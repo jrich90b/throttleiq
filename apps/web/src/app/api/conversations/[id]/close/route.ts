@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { apiFetch } from "../../../lib/apiFetch";
+import { apiFetch } from "@/lib/apiFetch";
 
 export async function POST(
   req: Request,
