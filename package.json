@@ -1,0 +1,20 @@
+{
+  "name": "throttleiq",
+  "private": true,
+  "type": "module",
+  "workspaces": ["apps/*", "services/*", "packages/*"],
+  "scripts": {
+    "dev:api": "npm --workspace @throttleiq/api run dev",
+    "dev:worker": "npm --workspace @throttleiq/worker run dev",
+    "dev": "concurrently -n api,worker -c auto \"npm:dev:api\" \"npm:dev:worker\"",
+    "build": "npm -ws run build",
+    "start:api": "npm --workspace @throttleiq/api run start",
+    "start:worker": "npm --workspace @throttleiq/worker run start"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": { "node": ">=18" }
+}
