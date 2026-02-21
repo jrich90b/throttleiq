@@ -8,6 +8,24 @@ export type SchedulerConfig = {
   start_hour_local?: number;
   end_hour_local?: number;
   timezone: string;
+  preferredSalespeople: string[];
+  salespeople: { id: string; name: string; calendarId: string }[];
+  businessHours: Record<string, { open: string | null; close: string | null }>;
+  bookingWindows: {
+    weekday: { earliestStart: string; latestStart: string };
+    saturday: { earliestStart: string; latestStart: string };
+  };
+  minLeadTimeHours: number;
+  minGapBetweenAppointmentsMinutes: number;
+  appointmentTypes: Record<string, { durationMinutes: number }>;
+};
+
+type SchedulerConfigRaw = {
+  enabled?: boolean;
+  interval_seconds?: number;
+  start_hour_local?: number;
+  end_hour_local?: number;
+  timezone?: string;
   preferredSalespeople?: string[];
   salespeople?: { id: string; name: string; calendarId: string }[];
   businessHours?: Record<string, { open: string | null; close: string | null }>;
@@ -29,7 +47,7 @@ let cached: SchedulerConfig | null = null;
 export async function getSchedulerConfig(): Promise<SchedulerConfig> {
   if (cached) return cached;
   const raw = await fs.readFile(process.env.SCHEDULER_CONFIG_PATH ?? DEFAULT_PATH, "utf8");
-  const parsed = JSON.parse(raw) as SchedulerConfig;
+  const parsed = JSON.parse(raw) as SchedulerConfigRaw;
   cached = {
     timezone: parsed.timezone ?? "America/New_York",
     preferredSalespeople: parsed.preferredSalespeople ?? [],
