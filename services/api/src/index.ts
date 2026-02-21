@@ -69,6 +69,34 @@ import { getSystemMode, setSystemMode, type SystemMode } from "./domain/settings
 
 const app = express();
 app.use(cors());
+app.post(
+  "/debug/inbound",
+  express.raw({ type: "*/*", limit: "10mb" }),
+  (req, res) => {
+    const requestId =
+      req.header("x-request-id") ||
+      req.header("x-correlation-id") ||
+      req.header("x-amzn-trace-id") ||
+      `dbg_${Math.random().toString(36).slice(2, 10)}`;
+    const contentType = req.header("content-type") ?? "";
+    const contentLength = req.header("content-length") ?? "";
+    const rawLength = Buffer.isBuffer(req.body) ? req.body.length : undefined;
+    console.log("[debug inbound]", {
+      ts: new Date().toISOString(),
+      id: requestId,
+      method: req.method,
+      path: req.originalUrl,
+      contentType,
+      contentLength,
+      rawLength,
+      host: req.header("host"),
+      userAgent: req.header("user-agent"),
+      xForwardedFor: req.header("x-forwarded-for"),
+      xForwardedProto: req.header("x-forwarded-proto")
+    });
+    return res.status(200).send("ok");
+  }
+);
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 

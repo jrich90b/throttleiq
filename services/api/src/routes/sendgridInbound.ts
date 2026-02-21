@@ -111,6 +111,11 @@ function extractLeadMeta(adfXml: string): { leadSource?: string; model?: string 
 }
 
 export async function handleSendgridInbound(req: Request, res: Response) {
+  console.log("[sendgrid inbound] meta:", {
+    contentType: req.header("content-type"),
+    contentLength: req.header("content-length"),
+    files: Array.isArray(req.files) ? req.files.length : 0
+  });
   console.log("[sendgrid inbound] keys:", Object.keys(req.body));
   if (req.body?.email) {
     const sample = [];
