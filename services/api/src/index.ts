@@ -168,10 +168,12 @@ function normalizePhone(raw: string): string {
 async function buildDay2Options(
   cfg: Awaited<ReturnType<typeof getSchedulerConfig>>
 ): Promise<{ message: string; slots: any[] } | null> {
-  if (!cfg.appointmentTypes || !cfg.preferredSalespeople?.length || !cfg.salespeople?.length) {
-    return null;
-  }
-  const durationMinutes = cfg.appointmentTypes["inventory_visit"]?.durationMinutes ?? 60;
+  const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
+  const preferredSalespeople = cfg.preferredSalespeople ?? [];
+  const salespeople = cfg.salespeople ?? [];
+  const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
+  if (!preferredSalespeople.length || !salespeople.length) return null;
+  const durationMinutes = appointmentTypes["inventory_visit"]?.durationMinutes ?? 60;
   const now = new Date();
   const candidatesByDay = generateCandidateSlots(cfg, now, durationMinutes, 14);
 
@@ -182,8 +184,8 @@ async function buildDay2Options(
     cal = null;
   }
 
-  for (const salespersonId of cfg.preferredSalespeople) {
-    const sp = cfg.salespeople.find(p => p.id === salespersonId);
+  for (const salespersonId of preferredSalespeople) {
+    const sp = salespeople.find(p => p.id === salespersonId);
     if (!sp) continue;
 
     let busy: any[] = [];
@@ -193,7 +195,7 @@ async function buildDay2Options(
       const fb = await queryFreeBusy(cal, [sp.calendarId], timeMin, timeMax, cfg.timezone);
       busy = fb.calendars?.[sp.calendarId]?.busy ?? [];
     }
-    const expanded = expandBusyBlocks(busy as any, cfg.minGapBetweenAppointmentsMinutes);
+    const expanded = expandBusyBlocks(busy as any, gapMinutes);
     const slots = pickSlotsForSalesperson(cfg, sp.id, sp.calendarId, candidatesByDay, expanded, 2);
     if (slots.length >= 2) {
       const mapped = slots.map(s => ({
@@ -310,8 +312,12 @@ app.get("/integrations/google/callback", async (req, res) => {
 
 app.post("/scheduler/suggest", async (req, res) => {
   const cfg = await getSchedulerConfig();
+  const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
+  const preferredSalespeople = cfg.preferredSalespeople ?? [];
+  const salespeople = cfg.salespeople ?? [];
+  const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
   const type = String(req.body?.appointmentType ?? "inventory_visit");
-  const durationMinutes = cfg.appointmentTypes[type]?.durationMinutes ?? 60;
+  const durationMinutes = appointmentTypes[type]?.durationMinutes ?? 60;
 
   const now = new Date();
   const candidatesByDay = generateCandidateSlots(cfg, now, durationMinutes, 14);
@@ -330,8 +336,8 @@ app.post("/scheduler/suggest", async (req, res) => {
     console.log("[sched] dayKey", i, dayKey(d, cfg.timezone));
   }
 
-  const pref = cfg.preferredSalespeople;
-  const people = cfg.salespeople;
+  const pref = preferredSalespeople;
+  const people = salespeople;
 
   const cal = await getAuthedCalendarClient();
 
@@ -348,7 +354,7 @@ app.post("/scheduler/suggest", async (req, res) => {
 
     const fb = await queryFreeBusy(cal, [sp.calendarId], timeMin, timeMax, cfg.timezone);
     const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any;
-    const expanded = expandBusyBlocks(busy, cfg.minGapBetweenAppointmentsMinutes);
+    const expanded = expandBusyBlocks(busy, gapMinutes);
 
     const slots = pickSlotsForSalesperson(
       cfg,
@@ -387,6 +393,7 @@ app.post("/scheduler/suggest", async (req, res) => {
 
 app.post("/scheduler/book", async (req, res) => {
   const cfg = await getSchedulerConfig();
+  const salespeople = cfg.salespeople ?? [];
 
   const slot = req.body?.slot as { salespersonId: string; calendarId: string; start: string; end: string };
   const lead = req.body?.lead as any;
@@ -395,7 +402,7 @@ app.post("/scheduler/book", async (req, res) => {
     return res.status(400).json({ ok: false, error: "Missing slot.calendarId/start/end" });
   }
 
-  const salesperson = cfg.salespeople.find((s: any) => s.id === slot.salespersonId);
+  const salesperson = salespeople.find((s: any) => s.id === slot.salespersonId);
   const summary = `Appt: ${String(req.body?.appointmentType ?? "inventory_visit")} – ${lead?.firstName ?? ""} ${
     lead?.lastName ?? ""
   }`.trim();
@@ -886,6 +893,10 @@ if (authToken && signature) {
   let requestedReschedule: ReturnType<typeof parseRequestedDayTime> | null = null;
   if (conv.appointment?.bookedEventId) {
     const cfg = await getSchedulerConfig();
+    const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
+    const preferredSalespeople = cfg.preferredSalespeople ?? [];
+    const salespeople = cfg.salespeople ?? [];
+    const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
     requestedReschedule = parseRequestedDayTime(event.body, cfg.timezone);
     const rescheduleIntent = reschedulePending || reschedulePhrase || !!requestedReschedule;
     if (!rescheduleIntent) {
@@ -912,10 +923,10 @@ if (authToken && signature) {
     try {
       const cal = await getAuthedCalendarClient();
       const appointmentType = "inventory_visit";
-      const durationMinutes = cfg.appointmentTypes[appointmentType]?.durationMinutes ?? 60;
+      const durationMinutes = appointmentTypes[appointmentType]?.durationMinutes ?? 60;
 
-      const salespersonId = conv.appointment.bookedSalespersonId ?? cfg.preferredSalespeople[0];
-      const sp = cfg.salespeople.find((p: any) => p.id === salespersonId);
+      const salespersonId = conv.appointment.bookedSalespersonId ?? preferredSalespeople[0];
+      const sp = salespeople.find((p: any) => p.id === salespersonId);
       if (!sp) throw new Error("Salesperson not found for reschedule");
 
       const timeMin = new Date().toISOString();
@@ -930,7 +941,7 @@ if (authToken && signature) {
           b => !(new Date(b.start) < oldEnd && oldStart < new Date(b.end))
         );
       }
-      const expanded = expandBusyBlocks(busy as any, cfg.minGapBetweenAppointmentsMinutes);
+      const expanded = expandBusyBlocks(busy as any, gapMinutes);
 
       const exact = findExactSlotForSalesperson(
         cfg,
@@ -1035,10 +1046,11 @@ if (authToken && signature) {
   ) {
     try {
       const cfg = await getSchedulerConfig();
+      const salespeople = cfg.salespeople ?? [];
       const cal = await getAuthedCalendarClient();
       const slot = conv.appointment.matchedSlot;
       const salespersonId = conv.appointment.bookedSalespersonId ?? slot.salespersonId;
-      const sp = cfg.salespeople.find((p: any) => p.id === salespersonId);
+      const sp = salespeople.find((p: any) => p.id === salespersonId);
       if (!sp) throw new Error("Salesperson not found for reschedule");
 
       const eventObj = await updateEvent(
@@ -1201,21 +1213,25 @@ if (authToken && signature) {
   if (!didConfirm && result.requestedTime) {
     try {
       const cfg = await getSchedulerConfig();
+      const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
+      const preferredSalespeople = cfg.preferredSalespeople ?? [];
+      const salespeople = cfg.salespeople ?? [];
+      const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
       const appointmentType = String(result.requestedAppointmentType ?? "inventory_visit");
-      const durationMinutes = cfg.appointmentTypes[appointmentType]?.durationMinutes ?? 60;
+      const durationMinutes = appointmentTypes[appointmentType]?.durationMinutes ?? 60;
 
       const cal = await getAuthedCalendarClient();
       const now = new Date();
       const timeMin = new Date(now).toISOString();
       const timeMax = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString();
 
-      for (const salespersonId of cfg.preferredSalespeople) {
-        const sp = cfg.salespeople.find((p: any) => p.id === salespersonId);
+      for (const salespersonId of preferredSalespeople) {
+        const sp = salespeople.find((p: any) => p.id === salespersonId);
         if (!sp) continue;
 
         const fb = await queryFreeBusy(cal, [sp.calendarId], timeMin, timeMax, cfg.timezone);
         const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any;
-        const expanded = expandBusyBlocks(busy, cfg.minGapBetweenAppointmentsMinutes);
+        const expanded = expandBusyBlocks(busy, gapMinutes);
 
         const exact = findExactSlotForSalesperson(
           cfg,
@@ -1294,13 +1310,13 @@ if (authToken && signature) {
       const requestedDayKey = result.requestedTime?.dayOfWeek ?? dayKey(requestedStartUtc, cfg.timezone);
 
       let bestSlots: any[] = [];
-      for (const salespersonId of cfg.preferredSalespeople) {
-        const sp = cfg.salespeople.find((p: any) => p.id === salespersonId);
+      for (const salespersonId of preferredSalespeople) {
+        const sp = salespeople.find((p: any) => p.id === salespersonId);
         if (!sp) continue;
 
         const fb = await queryFreeBusy(cal, [sp.calendarId], timeMin, timeMax, cfg.timezone);
         const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any;
-        const expanded = expandBusyBlocks(busy, cfg.minGapBetweenAppointmentsMinutes);
+        const expanded = expandBusyBlocks(busy, gapMinutes);
 
         const sameDay = candidatesByDay.filter(d => dayKey(d.dayStart, cfg.timezone) === requestedDayKey);
         const requestedDaySpecified = !!result.requestedTime?.dayOfWeek;

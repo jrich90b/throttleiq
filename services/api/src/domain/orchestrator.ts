@@ -295,7 +295,11 @@ export async function orchestrateInbound(
       if (schedulingIntent && !apptConfirmed && !holding) {
         try {
           const cfg = await getSchedulerConfig();
-          const durationMinutes = cfg.appointmentTypes[appointmentType]?.durationMinutes ?? 60;
+          const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
+          const preferredSalespeople = cfg.preferredSalespeople ?? [];
+          const salespeople = cfg.salespeople ?? [];
+          const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
+          const durationMinutes = appointmentTypes[appointmentType]?.durationMinutes ?? 60;
 
           const now = new Date();
           const candidatesByDay = generateCandidateSlots(cfg, now, durationMinutes, 14);
@@ -318,8 +322,8 @@ export async function orchestrateInbound(
             console.log("[scheduler] calendar unavailable, using open availability:", e?.message ?? e);
           }
 
-          for (const salespersonId of cfg.preferredSalespeople) {
-            const sp = cfg.salespeople.find((p: any) => p.id === salespersonId);
+          for (const salespersonId of preferredSalespeople) {
+            const sp = salespeople.find((p: any) => p.id === salespersonId);
             if (!sp) continue;
 
             const timeMin = new Date(now).toISOString();
@@ -330,7 +334,7 @@ export async function orchestrateInbound(
               const fb = await queryFreeBusy(cal, [sp.calendarId], timeMin, timeMax, cfg.timezone);
               busy = fb.calendars?.[sp.calendarId]?.busy ?? [];
             }
-            const expanded = expandBusyBlocks(busy as any, cfg.minGapBetweenAppointmentsMinutes);
+            const expanded = expandBusyBlocks(busy as any, gapMinutes);
 
             let slots: any[] = [];
             if (requestedDay) {
