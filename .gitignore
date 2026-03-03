@@ -22,4 +22,10 @@ coverage/
 # local persisted dev data (conversation store)
 data/
 
+# production/runtime state
+services/api/data/scheduler_config.json
+services/api/data/google_tokens.json
+services/api/.env
+data/conversations.json
+
 sample.adf.xml

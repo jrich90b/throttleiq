@@ -7,15 +7,21 @@ import type { InboundMessageEvent } from "./domain/types.js";
 import { sendgridInboundMiddleware, handleSendgridInbound } from "./routes/sendgridInbound.js";
 import { resolveInventoryUrlByStock } from "./domain/inventoryUrlResolver.js";
 import { checkInventorySalePendingByUrl } from "./domain/inventoryChecker.js";
-import { getDealerProfile } from "./domain/dealerProfile.js";
-import { getSchedulerConfig, dayKey } from "./domain/schedulerConfig.js";
+import { getDealerProfile, saveDealerProfile } from "./domain/dealerProfile.js";
+import { getSchedulerConfig, saveSchedulerConfig, dayKey, getPreferredSalespeople } from "./domain/schedulerConfig.js";
 import {
   getOAuthClient,
   saveTokens,
   getAuthedCalendarClient,
   queryFreeBusy,
   insertEvent,
-  updateEvent
+  updateEvent,
+  updateEventDetails,
+  listEvents,
+  createCalendar,
+  createRecurringBlock,
+  deleteEvent,
+  moveEvent
 } from "./domain/googleCalendar.js";
 import {
   generateCandidateSlots,
@@ -25,6 +31,7 @@ import {
   formatSlotLocal,
   localPartsToUtcDate
 } from "./domain/schedulerEngine.js";
+import { extractImageDate, findInventoryMatches, findInventoryPrice } from "./domain/inventoryFeed.js";
 
 import {
   upsertConversationByLeadKey,
@@ -54,7 +61,9 @@ import {
   markPricingEscalated,
   getPricingAttempts,
   closeConversation,
-  setConversationMode
+  setConversationMode,
+  setCrmLastLoggedAt,
+  reloadConversationStore
 } from "./domain/conversationStore.js";
 import { logTuningRow } from "./domain/tuningLogger.js";
 import {
@@ -64,8 +73,21 @@ import {
   removeSuppression
 } from "./domain/suppressionStore.js";
 import { tlpLogCustomerContact } from "./connectors/crm/tlpPlaywright.js";
+import { listContacts, updateContact, deleteContact } from "./domain/contactsStore.js";
 
 import { getSystemMode, setSystemMode, type SystemMode } from "./domain/settingsStore.js";
+import {
+  listUsers,
+  createUser,
+  updateUser,
+  deleteUser,
+  verifyPassword,
+  createSession,
+  getSession,
+  deleteSession,
+  getUserById,
+  hasAnyUsers
+} from "./domain/userStore.js";
 
 const app = express();
 app.use(cors());
@@ -100,6 +122,75 @@ app.post(
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
+const AUTH_DISABLED = (process.env.AUTH_DISABLED ?? "false").toLowerCase() === "true";
+
+function parseCookies(header: string | undefined): Record<string, string> {
+  if (!header) return {};
+  return header.split(";").reduce((acc, part) => {
+    const [k, ...rest] = part.trim().split("=");
+    if (!k) return acc;
+    acc[k] = decodeURIComponent(rest.join("="));
+    return acc;
+  }, {} as Record<string, string>);
+}
+
+function isPublicPath(pathname: string): boolean {
+  return (
+    pathname === "/health" ||
+    pathname.startsWith("/webhooks/twilio") ||
+    pathname.startsWith("/crm/leads/adf/sendgrid") ||
+    pathname.startsWith("/integrations/google") ||
+    pathname.startsWith("/debug/inbound") ||
+    pathname.startsWith("/auth/login") ||
+    pathname.startsWith("/auth/me")
+  );
+}
+
+app.use(async (req, res, next) => {
+  if (AUTH_DISABLED) return next();
+  if (req.path === "/users" && req.method === "POST") {
+    const any = await hasAnyUsers();
+    if (!any) return next();
+  }
+  if (isPublicPath(req.path)) return next();
+  const tokenHeader = req.header("x-auth-token") || req.header("authorization")?.replace(/^Bearer\s+/i, "");
+  const cookies = parseCookies(req.header("cookie"));
+  const token = tokenHeader || cookies.lr_session;
+  if (!token) return res.status(401).json({ ok: false, error: "auth required" });
+  const session = await getSession(token);
+  if (!session) return res.status(401).json({ ok: false, error: "invalid session" });
+  const user = await getUserById(session.userId);
+  if (!user) return res.status(401).json({ ok: false, error: "user not found" });
+  (req as any).user = user;
+  return next();
+});
+
+function requireManager(req: any, res: any, next: any) {
+  if (AUTH_DISABLED) return next();
+  if (req.user?.role !== "manager") return res.status(403).json({ ok: false, error: "manager required" });
+  return next();
+}
+
+function requirePermission(key: "canEditAppointments" | "canToggleHumanOverride" | "canAccessTodos" | "canAccessSuppressions") {
+  return (req: any, res: any, next: any) => {
+    if (AUTH_DISABLED) return next();
+    if (req.user?.role === "manager") return next();
+    if (req.user?.permissions?.[key]) return next();
+    return res.status(403).json({ ok: false, error: "forbidden" });
+  };
+}
+
+async function syncSchedulerSalespeopleFromUsers() {
+  const cfg = await getSchedulerConfig();
+  const users = await listUsers();
+  const salespeople = users
+    .filter(u => u.role === "salesperson" && u.calendarId)
+    .map(u => ({ id: u.id, name: u.name || u.email || u.id, calendarId: u.calendarId! }));
+  const preferredExisting = (cfg.preferredSalespeople ?? []).filter(id => salespeople.some(s => s.id === id));
+  const preferredSalespeople = preferredExisting.length ? preferredExisting : salespeople.map(s => s.id);
+  await saveSchedulerConfig({ ...(cfg as any), salespeople, preferredSalespeople });
+}
+
 function effectiveMode(conv: any): SystemMode {
   if (conv?.mode === "human") return "suggest";
   return getSystemMode();
@@ -107,6 +198,7 @@ function effectiveMode(conv: any): SystemMode {
 
 setInterval(() => {
   void processDueFollowUps();
+  void processAppointmentConfirmations();
 }, 60_000);
 
 app.get("/health", (_req, res) => {
@@ -118,12 +210,193 @@ app.get("/health", (_req, res) => {
   });
 });
 
+app.post("/debug/followups/run", async (_req, res) => {
+  try {
+    await processDueFollowUps();
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err?.message ?? "Failed to run follow-ups" });
+  }
+});
+
+app.post("/debug/conversations/reload", async (_req, res) => {
+  try {
+    await reloadConversationStore();
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err?.message ?? "Failed to reload conversation store" });
+  }
+});
+
+app.post("/debug/inbound/process", express.json(), async (req, res) => {
+  try {
+    const from = String(req.body?.from ?? "").trim();
+    const to = String(req.body?.to ?? "dealership").trim();
+    const body = String(req.body?.body ?? "");
+    if (!from || !body) {
+      return res.status(400).json({ ok: false, error: "from and body are required" });
+    }
+
+    const event: InboundMessageEvent = {
+      channel: "sms",
+      provider: "debug",
+      from,
+      to,
+      body,
+      providerMessageId: `dbg_${Math.random().toString(36).slice(2, 10)}`,
+      receivedAt: new Date().toISOString()
+    };
+
+    const conv = upsertConversationByLeadKey(event.from, "suggest");
+    appendInbound(conv, event);
+    const history = conv.messages.slice(-20).map(m => ({ direction: m.direction, body: m.body }));
+    const result = await orchestrateInbound(event, history, {
+      appointment: conv.appointment,
+      followUp: conv.followUp,
+      leadSource: conv.lead?.source ?? null,
+      bucket: conv.classification?.bucket ?? null,
+      cta: conv.classification?.cta ?? null,
+      lead: conv.lead ?? null,
+      pricingAttempts: getPricingAttempts(conv)
+    });
+
+    if (result?.draft && result.shouldRespond) {
+      appendOutbound(conv, event.to, event.from, result.draft, "draft_ai");
+      if (result.pricingAttempted) incrementPricingAttempt(conv);
+      if (result.suggestedSlots && result.suggestedSlots.length > 0) {
+        setLastSuggestedSlots(conv, result.suggestedSlots);
+      }
+      if (result.requestedTime) {
+        setRequestedTime(conv, { day: result.requestedTime.dayOfWeek, timeText: event.body });
+      }
+    }
+
+    res.json({ ok: true, conversationId: conv.id, draft: result?.draft ?? null });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err?.message ?? "Failed to process inbound" });
+  }
+});
+
+app.get("/auth/me", async (req, res) => {
+  if (AUTH_DISABLED) {
+    return res.json({ ok: true, authDisabled: true, user: { role: "manager", email: "dev@local" } });
+  }
+  const any = await hasAnyUsers();
+  if (!any) {
+    return res.json({ ok: true, needsBootstrap: true });
+  }
+  const tokenHeader = req.header("x-auth-token") || req.header("authorization")?.replace(/^Bearer\s+/i, "");
+  const cookies = parseCookies(req.header("cookie"));
+  const token = tokenHeader || cookies.lr_session;
+  if (!token) return res.status(401).json({ ok: false, error: "auth required" });
+  const session = await getSession(token);
+  if (!session) return res.status(401).json({ ok: false, error: "invalid session" });
+  const user = await getUserById(session.userId);
+  if (!user) return res.status(401).json({ ok: false, error: "user not found" });
+  return res.json({
+    ok: true,
+    user: { id: user.id, email: user.email, name: user.name, role: user.role, calendarId: user.calendarId, permissions: user.permissions }
+  });
+});
+
+app.post("/auth/login", async (req, res) => {
+  if (AUTH_DISABLED) return res.json({ ok: true, token: "disabled", user: { role: "manager" } });
+  const email = String(req.body?.email ?? "").trim();
+  const password = String(req.body?.password ?? "");
+  if (!email || !password) return res.status(400).json({ ok: false, error: "Missing email/password" });
+  const user = await verifyPassword(email, password);
+  if (!user) return res.status(401).json({ ok: false, error: "Invalid credentials" });
+  const session = await createSession(user.id);
+  res.json({
+    ok: true,
+    token: session.token,
+    user: { id: user.id, email: user.email, name: user.name, role: user.role, calendarId: user.calendarId, permissions: user.permissions }
+  });
+});
+
+app.post("/auth/logout", async (req, res) => {
+  const tokenHeader = req.header("x-auth-token") || req.header("authorization")?.replace(/^Bearer\s+/i, "");
+  const cookies = parseCookies(req.header("cookie"));
+  const token = tokenHeader || cookies.lr_session;
+  if (token) await deleteSession(token);
+  res.json({ ok: true });
+});
+
+app.get("/users", requireManager, async (_req, res) => {
+  const users = await listUsers();
+  res.json({
+    ok: true,
+    users: users.map(u => ({
+      id: u.id,
+      email: u.email,
+      name: u.name,
+      role: u.role,
+      calendarId: u.calendarId,
+      permissions: u.permissions
+    }))
+  });
+});
+
+app.post("/users", async (req, res) => {
+  const any = await hasAnyUsers();
+  if (any && !AUTH_DISABLED && (req as any).user?.role !== "manager") {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const email = String(req.body?.email ?? "").trim();
+  const password = String(req.body?.password ?? "");
+  const role = (String(req.body?.role ?? "salesperson") as "manager" | "salesperson") ?? "salesperson";
+  const name = String(req.body?.name ?? "").trim();
+  const calendarId = String(req.body?.calendarId ?? "").trim();
+  const permissions = req.body?.permissions ?? undefined;
+  if (!email || !password) return res.status(400).json({ ok: false, error: "Missing email/password" });
+  try {
+    const user = await createUser({ email, password, role, name, calendarId, permissions });
+    await syncSchedulerSalespeopleFromUsers();
+    res.json({
+      ok: true,
+      user: { id: user.id, email: user.email, name: user.name, role: user.role, calendarId: user.calendarId, permissions: user.permissions }
+    });
+  } catch (err: any) {
+    res.status(400).json({ ok: false, error: err?.message ?? "Failed to create user" });
+  }
+});
+
+app.put("/users/:id", requireManager, async (req, res) => {
+  const id = String(req.params.id ?? "").trim();
+  if (!id) return res.status(400).json({ ok: false, error: "Missing id" });
+  try {
+    const user = await updateUser(id, {
+      email: req.body?.email,
+      password: req.body?.password,
+      role: req.body?.role,
+      name: req.body?.name,
+      calendarId: req.body?.calendarId,
+      permissions: req.body?.permissions
+    });
+    await syncSchedulerSalespeopleFromUsers();
+    res.json({
+      ok: true,
+      user: { id: user.id, email: user.email, name: user.name, role: user.role, calendarId: user.calendarId, permissions: user.permissions }
+    });
+  } catch (err: any) {
+    res.status(400).json({ ok: false, error: err?.message ?? "Failed to update user" });
+  }
+});
+
+app.delete("/users/:id", requireManager, async (req, res) => {
+  const id = String(req.params.id ?? "").trim();
+  if (!id) return res.status(400).json({ ok: false, error: "Missing id" });
+  await deleteUser(id);
+  await syncSchedulerSalespeopleFromUsers();
+  res.json({ ok: true });
+});
+
 // ✅ System-wide mode (suggest vs autopilot)
 app.get("/settings", (_req, res) => {
   res.json({ ok: true, mode: getSystemMode() });
 });
 
-app.patch("/settings", (req, res) => {
+app.patch("/settings", requireManager, (req, res) => {
   const mode = String(req.body?.mode ?? "") as SystemMode;
   if (mode !== "suggest" && mode !== "autopilot") {
     return res.status(400).json({ ok: false, error: "mode must be 'suggest' or 'autopilot'" });
@@ -151,14 +424,334 @@ const FOLLOW_UP_MESSAGES = [
   "Just checking in - still want to come by to look at it? I have {a} or {b} if that helps.",
   "If you'd like a quick walkaround video first, I can send one. If you'd rather come by, what day works best for you?",
   "If you still want to see it, what day/time is best on your end?",
-  "Want to come by this week? What day works for you?",
+  "Quick question — are you comparing a few bikes, or is this one at the top of your list?",
   "Still interested? I can set a time - what day/time should I reserve?",
   "If you're still shopping, what day/time is easiest for you?",
   "No rush - if you want to see it, what day/time should I put down?",
   "Do you want to set a visit? What day/time works best?",
-  "Last check-in from me - should I keep a time available for you? If so, what day/time?",
-  "I don't want to bother you - should I keep this open, or close it out?"
+  "Should I keep a time available for you? If so, what day/time?",
+  "Still interested in taking a look? If so, what day/time works best?"
 ];
+
+const FOLLOW_UP_COLOR_WORDS = [
+  "black",
+  "white",
+  "red",
+  "blue",
+  "gray",
+  "grey",
+  "silver",
+  "orange",
+  "green",
+  "yellow",
+  "gold",
+  "burgundy",
+  "tan",
+  "brown",
+  "bronze"
+];
+
+function extractColorMention(text: string | null | undefined): string | null {
+  if (!text) return null;
+  const lower = text.toLowerCase();
+  for (const color of FOLLOW_UP_COLOR_WORDS) {
+    if (lower.includes(color)) return color;
+  }
+  return null;
+}
+
+function extractColorFromDescription(desc?: string | null, stockId?: string | null): string | null {
+  if (!desc) return null;
+  const clean = desc.replace(/\s+/g, " ").trim();
+  if (stockId) {
+    const idx = clean.toLowerCase().indexOf(stockId.toLowerCase());
+    if (idx >= 0) {
+      const tail = clean.slice(idx + stockId.length).trim();
+      if (tail && tail.length <= 40) return tail;
+    }
+  }
+  const colorMatch = clean.match(/color[:\-\s]+(.+)$/i);
+  if (colorMatch?.[1]) return colorMatch[1].trim();
+  return null;
+}
+
+function normalizeColor(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function normalizeColorBase(s: string, keepTrim = false): string {
+  const base = normalizeColor(s);
+  if (keepTrim) return base;
+  return base
+    .replace(/\b(chrome|black)\s+trim\b/g, "")
+    .replace(/\b(trim|finish)\b/g, "")
+    .replace(/\bblack\s+finish\b/g, "black")
+    .replace(/\bchrome\s+finish\b/g, "chrome")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractTrimToken(s: string | undefined | null): "black" | "chrome" | null {
+  if (!s) return null;
+  const clean = normalizeColor(s);
+  if (/\bblack\s+trim\b/.test(clean)) return "black";
+  if (/\bchrome\s+trim\b/.test(clean)) return "chrome";
+  return null;
+}
+
+const COLOR_ALIASES: Record<string, string[]> = {
+  "vivid black": ["vivid black", "black"]
+};
+
+function colorMatchesExact(
+  itemColor: string | undefined,
+  leadColor: string | undefined,
+  leadTrim: "black" | "chrome" | null
+): boolean {
+  if (!itemColor || !leadColor) return false;
+  const item = normalizeColorBase(itemColor, !!leadTrim);
+  const lead = normalizeColorBase(leadColor, !!leadTrim);
+  if (leadTrim) {
+    const itemTrim = extractTrimToken(itemColor);
+    if (itemTrim !== leadTrim) return false;
+  }
+  return !!item && !!lead && item === lead;
+}
+
+function colorMatchesAlias(
+  itemColor: string | undefined,
+  leadColor: string | undefined,
+  leadTrim: "black" | "chrome" | null
+): boolean {
+  if (!itemColor || !leadColor) return false;
+  const item = normalizeColorBase(itemColor, !!leadTrim);
+  const lead = normalizeColorBase(leadColor, !!leadTrim);
+  if (!item || !lead) return false;
+  const aliases = COLOR_ALIASES[lead];
+  if (!aliases || aliases.length === 0) return false;
+  if (leadTrim) {
+    const itemTrim = extractTrimToken(itemColor);
+    if (itemTrim !== leadTrim) return false;
+  }
+  return aliases.some(a => item.includes(normalizeColorBase(a, !!leadTrim)));
+}
+
+function getLastInboundBody(conv: any): string | null {
+  const msg = conv.messages?.slice().reverse().find((m: any) => m.direction === "in");
+  return msg?.body ?? null;
+}
+
+function isTestRideSeason(profile: any, now: Date): boolean {
+  const enabled = profile?.followUp?.testRideEnabled;
+  if (enabled === false) return false;
+  const months: number[] = Array.isArray(profile?.followUp?.testRideMonths)
+    ? profile.followUp.testRideMonths
+    : [4, 5, 6, 7, 8, 9, 10];
+  const current = now.getMonth() + 1;
+  return months.includes(current);
+}
+
+function formatModelLabel(year?: string | null, model?: string | null): string {
+  const yr = year ? `${year} ` : "";
+  return `${yr}${model ?? "that model"}`.trim();
+}
+
+function pickBestMatch(
+  matches: Array<{ images?: string[]; color?: string }>,
+  leadColor?: string | null
+): { url?: string; date: Date | null; color?: string } | null {
+  const leadTrim = extractTrimToken(leadColor ?? null);
+  const pool = leadColor
+    ? matches.filter(
+        m =>
+          colorMatchesExact(m.color, leadColor, leadTrim) ||
+          colorMatchesAlias(m.color, leadColor, leadTrim)
+      )
+    : matches;
+  if (leadColor && pool.length === 0) return null;
+  for (const m of pool) {
+    const url = m.images?.find(u => /^https?:\/\//i.test(u));
+    if (url) return { url, date: extractImageDate(url), color: m.color };
+  }
+  if (!pool.length) return null;
+  const fallback = pool[0];
+  const url = fallback.images?.find(u => /^https?:\/\//i.test(u));
+  return { url, date: url ? extractImageDate(url) : null, color: fallback.color };
+}
+
+function isRecent(date: Date | null, days: number): boolean {
+  if (!date) return false;
+  const ageMs = Date.now() - date.getTime();
+  return ageMs >= 0 && ageMs <= days * 24 * 60 * 60 * 1000;
+}
+
+async function buildLateFollowUp(
+  conv: any,
+  stepIndex: number,
+  dealerProfile: any
+): Promise<{ body: string; mediaUrls?: string[] }> {
+  const lead = conv.lead ?? {};
+  const year = lead?.vehicle?.year ?? null;
+  const model = lead?.vehicle?.model ?? null;
+  const leadColor =
+    lead?.vehicle?.color ??
+    extractColorFromDescription(lead?.vehicle?.description, lead?.vehicle?.stockId ?? null) ??
+    extractColorMention(getLastInboundBody(conv)) ??
+    extractColorMention(lead?.vehicle?.description);
+  const name = lead?.firstName ?? null;
+  const greeting = name ? `Hi ${name} — ` : "";
+  const label = formatModelLabel(year, model);
+
+  let matches: any[] = [];
+  if (model) {
+    matches = await findInventoryMatches({ year, model });
+  }
+
+  const hasMatch = matches.length > 0;
+  const imagePick = pickBestMatch(matches, leadColor ?? null);
+  const leadTrim = extractTrimToken(leadColor ?? null);
+  const colorLabelRaw =
+    leadColor &&
+    (colorMatchesExact(imagePick?.color, leadColor, leadTrim) ||
+      colorMatchesAlias(imagePick?.color, leadColor, leadTrim) ||
+      !imagePick?.color)
+      ? leadColor
+      : imagePick?.color ?? null;
+  const hasRecentInventory = imagePick ? isRecent(imagePick.date, 45) : false;
+  const testRideOk = isTestRideSeason(dealerProfile, new Date());
+
+  if (stepIndex === 10) {
+    if (!hasMatch && !testRideOk) {
+      return {
+        body: `${greeting}Just checking in on the ${label}. If you’re still looking, I can keep an eye out or set a time to visit. What works best?`
+      };
+    }
+    if (hasMatch && hasRecentInventory) {
+      return {
+        body: `${greeting}We just got a ${label} in. Want to come check it out? What day/time works best?`
+      };
+    }
+    if (hasMatch) {
+      return {
+        body: `${greeting}We have ${label} options in stock. Want to stop by and take a look? What day/time works best?`
+      };
+    }
+    return {
+      body: `${greeting}Just checking in on the ${label}. If you’re still looking, I can keep an eye out or set a time to visit. What works best?`
+    };
+  }
+
+  if (stepIndex === 11) {
+    if (!hasMatch && !testRideOk) {
+      return {
+        body: `${greeting}If you’re still shopping, I can help you compare options or set a quick visit. What day/time works best?`
+      };
+    }
+    if (colorLabelRaw && imagePick?.url && hasMatch) {
+      const colorLabel = colorLabelRaw.charAt(0).toUpperCase() + colorLabelRaw.slice(1);
+      const mentionLead =
+        !!leadColor &&
+        (colorMatchesExact(colorLabelRaw, leadColor, leadTrim) ||
+          colorMatchesAlias(colorLabelRaw, leadColor, leadTrim));
+      const prefix = mentionLead
+        ? `You mentioned ${colorLabel}. `
+        : `Here’s a ${colorLabel} ${label} we have right now. `;
+      const body = mentionLead
+        ? `${greeting}${prefix}Here’s a ${colorLabel} ${label} we have right now. Want to take a look?`
+        : `${greeting}${prefix}Want to take a look?`;
+      return {
+        body,
+        mediaUrls: [imagePick.url]
+      };
+    }
+    if (testRideOk && hasMatch) {
+      return {
+        body: `${greeting}If you want, we can set up a test ride for a ${label}. What day/time works best?`
+      };
+    }
+    if (hasMatch) {
+      return {
+        body: `${greeting}Still interested in a ${label}? I can send a quick walkaround or set a time to visit. What works best?`
+      };
+    }
+    return {
+      body: `${greeting}If you’re still shopping, I can help you compare options or set a quick visit. What day/time works best?`
+    };
+  }
+
+  if (stepIndex === 12) {
+    if (!hasMatch && !testRideOk) {
+      return {
+        body: `${greeting}Should I keep this open or close it out? If you’re still looking, I’m happy to help.`
+      };
+    }
+    if (testRideOk && hasMatch) {
+      return {
+        body: `${greeting}We’re offering test rides this time of year. Want me to reserve a time for you?`
+      };
+    }
+    return {
+      body: `${greeting}Should I keep this open or close it out? If you’re still looking, I’m happy to help.`
+    };
+  }
+
+  return {
+    body: `${greeting}${FOLLOW_UP_MESSAGES[FOLLOW_UP_MESSAGES.length - 1]}`
+  };
+}
+
+async function buildLongTermFollowUp(
+  conv: any,
+  dealerProfile: any
+): Promise<{ body: string; mediaUrls?: string[] }> {
+  const lead = conv.lead ?? {};
+  const year = lead?.vehicle?.year ?? null;
+  const model = lead?.vehicle?.model ?? null;
+  const leadColor =
+    lead?.vehicle?.color ??
+    extractColorFromDescription(lead?.vehicle?.description, lead?.vehicle?.stockId ?? null) ??
+    extractColorMention(getLastInboundBody(conv)) ??
+    extractColorMention(lead?.vehicle?.description);
+  const name = lead?.firstName ?? null;
+  const greeting = name ? `Hi ${name} — ` : "";
+  const label = formatModelLabel(year, model);
+  const timeframe = lead?.purchaseTimeframe ? lead.purchaseTimeframe.trim() : "a future";
+
+  let matches: any[] = [];
+  if (model) {
+    matches = await findInventoryMatches({ year, model });
+  }
+  const imagePick = pickBestMatch(matches, leadColor ?? null);
+  const leadTrim = extractTrimToken(leadColor ?? null);
+  const colorLabelRaw =
+    leadColor &&
+    (colorMatchesExact(imagePick?.color, leadColor, leadTrim) ||
+      colorMatchesAlias(imagePick?.color, leadColor, leadTrim) ||
+      !imagePick?.color)
+      ? leadColor
+      : imagePick?.color ?? null;
+  const hasLicense = lead?.hasMotoLicense;
+  const canTestRide = hasLicense !== false && isTestRideSeason(dealerProfile, new Date());
+
+  if (imagePick?.url) {
+    const colorLabel = colorLabelRaw ? colorLabelRaw.charAt(0).toUpperCase() + colorLabelRaw.slice(1) : null;
+    const itemLabel = colorLabel ? `${colorLabel} ${label}` : label;
+    return {
+      body: `${greeting}Just circling back since you mentioned a ${timeframe} timeline. We have a ${itemLabel} in stock right now. Want to take a look?`,
+      mediaUrls: [imagePick.url]
+    };
+  }
+
+  if (canTestRide) {
+    return {
+      body: `${greeting}Just circling back since you mentioned a ${timeframe} timeline. Want to come in and check out options or set up a test ride?`
+    };
+  }
+
+  return {
+    body: `${greeting}Just circling back since you mentioned a ${timeframe} timeline. Want to come in and check out options?`
+  };
+}
 
 function isOptOut(text: string): boolean {
   const t = text.trim().toLowerCase();
@@ -197,7 +790,7 @@ async function buildDay2Options(
   cfg: Awaited<ReturnType<typeof getSchedulerConfig>>
 ): Promise<{ message: string; slots: any[] } | null> {
   const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
-  const preferredSalespeople = cfg.preferredSalespeople ?? [];
+  const preferredSalespeople = getPreferredSalespeople(cfg);
   const salespeople = cfg.salespeople ?? [];
   const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
   if (!preferredSalespeople.length || !salespeople.length) return null;
@@ -246,6 +839,7 @@ async function buildDay2Options(
 async function processDueFollowUps() {
   const cfg = await getSchedulerConfig();
   if (cfg.enabled === false) return;
+  const dealerProfile = await getDealerProfile();
   const now = new Date();
   const convs = getAllConversations();
 
@@ -269,7 +863,12 @@ async function processDueFollowUps() {
     if (conv.followUp?.mode === "manual_handoff") continue;
 
     let message = FOLLOW_UP_MESSAGES[cadence.stepIndex] ?? FOLLOW_UP_MESSAGES[FOLLOW_UP_MESSAGES.length - 1];
-    if (cadence.stepIndex === 0) {
+    let mediaUrls: string[] | undefined;
+    if (cadence.kind === "long_term") {
+      const longTerm = await buildLongTermFollowUp(conv, dealerProfile);
+      message = longTerm.body;
+      mediaUrls = longTerm.mediaUrls;
+    } else if (cadence.stepIndex === 0) {
       const day2 = await buildDay2Options(cfg);
       if (day2) {
         message = day2.message;
@@ -277,6 +876,18 @@ async function processDueFollowUps() {
       } else {
         message = FOLLOW_UP_MESSAGES[1];
       }
+    } else if (cadence.stepIndex === 2) {
+      const hasLicense = conv?.lead?.hasMotoLicense;
+      const canTestRide = hasLicense !== false && isTestRideSeason(dealerProfile, new Date());
+      if (canTestRide) {
+        message = "If you’d like to set up a test ride, I can reserve a time. What day/time works best?";
+      } else {
+        message = FOLLOW_UP_MESSAGES[2];
+      }
+    } else if (cadence.stepIndex >= 10) {
+      const late = await buildLateFollowUp(conv, cadence.stepIndex, dealerProfile);
+      message = late.body;
+      mediaUrls = late.mediaUrls;
     }
 
     const systemMode = effectiveMode(conv);
@@ -286,24 +897,115 @@ async function processDueFollowUps() {
     const authToken = process.env.TWILIO_AUTH_TOKEN;
 
     if (systemMode === "suggest") {
-      appendOutbound(conv, from ?? "salesperson", to, message, "draft_ai");
-      advanceFollowUpCadence(conv, cfg.timezone);
+      appendOutbound(conv, from ?? "salesperson", to, message, "draft_ai", undefined, mediaUrls);
+      if (cadence.kind === "long_term") {
+        const nowIso = new Date().toISOString();
+        conv.followUpCadence = {
+          status: "active",
+          anchorAt: nowIso,
+          nextDueAt: computeFollowUpDueAt(nowIso, FOLLOW_UP_DAY_OFFSETS[0], cfg.timezone),
+          stepIndex: 0,
+          kind: "standard",
+          lastSentAt: nowIso,
+          lastSentStep: -1
+        };
+      } else {
+        advanceFollowUpCadence(conv, cfg.timezone);
+      }
       continue;
     }
 
     if (!from || !accountSid || !authToken || !to.startsWith("+")) {
-      appendOutbound(conv, "salesperson", to, message, "human");
-      advanceFollowUpCadence(conv, cfg.timezone);
+      appendOutbound(conv, "salesperson", to, message, "human", undefined, mediaUrls);
+      if (cadence.kind === "long_term") {
+        const nowIso = new Date().toISOString();
+        conv.followUpCadence = {
+          status: "active",
+          anchorAt: nowIso,
+          nextDueAt: computeFollowUpDueAt(nowIso, FOLLOW_UP_DAY_OFFSETS[0], cfg.timezone),
+          stepIndex: 0,
+          kind: "standard",
+          lastSentAt: nowIso,
+          lastSentStep: -1
+        };
+      } else {
+        advanceFollowUpCadence(conv, cfg.timezone);
+      }
       continue;
     }
 
     try {
       const client = twilio(accountSid, authToken);
-      const msg = await client.messages.create({ from, to, body: message });
-      appendOutbound(conv, from, to, message, "twilio", msg.sid);
-      advanceFollowUpCadence(conv, cfg.timezone);
+      const msg = await client.messages.create({
+        from,
+        to,
+        body: message,
+        ...(mediaUrls && mediaUrls.length ? { mediaUrl: mediaUrls } : {})
+      });
+      appendOutbound(conv, from, to, message, "twilio", msg.sid, mediaUrls);
+      if (cadence.kind === "long_term") {
+        const nowIso = new Date().toISOString();
+        conv.followUpCadence = {
+          status: "active",
+          anchorAt: nowIso,
+          nextDueAt: computeFollowUpDueAt(nowIso, FOLLOW_UP_DAY_OFFSETS[0], cfg.timezone),
+          stepIndex: 0,
+          kind: "standard",
+          lastSentAt: nowIso,
+          lastSentStep: -1
+        };
+      } else {
+        advanceFollowUpCadence(conv, cfg.timezone);
+      }
     } catch (e: any) {
       console.log("[followup] send failed:", e?.message ?? e);
+    }
+  }
+}
+
+async function processAppointmentConfirmations() {
+  const cfg = await getSchedulerConfig();
+  const now = new Date();
+  const convs = getAllConversations();
+
+  for (const conv of convs) {
+    const appt = conv.appointment;
+    if (!appt?.bookedEventId || !appt.whenIso) continue;
+    if (conv.status === "closed") continue;
+    if (isSuppressed(conv.leadKey)) continue;
+    if (appt.confirmation?.status === "confirmed" || appt.confirmation?.status === "declined") continue;
+    if (appt.confirmation?.sentAt) continue;
+
+    const start = new Date(appt.whenIso);
+    const diffMs = start.getTime() - now.getTime();
+    if (diffMs > 24 * 60 * 60 * 1000 || diffMs <= 23 * 60 * 60 * 1000) continue;
+
+    const when = formatSlotLocal(appt.whenIso, cfg.timezone);
+    const message = `Reminder: you’re scheduled for ${when}. Please reply YES to confirm or NO to reschedule.`;
+    const systemMode = effectiveMode(conv);
+    const from = process.env.TWILIO_FROM_NUMBER;
+    const accountSid = process.env.TWILIO_ACCOUNT_SID;
+    const authToken = process.env.TWILIO_AUTH_TOKEN;
+    const toNumber = normalizePhone(conv.leadKey);
+
+    appt.confirmation = {
+      sentAt: new Date().toISOString(),
+      status: "pending"
+    };
+
+    if (systemMode === "suggest") {
+      appendOutbound(conv, from ?? "salesperson", toNumber, message, "draft_ai");
+    } else if (from && accountSid && authToken && toNumber.startsWith("+")) {
+      try {
+        const client = twilio(accountSid, authToken);
+        const msg = await client.messages.create({ from, to: toNumber, body: message });
+        appendOutbound(conv, from, toNumber, message, "twilio", msg.sid);
+      } catch (e: any) {
+        console.log("[appt-confirm] send failed:", e?.message ?? e);
+        continue;
+      }
+    } else {
+      appendOutbound(conv, "salesperson", toNumber, message, "human");
     }
   }
 }
@@ -341,7 +1043,7 @@ app.get("/integrations/google/callback", async (req, res) => {
 app.post("/scheduler/suggest", async (req, res) => {
   const cfg = await getSchedulerConfig();
   const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
-  const preferredSalespeople = cfg.preferredSalespeople ?? [];
+  const preferredSalespeople = getPreferredSalespeople(cfg);
   const salespeople = cfg.salespeople ?? [];
   const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
   const type = String(req.body?.appointmentType ?? "inventory_visit");
@@ -494,6 +1196,219 @@ app.get("/scheduler/calendars", async (_req, res) => {
   res.json({ ok: true, calendars: items });
 });
 
+app.get("/calendar/events", async (req, res) => {
+  const start = String(req.query?.start ?? "").trim();
+  const end = String(req.query?.end ?? "").trim();
+  const idsRaw = String(req.query?.salespeople ?? "").trim();
+  if (!start || !end) {
+    return res.status(400).json({ ok: false, error: "Missing start/end" });
+  }
+  const cfg = await getSchedulerConfig();
+  const all = cfg.salespeople ?? [];
+  const wantedIds = idsRaw ? idsRaw.split(",").map(s => s.trim()).filter(Boolean) : [];
+  const selected = wantedIds.length ? all.filter(sp => wantedIds.includes(sp.id)) : all;
+
+  const cal = await getAuthedCalendarClient();
+  const out: any[] = [];
+  for (const sp of selected) {
+    const items = await listEvents(cal, sp.calendarId, start, end, cfg.timezone);
+    for (const ev of items) {
+      const startIso = ev.start?.dateTime ?? ev.start?.date ?? null;
+      const endIso = ev.end?.dateTime ?? ev.end?.date ?? null;
+      out.push({
+        id: ev.id,
+        summary: ev.summary ?? "",
+        start: startIso,
+        end: endIso,
+        status: ev.status ?? "confirmed",
+        calendarId: sp.calendarId,
+        salespersonId: sp.id,
+        salespersonName: sp.name
+      });
+    }
+  }
+  res.json({ ok: true, events: out });
+});
+
+app.post("/calendar/events", requirePermission("canEditAppointments"), async (req, res) => {
+  try {
+    const calendarId = String(req.body?.calendarId ?? "").trim();
+    const summary = String(req.body?.summary ?? "Appointment").trim();
+    const startDate = String(req.body?.startDate ?? "").trim();
+    const startTime = String(req.body?.startTime ?? "").trim();
+    const endDate = String(req.body?.endDate ?? "").trim();
+    const endTime = String(req.body?.endTime ?? "").trim();
+    const tz = String(req.body?.timeZone ?? "America/New_York").trim();
+
+    if (!calendarId || !startDate || !startTime || !endDate || !endTime) {
+      return res.status(400).json({ ok: false, error: "Missing calendarId/start/end" });
+    }
+
+    const [sy, sm, sd] = startDate.split("-").map(Number);
+    const [ey, em, ed] = endDate.split("-").map(Number);
+    const [sh, smin] = startTime.split(":").map(Number);
+    const [eh, emin] = endTime.split(":").map(Number);
+
+    const start = localPartsToUtcDate(tz, { year: sy, month: sm, day: sd, hour24: sh, minute: smin });
+    const end = localPartsToUtcDate(tz, { year: ey, month: em, day: ed, hour24: eh, minute: emin });
+
+    const cal = await getAuthedCalendarClient();
+    const event = await insertEvent(
+      cal,
+      calendarId,
+      tz,
+      summary,
+      "",
+      start.toISOString(),
+      end.toISOString()
+    );
+
+    return res.json({ ok: true, event });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: e?.message ?? "Failed to create event" });
+  }
+});
+
+app.patch("/calendar/events/:calendarId/:eventId", requirePermission("canEditAppointments"), async (req, res) => {
+  try {
+    console.log("[calendar edit] body", req.body);
+    const calendarId = String(req.params.calendarId ?? "").trim();
+    const eventId = String(req.params.eventId ?? "").trim();
+    if (!calendarId || !eventId) return res.status(400).json({ ok: false, error: "Missing calendarId/eventId" });
+    const cfg = await getSchedulerConfig();
+    console.log("[calendar edit] cfg.timezone", cfg.timezone);
+    const tz = typeof cfg.timezone === "string" && cfg.timezone ? cfg.timezone : "America/New_York";
+    const startDate = String(req.body?.startDate ?? "").trim(); // YYYY-MM-DD
+    const startTime = String(req.body?.startTime ?? "").trim(); // HH:MM
+    const endDate = String(req.body?.endDate ?? startDate).trim();
+    const endTime = String(req.body?.endTime ?? "").trim();
+    const summary = req.body?.summary != null ? String(req.body.summary) : undefined;
+    const status = req.body?.status != null ? String(req.body.status) : undefined;
+    const newCalendarId = req.body?.calendarId != null ? String(req.body.calendarId).trim() : "";
+    const reason = req.body?.reason != null ? String(req.body.reason) : "";
+
+    let startIso: string | undefined;
+    let endIso: string | undefined;
+    if (startDate && startTime && endDate && endTime) {
+      const [sy, sm, sd] = startDate.split("-").map(Number);
+      const [sh, smin] = startTime.split(":").map(Number);
+      const [ey, em, ed] = endDate.split("-").map(Number);
+      const [eh, emin] = endTime.split(":").map(Number);
+      const start = localPartsToUtcDate(tz, { year: sy, month: sm, day: sd, hour24: sh, minute: smin });
+      const end = localPartsToUtcDate(tz, { year: ey, month: em, day: ed, hour24: eh, minute: emin });
+      startIso = start.toISOString();
+      endIso = end.toISOString();
+    }
+
+    const description =
+      status === "no_show"
+        ? `Status: no_show${reason ? `\nReason: ${reason}` : ""}`
+        : status === "cancelled"
+          ? `Status: cancelled${reason ? `\nReason: ${reason}` : ""}`
+          : reason
+            ? `Reason: ${reason}`
+            : undefined;
+
+    const cal = await getAuthedCalendarClient();
+    let targetCalendarId = calendarId;
+    if (newCalendarId && newCalendarId !== calendarId) {
+      await moveEvent(cal, calendarId, eventId, newCalendarId);
+      targetCalendarId = newCalendarId;
+    }
+    const updated = await updateEventDetails(cal, targetCalendarId, eventId, tz, {
+      startIso,
+      endIso,
+      summary,
+      description,
+      status: status === "cancelled" ? "cancelled" : undefined
+    });
+    res.json({ ok: true, event: updated });
+  } catch (err: any) {
+    console.log("[calendar edit] error", err?.message ?? err);
+    res.status(500).json({ ok: false, error: err?.message ?? "Failed to update event" });
+  }
+});
+
+app.post("/scheduler/calendars", requireManager, async (req, res) => {
+  const name = String(req.body?.name ?? "").trim();
+  if (!name) return res.status(400).json({ ok: false, error: "Missing name" });
+  const cfg = await getSchedulerConfig();
+  const cal = await getAuthedCalendarClient();
+  const created = await createCalendar(cal, name, cfg.timezone);
+  res.json({ ok: true, calendar: { id: created.id, summary: created.summary, timeZone: created.timeZone } });
+});
+
+app.post("/scheduler/availability-blocks", requireManager, async (req, res) => {
+  const salespersonId = String(req.body?.salespersonId ?? "").trim();
+  const title = String(req.body?.title ?? "").trim();
+  const rrule = String(req.body?.rrule ?? "").trim();
+  const start = String(req.body?.start ?? "").trim(); // HH:MM
+  const end = String(req.body?.end ?? "").trim(); // HH:MM
+  const days = Array.isArray(req.body?.days) ? (req.body.days as string[]).map(d => String(d)) : undefined;
+  if (!salespersonId || !title || !rrule || !start || !end) {
+    return res.status(400).json({ ok: false, error: "Missing salespersonId/title/rrule/start/end" });
+  }
+  const cfg = await getSchedulerConfig();
+  const sp =
+    (cfg.salespeople ?? []).find(s => s.id === salespersonId) ??
+    (cfg.salespeople ?? []).find(s => s.calendarId === salespersonId);
+  if (!sp) return res.status(404).json({ ok: false, error: "Salesperson not found" });
+  const [sh, sm] = start.split(":").map(Number);
+  const [eh, em] = end.split(":").map(Number);
+  const cal = await getAuthedCalendarClient();
+  const created = await createRecurringBlock(
+    cal,
+    sp.calendarId,
+    cfg.timezone,
+    title,
+    { hour: sh, minute: sm },
+    { hour: eh, minute: em },
+    rrule
+  );
+  const updatedCfg = await saveSchedulerConfig({
+    ...(cfg as any),
+    availabilityBlocks: {
+      ...(cfg.availabilityBlocks ?? {}),
+      [salespersonId]: [
+        ...((cfg.availabilityBlocks ?? {})[salespersonId] ?? []),
+        { id: created.id, title, rrule, start, end, days }
+      ]
+    }
+  });
+  res.json({ ok: true, block: { id: created.id, title, rrule, start, end, days }, config: updatedCfg });
+});
+
+app.delete("/scheduler/availability-blocks/:salespersonId/:eventId", requireManager, async (req, res) => {
+  const salespersonId = String(req.params.salespersonId ?? "").trim();
+  const eventId = String(req.params.eventId ?? "").trim();
+  const cfg = await getSchedulerConfig();
+  const sp =
+    (cfg.salespeople ?? []).find(s => s.id === salespersonId) ??
+    (cfg.salespeople ?? []).find(s => s.calendarId === salespersonId);
+  if (!sp) return res.status(404).json({ ok: false, error: "Salesperson not found" });
+  const cal = await getAuthedCalendarClient();
+  await deleteEvent(cal, sp.calendarId, eventId);
+  const remaining = ((cfg.availabilityBlocks ?? {})[salespersonId] ?? []).filter(b => b.id !== eventId);
+  const updatedCfg = await saveSchedulerConfig({
+    ...(cfg as any),
+    availabilityBlocks: {
+      ...(cfg.availabilityBlocks ?? {}),
+      [salespersonId]: remaining
+    }
+  });
+  res.json({ ok: true, config: updatedCfg });
+});
+
+app.get("/scheduler-config", async (_req, res) => {
+  const cfg = await getSchedulerConfig();
+  res.json({ ok: true, config: cfg });
+});
+
+app.put("/scheduler-config", requireManager, async (req, res) => {
+  const saved = await saveSchedulerConfig(req.body ?? {});
+  res.json({ ok: true, config: saved });
+});
+
 
 app.get("/debug/inventory/:stock", async (req, res) => {
   const stock = String(req.params.stock ?? "").trim();
@@ -506,9 +1421,30 @@ app.get("/debug/inventory/:stock", async (req, res) => {
   return res.json({ ok: true, stock, resolved, status });
 });
 
+app.get("/debug/inventory-price", async (req, res) => {
+  const stock = String(req.query.stock ?? "").trim();
+  if (!stock) return res.status(400).json({ ok: false, error: "missing stock" });
+  try {
+    const result = await findInventoryPrice({ stockId: stock });
+    return res.json({ ok: true, stock, result });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: e?.message ?? "lookup_failed" });
+  }
+});
+
 app.get("/debug/dealer-profile", async (_req, res) => {
   const profile = await getDealerProfile();
   res.json({ ok: true, profile });
+});
+
+app.get("/dealer-profile", async (_req, res) => {
+  const profile = await getDealerProfile();
+  res.json({ ok: true, profile });
+});
+
+app.put("/dealer-profile", requireManager, async (req, res) => {
+  const saved = await saveDealerProfile(req.body ?? {});
+  res.json({ ok: true, profile: saved });
 });
 
 app.post("/inventory/status", (req, res) => {
@@ -548,7 +1484,7 @@ app.get("/conversations/:id", (req, res) => {
   res.json({ ok: true, systemMode: getSystemMode(), conversation: conv });
 });
 
-app.post("/conversations/:id/mode", (req, res) => {
+app.post("/conversations/:id/mode", requirePermission("canToggleHumanOverride"), (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
   const mode = String(req.body?.mode ?? "").trim();
@@ -574,11 +1510,11 @@ app.delete("/conversations/:id", (req, res) => {
   return res.json({ ok: true });
 });
 
-app.get("/todos", (_req, res) => {
+app.get("/todos", requirePermission("canAccessTodos"), (_req, res) => {
   res.json({ ok: true, todos: listOpenTodos() });
 });
 
-app.post("/todos/:convId/:todoId/done", (req, res) => {
+app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), (req, res) => {
   const { convId, todoId } = req.params;
   const task = markTodoDone(convId, todoId);
   const conv = getConversation(convId);
@@ -589,25 +1525,76 @@ app.post("/todos/:convId/:todoId/done", (req, res) => {
   res.json({ ok: true, todo: task });
 });
 
-app.get("/suppressions", (_req, res) => {
+app.get("/suppressions", requirePermission("canAccessSuppressions"), (_req, res) => {
   res.json({ ok: true, suppressions: listSuppressions() });
 });
 
-app.post("/suppressions", async (req, res) => {
+app.get("/contacts", (_req, res) => {
+  function extractInquiry(body?: string): string | undefined {
+    if (!body) return undefined;
+    const idx = body.toLowerCase().lastIndexOf("inquiry:");
+    if (idx === -1) return undefined;
+    return body.slice(idx + "inquiry:".length).trim() || undefined;
+  }
+
+  const contacts = listContacts().map(c => {
+    const convId = c.conversationId ?? c.leadKey;
+    const conv = convId ? getConversation(convId) : null;
+    const archived = !!(conv?.status === "closed" || conv?.closedAt);
+    const suppressed = c.phone ? isSuppressed(c.phone) : c.leadKey ? isSuppressed(c.leadKey) : false;
+    const status = suppressed ? "suppressed" : archived ? "archived" : "active";
+    const lastAdf = conv?.messages
+      ?.slice()
+      .reverse()
+      .find(m => m.direction === "in" && m.provider === "sendgrid_adf");
+    const inquiry = extractInquiry(lastAdf?.body);
+    return {
+      ...c,
+      stockId: c.stockId ?? conv?.lead?.vehicle?.stockId,
+      vin: c.vin ?? conv?.lead?.vehicle?.vin,
+      year: c.year ?? conv?.lead?.vehicle?.year,
+      vehicle: c.vehicle ?? conv?.lead?.vehicle?.model,
+      vehicleDescription:
+        c.vehicleDescription ?? conv?.lead?.vehicle?.description ?? conv?.lead?.vehicle?.model,
+      inquiry: c.inquiry ?? inquiry,
+      status
+    };
+  });
+  res.json({ ok: true, contacts });
+});
+
+app.patch("/contacts/:id", (req, res) => {
+  const updated = updateContact(req.params.id, req.body ?? {});
+  if (!updated) return res.status(404).json({ ok: false, error: "Not found" });
+  res.json({ ok: true, contact: updated });
+});
+
+app.delete("/contacts/:id", (req, res) => {
+  const ok = deleteContact(req.params.id);
+  if (!ok) return res.status(404).json({ ok: false, error: "Not found" });
+  res.json({ ok: true });
+});
+
+app.post("/suppressions", requirePermission("canAccessSuppressions"), async (req, res) => {
   const phone = String(req.body?.phone ?? "").trim();
   if (!phone) return res.status(400).json({ ok: false, error: "Missing phone" });
   const entry = await addSuppression(phone, String(req.body?.reason ?? "manual"), "ui");
   res.json({ ok: true, entry });
 });
 
-app.delete("/suppressions/:phone", async (req, res) => {
+app.delete("/suppressions/:phone", requirePermission("canAccessSuppressions"), async (req, res) => {
   const ok = await removeSuppression(String(req.params.phone ?? ""));
   res.json({ ok });
 });
 
-function buildTranscript(conv: any, maxMessages = 60): string {
+function buildTranscript(
+  conv: any,
+  opts?: { since?: string; maxMessages?: number }
+): { note: string; lastAt?: string; count: number } {
   const lead = conv.lead ?? {};
   const vehicle = lead.vehicle ?? {};
+  const since = opts?.since;
+  const maxMessages = opts?.maxMessages ?? 60;
   const header = [
     `LeadKey: ${conv.leadKey}`,
     lead.leadRef ? `Lead Ref: ${lead.leadRef}` : null,
@@ -624,14 +1611,27 @@ function buildTranscript(conv: any, maxMessages = 60): string {
     .filter(Boolean)
     .join("\n");
 
-  const messages = conv.messages.slice(-maxMessages).map((m: any) => {
+  let messages = Array.isArray(conv.messages) ? conv.messages : [];
+  if (since) {
+    messages = messages.filter((m: any) => m?.at && m.at > since);
+  }
+  if (maxMessages > 0) {
+    messages = messages.slice(-maxMessages);
+  }
+  if (messages.length === 0) {
+    return { note: "", lastAt: undefined, count: 0 };
+  }
+
+  const lines = messages.map((m: any) => {
     const when = new Date(m.at).toLocaleString();
     const dir = m.direction === "in" ? "IN" : "OUT";
     const prov = m.provider ? ` ${m.provider}` : "";
     return `[${when}] ${dir}${prov}: ${m.body}`;
   });
 
-  return `${header}\n\nTranscript:\n${messages.join("\n")}`.trim();
+  const note = `${header}\n\nNew messages:\n${lines.join("\n")}`.trim();
+  const lastAt = messages[messages.length - 1]?.at;
+  return { note, lastAt, count: messages.length };
 }
 
 app.post("/crm/tlp/log-contact", async (req, res) => {
@@ -645,10 +1645,14 @@ app.post("/crm/tlp/log-contact", async (req, res) => {
   const conv = getConversation(conversationId);
   if (!conv) return res.status(404).json({ ok: false, error: "Conversation not found" });
 
-  const note = buildTranscript(conv);
+  const { note, lastAt, count } = buildTranscript(conv, { since: conv.crm?.lastLoggedAt });
+  if (count === 0 || !note) {
+    return res.json({ ok: true, skipped: true, reason: "no_new_messages" });
+  }
 
   try {
     await tlpLogCustomerContact({ leadRef, note, categoryValue });
+    if (lastAt) setCrmLastLoggedAt(conv, lastAt);
     return res.json({ ok: true });
   } catch (err: any) {
     return res.status(500).json({ ok: false, error: err?.message ?? "Failed to log contact" });
@@ -664,6 +1668,7 @@ app.post("/conversations/:id/send", async (req, res) => {
   if (!body) return res.status(400).json({ ok: false, error: "Missing body" });
 
   const draftId = req.body?.draftId ? String(req.body.draftId) : undefined;
+  const manualTakeover = req.body?.manualTakeover === true;
   const editNote = req.body?.editNote ? String(req.body.editNote).trim() : null;
   const draftCandidate = draftId
     ? conv.messages.find(m => m.id === draftId)
@@ -711,7 +1716,11 @@ app.post("/conversations/:id/send", async (req, res) => {
       console.log("📝 TLP skip: missing leadRef", { convId: conv.id });
       return;
     }
-    const note = buildTranscript(conv);
+    const { note, lastAt, count } = buildTranscript(conv, { since: conv.crm?.lastLoggedAt });
+    if (count === 0 || !note) {
+      console.log("📝 TLP skip: no new messages", { leadRef, convId: conv.id });
+      return;
+    }
     try {
       console.log("📝 TLP env", {
         TLP_USERNAME: process.env.TLP_USERNAME ? "set" : "missing",
@@ -721,6 +1730,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       });
       console.log("📝 TLP log start", { leadRef, convId: conv.id });
       await tlpLogCustomerContact({ leadRef, note });
+      if (lastAt) setCrmLastLoggedAt(conv, lastAt);
       console.log("✅ TLP log success", { leadRef, convId: conv.id });
     } catch (err: any) {
       console.warn("⚠️ TLP log failed:", err?.message ?? err);
@@ -737,6 +1747,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
     }
+    if (manualTakeover) setConversationMode(conv.id, "human");
     markAppointmentAcknowledged(conv);
     await logRow(null);
     await maybeLogTlp();
@@ -760,6 +1771,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
     }
+    if (manualTakeover) setConversationMode(conv.id, "human");
     markAppointmentAcknowledged(conv);
     await logRow(null);
     await maybeLogTlp();
@@ -783,6 +1795,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
     }
+    if (manualTakeover) setConversationMode(conv.id, "human");
     markAppointmentAcknowledged(conv);
     await logRow(msg.sid);
     await maybeLogTlp();
@@ -803,6 +1816,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
     }
+    if (manualTakeover) setConversationMode(conv.id, "human");
     markAppointmentAcknowledged(conv);
     await logRow(null);
 
@@ -888,6 +1902,73 @@ if (authToken && signature) {
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
+
+  // 24-hour appointment confirmation replies (YES/NO)
+  if (
+    conv.appointment?.bookedEventId &&
+    conv.appointment?.confirmation?.status === "pending" &&
+    conv.appointment?.confirmation?.sentAt
+  ) {
+    const text = (event.body || "").trim().toLowerCase();
+    const isYes = /\b(yes|yep|yeah|yup|confirm|confirmed|ok|okay|sure)\b/.test(text);
+    const isNo = /\b(no|nope|nah|cancel|reschedule)\b/.test(text);
+    if (isYes || isNo) {
+      let tz = "America/New_York";
+      conv.appointment.confirmation = {
+        ...conv.appointment.confirmation,
+        status: isYes ? "confirmed" : "declined",
+        respondedAt: new Date().toISOString()
+      };
+      if (isNo) {
+        try {
+          const cfg = await getSchedulerConfig();
+          tz = cfg.timezone;
+          const cal = await getAuthedCalendarClient();
+          const calendarId =
+            cfg.salespeople?.find(p => p.id === conv.appointment?.bookedSalespersonId)?.calendarId ??
+            conv.appointment?.matchedSlot?.calendarId ??
+            "";
+          if (calendarId) {
+            await updateEventDetails(cal, calendarId, conv.appointment.bookedEventId, cfg.timezone, {
+              status: "cancelled"
+            });
+          }
+        } catch (e: any) {
+          console.log("[appt-confirm] cancel failed:", e?.message ?? e);
+        }
+        conv.appointment.status = "none";
+        conv.appointment.whenText = undefined;
+        conv.appointment.whenIso = null;
+        conv.appointment.confirmedBy = undefined;
+        conv.appointment.bookedEventId = null;
+        conv.appointment.bookedEventLink = null;
+        conv.appointment.bookedSalespersonId = null;
+        conv.appointment.acknowledged = true;
+        conv.appointment.reschedulePending = true;
+      }
+      if (isYes) {
+        try {
+          const cfg = await getSchedulerConfig();
+          tz = cfg.timezone;
+        } catch {}
+      }
+      const when = conv.appointment?.whenIso ? formatSlotLocal(conv.appointment.whenIso, tz) : null;
+      const reply = isYes
+        ? `Thanks — you’re all set for ${when ?? "your appointment"}. See you then.`
+        : "No problem — I’ve cancelled it. What day/time works best to reschedule?";
+      const systemMode = effectiveMode(conv);
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+  }
   const didConfirm = confirmAppointmentIfMatchesSuggested(conv, event.body, event.providerMessageId);
   updateHoldingFromInbound(conv, event.body);
 
@@ -922,7 +2003,7 @@ if (authToken && signature) {
   if (conv.appointment?.bookedEventId) {
     const cfg = await getSchedulerConfig();
     const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
-    const preferredSalespeople = cfg.preferredSalespeople ?? [];
+    const preferredSalespeople = getPreferredSalespeople(cfg);
     const salespeople = cfg.salespeople ?? [];
     const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
     requestedReschedule = parseRequestedDayTime(event.body, cfg.timezone);
@@ -1116,6 +2197,13 @@ if (authToken && signature) {
         `Perfect — you’re booked for ${when}${repName}. ` +
         `${dealerName} is at ${addressLine}.`;
 
+      const systemMode = effectiveMode(conv);
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, confirmText, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+
       appendOutbound(conv, event.to, event.from, confirmText, "twilio", eventObj.id ?? undefined);
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
         confirmText
@@ -1187,6 +2275,12 @@ if (authToken && signature) {
       const confirmText =
         `Perfect — you’re booked for ${when}${repName}. ` +
         `${dealerName} is at ${addressLine}.`;
+      const systemMode = effectiveMode(conv);
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, confirmText, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
 
       // Log as actually sent
       appendOutbound(conv, event.to, event.from, confirmText, "twilio", eventObj.id ?? undefined);
@@ -1227,6 +2321,15 @@ if (authToken && signature) {
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
+  if (result.autoClose?.reason) {
+    const ack = result.draft;
+    closeConversation(conv, result.autoClose.reason);
+    appendOutbound(conv, event.to, event.from, ack, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      ack
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (result.pricingAttempted) {
     incrementPricingAttempt(conv);
   }
@@ -1240,9 +2343,10 @@ if (authToken && signature) {
 
   if (!didConfirm && result.requestedTime) {
     try {
+      const skipExactBooking = /(this time|same time)/i.test(event.body);
       const cfg = await getSchedulerConfig();
       const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
-      const preferredSalespeople = cfg.preferredSalespeople ?? [];
+      const preferredSalespeople = getPreferredSalespeople(cfg);
       const salespeople = cfg.salespeople ?? [];
       const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
       const appointmentType = String(result.requestedAppointmentType ?? "inventory_visit");
@@ -1253,82 +2357,84 @@ if (authToken && signature) {
       const timeMin = new Date(now).toISOString();
       const timeMax = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString();
 
-      for (const salespersonId of preferredSalespeople) {
-        const sp = salespeople.find((p: any) => p.id === salespersonId);
-        if (!sp) continue;
+      if (!skipExactBooking) {
+        for (const salespersonId of preferredSalespeople) {
+          const sp = salespeople.find((p: any) => p.id === salespersonId);
+          if (!sp) continue;
 
-        const fb = await queryFreeBusy(cal, [sp.calendarId], timeMin, timeMax, cfg.timezone);
-        const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any;
-        const expanded = expandBusyBlocks(busy, gapMinutes);
+          const fb = await queryFreeBusy(cal, [sp.calendarId], timeMin, timeMax, cfg.timezone);
+          const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any;
+          const expanded = expandBusyBlocks(busy, gapMinutes);
 
-        const exact = findExactSlotForSalesperson(
-          cfg,
-          sp.id,
-          sp.calendarId,
-          result.requestedTime,
-          durationMinutes,
-          expanded
-        );
-
-        if (exact) {
-          const stockId = conv.lead?.vehicle?.stockId ?? null;
-          const firstName = conv.lead?.firstName ?? "";
-          const leadName = firstName ? firstName : conv.leadKey;
-
-          const summary = `Appt: ${appointmentType} – ${leadName}${stockId ? ` – ${stockId}` : ""}`;
-          const description = [
-            `LeadKey: ${conv.leadKey}`,
-            `Phone: ${conv.lead?.phone ?? conv.leadKey}`,
-            `Email: ${conv.lead?.email ?? ""}`,
-            `Stock: ${stockId ?? ""}`,
-            `VIN: ${conv.lead?.vehicle?.vin ?? ""}`,
-            `Source: ${conv.lead?.source ?? ""}`
-          ]
-            .filter(Boolean)
-            .join("\n");
-
-          const eventObj = await insertEvent(
-            cal,
-            exact.calendarId,
-            cfg.timezone,
-            summary,
-            description,
-            exact.start,
-            exact.end
+          const exact = findExactSlotForSalesperson(
+            cfg,
+            sp.id,
+            sp.calendarId,
+            result.requestedTime,
+            durationMinutes,
+            expanded
           );
 
-          conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
-          conv.appointment.status = "confirmed";
-          conv.appointment.whenText = formatSlotLocal(exact.start, cfg.timezone);
-          conv.appointment.whenIso = exact.start;
-          conv.appointment.confirmedBy = "customer";
-          conv.appointment.updatedAt = new Date().toISOString();
-          conv.appointment.acknowledged = true;
-          conv.appointment.bookedEventId = eventObj.id ?? null;
-          conv.appointment.bookedEventLink = eventObj.htmlLink ?? null;
-          conv.appointment.bookedSalespersonId = exact.salespersonId ?? null;
-          stopFollowUpCadence(conv, "appointment_booked");
+          if (exact) {
+            const stockId = conv.lead?.vehicle?.stockId ?? null;
+            const firstName = conv.lead?.firstName ?? "";
+            const leadName = firstName ? firstName : conv.leadKey;
 
-          if (conv.scheduler) {
-            conv.scheduler.lastSuggestedSlots = [];
-            conv.scheduler.updatedAt = new Date().toISOString();
+            const summary = `Appt: ${appointmentType} – ${leadName}${stockId ? ` – ${stockId}` : ""}`;
+            const description = [
+              `LeadKey: ${conv.leadKey}`,
+              `Phone: ${conv.lead?.phone ?? conv.leadKey}`,
+              `Email: ${conv.lead?.email ?? ""}`,
+              `Stock: ${stockId ?? ""}`,
+              `VIN: ${conv.lead?.vehicle?.vin ?? ""}`,
+              `Source: ${conv.lead?.source ?? ""}`
+            ]
+              .filter(Boolean)
+              .join("\n");
+
+            const eventObj = await insertEvent(
+              cal,
+              exact.calendarId,
+              cfg.timezone,
+              summary,
+              description,
+              exact.start,
+              exact.end
+            );
+
+            conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
+            conv.appointment.status = "confirmed";
+            conv.appointment.whenText = formatSlotLocal(exact.start, cfg.timezone);
+            conv.appointment.whenIso = exact.start;
+            conv.appointment.confirmedBy = "customer";
+            conv.appointment.updatedAt = new Date().toISOString();
+            conv.appointment.acknowledged = true;
+            conv.appointment.bookedEventId = eventObj.id ?? null;
+            conv.appointment.bookedEventLink = eventObj.htmlLink ?? null;
+            conv.appointment.bookedSalespersonId = exact.salespersonId ?? null;
+            stopFollowUpCadence(conv, "appointment_booked");
+
+            if (conv.scheduler) {
+              conv.scheduler.lastSuggestedSlots = [];
+              conv.scheduler.updatedAt = new Date().toISOString();
+            }
+
+            const dealerName =
+              (conv as any).dealerProfile?.dealerName ?? "American Harley-Davidson";
+            const addressLine = "1149 Erie Ave., North Tonawanda, NY 14120";
+            const when = formatSlotLocal(exact.start, cfg.timezone);
+            const repName = sp.name ? ` with ${sp.name}` : "";
+            const confirmText =
+              `Perfect — you’re booked for ${when}${repName}. ` +
+              `${dealerName} is at ${addressLine}.`;
+
+            appendOutbound(conv, event.to, event.from, confirmText, "twilio", eventObj.id ?? undefined);
+
+            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+              confirmText
+            )}</Message>\n</Response>`;
+            return res.status(200).type("text/xml").send(twiml);
           }
-
-          const dealerName =
-            (conv as any).dealerProfile?.dealerName ?? "American Harley-Davidson";
-          const addressLine = "1149 Erie Ave., North Tonawanda, NY 14120";
-          const when = formatSlotLocal(exact.start, cfg.timezone);
-          const repName = sp.name ? ` with ${sp.name}` : "";
-          const confirmText =
-            `Perfect — you’re booked for ${when}${repName}. ` +
-            `${dealerName} is at ${addressLine}.`;
-
-          appendOutbound(conv, event.to, event.from, confirmText, "twilio", eventObj.id ?? undefined);
-
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-            confirmText
-          )}</Message>\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
         }
       }
 
@@ -1336,6 +2442,26 @@ if (authToken && signature) {
       const candidatesByDay = generateCandidateSlots(cfg, now, durationMinutes, 14);
       const requestedStartUtc = localPartsToUtcDate(cfg.timezone, result.requestedTime);
       const requestedDayKey = result.requestedTime?.dayOfWeek ?? dayKey(requestedStartUtc, cfg.timezone);
+      const requestedDayHours = cfg.businessHours?.[requestedDayKey];
+      const requestedDayClosed = !requestedDayHours || !requestedDayHours.open || !requestedDayHours.close;
+      const requestedDateKey = `${result.requestedTime.year}-${String(result.requestedTime.month).padStart(2, "0")}-${String(
+        result.requestedTime.day
+      ).padStart(2, "0")}`;
+      const isSameLocalDate = (d: Date) => {
+        const fmt = new Intl.DateTimeFormat("en-US", {
+          timeZone: cfg.timezone,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit"
+        });
+        const parts = fmt.formatToParts(d);
+        const map: Record<string, string> = {};
+        for (const p of parts) {
+          if (p.type !== "literal") map[p.type] = p.value;
+        }
+        const key = `${map.year}-${map.month}-${map.day}`;
+        return key === requestedDateKey;
+      };
 
       let bestSlots: any[] = [];
       for (const salespersonId of preferredSalespeople) {
@@ -1346,26 +2472,43 @@ if (authToken && signature) {
         const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any;
         const expanded = expandBusyBlocks(busy, gapMinutes);
 
-        const sameDay = candidatesByDay.filter(d => dayKey(d.dayStart, cfg.timezone) === requestedDayKey);
-        const requestedDaySpecified = !!result.requestedTime?.dayOfWeek;
-        const isRequestedSaturday = requestedDayKey === "saturday";
-        const nextSaturday = candidatesByDay.filter(
-          d => dayKey(d.dayStart, cfg.timezone) === "saturday" && d.dayStart.getTime() > now.getTime()
+        const sameDay = candidatesByDay.filter(
+          d => dayKey(d.dayStart, cfg.timezone) === requestedDayKey && isSameLocalDate(d.dayStart)
         );
-
-        let pool = sameDay;
-        if (pool.length === 0 && requestedDaySpecified && isRequestedSaturday && nextSaturday.length > 0) {
-          pool = nextSaturday;
+        const requestedDaySpecified = !!result.requestedTime?.dayOfWeek;
+        const targetStart = requestedStartUtc;
+        let pool = sameDay.filter(d => d.dayStart.getTime() >= targetStart.getTime());
+        if (pool.length === 0 && !requestedDaySpecified) {
+          pool = candidatesByDay;
         }
         if (pool.length === 0) {
-          pool = candidatesByDay;
+          pool = sameDay;
         }
 
         const flat = pool.flatMap(d => d.candidates);
-        const available = flat.filter(c => !expanded.some(b => c.start < b.end && b.start < c.end));
-        available.sort((a, b) => Math.abs(a.start.getTime() - requestedStartUtc.getTime()) - Math.abs(b.start.getTime() - requestedStartUtc.getTime()));
+        const available = flat
+          .filter(c => !expanded.some(b => c.start < b.end && b.start < c.end))
+          .sort((a, b) => a.start.getTime() - b.start.getTime());
+        const after = available.filter(c => c.start.getTime() >= requestedStartUtc.getTime());
+        const before = available
+          .filter(c => c.start.getTime() < requestedStartUtc.getTime())
+          .sort((a, b) => b.start.getTime() - a.start.getTime());
+        const picked: any[] = [];
+        const tryAdd = (c: { start: Date; end: Date }) => {
+          if (picked.length >= 2) return;
+          const tooClose = picked.some((r: any) => {
+            const rs = new Date(new Date(r.start).getTime() - gapMinutes * 60_000);
+            const re = new Date(new Date(r.end).getTime() + gapMinutes * 60_000);
+            return c.start < re && rs < c.end;
+          });
+          if (!tooClose) {
+            picked.push(c);
+          }
+        };
+        for (const c of after) tryAdd(c);
+        for (const c of before) tryAdd(c);
 
-        const picked = available.slice(0, 2).map(s => ({
+        const mapped = picked.map(s => ({
           salespersonId: sp.id,
           salespersonName: sp.name,
           calendarId: sp.calendarId,
@@ -1374,10 +2517,10 @@ if (authToken && signature) {
           startLocal: formatSlotLocal(s.start.toISOString(), cfg.timezone),
           endLocal: formatSlotLocal(s.end.toISOString(), cfg.timezone),
           appointmentType
-        }));
+        })).sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
 
-        if (picked.length >= 2) {
-          bestSlots = picked;
+        if (mapped.length >= 2) {
+          bestSlots = mapped;
           break;
         }
       }
@@ -1390,9 +2533,11 @@ if (authToken && signature) {
           d => dayKey(d.dayStart, cfg.timezone) === requestedDayKey && d.candidates.length > 0
         );
         let prefix = "";
-        if (requestedDaySpecified && !sameDayHasCandidates) {
+        if (requestedDaySpecified && (requestedDayClosed || !sameDayHasCandidates)) {
           const todayKey = dayKey(now, cfg.timezone);
-          if (todayKey === requestedDayKey) {
+          if (requestedDayClosed) {
+            prefix = `We’re closed on ${dayName}, but`;
+          } else if (todayKey === requestedDayKey) {
             prefix = "I'm booked up for the rest of today, but";
           } else {
             prefix = `I'm booked up for the rest of ${dayName}, but`;

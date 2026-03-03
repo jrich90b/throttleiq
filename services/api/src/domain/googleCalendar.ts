@@ -82,3 +82,102 @@ export async function updateEvent(calendar: any, calendarId: string, eventId: st
   });
   return resp.data;
 }
+
+export async function updateEventDetails(
+  calendar: any,
+  calendarId: string,
+  eventId: string,
+  timeZone: string,
+  params: {
+    startIso?: string;
+    endIso?: string;
+    summary?: string;
+    description?: string;
+    status?: string;
+  }
+) {
+  const requestBody: any = {};
+  if (params.summary != null) requestBody.summary = params.summary;
+  if (params.description != null) requestBody.description = params.description;
+  if (params.status != null) requestBody.status = params.status;
+  if (params.startIso) requestBody.start = { dateTime: params.startIso, timeZone };
+  if (params.endIso) requestBody.end = { dateTime: params.endIso, timeZone };
+  const resp = await calendar.events.patch({
+    calendarId,
+    eventId,
+    requestBody
+  });
+  return resp.data;
+}
+
+export async function moveEvent(
+  calendar: any,
+  sourceCalendarId: string,
+  eventId: string,
+  destinationCalendarId: string
+) {
+  const resp = await calendar.events.move({
+    calendarId: sourceCalendarId,
+    eventId,
+    destination: destinationCalendarId
+  });
+  return resp.data;
+}
+
+export async function listEvents(
+  calendar: any,
+  calendarId: string,
+  timeMinIso: string,
+  timeMaxIso: string,
+  timeZone: string
+) {
+  const resp = await calendar.events.list({
+    calendarId,
+    timeMin: timeMinIso,
+    timeMax: timeMaxIso,
+    singleEvents: true,
+    orderBy: "startTime",
+    timeZone
+  });
+  return resp.data.items ?? [];
+}
+
+export async function createCalendar(calendar: any, summary: string, timeZone: string) {
+  const resp = await calendar.calendars.insert({
+    requestBody: {
+      summary,
+      timeZone
+    }
+  });
+  return resp.data;
+}
+
+export async function createRecurringBlock(
+  calendar: any,
+  calendarId: string,
+  timeZone: string,
+  summary: string,
+  startTime: { hour: number; minute: number },
+  endTime: { hour: number; minute: number },
+  rrule: string
+) {
+  const today = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const baseDate = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+  const startIso = `${baseDate}T${pad(startTime.hour)}:${pad(startTime.minute)}:00`;
+  const endIso = `${baseDate}T${pad(endTime.hour)}:${pad(endTime.minute)}:00`;
+  const resp = await calendar.events.insert({
+    calendarId,
+    requestBody: {
+      summary,
+      start: { dateTime: startIso, timeZone },
+      end: { dateTime: endIso, timeZone },
+      recurrence: [rrule]
+    }
+  });
+  return resp.data;
+}
+
+export async function deleteEvent(calendar: any, calendarId: string, eventId: string) {
+  await calendar.events.delete({ calendarId, eventId });
+}

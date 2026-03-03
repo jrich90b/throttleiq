@@ -1,6 +1,6 @@
 let tlsDisabled = false;
 
-export function apiFetch(url: string, options?: RequestInit): Promise<Response> {
+export async function apiFetch(url: string, options?: RequestInit): Promise<Response> {
   const allowInsecure =
     (process.env.API_INSECURE_TLS ?? "false").toLowerCase() === "true" ||
     url.includes("ngrok-free.dev");
@@ -10,5 +10,17 @@ export function apiFetch(url: string, options?: RequestInit): Promise<Response> 
     tlsDisabled = true;
   }
 
-  return fetch(url, options);
+  const headers = new Headers(options?.headers ?? {});
+  try {
+    const { cookies } = await import("next/headers");
+    const store = await cookies();
+    const token = store.get("lr_session")?.value;
+    if (token && !headers.has("x-auth-token")) {
+      headers.set("x-auth-token", token);
+    }
+  } catch {
+    // ignore in non-server contexts
+  }
+
+  return fetch(url, { ...options, headers });
 }

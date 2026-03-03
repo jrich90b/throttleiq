@@ -11,18 +11,21 @@ import {
   updateHoldingFromInbound,
   confirmAppointmentIfMatchesSuggested,
   startFollowUpCadence,
+  scheduleLongTermFollowUp,
   discardPendingDrafts,
   getPricingAttempts,
   incrementPricingAttempt,
   addTodo,
   setFollowUpMode,
   stopFollowUpCadence,
-  markPricingEscalated
+  markPricingEscalated,
+  closeConversation
 } from "../domain/conversationStore.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { resolveChannel, resolveLeadRule } from "../domain/leadSourceRules.js";
 import type { InboundMessageEvent } from "../domain/types.js";
 import { getSchedulerConfig } from "../domain/schedulerConfig.js";
+import { upsertContact } from "../domain/contactsStore.js";
 
 const upload = multer({ storage: multer.memoryStorage() });
 export const sendgridInboundMiddleware = upload.any();
@@ -110,6 +113,34 @@ function extractLeadMeta(adfXml: string): { leadSource?: string; model?: string 
   }
 }
 
+function parseTimeframeMonths(raw?: string): { start?: number; end?: number } | null {
+  if (!raw) return null;
+  const t = raw.toLowerCase();
+  if (/unsure|not sure|unknown/.test(t)) return null;
+  const range = t.match(/(\d+)\s*[-to]+\s*(\d+)\s*month/);
+  if (range) {
+    const a = Number(range[1]);
+    const b = Number(range[2]);
+    if (!Number.isNaN(a) && !Number.isNaN(b)) {
+      return { start: Math.min(a, b), end: Math.max(a, b) };
+    }
+  }
+  const single = t.match(/(\d+)\s*month/);
+  if (single) {
+    const a = Number(single[1]);
+    if (!Number.isNaN(a)) return { start: a };
+  }
+  return null;
+}
+
+function buildLongTermMessage(timeframe?: string, hasLicense?: boolean) {
+  const tf = timeframe ? timeframe.trim() : "a future";
+  if (hasLicense === true) {
+    return `Hi, this is Brooke at American Harley-Davidson. Just circling back since you mentioned a ${tf} timeline. Want to come in and check out options or set up a test ride? I can get you scheduled for a test ride.`;
+  }
+  return `Hi, this is Brooke at American Harley-Davidson. Just circling back since you mentioned a ${tf} timeline. Want to come in and check out options?`;
+}
+
 export async function handleSendgridInbound(req: Request, res: Response) {
   console.log("[sendgrid inbound] meta:", {
     contentType: req.header("content-type"),
@@ -193,6 +224,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   });
   const meta = extractLeadMeta(adfXml);
   const leadSource = meta.leadSource?.trim() || undefined;
+  const timeframeInfo = parseTimeframeMonths(lead.purchaseTimeframe);
 
   // Choose a stable conversation key
   const leadKey =
@@ -208,11 +240,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     lastName: lead.lastName,
     email: lead.email,
     phone: lead.phone,
+    purchaseTimeframe: lead.purchaseTimeframe,
+    purchaseTimeframeMonthsStart: timeframeInfo?.start,
+    purchaseTimeframeMonthsEnd: timeframeInfo?.end,
+    hasMotoLicense: lead.hasMotoLicense,
     vehicle: {
       stockId: lead.stockId,
       vin: lead.vin,
       year: lead.year,
       model: meta.model,
+      color: lead.vehicleColor,
       description: lead.vehicleDescription
     }
   });
@@ -225,6 +262,25 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   } else {
     conv.lead.vehicle.condition = "new_model_interest";
   }
+
+  upsertContact({
+    leadKey: conv.leadKey,
+    conversationId: conv.id,
+    leadRef,
+    leadSource,
+    firstName: lead.firstName,
+    lastName: lead.lastName,
+    name: [lead.firstName, lead.lastName].filter(Boolean).join(" ").trim() || undefined,
+    email: lead.email,
+    phone: lead.phone,
+    vehicleDescription: lead.vehicleDescription ?? meta.model,
+    stockId: lead.stockId,
+    vin: lead.vin,
+    year: lead.year,
+    vehicle: meta.model,
+    inquiry: lead.inquiry,
+    lastAdfAt: new Date().toISOString()
+  });
 
   const rule = resolveLeadRule(leadSource);
   const inquiryText = (lead.inquiry ?? "").toLowerCase();
@@ -347,6 +403,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const result = await orchestrateInbound(event, history, {
     appointment: conv.appointment,
     followUp: conv.followUp,
+    lead: conv.lead,
     leadSource: conv.lead?.source ?? null,
     bucket: conv.classification?.bucket ?? null,
     cta: conv.classification?.cta ?? null,
@@ -378,6 +435,25 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     });
   }
 
+  if (result.autoClose?.reason) {
+    closeConversation(conv, result.autoClose.reason);
+    appendOutbound(conv, "dealership", leadKey, result.draft, "draft_ai");
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: result.intent,
+      stage: result.stage,
+      draft: result.draft,
+      autoClose: result.autoClose
+    });
+  }
+
   if (result.pricingAttempted) {
     incrementPricingAttempt(conv);
   }
@@ -388,7 +464,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   appendOutbound(conv, "dealership", leadKey, draft, "draft_ai");
   if (!conv.followUpCadence?.status && !conv.appointment?.bookedEventId) {
     const cfg = await getSchedulerConfig();
-    startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
+    const monthsStart = conv.lead?.purchaseTimeframeMonthsStart;
+    if (monthsStart && monthsStart >= 1) {
+      const due = new Date();
+      due.setMonth(due.getMonth() + monthsStart);
+      due.setHours(10, 30, 0, 0);
+      const msg = buildLongTermMessage(conv.lead?.purchaseTimeframe, conv.lead?.hasMotoLicense);
+      scheduleLongTermFollowUp(conv, due.toISOString(), msg);
+    } else {
+      startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
+    }
   }
 
   return res.status(200).json({

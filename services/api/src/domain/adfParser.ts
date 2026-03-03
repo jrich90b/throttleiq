@@ -11,6 +11,9 @@ export type ParsedAdfLead = {
   vin?: string;
   year?: string;
   vehicleDescription?: string;
+  vehicleColor?: string;
+  purchaseTimeframe?: string;
+  hasMotoLicense?: boolean;
 };
 
 function asArray<T>(v: T | T[] | undefined): T[] {
@@ -62,17 +65,44 @@ function parseFromComment(comment?: string) {
   const vinMatch = clean.match(/vin:\s*([A-HJ-NPR-Z0-9]{8,17})/i);
   const yearMatch = clean.match(/inventory year:\s*(\d{4})/i);
   const itemMatch = clean.match(/inventory item:\s*([^\n\r]+)/i);
+  const itemColor = extractColorFromDescription(
+    itemMatch?.[1]?.trim(),
+    stockMatch?.[1]?.trim() ?? null
+  );
+  const colorMatch = clean.match(/color:\s*([^\n\r]+)/i);
   const phoneMatch = clean.match(/phone:\s*([0-9\-\s\(\)\.]+)/i);
   const emailMatch = clean.match(/email:\s*([^\s\n\r]+)/i);
+  const timeframeMatch = clean.match(/purchase timeframe:\s*([^\n\r]+)/i);
+  const licenseMatch = clean.match(/valid motorcycle license\?\s*(yes|no)/i);
   return {
     inquiry: inquiryMatch?.[1]?.trim(),
     stockId: stockMatch?.[1]?.trim(),
     vin: vinMatch?.[1]?.trim(),
     year: yearMatch?.[1]?.trim(),
     item: itemMatch?.[1]?.trim(),
+    color: colorMatch?.[1]?.trim() ?? itemColor,
     phone: phoneMatch?.[1]?.trim(),
-    email: emailMatch?.[1]?.trim()
+    email: emailMatch?.[1]?.trim(),
+    purchaseTimeframe: timeframeMatch?.[1]?.trim(),
+    hasMotoLicense: licenseMatch ? licenseMatch[1].toLowerCase() === "yes" : undefined
   };
+}
+
+function extractColorFromDescription(desc?: string | null, stockId?: string | null): string | undefined {
+  if (!desc) return undefined;
+  const clean = desc.replace(/\s+/g, " ").trim();
+  if (stockId) {
+    const idx = clean.toLowerCase().indexOf(stockId.toLowerCase());
+    if (idx >= 0) {
+      const tail = clean.slice(idx + stockId.length).trim();
+      if (tail && tail.length <= 80) {
+        return tail.replace(/^(two[-\s]?tone)\s+/i, "").trim();
+      }
+    }
+  }
+  const colorMatch = clean.match(/color[:\-\s]+(.+)$/i);
+  if (colorMatch?.[1]) return colorMatch[1].trim();
+  return undefined;
 }
 
 function findAdfInBlob(blob: string): string | null {
@@ -171,6 +201,9 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
       .join(" ") || text(vehicle?.description);
 
   const desc = vehicleDescription || parsedFromComment.item;
+  const vehicleColor =
+    parsedFromComment.color ??
+    extractColorFromDescription(desc, stockId ?? parsedFromComment.stockId ?? null);
   const textOnly = stripHtml(cleaned);
   const emailFromText = textOnly.match(/email:\s*([^\s\n\r]+)/i)?.[1]?.trim();
   const phoneFromText = textOnly.match(/phone:\s*([0-9][0-9\-\s\(\)\.]+)/i)?.[1]?.trim();
@@ -194,6 +227,9 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
     stockId,
     vin,
     year,
-    vehicleDescription: desc
+    vehicleDescription: desc,
+    vehicleColor,
+    purchaseTimeframe: parsedFromComment.purchaseTimeframe,
+    hasMotoLicense: parsedFromComment.hasMotoLicense
   };
 }

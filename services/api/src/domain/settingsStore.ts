@@ -1,9 +1,10 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import { dataPath } from "./dataDir.js";
 
 export type SystemMode = "suggest" | "autopilot";
 
-const DEFAULT_PATH = path.join(process.cwd(), "data", "settings.json");
+const DEFAULT_PATH = dataPath("settings.json");
 const SETTINGS_PATH = process.env.SETTINGS_DB_PATH
   ? path.resolve(process.env.SETTINGS_DB_PATH)
   : DEFAULT_PATH;

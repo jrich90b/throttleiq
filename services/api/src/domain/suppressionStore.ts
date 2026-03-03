@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { dataPath } from "./dataDir.js";
 
 export type SuppressionEntry = {
   phone: string;
@@ -13,8 +14,7 @@ const entries = new Map<string, SuppressionEntry>();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const REPO_ROOT = path.resolve(__dirname, "../../../../");
-const DEFAULT_PATH = path.join(REPO_ROOT, "data", "suppressions.json");
+const DEFAULT_PATH = dataPath("suppressions.json");
 
 const DB_PATH = process.env.SUPPRESSIONS_DB_PATH
   ? path.resolve(process.env.SUPPRESSIONS_DB_PATH)

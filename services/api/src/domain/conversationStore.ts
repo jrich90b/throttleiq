@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import type { InboundMessageEvent } from "./types.js";
 import { fileURLToPath } from "node:url";
+import { dataPath } from "./dataDir.js";
 
 export type ConversationMode = "autopilot" | "suggest" | "human";
 export type MessageProvider = "twilio" | "sendgrid_adf" | "draft_ai" | "human";
@@ -20,6 +21,11 @@ export type AppointmentMemory = {
   bookedEventLink?: string | null;
   bookedSalespersonId?: string | null;
   reschedulePending?: boolean;
+  confirmation?: {
+    sentAt?: string;
+    status?: "pending" | "confirmed" | "declined";
+    respondedAt?: string;
+  };
   matchedSlot?: {
     salespersonId: string;
     salespersonName?: string;
@@ -55,6 +61,8 @@ export type FollowUpCadence = {
   lastSentAt?: string;
   lastSentStep?: number;
   stopReason?: string;
+  kind?: "standard" | "long_term";
+  deferredMessage?: string;
 };
 
 export type PricingObjectionState = {
@@ -87,15 +95,22 @@ export type LeadProfile = {
   email?: string;
   phone?: string;
   channelPreference?: "sms" | "email" | "facebook_messenger";
+  purchaseTimeframe?: string;
+  purchaseTimeframeMonthsStart?: number;
+  purchaseTimeframeMonthsEnd?: number;
+  hasMotoLicense?: boolean;
   vehicle?: {
     stockId?: string;
     vin?: string;
     year?: string;
     model?: string;
+    color?: string;
     condition?: string;
     url?: string;
     inventoryStatus?: "AVAILABLE" | "PENDING" | "UNKNOWN";
     description?: string;
+    listPrice?: number;
+    priceRange?: { min: number; max: number; count: number };
   };
 };
 
@@ -105,6 +120,7 @@ export type Message = {
   from: string;
   to: string;
   body: string;
+  mediaUrls?: string[];
   at: string; // ISO
   provider?: MessageProvider;
   providerMessageId?: string; // e.g., Twilio SID for sent messages
@@ -128,6 +144,7 @@ export type Conversation = {
   scheduler?: SchedulerMemory;
   followUpCadence?: FollowUpCadence;
   objections?: ObjectionState;
+  crm?: { lastLoggedAt?: string };
 };
 
 const conversations = new Map<string, Conversation>();
@@ -152,11 +169,7 @@ function makeId(prefix: string) {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// conversationStore.ts is at: services/api/src/domain/
-// repo root is: ../../../../
-const REPO_ROOT = path.resolve(__dirname, "../../../../");
-
-const DEFAULT_DB_PATH = path.join(REPO_ROOT, "data", "conversations.json");
+const DEFAULT_DB_PATH = dataPath("conversations.json");
 
 const DB_PATH = process.env.CONVERSATIONS_DB_PATH
   ? path.resolve(process.env.CONVERSATIONS_DB_PATH)
@@ -194,6 +207,10 @@ async function loadFromDisk() {
     }
     console.warn("⚠️ Failed to load conversations store:", err?.message ?? err);
   }
+}
+
+export async function reloadConversationStore() {
+  await loadFromDisk();
 }
 
 async function saveToDisk() {
@@ -285,7 +302,8 @@ export function appendOutbound(
   to: string,
   body: string,
   provider: MessageProvider = "draft_ai",
-  providerMessageId?: string
+  providerMessageId?: string,
+  mediaUrls?: string[]
 ) {
   conv.messages.push({
     id: makeId("msg"),
@@ -293,6 +311,7 @@ export function appendOutbound(
     from,
     to,
     body,
+    mediaUrls: mediaUrls && mediaUrls.length ? mediaUrls : undefined,
     at: nowIso(),
     provider,
     providerMessageId
@@ -742,7 +761,7 @@ function localPartsToUtcDate(
   return new Date(guess.getTime() - diffMs);
 }
 
-export const FOLLOW_UP_DAY_OFFSETS = [2, 3, 5, 7, 10, 14, 18, 21, 27, 30];
+export const FOLLOW_UP_DAY_OFFSETS = [2, 3, 5, 7, 10, 14, 18, 21, 27, 30, 45, 60, 90];
 
 function computeFollowUpDueAt(anchorAtIso: string, offsetDays: number, timeZone: string) {
   const anchor = new Date(anchorAtIso);
@@ -774,7 +793,26 @@ export function startFollowUpCadence(conv: Conversation, anchorAtIso: string, ti
     status: "active",
     anchorAt: anchorAtIso,
     nextDueAt,
-    stepIndex: 0
+    stepIndex: 0,
+    kind: "standard"
+  };
+  conv.updatedAt = nowIso();
+  scheduleSave();
+}
+
+export function scheduleLongTermFollowUp(
+  conv: Conversation,
+  dueAtIso: string,
+  message: string
+) {
+  if (conv.status === "closed") return;
+  conv.followUpCadence = {
+    status: "active",
+    anchorAt: dueAtIso,
+    nextDueAt: dueAtIso,
+    stepIndex: 0,
+    kind: "long_term",
+    deferredMessage: message
   };
   conv.updatedAt = nowIso();
   scheduleSave();
@@ -910,7 +948,19 @@ export function parseRequestedDayTime(
 ): { year: number; month: number; day: number; hour24: number; minute: number; dayOfWeek: string } | null {
   const t = text.toLowerCase();
   const dayToken = parseDayToken(t);
-  const time = parseExactTime(t);
+  let time = parseExactTime(t);
+  if (!time && dayToken && /(this time|same time|same time tomorrow|this time tomorrow)/.test(t)) {
+    const now = new Date();
+    const nowParts = getZonedParts(now, timeZone);
+    const rounded = Math.round(nowParts.minute / 30) * 30;
+    let hour24 = nowParts.hour;
+    let minute = rounded;
+    if (rounded === 60) {
+      hour24 = (hour24 + 1) % 24;
+      minute = 0;
+    }
+    time = { hour24, minute, timeText: "this time" };
+  }
   if (!dayToken || !time) return null;
 
   const now = new Date();
@@ -1055,6 +1105,13 @@ export function markTodoDone(convId: string, todoId: string): TodoTask | null {
   task.doneAt = nowIso();
   scheduleSave();
   return task;
+}
+
+export function setCrmLastLoggedAt(conv: Conversation, iso: string) {
+  conv.crm = conv.crm ?? {};
+  conv.crm.lastLoggedAt = iso;
+  conv.updatedAt = nowIso();
+  scheduleSave();
 }
 
 export function deleteConversation(convId: string): boolean {

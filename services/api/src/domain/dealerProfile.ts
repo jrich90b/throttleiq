@@ -12,6 +12,10 @@ export type DealerProfile = {
   hours?: Record<string, any>;
   policies?: Record<string, any>;
   voice?: Record<string, any>;
+  followUp?: {
+    testRideEnabled?: boolean;
+    testRideMonths?: number[];
+  };
 };
 
 const __filename = fileURLToPath(import.meta.url);
@@ -49,4 +53,15 @@ export async function getDealerProfile(): Promise<DealerProfile | null> {
   } catch {
     return null;
   }
+}
+
+export async function saveDealerProfile(profile: DealerProfile): Promise<DealerProfile> {
+  const filePath = process.env.DEALER_PROFILE_PATH
+    ? path.resolve(process.env.DEALER_PROFILE_PATH)
+    : DEFAULT_PATH;
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify(profile ?? {}, null, 2), "utf8");
+  cached = profile ?? {};
+  cachedPath = filePath;
+  return cached;
 }

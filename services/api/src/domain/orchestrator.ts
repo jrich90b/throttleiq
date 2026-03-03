@@ -4,12 +4,18 @@ import type { InboundMessageEvent, OrchestratorResult } from "./types.js";
 import { generateDraftWithLLM } from "./llmDraft.js";
 import { resolveInventoryUrlByStock } from "./inventoryUrlResolver.js";
 import { checkInventorySalePendingByUrl, type InventoryStatus } from "./inventoryChecker.js";
+import { findInventoryPrice, findPriceRange } from "./inventoryFeed.js";
 import { getDealerProfile } from "./dealerProfile.js";
 import type { LeadProfile } from "./conversationStore.js";
 import { parseRequestedDayTime } from "./conversationStore.js";
-import { getSchedulerConfig, dayKey } from "./schedulerConfig.js";
+import { getSchedulerConfig, dayKey, getPreferredSalespeople } from "./schedulerConfig.js";
 import { getAuthedCalendarClient, queryFreeBusy } from "./googleCalendar.js";
-import { generateCandidateSlots, expandBusyBlocks, pickSlotsForSalesperson } from "./schedulerEngine.js";
+import {
+  generateCandidateSlots,
+  expandBusyBlocks,
+  pickSlotsForSalesperson,
+  localPartsToUtcDate
+} from "./schedulerEngine.js";
 
 function simpleIntent(body: string): OrchestratorResult["intent"] {
   const t = body.toLowerCase();
@@ -54,6 +60,32 @@ function detectPricingOrPayment(text: string, intent?: OrchestratorResult["inten
   return /(price|deal|discount|lowest|\botd\b|out the door|payment|monthly|down|apr|term)/.test(t);
 }
 
+function detectCorporateIntent(text: string): boolean {
+  const t = text.toLowerCase();
+  return (
+    /(harley[-\s]?davidson corporate|harley corporate|corporate office|headquarters|\bhq\b)/.test(t) ||
+    /(customer service|complaint|feedback|warranty|recall|vin lookup|information on.*vin|vin information)/.test(t) ||
+    /(employment|job|career|hr|human resources|business relations|media|press)/.test(t)
+  );
+}
+
+function isNonUsPhone(from?: string): boolean {
+  const raw = String(from ?? "").trim();
+  return raw.startsWith("+") && !raw.startsWith("+1");
+}
+
+function detectInternationalBuyer(text: string, from?: string): boolean {
+  const t = text.toLowerCase();
+  const country =
+    /(canada|uk|united kingdom|england|ireland|australia|new zealand|germany|france|mexico|brazil|india|china|philippines|nigeria|south africa|uae|dubai|saudi|kuwait|qatar|singapore|malaysia|thailand|indonesia|italy|spain|sweden|norway|denmark|netherlands|switzerland|poland|ukraine|russia|pakistan|bangladesh|vietnam|peru|chile|argentina|colombia|venezuela)/.test(
+      t
+    );
+  const intlPhrases = /(outside the united states|outside the us|international|overseas|export|ship abroad|ship overseas)/.test(t);
+  const purchaseIntent =
+    /(buy|purchase|order|quote|price|availability|ship|export|deliver|send to|sell)/.test(t);
+  return (isNonUsPhone(from) && purchaseIntent) || ((country || intlPhrases) && purchaseIntent);
+}
+
 function hasSchedulingIntent(text: string): boolean {
   const t = text.toLowerCase();
   return (
@@ -77,6 +109,28 @@ function inferAppointmentType(
   if (/(trade appraisal|appraisal|value my trade|trade in)/.test(t)) return "trade_appraisal";
   if (/(finance|credit|prequal|hdfs|payment)/.test(t)) return "finance_discussion";
   return "inventory_visit";
+}
+
+function buildLongTermMessage(timeframe?: string, hasLicense?: boolean) {
+  const tf = timeframe ? timeframe.trim() : "a future";
+  if (hasLicense === true) {
+    return `Hi, this is Brooke at American Harley-Davidson. Just circling back since you mentioned a ${tf} timeline. Want to come in and check out options or set up a test ride? I can get you scheduled for a test ride.`;
+  }
+  return `Hi, this is Brooke at American Harley-Davidson. Just circling back since you mentioned a ${tf} timeline. Want to come in and check out options?`;
+}
+
+function deriveModelFromDescription(desc?: string | null): string | null {
+  if (!desc) return null;
+  let s = desc.replace(/\s+/g, " ").trim();
+  s = s.replace(/^harley[- ]?davidson\s+/i, "");
+  s = s.replace(/\b(20\d{2})\b/, "").trim();
+  return s || null;
+}
+
+function deriveYearFromText(text?: string | null): string | null {
+  if (!text) return null;
+  const m = text.match(/\b(20\d{2})\b/);
+  return m?.[1] ?? null;
 }
 
 function inferRequestedDay(text: string): string | null {
@@ -154,13 +208,47 @@ export async function orchestrateInbound(
     };
   }
 
+  const corporateIntent = detectCorporateIntent(event.body);
+  const internationalBuyer = detectInternationalBuyer(event.body, event.from);
+  if (corporateIntent || internationalBuyer) {
+    const dealerProfile = await getDealerProfile();
+    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    if (corporateIntent) {
+      const ack =
+        `Hi, this is ${agentName} at ${dealerName}. ` +
+        "We’re a dealership, not Harley‑Davidson corporate. " +
+        "For corporate assistance, please call 800‑258‑2464.";
+      return {
+        intent: "GENERAL",
+        stage: "ENGAGED",
+        shouldRespond: true,
+        draft: ack,
+        autoClose: { reason: "corporate" }
+      };
+    }
+    const ack =
+      `Hi, this is ${agentName} at ${dealerName}. ` +
+      "Thanks for reaching out — due to our dealer agreement, we can only sell to customers within the United States.";
+    return {
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft: ack,
+      autoClose: { reason: "international" }
+    };
+  }
+
   const intent = simpleIntent(event.body);
   const pricingAttempts = ctx?.pricingAttempts ?? 0;
   const managerRequest = detectManagerRequest(event.body);
   const approvalStatus = detectApprovalStatus(event.body);
-  const pricingIntent = detectPricingOrPayment(event.body, intent);
+  const pricingIntent =
+    detectPricingOrPayment(event.body, intent) ||
+    /request a quote|raq/i.test(ctx?.leadSource ?? "");
   const exactPressure = detectExactNumberPressure(event.body);
   const pricingAttempted = pricingIntent && pricingAttempts === 0;
+  const stockIdFromText = event.body.match(/\b[A-Z0-9]{1,5}-\d{1,4}\b/i)?.[0]?.toUpperCase() ?? null;
 
   if (managerRequest) {
     const ack =
@@ -202,6 +290,55 @@ export async function orchestrateInbound(
 
   const fallbackDraft =
     "Thanks for reaching out — what day and time works best for you to stop in?";
+
+  if (pricingIntent) {
+    try {
+      const leadForPrice = ctx?.lead ?? {};
+      const yearForRange =
+        leadForPrice?.vehicle?.year ??
+        deriveYearFromText(leadForPrice?.vehicle?.description ?? null) ??
+        null;
+      const modelForRange =
+        leadForPrice?.vehicle?.model ??
+        deriveModelFromDescription(leadForPrice?.vehicle?.description ?? null) ??
+        null;
+      const stockForPrice = leadForPrice?.vehicle?.stockId ?? stockIdFromText ?? null;
+      const vinForPrice = leadForPrice?.vehicle?.vin ?? null;
+      const priceLookup = await findInventoryPrice({
+        stockId: stockForPrice,
+        vin: vinForPrice,
+        year: yearForRange,
+        model: modelForRange
+      });
+      let price = priceLookup?.price ?? null;
+      const range =
+        yearForRange && modelForRange ? await findPriceRange({ year: yearForRange, model: modelForRange }) : null;
+      if (!stockForPrice && !vinForPrice && range?.count && range.count > 1) {
+        price = null;
+      }
+      if (!price && !range) {
+        const ack =
+          "Got it — I’ll have a manager pull the exact pricing and follow up shortly. What’s the best time to reach you today?";
+        return {
+          intent,
+          stage: "ENGAGED",
+          shouldRespond: true,
+          draft: ack,
+          handoff: { required: true, reason: "pricing", ack }
+        };
+      }
+    } catch {
+      const ack =
+        "Got it — I’ll have a manager pull the exact pricing and follow up shortly. What’s the best time to reach you today?";
+      return {
+        intent,
+        stage: "ENGAGED",
+        shouldRespond: true,
+        draft: ack,
+        handoff: { required: true, reason: "pricing", ack }
+      };
+    }
+  }
 
   // --- Inventory verification (stock -> URL -> pending tag) ---
   let inventoryUrl: string | null = null;
@@ -252,12 +389,44 @@ export async function orchestrateInbound(
       const dealerProfile = await getDealerProfile();
       const appointment = ctx?.appointment ?? null;
       const followUp = ctx?.followUp ?? null;
+      let listPrice: number | null = null;
+      let priceRange: { min: number; max: number; count: number } | null = null;
+      if (pricingIntent) {
+        try {
+          const yearForRange =
+            ctx?.lead?.vehicle?.year ??
+            deriveYearFromText(ctx?.lead?.vehicle?.description ?? null) ??
+            null;
+          const modelForRange =
+            ctx?.lead?.vehicle?.model ??
+            deriveModelFromDescription(ctx?.lead?.vehicle?.description ?? null) ??
+            null;
+          const stockForPrice = ctx?.lead?.vehicle?.stockId ?? stockIdFromText ?? null;
+          const vinForPrice = ctx?.lead?.vehicle?.vin ?? null;
+          const priceLookup = await findInventoryPrice({
+            stockId: stockForPrice,
+            vin: vinForPrice,
+            year: yearForRange,
+            model: modelForRange
+          });
+          listPrice = priceLookup?.price ?? null;
+          if (yearForRange && modelForRange) {
+            priceRange = await findPriceRange({ year: yearForRange, model: modelForRange });
+          }
+          if (!stockForPrice && !vinForPrice && priceRange?.count && priceRange.count > 1) {
+            listPrice = null;
+          }
+        } catch {}
+      }
+
       const lead: LeadProfile = {
         ...(ctx?.lead ?? {}),
         vehicle: {
           ...(ctx?.lead?.vehicle ?? {}),
           stockId: stockId ?? ctx?.lead?.vehicle?.stockId,
-          condition
+          condition,
+          listPrice: listPrice ?? ctx?.lead?.vehicle?.listPrice,
+          priceRange
         }
       };
       const inboundHistory = [...history].reverse().filter(h => h.direction === "in");
@@ -269,6 +438,7 @@ export async function orchestrateInbound(
       let requestedDayNoAvailability = false;
       let requestedDayKey: string | null = null;
       let requestedDaySpecified = false;
+      let requestedDayClosed = false;
       let requestedDayMaxSlots = 0;
       const schedulingIntent = hasSchedulingIntent(event.body) || event.provider === "sendgrid_adf";
       const appointmentType = inferAppointmentType(event.body);
@@ -296,7 +466,7 @@ export async function orchestrateInbound(
         try {
           const cfg = await getSchedulerConfig();
           const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
-          const preferredSalespeople = cfg.preferredSalespeople ?? [];
+          const preferredSalespeople = getPreferredSalespeople(cfg);
           const salespeople = cfg.salespeople ?? [];
           const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
           const durationMinutes = appointmentTypes[appointmentType]?.durationMinutes ?? 60;
@@ -314,6 +484,49 @@ export async function orchestrateInbound(
             d.setDate(d.getDate() + (requestedDay === "tomorrow" ? 1 : 0));
             requestedDayKey = dayKey(d, cfg.timezone);
           }
+          const requestedDayHours = requestedDayKey ? cfg.businessHours?.[requestedDayKey] : undefined;
+          requestedDayClosed =
+            !!requestedDayKey && (!requestedDayHours || !requestedDayHours.open || !requestedDayHours.close);
+
+          const overlaps = (aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) => aStart < bEnd && bStart < aEnd;
+          const addMinutes = (d: Date, mins: number) => new Date(d.getTime() + mins * 60_000);
+          const requestedStart = requestedTime
+            ? localPartsToUtcDate(cfg.timezone, {
+                year: requestedTime.year,
+                month: requestedTime.month,
+                day: requestedTime.day,
+                hour24: requestedTime.hour24,
+                minute: requestedTime.minute
+              })
+            : null;
+          const requestedDayStart = requestedTime
+            ? localPartsToUtcDate(cfg.timezone, {
+                year: requestedTime.year,
+                month: requestedTime.month,
+                day: requestedTime.day,
+                hour24: 0,
+                minute: 0
+              })
+            : null;
+          const sameLocalDate = (d: Date) => {
+            if (!requestedTime) return true;
+            const fmt = new Intl.DateTimeFormat("en-US", {
+              timeZone: cfg.timezone,
+              year: "numeric",
+              month: "2-digit",
+              day: "2-digit"
+            });
+            const parts = fmt.formatToParts(d);
+            const map: Record<string, string> = {};
+            for (const p of parts) {
+              if (p.type !== "literal") map[p.type] = p.value;
+            }
+            return (
+              Number(map.year) === requestedTime.year &&
+              Number(map.month) === requestedTime.month &&
+              Number(map.day) === requestedTime.day
+            );
+          };
 
           let cal: any = null;
           try {
@@ -337,7 +550,7 @@ export async function orchestrateInbound(
             const expanded = expandBusyBlocks(busy as any, gapMinutes);
 
             let slots: any[] = [];
-            if (requestedDay) {
+            if (requestedDay && !requestedDayClosed) {
               let targetDayKey = requestedDay;
               if (requestedDay === "today" || requestedDay === "tomorrow") {
                 const d = new Date(now);
@@ -347,18 +560,91 @@ export async function orchestrateInbound(
               const preferredDays = candidatesByDay.filter(d => {
                 if (dayKey(d.dayStart, cfg.timezone) !== targetDayKey) return false;
                 if (requestedDay !== "today" && requestedDay !== "tomorrow") {
+                  const targetStart = requestedDayStart ?? requestedStart ?? d.dayStart;
                   // If they named a weekday, treat it as the next occurrence (not today)
-                  return d.dayStart.getTime() > now.getTime() && d.candidates.length > 0;
+                  return (
+                    d.dayStart.getTime() >= targetStart.getTime() &&
+                    sameLocalDate(d.dayStart) &&
+                    d.candidates.length > 0
+                  );
                 }
                 return d.candidates.length > 0;
               });
-              slots = pickSlotsForSalesperson(cfg, sp.id, sp.calendarId, preferredDays, expanded, 3);
+              if (requestedStart) {
+                const flat = preferredDays.flatMap(d =>
+                  d.candidates.map(c => ({
+                    start: c.start,
+                    end: c.end
+                  }))
+                );
+                const available = flat
+                  .filter(c => !expanded.some(b => overlaps(c.start, c.end, b.start, b.end)))
+                  .sort((a, b) => a.start.getTime() - b.start.getTime());
+                const after = available.filter(c => c.start.getTime() >= requestedStart.getTime());
+                const before = available
+                  .filter(c => c.start.getTime() < requestedStart.getTime())
+                  .sort((a, b) => b.start.getTime() - a.start.getTime());
+                const picked: { start: Date; end: Date }[] = [];
+                const tryAdd = (c: { start: Date; end: Date }) => {
+                  if (picked.length >= 3) return;
+                  const tooClose = picked.some(r => {
+                    const rs = addMinutes(r.start, -gapMinutes);
+                    const re = addMinutes(r.end, gapMinutes);
+                    return overlaps(c.start, c.end, rs, re);
+                  });
+                  if (!tooClose) picked.push(c);
+                };
+                for (const c of after) tryAdd(c);
+                for (const c of before) tryAdd(c);
+                slots = picked.map(p => ({
+                  salespersonId: sp.id,
+                  calendarId: sp.calendarId,
+                  start: p.start.toISOString(),
+                  end: p.end.toISOString()
+                }));
+              } else {
+                slots = pickSlotsForSalesperson(cfg, sp.id, sp.calendarId, preferredDays, expanded, 3);
+              }
               if (slots.length > requestedDayMaxSlots) {
                 requestedDayMaxSlots = slots.length;
               }
             }
-            if (slots.length < 2 && (!requestedDay || requestedDay === "today" || requestedDay === "tomorrow")) {
-              slots = pickSlotsForSalesperson(cfg, sp.id, sp.calendarId, candidatesByDay, expanded, 3);
+            if (slots.length < 2 && (!requestedDay || requestedDay === "today" || requestedDay === "tomorrow" || requestedDayClosed)) {
+              if (requestedStart && !requestedDayClosed) {
+                const flat = candidatesByDay.flatMap(d =>
+                  d.candidates.map(c => ({
+                    start: c.start,
+                    end: c.end
+                  }))
+                );
+                const available = flat
+                  .filter(c => !expanded.some(b => overlaps(c.start, c.end, b.start, b.end)))
+                  .sort((a, b) => a.start.getTime() - b.start.getTime());
+                const after = available.filter(c => c.start.getTime() >= requestedStart.getTime());
+                const before = available
+                  .filter(c => c.start.getTime() < requestedStart.getTime())
+                  .sort((a, b) => b.start.getTime() - a.start.getTime());
+                const picked: { start: Date; end: Date }[] = [];
+                const tryAdd = (c: { start: Date; end: Date }) => {
+                  if (picked.length >= 3) return;
+                  const tooClose = picked.some(r => {
+                    const rs = addMinutes(r.start, -gapMinutes);
+                    const re = addMinutes(r.end, gapMinutes);
+                    return overlaps(c.start, c.end, rs, re);
+                  });
+                  if (!tooClose) picked.push(c);
+                };
+                for (const c of after) tryAdd(c);
+                for (const c of before) tryAdd(c);
+                slots = picked.map(p => ({
+                  salespersonId: sp.id,
+                  calendarId: sp.calendarId,
+                  start: p.start.toISOString(),
+                  end: p.end.toISOString()
+                }));
+              } else {
+                slots = pickSlotsForSalesperson(cfg, sp.id, sp.calendarId, candidatesByDay, expanded, 3);
+              }
             }
 
             if (slots.length >= 2) {
@@ -379,12 +665,15 @@ export async function orchestrateInbound(
                 appointmentType,
                 salespersonId: sp.id,
                 salespersonName: sp.name
-              }));
+              })).sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
               break;
             }
           }
 
-          if (requestedDaySpecified && requestedDayMaxSlots < 2) {
+          if (requestedDaySpecified && !requestedDayClosed && requestedDayMaxSlots === 0) {
+            requestedDayNoAvailability = true;
+          }
+          if (requestedDayClosed) {
             requestedDayNoAvailability = true;
           }
         } catch (e: any) {
@@ -395,14 +684,94 @@ export async function orchestrateInbound(
 
       console.log("[scheduler] suggestedSlots", suggestedSlots.length);
 
+      if (pricingIntent && (listPrice || priceRange)) {
+        const nf = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+        const yearLabel = lead.vehicle?.year ? `${lead.vehicle.year} ` : "";
+        const modelLabel = lead.vehicle?.model ?? "that model";
+        const stockLabel = lead.vehicle?.stockId ?? stockId;
+        let priceLine = "";
+        if (listPrice) {
+          if (stockLabel) {
+            priceLine = `The listed price for ${stockLabel} is ${nf.format(listPrice)}.`;
+          } else {
+            priceLine = `The listed price for the ${yearLabel}${modelLabel} we have in stock is ${nf.format(
+              listPrice
+            )}.`;
+          }
+        } else if (priceRange) {
+          if (priceRange.count === 1) {
+            priceLine = `The listed price for the ${yearLabel}${modelLabel} we have in stock is ${nf.format(
+              priceRange.min
+            )}.`;
+          } else {
+            priceLine = `Listed prices for ${yearLabel}${modelLabel} units we have in stock range from ${nf.format(
+              priceRange.min
+            )} to ${nf.format(priceRange.max)}, depending on color/trim/options.`;
+          }
+        }
+        const disclaimer = "Final numbers depend on tax, fees, any trade, and financing.";
+        const schedule = suggestedSlots.length >= 2
+          ? `I could get you scheduled to meet with our sales team. I have ${suggestedSlots[0].startLocal} or ${suggestedSlots[1].startLocal} — which works best?`
+          : "I could get you scheduled to meet with our sales team — what day/time works best?";
+        const qualifier = "Do you have a trade?";
+        return {
+          intent,
+          stage: "ENGAGED",
+          shouldRespond: true,
+          draft: `${priceLine} ${disclaimer}\n\n${schedule} ${qualifier}`,
+          suggestedSlots
+        };
+      }
+
+      if (suggestedSlots.length === 1 && requestedDayKey) {
+        const reply = `I have ${suggestedSlots[0].startLocal}. If that doesn’t work, what other day works for you?`;
+        return {
+          intent,
+          stage: "ENGAGED",
+          shouldRespond: true,
+          draft: reply,
+          suggestedSlots
+        };
+      }
+
+      if (suggestedSlots.length >= 2) {
+        suggestedSlots = [...suggestedSlots].sort(
+          (a, b) => new Date(a.start).getTime() - new Date(b.start).getTime()
+        );
+      }
+
       if (requestedDayNoAvailability && requestedDayKey) {
         const dayName = requestedDayKey.charAt(0).toUpperCase() + requestedDayKey.slice(1);
-        const fallbackMessage = `I'm booked up for ${dayName}. Is there another day that works for you?`;
+        if (requestedDayClosed && suggestedSlots.length >= 2) {
+          const fallbackMessage = `We’re closed on ${dayName}. I have ${suggestedSlots[0].startLocal} or ${suggestedSlots[1].startLocal} — which works best?`;
+          return {
+            intent,
+            stage: "ENGAGED",
+            shouldRespond: true,
+            draft: fallbackMessage,
+            suggestedSlots
+          };
+        }
+        const fallbackMessage = requestedDayClosed
+          ? `We’re closed on ${dayName}. Is there another day that works for you?`
+          : `I'm booked up for ${dayName}. Is there another day that works for you?`;
         return {
           intent,
           stage: "ENGAGED",
           shouldRespond: true,
           draft: fallbackMessage,
+          suggestedSlots: []
+        };
+      }
+
+      const longTermMonths = lead.purchaseTimeframeMonthsStart;
+      if (event.provider === "sendgrid_adf" && longTermMonths && longTermMonths >= 1) {
+        const msg = buildLongTermMessage(lead.purchaseTimeframe, lead.hasMotoLicense);
+        return {
+          intent,
+          stage: "ENGAGED",
+          shouldRespond: true,
+          draft: msg,
           suggestedSlots: []
         };
       }
