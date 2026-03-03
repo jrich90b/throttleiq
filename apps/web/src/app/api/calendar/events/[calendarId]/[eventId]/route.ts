@@ -1,16 +1,18 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { apiFetch } from "../../../../../../lib/apiFetch";
 
+type Ctx = {
+  params: Promise<{ calendarId: string; eventId: string }>;
+};
+
 export async function PATCH(
-  req: Request,
-  { params }: { params: { calendarId: string; eventId: string } }
+  req: NextRequest,
+  { params }: Ctx
 ) {
+  const { calendarId, eventId } = await params;
   const base = process.env.API_BASE_URL;
   if (!base) return NextResponse.json({ ok: false, error: "API_BASE_URL not set" }, { status: 500 });
 
-  const resolved = (await (params as any)) as { calendarId: string; eventId: string };
-  const calendarId = resolved.calendarId;
-  const eventId = resolved.eventId;
   const body = await req.text();
   const r = await apiFetch(
     `${base}/calendar/events/${encodeURIComponent(calendarId)}/${encodeURIComponent(eventId)}`,

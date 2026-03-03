@@ -1,12 +1,17 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { apiFetch } from "../../../../lib/apiFetch";
 
-export async function PUT(req: Request, { params }: { params: { id: string } }) {
+type Ctx = {
+  params: Promise<{ id: string }>;
+};
+
+export async function PUT(req: NextRequest, { params }: Ctx) {
+  const { id } = await params;
   const base = process.env.API_BASE_URL;
   if (!base) return NextResponse.json({ ok: false, error: "API_BASE_URL not set" }, { status: 500 });
 
   const body = await req.text();
-  const r = await apiFetch(`${base}/users/${encodeURIComponent(params.id)}`, {
+  const r = await apiFetch(`${base}/users/${encodeURIComponent(id)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body
@@ -23,11 +28,12 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
   }
 }
 
-export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
+export async function DELETE(_req: NextRequest, { params }: Ctx) {
+  const { id } = await params;
   const base = process.env.API_BASE_URL;
   if (!base) return NextResponse.json({ ok: false, error: "API_BASE_URL not set" }, { status: 500 });
 
-  const r = await apiFetch(`${base}/users/${encodeURIComponent(params.id)}`, { method: "DELETE" });
+  const r = await apiFetch(`${base}/users/${encodeURIComponent(id)}`, { method: "DELETE" });
   const text = await r.text();
   try {
     const data = JSON.parse(text);

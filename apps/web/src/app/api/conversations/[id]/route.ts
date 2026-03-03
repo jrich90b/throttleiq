@@ -1,16 +1,20 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { apiFetch } from "../../../../lib/apiFetch";
 
+type Ctx = {
+  params: Promise<{ id: string }>;
+};
+
 export async function GET(
-  _req: Request,
-  context: { params: Promise<{ id: string }> }
+  _req: NextRequest,
+  { params }: Ctx
 ) {
   const base = process.env.API_BASE_URL;
   if (!base) {
     return NextResponse.json({ ok: false, error: "API_BASE_URL not set" }, { status: 500 });
   }
 
-  const { id } = await context.params;
+  const { id } = await params;
 
   const r = await apiFetch(`${base}/conversations/${decodeURIComponent(id)}`, {
     cache: "no-store"
@@ -29,15 +33,15 @@ export async function GET(
 }
 
 export async function DELETE(
-  _req: Request,
-  context: { params: Promise<{ id: string }> }
+  _req: NextRequest,
+  { params }: Ctx
 ) {
   const base = process.env.API_BASE_URL;
   if (!base) {
     return NextResponse.json({ ok: false, error: "API_BASE_URL not set" }, { status: 500 });
   }
 
-  const { id } = await context.params;
+  const { id } = await params;
   const r = await apiFetch(`${base}/conversations/${encodeURIComponent(id)}`, {
     method: "DELETE"
   });

@@ -1,9 +1,13 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { apiFetch } from "../../../../../lib/apiFetch";
 
+type Ctx = {
+  params: Promise<{ id: string }>;
+};
+
 export async function POST(
-  req: Request,
-  { params }: { params: Promise<{ id: string }> }
+  req: NextRequest,
+  { params }: Ctx
 ) {
   const { id } = await params;
   const base = process.env.API_BASE_URL;
