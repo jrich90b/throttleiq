@@ -8,6 +8,7 @@ import { sendgridInboundMiddleware, handleSendgridInbound } from "./routes/sendg
 import { resolveInventoryUrlByStock } from "./domain/inventoryUrlResolver.js";
 import { checkInventorySalePendingByUrl } from "./domain/inventoryChecker.js";
 import { getDealerProfile, saveDealerProfile } from "./domain/dealerProfile.js";
+import { computeFollowUpDueAt, FOLLOW_UP_DAY_OFFSETS } from "./domain/conversationStore.js";
 import { getSchedulerConfig, saveSchedulerConfig, dayKey, getPreferredSalespeople } from "./domain/schedulerConfig.js";
 import {
   getOAuthClient,

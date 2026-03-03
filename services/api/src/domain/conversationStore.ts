@@ -763,7 +763,7 @@ function localPartsToUtcDate(
 
 export const FOLLOW_UP_DAY_OFFSETS = [2, 3, 5, 7, 10, 14, 18, 21, 27, 30, 45, 60, 90];
 
-function computeFollowUpDueAt(anchorAtIso: string, offsetDays: number, timeZone: string) {
+export function computeFollowUpDueAt(anchorAtIso: string, offsetDays: number, timeZone: string) {
   const anchor = new Date(anchorAtIso);
   const anchorParts = getZonedParts(anchor, timeZone);
   const base = new Date(Date.UTC(anchorParts.year, anchorParts.month - 1, anchorParts.day));
