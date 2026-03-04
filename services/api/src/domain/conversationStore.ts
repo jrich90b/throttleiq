@@ -148,6 +148,17 @@ export type Conversation = {
 };
 
 const conversations = new Map<string, Conversation>();
+
+// Normalize lead keys at the store level to prevent split threads across phone formats.
+export function normalizeLeadKey(raw: string): string {
+  const trimmed = String(raw ?? "").trim();
+  if (trimmed.includes("@")) return trimmed.toLowerCase();
+  if (trimmed.startsWith("+") && trimmed.length > 1) return trimmed;
+  const digits = trimmed.replace(/\D/g, "");
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  return trimmed;
+}
 const todos: TodoTask[] = [];
 
 function nowIso() {
@@ -255,25 +266,27 @@ export function upsertConversationByLeadKey(
   leadKey: string,
   defaultMode: ConversationMode = "suggest"
 ): Conversation {
-  const existing = conversations.get(leadKey);
+  const key = normalizeLeadKey(leadKey);
+  const existing = conversations.get(key);
   if (existing) return existing;
 
   const created: Conversation = {
-    id: leadKey,
-    leadKey,
+    id: key,
+    leadKey: key,
     mode: defaultMode,
     createdAt: nowIso(),
     updatedAt: nowIso(),
     messages: []
   };
 
-  conversations.set(leadKey, created);
+  conversations.set(key, created);
   scheduleSave();
   return created;
 }
 
 export function setConversationMode(id: string, mode: ConversationMode): Conversation | null {
-  const conv = conversations.get(id);
+  const key = normalizeLeadKey(id);
+  const conv = conversations.get(key);
   if (!conv) return null;
   conv.mode = mode;
   conv.updatedAt = nowIso();
@@ -451,7 +464,8 @@ export function getAllConversations(): Conversation[] {
 }
 
 export function getConversation(id: string): Conversation | null {
-  return conversations.get(id) ?? null;
+  const key = normalizeLeadKey(id);
+  return conversations.get(key) ?? null;
 }
 
 
@@ -1115,10 +1129,11 @@ export function setCrmLastLoggedAt(conv: Conversation, iso: string) {
 }
 
 export function deleteConversation(convId: string): boolean {
-  const existed = conversations.delete(convId);
+  const key = normalizeLeadKey(convId);
+  const existed = conversations.delete(key);
   if (!existed) return false;
   for (let i = todos.length - 1; i >= 0; i -= 1) {
-    if (todos[i]?.convId === convId) {
+    if (todos[i]?.convId === key) {
       todos.splice(i, 1);
     }
   }
