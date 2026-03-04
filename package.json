@@ -2,7 +2,11 @@
   "name": "throttleiq",
   "private": true,
   "type": "module",
-  "workspaces": ["apps/*", "services/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "services/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev:api": "npm --workspace @throttleiq/api run dev",
     "dev:worker": "npm --workspace @throttleiq/worker run dev",
@@ -16,5 +20,10 @@
     "tsx": "^4.0.0",
     "typescript": "^5.0.0"
   },
-  "engines": { "node": ">=18" }
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "libphonenumber-js": "^1.12.38"
+  }
 }
