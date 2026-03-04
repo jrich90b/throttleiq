@@ -14,6 +14,7 @@
     "express": "^4.18.0",
     "fast-xml-parser": "^5.3.5",
     "googleapis": "^171.4.0",
+    "libphonenumber-js": "^1.11.2",
     "multer": "^2.0.2",
     "openai": "^6.21.0",
     "twilio": "^4.0.0"

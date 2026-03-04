@@ -3,6 +3,7 @@ import * as path from "node:path";
 import type { InboundMessageEvent } from "./types.js";
 import { fileURLToPath } from "node:url";
 import { dataPath } from "./dataDir.js";
+import { parsePhoneNumberFromString } from "libphonenumber-js";
 
 export type ConversationMode = "autopilot" | "suggest" | "human";
 export type MessageProvider = "twilio" | "sendgrid_adf" | "draft_ai" | "human";
@@ -152,12 +153,33 @@ const conversations = new Map<string, Conversation>();
 // Normalize lead keys at the store level to prevent split threads across phone formats.
 export function normalizeLeadKey(raw: string): string {
   const trimmed = String(raw ?? "").trim();
+  if (!trimmed) return trimmed;
   if (trimmed.includes("@")) return trimmed.toLowerCase();
-  if (trimmed.startsWith("+") && trimmed.length > 1) return trimmed;
+
+  const direct = parsePhoneNumberFromString(trimmed);
+  if (direct?.isValid()) return direct.number;
+
   const digits = trimmed.replace(/\D/g, "");
-  if (digits.length === 10) return `+1${digits}`;
-  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  const looksNanp = digits.length === 10 || (digits.length === 11 && digits.startsWith("1"));
+  if (looksNanp) {
+    const fallback = parsePhoneNumberFromString(digits, "US");
+    if (fallback?.isValid()) return fallback.number;
+  }
+
   return trimmed;
+}
+
+if (process.env.NODE_ENV === "test") {
+  const samples = [
+    "716-866-8217",
+    "+1 (716) 866-8217",
+    "+44 20 7946 0018",
+    "GIO@AMERICANHARLEY-DAVIDSON.COM"
+  ];
+  for (const s of samples) {
+    // eslint-disable-next-line no-console
+    console.log("[normalizeLeadKey]", s, "=>", normalizeLeadKey(s));
+  }
 }
 const todos: TodoTask[] = [];
 
