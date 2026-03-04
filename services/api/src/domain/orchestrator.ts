@@ -426,7 +426,7 @@ export async function orchestrateInbound(
           stockId: stockId ?? ctx?.lead?.vehicle?.stockId,
           condition,
           listPrice: listPrice ?? ctx?.lead?.vehicle?.listPrice,
-          priceRange
+          priceRange: priceRange ?? undefined
         }
       };
       const inboundHistory = [...history].reverse().filter(h => h.direction === "in");
