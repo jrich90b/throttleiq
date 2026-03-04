@@ -1849,11 +1849,16 @@ if (authToken && signature) {
 
   const { From, To, Body, MessageSid, SmsSid } = req.body ?? {};
 
+  const fromRaw = String(From ?? "").trim();
+  const toRaw = String(To ?? "").trim();
+  const from = normalizePhone(fromRaw);
+  const to = normalizePhone(toRaw);
+
   const event: InboundMessageEvent = {
     channel: "sms",
     provider: "twilio",
-    from: String(From ?? "").trim(),
-    to: String(To ?? "").trim(),
+    from,
+    to,
     body: String(Body ?? ""),
     providerMessageId: String(MessageSid ?? SmsSid ?? ""),
     receivedAt: new Date().toISOString()
