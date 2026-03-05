@@ -810,14 +810,16 @@ function extractTimeToken(msg: string): string | null {
   }
 
   // no-colon 3–4 digit: 930, 0930, 1030, 1230pm
-  m = s.match(/\b(\d{3,4})\s*(am|pm)?\b/);
+  m = s.match(/(?:^|[^0-9])(\d{3,4})\s*(am|pm)?(?:$|[^0-9])/);
   if (m) {
     const digits = m[1];
     const ap = m[2] ?? "";
     const d = digits.padStart(4, "0");
     const hh = String(Number(d.slice(0, 2)));
     const mm = d.slice(2, 4);
-    return normalizeTimeToken(`${hh}:${mm}${ap}`);
+    const token = normalizeTimeToken(`${hh}:${mm}${ap}`);
+    console.log("[time-token] compact", { raw: digits, token });
+    return token;
   }
 
   // hour-only: 1, 11, 1pm, 11am
@@ -2373,6 +2375,12 @@ if (authToken && signature) {
 
       if (picked.length >= 2) {
         setLastSuggestedSlots(conv, picked);
+        console.log(
+          "[scheduler] persisted lastSuggestedSlots",
+          picked.length,
+          "leadKey",
+          conv.leadKey
+        );
         console.log("[scheduler] persisted lastSuggestedSlots len:", picked.length);
         console.log(
           "[scheduler] persisted lastSuggestedSlots preview:",
@@ -2658,6 +2666,12 @@ if (authToken && signature) {
 
         if (bestSlots.length >= 2) {
           setLastSuggestedSlots(conv, bestSlots);
+          console.log(
+            "[scheduler] persisted lastSuggestedSlots",
+            bestSlots.length,
+            "leadKey",
+            conv.leadKey
+          );
           console.log("[scheduler] bestSlots len:", bestSlots.length);
           console.log(
             "[scheduler] bestSlots preview:",
@@ -2726,6 +2740,12 @@ if (authToken && signature) {
   if (result.suggestedSlots && result.suggestedSlots.length > 0) {
     console.log("[scheduler] persist suggestedSlots", result.suggestedSlots.length);
     setLastSuggestedSlots(conv, result.suggestedSlots);
+    console.log(
+      "[scheduler] persisted lastSuggestedSlots",
+      result.suggestedSlots.length,
+      "leadKey",
+      conv.leadKey
+    );
     saveConversation(conv);
     console.log(
       "[scheduler] flushing store path:",
