@@ -2074,7 +2074,8 @@ if (authToken && signature) {
 
       const stockId = conv.lead?.vehicle?.stockId ?? null;
       const firstName = conv.lead?.firstName ?? "";
-      const leadName = firstName ? firstName : conv.leadKey;
+      const lastName = conv.lead?.lastName ?? "";
+      const leadName = [firstName, lastName].filter(Boolean).join(" ").trim() || conv.leadKey;
       const appointmentType = chosen.appointmentType ?? "inventory_visit";
 
       const summary = `Appt: ${appointmentType} – ${leadName}${stockId ? ` – ${stockId}` : ""}`;
@@ -2159,7 +2160,8 @@ if (authToken && signature) {
 
         const stockId = conv.lead?.vehicle?.stockId ?? null;
         const firstName = conv.lead?.firstName ?? "";
-        const leadName = firstName ? firstName : conv.leadKey;
+        const lastName = conv.lead?.lastName ?? "";
+        const leadName = [firstName, lastName].filter(Boolean).join(" ").trim() || conv.leadKey;
         const appointmentType = chosen.appointmentType ?? "inventory_visit";
 
         const summary = `Appt: ${appointmentType} – ${leadName}${stockId ? ` – ${stockId}` : ""}`;
@@ -2597,7 +2599,8 @@ if (authToken && signature) {
 
       const stockId = conv.lead?.vehicle?.stockId ?? null;
       const firstName = conv.lead?.firstName ?? "";
-      const leadName = firstName ? firstName : conv.leadKey;
+      const lastName = conv.lead?.lastName ?? "";
+      const leadName = [firstName, lastName].filter(Boolean).join(" ").trim() || conv.leadKey;
 
       const summary = `Appt: Inventory Visit – ${leadName}${stockId ? ` – ${stockId}` : ""}`;
 
@@ -2739,7 +2742,8 @@ if (authToken && signature) {
           if (chosen) {
             const stockId = conv.lead?.vehicle?.stockId ?? null;
             const firstName = conv.lead?.firstName ?? "";
-            const leadName = firstName ? firstName : conv.leadKey;
+            const lastName = conv.lead?.lastName ?? "";
+            const leadName = [firstName, lastName].filter(Boolean).join(" ").trim() || conv.leadKey;
             const summary = `Appt: ${appointmentType} – ${leadName}${stockId ? ` – ${stockId}` : ""}`;
             const description = [
               `LeadKey: ${conv.leadKey}`,
@@ -2925,7 +2929,8 @@ if (authToken && signature) {
           if (exact) {
             const stockId = conv.lead?.vehicle?.stockId ?? null;
             const firstName = conv.lead?.firstName ?? "";
-            const leadName = firstName ? firstName : conv.leadKey;
+            const lastName = conv.lead?.lastName ?? "";
+            const leadName = [firstName, lastName].filter(Boolean).join(" ").trim() || conv.leadKey;
 
             const summary = `Appt: ${appointmentType} – ${leadName}${stockId ? ` – ${stockId}` : ""}`;
             const description = [
