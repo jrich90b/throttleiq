@@ -2807,6 +2807,15 @@ if (authToken && signature) {
   // - suggest: store a draft, do NOT auto-send
   // - autopilot: send immediately and log as twilio (no separate draft)
   if (systemMode === "suggest") {
+    if (result.suggestedSlots && result.suggestedSlots.length > 0) {
+      console.log("[scheduler] persist suggestedSlots", result.suggestedSlots.length);
+      setLastSuggestedSlots(conv, result.suggestedSlots);
+      const pending = chooseSlotFromReply(result.suggestedSlots, reply);
+      if (pending && conv.scheduler) {
+        conv.scheduler.pendingSlot = pending;
+        conv.scheduler.updatedAt = new Date().toISOString();
+      }
+    }
     appendOutbound(conv, event.to, event.from, reply, "draft_ai");
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
@@ -2816,6 +2825,15 @@ if (authToken && signature) {
   }
 
   // autopilot
+  if (result.suggestedSlots && result.suggestedSlots.length > 0) {
+    console.log("[scheduler] persist suggestedSlots", result.suggestedSlots.length);
+    setLastSuggestedSlots(conv, result.suggestedSlots);
+    const pending = chooseSlotFromReply(result.suggestedSlots, reply);
+    if (pending && conv.scheduler) {
+      conv.scheduler.pendingSlot = pending;
+      conv.scheduler.updatedAt = new Date().toISOString();
+    }
+  }
   appendOutbound(conv, event.to, event.from, reply, "twilio");
   if (!hadOutbound) {
     await maybeStartCadence(conv, new Date().toISOString());
