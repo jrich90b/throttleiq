@@ -1982,6 +1982,15 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
+  console.log("[deterministic-offer] precheck", {
+    provider: event.provider,
+    from: event.from,
+    to: event.to,
+    bookedEventId: conv.appointment?.bookedEventId ?? null,
+    lastSuggestedSlotsLen: conv.scheduler?.lastSuggestedSlots?.length ?? 0,
+    cta: conv.classification?.cta ?? null,
+    bucket: conv.classification?.bucket ?? null
+  });
   // Deterministic slot offer for Twilio when scheduling context is known but no slots exist yet.
   if (
     event.provider === "twilio" &&
