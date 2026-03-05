@@ -848,6 +848,14 @@ function chooseSlotFromReply(slots: any[], reply: string): any | null {
   return null;
 }
 
+function draftHasSpecificTimes(text: string): boolean {
+  const s = (text || "").toLowerCase();
+  const timePattern = /\b\d{1,2}:\d{2}\b|\b\d{1,2}\s*(am|pm)\b/;
+  const hasTwoOptions = /\bi have\b.*\bor\b/.test(s) && timePattern.test(s);
+  const hasWeekday = /\b(mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b/.test(s);
+  return hasTwoOptions || (hasWeekday && timePattern.test(s));
+}
+
 async function buildDay2Options(
   cfg: Awaited<ReturnType<typeof getSchedulerConfig>>
 ): Promise<{ message: string; slots: any[] } | null> {
@@ -2537,6 +2545,10 @@ if (authToken && signature) {
     lead: conv.lead ?? null,
     pricingAttempts: getPricingAttempts(conv)
   });
+  console.log("[twilio] result.suggestedSlots len:", result.suggestedSlots?.length ?? 0);
+  if ((result.suggestedSlots?.length ?? 0) === 0 && draftHasSpecificTimes(result.draft ?? "")) {
+    result.draft = "What day and time works best for you to stop in?";
+  }
   if (result.handoff?.required) {
     const reason = result.handoff.reason;
     const ack = result.handoff.ack;

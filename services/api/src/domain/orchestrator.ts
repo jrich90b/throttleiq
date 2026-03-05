@@ -647,7 +647,7 @@ export async function orchestrateInbound(
               }
             }
 
-            if (slots.length >= 2) {
+            if (slots.length >= 1) {
               const fmtLocal = (iso: string) =>
                 new Date(iso).toLocaleString("en-US", {
                   timeZone: cfg.timezone,
