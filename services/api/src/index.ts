@@ -63,7 +63,10 @@ import {
   closeConversation,
   setConversationMode,
   setCrmLastLoggedAt,
-  reloadConversationStore
+  flushConversationStore,
+  reloadConversationStore,
+  saveConversation,
+  getConversationStorePath
 } from "./domain/conversationStore.js";
 import { logTuningRow } from "./domain/tuningLogger.js";
 import {
@@ -2364,16 +2367,63 @@ if (authToken && signature) {
 
       if (picked.length >= 2) {
         setLastSuggestedSlots(conv, picked);
+        console.log("[scheduler] persisted lastSuggestedSlots len:", picked.length);
+        console.log(
+          "[scheduler] persisted lastSuggestedSlots preview:",
+          picked.slice(0, 2).map(s => s.startLocal)
+        );
         conv.appointment.reschedulePending = true;
         conv.appointment.updatedAt = new Date().toISOString();
         const reply = `I can reschedule you. I have ${picked[0].startLocal} or ${picked[1].startLocal} — which works best?`;
         const systemMode = effectiveMode(conv);
         if (systemMode === "suggest") {
           appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+          saveConversation(conv);
+          console.log(
+            "[scheduler] saving convo before flush",
+            "leadKey",
+            conv.leadKey,
+            "len",
+            conv.scheduler?.lastSuggestedSlots?.length ?? 0
+          );
+          console.log("[scheduler] flushing store path:", getConversationStorePath());
+          if (getConversationStorePath() !== "/home/ubuntu/throttleiq-runtime/data/conversations.json") {
+            console.log(
+              "[scheduler] WARN expected CONVERSATIONS_DB_PATH /home/ubuntu/throttleiq-runtime/data/conversations.json"
+            );
+          }
+          await flushConversationStore();
+          console.log(
+            "[scheduler] saved lastSuggestedSlots len:",
+            conv.scheduler?.lastSuggestedSlots?.length ?? 0,
+            "leadKey",
+            conv.leadKey
+          );
           const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
           return res.status(200).type("text/xml").send(twiml);
         }
         appendOutbound(conv, event.to, event.from, reply, "twilio");
+        saveConversation(conv);
+        console.log(
+          "[scheduler] saving convo before flush",
+          "leadKey",
+          conv.leadKey,
+          "len",
+          conv.scheduler?.lastSuggestedSlots?.length ?? 0
+        );
+        console.log("[scheduler] flushing store path:", getConversationStorePath());
+        if (getConversationStorePath() !== "/home/ubuntu/throttleiq-runtime/data/conversations.json") {
+          console.log(
+            "[scheduler] WARN expected CONVERSATIONS_DB_PATH /home/ubuntu/throttleiq-runtime/data/conversations.json"
+          );
+        }
+        await flushConversationStore();
+        console.log(
+          "[scheduler] saved lastSuggestedSlots len:",
+          conv.scheduler?.lastSuggestedSlots?.length ?? 0,
+          "leadKey",
+          conv.leadKey
+        );
         const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
           reply
         )}</Message>\n</Response>`;
@@ -2796,6 +2846,27 @@ if (authToken && signature) {
         if (systemMode === "suggest") {
           // Persist suggested slots before early return so the next inbound can match.
           appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+          saveConversation(conv);
+          console.log(
+            "[scheduler] saving convo before flush",
+            "leadKey",
+            conv.leadKey,
+            "len",
+            conv.scheduler?.lastSuggestedSlots?.length ?? 0
+          );
+          console.log("[scheduler] flushing store path:", getConversationStorePath());
+          if (getConversationStorePath() !== "/home/ubuntu/throttleiq-runtime/data/conversations.json") {
+            console.log(
+              "[scheduler] WARN expected CONVERSATIONS_DB_PATH /home/ubuntu/throttleiq-runtime/data/conversations.json"
+            );
+          }
+          await flushConversationStore();
+          console.log(
+            "[scheduler] saved lastSuggestedSlots len:",
+            conv.scheduler?.lastSuggestedSlots?.length ?? 0,
+            "leadKey",
+            conv.leadKey
+          );
           console.log(
             "[scheduler] after persist lastSuggestedSlots",
             conv.scheduler?.lastSuggestedSlots?.length ?? 0
@@ -2805,6 +2876,27 @@ if (authToken && signature) {
         }
         // Persist suggested slots before early return so the next inbound can match.
         appendOutbound(conv, event.to, event.from, reply, "twilio");
+        saveConversation(conv);
+        console.log(
+          "[scheduler] saving convo before flush",
+          "leadKey",
+          conv.leadKey,
+          "len",
+          conv.scheduler?.lastSuggestedSlots?.length ?? 0
+        );
+        console.log("[scheduler] flushing store path:", getConversationStorePath());
+        if (getConversationStorePath() !== "/home/ubuntu/throttleiq-runtime/data/conversations.json") {
+          console.log(
+            "[scheduler] WARN expected CONVERSATIONS_DB_PATH /home/ubuntu/throttleiq-runtime/data/conversations.json"
+          );
+        }
+        await flushConversationStore();
+        console.log(
+          "[scheduler] saved lastSuggestedSlots len:",
+          conv.scheduler?.lastSuggestedSlots?.length ?? 0,
+          "leadKey",
+          conv.leadKey
+        );
         console.log(
           "[scheduler] after persist lastSuggestedSlots",
           conv.scheduler?.lastSuggestedSlots?.length ?? 0

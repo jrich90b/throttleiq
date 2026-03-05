@@ -282,6 +282,25 @@ async function saveToDisk() {
   }
 }
 
+// Flush pending conversation changes to disk (used before early-return paths).
+export async function flushConversationStore(): Promise<void> {
+  await saveToDisk();
+}
+
+export function getConversationStorePath(): string {
+  return DB_PATH;
+}
+
+// Ensure conversation is present in the in-memory store before flush.
+export function saveConversation(conv: Conversation): void {
+  const key = normalizeLeadKey(conv.leadKey || conv.id || "");
+  if (!key) return;
+  conv.id = key;
+  conv.leadKey = key;
+  conversations.set(key, conv);
+  scheduleSave();
+}
+
 function scheduleSave() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
