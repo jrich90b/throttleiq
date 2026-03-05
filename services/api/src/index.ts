@@ -2025,7 +2025,6 @@ if (authToken && signature) {
       stopFollowUpCadence(conv, "appointment_booked");
 
       if (conv.scheduler) {
-        conv.scheduler.lastSuggestedSlots = [];
         conv.scheduler.pendingSlot = undefined;
         conv.scheduler.updatedAt = new Date().toISOString();
       }
@@ -2111,7 +2110,6 @@ if (authToken && signature) {
         stopFollowUpCadence(conv, "appointment_booked");
 
         if (conv.scheduler) {
-          conv.scheduler.lastSuggestedSlots = [];
           conv.scheduler.pendingSlot = undefined;
           conv.scheduler.updatedAt = new Date().toISOString();
         }

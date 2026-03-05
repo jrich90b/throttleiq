@@ -553,10 +553,9 @@ export function updateAppointmentFromInbound(
 }
 
 export function setLastSuggestedSlots(conv: Conversation, slots: any[]) {
-  conv.scheduler = {
-    lastSuggestedSlots: Array.isArray(slots) ? slots : [],
-    updatedAt: nowIso()
-  };
+  conv.scheduler = conv.scheduler ?? { updatedAt: nowIso(), lastSuggestedSlots: [] };
+  conv.scheduler.lastSuggestedSlots = Array.isArray(slots) ? slots : [];
+  conv.scheduler.updatedAt = nowIso();
   conv.updatedAt = nowIso();
   scheduleSave();
 }
