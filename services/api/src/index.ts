@@ -2056,6 +2056,11 @@ if (authToken && signature) {
     Array.isArray(conv.scheduler?.lastSuggestedSlots) &&
     conv.scheduler.lastSuggestedSlots.length > 0
   ) {
+    console.log("[auto-book] inbound:", JSON.stringify(event.body));
+    console.log(
+      "[auto-book] lastSuggestedSlots:",
+      conv.scheduler?.lastSuggestedSlots?.map(s => s.startLocal) ?? []
+    );
     const chosen = chooseSlotFromReply(conv.scheduler.lastSuggestedSlots, event.body);
     if (chosen) {
       console.log("[auto-book] chosen slot", chosen?.startLocal, chosen?.calendarId);
