@@ -199,13 +199,25 @@ export async function orchestrateInbound(
 ): Promise<OrchestratorResult> {
   await loadSystemPrompt("orchestrator");
 
+  const finalize = (result: OrchestratorResult): OrchestratorResult => {
+    const out: OrchestratorResult = {
+      ...result,
+      suggestedSlots: result.suggestedSlots ?? []
+    };
+    console.log("[orchestrateInbound] return", {
+      provider: event.provider,
+      suggestedSlotsLen: out.suggestedSlots?.length ?? 0
+    });
+    return out;
+  };
+
   if (looksLikeOptOut(event.body)) {
-    return {
+    return finalize({
       intent: "GENERAL",
       stage: "ENGAGED",
       shouldRespond: true,
       draft: "Got it — I won’t message you again."
-    };
+    });
   }
 
   const corporateIntent = detectCorporateIntent(event.body);
@@ -219,24 +231,24 @@ export async function orchestrateInbound(
         `Hi, this is ${agentName} at ${dealerName}. ` +
         "We’re a dealership, not Harley‑Davidson corporate. " +
         "For corporate assistance, please call 800‑258‑2464.";
-      return {
+      return finalize({
         intent: "GENERAL",
         stage: "ENGAGED",
         shouldRespond: true,
         draft: ack,
         autoClose: { reason: "corporate" }
-      };
+      });
     }
     const ack =
       `Hi, this is ${agentName} at ${dealerName}. ` +
       "Thanks for reaching out — due to our dealer agreement, we can only sell to customers within the United States.";
-    return {
+    return finalize({
       intent: "GENERAL",
       stage: "ENGAGED",
       shouldRespond: true,
       draft: ack,
       autoClose: { reason: "international" }
-    };
+    });
   }
 
   const intent = simpleIntent(event.body);
@@ -253,25 +265,25 @@ export async function orchestrateInbound(
   if (managerRequest) {
     const ack =
       "Got it — I’ll have a manager follow up shortly. What’s the best time to reach you today?";
-    return {
+    return finalize({
       intent,
       stage: "ENGAGED",
       shouldRespond: true,
       draft: ack,
       handoff: { required: true, reason: "manager", ack }
-    };
+    });
   }
 
   if (approvalStatus) {
     const ack =
       "Got it — I’ll have our team check the status and follow up shortly. What’s the best time to reach you today?";
-    return {
+    return finalize({
       intent,
       stage: "ENGAGED",
       shouldRespond: true,
       draft: ack,
       handoff: { required: true, reason: "approval", ack }
-    };
+    });
   }
 
   if (pricingIntent && pricingAttempts >= 1) {
@@ -279,13 +291,13 @@ export async function orchestrateInbound(
     const ack = exactPressure
       ? "Got it — to make sure the numbers are accurate, I’m going to have a manager pull the exact out-the-door/payment options and follow up shortly. What’s the best time to reach you today?"
       : "Got it — I’ll have a manager pull the most accurate numbers and follow up shortly. What’s the best time to reach you today?";
-    return {
+    return finalize({
       intent,
       stage: "ENGAGED",
       shouldRespond: true,
       draft: ack,
       handoff: { required: true, reason, ack }
-    };
+    });
   }
 
   const fallbackDraft =
@@ -319,24 +331,24 @@ export async function orchestrateInbound(
       if (!price && !range) {
         const ack =
           "Got it — I’ll have a manager pull the exact pricing and follow up shortly. What’s the best time to reach you today?";
-        return {
+        return finalize({
           intent,
           stage: "ENGAGED",
           shouldRespond: true,
           draft: ack,
           handoff: { required: true, reason: "pricing", ack }
-        };
+        });
       }
     } catch {
       const ack =
         "Got it — I’ll have a manager pull the exact pricing and follow up shortly. What’s the best time to reach you today?";
-      return {
+      return finalize({
         intent,
         stage: "ENGAGED",
         shouldRespond: true,
         draft: ack,
         handoff: { required: true, reason: "pricing", ack }
-      };
+      });
     }
   }
 
@@ -371,13 +383,13 @@ export async function orchestrateInbound(
     const ack =
       `Hi, this is ${agentName} at ${dealerName}. ` +
       "Thanks for checking — I’m going to have a manager verify availability and follow up shortly.";
-    return {
+    return finalize({
       intent,
       stage: "ENGAGED",
       shouldRespond: true,
       draft: ack,
       handoff: { required: true, reason: "other", ack }
-    };
+    });
   }
 
   // Use LLM when enabled; otherwise fall back to template.
@@ -714,24 +726,24 @@ export async function orchestrateInbound(
           ? `I could get you scheduled to meet with our sales team. I have ${suggestedSlots[0].startLocal} or ${suggestedSlots[1].startLocal} — which works best?`
           : "I could get you scheduled to meet with our sales team — what day/time works best?";
         const qualifier = "Do you have a trade?";
-        return {
+        return finalize({
           intent,
           stage: "ENGAGED",
           shouldRespond: true,
           draft: `${priceLine} ${disclaimer}\n\n${schedule} ${qualifier}`,
           suggestedSlots
-        };
+        });
       }
 
       if (suggestedSlots.length === 1 && requestedDayKey) {
         const reply = `I have ${suggestedSlots[0].startLocal}. If that doesn’t work, what other day works for you?`;
-        return {
+        return finalize({
           intent,
           stage: "ENGAGED",
           shouldRespond: true,
           draft: reply,
           suggestedSlots
-        };
+        });
       }
 
       if (suggestedSlots.length >= 2) {
@@ -744,36 +756,36 @@ export async function orchestrateInbound(
         const dayName = requestedDayKey.charAt(0).toUpperCase() + requestedDayKey.slice(1);
         if (requestedDayClosed && suggestedSlots.length >= 2) {
           const fallbackMessage = `We’re closed on ${dayName}. I have ${suggestedSlots[0].startLocal} or ${suggestedSlots[1].startLocal} — which works best?`;
-          return {
+          return finalize({
             intent,
             stage: "ENGAGED",
             shouldRespond: true,
             draft: fallbackMessage,
             suggestedSlots
-          };
+          });
         }
         const fallbackMessage = requestedDayClosed
           ? `We’re closed on ${dayName}. Is there another day that works for you?`
           : `I'm booked up for ${dayName}. Is there another day that works for you?`;
-        return {
+        return finalize({
           intent,
           stage: "ENGAGED",
           shouldRespond: true,
           draft: fallbackMessage,
           suggestedSlots: []
-        };
+        });
       }
 
       const longTermMonths = lead.purchaseTimeframeMonthsStart;
       if (event.provider === "sendgrid_adf" && longTermMonths && longTermMonths >= 1) {
         const msg = buildLongTermMessage(lead.purchaseTimeframe, lead.hasMotoLicense);
-        return {
+        return finalize({
           intent,
           stage: "ENGAGED",
           shouldRespond: true,
           draft: msg,
           suggestedSlots: []
-        };
+        });
       }
 
       const draft = await generateDraftWithLLM({
@@ -840,7 +852,7 @@ export async function orchestrateInbound(
         }
       }
 
-      return {
+      return finalize({
         intent,
         stage: "ENGAGED",
         shouldRespond: true,
@@ -849,23 +861,23 @@ export async function orchestrateInbound(
         requestedTime,
         requestedAppointmentType: appointmentType,
         pricingAttempted
-      };
+      });
     } catch {
-      return {
+      return finalize({
         intent,
         stage: "ENGAGED",
         shouldRespond: true,
         draft: fallbackDraft,
         pricingAttempted
-      };
+      });
     }
   }
 
-  return {
+  return finalize({
     intent,
     stage: "ENGAGED",
     shouldRespond: true,
     draft: fallbackDraft,
     pricingAttempted
-  };
+  });
 }
