@@ -2770,6 +2770,11 @@ if (authToken && signature) {
 
       if (bestSlots.length >= 2) {
         setLastSuggestedSlots(conv, bestSlots);
+        console.log("[scheduler] persisted lastSuggestedSlots len:", bestSlots.length);
+        console.log(
+          "[scheduler] persisted lastSuggestedSlots preview:",
+          bestSlots.slice(0, 2).map(s => s.startLocal)
+        );
         const dayName = requestedDayKey.charAt(0).toUpperCase() + requestedDayKey.slice(1);
         const requestedDaySpecified = !!result.requestedTime?.dayOfWeek;
         const sameDayHasCandidates = candidatesByDay.some(
@@ -2789,11 +2794,21 @@ if (authToken && signature) {
         const reply = `${prefix ? `${prefix} ` : ""}I have ${bestSlots[0].startLocal} or ${bestSlots[1].startLocal} — which works best?`;
         const systemMode = effectiveMode(conv);
         if (systemMode === "suggest") {
+          // Persist suggested slots before early return so the next inbound can match.
           appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+          console.log(
+            "[scheduler] after persist lastSuggestedSlots",
+            conv.scheduler?.lastSuggestedSlots?.length ?? 0
+          );
           const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
           return res.status(200).type("text/xml").send(twiml);
         }
+        // Persist suggested slots before early return so the next inbound can match.
         appendOutbound(conv, event.to, event.from, reply, "twilio");
+        console.log(
+          "[scheduler] after persist lastSuggestedSlots",
+          conv.scheduler?.lastSuggestedSlots?.length ?? 0
+        );
         const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
           reply
         )}</Message>\n</Response>`;
