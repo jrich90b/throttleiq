@@ -712,7 +712,7 @@ export async function orchestrateInbound(
         }
       }
 
-      console.log("[scheduler] suggestedSlots", suggestedSlots.length);
+      console.log("[scheduler] suggestedSlots", { provider: event.provider, len: suggestedSlots.length });
 
       if (pricingIntent && (listPrice || priceRange)) {
         const nf = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
