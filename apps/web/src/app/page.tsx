@@ -686,6 +686,16 @@ export default function Home() {
     }
     return events;
   };
+  const getEventTitle = (ev: any) => ev?.customerName || ev?.summary || "Busy";
+  const getEventDetails = (ev: any) => {
+    const parts = [];
+    if (ev?.phone) parts.push(`Phone: ${ev.phone}`);
+    if (ev?.email) parts.push(`Email: ${ev.email}`);
+    if (ev?.stock) parts.push(`Stock: ${ev.stock}`);
+    if (ev?.vin) parts.push(`VIN: ${ev.vin}`);
+    if (ev?.source) parts.push(`Source: ${ev.source}`);
+    return parts.join(" • ");
+  };
 
   useEffect(() => {
     if (appointmentTypeToAdd === "custom") return;
@@ -2220,13 +2230,14 @@ export default function Home() {
                                   return formatTimeLabel(`${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`, tz);
                                 };
                                 const timeLabel = `${minToLabel(renderStart)}–${minToLabel(renderEnd)}`;
+                                const detail = getEventDetails(ev);
                                 return (
                                   <div
                                     key={ev.id}
                                     data-cal-event
                                     className="absolute left-2 right-2 bg-blue-100 text-blue-900 border border-blue-200 rounded px-2 py-1 text-xs overflow-hidden cursor-pointer"
                                     style={{ top: `${top}%`, height: `${height}%` }}
-                                    title={ev.summary}
+                                    title={detail || ev.summary}
                                     onMouseDown={e => {
                                       e.stopPropagation();
                                       if (ev.readOnly) return;
@@ -2244,8 +2255,13 @@ export default function Home() {
                                   >
                                     <div className="flex items-start justify-between gap-2">
                                       <div className="min-w-0">
-                                        <div className="font-medium truncate">{ev.summary || "(no title)"}</div>
+                                        <div className="font-medium truncate">{getEventTitle(ev)}</div>
                                         <div className="text-[10px] text-blue-900/70 mt-1">{timeLabel}</div>
+                                        {detail ? (
+                                          <div className="text-[10px] text-blue-900/60 mt-1 truncate">
+                                            {detail}
+                                          </div>
+                                        ) : null}
                                       </div>
                                       {ev.readOnly ? null : (
                                         <button
@@ -2335,12 +2351,13 @@ export default function Home() {
                                           <div
                                             key={ev.id}
                                             className="text-xs bg-blue-100 border border-blue-200 rounded px-2 py-1 cursor-pointer"
+                                            title={getEventDetails(ev) || ev.summary}
                                             onClick={() => {
                                               if (ev.readOnly) return;
                                               setCalendarEdit({ ...ev, calendarId: ev.calendarId });
                                             }}
                                           >
-                                            {ev.summary || "(no title)"}
+                                            {getEventTitle(ev)}
                                           </div>
                                         ))
                                       )}

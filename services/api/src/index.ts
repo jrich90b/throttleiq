@@ -18,6 +18,7 @@ import {
   insertEvent,
   updateEvent,
   updateEventDetails,
+  listEvents,
   createCalendar,
   createRecurringBlock,
   deleteEvent,
@@ -1305,23 +1306,68 @@ app.get("/calendar/events", requirePermission("canEditAppointments"), async (req
     }
     const userIds = idsRaw ? idsRaw.split(",").map(s => s.trim()).filter(Boolean) : [];
     if (userIds.length === 0) {
-      return res.json({ ok: true, busyByUserId: {} });
+      return res.json({ ok: true, events: [] });
     }
 
     const users = await listUsers();
     const byId = new Map(users.map(u => [u.id, u]));
     const cal = await getAuthedCalendarClient();
-    const busyByUserId: Record<string, any[]> = {};
+    const events: any[] = [];
+
+    const parseDescription = (desc?: string | null) => {
+      const out: Record<string, string> = {};
+      const text = String(desc ?? "");
+      for (const line of text.split("\n")) {
+        const idx = line.indexOf(":");
+        if (idx === -1) continue;
+        const key = line.slice(0, idx).trim().toLowerCase();
+        const value = line.slice(idx + 1).trim();
+        if (!value) continue;
+        if (key === "leadkey") out.leadKey = value;
+        if (key === "phone") out.phone = value;
+        if (key === "email") out.email = value;
+        if (key === "stock") out.stock = value;
+        if (key === "vin") out.vin = value;
+        if (key === "source") out.source = value;
+      }
+      return out;
+    };
+    const parseCustomerName = (summary?: string | null) => {
+      const s = String(summary ?? "").trim();
+      const parts = s.split("–").map(p => p.trim()).filter(Boolean);
+      if (parts.length >= 2 && parts[0].toLowerCase().startsWith("appt")) {
+        return parts[1];
+      }
+      return "";
+    };
 
     for (const userId of userIds) {
       const user = byId.get(userId);
       if (!user?.calendarId) continue;
-      const fb = await queryFreeBusy(cal, [user.calendarId], start, end, timeZone);
-      const busy = fb.calendars?.[user.calendarId]?.busy ?? [];
-      busyByUserId[userId] = busy;
+      const items = await listEvents(cal, user.calendarId, start, end, timeZone);
+      for (const ev of items) {
+        if (ev?.status === "cancelled") continue;
+        const startIso = ev?.start?.dateTime ?? ev?.start?.date ?? null;
+        const endIso = ev?.end?.dateTime ?? ev?.end?.date ?? null;
+        if (!startIso || !endIso) continue;
+        const descFields = parseDescription(ev?.description ?? "");
+        const customerName = parseCustomerName(ev?.summary ?? "");
+        events.push({
+          id: ev.id,
+          calendarId: user.calendarId,
+          summary: ev?.summary ?? "",
+          description: ev?.description ?? "",
+          start: startIso,
+          end: endIso,
+          salespersonId: userId,
+          salespersonName: user.name || user.email || user.id,
+          customerName,
+          ...descFields
+        });
+      }
     }
 
-    return res.json({ ok: true, busyByUserId });
+    return res.json({ ok: true, events });
   } catch (err: any) {
     console.log("[calendar] failed to load events:", err?.message ?? err);
     return res.status(500).json({ ok: false, error: err?.message ?? "Failed to load events" });
