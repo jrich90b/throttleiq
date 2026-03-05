@@ -2624,7 +2624,6 @@ if (authToken && signature) {
   if (
     event.provider === "twilio" &&
     !conv.appointment?.bookedEventId &&
-    !looksLikeTimeSelection(event.body) &&
     (!conv.scheduler?.lastSuggestedSlots || conv.scheduler.lastSuggestedSlots.length === 0)
   ) {
     const cta = conv.classification?.cta ?? "";
@@ -2683,6 +2682,62 @@ if (authToken && signature) {
         }
 
         if (bestSlots.length >= 2) {
+          const timeLike = looksLikeTimeSelection(event.body);
+          const chosen = timeLike ? chooseSlotFromReply(bestSlots, event.body) : null;
+          if (chosen) {
+            const stockId = conv.lead?.vehicle?.stockId ?? null;
+            const firstName = conv.lead?.firstName ?? "";
+            const leadName = firstName ? firstName : conv.leadKey;
+            const summary = `Appt: ${appointmentType} – ${leadName}${stockId ? ` – ${stockId}` : ""}`;
+            const description = [
+              `LeadKey: ${conv.leadKey}`,
+              `Phone: ${conv.lead?.phone ?? conv.leadKey}`,
+              `Email: ${conv.lead?.email ?? ""}`,
+              `Stock: ${stockId ?? ""}`,
+              `VIN: ${conv.lead?.vehicle?.vin ?? ""}`,
+              `Source: ${conv.lead?.source ?? ""}`
+            ]
+              .filter(Boolean)
+              .join("\n");
+            const created = await insertEvent(
+              cal,
+              chosen.calendarId,
+              cfg.timezone,
+              summary,
+              description,
+              chosen.start,
+              chosen.end
+            );
+
+            conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
+            conv.appointment.status = "confirmed";
+            conv.appointment.whenText = chosen.startLocal ?? chosen.start;
+            conv.appointment.whenIso = chosen.start;
+            conv.appointment.confirmedBy = "customer";
+            conv.appointment.updatedAt = new Date().toISOString();
+            conv.appointment.acknowledged = true;
+            conv.appointment.bookedEventId = created.id ?? null;
+            conv.appointment.bookedEventLink = created.htmlLink ?? null;
+            conv.appointment.bookedSalespersonId = chosen.salespersonId ?? null;
+            conv.appointment.matchedSlot = chosen;
+            conv.appointment.reschedulePending = false;
+            stopFollowUpCadence(conv, "appointment_booked");
+
+            if (conv.scheduler) {
+              conv.scheduler.lastSuggestedSlots = [];
+              conv.scheduler.updatedAt = new Date().toISOString();
+            }
+
+            const confirmText = `Perfect — you’re all set for ${conv.appointment.whenText}. See you then.`;
+            appendOutbound(conv, event.to, event.from, confirmText, "twilio", created.id ?? undefined);
+            saveConversation(conv);
+            await flushConversationStore();
+            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+              confirmText
+            )}</Message>\n</Response>`;
+            return res.status(200).type("text/xml").send(twiml);
+          }
+
           setLastSuggestedSlots(conv, bestSlots);
           console.log(
             "[scheduler] persisted lastSuggestedSlots",
