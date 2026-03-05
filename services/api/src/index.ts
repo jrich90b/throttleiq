@@ -2025,16 +2025,20 @@ if (authToken && signature) {
             2
           );
           if (slots.length >= 2) {
-            bestSlots = slots.map(s => ({
-              salespersonId: sp.id,
-              salespersonName: sp.name,
-              calendarId: sp.calendarId,
-              start: s.start.toISOString(),
-              end: s.end.toISOString(),
-              startLocal: formatSlotLocal(s.start.toISOString(), cfg.timezone),
-              endLocal: formatSlotLocal(s.end.toISOString(), cfg.timezone),
-              appointmentType
-            }));
+            bestSlots = slots.map((s: any) => {
+              const startIso = typeof s.start === "string" ? s.start : s.start.toISOString();
+              const endIso = typeof s.end === "string" ? s.end : s.end.toISOString();
+              return {
+                salespersonId: sp.id,
+                salespersonName: sp.name,
+                calendarId: sp.calendarId,
+                start: startIso,
+                end: endIso,
+                startLocal: formatSlotLocal(startIso, cfg.timezone),
+                endLocal: formatSlotLocal(endIso, cfg.timezone),
+                appointmentType
+              };
+            });
             break;
           }
         }
