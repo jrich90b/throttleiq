@@ -150,7 +150,7 @@ export type Conversation = {
 
 const conversations = new Map<string, Conversation>();
 
-// Normalize lead keys at the store level to prevent split threads across phone formats.
+// Normalize lead keys at the store level to prevent split threads across channels/phone formats.
 export function normalizeLeadKey(raw: string): string {
   const trimmed = String(raw ?? "").trim();
   if (!trimmed) return trimmed;

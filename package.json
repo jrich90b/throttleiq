@@ -24,6 +24,7 @@
     "node": ">=18"
   },
   "dependencies": {
+    "geist": "^1.7.0",
     "libphonenumber-js": "^1.12.38"
   }
 }

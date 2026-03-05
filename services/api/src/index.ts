@@ -18,7 +18,6 @@ import {
   insertEvent,
   updateEvent,
   updateEventDetails,
-  listEvents,
   createCalendar,
   createRecurringBlock,
   deleteEvent,
@@ -1197,38 +1196,38 @@ app.get("/scheduler/calendars", async (_req, res) => {
   res.json({ ok: true, calendars: items });
 });
 
-app.get("/calendar/events", async (req, res) => {
-  const start = String(req.query?.start ?? "").trim();
-  const end = String(req.query?.end ?? "").trim();
-  const idsRaw = String(req.query?.salespeople ?? "").trim();
-  if (!start || !end) {
-    return res.status(400).json({ ok: false, error: "Missing start/end" });
-  }
-  const cfg = await getSchedulerConfig();
-  const all = cfg.salespeople ?? [];
-  const wantedIds = idsRaw ? idsRaw.split(",").map(s => s.trim()).filter(Boolean) : [];
-  const selected = wantedIds.length ? all.filter(sp => wantedIds.includes(sp.id)) : all;
-
-  const cal = await getAuthedCalendarClient();
-  const out: any[] = [];
-  for (const sp of selected) {
-    const items = await listEvents(cal, sp.calendarId, start, end, cfg.timezone);
-    for (const ev of items) {
-      const startIso = ev.start?.dateTime ?? ev.start?.date ?? null;
-      const endIso = ev.end?.dateTime ?? ev.end?.date ?? null;
-      out.push({
-        id: ev.id,
-        summary: ev.summary ?? "",
-        start: startIso,
-        end: endIso,
-        status: ev.status ?? "confirmed",
-        calendarId: sp.calendarId,
-        salespersonId: sp.id,
-        salespersonName: sp.name
-      });
+app.get("/calendar/events", requirePermission("canEditAppointments"), async (req, res) => {
+  try {
+    const start = String(req.query?.start ?? "").trim();
+    const end = String(req.query?.end ?? "").trim();
+    const idsRaw = String(req.query?.userIds ?? "").trim();
+    const timeZone = String(req.query?.timeZone ?? "America/New_York").trim();
+    if (!start || !end) {
+      return res.status(400).json({ ok: false, error: "Missing start/end" });
     }
+    const userIds = idsRaw ? idsRaw.split(",").map(s => s.trim()).filter(Boolean) : [];
+    if (userIds.length === 0) {
+      return res.json({ ok: true, busyByUserId: {} });
+    }
+
+    const users = await listUsers();
+    const byId = new Map(users.map(u => [u.id, u]));
+    const cal = await getAuthedCalendarClient();
+    const busyByUserId: Record<string, any[]> = {};
+
+    for (const userId of userIds) {
+      const user = byId.get(userId);
+      if (!user?.calendarId) continue;
+      const fb = await queryFreeBusy(cal, [user.calendarId], start, end, timeZone);
+      const busy = fb.calendars?.[user.calendarId]?.busy ?? [];
+      busyByUserId[userId] = busy;
+    }
+
+    return res.json({ ok: true, busyByUserId });
+  } catch (err: any) {
+    console.log("[calendar] failed to load events:", err?.message ?? err);
+    return res.status(500).json({ ok: false, error: err?.message ?? "Failed to load events" });
   }
-  res.json({ ok: true, events: out });
 });
 
 app.post("/calendar/events", requirePermission("canEditAppointments"), async (req, res) => {

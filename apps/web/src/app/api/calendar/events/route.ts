@@ -1,8 +1,8 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { apiFetch } from "../../../../lib/apiFetch";
 
-export async function GET(req: Request) {
-  const base = process.env.API_BASE_URL;
+export async function GET(req: NextRequest) {
+  const base = process.env.NEXT_PUBLIC_API_BASE_URL ?? process.env.API_BASE_URL;
   if (!base) {
     return NextResponse.json({ ok: false, error: "API_BASE_URL not set" }, { status: 500 });
   }
@@ -10,12 +10,12 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const start = url.searchParams.get("start") ?? "";
   const end = url.searchParams.get("end") ?? "";
-  const salespeople = url.searchParams.get("salespeople") ?? "";
+  const userIds = url.searchParams.get("userIds") ?? "";
 
   const apiUrl = new URL(`${base}/calendar/events`);
   apiUrl.searchParams.set("start", start);
   apiUrl.searchParams.set("end", end);
-  if (salespeople) apiUrl.searchParams.set("salespeople", salespeople);
+  if (userIds) apiUrl.searchParams.set("userIds", userIds);
 
   const r = await apiFetch(apiUrl.toString(), { cache: "no-store" });
   const text = await r.text();

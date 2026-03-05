@@ -399,6 +399,8 @@ export default function Home() {
     })();
   }, [section]);
 
+  const calendarUsers = (usersList ?? []).filter((u: any) => !!u.calendarId);
+
   useEffect(() => {
     if (section !== "calendar") return;
     if (schedulerConfig) return;
@@ -408,14 +410,35 @@ export default function Home() {
         const json = await resp.json();
         const cfg = json?.config ?? {};
         setSchedulerConfig(cfg);
-        if (!calendarSalespeople.length && Array.isArray(cfg.salespeople)) {
-          setCalendarSalespeople(cfg.salespeople.map((s: any) => s.id));
+        if (!calendarSalespeople.length && calendarUsers.length) {
+          setCalendarSalespeople(calendarUsers.map(u => u.id));
         }
       } catch {
         // ignore
       }
     })();
-  }, [section, schedulerConfig, calendarSalespeople.length]);
+  }, [section, schedulerConfig, calendarSalespeople.length, calendarUsers]);
+
+  useEffect(() => {
+    if (section !== "calendar") return;
+    if (usersList.length) return;
+    void (async () => {
+      try {
+        const resp = await fetch("/api/users", { cache: "no-store" });
+        const json = await resp.json();
+        setUsersList(json?.users ?? []);
+      } catch {
+        // ignore
+      }
+    })();
+  }, [section, usersList.length]);
+
+  useEffect(() => {
+    if (section !== "calendar") return;
+    if (calendarSalespeople.length) return;
+    if (!calendarUsers.length) return;
+    setCalendarSalespeople(calendarUsers.map(u => u.id));
+  }, [section, calendarSalespeople.length, calendarUsers]);
 
   useEffect(() => {
     if (section !== "calendar") return;
@@ -435,12 +458,11 @@ export default function Home() {
         params.set("start", start.toISOString());
         params.set("end", end.toISOString());
         if (calendarSalespeople.length) {
-          params.set("salespeople", calendarSalespeople.join(","));
+          params.set("userIds", calendarSalespeople.join(","));
         }
         const resp = await fetch(`/api/calendar/events?${params.toString()}`, { cache: "no-store" });
         const json = await resp.json();
-        const events = (json?.events ?? []).filter((e: any) => e?.status !== "cancelled");
-        setCalendarEvents(events);
+        setCalendarEvents(buildCalendarEvents(json));
       } catch {
         setCalendarEvents([]);
       } finally {
@@ -490,11 +512,11 @@ export default function Home() {
       reason: ""
     });
     if (calendarEdit.calendarId) {
-      const sp = (schedulerConfig?.salespeople ?? []).find((s: any) => s.calendarId === calendarEdit.calendarId) ??
-        (schedulerConfig?.salespeople ?? []).find((s: any) => s.id === calendarEdit.salespersonId);
+      const sp = calendarUsers.find((u: any) => u.calendarId === calendarEdit.calendarId) ??
+        calendarUsers.find((u: any) => u.id === calendarEdit.salespersonId);
       setCalendarEditSalespersonId(sp?.id ?? "");
     }
-  }, [calendarEdit, calendarDate, schedulerConfig?.timezone]);
+  }, [calendarEdit, calendarDate, schedulerConfig?.timezone, calendarUsers]);
 
   useEffect(() => {
     if (!selectedContact) return;
@@ -633,6 +655,37 @@ export default function Home() {
     const base = preferredOrderIds.length ? preferredOrderIds : salespeopleList.map(sp => sp.id);
     return [...base, ...salespeopleList.map(sp => sp.id).filter(id => !base.includes(id))];
   }, [preferredOrderIds, salespeopleList]);
+
+  const buildCalendarEvents = (json: any) => {
+    if (Array.isArray(json?.events)) {
+      return json.events.filter((e: any) => e?.status !== "cancelled");
+    }
+    const byId = new Map(calendarUsers.map(u => [u.id, u]));
+    const busyByUserId = json?.busyByUserId ?? {};
+    const events: any[] = [];
+    for (const [userId, blocks] of Object.entries(busyByUserId)) {
+      const user = byId.get(userId);
+      if (!user) continue;
+      const list = Array.isArray(blocks) ? blocks : [];
+      for (const block of list) {
+        const startIso = block?.start ?? null;
+        const endIso = block?.end ?? null;
+        if (!startIso || !endIso) continue;
+        events.push({
+          id: `${userId}-${startIso}`,
+          summary: "Busy",
+          start: startIso,
+          end: endIso,
+          status: "busy",
+          calendarId: user.calendarId,
+          salespersonId: userId,
+          salespersonName: user.name || user.email || user.id,
+          readOnly: true
+        });
+      }
+    }
+    return events;
+  };
 
   useEffect(() => {
     if (appointmentTypeToAdd === "custom") return;
@@ -1219,7 +1272,7 @@ export default function Home() {
           ...calendarEditForm,
           timeZone: schedulerConfig?.timezone ?? "America/New_York",
           calendarId: calendarEditSalespersonId
-            ? (schedulerConfig?.salespeople ?? []).find((s: any) => s.id === calendarEditSalespersonId)?.calendarId
+            ? calendarUsers.find((u: any) => u.id === calendarEditSalespersonId)?.calendarId
             : calendarEdit.calendarId
         })
       });
@@ -1248,11 +1301,11 @@ export default function Home() {
       params.set("start", start.toISOString());
       params.set("end", end.toISOString());
       if (calendarSalespeople.length) {
-        params.set("salespeople", calendarSalespeople.join(","));
+        params.set("userIds", calendarSalespeople.join(","));
       }
       const refresh = await fetch(`/api/calendar/events?${params.toString()}`, { cache: "no-store" });
       const refreshJson = await refresh.json();
-      setCalendarEvents((refreshJson?.events ?? []).filter((e: any) => e?.status !== "cancelled"));
+      setCalendarEvents(buildCalendarEvents(refreshJson));
       setSaveToast("Saved");
     } catch (err: any) {
       setSettingsError(err?.message ?? "Failed to update event");
@@ -1309,11 +1362,11 @@ export default function Home() {
       params.set("start", start.toISOString());
       params.set("end", end.toISOString());
       if (calendarSalespeople.length) {
-        params.set("salespeople", calendarSalespeople.join(","));
+        params.set("userIds", calendarSalespeople.join(","));
       }
       const refresh = await fetch(`/api/calendar/events?${params.toString()}`, { cache: "no-store" });
       const refreshJson = await refresh.json();
-      setCalendarEvents((refreshJson?.events ?? []).filter((e: any) => e?.status !== "cancelled"));
+      setCalendarEvents(buildCalendarEvents(refreshJson));
     } catch (err: any) {
       setSettingsError(err?.message ?? "Failed to update event");
     }
@@ -1969,26 +2022,26 @@ export default function Home() {
                   className="px-3 py-2 border rounded text-sm"
                   onClick={() => setCalendarFilterOpen(v => !v)}
                 >
-                  Filter salespeople
+                  Filter calendars
                 </button>
                 {calendarFilterOpen ? (
                   <div className="absolute right-0 mt-2 w-64 bg-white border rounded-lg shadow-lg p-3 z-50">
                     <div className="text-xs font-semibold text-gray-600 mb-2">Show calendars</div>
                     <div className="space-y-2 max-h-64 overflow-y-auto">
-                      {(schedulerConfig?.salespeople ?? []).map((sp: any) => (
-                        <label key={sp.id} className="flex items-center gap-2 text-sm">
+                      {calendarUsers.map((u: any) => (
+                        <label key={u.id} className="flex items-center gap-2 text-sm">
                           <input
                             type="checkbox"
-                            checked={calendarSalespeople.includes(sp.id)}
+                            checked={calendarSalespeople.includes(u.id)}
                             onChange={e => {
                               if (e.target.checked) {
-                                setCalendarSalespeople(prev => [...prev, sp.id]);
+                                setCalendarSalespeople(prev => [...prev, u.id]);
                               } else {
-                                setCalendarSalespeople(prev => prev.filter(id => id !== sp.id));
+                                setCalendarSalespeople(prev => prev.filter(id => id !== u.id));
                               }
                             }}
                           />
-                          <span>{sp.name}</span>
+                          <span>{u.name || u.email || u.id} {u.role ? `(${u.role})` : ""}</span>
                         </label>
                       ))}
                     </div>
@@ -2003,8 +2056,8 @@ export default function Home() {
               ) : (
                 (() => {
                   const tz = schedulerConfig?.timezone ?? "America/New_York";
-                const salespeople = (schedulerConfig?.salespeople ?? []).filter((sp: any) =>
-                  calendarSalespeople.length ? calendarSalespeople.includes(sp.id) : true
+                const salespeople = calendarUsers.filter((u: any) =>
+                  calendarSalespeople.length ? calendarSalespeople.includes(u.id) : true
                 );
                 const dayName = calendarDate
                   .toLocaleDateString("en-US", { weekday: "long", timeZone: tz })
@@ -2176,6 +2229,7 @@ export default function Home() {
                                     title={ev.summary}
                                     onMouseDown={e => {
                                       e.stopPropagation();
+                                      if (ev.readOnly) return;
                                       if (e.button !== 0) return;
                                       dragStateRef.current = {
                                         mode: "move",
@@ -2193,37 +2247,41 @@ export default function Home() {
                                         <div className="font-medium truncate">{ev.summary || "(no title)"}</div>
                                         <div className="text-[10px] text-blue-900/70 mt-1">{timeLabel}</div>
                                       </div>
-                                      <button
-                                        className="text-[10px] px-1.5 py-0.5 rounded border border-blue-300 bg-white/70 hover:bg-white"
+                                      {ev.readOnly ? null : (
+                                        <button
+                                          className="text-[10px] px-1.5 py-0.5 rounded border border-blue-300 bg-white/70 hover:bg-white"
+                                          onMouseDown={e => {
+                                            e.stopPropagation();
+                                            e.preventDefault();
+                                          }}
+                                          onClick={e => {
+                                            e.stopPropagation();
+                                            if (Date.now() < dragGuardRef.current.blockUntil) return;
+                                            setCalendarEdit({ ...ev, calendarId: ev.calendarId });
+                                          }}
+                                        >
+                                          Edit
+                                        </button>
+                                      )}
+                                    </div>
+                                    {ev.readOnly ? null : (
+                                      <div
+                                        className="absolute left-0 right-0 bottom-0 h-2 cursor-ns-resize bg-blue-200/60"
                                         onMouseDown={e => {
                                           e.stopPropagation();
-                                          e.preventDefault();
+                                          if (e.button !== 0) return;
+                                          dragStateRef.current = {
+                                            mode: "resize",
+                                            event: ev,
+                                            startY: e.clientY,
+                                            origStartMin: startMin,
+                                            origEndMin: endMin,
+                                            openWindow,
+                                            closeWindow
+                                          };
                                         }}
-                                        onClick={e => {
-                                          e.stopPropagation();
-                                          if (Date.now() < dragGuardRef.current.blockUntil) return;
-                                          setCalendarEdit({ ...ev, calendarId: ev.calendarId });
-                                        }}
-                                      >
-                                        Edit
-                                      </button>
-                                    </div>
-                                    <div
-                                      className="absolute left-0 right-0 bottom-0 h-2 cursor-ns-resize bg-blue-200/60"
-                                      onMouseDown={e => {
-                                        e.stopPropagation();
-                                        if (e.button !== 0) return;
-                                        dragStateRef.current = {
-                                          mode: "resize",
-                                          event: ev,
-                                          startY: e.clientY,
-                                          origStartMin: startMin,
-                                          origEndMin: endMin,
-                                          openWindow,
-                                          closeWindow
-                                        };
-                                      }}
-                                    />
+                                      />
+                                    )}
                                   </div>
                                 );
                               })}
@@ -2277,7 +2335,10 @@ export default function Home() {
                                           <div
                                             key={ev.id}
                                             className="text-xs bg-blue-100 border border-blue-200 rounded px-2 py-1 cursor-pointer"
-                                            onClick={() => setCalendarEdit({ ...ev, calendarId: ev.calendarId })}
+                                            onClick={() => {
+                                              if (ev.readOnly) return;
+                                              setCalendarEdit({ ...ev, calendarId: ev.calendarId });
+                                            }}
                                           >
                                             {ev.summary || "(no title)"}
                                           </div>
@@ -2308,16 +2369,16 @@ export default function Home() {
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="col-span-2">
-                      <div className="text-xs text-gray-500 mb-1">Salesperson</div>
+                      <div className="text-xs text-gray-500 mb-1">Calendar owner</div>
                       <select
                         className="border rounded px-3 py-2 text-sm w-full"
                         value={calendarEditSalespersonId}
                         onChange={e => setCalendarEditSalespersonId(e.target.value)}
                       >
                         <option value="">(no change)</option>
-                        {(schedulerConfig?.salespeople ?? []).map((sp: any) => (
-                          <option key={sp.id} value={sp.id}>
-                            {sp.name}
+                        {calendarUsers.map((u: any) => (
+                          <option key={u.id} value={u.id}>
+                            {u.name || u.email || u.id} {u.role ? `(${u.role})` : ""}
                           </option>
                         ))}
                       </select>
