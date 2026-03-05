@@ -28,7 +28,7 @@ export type AppointmentMemory = {
     respondedAt?: string;
   };
   matchedSlot?: {
-    salespersonId: string;
+    salespersonId?: string;
     salespersonName?: string;
     calendarId: string;
     start: string;
@@ -50,6 +50,15 @@ export type SchedulerMemory = {
     endLocal?: string;
     appointmentType?: string;
   }>;
+  pendingSlot?: {
+    calendarId: string;
+    start: string;
+    end: string;
+    startLocal?: string;
+    salespersonId?: string;
+    salespersonName?: string;
+    appointmentType?: string;
+  };
   requested?: { day?: string; timeText?: string; requestedAt: string };
   updatedAt: string;
 };
