@@ -796,6 +796,8 @@ function normalizeTimeToken(s: string): string {
 
 function extractTimeToken(msg: string): string | null {
   const s = String(msg ?? "").toLowerCase();
+
+  // colon format: 9:30, 09:30, 9:30am, 9:30 am
   let m = s.match(/\b(\d{1,2})\s*:\s*(\d{2})\s*(am|pm)?\b/);
   if (m) {
     const hh = String(Number(m[1]));
@@ -804,6 +806,7 @@ function extractTimeToken(msg: string): string | null {
     return normalizeTimeToken(`${hh}:${mm}${ap}`);
   }
 
+  // no-colon 3–4 digit: 930, 0930, 1030, 1230pm
   m = s.match(/\b(\d{3,4})\s*(am|pm)?\b/);
   if (m) {
     const digits = m[1];
@@ -814,6 +817,14 @@ function extractTimeToken(msg: string): string | null {
     return normalizeTimeToken(`${hh}:${mm}${ap}`);
   }
 
+  // hour-only: 1, 11, 1pm, 11am
+  m = s.match(/\b(\d{1,2})\s*(am|pm)?\b/);
+  if (m) {
+    const hh = String(Number(m[1]));
+    const ap = m[2] ?? "";
+    return normalizeTimeToken(`${hh}:00${ap}`);
+  }
+
   return null;
 }
 
@@ -821,7 +832,9 @@ function slotMatchesReply(slotStartLocal: string, reply: string): boolean {
   const slotToken = extractTimeToken(slotStartLocal);
   const replyToken = extractTimeToken(reply);
   if (!slotToken || !replyToken) return false;
-  return slotToken === replyToken;
+  const stripAp = (t: string) => t.replace(/(am|pm)$/i, "");
+  const replyHasAp = /(am|pm)$/i.test(replyToken);
+  return replyHasAp ? slotToken === replyToken : stripAp(slotToken) === stripAp(replyToken);
 }
 
 function chooseSlotFromReply(slots: any[], reply: string): any | null {
@@ -829,9 +842,6 @@ function chooseSlotFromReply(slots: any[], reply: string): any | null {
   if (!Array.isArray(slots) || slots.length === 0) return null;
   if (/(^|\b)(first|1st|earlier)(\b|$)/.test(text)) return slots[0];
   if (/(^|\b)(second|2nd|later)(\b|$)/.test(text)) return slots[1] ?? slots[0];
-  if (/\b(yes|yep|yeah|yup|ok|okay|sure|works|that works|sounds good)\b/.test(text)) {
-    return slots[0];
-  }
   for (const slot of slots) {
     if (slotMatchesReply(slot.startLocal ?? "", reply)) return slot;
   }
@@ -1960,6 +1970,86 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
+  const isAffirmative = (text: string) =>
+    /\b(yes|yep|yeah|yup|ok|okay|sure|confirmed|confirm|works|that works|sounds good)\b/i.test(
+      text
+    );
+
+  // Auto-book if they confirmed a pending slot
+  if (!conv.appointment?.bookedEventId && conv.scheduler?.pendingSlot && isAffirmative(event.body)) {
+    const chosen = conv.scheduler.pendingSlot;
+    try {
+      const cfg = await getSchedulerConfig();
+      const tz = cfg.timezone || "America/New_York";
+      const cal = await getAuthedCalendarClient();
+
+      const stockId = conv.lead?.vehicle?.stockId ?? null;
+      const firstName = conv.lead?.firstName ?? "";
+      const leadName = firstName ? firstName : conv.leadKey;
+      const appointmentType = chosen.appointmentType ?? "inventory_visit";
+
+      const summary = `Appt: ${appointmentType} – ${leadName}${stockId ? ` – ${stockId}` : ""}`;
+      const description = [
+        `LeadKey: ${conv.leadKey}`,
+        `Phone: ${conv.lead?.phone ?? conv.leadKey}`,
+        `Email: ${conv.lead?.email ?? ""}`,
+        `Stock: ${stockId ?? ""}`,
+        `VIN: ${conv.lead?.vehicle?.vin ?? ""}`,
+        `Source: ${conv.lead?.source ?? ""}`
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      const created = await insertEvent(
+        cal,
+        chosen.calendarId,
+        tz,
+        summary,
+        description,
+        chosen.start,
+        chosen.end
+      );
+
+      conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
+      conv.appointment.status = "confirmed";
+      conv.appointment.whenText = chosen.startLocal ?? chosen.start;
+      conv.appointment.whenIso = chosen.start;
+      conv.appointment.confirmedBy = "customer";
+      conv.appointment.updatedAt = new Date().toISOString();
+      conv.appointment.acknowledged = true;
+      conv.appointment.bookedEventId = created.id ?? null;
+      conv.appointment.bookedEventLink = created.htmlLink ?? null;
+      conv.appointment.bookedSalespersonId = chosen.salespersonId ?? null;
+      conv.appointment.matchedSlot = chosen;
+      conv.appointment.reschedulePending = false;
+      stopFollowUpCadence(conv, "appointment_booked");
+
+      if (conv.scheduler) {
+        conv.scheduler.lastSuggestedSlots = [];
+        conv.scheduler.pendingSlot = undefined;
+        conv.scheduler.updatedAt = new Date().toISOString();
+      }
+
+      console.log("[auto-book] chosen slot", chosen?.startLocal, chosen?.calendarId);
+      console.log("[auto-book] booked", created?.id, "calendarId", chosen.calendarId);
+
+      const reply = `Perfect — you’re all set for ${conv.appointment.whenText}. See you then.`;
+      const systemMode = effectiveMode(conv);
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio", created.id ?? undefined);
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    } catch (e: any) {
+      console.log("[auto-book] failed:", e?.message ?? e);
+    }
+  }
+
   // Auto-book if they accept a suggested slot
   if (
     !conv.appointment?.bookedEventId &&
@@ -2017,6 +2107,7 @@ if (authToken && signature) {
 
         if (conv.scheduler) {
           conv.scheduler.lastSuggestedSlots = [];
+          conv.scheduler.pendingSlot = undefined;
           conv.scheduler.updatedAt = new Date().toISOString();
         }
 
