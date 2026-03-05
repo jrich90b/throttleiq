@@ -831,6 +831,11 @@ function extractTimeToken(msg: string): string | null {
   return null;
 }
 
+function looksLikeTimeSelection(text: string): boolean {
+  if (extractTimeToken(text)) return true;
+  return /\b(first|second|earlier|later)\b/i.test(String(text ?? ""));
+}
+
 function slotMatchesReply(slotStartLocal: string, reply: string): boolean {
   const slotToken = extractTimeToken(slotStartLocal);
   const replyToken = extractTimeToken(reply);
@@ -1982,102 +1987,6 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
-  console.log("[deterministic-offer] precheck", {
-    provider: event.provider,
-    from: event.from,
-    to: event.to,
-    bookedEventId: conv.appointment?.bookedEventId ?? null,
-    lastSuggestedSlotsLen: conv.scheduler?.lastSuggestedSlots?.length ?? 0,
-    cta: conv.classification?.cta ?? null,
-    bucket: conv.classification?.bucket ?? null
-  });
-  // Deterministic slot offer for Twilio when scheduling context is known but no slots exist yet.
-  if (
-    event.provider === "twilio" &&
-    !conv.appointment?.bookedEventId &&
-    (!conv.scheduler?.lastSuggestedSlots || conv.scheduler.lastSuggestedSlots.length === 0)
-  ) {
-    const cta = conv.classification?.cta ?? "";
-    const bucket = conv.classification?.bucket ?? "";
-    const ctxSuggestsScheduling =
-      /(check_availability|inventory_interest|appointment|schedule|book|visit|test_ride)/i.test(cta) ||
-      /(inventory_interest|appointment|schedule|book|visit|test_ride)/i.test(bucket);
-    if (ctxSuggestsScheduling) {
-      try {
-        const cfg = await getSchedulerConfig();
-        const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
-        const preferredSalespeople = getPreferredSalespeople(cfg);
-        const salespeople = cfg.salespeople ?? [];
-        const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
-        const appointmentType = "inventory_visit";
-        const durationMinutes = appointmentTypes[appointmentType]?.durationMinutes ?? 60;
-
-        const cal = await getAuthedCalendarClient();
-        const now = new Date();
-        const timeMin = new Date(now).toISOString();
-        const timeMax = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString();
-
-        let bestSlots: any[] = [];
-        for (const salespersonId of preferredSalespeople) {
-          const sp = salespeople.find((p: any) => p.id === salespersonId);
-          if (!sp) continue;
-          const fb = await queryFreeBusy(cal, [sp.calendarId], timeMin, timeMax, cfg.timezone);
-          const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any;
-          const expanded = expandBusyBlocks(busy, gapMinutes);
-          const candidatesByDay = generateCandidateSlots(cfg, now, durationMinutes, 14);
-          const slots = pickSlotsForSalesperson(
-            cfg,
-            sp.id,
-            sp.calendarId,
-            candidatesByDay,
-            expanded,
-            2
-          );
-          if (slots.length >= 2) {
-            bestSlots = slots.map((s: any) => {
-              const startIso = typeof s.start === "string" ? s.start : s.start.toISOString();
-              const endIso = typeof s.end === "string" ? s.end : s.end.toISOString();
-              return {
-                salespersonId: sp.id,
-                salespersonName: sp.name,
-                calendarId: sp.calendarId,
-                start: startIso,
-                end: endIso,
-                startLocal: formatSlotLocal(startIso, cfg.timezone),
-                endLocal: formatSlotLocal(endIso, cfg.timezone),
-                appointmentType
-              };
-            });
-            break;
-          }
-        }
-
-        if (bestSlots.length >= 2) {
-          setLastSuggestedSlots(conv, bestSlots);
-          console.log("[scheduler] bestSlots len:", bestSlots.length);
-          console.log(
-            "[scheduler] bestSlots preview:",
-            bestSlots.slice(0, 2).map(s => s.startLocal)
-          );
-          const reply = `I have ${bestSlots[0].startLocal} or ${bestSlots[1].startLocal} — which works best?`;
-          appendOutbound(conv, event.to, event.from, reply, "twilio");
-          saveConversation(conv);
-          await flushConversationStore();
-          console.log(
-            "[scheduler] after flush lastSuggestedSlots len:",
-            conv.scheduler?.lastSuggestedSlots?.length ?? 0
-          );
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-            reply
-          )}</Message>\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
-        }
-      } catch (e: any) {
-        console.log("[scheduler] deterministic offer failed:", e?.message ?? e);
-      }
-    }
-  }
-
   const isAffirmative = (text: string) =>
     /\b(yes|yep|yeah|yup|ok|okay|sure|confirmed|confirm|works|that works|sounds good)\b/i.test(
       text
@@ -2673,6 +2582,103 @@ if (authToken && signature) {
     } catch (e: any) {
       console.log("[auto-book] failed:", e?.message ?? e);
       // If booking fails, fall through to normal draft behavior
+    }
+  }
+
+  console.log("[deterministic-offer] precheck", {
+    provider: event.provider,
+    from: event.from,
+    to: event.to,
+    bookedEventId: conv.appointment?.bookedEventId ?? null,
+    lastSuggestedSlotsLen: conv.scheduler?.lastSuggestedSlots?.length ?? 0,
+    cta: conv.classification?.cta ?? null,
+    bucket: conv.classification?.bucket ?? null
+  });
+  // Deterministic slot offer for Twilio when scheduling context is known but no slots exist yet.
+  if (
+    event.provider === "twilio" &&
+    !conv.appointment?.bookedEventId &&
+    !looksLikeTimeSelection(event.body) &&
+    (!conv.scheduler?.lastSuggestedSlots || conv.scheduler.lastSuggestedSlots.length === 0)
+  ) {
+    const cta = conv.classification?.cta ?? "";
+    const bucket = conv.classification?.bucket ?? "";
+    const ctxSuggestsScheduling =
+      /(check_availability|inventory_interest|appointment|schedule|book|visit|test_ride)/i.test(cta) ||
+      /(inventory_interest|appointment|schedule|book|visit|test_ride)/i.test(bucket);
+    if (ctxSuggestsScheduling) {
+      try {
+        const cfg = await getSchedulerConfig();
+        const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
+        const preferredSalespeople = getPreferredSalespeople(cfg);
+        const salespeople = cfg.salespeople ?? [];
+        const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
+        const appointmentType = "inventory_visit";
+        const durationMinutes = appointmentTypes[appointmentType]?.durationMinutes ?? 60;
+
+        const cal = await getAuthedCalendarClient();
+        const now = new Date();
+        const timeMin = new Date(now).toISOString();
+        const timeMax = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString();
+
+        let bestSlots: any[] = [];
+        for (const salespersonId of preferredSalespeople) {
+          const sp = salespeople.find((p: any) => p.id === salespersonId);
+          if (!sp) continue;
+          const fb = await queryFreeBusy(cal, [sp.calendarId], timeMin, timeMax, cfg.timezone);
+          const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any;
+          const expanded = expandBusyBlocks(busy, gapMinutes);
+          const candidatesByDay = generateCandidateSlots(cfg, now, durationMinutes, 14);
+          const slots = pickSlotsForSalesperson(
+            cfg,
+            sp.id,
+            sp.calendarId,
+            candidatesByDay,
+            expanded,
+            2
+          );
+          if (slots.length >= 2) {
+            bestSlots = slots.map((s: any) => {
+              const startIso = typeof s.start === "string" ? s.start : s.start.toISOString();
+              const endIso = typeof s.end === "string" ? s.end : s.end.toISOString();
+              return {
+                salespersonId: sp.id,
+                salespersonName: sp.name,
+                calendarId: sp.calendarId,
+                start: startIso,
+                end: endIso,
+                startLocal: formatSlotLocal(startIso, cfg.timezone),
+                endLocal: formatSlotLocal(endIso, cfg.timezone),
+                appointmentType
+              };
+            });
+            break;
+          }
+        }
+
+        if (bestSlots.length >= 2) {
+          setLastSuggestedSlots(conv, bestSlots);
+          console.log("[scheduler] bestSlots len:", bestSlots.length);
+          console.log(
+            "[scheduler] bestSlots preview:",
+            bestSlots.slice(0, 2).map(s => s.startLocal)
+          );
+          const reply = `I have ${bestSlots[0].startLocal} or ${bestSlots[1].startLocal} — which works best?`;
+          appendOutbound(conv, event.to, event.from, reply, "twilio");
+          saveConversation(conv);
+          await flushConversationStore();
+          console.log(
+            "[scheduler] after flush lastSuggestedSlots len:",
+            conv.scheduler?.lastSuggestedSlots?.length ?? 0
+          );
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+            reply
+          )}</Message>\n</Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+      } catch (e: any) {
+        console.log("[scheduler] deterministic offer failed:", e?.message ?? e);
+      }
     }
   }
 
