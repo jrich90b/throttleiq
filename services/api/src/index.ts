@@ -795,21 +795,25 @@ function normalizeTimeToken(s: string): string {
 }
 
 function extractTimeToken(msg: string): string | null {
-  const lower = msg.toLowerCase();
-  const colon = lower.match(/\b(\d{1,2})\s*:\s*(\d{2})\s*(am|pm)?\b/);
-  if (colon) {
-    const h = colon[1];
-    const min = colon[2];
-    const ampm = colon[3] ?? "";
-    return normalizeTimeToken(`${h}:${min}${ampm}`);
+  const s = String(msg ?? "").toLowerCase();
+  let m = s.match(/\b(\d{1,2})\s*:\s*(\d{2})\s*(am|pm)?\b/);
+  if (m) {
+    const hh = String(Number(m[1]));
+    const mm = m[2];
+    const ap = m[3] ?? "";
+    return normalizeTimeToken(`${hh}:${mm}${ap}`);
   }
-  const compact = lower.match(/\b(\d{1,2})\s*(\d{2})\s*(am|pm)?\b/);
-  if (compact) {
-    const h = compact[1];
-    const min = compact[2];
-    const ampm = compact[3] ?? "";
-    return normalizeTimeToken(`${h}:${min}${ampm}`);
+
+  m = s.match(/\b(\d{3,4})\s*(am|pm)?\b/);
+  if (m) {
+    const digits = m[1];
+    const ap = m[2] ?? "";
+    const d = digits.padStart(4, "0");
+    const hh = String(Number(d.slice(0, 2)));
+    const mm = d.slice(2, 4);
+    return normalizeTimeToken(`${hh}:${mm}${ap}`);
   }
+
   return null;
 }
 
