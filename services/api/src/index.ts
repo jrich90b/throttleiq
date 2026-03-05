@@ -838,6 +838,24 @@ function looksLikeTimeSelection(text: string): boolean {
   return /\b(first|second|earlier|later)\b/i.test(String(text ?? ""));
 }
 
+function parseOfferSlotsFromReply(reply: string): { startLocal: string; endLocal: string }[] {
+  const text = String(reply ?? "");
+  const marker = " — which works best?";
+  const head = text.includes(marker) ? text.split(marker)[0] : text;
+  const idx = head.indexOf("I have ");
+  if (idx === -1) return [];
+  const tail = head.slice(idx + "I have ".length);
+  const parts = tail.split(" or ");
+  if (parts.length < 2) return [];
+  const a = parts[0].trim();
+  const b = parts[1].trim();
+  if (!a || !b) return [];
+  return [
+    { startLocal: a, endLocal: "" },
+    { startLocal: b, endLocal: "" }
+  ];
+}
+
 function slotMatchesReply(slotStartLocal: string, reply: string): boolean {
   const slotToken = extractTimeToken(slotStartLocal);
   const replyToken = extractTimeToken(reply);
@@ -3089,8 +3107,24 @@ if (authToken && signature) {
       conv.scheduler.updatedAt = new Date().toISOString();
     }
   }
-  console.log("[twilio] result.suggestedSlots len:", result.suggestedSlots?.length ?? 0);
   appendOutbound(conv, event.to, event.from, reply, "twilio");
+  console.log("[twilio] result.suggestedSlots len:", result.suggestedSlots?.length ?? 0);
+  if (
+    (conv.scheduler?.lastSuggestedSlots?.length ?? 0) === 0 &&
+    (!result.suggestedSlots || result.suggestedSlots.length === 0)
+  ) {
+    const parsed = parseOfferSlotsFromReply(reply);
+    if (parsed.length >= 2) {
+      setLastSuggestedSlots(conv, parsed);
+      console.log(
+        "[scheduler] fallback-saved offer-path slots",
+        parsed.length,
+        conv.leadKey
+      );
+    }
+  }
+  saveConversation(conv);
+  await flushConversationStore();
   if (result.suggestedSlots && result.suggestedSlots.length > 0) {
     saveConversation(conv);
     await flushConversationStore();
