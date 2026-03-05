@@ -452,14 +452,32 @@ export async function orchestrateInbound(
       let requestedDaySpecified = false;
       let requestedDayClosed = false;
       let requestedDayMaxSlots = 0;
-      const schedulingIntent = hasSchedulingIntent(event.body) || event.provider === "sendgrid_adf";
+      const hasIntent = hasSchedulingIntent(event.body);
+      const isAdfLead = /adf/i.test(ctx?.leadSource ?? "") || /adf/i.test(ctx?.lead?.source ?? "");
+      const cta = ctx?.cta ?? "";
+      const bucket = ctx?.bucket ?? "";
+      const ctxSuggestsScheduling =
+        /(check_availability|inventory_interest|appointment|schedule|book|visit|test_ride)/i.test(cta) ||
+        /(inventory_interest|appointment|schedule|book|visit|test_ride)/i.test(bucket);
+      const schedulingIntent =
+        hasIntent || event.provider === "sendgrid_adf" || isAdfLead || ctxSuggestsScheduling;
       const appointmentType = inferAppointmentType(event.body);
 
       const apptBooked = appointment?.bookedEventId;
       const apptConfirmed = !!apptBooked;
       const holding = followUp?.mode === "holding_inventory";
 
-      console.log("[scheduler] intent?", schedulingIntent, "apptConfirmed?", apptConfirmed, "holding?", holding);
+      console.log("[scheduler] gate", {
+        provider: event.provider,
+        hasIntent,
+        isAdfLead,
+        cta,
+        bucket,
+        ctxSuggestsScheduling,
+        schedulingIntent,
+        apptConfirmed,
+        holding
+      });
 
       if (pricingAttempted && prevAskedAvailability && !inventoryStatus) {
         const prevStock = lead.vehicle?.stockId;
