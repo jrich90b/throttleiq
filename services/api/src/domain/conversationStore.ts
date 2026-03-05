@@ -307,7 +307,8 @@ export function upsertConversationByLeadKey(
     mode: defaultMode,
     createdAt: nowIso(),
     updatedAt: nowIso(),
-    messages: []
+    messages: [],
+    scheduler: { updatedAt: nowIso(), lastSuggestedSlots: [] }
   };
 
   conversations.set(key, created);
