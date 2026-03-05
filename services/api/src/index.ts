@@ -3091,6 +3091,15 @@ if (authToken && signature) {
   }
   console.log("[twilio] result.suggestedSlots len:", result.suggestedSlots?.length ?? 0);
   appendOutbound(conv, event.to, event.from, reply, "twilio");
+  if (result.suggestedSlots && result.suggestedSlots.length > 0) {
+    saveConversation(conv);
+    await flushConversationStore();
+    console.log(
+      "[scheduler] saved offer-path slots",
+      result.suggestedSlots.length,
+      conv.leadKey
+    );
+  }
   if (!hadOutbound) {
     await maybeStartCadence(conv, new Date().toISOString());
   }
