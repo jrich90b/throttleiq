@@ -1940,6 +1940,7 @@ if (authToken && signature) {
 
   const conv = upsertConversationByLeadKey(event.from, "suggest");
   appendInbound(conv, event);
+  const webhookMode = event.provider === "twilio" ? "autopilot" : effectiveMode(conv);
   if (isSuppressed(event.from)) {
     stopFollowUpCadence(conv, "suppressed");
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
@@ -1952,7 +1953,7 @@ if (authToken && signature) {
     await addSuppression(event.from, "sms_stop", "twilio");
     stopFollowUpCadence(conv, "opt_out");
     const reply = "Understood - I'll stop texting.";
-    const systemMode = effectiveMode(conv);
+    const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
@@ -1968,7 +1969,7 @@ if (authToken && signature) {
     stopFollowUpCadence(conv, "not_interested");
     closeConversation(conv, "not_interested");
     const reply = "Totally understand - I won't bug you. If anything changes, just let me know.";
-    const systemMode = effectiveMode(conv);
+    const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
@@ -2044,7 +2045,7 @@ if (authToken && signature) {
       console.log("[auto-book] booked", created?.id, "calendarId", chosen.calendarId);
 
       const reply = `Perfect — you’re all set for ${conv.appointment.whenText}. See you then.`;
-      const systemMode = effectiveMode(conv);
+      const systemMode = webhookMode;
       if (systemMode === "suggest") {
         appendOutbound(conv, event.to, event.from, reply, "draft_ai");
         const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
@@ -2128,7 +2129,7 @@ if (authToken && signature) {
         console.log("[auto-book] booked", created?.id, "calendarId", chosen.calendarId);
 
         const reply = `Perfect — you’re all set for ${conv.appointment.whenText}. See you then.`;
-        const systemMode = effectiveMode(conv);
+        const systemMode = webhookMode;
         if (systemMode === "suggest") {
           appendOutbound(conv, event.to, event.from, reply, "draft_ai");
           const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
@@ -2198,7 +2199,7 @@ if (authToken && signature) {
       const reply = isYes
         ? `Thanks — you’re all set for ${when ?? "your appointment"}. See you then.`
         : "No problem — I’ve cancelled it. What day/time works best to reschedule?";
-      const systemMode = effectiveMode(conv);
+      const systemMode = webhookMode;
       if (systemMode === "suggest") {
         appendOutbound(conv, event.to, event.from, reply, "draft_ai");
         const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response></Response>`;
@@ -2224,7 +2225,7 @@ if (authToken && signature) {
     addTodo(conv, "other", event.body, event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "pending_used_followup");
     stopFollowUpCadence(conv, "manual_handoff");
-    const systemMode = effectiveMode(conv);
+    const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, ack, "draft_ai");
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
@@ -2258,7 +2259,7 @@ if (authToken && signature) {
       const ask = "Absolutely — what day and time works best for you?";
       conv.appointment.reschedulePending = true;
       conv.appointment.updatedAt = new Date().toISOString();
-      const systemMode = effectiveMode(conv);
+      const systemMode = webhookMode;
       if (systemMode === "suggest") {
         appendOutbound(conv, event.to, event.from, ask, "draft_ai");
         const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
@@ -2375,7 +2376,7 @@ if (authToken && signature) {
         conv.appointment.reschedulePending = true;
         conv.appointment.updatedAt = new Date().toISOString();
         const reply = `I can reschedule you. I have ${picked[0].startLocal} or ${picked[1].startLocal} — which works best?`;
-        const systemMode = effectiveMode(conv);
+        const systemMode = webhookMode;
         if (systemMode === "suggest") {
           appendOutbound(conv, event.to, event.from, reply, "draft_ai");
           saveConversation(conv);
@@ -2486,7 +2487,7 @@ if (authToken && signature) {
         `Perfect — you’re booked for ${when}${repName}. ` +
         `${dealerName} is at ${addressLine}.`;
 
-      const systemMode = effectiveMode(conv);
+      const systemMode = webhookMode;
       if (systemMode === "suggest") {
         appendOutbound(conv, event.to, event.from, confirmText, "draft_ai");
         const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
@@ -2547,12 +2548,6 @@ if (authToken && signature) {
       conv.appointment.reschedulePending = false;
       stopFollowUpCadence(conv, "appointment_booked");
 
-      // Clear suggested slots so we don’t reuse stale ones
-      if (conv.scheduler) {
-        conv.scheduler.lastSuggestedSlots = [];
-        conv.scheduler.updatedAt = new Date().toISOString();
-      }
-
       // Build confirmation message (SMS)
       const dealerName =
         (conv as any).dealerProfile?.dealerName ?? "American Harley-Davidson";
@@ -2564,7 +2559,7 @@ if (authToken && signature) {
       const confirmText =
         `Perfect — you’re booked for ${when}${repName}. ` +
         `${dealerName} is at ${addressLine}.`;
-      const systemMode = effectiveMode(conv);
+      const systemMode = webhookMode;
       if (systemMode === "suggest") {
         appendOutbound(conv, event.to, event.from, confirmText, "draft_ai");
         const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
@@ -2629,6 +2624,18 @@ if (authToken && signature) {
   if (result.suggestedSlots && result.suggestedSlots.length > 0) {
     console.log("[scheduler] persist suggestedSlots", result.suggestedSlots.length);
     setLastSuggestedSlots(conv, result.suggestedSlots);
+    saveConversation(conv);
+    console.log(
+      "[scheduler] flushing store path:",
+      getConversationStorePath(),
+      "leadKey",
+      conv.leadKey
+    );
+    await flushConversationStore();
+    console.log(
+      "[scheduler] after flush lastSuggestedSlots len:",
+      conv.scheduler?.lastSuggestedSlots?.length ?? 0
+    );
   }
   if (result.requestedTime) {
     setRequestedTime(conv, { day: result.requestedTime.dayOfWeek, timeText: event.body });
@@ -2842,7 +2849,7 @@ if (authToken && signature) {
           }
         }
         const reply = `${prefix ? `${prefix} ` : ""}I have ${bestSlots[0].startLocal} or ${bestSlots[1].startLocal} — which works best?`;
-        const systemMode = effectiveMode(conv);
+        const systemMode = webhookMode;
         if (systemMode === "suggest") {
           // Persist suggested slots before early return so the next inbound can match.
           appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -2917,7 +2924,7 @@ if (authToken && signature) {
   }
 
   const reply = result.draft;
-  const systemMode = effectiveMode(conv);
+  const systemMode = webhookMode;
   const hadOutbound = conv.messages.some(m => m.direction === "out");
 
   // ✅ Global behavior:
