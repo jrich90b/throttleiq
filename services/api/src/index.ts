@@ -1329,6 +1329,8 @@ app.get("/calendar/events", requirePermission("canEditAppointments"), async (req
         if (key === "stock") out.stock = value;
         if (key === "vin") out.vin = value;
         if (key === "source") out.source = value;
+        if (key === "firstname" || key === "first name") out.firstName = value;
+        if (key === "lastname" || key === "last name") out.lastName = value;
       }
       return out;
     };
@@ -1351,6 +1353,9 @@ app.get("/calendar/events", requirePermission("canEditAppointments"), async (req
         const endIso = ev?.end?.dateTime ?? ev?.end?.date ?? null;
         if (!startIso || !endIso) continue;
         const descFields = parseDescription(ev?.description ?? "");
+        const firstName = descFields.firstName ?? "";
+        const lastName = descFields.lastName ?? "";
+        const fullName = [firstName, lastName].filter(Boolean).join(" ").trim();
         const customerName = parseCustomerName(ev?.summary ?? "");
         events.push({
           id: ev.id,
@@ -1361,6 +1366,7 @@ app.get("/calendar/events", requirePermission("canEditAppointments"), async (req
           end: endIso,
           salespersonId: userId,
           salespersonName: user.name || user.email || user.id,
+          fullName,
           customerName,
           ...descFields
         });

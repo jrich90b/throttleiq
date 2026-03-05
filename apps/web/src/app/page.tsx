@@ -686,7 +686,7 @@ export default function Home() {
     }
     return events;
   };
-  const getEventTitle = (ev: any) => ev?.customerName || ev?.summary || "Busy";
+  const getEventTitle = (ev: any) => ev?.fullName || ev?.customerName || ev?.summary || "Busy";
   const getEventDetails = (ev: any) => {
     const parts = [];
     if (ev?.phone) parts.push(`Phone: ${ev.phone}`);
