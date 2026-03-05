@@ -44,6 +44,7 @@ export async function getAuthedCalendarClient() {
  * Free/busy query: POST https://www.googleapis.com/calendar/v3/freeBusy :contentReference[oaicite:4]{index=4}
  */
 export async function queryFreeBusy(calendar: any, calendarIds: string[], timeMinIso: string, timeMaxIso: string, timeZone: string) {
+  console.log("[gcal] freebusy.query", { calendarId: calendarIds?.[0], timeMin: timeMinIso, timeMax: timeMaxIso });
   const resp = await calendar.freebusy.query({
     requestBody: {
       timeMin: timeMinIso,
@@ -52,6 +53,10 @@ export async function queryFreeBusy(calendar: any, calendarIds: string[], timeMi
       items: calendarIds.map(id => ({ id }))
     }
   });
+  console.log("[gcal] freebusy.ok", {
+    calendarId: calendarIds?.[0],
+    calendars: Object.keys(resp.data.calendars ?? {}).length
+  });
   return resp.data;
 }
 
@@ -59,16 +64,23 @@ export async function queryFreeBusy(calendar: any, calendarIds: string[], timeMi
  * Create event: events.insert with start/end dateTime :contentReference[oaicite:5]{index=5}
  */
 export async function insertEvent(calendar: any, calendarId: string, timeZone: string, summary: string, description: string, startIso: string, endIso: string) {
-  const resp = await calendar.events.insert({
-    calendarId,
-    requestBody: {
-      summary,
-      description,
-      start: { dateTime: startIso, timeZone },
-      end: { dateTime: endIso, timeZone }
-    }
-  });
-  return resp.data; // includes id, htmlLink, etc.
+  console.log("[gcal] insertEvent.request", { calendarId, summary, startIso, endIso, timeZone });
+  try {
+    const resp = await calendar.events.insert({
+      calendarId,
+      requestBody: {
+        summary,
+        description,
+        start: { dateTime: startIso, timeZone },
+        end: { dateTime: endIso, timeZone }
+      }
+    });
+    console.log("[gcal] insertEvent.ok", { calendarId, eventId: resp.data?.id });
+    return resp.data; // includes id, htmlLink, etc.
+  } catch (e: any) {
+    console.error("[gcal] insertEvent.failed", e?.message ?? e);
+    throw e;
+  }
 }
 
 export async function updateEvent(calendar: any, calendarId: string, eventId: string, timeZone: string, startIso: string, endIso: string) {
