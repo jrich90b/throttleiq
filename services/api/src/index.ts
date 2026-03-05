@@ -795,12 +795,22 @@ function normalizeTimeToken(s: string): string {
 }
 
 function extractTimeToken(msg: string): string | null {
-  const m = msg.toLowerCase().match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/);
-  if (!m) return null;
-  const h = m[1];
-  const min = m[2] ?? "00";
-  const ampm = m[3] ?? "";
-  return normalizeTimeToken(`${h}:${min}${ampm}`);
+  const lower = msg.toLowerCase();
+  const colon = lower.match(/\b(\d{1,2})\s*:\s*(\d{2})\s*(am|pm)?\b/);
+  if (colon) {
+    const h = colon[1];
+    const min = colon[2];
+    const ampm = colon[3] ?? "";
+    return normalizeTimeToken(`${h}:${min}${ampm}`);
+  }
+  const compact = lower.match(/\b(\d{1,2})\s*(\d{2})\s*(am|pm)?\b/);
+  if (compact) {
+    const h = compact[1];
+    const min = compact[2];
+    const ampm = compact[3] ?? "";
+    return normalizeTimeToken(`${h}:${min}${ampm}`);
+  }
+  return null;
 }
 
 function slotMatchesReply(slotStartLocal: string, reply: string): boolean {
@@ -1954,6 +1964,7 @@ if (authToken && signature) {
   ) {
     const chosen = chooseSlotFromReply(conv.scheduler.lastSuggestedSlots, event.body);
     if (chosen) {
+      console.log("[auto-book] chosen slot", chosen?.startLocal, chosen?.calendarId);
       try {
         const cfg = await getSchedulerConfig();
         const tz = cfg.timezone || "America/New_York";
