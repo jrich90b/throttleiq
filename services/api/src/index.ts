@@ -1232,9 +1232,10 @@ app.post("/scheduler/book", async (req, res) => {
   }
 
   const salesperson = salespeople.find((s: any) => s.id === slot.salespersonId);
-  const summary = `Appt: ${String(req.body?.appointmentType ?? "inventory_visit")} – ${lead?.firstName ?? ""} ${
-    lead?.lastName ?? ""
-  }`.trim();
+  const firstName = lead?.firstName ?? "";
+  const lastName = lead?.lastName ?? "";
+  const leadName = [firstName, lastName].filter(Boolean).join(" ").trim() || String(req.body?.leadKey ?? "");
+  const summary = `Appt: ${String(req.body?.appointmentType ?? "inventory_visit")} – ${leadName}`.trim();
 
   const descriptionLines = [
     `LeadKey: ${lead?.leadKey ?? ""}`,
