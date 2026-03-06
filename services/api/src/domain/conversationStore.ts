@@ -500,7 +500,10 @@ export function listConversations() {
         updatedAt: c.updatedAt,
         lastMessage: c.messages[c.messages.length - 1] ?? null,
         messageCount: c.messages.length,
-        leadName: [c.lead?.firstName, c.lead?.lastName].filter(Boolean).join(" ").trim() || null,
+        leadName:
+          c.lead?.name?.trim() ||
+          [c.lead?.firstName, c.lead?.lastName].filter(Boolean).join(" ").trim() ||
+          null,
         vehicleDescription: c.lead?.vehicle?.description ?? null,
         leadSource: c.lead?.source ?? null,
         classification: c.classification ?? null,
