@@ -100,6 +100,7 @@ export type TodoTask = {
 export type LeadProfile = {
   leadRef?: string;
   source?: string;
+  name?: string;
   firstName?: string;
   lastName?: string;
   email?: string;
