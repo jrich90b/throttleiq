@@ -252,7 +252,11 @@ async function loadFromDisk() {
     const list = parsed?.conversations ?? [];
     conversations.clear();
     for (const c of list) {
-      if (c?.id) conversations.set(c.id, c);
+      const key = normalizeLeadKey(c?.leadKey || c?.id || "");
+      if (!key) continue;
+      c.id = key;
+      c.leadKey = key;
+      conversations.set(key, c);
     }
     todos.length = 0;
     if (parsed?.todos?.length) todos.push(...parsed.todos);
