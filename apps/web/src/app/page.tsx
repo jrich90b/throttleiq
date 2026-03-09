@@ -3731,7 +3731,8 @@ export default function Home() {
                       >
                         {m.body}
                       </div>
-                      {m.direction === "in" && m.provider === "sendgrid_adf" ? (
+                      {m.direction === "in" &&
+                      (m.provider === "sendgrid_adf" || /web lead \\(adf\\)/i.test(m.body || "")) ? (
                         <div className="mt-1">
                           <a
                             className="text-xs text-blue-600 underline"
