@@ -1209,7 +1209,7 @@ async function processAppointmentQuestions() {
   const now = new Date();
   const convs = getAllConversations();
   const openQuestions = listOpenQuestions();
-  const openByConv = new Set(openQuestions.map(q => q.convId));
+  const openByConv = new Set(openQuestions.map((q: { convId: string }) => q.convId));
 
   for (const conv of convs) {
     const appt = conv.appointment;
