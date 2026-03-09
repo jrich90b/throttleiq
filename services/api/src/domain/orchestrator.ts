@@ -772,11 +772,20 @@ export async function orchestrateInbound(
           ? `I could get you scheduled to meet with our sales team. I have ${suggestedSlots[0].startLocal} or ${suggestedSlots[1].startLocal} — which works best?`
           : "I could get you scheduled to meet with our sales team — what day/time works best?";
         const qualifier = "Do you have a trade?";
+        const isFirstOutbound = !history.some(h => h.direction === "out");
+        const leadName = lead?.firstName?.trim() || "there";
+        const thankLabel = lead.vehicle?.model ?? lead.vehicle?.description ?? "that bike";
+        const thankYear = lead.vehicle?.year ? `${lead.vehicle.year} ` : "";
+        const greeting =
+          isFirstOutbound && event.provider === "sendgrid_adf"
+            ? `Hi ${leadName} — thanks for your interest in the ${thankYear}${thankLabel}. `
+            : "";
+
         return finalize({
           intent,
           stage: "ENGAGED",
           shouldRespond: true,
-          draft: `${priceLine} ${disclaimer}\n\n${schedule} ${qualifier}`,
+          draft: `${greeting}${priceLine} ${disclaimer}\n\n${schedule} ${qualifier}`.trim(),
           suggestedSlots
         });
       }
@@ -872,6 +881,10 @@ export async function orchestrateInbound(
       if (isFirstOutbound && event.provider === "sendgrid_adf") {
         const agentName = dealerProfile?.agentName ?? "Brooke";
         const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+        const leadName = lead?.firstName?.trim() || "there";
+        const thankLabel = lead.vehicle?.model ?? lead.vehicle?.description ?? "that bike";
+        const thankYear = lead.vehicle?.year ? `${lead.vehicle.year} ` : "";
+        const greeting = `Hi ${leadName} — thanks for your interest in the ${thankYear}${thankLabel}. `;
         const availabilityAsked = /(available|availability|still there|in stock)/i.test(event.body);
         const hasAvailabilityAnswer = inventoryStatus === "AVAILABLE";
         const hasPendingAnswer = inventoryStatus === "PENDING";
@@ -890,11 +903,11 @@ export async function orchestrateInbound(
         if (canScheduleNow && suggestedSlots.length >= 2) {
           const a = suggestedSlots[0].startLocal;
           const b = suggestedSlots[1].startLocal;
-          finalDraft = `Hi, this is ${agentName} at ${dealerName}. ${availabilityLine}I can get you scheduled to come in. I have ${a} or ${b} — which works best?`.trim();
+          finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}I can get you scheduled to come in. I have ${a} or ${b} — which works best?`.trim();
         } else if (canScheduleNow) {
-          finalDraft = `Hi, this is ${agentName} at ${dealerName}. ${availabilityLine}I can get you scheduled to come in — what day and time works best for you?`.trim();
+          finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}I can get you scheduled to come in — what day and time works best for you?`.trim();
         } else {
-          finalDraft = `Hi, this is ${agentName} at ${dealerName}. ${availabilityLine}I'll confirm availability shortly and follow up.`;
+          finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}I'll confirm availability shortly and follow up.`;
         }
       }
 
