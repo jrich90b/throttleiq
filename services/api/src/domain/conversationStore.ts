@@ -116,6 +116,10 @@ export type LeadProfile = {
   lastName?: string;
   email?: string;
   phone?: string;
+  street?: string;
+  city?: string;
+  region?: string;
+  postal?: string;
   channelPreference?: "sms" | "email" | "facebook_messenger";
   purchaseTimeframe?: string;
   purchaseTimeframeMonthsStart?: number;
