@@ -16,7 +16,7 @@ export async function GET(
 
   const { id } = await params;
 
-  const r = await apiFetch(`${base}/conversations/${decodeURIComponent(id)}`, {
+  const r = await apiFetch(`${base}/conversations/${encodeURIComponent(id)}`, {
     cache: "no-store"
   });
 

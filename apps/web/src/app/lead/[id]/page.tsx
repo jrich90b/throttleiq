@@ -40,6 +40,7 @@ type Conversation = {
 export default function LeadDetailsPage({ params }: { params: { id: string } }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [debugInfo, setDebugInfo] = useState<string | null>(null);
   const [conv, setConv] = useState<Conversation | null>(null);
 
   useEffect(() => {
@@ -48,18 +49,21 @@ export default function LeadDetailsPage({ params }: { params: { id: string } }) 
       try {
         setLoading(true);
         setError(null);
-        const r = await fetch(`/api/conversations/${encodeURIComponent(params.id)}`, { cache: "no-store" });
+        const rawId = decodeURIComponent(params.id);
+        const r = await fetch(`/api/conversations/${encodeURIComponent(rawId)}`, { cache: "no-store" });
         const text = await r.text();
         const data = JSON.parse(text);
         if (!active) return;
         if (!r.ok) {
           setError(data?.error ?? "Failed to load lead");
+          setDebugInfo(`status=${r.status} body=${text.slice(0, 500)}`);
           return;
         }
         setConv(data?.conversation ?? null);
       } catch (e: any) {
         if (!active) return;
         setError(e?.message ?? "Failed to load lead");
+        setDebugInfo(`exception=${e?.message ?? e}`);
       } finally {
         if (active) setLoading(false);
       }
@@ -94,6 +98,9 @@ export default function LeadDetailsPage({ params }: { params: { id: string } }) 
 
         {loading ? <div className="mt-6 text-gray-500">Loading…</div> : null}
         {error ? <div className="mt-6 text-red-600 text-sm">{error}</div> : null}
+        {debugInfo ? (
+          <div className="mt-2 text-xs text-gray-500 break-words">Debug: {debugInfo}</div>
+        ) : null}
 
         {!loading && !error ? (
           <div className="mt-6 space-y-6">
