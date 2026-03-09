@@ -52,6 +52,14 @@ type TodoItem = {
   createdAt: string;
 };
 
+type QuestionItem = {
+  id: string;
+  convId: string;
+  leadKey: string;
+  text: string;
+  createdAt: string;
+};
+
 type SuppressionItem = {
   phone: string;
   addedAt: string;
@@ -84,12 +92,13 @@ export default function Home() {
   const [mode, setMode] = useState<SystemMode>("suggest");
   const [conversations, setConversations] = useState<ConversationListItem[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
+  const [questions, setQuestions] = useState<QuestionItem[]>([]);
   const [suppressions, setSuppressions] = useState<SuppressionItem[]>([]);
   const [contacts, setContacts] = useState<ContactItem[]>([]);
   const [newSuppression, setNewSuppression] = useState("");
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<"inbox" | "archive">("inbox");
-  const [section, setSection] = useState<"inbox" | "todos" | "suppressions" | "contacts" | "settings" | "calendar">("inbox");
+  const [section, setSection] = useState<"inbox" | "todos" | "questions" | "suppressions" | "contacts" | "settings" | "calendar">("inbox");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedConv, setSelectedConv] = useState<ConversationDetail | null>(null);
   const [selectedContact, setSelectedContact] = useState<ContactItem | null>(null);
@@ -195,6 +204,9 @@ export default function Home() {
     reason: ""
   });
   const [calendarEditSalespersonId, setCalendarEditSalespersonId] = useState("");
+  const [todoResolveOpen, setTodoResolveOpen] = useState(false);
+  const [todoResolveTarget, setTodoResolveTarget] = useState<TodoItem | null>(null);
+  const [todoResolution, setTodoResolution] = useState("resume");
   const [saveToast, setSaveToast] = useState<string | null>(null);
   const calendarColumnRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const calendarEventsRef = useRef<any[]>([]);
@@ -246,8 +258,9 @@ export default function Home() {
       fetch("/api/conversations", { cache: "no-store" }),
       fetch("/api/contacts", { cache: "no-store" })
     ]);
-    const [t, sup] = await Promise.all([
+    const [t, q, sup] = await Promise.all([
       fetch("/api/todos", { cache: "no-store" }),
+      fetch("/api/questions", { cache: "no-store" }),
       fetch("/api/suppressions", { cache: "no-store" })
     ]);
 
@@ -255,6 +268,7 @@ export default function Home() {
     const convs = await c.json();
     const contactsJson = await contactsResp.json();
     const todosResp = await t.json();
+    const questionsResp = await q.json();
     const suppressionsResp = await sup.json();
 
     setMode((settings?.mode as SystemMode) ?? "suggest");
@@ -265,6 +279,7 @@ export default function Home() {
       })) ?? []
     );
     setTodos((todosResp?.todos as TodoItem[]) ?? []);
+    setQuestions((questionsResp?.questions as QuestionItem[]) ?? []);
     setSuppressions((suppressionsResp?.suppressions as SuppressionItem[]) ?? []);
     setContacts((contactsJson?.contacts as ContactItem[]) ?? []);
     setLoading(false);
@@ -747,11 +762,33 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingDraft?.id]);
 
-  async function markTodoDone(todo: TodoItem) {
+  useEffect(() => {
+    setSendBody("");
+  }, [selectedConv?.id]);
+
+  async function markTodoDone(todo: TodoItem, resolution = "resume") {
     await fetch("/api/todos", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ convId: todo.convId, todoId: todo.id })
+      body: JSON.stringify({ convId: todo.convId, todoId: todo.id, resolution })
+    });
+    await load();
+  }
+
+  async function markQuestionDone(q: QuestionItem) {
+    await fetch("/api/questions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ convId: q.convId, questionId: q.id })
+    });
+    await load();
+  }
+
+  async function createQuestion(convId: string, text: string) {
+    await fetch("/api/questions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ convId, text })
     });
     await load();
   }
@@ -767,6 +804,15 @@ export default function Home() {
     setSendBody("");
     if (data?.conversation) {
       const conv = data.conversation;
+      if (payload.draftId && Array.isArray(conv.messages)) {
+        const msg = conv.messages.find((m: any) => m.id === payload.draftId);
+        if (msg) {
+          msg.body = payload.body;
+          msg.provider = data?.sent === true ? "twilio" : msg.provider ?? "human";
+          msg.draftStatus = undefined;
+          msg.at = new Date().toISOString();
+        }
+      }
       setSelectedConv(conv);
       setConversations(prev =>
         prev.map(c => {
@@ -1557,11 +1603,16 @@ export default function Home() {
         </button>
         {(authUser?.role === "manager" || authUser?.permissions?.canAccessTodos) ? (
           <button
-            className={`w-10 h-10 rounded flex items-center justify-center border ${section === "todos" ? "bg-gray-100" : ""}`}
+            className={`relative w-10 h-10 rounded flex items-center justify-center border ${section === "todos" ? "bg-gray-100" : ""}`}
             title="To-Dos"
             onClick={() => setSection("todos")}
           >
             ✅
+            {todos.length > 0 ? (
+              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-semibold flex items-center justify-center border border-white">
+                {todos.length > 99 ? "99+" : todos.length}
+              </span>
+            ) : null}
           </button>
         ) : null}
         <button
@@ -1589,6 +1640,18 @@ export default function Home() {
             📅
           </button>
         ) : null}
+        <button
+          className={`relative w-10 h-10 rounded flex items-center justify-center border ${section === "questions" ? "bg-gray-100" : ""}`}
+          title="Questions"
+          onClick={() => setSection("questions")}
+        >
+          🔔
+          {questions.length > 0 ? (
+            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-semibold flex items-center justify-center border border-white">
+              {questions.length > 99 ? "99+" : questions.length}
+            </span>
+          ) : null}
+        </button>
         <div className="mt-auto flex flex-col items-center gap-3">
           <div className="text-xs text-gray-500">{loading ? "…" : ""}</div>
           {isManager ? (
@@ -1658,6 +1721,8 @@ export default function Home() {
                 ? "Inbox"
                 : section === "todos"
                   ? "To-Do Inbox"
+                  : section === "questions"
+                    ? "Internal Questions"
                   : section === "contacts"
                     ? "Contacts"
                     : section === "calendar"
@@ -1671,6 +1736,8 @@ export default function Home() {
                 ? `${conversations.length} conversations`
                 : section === "todos"
                   ? `${todos.length} open`
+                  : section === "questions"
+                    ? `${questions.length} open`
                   : section === "contacts"
                     ? `${contacts.length} contacts`
                     : section === "calendar"
@@ -1816,7 +1883,14 @@ export default function Home() {
                     Open conversation
                   </button>
                 </div>
-                <button className="px-3 py-2 border rounded text-sm" onClick={() => markTodoDone(t)}>
+                <button
+                  className="px-3 py-2 border rounded text-sm"
+                  onClick={() => {
+                    setTodoResolveTarget(t);
+                    setTodoResolution("resume");
+                    setTodoResolveOpen(true);
+                  }}
+                >
                   Done
                 </button>
               </div>
@@ -1824,6 +1898,37 @@ export default function Home() {
             {!loading && todos.length === 0 && (
               <div className="p-4 text-sm text-gray-600">No open To-Dos.</div>
             )}
+          </div>
+        ) : null}
+
+        {section === "questions" ? (
+          <div className="mt-3 border rounded-lg divide-y">
+            {questions.map(q => (
+              <div key={q.id} className="p-4 flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-sm font-medium">{q.leadKey}</div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {new Date(q.createdAt).toLocaleString()}
+                  </div>
+                  <div className="text-sm text-gray-700 mt-2 line-clamp-3">{q.text}</div>
+                  <button
+                    className="text-xs text-blue-600 mt-2 inline-block"
+                    onClick={() => {
+                      setSection("inbox");
+                      setSelectedId(q.convId);
+                    }}
+                  >
+                    Open conversation
+                  </button>
+                </div>
+                <button className="px-3 py-2 border rounded text-sm" onClick={() => markQuestionDone(q)}>
+                  Done
+                </button>
+              </div>
+            ))}
+            {!loading && questions.length === 0 ? (
+              <div className="p-4 text-sm text-gray-600">No open questions.</div>
+            ) : null}
           </div>
         ) : null}
 
@@ -1887,6 +1992,53 @@ export default function Home() {
             )}
           </div>
           </>
+        ) : null}
+
+        {todoResolveOpen && todoResolveTarget ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+            <div className="bg-white rounded-lg shadow-lg w-full max-w-md p-4">
+              <div className="text-sm font-medium">Resolve To-Do</div>
+              <div className="text-xs text-gray-500 mt-1">
+                Choose what should happen to follow-ups for this conversation.
+              </div>
+              <div className="mt-3">
+                <select
+                  className="w-full border rounded px-3 py-2 text-sm"
+                  value={todoResolution}
+                  onChange={e => setTodoResolution(e.target.value)}
+                >
+                  <option value="resume">Resume follow-ups now</option>
+                  <option value="pause_7">Pause for 7 days</option>
+                  <option value="pause_30">Pause for 30 days</option>
+                  <option value="pause_indef">Pause indefinitely</option>
+                  <option value="appointment_set">Appointment set manually</option>
+                  <option value="archive">Archive conversation</option>
+                </select>
+              </div>
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  className="px-3 py-2 border rounded text-sm"
+                  onClick={() => {
+                    setTodoResolveOpen(false);
+                    setTodoResolveTarget(null);
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="px-3 py-2 border rounded text-sm"
+                  onClick={async () => {
+                    if (!todoResolveTarget) return;
+                    await markTodoDone(todoResolveTarget, todoResolution);
+                    setTodoResolveOpen(false);
+                    setTodoResolveTarget(null);
+                  }}
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          </div>
         ) : null}
 
         {section === "settings" && authUser?.role === "manager" ? (
@@ -3531,6 +3683,19 @@ export default function Home() {
                     <span className="mr-1">👤</span>
                   </button>
                 ) : null}
+                {(authUser?.role === "manager" || authUser?.permissions?.canAccessTodos) ? (
+                  <button
+                    className="px-2 py-1 border rounded text-sm"
+                    onClick={async () => {
+                      const text = window.prompt("Internal question for this conversation:");
+                      if (!text || !selectedConv) return;
+                      await createQuestion(selectedConv.id, text.trim());
+                    }}
+                    title="Create internal question"
+                  >
+                    Ask
+                  </button>
+                ) : null}
                 {modeSaving ? <span className="text-xs text-gray-500">Saving…</span> : null}
               </div>
             </div>
@@ -3586,11 +3751,17 @@ export default function Home() {
                 })}
             </div>
 
-            <div className="mt-6 flex gap-2">
-              <input
+            <div className="mt-6 flex gap-2 items-start">
+              <textarea
                 value={sendBody}
                 onChange={e => setSendBody(e.target.value)}
-                className="flex-1 border rounded px-3 py-2"
+                onInput={e => {
+                  const el = e.currentTarget;
+                  el.style.height = "auto";
+                  el.style.height = `${el.scrollHeight}px`;
+                }}
+                rows={1}
+                className="flex-1 border rounded px-3 py-3 min-h-[48px] resize-none leading-6 overflow-hidden"
                 placeholder={pendingDraft ? "Edit draft then Send…" : "Type a message…"}
               />
               <button className="px-4 py-2 border rounded" onClick={send}>

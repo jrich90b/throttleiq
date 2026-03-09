@@ -55,6 +55,9 @@ import {
   discardPendingDrafts,
   addTodo,
   listOpenTodos,
+  addInternalQuestion,
+  listOpenQuestions,
+  markQuestionDone,
   markTodoDone,
   deleteConversation,
   setFollowUpMode,
@@ -203,6 +206,7 @@ function effectiveMode(conv: any): SystemMode {
 setInterval(() => {
   void processDueFollowUps();
   void processAppointmentConfirmations();
+  void processAppointmentQuestions();
 }, 60_000);
 
 app.get("/health", (_req, res) => {
@@ -941,6 +945,86 @@ async function processDueFollowUps() {
   const dealerProfile = await getDealerProfile();
   const now = new Date();
   const convs = getAllConversations();
+  const todoConvIds = new Set(listOpenTodos().map(t => t.convId));
+
+  const getLastInbound = (conv: any) =>
+    [...(conv.messages ?? [])].reverse().find((m: any) => m.direction === "in") ?? null;
+
+  const isMeaningfulInbound = (text: string) => {
+    const t = text.toLowerCase();
+    return (
+      /(call me|call him|call her|reach me|reach him|reach her|contact me|can you call|please call|tell .* i will call|i will call)/.test(
+        t
+      ) ||
+      /(appointment|appt|schedule|book|come in|stop in|stop by|visit|test ride|demo ride)/.test(t) ||
+      /(price|otd|out the door|payment|monthly|finance|credit|apr|trade|trade-in|trade in)/.test(t) ||
+      /(next week|next month|this weekend|today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\bmon\b|\btue\b|\bwed\b|\bthu\b|\bfri\b|\bsat\b|\bsun\b)/.test(
+        t
+      ) ||
+      /\b\d{1,2}(:\d{2})?\s*(am|pm)?\b/.test(t)
+    );
+  };
+
+  const parsePauseUntil = (text: string, base: Date): { until?: Date; indefinite?: boolean } => {
+    const t = text.toLowerCase();
+    if (/(i('| )?ll let you know|i will let you know|i'll reach out|i will reach out|i'll get back to you|i will get back to you)/.test(t)) {
+      return { indefinite: true };
+    }
+
+    const inDays = t.match(/\bin\s+(\d{1,2})\s+days?\b/);
+    if (inDays) return { until: new Date(base.getTime() + Number(inDays[1]) * 24 * 60 * 60 * 1000) };
+
+    const inWeeks = t.match(/\bin\s+(\d{1,2})\s+weeks?\b/);
+    if (inWeeks) return { until: new Date(base.getTime() + Number(inWeeks[1]) * 7 * 24 * 60 * 60 * 1000) };
+
+    if (/\bnext week\b/.test(t)) {
+      return { until: new Date(base.getTime() + 7 * 24 * 60 * 60 * 1000) };
+    }
+    if (/\bnext month\b/.test(t)) {
+      return { until: new Date(base.getTime() + 30 * 24 * 60 * 60 * 1000) };
+    }
+
+    const monthMap: Record<string, number> = {
+      jan: 0, january: 0, feb: 1, february: 1, mar: 2, march: 2, apr: 3, april: 3,
+      may: 4, jun: 5, june: 5, jul: 6, july: 6, aug: 7, august: 7, sep: 8, sept: 8, september: 8,
+      oct: 9, october: 9, nov: 10, november: 10, dec: 11, december: 11
+    };
+    const monthMatch = t.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+(\d{1,2}))?\b/);
+    if (monthMatch) {
+      const m = monthMap[monthMatch[1]];
+      const day = monthMatch[2] ? Number(monthMatch[2]) : 1;
+      const y = base.getFullYear();
+      let d = new Date(y, m, day, 9, 0, 0, 0);
+      if (d.getTime() <= base.getTime()) d = new Date(y + 1, m, day, 9, 0, 0, 0);
+      return { until: d };
+    }
+
+    const dowMap: Record<string, number> = {
+      sunday: 0, sun: 0, monday: 1, mon: 1, tuesday: 2, tue: 2, tues: 2, wednesday: 3, wed: 3,
+      thursday: 4, thu: 4, thurs: 4, friday: 5, fri: 5, saturday: 6, sat: 6
+    };
+    const dowMatch = t.match(/\b(sun(day)?|mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?|sat(urday)?)\b/);
+    if (dowMatch) {
+      const key = dowMatch[0].replace(/\s+/g, "");
+      const dow = dowMap[key] ?? dowMap[key.slice(0,3)];
+      if (dow != null) {
+        const d = new Date(base);
+        d.setDate(d.getDate() + ((7 + dow - d.getDay()) % 7 || 7));
+        d.setHours(9, 0, 0, 0);
+        return { until: d };
+      }
+    }
+
+    if (/\bthis weekend\b/.test(t)) {
+      const d = new Date(base);
+      const daysToSat = (6 - d.getDay() + 7) % 7;
+      d.setDate(d.getDate() + (daysToSat === 0 ? 7 : daysToSat));
+      d.setHours(9, 0, 0, 0);
+      return { until: d };
+    }
+
+    return {};
+  };
 
   for (const conv of convs) {
     const cadence = conv.followUpCadence;
@@ -949,9 +1033,20 @@ async function processDueFollowUps() {
       stopFollowUpCadence(conv, "closed");
       continue;
     }
+    if (todoConvIds.has(conv.id)) continue;
     if (isSuppressed(conv.leadKey)) {
       stopFollowUpCadence(conv, "suppressed");
       continue;
+    }
+    const lastInbound = getLastInbound(conv);
+    if (lastInbound?.body && lastInbound?.at) {
+      const inboundAt = new Date(lastInbound.at);
+      const { until, indefinite } = parsePauseUntil(lastInbound.body, inboundAt);
+      if (indefinite) continue;
+      if (until && now < until) continue;
+      if (isMeaningfulInbound(lastInbound.body) && now.getTime() - inboundAt.getTime() < 72 * 60 * 60 * 1000) {
+        continue;
+      }
     }
     if (new Date(cadence.nextDueAt) > now) continue;
     if (conv.appointment?.bookedEventId) {
@@ -1106,6 +1201,31 @@ async function processAppointmentConfirmations() {
     } else {
       appendOutbound(conv, "salesperson", toNumber, message, "human");
     }
+  }
+}
+
+async function processAppointmentQuestions() {
+  const cfg = await getSchedulerConfig();
+  const now = new Date();
+  const convs = getAllConversations();
+  const openQuestions = listOpenQuestions();
+  const openByConv = new Set(openQuestions.map(q => q.convId));
+
+  for (const conv of convs) {
+    const appt = conv.appointment;
+    if (!appt?.whenIso || !appt.bookedEventId) continue;
+    if (conv.status === "closed") continue;
+    if (isSuppressed(conv.leadKey)) continue;
+    if (appt.attendanceQuestionedAt) continue;
+    if (openByConv.has(conv.id)) continue;
+
+    const when = new Date(appt.whenIso);
+    if (now.getTime() < when.getTime() + 2 * 60 * 60 * 1000) continue;
+
+    const whenText = formatSlotLocal(appt.whenIso, cfg.timezone);
+    const text = `Did the customer show for the ${whenText} appointment?`;
+    addInternalQuestion(conv.id, conv.leadKey, text);
+    appt.attendanceQuestionedAt = now.toISOString();
   }
 }
 
@@ -1674,10 +1794,53 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), (re
   const task = markTodoDone(convId, todoId);
   const conv = getConversation(convId);
   if (conv) {
-    setFollowUpMode(conv, "active", "todo_done");
+    const resolution = String(req.body?.resolution ?? "resume").trim();
+    const nowIso = new Date().toISOString();
+    if (resolution === "resume") {
+      setFollowUpMode(conv, "active", "todo_done");
+    } else if (resolution === "pause_7" || resolution === "pause_30") {
+      setFollowUpMode(conv, "active", "todo_pause");
+      const days = resolution === "pause_7" ? 7 : 30;
+      if (conv.followUpCadence) {
+        conv.followUpCadence.status = "active";
+        conv.followUpCadence.nextDueAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+        conv.followUpCadence.lastSentAt = conv.followUpCadence.lastSentAt ?? nowIso;
+      }
+    } else if (resolution === "pause_indef") {
+      setFollowUpMode(conv, "manual_handoff", "todo_pause_indef");
+    } else if (resolution === "archive") {
+      stopFollowUpCadence(conv, "manual_archive");
+      closeConversation(conv, "manual_archive");
+    } else if (resolution === "appointment_set") {
+      stopFollowUpCadence(conv, "manual_appointment");
+      setFollowUpMode(conv, "manual_handoff", "manual_appointment");
+    } else {
+      setFollowUpMode(conv, "active", "todo_done");
+    }
   }
   if (!task) return res.status(404).json({ ok: false, error: "Todo not found" });
   res.json({ ok: true, todo: task });
+});
+
+app.get("/questions", (_req, res) => {
+  res.json({ ok: true, questions: listOpenQuestions() });
+});
+
+app.post("/questions", (req, res) => {
+  const convId = String(req.body?.convId ?? "").trim();
+  const text = String(req.body?.text ?? "").trim();
+  if (!convId || !text) return res.status(400).json({ ok: false, error: "Missing convId/text" });
+  const conv = getConversation(convId);
+  const leadKey = conv?.leadKey ?? convId;
+  const q = addInternalQuestion(convId, leadKey, text);
+  res.json({ ok: true, question: q });
+});
+
+app.post("/questions/:convId/:questionId/done", (req, res) => {
+  const { convId, questionId } = req.params;
+  const q = markQuestionDone(convId, questionId);
+  if (!q) return res.status(404).json({ ok: false, error: "Question not found" });
+  res.json({ ok: true, question: q });
 });
 
 app.get("/suppressions", requirePermission("canAccessSuppressions"), (_req, res) => {
