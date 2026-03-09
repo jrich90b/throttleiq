@@ -545,7 +545,14 @@ export function getAllConversations(): Conversation[] {
 
 export function getConversation(id: string): Conversation | null {
   const key = normalizeLeadKey(id);
-  return conversations.get(key) ?? null;
+  const direct = conversations.get(key);
+  if (direct) return direct;
+  for (const conv of conversations.values()) {
+    if (conv.id === id || conv.leadKey === id) return conv;
+    const convKey = normalizeLeadKey(conv.leadKey || conv.id || "");
+    if (convKey && convKey === key) return conv;
+  }
+  return null;
 }
 
 
