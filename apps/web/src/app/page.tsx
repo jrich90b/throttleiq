@@ -3731,6 +3731,18 @@ export default function Home() {
                       >
                         {m.body}
                       </div>
+                      {m.direction === "in" && m.provider === "sendgrid_adf" ? (
+                        <div className="mt-1">
+                          <a
+                            className="text-xs text-blue-600 underline"
+                            href={`/lead/${selectedConv.id}`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            View lead
+                          </a>
+                        </div>
+                      ) : null}
                       {m.mediaUrls && m.mediaUrls.length ? (
                         <div
                           className={`mt-2 flex flex-wrap gap-2 ${m.direction === "in" ? "" : "justify-end"}`}
