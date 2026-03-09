@@ -22,6 +22,7 @@ export type AppointmentMemory = {
   bookedEventLink?: string | null;
   bookedSalespersonId?: string | null;
   reschedulePending?: boolean;
+  attendanceQuestionedAt?: string;
   confirmation?: {
     sentAt?: string;
     status?: "pending" | "confirmed" | "declined";
@@ -93,6 +94,16 @@ export type TodoTask = {
   summary: string;
   createdAt: string;
   sourceMessageId?: string;
+  status: "open" | "done";
+  doneAt?: string;
+};
+
+export type InternalQuestion = {
+  id: string;
+  convId: string;
+  leadKey: string;
+  text: string;
+  createdAt: string;
   status: "open" | "done";
   doneAt?: string;
 };
@@ -192,6 +203,7 @@ if (process.env.NODE_ENV === "test") {
   }
 }
 const todos: TodoTask[] = [];
+const questions: InternalQuestion[] = [];
 
 function nowIso() {
   return new Date().toISOString();
@@ -229,7 +241,7 @@ async function ensureDirForFile(filePath: string) {
 async function loadFromDisk() {
   try {
     const raw = await fs.readFile(DB_PATH, "utf8");
-    const parsed = JSON.parse(raw) as { conversations?: Conversation[]; todos?: TodoTask[] };
+    const parsed = JSON.parse(raw) as { conversations?: Conversation[]; todos?: TodoTask[]; questions?: InternalQuestion[] };
 
     const list = parsed?.conversations ?? [];
     conversations.clear();
@@ -238,6 +250,8 @@ async function loadFromDisk() {
     }
     todos.length = 0;
     if (parsed?.todos?.length) todos.push(...parsed.todos);
+    questions.length = 0;
+    if (parsed?.questions?.length) questions.push(...parsed.questions);
 
     console.log(`📦 Loaded ${conversations.size} conversations from ${DB_PATH}`);
   } catch (err: any) {
@@ -267,7 +281,8 @@ async function saveToDisk() {
       version: 1,
       savedAt: nowIso(),
       conversations: Array.from(conversations.values()),
-      todos
+      todos,
+      questions
     };
 
     const json = JSON.stringify(payload, null, 2);
@@ -1166,6 +1181,33 @@ export function listOpenTodos(): TodoTask[] {
   return todos.filter(t => t.status === "open");
 }
 
+export function addInternalQuestion(convId: string, leadKey: string, text: string): InternalQuestion {
+  const q: InternalQuestion = {
+    id: makeId("q"),
+    convId,
+    leadKey,
+    text,
+    createdAt: nowIso(),
+    status: "open"
+  };
+  questions.push(q);
+  scheduleSave();
+  return q;
+}
+
+export function listOpenQuestions(): InternalQuestion[] {
+  return questions.filter(q => q.status === "open");
+}
+
+export function markQuestionDone(convId: string, questionId: string): InternalQuestion | null {
+  const q = questions.find(x => x.id === questionId && x.convId === convId);
+  if (!q) return null;
+  q.status = "done";
+  q.doneAt = nowIso();
+  scheduleSave();
+  return q;
+}
+
 export function markTodoDone(convId: string, todoId: string): TodoTask | null {
   const task = todos.find(t => t.id === todoId && t.convId === convId);
   if (!task) return null;
@@ -1189,6 +1231,11 @@ export function deleteConversation(convId: string): boolean {
   for (let i = todos.length - 1; i >= 0; i -= 1) {
     if (todos[i]?.convId === key) {
       todos.splice(i, 1);
+    }
+  }
+  for (let i = questions.length - 1; i >= 0; i -= 1) {
+    if (questions[i]?.convId === key) {
+      questions.splice(i, 1);
     }
   }
   scheduleSave();

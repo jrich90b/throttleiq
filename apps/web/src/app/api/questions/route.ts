@@ -7,7 +7,7 @@ export async function GET() {
     return NextResponse.json({ ok: false, error: "API_BASE_URL not set" }, { status: 500 });
   }
 
-  const r = await apiFetch(`${base}/todos`, { cache: "no-store" });
+  const r = await apiFetch(`${base}/questions`, { cache: "no-store" });
   const text = await r.text();
   try {
     const data = JSON.parse(text);
@@ -28,24 +28,42 @@ export async function POST(req: Request) {
 
   const body = await req.json();
   const convId = String(body?.convId ?? "").trim();
-  const todoId = String(body?.todoId ?? "").trim();
-  const resolution = String(body?.resolution ?? "").trim();
-  if (!convId || !todoId) {
-    return NextResponse.json({ ok: false, error: "Missing convId/todoId" }, { status: 400 });
+  const questionId = String(body?.questionId ?? "").trim();
+  const text = String(body?.text ?? "").trim();
+
+  if (convId && questionId) {
+    const r = await apiFetch(
+      `${base}/questions/${encodeURIComponent(convId)}/${encodeURIComponent(questionId)}/done`,
+      { method: "POST" }
+    );
+    const txt = await r.text();
+    try {
+      const data = JSON.parse(txt);
+      return NextResponse.json(data, { status: r.status });
+    } catch {
+      return NextResponse.json(
+        { ok: false, error: "Upstream not JSON", status: r.status, body: txt.slice(0, 200) },
+        { status: 502 }
+      );
+    }
   }
 
-  const r = await apiFetch(`${base}/todos/${encodeURIComponent(convId)}/${encodeURIComponent(todoId)}/done`, {
+  if (!convId || !text) {
+    return NextResponse.json({ ok: false, error: "Missing convId/text" }, { status: 400 });
+  }
+
+  const r = await apiFetch(`${base}/questions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ resolution })
+    body: JSON.stringify({ convId, text })
   });
-  const text = await r.text();
+  const txt = await r.text();
   try {
-    const data = JSON.parse(text);
+    const data = JSON.parse(txt);
     return NextResponse.json(data, { status: r.status });
   } catch {
     return NextResponse.json(
-      { ok: false, error: "Upstream not JSON", status: r.status, body: text.slice(0, 200) },
+      { ok: false, error: "Upstream not JSON", status: r.status, body: txt.slice(0, 200) },
       { status: 502 }
     );
   }

@@ -38,6 +38,21 @@ function detectApprovalStatus(text: string): boolean {
   return /(am i approved|approved|denied|credit decision|status of my application)/.test(t);
 }
 
+function detectCallbackRequest(text: string): boolean {
+  const t = text.toLowerCase();
+  const hasCallback =
+    /(call me|call him|call her|give me a call|give (him|her) a call|reach me|reach him|reach her|contact me|can you call|can you have|please call|have .* call|tell .* i will call|i will call)/.test(
+      t
+    );
+  const hasTimeframe =
+    /(today|tomorrow|this weekend|this week|next week|tuesday|wednesday|thursday|friday|saturday|sunday|monday|\bmon\b|\btue\b|\bwed\b|\bthu\b|\bfri\b|\bsat\b|\bsun\b|\b\d{1,2}(:\d{2})?\s*(am|pm)?\b)/.test(
+      t
+    );
+  const hasPhone = /\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/.test(t);
+  const hasTrade = /(trade[-\s]?in|trade in|trading in)/.test(t);
+  return hasCallback || (hasTimeframe && (hasPhone || hasTrade));
+}
+
 function detectExactNumberPressure(text: string): boolean {
   const t = text.toLowerCase();
   return (
@@ -255,6 +270,7 @@ export async function orchestrateInbound(
   const pricingAttempts = ctx?.pricingAttempts ?? 0;
   const managerRequest = detectManagerRequest(event.body);
   const approvalStatus = detectApprovalStatus(event.body);
+  const callbackRequest = detectCallbackRequest(event.body);
   const pricingIntent =
     detectPricingOrPayment(event.body, intent) ||
     /request a quote|raq/i.test(ctx?.leadSource ?? "");
@@ -283,6 +299,18 @@ export async function orchestrateInbound(
       shouldRespond: true,
       draft: ack,
       handoff: { required: true, reason: "approval", ack }
+    });
+  }
+
+  if (callbackRequest) {
+    const ack =
+      "Got it — I’ll have Scotty reach out. If you prefer, you can call us when you’re back. What’s the best number and time to reach you?";
+    return finalize({
+      intent,
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft: ack,
+      handoff: { required: true, reason: "other", ack }
     });
   }
 
