@@ -50,13 +50,14 @@ export default function LeadDetailsPage({ params }: { params: { id: string } }) 
         setLoading(true);
         setError(null);
         const rawId = decodeURIComponent(params.id);
-        const r = await fetch(`/api/conversations/${encodeURIComponent(rawId)}`, { cache: "no-store" });
+        const apiPath = `/api/conversations/${encodeURIComponent(rawId)}`;
+        const r = await fetch(apiPath, { cache: "no-store" });
         const text = await r.text();
         const data = JSON.parse(text);
         if (!active) return;
         if (!r.ok) {
           setError(data?.error ?? "Failed to load lead");
-          setDebugInfo(`status=${r.status} body=${text.slice(0, 500)}`);
+          setDebugInfo(`id=${rawId} path=${apiPath} status=${r.status} body=${text.slice(0, 500)}`);
           return;
         }
         setConv(data?.conversation ?? null);
