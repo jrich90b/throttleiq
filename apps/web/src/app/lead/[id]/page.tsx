@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useParams } from "next/navigation";
 
 type LeadVehicle = {
   stockId?: string;
@@ -37,7 +38,8 @@ type Conversation = {
   lastInbound?: { body?: string };
 };
 
-export default function LeadDetailsPage({ params }: { params: { id: string } }) {
+export default function LeadDetailsPage() {
+  const params = useParams<{ id: string }>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [debugInfo, setDebugInfo] = useState<string | null>(null);
@@ -49,7 +51,13 @@ export default function LeadDetailsPage({ params }: { params: { id: string } }) 
       try {
         setLoading(true);
         setError(null);
-        const rawId = decodeURIComponent(params.id);
+        const rawId = decodeURIComponent(String(params?.id ?? ""));
+        if (!rawId) {
+          setError("Missing lead id");
+          setDebugInfo("id missing in route params");
+          setLoading(false);
+          return;
+        }
         const apiPath = `/api/conversations/${encodeURIComponent(rawId)}`;
         const r = await fetch(apiPath, { cache: "no-store" });
         const text = await r.text();
