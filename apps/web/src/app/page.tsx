@@ -3736,7 +3736,7 @@ export default function Home() {
                         <div className="mt-1">
                           <a
                             className="text-xs text-blue-600 underline"
-                            href={`/lead/${selectedConv.id}`}
+                            href={`/lead/${encodeURIComponent(selectedConv.id)}`}
                             target="_blank"
                             rel="noreferrer"
                           >
