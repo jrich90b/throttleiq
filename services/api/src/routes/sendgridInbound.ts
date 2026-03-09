@@ -240,17 +240,23 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     lastName: lead.lastName,
     email: lead.email,
     phone: lead.phone,
+    street: lead.street,
+    city: lead.city,
+    region: lead.region,
+    postal: lead.postal,
     purchaseTimeframe: lead.purchaseTimeframe,
     purchaseTimeframeMonthsStart: timeframeInfo?.start,
     purchaseTimeframeMonthsEnd: timeframeInfo?.end,
     hasMotoLicense: lead.hasMotoLicense,
+    sellOption: lead.sellOption,
     vehicle: {
       stockId: lead.stockId,
       vin: lead.vin,
       year: lead.year,
       model: meta.model,
       color: lead.vehicleColor,
-      description: lead.vehicleDescription
+      description: lead.vehicleDescription,
+      mileage: lead.mileage
     }
   });
   const stockId = lead.stockId?.trim() || undefined;

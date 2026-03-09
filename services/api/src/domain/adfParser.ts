@@ -6,6 +6,12 @@ export type ParsedAdfLead = {
   lastName?: string;
   email?: string;
   phone?: string;
+  street?: string;
+  city?: string;
+  region?: string;
+  postal?: string;
+  mileage?: number;
+  sellOption?: "cash" | "trade" | "either";
   inquiry?: string;
   stockId?: string;
   vin?: string;
@@ -74,6 +80,17 @@ function parseFromComment(comment?: string) {
   const emailMatch = clean.match(/email:\s*([^\s\n\r]+)/i);
   const timeframeMatch = clean.match(/purchase timeframe:\s*([^\n\r]+)/i);
   const licenseMatch = clean.match(/valid motorcycle license\?\s*(yes|no)/i);
+  const mileageMatch = clean.match(/mileage:\s*([0-9,]+)/i);
+  const optionsMatch = clean.match(/options:\s*([^\n\r]+)/i);
+  const optionsRaw = optionsMatch?.[1]?.trim().toLowerCase();
+  let sellOption: "cash" | "trade" | "either" | undefined;
+  if (optionsRaw) {
+    if (optionsRaw.includes("cash")) sellOption = "cash";
+    else if (optionsRaw.includes("trade")) sellOption = "trade";
+    else if (optionsRaw.includes("open")) sellOption = "either";
+  }
+  const mileage =
+    mileageMatch?.[1] != null ? Number(mileageMatch[1].replace(/,/g, "")) : undefined;
   return {
     inquiry: inquiryMatch?.[1]?.trim(),
     stockId: stockMatch?.[1]?.trim(),
@@ -84,7 +101,9 @@ function parseFromComment(comment?: string) {
     phone: phoneMatch?.[1]?.trim(),
     email: emailMatch?.[1]?.trim(),
     purchaseTimeframe: timeframeMatch?.[1]?.trim(),
-    hasMotoLicense: licenseMatch ? licenseMatch[1].toLowerCase() === "yes" : undefined
+    hasMotoLicense: licenseMatch ? licenseMatch[1].toLowerCase() === "yes" : undefined,
+    mileage,
+    sellOption
   };
 }
 
@@ -177,6 +196,11 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
   const phones = asArray(contact?.phone);
   const preferredPhone = pickByType(phones, "cell") ?? pickByType(phones, "mobile") ?? phones[0];
   const phone = text(preferredPhone);
+  const address = contact?.address ?? {};
+  const street = text(address?.street?.[0] ?? address?.street ?? address?.line1 ?? address?.line);
+  const city = text(address?.city);
+  const region = text(address?.regioncode ?? address?.region ?? address?.state);
+  const postal = text(address?.postalcode ?? address?.postal);
 
   const request = prospect?.request ?? {};
   const commentText = text(contact?.comment) ?? text(request?.comment) ?? text(request?.comments);
@@ -199,6 +223,10 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
     [text(vehicle?.make), text(vehicle?.model), text(vehicle?.trim)]
       .filter(Boolean)
       .join(" ") || text(vehicle?.description);
+  const odometerRaw = text(vehicle?.odometer);
+  const odometerVal =
+    odometerRaw != null ? Number(String(odometerRaw).replace(/,/g, "")) : undefined;
+  const mileage = odometerVal ?? parsedFromComment.mileage;
 
   const desc = vehicleDescription || parsedFromComment.item;
   const vehicleColor =
@@ -223,6 +251,12 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
     lastName,
     email: finalEmail,
     phone: finalPhone,
+    street,
+    city,
+    region,
+    postal,
+    mileage,
+    sellOption: parsedFromComment.sellOption,
     inquiry,
     stockId,
     vin,

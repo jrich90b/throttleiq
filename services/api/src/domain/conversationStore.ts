@@ -125,6 +125,7 @@ export type LeadProfile = {
   purchaseTimeframeMonthsStart?: number;
   purchaseTimeframeMonthsEnd?: number;
   hasMotoLicense?: boolean;
+  sellOption?: "cash" | "trade" | "either";
   vehicle?: {
     stockId?: string;
     vin?: string;
@@ -135,6 +136,7 @@ export type LeadProfile = {
     url?: string;
     inventoryStatus?: "AVAILABLE" | "PENDING" | "UNKNOWN";
     description?: string;
+    mileage?: number;
     listPrice?: number;
     priceRange?: { min: number; max: number; count: number };
   };

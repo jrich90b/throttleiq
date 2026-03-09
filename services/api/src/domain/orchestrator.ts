@@ -116,6 +116,26 @@ function hasSchedulingIntent(text: string): boolean {
   );
 }
 
+function toTitleCase(label: string): string {
+  return label
+    .toLowerCase()
+    .split(/\s+/)
+    .map(word => {
+      if (!word) return "";
+      return word[0].toUpperCase() + word.slice(1);
+    })
+    .join(" ");
+}
+
+function normalizeModelLabel(label?: string | null): string {
+  if (!label) return "that bike";
+  const trimmed = label.trim();
+  if (!trimmed) return "that bike";
+  const letters = trimmed.replace(/[^A-Za-z]/g, "");
+  const isAllCaps = letters.length > 0 && letters === letters.toUpperCase();
+  return isAllCaps ? toTitleCase(trimmed) : trimmed;
+}
+
 function inferAppointmentType(
   text: string
 ): "inventory_visit" | "test_ride" | "trade_appraisal" | "finance_discussion" {
@@ -235,7 +255,33 @@ export async function orchestrateInbound(
     });
   }
 
-  const corporateIntent = detectCorporateIntent(event.body);
+  const leadSourceRaw = (ctx?.leadSource ?? ctx?.lead?.source ?? "").toLowerCase();
+  const isSellMyBike = /sell my bike/.test(leadSourceRaw);
+  if (isSellMyBike) {
+    const leadFirst = ctx?.lead?.firstName?.trim() || "there";
+    const yearLabel = ctx?.lead?.vehicle?.year ? `${ctx.lead.vehicle.year} ` : "";
+    const modelLabel = normalizeModelLabel(ctx?.lead?.vehicle?.model ?? ctx?.lead?.vehicle?.description);
+    const mileage = ctx?.lead?.vehicle?.mileage;
+    const mileageLine = mileage ? ` I have the mileage at ${mileage.toLocaleString()}.` : " What’s the mileage?";
+    const sellOption = ctx?.lead?.sellOption ?? null;
+    const optionLine =
+      sellOption === "cash"
+        ? "Are you looking for a straight cash offer, or would you consider trading toward another bike?"
+        : sellOption === "trade"
+          ? "What are you hoping to trade into?"
+          : sellOption === "either"
+            ? "Are you leaning more toward a cash offer or trade credit?"
+            : "Are you looking for a cash offer or trade credit?";
+    const draft = `Hi ${leadFirst} — thanks for reaching out about selling your ${yearLabel}${modelLabel}. We can help with a trade‑in appraisal.${mileageLine} ${optionLine} Do you have a couple photos? If you’d rather stop in, I can set a time.`;
+    return finalize({
+      intent: "TRADE_IN",
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft
+    });
+  }
+
+  const corporateIntent = !isSellMyBike && detectCorporateIntent(event.body);
   const internationalBuyer = detectInternationalBuyer(event.body, event.from);
   if (corporateIntent || internationalBuyer) {
     const dealerProfile = await getDealerProfile();
@@ -774,7 +820,7 @@ export async function orchestrateInbound(
         const qualifier = "Do you have a trade?";
         const isFirstOutbound = !history.some(h => h.direction === "out");
         const leadName = lead?.firstName?.trim() || "there";
-        const thankLabel = lead.vehicle?.model ?? lead.vehicle?.description ?? "that bike";
+        const thankLabel = normalizeModelLabel(lead.vehicle?.model ?? lead.vehicle?.description);
         const thankYear = lead.vehicle?.year ? `${lead.vehicle.year} ` : "";
         const greeting =
           isFirstOutbound && event.provider === "sendgrid_adf"
@@ -882,7 +928,7 @@ export async function orchestrateInbound(
         const agentName = dealerProfile?.agentName ?? "Brooke";
         const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
         const leadName = lead?.firstName?.trim() || "there";
-        const thankLabel = lead.vehicle?.model ?? lead.vehicle?.description ?? "that bike";
+        const thankLabel = normalizeModelLabel(lead.vehicle?.model ?? lead.vehicle?.description);
         const thankYear = lead.vehicle?.year ? `${lead.vehicle.year} ` : "";
         const greeting = `Hi ${leadName} — thanks for your interest in the ${thankYear}${thankLabel}. `;
         const availabilityAsked = /(available|availability|still there|in stock)/i.test(event.body);
