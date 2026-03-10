@@ -333,7 +333,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       inferredCta = "unknown";
     }
   }
-  if (leadSourceLower.includes("test ride") || leadSourceLower.includes("book test ride")) {
+  const forcedTestRide = leadSourceLower.includes("test ride") || leadSourceLower.includes("book test ride");
+  if (forcedTestRide) {
     inferredBucket = "test_ride";
     inferredCta = "schedule_test_ride";
   }
@@ -347,11 +348,18 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       leadSourceLower.includes("autodealers.digital") ||
       leadSourceLower.includes("autodealersdigital.com")
   });
+  console.log("[sendgrid inbound] classification", {
+    leadSource,
+    leadSourceId,
+    inferredBucket,
+    inferredCta,
+    forcedTestRide
+  });
   setConversationClassification(conv, {
     bucket: inferredBucket,
     cta: inferredCta,
     channel,
-    ruleName: rule.ruleName
+    ruleName: forcedTestRide ? "room58_book_test_ride_forced" : rule.ruleName
   });
 
 
