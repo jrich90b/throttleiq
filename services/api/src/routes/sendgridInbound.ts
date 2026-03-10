@@ -530,7 +530,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           expanded
         );
         if (!exact) {
-          const requestedStartUtc = localPartsToUtcDate(cfg.timezone, result.requestedTime);
+          const requested = result.requestedTime!;
+          const requestedStartUtc = localPartsToUtcDate(cfg.timezone, requested);
           const candidatesByDay = generateCandidateSlots(cfg, now, durationMinutes, 14);
           const matchesSameDay = (d: Date) => {
             const fmt = new Intl.DateTimeFormat("en-US", {
@@ -545,9 +546,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
               if (p.type !== "literal") map[p.type] = p.value;
             }
             return (
-              Number(map.year) === result.requestedTime.year &&
-              Number(map.month) === result.requestedTime.month &&
-              Number(map.day) === result.requestedTime.day
+              Number(map.year) === requested.year &&
+              Number(map.month) === requested.month &&
+              Number(map.day) === requested.day
             );
           };
           const candidate = candidatesByDay
