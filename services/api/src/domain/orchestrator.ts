@@ -288,6 +288,27 @@ export async function orchestrateInbound(
     });
   }
 
+  const isHdfsCoa = /hdfs\s*coa\s*online/.test(leadSourceRaw);
+  if (isHdfsCoa && event.provider === "sendgrid_adf") {
+    const leadFirst = ctx?.lead?.firstName?.trim() || "there";
+    const yearLabel = ctx?.lead?.vehicle?.year ? `${ctx.lead.vehicle.year} ` : "";
+    const modelLabel = normalizeModelLabel(ctx?.lead?.vehicle?.model ?? ctx?.lead?.vehicle?.description);
+    const dealerProfile = await getDealerProfile();
+    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const draft =
+      `Hi ${leadFirst} — thanks for your interest in the ${yearLabel}${modelLabel}. ` +
+      `This is ${agentName} at ${dealerName}. We received your online credit application. ` +
+      "I’ll have our business manager reach out to go over your options. What time would work best?";
+    return finalize({
+      intent: "FINANCING",
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft,
+      handoff: { required: true, reason: "approval", ack: draft }
+    });
+  }
+
   const corporateIntent = !isSellMyBike && detectCorporateIntent(event.body);
   const internationalBuyer = detectInternationalBuyer(event.body, event.from);
   if (corporateIntent || internationalBuyer) {
