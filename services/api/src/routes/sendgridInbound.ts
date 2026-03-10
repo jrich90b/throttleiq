@@ -436,6 +436,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     cta: conv.classification?.cta ?? null,
     pricingAttempts: getPricingAttempts(conv)
   });
+  console.log("[sendgrid inbound] requestedTime", result.requestedTime);
 
   if (result.handoff?.required) {
     const reason = result.handoff.reason;
