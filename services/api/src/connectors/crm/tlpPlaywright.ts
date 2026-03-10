@@ -114,12 +114,12 @@ async function openLeadByRef(page: Page, leadRef: string) {
     // Last-resort: use JS to click the event button if present
     const jsClicked = await page.evaluate(() => {
       const btn =
-        document.querySelector("#pencilPopupInner #pencilEventButton") ||
-        Array.from(document.querySelectorAll("a")).find(a =>
-          /Event Customer Contact/i.test(a.textContent || "")
+        (globalThis as any).document?.querySelector?.("#pencilPopupInner #pencilEventButton") ||
+        Array.from((globalThis as any).document?.querySelectorAll?.("a") ?? []).find((a: any) =>
+          /Event Customer Contact/i.test(a?.textContent || "")
         );
-      if (btn && (btn as HTMLElement).click) {
-        (btn as HTMLElement).click();
+      if (btn && (btn as any).click) {
+        (btn as any).click();
         return true;
       }
       return false;
