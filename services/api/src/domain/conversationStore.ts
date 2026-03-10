@@ -1023,15 +1023,16 @@ function parseExactTime(text: string): { hour24: number; minute: number; timeTex
   if (/(around|approx|approximately|ish)\b/.test(t)) return null;
   if (/\bnoon\b/.test(t)) return { hour24: 12, minute: 0, timeText: "noon" };
 
-  const m = t.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/);
+  // Prefer explicit time tokens so dates like 3/11/2026 don't get parsed as "3".
+  let m = t.match(/\b(\d{1,2}):(\d{2})\s*(am|pm)?\b/);
+  if (!m) {
+    m = t.match(/\b(\d{1,2})\s*(am|pm)\b/);
+  }
   if (!m) return null;
 
   const hourRaw = Number(m[1]);
   const minute = Number(m[2] ?? "0");
   const meridiem = m[3];
-
-  // Require explicit precision: am/pm or colon time.
-  if (!meridiem && !m[2]) return null;
   if (minute < 0 || minute > 59) return null;
   if (hourRaw < 0 || hourRaw > 23) return null;
   if (meridiem && (hourRaw < 1 || hourRaw > 12)) return null;
