@@ -160,6 +160,9 @@ app.use(async (req, res, next) => {
     if (!any) return next();
   }
   if (isPublicPath(req.path)) return next();
+  if (req.path === "/dealer-profile" && req.method === "PUT") {
+    console.log("[auth] dealer-profile PUT start");
+  }
   const tokenHeader = req.header("x-auth-token") || req.header("authorization")?.replace(/^Bearer\s+/i, "");
   const cookies = parseCookies(req.header("cookie"));
   const token = tokenHeader || cookies.lr_session;
@@ -169,6 +172,9 @@ app.use(async (req, res, next) => {
   const user = await getUserById(session.userId);
   if (!user) return res.status(401).json({ ok: false, error: "user not found" });
   (req as any).user = user;
+  if (req.path === "/dealer-profile" && req.method === "PUT") {
+    console.log("[auth] dealer-profile PUT user", user.email);
+  }
   return next();
 });
 
@@ -1718,7 +1724,9 @@ app.get("/dealer-profile", async (_req, res) => {
 });
 
 app.put("/dealer-profile", requireManager, async (req, res) => {
+  console.log("[dealer-profile] save start");
   const saved = await saveDealerProfile(req.body ?? {});
+  console.log("[dealer-profile] save done");
   res.json({ ok: true, profile: saved });
 });
 
