@@ -669,12 +669,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (
     inferredBucket === "test_ride" &&
     typeof draft === "string" &&
-    /^Hi [^—]+— thanks for your interest\./i.test(draft)
+    /^Hi [^—]+— /i.test(draft)
   ) {
-    draft = draft.replace(
-      /^Hi ([^—]+)— thanks for your interest\./i,
-      "Hi $1 — thanks for your interest in a test ride."
-    );
+    const m = draft.match(/^Hi ([^—]+)—\s*([^.]*)\.\s*(.*)$/i);
+    if (m) {
+      const name = m[1];
+      const rest = m[3] ?? "";
+      draft = `Hi ${name} — thanks for your interest in a test ride. ${rest}`.trim();
+    }
   }
   const rawModel = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "";
   if (/full line/i.test(rawModel) && typeof draft === "string") {
