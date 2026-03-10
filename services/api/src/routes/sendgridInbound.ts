@@ -666,18 +666,34 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
 
   let draft = result.shouldRespond ? result.draft : "Thanks — I’ll follow up shortly.";
+  const rawModel = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "";
+  if (/full line/i.test(rawModel) && typeof draft === "string") {
+    draft = draft
+      .replace(/\s+in the\s+\d{4}\s+harley-davidson\s+full line\b/gi, "")
+      .replace(/\s+for the\s+\d{4}\s+harley-davidson\s+full line\b/gi, "")
+      .replace(/\s+on the\s+\d{4}\s+harley-davidson\s+full line\b/gi, "");
+  }
   if (
     result.requestedTime &&
     typeof draft === "string" &&
     /I have .*— which works best\?/i.test(draft) &&
     !/already taken|booked up|closed/i.test(draft)
   ) {
-    const marker = ". ";
-    const idx = draft.indexOf(marker);
-    if (idx > -1 && draft.startsWith("Hi ")) {
-      const head = draft.slice(0, idx + marker.length);
-      const tail = draft.slice(idx + marker.length);
+    const introMatch = draft.match(/^(.*?\bThis is [^.]+\. )(.+)$/i);
+    if (introMatch) {
+      const head = introMatch[1];
+      const tail = introMatch[2];
       draft = `${head}That time is already taken, but ${tail.charAt(0).toLowerCase()}${tail.slice(1)}`;
+    } else if (draft.startsWith("Hi ")) {
+      const marker = ". ";
+      const idx = draft.indexOf(marker);
+      if (idx > -1) {
+        const head = draft.slice(0, idx + marker.length);
+        const tail = draft.slice(idx + marker.length);
+        draft = `${head}That time is already taken, but ${tail.charAt(0).toLowerCase()}${tail.slice(1)}`;
+      } else {
+        draft = `That time is already taken, but ${draft.charAt(0).toLowerCase()}${draft.slice(1)}`;
+      }
     } else {
       draft = `That time is already taken, but ${draft.charAt(0).toLowerCase()}${draft.slice(1)}`;
     }
