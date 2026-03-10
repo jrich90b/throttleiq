@@ -672,7 +672,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     /I have .*— which works best\?/i.test(draft) &&
     !/already taken|booked up|closed/i.test(draft)
   ) {
-    draft = `That time is already taken, but ${draft.charAt(0).toLowerCase()}${draft.slice(1)}`;
+    const marker = ". ";
+    const idx = draft.indexOf(marker);
+    if (idx > -1 && draft.startsWith("Hi ")) {
+      const head = draft.slice(0, idx + marker.length);
+      const tail = draft.slice(idx + marker.length);
+      draft = `${head}That time is already taken, but ${tail.charAt(0).toLowerCase()}${tail.slice(1)}`;
+    } else {
+      draft = `That time is already taken, but ${draft.charAt(0).toLowerCase()}${draft.slice(1)}`;
+    }
   }
 
   // Store the draft as an outbound message (suggest-only for now)
