@@ -27,6 +27,7 @@ import type { InboundMessageEvent } from "../domain/types.js";
 import { getSchedulerConfig, getPreferredSalespeople } from "../domain/schedulerConfig.js";
 import { getAuthedCalendarClient, insertEvent, queryFreeBusy } from "../domain/googleCalendar.js";
 import { expandBusyBlocks, findExactSlotForSalesperson, formatSlotLocal } from "../domain/schedulerEngine.js";
+import { getDealerProfile } from "../domain/dealerProfile.js";
 import { upsertContact } from "../domain/contactsStore.js";
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -550,11 +551,24 @@ export async function handleSendgridInbound(req: Request, res: Response) {
             conv.scheduler.updatedAt = new Date().toISOString();
           }
 
-          const dealerName = (conv as any).dealerProfile?.dealerName ?? "American Harley-Davidson";
-          const addressLine = "1149 Erie Ave., North Tonawanda, NY 14120";
+          const profile = await getDealerProfile();
+          const dealerName = profile?.dealerName ?? "American Harley-Davidson";
+          const agentName = profile?.agentName ?? "Brooke";
+          const addressLine = profile?.address
+            ? `${profile.address.line1 ?? ""}${profile.address.city ? `, ${profile.address.city}` : ""}${
+                profile.address.state ? `, ${profile.address.state}` : ""
+              }${profile.address.zip ? ` ${profile.address.zip}` : ""}`.replace(/^\s*,\s*/,"").trim()
+            : "1149 Erie Ave., North Tonawanda, NY 14120";
           const when = formatSlotLocal(exact.start, cfg.timezone);
           const repName = sp.name ? ` with ${sp.name}` : "";
+          const firstName = conv.lead?.firstName ?? "";
+          const model = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "";
+          const greeting = firstName
+            ? `Hi ${firstName} — thanks for booking a test ride${model ? ` on the ${model}` : ""}. `
+            : `Thanks for booking a test ride${model ? ` on the ${model}` : ""}. `;
+          const intro = `This is ${agentName} at ${dealerName}. `;
           const confirmText =
+            `${greeting}${intro}` +
             `Perfect — you’re booked for ${when}${repName}. ` +
             `${dealerName} is at ${addressLine}.`;
 
