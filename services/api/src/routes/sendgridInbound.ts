@@ -665,7 +665,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
   }
 
-  const draft = result.shouldRespond ? result.draft : "Thanks — I’ll follow up shortly.";
+  let draft = result.shouldRespond ? result.draft : "Thanks — I’ll follow up shortly.";
+  if (
+    result.requestedTime &&
+    typeof draft === "string" &&
+    /I have .*— which works best\?/i.test(draft) &&
+    !/already taken|booked up|closed/i.test(draft)
+  ) {
+    draft = `That time is already taken, but ${draft.charAt(0).toLowerCase()}${draft.slice(1)}`;
+  }
 
   // Store the draft as an outbound message (suggest-only for now)
   appendOutbound(conv, "dealership", leadKey, draft, "draft_ai");
