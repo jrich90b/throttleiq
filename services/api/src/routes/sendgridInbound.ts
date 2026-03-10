@@ -26,7 +26,13 @@ import { resolveChannel, resolveLeadRule } from "../domain/leadSourceRules.js";
 import type { InboundMessageEvent } from "../domain/types.js";
 import { getSchedulerConfig, getPreferredSalespeople } from "../domain/schedulerConfig.js";
 import { getAuthedCalendarClient, insertEvent, queryFreeBusy } from "../domain/googleCalendar.js";
-import { expandBusyBlocks, findExactSlotForSalesperson, formatSlotLocal } from "../domain/schedulerEngine.js";
+import {
+  expandBusyBlocks,
+  findExactSlotForSalesperson,
+  formatSlotLocal,
+  generateCandidateSlots,
+  localPartsToUtcDate
+} from "../domain/schedulerEngine.js";
 import { getDealerProfile } from "../domain/dealerProfile.js";
 import { upsertContact } from "../domain/contactsStore.js";
 
@@ -515,7 +521,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any;
         const expanded = expandBusyBlocks(busy, gapMinutes);
 
-        const exact = findExactSlotForSalesperson(
+        let exact = findExactSlotForSalesperson(
           cfg,
           sp.id,
           sp.calendarId,
@@ -523,6 +529,42 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           durationMinutes,
           expanded
         );
+        if (!exact) {
+          const requestedStartUtc = localPartsToUtcDate(cfg.timezone, result.requestedTime);
+          const candidatesByDay = generateCandidateSlots(cfg, now, durationMinutes, 14);
+          const matchesSameDay = (d: Date) => {
+            const fmt = new Intl.DateTimeFormat("en-US", {
+              timeZone: cfg.timezone,
+              year: "numeric",
+              month: "2-digit",
+              day: "2-digit"
+            });
+            const parts = fmt.formatToParts(d);
+            const map: Record<string, string> = {};
+            for (const p of parts) {
+              if (p.type !== "literal") map[p.type] = p.value;
+            }
+            return (
+              Number(map.year) === result.requestedTime.year &&
+              Number(map.month) === result.requestedTime.month &&
+              Number(map.day) === result.requestedTime.day
+            );
+          };
+          const candidate = candidatesByDay
+            .flatMap(d => d.candidates)
+            .find(c => matchesSameDay(c.start) && c.start.getTime() === requestedStartUtc.getTime());
+          if (candidate) {
+            const blocked = expanded.some(b => candidate.start < b.end && b.start < candidate.end);
+            if (!blocked) {
+              exact = {
+                salespersonId: sp.id,
+                calendarId: sp.calendarId,
+                start: candidate.start.toISOString(),
+                end: candidate.end.toISOString()
+              };
+            }
+          }
+        }
         if (!exact) {
           console.log("[sendgrid inbound] exact slot not found", {
             salespersonId: sp.id,
