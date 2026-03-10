@@ -292,6 +292,13 @@ const RULES: LeadRule[] = [
     bucket: "trade_in_sell",
     cta: "sell_my_bike",
     tone: "short_conversational"
+  },
+  {
+    name: "room58_book_test_ride",
+    match: { equals: ["Room58 - Book test ride"], sourceIds: [2776] },
+    bucket: "test_ride",
+    cta: "schedule_test_ride",
+    tone: "short_conversational"
   }
 ];
 
