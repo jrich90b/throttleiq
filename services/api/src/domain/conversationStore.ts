@@ -1024,15 +1024,21 @@ function parseExactTime(text: string): { hour24: number; minute: number; timeTex
   if (/\bnoon\b/.test(t)) return { hour24: 12, minute: 0, timeText: "noon" };
 
   // Prefer explicit time tokens so dates like 3/11/2026 don't get parsed as "3".
-  let m = t.match(/\b(\d{1,2}):(\d{2})\s*(am|pm)?\b/);
-  if (!m) {
-    m = t.match(/\b(\d{1,2})\s*(am|pm)\b/);
+  const m = t.match(/\b(\d{1,2}):(\d{2})\s*(am|pm)?\b/);
+  let hourRaw: number;
+  let minute: number;
+  let meridiem: string | undefined;
+  if (m) {
+    hourRaw = Number(m[1]);
+    minute = Number(m[2] ?? "0");
+    meridiem = m[3];
+  } else {
+    const m2 = t.match(/\b(\d{1,2})\s*(am|pm)\b/);
+    if (!m2) return null;
+    hourRaw = Number(m2[1]);
+    minute = 0;
+    meridiem = m2[2];
   }
-  if (!m) return null;
-
-  const hourRaw = Number(m[1]);
-  const minute = Number(m[2] ?? "0");
-  const meridiem = m[3];
   if (minute < 0 || minute > 59) return null;
   if (hourRaw < 0 || hourRaw > 23) return null;
   if (meridiem && (hourRaw < 1 || hourRaw > 12)) return null;
