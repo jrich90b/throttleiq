@@ -24,7 +24,9 @@ import {
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { resolveChannel, resolveLeadRule } from "../domain/leadSourceRules.js";
 import type { InboundMessageEvent } from "../domain/types.js";
-import { getSchedulerConfig } from "../domain/schedulerConfig.js";
+import { getSchedulerConfig, getPreferredSalespeople } from "../domain/schedulerConfig.js";
+import { getAuthedCalendarClient, insertEvent, queryFreeBusy } from "../domain/googleCalendar.js";
+import { expandBusyBlocks, findExactSlotForSalesperson, formatSlotLocal } from "../domain/schedulerEngine.js";
 import { upsertContact } from "../domain/contactsStore.js";
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -468,6 +470,115 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   if (result.pricingAttempted) {
     incrementPricingAttempt(conv);
+  }
+
+  if (result.requestedTime && !conv.appointment?.bookedEventId) {
+    try {
+      const cfg = await getSchedulerConfig();
+      const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
+      const preferredSalespeople = getPreferredSalespeople(cfg);
+      const salespeople = cfg.salespeople ?? [];
+      const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
+      const appointmentType = String(result.requestedAppointmentType ?? "inventory_visit");
+      const durationMinutes = appointmentTypes[appointmentType]?.durationMinutes ?? 60;
+
+      const cal = await getAuthedCalendarClient();
+      const now = new Date();
+      const timeMin = new Date(now).toISOString();
+      const timeMax = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString();
+
+      for (const salespersonId of preferredSalespeople) {
+        const sp = salespeople.find((p: any) => p.id === salespersonId);
+        if (!sp) continue;
+
+        const fb = await queryFreeBusy(cal, [sp.calendarId], timeMin, timeMax, cfg.timezone);
+        const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any;
+        const expanded = expandBusyBlocks(busy, gapMinutes);
+
+        const exact = findExactSlotForSalesperson(
+          cfg,
+          sp.id,
+          sp.calendarId,
+          result.requestedTime,
+          durationMinutes,
+          expanded
+        );
+
+        if (exact) {
+          const stockId = conv.lead?.vehicle?.stockId ?? null;
+          const leadNameRaw = conv.lead?.name?.trim() ?? "";
+          const firstName = conv.lead?.firstName ?? "";
+          const lastName = conv.lead?.lastName ?? "";
+          const leadName = leadNameRaw || [firstName, lastName].filter(Boolean).join(" ").trim() || conv.leadKey;
+
+          const summary = `Appt: ${appointmentType} – ${leadName}${stockId ? ` – ${stockId}` : ""}`;
+          const description = [
+            `LeadKey: ${conv.leadKey}`,
+            `Phone: ${conv.lead?.phone ?? conv.leadKey}`,
+            `Email: ${conv.lead?.email ?? ""}`,
+            `Stock: ${stockId ?? ""}`,
+            `VIN: ${conv.lead?.vehicle?.vin ?? ""}`,
+            `Source: ${conv.lead?.source ?? ""}`
+          ]
+            .filter(Boolean)
+            .join("\n");
+
+          const eventObj = await insertEvent(
+            cal,
+            exact.calendarId,
+            cfg.timezone,
+            summary,
+            description,
+            exact.start,
+            exact.end
+          );
+
+          conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
+          conv.appointment.status = "confirmed";
+          conv.appointment.whenText = formatSlotLocal(exact.start, cfg.timezone);
+          conv.appointment.whenIso = exact.start;
+          conv.appointment.confirmedBy = "customer";
+          conv.appointment.updatedAt = new Date().toISOString();
+          conv.appointment.acknowledged = true;
+          conv.appointment.bookedEventId = eventObj.id ?? null;
+          conv.appointment.bookedEventLink = eventObj.htmlLink ?? null;
+          conv.appointment.bookedSalespersonId = exact.salespersonId ?? null;
+          stopFollowUpCadence(conv, "appointment_booked");
+
+          if (conv.scheduler) {
+            conv.scheduler.lastSuggestedSlots = [];
+            conv.scheduler.updatedAt = new Date().toISOString();
+          }
+
+          const dealerName = (conv as any).dealerProfile?.dealerName ?? "American Harley-Davidson";
+          const addressLine = "1149 Erie Ave., North Tonawanda, NY 14120";
+          const when = formatSlotLocal(exact.start, cfg.timezone);
+          const repName = sp.name ? ` with ${sp.name}` : "";
+          const confirmText =
+            `Perfect — you’re booked for ${when}${repName}. ` +
+            `${dealerName} is at ${addressLine}.`;
+
+          appendOutbound(conv, "dealership", leadKey, confirmText, "draft_ai", eventObj.id ?? undefined);
+          return res.status(200).json({
+            ok: true,
+            parsed: true,
+            leadKey,
+            lead,
+            leadSource,
+            bucket: inferredBucket,
+            cta: inferredCta,
+            channel,
+            intent: result.intent,
+            stage: result.stage,
+            draft: confirmText,
+            booked: true
+          });
+        }
+      }
+    } catch (e: any) {
+      console.log("[exact-book] failed:", e?.message ?? e);
+      // fall through to normal draft behavior
+    }
   }
 
   const draft = result.shouldRespond ? result.draft : "Thanks — I’ll follow up shortly.";
