@@ -1028,16 +1028,19 @@ function parseExactTime(text: string): { hour24: number; minute: number; timeTex
   let hourRaw: number;
   let minute: number;
   let meridiem: string | undefined;
+  let timeText: string;
   if (m) {
     hourRaw = Number(m[1]);
     minute = Number(m[2] ?? "0");
     meridiem = m[3];
+    timeText = m[0];
   } else {
     const m2 = t.match(/\b(\d{1,2})\s*(am|pm)\b/);
     if (!m2) return null;
     hourRaw = Number(m2[1]);
     minute = 0;
     meridiem = m2[2];
+    timeText = m2[0];
   }
   if (minute < 0 || minute > 59) return null;
   if (hourRaw < 0 || hourRaw > 23) return null;
@@ -1049,7 +1052,7 @@ function parseExactTime(text: string): { hour24: number; minute: number; timeTex
     if (meridiem === "am") hour24 = hourRaw === 12 ? 0 : hourRaw;
     if (meridiem === "pm") hour24 = hourRaw === 12 ? 12 : hourRaw + 12;
   }
-  return { hour24, minute, timeText: m[0] };
+  return { hour24, minute, timeText };
 }
 
 function parseExplicitDate(text: string): { year: number; month: number; day: number } | null {
