@@ -301,6 +301,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const hasStockIntent =
     !!lead.stockId || !!lead.vin || inquiryText.includes("available");
 
+  const leadSourceLower = (leadSource ?? "").toLowerCase();
   let inferredBucket = rule.bucket;
   let inferredCta = rule.cta;
   if (!leadSource || rule.ruleName === "default") {
@@ -332,7 +333,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       inferredCta = "unknown";
     }
   }
-  const leadSourceLower = (leadSource ?? "").toLowerCase();
+  if (leadSourceLower.includes("test ride") || leadSourceLower.includes("book test ride")) {
+    inferredBucket = "test_ride";
+    inferredCta = "schedule_test_ride";
+  }
   const channel = resolveChannel({
     leadSource,
     sourceId: leadSourceId,
