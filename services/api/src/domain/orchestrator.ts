@@ -636,13 +636,16 @@ export async function orchestrateInbound(
           const preferredDate = ctx?.lead?.preferredDate;
           const preferredTime = ctx?.lead?.preferredTime;
           const requestedSeed = [preferredDate, preferredTime].filter(Boolean).join(" ").trim() || event.body;
-          const requestedDay = inferRequestedDay(requestedSeed);
+          let requestedDay = inferRequestedDay(requestedSeed);
           requestedTime =
             preferredDate && preferredTime
               ? parsePreferredDateTime(preferredDate, preferredTime, cfg.timezone)
               : null;
           if (!requestedTime) {
             requestedTime = parseRequestedDayTime(requestedSeed, cfg.timezone);
+          }
+          if (!requestedDay && requestedTime && preferredDate) {
+            requestedDay = requestedTime.dayOfWeek;
           }
           requestedDaySpecified =
             !!requestedDay && requestedDay !== "today" && requestedDay !== "tomorrow";
