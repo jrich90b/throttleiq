@@ -12,6 +12,7 @@ export type ParsedAdfLead = {
   postal?: string;
   mileage?: number;
   sellOption?: "cash" | "trade" | "either";
+  leadSourceId?: number;
   inquiry?: string;
   stockId?: string;
   vin?: string;
@@ -83,6 +84,8 @@ function parseFromComment(comment?: string) {
   const mileageMatch = clean.match(/mileage:\s*([0-9,]+)/i);
   const optionsMatch = clean.match(/options:\s*([^\n\r]+)/i);
   const optionsRaw = optionsMatch?.[1]?.trim().toLowerCase();
+  const sourceIdMatch = clean.match(/source id:\s*(\d+)/i);
+  const leadSourceId = sourceIdMatch?.[1] ? Number(sourceIdMatch[1]) : undefined;
   let sellOption: "cash" | "trade" | "either" | undefined;
   if (optionsRaw) {
     if (optionsRaw.includes("cash")) sellOption = "cash";
@@ -103,7 +106,8 @@ function parseFromComment(comment?: string) {
     purchaseTimeframe: timeframeMatch?.[1]?.trim(),
     hasMotoLicense: licenseMatch ? licenseMatch[1].toLowerCase() === "yes" : undefined,
     mileage,
-    sellOption
+    sellOption,
+    leadSourceId
   };
 }
 
@@ -257,6 +261,7 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
     postal,
     mileage,
     sellOption: parsedFromComment.sellOption,
+    leadSourceId: parsedFromComment.leadSourceId,
     inquiry,
     stockId,
     vin,

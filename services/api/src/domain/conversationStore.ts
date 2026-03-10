@@ -126,6 +126,7 @@ export type LeadProfile = {
   purchaseTimeframeMonthsEnd?: number;
   hasMotoLicense?: boolean;
   sellOption?: "cash" | "trade" | "either";
+  sourceId?: number;
   vehicle?: {
     stockId?: string;
     vin?: string;

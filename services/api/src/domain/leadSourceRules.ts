@@ -31,6 +31,7 @@ type LeadTone = "short_conversational" | "professional_privacy_forward" | "neutr
 type RuleMatch = {
   equals?: string[];
   prefix?: string[];
+  sourceIds?: number[];
 };
 
 type LeadRule = {
@@ -67,6 +68,111 @@ const RULES: LeadRule[] = [
     match: { equals: ["Facebook - RAQ"] },
     bucket: "inventory_interest",
     cta: "check_availability",
+    tone: "short_conversational"
+  },
+  {
+    name: "hdfs_coa_online",
+    match: { equals: ["HDFS COA Online"], sourceIds: [2852] },
+    bucket: "finance_prequal",
+    cta: "hdfs_coa",
+    tone: "professional_privacy_forward",
+    appointment_close: {
+      priority: "high",
+      provide_two_time_options: true,
+      call_first: true
+    }
+  },
+  {
+    name: "hdfs_marketplace_apply_credit",
+    match: { equals: ["HDFS MARKETPLACE - APPLY FOR CREDIT"], sourceIds: [2883] },
+    bucket: "finance_prequal",
+    cta: "prequalify",
+    tone: "professional_privacy_forward",
+    appointment_close: {
+      priority: "high",
+      provide_two_time_options: true,
+      call_first: true
+    }
+  },
+  {
+    name: "hdfs_marketplace_prequal",
+    match: { equals: ["HDFS MARKETPLACE - PREQUAL"], sourceIds: [2915] },
+    bucket: "finance_prequal",
+    cta: "prequalify",
+    tone: "professional_privacy_forward",
+    appointment_close: {
+      priority: "high",
+      provide_two_time_options: true,
+      call_first: true
+    }
+  },
+  {
+    name: "hdmc_new_vehicle_prequal",
+    match: { equals: ["HDMC NEW VEHICLE - PREQUALIFY"], sourceIds: [2946] },
+    bucket: "finance_prequal",
+    cta: "prequalify",
+    tone: "professional_privacy_forward",
+    appointment_close: {
+      priority: "high",
+      provide_two_time_options: true,
+      call_first: true
+    }
+  },
+  {
+    name: "dealer_lead_app_prequal",
+    match: { equals: ["DEALER LEAD APP - PREQUALIFY"], sourceIds: [2949] },
+    bucket: "finance_prequal",
+    cta: "prequalify",
+    tone: "professional_privacy_forward",
+    appointment_close: {
+      priority: "high",
+      provide_two_time_options: true,
+      call_first: true
+    }
+  },
+  {
+    name: "dfi_credit_application",
+    match: { equals: ["DFI Credit Application"], sourceIds: [2955] },
+    bucket: "finance_prequal",
+    cta: "prequalify",
+    tone: "professional_privacy_forward",
+    appointment_close: {
+      priority: "high",
+      provide_two_time_options: true,
+      call_first: true
+    }
+  },
+  {
+    name: "dfi_deal_submission",
+    match: { equals: ["DFI Deal Submission"], sourceIds: [2956] },
+    bucket: "finance_prequal",
+    cta: "prequalify",
+    tone: "professional_privacy_forward",
+    appointment_close: {
+      priority: "high",
+      provide_two_time_options: true,
+      call_first: true
+    }
+  },
+  {
+    name: "dfi_callback_request",
+    match: { equals: ["DFI Callback Request"], sourceIds: [2957] },
+    bucket: "callback_request",
+    cta: "callback",
+    tone: "professional_privacy_forward"
+  },
+  {
+    name: "hdmc_test_ride_request",
+    match: { equals: ["HD.COM ONLINE TEST RIDE REQUEST", "Test Ride Request - H-D.com (Test Ride Booking Form)", "DEALER DEMO RIDE"], sourceIds: [2814, 2864, 2813] },
+    bucket: "test_ride",
+    cta: "schedule_test_ride",
+    tone: "short_conversational"
+  },
+  {
+    name: "hdmc_request_a_quote",
+    match: { equals: ["HD.COM REQUEST A QUOTE", "HDMC Google - Request a Quote"], sourceIds: [2862, 2981] },
+    bucket: "inventory_interest",
+    cta: "request_a_quote",
     tone: "short_conversational"
   },
   {
@@ -112,26 +218,29 @@ function normalizeSource(source?: string) {
   return (source ?? "").trim();
 }
 
-function matchesRule(source: string, rule: LeadRule): boolean {
+function matchesRule(source: string, rule: LeadRule, sourceId?: number | null): boolean {
   const { equals, prefix } = rule.match;
+  if (rule.match.sourceIds && sourceId != null) {
+    if (rule.match.sourceIds.includes(sourceId)) return true;
+  }
   if (equals?.some(v => v.toLowerCase() === source.toLowerCase())) return true;
   if (prefix?.some(v => source.toLowerCase().startsWith(v.toLowerCase()))) return true;
   return false;
 }
 
-function findRule(leadSource?: string): LeadRule | null {
+function findRule(leadSource?: string, sourceId?: number | null): LeadRule | null {
   const source = normalizeSource(leadSource);
   if (!source) return null;
-  return RULES.find(rule => matchesRule(source, rule)) ?? null;
+  return RULES.find(rule => matchesRule(source, rule, sourceId)) ?? null;
 }
 
-export function resolveLeadRule(leadSource?: string): {
+export function resolveLeadRule(leadSource?: string, sourceId?: number | null): {
   bucket: LeadBucket;
   cta: LeadCTA;
   tone: LeadTone;
   ruleName: string;
 } {
-  const rule = findRule(leadSource);
+  const rule = findRule(leadSource, sourceId);
   if (rule) {
     return { bucket: rule.bucket, cta: rule.cta, tone: rule.tone, ruleName: rule.name };
   }
@@ -146,6 +255,7 @@ export function resolveLeadRule(leadSource?: string): {
 
 type ChannelOpts = {
   leadSource?: string;
+  sourceId?: number | null;
   hasSms?: boolean;
   hasEmail?: boolean;
   hasFacebook?: boolean;
@@ -162,7 +272,7 @@ function isChannelAvailable(channel: LeadChannel, opts: ChannelOpts): boolean {
 }
 
 export function resolveChannel(opts: ChannelOpts): LeadChannel {
-  const rule = findRule(opts.leadSource);
+  const rule = findRule(opts.leadSource, opts.sourceId);
   const order = rule?.channel_overrides?.fallback_order ?? CHANNEL_RESOLUTION.preferred_order;
 
   for (const channel of order) {

@@ -9,6 +9,7 @@ export type ContactEntry = {
   conversationId?: string;
   leadRef?: string;
   leadSource?: string;
+  leadSourceId?: number;
   firstName?: string;
   lastName?: string;
   name?: string;
@@ -143,6 +144,7 @@ export function upsertContact(input: Partial<ContactEntry>): ContactEntry {
     conversationId: input.conversationId,
     leadRef: input.leadRef,
     leadSource: input.leadSource,
+    leadSourceId: input.leadSourceId,
     firstName: input.firstName,
     lastName: input.lastName,
     name: input.name,
@@ -178,6 +180,7 @@ export function updateContact(
     email: normalizeEmail(patch.email ?? existing.email),
     phone: normalizePhone(patch.phone ?? existing.phone),
     leadSource: patch.leadSource ?? existing.leadSource,
+    leadSourceId: patch.leadSourceId ?? existing.leadSourceId,
     leadRef: patch.leadRef ?? existing.leadRef,
     vehicleDescription: patch.vehicleDescription ?? existing.vehicleDescription,
     updatedAt: now

@@ -143,6 +143,16 @@ function isUnknownModel(label?: string | null): boolean {
   return trimmed === "other" || /\bother\b/.test(trimmed);
 }
 
+function isCreditAppSource(source?: string | null, sourceId?: number | null): boolean {
+  const creditIds = new Set([2852, 2883, 2915, 2946, 2949, 2955, 2956, 2928, 2930]);
+  if (sourceId != null && creditIds.has(sourceId)) return true;
+  const s = (source ?? "").toLowerCase();
+  return (
+    /credit application|apply for credit|finance application|prequal|pre-qual|prequalify|coa|dfi/.test(s) ||
+    /hdfs.*prequal|hdfs.*credit/.test(s)
+  );
+}
+
 function inferAppointmentType(
   text: string
 ): "inventory_visit" | "test_ride" | "trade_appraisal" | "finance_discussion" {
@@ -288,8 +298,9 @@ export async function orchestrateInbound(
     });
   }
 
-  const isHdfsCoa = /hdfs\s*coa\s*online/.test(leadSourceRaw);
-  if (isHdfsCoa && event.provider === "sendgrid_adf") {
+  const sourceId = ctx?.lead?.sourceId ?? null;
+  const isCreditAppLead = isCreditAppSource(leadSourceRaw, sourceId);
+  if (isCreditAppLead && event.provider === "sendgrid_adf") {
     const leadFirst = ctx?.lead?.firstName?.trim() || "there";
     const yearLabel = ctx?.lead?.vehicle?.year ? `${ctx.lead.vehicle.year} ` : "";
     const modelLabel = normalizeModelLabel(ctx?.lead?.vehicle?.model ?? ctx?.lead?.vehicle?.description);

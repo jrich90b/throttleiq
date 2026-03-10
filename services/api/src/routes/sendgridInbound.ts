@@ -224,6 +224,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   });
   const meta = extractLeadMeta(adfXml);
   const leadSource = meta.leadSource?.trim() || undefined;
+  const leadSourceId = lead.leadSourceId ?? undefined;
   const timeframeInfo = parseTimeframeMonths(lead.purchaseTimeframe);
 
   // Choose a stable conversation key
@@ -236,6 +237,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   mergeConversationLead(conv, {
     leadRef,
     source: leadSource,
+    sourceId: leadSourceId,
     firstName: lead.firstName,
     lastName: lead.lastName,
     email: lead.email,
@@ -274,6 +276,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     conversationId: conv.id,
     leadRef,
     leadSource,
+    leadSourceId,
     firstName: lead.firstName,
     lastName: lead.lastName,
     name: [lead.firstName, lead.lastName].filter(Boolean).join(" ").trim() || undefined,
@@ -288,7 +291,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     lastAdfAt: new Date().toISOString()
   });
 
-  const rule = resolveLeadRule(leadSource);
+  const rule = resolveLeadRule(leadSource, leadSourceId);
   const inquiryText = (lead.inquiry ?? "").toLowerCase();
   const hasStockIntent =
     !!lead.stockId || !!lead.vin || inquiryText.includes("available");
@@ -327,6 +330,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const leadSourceLower = (leadSource ?? "").toLowerCase();
   const channel = resolveChannel({
     leadSource,
+    sourceId: leadSourceId,
     hasSms: !!lead.phone,
     hasEmail: !!lead.email,
     hasFacebook:
