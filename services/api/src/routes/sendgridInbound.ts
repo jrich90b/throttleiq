@@ -666,6 +666,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
 
   let draft = result.shouldRespond ? result.draft : "Thanks — I’ll follow up shortly.";
+  if (
+    inferredBucket === "test_ride" &&
+    typeof draft === "string" &&
+    /^Hi [^—]+— thanks for your interest\./i.test(draft)
+  ) {
+    draft = draft.replace(
+      /^Hi ([^—]+)— thanks for your interest\./i,
+      "Hi $1 — thanks for your interest in a test ride."
+    );
+  }
   const rawModel = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "";
   if (/full line/i.test(rawModel) && typeof draft === "string") {
     draft = draft
