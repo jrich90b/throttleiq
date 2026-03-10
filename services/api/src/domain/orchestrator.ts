@@ -136,6 +136,13 @@ function normalizeModelLabel(label?: string | null): string {
   return isAllCaps ? toTitleCase(trimmed) : trimmed;
 }
 
+function isUnknownModel(label?: string | null): boolean {
+  if (!label) return true;
+  const trimmed = label.trim().toLowerCase();
+  if (!trimmed) return true;
+  return trimmed === "other" || /\bother\b/.test(trimmed);
+}
+
 function inferAppointmentType(
   text: string
 ): "inventory_visit" | "test_ride" | "trade_appraisal" | "finance_discussion" {
@@ -388,6 +395,7 @@ export async function orchestrateInbound(
         leadForPrice?.vehicle?.model ??
         deriveModelFromDescription(leadForPrice?.vehicle?.description ?? null) ??
         null;
+      const modelUnknown = isUnknownModel(modelForRange);
       const stockForPrice = leadForPrice?.vehicle?.stockId ?? stockIdFromText ?? null;
       const vinForPrice = leadForPrice?.vehicle?.vin ?? null;
       const priceLookup = await findInventoryPrice({
@@ -403,6 +411,22 @@ export async function orchestrateInbound(
         price = null;
       }
       if (!price && !range) {
+        if (modelUnknown) {
+          const firstName = leadForPrice?.firstName?.trim() || "there";
+          const yearLabel = yearForRange ? `${yearForRange} ` : "";
+          const dealerProfile = await getDealerProfile();
+          const agentName = dealerProfile?.agentName ?? "Brooke";
+          const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+          const draft =
+            `Hi ${firstName} — this is ${agentName} at ${dealerName}. ` +
+            `Thanks for your Facebook quote request. I’d love to help with pricing. Which ${yearLabel}model are you interested in?`;
+          return finalize({
+            intent,
+            stage: "ENGAGED",
+            shouldRespond: true,
+            draft
+          });
+        }
         const ack =
           "Got it — I’ll have a manager pull the exact pricing and follow up shortly. What’s the best time to reach you today?";
         return finalize({
