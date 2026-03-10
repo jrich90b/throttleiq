@@ -68,29 +68,43 @@ async function openLeadByRef(page: Page, leadRef: string) {
   await openActions.waitFor({ state: "visible", timeout: 10_000 });
   await openActions.click();
 
-  // If the bubble backdrop is intercepting clicks, dismiss it before selecting the menu item.
+  // If the bubble backdrop/loader is intercepting clicks, dismiss it before selecting the menu item.
   const bubbleBackdrop = page.locator("#bubbleBackdrop");
+  const bubbleLoader = page.locator("#bubbleLoader");
   try {
     if (await bubbleBackdrop.isVisible({ timeout: 1000 })) {
-      await bubbleBackdrop.click();
-      await bubbleBackdrop.waitFor({ state: "hidden", timeout: 5_000 });
+      await bubbleBackdrop.click({ force: true });
+      await bubbleBackdrop.waitFor({ state: "hidden", timeout: 8_000 });
     }
   } catch {
     // best-effort: continue even if we couldn't dismiss the backdrop
   }
+  try {
+    await bubbleLoader.waitFor({ state: "hidden", timeout: 8_000 });
+  } catch {
+    // continue even if loader doesn't fully hide
+  }
 
   // Now the bubble option should exist (selector can vary).
-  try {
-    const menuItem = page.locator("#pencilPopupInner #pencilEventButton").first();
-    await menuItem.waitFor({ state: "visible", timeout: 10_000 });
-    await menuItem.click({ force: true });
-  } catch {
-    // If the menu didn't open, try clicking the action cell and open menu again
-    await actionCell.click();
-    await openActions.click();
-    const fallback = page.locator("#pencilPopupInner #pencilEventButton, text=/Event Customer Contact/i").first();
-    await fallback.waitFor({ state: "visible", timeout: 10_000 });
-    await fallback.click({ force: true });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const menuItem = page.locator("#pencilPopupInner #pencilEventButton").first();
+      await menuItem.waitFor({ state: "visible", timeout: 10_000 });
+      await menuItem.click({ force: true });
+      break;
+    } catch {
+      // If the menu didn't open, try clicking the action cell and open menu again
+      await actionCell.click({ force: true });
+      await openActions.click({ force: true });
+      try {
+        const fallback = page.locator("#pencilPopupInner #pencilEventButton, text=/Event Customer Contact/i").first();
+        await fallback.waitFor({ state: "visible", timeout: 10_000 });
+        await fallback.click({ force: true });
+        break;
+      } catch {
+        if (attempt === 2) throw new Error("TLP menu click failed after retries");
+      }
+    }
   }
 
   // Wait for the modal content to be ready by waiting for Submit
