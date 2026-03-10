@@ -561,10 +561,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
             : "1149 Erie Ave., North Tonawanda, NY 14120";
           const when = formatSlotLocal(exact.start, cfg.timezone);
           const repName = sp.name ? ` with ${sp.name}` : "";
-          const firstName = conv.lead?.firstName ?? "";
+          const firstNameGreeting = conv.lead?.firstName ?? "";
           const model = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "";
-          const greeting = firstName
-            ? `Hi ${firstName} — thanks for booking a test ride${model ? ` on the ${model}` : ""}. `
+          const greeting = firstNameGreeting
+            ? `Hi ${firstNameGreeting} — thanks for booking a test ride${model ? ` on the ${model}` : ""}. `
             : `Thanks for booking a test ride${model ? ` on the ${model}` : ""}. `;
           const intro = `This is ${agentName} at ${dealerName}. `;
           const confirmText =
