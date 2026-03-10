@@ -21,6 +21,8 @@ export type ParsedAdfLead = {
   vehicleColor?: string;
   purchaseTimeframe?: string;
   hasMotoLicense?: boolean;
+  preferredDate?: string;
+  preferredTime?: string;
 };
 
 function asArray<T>(v: T | T[] | undefined): T[] {
@@ -84,6 +86,8 @@ function parseFromComment(comment?: string) {
   const mileageMatch = clean.match(/mileage:\s*([0-9,]+)/i);
   const optionsMatch = clean.match(/options:\s*([^\n\r]+)/i);
   const optionsRaw = optionsMatch?.[1]?.trim().toLowerCase();
+  const preferredDateMatch = clean.match(/preferred date:\s*([^\n\r]+)/i);
+  const preferredTimeMatch = clean.match(/preferred time:\s*([^\n\r]+)/i);
   const sourceIdMatch = clean.match(/source id:\s*(\d+)/i);
   const leadSourceId = sourceIdMatch?.[1] ? Number(sourceIdMatch[1]) : undefined;
   let sellOption: "cash" | "trade" | "either" | undefined;
@@ -107,7 +111,9 @@ function parseFromComment(comment?: string) {
     hasMotoLicense: licenseMatch ? licenseMatch[1].toLowerCase() === "yes" : undefined,
     mileage,
     sellOption,
-    leadSourceId
+    leadSourceId,
+    preferredDate: preferredDateMatch?.[1]?.trim(),
+    preferredTime: preferredTimeMatch?.[1]?.trim()
   };
 }
 
@@ -269,6 +275,8 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
     vehicleDescription: desc,
     vehicleColor,
     purchaseTimeframe: parsedFromComment.purchaseTimeframe,
-    hasMotoLicense: parsedFromComment.hasMotoLicense
+    hasMotoLicense: parsedFromComment.hasMotoLicense,
+    preferredDate: parsedFromComment.preferredDate,
+    preferredTime: parsedFromComment.preferredTime
   };
 }

@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import { dataPath } from "./dataDir.js";
+
 export type LeadChannel = "sms" | "email" | "facebook_messenger" | "phone" | "task";
 export type LeadBucket =
   | "inventory_interest"
@@ -56,11 +59,89 @@ type LeadRule = {
   };
 };
 
+type LeadSourceCatalogEntry = {
+  leadType?: string;
+  sourceType?: string;
+  source?: string;
+  sourceId?: number;
+};
+
 const CHANNEL_RESOLUTION = {
   preferred_order: ["sms", "email", "facebook_messenger"] as LeadChannel[],
   fallback_if_missing_contact: "create_task",
   create_task_reason_codes: ["missing_phone_email", "facebook_only_lead", "crm_missing_fields"]
 };
+
+type CatalogIndex = {
+  entries: LeadSourceCatalogEntry[];
+  byId: Map<number, LeadSourceCatalogEntry>;
+  bySource: Map<string, LeadSourceCatalogEntry>;
+};
+
+let catalogCache: CatalogIndex | null = null;
+
+function loadCatalog(): CatalogIndex {
+  if (catalogCache) return catalogCache;
+
+  const entries: LeadSourceCatalogEntry[] = [];
+  const byId = new Map<number, LeadSourceCatalogEntry>();
+  const bySource = new Map<string, LeadSourceCatalogEntry>();
+
+  const files = ["lead_sources/hdmc.json"];
+  let crm = process.env.CRM_PROVIDER?.trim().toLowerCase();
+  if (!crm) {
+    try {
+      const profilePath = dataPath("dealer_profile.json");
+      if (fs.existsSync(profilePath)) {
+        const profile = JSON.parse(fs.readFileSync(profilePath, "utf8"));
+        const fromProfile = String(profile?.crmProvider ?? "").trim().toLowerCase();
+        if (fromProfile) crm = fromProfile;
+      }
+    } catch {
+      // ignore dealer profile read errors
+    }
+  }
+  if (crm) files.push(`lead_sources/${crm}.json`);
+
+  for (const rel of files) {
+    const fullPath = dataPath(rel);
+    if (!fs.existsSync(fullPath)) continue;
+    try {
+      const raw = fs.readFileSync(fullPath, "utf8");
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) continue;
+      for (const entry of parsed) {
+        if (!entry || typeof entry !== "object") continue;
+        const sourceId =
+          typeof entry.sourceId === "number"
+            ? entry.sourceId
+            : Number.isFinite(Number(entry.sourceId))
+            ? Number(entry.sourceId)
+            : undefined;
+        const source = typeof entry.source === "string" ? entry.source : undefined;
+        const normalizedSource = source?.trim() ? source.trim().toLowerCase() : undefined;
+        const leadEntry: LeadSourceCatalogEntry = {
+          leadType: typeof entry.leadType === "string" ? entry.leadType : undefined,
+          sourceType: typeof entry.sourceType === "string" ? entry.sourceType : undefined,
+          source,
+          sourceId
+        };
+        entries.push(leadEntry);
+        if (sourceId != null && !Number.isNaN(sourceId) && !byId.has(sourceId)) {
+          byId.set(sourceId, leadEntry);
+        }
+        if (normalizedSource && !bySource.has(normalizedSource)) {
+          bySource.set(normalizedSource, leadEntry);
+        }
+      }
+    } catch {
+      // ignore malformed catalog entries
+    }
+  }
+
+  catalogCache = { entries, byId, bySource };
+  return catalogCache;
+}
 
 const RULES: LeadRule[] = [
   {
@@ -218,6 +299,61 @@ function normalizeSource(source?: string) {
   return (source ?? "").trim();
 }
 
+function inferFromCatalog(entry: LeadSourceCatalogEntry): LeadRule | null {
+  const source = entry.source ?? "";
+  const normalized = source.toLowerCase();
+
+  const mkRule = (bucket: LeadBucket, cta: LeadCTA, tone: LeadTone): LeadRule => ({
+    name: `catalog_${entry.sourceId ?? (normalized || "unknown")}`,
+    match: { sourceIds: entry.sourceId ? [entry.sourceId] : undefined, equals: source ? [source] : undefined },
+    bucket,
+    cta,
+    tone
+  });
+
+  if (/test ride/.test(normalized)) {
+    return mkRule("test_ride", "schedule_test_ride", "short_conversational");
+  }
+
+  if (/credit|prequal|pre-qual|finance|apply for credit|credit app|coa/.test(normalized)) {
+    return mkRule("finance_prequal", /coa/.test(normalized) ? "hdfs_coa" : "prequalify", "professional_privacy_forward");
+  }
+
+  if (/sell my bike|sell your bike|sell your vehicle/.test(normalized)) {
+    return mkRule("trade_in_sell", "sell_my_bike", "short_conversational");
+  }
+
+  if (/value my trade|value your trade|trade[- ]?in|trade\b/.test(normalized)) {
+    return mkRule("trade_in_sell", "value_my_trade", "short_conversational");
+  }
+
+  if (/service/.test(normalized)) {
+    return mkRule("service", "service_request", "short_conversational");
+  }
+
+  if (/sweepstakes|sweeps/.test(normalized)) {
+    return mkRule("event_promo", "sweepstakes", "short_conversational");
+  }
+
+  if (/event|rsvp|demo ride/.test(normalized)) {
+    return mkRule("event_promo", "event_rsvp", "short_conversational");
+  }
+
+  if (/request a quote|get price|price|quote|estimate payment/.test(normalized)) {
+    return mkRule("inventory_interest", "request_a_quote", "short_conversational");
+  }
+
+  if (/check availability|request details|request more info|bike finder|inventory/.test(normalized)) {
+    return mkRule("inventory_interest", "check_availability", "short_conversational");
+  }
+
+  if (/contact|ask a question|general inquiry/.test(normalized)) {
+    return mkRule("general_inquiry", "contact_us", "short_conversational");
+  }
+
+  return null;
+}
+
 function matchesRule(source: string, rule: LeadRule, sourceId?: number | null): boolean {
   const { equals, prefix } = rule.match;
   if (rule.match.sourceIds && sourceId != null) {
@@ -230,8 +366,21 @@ function matchesRule(source: string, rule: LeadRule, sourceId?: number | null): 
 
 function findRule(leadSource?: string, sourceId?: number | null): LeadRule | null {
   const source = normalizeSource(leadSource);
-  if (!source) return null;
-  return RULES.find(rule => matchesRule(source, rule, sourceId)) ?? null;
+  const directRule = RULES.find(rule => matchesRule(source, rule, sourceId)) ?? null;
+  if (directRule) return directRule;
+
+  const catalog = loadCatalog();
+  if (sourceId != null) {
+    const entry = catalog.byId.get(sourceId);
+    if (entry) return inferFromCatalog(entry);
+  }
+
+  if (source) {
+    const entry = catalog.bySource.get(source.toLowerCase());
+    if (entry) return inferFromCatalog(entry);
+  }
+
+  return null;
 }
 
 export function resolveLeadRule(leadSource?: string, sourceId?: number | null): {

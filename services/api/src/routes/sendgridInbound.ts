@@ -240,6 +240,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     sourceId: leadSourceId,
     firstName: lead.firstName,
     lastName: lead.lastName,
+    preferredDate: lead.preferredDate,
+    preferredTime: lead.preferredTime,
     email: lead.email,
     phone: lead.phone,
     street: lead.street,

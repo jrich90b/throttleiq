@@ -120,6 +120,8 @@ export type LeadProfile = {
   city?: string;
   region?: string;
   postal?: string;
+  preferredDate?: string;
+  preferredTime?: string;
   channelPreference?: "sms" | "email" | "facebook_messenger";
   purchaseTimeframe?: string;
   purchaseTimeframeMonthsStart?: number;
@@ -1043,11 +1045,25 @@ function parseExactTime(text: string): { hour24: number; minute: number; timeTex
   return { hour24, minute, timeText: m[0] };
 }
 
+function parseExplicitDate(text: string): { year: number; month: number; day: number } | null {
+  const m = text.match(/\b(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?\b/);
+  if (!m) return null;
+  const month = Number(m[1]);
+  const day = Number(m[2]);
+  let year = m[3] ? Number(m[3]) : new Date().getFullYear();
+  if (m[3] && m[3].length === 2) {
+    year = 2000 + year;
+  }
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return { year, month, day };
+}
+
 export function parseRequestedDayTime(
   text: string,
   timeZone: string
 ): { year: number; month: number; day: number; hour24: number; minute: number; dayOfWeek: string } | null {
   const t = text.toLowerCase();
+  const explicitDate = parseExplicitDate(t);
   const dayToken = parseDayToken(t);
   let time = parseExactTime(t);
   if (!time && dayToken && /(this time|same time|same time tomorrow|this time tomorrow)/.test(t)) {
@@ -1062,7 +1078,20 @@ export function parseRequestedDayTime(
     }
     time = { hour24, minute, timeText: "this time" };
   }
-  if (!dayToken || !time) return null;
+  if (!time) return null;
+  if (explicitDate) {
+    const base = new Date(Date.UTC(explicitDate.year, explicitDate.month - 1, explicitDate.day, 12, 0));
+    const parts = getZonedParts(base, timeZone);
+    return {
+      year: explicitDate.year,
+      month: explicitDate.month,
+      day: explicitDate.day,
+      hour24: time.hour24,
+      minute: time.minute,
+      dayOfWeek: weekdayFull((parts.weekday ?? "").slice(0, 3))
+    };
+  }
+  if (!dayToken) return null;
 
   const now = new Date();
   const nowParts = getZonedParts(now, timeZone);

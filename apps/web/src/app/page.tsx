@@ -147,6 +147,7 @@ export default function Home() {
   const [dealerProfileForm, setDealerProfileForm] = useState({
     dealerName: "",
     agentName: "",
+    crmProvider: "",
     phone: "",
     website: "",
     addressLine1: "",
@@ -369,6 +370,7 @@ export default function Home() {
         setDealerProfileForm({
           dealerName: profile.dealerName ?? "",
           agentName: profile.agentName ?? "",
+          crmProvider: profile.crmProvider ?? "",
           phone: profile.phone ?? "",
           website: profile.website ?? "",
           addressLine1: profile.address?.line1 ?? "",
@@ -961,6 +963,7 @@ export default function Home() {
       const payload = {
         dealerName: dealerProfileForm.dealerName.trim(),
         agentName: dealerProfileForm.agentName.trim(),
+        crmProvider: dealerProfileForm.crmProvider.trim(),
         phone: dealerProfileForm.phone.trim(),
         website: dealerProfileForm.website.trim(),
         address: {
@@ -2632,6 +2635,18 @@ export default function Home() {
                     value={dealerProfileForm.agentName}
                     onChange={e => setDealerProfileForm({ ...dealerProfileForm, agentName: e.target.value })}
                   />
+                  <select
+                    className="border rounded px-3 py-2 text-sm"
+                    value={dealerProfileForm.crmProvider}
+                    onChange={e => setDealerProfileForm({ ...dealerProfileForm, crmProvider: e.target.value })}
+                  >
+                    <option value="">CRM provider (optional)</option>
+                    <option value="tlp">TLP</option>
+                    <option value="vin">VIN</option>
+                    <option value="elead">eLead</option>
+                    <option value="dealersocket">DealerSocket</option>
+                    <option value="adf">Generic ADF</option>
+                  </select>
                   <input
                     className="border rounded px-3 py-2 text-sm"
                     placeholder="Phone"

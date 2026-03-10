@@ -633,12 +633,18 @@ export async function orchestrateInbound(
 
           const now = new Date();
           const candidatesByDay = generateCandidateSlots(cfg, now, durationMinutes, 14);
-          const requestedDay = inferRequestedDay(event.body);
-          requestedTime = parseRequestedDayTime(event.body, cfg.timezone);
+          const preferredDate = ctx?.lead?.preferredDate;
+          const preferredTime = ctx?.lead?.preferredTime;
+          const requestedSeed = [preferredDate, preferredTime].filter(Boolean).join(" ").trim() || event.body;
+          const requestedDay = inferRequestedDay(requestedSeed);
+          requestedTime = parseRequestedDayTime(requestedSeed, cfg.timezone);
           requestedDaySpecified =
             !!requestedDay && requestedDay !== "today" && requestedDay !== "tomorrow";
           if (requestedDaySpecified) {
             requestedDayKey = requestedDay;
+          } else if (requestedTime && preferredDate) {
+            requestedDaySpecified = true;
+            requestedDayKey = requestedTime.dayOfWeek;
           } else if (requestedDay === "today" || requestedDay === "tomorrow") {
             const d = new Date(now);
             d.setDate(d.getDate() + (requestedDay === "tomorrow" ? 1 : 0));
