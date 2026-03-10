@@ -489,6 +489,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (result.requestedTime && !conv.appointment?.bookedEventId) {
     try {
       const cfg = await getSchedulerConfig();
+      console.log("[sendgrid inbound] scheduler cfg", {
+        salespeople: (cfg.salespeople ?? []).length,
+        preferred: (cfg.preferredSalespeople ?? []).length,
+        timezone: cfg.timezone,
+        appointmentTypes: Object.keys(cfg.appointmentTypes ?? {})
+      });
       const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
       const preferredSalespeople = getPreferredSalespeople(cfg);
       const salespeople = cfg.salespeople ?? [];
@@ -517,6 +523,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           durationMinutes,
           expanded
         );
+        if (!exact) {
+          console.log("[sendgrid inbound] exact slot not found", {
+            salespersonId: sp.id,
+            calendarId: sp.calendarId,
+            requestedTime: result.requestedTime
+          });
+        }
 
         if (exact) {
           const stockId = conv.lead?.vehicle?.stockId ?? null;
