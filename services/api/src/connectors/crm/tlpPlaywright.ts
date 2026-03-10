@@ -86,11 +86,13 @@ async function openLeadByRef(page: Page, leadRef: string) {
   }
 
   // Now the bubble option should exist (selector can vary).
+  let clicked = false;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const menuItem = page.locator("#pencilPopupInner #pencilEventButton").first();
       await menuItem.waitFor({ state: "visible", timeout: 10_000 });
       await menuItem.click({ force: true });
+      clicked = true;
       break;
     } catch {
       // If the menu didn't open, try clicking the action cell and open menu again
@@ -100,10 +102,30 @@ async function openLeadByRef(page: Page, leadRef: string) {
         const fallback = page.locator("#pencilPopupInner #pencilEventButton, text=/Event Customer Contact/i").first();
         await fallback.waitFor({ state: "visible", timeout: 10_000 });
         await fallback.click({ force: true });
+        clicked = true;
         break;
       } catch {
-        if (attempt === 2) throw new Error("TLP menu click failed after retries");
+        await page.waitForTimeout(300);
       }
+    }
+  }
+
+  if (!clicked) {
+    // Last-resort: use JS to click the event button if present
+    const jsClicked = await page.evaluate(() => {
+      const btn =
+        document.querySelector("#pencilPopupInner #pencilEventButton") ||
+        Array.from(document.querySelectorAll("a")).find(a =>
+          /Event Customer Contact/i.test(a.textContent || "")
+        );
+      if (btn && (btn as HTMLElement).click) {
+        (btn as HTMLElement).click();
+        return true;
+      }
+      return false;
+    });
+    if (!jsClicked) {
+      throw new Error("TLP menu click failed after retries");
     }
   }
 
