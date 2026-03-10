@@ -1059,6 +1059,26 @@ function parseExplicitDate(text: string): { year: number; month: number; day: nu
   return { year, month, day };
 }
 
+export function parsePreferredDateTime(
+  dateText: string,
+  timeText: string,
+  timeZone: string
+): { year: number; month: number; day: number; hour24: number; minute: number; dayOfWeek: string } | null {
+  const date = parseExplicitDate(dateText.toLowerCase());
+  const time = parseExactTime(timeText.toLowerCase());
+  if (!date || !time) return null;
+  const base = new Date(Date.UTC(date.year, date.month - 1, date.day, 12, 0));
+  const parts = getZonedParts(base, timeZone);
+  return {
+    year: date.year,
+    month: date.month,
+    day: date.day,
+    hour24: time.hour24,
+    minute: time.minute,
+    dayOfWeek: weekdayFull((parts.weekday ?? "").slice(0, 3))
+  };
+}
+
 export function parseRequestedDayTime(
   text: string,
   timeZone: string

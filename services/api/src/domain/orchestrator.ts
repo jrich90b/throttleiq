@@ -7,7 +7,7 @@ import { checkInventorySalePendingByUrl, type InventoryStatus } from "./inventor
 import { findInventoryPrice, findPriceRange } from "./inventoryFeed.js";
 import { getDealerProfile } from "./dealerProfile.js";
 import type { LeadProfile } from "./conversationStore.js";
-import { parseRequestedDayTime } from "./conversationStore.js";
+import { parsePreferredDateTime, parseRequestedDayTime } from "./conversationStore.js";
 import { getSchedulerConfig, dayKey, getPreferredSalespeople } from "./schedulerConfig.js";
 import { getAuthedCalendarClient, queryFreeBusy } from "./googleCalendar.js";
 import {
@@ -637,7 +637,13 @@ export async function orchestrateInbound(
           const preferredTime = ctx?.lead?.preferredTime;
           const requestedSeed = [preferredDate, preferredTime].filter(Boolean).join(" ").trim() || event.body;
           const requestedDay = inferRequestedDay(requestedSeed);
-          requestedTime = parseRequestedDayTime(requestedSeed, cfg.timezone);
+          requestedTime =
+            preferredDate && preferredTime
+              ? parsePreferredDateTime(preferredDate, preferredTime, cfg.timezone)
+              : null;
+          if (!requestedTime) {
+            requestedTime = parseRequestedDayTime(requestedSeed, cfg.timezone);
+          }
           requestedDaySpecified =
             !!requestedDay && requestedDay !== "today" && requestedDay !== "tomorrow";
           if (requestedDaySpecified) {
