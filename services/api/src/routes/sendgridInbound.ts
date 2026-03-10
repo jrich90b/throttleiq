@@ -562,7 +562,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           const when = formatSlotLocal(exact.start, cfg.timezone);
           const repName = sp.name ? ` with ${sp.name}` : "";
           const firstNameGreeting = conv.lead?.firstName ?? "";
-          const model = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "";
+          const rawModel = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "";
+          const model = /full line/i.test(rawModel) ? "" : rawModel;
           const greeting = firstNameGreeting
             ? `Hi ${firstNameGreeting} — thanks for booking a test ride${model ? ` on the ${model}` : ""}. `
             : `Thanks for booking a test ride${model ? ` on the ${model}` : ""}. `;
