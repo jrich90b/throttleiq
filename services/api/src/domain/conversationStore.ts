@@ -143,6 +143,15 @@ export type LeadProfile = {
     listPrice?: number;
     priceRange?: { min: number; max: number; count: number };
   };
+  tradeVehicle?: {
+    year?: string;
+    make?: string;
+    model?: string;
+    vin?: string;
+    mileage?: number;
+    color?: string;
+    description?: string;
+  };
 };
 
 export type Message = {
@@ -445,11 +454,15 @@ export function mergeConversationLead(conv: Conversation, patch: Partial<LeadPro
   const mergedVehicle = patch.vehicle
     ? { ...(existingLead.vehicle ?? {}), ...patch.vehicle }
     : existingLead.vehicle;
+  const mergedTradeVehicle = patch.tradeVehicle
+    ? { ...(existingLead.tradeVehicle ?? {}), ...patch.tradeVehicle }
+    : existingLead.tradeVehicle;
 
   conv.lead = {
     ...existingLead,
     ...patch,
-    vehicle: mergedVehicle
+    vehicle: mergedVehicle,
+    tradeVehicle: mergedTradeVehicle
   };
   conv.updatedAt = nowIso();
   scheduleSave();

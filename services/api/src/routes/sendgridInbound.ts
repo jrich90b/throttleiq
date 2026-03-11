@@ -270,7 +270,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       color: lead.vehicleColor,
       description: lead.vehicleDescription,
       mileage: lead.mileage
-    }
+    },
+    tradeVehicle: lead.tradeVehicle
   });
   const stockId = lead.stockId?.trim() || undefined;
   conv.lead = conv.lead ?? {};
@@ -381,6 +382,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       lead.vin ? `VIN: ${lead.vin}` : null,
       lead.year ? `Year: ${lead.year}` : null,
       lead.vehicleDescription ? `Vehicle: ${lead.vehicleDescription}` : null,
+      lead.tradeVehicle?.description || lead.tradeVehicle?.year
+        ? `Trade-In: ${[lead.tradeVehicle?.year, lead.tradeVehicle?.description ?? lead.tradeVehicle?.model]
+            .filter(Boolean)
+            .join(" ")}`
+        : null,
       "",
       `Inquiry:`,
       inquiryText

@@ -273,6 +273,31 @@ export async function orchestrateInbound(
   }
 
   const leadSourceRaw = (ctx?.leadSource ?? ctx?.lead?.source ?? "").toLowerCase();
+  const isTradeValueLead =
+    ctx?.bucket === "trade_in_sell" &&
+    (ctx?.cta === "value_my_trade" || ctx?.cta === "trade_in_value");
+  if (isTradeValueLead) {
+    const dealerProfile = await getDealerProfile();
+    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const leadFirst = ctx?.lead?.firstName?.trim() || "there";
+    const trade = ctx?.lead?.tradeVehicle;
+    const tradeYear = trade?.year ? `${trade.year} ` : "";
+    const tradeModel = normalizeModelLabel(trade?.model ?? trade?.description);
+    const tradeLabel = (tradeYear + tradeModel).trim();
+    const opening = tradeLabel
+      ? `Hi ${leadFirst} — thanks for using our trade‑in estimator on your ${tradeLabel}. `
+      : `Hi ${leadFirst} — thanks for using our trade‑in estimator. `;
+    const disclaimer =
+      "The estimate is a guide; final trade value comes from an in‑person evaluation and can be higher. ";
+    const close = "I can set up a trade appraisal — what day and time works best?";
+    return finalize({
+      intent: "TRADE_IN",
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft: `${opening}This is ${agentName} at ${dealerName}. ${disclaimer}${close}`
+    });
+  }
   const isSellMyBike = /sell my bike/.test(leadSourceRaw);
   if (isSellMyBike) {
     const leadFirst = ctx?.lead?.firstName?.trim() || "there";

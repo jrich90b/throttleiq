@@ -23,6 +23,15 @@ export type ParsedAdfLead = {
   hasMotoLicense?: boolean;
   preferredDate?: string;
   preferredTime?: string;
+  tradeVehicle?: {
+    year?: string;
+    make?: string;
+    model?: string;
+    vin?: string;
+    mileage?: number;
+    color?: string;
+    description?: string;
+  };
 };
 
 function asArray<T>(v: T | T[] | undefined): T[] {
@@ -60,6 +69,12 @@ function pickVehicle(v: any): any {
   if (byInterest) return byInterest;
   const byStock = v.find(x => text(x?.stock) || text(x?.vin) || text(x?.year));
   return byStock ?? v[0] ?? {};
+}
+
+function pickTradeVehicle(v: any): any | null {
+  if (!Array.isArray(v)) return null;
+  const byInterest = v.find(x => (attr(x, "interest") ?? "").toLowerCase().includes("trade"));
+  return byInterest ?? null;
 }
 
 function stripHtml(s: string): string {
@@ -224,6 +239,7 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
 
   const vehicleRaw = prospect?.vehicle ?? request?.vehicle ?? {};
   const vehicle = pickVehicle(vehicleRaw);
+  const tradeVehicleRaw = pickTradeVehicle(vehicleRaw);
   const vin = text(vehicle?.vin) ?? parsedFromComment.vin;
   const stockId =
     text(vehicle?.stock) ?? text(vehicle?.stock_id) ?? text(vehicle?.stockid) ?? parsedFromComment.stockId;
@@ -255,6 +271,29 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
     parsedFromComment.phone ??
     cleaned.match(/<phone[^>]*>([^<]+)<\/phone>/i)?.[1]?.trim() ??
     phoneFromText;
+
+  let tradeVehicle: ParsedAdfLead["tradeVehicle"] | undefined;
+  if (tradeVehicleRaw) {
+    const tradeYear = text(tradeVehicleRaw?.year);
+    const tradeMake = text(tradeVehicleRaw?.make);
+    const tradeModel = text(tradeVehicleRaw?.model);
+    const tradeVin = text(tradeVehicleRaw?.vin);
+    const tradeOdometerRaw = text(tradeVehicleRaw?.odometer);
+    const tradeMileage =
+      tradeOdometerRaw != null ? Number(String(tradeOdometerRaw).replace(/,/g, "")) : undefined;
+    const tradeDesc =
+      [tradeMake, tradeModel].filter(Boolean).join(" ") ||
+      text(tradeVehicleRaw?.description) ||
+      undefined;
+    tradeVehicle = {
+      year: tradeYear,
+      make: tradeMake,
+      model: tradeModel,
+      vin: tradeVin,
+      mileage: tradeMileage,
+      description: tradeDesc
+    };
+  }
   return {
     leadRef,
     firstName,
@@ -277,6 +316,7 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
     purchaseTimeframe: parsedFromComment.purchaseTimeframe,
     hasMotoLicense: parsedFromComment.hasMotoLicense,
     preferredDate: parsedFromComment.preferredDate,
-    preferredTime: parsedFromComment.preferredTime
+    preferredTime: parsedFromComment.preferredTime,
+    tradeVehicle
   };
 }
