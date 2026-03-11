@@ -726,7 +726,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   // Store the draft as an outbound message (suggest-only for now)
   appendOutbound(conv, "dealership", leadKey, draft, "draft_ai");
-  if (!conv.followUpCadence?.status && !conv.appointment?.bookedEventId) {
+  const shouldStartCadence =
+    !conv.followUpCadence?.status &&
+    !conv.appointment?.bookedEventId &&
+    conv.classification?.bucket !== "finance_prequal" &&
+    conv.classification?.cta !== "hdfs_coa" &&
+    conv.classification?.cta !== "prequalify";
+  if (shouldStartCadence) {
     const cfg = await getSchedulerConfig();
     const monthsStart = conv.lead?.purchaseTimeframeMonthsStart;
     if (monthsStart && monthsStart >= 1) {
