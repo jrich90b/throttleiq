@@ -2986,14 +2986,17 @@ if (authToken && signature) {
           if (year) conv.lead.vehicle.year = year;
           conv.lead.vehicle.model = model ?? conv.lead.vehicle.model;
           if (color) conv.lead.vehicle.color = color;
+          const imageUrl =
+            matches.find(m => Array.isArray(m.images) && m.images.length)?.images?.[0] ?? null;
           const reply =
             year
               ? `Yes — we do have ${year} ${model}${color ? ` in ${color}` : ""} in stock. Would you like to stop by to take a look?`
               : `Yes — we do have ${model} in stock. Any specific year, trim, or color you’re after?`;
-          appendOutbound(conv, event.to, event.from, reply, "twilio");
-          const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<Response>\\n  <Message>${escapeXml(
+          appendOutbound(conv, event.to, event.from, reply, "twilio", undefined, imageUrl ? [imageUrl] : undefined);
+          const mediaTag = imageUrl ? `\n    <Media>${escapeXml(imageUrl)}</Media>` : "";
+          const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<Response>\\n  <Message>\\n    <Body>${escapeXml(
             reply
-          )}</Message>\\n</Response>`;
+          )}</Body>${mediaTag}\\n  </Message>\\n</Response>`;
           return res.status(200).type("text/xml").send(twiml);
         }
         addTodo(
