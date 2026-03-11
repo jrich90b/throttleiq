@@ -2271,6 +2271,26 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
+  const deferIndefinitely = /i('| )?ll let you know|i will let you know|i('| )?ll get back to you|i will get back to you|reach out when i can/i.test(
+    event.body ?? ""
+  );
+  if (deferIndefinitely) {
+    stopFollowUpCadence(conv, "customer_deferred");
+    setFollowUpMode(conv, "paused_indefinite", "customer_deferred");
+    const reply = "Sounds good — I’ll be here when you’re ready.";
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+
   const isAffirmative = (text: string) =>
     /\b(yes|yep|yeah|yup|ok|okay|sure|confirmed|confirm|works|that works|sounds good)\b/i.test(
       text
