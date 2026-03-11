@@ -581,6 +581,19 @@ export default function Home() {
     if (lastDraftIdx > lastSentIdx) return selectedConv.messages[lastDraftIdx];
     return null;
   }, [selectedConv]);
+  const displaySendBody = useMemo(() => {
+    if (sendBodySource === "user") return sendBody;
+    if (pendingDraft?.body) return pendingDraft.body;
+    return sendBody;
+  }, [sendBodySource, sendBody, pendingDraft?.body]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    if (pendingDraft) return;
+    const listItem = conversations.find(c => c.id === selectedId);
+    if (!listItem?.pendingDraft) return;
+    void loadConversation(selectedId);
+  }, [conversations, selectedId, pendingDraft]);
 
   const filteredContacts = useMemo(() => {
     const q = contactQuery.trim().toLowerCase();
@@ -770,10 +783,16 @@ export default function Home() {
   }, [pendingDraft?.id]);
 
   useEffect(() => {
+    if (pendingDraft) {
+      setSendBody(pendingDraft.body);
+      setSendBodySource("draft");
+      setLastDraftId(pendingDraft.id ?? null);
+      return;
+    }
     setSendBody("");
     setSendBodySource("system");
     setLastDraftId(null);
-  }, [selectedConv?.id]);
+  }, [selectedConv?.id, pendingDraft?.id]);
 
   async function markTodoDone(todo: TodoItem, resolution = "resume") {
     await fetch("/api/todos", {
@@ -846,7 +865,8 @@ export default function Home() {
 
   async function send() {
     if (!selectedConv) return;
-    const body = sendBody.trim();
+    const bodySource = sendBodySource === "user" ? sendBody : (pendingDraft?.body ?? sendBody);
+    const body = bodySource.trim();
     if (!body) return;
     const draftId = pendingDraft?.id;
     const edited = !!pendingDraft && pendingDraft.body.trim() !== body.trim();
@@ -3788,7 +3808,7 @@ export default function Home() {
 
             <div className="mt-6 flex gap-2 items-start">
               <textarea
-                value={sendBody}
+                value={displaySendBody}
                 onChange={e => {
                   setSendBody(e.target.value);
                   setSendBodySource("user");
