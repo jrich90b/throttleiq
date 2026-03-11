@@ -595,7 +595,7 @@ export async function orchestrateInbound(
 
       const apptBooked = appointment?.bookedEventId;
       const apptConfirmed = !!apptBooked;
-      const holding = followUp?.mode === "holding_inventory";
+      const holding = followUp?.mode === "holding_inventory" || followUp?.mode === "manual_handoff";
 
       console.log("[scheduler] gate", {
         provider: event.provider,

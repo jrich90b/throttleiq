@@ -2889,11 +2889,34 @@ if (authToken && signature) {
     cta: conv.classification?.cta ?? null,
     bucket: conv.classification?.bucket ?? null
   });
+  const lastOutbound = [...(conv.messages ?? [])]
+    .filter(m => m.direction === "out")
+    .slice(-1)[0];
+  const outboundHoldNotice =
+    lastOutbound?.body &&
+    /(on hold|hold with deposit|deposit|sale pending|pending|sold|already sold)/i.test(lastOutbound.body);
+  const schedulingBlocked =
+    conv.followUp?.mode === "manual_handoff" ||
+    conv.followUp?.mode === "holding_inventory" ||
+    outboundHoldNotice;
+  const shortAck =
+    /^(ok|okay|k|kk|thanks|thank you|got it|will do|sounds good|sounds great|appreciate it|cool)\b/i.test(
+      (event.body ?? "").trim()
+    );
+  if (event.provider === "twilio" && schedulingBlocked && shortAck) {
+    const ack = "Sounds good. If anything changes, I’ll let you know.";
+    appendOutbound(conv, event.to, event.from, ack, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      ack
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   // Deterministic slot offer for Twilio when scheduling context is known but no slots exist yet.
   if (
     event.provider === "twilio" &&
     !conv.appointment?.bookedEventId &&
-    (!conv.scheduler?.lastSuggestedSlots || conv.scheduler.lastSuggestedSlots.length === 0)
+    (!conv.scheduler?.lastSuggestedSlots || conv.scheduler.lastSuggestedSlots.length === 0) &&
+    !schedulingBlocked
   ) {
     const cta = conv.classification?.cta ?? "";
     const bucket = conv.classification?.bucket ?? "";
