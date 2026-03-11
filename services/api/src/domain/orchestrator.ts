@@ -80,7 +80,7 @@ function detectCorporateIntent(text: string): boolean {
   return (
     /(harley[-\s]?davidson corporate|harley corporate|corporate office|headquarters|\bhq\b)/.test(t) ||
     /(customer service|complaint|feedback|warranty|recall|vin lookup|information on.*vin|vin information)/.test(t) ||
-    /(employment|job|career|hr|human resources|business relations|media|press)/.test(t)
+    /(employment|job|career|\bhr\b|human resources|business relations|\bmedia\b|\bpress\b)/.test(t)
   );
 }
 
