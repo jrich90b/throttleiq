@@ -48,6 +48,7 @@ import {
   setRequestedTime,
   parseRequestedDayTime,
   startFollowUpCadence,
+  pauseFollowUpCadence,
   stopFollowUpCadence,
   advanceFollowUpCadence,
   getAllConversations,
@@ -1032,6 +1033,11 @@ async function processDueFollowUps() {
     return {};
   };
 
+  const getLastOutbound = (conv: any, providers: string[]) => {
+    const list = conv.messages?.filter((m: any) => m.direction === "out" && providers.includes(m.provider)) ?? [];
+    return list.sort((a: any, b: any) => new Date(a.at).getTime() - new Date(b.at).getTime()).slice(-1)[0];
+  };
+
   for (const conv of convs) {
     const cadence = conv.followUpCadence;
     if (!cadence || cadence.status !== "active" || !cadence.nextDueAt) continue;
@@ -1040,6 +1046,12 @@ async function processDueFollowUps() {
       continue;
     }
     if (todoConvIds.has(conv.id)) continue;
+    if (cadence.pausedUntil) {
+      const resumeAt = new Date(cadence.pausedUntil);
+      if (now < resumeAt) continue;
+      cadence.pausedUntil = undefined;
+      cadence.pauseReason = undefined;
+    }
     if (isSuppressed(conv.leadKey)) {
       stopFollowUpCadence(conv, "suppressed");
       continue;
@@ -1051,6 +1063,13 @@ async function processDueFollowUps() {
       if (indefinite) continue;
       if (until && now < until) continue;
       if (isMeaningfulInbound(lastInbound.body) && now.getTime() - inboundAt.getTime() < 72 * 60 * 60 * 1000) {
+        continue;
+      }
+    }
+    const lastOutbound = getLastOutbound(conv, ["human", "twilio"]);
+    if (lastOutbound?.at) {
+      const outboundAt = new Date(lastOutbound.at);
+      if (now.getTime() - outboundAt.getTime() < 72 * 60 * 60 * 1000) {
         continue;
       }
     }
@@ -2073,6 +2092,10 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
     }
+    const hasOpenTodo = listOpenTodos().some(t => t.convId === conv.id);
+    if (!hasOpenTodo) {
+      pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
+    }
     if (manualTakeover) setConversationMode(conv.id, "human");
     markAppointmentAcknowledged(conv);
     await logRow(null);
@@ -2096,6 +2119,10 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
+    }
+    const hasOpenTodo = listOpenTodos().some(t => t.convId === conv.id);
+    if (!hasOpenTodo) {
+      pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
     }
     if (manualTakeover) setConversationMode(conv.id, "human");
     markAppointmentAcknowledged(conv);
@@ -2121,6 +2148,10 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
     }
+    const hasOpenTodo = listOpenTodos().some(t => t.convId === conv.id);
+    if (!hasOpenTodo) {
+      pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
+    }
     if (manualTakeover) setConversationMode(conv.id, "human");
     markAppointmentAcknowledged(conv);
     await logRow(msg.sid);
@@ -2141,6 +2172,10 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
+    }
+    const hasOpenTodo = listOpenTodos().some(t => t.convId === conv.id);
+    if (!hasOpenTodo) {
+      pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
     }
     if (manualTakeover) setConversationMode(conv.id, "human");
     markAppointmentAcknowledged(conv);

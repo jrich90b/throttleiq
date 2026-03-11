@@ -74,6 +74,8 @@ export type FollowUpCadence = {
   stopReason?: string;
   kind?: "standard" | "long_term";
   deferredMessage?: string;
+  pausedUntil?: string;
+  pauseReason?: string;
 };
 
 export type PricingObjectionState = {
@@ -939,6 +941,16 @@ export function stopFollowUpCadence(conv: Conversation, reason: string) {
   conv.followUpCadence.status = "stopped";
   conv.followUpCadence.stopReason = reason;
   conv.followUpCadence.nextDueAt = undefined;
+  conv.followUpCadence.pausedUntil = undefined;
+  conv.followUpCadence.pauseReason = undefined;
+  conv.updatedAt = nowIso();
+  scheduleSave();
+}
+
+export function pauseFollowUpCadence(conv: Conversation, untilIso: string, reason?: string) {
+  if (!conv.followUpCadence || conv.followUpCadence.status !== "active") return;
+  conv.followUpCadence.pausedUntil = untilIso;
+  conv.followUpCadence.pauseReason = reason ?? "manual_outbound";
   conv.updatedAt = nowIso();
   scheduleSave();
 }
