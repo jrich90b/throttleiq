@@ -1190,7 +1190,7 @@ export function parseRequestedDayTime(
 
 export function setFollowUpMode(
   conv: Conversation,
-  mode: "active" | "holding_inventory" | "manual_handoff",
+  mode: "active" | "holding_inventory" | "manual_handoff" | "paused_indefinite",
   reason?: string
 ) {
   conv.followUp = { mode, reason, updatedAt: nowIso() };
