@@ -33,7 +33,7 @@ import {
   formatSlotLocal,
   localPartsToUtcDate
 } from "./domain/schedulerEngine.js";
-import { extractImageDate, findInventoryMatches, findInventoryPrice } from "./domain/inventoryFeed.js";
+import { extractImageDate, findInventoryMatches, findInventoryPrice, getInventoryFeed } from "./domain/inventoryFeed.js";
 
 import {
   upsertConversationByLeadKey,
@@ -2931,6 +2931,90 @@ if (authToken && signature) {
       ack
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
+  }
+
+  const inventoryQuestion =
+    /(in stock|available|availability|do you have|any .* in stock)/i.test(event.body ?? "");
+  if (event.provider === "twilio" && inventoryQuestion && !schedulingBlocked) {
+    try {
+      const textLower = String(event.body ?? "").toLowerCase();
+      const yearMatch = textLower.match(/\b(20\d{2}|19\d{2})\b/);
+      const year = yearMatch?.[1] ?? conv.lead?.vehicle?.year ?? null;
+      let model =
+        conv.lead?.vehicle?.model ??
+        conv.lead?.vehicle?.description ??
+        null;
+      if (!model || !textLower.includes(model.toLowerCase())) {
+        const items = await getInventoryFeed();
+        const models = Array.from(new Set(items.map(i => i.model).filter(Boolean))) as string[];
+        models.sort((a, b) => b.length - a.length);
+        model = models.find(m => textLower.includes(m.toLowerCase())) ?? model;
+      }
+      const colorTokens = [
+        "vivid black",
+        "black",
+        "white",
+        "red",
+        "blue",
+        "gray",
+        "grey",
+        "silver",
+        "green",
+        "orange",
+        "yellow",
+        "brown",
+        "tan"
+      ];
+      const color =
+        colorTokens.find(c => textLower.includes(c)) ??
+        conv.lead?.vehicle?.color ??
+        null;
+
+      if (year && model) {
+        let matches = await findInventoryMatches({ year, model });
+        if (color) {
+          const c = color.toLowerCase();
+          matches = matches.filter(i => (i.color ?? "").toLowerCase().includes(c));
+        }
+        if (matches.length > 0) {
+          conv.lead = conv.lead ?? {};
+          conv.lead.vehicle = conv.lead.vehicle ?? {};
+          conv.lead.vehicle.year = year ?? conv.lead.vehicle.year;
+          conv.lead.vehicle.model = model ?? conv.lead.vehicle.model;
+          if (color) conv.lead.vehicle.color = color;
+          const reply =
+            `Yes — we do have ${year} ${model}${color ? ` in ${color}` : ""} in stock. ` +
+            "Would you like to stop by to take a look?";
+          appendOutbound(conv, event.to, event.from, reply, "twilio");
+          const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<Response>\\n  <Message>${escapeXml(
+            reply
+          )}</Message>\\n</Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+        addTodo(
+          conv,
+          "other",
+          `Verify inventory for ${year} ${model}${color ? ` (${color})` : ""}`,
+          event.providerMessageId
+        );
+        const reply =
+          `I’m not seeing a ${year} ${model}${color ? ` in ${color}` : ""} in our live feed. ` +
+          "I’ll have someone verify and follow up shortly.";
+        appendOutbound(conv, event.to, event.from, reply, "twilio");
+        const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<Response>\\n  <Message>${escapeXml(
+          reply
+        )}</Message>\\n</Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+    } catch (e: any) {
+      addTodo(conv, "other", "Verify inventory availability", event.providerMessageId);
+      const reply = "I’ll have someone verify inventory availability and follow up shortly.";
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<Response>\\n  <Message>${escapeXml(
+        reply
+      )}</Message>\\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
   }
   // Deterministic slot offer for Twilio when scheduling context is known but no slots exist yet.
   if (
