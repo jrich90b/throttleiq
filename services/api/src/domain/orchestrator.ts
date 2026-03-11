@@ -77,11 +77,36 @@ function detectPricingOrPayment(text: string, intent?: OrchestratorResult["inten
 
 function detectCorporateIntent(text: string): boolean {
   const t = text.toLowerCase();
+  const tokens = t.split(/[^a-z0-9]+/).filter(Boolean);
+  const hasToken = (w: string) => tokens.includes(w);
+  const hasAnyToken = (list: string[]) => list.some(hasToken);
   return (
     /(harley[-\s]?davidson corporate|harley corporate|corporate office|headquarters|\bhq\b)/.test(t) ||
     /(customer service|complaint|feedback|warranty|recall|vin lookup|information on.*vin|vin information)/.test(t) ||
-    /(employment|job|career|\bhr\b|human resources|business relations|\bmedia\b|\bpress\b)/.test(t)
+    hasAnyToken(["employment", "job", "career"]) ||
+    (hasToken("human") && hasToken("resources")) ||
+    hasToken("hr") ||
+    hasToken("media") ||
+    hasToken("press") ||
+    /business relations/.test(t)
   );
+}
+
+if (process.env.DEBUG_INTENT_TESTS === "1") {
+  const cases: Array<[string, boolean]> = [
+    ["blue with chrome trim", false],
+    ["need HR contact", true],
+    ["press inquiry", true],
+    ["career opportunities", true],
+    ["customer service complaint", true],
+    ["do you have a 2026 street glide", false]
+  ];
+  for (const [input, expected] of cases) {
+    const got = detectCorporateIntent(input);
+    if (got !== expected) {
+      console.log("[intent-test] corporate mismatch", { input, expected, got });
+    }
+  }
 }
 
 function isNonUsPhone(from?: string): boolean {
