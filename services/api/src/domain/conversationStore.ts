@@ -182,7 +182,7 @@ export type Conversation = {
   lead?: LeadProfile;
   classification?: { bucket?: string; cta?: string; channel?: string; ruleName?: string };
   appointment?: AppointmentMemory;
-  followUp?: { mode: "active" | "holding_inventory" | "manual_handoff"; reason?: string; updatedAt: string };
+  followUp?: { mode: "active" | "holding_inventory" | "manual_handoff" | "paused_indefinite"; reason?: string; updatedAt: string };
   scheduler?: SchedulerMemory;
   followUpCadence?: FollowUpCadence;
   objections?: ObjectionState;
