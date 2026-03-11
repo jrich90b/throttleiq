@@ -3819,7 +3819,7 @@ export default function Home() {
                   el.style.height = `${el.scrollHeight}px`;
                 }}
                 rows={1}
-                className="flex-1 border rounded px-3 py-3 min-h-[48px] resize-none leading-6 overflow-hidden"
+                className="flex-1 border rounded px-3 py-3.5 min-h-[56px] resize-none leading-6 overflow-hidden box-border"
                 placeholder={pendingDraft ? "Edit draft then Send…" : "Type a message…"}
               />
               <button className="px-4 py-2 border rounded" onClick={send}>
