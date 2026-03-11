@@ -345,6 +345,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     inferredBucket = "test_ride";
     inferredCta = "schedule_test_ride";
   }
+  const forcedTradeIn =
+    leadSourceLower.includes("trade accelerator") ||
+    /\btrade[-\s]?in\b/.test(leadSourceLower);
+  if (forcedTradeIn) {
+    inferredBucket = "trade_in_sell";
+    inferredCta = "value_my_trade";
+  }
   const channel = resolveChannel({
     leadSource,
     sourceId: leadSourceId,
