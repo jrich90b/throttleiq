@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import twilio from "twilio";
 import { orchestrateInbound } from "./domain/orchestrator.js";
+import { classifySchedulingIntent } from "./domain/llmDraft.js";
 import type { InboundMessageEvent } from "./domain/types.js";
 import { sendgridInboundMiddleware, handleSendgridInbound } from "./routes/sendgridInbound.js";
 import { resolveInventoryUrlByStock } from "./domain/inventoryUrlResolver.js";
@@ -2923,7 +2924,19 @@ if (authToken && signature) {
     const ctxSuggestsScheduling =
       /(check_availability|inventory_interest|appointment|schedule|book|visit|test_ride)/i.test(cta) ||
       /(inventory_interest|appointment|schedule|book|visit|test_ride)/i.test(bucket);
-    if (ctxSuggestsScheduling) {
+    let llmSuggestsScheduling = false;
+    if (!ctxSuggestsScheduling) {
+      const text = String(event.body ?? "").trim();
+      if (text.length > 3 && !shortAck && !looksLikeTimeSelection(text)) {
+        llmSuggestsScheduling = await classifySchedulingIntent(text);
+        console.log("[twilio] llm scheduling intent", {
+          text: text.slice(0, 120),
+          llmSuggestsScheduling
+        });
+      }
+    }
+    const schedulingIntent = ctxSuggestsScheduling || llmSuggestsScheduling;
+    if (schedulingIntent) {
       try {
         const cfg = await getSchedulerConfig();
         const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };

@@ -27,6 +27,31 @@ export type DraftContext = {
   inventoryStatus?: "AVAILABLE" | "PENDING" | "UNKNOWN" | null;
 };
 
+export async function classifySchedulingIntent(input: string): Promise<boolean> {
+  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return false;
+  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  const text = String(input ?? "").trim();
+  if (!text) return false;
+  const prompt = [
+    "You are a classifier for dealership SMS.",
+    "Question: Is the customer trying to schedule or pick an appointment time?",
+    "Answer with only YES or NO.",
+    "",
+    `Message: ${text}`
+  ].join("\n");
+  try {
+    const resp = await client.responses.create({
+      model,
+      input: prompt
+    });
+    const out = resp.output_text?.trim().toLowerCase() ?? "";
+    return out.startsWith("y");
+  } catch {
+    return false;
+  }
+}
+
 export async function generateDraftWithLLM(ctx: DraftContext): Promise<string> {
   const model = process.env.OPENAI_MODEL || "gpt-5-mini";
 
