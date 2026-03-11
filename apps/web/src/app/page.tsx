@@ -119,6 +119,7 @@ export default function Home() {
   const [editNote, setEditNote] = useState("");
   const [pendingSend, setPendingSend] = useState<{ body: string; draftId?: string } | null>(null);
   const [closeReason, setCloseReason] = useState("sold");
+  const sendBoxRef = useRef<HTMLTextAreaElement | null>(null);
   const [modeSaving, setModeSaving] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -586,6 +587,13 @@ export default function Home() {
     if (pendingDraft?.body) return pendingDraft.body;
     return sendBody;
   }, [sendBodySource, sendBody, pendingDraft?.body]);
+
+  useEffect(() => {
+    const el = sendBoxRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [displaySendBody]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -3808,6 +3816,7 @@ export default function Home() {
 
             <div className="mt-6 flex gap-2 items-start">
               <textarea
+                ref={sendBoxRef}
                 value={displaySendBody}
                 onChange={e => {
                   setSendBody(e.target.value);
@@ -3819,7 +3828,7 @@ export default function Home() {
                   el.style.height = `${el.scrollHeight}px`;
                 }}
                 rows={1}
-                className="flex-1 border rounded px-3 py-3.5 min-h-[56px] resize-none leading-6 overflow-hidden box-border"
+                className="flex-1 border rounded px-3 py-3.5 min-h-[60px] resize-none leading-7 overflow-hidden box-border"
                 placeholder={pendingDraft ? "Edit draft then Send…" : "Type a message…"}
               />
               <button className="px-4 py-2 border rounded" onClick={send}>
