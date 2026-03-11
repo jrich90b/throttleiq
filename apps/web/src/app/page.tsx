@@ -113,6 +113,8 @@ export default function Home() {
   const [contactQuery, setContactQuery] = useState("");
   const [detailLoading, setDetailLoading] = useState(false);
   const [sendBody, setSendBody] = useState("");
+  const [sendBodySource, setSendBodySource] = useState<"draft" | "user" | "system">("system");
+  const [lastDraftId, setLastDraftId] = useState<string | null>(null);
   const [editPromptOpen, setEditPromptOpen] = useState(false);
   const [editNote, setEditNote] = useState("");
   const [pendingSend, setPendingSend] = useState<{ body: string; draftId?: string } | null>(null);
@@ -759,13 +761,18 @@ export default function Home() {
 
   useEffect(() => {
     if (!pendingDraft) return;
-    if (sendBody.trim().length > 0) return;
+    const hasUserEdits = sendBodySource === "user" && sendBody.trim().length > 0;
+    if (hasUserEdits && pendingDraft.id !== lastDraftId) return;
     setSendBody(pendingDraft.body);
+    setSendBodySource("draft");
+    setLastDraftId(pendingDraft.id ?? null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingDraft?.id]);
 
   useEffect(() => {
     setSendBody("");
+    setSendBodySource("system");
+    setLastDraftId(null);
   }, [selectedConv?.id]);
 
   async function markTodoDone(todo: TodoItem, resolution = "resume") {
@@ -3782,7 +3789,10 @@ export default function Home() {
             <div className="mt-6 flex gap-2 items-start">
               <textarea
                 value={sendBody}
-                onChange={e => setSendBody(e.target.value)}
+                onChange={e => {
+                  setSendBody(e.target.value);
+                  setSendBodySource("user");
+                }}
                 onInput={e => {
                   const el = e.currentTarget;
                   el.style.height = "auto";
