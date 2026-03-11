@@ -23,6 +23,7 @@ export type LeadCTA =
   | "value_my_trade"
   | "sell_my_bike"
   | "service_request"
+  | "demo_ride_event"
   | "event_rsvp"
   | "sweepstakes"
   | "contact_us"
@@ -298,6 +299,16 @@ const RULES: LeadRule[] = [
     match: { equals: ["Room58 - Book test ride"], sourceIds: [2776] },
     bucket: "test_ride",
     cta: "schedule_test_ride",
+    tone: "short_conversational"
+  },
+  {
+    name: "gla_demo_ride_dat",
+    match: {
+      equals: ["GLA - Demo Ride - DAT", "HDMC GLA - Road to Your Ride DAT Dealer Demo Ride"],
+      sourceIds: [3026]
+    },
+    bucket: "event_promo",
+    cta: "demo_ride_event",
     tone: "short_conversational"
   }
 ];

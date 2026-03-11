@@ -730,6 +730,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     !conv.followUpCadence?.status &&
     !conv.appointment?.bookedEventId &&
     conv.classification?.bucket !== "finance_prequal" &&
+    conv.classification?.bucket !== "event_promo" &&
     conv.classification?.cta !== "hdfs_coa" &&
     conv.classification?.cta !== "prequalify";
   if (shouldStartCadence) {

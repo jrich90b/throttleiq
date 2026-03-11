@@ -342,6 +342,27 @@ export async function orchestrateInbound(
       shouldRespond: true,
       draft,
       handoff: { required: true, reason: "approval", ack: draft }
+      });
+  }
+
+  const isDemoRideEventLead = ctx?.bucket === "event_promo" && ctx?.cta === "demo_ride_event";
+  if (isDemoRideEventLead && event.provider === "sendgrid_adf") {
+    const dealerProfile = await getDealerProfile();
+    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const leadFirst = ctx?.lead?.firstName?.trim() || "there";
+    const yearLabel = ctx?.lead?.vehicle?.year ? `${ctx.lead.vehicle.year} ` : "";
+    const modelLabel = normalizeModelLabel(ctx?.lead?.vehicle?.model ?? ctx?.lead?.vehicle?.description);
+    const bikeLabel = `${yearLabel}${modelLabel}`.trim() || "that bike";
+    const draft =
+      `Hi ${leadFirst} — thanks for your recent demo ride on the ${bikeLabel}. ` +
+      `This is ${agentName} at ${dealerName}. ` +
+      `If you’d like more details on the ${bikeLabel}, I’m happy to help.`;
+    return finalize({
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft
     });
   }
 
