@@ -2933,11 +2933,15 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
+  const textLower = String(event.body ?? "").toLowerCase();
   const inventoryQuestion =
-    /(in stock|available|availability|do you have|any .* in stock)/i.test(event.body ?? "");
+    /(in stock|available|availability|do you have|any .* in stock)/i.test(textLower) ||
+    (!!conv.lead?.vehicle?.model &&
+      /\b(\d{4}|blue|black|white|red|green|gray|grey|silver|chrome|trim|color|standard|special|st)\b/i.test(
+        textLower
+      ));
   if (event.provider === "twilio" && inventoryQuestion && !schedulingBlocked) {
     try {
-      const textLower = String(event.body ?? "").toLowerCase();
       const yearMatch = textLower.match(/\b(20\d{2}|19\d{2})\b/);
       const year = yearMatch?.[1] ?? conv.lead?.vehicle?.year ?? null;
       let model =
