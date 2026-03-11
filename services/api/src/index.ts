@@ -2970,8 +2970,8 @@ if (authToken && signature) {
         conv.lead?.vehicle?.color ??
         null;
 
-      if (year && model) {
-        let matches = await findInventoryMatches({ year, model });
+      if (model) {
+        let matches = await findInventoryMatches({ year: year ?? null, model });
         if (color) {
           const c = color.toLowerCase();
           matches = matches.filter(i => (i.color ?? "").toLowerCase().includes(c));
@@ -2979,12 +2979,13 @@ if (authToken && signature) {
         if (matches.length > 0) {
           conv.lead = conv.lead ?? {};
           conv.lead.vehicle = conv.lead.vehicle ?? {};
-          conv.lead.vehicle.year = year ?? conv.lead.vehicle.year;
+          if (year) conv.lead.vehicle.year = year;
           conv.lead.vehicle.model = model ?? conv.lead.vehicle.model;
           if (color) conv.lead.vehicle.color = color;
           const reply =
-            `Yes — we do have ${year} ${model}${color ? ` in ${color}` : ""} in stock. ` +
-            "Would you like to stop by to take a look?";
+            year
+              ? `Yes — we do have ${year} ${model}${color ? ` in ${color}` : ""} in stock. Would you like to stop by to take a look?`
+              : `Yes — we do have ${model} in stock. Any specific year, trim, or color you’re after?`;
           appendOutbound(conv, event.to, event.from, reply, "twilio");
           const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<Response>\\n  <Message>${escapeXml(
             reply
@@ -2994,11 +2995,11 @@ if (authToken && signature) {
         addTodo(
           conv,
           "other",
-          `Verify inventory for ${year} ${model}${color ? ` (${color})` : ""}`,
+          `Verify inventory for ${year ?? ""} ${model}${color ? ` (${color})` : ""}`.trim(),
           event.providerMessageId
         );
         const reply =
-          `I’m not seeing a ${year} ${model}${color ? ` in ${color}` : ""} in our live feed. ` +
+          `I’m not seeing ${year ? `${year} ` : ""}${model}${color ? ` in ${color}` : ""} in our live feed. ` +
           "I’ll have someone verify and follow up shortly.";
         appendOutbound(conv, event.to, event.from, reply, "twilio");
         const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<Response>\\n  <Message>${escapeXml(
@@ -3006,6 +3007,13 @@ if (authToken && signature) {
         )}</Message>\\n</Response>`;
         return res.status(200).type("text/xml").send(twiml);
       }
+      addTodo(conv, "other", "Verify inventory availability", event.providerMessageId);
+      const reply = "I’ll have someone verify inventory availability and follow up shortly.";
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<Response>\\n  <Message>${escapeXml(
+        reply
+      )}</Message>\\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
     } catch (e: any) {
       addTodo(conv, "other", "Verify inventory availability", event.providerMessageId);
       const reply = "I’ll have someone verify inventory availability and follow up shortly.";
