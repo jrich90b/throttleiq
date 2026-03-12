@@ -2053,7 +2053,7 @@ app.post("/crm/tlp/log-contact", async (req, res) => {
     return res.json({ ok: true });
   } catch (err: any) {
     const msg = `TLP log failed for leadRef ${leadRef}. Retry in TLP or update manually.`;
-    addInternalQuestion(conversationId, msg);
+    addInternalQuestion(conversationId, conv.leadKey, msg);
     addTodo(conv, "other", msg);
     return res.status(500).json({ ok: false, error: err?.message ?? "Failed to log contact" });
   }
@@ -2135,7 +2135,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     } catch (err: any) {
       console.warn("⚠️ TLP log failed:", err?.message ?? err);
       const msg = `TLP log failed for leadRef ${leadRef}. Retry in TLP or update manually.`;
-      addInternalQuestion(conv.id, msg);
+      addInternalQuestion(conv.id, conv.leadKey, msg);
       addTodo(conv, "other", msg);
     }
   };
