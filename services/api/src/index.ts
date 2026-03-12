@@ -895,6 +895,11 @@ function looksLikeTimeSelection(text: string): boolean {
   return /\b(first|second|earlier|later)\b/i.test(String(text ?? ""));
 }
 
+function isVideoRequest(text: string): boolean {
+  const t = (text ?? "").toLowerCase();
+  return /\b(video|walkaround|walk around|walk-through|walkthrough|clip)\b/.test(t);
+}
+
 function parseOfferSlotsFromReply(reply: string): { startLocal: string; endLocal: string }[] {
   const text = String(reply ?? "");
   const marker = " — which works best?";
@@ -2363,6 +2368,23 @@ if (authToken && signature) {
     stopFollowUpCadence(conv, "not_interested");
     closeConversation(conv, "not_interested");
     const reply = "Totally understand - I won't bug you. If anything changes, just let me know.";
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+
+  if (isVideoRequest(event.body)) {
+    const reply =
+      "Got it — I’ll have a salesperson send a walkaround video by text shortly.";
+    addTodo(conv, "other", `Video request: ${event.body}`, event.providerMessageId);
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
