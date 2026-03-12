@@ -437,7 +437,10 @@ export default function Home() {
     })();
   }, [section]);
 
-  const calendarUsers = (usersList ?? []).filter((u: any) => !!u.calendarId);
+  const calendarUsers = useMemo(
+    () => (usersList ?? []).filter((u: any) => !!u.calendarId),
+    [usersList]
+  );
 
   useEffect(() => {
     if (section !== "calendar") return;
