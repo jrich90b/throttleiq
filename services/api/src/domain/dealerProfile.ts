@@ -7,6 +7,11 @@ export type DealerProfile = {
   agentName?: string;
   crmProvider?: string;
   websiteProvider?: string;
+  mcpBaseUrl?: string;
+  mcpApiKey?: string;
+  sharepointSiteUrl?: string;
+  sharepointUsername?: string;
+  sharepointPassword?: string;
   address?: { line1?: string; city?: string; state?: string; zip?: string; country?: string };
   phone?: string;
   website?: string;
