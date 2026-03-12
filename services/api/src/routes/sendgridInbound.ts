@@ -126,6 +126,17 @@ function parseTimeframeMonths(raw?: string): { start?: number; end?: number } | 
   if (!raw) return null;
   const t = raw.toLowerCase();
   if (/unsure|not sure|unknown/.test(t)) return null;
+  if (/over\s*\d+\s*year/.test(t) || /over\s*a\s*year/.test(t) || /over\s*one\s*year/.test(t)) {
+    return { start: 12 };
+  }
+  if (/\byear\b/.test(t)) {
+    const years = t.match(/(\d+)\s*year/);
+    if (years) {
+      const y = Number(years[1]);
+      if (!Number.isNaN(y)) return { start: y * 12 };
+    }
+    return { start: 12 };
+  }
   const range = t.match(/(\d+)\s*[-to]+\s*(\d+)\s*month/);
   if (range) {
     const a = Number(range[1]);

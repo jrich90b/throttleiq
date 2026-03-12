@@ -165,7 +165,7 @@ function isUnknownModel(label?: string | null): boolean {
   if (!label) return true;
   const trimmed = label.trim().toLowerCase();
   if (!trimmed) return true;
-  return trimmed === "other" || /\bother\b/.test(trimmed);
+  return trimmed === "other" || /\bother\b/.test(trimmed) || /\bfull\s*line\b/.test(trimmed);
 }
 
 function isCreditAppSource(source?: string | null, sourceId?: number | null): boolean {
@@ -465,6 +465,17 @@ export async function orchestrateInbound(
   if (pricingIntent) {
     try {
       const leadForPrice = ctx?.lead ?? {};
+      const longTermMonths = leadForPrice?.purchaseTimeframeMonthsStart ?? null;
+      const longTermTimeframe = leadForPrice?.purchaseTimeframe ?? "";
+      const wantsLongTerm = event.provider === "sendgrid_adf" && !!longTermMonths && longTermMonths >= 12;
+      const dealerProfile = await getDealerProfile();
+      const agentName = dealerProfile?.agentName ?? "Brooke";
+      const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+      const testRideEnabled = dealerProfile?.followUp?.testRideEnabled !== false;
+      const longTermInvite = wantsLongTerm
+        ? `I know you mentioned a ${longTermTimeframe || "longer-term"} timeline — ` +
+          `if you’d like to check out current inventory${testRideEnabled ? " or take a test ride" : ""}, I’m happy to help. `
+        : "";
       const yearForRange =
         leadForPrice?.vehicle?.year ??
         deriveYearFromText(leadForPrice?.vehicle?.description ?? null) ??
@@ -488,16 +499,49 @@ export async function orchestrateInbound(
       if (!stockForPrice && !vinForPrice && range?.count && range.count > 1) {
         price = null;
       }
+      const numericYear = yearForRange ? Number(yearForRange) : null;
       if (!price && !range) {
+        if (
+          numericYear &&
+          Number.isFinite(numericYear) &&
+          numericYear >= 2021 &&
+          modelForRange &&
+          !isUnknownModel(modelForRange)
+        ) {
+          const fallbackYear = numericYear - 1;
+          const fallbackRange = await findPriceRange({ year: String(fallbackYear), model: modelForRange });
+          if (fallbackRange?.count) {
+            const nf = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+            const firstName = leadForPrice?.firstName?.trim() || "there";
+            const modelLabel = normalizeModelLabel(modelForRange);
+            const originalLabel = `${numericYear} ${modelLabel}`.trim();
+            const fallbackLabel = `${fallbackYear} ${modelLabel}`.trim();
+            const priceLine =
+              fallbackRange.count === 1
+                ? `The listed price for a ${fallbackLabel} we have in stock is ${nf.format(fallbackRange.min)}.`
+                : `Listed prices for ${fallbackLabel} units we have in stock range from ${nf.format(
+                    fallbackRange.min
+                  )} to ${nf.format(fallbackRange.max)}.`;
+            const draft =
+              `Hi ${firstName} — thanks for your interest in the ${originalLabel}. ` +
+              `This is ${agentName} at ${dealerName}. ${longTermInvite}` +
+              `We don't have a ${originalLabel} in stock right now, ` +
+              `but we do have ${fallbackLabel} units available. ${priceLine} ` +
+              `If you'd like, I can send photos or details.`;
+            return finalize({
+              intent,
+              stage: "ENGAGED",
+              shouldRespond: true,
+              draft
+            });
+          }
+        }
         if (modelUnknown) {
           const firstName = leadForPrice?.firstName?.trim() || "there";
           const yearLabel = yearForRange ? `${yearForRange} ` : "";
-          const dealerProfile = await getDealerProfile();
-          const agentName = dealerProfile?.agentName ?? "Brooke";
-          const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
           const draft =
             `Hi ${firstName} — this is ${agentName} at ${dealerName}. ` +
-            `Thanks for your Facebook quote request. I’d love to help with pricing. Which ${yearLabel}model are you interested in?`;
+            `${longTermInvite}Thanks for your Facebook quote request. I’d love to help with pricing. Which ${yearLabel}model are you interested in?`;
           return finalize({
             intent,
             stage: "ENGAGED",
@@ -505,8 +549,17 @@ export async function orchestrateInbound(
             draft
           });
         }
+        const firstName = leadForPrice?.firstName?.trim() || "there";
+        const modelLabel = normalizeModelLabel(modelForRange);
+        const modelKnown = modelForRange && !isUnknownModel(modelForRange);
+        const yearLabel = yearForRange ? `${yearForRange} ` : "";
+        const thankLine = modelKnown
+          ? `Thanks for your interest in the ${yearLabel}${modelLabel}. `
+          : "Thanks for your Facebook quote request. ";
         const ack =
-          "Got it — I’ll have a manager pull the exact pricing and follow up shortly. What’s the best time to reach you today?";
+          `Hi ${firstName} — ${thankLine}This is ${agentName} at ${dealerName}. ` +
+          `${longTermInvite}` +
+          "I’ll have a manager pull the exact pricing and follow up shortly. What’s the best time to reach you today?";
         return finalize({
           intent,
           stage: "ENGAGED",
