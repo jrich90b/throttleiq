@@ -388,8 +388,8 @@ export function setConversationMode(id: string, mode: ConversationMode): Convers
 export function appendInbound(conv: Conversation, evt: InboundMessageEvent) {
   if (conv.status === "closed") {
     conv.status = "open";
-    conv.closedAt = null;
-    conv.closedReason = null;
+    conv.closedAt = undefined;
+    conv.closedReason = undefined;
   }
   conv.messages.push({
     id: makeId("msg"),
