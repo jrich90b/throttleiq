@@ -98,7 +98,9 @@ export default function Home() {
   const [newSuppression, setNewSuppression] = useState("");
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<"inbox" | "archive">("inbox");
-  const [section, setSection] = useState<"inbox" | "todos" | "questions" | "suppressions" | "contacts" | "settings" | "calendar">("inbox");
+  const [section, setSection] = useState<
+    "inbox" | "todos" | "questions" | "suppressions" | "contacts" | "settings" | "calendar" | "assistant"
+  >("inbox");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedConv, setSelectedConv] = useState<ConversationDetail | null>(null);
   const [selectedContact, setSelectedContact] = useState<ContactItem | null>(null);
