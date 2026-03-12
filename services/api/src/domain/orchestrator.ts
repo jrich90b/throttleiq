@@ -168,6 +168,13 @@ function isUnknownModel(label?: string | null): boolean {
   return trimmed === "other" || /\bother\b/.test(trimmed) || /\bfull\s*line\b/.test(trimmed);
 }
 
+function buildScheduleInvite(hasConcreteInventory: boolean): string {
+  if (hasConcreteInventory) {
+    return "I can get you scheduled to come in and check out the bike and go over options.";
+  }
+  return "I can get you scheduled to come in.";
+}
+
 function isCreditAppSource(source?: string | null, sourceId?: number | null): boolean {
   const creditIds = new Set([2852, 2883, 2915, 2946, 2949, 2955, 2956, 2928, 2930]);
   if (sourceId != null && creditIds.has(sourceId)) return true;
@@ -1149,12 +1156,14 @@ export async function orchestrateInbound(
           }
         }
         const canScheduleNow = !(availabilityAsked && (inventoryStatus === "UNKNOWN" || !inventoryStatus));
+        const hasConcreteInventory = !!stockId || inventoryStatus === "AVAILABLE";
+        const scheduleInvite = buildScheduleInvite(hasConcreteInventory);
         if (canScheduleNow && suggestedSlots.length >= 2) {
           const a = suggestedSlots[0].startLocal;
           const b = suggestedSlots[1].startLocal;
-          finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}I can get you scheduled to come in. I have ${a} or ${b} — which works best?`.trim();
+          finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}${scheduleInvite} I have ${a} or ${b} — which works best?`.trim();
         } else if (canScheduleNow) {
-          finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}I can get you scheduled to come in — what day and time works best for you?`.trim();
+          finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}${scheduleInvite} What day and time works best for you?`.trim();
         } else {
           finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}I'll confirm availability shortly and follow up.`;
         }
