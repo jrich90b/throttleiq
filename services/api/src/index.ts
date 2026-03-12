@@ -1486,6 +1486,54 @@ app.post("/scheduler/book", async (req, res) => {
   });
 });
 
+// Assistant (MCP bridge)
+app.post("/assistant/execute", async (req, res) => {
+  const task = String(req.body?.task ?? "").trim();
+  if (!task) return res.status(400).json({ ok: false, error: "Missing task" });
+
+  const profile = await getDealerProfile();
+  const baseUrl = (profile?.mcpBaseUrl ?? process.env.MCP_BASE_URL)?.trim();
+  const apiKey = (profile?.mcpApiKey ?? process.env.MCP_API_KEY)?.trim();
+  const siteUrl = (profile?.sharepointSiteUrl ?? process.env.SHAREPOINT_SITE_URL)?.trim();
+  const username = (profile?.sharepointUsername ?? process.env.SHAREPOINT_USERNAME)?.trim();
+  const password = (profile?.sharepointPassword ?? process.env.SHAREPOINT_PASSWORD)?.trim();
+
+  if (!baseUrl || !siteUrl) {
+    return res.status(400).json({ ok: false, error: "MCP not configured" });
+  }
+
+  try {
+    const resp = await fetch(`${baseUrl.replace(/\/+$/, "")}/execute`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
+      },
+      body: JSON.stringify({
+        task,
+        siteUrl,
+        credentials: username && password ? { username, password } : undefined
+      })
+    });
+
+    const text = await resp.text();
+    let payload: any = null;
+    try {
+      payload = text ? JSON.parse(text) : null;
+    } catch {
+      payload = { raw: text };
+    }
+
+    if (!resp.ok) {
+      return res.status(500).json({ ok: false, error: payload?.error ?? text ?? "MCP error" });
+    }
+
+    return res.json({ ok: true, result: payload });
+  } catch (err: any) {
+    return res.status(500).json({ ok: false, error: err?.message ?? "Failed to execute task" });
+  }
+});
+
 app.get("/scheduler/calendars", async (_req, res) => {
   const cal = await getAuthedCalendarClient();
   const resp = await cal.calendarList.list();
