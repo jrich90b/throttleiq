@@ -221,8 +221,24 @@ export default function Home() {
   const [inventoryItems, setInventoryItems] = useState<any[]>([]);
   const [inventoryLoading, setInventoryLoading] = useState(false);
   const [inventoryQuery, setInventoryQuery] = useState("");
-  const [inventoryNotes, setInventoryNotes] = useState<Record<string, string>>({});
+  const [inventoryNotes, setInventoryNotes] = useState<Record<string, any[]>>({});
   const [inventorySaving, setInventorySaving] = useState<string | null>(null);
+  const inventoryNoteSuggestions = useMemo(() => {
+    const labels = new Set<string>();
+    const notes = new Set<string>();
+    Object.values(inventoryNotes).forEach(list => {
+      (list ?? []).forEach((n: any) => {
+        const l = String(n?.label ?? "").trim();
+        const t = String(n?.note ?? "").trim();
+        if (l) labels.add(l);
+        if (t) notes.add(t);
+      });
+    });
+    return {
+      labels: Array.from(labels).slice(0, 50),
+      notes: Array.from(notes).slice(0, 50)
+    };
+  }, [inventoryNotes]);
   const [calendarEditForm, setCalendarEditForm] = useState({
     summary: "",
     startDate: "",
@@ -531,11 +547,11 @@ export default function Home() {
     if (!key) return;
     setInventorySaving(key);
     try {
-      const note = inventoryNotes[key] ?? "";
+      const notes = Array.isArray(inventoryNotes[key]) ? inventoryNotes[key] : [];
       const resp = await fetch("/api/inventory", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ stockId, vin, note })
+        body: JSON.stringify({ stockId, vin, notes })
       });
       const json = await resp.json();
       if (!resp.ok || json?.ok === false) {
@@ -545,7 +561,7 @@ export default function Home() {
         prev.map(it => {
           const k = String(it.stockId ?? it.vin ?? "").trim().toLowerCase();
           if (k !== key) return it;
-          return { ...it, note };
+          return { ...it, notes };
         })
       );
       setSaveToast("Inventory note saved");
@@ -567,10 +583,10 @@ export default function Home() {
         const json = await resp.json();
         const items = Array.isArray(json?.items) ? json.items : [];
         setInventoryItems(items);
-        const noteMap: Record<string, string> = {};
+        const noteMap: Record<string, any[]> = {};
         items.forEach((it: any) => {
           const key = String(it.stockId ?? it.vin ?? "").trim().toLowerCase();
-          if (key) noteMap[key] = it.note ?? "";
+          if (key) noteMap[key] = Array.isArray(it.notes) ? it.notes : [];
         });
         setInventoryNotes(noteMap);
       } catch {
@@ -2853,10 +2869,10 @@ export default function Home() {
                     const json = await resp.json();
                     const items = Array.isArray(json?.items) ? json.items : [];
                     setInventoryItems(items);
-                    const noteMap: Record<string, string> = {};
+                    const noteMap: Record<string, any[]> = {};
                     items.forEach((it: any) => {
                       const key = String(it.stockId ?? it.vin ?? "").trim().toLowerCase();
-                      if (key) noteMap[key] = it.note ?? "";
+                      if (key) noteMap[key] = Array.isArray(it.notes) ? it.notes : [];
                     });
                     setInventoryNotes(noteMap);
                   } catch {
@@ -2872,6 +2888,17 @@ export default function Home() {
             {inventoryLoading ? (
               <div className="text-sm text-gray-500">Loading inventory...</div>
             ) : (
+              <>
+                <datalist id="inventory-note-labels">
+                  {inventoryNoteSuggestions.labels.map(label => (
+                    <option key={label} value={label} />
+                  ))}
+                </datalist>
+                <datalist id="inventory-note-texts">
+                  {inventoryNoteSuggestions.notes.map(note => (
+                    <option key={note} value={note} />
+                  ))}
+                </datalist>
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {inventoryItems
                   .filter((it: any) => {
@@ -2920,12 +2947,82 @@ export default function Home() {
                             View listing
                           </a>
                         ) : null}
-                        <textarea
-                          className="w-full border rounded px-2 py-2 text-xs min-h-[70px]"
-                          placeholder="Add a note for the agent (promos, talking points, etc.)"
-                          value={inventoryNotes[key] ?? ""}
-                          onChange={e => setInventoryNotes(prev => ({ ...prev, [key]: e.target.value }))}
-                        />
+                        <div className="space-y-2">
+                          {(inventoryNotes[key] ?? []).map((n: any, idx: number) => {
+                            const expired = n?.expiresAt && n.expiresAt < new Date().toISOString().slice(0, 10);
+                            return (
+                              <div
+                                key={n.id ?? idx}
+                                className={`border rounded p-2 space-y-2 ${expired ? "opacity-50" : ""}`}
+                              >
+                                <input
+                                  className="w-full border rounded px-2 py-1 text-xs"
+                                  placeholder="Label (e.g., Accessories, Finance Special)"
+                                  list="inventory-note-labels"
+                                  value={n.label ?? ""}
+                                  onChange={e =>
+                                    setInventoryNotes(prev => {
+                                      const next = [...(prev[key] ?? [])];
+                                      next[idx] = { ...next[idx], label: e.target.value };
+                                      return { ...prev, [key]: next };
+                                    })
+                                  }
+                                />
+                                <textarea
+                                  className="w-full border rounded px-2 py-2 text-xs min-h-[70px]"
+                                  placeholder="Note details"
+                                  list="inventory-note-texts"
+                                  value={n.note ?? ""}
+                                  onChange={e =>
+                                    setInventoryNotes(prev => {
+                                      const next = [...(prev[key] ?? [])];
+                                      next[idx] = { ...next[idx], note: e.target.value };
+                                      return { ...prev, [key]: next };
+                                    })
+                                  }
+                                />
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    className="border rounded px-2 py-1 text-xs"
+                                    type="date"
+                                    value={n.expiresAt ?? ""}
+                                    onChange={e =>
+                                      setInventoryNotes(prev => {
+                                        const next = [...(prev[key] ?? [])];
+                                        next[idx] = { ...next[idx], expiresAt: e.target.value };
+                                        return { ...prev, [key]: next };
+                                      })
+                                    }
+                                  />
+                                  <button
+                                    className="px-2 py-1 border rounded text-xs"
+                                    onClick={() =>
+                                      setInventoryNotes(prev => {
+                                        const next = [...(prev[key] ?? [])];
+                                        next.splice(idx, 1);
+                                        return { ...prev, [key]: next };
+                                      })
+                                    }
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                          <button
+                            className="px-2 py-1 border rounded text-xs"
+                            onClick={() =>
+                              setInventoryNotes(prev => {
+                                const next = [...(prev[key] ?? [])];
+                                next.push({ id: `note_${Date.now()}_${Math.random()}`, label: "", note: "", expiresAt: "" });
+                                return { ...prev, [key]: next };
+                              })
+                            }
+                          >
+                            Add note
+                          </button>
+                        </div>
                         <button
                           className="px-3 py-2 border rounded text-xs"
                           onClick={() => saveInventoryNote(it.stockId, it.vin)}
@@ -2937,6 +3034,7 @@ export default function Home() {
                     );
                   })}
               </div>
+              </>
             )}
           </div>
         ) : section === "settings" ? (

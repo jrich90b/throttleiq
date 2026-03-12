@@ -233,8 +233,8 @@ app.get("/inventory", async (_req, res) => {
     const notes = await listInventoryNotes();
     const withNotes = items.map(item => {
       const key = (item.stockId ?? item.vin ?? "").trim().toLowerCase();
-      const note = key ? notes?.[key]?.note ?? "" : "";
-      return { ...item, note };
+      const entry = key ? notes?.[key] : undefined;
+      return { ...item, notes: entry?.notes ?? [] };
     });
     return res.json({ ok: true, items: withNotes });
   } catch (err: any) {
@@ -247,8 +247,8 @@ app.put("/inventory", async (req, res) => {
   try {
     const stockId = req.body?.stockId ?? null;
     const vin = req.body?.vin ?? null;
-    const note = String(req.body?.note ?? "");
-    await setInventoryNote({ stockId, vin, note });
+    const notes = Array.isArray(req.body?.notes) ? req.body.notes : [];
+    await setInventoryNote({ stockId, vin, notes });
     return res.json({ ok: true });
   } catch (err: any) {
     console.warn("inventory note update failed:", err?.message ?? err);
