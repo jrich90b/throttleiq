@@ -2408,7 +2408,12 @@ if (authToken && signature) {
       console.log("[auto-book] chosen slot", chosen?.startLocal, chosen?.calendarId);
       console.log("[auto-book] booked", created?.id, "calendarId", chosen.calendarId);
 
-      const reply = `Perfect — you’re all set for ${conv.appointment.whenText}. See you then.`;
+      const repName =
+        chosen?.salespersonName ??
+        cfg.salespeople?.find(p => p.id === chosen?.salespersonId)?.name ??
+        null;
+      const repSuffix = repName ? ` with ${repName}` : "";
+      const reply = `Perfect — you’re all set for ${conv.appointment.whenText}${repSuffix}. See you then.`;
       const systemMode = webhookMode;
       if (systemMode === "suggest") {
         appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -2494,7 +2499,12 @@ if (authToken && signature) {
 
         console.log("[auto-book] booked", created?.id, "calendarId", chosen.calendarId);
 
-        const reply = `Perfect — you’re all set for ${conv.appointment.whenText}. See you then.`;
+        const repName =
+          chosen?.salespersonName ??
+          cfg.salespeople?.find(p => p.id === chosen?.salespersonId)?.name ??
+          null;
+        const repSuffix = repName ? ` with ${repName}` : "";
+        const reply = `Perfect — you’re all set for ${conv.appointment.whenText}${repSuffix}. See you then.`;
         const systemMode = webhookMode;
         if (systemMode === "suggest") {
           appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -3231,7 +3241,12 @@ if (authToken && signature) {
               conv.scheduler.updatedAt = new Date().toISOString();
             }
 
-            const confirmText = `Perfect — you’re all set for ${conv.appointment.whenText}. See you then.`;
+            const repName =
+              chosen?.salespersonName ??
+              cfg.salespeople?.find(p => p.id === chosen?.salespersonId)?.name ??
+              null;
+            const repSuffix = repName ? ` with ${repName}` : "";
+            const confirmText = `Perfect — you’re all set for ${conv.appointment.whenText}${repSuffix}. See you then.`;
             appendOutbound(conv, event.to, event.from, confirmText, "twilio", created.id ?? undefined);
             saveConversation(conv);
             await flushConversationStore();
