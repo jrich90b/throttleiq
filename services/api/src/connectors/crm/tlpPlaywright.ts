@@ -92,7 +92,7 @@ async function openLeadByRef(page: Page, leadRef: string) {
   let clicked = false;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const menuItem = page.locator("#pencilPopupInner #pencilEventButton").first();
+      const menuItem = page.locator("#pencilPopupInner #pencilOutboundButton").first();
       await menuItem.waitFor({ state: "visible", timeout: 10_000 });
       await menuItem.click({ force: true });
       clicked = true;
@@ -102,7 +102,7 @@ async function openLeadByRef(page: Page, leadRef: string) {
       await actionCell.click({ force: true });
       await openActions.click({ force: true });
       try {
-        const fallback = page.locator("#pencilPopupInner #pencilEventButton, text=/Event Customer Contact/i").first();
+        const fallback = page.locator("#pencilPopupInner #pencilOutboundButton, text=/Outbound Call/i").first();
         await fallback.waitFor({ state: "visible", timeout: 10_000 });
         await fallback.click({ force: true });
         clicked = true;
@@ -114,12 +114,12 @@ async function openLeadByRef(page: Page, leadRef: string) {
   }
 
   if (!clicked) {
-    // Last-resort: use JS to click the event button if present
+    // Last-resort: use JS to click the outbound call button if present
     const jsClicked = await page.evaluate(() => {
       const btn =
-        (globalThis as any).document?.querySelector?.("#pencilPopupInner #pencilEventButton") ||
+        (globalThis as any).document?.querySelector?.("#pencilPopupInner #pencilOutboundButton") ||
         Array.from((globalThis as any).document?.querySelectorAll?.("a") ?? []).find((a: any) =>
-          /Event Customer Contact/i.test(a?.textContent || "")
+          /Outbound Call/i.test(a?.textContent || "")
         );
       if (btn && (btn as any).click) {
         (btn as any).click();
@@ -142,6 +142,13 @@ async function selectMotorcyclesCategory(page: Page, categoryValue: string) {
   const cat = page.locator("#TLPLOG_product_category");
   await cat.waitFor({ state: "visible", timeout: 15_000 });
   await cat.selectOption({ value: categoryValue });
+}
+
+async function selectCustomerContacted(page: Page) {
+  // <select id="TLPLOG_comments_contacted"> with option value YES
+  const status = page.locator("#TLPLOG_comments_contacted");
+  await status.waitFor({ state: "visible", timeout: 15_000 });
+  await status.selectOption({ value: "YES" });
 }
 
 async function fillComments(page: Page, note: string) {
@@ -193,13 +200,16 @@ export async function tlpLogCustomerContact(args: TlpLogCustomerContactArgs): Pr
     // 2) Search by Ref # and open Event Customer Contact logging modal
     await openLeadByRef(page, args.leadRef);
 
-    // 3) Set category to Motorcycles
+    // 3) Set contact outcome to "Customer Was Contacted"
+    await selectCustomerContacted(page);
+
+    // 4) Set category to Motorcycles
     await selectMotorcyclesCategory(page, categoryValue);
 
-    // 4) Fill latest transcript
+    // 5) Fill latest transcript
     await fillComments(page, args.note);
 
-    // 5) Submit
+    // 6) Submit
     await submitLog(page);
     await context.close();
   });
