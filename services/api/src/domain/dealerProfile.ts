@@ -6,6 +6,7 @@ export type DealerProfile = {
   dealerName?: string;
   agentName?: string;
   crmProvider?: string;
+  websiteProvider?: string;
   address?: { line1?: string; city?: string; state?: string; zip?: string; country?: string };
   phone?: string;
   website?: string;

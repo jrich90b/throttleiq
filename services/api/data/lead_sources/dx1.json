@@ -1,0 +1,44 @@
+[
+  {
+    "leadType": "New Sales",
+    "sourceType": "DEALER WEBSITE",
+    "source": "DX1 - Contact Us",
+    "sourceId": 2783
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "DEALER WEBSITE",
+    "source": "DX1 - Schedule Service",
+    "sourceId": 2784
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "DEALER WEBSITE",
+    "source": "DX1 - Schedule Test Ride",
+    "sourceId": 2785
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "DEALER WEBSITE",
+    "source": "DX1 - Request More Info",
+    "sourceId": 2786
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "DEALER WEBSITE",
+    "source": "DX1 - Trade-In",
+    "sourceId": 2853
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "DEALER WEBSITE",
+    "source": "DX1 - National Event RSVP",
+    "sourceId": 2968
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "DEALER WEBSITE",
+    "source": "DX1 - Rolling RSVP",
+    "sourceId": 3017
+  }
+]

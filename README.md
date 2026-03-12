@@ -19,16 +19,18 @@ Lead source routing supports a base HDMC catalog plus optional CRM-specific over
 Files:
 - `services/api/data/lead_sources/hdmc.json` (global HDMC list)
 - `services/api/data/lead_sources/<crm>.json` (optional CRM overlay, e.g. `tlp.json`)
+- `services/api/data/lead_sources/<website>.json` (optional website provider overlay, e.g. `room58.json`)
 
 Selection:
 - API uses `CRM_PROVIDER` if set.
 - If not set, it will look at `dealer_profile.json` -> `crmProvider` (set in the Dealer Profile UI).
+- For website providers, set `websiteProvider` in the Dealer Profile UI (or `WEBSITE_PROVIDER` env).
 
 Matching:
 - Exact rule matches in `leadSourceRules.ts` still win.
 - Catalog match by `sourceId` or `source` name is used as a fallback.
 
-To add a new CRM:
-1) Create `services/api/data/lead_sources/<crm>.json`
-2) Add any CRM-specific lead sources to that file
-3) Set `crmProvider` in Dealer Profile (or `CRM_PROVIDER` env)
+To add a new CRM or website provider:
+1) Create `services/api/data/lead_sources/<crm>.json` or `services/api/data/lead_sources/<website>.json`
+2) Add any provider-specific lead sources to that file
+3) Set `crmProvider` or `websiteProvider` in Dealer Profile (or `CRM_PROVIDER`/`WEBSITE_PROVIDER` env)

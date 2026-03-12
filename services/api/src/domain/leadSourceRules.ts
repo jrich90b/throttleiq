@@ -90,19 +90,27 @@ function loadCatalog(): CatalogIndex {
 
   const files = ["lead_sources/hdmc.json"];
   let crm = process.env.CRM_PROVIDER?.trim().toLowerCase();
-  if (!crm) {
+  let website = process.env.WEBSITE_PROVIDER?.trim().toLowerCase();
+  if (!crm || !website) {
     try {
       const profilePath = dataPath("dealer_profile.json");
       if (fs.existsSync(profilePath)) {
         const profile = JSON.parse(fs.readFileSync(profilePath, "utf8"));
-        const fromProfile = String(profile?.crmProvider ?? "").trim().toLowerCase();
-        if (fromProfile) crm = fromProfile;
+        if (!crm) {
+          const fromProfile = String(profile?.crmProvider ?? "").trim().toLowerCase();
+          if (fromProfile) crm = fromProfile;
+        }
+        if (!website) {
+          const fromProfile = String(profile?.websiteProvider ?? "").trim().toLowerCase();
+          if (fromProfile) website = fromProfile;
+        }
       }
     } catch {
       // ignore dealer profile read errors
     }
   }
   if (crm) files.push(`lead_sources/${crm}.json`);
+  if (website) files.push(`lead_sources/${website}.json`);
 
   for (const rel of files) {
     const fullPath = dataPath(rel);

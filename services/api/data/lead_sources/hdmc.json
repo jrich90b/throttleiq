@@ -1,0 +1,350 @@
+[
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "EAGLE RIDER",
+    "sourceId": 2800
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "DEALER DEMO RIDE",
+    "sourceId": 2813
+  },
+  {
+    "leadType": "New Sales, Used Sales",
+    "sourceType": "HDMC",
+    "source": "HD.COM ONLINE TEST RIDE REQUEST",
+    "sourceId": 2814
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "RIDING ACADEMY - ENROLLED",
+    "sourceId": 2843
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "RIDING ACADEMY - COMPLETE",
+    "sourceId": 2844
+  },
+  {
+    "leadType": "New Finance, Used Finance",
+    "sourceType": "HDFS",
+    "source": "HDFS COA ONLINE",
+    "sourceId": 2852
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "SWEEPSTAKES",
+    "sourceId": 2854
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "FACEBOOK - RESERVE",
+    "sourceId": 2856
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "HD.COM REQUEST A QUOTE",
+    "sourceId": 2862
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "Test Ride Request - H-D.com (Test Ride Booking Form)",
+    "sourceId": 2864
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "Test Ride Request - Events",
+    "sourceId": 2866
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "General Inquiry - H-D.com",
+    "sourceId": 2868
+  },
+  {
+    "leadType": "Used Sales",
+    "sourceType": "HDFS",
+    "source": "MARKETPLACE - TEST RIDE",
+    "sourceId": 2882
+  },
+  {
+    "leadType": "Used Finance",
+    "sourceType": "HDFS",
+    "source": "MARKETPLACE - APPLY FOR CREDIT",
+    "sourceId": 2883
+  },
+  {
+    "leadType": "Used Sales",
+    "sourceType": "HDFS",
+    "source": "MARKETPLACE - CONTACT DEALER",
+    "sourceId": 2884
+  },
+  {
+    "leadType": "Used Sales",
+    "sourceType": "HDFS",
+    "source": "MARKETPLACE - SELL MY BIKE",
+    "sourceId": 2885
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "MY Event",
+    "sourceId": 2908
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "MOTORCYCLE RESERVATION",
+    "sourceId": 2909
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "Rolling Sweeps",
+    "sourceId": 2914
+  },
+  {
+    "leadType": "Used Finance",
+    "sourceType": "HDFS",
+    "source": "MARKETPLACE - PREQUAL",
+    "sourceId": 2915
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "HDMC SERVICE",
+    "sourceId": 2917
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "HDMC SERVICE APP",
+    "sourceId": 2919
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "GLA - SWEEPSTAKES",
+    "sourceId": 2920
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "GLA - DEMO RIDE",
+    "sourceId": 2921
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "GLA - JumpStart",
+    "sourceId": 2922
+  },
+  {
+    "leadType": "Used Sales",
+    "sourceType": "HDMC",
+    "source": "GLA - LEAD GEN",
+    "sourceId": 2925
+  },
+  {
+    "leadType": "Used Sales",
+    "sourceType": "HDFS",
+    "source": "MARKETPLACE - PRIVATE PARTY LISTING",
+    "sourceId": 2927
+  },
+  {
+    "leadType": "Used Finance",
+    "sourceType": "HDFS",
+    "source": "MARKETPLACE - RIDER TO RIDER FINANCE INQUIRY",
+    "sourceId": 2928
+  },
+  {
+    "leadType": "Used Sales",
+    "sourceType": "HDFS",
+    "source": "MARKETPLACE - VALUE MY TRADE",
+    "sourceId": 2929
+  },
+  {
+    "leadType": "Used Finance",
+    "sourceType": "HDFS",
+    "source": "MARKETPLACE - RIDER TO RIDER CREDIT APP",
+    "sourceId": 2930
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "MY Event - Facebook",
+    "sourceId": 2932
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "FACEBOOK - RAQ",
+    "sourceId": 2943
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "HDMC NEW VEHICLE - INVENTORY",
+    "sourceId": 2944
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "HDMC NEW VEHICLE - CUSTOM BUILD",
+    "sourceId": 2945
+  },
+  {
+    "leadType": "New Finance, Used Finance",
+    "sourceType": "HDFS",
+    "source": "HDMC NEW VEHICLE - PREQUALIFY",
+    "sourceId": 2946
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "Facebook - Request a Test Ride",
+    "sourceId": 2948
+  },
+  {
+    "leadType": "New Finance, Used Finance",
+    "sourceType": "HDFS",
+    "source": "DEALER LEAD APP - PREQUALIFY",
+    "sourceId": 2949
+  },
+  {
+    "leadType": "New Finance, Used Finance",
+    "sourceType": "HDFS",
+    "source": "DFI Credit Application",
+    "sourceId": 2955
+  },
+  {
+    "leadType": "New Finance, Used Finance",
+    "sourceType": "HDFS",
+    "source": "DFI Deal Submission",
+    "sourceId": 2956
+  },
+  {
+    "leadType": "New Finance, Used Finance",
+    "sourceType": "HDFS",
+    "source": "DFI Callback Request",
+    "sourceId": 2957
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "National Event Dealer Sweeps",
+    "sourceId": 2964
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "Event",
+    "source": "Dealer Promotion Tool",
+    "sourceId": 2973
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "Livewire Credit Inquiry",
+    "sourceId": 2974
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "Livewire General Inquiry",
+    "sourceId": 2975
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDFS",
+    "source": "HDFS RVL NPA EOL",
+    "sourceId": 2976
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDFS",
+    "source": "HDFS RVL EOL",
+    "sourceId": 2977
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "Riding Academy - Wait List",
+    "sourceId": 2978
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "Google - Request a Quote",
+    "sourceId": 2981
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "Rider Training - Instructor",
+    "sourceId": 2982
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "Rider Training - Level Up",
+    "sourceId": 2983
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDFS",
+    "source": "Dealer Demo Ride - Prequalify",
+    "sourceId": 2995
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "GLA - Road to Your Ride Event Dealer Demo Ride",
+    "sourceId": 3025
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "GLA - Road to Your Ride DAT Dealer Demo Ride",
+    "sourceId": 3026
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "Ride Challenge",
+    "sourceId": 3027
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "La Classique Demo",
+    "sourceId": 3028
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "TiKTok - RAQ",
+    "sourceId": 3029
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDMC",
+    "source": "Ansira - Landing Page",
+    "sourceId": 3030
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "HDFS",
+    "source": "HDFS Prequalify - Dealer Website",
+    "sourceId": 3031
+  }
+]

@@ -28,4 +28,9 @@ services/api/data/google_tokens.json
 services/api/.env
 data/conversations.json
 
+# allow lead source catalogs to be committed
+!services/api/data/
+!services/api/data/lead_sources/
+!services/api/data/lead_sources/*.json
+
 sample.adf.xml

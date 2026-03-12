@@ -151,6 +151,7 @@ export default function Home() {
     dealerName: "",
     agentName: "",
     crmProvider: "",
+    websiteProvider: "",
     phone: "",
     website: "",
     addressLine1: "",
@@ -374,6 +375,7 @@ export default function Home() {
           dealerName: profile.dealerName ?? "",
           agentName: profile.agentName ?? "",
           crmProvider: profile.crmProvider ?? "",
+          websiteProvider: profile.websiteProvider ?? "",
           phone: profile.phone ?? "",
           website: profile.website ?? "",
           addressLine1: profile.address?.line1 ?? "",
@@ -999,6 +1001,7 @@ export default function Home() {
         dealerName: dealerProfileForm.dealerName.trim(),
         agentName: dealerProfileForm.agentName.trim(),
         crmProvider: dealerProfileForm.crmProvider.trim(),
+        websiteProvider: dealerProfileForm.websiteProvider.trim(),
         phone: dealerProfileForm.phone.trim(),
         website: dealerProfileForm.website.trim(),
         address: {
@@ -2681,6 +2684,19 @@ export default function Home() {
                     <option value="elead">eLead</option>
                     <option value="dealersocket">DealerSocket</option>
                     <option value="adf">Generic ADF</option>
+                  </select>
+                  <select
+                    className="border rounded px-3 py-2 text-sm"
+                    value={dealerProfileForm.websiteProvider}
+                    onChange={e => setDealerProfileForm({ ...dealerProfileForm, websiteProvider: e.target.value })}
+                  >
+                    <option value="">Website provider (optional)</option>
+                    <option value="dx1">DX1</option>
+                    <option value="foxdealer">Fox Dealer</option>
+                    <option value="room58">Room 58</option>
+                    <option value="dealerspike">Dealer Spike</option>
+                    <option value="dealereprocess">Dealer eProcess</option>
+                    <option value="motive">Motive</option>
                   </select>
                   <input
                     className="border rounded px-3 py-2 text-sm"

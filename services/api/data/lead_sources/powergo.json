@@ -1,0 +1,62 @@
+[
+  {
+    "leadType": "New Sales",
+    "sourceType": "DEALER WEBSITE",
+    "source": "Power Go - Vehicle Reservation",
+    "sourceId": 2933
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "DEALER WEBSITE",
+    "source": "Power Go - Trade-In",
+    "sourceId": 2934
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "DEALER WEBSITE",
+    "source": "Power Go - Test Drive",
+    "sourceId": 2935
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "DEALER WEBSITE",
+    "source": "Power Go - Price Quote - Used",
+    "sourceId": 2936
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "DEALER WEBSITE",
+    "source": "Power Go - Price Quote - New Inventory",
+    "sourceId": 2937
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "DEALER WEBSITE",
+    "source": "Power Go - Price Quote - New",
+    "sourceId": 2938
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "DEALER WEBSITE",
+    "source": "Power Go - Financing",
+    "sourceId": 2939
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "DEALER WEBSITE",
+    "source": "Power Go - National Event RSVP",
+    "sourceId": 2972
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "DEALER WEBSITE",
+    "source": "Power Go - Contact Us",
+    "sourceId": 2979
+  },
+  {
+    "leadType": "New Sales",
+    "sourceType": "DEALER WEBSITE",
+    "source": "Power Go - Rolling RSVP",
+    "sourceId": 3020
+  }
+]
