@@ -810,6 +810,50 @@ function normalizeTimeToken(s: string): string {
     .replace(/^0+/, "");
 }
 
+function getLocalDateParts(date: Date, timeZone: string) {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+  const parts = fmt.formatToParts(date);
+  const map: Record<string, string> = {};
+  for (const p of parts) {
+    if (p.type !== "literal") map[p.type] = p.value;
+  }
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day),
+    hour: Number(map.hour),
+    minute: Number(map.minute)
+  };
+}
+
+function parseTimeTokenToParts(token: string, fallbackHour24: number): { hour24: number; minute: number } | null {
+  const m = token.match(/(\d{1,2}):(\d{2})(am|pm)?/i);
+  if (!m) return null;
+  const hourRaw = Number(m[1]);
+  const minute = Number(m[2]);
+  const meridiem = (m[3] ?? "").toLowerCase();
+  if (Number.isNaN(hourRaw) || Number.isNaN(minute)) return null;
+  if (minute < 0 || minute > 59) return null;
+  if (hourRaw < 0 || hourRaw > 12) return null;
+  if (meridiem) {
+    if (meridiem === "am") return { hour24: hourRaw === 12 ? 0 : hourRaw, minute };
+    if (meridiem === "pm") return { hour24: hourRaw === 12 ? 12 : hourRaw + 12, minute };
+  }
+  const fallbackIsPm = fallbackHour24 >= 12;
+  if (fallbackIsPm) {
+    return { hour24: hourRaw === 12 ? 12 : hourRaw + 12, minute };
+  }
+  return { hour24: hourRaw === 12 ? 0 : hourRaw, minute };
+}
+
 function extractTimeToken(msg: string): string | null {
   const s = String(msg ?? "").toLowerCase();
 
@@ -2572,6 +2616,30 @@ if (authToken && signature) {
     const salespeople = cfg.salespeople ?? [];
     const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
     requestedReschedule = parseRequestedDayTime(event.body, cfg.timezone);
+    if (!requestedReschedule && conv.appointment.whenIso) {
+      const token = extractTimeToken(event.body);
+      if (token) {
+        const baseParts = getLocalDateParts(new Date(conv.appointment.whenIso), cfg.timezone);
+        const timeParts = parseTimeTokenToParts(token, baseParts.hour);
+        if (timeParts) {
+          const dayBase = localPartsToUtcDate(cfg.timezone, {
+            year: baseParts.year,
+            month: baseParts.month,
+            day: baseParts.day,
+            hour24: 12,
+            minute: 0
+          });
+          requestedReschedule = {
+            year: baseParts.year,
+            month: baseParts.month,
+            day: baseParts.day,
+            hour24: timeParts.hour24,
+            minute: timeParts.minute,
+            dayOfWeek: dayKey(dayBase, cfg.timezone)
+          };
+        }
+      }
+    }
     const rescheduleIntent = reschedulePending || reschedulePhrase || !!requestedReschedule;
     if (!rescheduleIntent) {
       // fall through
