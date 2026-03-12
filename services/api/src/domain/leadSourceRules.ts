@@ -310,6 +310,13 @@ const RULES: LeadRule[] = [
     tone: "short_conversational"
   },
   {
+    name: "room58_standard",
+    match: { equals: ["Room58 - Standard"], sourceIds: [2782] },
+    bucket: "general_inquiry",
+    cta: "contact_us",
+    tone: "short_conversational"
+  },
+  {
     name: "gla_demo_ride_dat",
     match: {
       equals: ["GLA - Demo Ride - DAT", "HDMC GLA - Road to Your Ride DAT Dealer Demo Ride"],

@@ -456,6 +456,35 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     });
   }
 
+  const isRoom58Standard =
+    leadSourceLower.includes("room58 - standard") || rule.ruleName === "room58_standard";
+  if (isRoom58Standard) {
+    const profile = await getDealerProfile();
+    const dealerName = profile?.dealerName ?? "American Harley-Davidson";
+    const agentName = profile?.agentName ?? "Brooke";
+    const firstName = conv.lead?.firstName ?? "";
+    const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
+    const ack = `${greeting}thanks for reaching out. This is ${agentName} at ${dealerName}. We received your inquiry and someone will follow up shortly.`;
+
+    addTodo(conv, "other", event.body, event.providerMessageId);
+    setFollowUpMode(conv, "manual_handoff", "room58_standard");
+    stopFollowUpCadence(conv, "manual_handoff");
+    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai");
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      draft: ack
+    });
+  }
+
   const history = conv.messages.slice(-20).map(m => ({ direction: m.direction, body: m.body }));
   const result = await orchestrateInbound(event, history, {
     appointment: conv.appointment,
