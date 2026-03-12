@@ -64,21 +64,24 @@ async function openLeadByRef(page: Page, leadRef: string) {
     .locator("ul.pencilOnly a.action1[title='Open Lead Actions Menu']")
     .first();
   await openActions.waitFor({ state: "visible", timeout: 10_000 });
-  await openActions.click();
-  await openActions.waitFor({ state: "visible", timeout: 10_000 });
-  await openActions.click();
 
-  // If the bubble backdrop/loader is intercepting clicks, dismiss it before selecting the menu item.
-  const bubbleBackdrop = page.locator("#bubbleBackdrop");
-  const bubbleLoader = page.locator("#bubbleLoader");
-  try {
-    if (await bubbleBackdrop.isVisible({ timeout: 1000 })) {
-      await bubbleBackdrop.click({ force: true });
-      await bubbleBackdrop.waitFor({ state: "hidden", timeout: 8_000 });
+  let popupVisible = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await openActions.click({ force: true });
+    try {
+      await page.locator("#pencilPopupInner").waitFor({ state: "visible", timeout: 8_000 });
+      popupVisible = true;
+      break;
+    } catch {
+      await actionCell.click({ force: true });
     }
-  } catch {
-    // best-effort: continue even if we couldn't dismiss the backdrop
   }
+
+  if (!popupVisible) {
+    throw new Error("TLP menu did not open");
+  }
+
+  const bubbleLoader = page.locator("#bubbleLoader");
   try {
     await bubbleLoader.waitFor({ state: "hidden", timeout: 8_000 });
   } catch {
