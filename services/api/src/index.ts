@@ -34,6 +34,7 @@ import {
   localPartsToUtcDate
 } from "./domain/schedulerEngine.js";
 import { extractImageDate, findInventoryMatches, findInventoryPrice, getInventoryFeed } from "./domain/inventoryFeed.js";
+import { listInventoryNotes, setInventoryNote } from "./domain/inventoryNotes.js";
 
 import {
   upsertConversationByLeadKey,
@@ -224,6 +225,35 @@ app.get("/health", (_req, res) => {
     ts: new Date().toISOString(),
     systemMode: getSystemMode()
   });
+});
+
+app.get("/inventory", async (_req, res) => {
+  try {
+    const items = await getInventoryFeed();
+    const notes = await listInventoryNotes();
+    const withNotes = items.map(item => {
+      const key = (item.stockId ?? item.vin ?? "").trim().toLowerCase();
+      const note = key ? notes?.[key]?.note ?? "" : "";
+      return { ...item, note };
+    });
+    return res.json({ ok: true, items: withNotes });
+  } catch (err: any) {
+    console.warn("inventory list failed:", err?.message ?? err);
+    return res.status(500).json({ ok: false, error: "Failed to load inventory" });
+  }
+});
+
+app.put("/inventory", async (req, res) => {
+  try {
+    const stockId = req.body?.stockId ?? null;
+    const vin = req.body?.vin ?? null;
+    const note = String(req.body?.note ?? "");
+    await setInventoryNote({ stockId, vin, note });
+    return res.json({ ok: true });
+  } catch (err: any) {
+    console.warn("inventory note update failed:", err?.message ?? err);
+    return res.status(500).json({ ok: false, error: "Failed to save note" });
+  }
 });
 
 app.post("/debug/followups/run", async (_req, res) => {

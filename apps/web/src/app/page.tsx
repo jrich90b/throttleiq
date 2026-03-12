@@ -99,7 +99,15 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<"inbox" | "archive">("inbox");
   const [section, setSection] = useState<
-    "inbox" | "todos" | "questions" | "suppressions" | "contacts" | "settings" | "calendar" | "assistant"
+    | "inbox"
+    | "todos"
+    | "questions"
+    | "suppressions"
+    | "contacts"
+    | "inventory"
+    | "settings"
+    | "calendar"
+    | "assistant"
   >("inbox");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedConv, setSelectedConv] = useState<ConversationDetail | null>(null);
@@ -210,6 +218,11 @@ export default function Home() {
   const [calendarFilterOpen, setCalendarFilterOpen] = useState(false);
   const [calendarEdit, setCalendarEdit] = useState<any | null>(null);
   const [calendarRowHeight, setCalendarRowHeight] = useState(40);
+  const [inventoryItems, setInventoryItems] = useState<any[]>([]);
+  const [inventoryLoading, setInventoryLoading] = useState(false);
+  const [inventoryQuery, setInventoryQuery] = useState("");
+  const [inventoryNotes, setInventoryNotes] = useState<Record<string, string>>({});
+  const [inventorySaving, setInventorySaving] = useState<string | null>(null);
   const [calendarEditForm, setCalendarEditForm] = useState({
     summary: "",
     startDate: "",
@@ -512,6 +525,61 @@ export default function Home() {
     };
     void loadEvents();
   }, [section, schedulerConfig, calendarDate, calendarView, calendarSalespeople]);
+
+  async function saveInventoryNote(stockId?: string, vin?: string) {
+    const key = String(stockId ?? vin ?? "").trim().toLowerCase();
+    if (!key) return;
+    setInventorySaving(key);
+    try {
+      const note = inventoryNotes[key] ?? "";
+      const resp = await fetch("/api/inventory", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stockId, vin, note })
+      });
+      const json = await resp.json();
+      if (!resp.ok || json?.ok === false) {
+        throw new Error(json?.error ?? "Failed to save note");
+      }
+      setInventoryItems(prev =>
+        prev.map(it => {
+          const k = String(it.stockId ?? it.vin ?? "").trim().toLowerCase();
+          if (k !== key) return it;
+          return { ...it, note };
+        })
+      );
+      setSaveToast("Inventory note saved");
+      setTimeout(() => setSaveToast(null), 2000);
+    } catch (err: any) {
+      setSettingsError(err?.message ?? "Failed to save note");
+    } finally {
+      setInventorySaving(null);
+    }
+  }
+
+  useEffect(() => {
+    if (section !== "inventory") return;
+    if (inventoryItems.length) return;
+    void (async () => {
+      setInventoryLoading(true);
+      try {
+        const resp = await fetch("/api/inventory", { cache: "no-store" });
+        const json = await resp.json();
+        const items = Array.isArray(json?.items) ? json.items : [];
+        setInventoryItems(items);
+        const noteMap: Record<string, string> = {};
+        items.forEach((it: any) => {
+          const key = String(it.stockId ?? it.vin ?? "").trim().toLowerCase();
+          if (key) noteMap[key] = it.note ?? "";
+        });
+        setInventoryNotes(noteMap);
+      } catch {
+        setInventoryItems([]);
+      } finally {
+        setInventoryLoading(false);
+      }
+    })();
+  }, [section, inventoryItems.length]);
 
   useEffect(() => {
     if (!calendarEdit) return;
@@ -1728,6 +1796,13 @@ export default function Home() {
           </button>
         ) : null}
         <button
+          className={`w-10 h-10 rounded flex items-center justify-center border ${section === "inventory" ? "bg-gray-100" : ""}`}
+          title="Inventory"
+          onClick={() => setSection("inventory")}
+        >
+          📦
+        </button>
+        <button
           className={`w-10 h-10 rounded flex items-center justify-center border ${section === "assistant" ? "bg-gray-100" : ""}`}
           title="Assistant"
           onClick={() => setSection("assistant")}
@@ -1819,13 +1894,15 @@ export default function Home() {
                     ? "Internal Questions"
                 : section === "contacts"
                   ? "Contacts"
-                  : section === "calendar"
-                    ? "Calendar"
-                    : section === "assistant"
-                      ? "Assistant"
-                    : section === "settings"
-                      ? "Settings"
-                      : "Suppression List"}
+                  : section === "inventory"
+                    ? "Inventory"
+                    : section === "calendar"
+                      ? "Calendar"
+                      : section === "assistant"
+                        ? "Assistant"
+                        : section === "settings"
+                          ? "Settings"
+                          : "Suppression List"}
             </h1>
             <p className="text-xs text-gray-600 mt-1">
               {section === "inbox"
@@ -1836,13 +1913,15 @@ export default function Home() {
                     ? `${questions.length} open`
                 : section === "contacts"
                   ? `${contacts.length} contacts`
-                  : section === "calendar"
-                    ? "Google Calendar view"
-                    : section === "assistant"
-                      ? "Run tasks against SharePoint"
-                    : section === "settings"
-                      ? "Configure dealer & scheduling"
-                      : `${suppressions.length} suppressed`}
+                  : section === "inventory"
+                    ? `${inventoryItems.length} bikes`
+                    : section === "calendar"
+                      ? "Google Calendar view"
+                      : section === "assistant"
+                        ? "Run tasks against SharePoint"
+                        : section === "settings"
+                          ? "Configure dealer & scheduling"
+                          : `${suppressions.length} suppressed`}
             </p>
           </div>
           <div className="border rounded-lg p-2">
@@ -1895,6 +1974,24 @@ export default function Home() {
                 <pre className="text-xs whitespace-pre-wrap">{assistantResult}</pre>
               </div>
             ) : null}
+          </div>
+        ) : section === "inventory" ? (
+          <div className="mt-4 space-y-3">
+            <input
+              className="w-full border rounded px-3 py-2 text-sm"
+              placeholder="Search inventory..."
+              value={inventoryQuery}
+              onChange={e => setInventoryQuery(e.target.value)}
+            />
+            {inventoryLoading ? (
+              <div className="text-sm text-gray-500">Loading inventory...</div>
+            ) : inventoryItems.length === 0 ? (
+              <div className="text-sm text-gray-500">No inventory loaded.</div>
+            ) : (
+              <div className="text-xs text-gray-500">
+                Showing {inventoryItems.length} bikes
+              </div>
+            )}
           </div>
         ) : section === "inbox" ? (
           <>
@@ -2739,6 +2836,108 @@ export default function Home() {
                 </div>
               </div>
             ) : null}
+          </div>
+        ) : section === "inventory" ? (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="text-lg font-semibold">Inventory</div>
+              <button
+                className="px-3 py-2 border rounded text-sm"
+                onClick={async () => {
+                  setInventoryItems([]);
+                  setInventoryNotes({});
+                  setInventoryQuery("");
+                  setInventoryLoading(true);
+                  try {
+                    const resp = await fetch("/api/inventory", { cache: "no-store" });
+                    const json = await resp.json();
+                    const items = Array.isArray(json?.items) ? json.items : [];
+                    setInventoryItems(items);
+                    const noteMap: Record<string, string> = {};
+                    items.forEach((it: any) => {
+                      const key = String(it.stockId ?? it.vin ?? "").trim().toLowerCase();
+                      if (key) noteMap[key] = it.note ?? "";
+                    });
+                    setInventoryNotes(noteMap);
+                  } catch {
+                    setInventoryItems([]);
+                  } finally {
+                    setInventoryLoading(false);
+                  }
+                }}
+              >
+                Refresh
+              </button>
+            </div>
+            {inventoryLoading ? (
+              <div className="text-sm text-gray-500">Loading inventory...</div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {inventoryItems
+                  .filter((it: any) => {
+                    const q = inventoryQuery.trim().toLowerCase();
+                    if (!q) return true;
+                    const hay = [
+                      it.stockId,
+                      it.vin,
+                      it.year,
+                      it.make,
+                      it.model,
+                      it.color
+                    ]
+                      .filter(Boolean)
+                      .join(" ")
+                      .toLowerCase();
+                    return hay.includes(q);
+                  })
+                  .map((it: any) => {
+                    const key = String(it.stockId ?? it.vin ?? "").trim().toLowerCase();
+                    return (
+                      <div key={key || it.url || Math.random()} className="border rounded-lg p-3 space-y-2">
+                        {it.images?.[0] ? (
+                          <img
+                            src={it.images[0]}
+                            alt={it.model ?? it.stockId ?? "Bike"}
+                            className="w-full h-40 object-cover rounded"
+                          />
+                        ) : (
+                          <div className="w-full h-40 bg-gray-100 rounded flex items-center justify-center text-xs text-gray-400">
+                            No image
+                          </div>
+                        )}
+                        <div className="text-sm font-semibold">
+                          {[it.year, it.make, it.model].filter(Boolean).join(" ")}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {it.stockId ? `Stock ${it.stockId}` : it.vin ? `VIN ${it.vin}` : "No stock/VIN"}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {it.color ? `Color: ${it.color}` : "Color: —"}{" "}
+                          {it.price ? `• $${Number(it.price).toLocaleString()}` : ""}
+                        </div>
+                        {it.url ? (
+                          <a className="text-xs text-blue-600 underline" href={it.url} target="_blank" rel="noreferrer">
+                            View listing
+                          </a>
+                        ) : null}
+                        <textarea
+                          className="w-full border rounded px-2 py-2 text-xs min-h-[70px]"
+                          placeholder="Add a note for the agent (promos, talking points, etc.)"
+                          value={inventoryNotes[key] ?? ""}
+                          onChange={e => setInventoryNotes(prev => ({ ...prev, [key]: e.target.value }))}
+                        />
+                        <button
+                          className="px-3 py-2 border rounded text-xs"
+                          onClick={() => saveInventoryNote(it.stockId, it.vin)}
+                          disabled={!key || inventorySaving === key}
+                        >
+                          {inventorySaving === key ? "Saving..." : "Save note"}
+                        </button>
+                      </div>
+                    );
+                  })}
+              </div>
+            )}
           </div>
         ) : section === "settings" ? (
           <div className="max-w-3xl space-y-6">

@@ -25,6 +25,7 @@ export type DraftContext = {
   stockId?: string | null;
   inventoryUrl?: string | null;
   inventoryStatus?: "AVAILABLE" | "PENDING" | "UNKNOWN" | null;
+  inventoryNote?: string | null;
 };
 
 export async function classifySchedulingIntent(input: string): Promise<boolean> {
@@ -220,6 +221,9 @@ AVAILABLE INVENTORY BEHAVIOR (tone + close):
       Medium intent: offer video then include time options.
       Low intent: offer help/video; do NOT force time options unless they ask.
 
+INVENTORY NOTES (optional):
+- If inventoryNote is present, weave it into the response as ONE short sentence.
+
 LEAD SOURCE CLOSE INTENSITY:
 - High intent (appointment times strongly):
   - "HDFS COA Online"
@@ -277,6 +281,7 @@ Inventory check:
 - stockId: ${ctx.stockId ?? "none"}
 - inventoryUrl: ${ctx.inventoryUrl ?? "none"}
 - inventoryStatus: ${ctx.inventoryStatus ?? "none"}
+- inventoryNote: ${ctx.inventoryNote ?? "none"}
 
 Customer inquiry:
 ${ctx.inquiry}

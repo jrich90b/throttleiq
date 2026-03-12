@@ -5,6 +5,7 @@ import { generateDraftWithLLM } from "./llmDraft.js";
 import { resolveInventoryUrlByStock } from "./inventoryUrlResolver.js";
 import { checkInventorySalePendingByUrl, type InventoryStatus } from "./inventoryChecker.js";
 import { findInventoryPrice, findPriceRange } from "./inventoryFeed.js";
+import { getInventoryNote } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
 import type { LeadProfile } from "./conversationStore.js";
 import { parsePreferredDateTime, parseRequestedDayTime } from "./conversationStore.js";
@@ -501,6 +502,7 @@ export async function orchestrateInbound(
         model: modelForRange
       });
       let price = priceLookup?.price ?? null;
+      const inventoryNote = await getInventoryNote(stockForPrice, vinForPrice);
       const range =
         yearForRange && modelForRange ? await findPriceRange({ year: yearForRange, model: modelForRange }) : null;
       if (!stockForPrice && !vinForPrice && range?.count && range.count > 1) {
@@ -534,6 +536,7 @@ export async function orchestrateInbound(
               `This is ${agentName} at ${dealerName}. ${longTermInvite}` +
               `We don't have a ${originalLabel} in stock right now, ` +
               `but we do have ${fallbackLabel} units available. ${priceLine} ` +
+              `${inventoryNote ? `${inventoryNote} ` : ""}` +
               `If you'd like, I can send photos or details.`;
             return finalize({
               intent,
@@ -1099,6 +1102,10 @@ export async function orchestrateInbound(
         });
       }
 
+      const stockForNote = ctx?.lead?.vehicle?.stockId ?? stockId ?? null;
+      const vinForNote = ctx?.lead?.vehicle?.vin ?? null;
+      const inventoryNote = await getInventoryNote(stockForNote, vinForNote);
+
       const draft = await generateDraftWithLLM({
         channel: "sms",
         leadSource: ctx?.leadSource ?? null,
@@ -1111,6 +1118,7 @@ export async function orchestrateInbound(
         stockId,
         inventoryUrl,
         inventoryStatus,
+        inventoryNote,
         dealerProfile,
         today,
         appointment,
@@ -1158,12 +1166,13 @@ export async function orchestrateInbound(
         const canScheduleNow = !(availabilityAsked && (inventoryStatus === "UNKNOWN" || !inventoryStatus));
         const hasConcreteInventory = !!stockId || inventoryStatus === "AVAILABLE";
         const scheduleInvite = buildScheduleInvite(hasConcreteInventory);
+        const noteLine = inventoryNote ? `${inventoryNote} ` : "";
         if (canScheduleNow && suggestedSlots.length >= 2) {
           const a = suggestedSlots[0].startLocal;
           const b = suggestedSlots[1].startLocal;
-          finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}${scheduleInvite} I have ${a} or ${b} — which works best?`.trim();
+          finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}${noteLine}${scheduleInvite} I have ${a} or ${b} — which works best?`.trim();
         } else if (canScheduleNow) {
-          finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}${scheduleInvite} What day and time works best for you?`.trim();
+          finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}${noteLine}${scheduleInvite} What day and time works best for you?`.trim();
         } else {
           finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}I'll confirm availability shortly and follow up.`;
         }
