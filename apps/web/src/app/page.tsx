@@ -2968,8 +2968,8 @@ export default function Home() {
                                     })
                                   }
                                 />
-                                <textarea
-                                  className="w-full border rounded px-2 py-2 text-xs min-h-[70px]"
+                                <input
+                                  className="w-full border rounded px-2 py-2 text-xs"
                                   placeholder="Note details"
                                   list="inventory-note-texts"
                                   value={n.note ?? ""}
