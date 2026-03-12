@@ -881,6 +881,13 @@ function slotMatchesReply(slotStartLocal: string, reply: string): boolean {
 function chooseSlotFromReply(slots: any[], reply: string): any | null {
   const text = (reply || "").toLowerCase();
   if (!Array.isArray(slots) || slots.length === 0) return null;
+  const replyToken = extractTimeToken(reply);
+  if (replyToken) {
+    for (const slot of slots) {
+      if (slotMatchesReply(slot.startLocal ?? "", reply)) return slot;
+    }
+    return null;
+  }
   if (/(^|\b)(first|1st|earlier)(\b|$)/.test(text)) return slots[0];
   if (/(^|\b)(second|2nd|later)(\b|$)/.test(text)) return slots[1] ?? slots[0];
   for (const slot of slots) {
@@ -2291,10 +2298,12 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
-  const isAffirmative = (text: string) =>
-    /\b(yes|yep|yeah|yup|ok|okay|sure|confirmed|confirm|works|that works|sounds good)\b/i.test(
+  const isAffirmative = (text: string) => {
+    if (extractTimeToken(text)) return false;
+    return /\b(yes|yep|yeah|yup|ok|okay|sure|confirmed|confirm|works|that works|sounds good)\b/i.test(
       text
     );
+  };
 
   // Auto-book if they confirmed a pending slot
   if (!conv.appointment?.bookedEventId && conv.scheduler?.pendingSlot && isAffirmative(event.body)) {
