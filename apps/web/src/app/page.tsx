@@ -223,6 +223,7 @@ export default function Home() {
   const [inventoryQuery, setInventoryQuery] = useState("");
   const [inventoryNotes, setInventoryNotes] = useState<Record<string, any[]>>({});
   const [inventorySaving, setInventorySaving] = useState<string | null>(null);
+  const [inventoryExpandedNote, setInventoryExpandedNote] = useState<string | null>(null);
   const inventoryNoteSuggestions = useMemo(() => {
     const labels = new Set<string>();
     const notes = new Set<string>();
@@ -2950,63 +2951,86 @@ export default function Home() {
                         <div className="space-y-2">
                           {(inventoryNotes[key] ?? []).map((n: any, idx: number) => {
                             const expired = n?.expiresAt && n.expiresAt < new Date().toISOString().slice(0, 10);
+                            const noteId = String(n.id ?? `${key}-${idx}`);
+                            const isOpen = inventoryExpandedNote === noteId;
+                            const label = String(n.label ?? "").trim() || "Note";
+                            const notePreview = String(n.note ?? "").trim();
+                            const preview =
+                              notePreview.length > 80 ? `${notePreview.slice(0, 80)}…` : notePreview;
                             return (
-                              <div
-                                key={n.id ?? idx}
-                                className={`border rounded p-2 space-y-2 ${expired ? "opacity-50" : ""}`}
-                              >
-                                <input
-                                  className="w-full border rounded px-2 py-1 text-xs"
-                                  placeholder="Label (e.g., Accessories, Finance Special)"
-                                  list="inventory-note-labels"
-                                  value={n.label ?? ""}
-                                  onChange={e =>
-                                    setInventoryNotes(prev => {
-                                      const next = [...(prev[key] ?? [])];
-                                      next[idx] = { ...next[idx], label: e.target.value };
-                                      return { ...prev, [key]: next };
-                                    })
-                                  }
-                                />
-                                <input
-                                  className="w-full border rounded px-2 py-2 text-xs"
-                                  placeholder="Note details"
-                                  list="inventory-note-texts"
-                                  value={n.note ?? ""}
-                                  onChange={e =>
-                                    setInventoryNotes(prev => {
-                                      const next = [...(prev[key] ?? [])];
-                                      next[idx] = { ...next[idx], note: e.target.value };
-                                      return { ...prev, [key]: next };
-                                    })
-                                  }
-                                />
-                                <div className="flex items-center gap-2">
-                                  <input
-                                    className="border rounded px-2 py-1 text-xs"
-                                    type="date"
-                                    value={n.expiresAt ?? ""}
-                                    onChange={e =>
-                                      setInventoryNotes(prev => {
-                                        const next = [...(prev[key] ?? [])];
-                                        next[idx] = { ...next[idx], expiresAt: e.target.value };
-                                        return { ...prev, [key]: next };
-                                      })
-                                    }
-                                  />
-                                  <button
-                                    className="px-2 py-1 border rounded text-xs"
-                                    onClick={() =>
-                                      setInventoryNotes(prev => {
-                                        const next = [...(prev[key] ?? [])];
-                                        next.splice(idx, 1);
-                                        return { ...prev, [key]: next };
-                                      })
-                                    }
-                                  >
-                                    Remove
-                                  </button>
-                                </div>
+                              <div key={noteId} className={`border rounded ${expired ? "opacity-50" : ""}`}>
+                                <button
+                                  className="w-full text-left px-2 py-2 text-xs flex items-center justify-between gap-2"
+                                  onClick={() => setInventoryExpandedNote(isOpen ? null : noteId)}
+                                >
+                                  <div className="min-w-0">
+                                    <div className="font-semibold truncate">{label}</div>
+                                    {preview ? (
+                                      <div className="text-gray-500 truncate">{preview}</div>
+                                    ) : (
+                                      <div className="text-gray-400 truncate">No details</div>
+                                    )}
+                                  </div>
+                                  <div className="text-gray-400 text-[10px]">
+                                    {n.expiresAt ? `Exp ${n.expiresAt}` : "No expiry"}
+                                  </div>
+                                </button>
+                                {isOpen ? (
+                                  <div className="px-2 pb-2 space-y-2">
+                                    <input
+                                      className="w-full border rounded px-2 py-1 text-xs"
+                                      placeholder="Label (e.g., Accessories, Finance Special)"
+                                      list="inventory-note-labels"
+                                      value={n.label ?? ""}
+                                      onChange={e =>
+                                        setInventoryNotes(prev => {
+                                          const next = [...(prev[key] ?? [])];
+                                          next[idx] = { ...next[idx], label: e.target.value };
+                                          return { ...prev, [key]: next };
+                                        })
+                                      }
+                                    />
+                                    <input
+                                      className="w-full border rounded px-2 py-2 text-xs"
+                                      placeholder="Note details"
+                                      list="inventory-note-texts"
+                                      value={n.note ?? ""}
+                                      onChange={e =>
+                                        setInventoryNotes(prev => {
+                                          const next = [...(prev[key] ?? [])];
+                                          next[idx] = { ...next[idx], note: e.target.value };
+                                          return { ...prev, [key]: next };
+                                        })
+                                      }
+                                    />
+                                    <div className="flex items-center gap-2">
+                                      <input
+                                        className="border rounded px-2 py-1 text-xs"
+                                        type="date"
+                                        value={n.expiresAt ?? ""}
+                                        onChange={e =>
+                                          setInventoryNotes(prev => {
+                                            const next = [...(prev[key] ?? [])];
+                                            next[idx] = { ...next[idx], expiresAt: e.target.value };
+                                            return { ...prev, [key]: next };
+                                          })
+                                        }
+                                      />
+                                      <button
+                                        className="px-2 py-1 border rounded text-xs"
+                                        onClick={() =>
+                                          setInventoryNotes(prev => {
+                                            const next = [...(prev[key] ?? [])];
+                                            next.splice(idx, 1);
+                                            return { ...prev, [key]: next };
+                                          })
+                                        }
+                                      >
+                                        Remove
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : null}
                               </div>
                             );
                           })}
