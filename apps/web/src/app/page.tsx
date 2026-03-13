@@ -3162,14 +3162,14 @@ export default function Home() {
                         type="file"
                         accept="image/*"
                         onChange={async e => {
-                          const file = e.target.files?.[0];
-                          if (!file) return;
-                          const fd = new FormData();
-                          fd.append("file", file);
-                          const resp = await fetch("/api/dealer-profile/logo", {
-                            method: "POST",
-                            body: fd
-                          });
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const fd = new FormData();
+                        fd.append("file", file);
+                        const resp = await fetch("/api/dealer-profile/logo", {
+                          method: "POST",
+                          body: fd
+                        });
                           const payload = await resp.json().catch(() => null);
                           if (resp.ok && payload?.profile) {
                             setDealerProfileForm(prev => ({
