@@ -19,7 +19,9 @@ import {
   setFollowUpMode,
   stopFollowUpCadence,
   markPricingEscalated,
-  closeConversation
+  closeConversation,
+  saveConversation,
+  flushConversationStore
 } from "../domain/conversationStore.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { resolveChannel, resolveLeadRule } from "../domain/leadSourceRules.js";
@@ -696,6 +698,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
             `${dealerName} is at ${addressLine}.`;
 
           appendOutbound(conv, "dealership", leadKey, confirmText, "draft_ai", eventObj.id ?? undefined);
+          saveConversation(conv);
+          await flushConversationStore();
           return res.status(200).json({
             ok: true,
             parsed: true,
