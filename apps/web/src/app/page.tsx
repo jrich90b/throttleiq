@@ -1033,10 +1033,16 @@ export default function Home() {
 
   async function setHumanMode(next: "human" | "suggest") {
     if (!selectedConv) return;
+    await setHumanModeForId(selectedConv.id, next, true);
+  }
+
+  async function setHumanModeForId(id: string, next: "human" | "suggest", updateSelected = false) {
     setModeSaving(true);
     setModeError(null);
-    setSelectedConv(prev => (prev ? { ...prev, mode: next } : prev));
-    const resp = await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/mode`, {
+    if (updateSelected) {
+      setSelectedConv(prev => (prev ? { ...prev, mode: next } : prev));
+    }
+    const resp = await fetch(`/api/conversations/${encodeURIComponent(id)}/mode`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode: next })
@@ -1045,7 +1051,7 @@ export default function Home() {
     if (!resp.ok || payload?.ok === false) {
       setModeError(payload?.error ?? "Failed to update mode");
     }
-    if (payload?.conversation) setSelectedConv(payload.conversation);
+    if (payload?.conversation && updateSelected) setSelectedConv(payload.conversation);
     await load();
     setModeSaving(false);
   }
@@ -2064,6 +2070,18 @@ export default function Home() {
 
                             <div className="flex items-center gap-2">
                               {c.mode === "human" ? <span title="Human override">👤</span> : null}
+                              <button
+                                className={`text-xs px-2 py-1 rounded border ${
+                                  c.mode === "human" ? "bg-gray-100" : "bg-blue-50"
+                                }`}
+                                title={c.mode === "human" ? "Switch to AI" : "Switch to Human"}
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  void setHumanModeForId(c.id, c.mode === "human" ? "suggest" : "human");
+                                }}
+                              >
+                                {c.mode === "human" ? "Human" : "AI"}
+                              </button>
                               {c.pendingDraft ? <span className="text-xs px-2 py-1 rounded border">Draft</span> : null}
                               <span className="text-xs px-2 py-1 rounded border">{c.messageCount}</span>
                             </div>
