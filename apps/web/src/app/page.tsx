@@ -949,7 +949,7 @@ export default function Home() {
     const resp = await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...payload, manualTakeover: true })
+      body: JSON.stringify({ ...payload, manualTakeover: true, channel: messageFilter })
     });
     const data = await resp.json().catch(() => null);
     setSendBody("");

@@ -2244,6 +2244,8 @@ app.post("/conversations/:id/send", async (req, res) => {
 
   const draftId = req.body?.draftId ? String(req.body.draftId) : undefined;
   const manualTakeover = req.body?.manualTakeover === true;
+  const channel =
+    req.body?.channel === "email" ? "email" : req.body?.channel === "sms" ? "sms" : null;
   const editNote = req.body?.editNote ? String(req.body.editNote).trim() : null;
   const draftCandidate = draftId
     ? conv.messages.find(m => m.id === draftId)
@@ -2255,7 +2257,8 @@ app.post("/conversations/:id/send", async (req, res) => {
   const rawTo = String(conv.leadKey ?? "").trim();
   const emailTo = conv.lead?.email ?? (rawTo.includes("@") ? rawTo : null);
   const wantsEmail =
-    !!emailTo && (rawTo.includes("@") || conv.classification?.channel === "email");
+    !!emailTo &&
+    (channel === "email" || rawTo.includes("@") || conv.classification?.channel === "email");
   const emailOptInOk = hasEmailOptIn(conv.lead);
   const digits = rawTo.replace(/\D/g, "");
   const to =
@@ -2275,7 +2278,7 @@ app.post("/conversations/:id/send", async (req, res) => {
         leadSource: conv.lead?.source ?? null,
         bucket: conv.classification?.bucket ?? null,
         cta: conv.classification?.cta ?? null,
-        channel: conv.classification?.channel ?? "sms",
+        channel: channel ?? conv.classification?.channel ?? "sms",
         draftId: draft?.id ?? null,
         draft: draft?.body ?? null,
         final: body,
