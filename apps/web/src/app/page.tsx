@@ -3155,28 +3155,31 @@ export default function Home() {
                         </button>
                       </div>
                     ) : null}
-                    <input
-                      className="text-sm"
-                      type="file"
-                      accept="image/*"
-                      onChange={async e => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-                        const fd = new FormData();
-                        fd.append("file", file);
-                        const resp = await fetch("/api/dealer-profile/logo", {
-                          method: "POST",
-                          body: fd
-                        });
-                        const payload = await resp.json().catch(() => null);
-                        if (resp.ok && payload?.profile) {
-                          setDealerProfileForm(prev => ({
-                            ...prev,
-                            logoUrl: payload.profile.logoUrl ?? payload.url ?? ""
-                          }));
-                        }
-                      }}
-                    />
+                    <label className="inline-flex items-center gap-2 px-3 py-2 border rounded text-sm cursor-pointer hover:bg-gray-50">
+                      <span>Upload logo</span>
+                      <input
+                        className="hidden"
+                        type="file"
+                        accept="image/*"
+                        onChange={async e => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          const fd = new FormData();
+                          fd.append("file", file);
+                          const resp = await fetch("/api/dealer-profile/logo", {
+                            method: "POST",
+                            body: fd
+                          });
+                          const payload = await resp.json().catch(() => null);
+                          if (resp.ok && payload?.profile) {
+                            setDealerProfileForm(prev => ({
+                              ...prev,
+                              logoUrl: payload.profile.logoUrl ?? payload.url ?? ""
+                            }));
+                          }
+                        }}
+                      />
+                    </label>
                   </div>
                   <input
                     className="border rounded px-3 py-2 text-sm col-span-2"
