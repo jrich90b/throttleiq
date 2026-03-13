@@ -21,6 +21,9 @@ export type ParsedAdfLead = {
   vehicleColor?: string;
   purchaseTimeframe?: string;
   hasMotoLicense?: boolean;
+  emailOptIn?: boolean;
+  smsOptIn?: boolean;
+  phoneOptIn?: boolean;
   preferredDate?: string;
   preferredTime?: string;
   tradeVehicle?: {
