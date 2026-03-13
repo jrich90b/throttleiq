@@ -2006,6 +2006,7 @@ app.post("/questions/:convId/:questionId/done", (req, res) => {
   if (!q) return res.status(404).json({ ok: false, error: "Question not found" });
 
   const conv = getConversation(convId);
+  if (!conv) return res.status(404).json({ ok: false, error: "Conversation not found" });
   const nowIso = new Date().toISOString();
   const applyAction = async (action?: string) => {
     const cfg = await getSchedulerConfig();
