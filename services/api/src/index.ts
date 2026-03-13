@@ -2,6 +2,9 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import twilio from "twilio";
+import multer from "multer";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { orchestrateInbound } from "./domain/orchestrator.js";
 import { classifySchedulingIntent } from "./domain/llmDraft.js";
 import type { InboundMessageEvent } from "./domain/types.js";
@@ -102,6 +105,7 @@ import {
 } from "./domain/userStore.js";
 
 const app = express();
+const upload = multer({ storage: multer.memoryStorage() });
 app.use(cors());
 app.use("/uploads", express.static(path.resolve(getDataDir(), "uploads")));
 app.post(
