@@ -766,6 +766,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   // Store the draft as an outbound message (suggest-only for now)
   appendOutbound(conv, "dealership", leadKey, draft, "draft_ai");
+  if (conv.classification?.bucket === "event_promo") {
+    closeConversation(conv, "event_promo_no_cadence");
+    stopFollowUpCadence(conv, "manual_handoff");
+  }
   const shouldStartCadence =
     !conv.followUpCadence?.status &&
     !conv.appointment?.bookedEventId &&
