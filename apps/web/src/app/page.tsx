@@ -186,6 +186,7 @@ export default function Home() {
     {}
   );
   const [schedulerConfig, setSchedulerConfig] = useState<any>(null);
+  const [messageFilter, setMessageFilter] = useState<"all" | "sms" | "email">("all");
   const [schedulerForm, setSchedulerForm] = useState({
     timezone: "America/New_York",
     assignmentMode: "preferred",
@@ -396,6 +397,10 @@ export default function Home() {
   useEffect(() => {
     if (selectedId) void loadConversation(selectedId);
   }, [selectedId]);
+
+  useEffect(() => {
+    setMessageFilter("all");
+  }, [selectedConv?.id]);
 
   useEffect(() => {
     if (section !== "contacts") setSelectedContact(null);
@@ -4306,8 +4311,35 @@ export default function Home() {
             ) : null}
 
             <div className="mt-6 border rounded-lg p-4 space-y-3">
+              <div className="flex items-center gap-2 mb-2">
+                <button
+                  className={`px-2 py-1 border rounded text-xs ${messageFilter === "all" ? "font-semibold bg-gray-100" : ""}`}
+                  onClick={() => setMessageFilter("all")}
+                >
+                  All
+                </button>
+                <button
+                  className={`px-2 py-1 border rounded text-xs ${messageFilter === "sms" ? "font-semibold bg-gray-100" : ""}`}
+                  onClick={() => setMessageFilter("sms")}
+                >
+                  SMS
+                </button>
+                <button
+                  className={`px-2 py-1 border rounded text-xs ${messageFilter === "email" ? "font-semibold bg-gray-100" : ""}`}
+                  onClick={() => setMessageFilter("email")}
+                >
+                  Email
+                </button>
+              </div>
               {selectedConv.messages
                 .filter(m => m.draftStatus !== "stale")
+                .filter(m => {
+                  if (messageFilter === "all") return true;
+                  const provider = m.provider ?? "";
+                  const isEmail = provider === "sendgrid" || provider === "sendgrid_adf";
+                  const isSms = provider === "twilio" || provider === "human" || provider === "draft_ai";
+                  return messageFilter === "email" ? isEmail : isSms;
+                })
                 .map(m => {
                   const isPending = pendingDraft?.id === m.id;
                   return (
