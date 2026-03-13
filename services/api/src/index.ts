@@ -2237,7 +2237,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hasOpenTodo) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
     }
-    if (manualTakeover) setConversationMode(conv.id, "human");
+    setConversationMode(conv.id, "human");
     markAppointmentAcknowledged(conv);
     await logRow(null);
     await maybeLogTlp();
@@ -2265,7 +2265,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hasOpenTodo) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
     }
-    if (manualTakeover) setConversationMode(conv.id, "human");
+    setConversationMode(conv.id, "human");
     markAppointmentAcknowledged(conv);
     await logRow(null);
     await maybeLogTlp();
@@ -2293,7 +2293,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hasOpenTodo) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
     }
-    if (manualTakeover) setConversationMode(conv.id, "human");
+    setConversationMode(conv.id, "human");
     markAppointmentAcknowledged(conv);
     await logRow(msg.sid);
     await maybeLogTlp();
@@ -2318,7 +2318,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hasOpenTodo) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
     }
-    if (manualTakeover) setConversationMode(conv.id, "human");
+    setConversationMode(conv.id, "human");
     markAppointmentAcknowledged(conv);
     await logRow(null);
 
@@ -2369,6 +2369,10 @@ if (authToken && signature) {
 
   const conv = upsertConversationByLeadKey(event.from, "suggest");
   appendInbound(conv, event);
+  if (conv.mode === "human") {
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   const webhookMode = event.provider === "twilio" ? "autopilot" : effectiveMode(conv);
   if (isSuppressed(event.from)) {
     stopFollowUpCadence(conv, "suppressed");
