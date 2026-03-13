@@ -536,7 +536,7 @@ export async function orchestrateInbound(
               `This is ${agentName} at ${dealerName}. ${longTermInvite}` +
               `We don't have a ${originalLabel} in stock right now, ` +
               `but we do have ${fallbackLabel} units available. ${priceLine} ` +
-              `${inventoryNote ? `${inventoryNote} ` : ""}` +
+              `${inventoryNote ? `Right now there's ${inventoryNote} available. ` : ""}` +
               `If you'd like, I can send photos or details.`;
             return finalize({
               intent,
@@ -1166,7 +1166,7 @@ export async function orchestrateInbound(
         const canScheduleNow = !(availabilityAsked && (inventoryStatus === "UNKNOWN" || !inventoryStatus));
         const hasConcreteInventory = !!stockId || inventoryStatus === "AVAILABLE";
         const scheduleInvite = buildScheduleInvite(hasConcreteInventory);
-        const noteLine = inventoryNote ? `${inventoryNote} ` : "";
+        const noteLine = inventoryNote ? `Right now there's ${inventoryNote} available. ` : "";
         if (canScheduleNow && suggestedSlots.length >= 2) {
           const a = suggestedSlots[0].startLocal;
           const b = suggestedSlots[1].startLocal;

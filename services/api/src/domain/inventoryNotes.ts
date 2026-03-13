@@ -69,7 +69,8 @@ export async function getInventoryNote(stockId?: string | null, vin?: string | n
   const active = entry.notes.filter(n => !isExpired(n.expiresAt) && n.note?.trim());
   if (!active.length) return null;
   const top = active.slice(0, 2).map(n => n.note.trim());
-  return top.join(" ");
+  if (top.length === 1) return top[0];
+  return `${top[0]} and ${top[1]}`;
 }
 
 export async function listInventoryNotes(): Promise<Record<string, InventoryNoteEntry>> {
