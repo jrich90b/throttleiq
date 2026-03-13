@@ -36,6 +36,8 @@ import {
   localPartsToUtcDate
 } from "../domain/schedulerEngine.js";
 import { getDealerProfile } from "../domain/dealerProfile.js";
+import { getSystemMode } from "../domain/settingsStore.js";
+import { sendEmail } from "../domain/emailSender.js";
 import { upsertContact } from "../domain/contactsStore.js";
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -768,8 +770,41 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
   }
 
-  // Store the draft as an outbound message (suggest-only for now)
-  appendOutbound(conv, "dealership", leadKey, draft, "draft_ai");
+  const systemMode = getSystemMode();
+  const emailTo = lead.email?.trim();
+  const useEmail = channel === "email" && !!emailTo && lead.emailOptIn === true;
+  const dealerProfile = await getDealerProfile();
+
+  if (systemMode !== "suggest" && useEmail) {
+    const dealerName = dealerProfile?.dealerName ?? "Dealership";
+    const { from: emailFrom, replyTo: emailReplyTo } = {
+      from: (dealerProfile?.fromEmail ?? process.env.SENDGRID_FROM_EMAIL ?? "").trim(),
+      replyTo: (dealerProfile?.replyToEmail ?? process.env.SENDGRID_REPLY_TO ?? "").trim()
+    };
+    if (emailFrom) {
+      try {
+        const subject = `Thanks for your inquiry at ${dealerName}`;
+        await sendEmail({
+          to: emailTo!,
+          subject,
+          text: draft,
+          from: emailFrom,
+          replyTo: emailReplyTo || undefined
+        });
+        appendOutbound(conv, emailFrom, emailTo!, draft, "sendgrid");
+        saveConversation(conv);
+        await flushConversationStore();
+      } catch (e: any) {
+        console.log("[sendgrid inbound] email send failed:", e?.message ?? e);
+        appendOutbound(conv, "dealership", leadKey, draft, "draft_ai");
+      }
+    } else {
+      appendOutbound(conv, "dealership", leadKey, draft, "draft_ai");
+    }
+  } else {
+    // Store the draft as an outbound message (suggest-only for now)
+    appendOutbound(conv, "dealership", leadKey, draft, "draft_ai");
+  }
   if (conv.classification?.bucket === "event_promo") {
     closeConversation(conv, "event_promo_no_cadence");
     stopFollowUpCadence(conv, "manual_handoff");

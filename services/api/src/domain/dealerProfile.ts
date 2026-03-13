@@ -12,6 +12,9 @@ export type DealerProfile = {
   sharepointSiteUrl?: string;
   sharepointUsername?: string;
   sharepointPassword?: string;
+  fromEmail?: string;
+  replyToEmail?: string;
+  emailProvider?: "sendgrid" | "smtp";
   address?: { line1?: string; city?: string; state?: string; zip?: string; country?: string };
   phone?: string;
   website?: string;

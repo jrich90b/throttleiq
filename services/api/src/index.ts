@@ -35,6 +35,7 @@ import {
 } from "./domain/schedulerEngine.js";
 import { extractImageDate, findInventoryMatches, findInventoryPrice, getInventoryFeed } from "./domain/inventoryFeed.js";
 import { listInventoryNotes, setInventoryNote } from "./domain/inventoryNotes.js";
+import { sendEmail } from "./domain/emailSender.js";
 
 import {
   upsertConversationByLeadKey,
@@ -210,6 +211,18 @@ async function syncSchedulerSalespeopleFromUsers() {
 function effectiveMode(conv: any): SystemMode {
   if (conv?.mode === "human") return "suggest";
   return getSystemMode();
+}
+
+function hasEmailOptIn(lead: any): boolean {
+  return lead?.emailOptIn !== false;
+}
+
+function getEmailConfig(profile: any) {
+  const from =
+    (profile?.fromEmail ?? process.env.SENDGRID_FROM_EMAIL ?? "").trim() || undefined;
+  const replyTo =
+    (profile?.replyToEmail ?? process.env.SENDGRID_REPLY_TO ?? "").trim() || undefined;
+  return { from, replyTo };
 }
 
 setInterval(() => {
@@ -1153,7 +1166,7 @@ async function processDueFollowUps() {
         continue;
       }
     }
-    const lastOutbound = getLastOutbound(conv, ["human", "twilio"]);
+    const lastOutbound = getLastOutbound(conv, ["human", "twilio", "sendgrid"]);
     if (lastOutbound?.at) {
       const outboundAt = new Date(lastOutbound.at);
       if (now.getTime() - outboundAt.getTime() < 72 * 60 * 60 * 1000) {
@@ -1197,13 +1210,55 @@ async function processDueFollowUps() {
     }
 
     const systemMode = effectiveMode(conv);
+    const emailTo = conv.lead?.email;
+    const useEmail =
+      conv.classification?.channel === "email" && !!emailTo && hasEmailOptIn(conv.lead);
+    const { from: emailFrom, replyTo: emailReplyTo } = getEmailConfig(dealerProfile);
     const to = normalizePhone(conv.leadKey);
     const from = process.env.TWILIO_FROM_NUMBER;
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
     const authToken = process.env.TWILIO_AUTH_TOKEN;
 
     if (systemMode === "suggest") {
-      appendOutbound(conv, from ?? "salesperson", to, message, "draft_ai", undefined, mediaUrls);
+      const draftTo = useEmail ? emailTo! : to;
+      appendOutbound(conv, from ?? "salesperson", draftTo, message, "draft_ai", undefined, mediaUrls);
+      if (cadence.kind === "long_term") {
+        const nowIso = new Date().toISOString();
+        conv.followUpCadence = {
+          status: "active",
+          anchorAt: nowIso,
+          nextDueAt: computeFollowUpDueAt(nowIso, FOLLOW_UP_DAY_OFFSETS[0], cfg.timezone),
+          stepIndex: 0,
+          kind: "standard",
+          lastSentAt: nowIso,
+          lastSentStep: -1
+        };
+      } else {
+        advanceFollowUpCadence(conv, cfg.timezone);
+      }
+      continue;
+    }
+
+    if (useEmail) {
+      if (!emailFrom) {
+        appendOutbound(conv, "salesperson", emailTo!, message, "human", undefined, mediaUrls);
+      } else {
+        try {
+          const dealerName = dealerProfile?.dealerName ?? "Dealership";
+          const subject = `Follow-up from ${dealerName}`;
+          await sendEmail({
+            to: emailTo!,
+            subject,
+            text: message,
+            from: emailFrom,
+            replyTo: emailReplyTo
+          });
+          appendOutbound(conv, emailFrom, emailTo!, message, "sendgrid", undefined, mediaUrls);
+        } catch (e: any) {
+          console.log("[followup] email send failed:", e?.message ?? e);
+          appendOutbound(conv, "salesperson", emailTo!, message, "human", undefined, mediaUrls);
+        }
+      }
       if (cadence.kind === "long_term") {
         const nowIso = new Date().toISOString();
         conv.followUpCadence = {
@@ -2212,6 +2267,10 @@ app.post("/conversations/:id/send", async (req, res) => {
 
   // Normalize destination number from conversation leadKey
   const rawTo = String(conv.leadKey ?? "").trim();
+  const emailTo = conv.lead?.email ?? (rawTo.includes("@") ? rawTo : null);
+  const wantsEmail =
+    !!emailTo && (rawTo.includes("@") || conv.classification?.channel === "email");
+  const emailOptInOk = hasEmailOptIn(conv.lead);
   const digits = rawTo.replace(/\D/g, "");
   const to =
     rawTo.startsWith("+")
@@ -2273,6 +2332,56 @@ app.post("/conversations/:id/send", async (req, res) => {
       addTodo(conv, "other", msg);
     }
   };
+
+  if (wantsEmail) {
+    if (!emailOptInOk) {
+      return res.status(400).json({
+        ok: false,
+        error: "email opt-in not present for this lead",
+        conversation: conv
+      });
+    }
+    const dealerProfile = await getDealerProfile();
+    const { from: emailFrom, replyTo: emailReplyTo } = getEmailConfig(dealerProfile);
+    if (!emailFrom) {
+      return res.status(400).json({
+        ok: false,
+        error: "SendGrid from email not configured",
+        conversation: conv
+      });
+    }
+    const dealerName = dealerProfile?.dealerName ?? "Dealership";
+    const subject = String(req.body?.subject ?? `Message from ${dealerName}`).trim();
+    const hadOutbound = conv.messages.some(m => m.direction === "out");
+    const fin = finalizeDraftAsSent(conv, draftId, body, "sendgrid");
+    if (!fin.usedDraft) {
+      appendOutbound(conv, emailFrom, emailTo!, body, "sendgrid");
+    }
+    try {
+      await sendEmail({
+        to: emailTo!,
+        subject,
+        text: body,
+        from: emailFrom,
+        replyTo: emailReplyTo
+      });
+      if (!hadOutbound) {
+        await maybeStartCadence(conv, new Date().toISOString());
+      }
+      const hasOpenTodo = listOpenTodos().some(t => t.convId === conv.id);
+      if (!hasOpenTodo) {
+        pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
+      }
+      if (manualTakeover) setConversationMode(conv.id, "human");
+      markAppointmentAcknowledged(conv);
+      await logRow(null);
+      await maybeLogTlp();
+      return res.json({ ok: true, conversation: conv });
+    } catch (err: any) {
+      console.warn("[email] send failed:", err?.message ?? err);
+      return res.status(500).json({ ok: false, error: "email send failed", conversation: conv });
+    }
+  }
 
   if (!to.startsWith("+")) {
     // Not a phone number; still log as human note so it isn't lost

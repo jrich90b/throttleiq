@@ -6,7 +6,7 @@ import { dataPath } from "./dataDir.js";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
 
 export type ConversationMode = "autopilot" | "suggest" | "human";
-export type MessageProvider = "twilio" | "sendgrid_adf" | "draft_ai" | "human";
+export type MessageProvider = "twilio" | "sendgrid_adf" | "sendgrid" | "draft_ai" | "human";
 
 export type AppointmentStatus = "none" | "proposed" | "confirmed";
 
@@ -120,6 +120,9 @@ export type LeadProfile = {
   lastName?: string;
   email?: string;
   phone?: string;
+  emailOptIn?: boolean;
+  smsOptIn?: boolean;
+  phoneOptIn?: boolean;
   street?: string;
   city?: string;
   region?: string;

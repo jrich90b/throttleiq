@@ -171,6 +171,8 @@ export default function Home() {
     sharepointSiteUrl: "",
     sharepointUsername: "",
     sharepointPassword: "",
+    fromEmail: "",
+    replyToEmail: "",
     phone: "",
     website: "",
     addressLine1: "",
@@ -426,6 +428,8 @@ export default function Home() {
           sharepointSiteUrl: profile.sharepointSiteUrl ?? "",
           sharepointUsername: profile.sharepointUsername ?? "",
           sharepointPassword: profile.sharepointPassword ?? "",
+          fromEmail: profile.fromEmail ?? "",
+          replyToEmail: profile.replyToEmail ?? "",
           phone: profile.phone ?? "",
           website: profile.website ?? "",
           addressLine1: profile.address?.line1 ?? "",
@@ -1150,6 +1154,8 @@ export default function Home() {
         sharepointSiteUrl: dealerProfileForm.sharepointSiteUrl.trim(),
         sharepointUsername: dealerProfileForm.sharepointUsername.trim(),
         sharepointPassword: dealerProfileForm.sharepointPassword.trim(),
+        fromEmail: dealerProfileForm.fromEmail.trim(),
+        replyToEmail: dealerProfileForm.replyToEmail.trim(),
         phone: dealerProfileForm.phone.trim(),
         website: dealerProfileForm.website.trim(),
         address: {
@@ -3183,6 +3189,18 @@ export default function Home() {
                     placeholder="Website"
                     value={dealerProfileForm.website}
                     onChange={e => setDealerProfileForm({ ...dealerProfileForm, website: e.target.value })}
+                  />
+                  <input
+                    className="border rounded px-3 py-2 text-sm"
+                    placeholder="From email (outbound)"
+                    value={dealerProfileForm.fromEmail}
+                    onChange={e => setDealerProfileForm({ ...dealerProfileForm, fromEmail: e.target.value })}
+                  />
+                  <input
+                    className="border rounded px-3 py-2 text-sm"
+                    placeholder="Reply-to email (optional)"
+                    value={dealerProfileForm.replyToEmail}
+                    onChange={e => setDealerProfileForm({ ...dealerProfileForm, replyToEmail: e.target.value })}
                   />
                   <input
                     className="border rounded px-3 py-2 text-sm col-span-2"

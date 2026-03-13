@@ -103,6 +103,15 @@ function parseFromComment(comment?: string) {
   const optionsRaw = optionsMatch?.[1]?.trim().toLowerCase();
   const preferredDateMatch = clean.match(/preferred date:\s*([^\n\r]+)/i);
   const preferredTimeMatch = clean.match(/preferred time:\s*([^\n\r]+)/i);
+  const emailOptInMatch =
+    clean.match(/email opt-?in:\s*(yes|no)/i) ||
+    clean.match(/can we contact you via email\?:\s*(yes|no)/i);
+  const phoneOptInMatch =
+    clean.match(/phone opt-?in:\s*(yes|no)/i) ||
+    clean.match(/can we contact you via phone\?:\s*(yes|no)/i);
+  const smsOptInMatch =
+    clean.match(/text opt-?in:\s*(yes|no)/i) ||
+    clean.match(/can we contact you via text\?:\s*(yes|no)/i);
   const sourceIdMatch = clean.match(/source id:\s*(\d+)/i);
   const leadSourceId = sourceIdMatch?.[1] ? Number(sourceIdMatch[1]) : undefined;
   let sellOption: "cash" | "trade" | "either" | undefined;
@@ -128,7 +137,10 @@ function parseFromComment(comment?: string) {
     sellOption,
     leadSourceId,
     preferredDate: preferredDateMatch?.[1]?.trim(),
-    preferredTime: preferredTimeMatch?.[1]?.trim()
+    preferredTime: preferredTimeMatch?.[1]?.trim(),
+    emailOptIn: emailOptInMatch ? emailOptInMatch[1].toLowerCase() === "yes" : undefined,
+    phoneOptIn: phoneOptInMatch ? phoneOptInMatch[1].toLowerCase() === "yes" : undefined,
+    smsOptIn: smsOptInMatch ? smsOptInMatch[1].toLowerCase() === "yes" : undefined
   };
 }
 
@@ -300,6 +312,9 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
     lastName,
     email: finalEmail,
     phone: finalPhone,
+    emailOptIn: parsedFromComment.emailOptIn,
+    phoneOptIn: parsedFromComment.phoneOptIn,
+    smsOptIn: parsedFromComment.smsOptIn,
     street,
     city,
     region,
