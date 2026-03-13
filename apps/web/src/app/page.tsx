@@ -182,7 +182,7 @@ export default function Home() {
     {}
   );
   const [schedulerConfig, setSchedulerConfig] = useState<any>(null);
-  const [messageFilter, setMessageFilter] = useState<"all" | "sms" | "email">("all");
+  const [messageFilter, setMessageFilter] = useState<"sms" | "email">("sms");
   const [schedulerForm, setSchedulerForm] = useState({
     timezone: "America/New_York",
     assignmentMode: "preferred",
@@ -391,7 +391,7 @@ export default function Home() {
   }, [selectedId]);
 
   useEffect(() => {
-    setMessageFilter("all");
+    setMessageFilter("sms");
   }, [selectedConv?.id]);
 
   useEffect(() => {
@@ -4250,12 +4250,6 @@ export default function Home() {
             <div className="mt-6 border rounded-lg p-4 space-y-3">
               <div className="flex items-center gap-2 mb-2">
                 <button
-                  className={`px-2 py-1 border rounded text-xs ${messageFilter === "all" ? "font-semibold bg-gray-100" : ""}`}
-                  onClick={() => setMessageFilter("all")}
-                >
-                  All
-                </button>
-                <button
                   className={`px-2 py-1 border rounded text-xs ${messageFilter === "sms" ? "font-semibold bg-gray-100" : ""}`}
                   onClick={() => setMessageFilter("sms")}
                 >
@@ -4271,10 +4265,10 @@ export default function Home() {
               {selectedConv.messages
                 .filter(m => m.draftStatus !== "stale")
                 .filter(m => {
-                  if (messageFilter === "all") return true;
                   const provider = m.provider ?? "";
-                  const isEmail = provider === "sendgrid" || provider === "sendgrid_adf";
-                  const isSms = provider === "twilio" || provider === "human" || provider === "draft_ai";
+                  const isEmail = provider === "sendgrid";
+                  const isSms =
+                    provider === "twilio" || provider === "human" || provider === "draft_ai" || provider === "sendgrid_adf";
                   return messageFilter === "email" ? isEmail : isSms;
                 })
                 .map(m => {
