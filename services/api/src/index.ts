@@ -2237,7 +2237,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hasOpenTodo) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
     }
-    setConversationMode(conv.id, "human");
+    if (manualTakeover) setConversationMode(conv.id, "human");
     markAppointmentAcknowledged(conv);
     await logRow(null);
     await maybeLogTlp();
@@ -2265,7 +2265,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hasOpenTodo) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
     }
-    setConversationMode(conv.id, "human");
+    if (manualTakeover) setConversationMode(conv.id, "human");
     markAppointmentAcknowledged(conv);
     await logRow(null);
     await maybeLogTlp();
@@ -2293,7 +2293,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hasOpenTodo) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
     }
-    setConversationMode(conv.id, "human");
+    if (manualTakeover) setConversationMode(conv.id, "human");
     markAppointmentAcknowledged(conv);
     await logRow(msg.sid);
     await maybeLogTlp();
@@ -2318,7 +2318,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hasOpenTodo) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
     }
-    setConversationMode(conv.id, "human");
+    if (manualTakeover) setConversationMode(conv.id, "human");
     markAppointmentAcknowledged(conv);
     await logRow(null);
 
