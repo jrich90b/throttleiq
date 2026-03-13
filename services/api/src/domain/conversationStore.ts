@@ -162,6 +162,7 @@ export type Message = {
   from: string;
   to: string;
   body: string;
+  originalDraftBody?: string;
   mediaUrls?: string[];
   at: string; // ISO
   provider?: MessageProvider;
@@ -444,6 +445,9 @@ export function finalizeDraftAsSent(
   if (msg.draftStatus === "stale") return { usedDraft: false };
 
   const original = msg.body;
+  if (original.trim() !== finalBody.trim()) {
+    msg.originalDraftBody = original;
+  }
   msg.body = finalBody;
   msg.provider = provider;
   msg.providerMessageId = providerMessageId;
