@@ -108,6 +108,8 @@ export type InternalQuestion = {
   createdAt: string;
   status: "open" | "done";
   doneAt?: string;
+  outcome?: string;
+  followUpAction?: string;
 };
 
 export type LeadProfile = {
@@ -1310,11 +1312,18 @@ export function listOpenQuestions(): InternalQuestion[] {
   return questions.filter(q => q.status === "open");
 }
 
-export function markQuestionDone(convId: string, questionId: string): InternalQuestion | null {
+export function markQuestionDone(
+  convId: string,
+  questionId: string,
+  outcome?: string,
+  followUpAction?: string
+): InternalQuestion | null {
   const q = questions.find(x => x.id === questionId && x.convId === convId);
   if (!q) return null;
   q.status = "done";
   q.doneAt = nowIso();
+  if (outcome) q.outcome = outcome;
+  if (followUpAction) q.followUpAction = followUpAction;
   scheduleSave();
   return q;
 }

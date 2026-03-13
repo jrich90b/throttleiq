@@ -2000,8 +2000,58 @@ app.post("/questions", (req, res) => {
 
 app.post("/questions/:convId/:questionId/done", (req, res) => {
   const { convId, questionId } = req.params;
-  const q = markQuestionDone(convId, questionId);
+  const outcome = String(req.body?.outcome ?? "").trim() || undefined;
+  const followUpAction = String(req.body?.followUpAction ?? "").trim() || undefined;
+  const q = markQuestionDone(convId, questionId, outcome, followUpAction);
   if (!q) return res.status(404).json({ ok: false, error: "Question not found" });
+
+  const conv = getConversation(convId);
+  const nowIso = new Date().toISOString();
+  const applyAction = async (action?: string) => {
+    const cfg = await getSchedulerConfig();
+    const tz = cfg.timezone || "America/New_York";
+    if (!action || action === "none") return;
+    if (action === "archive") {
+      stopFollowUpCadence(conv, "attendance_archive");
+      closeConversation(conv, "attendance_archive");
+      return;
+    }
+    if (action === "pause_indef") {
+      stopFollowUpCadence(conv, "attendance_pause_indef");
+      setFollowUpMode(conv, "paused_indefinite", "attendance_pause_indef");
+      return;
+    }
+    if (action === "pause_24h" || action === "pause_72h") {
+      if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
+        startFollowUpCadence(conv, nowIso, tz);
+      }
+      const hours = action === "pause_24h" ? 24 : 72;
+      const until = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+      pauseFollowUpCadence(conv, until, "attendance_pause");
+      return;
+    }
+    if (action === "resume") {
+      setFollowUpMode(conv, "active", "attendance_resume");
+      if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
+        startFollowUpCadence(conv, nowIso, tz);
+      } else if (conv.followUpCadence.pausedUntil) {
+        conv.followUpCadence.pausedUntil = undefined;
+        conv.followUpCadence.pauseReason = undefined;
+      }
+    }
+  };
+
+  const derivedAction = () => {
+    if (followUpAction) return followUpAction;
+    if (!outcome) return undefined;
+    if (outcome === "sold") return "archive";
+    if (outcome === "hold") return "pause_indef";
+    if (outcome === "undecided") return "resume";
+    if (outcome === "no_show") return "pause_72h";
+    return undefined;
+  };
+
+  void applyAction(derivedAction());
   res.json({ ok: true, question: q });
 });
 

@@ -32,9 +32,18 @@ export async function POST(req: Request) {
   const text = String(body?.text ?? "").trim();
 
   if (convId && questionId) {
+    const outcome = String(body?.outcome ?? "").trim();
+    const followUpAction = String(body?.followUpAction ?? "").trim();
     const r = await apiFetch(
       `${base}/questions/${encodeURIComponent(convId)}/${encodeURIComponent(questionId)}/done`,
-      { method: "POST" }
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          outcome: outcome || undefined,
+          followUpAction: followUpAction || undefined
+        })
+      }
     );
     const txt = await r.text();
     try {
