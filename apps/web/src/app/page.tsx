@@ -173,6 +173,8 @@ export default function Home() {
     sharepointPassword: "",
     fromEmail: "",
     replyToEmail: "",
+    emailSignature: "",
+    logoUrl: "",
     phone: "",
     website: "",
     addressLine1: "",
@@ -435,6 +437,8 @@ export default function Home() {
           sharepointPassword: profile.sharepointPassword ?? "",
           fromEmail: profile.fromEmail ?? "",
           replyToEmail: profile.replyToEmail ?? "",
+          emailSignature: profile.emailSignature ?? "",
+          logoUrl: profile.logoUrl ?? "",
           phone: profile.phone ?? "",
           website: profile.website ?? "",
           addressLine1: profile.address?.line1 ?? "",
@@ -1161,6 +1165,8 @@ export default function Home() {
         sharepointPassword: dealerProfileForm.sharepointPassword.trim(),
         fromEmail: dealerProfileForm.fromEmail.trim(),
         replyToEmail: dealerProfileForm.replyToEmail.trim(),
+        emailSignature: dealerProfileForm.emailSignature,
+        logoUrl: dealerProfileForm.logoUrl.trim(),
         phone: dealerProfileForm.phone.trim(),
         website: dealerProfileForm.website.trim(),
         address: {
@@ -3207,6 +3213,54 @@ export default function Home() {
                     value={dealerProfileForm.replyToEmail}
                     onChange={e => setDealerProfileForm({ ...dealerProfileForm, replyToEmail: e.target.value })}
                   />
+                  <textarea
+                    className="border rounded px-3 py-2 text-sm col-span-2 min-h-[90px]"
+                    placeholder="Email signature (optional)"
+                    value={dealerProfileForm.emailSignature}
+                    onChange={e =>
+                      setDealerProfileForm({ ...dealerProfileForm, emailSignature: e.target.value })
+                    }
+                  />
+                  <div className="col-span-2 border rounded p-3">
+                    <div className="text-xs text-gray-600 mb-2">Logo (email signature)</div>
+                    {dealerProfileForm.logoUrl ? (
+                      <div className="flex items-center gap-3 mb-2">
+                        <img
+                          src={dealerProfileForm.logoUrl}
+                          alt="Dealer logo"
+                          className="h-12 object-contain border rounded bg-white"
+                        />
+                        <button
+                          className="px-2 py-1 border rounded text-xs"
+                          onClick={() => setDealerProfileForm({ ...dealerProfileForm, logoUrl: "" })}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ) : null}
+                    <input
+                      className="text-sm"
+                      type="file"
+                      accept="image/*"
+                      onChange={async e => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const fd = new FormData();
+                        fd.append("file", file);
+                        const resp = await fetch("/api/dealer-profile/logo", {
+                          method: "POST",
+                          body: fd
+                        });
+                        const payload = await resp.json().catch(() => null);
+                        if (resp.ok && payload?.profile) {
+                          setDealerProfileForm(prev => ({
+                            ...prev,
+                            logoUrl: payload.profile.logoUrl ?? payload.url ?? ""
+                          }));
+                        }
+                      }}
+                    />
+                  </div>
                   <input
                     className="border rounded px-3 py-2 text-sm col-span-2"
                     placeholder="MCP Base URL"

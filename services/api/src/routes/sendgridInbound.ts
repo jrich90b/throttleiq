@@ -777,21 +777,26 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   if (systemMode !== "suggest" && useEmail) {
     const dealerName = dealerProfile?.dealerName ?? "Dealership";
-    const { from: emailFrom, replyTo: emailReplyTo } = {
+    const { from: emailFrom, replyTo: emailReplyTo, signature } = {
       from: (dealerProfile?.fromEmail ?? process.env.SENDGRID_FROM_EMAIL ?? "").trim(),
-      replyTo: (dealerProfile?.replyToEmail ?? process.env.SENDGRID_REPLY_TO ?? "").trim()
+      replyTo: (dealerProfile?.replyToEmail ?? process.env.SENDGRID_REPLY_TO ?? "").trim(),
+      signature: String(dealerProfile?.emailSignature ?? "").trim() || undefined
     };
     if (emailFrom) {
       try {
         const subject = `Thanks for your inquiry at ${dealerName}`;
+        const signed =
+          signature
+            ? `${draft}\n\n${signature}${dealerProfile?.logoUrl ? `\n\n${dealerProfile.logoUrl}` : ""}`
+            : draft;
         await sendEmail({
           to: emailTo!,
           subject,
-          text: draft,
+          text: signed,
           from: emailFrom,
           replyTo: emailReplyTo || undefined
         });
-        appendOutbound(conv, emailFrom, emailTo!, draft, "sendgrid");
+        appendOutbound(conv, emailFrom, emailTo!, signed, "sendgrid");
         saveConversation(conv);
         await flushConversationStore();
       } catch (e: any) {

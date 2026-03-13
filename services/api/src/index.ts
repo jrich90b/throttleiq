@@ -9,6 +9,7 @@ import { sendgridInboundMiddleware, handleSendgridInbound } from "./routes/sendg
 import { resolveInventoryUrlByStock } from "./domain/inventoryUrlResolver.js";
 import { checkInventorySalePendingByUrl } from "./domain/inventoryChecker.js";
 import { getDealerProfile, saveDealerProfile } from "./domain/dealerProfile.js";
+import { getDataDir } from "./domain/dataDir.js";
 import { computeFollowUpDueAt, FOLLOW_UP_DAY_OFFSETS } from "./domain/conversationStore.js";
 import { getSchedulerConfig, saveSchedulerConfig, dayKey, getPreferredSalespeople } from "./domain/schedulerConfig.js";
 import {
@@ -102,6 +103,7 @@ import {
 
 const app = express();
 app.use(cors());
+app.use("/uploads", express.static(path.resolve(getDataDir(), "uploads")));
 app.post(
   "/debug/inbound",
   express.raw({ type: "*/*", limit: "10mb" }),
@@ -222,7 +224,8 @@ function getEmailConfig(profile: any) {
     (profile?.fromEmail ?? process.env.SENDGRID_FROM_EMAIL ?? "").trim() || undefined;
   const replyTo =
     (profile?.replyToEmail ?? process.env.SENDGRID_REPLY_TO ?? "").trim() || undefined;
-  return { from, replyTo };
+  const signature = String(profile?.emailSignature ?? "").trim() || undefined;
+  return { from, replyTo, signature };
 }
 
 setInterval(() => {
@@ -1213,7 +1216,7 @@ async function processDueFollowUps() {
     const emailTo = conv.lead?.email;
     const useEmail =
       conv.classification?.channel === "email" && !!emailTo && hasEmailOptIn(conv.lead);
-    const { from: emailFrom, replyTo: emailReplyTo } = getEmailConfig(dealerProfile);
+    const { from: emailFrom, replyTo: emailReplyTo, signature } = getEmailConfig(dealerProfile);
     const to = normalizePhone(conv.leadKey);
     const from = process.env.TWILIO_FROM_NUMBER;
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -1244,20 +1247,24 @@ async function processDueFollowUps() {
         appendOutbound(conv, "salesperson", emailTo!, message, "human", undefined, mediaUrls);
       } else {
         try {
-          const dealerName = dealerProfile?.dealerName ?? "Dealership";
-          const subject = `Follow-up from ${dealerName}`;
-          await sendEmail({
-            to: emailTo!,
-            subject,
-            text: message,
-            from: emailFrom,
-            replyTo: emailReplyTo
-          });
-          appendOutbound(conv, emailFrom, emailTo!, message, "sendgrid", undefined, mediaUrls);
-        } catch (e: any) {
-          console.log("[followup] email send failed:", e?.message ?? e);
-          appendOutbound(conv, "salesperson", emailTo!, message, "human", undefined, mediaUrls);
-        }
+        const dealerName = dealerProfile?.dealerName ?? "Dealership";
+        const subject = `Follow-up from ${dealerName}`;
+        const signed =
+          signature
+            ? `${message}\n\n${signature}${dealerProfile?.logoUrl ? `\n\n${dealerProfile.logoUrl}` : ""}`
+            : message;
+        await sendEmail({
+          to: emailTo!,
+          subject,
+          text: signed,
+          from: emailFrom,
+          replyTo: emailReplyTo
+        });
+        appendOutbound(conv, emailFrom, emailTo!, signed, "sendgrid", undefined, mediaUrls);
+      } catch (e: any) {
+        console.log("[followup] email send failed:", e?.message ?? e);
+        appendOutbound(conv, "salesperson", emailTo!, message, "human", undefined, mediaUrls);
+      }
       }
       if (cadence.kind === "long_term") {
         const nowIso = new Date().toISOString();
@@ -1932,6 +1939,28 @@ app.get("/dealer-profile", async (_req, res) => {
   res.json({ ok: true, profile });
 });
 
+app.post("/dealer-profile/logo", requireManager, upload.single("file"), async (req, res) => {
+  if (!req.file) return res.status(400).json({ ok: false, error: "missing file" });
+  const ext = path.extname(req.file.originalname || "").toLowerCase();
+  const allowed = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
+  if (!allowed.has(ext)) {
+    return res.status(400).json({ ok: false, error: "invalid file type" });
+  }
+  const fileName = `dealer-logo${ext}`;
+  const dir = path.resolve(getDataDir(), "uploads");
+  await fs.promises.mkdir(dir, { recursive: true });
+  const dest = path.join(dir, fileName);
+  await fs.promises.writeFile(dest, req.file.buffer);
+
+  const profile = (await getDealerProfile()) ?? {};
+  const publicBase = process.env.PUBLIC_BASE_URL ?? "";
+  const url = publicBase
+    ? `${publicBase.replace(/\/$/, "")}/uploads/${fileName}`
+    : `/uploads/${fileName}`;
+  const saved = await saveDealerProfile({ ...profile, logoUrl: url });
+  res.json({ ok: true, profile: saved, url });
+});
+
 app.put("/dealer-profile", requireManager, async (req, res) => {
   console.log("[dealer-profile] save start");
   const saved = await saveDealerProfile(req.body ?? {});
@@ -2342,7 +2371,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       });
     }
     const dealerProfile = await getDealerProfile();
-    const { from: emailFrom, replyTo: emailReplyTo } = getEmailConfig(dealerProfile);
+    const { from: emailFrom, replyTo: emailReplyTo, signature } = getEmailConfig(dealerProfile);
     if (!emailFrom) {
       return res.status(400).json({
         ok: false,
@@ -2352,16 +2381,20 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
     const dealerName = dealerProfile?.dealerName ?? "Dealership";
     const subject = String(req.body?.subject ?? `Message from ${dealerName}`).trim();
+    const signed =
+      signature
+        ? `${body}\n\n${signature}${dealerProfile?.logoUrl ? `\n\n${dealerProfile.logoUrl}` : ""}`
+        : body;
     const hadOutbound = conv.messages.some(m => m.direction === "out");
-    const fin = finalizeDraftAsSent(conv, draftId, body, "sendgrid");
+    const fin = finalizeDraftAsSent(conv, draftId, signed, "sendgrid");
     if (!fin.usedDraft) {
-      appendOutbound(conv, emailFrom, emailTo!, body, "sendgrid");
+      appendOutbound(conv, emailFrom, emailTo!, signed, "sendgrid");
     }
     try {
       await sendEmail({
         to: emailTo!,
         subject,
-        text: body,
+        text: signed,
         from: emailFrom,
         replyTo: emailReplyTo
       });
