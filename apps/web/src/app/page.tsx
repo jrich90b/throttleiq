@@ -391,10 +391,6 @@ export default function Home() {
   }, [selectedId]);
 
   useEffect(() => {
-    setMessageFilter("sms");
-  }, [selectedConv?.id]);
-
-  useEffect(() => {
     if (section !== "contacts") setSelectedContact(null);
   }, [section]);
 
