@@ -7,11 +7,6 @@ export type DealerProfile = {
   agentName?: string;
   crmProvider?: string;
   websiteProvider?: string;
-  mcpBaseUrl?: string;
-  mcpApiKey?: string;
-  sharepointSiteUrl?: string;
-  sharepointUsername?: string;
-  sharepointPassword?: string;
   fromEmail?: string;
   replyToEmail?: string;
   emailProvider?: "sendgrid" | "smtp";

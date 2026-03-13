@@ -111,7 +111,6 @@ export default function Home() {
     | "inventory"
     | "settings"
     | "calendar"
-    | "assistant"
   >("inbox");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedConv, setSelectedConv] = useState<ConversationDetail | null>(null);
@@ -166,11 +165,6 @@ export default function Home() {
     agentName: "",
     crmProvider: "",
     websiteProvider: "",
-    mcpBaseUrl: "",
-    mcpApiKey: "",
-    sharepointSiteUrl: "",
-    sharepointUsername: "",
-    sharepointPassword: "",
     fromEmail: "",
     replyToEmail: "",
     emailSignature: "",
@@ -213,10 +207,6 @@ export default function Home() {
   const [appointmentTypeToAdd, setAppointmentTypeToAdd] = useState("inventory_visit");
   const [newSalespersonName, setNewSalespersonName] = useState("");
   const [creatingCalendar, setCreatingCalendar] = useState(false);
-  const [assistantInput, setAssistantInput] = useState("");
-  const [assistantResult, setAssistantResult] = useState<string | null>(null);
-  const [assistantError, setAssistantError] = useState<string | null>(null);
-  const [assistantLoading, setAssistantLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [calendarView, setCalendarView] = useState<"day" | "week">("day");
@@ -430,11 +420,6 @@ export default function Home() {
           agentName: profile.agentName ?? "",
           crmProvider: profile.crmProvider ?? "",
           websiteProvider: profile.websiteProvider ?? "",
-          mcpBaseUrl: profile.mcpBaseUrl ?? "",
-          mcpApiKey: profile.mcpApiKey ?? "",
-          sharepointSiteUrl: profile.sharepointSiteUrl ?? "",
-          sharepointUsername: profile.sharepointUsername ?? "",
-          sharepointPassword: profile.sharepointPassword ?? "",
           fromEmail: profile.fromEmail ?? "",
           replyToEmail: profile.replyToEmail ?? "",
           emailSignature: profile.emailSignature ?? "",
@@ -1126,27 +1111,6 @@ export default function Home() {
     setSelectedContact(null);
   }
 
-  async function runAssistantTask() {
-    const task = assistantInput.trim();
-    if (!task) return;
-    setAssistantLoading(true);
-    setAssistantError(null);
-    setAssistantResult(null);
-    try {
-      const resp = await fetch("/api/assistant/execute", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ task })
-      });
-      const json = await resp.json();
-      if (!resp.ok) throw new Error(json?.error ?? "Failed to run assistant task");
-      setAssistantResult(JSON.stringify(json?.result ?? {}, null, 2));
-    } catch (err: any) {
-      setAssistantError(err?.message ?? "Failed to run assistant task");
-    } finally {
-      setAssistantLoading(false);
-    }
-  }
 
   async function saveDealerProfile() {
     setSettingsSaving(true);
@@ -1158,11 +1122,6 @@ export default function Home() {
         agentName: dealerProfileForm.agentName.trim(),
         crmProvider: dealerProfileForm.crmProvider.trim(),
         websiteProvider: dealerProfileForm.websiteProvider.trim(),
-        mcpBaseUrl: dealerProfileForm.mcpBaseUrl.trim(),
-        mcpApiKey: dealerProfileForm.mcpApiKey.trim(),
-        sharepointSiteUrl: dealerProfileForm.sharepointSiteUrl.trim(),
-        sharepointUsername: dealerProfileForm.sharepointUsername.trim(),
-        sharepointPassword: dealerProfileForm.sharepointPassword.trim(),
         fromEmail: dealerProfileForm.fromEmail.trim(),
         replyToEmail: dealerProfileForm.replyToEmail.trim(),
         emailSignature: dealerProfileForm.emailSignature,
@@ -1854,13 +1813,6 @@ export default function Home() {
           📦
         </button>
         <button
-          className={`w-10 h-10 rounded flex items-center justify-center border ${section === "assistant" ? "bg-gray-100" : ""}`}
-          title="Assistant"
-          onClick={() => setSection("assistant")}
-        >
-          🤖
-        </button>
-        <button
           className={`relative w-10 h-10 rounded flex items-center justify-center border ${section === "questions" ? "bg-gray-100" : ""}`}
           title="Questions"
           onClick={() => setSection("questions")}
@@ -1949,8 +1901,6 @@ export default function Home() {
                     ? "Inventory"
                     : section === "calendar"
                       ? "Calendar"
-                      : section === "assistant"
-                        ? "Assistant"
                         : section === "settings"
                           ? "Settings"
                           : "Suppression List"}
@@ -1968,8 +1918,6 @@ export default function Home() {
                     ? `${inventoryItems.length} bikes`
                     : section === "calendar"
                       ? "Google Calendar view"
-                      : section === "assistant"
-                        ? "Run tasks against SharePoint"
                         : section === "settings"
                           ? "Configure dealer & scheduling"
                           : `${suppressions.length} suppressed`}
@@ -1995,38 +1943,7 @@ export default function Home() {
           </div>
         </div>
 
-        {section === "assistant" ? (
-          <div className="mt-4 space-y-4">
-            <div className="border rounded-lg p-4 space-y-2">
-              <div className="text-sm font-semibold">SharePoint Assistant</div>
-              <div className="text-xs text-gray-600">
-                Runs tasks against the configured SharePoint site using the MCP server.
-              </div>
-              <textarea
-                className="w-full border rounded px-3 py-2 text-sm min-h-[120px]"
-                placeholder="Ask the assistant to find or summarize SharePoint content..."
-                value={assistantInput}
-                onChange={e => setAssistantInput(e.target.value)}
-              />
-              <button
-                className="px-3 py-2 border rounded text-sm"
-                onClick={runAssistantTask}
-                disabled={assistantLoading}
-              >
-                {assistantLoading ? "Running..." : "Run Task"}
-              </button>
-              {assistantError ? (
-                <div className="text-xs text-red-600">{assistantError}</div>
-              ) : null}
-            </div>
-            {assistantResult ? (
-              <div className="border rounded-lg p-4">
-                <div className="text-sm font-semibold mb-2">Result</div>
-                <pre className="text-xs whitespace-pre-wrap">{assistantResult}</pre>
-              </div>
-            ) : null}
-          </div>
-        ) : section === "inventory" ? (
+        {section === "inventory" ? (
           <div className="mt-4 space-y-3">
             <input
               className="w-full border rounded px-3 py-2 text-sm"
@@ -3261,43 +3178,6 @@ export default function Home() {
                       }}
                     />
                   </div>
-                  <input
-                    className="border rounded px-3 py-2 text-sm col-span-2"
-                    placeholder="MCP Base URL"
-                    value={dealerProfileForm.mcpBaseUrl}
-                    onChange={e => setDealerProfileForm({ ...dealerProfileForm, mcpBaseUrl: e.target.value })}
-                  />
-                  <input
-                    className="border rounded px-3 py-2 text-sm col-span-2"
-                    placeholder="MCP API Key"
-                    value={dealerProfileForm.mcpApiKey}
-                    onChange={e => setDealerProfileForm({ ...dealerProfileForm, mcpApiKey: e.target.value })}
-                  />
-                  <input
-                    className="border rounded px-3 py-2 text-sm col-span-2"
-                    placeholder="SharePoint Site URL"
-                    value={dealerProfileForm.sharepointSiteUrl}
-                    onChange={e =>
-                      setDealerProfileForm({ ...dealerProfileForm, sharepointSiteUrl: e.target.value })
-                    }
-                  />
-                  <input
-                    className="border rounded px-3 py-2 text-sm"
-                    placeholder="SharePoint Username"
-                    value={dealerProfileForm.sharepointUsername}
-                    onChange={e =>
-                      setDealerProfileForm({ ...dealerProfileForm, sharepointUsername: e.target.value })
-                    }
-                  />
-                  <input
-                    className="border rounded px-3 py-2 text-sm"
-                    placeholder="SharePoint Password"
-                    type="password"
-                    value={dealerProfileForm.sharepointPassword}
-                    onChange={e =>
-                      setDealerProfileForm({ ...dealerProfileForm, sharepointPassword: e.target.value })
-                    }
-                  />
                   <input
                     className="border rounded px-3 py-2 text-sm col-span-2"
                     placeholder="Address line 1"
