@@ -13,6 +13,7 @@ type Slot = {
 function BookingPageInner() {
   const params = useSearchParams();
   const token = params.get("token") ?? "";
+  const leadKey = params.get("leadKey") ?? "";
 
   const [config, setConfig] = useState<any>(null);
   const [loadingConfig, setLoadingConfig] = useState(true);
@@ -20,6 +21,7 @@ function BookingPageInner() {
   const [loadingSlots, setLoadingSlots] = useState(false);
   const [appointmentType, setAppointmentType] = useState("inventory_visit");
   const [preferredType, setPreferredType] = useState<string | null>(null);
+  const [lockedType, setLockedType] = useState<string | null>(null);
   const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<any>(null);
@@ -81,6 +83,35 @@ function BookingPageInner() {
   }, [params, token]);
 
   useEffect(() => {
+    if (!token || !leadKey) return;
+    void (async () => {
+      try {
+        const resp = await fetch(
+          `/api/booking/prefill?token=${encodeURIComponent(token)}&leadKey=${encodeURIComponent(leadKey)}`,
+          { cache: "no-store" }
+        );
+        const json = await resp.json();
+        if (!resp.ok) return;
+        const lead = json?.lead ?? null;
+        if (!lead) return;
+        setForm(prev => ({
+          ...prev,
+          firstName: prev.firstName || lead.firstName || "",
+          lastName: prev.lastName || lead.lastName || "",
+          email: prev.email || lead.email || "",
+          phone: prev.phone || lead.phone || ""
+        }));
+        if (lead.appointmentType) {
+          setLockedType(lead.appointmentType);
+          setPreferredType(lead.appointmentType);
+        }
+      } catch {
+        // ignore
+      }
+    })();
+  }, [token, leadKey]);
+
+  useEffect(() => {
     if (!token || !appointmentType) return;
     void (async () => {
       setLoadingSlots(true);
@@ -106,6 +137,7 @@ function BookingPageInner() {
   const dealerName = config?.dealer?.dealerName ?? "Dealer";
   const tz = config?.timezone ?? "America/New_York";
   const appointmentTypes = config?.appointmentTypes ?? ["inventory_visit"];
+  const showTypeSelect = !lockedType && !preferredType;
 
   const canSubmit = useMemo(() => {
     if (!selectedSlot) return false;
@@ -163,20 +195,22 @@ function BookingPageInner() {
           </div>
         ) : (
           <div className="space-y-6">
-            <div>
-              <label className="text-sm font-medium block mb-2">Appointment type</label>
-              <select
-                className="border rounded px-3 py-2 text-sm w-full"
-                value={appointmentType}
-                onChange={e => setAppointmentType(e.target.value)}
-              >
-                {appointmentTypes.map((t: string) => (
-                  <option key={t} value={t}>
-                    {t.replace(/_/g, " ")}
-                  </option>
-                ))}
-              </select>
-            </div>
+            {showTypeSelect ? (
+              <div>
+                <label className="text-sm font-medium block mb-2">Appointment type</label>
+                <select
+                  className="border rounded px-3 py-2 text-sm w-full"
+                  value={appointmentType}
+                  onChange={e => setAppointmentType(e.target.value)}
+                >
+                  {appointmentTypes.map((t: string) => (
+                    <option key={t} value={t}>
+                      {t.replace(/_/g, " ")}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
 
             <div>
               <div className="text-sm font-medium mb-2">Available times</div>

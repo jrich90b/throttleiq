@@ -1,0 +1,31 @@
+import { NextResponse } from "next/server";
+import { apiFetch } from "../../../../lib/apiFetch";
+
+export async function GET(req: Request) {
+  const base = process.env.API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL;
+  if (!base) {
+    return NextResponse.json({ ok: false, error: "API_BASE_URL not set" }, { status: 500 });
+  }
+
+  const url = new URL(req.url);
+  const token = url.searchParams.get("token") ?? "";
+  const leadKey = url.searchParams.get("leadKey") ?? "";
+  const qs = new URLSearchParams();
+  if (token) qs.set("token", token);
+  if (leadKey) qs.set("leadKey", leadKey);
+
+  const r = await apiFetch(`${base}/public/booking/prefill?${qs.toString()}`, {
+    cache: "no-store"
+  });
+  const text = await r.text();
+  try {
+    const data = JSON.parse(text);
+    return NextResponse.json(data, { status: r.status });
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: "Upstream not JSON", status: r.status, body: text.slice(0, 200) },
+      { status: 502 }
+    );
+  }
+}
+

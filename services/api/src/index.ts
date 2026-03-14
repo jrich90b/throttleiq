@@ -670,11 +670,13 @@ function buildBookingUrlForLead(baseUrl: string | undefined | null, conv: any): 
     const lastName = conv?.lead?.lastName ?? "";
     const email = conv?.lead?.email ?? "";
     const phone = conv?.lead?.phone ?? "";
+    const leadKey = conv?.leadKey ?? "";
     if (type) url.searchParams.set("type", type);
     if (firstName) url.searchParams.set("firstName", firstName);
     if (lastName) url.searchParams.set("lastName", lastName);
     if (email) url.searchParams.set("email", email);
     if (phone) url.searchParams.set("phone", phone);
+    if (leadKey) url.searchParams.set("leadKey", leadKey);
     return url.toString();
   } catch {
     return raw;
@@ -2294,6 +2296,32 @@ app.post("/public/booking/book", async (req, res) => {
     htmlLink: event.htmlLink,
     whenText: conv.appointment.whenText,
     salesperson: chosenSp?.name ?? null
+  });
+});
+
+app.get("/public/booking/prefill", async (req, res) => {
+  const profile = await getDealerProfile();
+  const token = extractBookingToken(req);
+  const expected = getBookingToken(profile);
+  if (!token || !expected || token !== expected) {
+    return res.status(401).json({ ok: false, error: "unauthorized" });
+  }
+
+  const leadKey = String(req.query?.leadKey ?? "").trim();
+  if (!leadKey) return res.json({ ok: true, lead: null });
+  const conv = getConversation(leadKey);
+  if (!conv) return res.json({ ok: true, lead: null });
+
+  return res.json({
+    ok: true,
+    lead: {
+      firstName: conv.lead?.firstName ?? "",
+      lastName: conv.lead?.lastName ?? "",
+      email: conv.lead?.email ?? "",
+      phone: conv.lead?.phone ?? "",
+      name: conv.lead?.name ?? "",
+      appointmentType: inferAppointmentTypeFromConv(conv)
+    }
   });
 });
 
