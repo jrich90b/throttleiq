@@ -22,6 +22,7 @@ export type ContactEntry = {
   vehicle?: string;
   inquiry?: string;
   lastAdfAt?: string;
+  lastInboundAt?: string;
   createdAt: string;
   updatedAt: string;
 };
