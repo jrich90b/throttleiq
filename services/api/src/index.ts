@@ -1310,6 +1310,16 @@ function isClarificationReply(text: string): boolean {
 function parseFutureTimeframe(text: string, base: Date): { label: string; until?: Date } | null {
   const t = text.toLowerCase();
 
+  if (/\bnext\s+year\b/.test(t)) {
+    const d = new Date(base.getFullYear() + 1, 0, 1, 9, 0, 0, 0);
+    return { label: "next year", until: d };
+  }
+
+  if (/\bnext\s+season\b/.test(t)) {
+    const d = new Date(base.getFullYear() + 1, 2, 1, 9, 0, 0, 0);
+    return { label: "next season", until: d };
+  }
+
   const inDays = t.match(/\bin\s+(\d{1,2})\s+days?\b/);
   if (inDays) {
     const days = Number(inDays[1]);
@@ -1349,7 +1359,7 @@ function parseFutureTimeframe(text: string, base: Date): { label: string; until?
     return { label: monthKey, until: d };
   }
 
-  const seasonMatch = t.match(/\b(this\s+)?(spring|summer|fall|autumn|winter)\b/);
+  const seasonMatch = t.match(/\b(this\s+|next\s+)?(spring|summer|fall|autumn|winter)\b/);
   if (seasonMatch) {
     const season = seasonMatch[2];
     const seasonMap: Record<string, number> = {
@@ -1362,11 +1372,107 @@ function parseFutureTimeframe(text: string, base: Date): { label: string; until?
     const month = seasonMap[season];
     const year = base.getFullYear();
     let d = new Date(year, month, 1, 9, 0, 0, 0);
+    if (seasonMatch[1]?.trim().startsWith("next")) {
+      d = new Date(year + 1, month, 1, 9, 0, 0, 0);
+      return { label: `next ${season}`, until: d };
+    }
     if (d.getTime() <= base.getTime()) d = new Date(year + 1, month, 1, 9, 0, 0, 0);
     return { label: seasonMatch[1] ? `this ${season}` : season, until: d };
   }
 
   return null;
+}
+
+function isExplicitScheduleIntent(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (looksLikeTimeSelection(t)) return true;
+  if (/\b(schedule|appointment|appt|book|reserve|set\s+up|come\s+in|stop\s+(in|by)|visit|test ride|demo ride)\b/i.test(t)) {
+    return true;
+  }
+  if (/\b(when|what time|what day|availability|available|openings|open)\b/i.test(t)) {
+    return true;
+  }
+  if (/\b(today|tomorrow|next week|this week|next month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(t)) {
+    return true;
+  }
+  return false;
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeOutboundText(text: string): string {
+  return String(text ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function hasIntro(conv: any, dealerName?: string, agentName?: string): boolean {
+  const dealer = dealerName?.toLowerCase();
+  const agent = agentName?.toLowerCase();
+  const outs = (conv?.messages ?? []).filter((m: any) => m.direction === "out");
+  return outs.some((m: any) => {
+    const body = String(m.body ?? "").toLowerCase();
+    if (agent && body.includes(`this is ${agent}`)) return true;
+    if (dealer && body.includes(dealer)) return true;
+    return false;
+  });
+}
+
+function stripIntroIfRepeated(text: string, conv: any, dealerName?: string, agentName?: string): string {
+  if (!text) return text;
+  if (!hasIntro(conv, dealerName, agentName)) return text.trim();
+  let out = text.trim();
+  out = out.replace(/^hi[^.]*?\s*[-—]\s*/i, "");
+  if (agentName) {
+    const r = new RegExp(`^\\s*(this is[^.]*${escapeRegex(agentName)}[^.]*\\.)\\s*`, "i");
+    out = out.replace(r, "");
+  }
+  if (dealerName) {
+    const r = new RegExp(`^\\s*(this is[^.]*${escapeRegex(dealerName)}[^.]*\\.)\\s*`, "i");
+    out = out.replace(r, "");
+  }
+  return out.trim();
+}
+
+function ensureUniqueDraft(
+  conv: any,
+  draft: string,
+  dealerName?: string,
+  agentName?: string
+): string {
+  const used = new Set(
+    (conv?.messages ?? [])
+      .filter((m: any) => m.direction === "out")
+      .map((m: any) => normalizeOutboundText(m.body))
+  );
+  let candidate = stripIntroIfRepeated(draft, conv, dealerName, agentName);
+  if (!candidate) {
+    candidate = "Got it — happy to help with pricing or a model comparison.";
+  }
+  if (!used.has(normalizeOutboundText(candidate))) return candidate;
+  const fallbacks = [
+    "Got it — happy to help with pricing or a model comparison. Which model are you leaning toward?",
+    "Thanks for the update — I can help with pricing or compare models if that’s useful.",
+    "Understood. If you want pricing details or a quick model comparison, just say the word."
+  ];
+  for (const fb of fallbacks) {
+    if (!used.has(normalizeOutboundText(fb))) return fb;
+  }
+  const suffix = " Let me know what you’re leaning toward.";
+  return used.has(normalizeOutboundText(candidate + suffix))
+    ? `${candidate} Thanks for the update.`
+    : candidate + suffix;
+}
+
+function draftHasSchedulingPrompt(text: string): boolean {
+  return /(what day|what time|when.*available|schedule|appointment|come in|stop by|stop in|book|reserve|test ride|demo ride|which works best)/i.test(
+    text
+  );
+}
+
+function wantsReminder(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  return /\b(remind|reminder|follow up|follow-up|check back|reach out|touch base)\b/i.test(t);
 }
 
 function looksLikeTimeSelection(text: string): boolean {
@@ -4127,6 +4233,8 @@ if (authToken && signature) {
     conv.followUp?.mode === "manual_handoff" ||
     conv.followUp?.mode === "holding_inventory" ||
     outboundHoldNotice;
+  const schedulingExplicit = isExplicitScheduleIntent(event.body);
+  console.log("[deterministic-offer] scheduleExplicit", { schedulingExplicit });
   const shortAck =
     /^(ok|okay|k|kk|thanks|thank you|got it|will do|sounds good|sounds great|appreciate it|cool)\b/i.test(
       (event.body ?? "").trim()
@@ -4150,24 +4258,63 @@ if (authToken && signature) {
   }
 
   const future = parseFutureTimeframe(String(event.body ?? ""), new Date());
-  const lastWasSchedulingOffer =
-    /(which works best|what day and time|schedule|appointment|come in|stop in|stop by|test ride|demo ride)/i.test(
-      lastOutboundText
-    );
-  const textHasSchedulingTerms =
-    /(schedule|appointment|come in|stop in|stop by|visit|test ride|demo ride)/i.test(textLower);
-  if (event.provider === "twilio" && future && (lastWasSchedulingOffer || textHasSchedulingTerms)) {
+  if (event.provider === "twilio" && future) {
     if (future.until) {
       pauseFollowUpCadence(conv, future.until.toISOString(), "future_timeframe");
+    } else {
+      setFollowUpMode(conv, "paused_indefinite", "future_timeframe");
     }
+    const dealerProfile = await getDealerProfile();
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const agentName = dealerProfile?.agentName ?? "Brooke";
     const label = future.label;
     const labelText = label.charAt(0).toUpperCase() + label.slice(1);
-    const reply =
+    const replyRaw =
       label === "next week"
-        ? "Got it — next week works. What day and time next week is best for you?"
-        : `Got it — ${labelText} works. If you’d like to come sooner, just tell me a day/time that works.`;
+        ? "Got it — next week works. Want me to set a reminder, or would you like to pick a day/time now?"
+        : `Got it — ${labelText} works. I can set a reminder for you. If you’d rather pick a day/time now, just say the word.`;
+    const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
     appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+
+  if (event.provider === "twilio" && wantsReminder(event.body)) {
+    const pauseUntil = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
+    pauseFollowUpCadence(conv, pauseUntil, "customer_reminder");
+    const dealerProfile = await getDealerProfile();
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const replyRaw =
+      "Sounds good — I’ll set a reminder and check back closer to then. If you want pricing or a model comparison sooner, just let me know.";
+    const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+
+  const locationQuestion = /(where are you|what location|what address|address|located|location)\b/i.test(
+    textLower
+  );
+  if (event.provider === "twilio" && locationQuestion) {
+    const dealerProfile = await getDealerProfile();
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const address = dealerProfile?.address;
+    const line1 = address?.line1 ?? "1149 Erie Ave.";
+    const city = address?.city ?? "North Tonawanda";
+    const state = address?.state ?? "NY";
+    const zip = address?.zip ?? "14120";
+    const replyRaw =
+      `Hi — this is ${agentName} at ${dealerName}. We’re located at ${line1}, ${city}, ${state} ${zip}. ` +
+      "Do you want pricing details or a quick model comparison?";
+    const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
       reply
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
@@ -4345,7 +4492,7 @@ if (authToken && signature) {
         });
       }
     }
-    const schedulingIntent = ctxSuggestsScheduling || llmSuggestsScheduling;
+    const schedulingIntent = (ctxSuggestsScheduling || llmSuggestsScheduling) && schedulingExplicit;
     if (schedulingIntent) {
       try {
         const cfg = await getSchedulerConfig();
@@ -4513,7 +4660,10 @@ if (authToken && signature) {
   }
   if (result.handoff?.required) {
     const reason = result.handoff.reason;
-    const ack = result.handoff.ack;
+    const dealerProfile = await getDealerProfile();
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const ack = ensureUniqueDraft(result.handoff.ack, conv, dealerName, agentName);
     addTodo(conv, reason, event.body, event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", `handoff:${reason}`);
     stopFollowUpCadence(conv, "manual_handoff");
@@ -4528,7 +4678,10 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
   if (result.autoClose?.reason) {
-    const ack = result.draft;
+    const dealerProfile = await getDealerProfile();
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const ack = ensureUniqueDraft(result.draft, conv, dealerName, agentName);
     closeConversation(conv, result.autoClose.reason);
     stopRelatedCadences(conv, result.autoClose.reason, { close: true });
     appendOutbound(conv, event.to, event.from, ack, "twilio");
@@ -4850,7 +5003,13 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
-  const reply = result.draft;
+  const dealerProfile = await getDealerProfile();
+  const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+  const agentName = dealerProfile?.agentName ?? "Brooke";
+  let reply = ensureUniqueDraft(result.draft, conv, dealerName, agentName);
+  if (!schedulingExplicit && draftHasSchedulingPrompt(reply)) {
+    reply = "If you’d like, I can set a reminder for you or help with pricing/model comparisons.";
+  }
   const systemMode = webhookMode;
   const hadOutbound = conv.messages.some(m => m.direction === "out");
 
