@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 
 type Slot = {
@@ -335,7 +336,7 @@ function BookingPageInner() {
                       const first = new Date(year, month, 1);
                       const startDay = first.getDay();
                       const daysInMonth = new Date(year, month + 1, 0).getDate();
-                      const cells: Array<JSX.Element> = [];
+                      const cells: ReactNode[] = [];
                       for (let i = 0; i < startDay; i++) {
                         cells.push(<div key={`empty-${i}`} />);
                       }
