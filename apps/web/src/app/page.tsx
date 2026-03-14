@@ -169,6 +169,7 @@ export default function Home() {
     replyToEmail: "",
     emailSignature: "",
     logoUrl: "",
+    bookingUrl: "",
     phone: "",
     website: "",
     addressLine1: "",
@@ -420,6 +421,7 @@ export default function Home() {
           replyToEmail: profile.replyToEmail ?? "",
           emailSignature: profile.emailSignature ?? "",
           logoUrl: profile.logoUrl ?? "",
+          bookingUrl: profile.bookingUrl ?? "",
           phone: profile.phone ?? "",
           website: profile.website ?? "",
           addressLine1: profile.address?.line1 ?? "",
@@ -1122,6 +1124,7 @@ export default function Home() {
         replyToEmail: dealerProfileForm.replyToEmail.trim(),
         emailSignature: dealerProfileForm.emailSignature,
         logoUrl: dealerProfileForm.logoUrl.trim(),
+        bookingUrl: dealerProfileForm.bookingUrl.trim(),
         phone: dealerProfileForm.phone.trim(),
         website: dealerProfileForm.website.trim(),
         address: {
@@ -3113,6 +3116,12 @@ export default function Home() {
                     placeholder="Website"
                     value={dealerProfileForm.website}
                     onChange={e => setDealerProfileForm({ ...dealerProfileForm, website: e.target.value })}
+                  />
+                  <input
+                    className="border rounded px-3 py-2 text-sm"
+                    placeholder="Booking link (for email follow-ups)"
+                    value={dealerProfileForm.bookingUrl}
+                    onChange={e => setDealerProfileForm({ ...dealerProfileForm, bookingUrl: e.target.value })}
                   />
                   <input
                     className="border rounded px-3 py-2 text-sm"

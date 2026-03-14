@@ -12,6 +12,7 @@ export type DealerProfile = {
   emailProvider?: "sendgrid" | "smtp";
   emailSignature?: string;
   logoUrl?: string;
+  bookingUrl?: string;
   address?: { line1?: string; city?: string; state?: string; zip?: string; country?: string };
   phone?: string;
   website?: string;

@@ -646,6 +646,37 @@ const FOLLOW_UP_MESSAGES = [
   "Still interested in taking a look? If so, what day/time works best?"
 ];
 
+type EmailFollowUpCtx = {
+  name: string;
+  label: string;
+  bookingLine: string;
+  dealerName: string;
+  canTestRide: boolean;
+};
+
+const EMAIL_FOLLOW_UP_MESSAGES: Array<(ctx: EmailFollowUpCtx) => string> = [
+  ({ name, label, bookingLine }) =>
+    `Hi ${name},\n\nJust checking in about ${label}. I can help with pricing, options, or a quick walkaround if that would be useful. ${bookingLine} If you’d rather reply by email, just send the day/time that works best.\n\nThanks,`,
+  ({ name, label, bookingLine }) =>
+    `Hi ${name},\n\nI wanted to see if you’d like any additional details on ${label}. If a walkaround video would help, I can send one. ${bookingLine} I’m happy to answer any questions by email as well.\n\nThanks,`,
+  ({ name, label, bookingLine, canTestRide }) =>
+    `Hi ${name},\n\nThanks again for your interest in ${label}. ${canTestRide ? "If you’d like to set up a test ride, I can reserve a time." : "If you’d like to stop by, I can reserve a time for you."} ${bookingLine} If you prefer, just reply with the day/time that works.\n\nThanks,`,
+  ({ name, label, bookingLine }) =>
+    `Hi ${name},\n\nQuick question as you compare options: is ${label} still at the top of your list? If you’d like to see it in person, ${bookingLine} I’m here to help with any questions in the meantime.\n\nThanks,`,
+  ({ name, label, bookingLine }) =>
+    `Hi ${name},\n\nJust checking in on ${label}. If you’d like to take a closer look, ${bookingLine} I can also help with pricing or availability details by email.\n\nThanks,`,
+  ({ name, label, bookingLine }) =>
+    `Hi ${name},\n\nI hope your week is going well. If you’re still shopping for ${label}, I’m happy to help with options and next steps. ${bookingLine} Let me know if there’s anything specific you want to see.\n\nThanks,`,
+  ({ name, label, bookingLine }) =>
+    `Hi ${name},\n\nNo rush at all — I just wanted to keep the conversation open on ${label}. ${bookingLine} If it’s easier, you can reply with a preferred day/time and I’ll take care of the rest.\n\nThanks,`,
+  ({ name, label, bookingLine }) =>
+    `Hi ${name},\n\nIf you’d like to set a time to check out ${label}, I can get that on the calendar. ${bookingLine} I can also answer any questions by email before you visit.\n\nThanks,`,
+  ({ name, label, bookingLine }) =>
+    `Hi ${name},\n\nShould I hold a time for you to see ${label}? ${bookingLine} If a different approach is better, just tell me what works and I’ll follow your lead.\n\nThanks,`,
+  ({ name, label, bookingLine }) =>
+    `Hi ${name},\n\nStill interested in taking a look at ${label}? ${bookingLine} I’m happy to help with anything you need in the meantime.\n\nThanks,`
+];
+
 const FOLLOW_UP_COLOR_WORDS = [
   "black",
   "white",
@@ -1395,6 +1426,10 @@ async function processDueFollowUps() {
   const now = new Date();
   const convs = getAllConversations();
   const todoConvIds = new Set(listOpenTodos().map(t => t.convId));
+  const canTestRideNow = (conv: any) => {
+    const hasLicense = conv?.lead?.hasMotoLicense;
+    return hasLicense !== false && isTestRideSeason(dealerProfile, new Date());
+  };
 
   const getLastInbound = (conv: any) =>
     [...(conv.messages ?? [])].reverse().find((m: any) => m.direction === "in") ?? null;
@@ -1546,8 +1581,7 @@ async function processDueFollowUps() {
         message = FOLLOW_UP_MESSAGES[1];
       }
     } else if (cadence.stepIndex === 2) {
-      const hasLicense = conv?.lead?.hasMotoLicense;
-      const canTestRide = hasLicense !== false && isTestRideSeason(dealerProfile, new Date());
+      const canTestRide = canTestRideNow(conv);
       if (canTestRide) {
         message = "If you’d like to set up a test ride, I can reserve a time. What day/time works best?";
       } else {
@@ -1559,11 +1593,34 @@ async function processDueFollowUps() {
       mediaUrls = late.mediaUrls;
     }
 
-    const systemMode = effectiveMode(conv);
     const emailTo = conv.lead?.email;
     const useEmail =
       conv.classification?.channel === "email" && !!emailTo && hasEmailOptIn(conv.lead);
+    const systemMode = effectiveMode(conv);
     const { from: emailFrom, replyTo: emailReplyTo, signature } = getEmailConfig(dealerProfile);
+    const bookingUrl = dealerProfile?.bookingUrl?.trim();
+    const name = conv.lead?.firstName?.trim() || "there";
+    const year = conv.lead?.vehicle?.year ?? null;
+    const model = conv.lead?.vehicle?.model ?? null;
+    const label = model ? `the ${formatModelLabel(year, model)}` : "your inquiry";
+    const bookingLine = bookingUrl
+      ? `You can choose a time here: ${bookingUrl}.`
+      : "If you’d like to schedule a visit, just reply with a day and time that works.";
+    let emailMessage: string | null = null;
+    if (useEmail) {
+      if (cadence.kind === "long_term") {
+        emailMessage = `Hi ${name},\n\n${message}\n\n${bookingLine}\n\nThanks,`;
+      } else {
+        const idx = Math.min(cadence.stepIndex, EMAIL_FOLLOW_UP_MESSAGES.length - 1);
+        emailMessage = EMAIL_FOLLOW_UP_MESSAGES[idx]({
+          name,
+          label,
+          bookingLine,
+          dealerName: dealerProfile?.dealerName ?? "American Harley-Davidson",
+          canTestRide: canTestRideNow(conv)
+        });
+      }
+    }
     const to = normalizePhone(conv.leadKey);
     const from = process.env.TWILIO_FROM_NUMBER;
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -1571,7 +1628,8 @@ async function processDueFollowUps() {
 
     if (systemMode === "suggest") {
       const draftTo = useEmail ? emailTo! : to;
-      appendOutbound(conv, from ?? "salesperson", draftTo, message, "draft_ai", undefined, mediaUrls);
+      const draftMessage = useEmail && emailMessage ? emailMessage : message;
+      appendOutbound(conv, from ?? "salesperson", draftTo, draftMessage, "draft_ai", undefined, mediaUrls);
       if (cadence.kind === "long_term") {
         const nowIso = new Date().toISOString();
         conv.followUpCadence = {
@@ -1591,15 +1649,17 @@ async function processDueFollowUps() {
 
     if (useEmail) {
       if (!emailFrom) {
-        appendOutbound(conv, "salesperson", emailTo!, message, "human", undefined, mediaUrls);
+        const fallbackMessage = emailMessage ?? message;
+        appendOutbound(conv, "salesperson", emailTo!, fallbackMessage, "human", undefined, mediaUrls);
       } else {
         try {
         const dealerName = dealerProfile?.dealerName ?? "Dealership";
         const subject = `Follow-up from ${dealerName}`;
+        const body = emailMessage ?? message;
         const signed =
           signature
-            ? `${message}\n\n${signature}${dealerProfile?.logoUrl ? `\n\n${dealerProfile.logoUrl}` : ""}`
-            : message;
+            ? `${body}\n\n${signature}${dealerProfile?.logoUrl ? `\n\n${dealerProfile.logoUrl}` : ""}`
+            : body;
         await sendEmail({
           to: emailTo!,
           subject,
@@ -1610,7 +1670,8 @@ async function processDueFollowUps() {
         appendOutbound(conv, emailFrom, emailTo!, signed, "sendgrid", undefined, mediaUrls);
       } catch (e: any) {
         console.log("[followup] email send failed:", e?.message ?? e);
-        appendOutbound(conv, "salesperson", emailTo!, message, "human", undefined, mediaUrls);
+        const fallbackMessage = emailMessage ?? message;
+        appendOutbound(conv, "salesperson", emailTo!, fallbackMessage, "human", undefined, mediaUrls);
       }
       }
       if (cadence.kind === "long_term") {
