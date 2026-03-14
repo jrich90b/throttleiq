@@ -700,11 +700,16 @@ export default function Home() {
     if (lastDraftIdx > lastSentIdx) return selectedConv.messages[lastDraftIdx];
     return null;
   }, [selectedConv]);
+  const emailDraft = useMemo(() => {
+    if (messageFilter !== "email") return null;
+    return (selectedConv as any)?.emailDraft ?? null;
+  }, [messageFilter, selectedConv]);
   const displaySendBody = useMemo(() => {
     if (sendBodySource === "user") return sendBody;
+    if (messageFilter === "email" && emailDraft) return emailDraft;
     if (pendingDraft?.body) return pendingDraft.body;
     return sendBody;
-  }, [sendBodySource, sendBody, pendingDraft?.body]);
+  }, [sendBodySource, sendBody, pendingDraft?.body, messageFilter, emailDraft]);
 
   useEffect(() => {
     const el = sendBoxRef.current;
@@ -899,6 +904,12 @@ export default function Home() {
   }
 
   useEffect(() => {
+    if (messageFilter === "email" && emailDraft) {
+      setSendBody(emailDraft);
+      setSendBodySource("draft");
+      setLastDraftId(null);
+      return;
+    }
     if (!pendingDraft) return;
     const hasUserEdits = sendBodySource === "user" && sendBody.trim().length > 0;
     if (hasUserEdits && pendingDraft.id !== lastDraftId) return;
@@ -906,9 +917,15 @@ export default function Home() {
     setSendBodySource("draft");
     setLastDraftId(pendingDraft.id ?? null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingDraft?.id]);
+  }, [pendingDraft?.id, messageFilter, emailDraft]);
 
   useEffect(() => {
+    if (messageFilter === "email" && emailDraft) {
+      setSendBody(emailDraft);
+      setSendBodySource("draft");
+      setLastDraftId(null);
+      return;
+    }
     if (pendingDraft) {
       setSendBody(pendingDraft.body);
       setSendBodySource("draft");
@@ -918,7 +935,7 @@ export default function Home() {
     setSendBody("");
     setSendBodySource("system");
     setLastDraftId(null);
-  }, [selectedConv?.id, pendingDraft?.id]);
+  }, [selectedConv?.id, pendingDraft?.id, messageFilter, emailDraft]);
 
   async function markTodoDone(todo: TodoItem, resolution = "resume") {
     await fetch("/api/todos", {
@@ -998,11 +1015,18 @@ export default function Home() {
 
   async function send() {
     if (!selectedConv) return;
-    const bodySource = sendBodySource === "user" ? sendBody : (pendingDraft?.body ?? sendBody);
+    const useEmailDraft = messageFilter === "email" && !!emailDraft;
+    const effectiveDraft = useEmailDraft ? null : pendingDraft;
+    const bodySource =
+      sendBodySource === "user"
+        ? sendBody
+        : useEmailDraft
+          ? emailDraft
+          : (pendingDraft?.body ?? sendBody);
     const body = bodySource.trim();
     if (!body) return;
-    const draftId = pendingDraft?.id;
-    const edited = !!pendingDraft && pendingDraft.body.trim() !== body.trim();
+    const draftId = effectiveDraft?.id;
+    const edited = !!effectiveDraft && effectiveDraft.body.trim() !== body.trim();
     if (edited) {
       setPendingSend({ body, draftId });
       setEditNote("");

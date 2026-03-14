@@ -691,6 +691,47 @@ const EMAIL_FOLLOW_UP_MESSAGES: Array<(ctx: EmailFollowUpCtx) => string> = [
     `Hi ${name},\n\nStill interested in taking a look at ${label}? ${bookingLine} I’m happy to help with anything you need in the meantime.\n\nThanks,`
 ];
 
+function normalizeLeadLabel(conv: any): string | null {
+  const raw =
+    conv?.lead?.vehicle?.model ??
+    conv?.lead?.vehicle?.description ??
+    conv?.lead?.vehicleDescription ??
+    "";
+  if (!raw) return null;
+  if (/full line|other/i.test(raw)) return null;
+  const year = conv?.lead?.vehicle?.year ?? conv?.lead?.year ?? null;
+  return formatModelLabel(year, raw);
+}
+
+function buildInitialEmailDraft(conv: any, dealerProfile: any): string {
+  const rawName = conv?.lead?.firstName?.trim() || conv?.lead?.name?.trim() || "there";
+  const name = rawName.split(" ")[0] || "there";
+  const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+  const agentName = dealerProfile?.agentName ?? "our team";
+  const bookingUrl = dealerProfile?.bookingUrl?.trim();
+  const label = normalizeLeadLabel(conv);
+  const isTestRide =
+    conv?.classification?.bucket === "test_ride" || conv?.classification?.cta === "schedule_test_ride";
+  const thanks = isTestRide
+    ? label
+      ? `Thanks for your interest in a test ride on the ${label}.`
+      : "Thanks for your interest in a test ride."
+    : label
+      ? `Thanks for your interest in the ${label}.`
+      : "Thanks for your interest.";
+  const intro = `This is ${agentName} at ${dealerName}.`;
+  const help = "I’m happy to help with pricing, options, and availability.";
+  const visit = label
+    ? "If you’d like to stop in to check out the bike and go over options,"
+    : "If you’d like to stop in to go over options,";
+  const bookingLine = bookingUrl
+    ? `you can choose a time here: ${bookingUrl}.`
+    : "just reply with a day and time that works best for you.";
+  const extra = "If a walkaround or extra photos would help, just let me know.";
+
+  return `Hi ${name},\n\n${thanks} ${intro} ${help} ${visit} ${bookingLine} ${extra}`;
+}
+
 const FOLLOW_UP_COLOR_WORDS = [
   "black",
   "white",
@@ -2566,10 +2607,16 @@ app.get("/conversations", (_req, res) => {
   res.json({ ok: true, systemMode: getSystemMode(), conversations: listConversations() });
 });
 
-app.get("/conversations/:id", (req, res) => {
+app.get("/conversations/:id", async (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
-  res.json({ ok: true, systemMode: getSystemMode(), conversation: conv });
+  const dealerProfile = await getDealerProfile();
+  const emailDraft = buildInitialEmailDraft(conv, dealerProfile);
+  res.json({
+    ok: true,
+    systemMode: getSystemMode(),
+    conversation: { ...conv, emailDraft }
+  });
 });
 
 app.post("/conversations/:id/mode", requirePermission("canToggleHumanOverride"), (req, res) => {
