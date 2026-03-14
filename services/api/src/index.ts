@@ -2119,7 +2119,7 @@ app.get("/public/booking/availability", async (req, res) => {
   const daysAheadRaw = Number(req.query?.daysAhead ?? 14);
   const daysAhead = Number.isFinite(daysAheadRaw) ? Math.min(Math.max(daysAheadRaw, 3), 30) : 14;
   const perDayRaw = Number(req.query?.perDay ?? req.query?.perSalesperson ?? 6);
-  const perDay = Number.isFinite(perDayRaw) ? Math.min(Math.max(perDayRaw, 2), 12) : 6;
+  const perDay = Number.isFinite(perDayRaw) ? Math.min(Math.max(perDayRaw, 2), 48) : 6;
 
   const now = new Date();
   const candidatesByDay = generateCandidateSlots(cfg, now, durationMinutes, daysAhead);
@@ -2149,24 +2149,23 @@ app.get("/public/booking/availability", async (req, res) => {
     const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any[];
     const expanded = expandBusyBlocks(busy, gapMinutes);
     for (const dayEntry of candidatesByDay) {
-      const picked = pickSlotsForSalesperson(
-        cfg,
-        sp.id,
-        sp.calendarId,
-        [dayEntry],
-        expanded,
-        perDay
-      );
-      for (const s of picked) {
-        const key = `${s.start}|${s.end}`;
+      let added = 0;
+      for (const c of dayEntry.candidates) {
+        if (added >= perDay) break;
+        const blocked = expanded.some(b => overlaps(c.start, c.end, b.start, b.end));
+        if (blocked) continue;
+        const startIso = c.start.toISOString();
+        const endIso = c.end.toISOString();
+        const key = `${startIso}|${endIso}`;
         if (!unique.has(key)) {
           unique.set(key, {
-            start: s.start,
-            end: s.end,
-            startLocal: fmtLocal(s.start, cfg.timezone),
-            endLocal: fmtLocal(s.end, cfg.timezone)
+            start: startIso,
+            end: endIso,
+            startLocal: fmtLocal(startIso, cfg.timezone),
+            endLocal: fmtLocal(endIso, cfg.timezone)
           });
         }
+        added += 1;
       }
     }
   }
@@ -2175,10 +2174,11 @@ app.get("/public/booking/availability", async (req, res) => {
     a.start < b.start ? -1 : a.start > b.start ? 1 : 0
   );
   const limitRaw = Number(req.query?.limit ?? 0);
-  const defaultLimit = Math.min(Math.max(daysAhead * perDay, 24), 240);
-  const limit = Number.isFinite(limitRaw) && limitRaw > 0
-    ? Math.min(Math.max(limitRaw, 6), 240)
-    : defaultLimit;
+  const defaultLimit = Math.min(Math.max(daysAhead * perDay, 48), 1000);
+  const limit =
+    Number.isFinite(limitRaw) && limitRaw > 0
+      ? Math.min(Math.max(limitRaw, 24), 1000)
+      : defaultLimit;
 
   return res.json({
     ok: true,
