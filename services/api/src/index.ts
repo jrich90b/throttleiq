@@ -2118,10 +2118,8 @@ app.get("/public/booking/availability", async (req, res) => {
   const durationMinutes = appointmentTypes[type]?.durationMinutes ?? 60;
   const daysAheadRaw = Number(req.query?.daysAhead ?? 14);
   const daysAhead = Number.isFinite(daysAheadRaw) ? Math.min(Math.max(daysAheadRaw, 3), 30) : 14;
-  const perSalespersonRaw = Number(req.query?.perSalesperson ?? 6);
-  const perSalesperson = Number.isFinite(perSalespersonRaw)
-    ? Math.min(Math.max(perSalespersonRaw, 2), 12)
-    : 6;
+  const perDayRaw = Number(req.query?.perDay ?? req.query?.perSalesperson ?? 6);
+  const perDay = Number.isFinite(perDayRaw) ? Math.min(Math.max(perDayRaw, 2), 12) : 6;
 
   const now = new Date();
   const candidatesByDay = generateCandidateSlots(cfg, now, durationMinutes, daysAhead);
@@ -2150,23 +2148,25 @@ app.get("/public/booking/availability", async (req, res) => {
     const fb = await queryFreeBusy(cal, [sp.calendarId], timeMin, timeMax, cfg.timezone);
     const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any[];
     const expanded = expandBusyBlocks(busy, gapMinutes);
-    const picked = pickSlotsForSalesperson(
-      cfg,
-      sp.id,
-      sp.calendarId,
-      candidatesByDay,
-      expanded,
-      perSalesperson
-    );
-    for (const s of picked) {
-      const key = `${s.start}|${s.end}`;
-      if (!unique.has(key)) {
-        unique.set(key, {
-          start: s.start,
-          end: s.end,
-          startLocal: fmtLocal(s.start, cfg.timezone),
-          endLocal: fmtLocal(s.end, cfg.timezone)
-        });
+    for (const dayEntry of candidatesByDay) {
+      const picked = pickSlotsForSalesperson(
+        cfg,
+        sp.id,
+        sp.calendarId,
+        [dayEntry],
+        expanded,
+        perDay
+      );
+      for (const s of picked) {
+        const key = `${s.start}|${s.end}`;
+        if (!unique.has(key)) {
+          unique.set(key, {
+            start: s.start,
+            end: s.end,
+            startLocal: fmtLocal(s.start, cfg.timezone),
+            endLocal: fmtLocal(s.end, cfg.timezone)
+          });
+        }
       }
     }
   }
@@ -2174,8 +2174,11 @@ app.get("/public/booking/availability", async (req, res) => {
   const slots = Array.from(unique.values()).sort((a, b) =>
     a.start < b.start ? -1 : a.start > b.start ? 1 : 0
   );
-  const limitRaw = Number(req.query?.limit ?? 24);
-  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 6), 60) : 24;
+  const limitRaw = Number(req.query?.limit ?? 0);
+  const defaultLimit = Math.min(Math.max(daysAhead * perDay, 24), 240);
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0
+    ? Math.min(Math.max(limitRaw, 6), 240)
+    : defaultLimit;
 
   return res.json({
     ok: true,

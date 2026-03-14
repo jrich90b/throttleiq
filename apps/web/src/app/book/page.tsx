@@ -154,7 +154,6 @@ function BookingPageInner() {
           token,
           type: appointmentType,
           daysAhead: "30",
-          limit: "60",
           perSalesperson: "6"
         });
         const resp = await fetch(`/api/booking/availability?${qs.toString()}`, {
