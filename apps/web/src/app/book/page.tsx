@@ -375,19 +375,28 @@ function BookingPageInner() {
               ) : visibleSlots.length === 0 ? (
                 <div className="text-sm text-gray-600">No times available for that day.</div>
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {visibleSlots.map(slot => (
-                    <button
-                      key={`${slot.start}-${slot.end}`}
-                      className={`border rounded px-3 py-2 text-left text-sm hover:border-blue-500 ${
-                        selectedSlot?.start === slot.start ? "border-blue-600 bg-blue-50" : ""
-                      }`}
-                      onClick={() => setSelectedSlot(slot)}
-                    >
-                      <div className="font-medium">{slot.startLocal}</div>
-                    </button>
-                  ))}
-                </div>
+                <>
+                  <div className="max-h-[45vh] overflow-y-auto pr-1">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {visibleSlots.map(slot => (
+                        <button
+                          key={`${slot.start}-${slot.end}`}
+                          className={`border rounded px-3 py-2 text-left text-sm hover:border-blue-500 ${
+                            selectedSlot?.start === slot.start ? "border-blue-600 bg-blue-50" : ""
+                          }`}
+                          onClick={() => setSelectedSlot(slot)}
+                        >
+                          <div className="font-medium">{slot.startLocal}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {visibleSlots.length > 10 ? (
+                    <div className="text-xs text-gray-500 mt-2">
+                      Scroll to see more times.
+                    </div>
+                  ) : null}
+                </>
               )}
             </div>
 
