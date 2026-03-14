@@ -154,7 +154,7 @@ function BookingPageInner() {
           token,
           type: appointmentType,
           daysAhead: "30",
-          perDay: "24"
+          perDay: "48"
         });
         const resp = await fetch(`/api/booking/availability?${qs.toString()}`, {
           cache: "no-store"

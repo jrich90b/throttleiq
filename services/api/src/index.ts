@@ -634,6 +634,20 @@ function fmtLocal(iso: string, tz: string) {
   });
 }
 
+function dayKeyLocal(iso: string, tz: string) {
+  try {
+    const fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    });
+    return fmt.format(new Date(iso));
+  } catch {
+    return new Date(iso).toISOString().slice(0, 10);
+  }
+}
+
 function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
   return aStart < bEnd && aEnd > bStart;
 }
@@ -2139,6 +2153,7 @@ app.get("/public/booking/availability", async (req, res) => {
     string,
     { start: string; end: string; startLocal: string; endLocal: string }
   >();
+  const perDayCounts = new Map<string, number>();
 
   for (const salespersonId of preferred) {
     const sp = salespeople.find(p => p.id === salespersonId);
@@ -2154,23 +2169,23 @@ app.get("/public/booking/availability", async (req, res) => {
     const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any[];
     const expanded = expandBusyBlocks(busy, gapMinutes);
     for (const dayEntry of candidatesByDay) {
-      let added = 0;
       for (const c of dayEntry.candidates) {
-        if (added >= perDay) break;
         const blocked = expanded.some(b => overlaps(c.start, c.end, b.start, b.end));
         if (blocked) continue;
         const startIso = c.start.toISOString();
         const endIso = c.end.toISOString();
         const key = `${startIso}|${endIso}`;
-        if (!unique.has(key)) {
-          unique.set(key, {
-            start: startIso,
-            end: endIso,
-            startLocal: fmtLocal(startIso, cfg.timezone),
-            endLocal: fmtLocal(endIso, cfg.timezone)
-          });
-        }
-        added += 1;
+        const dayKey = dayKeyLocal(startIso, cfg.timezone);
+        const count = perDayCounts.get(dayKey) ?? 0;
+        if (count >= perDay) continue;
+        if (unique.has(key)) continue;
+        unique.set(key, {
+          start: startIso,
+          end: endIso,
+          startLocal: fmtLocal(startIso, cfg.timezone),
+          endLocal: fmtLocal(endIso, cfg.timezone)
+        });
+        perDayCounts.set(dayKey, count + 1);
       }
     }
   }

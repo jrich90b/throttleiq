@@ -12,6 +12,7 @@ export async function GET(req: Request) {
   const type = url.searchParams.get("type") ?? "";
   const daysAhead = url.searchParams.get("daysAhead") ?? "";
   const limit = url.searchParams.get("limit") ?? "";
+  const perDay = url.searchParams.get("perDay") ?? "";
   const perSalesperson = url.searchParams.get("perSalesperson") ?? "";
 
   const qs = new URLSearchParams();
@@ -19,6 +20,7 @@ export async function GET(req: Request) {
   if (type) qs.set("type", type);
   if (daysAhead) qs.set("daysAhead", daysAhead);
   if (limit) qs.set("limit", limit);
+  if (perDay) qs.set("perDay", perDay);
   if (perSalesperson) qs.set("perSalesperson", perSalesperson);
 
   const r = await apiFetch(`${base}/public/booking/availability?${qs.toString()}`, {
@@ -35,4 +37,3 @@ export async function GET(req: Request) {
     );
   }
 }
-
