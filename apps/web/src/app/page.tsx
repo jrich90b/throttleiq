@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 const BOOKING_LINK_RE =
   /(Book here|You can choose a time here|You can book an appointment here):\s*(https?:\/\/[^\s<]+)/i;
+const BOOKING_LABEL_ONLY_RE =
+  /\b(Book here|You can choose a time here|You can book an appointment here)\b/i;
 
 function renderBookingLinkLine(line: string) {
   const match = line.match(BOOKING_LINK_RE);
@@ -36,6 +38,29 @@ function renderMessageBody(text?: string | null) {
       {idx < lines.length - 1 ? <br /> : null}
     </span>
   ));
+}
+
+function maskBookingLink(text?: string | null) {
+  if (!text) return "";
+  return text.replace(BOOKING_LINK_RE, (m, label) => {
+    const prefix = String(label).replace(/\s*here$/i, "").trim();
+    const prefixWithSpace = prefix.length ? `${prefix} ` : "";
+    return `${prefixWithSpace}here`;
+  });
+}
+
+function extractBookingUrl(text?: string | null) {
+  if (!text) return null;
+  const match = text.match(BOOKING_LINK_RE);
+  return match?.[2] ?? null;
+}
+
+function injectBookingUrl(body: string, url: string) {
+  if (BOOKING_LINK_RE.test(body)) return body;
+  if (BOOKING_LABEL_ONLY_RE.test(body)) {
+    return body.replace(BOOKING_LABEL_ONLY_RE, (label) => `${label}: ${url}`);
+  }
+  return `${body}\n\nYou can book an appointment here: ${url}`;
 }
 
 type SystemMode = "suggest" | "autopilot";
@@ -742,7 +767,7 @@ export default function Home() {
   }, [messageFilter, selectedConv]);
   const displaySendBody = useMemo(() => {
     if (sendBodySource === "user") return sendBody;
-    if (messageFilter === "email" && emailDraft) return emailDraft;
+    if (messageFilter === "email" && emailDraft) return maskBookingLink(emailDraft);
     if (pendingDraft?.body) return pendingDraft.body;
     return sendBody;
   }, [sendBodySource, sendBody, pendingDraft?.body, messageFilter, emailDraft]);
@@ -1059,7 +1084,13 @@ export default function Home() {
         : useEmailDraft
           ? emailDraft
           : (pendingDraft?.body ?? sendBody);
-    const body = bodySource.trim();
+    let body = bodySource.trim();
+    if (messageFilter === "email") {
+      const bookingUrl = extractBookingUrl(emailDraft);
+      if (bookingUrl && !/https?:\/\//i.test(body)) {
+        body = injectBookingUrl(body, bookingUrl);
+      }
+    }
     if (!body) return;
     const draftId = effectiveDraft?.id;
     const edited = !!effectiveDraft && effectiveDraft.body.trim() !== body.trim();
