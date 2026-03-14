@@ -194,6 +194,11 @@ export default function Home() {
   const [pendingSend, setPendingSend] = useState<{ body: string; draftId?: string } | null>(null);
   const [closeReason, setCloseReason] = useState("sold");
   const sendBoxRef = useRef<HTMLTextAreaElement | null>(null);
+  const streamRef = useRef<EventSource | null>(null);
+  const lastStreamRefreshRef = useRef(0);
+  const loadRef = useRef<() => Promise<void>>(async () => {});
+  const loadConversationRef = useRef<(id: string) => Promise<void>>(async () => {});
+  const selectedIdRef = useRef<string | null>(null);
   const [modeSaving, setModeSaving] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -452,6 +457,58 @@ export default function Home() {
   useEffect(() => {
     if (selectedId) void loadConversation(selectedId);
   }, [selectedId]);
+
+  useEffect(() => {
+    loadRef.current = load;
+  });
+
+  useEffect(() => {
+    loadConversationRef.current = loadConversation;
+  });
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (!authUser) return;
+    if (typeof EventSource === "undefined") return;
+    if (streamRef.current) return;
+
+    const connect = () => {
+      const es = new EventSource("/api/stream");
+      streamRef.current = es;
+
+      const refresh = () => {
+        const now = Date.now();
+        if (now - lastStreamRefreshRef.current < 2000) return;
+        lastStreamRefreshRef.current = now;
+        void loadRef.current();
+        const id = selectedIdRef.current;
+        if (id) void loadConversationRef.current(id);
+      };
+
+      es.addEventListener("ping", refresh);
+      es.onmessage = refresh;
+      es.onerror = () => {
+        es.close();
+        if (streamRef.current === es) {
+          streamRef.current = null;
+        }
+        setTimeout(() => {
+          if (!streamRef.current && authUser) connect();
+        }, 5000);
+      };
+    };
+
+    connect();
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.close();
+        streamRef.current = null;
+      }
+    };
+  }, [authUser]);
 
   useEffect(() => {
     if (section !== "contacts") setSelectedContact(null);
