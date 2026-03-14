@@ -652,6 +652,35 @@ function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
   return aStart < bEnd && aEnd > bStart;
 }
 
+function getLeadIdentifiers(conv: any, event?: { from?: string }) {
+  const leadEmailRaw =
+    conv?.lead?.email ??
+    (typeof conv?.leadKey === "string" && conv.leadKey.includes("@") ? conv.leadKey : "") ??
+    (event?.from && event.from.includes("@") ? event.from : "");
+  const leadPhoneRaw =
+    conv?.lead?.phone ??
+    (typeof conv?.leadKey === "string" && !conv.leadKey.includes("@") ? conv.leadKey : "") ??
+    (event?.from && !event.from.includes("@") ? event.from : "");
+
+  const email = String(leadEmailRaw ?? "").trim().toLowerCase() || undefined;
+  const phone = leadPhoneRaw ? normalizePhone(String(leadPhoneRaw)) : undefined;
+  return { email, phone };
+}
+
+function pauseRelatedCadencesOnInbound(conv: any, event?: { from?: string }) {
+  const { email, phone } = getLeadIdentifiers(conv, event);
+  if (!email && !phone) return;
+  const pauseUntil = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
+  for (const other of getAllConversations()) {
+    if (!other || other.id === conv.id) continue;
+    const ids = getLeadIdentifiers(other);
+    const emailMatch = email && ids.email && ids.email === email;
+    const phoneMatch = phone && ids.phone && ids.phone === phone;
+    if (!emailMatch && !phoneMatch) continue;
+    pauseFollowUpCadence(other, pauseUntil, "cross_channel_inbound");
+  }
+}
+
 function getBookingToken(profile: Awaited<ReturnType<typeof getDealerProfile>> | null): string {
   const token = profile?.bookingToken?.trim();
   return token || (process.env.BOOKING_PUBLIC_TOKEN ?? "").trim();
@@ -3289,6 +3318,7 @@ if (authToken && signature) {
 
   const conv = upsertConversationByLeadKey(event.from, "suggest");
   appendInbound(conv, event);
+  pauseRelatedCadencesOnInbound(conv, event);
   if (conv.mode === "human") {
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
