@@ -4,9 +4,6 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 type Slot = {
-  salespersonId: string;
-  salespersonName?: string;
-  calendarId: string;
   start: string;
   end: string;
   startLocal: string;
@@ -22,6 +19,7 @@ function BookingPageInner() {
   const [slots, setSlots] = useState<Slot[]>([]);
   const [loadingSlots, setLoadingSlots] = useState(false);
   const [appointmentType, setAppointmentType] = useState("inventory_visit");
+  const [preferredType, setPreferredType] = useState<string | null>(null);
   const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<any>(null);
@@ -52,14 +50,35 @@ function BookingPageInner() {
         }
         setConfig(json);
         const firstType = json?.appointmentTypes?.[0] ?? "inventory_visit";
-        setAppointmentType(firstType);
+        const pref =
+          preferredType && json?.appointmentTypes?.includes(preferredType)
+            ? preferredType
+            : firstType;
+        setAppointmentType(pref);
       } catch (err: any) {
         setError(err?.message ?? "Failed to load booking config");
       } finally {
         setLoadingConfig(false);
       }
     })();
-  }, [token]);
+  }, [token, preferredType]);
+
+  useEffect(() => {
+    if (!token) return;
+    const firstName = params.get("firstName") ?? "";
+    const lastName = params.get("lastName") ?? "";
+    const email = params.get("email") ?? "";
+    const phone = params.get("phone") ?? "";
+    const type = params.get("type");
+    if (type) setPreferredType(type);
+    setForm(prev => ({
+      ...prev,
+      firstName: prev.firstName || firstName,
+      lastName: prev.lastName || lastName,
+      email: prev.email || email,
+      phone: prev.phone || phone
+    }));
+  }, [params, token]);
 
   useEffect(() => {
     if (!token || !appointmentType) return;
@@ -169,16 +188,13 @@ function BookingPageInner() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {slots.map(slot => (
                     <button
-                      key={`${slot.calendarId}-${slot.start}`}
+                      key={`${slot.start}-${slot.end}`}
                       className={`border rounded px-3 py-2 text-left text-sm hover:border-blue-500 ${
                         selectedSlot?.start === slot.start ? "border-blue-600 bg-blue-50" : ""
                       }`}
                       onClick={() => setSelectedSlot(slot)}
                     >
                       <div className="font-medium">{slot.startLocal}</div>
-                      {slot.salespersonName ? (
-                        <div className="text-xs text-gray-600">with {slot.salespersonName}</div>
-                      ) : null}
                     </button>
                   ))}
                 </div>

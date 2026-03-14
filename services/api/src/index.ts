@@ -647,6 +647,40 @@ function extractBookingToken(req: express.Request): string {
   ).trim();
 }
 
+function inferAppointmentTypeFromConv(conv: any): string {
+  const bucket = conv?.classification?.bucket ?? "";
+  const cta = conv?.classification?.cta ?? "";
+  if (bucket === "test_ride" || cta === "schedule_test_ride") return "test_ride";
+  if (bucket === "trade_in_sell" || cta === "value_my_trade" || cta === "sell_my_bike") {
+    return "trade_appraisal";
+  }
+  if (bucket === "finance_prequal" || cta === "prequalify" || cta === "hdfs_coa") {
+    return "finance_discussion";
+  }
+  return "inventory_visit";
+}
+
+function buildBookingUrlForLead(baseUrl: string | undefined | null, conv: any): string | null {
+  const raw = (baseUrl ?? "").trim();
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    const type = inferAppointmentTypeFromConv(conv);
+    const firstName = conv?.lead?.firstName ?? "";
+    const lastName = conv?.lead?.lastName ?? "";
+    const email = conv?.lead?.email ?? "";
+    const phone = conv?.lead?.phone ?? "";
+    if (type) url.searchParams.set("type", type);
+    if (firstName) url.searchParams.set("firstName", firstName);
+    if (lastName) url.searchParams.set("lastName", lastName);
+    if (email) url.searchParams.set("email", email);
+    if (phone) url.searchParams.set("phone", phone);
+    return url.toString();
+  } catch {
+    return raw;
+  }
+}
+
 const FOLLOW_UP_MESSAGES = [
   "Just checking in - still want to come by to look at it? I have {a} or {b} if that helps.",
   "If you'd like a quick walkaround video first, I can send one. If you'd rather come by, what day works best for you?",
@@ -708,7 +742,7 @@ function buildInitialEmailDraft(conv: any, dealerProfile: any): string {
   const name = rawName.split(" ")[0] || "there";
   const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
   const agentName = dealerProfile?.agentName ?? "our team";
-  const bookingUrl = dealerProfile?.bookingUrl?.trim();
+  const bookingUrl = buildBookingUrlForLead(dealerProfile?.bookingUrl, conv);
   const label = normalizeLeadLabel(conv);
   const isTestRide =
     conv?.classification?.bucket === "test_ride" || conv?.classification?.cta === "schedule_test_ride";
@@ -1653,14 +1687,14 @@ async function processDueFollowUps() {
       conv.classification?.channel === "email" && !!emailTo && hasEmailOptIn(conv.lead);
     const systemMode = effectiveMode(conv);
     const { from: emailFrom, replyTo: emailReplyTo, signature } = getEmailConfig(dealerProfile);
-    const bookingUrl = dealerProfile?.bookingUrl?.trim();
+  const bookingUrl = buildBookingUrlForLead(dealerProfile?.bookingUrl, conv);
     const name = conv.lead?.firstName?.trim() || "there";
     const year = conv.lead?.vehicle?.year ?? null;
     const model = conv.lead?.vehicle?.model ?? null;
     const label = model ? `the ${formatModelLabel(year, model)}` : "your inquiry";
-    const bookingLine = bookingUrl
-      ? `You can choose a time here: ${bookingUrl}.`
-      : "If you’d like to schedule a visit, just reply with a day and time that works.";
+  const bookingLine = bookingUrl
+    ? `You can choose a time here: ${bookingUrl}.`
+    : "If you’d like to schedule a visit, just reply with a day and time that works.";
     let emailMessage: string | null = null;
     if (useEmail) {
       if (cadence.kind === "long_term") {
@@ -2090,19 +2124,16 @@ app.get("/public/booking/availability", async (req, res) => {
   const now = new Date();
   const candidatesByDay = generateCandidateSlots(cfg, now, durationMinutes, daysAhead);
   const salespeople = cfg.salespeople ?? [];
-  const preferred = getPreferredSalespeople(cfg);
+  const preferred = (cfg.preferredSalespeople?.length
+    ? cfg.preferredSalespeople
+    : salespeople.map(s => s.id)) as string[];
   const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
 
   const cal = await getAuthedCalendarClient();
-  const slots: Array<{
-    salespersonId: string;
-    salespersonName?: string;
-    calendarId: string;
-    start: string;
-    end: string;
-    startLocal: string;
-    endLocal: string;
-  }> = [];
+  const unique = new Map<
+    string,
+    { start: string; end: string; startLocal: string; endLocal: string }
+  >();
 
   for (const salespersonId of preferred) {
     const sp = salespeople.find(p => p.id === salespersonId);
@@ -2126,16 +2157,21 @@ app.get("/public/booking/availability", async (req, res) => {
       perSalesperson
     );
     for (const s of picked) {
-      slots.push({
-        ...s,
-        salespersonName: sp.name,
-        startLocal: fmtLocal(s.start, cfg.timezone),
-        endLocal: fmtLocal(s.end, cfg.timezone)
-      });
+      const key = `${s.start}|${s.end}`;
+      if (!unique.has(key)) {
+        unique.set(key, {
+          start: s.start,
+          end: s.end,
+          startLocal: fmtLocal(s.start, cfg.timezone),
+          endLocal: fmtLocal(s.end, cfg.timezone)
+        });
+      }
     }
   }
 
-  slots.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+  const slots = Array.from(unique.values()).sort((a, b) =>
+    a.start < b.start ? -1 : a.start > b.start ? 1 : 0
+  );
   const limitRaw = Number(req.query?.limit ?? 24);
   const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 6), 60) : 24;
 
@@ -2157,8 +2193,6 @@ app.post("/public/booking/book", async (req, res) => {
 
   const cfg = await getSchedulerConfig();
   const slot = req.body?.slot as {
-    salespersonId: string;
-    calendarId: string;
     start: string;
     end: string;
     startLocal?: string;
@@ -2167,8 +2201,8 @@ app.post("/public/booking/book", async (req, res) => {
   const lead = req.body?.lead as any;
   const appointmentType = String(req.body?.appointmentType ?? "inventory_visit");
 
-  if (!slot?.calendarId || !slot?.start || !slot?.end) {
-    return res.status(400).json({ ok: false, error: "Missing slot.calendarId/start/end" });
+  if (!slot?.start || !slot?.end) {
+    return res.status(400).json({ ok: false, error: "Missing slot.start/end" });
   }
 
   const leadKey = String(lead?.leadKey ?? lead?.phone ?? lead?.email ?? "").trim();
@@ -2197,9 +2231,33 @@ app.post("/public/booking/book", async (req, res) => {
   ].filter(Boolean);
 
   const cal = await getAuthedCalendarClient();
+  const preferred = getPreferredSalespeople(cfg);
+  const salespeople = cfg.salespeople ?? [];
+  let chosenSp: { id: string; calendarId: string; name?: string } | null = null;
+  const slotStart = new Date(slot.start);
+  const slotEnd = new Date(slot.end);
+  for (const salespersonId of preferred) {
+    const sp = salespeople.find(p => p.id === salespersonId);
+    if (!sp?.calendarId) continue;
+    const fb = await queryFreeBusy(cal, [sp.calendarId], slot.start, slot.end, cfg.timezone);
+    const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any[];
+    const blocked = busy.some((b: any) => {
+      const bStart = new Date(b.start);
+      const bEnd = new Date(b.end);
+      return slotStart < bEnd && bStart < slotEnd;
+    });
+    if (blocked) continue;
+    chosenSp = { id: sp.id, calendarId: sp.calendarId, name: sp.name };
+    break;
+  }
+
+  if (!chosenSp) {
+    return res.status(409).json({ ok: false, error: "No longer available" });
+  }
+
   const event = await insertEvent(
     cal,
-    slot.calendarId,
+    chosenSp.calendarId,
     cfg.timezone,
     summary,
     descriptionLines.join("\n"),
@@ -2227,14 +2285,15 @@ app.post("/public/booking/book", async (req, res) => {
   conv.appointment.acknowledged = true;
   conv.appointment.bookedEventId = event.id ?? null;
   conv.appointment.bookedEventLink = event.htmlLink ?? null;
-  conv.appointment.bookedSalespersonId = slot.salespersonId ?? null;
+  conv.appointment.bookedSalespersonId = chosenSp.id ?? null;
   stopFollowUpCadence(conv, "appointment_booked");
 
   return res.json({
     ok: true,
     eventId: event.id,
     htmlLink: event.htmlLink,
-    whenText: conv.appointment.whenText
+    whenText: conv.appointment.whenText,
+    salesperson: chosenSp?.name ?? null
   });
 });
 
