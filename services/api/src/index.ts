@@ -633,6 +633,10 @@ function fmtLocal(iso: string, tz: string) {
   });
 }
 
+function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
+  return aStart < bEnd && aEnd > bStart;
+}
+
 function getBookingToken(profile: Awaited<ReturnType<typeof getDealerProfile>> | null): string {
   const token = profile?.bookingToken?.trim();
   return token || (process.env.BOOKING_PUBLIC_TOKEN ?? "").trim();

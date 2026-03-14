@@ -153,7 +153,7 @@ function BookingPageInner() {
         const qs = new URLSearchParams({
           token,
           type: appointmentType,
-          daysAhead: "30",
+          daysAhead: "14",
           perSalesperson: "6"
         });
         const resp = await fetch(`/api/booking/availability?${qs.toString()}`, {
