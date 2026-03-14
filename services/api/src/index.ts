@@ -633,6 +633,20 @@ function fmtLocal(iso: string, tz: string) {
   });
 }
 
+function getBookingToken(profile: Awaited<ReturnType<typeof getDealerProfile>> | null): string {
+  const token = profile?.bookingToken?.trim();
+  return token || (process.env.BOOKING_PUBLIC_TOKEN ?? "").trim();
+}
+
+function extractBookingToken(req: express.Request): string {
+  return String(
+    (req.query?.token as string | undefined) ??
+      req.body?.token ??
+      req.headers["x-booking-token"] ??
+      ""
+  ).trim();
+}
+
 const FOLLOW_UP_MESSAGES = [
   "Just checking in - still want to come by to look at it? I have {a} or {b} if that helps.",
   "If you'd like a quick walkaround video first, I can send one. If you'd rather come by, what day works best for you?",
@@ -1988,6 +2002,198 @@ app.post("/scheduler/book", async (req, res) => {
     eventId: event.id,
     htmlLink: event.htmlLink,
     salesperson: salesperson ? { id: salesperson.id, name: salesperson.name } : null
+  });
+});
+
+app.get("/public/booking/config", async (req, res) => {
+  const profile = await getDealerProfile();
+  const token = extractBookingToken(req);
+  const expected = getBookingToken(profile);
+  if (!token || !expected || token !== expected) {
+    return res.status(401).json({ ok: false, error: "unauthorized" });
+  }
+  const cfg = await getSchedulerConfig();
+  return res.json({
+    ok: true,
+    dealer: {
+      dealerName: profile?.dealerName ?? "",
+      agentName: profile?.agentName ?? "",
+      phone: profile?.phone ?? "",
+      website: profile?.website ?? "",
+      address: profile?.address ?? null
+    },
+    timezone: cfg.timezone,
+    appointmentTypes: Object.keys(cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } })
+  });
+});
+
+app.get("/public/booking/availability", async (req, res) => {
+  const profile = await getDealerProfile();
+  const token = extractBookingToken(req);
+  const expected = getBookingToken(profile);
+  if (!token || !expected || token !== expected) {
+    return res.status(401).json({ ok: false, error: "unauthorized" });
+  }
+
+  const cfg = await getSchedulerConfig();
+  const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
+  const type = String(req.query?.type ?? "inventory_visit");
+  const durationMinutes = appointmentTypes[type]?.durationMinutes ?? 60;
+  const daysAheadRaw = Number(req.query?.daysAhead ?? 14);
+  const daysAhead = Number.isFinite(daysAheadRaw) ? Math.min(Math.max(daysAheadRaw, 3), 30) : 14;
+  const perSalespersonRaw = Number(req.query?.perSalesperson ?? 6);
+  const perSalesperson = Number.isFinite(perSalespersonRaw)
+    ? Math.min(Math.max(perSalespersonRaw, 2), 12)
+    : 6;
+
+  const now = new Date();
+  const candidatesByDay = generateCandidateSlots(cfg, now, durationMinutes, daysAhead);
+  const salespeople = cfg.salespeople ?? [];
+  const preferred = getPreferredSalespeople(cfg);
+  const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
+
+  const cal = await getAuthedCalendarClient();
+  const slots: Array<{
+    salespersonId: string;
+    salespersonName?: string;
+    calendarId: string;
+    start: string;
+    end: string;
+    startLocal: string;
+    endLocal: string;
+  }> = [];
+
+  for (const salespersonId of preferred) {
+    const sp = salespeople.find(p => p.id === salespersonId);
+    if (!sp?.calendarId) continue;
+    const timeMin =
+      candidatesByDay[0]?.candidates[0]?.start?.toISOString() ?? new Date(now).toISOString();
+    const lastDay = candidatesByDay[candidatesByDay.length - 1];
+    const timeMax =
+      lastDay?.candidates[lastDay.candidates.length - 1]?.end?.toISOString() ??
+      new Date(now.getTime() + daysAhead * 864e5).toISOString();
+
+    const fb = await queryFreeBusy(cal, [sp.calendarId], timeMin, timeMax, cfg.timezone);
+    const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any[];
+    const expanded = expandBusyBlocks(busy, gapMinutes);
+    const picked = pickSlotsForSalesperson(
+      cfg,
+      sp.id,
+      sp.calendarId,
+      candidatesByDay,
+      expanded,
+      perSalesperson
+    );
+    for (const s of picked) {
+      slots.push({
+        ...s,
+        salespersonName: sp.name,
+        startLocal: fmtLocal(s.start, cfg.timezone),
+        endLocal: fmtLocal(s.end, cfg.timezone)
+      });
+    }
+  }
+
+  slots.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+  const limitRaw = Number(req.query?.limit ?? 24);
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 6), 60) : 24;
+
+  return res.json({
+    ok: true,
+    appointmentType: type,
+    durationMinutes,
+    slots: slots.slice(0, limit)
+  });
+});
+
+app.post("/public/booking/book", async (req, res) => {
+  const profile = await getDealerProfile();
+  const token = extractBookingToken(req);
+  const expected = getBookingToken(profile);
+  if (!token || !expected || token !== expected) {
+    return res.status(401).json({ ok: false, error: "unauthorized" });
+  }
+
+  const cfg = await getSchedulerConfig();
+  const slot = req.body?.slot as {
+    salespersonId: string;
+    calendarId: string;
+    start: string;
+    end: string;
+    startLocal?: string;
+    endLocal?: string;
+  };
+  const lead = req.body?.lead as any;
+  const appointmentType = String(req.body?.appointmentType ?? "inventory_visit");
+
+  if (!slot?.calendarId || !slot?.start || !slot?.end) {
+    return res.status(400).json({ ok: false, error: "Missing slot.calendarId/start/end" });
+  }
+
+  const leadKey = String(lead?.leadKey ?? lead?.phone ?? lead?.email ?? "").trim();
+  if (!leadKey) {
+    return res.status(400).json({ ok: false, error: "Missing leadKey/phone/email" });
+  }
+
+  const leadNameRaw = lead?.name?.trim?.() ?? "";
+  const firstName = lead?.firstName ?? "";
+  const lastName = lead?.lastName ?? "";
+  const leadName =
+    leadNameRaw ||
+    [firstName, lastName].filter(Boolean).join(" ").trim() ||
+    leadKey;
+  const summary = `Appt: ${appointmentType} – ${leadName}`.trim();
+
+  const descriptionLines = [
+    `LeadKey: ${leadKey}`,
+    `Phone: ${lead?.phone ?? ""}`,
+    `Email: ${lead?.email ?? ""}`,
+    `Stock: ${lead?.stockId ?? ""}`,
+    `VIN: ${lead?.vin ?? ""}`,
+    `Source: ${lead?.leadSource ?? "public_booking"}`,
+    "",
+    `Notes: ${lead?.notes ?? ""}`
+  ].filter(Boolean);
+
+  const cal = await getAuthedCalendarClient();
+  const event = await insertEvent(
+    cal,
+    slot.calendarId,
+    cfg.timezone,
+    summary,
+    descriptionLines.join("\n"),
+    slot.start,
+    slot.end
+  );
+
+  const conv = upsertConversationByLeadKey(leadKey, "suggest");
+  conv.lead = {
+    ...(conv.lead ?? {}),
+    name: leadNameRaw || undefined,
+    firstName,
+    lastName,
+    email: lead?.email ?? conv.lead?.email ?? "",
+    phone: lead?.phone ?? conv.lead?.phone ?? "",
+    source: conv.lead?.source ?? "Public Booking",
+    vehicle: lead?.vehicle ?? conv.lead?.vehicle
+  };
+  conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
+  conv.appointment.status = "confirmed";
+  conv.appointment.whenText = slot.startLocal ?? fmtLocal(slot.start, cfg.timezone);
+  conv.appointment.whenIso = slot.start;
+  conv.appointment.confirmedBy = "customer";
+  conv.appointment.updatedAt = new Date().toISOString();
+  conv.appointment.acknowledged = true;
+  conv.appointment.bookedEventId = event.id ?? null;
+  conv.appointment.bookedEventLink = event.htmlLink ?? null;
+  conv.appointment.bookedSalespersonId = slot.salespersonId ?? null;
+  stopFollowUpCadence(conv, "appointment_booked");
+
+  return res.json({
+    ok: true,
+    eventId: event.id,
+    htmlLink: event.htmlLink,
+    whenText: conv.appointment.whenText
   });
 });
 

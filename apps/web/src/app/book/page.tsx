@@ -1,0 +1,239 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+
+type Slot = {
+  salespersonId: string;
+  salespersonName?: string;
+  calendarId: string;
+  start: string;
+  end: string;
+  startLocal: string;
+  endLocal: string;
+};
+
+export default function BookingPage() {
+  const params = useSearchParams();
+  const token = params.get("token") ?? "";
+
+  const [config, setConfig] = useState<any>(null);
+  const [loadingConfig, setLoadingConfig] = useState(true);
+  const [slots, setSlots] = useState<Slot[]>([]);
+  const [loadingSlots, setLoadingSlots] = useState(false);
+  const [appointmentType, setAppointmentType] = useState("inventory_visit");
+  const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<any>(null);
+  const [form, setForm] = useState({
+    firstName: "",
+    lastName: "",
+    email: "",
+    phone: "",
+    notes: ""
+  });
+
+  useEffect(() => {
+    if (!token) {
+      setLoadingConfig(false);
+      setError("Missing booking token.");
+      return;
+    }
+    void (async () => {
+      setLoadingConfig(true);
+      setError(null);
+      try {
+        const resp = await fetch(`/api/booking/config?token=${encodeURIComponent(token)}`, {
+          cache: "no-store"
+        });
+        const json = await resp.json();
+        if (!resp.ok) {
+          throw new Error(json?.error ?? "Failed to load booking config");
+        }
+        setConfig(json);
+        const firstType = json?.appointmentTypes?.[0] ?? "inventory_visit";
+        setAppointmentType(firstType);
+      } catch (err: any) {
+        setError(err?.message ?? "Failed to load booking config");
+      } finally {
+        setLoadingConfig(false);
+      }
+    })();
+  }, [token]);
+
+  useEffect(() => {
+    if (!token || !appointmentType) return;
+    void (async () => {
+      setLoadingSlots(true);
+      setError(null);
+      try {
+        const resp = await fetch(
+          `/api/booking/availability?token=${encodeURIComponent(token)}&type=${encodeURIComponent(appointmentType)}`,
+          { cache: "no-store" }
+        );
+        const json = await resp.json();
+        if (!resp.ok) {
+          throw new Error(json?.error ?? "Failed to load availability");
+        }
+        setSlots(json?.slots ?? []);
+      } catch (err: any) {
+        setError(err?.message ?? "Failed to load availability");
+      } finally {
+        setLoadingSlots(false);
+      }
+    })();
+  }, [token, appointmentType]);
+
+  const dealerName = config?.dealer?.dealerName ?? "Dealer";
+  const tz = config?.timezone ?? "America/New_York";
+  const appointmentTypes = config?.appointmentTypes ?? ["inventory_visit"];
+
+  const canSubmit = useMemo(() => {
+    if (!selectedSlot) return false;
+    if (!form.firstName.trim() && !form.lastName.trim()) return false;
+    if (!form.email.trim() && !form.phone.trim()) return false;
+    return true;
+  }, [selectedSlot, form]);
+
+  async function submitBooking() {
+    if (!selectedSlot) return;
+    setError(null);
+    const leadName = [form.firstName, form.lastName].filter(Boolean).join(" ").trim();
+    try {
+      const resp = await fetch("/api/booking/book", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token,
+          appointmentType,
+          slot: selectedSlot,
+          lead: {
+            name: leadName,
+            firstName: form.firstName.trim(),
+            lastName: form.lastName.trim(),
+            email: form.email.trim(),
+            phone: form.phone.trim(),
+            notes: form.notes.trim()
+          }
+        })
+      });
+      const json = await resp.json();
+      if (!resp.ok) throw new Error(json?.error ?? "Booking failed");
+      setSuccess(json);
+    } catch (err: any) {
+      setError(err?.message ?? "Booking failed");
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+      <div className="w-full max-w-2xl bg-white border rounded-lg shadow-sm p-6">
+        <div className="text-xl font-semibold mb-1">{dealerName}</div>
+        <div className="text-sm text-gray-600 mb-6">Book a time to stop in (timezone: {tz}).</div>
+
+        {loadingConfig ? (
+          <div className="text-sm text-gray-600">Loading booking info…</div>
+        ) : error ? (
+          <div className="text-sm text-red-600">{error}</div>
+        ) : success ? (
+          <div className="space-y-3">
+            <div className="text-lg font-semibold">You’re booked.</div>
+            <div className="text-sm text-gray-700">
+              We’ll see you at {success.whenText ?? selectedSlot?.startLocal}.
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            <div>
+              <label className="text-sm font-medium block mb-2">Appointment type</label>
+              <select
+                className="border rounded px-3 py-2 text-sm w-full"
+                value={appointmentType}
+                onChange={e => setAppointmentType(e.target.value)}
+              >
+                {appointmentTypes.map((t: string) => (
+                  <option key={t} value={t}>
+                    {t.replace(/_/g, " ")}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <div className="text-sm font-medium mb-2">Available times</div>
+              {loadingSlots ? (
+                <div className="text-sm text-gray-600">Loading availability…</div>
+              ) : slots.length === 0 ? (
+                <div className="text-sm text-gray-600">No times available right now.</div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {slots.map(slot => (
+                    <button
+                      key={`${slot.calendarId}-${slot.start}`}
+                      className={`border rounded px-3 py-2 text-left text-sm hover:border-blue-500 ${
+                        selectedSlot?.start === slot.start ? "border-blue-600 bg-blue-50" : ""
+                      }`}
+                      onClick={() => setSelectedSlot(slot)}
+                    >
+                      <div className="font-medium">{slot.startLocal}</div>
+                      {slot.salespersonName ? (
+                        <div className="text-xs text-gray-600">with {slot.salespersonName}</div>
+                      ) : null}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <input
+                className="border rounded px-3 py-2 text-sm"
+                placeholder="First name"
+                value={form.firstName}
+                onChange={e => setForm({ ...form, firstName: e.target.value })}
+              />
+              <input
+                className="border rounded px-3 py-2 text-sm"
+                placeholder="Last name"
+                value={form.lastName}
+                onChange={e => setForm({ ...form, lastName: e.target.value })}
+              />
+              <input
+                className="border rounded px-3 py-2 text-sm"
+                placeholder="Email"
+                value={form.email}
+                onChange={e => setForm({ ...form, email: e.target.value })}
+              />
+              <input
+                className="border rounded px-3 py-2 text-sm"
+                placeholder="Phone"
+                value={form.phone}
+                onChange={e => setForm({ ...form, phone: e.target.value })}
+              />
+            </div>
+            <textarea
+              className="border rounded px-3 py-2 text-sm w-full min-h-[80px]"
+              placeholder="Notes (optional)"
+              value={form.notes}
+              onChange={e => setForm({ ...form, notes: e.target.value })}
+            />
+
+            <div className="flex items-center justify-between">
+              <div className="text-xs text-gray-500">
+                Please select a time and provide your contact details.
+              </div>
+              <button
+                className="px-4 py-2 rounded bg-blue-600 text-white text-sm disabled:bg-gray-300"
+                disabled={!canSubmit}
+                onClick={submitBooking}
+              >
+                Book appointment
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+

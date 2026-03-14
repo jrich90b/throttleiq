@@ -170,6 +170,7 @@ export default function Home() {
     emailSignature: "",
     logoUrl: "",
     bookingUrl: "",
+    bookingToken: "",
     phone: "",
     website: "",
     addressLine1: "",
@@ -422,6 +423,7 @@ export default function Home() {
           emailSignature: profile.emailSignature ?? "",
           logoUrl: profile.logoUrl ?? "",
           bookingUrl: profile.bookingUrl ?? "",
+          bookingToken: profile.bookingToken ?? "",
           phone: profile.phone ?? "",
           website: profile.website ?? "",
           addressLine1: profile.address?.line1 ?? "",
@@ -466,6 +468,16 @@ export default function Home() {
       }
     })();
   }, [section]);
+
+  useEffect(() => {
+    if (!dealerProfileForm.bookingToken) return;
+    if (dealerProfileForm.bookingUrl) return;
+    if (typeof window === "undefined") return;
+    const token = dealerProfileForm.bookingToken.trim();
+    if (!token) return;
+    const url = `${window.location.origin}/book?token=${encodeURIComponent(token)}`;
+    setDealerProfileForm(prev => (prev.bookingUrl ? prev : { ...prev, bookingUrl: url }));
+  }, [dealerProfileForm.bookingToken, dealerProfileForm.bookingUrl]);
 
   const calendarUsers = useMemo(
     () => (usersList ?? []).filter((u: any) => !!u.calendarId),
@@ -1125,6 +1137,7 @@ export default function Home() {
         emailSignature: dealerProfileForm.emailSignature,
         logoUrl: dealerProfileForm.logoUrl.trim(),
         bookingUrl: dealerProfileForm.bookingUrl.trim(),
+        bookingToken: dealerProfileForm.bookingToken.trim(),
         phone: dealerProfileForm.phone.trim(),
         website: dealerProfileForm.website.trim(),
         address: {
@@ -3117,6 +3130,26 @@ export default function Home() {
                     value={dealerProfileForm.website}
                     onChange={e => setDealerProfileForm({ ...dealerProfileForm, website: e.target.value })}
                   />
+                  <div className="flex items-center gap-2">
+                    <input
+                      className="border rounded px-3 py-2 text-sm flex-1"
+                      placeholder="Booking token (public)"
+                      value={dealerProfileForm.bookingToken}
+                      onChange={e => setDealerProfileForm({ ...dealerProfileForm, bookingToken: e.target.value })}
+                    />
+                    <button
+                      className="px-3 py-2 border rounded text-sm"
+                      type="button"
+                      onClick={() => {
+                        const token =
+                          (typeof window !== "undefined" && window.crypto?.randomUUID?.()) ||
+                          Math.random().toString(36).slice(2);
+                        setDealerProfileForm(prev => ({ ...prev, bookingToken: token }));
+                      }}
+                    >
+                      Generate
+                    </button>
+                  </div>
                   <input
                     className="border rounded px-3 py-2 text-sm"
                     placeholder="Booking link (for email follow-ups)"
