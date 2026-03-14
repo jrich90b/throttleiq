@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 type Slot = {
@@ -13,7 +13,7 @@ type Slot = {
   endLocal: string;
 };
 
-export default function BookingPage() {
+function BookingPageInner() {
   const params = useSearchParams();
   const token = params.get("token") ?? "";
 
@@ -237,3 +237,18 @@ export default function BookingPage() {
   );
 }
 
+export default function BookingPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+          <div className="w-full max-w-2xl bg-white border rounded-lg shadow-sm p-6">
+            <div className="text-sm text-gray-600">Loading booking page…</div>
+          </div>
+        </div>
+      }
+    >
+      <BookingPageInner />
+    </Suspense>
+  );
+}
