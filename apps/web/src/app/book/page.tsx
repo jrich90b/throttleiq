@@ -10,6 +10,36 @@ type Slot = {
   endLocal: string;
 };
 
+function dayKeyFromIso(iso: string, tz: string) {
+  try {
+    const fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    });
+    return fmt.format(new Date(iso));
+  } catch {
+    return new Date(iso).toISOString().slice(0, 10);
+  }
+}
+
+function dayKeyFromParts(year: number, monthIndex: number, day: number, tz: string) {
+  try {
+    const fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    });
+    const d = new Date(year, monthIndex, day, 12, 0, 0);
+    return fmt.format(d);
+  } catch {
+    const d = new Date(year, monthIndex, day);
+    return d.toISOString().slice(0, 10);
+  }
+}
+
 function BookingPageInner() {
   const params = useSearchParams();
   const token = params.get("token") ?? "";
@@ -23,6 +53,8 @@ function BookingPageInner() {
   const [preferredType, setPreferredType] = useState<string | null>(null);
   const [lockedType, setLockedType] = useState<string | null>(null);
   const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null);
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [monthCursor, setMonthCursor] = useState<Date>(() => new Date());
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<any>(null);
   const [form, setForm] = useState({
@@ -117,10 +149,16 @@ function BookingPageInner() {
       setLoadingSlots(true);
       setError(null);
       try {
-        const resp = await fetch(
-          `/api/booking/availability?token=${encodeURIComponent(token)}&type=${encodeURIComponent(appointmentType)}`,
-          { cache: "no-store" }
-        );
+        const qs = new URLSearchParams({
+          token,
+          type: appointmentType,
+          daysAhead: "30",
+          limit: "60",
+          perSalesperson: "6"
+        });
+        const resp = await fetch(`/api/booking/availability?${qs.toString()}`, {
+          cache: "no-store"
+        });
         const json = await resp.json();
         if (!resp.ok) {
           throw new Error(json?.error ?? "Failed to load availability");
@@ -138,6 +176,45 @@ function BookingPageInner() {
   const tz = config?.timezone ?? "America/New_York";
   const appointmentTypes = config?.appointmentTypes ?? ["inventory_visit"];
   const showTypeSelect = !lockedType && !preferredType;
+
+  const slotsByDay = useMemo(() => {
+    const map = new Map<string, Slot[]>();
+    for (const slot of slots) {
+      const key = dayKeyFromIso(slot.start, tz);
+      const existing = map.get(key);
+      if (existing) {
+        existing.push(slot);
+      } else {
+        map.set(key, [slot]);
+      }
+    }
+    return map;
+  }, [slots, tz]);
+
+  const availableDays = useMemo(() => Array.from(slotsByDay.keys()).sort(), [slotsByDay]);
+
+  useEffect(() => {
+    if (!availableDays.length) return;
+    if (!selectedDay) {
+      setSelectedDay(availableDays[0]);
+      const first = new Date(`${availableDays[0]}T12:00:00`);
+      if (!Number.isNaN(first.getTime())) setMonthCursor(first);
+    }
+  }, [availableDays, selectedDay]);
+
+  useEffect(() => {
+    if (!availableDays.length || !selectedDay) return;
+    if (!availableDays.includes(selectedDay)) {
+      setSelectedDay(availableDays[0]);
+      const first = new Date(`${availableDays[0]}T12:00:00`);
+      if (!Number.isNaN(first.getTime())) setMonthCursor(first);
+    }
+  }, [availableDays, selectedDay]);
+
+  const visibleSlots = useMemo(() => {
+    if (!selectedDay) return [];
+    return slotsByDay.get(selectedDay) ?? [];
+  }, [slotsByDay, selectedDay]);
 
   const canSubmit = useMemo(() => {
     if (!selectedSlot) return false;
@@ -213,14 +290,93 @@ function BookingPageInner() {
             ) : null}
 
             <div>
-              <div className="text-sm font-medium mb-2">Available times</div>
+              <div className="text-sm font-medium mb-2">Choose a day</div>
               {loadingSlots ? (
                 <div className="text-sm text-gray-600">Loading availability…</div>
               ) : slots.length === 0 ? (
                 <div className="text-sm text-gray-600">No times available right now.</div>
               ) : (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <button
+                      className="text-sm border rounded px-2 py-1"
+                      onClick={() =>
+                        setMonthCursor(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))
+                      }
+                    >
+                      Prev
+                    </button>
+                    <div className="text-sm font-medium">
+                      {monthCursor.toLocaleString("en-US", {
+                        month: "long",
+                        year: "numeric"
+                      })}
+                    </div>
+                    <button
+                      className="text-sm border rounded px-2 py-1"
+                      onClick={() =>
+                        setMonthCursor(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))
+                      }
+                    >
+                      Next
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-7 gap-1 text-xs text-gray-500">
+                    {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(d => (
+                      <div key={d} className="text-center">
+                        {d}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-7 gap-1">
+                    {(() => {
+                      const year = monthCursor.getFullYear();
+                      const month = monthCursor.getMonth();
+                      const first = new Date(year, month, 1);
+                      const startDay = first.getDay();
+                      const daysInMonth = new Date(year, month + 1, 0).getDate();
+                      const cells: Array<JSX.Element> = [];
+                      for (let i = 0; i < startDay; i++) {
+                        cells.push(<div key={`empty-${i}`} />);
+                      }
+                      for (let day = 1; day <= daysInMonth; day++) {
+                        const key = dayKeyFromParts(year, month, day, tz);
+                        const hasSlots = slotsByDay.has(key);
+                        const isSelected = selectedDay === key;
+                        cells.push(
+                          <button
+                            key={key}
+                            className={`text-sm border rounded p-2 text-center ${
+                              hasSlots ? "hover:border-blue-500" : "opacity-40 cursor-not-allowed"
+                            } ${isSelected ? "border-blue-600 bg-blue-50" : ""}`}
+                            disabled={!hasSlots}
+                            onClick={() => {
+                              setSelectedDay(key);
+                              setSelectedSlot(null);
+                            }}
+                          >
+                            {day}
+                          </button>
+                        );
+                      }
+                      return cells;
+                    })()}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div className="text-sm font-medium mb-2">Available times</div>
+              {loadingSlots ? (
+                <div className="text-sm text-gray-600">Loading availability…</div>
+              ) : !selectedDay ? (
+                <div className="text-sm text-gray-600">Select a day to see times.</div>
+              ) : visibleSlots.length === 0 ? (
+                <div className="text-sm text-gray-600">No times available for that day.</div>
+              ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {slots.map(slot => (
+                  {visibleSlots.map(slot => (
                     <button
                       key={`${slot.start}-${slot.end}`}
                       className={`border rounded px-3 py-2 text-left text-sm hover:border-blue-500 ${
