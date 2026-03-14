@@ -1515,6 +1515,14 @@ async function processDueFollowUps() {
         continue;
       }
     }
+    const lastDraft = getLastOutbound(conv, ["draft_ai"]);
+    if (lastDraft?.at) {
+      const draftAt = new Date(lastDraft.at);
+      // Avoid stacking multiple follow-up drafts within a day.
+      if (now.getTime() - draftAt.getTime() < 24 * 60 * 60 * 1000) {
+        continue;
+      }
+    }
     if (new Date(cadence.nextDueAt) > now) continue;
     if (conv.appointment?.bookedEventId) {
       stopFollowUpCadence(conv, "appointment_booked");
