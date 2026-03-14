@@ -216,6 +216,7 @@ export type Conversation = {
   crm?: { lastLoggedAt?: string };
   inventoryWatch?: InventoryWatch;
   inventoryWatchPending?: InventoryWatchPending;
+  emailDraft?: string;
 };
 
 const conversations = new Map<string, Conversation>();

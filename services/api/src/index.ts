@@ -2795,7 +2795,7 @@ app.get("/conversations/:id", async (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
   const dealerProfile = await getDealerProfile();
-  const emailDraft = buildInitialEmailDraft(conv, dealerProfile);
+  const emailDraft = conv.emailDraft ?? buildInitialEmailDraft(conv, dealerProfile);
   res.json({
     ok: true,
     systemMode: getSystemMode(),

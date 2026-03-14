@@ -13,13 +13,16 @@ import {
   startFollowUpCadence,
   scheduleLongTermFollowUp,
   discardPendingDrafts,
+  getAllConversations,
   getPricingAttempts,
   incrementPricingAttempt,
   addTodo,
   setFollowUpMode,
+  pauseFollowUpCadence,
   stopFollowUpCadence,
   markPricingEscalated,
   closeConversation,
+  normalizeLeadKey,
   saveConversation,
   flushConversationStore
 } from "../domain/conversationStore.js";
@@ -83,6 +86,49 @@ function decodeQuotedPrintable(input: string): string {
   return softBreak.replace(/=([A-Fa-f0-9]{2})/g, (_m, hex) =>
     String.fromCharCode(parseInt(hex, 16))
   );
+}
+
+function extractEmailAddress(input?: string): string | undefined {
+  if (!input) return undefined;
+  const m = String(input)
+    .trim()
+    .match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return m?.[0]?.toLowerCase();
+}
+
+function stripHtml(input?: string): string | undefined {
+  if (!input) return undefined;
+  const withBreaks = input.replace(/<\s*br\s*\/?>/gi, "\n").replace(/<\/p>/gi, "\n");
+  const stripped = withBreaks.replace(/<[^>]+>/g, " ").replace(/\s+\n/g, "\n");
+  const cleaned = stripped.replace(/\n{3,}/g, "\n\n").trim();
+  return cleaned || undefined;
+}
+
+function getLeadIdentifiers(conv: any, fromEmail?: string) {
+  const email =
+    (conv?.lead?.email ?? fromEmail ?? (conv?.leadKey?.includes?.("@") ? conv.leadKey : ""))
+      ?.toString()
+      .trim()
+      .toLowerCase() || undefined;
+  const phoneRaw =
+    conv?.lead?.phone ?? (!conv?.leadKey?.includes?.("@") ? conv?.leadKey : undefined);
+  const phone = phoneRaw ? normalizeLeadKey(String(phoneRaw)) : undefined;
+  return { email, phone };
+}
+
+function pauseRelatedCadencesOnInbound(conv: any, fromEmail?: string) {
+  const { email, phone } = getLeadIdentifiers(conv, fromEmail);
+  if (!email && !phone) return;
+  const pauseUntil = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
+  for (const other of getAllConversations()) {
+    if (!other || other.id === conv.id) continue;
+    const ids = getLeadIdentifiers(other);
+    const emailMatch = email && ids.email && ids.email === email;
+    const phoneMatch = phone && ids.phone && ids.phone === phone;
+    if (!emailMatch && !phoneMatch) continue;
+    pauseFollowUpCadence(other, pauseUntil, "cross_channel_inbound");
+  }
+  pauseFollowUpCadence(conv, pauseUntil, "inbound_email");
 }
 
 function extractLeadMeta(adfXml: string): { leadSource?: string; model?: string } {
@@ -216,11 +262,111 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
 
   if (!adfXml) {
-    console.warn("[sendgrid inbound] No ADF found", {
-      subject: req.body?.subject,
-      from: req.body?.from
+    const envelopeRaw = req.body?.envelope;
+    let envelope: any = null;
+    if (typeof envelopeRaw === "string") {
+      try {
+        envelope = JSON.parse(envelopeRaw);
+      } catch {
+        envelope = null;
+      }
+    }
+    const fromEmail =
+      extractEmailAddress(req.body?.from) ?? extractEmailAddress(envelope?.from) ?? undefined;
+    const toEmail =
+      extractEmailAddress(req.body?.to) ??
+      (Array.isArray(envelope?.to) ? extractEmailAddress(envelope?.to[0]) : undefined) ??
+      extractEmailAddress(envelope?.to) ??
+      "dealership";
+    const subject = typeof req.body?.subject === "string" ? req.body.subject.trim() : "";
+    const plain = textBody?.trim();
+    const htmlText = stripHtml(htmlBody) ?? stripHtml(emailBody);
+    const bodyText = plain || htmlText || "";
+    const body = [subject ? `Subject: ${subject}` : null, bodyText]
+      .filter(Boolean)
+      .join("\n\n")
+      .trim();
+
+    if (!fromEmail) {
+      console.warn("[sendgrid inbound] No ADF found and no from email", {
+        subject: req.body?.subject,
+        from: req.body?.from
+      });
+      return res.status(200).json({ ok: true, parsed: false, reason: "no_adf_found" });
+    }
+
+    const leadKey = fromEmail;
+    const existingConv = getAllConversations().find(c => {
+      const email =
+        (c?.lead?.email ?? (c?.leadKey?.includes?.("@") ? c.leadKey : ""))?.toString().toLowerCase();
+      return !!email && email === fromEmail;
     });
-    return res.status(200).json({ ok: true, parsed: false, reason: "no_adf_found" });
+    const conv = existingConv ?? upsertConversationByLeadKey(leadKey, "suggest");
+    mergeConversationLead(conv, {
+      email: fromEmail
+    });
+    if (!conv.classification?.channel) {
+      setConversationClassification(conv, {
+        bucket: conv.classification?.bucket ?? "general_inquiry",
+        cta: conv.classification?.cta ?? "unknown",
+        channel: "email",
+        ruleName: conv.classification?.ruleName ?? "email_reply"
+      });
+    }
+
+    upsertContact({
+      leadKey: conv.leadKey,
+      conversationId: conv.id,
+      email: fromEmail,
+      lastInboundAt: new Date().toISOString()
+    });
+
+    const event: InboundMessageEvent = {
+      channel: "email",
+      provider: "sendgrid",
+      from: fromEmail,
+      to: toEmail || "dealership",
+      body: body || "(no content)",
+      providerMessageId: String(req.body?.MessageID ?? req.body?.message_id ?? ""),
+      receivedAt: new Date().toISOString()
+    };
+
+    appendInbound(conv, event);
+    discardPendingDrafts(conv, "new_inbound");
+    confirmAppointmentIfMatchesSuggested(conv, event.body, event.providerMessageId);
+    updateHoldingFromInbound(conv, event.body);
+    pauseRelatedCadencesOnInbound(conv, fromEmail);
+
+    const history = conv.messages.slice(-20).map(m => ({ direction: m.direction, body: m.body }));
+    const result = await orchestrateInbound(event, history, {
+      appointment: conv.appointment,
+      followUp: conv.followUp,
+      lead: conv.lead,
+      leadSource: conv.lead?.source ?? null,
+      bucket: conv.classification?.bucket ?? null,
+      cta: conv.classification?.cta ?? null,
+      pricingAttempts: getPricingAttempts(conv)
+    });
+
+    if (result.handoff?.required) {
+      addTodo(conv, result.handoff.reason, event.body, event.providerMessageId);
+      setFollowUpMode(conv, "manual_handoff", `handoff:${result.handoff.reason}`);
+      stopFollowUpCadence(conv, "manual_handoff");
+      if (result.handoff.reason === "pricing" || result.handoff.reason === "payments") {
+        markPricingEscalated(conv);
+      }
+      conv.emailDraft = result.handoff.ack;
+    } else if (result.autoClose?.reason) {
+      closeConversation(conv, result.autoClose.reason);
+      conv.emailDraft = result.draft;
+    } else {
+      conv.emailDraft = result.draft;
+    }
+
+    saveConversation(conv);
+    await flushConversationStore();
+
+    return res.status(200).json({ ok: true, parsed: true, type: "email_reply", draft: conv.emailDraft });
   }
 
   console.log("[sendgrid inbound] to:", req.body?.to);
@@ -510,6 +656,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       markPricingEscalated(conv);
     }
     appendOutbound(conv, "dealership", leadKey, result.handoff.ack, "draft_ai");
+    conv.emailDraft = result.handoff.ack;
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -529,6 +676,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (result.autoClose?.reason) {
     closeConversation(conv, result.autoClose.reason);
     appendOutbound(conv, "dealership", leadKey, result.draft, "draft_ai");
+    conv.emailDraft = result.draft;
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -548,6 +696,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (result.pricingAttempted) {
     incrementPricingAttempt(conv);
   }
+
+  conv.emailDraft = result.draft;
 
   if (result.requestedTime && !conv.appointment?.bookedEventId) {
     try {
