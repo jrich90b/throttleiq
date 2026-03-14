@@ -667,18 +667,63 @@ function getLeadIdentifiers(conv: any, event?: { from?: string }) {
   return { email, phone };
 }
 
-function pauseRelatedCadencesOnInbound(conv: any, event?: { from?: string }) {
+function getRelatedConversations(conv: any, event?: { from?: string }) {
   const { email, phone } = getLeadIdentifiers(conv, event);
-  if (!email && !phone) return;
-  const pauseUntil = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
-  for (const other of getAllConversations()) {
-    if (!other || other.id === conv.id) continue;
+  if (!email && !phone) return [];
+  return getAllConversations().filter(other => {
+    if (!other || other.id === conv.id) return false;
     const ids = getLeadIdentifiers(other);
     const emailMatch = email && ids.email && ids.email === email;
     const phoneMatch = phone && ids.phone && ids.phone === phone;
-    if (!emailMatch && !phoneMatch) continue;
+    return !!(emailMatch || phoneMatch);
+  });
+}
+
+function pauseRelatedCadencesOnInbound(conv: any, event?: { from?: string }) {
+  const pauseUntil = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
+  for (const other of getRelatedConversations(conv, event)) {
     pauseFollowUpCadence(other, pauseUntil, "cross_channel_inbound");
   }
+}
+
+async function suppressRelatedPhones(
+  conv: any,
+  event: { from?: string } | undefined,
+  reason: string,
+  source: string
+) {
+  const phones = new Set<string>();
+  const { phone } = getLeadIdentifiers(conv, event);
+  if (phone) phones.add(phone);
+  for (const other of getRelatedConversations(conv, event)) {
+    const ids = getLeadIdentifiers(other);
+    if (ids.phone) phones.add(ids.phone);
+  }
+  for (const p of phones) {
+    await addSuppression(p, reason, source);
+  }
+}
+
+function stopRelatedCadences(
+  conv: any,
+  reason: string,
+  opts?: { setMode?: "manual_handoff" | "holding_inventory" | "active"; close?: boolean }
+) {
+  for (const other of getRelatedConversations(conv)) {
+    if (opts?.setMode) {
+      setFollowUpMode(other, opts.setMode, `cross_channel:${reason}`);
+    }
+    if (opts?.close) {
+      closeConversation(other, reason);
+    } else {
+      stopFollowUpCadence(other, reason);
+    }
+  }
+}
+
+function onAppointmentBooked(conv: any) {
+  stopFollowUpCadence(conv, "appointment_booked");
+  stopRelatedCadences(conv, "appointment_booked");
 }
 
 function getBookingToken(profile: Awaited<ReturnType<typeof getDealerProfile>> | null): string {
@@ -1699,7 +1744,7 @@ async function processDueFollowUps() {
     }
     if (new Date(cadence.nextDueAt) > now) continue;
     if (conv.appointment?.bookedEventId) {
-      stopFollowUpCadence(conv, "appointment_booked");
+      onAppointmentBooked(conv);
       continue;
     }
     if (conv.followUp?.mode === "holding_inventory") continue;
@@ -2118,7 +2163,7 @@ app.post("/scheduler/book", async (req, res) => {
       conv.appointment.bookedEventId = event.id ?? null;
       conv.appointment.bookedEventLink = event.htmlLink ?? null;
       conv.appointment.bookedSalespersonId = slot.salespersonId ?? null;
-      stopFollowUpCadence(conv, "appointment_booked");
+      onAppointmentBooked(conv);
     }
   }
 
@@ -2340,7 +2385,7 @@ app.post("/public/booking/book", async (req, res) => {
   conv.appointment.bookedEventId = event.id ?? null;
   conv.appointment.bookedEventLink = event.htmlLink ?? null;
   conv.appointment.bookedSalespersonId = chosenSp.id ?? null;
-  stopFollowUpCadence(conv, "appointment_booked");
+  onAppointmentBooked(conv);
 
   return res.json({
     ok: true,
@@ -2774,6 +2819,7 @@ app.post("/conversations/:id/close", (req, res) => {
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
   const reason = String(req.body?.reason ?? "closed").trim() || "closed";
   closeConversation(conv, reason);
+  stopRelatedCadences(conv, reason, { close: true });
   return res.json({ ok: true, conversation: conv });
 });
 
@@ -2807,12 +2853,15 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), (re
       }
     } else if (resolution === "pause_indef") {
       setFollowUpMode(conv, "manual_handoff", "todo_pause_indef");
+      stopRelatedCadences(conv, "todo_pause_indef", { setMode: "manual_handoff" });
     } else if (resolution === "archive") {
       stopFollowUpCadence(conv, "manual_archive");
       closeConversation(conv, "manual_archive");
+      stopRelatedCadences(conv, "manual_archive", { close: true });
     } else if (resolution === "appointment_set") {
       stopFollowUpCadence(conv, "manual_appointment");
       setFollowUpMode(conv, "manual_handoff", "manual_appointment");
+      stopRelatedCadences(conv, "manual_appointment", { setMode: "manual_handoff" });
     } else {
       setFollowUpMode(conv, "active", "todo_done");
     }
@@ -3333,8 +3382,9 @@ if (authToken && signature) {
     discardPendingDrafts(conv, "new_inbound");
   }
   if (isOptOut(event.body)) {
-    await addSuppression(event.from, "sms_stop", "twilio");
+    await suppressRelatedPhones(conv, event, "sms_stop", "twilio");
     stopFollowUpCadence(conv, "opt_out");
+    stopRelatedCadences(conv, "opt_out");
     const reply = "Understood - I'll stop texting.";
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
@@ -3351,6 +3401,7 @@ if (authToken && signature) {
   if (isNotInterested(event.body)) {
     stopFollowUpCadence(conv, "not_interested");
     closeConversation(conv, "not_interested");
+    stopRelatedCadences(conv, "not_interested", { close: true });
     const reply = "Totally understand - I won't bug you. If anything changes, just let me know.";
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
@@ -3458,7 +3509,7 @@ if (authToken && signature) {
       conv.appointment.bookedSalespersonId = chosen.salespersonId ?? null;
       conv.appointment.matchedSlot = chosen;
       conv.appointment.reschedulePending = false;
-      stopFollowUpCadence(conv, "appointment_booked");
+      onAppointmentBooked(conv);
 
       if (conv.scheduler) {
         conv.scheduler.pendingSlot = undefined;
@@ -3554,7 +3605,7 @@ if (authToken && signature) {
         conv.appointment.bookedSalespersonId = chosen.salespersonId ?? null;
         conv.appointment.matchedSlot = chosen;
         conv.appointment.reschedulePending = false;
-        stopFollowUpCadence(conv, "appointment_booked");
+        onAppointmentBooked(conv);
 
         if (conv.scheduler) {
           conv.scheduler.pendingSlot = undefined;
@@ -3669,6 +3720,7 @@ if (authToken && signature) {
     addTodo(conv, "other", event.body, event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "pending_used_followup");
     stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, ack, "draft_ai");
@@ -3792,7 +3844,7 @@ if (authToken && signature) {
         conv.appointment.bookedEventLink = eventObj.htmlLink ?? conv.appointment.bookedEventLink;
         conv.appointment.bookedSalespersonId = sp.id;
         conv.appointment.reschedulePending = false;
-        stopFollowUpCadence(conv, "appointment_booked");
+        onAppointmentBooked(conv);
 
         const dealerName =
           (conv as any).dealerProfile?.dealerName ?? "American Harley-Davidson";
@@ -3945,7 +3997,7 @@ if (authToken && signature) {
       conv.appointment.bookedEventLink = eventObj.htmlLink ?? conv.appointment.bookedEventLink;
       conv.appointment.bookedSalespersonId = sp.id;
       conv.appointment.reschedulePending = false;
-      stopFollowUpCadence(conv, "appointment_booked");
+      onAppointmentBooked(conv);
 
       if (conv.scheduler) {
         conv.scheduler.lastSuggestedSlots = [];
@@ -4022,7 +4074,7 @@ if (authToken && signature) {
       conv.appointment.bookedSalespersonId = slot.salespersonId ?? null;
       conv.appointment.acknowledged = true;
       conv.appointment.reschedulePending = false;
-      stopFollowUpCadence(conv, "appointment_booked");
+      onAppointmentBooked(conv);
 
       // Build confirmation message (SMS)
       const dealerName =
@@ -4391,7 +4443,7 @@ if (authToken && signature) {
             conv.appointment.bookedSalespersonId = chosen.salespersonId ?? null;
             conv.appointment.matchedSlot = chosen;
             conv.appointment.reschedulePending = false;
-            stopFollowUpCadence(conv, "appointment_booked");
+            onAppointmentBooked(conv);
 
             if (conv.scheduler) {
               conv.scheduler.lastSuggestedSlots = [];
@@ -4465,6 +4517,7 @@ if (authToken && signature) {
     addTodo(conv, reason, event.body, event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", `handoff:${reason}`);
     stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
     if (reason === "pricing" || reason === "payments") {
       markPricingEscalated(conv);
     }
@@ -4477,6 +4530,7 @@ if (authToken && signature) {
   if (result.autoClose?.reason) {
     const ack = result.draft;
     closeConversation(conv, result.autoClose.reason);
+    stopRelatedCadences(conv, result.autoClose.reason, { close: true });
     appendOutbound(conv, event.to, event.from, ack, "twilio");
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
       ack
@@ -4585,7 +4639,7 @@ if (authToken && signature) {
             conv.appointment.bookedEventId = eventObj.id ?? null;
             conv.appointment.bookedEventLink = eventObj.htmlLink ?? null;
             conv.appointment.bookedSalespersonId = exact.salespersonId ?? null;
-            stopFollowUpCadence(conv, "appointment_booked");
+            onAppointmentBooked(conv);
 
             if (conv.scheduler) {
               conv.scheduler.lastSuggestedSlots = [];
