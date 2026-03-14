@@ -758,14 +758,14 @@ function buildInitialEmailDraft(conv: any, dealerProfile: any): string {
   const intro = `This is ${agentName} at ${dealerName}.`;
   const help = "I’m happy to help with pricing, options, and availability.";
   const visit = label
-    ? "If you’d like to stop in to check out the bike and go over options,"
-    : "If you’d like to stop in to go over options,";
+    ? "If you’d like to stop in to check out the bike and go over options, you can book an appointment below."
+    : "If you’d like to stop in to go over options, you can book an appointment below.";
   const bookingLine = bookingUrl
     ? `You can book an appointment here: ${bookingUrl}`
-    : "just reply with a day and time that works best for you.";
+    : "Just reply with a day and time that works best for you.";
   const extra = "If a walkaround or extra photos would help, just let me know.";
 
-  return `Hi ${name},\n\n${thanks} ${intro} ${help} ${visit} ${bookingLine} ${extra}`;
+  return `Hi ${name},\n\n${thanks} ${intro} ${help} ${visit}\n\n${bookingLine}\n\n${extra}`;
 }
 
 const FOLLOW_UP_COLOR_WORDS = [
