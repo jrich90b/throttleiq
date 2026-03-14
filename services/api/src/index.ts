@@ -949,6 +949,73 @@ function extractTimeToken(msg: string): string | null {
   return null;
 }
 
+function isClarificationReply(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  return /^(what\??|huh\??|sorry\??|pardon\??|come again\??|not sure|confused)\s*$/.test(t);
+}
+
+function parseFutureTimeframe(text: string, base: Date): { label: string; until?: Date } | null {
+  const t = text.toLowerCase();
+
+  const inDays = t.match(/\bin\s+(\d{1,2})\s+days?\b/);
+  if (inDays) {
+    const days = Number(inDays[1]);
+    if (!Number.isNaN(days)) {
+      return { label: `in ${days} days`, until: new Date(base.getTime() + days * 24 * 60 * 60 * 1000) };
+    }
+  }
+
+  const inWeeks = t.match(/\bin\s+(\d{1,2})\s+weeks?\b/);
+  if (inWeeks) {
+    const weeks = Number(inWeeks[1]);
+    if (!Number.isNaN(weeks)) {
+      return { label: `in ${weeks} weeks`, until: new Date(base.getTime() + weeks * 7 * 24 * 60 * 60 * 1000) };
+    }
+  }
+
+  if (/\bnext week\b/.test(t)) {
+    return { label: "next week", until: new Date(base.getTime() + 7 * 24 * 60 * 60 * 1000) };
+  }
+
+  if (/\bnext month\b/.test(t)) {
+    return { label: "next month", until: new Date(base.getTime() + 30 * 24 * 60 * 60 * 1000) };
+  }
+
+  const monthMap: Record<string, number> = {
+    jan: 0, january: 0, feb: 1, february: 1, mar: 2, march: 2, apr: 3, april: 3,
+    may: 4, jun: 5, june: 5, jul: 6, july: 6, aug: 7, august: 7, sep: 8, sept: 8, september: 8,
+    oct: 9, october: 9, nov: 10, november: 10, dec: 11, december: 11
+  };
+  const monthMatch = t.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/);
+  if (monthMatch) {
+    const monthKey = monthMatch[1];
+    const month = monthMap[monthKey];
+    const year = base.getFullYear();
+    let d = new Date(year, month, 1, 9, 0, 0, 0);
+    if (d.getTime() <= base.getTime()) d = new Date(year + 1, month, 1, 9, 0, 0, 0);
+    return { label: monthKey, until: d };
+  }
+
+  const seasonMatch = t.match(/\b(this\s+)?(spring|summer|fall|autumn|winter)\b/);
+  if (seasonMatch) {
+    const season = seasonMatch[2];
+    const seasonMap: Record<string, number> = {
+      spring: 2,
+      summer: 5,
+      fall: 8,
+      autumn: 8,
+      winter: 11
+    };
+    const month = seasonMap[season];
+    const year = base.getFullYear();
+    let d = new Date(year, month, 1, 9, 0, 0, 0);
+    if (d.getTime() <= base.getTime()) d = new Date(year + 1, month, 1, 9, 0, 0, 0);
+    return { label: seasonMatch[1] ? `this ${season}` : season, until: d };
+  }
+
+  return null;
+}
+
 function looksLikeTimeSelection(text: string): boolean {
   if (extractTimeToken(text)) return true;
   return /\b(first|second|earlier|later)\b/i.test(String(text ?? ""));
@@ -3291,6 +3358,47 @@ if (authToken && signature) {
     /^(ok|okay|k|kk|thanks|thank you|got it|will do|sounds good|sounds great|appreciate it|cool)\b/i.test(
       (event.body ?? "").trim()
     );
+  const textLower = String(event.body ?? "").toLowerCase();
+  const lastOutboundText = lastOutbound?.body ?? "";
+  const clarificationReply = isClarificationReply(String(event.body ?? ""));
+  const lastWasInventoryUncertain =
+    /(not seeing|live feed|verify|inventory availability|check.*inventory|follow up shortly)/i.test(
+      lastOutboundText
+    );
+  if (event.provider === "twilio" && clarificationReply && lastWasInventoryUncertain) {
+    const reply =
+      "Sorry for the confusion — I meant I don’t see that exact bike/color in our live feed yet. " +
+      "Want me to check similar options or other years/colors?";
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+
+  const future = parseFutureTimeframe(String(event.body ?? ""), new Date());
+  const lastWasSchedulingOffer =
+    /(which works best|what day and time|schedule|appointment|come in|stop in|stop by|test ride|demo ride)/i.test(
+      lastOutboundText
+    );
+  const textHasSchedulingTerms =
+    /(schedule|appointment|come in|stop in|stop by|visit|test ride|demo ride)/i.test(textLower);
+  if (event.provider === "twilio" && future && (lastWasSchedulingOffer || textHasSchedulingTerms)) {
+    if (future.until) {
+      pauseFollowUpCadence(conv, future.until.toISOString(), "future_timeframe");
+    }
+    const label = future.label;
+    const labelText = label.charAt(0).toUpperCase() + label.slice(1);
+    const reply =
+      label === "next week"
+        ? "Got it — next week works. What day and time next week is best for you?"
+        : `Got it — ${labelText} works. If you’d like to come sooner, just tell me a day/time that works.`;
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (event.provider === "twilio" && schedulingBlocked && shortAck) {
     const ack = "Sounds good. If anything changes, I’ll let you know.";
     appendOutbound(conv, event.to, event.from, ack, "twilio");
@@ -3300,7 +3408,6 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
-  const textLower = String(event.body ?? "").toLowerCase();
   const inventoryQuestion =
     /(in stock|available|availability|do you have|any .* in stock)/i.test(textLower) ||
     (!!conv.lead?.vehicle?.model &&
