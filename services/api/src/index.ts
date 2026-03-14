@@ -104,6 +104,15 @@ import {
   hasAnyUsers
 } from "./domain/userStore.js";
 
+const isProd = (process.env.NODE_ENV ?? "").toLowerCase() === "production";
+if (!process.env.DATA_DIR) {
+  console.warn("⚠ DATA_DIR not set. Defaulting to ./data (repo).");
+  if (isProd) {
+    console.error("❌ Refusing to start in production without DATA_DIR.");
+    process.exit(1);
+  }
+}
+
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
 app.use(cors());
