@@ -1435,8 +1435,8 @@ function stripIntroIfRepeated(text: string, conv: any, dealerName?: string, agen
 }
 
 function ensureUniqueDraft(
-  conv: any,
   draft: string,
+  conv: any,
   dealerName?: string,
   agentName?: string
 ): string {
