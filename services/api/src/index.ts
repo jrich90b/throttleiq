@@ -3532,6 +3532,11 @@ if (authToken && signature) {
     if (schedulingIntent) {
       try {
         const cfg = await getSchedulerConfig();
+        const requested = parseRequestedDayTime(String(event.body ?? ""), cfg.timezone);
+        if (requested) {
+          console.log("[deterministic-offer] skip explicit day/time request");
+          // Let orchestrator/exact-booking handle explicit day+time requests.
+        } else {
         const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
         const preferredSalespeople = getPreferredSalespeople(cfg);
         const salespeople = cfg.salespeople ?? [];
@@ -3667,6 +3672,7 @@ if (authToken && signature) {
             reply
           )}</Message>\n</Response>`;
           return res.status(200).type("text/xml").send(twiml);
+        }
         }
       } catch (e: any) {
         console.log("[scheduler] deterministic offer failed:", e?.message ?? e);

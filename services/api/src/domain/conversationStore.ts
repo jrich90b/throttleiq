@@ -1135,6 +1135,23 @@ export function parseRequestedDayTime(
   const explicitDate = parseExplicitDate(t);
   const dayToken = parseDayToken(t);
   let time = parseExactTime(t);
+  if (!time && dayToken && !explicitDate) {
+    // Support messages like "Tuesday at 3" or "Tue 3?" by inferring AM/PM.
+    const atMatch = t.match(/\b(?:at|for|around|by)\s*(\d{1,2})\b(?!\s*\/)/);
+    const bareMatch = t.match(/\b(\d{1,2})\b(?!\s*\/)/);
+    const raw = atMatch?.[1] ?? bareMatch?.[1];
+    if (raw) {
+      const hour = Number(raw);
+      if (hour >= 1 && hour <= 12) {
+        let hour24 = hour;
+        if (hour !== 12) {
+          // Heuristic: 1-7 -> PM, 8-11 -> AM.
+          hour24 = hour <= 7 ? hour + 12 : hour;
+        }
+        time = { hour24, minute: 0, timeText: raw };
+      }
+    }
+  }
   if (!time && dayToken && /(this time|same time|same time tomorrow|this time tomorrow)/.test(t)) {
     const now = new Date();
     const nowParts = getZonedParts(now, timeZone);
