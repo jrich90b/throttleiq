@@ -2122,8 +2122,8 @@ app.get("/public/booking/availability", async (req, res) => {
   const durationMinutes = appointmentTypes[type]?.durationMinutes ?? 60;
   const daysAheadRaw = Number(req.query?.daysAhead ?? 14);
   const daysAhead = Number.isFinite(daysAheadRaw) ? Math.min(Math.max(daysAheadRaw, 3), 30) : 14;
-  const perDayRaw = Number(req.query?.perDay ?? req.query?.perSalesperson ?? 6);
-  const perDay = Number.isFinite(perDayRaw) ? Math.min(Math.max(perDayRaw, 2), 48) : 6;
+  const perDayRaw = Number(req.query?.perDay ?? req.query?.perSalesperson ?? 24);
+  const perDay = Number.isFinite(perDayRaw) ? Math.min(Math.max(perDayRaw, 2), 48) : 24;
 
   const now = new Date();
   const candidatesByDay = generateCandidateSlots(cfg, now, durationMinutes, daysAhead);
