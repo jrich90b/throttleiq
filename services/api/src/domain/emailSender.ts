@@ -8,7 +8,16 @@ type SendEmailInput = {
 };
 
 function toHtml(text: string) {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br/>");
+  let html = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\n/g, "<br/>");
+  html = html.replace(
+    /\bbook here:\s*(https?:\/\/[^\s<]+)/gi,
+    (_m, url) => `<a href="${url}">book here</a>`
+  );
+  return html;
 }
 
 export async function sendEmail(input: SendEmailInput) {
