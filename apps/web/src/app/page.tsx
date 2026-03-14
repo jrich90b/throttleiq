@@ -2,6 +2,42 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
+const BOOKING_LINK_RE =
+  /(Book here|You can choose a time here|You can book an appointment here):\s*(https?:\/\/[^\s<]+)/i;
+
+function renderBookingLinkLine(line: string) {
+  const match = line.match(BOOKING_LINK_RE);
+  if (!match) return line;
+  const label = match[1];
+  const url = match[2];
+  const idx = match.index ?? 0;
+  const before = line.slice(0, idx);
+  const after = line.slice(idx + match[0].length);
+  const prefix = String(label).replace(/\s*here$/i, "").trim();
+  const prefixWithSpace = prefix.length ? `${prefix} ` : "";
+  return (
+    <>
+      {before}
+      {prefixWithSpace}
+      <a className="underline" href={url} target="_blank" rel="noreferrer">
+        here
+      </a>
+      {after}
+    </>
+  );
+}
+
+function renderMessageBody(text?: string | null) {
+  if (!text) return null;
+  const lines = text.split("\n");
+  return lines.map((line, idx) => (
+    <span key={idx}>
+      {renderBookingLinkLine(line)}
+      {idx < lines.length - 1 ? <br /> : null}
+    </span>
+  ));
+}
+
 type SystemMode = "suggest" | "autopilot";
 
 type ConversationListItem = {
@@ -2069,9 +2105,13 @@ export default function Home() {
                           </div>
 
                           <div className="text-sm text-gray-700 mt-2 line-clamp-2">
-                            {c.pendingDraftPreview
-                              ? `Draft: ${c.pendingDraftPreview}`
-                              : (c.lastMessage?.body ?? "(no messages)")}
+                            {c.pendingDraftPreview ? (
+                              <>
+                                Draft: {renderBookingLinkLine(c.pendingDraftPreview)}
+                              </>
+                            ) : (
+                              renderBookingLinkLine(c.lastMessage?.body ?? "(no messages)")
+                            )}
                           </div>
 
                           <div className="text-xs text-gray-500 mt-2">
@@ -4349,7 +4389,7 @@ export default function Home() {
                             : "bg-blue-600 text-white border-blue-600"
                         }`}
                       >
-                        {m.body}
+                        {renderMessageBody(m.body)}
                       </div>
                       {m.direction === "in" &&
                       (m.provider === "sendgrid_adf" || /web lead \\(adf\\)/i.test(m.body || "")) ? (

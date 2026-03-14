@@ -14,8 +14,12 @@ function toHtml(text: string) {
     .replace(/>/g, "&gt;")
     .replace(/\n/g, "<br/>");
   html = html.replace(
-    /\bbook here:\s*(https?:\/\/[^\s<]+)/gi,
-    (_m, url) => `<a href="${url}">book here</a>`
+    /\b(book here|you can choose a time here|you can book an appointment here):\s*(https?:\/\/[^\s<]+)/gi,
+    (_m, label, url) => {
+      const prefix = String(label).replace(/\s*here$/i, "").trim();
+      const prefixWithSpace = prefix.length ? `${prefix} ` : "";
+      return `${prefixWithSpace}<a href="${url}">here</a>`;
+    }
   );
   return html;
 }

@@ -761,7 +761,7 @@ function buildInitialEmailDraft(conv: any, dealerProfile: any): string {
     ? "If you’d like to stop in to check out the bike and go over options,"
     : "If you’d like to stop in to go over options,";
   const bookingLine = bookingUrl
-    ? `Book here: ${bookingUrl}`
+    ? `You can book an appointment here: ${bookingUrl}`
     : "just reply with a day and time that works best for you.";
   const extra = "If a walkaround or extra photos would help, just let me know.";
 
@@ -1695,7 +1695,7 @@ async function processDueFollowUps() {
     const model = conv.lead?.vehicle?.model ?? null;
     const label = model ? `the ${formatModelLabel(year, model)}` : "your inquiry";
   const bookingLine = bookingUrl
-    ? `Book here: ${bookingUrl}`
+    ? `You can book an appointment here: ${bookingUrl}`
     : "If you’d like to schedule a visit, just reply with a day and time that works.";
     let emailMessage: string | null = null;
     if (useEmail) {
