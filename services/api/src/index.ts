@@ -78,7 +78,8 @@ import {
   flushConversationStore,
   reloadConversationStore,
   saveConversation,
-  getConversationStorePath
+  getConversationStorePath,
+  type InventoryWatch
 } from "./domain/conversationStore.js";
 import { logTuningRow } from "./domain/tuningLogger.js";
 import {
@@ -241,11 +242,148 @@ function getEmailConfig(profile: any) {
   return { from, replyTo, signature };
 }
 
+type InventorySnapshot = {
+  savedAt: string;
+  items: Array<{
+    key: string;
+    stockId?: string;
+    vin?: string;
+    year?: string;
+    model?: string;
+    color?: string;
+  }>;
+};
+
+const INVENTORY_SNAPSHOT_PATH = path.join(getDataDir(), "inventory_snapshot.json");
+let inventoryWatchRunning = false;
+
+function inventoryKey(item: any): string | null {
+  const key =
+    (item.stockId ?? item.vin ?? "").trim() ||
+    [item.year ?? "", item.model ?? "", item.color ?? ""].join("|").trim();
+  return key ? key.toLowerCase() : null;
+}
+
+async function loadInventorySnapshot(): Promise<InventorySnapshot> {
+  try {
+    const raw = await fs.promises.readFile(INVENTORY_SNAPSHOT_PATH, "utf8");
+    const parsed = JSON.parse(raw) as InventorySnapshot;
+    if (!parsed?.items) return { savedAt: new Date(0).toISOString(), items: [] };
+    return parsed;
+  } catch (e: any) {
+    if (e?.code === "ENOENT") {
+      return { savedAt: new Date(0).toISOString(), items: [] };
+    }
+    console.warn("[inventory-watch] snapshot load failed:", e?.message ?? e);
+    return { savedAt: new Date(0).toISOString(), items: [] };
+  }
+}
+
+async function saveInventorySnapshot(items: any[]) {
+  const payload: InventorySnapshot = {
+    savedAt: new Date().toISOString(),
+    items: items
+      .map(i => ({
+        key: inventoryKey(i) ?? "",
+        stockId: i.stockId,
+        vin: i.vin,
+        year: i.year,
+        model: i.model,
+        color: i.color
+      }))
+      .filter(i => i.key)
+  };
+  try {
+    await fs.promises.mkdir(path.dirname(INVENTORY_SNAPSHOT_PATH), { recursive: true });
+    await fs.promises.writeFile(INVENTORY_SNAPSHOT_PATH, JSON.stringify(payload, null, 2));
+  } catch (e: any) {
+    console.warn("[inventory-watch] snapshot save failed:", e?.message ?? e);
+  }
+}
+
+function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
+  if (!item?.model || !watch?.model) return false;
+  const itemModel = normalizeModelName(String(item.model));
+  const watchModel = normalizeModelName(String(watch.model));
+  if (!itemModel.includes(watchModel) && !watchModel.includes(itemModel)) return false;
+  if (watch.year && String(item.year) !== String(watch.year)) return false;
+  if (watch.yearMin && watch.yearMax) {
+    const y = Number(item.year ?? 0);
+    if (!Number.isFinite(y) || y < watch.yearMin || y > watch.yearMax) return false;
+  }
+  if (watch.color) {
+    const color = String(item.color ?? "").toLowerCase();
+    if (!color.includes(String(watch.color).toLowerCase())) return false;
+  }
+  return true;
+}
+
+async function processInventoryWatchlist() {
+  if (inventoryWatchRunning) return;
+  inventoryWatchRunning = true;
+  try {
+    const items = await getInventoryFeed();
+    if (!items.length) return;
+    const snapshot = await loadInventorySnapshot();
+    const prevKeys = new Set(snapshot.items.map(i => i.key));
+    const newItems = items.filter(i => {
+      const key = inventoryKey(i);
+      return key && !prevKeys.has(key);
+    });
+    await saveInventorySnapshot(items);
+    if (!newItems.length) return;
+
+    const nowIso = new Date().toISOString();
+    const convs = getAllConversations();
+    for (const conv of convs) {
+      const watch = conv.inventoryWatch;
+      if (!watch || watch.status === "paused") continue;
+      if (conv.status === "closed") continue;
+      const phone = conv.lead?.phone ?? conv.leadKey;
+      if (phone && isSuppressed(phone)) continue;
+      if (conv.followUp?.mode === "manual_handoff") continue;
+      if (watch.lastNotifiedAt && Date.now() - new Date(watch.lastNotifiedAt).getTime() < 24 * 60 * 60 * 1000) {
+        continue;
+      }
+
+      const match = newItems.find(i => inventoryItemMatchesWatch(i, watch));
+      if (!match) continue;
+
+      const year = match.year ?? (watch.year ? String(watch.year) : undefined);
+      const model = match.model ?? watch.model;
+      const color = match.color ?? watch.color;
+      const name = [year, model].filter(Boolean).join(" ");
+      const colorText = color ? ` in ${color}` : "";
+      const reply = `Good news — we just got ${name}${colorText} in stock. Want details or a time to check it out?`;
+      const imageUrl = Array.isArray(match.images) && match.images.length ? match.images[0] : undefined;
+      const to = conv.lead?.phone ?? conv.leadKey;
+      appendOutbound(conv, "salesperson", to, reply, "draft_ai", undefined, imageUrl ? [imageUrl] : undefined);
+      watch.lastNotifiedAt = nowIso;
+      watch.lastNotifiedStockId = match.stockId ?? match.vin ?? undefined;
+      conv.updatedAt = nowIso;
+      saveConversation(conv);
+    }
+    await flushConversationStore();
+  } catch (e: any) {
+    console.warn("[inventory-watch] failed:", e?.message ?? e);
+  } finally {
+    inventoryWatchRunning = false;
+  }
+}
+
 setInterval(() => {
   void processDueFollowUps();
   void processAppointmentConfirmations();
   void processAppointmentQuestions();
 }, 60_000);
+
+setTimeout(() => {
+  void processInventoryWatchlist();
+}, 60_000);
+
+setInterval(() => {
+  void processInventoryWatchlist();
+}, 24 * 60 * 60 * 1000);
 
 app.get("/health", (_req, res) => {
   res.json({
@@ -1019,6 +1157,127 @@ function parseFutureTimeframe(text: string, base: Date): { label: string; until?
 function looksLikeTimeSelection(text: string): boolean {
   if (extractTimeToken(text)) return true;
   return /\b(first|second|earlier|later)\b/i.test(String(text ?? ""));
+}
+
+function normalizeModelName(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function extractYearRange(text: string): { min: number; max: number } | null {
+  const t = text.toLowerCase();
+  const range = t.match(/\b(20\d{2})\s*(?:-|to)\s*(20\d{2})\b/);
+  if (range) {
+    const a = Number(range[1]);
+    const b = Number(range[2]);
+    if (Number.isFinite(a) && Number.isFinite(b)) {
+      return { min: Math.min(a, b), max: Math.max(a, b) };
+    }
+  }
+  const shortRange = t.match(/\b(20\d{2})\s*-\s*(\d{2})\b/);
+  if (shortRange) {
+    const a = Number(shortRange[1]);
+    const b = Number(`20${shortRange[2]}`);
+    if (Number.isFinite(a) && Number.isFinite(b)) {
+      return { min: Math.min(a, b), max: Math.max(a, b) };
+    }
+  }
+  const years = Array.from(t.matchAll(/\b(20\d{2})\b/g)).map(m => Number(m[1]));
+  if (years.length >= 2) {
+    const min = Math.min(...years);
+    const max = Math.max(...years);
+    if (Number.isFinite(min) && Number.isFinite(max)) return { min, max };
+  }
+  return null;
+}
+
+function extractYearSingle(text: string): number | null {
+  const m = text.match(/\b(20\d{2})\b/);
+  if (!m) return null;
+  const year = Number(m[1]);
+  return Number.isFinite(year) ? year : null;
+}
+
+function extractColorToken(text: string): string | null {
+  const t = text.toLowerCase();
+  const colors = [
+    "vivid black",
+    "black",
+    "white",
+    "red",
+    "blue",
+    "gray",
+    "grey",
+    "silver",
+    "green",
+    "orange",
+    "yellow",
+    "brown",
+    "tan",
+    "chrome",
+    "gunship gray",
+    "midnight ember"
+  ];
+  return colors.find(c => t.includes(c)) ?? null;
+}
+
+function parseInventoryWatchPreference(
+  text: string,
+  pending: { model?: string; year?: number; color?: string }
+): { action: "set" | "clarify" | "ignore"; watch?: InventoryWatch } {
+  const t = text.toLowerCase();
+  if (!pending.model) return { action: "ignore" };
+
+  const mentionsPreference =
+    /(exact|only|same|any|no preference|no pref|either|range|year|color)/.test(t) ||
+    /\b(20\d{2})\b/.test(t);
+  if (!mentionsPreference) return { action: "ignore" };
+
+  const anyColor = /(any color|no color preference|no preference|any colour|no colour preference)/.test(t);
+  const anyYear = /(any year|no year preference|no preference|open to other years|either year)/.test(t);
+  const exact = /(exact|only|same color|same colour|only that|just that|same year)/.test(t);
+
+  const color = anyColor ? undefined : extractColorToken(t) ?? pending.color;
+  const range = extractYearRange(t);
+  let yearMin: number | undefined;
+  let yearMax: number | undefined;
+  let year: number | undefined;
+
+  if (range) {
+    yearMin = range.min;
+    yearMax = range.max;
+  } else if (!anyYear) {
+    const single = extractYearSingle(t);
+    if (single) year = single;
+    else if (pending.year && /(same year|this year|that year|current year)/.test(t)) year = pending.year;
+    else if (pending.year && exact) year = pending.year;
+  }
+
+  if (!year && !yearMin && !yearMax && anyYear) {
+    year = undefined;
+  }
+
+  const watch: InventoryWatch = {
+    model: pending.model,
+    color,
+    year,
+    yearMin,
+    yearMax,
+    exactness: "model_only",
+    status: "active",
+    createdAt: new Date().toISOString()
+  };
+
+  if (watch.yearMin && watch.yearMax) watch.exactness = "model_range";
+  else if (watch.year && watch.color) watch.exactness = "exact";
+  else if (watch.year) watch.exactness = "year_model";
+
+  const hasYearInfo = !!watch.year || (!!watch.yearMin && !!watch.yearMax);
+  if (!hasYearInfo && !anyYear && pending.year) {
+    // Still unclear; ask again
+    return { action: "clarify" };
+  }
+
+  return { action: "set", watch };
 }
 
 function isVideoRequest(text: string): boolean {
@@ -3399,6 +3658,39 @@ if (authToken && signature) {
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
+
+  if (event.provider === "twilio" && conv.inventoryWatchPending) {
+    const pending = conv.inventoryWatchPending;
+    const pref = parseInventoryWatchPreference(String(event.body ?? ""), pending);
+    if (pref.action === "clarify") {
+      const reply =
+        "Got it — just to confirm, should I watch for the exact year/color, the same year any color, or a year range? " +
+        "If a range, tell me the years you want.";
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    if (pref.action === "set" && pref.watch) {
+      conv.inventoryWatch = pref.watch;
+      conv.inventoryWatchPending = undefined;
+      setFollowUpMode(conv, "holding_inventory", "inventory_watch");
+      stopFollowUpCadence(conv, "holding_inventory");
+      const yearText = pref.watch.year
+        ? `${pref.watch.year} `
+        : pref.watch.yearMin && pref.watch.yearMax
+          ? `${pref.watch.yearMin}-${pref.watch.yearMax} `
+          : "";
+      const colorText = pref.watch.color ? ` in ${pref.watch.color}` : "";
+      const reply = `Got it — I’ll keep an eye out for ${yearText}${pref.watch.model}${colorText} and text you as soon as one comes in.`;
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+  }
   if (event.provider === "twilio" && schedulingBlocked && shortAck) {
     const ack = "Sounds good. If anything changes, I’ll let you know.";
     appendOutbound(conv, event.to, event.from, ack, "twilio");
@@ -3479,9 +3771,20 @@ if (authToken && signature) {
           `Verify inventory for ${year ?? ""} ${model}${color ? ` (${color})` : ""}`.trim(),
           event.providerMessageId
         );
+        const isGenericModel = /full line|other/i.test(model ?? "");
+        if (!isGenericModel) {
+          conv.inventoryWatchPending = {
+            model,
+            year: year ? Number(year) : undefined,
+            color: color ?? undefined,
+            askedAt: new Date().toISOString()
+          };
+        }
         const reply =
           `I’m not seeing ${year ? `${year} ` : ""}${model}${color ? ` in ${color}` : ""} in our live feed. ` +
-          "I’ll have someone verify and follow up shortly.";
+          (isGenericModel
+            ? "I’ll have someone verify and follow up shortly."
+            : "Do you want me to watch for the exact year/color, the same year any color, or a year range?");
         appendOutbound(conv, event.to, event.from, reply, "twilio");
         const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<Response>\\n  <Message>${escapeXml(
           reply

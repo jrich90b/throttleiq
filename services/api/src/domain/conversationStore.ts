@@ -161,6 +161,27 @@ export type LeadProfile = {
   };
 };
 
+export type InventoryWatch = {
+  model: string;
+  year?: number;
+  yearMin?: number;
+  yearMax?: number;
+  color?: string;
+  trim?: string;
+  exactness?: "exact" | "year_model" | "model_range" | "model_only";
+  status?: "active" | "paused";
+  createdAt: string;
+  lastNotifiedAt?: string;
+  lastNotifiedStockId?: string;
+};
+
+export type InventoryWatchPending = {
+  model?: string;
+  year?: number;
+  color?: string;
+  askedAt: string;
+};
+
 export type Message = {
   id: string;
   direction: "in" | "out";
@@ -193,6 +214,8 @@ export type Conversation = {
   followUpCadence?: FollowUpCadence;
   objections?: ObjectionState;
   crm?: { lastLoggedAt?: string };
+  inventoryWatch?: InventoryWatch;
+  inventoryWatchPending?: InventoryWatchPending;
 };
 
 const conversations = new Map<string, Conversation>();
