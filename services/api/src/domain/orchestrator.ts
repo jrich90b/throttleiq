@@ -263,7 +263,7 @@ function enforceNoPrematureBooking(draft: string, appointment: any, suggestedSlo
   if (Array.isArray(suggestedSlots) && suggestedSlots.length >= 2) {
     const a = suggestedSlots[0].startLocal;
     const b = suggestedSlots[1].startLocal;
-    out = `I can get you scheduled to come in. I have ${a} or ${b} — which works best?`;
+    out = `I can get you scheduled to come in. I have ${a} or ${b} — do any of these times work?`;
   }
 
   return out;
@@ -990,7 +990,7 @@ export async function orchestrateInbound(
           "The estimate is a guide; final trade value comes from an in‑person evaluation and can be higher. ";
         const schedule =
           suggestedSlots.length >= 2
-            ? `I can set up a trade appraisal — I have ${suggestedSlots[0].startLocal} or ${suggestedSlots[1].startLocal} — which works best?`
+            ? `I can set up a trade appraisal — I have ${suggestedSlots[0].startLocal} or ${suggestedSlots[1].startLocal} — do any of these times work?`
             : "I can set up a trade appraisal — what day and time works best?";
         return finalize({
           intent: "TRADE_IN",
@@ -1028,7 +1028,7 @@ export async function orchestrateInbound(
         }
         const disclaimer = "Final numbers depend on tax, fees, any trade, and financing.";
         const schedule = suggestedSlots.length >= 2
-          ? `I could get you scheduled to meet with our sales team. I have ${suggestedSlots[0].startLocal} or ${suggestedSlots[1].startLocal} — which works best?`
+          ? `I could get you scheduled to meet with our sales team. I have ${suggestedSlots[0].startLocal} or ${suggestedSlots[1].startLocal} — do any of these times work?`
           : "I could get you scheduled to meet with our sales team — what day/time works best?";
         const qualifier = "Do you have a trade?";
         const isFirstOutbound = !history.some(h => h.direction === "out");
@@ -1069,7 +1069,7 @@ export async function orchestrateInbound(
       if (requestedDayNoAvailability && requestedDayKey) {
         const dayName = requestedDayKey.charAt(0).toUpperCase() + requestedDayKey.slice(1);
         if (requestedDayClosed && suggestedSlots.length >= 2) {
-          const fallbackMessage = `We’re closed on ${dayName}. I have ${suggestedSlots[0].startLocal} or ${suggestedSlots[1].startLocal} — which works best?`;
+          const fallbackMessage = `We’re closed on ${dayName}. I have ${suggestedSlots[0].startLocal} or ${suggestedSlots[1].startLocal} — do any of these times work?`;
           return finalize({
             intent,
             stage: "ENGAGED",
@@ -1170,7 +1170,7 @@ export async function orchestrateInbound(
         if (canScheduleNow && suggestedSlots.length >= 2) {
           const a = suggestedSlots[0].startLocal;
           const b = suggestedSlots[1].startLocal;
-          finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}${noteLine}${scheduleInvite} I have ${a} or ${b} — which works best?`.trim();
+          finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}${noteLine}${scheduleInvite} I have ${a} or ${b} — do any of these times work?`.trim();
         } else if (canScheduleNow) {
           finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}${noteLine}${scheduleInvite} What day and time works best for you?`.trim();
         } else {

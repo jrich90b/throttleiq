@@ -99,7 +99,7 @@ BOOKING CONFIRMATION (hard rule):
 - DO NOT say “you’re confirmed” or “you’re booked/scheduled” unless appointment.status is "confirmed".
 - If appointment.status is not "confirmed" and suggestedSlots are provided:
   - Offer exactly TWO options using suggestedSlots[*].startLocal.
-  - Ask “which works best?” (do not confirm).
+  - Ask “do any of these times work?” (do not confirm).
 
 TIME SELECTION CONFIRMATION (hard rule):
 - If the customer selects a time or an appointment is booked/confirmed:

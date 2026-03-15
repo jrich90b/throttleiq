@@ -1608,7 +1608,7 @@ function isVideoRequest(text: string): boolean {
 
 function parseOfferSlotsFromReply(reply: string): { startLocal: string; endLocal: string }[] {
   const text = String(reply ?? "");
-  const marker = " — which works best?";
+  const marker = " — do any of these times work?";
   const head = text.includes(marker) ? text.split(marker)[0] : text;
   const idx = head.indexOf("I have ");
   if (idx === -1) return [];
@@ -3203,6 +3203,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     : getLatestPendingDraft(conv);
   const draft =
     draftCandidate && draftCandidate.provider === "draft_ai" ? draftCandidate : null;
+  const draftTextForLog = draft?.body ?? null;
 
   // Normalize destination number from conversation leadKey
   const rawTo = String(conv.leadKey ?? "").trim();
@@ -3223,6 +3224,7 @@ app.post("/conversations/:id/send", async (req, res) => {
 
   const logRow = async (twilioSid: string | null) => {
     try {
+      const draftForLog = draftTextForLog ?? draft?.originalDraftBody ?? draft?.body ?? null;
       await logTuningRow({
         ts: new Date().toISOString(),
         leadKey: conv.leadKey,
@@ -3231,9 +3233,9 @@ app.post("/conversations/:id/send", async (req, res) => {
         cta: conv.classification?.cta ?? null,
         channel: channel ?? conv.classification?.channel ?? "sms",
         draftId: draft?.id ?? null,
-        draft: draft?.body ?? null,
+        draft: draftForLog,
         final: body,
-        edited: draft ? draft.body.trim() !== body.trim() : null,
+        edited: draftForLog ? draftForLog.trim() !== body.trim() : null,
         editDistance: null,
         editNote: editNote && editNote.length > 0 ? editNote : null,
         twilioSid
@@ -4014,7 +4016,7 @@ if (authToken && signature) {
         );
         conv.appointment.reschedulePending = true;
         conv.appointment.updatedAt = new Date().toISOString();
-        const reply = `I can reschedule you. I have ${picked[0].startLocal} or ${picked[1].startLocal} — which works best?`;
+        const reply = `I can reschedule you. I have ${picked[0].startLocal} or ${picked[1].startLocal} — do any of these times work?`;
         const systemMode = webhookMode;
         if (systemMode === "suggest") {
           appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -4713,7 +4715,7 @@ if (authToken && signature) {
             "[scheduler] bestSlots preview:",
             bestSlots.slice(0, 2).map(s => s.startLocal)
           );
-          const reply = `I have ${bestSlots[0].startLocal} or ${bestSlots[1].startLocal} — which works best?`;
+          const reply = `I have ${bestSlots[0].startLocal} or ${bestSlots[1].startLocal} — do any of these times work?`;
           const systemMode = webhookMode;
           if (systemMode === "suggest") {
             appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -5047,7 +5049,7 @@ if (authToken && signature) {
             prefix = `I'm booked up for the rest of ${dayName}, but`;
           }
         }
-        const reply = `${prefix ? `${prefix} ` : ""}I have ${bestSlots[0].startLocal} or ${bestSlots[1].startLocal} — which works best?`;
+        const reply = `${prefix ? `${prefix} ` : ""}I have ${bestSlots[0].startLocal} or ${bestSlots[1].startLocal} — do any of these times work?`;
         const systemMode = webhookMode;
         if (systemMode === "suggest") {
           // Persist suggested slots before early return so the next inbound can match.
