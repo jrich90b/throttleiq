@@ -175,22 +175,9 @@ export async function findPriceRange(opts: {
   const year = opts.year?.trim();
   const model = opts.model?.trim().toLowerCase();
   if (!year || !model) return null;
-  const exact = items.filter(
+  const matches = items.filter(
     i => i.year === year && i.model?.toLowerCase() === model && i.price && i.price > 0
   );
-  const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
-  let matches = exact;
-  if (matches.length < 2) {
-    const base = normalize(model);
-    matches = items.filter(
-      i =>
-        i.year === year &&
-        i.model &&
-        normalize(i.model).includes(base) &&
-        i.price &&
-        i.price > 0
-    );
-  }
   if (!matches.length) return null;
   const prices = matches.map(m => m.price as number).sort((a, b) => a - b);
   return { min: prices[0], max: prices[prices.length - 1], count: prices.length };
