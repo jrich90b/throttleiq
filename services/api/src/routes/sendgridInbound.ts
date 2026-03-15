@@ -536,6 +536,17 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     ruleName: forcedTestRide ? "room58_book_test_ride_forced" : rule.ruleName
   });
 
+  const isCreditLead =
+    inferredBucket === "finance_prequal" ||
+    inferredCta === "hdfs_coa" ||
+    inferredCta === "prequalify" ||
+    /coa|credit application|apply for credit|finance application|prequal/i.test(leadSourceLower);
+  if (isCreditLead) {
+    addTodo(conv, "credit_app", event.body ?? "Credit application", event.providerMessageId);
+    setFollowUpMode(conv, "manual_handoff", "credit_app");
+    stopFollowUpCadence(conv, "manual_handoff");
+  }
+
 
   const inboundBody =
     [
