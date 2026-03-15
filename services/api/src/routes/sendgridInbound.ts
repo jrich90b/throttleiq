@@ -634,9 +634,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     });
   }
 
-  const rawModel = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "";
+  const metaOfferRawModel = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "";
   const isMetaPromoOffer = /meta promo offer/i.test(leadSourceLower);
-  if (isMetaPromoOffer && /^(other|full line)$/i.test(rawModel.trim())) {
+  if (isMetaPromoOffer && /^(other|full line)$/i.test(metaOfferRawModel.trim())) {
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
     const agentName = profile?.agentName ?? "Brooke";

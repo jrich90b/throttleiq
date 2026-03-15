@@ -141,6 +141,7 @@ export type LeadProfile = {
     vin?: string;
     year?: string;
     model?: string;
+    modelOptions?: string[];
     color?: string;
     condition?: string;
     url?: string;
