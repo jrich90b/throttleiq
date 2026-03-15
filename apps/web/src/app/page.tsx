@@ -3132,7 +3132,7 @@ export default function Home() {
                           <img
                             src={it.images[0]}
                             alt={it.model ?? it.stockId ?? "Bike"}
-                            className="w-full h-40 object-cover rounded"
+                            className="w-full h-40 object-contain bg-gray-50 rounded"
                           />
                         ) : (
                           <div className="w-full h-40 bg-gray-100 rounded flex items-center justify-center text-xs text-gray-400">
