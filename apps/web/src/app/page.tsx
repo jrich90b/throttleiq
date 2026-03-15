@@ -4514,7 +4514,7 @@ export default function Home() {
                         {isPending ? " • DRAFT (not sent)" : ""}
                       </div>
                       <div
-                        className={`inline-block mt-1 px-3 py-2 rounded border max-w-[85%] whitespace-pre-wrap text-base font-medium ${
+                        className={`inline-block mt-1 px-3 py-2 rounded-2xl border max-w-[85%] whitespace-pre-wrap text-base font-medium ${
                           m.direction === "in"
                             ? "bg-gray-100 text-gray-900 border-gray-200"
                             : "bg-blue-600 text-white border-blue-600"
