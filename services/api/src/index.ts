@@ -777,7 +777,7 @@ function buildBookingUrlForLead(baseUrl: string | undefined | null, conv: any): 
 }
 
 const FOLLOW_UP_MESSAGES = [
-  "Just checking in - still want to come by to look at it? I have {a} or {b} if that helps.",
+  "Just checking in — would you like to come by and look at it? I have {a} or {b} if that helps.",
   "If you'd like a quick walkaround video first, I can send one. If you'd rather come by, what day works best for you?",
   "If you still want to see it, what day/time is best on your end?",
   "Quick question — are you comparing a few bikes, or is this one at the top of your list?",
@@ -982,6 +982,12 @@ function isTestRideSeason(profile: any, now: Date): boolean {
 function formatModelLabel(year?: string | null, model?: string | null): string {
   const yr = year ? `${year} ` : "";
   return `${yr}${model ?? "that model"}`.trim();
+}
+
+function formatModelLabelForFollowUp(_year?: string | null, model?: string | null): string {
+  if (!model || /full line/i.test(model)) return "the bike";
+  const base = String(model).trim();
+  return /^the\s/i.test(base) ? base : `the ${base}`;
 }
 
 function pickBestMatch(
@@ -1865,7 +1871,11 @@ async function processDueFollowUps() {
     } else if (cadence.stepIndex === 0) {
       const day2 = await buildDay2Options(cfg);
       if (day2) {
-        message = day2.message;
+        const followUpLabel = formatModelLabelForFollowUp(
+          conv.lead?.vehicle?.year ?? null,
+          conv.lead?.vehicle?.model ?? null
+        );
+        message = `Just checking in — would you like to come by and look at ${followUpLabel}? I have ${day2.slots[0].startLocal} or ${day2.slots[1].startLocal} if that helps.`;
         setLastSuggestedSlots(conv, day2.slots);
       } else {
         message = FOLLOW_UP_MESSAGES[1];
