@@ -317,8 +317,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     upsertContact({
       leadKey: conv.leadKey,
       conversationId: conv.id,
-      email: fromEmail,
-      lastInboundAt: new Date().toISOString()
+      email: fromEmail
     });
 
     const event: InboundMessageEvent = {
@@ -620,6 +619,36 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     setFollowUpMode(conv, "manual_handoff", "room58_standard");
     stopFollowUpCadence(conv, "manual_handoff");
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai");
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      draft: ack
+    });
+  }
+
+  const rawModel = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "";
+  const isMetaPromoOffer = /meta promo offer/i.test(leadSourceLower);
+  if (isMetaPromoOffer && /^(other|full line)$/i.test(rawModel.trim())) {
+    const profile = await getDealerProfile();
+    const dealerName = profile?.dealerName ?? "American Harley-Davidson";
+    const agentName = profile?.agentName ?? "Brooke";
+    const firstName = conv.lead?.firstName ?? "";
+    const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
+    const ack =
+      `${greeting}thanks for your H‑D Meta promo offer request. ` +
+      `This is ${agentName} at ${dealerName}. ` +
+      `I’d love to help with pricing. Which model are you interested in (and any trim or color)?`;
+
+    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai");
+    conv.emailDraft = ack;
     return res.status(200).json({
       ok: true,
       parsed: true,
