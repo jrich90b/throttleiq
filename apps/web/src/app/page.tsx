@@ -199,6 +199,10 @@ export default function Home() {
   const loadRef = useRef<() => Promise<void>>(async () => {});
   const loadConversationRef = useRef<(id: string) => Promise<void>>(async () => {});
   const selectedIdRef = useRef<string | null>(null);
+  const refreshConversationsRef = useRef<() => Promise<void>>(async () => {});
+  const refreshSelectedRef = useRef<(id: string) => Promise<void>>(async () => {});
+  const lastConversationsSigRef = useRef<string>("");
+  const lastSelectedSigRef = useRef<string>("");
   const [modeSaving, setModeSaving] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -441,6 +445,37 @@ export default function Home() {
     setDetailLoading(false);
   }
 
+  async function refreshConversations() {
+    if (document.visibilityState === "hidden") return;
+    const r = await fetch("/api/conversations", { cache: "no-store" });
+    const data = await r.json();
+    const next =
+      (data?.conversations as ConversationListItem[])?.map(c => ({
+        ...c,
+        mode: c.mode ?? "suggest"
+      })) ?? [];
+    const sig = next
+      .map(c => `${c.id}:${c.updatedAt}:${c.messageCount}:${c.lastMessage?.body ?? ""}`)
+      .join("|");
+    if (sig && sig === lastConversationsSigRef.current) return;
+    lastConversationsSigRef.current = sig;
+    setConversations(next);
+  }
+
+  async function refreshSelectedConversation(id: string) {
+    if (document.visibilityState === "hidden") return;
+    const r = await fetch(`/api/conversations/${encodeURIComponent(id)}`, { cache: "no-store" });
+    const data = await r.json();
+    const conv = data?.conversation ?? null;
+    const sig = conv
+      ? `${conv.id}:${conv.updatedAt ?? ""}:${conv.messages?.length ?? 0}:` +
+        `${conv.messages?.[conv.messages?.length - 1]?.id ?? ""}`
+      : "";
+    if (sig && sig === lastSelectedSigRef.current) return;
+    lastSelectedSigRef.current = sig;
+    setSelectedConv(conv);
+  }
+
   async function updateMode(next: SystemMode) {
     await fetch("/api/settings", {
       method: "PATCH",
@@ -467,6 +502,14 @@ export default function Home() {
   });
 
   useEffect(() => {
+    refreshConversationsRef.current = refreshConversations;
+  });
+
+  useEffect(() => {
+    refreshSelectedRef.current = refreshSelectedConversation;
+  });
+
+  useEffect(() => {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
 
@@ -483,9 +526,9 @@ export default function Home() {
         const now = Date.now();
         if (now - lastStreamRefreshRef.current < 2000) return;
         lastStreamRefreshRef.current = now;
-        void loadRef.current();
+        void refreshConversationsRef.current();
         const id = selectedIdRef.current;
-        if (id) void loadConversationRef.current(id);
+        if (id) void refreshSelectedRef.current(id);
       };
 
       es.addEventListener("ping", refresh);
