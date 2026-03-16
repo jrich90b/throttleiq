@@ -5073,42 +5073,6 @@ export default function Home() {
               </div>
             ) : null}
 
-            {todoPromptOpen ? (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-                <div className="bg-white rounded-lg shadow-lg w-full max-w-md p-4">
-                  <div className="text-sm font-medium">Create to-do</div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    What should the salesperson do?
-                  </div>
-                  <textarea
-                    className="mt-3 w-full border rounded px-3 py-2 text-sm"
-                    rows={3}
-                    value={todoPromptText}
-                    onChange={e => setTodoPromptText(e.target.value)}
-                    placeholder="e.g., Call customer about trade appraisal"
-                  />
-                  <div className="mt-3 flex justify-end gap-2">
-                    <button
-                      className="px-3 py-2 border rounded text-sm"
-                      onClick={() => {
-                        setTodoPromptOpen(false);
-                        setTodoPromptConvId(null);
-                        setTodoPromptText("");
-                      }}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      className="px-3 py-2 border rounded text-sm"
-                      onClick={submitTodoPrompt}
-                    >
-                      Create
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-
             {selectedConv.status !== "closed" ? (
               <div className="mt-4 flex items-center gap-2">
                 <select
@@ -5146,6 +5110,42 @@ export default function Home() {
           <div className="text-gray-500">Conversation not found.</div>
         )}
       </section>
+
+      {todoPromptOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+          <div className="bg-white rounded-lg shadow-lg w-full max-w-md p-4">
+            <div className="text-sm font-medium">Create to-do</div>
+            <div className="text-xs text-gray-500 mt-1">
+              What should the salesperson do?
+            </div>
+            <textarea
+              className="mt-3 w-full border rounded px-3 py-2 text-sm"
+              rows={3}
+              value={todoPromptText}
+              onChange={e => setTodoPromptText(e.target.value)}
+              placeholder="e.g., Call customer about trade appraisal"
+            />
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                className="px-3 py-2 border rounded text-sm"
+                onClick={() => {
+                  setTodoPromptOpen(false);
+                  setTodoPromptConvId(null);
+                  setTodoPromptText("");
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className="px-3 py-2 border rounded text-sm"
+                onClick={submitTodoPrompt}
+              >
+                Create
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
