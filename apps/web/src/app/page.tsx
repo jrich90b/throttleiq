@@ -2371,7 +2371,7 @@ export default function Home() {
                       <div key={c.id} className="flex items-stretch">
                         <button
                           onClick={() => setSelectedId(c.id)}
-                          className={`block w-full text-left p-4 hover:bg-[var(--surface-2)] ${
+                          className={`flex-1 min-w-0 text-left p-4 hover:bg-[var(--surface-2)] ${
                             selectedId === c.id ? "bg-[var(--surface-2)]" : ""
                           }`}
                         >
@@ -2430,7 +2430,7 @@ export default function Home() {
                               : `updated: ${new Date(c.updatedAt).toLocaleString()}`}
                           </div>
                         </button>
-                        <div className="relative border-l">
+                        <div className="relative border-l shrink-0">
                           <button
                             className="px-3 h-full text-sm hover:bg-gray-50"
                             aria-label="Conversation actions"
