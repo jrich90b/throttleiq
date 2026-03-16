@@ -345,6 +345,7 @@ export default function Home() {
   const [saveToast, setSaveToast] = useState<string | null>(null);
   const [callBusy, setCallBusy] = useState(false);
   const [callMethod, setCallMethod] = useState<"cell" | "extension">("cell");
+  const [callPickerOpen, setCallPickerOpen] = useState(false);
   const calendarColumnRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const calendarEventsRef = useRef<any[]>([]);
   const calendarGridRef = useRef<HTMLDivElement | null>(null);
@@ -1260,7 +1261,7 @@ export default function Home() {
     await doSend(draftId ? { body, draftId } : { body });
   }
 
-  async function startCall() {
+  async function startCall(method?: "cell" | "extension") {
     if (!selectedConv || callBusy) return;
     if (!authUser?.phone && !authUser?.extension) {
       window.alert("No phone or extension configured for your user.");
@@ -1268,10 +1269,11 @@ export default function Home() {
     }
     setCallBusy(true);
     try {
+      const methodToUse = method ?? callMethod;
       const resp = await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/call`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ useExtension: callMethod === "extension" })
+        body: JSON.stringify({ useExtension: methodToUse === "extension" })
       });
       const data = await resp.json().catch(() => null);
       if (!resp.ok) {
@@ -4606,19 +4608,19 @@ export default function Home() {
               <div className="flex items-center gap-2">
                 {(authUser?.phone || authUser?.extension) ? (
                   <div className="flex items-center gap-2">
-                    {authUser?.phone && authUser?.extension ? (
-                      <select
-                        className="border rounded text-xs px-2 py-1"
-                        value={callMethod}
-                        onChange={e => setCallMethod(e.target.value as "cell" | "extension")}
-                      >
-                        <option value="cell">Cell</option>
-                        <option value="extension">Extension</option>
-                      </select>
-                    ) : null}
                     <button
                       className={`px-2 py-1 border rounded text-sm cursor-pointer ${callBusy ? "opacity-60" : "hover:bg-gray-50"}`}
-                      onClick={startCall}
+                      onClick={() => {
+                        if (authUser?.phone && authUser?.extension) {
+                          setCallPickerOpen(true);
+                          return;
+                        }
+                        if (authUser?.extension && !authUser?.phone) {
+                          startCall("extension");
+                          return;
+                        }
+                        startCall("cell");
+                      }}
                       disabled={callBusy}
                       title="Call customer"
                     >
@@ -4653,6 +4655,50 @@ export default function Home() {
               </div>
             </div>
             {modeError ? <div className="text-xs text-red-600 mt-1">{modeError}</div> : null}
+
+            {callPickerOpen ? (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+                <div className="w-80 rounded-lg bg-white shadow-lg border p-4">
+                  <div className="text-sm font-semibold">Place call with</div>
+                  <div className="mt-3 flex gap-2">
+                    {authUser?.phone ? (
+                      <button
+                        className="flex-1 px-3 py-2 rounded border hover:bg-gray-50 text-sm"
+                        disabled={callBusy}
+                        onClick={() => {
+                          setCallMethod("cell");
+                          setCallPickerOpen(false);
+                          startCall("cell");
+                        }}
+                      >
+                        Cell
+                      </button>
+                    ) : null}
+                    {authUser?.extension ? (
+                      <button
+                        className="flex-1 px-3 py-2 rounded border hover:bg-gray-50 text-sm"
+                        disabled={callBusy}
+                        onClick={() => {
+                          setCallMethod("extension");
+                          setCallPickerOpen(false);
+                          startCall("extension");
+                        }}
+                      >
+                        Extension
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="mt-3 text-right">
+                    <button
+                      className="text-xs text-gray-500 hover:text-gray-700"
+                      onClick={() => setCallPickerOpen(false)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             {pendingDraft ? (
               <div className="mt-4 border rounded-lg p-3 text-sm">
