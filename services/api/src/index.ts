@@ -1379,6 +1379,52 @@ function normalizePhone(raw: string): string {
 }
 
 async function transcribeRecordingMp3(buffer: Buffer): Promise<string | null> {
+  const deepgramKey = process.env.DEEPGRAM_API_KEY?.trim();
+  if (deepgramKey) {
+    try {
+      const resp = await fetch(
+        "https://api.deepgram.com/v1/listen?multichannel=true&punctuate=true&model=nova-2",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Token ${deepgramKey}`,
+            "Content-Type": "audio/mpeg"
+          },
+          body: buffer
+        }
+      );
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => "");
+        console.warn("[voice] deepgram failed:", resp.status, errText);
+      } else {
+        const data: any = await resp.json().catch(() => null);
+        const channels = data?.results?.channels;
+        if (Array.isArray(channels) && channels.length >= 2) {
+          const getText = (ch: any) =>
+            ch?.alternatives?.[0]?.paragraphs?.transcript ||
+            ch?.alternatives?.[0]?.transcript ||
+            "";
+          const agentText = getText(channels[0]);
+          const customerText = getText(channels[1]);
+          const parts: string[] = [];
+          if (agentText) parts.push(`Agent: ${agentText}`);
+          if (customerText) parts.push(`Customer: ${customerText}`);
+          if (parts.length) return parts.join("\n");
+        }
+        const utterances = data?.results?.utterances;
+        if (Array.isArray(utterances) && utterances.length) {
+          return utterances
+            .map((u: any) => `Speaker ${Number(u.speaker) + 1}: ${u.transcript}`)
+            .join("\n");
+        }
+        const fallback = channels?.[0]?.alternatives?.[0]?.transcript;
+        if (typeof fallback === "string" && fallback.trim()) return fallback.trim();
+      }
+    } catch (err: any) {
+      console.warn("[voice] deepgram error:", err?.message ?? err);
+    }
+  }
+
   if (!process.env.OPENAI_API_KEY) return null;
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const tmpPath = path.join(
@@ -5603,6 +5649,7 @@ app.post("/webhooks/twilio/voice", async (req, res) => {
       answerOnBridge: true,
       timeout: 30,
       record: "record-from-answer",
+      recordingChannels: "dual",
       recordingStatusCallback: recordingCb,
       recordingStatusCallbackEvent: ["completed"]
     });
