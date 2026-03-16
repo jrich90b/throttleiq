@@ -40,6 +40,7 @@ import {
   localPartsToUtcDate
 } from "../domain/schedulerEngine.js";
 import { getDealerProfile } from "../domain/dealerProfile.js";
+import { getInventoryNote } from "../domain/inventoryFeed.js";
 
 function inferAppointmentTypeFromConv(conv: any): string | null {
   const bucket = conv?.classification?.bucket ?? "";
@@ -80,7 +81,7 @@ function formatModelLabel(year?: string | null, model?: string | null): string |
   return year ? `${year} ${clean}` : clean;
 }
 
-function buildInitialEmailDraft(conv: any, dealerProfile: any): string {
+function buildInitialEmailDraft(conv: any, dealerProfile: any, inventoryNote?: string | null): string {
   const rawName = conv?.lead?.firstName?.trim() || conv?.lead?.name?.trim() || "there";
   const name = rawName.split(" ")[0] || "there";
   const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
@@ -98,6 +99,7 @@ function buildInitialEmailDraft(conv: any, dealerProfile: any): string {
       : "Thanks for your interest.";
   const intro = `This is ${agentName} at ${dealerName}.`;
   const help = "I’m happy to help with pricing, options, and availability.";
+  const noteLine = inventoryNote ? `Right now there’s ${inventoryNote} available.` : "";
   const visit = model
     ? "If you want to stop in to check out the bike and go over options, you can book an appointment below."
     : "If you want to stop in to go over options, you can book an appointment below.";
@@ -106,7 +108,7 @@ function buildInitialEmailDraft(conv: any, dealerProfile: any): string {
     : "Just reply with a day and time that works for you.";
   const extra = "If a walkaround or extra photos would help, just let me know.";
 
-  return `Hi ${name},\n\n${thanks} ${intro} ${help} ${visit}\n\n${bookingLine}\n\n${extra}`;
+  return `Hi ${name},\n\n${thanks} ${intro} ${help} ${noteLine} ${visit}\n\n${bookingLine}\n\n${extra}`.replace(/\s+\n/g, "\n").trim();
 }
 import { getSystemMode } from "../domain/settingsStore.js";
 import { sendEmail } from "../domain/emailSender.js";
@@ -875,7 +877,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   if (isInitialAdf) {
     const profile = await getDealerProfile();
-    conv.emailDraft = buildInitialEmailDraft(conv, profile);
+    const stockForNote = conv.lead?.vehicle?.stockId ?? conv.lead?.stockId ?? null;
+    const vinForNote = conv.lead?.vehicle?.vin ?? conv.lead?.vin ?? null;
+    const inventoryNote = await getInventoryNote(stockForNote, vinForNote);
+    conv.emailDraft = buildInitialEmailDraft(conv, profile, inventoryNote);
   } else {
     conv.emailDraft = result.draft;
   }
