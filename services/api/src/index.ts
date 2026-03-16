@@ -1639,6 +1639,16 @@ function parseFutureTimeframe(text: string, base: Date): { label: string; until?
 
 function isExplicitScheduleIntent(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
+  // If they’re asking for a phone call, do not treat it as an appointment request.
+  if (/\b(call|phone|call me|give me a call|reach me|reach out)\b/i.test(t) &&
+      !/\b(schedule|appointment|appt|book|reserve|set\s+up|come\s+in|stop\s+(in|by)|visit|test ride|demo ride)\b/i.test(t)) {
+    return false;
+  }
+  // Deferrals like "wait until warmer" shouldn't trigger scheduling.
+  if (/\b(wait|later|not yet|not now|when (it'?s|it is) warmer|once (it'?s|it is) warmer|warmer)\b/i.test(t) &&
+      !/\b(schedule|appointment|appt|book|reserve|set\s+up|come\s+in|stop\s+(in|by)|visit|test ride|demo ride)\b/i.test(t)) {
+    return false;
+  }
   if (looksLikeTimeSelection(t)) return true;
   if (/\b(schedule|appointment|appt|book|reserve|set\s+up|come\s+in|stop\s+(in|by)|visit|test ride|demo ride)\b/i.test(t)) {
     return true;
@@ -1646,7 +1656,9 @@ function isExplicitScheduleIntent(text: string): boolean {
   if (/\b(when|what time|what day|availability|available|openings|open)\b/i.test(t)) {
     return true;
   }
-  if (/\b(today|tomorrow|next week|this week|next month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(t)) {
+  // Day words only count as scheduling if paired with a time.
+  if (/\b(today|tomorrow|next week|this week|next month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(t) &&
+      /\b(\d{1,2})(?::\d{2})?\s*(am|pm)?\b/i.test(t)) {
     return true;
   }
   return false;
