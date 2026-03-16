@@ -1187,14 +1187,41 @@ export default function Home() {
     await load();
   }
 
-  async function doSend(payload: { body: string; draftId?: string; editNote?: string }) {
+  async function retryCrmLog(q: QuestionItem) {
+    try {
+      const convResp = await fetch(`/api/conversations/${encodeURIComponent(q.convId)}`);
+      const convData = await convResp.json().catch(() => null);
+      const leadRef =
+        convData?.conversation?.lead?.leadRef ?? convData?.conversation?.leadRef ?? null;
+      if (!leadRef) {
+        window.alert("Missing leadRef for this conversation.");
+        return;
+      }
+      const resp = await fetch("/api/crm/tlp/log-contact", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadRef, conversationId: q.convId })
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) {
+        window.alert(data?.error ?? "CRM update failed");
+        return;
+      }
+      await markQuestionDone(q);
+      setSaveToast("CRM updated");
+    } catch {
+      window.alert("CRM update failed");
+    }
+  }
+
+  async function doSend(payload: { body: string; draftId?: string; editNote?: string; manualTakeover?: boolean }) {
     if (!selectedConv) return;
     const resp = await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         ...payload,
-        manualTakeover: !payload.draftId,
+        manualTakeover: payload.manualTakeover ?? !payload.draftId,
         channel: messageFilter
       })
     });
@@ -1263,7 +1290,8 @@ export default function Home() {
       setEditPromptOpen(true);
       return;
     }
-    await doSend(draftId ? { body, draftId } : { body });
+    const manualTakeover = messageFilter === "email" ? !emailDraft : !draftId;
+    await doSend(draftId ? { body, draftId, manualTakeover } : { body, manualTakeover });
   }
 
   async function startCall(method?: "cell" | "extension") {
@@ -2492,9 +2520,32 @@ export default function Home() {
                     Open conversation
                   </button>
                 </div>
-                <button className="px-3 py-2 border rounded text-sm" onClick={() => markQuestionDone(q)}>
-                  Done
-                </button>
+                {(() => {
+                  const isCrmFailure = /tlp log failed/i.test(q.text ?? "");
+                  if (isCrmFailure) {
+                    return (
+                      <div className="flex flex-col gap-2">
+                        <button
+                          className="px-3 py-2 border rounded text-sm"
+                          onClick={() => retryCrmLog(q)}
+                        >
+                          Try again
+                        </button>
+                        <button
+                          className="px-3 py-2 border rounded text-sm"
+                          onClick={() => markQuestionDone(q)}
+                        >
+                          Update manually
+                        </button>
+                      </div>
+                    );
+                  }
+                  return (
+                    <button className="px-3 py-2 border rounded text-sm" onClick={() => markQuestionDone(q)}>
+                      Done
+                    </button>
+                  );
+                })()}
               </div>
             ))}
             {!loading && questions.length === 0 ? (
