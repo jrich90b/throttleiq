@@ -2444,42 +2444,44 @@ export default function Home() {
                     {new Date(q.createdAt).toLocaleString()}
                   </div>
                   <div className="text-sm text-gray-700 mt-2 line-clamp-3">{q.text}</div>
-                  <div className="mt-3 grid grid-cols-1 gap-2">
-                    <label className="text-xs text-gray-600">
-                      Outcome
-                      <select
-                        className="mt-1 w-full border rounded px-2 py-1 text-sm"
-                        value={questionOutcomeById[q.id] ?? q.outcome ?? ""}
-                        onChange={e =>
-                          setQuestionOutcomeById(prev => ({ ...prev, [q.id]: e.target.value }))
-                        }
-                      >
-                        <option value="">Select outcome…</option>
-                        <option value="sold">Sold</option>
-                        <option value="hold">On hold</option>
-                        <option value="undecided">Undecided</option>
-                        <option value="no_show">No show</option>
-                      </select>
-                    </label>
-                    <label className="text-xs text-gray-600">
-                      Follow-up Action
-                      <select
-                        className="mt-1 w-full border rounded px-2 py-1 text-sm"
-                        value={questionFollowUpById[q.id] ?? q.followUpAction ?? ""}
-                        onChange={e =>
-                          setQuestionFollowUpById(prev => ({ ...prev, [q.id]: e.target.value }))
-                        }
-                      >
-                        <option value="">Auto (based on outcome)</option>
-                        <option value="resume">Resume cadence</option>
-                        <option value="pause_24h">Pause 24h</option>
-                        <option value="pause_72h">Pause 72h</option>
-                        <option value="pause_indef">Pause indefinitely</option>
-                        <option value="archive">Archive</option>
-                        <option value="none">No change</option>
-                      </select>
-                    </label>
-                  </div>
+                  {q.type === "attendance" ? (
+                    <div className="mt-3 grid grid-cols-1 gap-2">
+                      <label className="text-xs text-gray-600">
+                        Outcome
+                        <select
+                          className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                          value={questionOutcomeById[q.id] ?? q.outcome ?? ""}
+                          onChange={e =>
+                            setQuestionOutcomeById(prev => ({ ...prev, [q.id]: e.target.value }))
+                          }
+                        >
+                          <option value="">Select outcome…</option>
+                          <option value="sold">Sold</option>
+                          <option value="hold">On hold</option>
+                          <option value="undecided">Undecided</option>
+                          <option value="no_show">No show</option>
+                        </select>
+                      </label>
+                      <label className="text-xs text-gray-600">
+                        Follow-up Action
+                        <select
+                          className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                          value={questionFollowUpById[q.id] ?? q.followUpAction ?? ""}
+                          onChange={e =>
+                            setQuestionFollowUpById(prev => ({ ...prev, [q.id]: e.target.value }))
+                          }
+                        >
+                          <option value="">Auto (based on outcome)</option>
+                          <option value="resume">Resume cadence</option>
+                          <option value="pause_24h">Pause 24h</option>
+                          <option value="pause_72h">Pause 72h</option>
+                          <option value="pause_indef">Pause indefinitely</option>
+                          <option value="archive">Archive</option>
+                          <option value="none">No change</option>
+                        </select>
+                      </label>
+                    </div>
+                  ) : null}
                   <button
                     className="text-xs text-blue-600 mt-2 inline-block"
                     onClick={() => {
