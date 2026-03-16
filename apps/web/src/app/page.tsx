@@ -233,6 +233,8 @@ export default function Home() {
     email: "",
     password: "",
     name: "",
+    phone: "",
+    extension: "",
     role: "salesperson",
     calendarId: "",
     permissions: {
@@ -341,6 +343,8 @@ export default function Home() {
   const [todoResolveTarget, setTodoResolveTarget] = useState<TodoItem | null>(null);
   const [todoResolution, setTodoResolution] = useState("resume");
   const [saveToast, setSaveToast] = useState<string | null>(null);
+  const [callBusy, setCallBusy] = useState(false);
+  const [callMethod, setCallMethod] = useState<"cell" | "extension">("cell");
   const calendarColumnRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const calendarEventsRef = useRef<any[]>([]);
   const calendarGridRef = useRef<HTMLDivElement | null>(null);
@@ -863,6 +867,13 @@ export default function Home() {
     const t = setTimeout(() => setSaveToast(null), 2000);
     return () => clearTimeout(t);
   }, [saveToast]);
+  useEffect(() => {
+    if (authUser?.phone) {
+      setCallMethod("cell");
+    } else if (authUser?.extension) {
+      setCallMethod("extension");
+    }
+  }, [authUser?.phone, authUser?.extension]);
 
   const pendingDraft = useMemo(() => {
     if (!selectedConv) return null;
@@ -1233,6 +1244,32 @@ export default function Home() {
       return;
     }
     await doSend(draftId ? { body, draftId } : { body });
+  }
+
+  async function startCall() {
+    if (!selectedConv || callBusy) return;
+    if (!authUser?.phone && !authUser?.extension) {
+      window.alert("No phone or extension configured for your user.");
+      return;
+    }
+    setCallBusy(true);
+    try {
+      const resp = await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/call`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ useExtension: callMethod === "extension" })
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) {
+        window.alert(data?.error ?? "Call failed");
+      } else {
+        setSaveToast("Call started");
+      }
+    } catch {
+      window.alert("Call failed");
+    } finally {
+      setCallBusy(false);
+    }
   }
 
   async function clearContactPreference() {
@@ -1653,6 +1690,8 @@ export default function Home() {
         email: "",
         password: "",
         name: "",
+        phone: "",
+        extension: "",
         role: "salesperson",
         calendarId: "",
         permissions: {
@@ -3594,9 +3633,11 @@ export default function Home() {
                     <div key={user.id} className="border rounded-lg p-3 flex items-center justify-between">
                       <div>
                         <div className="text-sm font-medium">{user.name || user.email || "Unnamed"}</div>
-                        <div className="text-xs text-gray-600">
-                          {user.email || "No email"} • {user.role}
-                        </div>
+                                <div className="text-xs text-gray-600">
+                                  {user.email || "No email"} • {user.role}
+                                  {user.phone ? ` • ${user.phone}` : ""}
+                                  {user.extension ? ` • ext ${user.extension}` : ""}
+                                </div>
                       </div>
                       <div className="flex gap-2">
                         <button
@@ -3689,6 +3730,26 @@ export default function Home() {
                                     onChange={e =>
                                       setUsersList(prev =>
                                         prev.map(u => (u.id === user.id ? { ...u, calendarId: e.target.value } : u))
+                                      )
+                                    }
+                                  />
+                                  <input
+                                    className="border rounded px-2 py-1 text-sm"
+                                    placeholder="Phone (for calls)"
+                                    value={user.phone ?? ""}
+                                    onChange={e =>
+                                      setUsersList(prev =>
+                                        prev.map(u => (u.id === user.id ? { ...u, phone: e.target.value } : u))
+                                      )
+                                    }
+                                  />
+                                  <input
+                                    className="border rounded px-2 py-1 text-sm"
+                                    placeholder="Extension / dial digits"
+                                    value={user.extension ?? ""}
+                                    onChange={e =>
+                                      setUsersList(prev =>
+                                        prev.map(u => (u.id === user.id ? { ...u, extension: e.target.value } : u))
                                       )
                                     }
                                   />
@@ -3805,6 +3866,8 @@ export default function Home() {
                                         name: user.name,
                                         role: user.role,
                                         calendarId: user.calendarId,
+                                        phone: user.phone,
+                                        extension: user.extension,
                                         permissions: user.permissions,
                                         ...(password ? { password } : {})
                                       });
@@ -3863,6 +3926,18 @@ export default function Home() {
                                 placeholder="Email"
                                 value={userForm.email}
                                 onChange={e => setUserForm({ ...userForm, email: e.target.value })}
+                              />
+                              <input
+                                className="border rounded px-3 py-2 text-sm"
+                                placeholder="Phone (for calls)"
+                                value={(userForm as any).phone ?? ""}
+                                onChange={e => setUserForm({ ...userForm, phone: e.target.value })}
+                              />
+                              <input
+                                className="border rounded px-3 py-2 text-sm"
+                                placeholder="Extension / dial digits"
+                                value={(userForm as any).extension ?? ""}
+                                onChange={e => setUserForm({ ...userForm, extension: e.target.value })}
                               />
                               <input
                                 className="border rounded px-3 py-2 text-sm"
@@ -4513,6 +4588,29 @@ export default function Home() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
+                {(authUser?.phone || authUser?.extension) ? (
+                  <div className="flex items-center gap-2">
+                    {authUser?.phone && authUser?.extension ? (
+                      <select
+                        className="border rounded text-xs px-2 py-1"
+                        value={callMethod}
+                        onChange={e => setCallMethod(e.target.value as "cell" | "extension")}
+                      >
+                        <option value="cell">Cell</option>
+                        <option value="extension">Extension</option>
+                      </select>
+                    ) : null}
+                    <button
+                      className={`px-2 py-1 border rounded text-sm cursor-pointer ${callBusy ? "opacity-60" : "hover:bg-gray-50"}`}
+                      onClick={startCall}
+                      disabled={callBusy}
+                      title="Call customer"
+                    >
+                      <span className="mr-1">📞</span>
+                      Call
+                    </button>
+                  </div>
+                ) : null}
                 {(authUser?.role === "manager" || authUser?.permissions?.canToggleHumanOverride) ? (
                   <button
                     className={`px-2 py-1 border rounded text-sm cursor-pointer ${selectedConv.mode === "human" ? "font-semibold bg-black text-white" : "hover:bg-gray-50"}`}
@@ -4581,15 +4679,26 @@ export default function Home() {
                   const provider = m.provider ?? "";
                   const isEmail = provider === "sendgrid";
                   const isSms =
-                    provider === "twilio" || provider === "human" || provider === "draft_ai" || provider === "sendgrid_adf";
+                    provider === "twilio" ||
+                    provider === "human" ||
+                    provider === "draft_ai" ||
+                    provider === "sendgrid_adf" ||
+                    provider === "voice_call" ||
+                    provider === "voice_transcript";
                   return messageFilter === "email" ? isEmail : isSms;
                 })
                 .map(m => {
                   const isPending = pendingDraft?.id === m.id;
+                  const providerLabel =
+                    m.provider === "voice_call"
+                      ? "call"
+                      : m.provider === "voice_transcript"
+                        ? "call transcript"
+                        : (m.provider ?? "?");
                   return (
                     <div key={m.id} className={`text-sm ${m.direction === "in" ? "" : "text-right"}`}>
                       <div className="text-xs text-gray-500">
-                        {m.direction.toUpperCase()} • {m.provider ?? "?"} •{" "}
+                        {m.direction.toUpperCase()} • {providerLabel} •{" "}
                         {new Date(m.at).toLocaleString()}
                         {isPending ? " • DRAFT (not sent)" : ""}
                       </div>

@@ -5,6 +5,8 @@ import twilio from "twilio";
 import multer from "multer";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
+import OpenAI from "openai";
 import { orchestrateInbound } from "./domain/orchestrator.js";
 import { classifySchedulingIntent } from "./domain/llmDraft.js";
 import type { InboundMessageEvent } from "./domain/types.js";
@@ -535,7 +537,16 @@ app.get("/auth/me", async (req, res) => {
   if (!user) return res.status(401).json({ ok: false, error: "user not found" });
   return res.json({
     ok: true,
-    user: { id: user.id, email: user.email, name: user.name, role: user.role, calendarId: user.calendarId, permissions: user.permissions }
+    user: {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      calendarId: user.calendarId,
+      phone: user.phone,
+      extension: user.extension,
+      permissions: user.permissions
+    }
   });
 });
 
@@ -550,7 +561,16 @@ app.post("/auth/login", async (req, res) => {
   res.json({
     ok: true,
     token: session.token,
-    user: { id: user.id, email: user.email, name: user.name, role: user.role, calendarId: user.calendarId, permissions: user.permissions }
+    user: {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      calendarId: user.calendarId,
+      phone: user.phone,
+      extension: user.extension,
+      permissions: user.permissions
+    }
   });
 });
 
@@ -572,6 +592,8 @@ app.get("/users", requireManager, async (_req, res) => {
       name: u.name,
       role: u.role,
       calendarId: u.calendarId,
+      phone: u.phone,
+      extension: u.extension,
       permissions: u.permissions
     }))
   });
@@ -587,14 +609,25 @@ app.post("/users", async (req, res) => {
   const role = (String(req.body?.role ?? "salesperson") as "manager" | "salesperson") ?? "salesperson";
   const name = String(req.body?.name ?? "").trim();
   const calendarId = String(req.body?.calendarId ?? "").trim();
+  const phone = String(req.body?.phone ?? "").trim();
+  const extension = String(req.body?.extension ?? "").trim();
   const permissions = req.body?.permissions ?? undefined;
   if (!email || !password) return res.status(400).json({ ok: false, error: "Missing email/password" });
   try {
-    const user = await createUser({ email, password, role, name, calendarId, permissions });
+    const user = await createUser({ email, password, role, name, calendarId, phone, extension, permissions });
     await syncSchedulerSalespeopleFromUsers();
     res.json({
       ok: true,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role, calendarId: user.calendarId, permissions: user.permissions }
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        calendarId: user.calendarId,
+        phone: user.phone,
+        extension: user.extension,
+        permissions: user.permissions
+      }
     });
   } catch (err: any) {
     res.status(400).json({ ok: false, error: err?.message ?? "Failed to create user" });
@@ -611,12 +644,23 @@ app.put("/users/:id", requireManager, async (req, res) => {
       role: req.body?.role,
       name: req.body?.name,
       calendarId: req.body?.calendarId,
+      phone: req.body?.phone,
+      extension: req.body?.extension,
       permissions: req.body?.permissions
     });
     await syncSchedulerSalespeopleFromUsers();
     res.json({
       ok: true,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role, calendarId: user.calendarId, permissions: user.permissions }
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        calendarId: user.calendarId,
+        phone: user.phone,
+        extension: user.extension,
+        permissions: user.permissions
+      }
     });
   } catch (err: any) {
     res.status(400).json({ ok: false, error: err?.message ?? "Failed to update user" });
@@ -1332,6 +1376,29 @@ function normalizePhone(raw: string): string {
   if (digits.length === 10) return `+1${digits}`;
   if (digits.length > 10) return `+${digits}`;
   return trimmed;
+}
+
+async function transcribeRecordingMp3(buffer: Buffer): Promise<string | null> {
+  if (!process.env.OPENAI_API_KEY) return null;
+  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const tmpPath = path.join(
+    os.tmpdir(),
+    `call-${Date.now()}-${Math.random().toString(16).slice(2)}.mp3`
+  );
+  try {
+    await fs.promises.writeFile(tmpPath, buffer);
+    const file = fs.createReadStream(tmpPath);
+    const resp = await client.audio.transcriptions.create({
+      file,
+      model: "whisper-1"
+    });
+    return resp.text?.trim() || null;
+  } catch (err: any) {
+    console.warn("[voice] transcription failed:", err?.message ?? err);
+    return null;
+  } finally {
+    fs.promises.unlink(tmpPath).catch(() => null);
+  }
 }
 
 function normalizeTimeToken(s: string): string {
@@ -3593,6 +3660,87 @@ app.post("/conversations/:id/send", async (req, res) => {
   }
 });
 
+app.post("/conversations/:id/call", async (req, res) => {
+  const conv = getConversation(req.params.id);
+  if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const from = process.env.TWILIO_FROM_NUMBER;
+  if (!accountSid || !authToken || !from) {
+    return res.status(500).json({
+      ok: false,
+      error: "Twilio credentials not configured (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_FROM_NUMBER)"
+    });
+  }
+
+  const dealerProfile = await getDealerProfile();
+  const user = (req as any).user ?? null;
+  const useExtension = req.body?.useExtension === true;
+  const userPhoneRaw = String(user?.phone ?? "").trim();
+  const userExtRaw = String(user?.extension ?? "").trim();
+  const dealerPhoneRaw = String(dealerProfile?.phone ?? "").trim();
+
+  let agentTo = "";
+  let agentDigits = "";
+  if (useExtension) {
+    if (!userExtRaw) {
+      return res.status(400).json({ ok: false, error: "No extension configured for this user" });
+    }
+    if (!dealerPhoneRaw) {
+      return res.status(400).json({ ok: false, error: "Dealer phone not configured for extensions" });
+    }
+    agentTo = normalizePhone(dealerPhoneRaw);
+    agentDigits = userExtRaw;
+  } else if (userPhoneRaw) {
+    agentTo = normalizePhone(userPhoneRaw);
+  } else if (userExtRaw && dealerPhoneRaw) {
+    agentTo = normalizePhone(dealerPhoneRaw);
+    agentDigits = userExtRaw;
+  }
+
+  if (!agentTo || !agentTo.startsWith("+")) {
+    return res.status(400).json({ ok: false, error: "Salesperson phone/extension not configured" });
+  }
+
+  const customerRaw = String(conv.lead?.phone ?? conv.leadKey ?? "").trim();
+  const customerPhone = normalizePhone(customerRaw);
+  if (!customerPhone || !customerPhone.startsWith("+")) {
+    return res.status(400).json({ ok: false, error: "Customer phone not available" });
+  }
+
+  const publicBase = process.env.PUBLIC_BASE_URL?.replace(/\/+$/, "");
+  const baseUrl = publicBase
+    ? publicBase
+    : `${req.protocol}://${req.get("host")}`;
+  const voiceUrl = `${baseUrl}/webhooks/twilio/voice?customer=${encodeURIComponent(
+    customerPhone
+  )}&leadKey=${encodeURIComponent(conv.leadKey)}${agentDigits ? `&agentDigits=${encodeURIComponent(agentDigits)}` : ""}`;
+
+  try {
+    const client = twilio(accountSid, authToken);
+    const call = await client.calls.create({
+      to: agentTo,
+      from,
+      url: voiceUrl
+    });
+    appendOutbound(
+      conv,
+      "system",
+      conv.leadKey,
+      `Call initiated to ${agentTo}.`,
+      "voice_call",
+      call.sid
+    );
+    saveConversation(conv);
+    await flushConversationStore();
+    return res.json({ ok: true, callSid: call.sid, agentPhone: agentTo, customerPhone });
+  } catch (err: any) {
+    console.warn("[voice] call start failed:", err?.message ?? err);
+    return res.status(500).json({ ok: false, error: "call failed" });
+  }
+});
+
 app.post("/webhooks/twilio", async (req, res) => {
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const signature = req.header("x-twilio-signature");
@@ -5421,6 +5569,107 @@ if (authToken && signature) {
     reply
   )}</Message>\n</Response>`;
   return res.status(200).type("text/xml").send(twiml);
+});
+
+app.post("/webhooks/twilio/voice", async (req, res) => {
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const signature = req.header("x-twilio-signature");
+  const publicBase = process.env.PUBLIC_BASE_URL?.replace(/\/+$/, "");
+  const requestUrl = publicBase
+    ? `${publicBase}${req.originalUrl}`
+    : `${req.protocol}://${req.get("host")}${req.originalUrl}`;
+  if (authToken && signature) {
+    const ok = twilio.validateRequest(authToken, signature, requestUrl, req.body);
+    if (!ok) return res.status(403).json({ ok: false, error: "Invalid Twilio signature" });
+  }
+
+  const customerRaw = String(req.query?.customer ?? req.body?.To ?? "").trim();
+  const agentDigits = String(req.query?.agentDigits ?? "").trim();
+  const customerPhone = normalizePhone(customerRaw);
+  const leadKey = String(req.query?.leadKey ?? "").trim();
+  const from = process.env.TWILIO_FROM_NUMBER ?? "";
+
+  const recordingCb = `${publicBase ?? `${req.protocol}://${req.get("host")}`}/webhooks/twilio/voice/recording?leadKey=${encodeURIComponent(leadKey)}`;
+
+  const response = new (twilio as any).twiml.VoiceResponse();
+  if (agentDigits) {
+    response.pause({ length: 1 });
+    response.play({ digits: agentDigits });
+    response.pause({ length: 1 });
+  }
+  if (customerPhone && customerPhone.startsWith("+")) {
+    const dial = response.dial({
+      callerId: from,
+      record: "record-from-answer",
+      recordingStatusCallback: recordingCb,
+      recordingStatusCallbackEvent: ["completed"]
+    });
+    dial.number(customerPhone);
+  } else {
+    response.say("No customer number provided.");
+  }
+  return res.type("text/xml").send(response.toString());
+});
+
+app.post("/webhooks/twilio/voice/recording", async (req, res) => {
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const signature = req.header("x-twilio-signature");
+  const publicBase = process.env.PUBLIC_BASE_URL?.replace(/\/+$/, "");
+  const requestUrl = publicBase
+    ? `${publicBase}${req.originalUrl}`
+    : `${req.protocol}://${req.get("host")}${req.originalUrl}`;
+  if (authToken && signature) {
+    const ok = twilio.validateRequest(authToken, signature, requestUrl, req.body);
+    if (!ok) return res.status(403).json({ ok: false, error: "Invalid Twilio signature" });
+  }
+
+  const leadKey = String(req.query?.leadKey ?? "").trim();
+  const recordingUrl = String(req.body?.RecordingUrl ?? "").trim();
+  const recordingSid = String(req.body?.RecordingSid ?? "").trim();
+
+  if (!leadKey || !recordingUrl) {
+    return res.json({ ok: false, error: "missing leadKey or RecordingUrl" });
+  }
+
+  const conv = getConversation(leadKey);
+  if (!conv) return res.json({ ok: true });
+
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken2 = process.env.TWILIO_AUTH_TOKEN;
+  if (!accountSid || !authToken2) {
+    return res.json({ ok: false, error: "missing twilio auth" });
+  }
+
+  try {
+    const mp3Url = `${recordingUrl}.mp3`;
+    const authHeader = `Basic ${Buffer.from(`${accountSid}:${authToken2}`).toString("base64")}`;
+    const recResp = await fetch(mp3Url, {
+      headers: { Authorization: authHeader }
+    });
+    if (!recResp.ok) {
+      throw new Error(`recording fetch failed ${recResp.status}`);
+    }
+    const buf = Buffer.from(await recResp.arrayBuffer());
+    const transcript = await transcribeRecordingMp3(buf);
+    const body = transcript
+      ? `Call transcript:\n${transcript}`
+      : `Call recording saved: ${mp3Url}`;
+    appendInbound(conv, {
+      channel: "sms",
+      provider: "voice_transcript",
+      from: "voice",
+      to: conv.leadKey,
+      body,
+      providerMessageId: recordingSid || undefined,
+      receivedAt: new Date().toISOString()
+    });
+    saveConversation(conv);
+    await flushConversationStore();
+    return res.json({ ok: true });
+  } catch (err: any) {
+    console.warn("[voice] recording handle failed:", err?.message ?? err);
+    return res.json({ ok: false, error: "recording handle failed" });
+  }
 });
 
 function escapeXml(s: string): string {

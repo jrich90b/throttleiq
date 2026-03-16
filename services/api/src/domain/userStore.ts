@@ -18,6 +18,8 @@ export type UserRecord = {
   name?: string;
   role: UserRole;
   calendarId?: string;
+  phone?: string;
+  extension?: string;
   permissions: UserPermissions;
   passwordHash: string;
   createdAt: string;
@@ -89,6 +91,8 @@ export async function createUser(input: {
   role: UserRole;
   name?: string;
   calendarId?: string;
+  phone?: string;
+  extension?: string;
   permissions?: Partial<UserPermissions>;
 }): Promise<UserRecord> {
   const users = await listUsers();
@@ -112,6 +116,8 @@ export async function createUser(input: {
     name: input.name?.trim() || undefined,
     role: input.role,
     calendarId: input.calendarId?.trim() || undefined,
+    phone: input.phone?.trim() || undefined,
+    extension: input.extension?.trim() || undefined,
     permissions: perms,
     passwordHash: hashPassword(input.password),
     createdAt: now,
@@ -123,7 +129,16 @@ export async function createUser(input: {
 
 export async function updateUser(
   id: string,
-  patch: Partial<{ email: string; password: string; role: UserRole; name: string; calendarId: string; permissions: Partial<UserPermissions> }>
+  patch: Partial<{
+    email: string;
+    password: string;
+    role: UserRole;
+    name: string;
+    calendarId: string;
+    phone: string;
+    extension: string;
+    permissions: Partial<UserPermissions>;
+  }>
 ): Promise<UserRecord> {
   const users = await listUsers();
   const idx = users.findIndex(u => u.id === id);
@@ -151,6 +166,8 @@ export async function updateUser(
     name: patch.name?.trim() || existing.name,
     role: nextRole,
     calendarId: patch.calendarId?.trim() || undefined,
+    phone: patch.phone?.trim() || undefined,
+    extension: patch.extension?.trim() || undefined,
     permissions: nextPerms,
     passwordHash: patch.password ? hashPassword(patch.password) : existing.passwordHash,
     updatedAt: new Date().toISOString()
