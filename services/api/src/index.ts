@@ -5696,6 +5696,7 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
   }
 
   const leadKey = String(req.query?.leadKey ?? "").trim();
+  const agentName = String(req.query?.agentName ?? "").trim();
   const recordingUrl = String(req.body?.RecordingUrl ?? "").trim();
   const recordingSid = String(req.body?.RecordingSid ?? "").trim();
 
