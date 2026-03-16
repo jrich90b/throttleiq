@@ -3219,6 +3219,17 @@ app.post("/conversations/:id/close", (req, res) => {
   return res.json({ ok: true, conversation: conv });
 });
 
+app.post("/conversations/:id/reopen", (req, res) => {
+  const conv = getConversation(req.params.id);
+  if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+  conv.status = "open";
+  conv.closedAt = undefined;
+  conv.closedReason = undefined;
+  conv.updatedAt = new Date().toISOString();
+  saveConversation(conv);
+  return res.json({ ok: true, conversation: conv });
+});
+
 app.delete("/conversations/:id", (req, res) => {
   const id = req.params.id;
   const ok = deleteConversation(id);
@@ -5799,6 +5810,7 @@ app.listen(port, () => {
   console.log("   - GET    /conversations/:id");
   console.log("   - POST   /conversations/:id/mode");
   console.log("   - POST   /conversations/:id/close");
+  console.log("   - POST   /conversations/:id/reopen");
   console.log("   - POST   /conversations/:id/send");
   console.log("   - GET    /todos");
   console.log("   - POST   /todos");

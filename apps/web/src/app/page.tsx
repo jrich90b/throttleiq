@@ -1378,6 +1378,16 @@ export default function Home() {
     await load();
   }
 
+  async function reopenConv() {
+    if (!selectedConv) return;
+    await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/reopen`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" }
+    });
+    await loadConversation(selectedConv.id);
+    await load();
+  }
+
   async function deleteConv() {
     if (!selectedConv) return;
     const ok = window.confirm(
@@ -5130,6 +5140,9 @@ export default function Home() {
               </div>
             ) : (
               <div className="mt-4 flex items-center gap-2">
+                <button className="px-3 py-2 border rounded text-sm" onClick={reopenConv}>
+                  Re-open
+                </button>
                 <button
                   className="px-3 py-2 border rounded text-sm text-red-600 border-red-200 hover:bg-red-50"
                   onClick={deleteConv}
