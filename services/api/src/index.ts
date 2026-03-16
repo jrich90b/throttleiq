@@ -1378,7 +1378,7 @@ function normalizePhone(raw: string): string {
   return trimmed;
 }
 
-async function transcribeRecordingMp3(buffer: Buffer): Promise<string | null> {
+async function transcribeRecordingMp3(buffer: Buffer, agentLabel = "Agent"): Promise<string | null> {
   const deepgramKey = process.env.DEEPGRAM_API_KEY?.trim();
   if (deepgramKey) {
     try {
@@ -1404,7 +1404,25 @@ async function transcribeRecordingMp3(buffer: Buffer): Promise<string | null> {
         const utterances = data?.results?.utterances;
         if (Array.isArray(utterances) && utterances.length) {
           return utterances
-            .map((u: any) => `Speaker ${Number(u.speaker) + 1}: ${u.transcript}`)
+            .map((u: any) => {
+              const channel =
+                typeof u.channel === "number"
+                  ? u.channel
+                  : typeof u.channel_index === "number"
+                    ? u.channel_index
+                    : null;
+              let who = "";
+              if (channel === 0) {
+                who = agentLabel;
+              } else if (channel === 1) {
+                who = "Customer";
+              } else if (typeof u.speaker === "number") {
+                who = `Speaker ${Number(u.speaker) + 1}`;
+              } else {
+                who = "Speaker";
+              }
+              return `${who}: ${u.transcript}`;
+            })
             .join("\n");
         }
         const channels = data?.results?.channels;
@@ -2755,6 +2773,7 @@ app.get("/public/booking/prefill", async (req, res) => {
   }
 
   const leadKey = String(req.query?.leadKey ?? "").trim();
+  const agentName = String(req.query?.agentName ?? "").trim();
   if (!leadKey) return res.json({ ok: true, lead: null });
   const conv = getConversation(leadKey);
   if (!conv) return res.json({ ok: true, lead: null });
@@ -3762,9 +3781,10 @@ app.post("/conversations/:id/call", async (req, res) => {
   const baseUrl = publicBase
     ? publicBase
     : `${req.protocol}://${req.get("host")}`;
+  const agentName = String(user?.name ?? user?.email ?? "Agent").trim() || "Agent";
   const voiceUrl = `${baseUrl}/webhooks/twilio/voice?customer=${encodeURIComponent(
     customerPhone
-  )}&leadKey=${encodeURIComponent(conv.leadKey)}${agentDigits ? `&agentDigits=${encodeURIComponent(agentDigits)}` : ""}`;
+  )}&leadKey=${encodeURIComponent(conv.leadKey)}${agentDigits ? `&agentDigits=${encodeURIComponent(agentDigits)}` : ""}&agentName=${encodeURIComponent(agentName)}`;
 
   try {
     const client = twilio(accountSid, authToken);
@@ -5634,11 +5654,12 @@ app.post("/webhooks/twilio/voice", async (req, res) => {
 
   const customerRaw = String(req.query?.customer ?? req.body?.To ?? "").trim();
   const agentDigits = String(req.query?.agentDigits ?? "").trim();
+  const agentNameRaw = String(req.query?.agentName ?? "").trim();
   const customerPhone = normalizePhone(customerRaw);
   const leadKey = String(req.query?.leadKey ?? "").trim();
   const from = process.env.TWILIO_FROM_NUMBER ?? "";
 
-  const recordingCb = `${publicBase ?? `${req.protocol}://${req.get("host")}`}/webhooks/twilio/voice/recording?leadKey=${encodeURIComponent(leadKey)}`;
+  const recordingCb = `${publicBase ?? `${req.protocol}://${req.get("host")}`}/webhooks/twilio/voice/recording?leadKey=${encodeURIComponent(leadKey)}${agentNameRaw ? `&agentName=${encodeURIComponent(agentNameRaw)}` : ""}`;
 
   const response = new (twilio as any).twiml.VoiceResponse();
   if (agentDigits) {
@@ -5701,7 +5722,7 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
       throw new Error(`recording fetch failed ${recResp.status}`);
     }
     const buf = Buffer.from(await recResp.arrayBuffer());
-    const transcript = await transcribeRecordingMp3(buf);
+    const transcript = await transcribeRecordingMp3(buf, agentName || "Agent");
     const body = transcript
       ? `Call transcript:\n${transcript}`
       : `Call recording saved: ${mp3Url}`;
