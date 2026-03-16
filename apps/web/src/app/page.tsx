@@ -211,9 +211,8 @@ export default function Home() {
   const [pendingSend, setPendingSend] = useState<{ body: string; draftId?: string } | null>(null);
   const [closeReason, setCloseReason] = useState("sold");
   const [listActionsOpenId, setListActionsOpenId] = useState<string | null>(null);
-  const [todoPromptOpen, setTodoPromptOpen] = useState(false);
-  const [todoPromptText, setTodoPromptText] = useState("");
-  const [todoPromptConvId, setTodoPromptConvId] = useState<string | null>(null);
+  const [todoInlineOpenId, setTodoInlineOpenId] = useState<string | null>(null);
+  const [todoInlineText, setTodoInlineText] = useState("");
   const sendBoxRef = useRef<HTMLTextAreaElement | null>(null);
   const streamRef = useRef<EventSource | null>(null);
   const lastStreamRefreshRef = useRef(0);
@@ -930,6 +929,13 @@ export default function Home() {
   }, [listActionsOpenId]);
 
   useEffect(() => {
+    if (!listActionsOpenId) {
+      setTodoInlineOpenId(null);
+      setTodoInlineText("");
+    }
+  }, [listActionsOpenId]);
+
+  useEffect(() => {
     if (!selectedId) return;
     if (pendingDraft) return;
     const listItem = conversations.find(c => c.id === selectedId);
@@ -1399,15 +1405,8 @@ export default function Home() {
     await load();
   }
 
-  function openTodoPrompt(convId: string) {
-    setTodoPromptConvId(convId);
-    setTodoPromptText("");
-    setTodoPromptOpen(true);
-  }
-
-  async function submitTodoPrompt() {
-    if (!todoPromptConvId) return;
-    const summary = todoPromptText.trim();
+  async function submitTodoInline(convId: string) {
+    const summary = todoInlineText.trim();
     if (!summary) {
       window.alert("Please enter what the salesperson should do.");
       return;
@@ -1416,7 +1415,7 @@ export default function Home() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        convId: todoPromptConvId,
+        convId,
         summary,
         reason: "other"
       })
@@ -1426,9 +1425,9 @@ export default function Home() {
       window.alert(data?.error ?? "Failed to create to-do");
       return;
     }
-    setTodoPromptOpen(false);
-    setTodoPromptConvId(null);
-    setTodoPromptText("");
+    setTodoInlineOpenId(null);
+    setTodoInlineText("");
+    setListActionsOpenId(null);
     await load();
   }
 
@@ -2466,27 +2465,61 @@ export default function Home() {
                           >
                             ⋮
                           </button>
-                          {listActionsOpenId === c.id ? (
-                            <div
-                              className="absolute right-0 mt-2 w-40 border rounded bg-white shadow z-10"
-                              data-actions-menu
-                              onClick={e => e.stopPropagation()}
-                              onMouseDown={e => e.stopPropagation()}
-                            >
+                              {listActionsOpenId === c.id ? (
+                                <div
+                                  className="absolute right-0 mt-2 w-40 border rounded bg-white shadow z-10"
+                                  data-actions-menu
+                                  onClick={e => e.stopPropagation()}
+                                  onMouseDown={e => e.stopPropagation()}
+                                >
+                                  {todoInlineOpenId === c.id ? (
+                                    <div className="p-2">
+                                      <div className="text-[11px] text-gray-500 mb-1">
+                                        To‑do note
+                                      </div>
+                                      <textarea
+                                        className="w-full border rounded px-2 py-1 text-xs"
+                                        rows={3}
+                                        value={todoInlineText}
+                                        onChange={e => setTodoInlineText(e.target.value)}
+                                        placeholder="Call customer about trade appraisal"
+                                      />
+                                      <div className="mt-2 flex justify-end gap-2">
+                                        <button
+                                          className="px-2 py-1 border rounded text-xs"
+                                          onClick={() => {
+                                            setTodoInlineOpenId(null);
+                                            setTodoInlineText("");
+                                          }}
+                                        >
+                                          Cancel
+                                        </button>
+                                        <button
+                                          className="px-2 py-1 border rounded text-xs"
+                                          onClick={() => {
+                                            void submitTodoInline(c.id);
+                                          }}
+                                        >
+                                          Create
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : (
                                     <button
                                       className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
                                       onClick={() => {
-                                        setListActionsOpenId(null);
-                                        openTodoPrompt(c.id);
+                                        setTodoInlineOpenId(c.id);
+                                        setTodoInlineText("");
                                       }}
                                     >
                                       Create to-do
                                     </button>
-                              <button
-                                className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-                                onClick={() => {
-                                  setListActionsOpenId(null);
-                                  void deleteConvFromList(c.id);
+                                  )}
+                                  <button
+                                    className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                                    onClick={() => {
+                                      setListActionsOpenId(null);
+                                      void deleteConvFromList(c.id);
                                 }}
                               >
                                 Delete
@@ -5111,41 +5144,6 @@ export default function Home() {
         )}
       </section>
 
-      {todoPromptOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-          <div className="bg-white rounded-lg shadow-lg w-full max-w-md p-4">
-            <div className="text-sm font-medium">Create to-do</div>
-            <div className="text-xs text-gray-500 mt-1">
-              What should the salesperson do?
-            </div>
-            <textarea
-              className="mt-3 w-full border rounded px-3 py-2 text-sm"
-              rows={3}
-              value={todoPromptText}
-              onChange={e => setTodoPromptText(e.target.value)}
-              placeholder="e.g., Call customer about trade appraisal"
-            />
-            <div className="mt-3 flex justify-end gap-2">
-              <button
-                className="px-3 py-2 border rounded text-sm"
-                onClick={() => {
-                  setTodoPromptOpen(false);
-                  setTodoPromptConvId(null);
-                  setTodoPromptText("");
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                className="px-3 py-2 border rounded text-sm"
-                onClick={submitTodoPrompt}
-              >
-                Create
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </main>
   );
 }
