@@ -3443,7 +3443,7 @@ app.post("/conversations/:id/send", async (req, res) => {
         replyTo: emailReplyTo
       });
       // Clear stored email draft so the UI doesn't keep pre-filling after send.
-      conv.emailDraft = null;
+      delete conv.emailDraft;
       if (!hadOutbound) {
         await maybeStartCadence(conv, new Date().toISOString());
       }
