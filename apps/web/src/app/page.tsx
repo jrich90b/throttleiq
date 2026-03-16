@@ -2453,9 +2453,9 @@ export default function Home() {
                               : `updated: ${new Date(c.updatedAt).toLocaleString()}`}
                           </div>
                         </button>
-                        <div className="relative border-l shrink-0">
+                        <div className="relative border-l shrink-0 w-10 flex items-center justify-center bg-[var(--surface-2)]">
                           <button
-                            className="px-3 h-full text-lg leading-none text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                            className="w-8 h-8 flex items-center justify-center text-xl font-semibold text-gray-700 hover:text-gray-900"
                             aria-label="Conversation actions"
                             data-actions-button
                             onClick={e => {
@@ -2464,7 +2464,7 @@ export default function Home() {
                             }}
                             onMouseDown={e => e.stopPropagation()}
                           >
-                            ...
+                            ⋮
                           </button>
                           {listActionsOpenId === c.id ? (
                             <div
