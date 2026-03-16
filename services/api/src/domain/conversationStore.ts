@@ -6,7 +6,14 @@ import { dataPath } from "./dataDir.js";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
 
 export type ConversationMode = "autopilot" | "suggest" | "human";
-export type MessageProvider = "twilio" | "sendgrid_adf" | "sendgrid" | "draft_ai" | "human";
+export type MessageProvider =
+  | "twilio"
+  | "sendgrid_adf"
+  | "sendgrid"
+  | "draft_ai"
+  | "human"
+  | "voice_call"
+  | "voice_transcript";
 
 export type AppointmentStatus = "none" | "proposed" | "confirmed";
 
