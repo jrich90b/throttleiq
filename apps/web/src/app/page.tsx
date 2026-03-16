@@ -210,9 +210,8 @@ export default function Home() {
   const [editNote, setEditNote] = useState("");
   const [pendingSend, setPendingSend] = useState<{ body: string; draftId?: string } | null>(null);
   const [closeReason, setCloseReason] = useState("sold");
-  const [convActionsOpen, setConvActionsOpen] = useState(false);
+  const [listActionsOpenId, setListActionsOpenId] = useState<string | null>(null);
   const sendBoxRef = useRef<HTMLTextAreaElement | null>(null);
-  const convActionsRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<EventSource | null>(null);
   const lastStreamRefreshRef = useRef(0);
   const loadRef = useRef<() => Promise<void>>(async () => {});
@@ -914,21 +913,11 @@ export default function Home() {
   }, [displaySendBody]);
 
   useEffect(() => {
-    setConvActionsOpen(false);
-  }, [selectedConv?.id]);
-
-  useEffect(() => {
-    if (!convActionsOpen) return;
-    const onClick = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-      if (!convActionsRef.current || !target) return;
-      if (!convActionsRef.current.contains(target)) {
-        setConvActionsOpen(false);
-      }
-    };
+    if (!listActionsOpenId) return;
+    const onClick = () => setListActionsOpenId(null);
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
-  }, [convActionsOpen]);
+  }, [listActionsOpenId]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -1388,15 +1377,26 @@ export default function Home() {
     await load();
   }
 
-  async function createManualTodo() {
-    if (!selectedConv) return;
+  async function deleteConvFromList(id: string) {
+    const ok = window.confirm("Delete this conversation permanently? This cannot be undone.");
+    if (!ok) return;
+    await fetch(`/api/conversations/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (selectedId === id) {
+      setSelectedConv(null);
+      setSelectedId(null);
+    }
+    setConversations(prev => prev.filter(c => c.id !== id));
+    await load();
+  }
+
+  async function createManualTodoForId(convId: string) {
     const summary = window.prompt("What should the salesperson do?");
     if (!summary) return;
     const resp = await fetch("/api/todos/create", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        convId: selectedConv.id,
+        convId,
         summary: summary.trim(),
         reason: "other"
       })
@@ -2411,6 +2411,43 @@ export default function Home() {
                               </button>
                               {c.pendingDraft ? <span className="text-xs px-2 py-1 rounded border">Draft</span> : null}
                               <span className="text-xs px-2 py-1 rounded border">{c.messageCount}</span>
+                              <div className="relative">
+                                <button
+                                  className="text-xs px-2 py-1 rounded border"
+                                  aria-label="Conversation actions"
+                                  onClick={e => {
+                                    e.stopPropagation();
+                                    setListActionsOpenId(prev => (prev === c.id ? null : c.id));
+                                  }}
+                                >
+                                  ⋯
+                                </button>
+                                {listActionsOpenId === c.id ? (
+                                  <div
+                                    className="absolute right-0 mt-2 w-40 border rounded bg-white shadow z-10"
+                                    onClick={e => e.stopPropagation()}
+                                  >
+                                    <button
+                                      className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
+                                      onClick={async () => {
+                                        setListActionsOpenId(null);
+                                        await createManualTodoForId(c.id);
+                                      }}
+                                    >
+                                      Create to-do
+                                    </button>
+                                    <button
+                                      className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                                      onClick={() => {
+                                        setListActionsOpenId(null);
+                                        void deleteConvFromList(c.id);
+                                      }}
+                                    >
+                                      Delete
+                                    </button>
+                                  </div>
+                                ) : null}
+                              </div>
                             </div>
                           </div>
 
@@ -5024,71 +5061,21 @@ export default function Home() {
                 <button className="px-3 py-2 border rounded text-sm" onClick={closeConv}>
                   Mark Closed
                 </button>
-                <div className="relative" ref={convActionsRef}>
-                  <button
-                    className="px-3 py-2 border rounded text-sm"
-                    onClick={() => setConvActionsOpen(v => !v)}
-                    aria-label="Conversation actions"
-                  >
-                    ⋯
-                  </button>
-                  {convActionsOpen ? (
-                    <div className="absolute right-0 mt-2 w-44 border rounded bg-white shadow z-10">
-                      <button
-                        className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
-                        onClick={async () => {
-                          setConvActionsOpen(false);
-                          await createManualTodo();
-                        }}
-                      >
-                        Create to-do
-                      </button>
-                      <button
-                        className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-                        onClick={() => {
-                          setConvActionsOpen(false);
-                          void deleteConv();
-                        }}
-                      >
-                        Delete conversation
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
+                <button
+                  className="px-3 py-2 border rounded text-sm text-red-600 border-red-200 hover:bg-red-50"
+                  onClick={deleteConv}
+                >
+                  Delete
+                </button>
               </div>
             ) : (
               <div className="mt-4 flex items-center gap-2">
-                <div className="relative" ref={convActionsRef}>
-                  <button
-                    className="px-3 py-2 border rounded text-sm"
-                    onClick={() => setConvActionsOpen(v => !v)}
-                    aria-label="Conversation actions"
-                  >
-                    ⋯
-                  </button>
-                  {convActionsOpen ? (
-                    <div className="absolute right-0 mt-2 w-44 border rounded bg-white shadow z-10">
-                      <button
-                        className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
-                        onClick={async () => {
-                          setConvActionsOpen(false);
-                          await createManualTodo();
-                        }}
-                      >
-                        Create to-do
-                      </button>
-                      <button
-                        className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-                        onClick={() => {
-                          setConvActionsOpen(false);
-                          void deleteConv();
-                        }}
-                      >
-                        Delete conversation
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
+                <button
+                  className="px-3 py-2 border rounded text-sm text-red-600 border-red-200 hover:bg-red-50"
+                  onClick={deleteConv}
+                >
+                  Delete
+                </button>
               </div>
             )}
           </div>
