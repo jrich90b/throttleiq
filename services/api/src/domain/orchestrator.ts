@@ -4,7 +4,7 @@ import type { InboundMessageEvent, OrchestratorResult } from "./types.js";
 import { generateDraftWithLLM } from "./llmDraft.js";
 import { resolveInventoryUrlByStock } from "./inventoryUrlResolver.js";
 import { checkInventorySalePendingByUrl, type InventoryStatus } from "./inventoryChecker.js";
-import { findInventoryPrice, findPriceRange } from "./inventoryFeed.js";
+import { findInventoryPrice, findPriceRange, hasInventoryForModelYear } from "./inventoryFeed.js";
 import { getInventoryNote } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
 import type { LeadProfile } from "./conversationStore.js";
@@ -52,6 +52,29 @@ function detectCallbackRequest(text: string): boolean {
   const hasPhone = /\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/.test(t);
   const hasTrade = /(trade[-\s]?in|trade in|trading in)/.test(t);
   return hasCallback || (hasTimeframe && (hasPhone || hasTrade));
+}
+
+function escapeRegExp(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function detectSalespersonMention(text: string): Promise<string | null> {
+  const t = String(text ?? "").toLowerCase();
+  if (!t) return null;
+  try {
+    const cfg = await getSchedulerConfig();
+    const list = (cfg.salespeople ?? []).map(p => p.name).filter(Boolean) as string[];
+    for (const name of list) {
+      const nameLower = name.toLowerCase();
+      if (nameLower && t.includes(nameLower)) return name;
+      const first = nameLower.split(/\s+/)[0];
+      if (first && first.length > 2) {
+        const re = new RegExp(`\\b${escapeRegExp(first)}\\b`, "i");
+        if (re.test(text)) return name.split(/\s+/)[0];
+      }
+    }
+  } catch {}
+  return null;
 }
 
 function detectExactNumberPressure(text: string): boolean {
@@ -442,8 +465,26 @@ export async function orchestrateInbound(
   }
 
   if (callbackRequest) {
+    const dealerProfile = await getDealerProfile();
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const firstName = ctx?.lead?.firstName?.trim() || "";
+    const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
+    const rawModel = ctx?.lead?.vehicle?.model ?? ctx?.lead?.vehicle?.description ?? "";
+    const modelKnown = !!rawModel && !isUnknownModel(rawModel);
+    const yearLabel = ctx?.lead?.vehicle?.year ? `${ctx.lead.vehicle.year} ` : "";
+    const modelLabel = normalizeModelLabel(rawModel);
+    const thanks = modelKnown
+      ? `Thanks for your interest in the ${yearLabel}${modelLabel}. `
+      : "Thanks for your inquiry. ";
+    const salesName = await detectSalespersonMention(event.body);
+    const reachOut = salesName
+      ? `I’ll have ${salesName} reach out.`
+      : "I’ll have someone from our sales team reach out.";
     const ack =
-      "Got it — I’ll have Scotty reach out. If you prefer, you can call us when you’re back. What’s the best number and time to reach you?";
+      `${greeting}${thanks}` +
+      `This is ${agentName} at ${dealerName}. ` +
+      `${reachOut}`;
     return finalize({
       intent,
       stage: "ENGAGED",
@@ -479,11 +520,6 @@ export async function orchestrateInbound(
       const dealerProfile = await getDealerProfile();
       const agentName = dealerProfile?.agentName ?? "Brooke";
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-      const testRideEnabled = dealerProfile?.followUp?.testRideEnabled !== false;
-      const longTermInvite = wantsLongTerm
-        ? `I know you mentioned a ${longTermTimeframe || "longer-term"} timeline — ` +
-          `if you’d like to check out current inventory${testRideEnabled ? " or take a test ride" : ""}, I’m happy to help. `
-        : "";
       const yearForRange =
         leadForPrice?.vehicle?.year ??
         deriveYearFromText(leadForPrice?.vehicle?.description ?? null) ??
@@ -492,6 +528,16 @@ export async function orchestrateInbound(
         leadForPrice?.vehicle?.model ??
         deriveModelFromDescription(leadForPrice?.vehicle?.description ?? null) ??
         null;
+      const testRideEnabled = dealerProfile?.followUp?.testRideEnabled !== false;
+      const canOfferTestRide =
+        testRideEnabled &&
+        !!modelForRange &&
+        !isUnknownModel(modelForRange) &&
+        (await hasInventoryForModelYear({ model: modelForRange, year: yearForRange, yearDelta: 1 }));
+      const longTermInvite = wantsLongTerm
+        ? `I know you mentioned a ${longTermTimeframe || "longer-term"} timeline — ` +
+          `if you’d like to check out current inventory${canOfferTestRide ? " or take a test ride" : ""}, I’m happy to help. `
+        : "";
       const modelUnknown = isUnknownModel(modelForRange);
       const stockForPrice = leadForPrice?.vehicle?.stockId ?? stockIdFromText ?? null;
       const vinForPrice = leadForPrice?.vehicle?.vin ?? null;
