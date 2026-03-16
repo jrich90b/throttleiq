@@ -82,6 +82,9 @@ VOICE / STYLE (strict):
 - Friendly, professional, concise.
 - Use "I" language (not "we") unless dealerProfile.voice explicitly says otherwise.
 - Do NOT use the customer’s last name.
+- Write at about a 7th–8th grade reading level.
+- Keep sentences short (aim under ~18 words).
+- Avoid jargon and long, complex clauses.
 ${channelRules}
 
 CONTROLLED VARIATIONS (use these to sound human):

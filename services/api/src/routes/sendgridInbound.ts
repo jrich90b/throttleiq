@@ -214,9 +214,9 @@ function parseTimeframeMonths(raw?: string): { start?: number; end?: number } | 
 function buildLongTermMessage(timeframe?: string, hasLicense?: boolean) {
   const tf = timeframe ? timeframe.trim() : "a future";
   if (hasLicense === true) {
-    return `Hi, this is Brooke at American Harley-Davidson. Just circling back since you mentioned a ${tf} timeline. Want to come in and check out options or set up a test ride? I can get you scheduled for a test ride.`;
+    return `Hi, this is Brooke at American Harley-Davidson. You mentioned a ${tf} timeline. I’m happy to help when you’re ready. Want me to set a reminder for you?`;
   }
-  return `Hi, this is Brooke at American Harley-Davidson. Just circling back since you mentioned a ${tf} timeline. Want to come in and check out options?`;
+  return `Hi, this is Brooke at American Harley-Davidson. You mentioned a ${tf} timeline. I’m happy to help when you’re ready. Want me to set a reminder for you?`;
 }
 
 export async function handleSendgridInbound(req: Request, res: Response) {
@@ -659,7 +659,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   );
   if (isUsed && isPendingComplaint) {
     let ack =
-      "Thanks for the heads-up — I’m going to have a salesperson check the sale‑pending status and follow up shortly.";
+      "Thanks for the heads-up. I’ll have someone check the sale‑pending status and follow up soon.";
     ack = await applyInitialAdfPrefix(ack);
     addTodo(conv, "other", event.body, event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "pending_used_followup");
@@ -688,7 +688,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const agentName = profile?.agentName ?? "Brooke";
     const firstName = conv.lead?.firstName ?? "";
     const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
-    let ack = `${greeting}thanks for reaching out. This is ${agentName} at ${dealerName}. We received your inquiry and someone will follow up shortly.`;
+    let ack = `${greeting}thanks for reaching out. This is ${agentName} at ${dealerName}. We got your inquiry and someone will follow up soon.`;
     ack = await applyInitialAdfPrefix(ack);
 
     addTodo(conv, "other", event.body, event.providerMessageId);
@@ -954,7 +954,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           const intro = `This is ${agentName} at ${dealerName}. `;
           const confirmText =
             `${greeting}${intro}` +
-            `Perfect — you’re booked for ${when}${repName}. ` +
+            `You’re booked for ${when}${repName}. ` +
             `${dealerName} is at ${addressLine}.`;
 
           appendOutbound(conv, "dealership", leadKey, confirmText, "draft_ai", eventObj.id ?? undefined);

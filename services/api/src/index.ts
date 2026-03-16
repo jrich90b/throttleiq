@@ -784,16 +784,16 @@ function buildBookingUrlForLead(baseUrl: string | undefined | null, conv: any): 
 }
 
 const FOLLOW_UP_MESSAGES = [
-  "Just checking in — would you like to come by and look at it? I have {a} or {b} if that helps.",
-  "If you'd like a quick walkaround video first, I can send one. If you'd rather come by, what day works best for you?",
-  "If you still want to see it, what day/time is best on your end?",
-  "Quick question — are you comparing a few bikes, or is this one at the top of your list?",
-  "Still interested? I can set a time - what day/time should I reserve?",
-  "If you're still shopping, what day/time is easiest for you?",
-  "No rush - if you want to see it, what day/time should I put down?",
-  "Do you want to set a visit? What day/time works best?",
-  "Should I keep a time available for you? If so, what day/time?",
-  "Still interested in taking a look? If so, what day/time works best?"
+  "Just checking in. Want to come by and look at the bike? I have {a} or {b} — do any of these times work?",
+  "If you want a quick walkaround video, I can send one. If you'd rather come by, what day works for you?",
+  "If you still want to see it, what day and time works for you?",
+  "Quick question — are you comparing a few bikes, or is this one your top choice?",
+  "Still interested? I can set a time. What day and time works for you?",
+  "If you're still shopping, what day and time works for you?",
+  "No rush. If you want to see it, what day and time should I hold?",
+  "Want to set a visit? What day and time works for you?",
+  "Should I hold a time for you? If so, what day and time?",
+  "Still want to take a look? If so, what day and time works for you?"
 ];
 
 type EmailFollowUpCtx = {
@@ -806,23 +806,23 @@ type EmailFollowUpCtx = {
 
 const EMAIL_FOLLOW_UP_MESSAGES: Array<(ctx: EmailFollowUpCtx) => string> = [
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nJust checking in about ${label}. I can help with pricing, options, or a quick walkaround if that would be useful. ${bookingLine} If you’d rather reply by email, just send the day/time that works best.\n\nThanks,`,
+    `Hi ${name},\n\nJust checking in about ${label}. I can help with pricing, options, and availability. ${bookingLine} If you’d rather reply by email, just send a day and time that works for you.\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nI wanted to see if you’d like any additional details on ${label}. If a walkaround video would help, I can send one. ${bookingLine} I’m happy to answer any questions by email as well.\n\nThanks,`,
+    `Hi ${name},\n\nI wanted to see if you’d like more details on ${label}. If a walkaround video would help, I can send one. ${bookingLine} I’m happy to answer any questions by email.\n\nThanks,`,
   ({ name, label, bookingLine, canTestRide }) =>
-    `Hi ${name},\n\nThanks again for your interest in ${label}. ${canTestRide ? "If you’d like to set up a test ride, I can reserve a time." : "If you’d like to stop by, I can reserve a time for you."} ${bookingLine} If you prefer, just reply with the day/time that works.\n\nThanks,`,
+    `Hi ${name},\n\nThanks again for your interest in ${label}. ${canTestRide ? "If you want a test ride, I can reserve a time." : "If you want to stop by, I can reserve a time."} ${bookingLine} If you prefer, just reply with a day and time that works.\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nQuick question as you compare options: is ${label} still at the top of your list? If you’d like to see it in person, ${bookingLine} I’m here to help with any questions in the meantime.\n\nThanks,`,
+    `Hi ${name},\n\nQuick question: is ${label} still at the top of your list? If you’d like to see it in person, ${bookingLine} I’m here to help with any questions in the meantime.\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nJust checking in on ${label}. If you’d like to take a closer look, ${bookingLine} I can also help with pricing or availability details by email.\n\nThanks,`,
+    `Hi ${name},\n\nJust checking in on ${label}. If you’d like to take a closer look, ${bookingLine} I can also help with pricing or availability by email.\n\nThanks,`,
   ({ name, label, bookingLine }) =>
     `Hi ${name},\n\nI hope your week is going well. If you’re still shopping for ${label}, I’m happy to help with options and next steps. ${bookingLine} Let me know if there’s anything specific you want to see.\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nNo rush at all — I just wanted to keep the conversation open on ${label}. ${bookingLine} If it’s easier, you can reply with a preferred day/time and I’ll take care of the rest.\n\nThanks,`,
+    `Hi ${name},\n\nNo rush at all — I just wanted to keep the conversation open on ${label}. ${bookingLine} If it’s easier, reply with a day and time and I’ll take care of the rest.\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nIf you’d like to set a time to check out ${label}, I can get that on the calendar. ${bookingLine} I can also answer any questions by email before you visit.\n\nThanks,`,
+    `Hi ${name},\n\nIf you want to set a time to check out ${label}, I can get that on the calendar. ${bookingLine} I can also answer any questions by email before you visit.\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nShould I hold a time for you to see ${label}? ${bookingLine} If a different approach is better, just tell me what works and I’ll follow your lead.\n\nThanks,`,
+    `Hi ${name},\n\nShould I hold a time for you to see ${label}? ${bookingLine} If a different approach is better, just tell me what works.\n\nThanks,`,
   ({ name, label, bookingLine }) =>
     `Hi ${name},\n\nStill interested in taking a look at ${label}? ${bookingLine} I’m happy to help with anything you need in the meantime.\n\nThanks,`
 ];
@@ -858,11 +858,11 @@ function buildInitialEmailDraft(conv: any, dealerProfile: any): string {
   const intro = `This is ${agentName} at ${dealerName}.`;
   const help = "I’m happy to help with pricing, options, and availability.";
   const visit = label
-    ? "If you’d like to stop in to check out the bike and go over options, you can book an appointment below."
-    : "If you’d like to stop in to go over options, you can book an appointment below.";
+    ? "If you want to stop in to check out the bike and go over options, you can book an appointment below."
+    : "If you want to stop in to go over options, you can book an appointment below.";
   const bookingLine = bookingUrl
     ? `You can book an appointment here: ${bookingUrl}`
-    : "Just reply with a day and time that works best for you.";
+    : "Just reply with a day and time that works for you.";
   const extra = "If a walkaround or extra photos would help, just let me know.";
 
   return `Hi ${name},\n\n${thanks} ${intro} ${help} ${visit}\n\n${bookingLine}\n\n${extra}`;
@@ -1153,28 +1153,28 @@ async function buildLateFollowUp(
   if (stepIndex === 10) {
     if (!hasMatch && !testRideOk) {
       return {
-        body: `${greeting}Just checking in on the ${label}. If you’re still looking, I can keep an eye out or set a time to visit. What works best?`
+        body: `${greeting}Just checking in on the ${label}. If you’re still looking, I can keep an eye out or set a time to stop in. What day and time works for you?`
       };
     }
     if (hasMatch && hasRecentInventory) {
       return {
-        body: `${greeting}We just got a ${label} in. Want to come check it out? What day/time works best?`
+        body: `${greeting}We just got a ${label} in. Want to come see it? What day and time works for you?`
       };
     }
     if (hasMatch) {
       return {
-        body: `${greeting}We have ${label} options in stock. Want to stop by and take a look? What day/time works best?`
+        body: `${greeting}We have ${label} in stock. Want to stop by and take a look? What day and time works for you?`
       };
     }
     return {
-      body: `${greeting}Just checking in on the ${label}. If you’re still looking, I can keep an eye out or set a time to visit. What works best?`
+      body: `${greeting}Just checking in on the ${label}. If you’re still looking, I can keep an eye out or set a time to stop in. What day and time works for you?`
     };
   }
 
   if (stepIndex === 11) {
     if (!hasMatch && !testRideOk) {
       return {
-        body: `${greeting}If you’re still shopping, I can help you compare options or set a quick visit. What day/time works best?`
+        body: `${greeting}If you’re still shopping, I can help compare options or set a quick visit. What day and time works for you?`
       };
     }
     if (colorLabelRaw && imagePick?.url && hasMatch) {
@@ -1196,30 +1196,30 @@ async function buildLateFollowUp(
     }
     if (canTestRide) {
       return {
-        body: `${greeting}If you want, we can set up a test ride for a ${label}. What day/time works best?`
+        body: `${greeting}If you want, we can set up a test ride for a ${label}. What day and time works for you?`
       };
     }
     if (hasMatch) {
       return {
-        body: `${greeting}Still interested in a ${label}? I can send a quick walkaround or set a time to visit. What works best?`
+        body: `${greeting}Still interested in a ${label}? I can send a quick walkaround or set a time to stop in. What day and time works for you?`
       };
     }
     return {
-      body: `${greeting}If you’re still shopping, I can help you compare options or set a quick visit. What day/time works best?`
+      body: `${greeting}If you’re still shopping, I can help compare options or set a quick visit. What day and time works for you?`
     };
   }
 
   if (stepIndex === 12) {
     if (!hasMatch && !testRideOk) {
       return {
-        body: `${greeting}Should I keep this open or close it out? If you’re still looking, I’m happy to help.`
-      };
-    }
-    if (canTestRide) {
-      return {
-        body: `${greeting}We’re offering test rides this time of year. Want me to reserve a time for you?`
-      };
-    }
+      body: `${greeting}Should I keep this open or close it out? If you’re still looking, I’m happy to help.`
+    };
+  }
+  if (canTestRide) {
+    return {
+      body: `${greeting}We’re offering test rides right now. Want me to reserve a time for you?`
+    };
+  }
     return {
       body: `${greeting}Should I keep this open or close it out? If you’re still looking, I’m happy to help.`
     };
@@ -1266,19 +1266,19 @@ async function buildLongTermFollowUp(
     const colorLabel = colorLabelRaw ? colorLabelRaw.charAt(0).toUpperCase() + colorLabelRaw.slice(1) : null;
     const itemLabel = colorLabel ? `${colorLabel} ${label}` : label;
     return {
-      body: `${greeting}Just circling back since you mentioned a ${timeframe} timeline. We have a ${itemLabel} in stock right now. Want to take a look?`,
+      body: `${greeting}You mentioned a ${timeframe} timeline. We have a ${itemLabel} in stock now. Want to take a look?`,
       mediaUrls: [imagePick.url]
     };
   }
 
   if (canTestRide) {
     return {
-      body: `${greeting}Just circling back since you mentioned a ${timeframe} timeline. Want to come in and check out options or set up a test ride?`
+      body: `${greeting}You mentioned a ${timeframe} timeline. I’m here when you’re ready. Want me to set a reminder?`
     };
   }
 
   return {
-    body: `${greeting}Just circling back since you mentioned a ${timeframe} timeline. Want to come in and check out options?`
+    body: `${greeting}You mentioned a ${timeframe} timeline. I’m here when you’re ready. Want me to set a reminder?`
   };
 }
 
@@ -1974,14 +1974,14 @@ async function processDueFollowUps() {
           conv.lead?.vehicle?.year ?? null,
           conv.lead?.vehicle?.model ?? null
         );
-        message = `Just checking in — would you like to come by and look at ${followUpLabel}? I have ${day2.slots[0].startLocal} or ${day2.slots[1].startLocal} if that helps.`;
+        message = `Just checking in — want to come by and look at ${followUpLabel}? I have ${day2.slots[0].startLocal} or ${day2.slots[1].startLocal} if that helps.`;
         setLastSuggestedSlots(conv, day2.slots);
       } else {
         message = FOLLOW_UP_MESSAGES[1];
       }
     } else if (cadence.stepIndex === 2) {
       if (canTestRideFlag) {
-        message = "If you’d like to set up a test ride, I can reserve a time. What day/time works best?";
+        message = "If you want to set up a test ride, I can hold a time. What day and time works for you?";
       } else {
         message = FOLLOW_UP_MESSAGES[2];
       }
@@ -2003,7 +2003,7 @@ async function processDueFollowUps() {
     const label = model ? `the ${formatModelLabel(year, model)}` : "your inquiry";
   const bookingLine = bookingUrl
     ? `You can book an appointment here: ${bookingUrl}`
-    : "If you’d like to schedule a visit, just reply with a day and time that works.";
+    : "If you want to stop in, reply with a day and time that works.";
     let emailMessage: string | null = null;
     if (useEmail) {
       if (cadence.kind === "long_term") {
@@ -3947,7 +3947,7 @@ if (authToken && signature) {
       const when = conv.appointment?.whenIso ? formatSlotLocal(conv.appointment.whenIso, tz) : null;
       const reply = isYes
         ? `Thanks — you’re all set for ${when ?? "your appointment"}. See you then.`
-        : "No problem — I’ve cancelled it. What day/time works best to reschedule?";
+        : "No problem — I’ve cancelled it. What day and time works to reschedule?";
       const systemMode = webhookMode;
       if (systemMode === "suggest") {
         appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -4030,7 +4030,7 @@ if (authToken && signature) {
     } else {
       const requested = requestedReschedule;
     if (!requested) {
-      const ask = "Absolutely — what day and time works best for you?";
+      const ask = "Absolutely — what day and time works for you?";
       conv.appointment.reschedulePending = true;
       conv.appointment.updatedAt = new Date().toISOString();
       const systemMode = webhookMode;
@@ -4947,7 +4947,7 @@ if (authToken && signature) {
   });
   console.log("[twilio] result.suggestedSlots len:", result.suggestedSlots?.length ?? 0);
   if ((result.suggestedSlots?.length ?? 0) === 0 && draftHasSpecificTimes(result.draft ?? "")) {
-    result.draft = "What day and time works best for you to stop in?";
+    result.draft = "What day and time works for you to stop in?";
   }
   if (result.handoff?.required) {
     const reason = result.handoff.reason;

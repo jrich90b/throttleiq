@@ -194,9 +194,9 @@ function isUnknownModel(label?: string | null): boolean {
 
 function buildScheduleInvite(hasConcreteInventory: boolean): string {
   if (hasConcreteInventory) {
-    return "I can get you scheduled to come in and check out the bike and go over options.";
+    return "I can set up a time to stop in and check out the bike and go over options.";
   }
-  return "I can get you scheduled to come in.";
+  return "I can set up a time to stop in.";
 }
 
 function isCreditAppSource(source?: string | null, sourceId?: number | null): boolean {
@@ -222,9 +222,9 @@ function inferAppointmentType(
 function buildLongTermMessage(timeframe?: string, hasLicense?: boolean) {
   const tf = timeframe ? timeframe.trim() : "a future";
   if (hasLicense === true) {
-    return `Hi, this is Brooke at American Harley-Davidson. Just circling back since you mentioned a ${tf} timeline. Want to come in and check out options or set up a test ride? I can get you scheduled for a test ride.`;
+    return `Hi, this is Brooke at American Harley-Davidson. You mentioned a ${tf} timeline. I’m here when you’re ready. Want me to set a reminder?`;
   }
-  return `Hi, this is Brooke at American Harley-Davidson. Just circling back since you mentioned a ${tf} timeline. Want to come in and check out options?`;
+  return `Hi, this is Brooke at American Harley-Davidson. You mentioned a ${tf} timeline. I’m here when you’re ready. Want me to set a reminder?`;
 }
 
 function deriveModelFromDescription(desc?: string | null): string | null {
@@ -278,15 +278,15 @@ function enforceNoPrematureBooking(draft: string, appointment: any, suggestedSlo
   let out = draft
     .replace(
       /\b(i have you|you('| a)?re|you are)\s+(scheduled|booked|confirmed|all set|set)\b/gi,
-      "I can get you scheduled"
+      "I can set up a time"
     )
-    .replace(/\bsee you\b/gi, "I can get you scheduled")
+    .replace(/\bsee you\b/gi, "I can set up a time")
     .trim();
 
   if (Array.isArray(suggestedSlots) && suggestedSlots.length >= 2) {
     const a = suggestedSlots[0].startLocal;
     const b = suggestedSlots[1].startLocal;
-    out = `I can get you scheduled to come in. I have ${a} or ${b} — do any of these times work?`;
+    out = `I can set up a time to stop in. I have ${a} or ${b} — do any of these times work?`;
   }
 
   return out;
@@ -345,7 +345,7 @@ export async function orchestrateInbound(
           : sellOption === "either"
             ? "Are you leaning more toward a cash offer or trade credit?"
             : "Are you looking for a cash offer or trade credit?";
-    const draft = `Hi ${leadFirst} — thanks for reaching out about selling your ${yearLabel}${modelLabel}. We can help with a trade‑in appraisal.${mileageLine} ${optionLine} Do you have a couple photos? If you’d rather stop in, I can set a time.`;
+    const draft = `Hi ${leadFirst} — thanks for reaching out about selling your ${yearLabel}${modelLabel}. I can help with a trade‑in appraisal.${mileageLine} ${optionLine} If you want to stop in, I can set a time.`;
     return finalize({
       intent: "TRADE_IN",
       stage: "ENGAGED",
@@ -366,7 +366,7 @@ export async function orchestrateInbound(
     const draft =
       `Hi ${leadFirst} — thanks for your interest in the ${yearLabel}${modelLabel}. ` +
       `This is ${agentName} at ${dealerName}. We received your online credit application. ` +
-      "I’ll have our business manager reach out to go over your options. What time would work best?";
+      "I’ll have our business manager reach out to go over your options.";
     return finalize({
       intent: "FINANCING",
       stage: "ENGAGED",
@@ -388,7 +388,7 @@ export async function orchestrateInbound(
     const draft =
       `Hi ${leadFirst} — thanks for your recent demo ride on the ${bikeLabel}. ` +
       `This is ${agentName} at ${dealerName}. ` +
-      `If you’d like more details on the ${bikeLabel}, I’m happy to help.`;
+      `If you want more details on the ${bikeLabel}, I’m happy to help.`;
     return finalize({
       intent: "GENERAL",
       stage: "ENGAGED",
@@ -418,7 +418,7 @@ export async function orchestrateInbound(
     }
     const ack =
       `Hi, this is ${agentName} at ${dealerName}. ` +
-      "Thanks for reaching out — due to our dealer agreement, we can only sell to customers within the United States.";
+      "Thanks for reaching out. We can only sell to customers in the United States.";
     return finalize({
       intent: "GENERAL",
       stage: "ENGAGED",
@@ -441,8 +441,7 @@ export async function orchestrateInbound(
   const stockIdFromText = event.body.match(/\b[A-Z0-9]{1,5}-\d{1,4}\b/i)?.[0]?.toUpperCase() ?? null;
 
   if (managerRequest) {
-    const ack =
-      "Got it — I’ll have a manager follow up shortly. What’s the best time to reach you today?";
+    const ack = "Got it — I’ll have a manager follow up shortly.";
     return finalize({
       intent,
       stage: "ENGAGED",
@@ -453,8 +452,7 @@ export async function orchestrateInbound(
   }
 
   if (approvalStatus) {
-    const ack =
-      "Got it — I’ll have our team check the status and follow up shortly. What’s the best time to reach you today?";
+    const ack = "Got it — I’ll have our team check the status and follow up shortly.";
     return finalize({
       intent,
       stage: "ENGAGED",
@@ -497,8 +495,8 @@ export async function orchestrateInbound(
   if (pricingIntent && pricingAttempts >= 1) {
     const reason = detectPaymentPressure(event.body) ? "payments" : "pricing";
     const ack = exactPressure
-      ? "Got it — to make sure the numbers are accurate, I’m going to have a manager pull the exact out-the-door/payment options and follow up shortly. What’s the best time to reach you today?"
-      : "Got it — I’ll have a manager pull the most accurate numbers and follow up shortly. What’s the best time to reach you today?";
+      ? "Got it — I’ll have a manager pull the exact numbers and follow up shortly."
+      : "Got it — I’ll have a manager pull the most accurate numbers and follow up shortly.";
     return finalize({
       intent,
       stage: "ENGAGED",
@@ -508,8 +506,7 @@ export async function orchestrateInbound(
     });
   }
 
-  const fallbackDraft =
-    "Thanks for reaching out — what day and time works best for you to stop in?";
+  const fallbackDraft = "Thanks for reaching out. How can I help?";
 
   if (pricingIntent) {
     try {
@@ -577,14 +574,14 @@ export async function orchestrateInbound(
                 : `Listed prices for ${fallbackLabel} units we have in stock range from ${nf.format(
                     fallbackRange.min
                   )} to ${nf.format(fallbackRange.max)}.`;
-            const draft =
+          const draft =
               `Hi ${firstName} — thanks for your interest in the ${originalLabel}. ` +
               `This is ${agentName} at ${dealerName}. ${longTermInvite}` +
-              `We don't have a ${originalLabel} in stock right now, ` +
+              `We don’t have a ${originalLabel} in stock right now, ` +
               `but we do have ${fallbackLabel} units available. ${priceLine} ` +
               `${inventoryNote ? `Right now there's ${inventoryNote} available. ` : ""}` +
-              `If you'd like, I can send photos or details.`;
-            return finalize({
+              `If you want, I can send photos or details.`;
+          return finalize({
               intent,
               stage: "ENGAGED",
               shouldRespond: true,
@@ -615,7 +612,7 @@ export async function orchestrateInbound(
         const ack =
           `Hi ${firstName} — ${thankLine}This is ${agentName} at ${dealerName}. ` +
           `${longTermInvite}` +
-          "I’ll have a manager pull the exact pricing and follow up shortly. What’s the best time to reach you today?";
+          "I’ll have a manager pull the exact pricing and follow up shortly.";
         return finalize({
           intent,
           stage: "ENGAGED",
@@ -625,8 +622,7 @@ export async function orchestrateInbound(
         });
       }
     } catch {
-      const ack =
-        "Got it — I’ll have a manager pull the exact pricing and follow up shortly. What’s the best time to reach you today?";
+      const ack = "Got it — I’ll have a manager pull the exact pricing and follow up shortly.";
       return finalize({
         intent,
         stage: "ENGAGED",
@@ -1036,8 +1032,8 @@ export async function orchestrateInbound(
           "The estimate is a guide; final trade value comes from an in‑person evaluation and can be higher. ";
         const schedule =
           suggestedSlots.length >= 2
-            ? `I can set up a trade appraisal — I have ${suggestedSlots[0].startLocal} or ${suggestedSlots[1].startLocal} — do any of these times work?`
-            : "I can set up a trade appraisal — what day and time works best?";
+            ? `I can set up a trade appraisal. I have ${suggestedSlots[0].startLocal} or ${suggestedSlots[1].startLocal} — do any of these times work?`
+            : "I can set up a trade appraisal. What day and time works for you?";
         return finalize({
           intent: "TRADE_IN",
           stage: "ENGAGED",
@@ -1055,27 +1051,27 @@ export async function orchestrateInbound(
         let priceLine = "";
         if (listPrice) {
           if (stockLabel) {
-            priceLine = `The listed price for ${stockLabel} is ${nf.format(listPrice)}.`;
+            priceLine = `The price we have listed for ${stockLabel} is ${nf.format(listPrice)}.`;
           } else {
-            priceLine = `The listed price for the ${yearLabel}${modelLabel} we have in stock is ${nf.format(
+            priceLine = `The price we have listed for the ${yearLabel}${modelLabel} is ${nf.format(
               listPrice
             )}.`;
           }
         } else if (priceRange) {
           if (priceRange.count === 1) {
-            priceLine = `The listed price for the ${yearLabel}${modelLabel} we have in stock is ${nf.format(
+            priceLine = `The price we have listed for the ${yearLabel}${modelLabel} is ${nf.format(
               priceRange.min
             )}.`;
           } else {
-            priceLine = `Listed prices for ${yearLabel}${modelLabel} units we have in stock range from ${nf.format(
+            priceLine = `Prices we have listed for ${yearLabel}${modelLabel} run about ${nf.format(
               priceRange.min
-            )} to ${nf.format(priceRange.max)}, depending on color/trim/options.`;
+            )} to ${nf.format(priceRange.max)}, depending on trim and options.`;
           }
         }
-        const disclaimer = "Final numbers depend on tax, fees, any trade, and financing.";
+        const disclaimer = "Final price can change with tax, fees, trade-in, and financing.";
         const schedule = suggestedSlots.length >= 2
-          ? `I could get you scheduled to meet with our sales team. I have ${suggestedSlots[0].startLocal} or ${suggestedSlots[1].startLocal} — do any of these times work?`
-          : "I could get you scheduled to meet with our sales team — what day/time works best?";
+          ? `I can set up a time to stop in and go over options. I have ${suggestedSlots[0].startLocal} or ${suggestedSlots[1].startLocal} — do any of these times work?`
+          : "I can set up a time to stop in and go over options. What day and time works for you?";
         const qualifier = "Do you have a trade?";
         const isFirstOutbound = !history.some(h => h.direction === "out");
         const leadName = lead?.firstName?.trim() || "there";
@@ -1218,7 +1214,7 @@ export async function orchestrateInbound(
           const b = suggestedSlots[1].startLocal;
           finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}${noteLine}${scheduleInvite} I have ${a} or ${b} — do any of these times work?`.trim();
         } else if (canScheduleNow) {
-          finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}${noteLine}${scheduleInvite} What day and time works best for you?`.trim();
+          finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}${noteLine}${scheduleInvite} What day and time works for you?`.trim();
         } else {
           finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}I'll confirm availability shortly and follow up.`;
         }
