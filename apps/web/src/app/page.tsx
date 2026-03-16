@@ -272,7 +272,7 @@ export default function Home() {
     {}
   );
   const [schedulerConfig, setSchedulerConfig] = useState<any>(null);
-  const [messageFilter, setMessageFilter] = useState<"sms" | "email">("sms");
+  const [messageFilter, setMessageFilter] = useState<"sms" | "email" | "calls">("sms");
   const [schedulerForm, setSchedulerForm] = useState({
     timezone: "America/New_York",
     assignmentMode: "preferred",
@@ -893,6 +893,7 @@ export default function Home() {
   }, [selectedConv]);
   const displaySendBody = useMemo(() => {
     if (sendBodySource === "user") return sendBody;
+    if (messageFilter === "calls") return "";
     if (messageFilter === "email") {
       if (emailDraft) return maskBookingLink(emailDraft);
       return sendBody;
@@ -1095,6 +1096,12 @@ export default function Home() {
   }
 
   useEffect(() => {
+    if (messageFilter === "calls") {
+      setSendBody("");
+      setSendBodySource("system");
+      setLastDraftId(null);
+      return;
+    }
     if (messageFilter === "email") {
       if (emailDraft) {
         setSendBody(emailDraft);
@@ -1116,6 +1123,12 @@ export default function Home() {
   }, [pendingDraft?.id, messageFilter, emailDraft]);
 
   useEffect(() => {
+    if (messageFilter === "calls") {
+      setSendBody("");
+      setSendBodySource("system");
+      setLastDraftId(null);
+      return;
+    }
     if (messageFilter === "email") {
       if (emailDraft) {
         setSendBody(emailDraft);
@@ -1216,6 +1229,7 @@ export default function Home() {
 
   async function send() {
     if (!selectedConv) return;
+    if (messageFilter === "calls") return;
     if (messageFilter === "sms" && selectedConv.contactPreference === "call_only") {
       return;
     }
@@ -4663,6 +4677,12 @@ export default function Home() {
                 >
                   Email
                 </button>
+                <button
+                  className={`px-2 py-1 border rounded text-xs ${messageFilter === "calls" ? "font-semibold bg-gray-100" : ""}`}
+                  onClick={() => setMessageFilter("calls")}
+                >
+                  Calls
+                </button>
               </div>
               {messageFilter === "sms" && selectedConv.contactPreference === "call_only" ? (
                 <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
@@ -4680,14 +4700,15 @@ export default function Home() {
                 .filter(m => {
                   const provider = m.provider ?? "";
                   const isEmail = provider === "sendgrid";
+                  const isCall = provider === "voice_call" || provider === "voice_transcript";
                   const isSms =
                     provider === "twilio" ||
                     provider === "human" ||
                     provider === "draft_ai" ||
-                    provider === "sendgrid_adf" ||
-                    provider === "voice_call" ||
-                    provider === "voice_transcript";
-                  return messageFilter === "email" ? isEmail : isSms;
+                    provider === "sendgrid_adf";
+                  if (messageFilter === "email") return isEmail;
+                  if (messageFilter === "calls") return isCall;
+                  return isSms;
                 })
                 .map(m => {
                   const isPending = pendingDraft?.id === m.id;
@@ -4751,6 +4772,7 @@ export default function Home() {
                 ref={sendBoxRef}
                 value={displaySendBody}
                 onChange={e => {
+                  if (messageFilter === "calls") return;
                   setSendBody(e.target.value);
                   setSendBodySource("user");
                 }}
@@ -4760,13 +4782,26 @@ export default function Home() {
                   el.style.height = `${el.scrollHeight}px`;
                 }}
                 rows={1}
-                className="flex-1 border rounded px-3 py-3.5 min-h-[60px] resize-none leading-7 overflow-hidden box-border"
-                placeholder={pendingDraft ? "Edit draft then Send…" : "Type a message…"}
+                className={`flex-1 border rounded px-3 py-3.5 min-h-[60px] resize-none leading-7 overflow-hidden box-border ${
+                  messageFilter === "calls" ? "bg-gray-50 text-gray-500" : ""
+                }`}
+                placeholder={
+                  messageFilter === "calls"
+                    ? "Calls view only."
+                    : pendingDraft
+                      ? "Edit draft then Send…"
+                      : "Type a message…"
+                }
+                disabled={messageFilter === "calls"}
               />
               <button
-                className={`px-4 py-2 border rounded ${messageFilter === "sms" && selectedConv.contactPreference === "call_only" ? "opacity-50 cursor-not-allowed" : ""}`}
+                className={`px-4 py-2 border rounded ${
+                  messageFilter === "calls" || (messageFilter === "sms" && selectedConv.contactPreference === "call_only")
+                    ? "opacity-50 cursor-not-allowed"
+                    : ""
+                }`}
                 onClick={send}
-                disabled={messageFilter === "sms" && selectedConv.contactPreference === "call_only"}
+                disabled={messageFilter === "calls" || (messageFilter === "sms" && selectedConv.contactPreference === "call_only")}
               >
                 Send
               </button>
