@@ -5600,6 +5600,8 @@ app.post("/webhooks/twilio/voice", async (req, res) => {
   if (customerPhone && customerPhone.startsWith("+")) {
     const dial = response.dial({
       callerId: from,
+      answerOnBridge: true,
+      timeout: 30,
       record: "record-from-answer",
       recordingStatusCallback: recordingCb,
       recordingStatusCallbackEvent: ["completed"]
