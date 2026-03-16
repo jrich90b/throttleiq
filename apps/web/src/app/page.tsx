@@ -2230,6 +2230,11 @@ export default function Home() {
                             <div>
                               <div className="font-medium flex items-center gap-2">
                                 <span>{c.leadName && c.leadName.length > 0 ? c.leadName : c.leadKey}</span>
+                                {c.contactPreference === "call_only" ? (
+                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
+                                    Call Only
+                                  </span>
+                                ) : null}
                                 {c.status === "closed" ? (
                                   <span className="text-xs px-2 py-1 rounded border bg-gray-50">Closed</span>
                                 ) : null}

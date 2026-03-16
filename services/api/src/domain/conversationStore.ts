@@ -602,6 +602,7 @@ export function listConversations() {
           [c.lead?.firstName, c.lead?.lastName].filter(Boolean).join(" ").trim() ||
           null,
         vehicleDescription: c.lead?.vehicle?.description ?? null,
+        contactPreference: c.contactPreference,
         leadSource: c.lead?.source ?? null,
         classification: c.classification ?? null,
         ...pd

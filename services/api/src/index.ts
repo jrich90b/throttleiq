@@ -1908,6 +1908,10 @@ async function processDueFollowUps() {
   for (const conv of convs) {
     const cadence = conv.followUpCadence;
     if (!cadence || cadence.status !== "active" || !cadence.nextDueAt) continue;
+    if (conv.contactPreference === "call_only") {
+      stopFollowUpCadence(conv, "call_only");
+      continue;
+    }
     if (conv.status === "closed") {
       stopFollowUpCadence(conv, "closed");
       continue;
@@ -3603,6 +3607,19 @@ if (authToken && signature) {
   const conv = upsertConversationByLeadKey(event.from, "suggest");
   appendInbound(conv, event);
   pauseRelatedCadencesOnInbound(conv, event);
+  if (conv.contactPreference === "call_only") {
+    if (isOptOut(event.body)) {
+      await suppressRelatedPhones(conv, event, "sms_stop", "twilio");
+      stopFollowUpCadence(conv, "opt_out");
+      stopRelatedCadences(conv, "opt_out");
+    } else if (isNotInterested(event.body)) {
+      stopFollowUpCadence(conv, "not_interested");
+      closeConversation(conv, "not_interested");
+      stopRelatedCadences(conv, "not_interested", { close: true });
+    }
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (conv.mode === "human") {
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
