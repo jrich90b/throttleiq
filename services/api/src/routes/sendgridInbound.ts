@@ -536,18 +536,6 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     ruleName: forcedTestRide ? "room58_book_test_ride_forced" : rule.ruleName
   });
 
-  const isCreditLead =
-    inferredBucket === "finance_prequal" ||
-    inferredCta === "hdfs_coa" ||
-    inferredCta === "prequalify" ||
-    /coa|credit application|apply for credit|finance application|prequal/i.test(leadSourceLower);
-  if (isCreditLead) {
-    addTodo(conv, "credit_app", event.body ?? "Credit application", event.providerMessageId);
-    setFollowUpMode(conv, "manual_handoff", "credit_app");
-    stopFollowUpCadence(conv, "manual_handoff");
-  }
-
-
   const inboundBody =
     [
       `WEB LEAD (ADF)`,
@@ -582,10 +570,40 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     receivedAt: new Date().toISOString()
   };
 
+  const isCreditLead =
+    inferredBucket === "finance_prequal" ||
+    inferredCta === "hdfs_coa" ||
+    inferredCta === "prequalify" ||
+    /coa|credit application|apply for credit|finance application|prequal/i.test(leadSourceLower);
+  if (isCreditLead) {
+    addTodo(conv, "other", event.body ?? "Credit application", event.providerMessageId);
+    setFollowUpMode(conv, "manual_handoff", "credit_app");
+    stopFollowUpCadence(conv, "manual_handoff");
+  }
+
   appendInbound(conv, event);
   discardPendingDrafts(conv, "new_inbound");
   confirmAppointmentIfMatchesSuggested(conv, event.body, event.providerMessageId);
   updateHoldingFromInbound(conv, event.body);
+
+  const isInitialAdf =
+    event.provider === "sendgrid_adf" &&
+    !(conv.messages ?? []).some((m: any) => m.direction === "out");
+  const applyInitialAdfPrefix = async (text: string) => {
+    if (!isInitialAdf) return text;
+    const profile = await getDealerProfile();
+    const dealerName = profile?.dealerName ?? "American Harley-Davidson";
+    const agentName = profile?.agentName ?? "Brooke";
+    const firstName = conv.lead?.firstName?.trim() || "";
+    const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
+    const prefix = `${greeting}Thanks for your inquiry. This is ${agentName} at ${dealerName}. `;
+    const prefixLower = prefix.toLowerCase();
+    let body = String(text ?? "").trim();
+    if (body.toLowerCase().startsWith(prefixLower)) return body;
+    body = body.replace(/^hi\s+[^—]+—\s*/i, "");
+    body = body.replace(/^thanks for[^.]*\.\s*/i, "");
+    return `${prefix}${body}`.trim();
+  };
 
   const isUsed =
     conv.lead?.vehicle?.condition === "used" ||
@@ -595,8 +613,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     event.body
   );
   if (isUsed && isPendingComplaint) {
-    const ack =
+    let ack =
       "Thanks for the heads-up — I’m going to have a salesperson check the sale‑pending status and follow up shortly.";
+    ack = await applyInitialAdfPrefix(ack);
     addTodo(conv, "other", event.body, event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "pending_used_followup");
     stopFollowUpCadence(conv, "manual_handoff");
@@ -624,7 +643,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const agentName = profile?.agentName ?? "Brooke";
     const firstName = conv.lead?.firstName ?? "";
     const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
-    const ack = `${greeting}thanks for reaching out. This is ${agentName} at ${dealerName}. We received your inquiry and someone will follow up shortly.`;
+    let ack = `${greeting}thanks for reaching out. This is ${agentName} at ${dealerName}. We received your inquiry and someone will follow up shortly.`;
+    ack = await applyInitialAdfPrefix(ack);
 
     addTodo(conv, "other", event.body, event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "room58_standard");
@@ -653,10 +673,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const agentName = profile?.agentName ?? "Brooke";
     const firstName = conv.lead?.firstName ?? "";
     const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
-    const ack =
+    let ack =
       `${greeting}thanks for your H‑D Meta promo offer request. ` +
       `This is ${agentName} at ${dealerName}. ` +
       `I’d love to help with pricing. Which model are you interested in (and any trim or color)?`;
+    ack = await applyInitialAdfPrefix(ack);
 
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai");
     conv.emailDraft = ack;
@@ -689,14 +710,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   if (result.handoff?.required) {
     const reason = result.handoff.reason;
+    const ack = await applyInitialAdfPrefix(result.handoff.ack);
     addTodo(conv, reason, event.body, event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", `handoff:${reason}`);
     stopFollowUpCadence(conv, "manual_handoff");
     if (reason === "pricing" || reason === "payments") {
       markPricingEscalated(conv);
     }
-    appendOutbound(conv, "dealership", leadKey, result.handoff.ack, "draft_ai");
-    conv.emailDraft = result.handoff.ack;
+    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai");
+    conv.emailDraft = ack;
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -708,15 +730,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       channel,
       intent: result.intent,
       stage: result.stage,
-      draft: result.handoff.ack,
-      handoff: result.handoff
+      draft: ack,
+      handoff: { ...result.handoff, ack }
     });
   }
 
   if (result.autoClose?.reason) {
+    const ack = await applyInitialAdfPrefix(result.draft);
     closeConversation(conv, result.autoClose.reason);
-    appendOutbound(conv, "dealership", leadKey, result.draft, "draft_ai");
-    conv.emailDraft = result.draft;
+    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai");
+    conv.emailDraft = ack;
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -728,7 +751,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       channel,
       intent: result.intent,
       stage: result.stage,
-      draft: result.draft,
+      draft: ack,
       autoClose: result.autoClose
     });
   }
@@ -959,6 +982,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       draft = `That time is already taken, but ${draft.charAt(0).toLowerCase()}${draft.slice(1)}`;
     }
   }
+
+  draft = await applyInitialAdfPrefix(draft);
 
   const systemMode = getSystemMode();
   const emailTo = lead.email?.trim();
