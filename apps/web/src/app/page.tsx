@@ -125,6 +125,20 @@ type QuestionItem = {
   followUpAction?: string;
 };
 
+function todoActionLabel(todo: TodoItem): string {
+  const reason = (todo.reason ?? "").toLowerCase();
+  const summary = (todo.summary ?? "").toLowerCase();
+  const text = `${reason} ${summary}`;
+  if (/(call only|phone only|no text|do not text)/.test(text)) return "Call customer (call-only).";
+  if (/(credit|prequal|finance)/.test(text)) return "Business manager follow-up (credit app).";
+  if (/(trade|appraisal|trade[- ]in)/.test(text)) return "Discuss trade appraisal and next steps.";
+  if (/(inventory|verify|check stock|not seeing|live feed)/.test(text)) return "Verify inventory and follow up.";
+  if (/(video|walkaround|photos)/.test(text)) return "Send a walkaround video or photos.";
+  if (/(appointment|schedule|book)/.test(text)) return "Schedule an appointment.";
+  if (/(pricing|price|quote|payment)/.test(text)) return "Provide pricing or payment details.";
+  return "Follow up with the customer.";
+}
+
 type SuppressionItem = {
   phone: string;
   addedAt: string;
@@ -2314,6 +2328,7 @@ export default function Home() {
                     {t.reason} • {new Date(t.createdAt).toLocaleString()}
                   </div>
                   <div className="text-sm text-gray-700 mt-2 line-clamp-3">{t.summary}</div>
+                  <div className="text-xs text-gray-600 mt-2">Action: {todoActionLabel(t)}</div>
                   <button
                     className="text-xs text-blue-600 mt-2 inline-block"
                     onClick={() => {
