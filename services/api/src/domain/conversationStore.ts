@@ -593,6 +593,14 @@ export function listConversations() {
   return Array.from(conversations.values())
     .map(c => {
       const pd = pendingDraftInfo(c);
+      const nonCallMessages = c.messages.filter(
+        m => m.provider !== "voice_call" && m.provider !== "voice_transcript"
+      );
+      const lastNonCall =
+        nonCallMessages[nonCallMessages.length - 1] ??
+        c.messages[c.messages.length - 1] ??
+        null;
+      const updatedAt = lastNonCall?.at ?? c.updatedAt;
       return {
         id: c.id,
         leadKey: c.leadKey,
@@ -601,8 +609,8 @@ export function listConversations() {
         closedAt: c.closedAt ?? null,
         closedReason: c.closedReason ?? null,
         createdAt: c.createdAt,
-        updatedAt: c.updatedAt,
-        lastMessage: c.messages[c.messages.length - 1] ?? null,
+        updatedAt,
+        lastMessage: lastNonCall,
         messageCount: c.messages.length,
         leadName:
           c.lead?.name?.trim() ||
