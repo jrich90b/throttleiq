@@ -105,6 +105,13 @@ function stripHtml(input?: string): string | undefined {
   return cleaned || undefined;
 }
 
+function isCallOnlyText(input?: string | null): boolean {
+  if (!input) return false;
+  return /\b(call only|phone only|call me only|no text|do not text|don't text|text me not)\b/i.test(
+    input
+  );
+}
+
 function getLeadIdentifiers(conv: any, fromEmail?: string) {
   const email =
     (conv?.lead?.email ?? fromEmail ?? (conv?.leadKey?.includes?.("@") ? conv.leadKey : ""))
@@ -336,6 +343,21 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     confirmAppointmentIfMatchesSuggested(conv, event.body, event.providerMessageId);
     updateHoldingFromInbound(conv, event.body);
     pauseRelatedCadencesOnInbound(conv, fromEmail);
+
+    if (conv.contactPreference === "call_only" || isCallOnlyText(body)) {
+      setContactPreference(conv, "call_only");
+      addTodo(conv, "other", event.body ?? "Call only requested", event.providerMessageId);
+      setFollowUpMode(conv, "manual_handoff", "call_only");
+      stopFollowUpCadence(conv, "manual_handoff");
+      return res.status(200).json({
+        ok: true,
+        parsed: true,
+        leadKey,
+        lead: conv.lead,
+        channel: "email",
+        note: "call_only_no_email_draft"
+      });
+    }
 
     const history = conv.messages.slice(-20).map(m => ({ direction: m.direction, body: m.body }));
     const result = await orchestrateInbound(event, history, {
@@ -571,9 +593,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     receivedAt: new Date().toISOString()
   };
 
-  const callOnlyRequested = /\b(call only|phone only|call me only|no text|do not text|don't text|text me not)\b/i.test(
-    inquiryText
-  );
+  const callOnlyRequested = isCallOnlyText(inquiryText);
 
   const isCreditLead =
     inferredBucket === "finance_prequal" ||
