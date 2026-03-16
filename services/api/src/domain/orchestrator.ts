@@ -4,7 +4,7 @@ import type { InboundMessageEvent, OrchestratorResult } from "./types.js";
 import { generateDraftWithLLM } from "./llmDraft.js";
 import { resolveInventoryUrlByStock } from "./inventoryUrlResolver.js";
 import { checkInventorySalePendingByUrl, type InventoryStatus } from "./inventoryChecker.js";
-import { findInventoryPrice, findPriceRange, hasInventoryForModelYear } from "./inventoryFeed.js";
+import { findInventoryMatches, findInventoryPrice, findPriceRange, hasInventoryForModelYear } from "./inventoryFeed.js";
 import { getInventoryNote } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
 import type { LeadProfile } from "./conversationStore.js";
@@ -574,12 +574,20 @@ export async function orchestrateInbound(
                 : `Listed prices for ${fallbackLabel} units we have in stock range from ${nf.format(
                     fallbackRange.min
                   )} to ${nf.format(fallbackRange.max)}.`;
-          const draft =
+            const fallbackMatch =
+              (await findInventoryPrice({ year: String(fallbackYear), model: modelForRange })) ??
+              null;
+            const fallbackItem =
+              fallbackMatch?.item ?? (await findInventoryMatches({ year: String(fallbackYear), model: modelForRange }))[0];
+            const fallbackNote = fallbackItem
+              ? await getInventoryNote(fallbackItem.stockId ?? null, fallbackItem.vin ?? null)
+              : null;
+            const draft =
               `Hi ${firstName} — thanks for your interest in the ${originalLabel}. ` +
               `This is ${agentName} at ${dealerName}. ${longTermInvite}` +
               `We don’t have a ${originalLabel} in stock right now, ` +
               `but we do have ${fallbackLabel} units available. ${priceLine} ` +
-              `${inventoryNote ? `Right now there's ${inventoryNote} available. ` : ""}` +
+              `${fallbackNote ? `Right now there's ${fallbackNote} available. ` : ""}` +
               `If you want, I can send photos or details.`;
           return finalize({
               intent,
