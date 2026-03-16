@@ -121,6 +121,7 @@ type QuestionItem = {
   leadKey: string;
   text: string;
   createdAt: string;
+  type?: string;
   outcome?: string;
   followUpAction?: string;
 };
