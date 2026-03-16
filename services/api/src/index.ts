@@ -2016,7 +2016,6 @@ async function processDueFollowUps() {
     const systemMode = effectiveMode(conv);
     const { from: emailFrom, replyTo: emailReplyTo, signature } = getEmailConfig(dealerProfile);
     const replyTo = maybeTagReplyTo(emailReplyTo, conv);
-    const replyTo = maybeTagReplyTo(emailReplyTo, conv);
     const bookingUrl = buildBookingUrlForLead(dealerProfile?.bookingUrl, conv);
     const name = conv.lead?.firstName?.trim() || "there";
     const year = conv.lead?.vehicle?.year ?? null;
@@ -3437,6 +3436,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
     const dealerProfile = await getDealerProfile();
     const { from: emailFrom, replyTo: emailReplyTo, signature } = getEmailConfig(dealerProfile);
+    const replyTo = maybeTagReplyTo(emailReplyTo, conv);
     if (!emailFrom) {
       return res.status(400).json({
         ok: false,
