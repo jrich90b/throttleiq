@@ -210,7 +210,9 @@ export default function Home() {
   const [editNote, setEditNote] = useState("");
   const [pendingSend, setPendingSend] = useState<{ body: string; draftId?: string } | null>(null);
   const [closeReason, setCloseReason] = useState("sold");
+  const [convActionsOpen, setConvActionsOpen] = useState(false);
   const sendBoxRef = useRef<HTMLTextAreaElement | null>(null);
+  const convActionsRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<EventSource | null>(null);
   const lastStreamRefreshRef = useRef(0);
   const loadRef = useRef<() => Promise<void>>(async () => {});
@@ -912,6 +914,23 @@ export default function Home() {
   }, [displaySendBody]);
 
   useEffect(() => {
+    setConvActionsOpen(false);
+  }, [selectedConv?.id]);
+
+  useEffect(() => {
+    if (!convActionsOpen) return;
+    const onClick = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!convActionsRef.current || !target) return;
+      if (!convActionsRef.current.contains(target)) {
+        setConvActionsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [convActionsOpen]);
+
+  useEffect(() => {
     if (!selectedId) return;
     if (pendingDraft) return;
     const listItem = conversations.find(c => c.id === selectedId);
@@ -1207,6 +1226,10 @@ export default function Home() {
         window.alert(data?.error ?? "CRM update failed");
         return;
       }
+      if (data?.skipped) {
+        window.alert("No new messages to log to CRM.");
+        return;
+      }
       await markQuestionDone(q);
       setSaveToast("CRM updated");
     } catch {
@@ -1365,15 +1388,24 @@ export default function Home() {
     await load();
   }
 
-  async function deleteConvFromList(id: string) {
-    const ok = window.confirm("Delete this conversation permanently? This cannot be undone.");
-    if (!ok) return;
-    await fetch(`/api/conversations/${encodeURIComponent(id)}`, { method: "DELETE" });
-    if (selectedId === id) {
-      setSelectedConv(null);
-      setSelectedId(null);
+  async function createManualTodo() {
+    if (!selectedConv) return;
+    const summary = window.prompt("What should the salesperson do?");
+    if (!summary) return;
+    const resp = await fetch("/api/todos/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        convId: selectedConv.id,
+        summary: summary.trim(),
+        reason: "other"
+      })
+    });
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok || data?.ok === false) {
+      window.alert(data?.error ?? "Failed to create to-do");
+      return;
     }
-    setConversations(prev => prev.filter(c => c.id !== id));
     await load();
   }
 
@@ -2397,16 +2429,6 @@ export default function Home() {
                               ? `closed: ${new Date(c.closedAt).toLocaleString()}`
                               : `updated: ${new Date(c.updatedAt).toLocaleString()}`}
                           </div>
-                        </button>
-                        <button
-                          className="px-3 border-l text-sm text-red-600 hover:bg-red-50"
-                          title="Delete conversation"
-                          onClick={e => {
-                            e.stopPropagation();
-                            void deleteConvFromList(c.id);
-                          }}
-                        >
-                          🗑️
                         </button>
                       </div>
                     ))}
@@ -5002,21 +5024,71 @@ export default function Home() {
                 <button className="px-3 py-2 border rounded text-sm" onClick={closeConv}>
                   Mark Closed
                 </button>
-                <button
-                  className="px-3 py-2 border rounded text-sm text-red-600 border-red-200 hover:bg-red-50"
-                  onClick={deleteConv}
-                >
-                  Delete
-                </button>
+                <div className="relative" ref={convActionsRef}>
+                  <button
+                    className="px-3 py-2 border rounded text-sm"
+                    onClick={() => setConvActionsOpen(v => !v)}
+                    aria-label="Conversation actions"
+                  >
+                    ⋯
+                  </button>
+                  {convActionsOpen ? (
+                    <div className="absolute right-0 mt-2 w-44 border rounded bg-white shadow z-10">
+                      <button
+                        className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
+                        onClick={async () => {
+                          setConvActionsOpen(false);
+                          await createManualTodo();
+                        }}
+                      >
+                        Create to-do
+                      </button>
+                      <button
+                        className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                        onClick={() => {
+                          setConvActionsOpen(false);
+                          void deleteConv();
+                        }}
+                      >
+                        Delete conversation
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             ) : (
               <div className="mt-4 flex items-center gap-2">
-                <button
-                  className="px-3 py-2 border rounded text-sm text-red-600 border-red-200 hover:bg-red-50"
-                  onClick={deleteConv}
-                >
-                  Delete
-                </button>
+                <div className="relative" ref={convActionsRef}>
+                  <button
+                    className="px-3 py-2 border rounded text-sm"
+                    onClick={() => setConvActionsOpen(v => !v)}
+                    aria-label="Conversation actions"
+                  >
+                    ⋯
+                  </button>
+                  {convActionsOpen ? (
+                    <div className="absolute right-0 mt-2 w-44 border rounded bg-white shadow z-10">
+                      <button
+                        className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
+                        onClick={async () => {
+                          setConvActionsOpen(false);
+                          await createManualTodo();
+                        }}
+                      >
+                        Create to-do
+                      </button>
+                      <button
+                        className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                        onClick={() => {
+                          setConvActionsOpen(false);
+                          void deleteConv();
+                        }}
+                      >
+                        Delete conversation
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             )}
           </div>

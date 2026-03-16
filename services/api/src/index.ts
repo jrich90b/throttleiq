@@ -3230,6 +3230,30 @@ app.get("/todos", requirePermission("canAccessTodos"), (_req, res) => {
   res.json({ ok: true, todos: listOpenTodos() });
 });
 
+app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
+  const convId = String(req.body?.convId ?? "").trim();
+  const summary = String(req.body?.summary ?? "").trim();
+  const reasonRaw = String(req.body?.reason ?? "other").trim();
+  if (!convId || !summary) {
+    return res.status(400).json({ ok: false, error: "Missing convId/summary" });
+  }
+  const conv = getConversation(convId);
+  if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+  const allowedReasons: Array<"pricing" | "payments" | "approval" | "manager" | "other"> = [
+    "pricing",
+    "payments",
+    "approval",
+    "manager",
+    "other"
+  ];
+  const reason = allowedReasons.includes(reasonRaw as any)
+    ? (reasonRaw as any)
+    : "other";
+  const task = addTodo(conv, reason, summary);
+  saveConversation(conv);
+  return res.json({ ok: true, todo: task, conversation: conv });
+});
+
 app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), (req, res) => {
   const { convId, todoId } = req.params;
   const task = markTodoDone(convId, todoId);
@@ -5777,6 +5801,7 @@ app.listen(port, () => {
   console.log("   - POST   /conversations/:id/close");
   console.log("   - POST   /conversations/:id/send");
   console.log("   - GET    /todos");
+  console.log("   - POST   /todos");
   console.log("   - POST   /todos/:convId/:todoId/done");
   console.log("   - GET    /suppressions");
   console.log("   - POST   /suppressions");
