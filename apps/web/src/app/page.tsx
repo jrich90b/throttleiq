@@ -2295,9 +2295,11 @@ export default function Home() {
                           }`}
                         >
                           <div className="flex items-center justify-between gap-3">
-                            <div>
+                            <div className="min-w-0">
                               <div className="font-medium flex items-center gap-2">
-                                <span>{c.leadName && c.leadName.length > 0 ? c.leadName : c.leadKey}</span>
+                                <span className="truncate">
+                                  {c.leadName && c.leadName.length > 0 ? c.leadName : c.leadKey}
+                                </span>
                                 {c.contactPreference === "call_only" ? (
                                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
                                     Call Only
@@ -2308,11 +2310,11 @@ export default function Home() {
                                 ) : null}
                               </div>
                               {c.vehicleDescription ? (
-                                <div className="text-xs text-gray-500 mt-1">{c.vehicleDescription}</div>
+                                <div className="text-xs text-gray-500 mt-1 truncate">{c.vehicleDescription}</div>
                               ) : null}
                             </div>
 
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 shrink-0">
                               {c.mode === "human" ? <span title="Human override">👤</span> : null}
                               <button
                                 className={`text-xs px-2 py-1 rounded border ${
