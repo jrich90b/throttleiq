@@ -993,6 +993,7 @@ export default function Home() {
       key => !appointmentTypesList.some(row => row.key.trim().toLowerCase() === key.toLowerCase())
     );
   }, [appointmentTypesList]);
+  const canViewConversation = section === "inbox" || section === "todos" || section === "questions";
   const preferredOrder = useMemo(() => {
     const base = preferredOrderIds.length ? preferredOrderIds : salespeopleList.map(sp => sp.id);
     return [...base, ...salespeopleList.map(sp => sp.id).filter(id => !base.includes(id))];
@@ -2348,7 +2349,6 @@ export default function Home() {
                   <button
                     className="text-xs text-blue-600 mt-2 inline-block"
                     onClick={() => {
-                      setSection("inbox");
                       setSelectedId(t.convId);
                     }}
                   >
@@ -2422,7 +2422,6 @@ export default function Home() {
                   <button
                     className="text-xs text-blue-600 mt-2 inline-block"
                     onClick={() => {
-                      setSection("inbox");
                       setSelectedId(q.convId);
                     }}
                   >
@@ -4486,7 +4485,7 @@ export default function Home() {
           ) : (
             <div className="text-gray-500">Select a contact to view details.</div>
           )
-        ) : section !== "inbox" ? (
+        ) : !canViewConversation ? (
           <div className="text-gray-500">Select “Inbox” to view a conversation.</div>
         ) : !selectedId ? (
           <div className="text-gray-500">Select a conversation to view details.</div>
