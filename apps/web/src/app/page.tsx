@@ -915,8 +915,8 @@ export default function Home() {
   useEffect(() => {
     if (!listActionsOpenId) return;
     const onClick = (event: MouseEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (!target) return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
       if (target.closest("[data-actions-menu]") || target.closest("[data-actions-button]")) {
         return;
       }
@@ -2446,6 +2446,7 @@ export default function Home() {
                               e.stopPropagation();
                               setListActionsOpenId(prev => (prev === c.id ? null : c.id));
                             }}
+                            onMouseDown={e => e.stopPropagation()}
                           >
                             ⋯
                           </button>
@@ -2454,6 +2455,7 @@ export default function Home() {
                               className="absolute right-0 mt-2 w-40 border rounded bg-white shadow z-10"
                               data-actions-menu
                               onClick={e => e.stopPropagation()}
+                              onMouseDown={e => e.stopPropagation()}
                             >
                               <button
                                 className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
