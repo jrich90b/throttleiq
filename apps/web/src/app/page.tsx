@@ -211,6 +211,9 @@ export default function Home() {
   const [pendingSend, setPendingSend] = useState<{ body: string; draftId?: string } | null>(null);
   const [closeReason, setCloseReason] = useState("sold");
   const [listActionsOpenId, setListActionsOpenId] = useState<string | null>(null);
+  const [todoPromptOpen, setTodoPromptOpen] = useState(false);
+  const [todoPromptText, setTodoPromptText] = useState("");
+  const [todoPromptConvId, setTodoPromptConvId] = useState<string | null>(null);
   const sendBoxRef = useRef<HTMLTextAreaElement | null>(null);
   const streamRef = useRef<EventSource | null>(null);
   const lastStreamRefreshRef = useRef(0);
@@ -1396,15 +1399,25 @@ export default function Home() {
     await load();
   }
 
-  async function createManualTodoForId(convId: string) {
-    const summary = window.prompt("What should the salesperson do?");
-    if (!summary) return;
+  function openTodoPrompt(convId: string) {
+    setTodoPromptConvId(convId);
+    setTodoPromptText("");
+    setTodoPromptOpen(true);
+  }
+
+  async function submitTodoPrompt() {
+    if (!todoPromptConvId) return;
+    const summary = todoPromptText.trim();
+    if (!summary) {
+      window.alert("Please enter what the salesperson should do.");
+      return;
+    }
     const resp = await fetch("/api/todos/create", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        convId,
-        summary: summary.trim(),
+        convId: todoPromptConvId,
+        summary,
         reason: "other"
       })
     });
@@ -1413,6 +1426,9 @@ export default function Home() {
       window.alert(data?.error ?? "Failed to create to-do");
       return;
     }
+    setTodoPromptOpen(false);
+    setTodoPromptConvId(null);
+    setTodoPromptText("");
     await load();
   }
 
@@ -2457,15 +2473,15 @@ export default function Home() {
                               onClick={e => e.stopPropagation()}
                               onMouseDown={e => e.stopPropagation()}
                             >
-                              <button
-                                className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
-                                onClick={async () => {
-                                  setListActionsOpenId(null);
-                                  await createManualTodoForId(c.id);
-                                }}
-                              >
-                                Create to-do
-                              </button>
+                                    <button
+                                      className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
+                                      onClick={() => {
+                                        setListActionsOpenId(null);
+                                        openTodoPrompt(c.id);
+                                      }}
+                                    >
+                                      Create to-do
+                                    </button>
                               <button
                                 className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
                                 onClick={() => {
@@ -5051,6 +5067,42 @@ export default function Home() {
                       }}
                     >
                       Skip note
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {todoPromptOpen ? (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+                <div className="bg-white rounded-lg shadow-lg w-full max-w-md p-4">
+                  <div className="text-sm font-medium">Create to-do</div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    What should the salesperson do?
+                  </div>
+                  <textarea
+                    className="mt-3 w-full border rounded px-3 py-2 text-sm"
+                    rows={3}
+                    value={todoPromptText}
+                    onChange={e => setTodoPromptText(e.target.value)}
+                    placeholder="e.g., Call customer about trade appraisal"
+                  />
+                  <div className="mt-3 flex justify-end gap-2">
+                    <button
+                      className="px-3 py-2 border rounded text-sm"
+                      onClick={() => {
+                        setTodoPromptOpen(false);
+                        setTodoPromptConvId(null);
+                        setTodoPromptText("");
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="px-3 py-2 border rounded text-sm"
+                      onClick={submitTodoPrompt}
+                    >
+                      Create
                     </button>
                   </div>
                 </div>
