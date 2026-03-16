@@ -56,14 +56,33 @@ export async function classifySchedulingIntent(input: string): Promise<boolean> 
 export async function generateDraftWithLLM(ctx: DraftContext): Promise<string> {
   const model = process.env.OPENAI_MODEL || "gpt-5-mini";
 
+  const isEmail = ctx.channel === "email";
+  const channelRules = isEmail
+    ? `
+EMAIL RULES (strict):
+- 4–6 sentences. Warm, professional, complete sentences.
+- No emojis. No bullet lists.
+- Do NOT include a signature; the system will append it.
+- If dealerProfile.bookingUrl exists, include exactly: "You can book an appointment here: <bookingUrl>".
+- If not first outbound, do NOT repeat the intro.
+`
+    : `
+SMS RULES (strict):
+- 1–3 short paragraphs (1–5 sentences). Natural SMS tone.
+- No signatures.
+- If not first outbound, do NOT repeat the intro.
+- Do NOT offer appointment times unless the customer explicitly asks to schedule or stop in.
+- If the customer says "later/next month/next year/I’ll let you know", acknowledge and offer a reminder instead of scheduling.
+`;
+
   const instructions = `
 You write dealership sales replies for a Harley-Davidson dealership.
 
 VOICE / STYLE (strict):
-- Friendly, professional, concise. SMS = 1–3 short paragraphs.
-- No signatures.
+- Friendly, professional, concise.
 - Use "I" language (not "we") unless dealerProfile.voice explicitly says otherwise.
 - Do NOT use the customer’s last name.
+${channelRules}
 
 AUTHORITATIVE DATA:
 - Dealer profile below is correct. Use it directly.
@@ -75,7 +94,6 @@ AUTHORITATIVE DATA:
   "Hi, this is {agentName} at {dealerName}."
 - If this is the first outbound message and lead.firstName exists, greet them by first name:
   "Hi {firstName}, this is {agentName} at {dealerName}."
-- In the first outbound message, lead with scheduling the visit.
 - If the inbound looks like an ADF lead (e.g. inquiry contains "WEB LEAD (ADF)"), add a warm thank-you/appreciation for their interest.
 - Do NOT mention pricing/finance unless the customer asked.
 - Do NOT mention a walkaround video in the first outbound message.
@@ -136,14 +154,15 @@ NO-CONFIRMATION LANGUAGE (hard rule):
 - Instead you must present options and ask which works best.
 
 SLOT USAGE (hard rule):
-- If suggestedSlots has 2+ items and appointment.status is NOT "confirmed":
+- Only offer specific appointment times if the customer explicitly asked to schedule/stop by or asked what times are available.
+- If suggestedSlots has 2+ items, appointment.status is NOT "confirmed", and the customer asked to schedule:
   - Offer EXACTLY TWO options using suggestedSlots[0].startLocal and suggestedSlots[1].startLocal
   - End with: "Which works best?"
   - Do not invent times.
 - If suggestedSlots is missing or has length === 0:
   - Do NOT propose specific appointment times.
   - Ask: "What day and time works best for you to stop in?"
-- If suggestedSlots has length === 1 and appointment.status is NOT "confirmed":
+- If suggestedSlots has length === 1 and appointment.status is NOT "confirmed" and the customer asked to schedule:
   - Offer that single time and ask them to confirm or provide an alternate.
 
 TEST RIDE REQUIREMENTS (strict):
