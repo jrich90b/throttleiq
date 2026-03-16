@@ -1986,16 +1986,16 @@ export default function Home() {
   }
 
   return (
-    <main className="h-screen flex bg-white">
+    <main className="h-screen flex bg-[var(--background)] text-[var(--foreground)]">
       {saveToast ? (
         <div className="fixed top-4 right-4 z-[60] px-3 py-2 rounded border bg-white text-sm shadow">
           {saveToast}
         </div>
       ) : null}
-      <aside className="w-16 border-r flex flex-col items-center py-4 gap-4 cursor-pointer relative">
+      <aside className="w-16 border-r border-[var(--palette-graphite)] bg-[var(--palette-graphite)] text-white flex flex-col items-center py-4 gap-4 cursor-pointer relative">
         <div className="text-lg font-semibold">TI</div>
         <button
-          className={`w-10 h-10 rounded flex items-center justify-center border ${section === "inbox" ? "bg-gray-100" : ""}`}
+          className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "inbox" ? "bg-white/10" : "hover:bg-white/5"}`}
           title="Inbox"
           onClick={() => {
             setSection("inbox");
@@ -2008,7 +2008,7 @@ export default function Home() {
         </button>
         {(authUser?.role === "manager" || authUser?.permissions?.canAccessTodos) ? (
           <button
-            className={`relative w-10 h-10 rounded flex items-center justify-center border ${section === "todos" ? "bg-gray-100" : ""}`}
+            className={`relative w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "todos" ? "bg-white/10" : "hover:bg-white/5"}`}
             title="To-Dos"
             onClick={() => setSection("todos")}
           >
@@ -2021,7 +2021,7 @@ export default function Home() {
           </button>
         ) : null}
         <button
-          className={`w-10 h-10 rounded flex items-center justify-center border ${section === "contacts" ? "bg-gray-100" : ""}`}
+          className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "contacts" ? "bg-white/10" : "hover:bg-white/5"}`}
           title="Contacts"
           onClick={() => setSection("contacts")}
         >
@@ -2029,7 +2029,7 @@ export default function Home() {
         </button>
         {(authUser?.role === "manager" || authUser?.permissions?.canAccessSuppressions) ? (
           <button
-            className={`w-10 h-10 rounded flex items-center justify-center border ${section === "suppressions" ? "bg-gray-100" : ""}`}
+            className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "suppressions" ? "bg-white/10" : "hover:bg-white/5"}`}
             title="Suppressions"
             onClick={() => setSection("suppressions")}
           >
@@ -2038,7 +2038,7 @@ export default function Home() {
         ) : null}
         {(authUser?.role === "manager" || authUser?.permissions?.canEditAppointments) ? (
           <button
-            className={`w-10 h-10 rounded flex items-center justify-center border ${section === "calendar" ? "bg-gray-100" : ""}`}
+            className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "calendar" ? "bg-white/10" : "hover:bg-white/5"}`}
             title="Calendar"
             onClick={() => setSection("calendar")}
           >
@@ -2046,14 +2046,14 @@ export default function Home() {
           </button>
         ) : null}
         <button
-          className={`w-10 h-10 rounded flex items-center justify-center border ${section === "inventory" ? "bg-gray-100" : ""}`}
+          className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "inventory" ? "bg-white/10" : "hover:bg-white/5"}`}
           title="Inventory"
           onClick={() => setSection("inventory")}
         >
           📦
         </button>
         <button
-          className={`relative w-10 h-10 rounded flex items-center justify-center border ${section === "questions" ? "bg-gray-100" : ""}`}
+          className={`relative w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "questions" ? "bg-white/10" : "hover:bg-white/5"}`}
           title="Questions"
           onClick={() => setSection("questions")}
         >
@@ -2065,11 +2065,11 @@ export default function Home() {
           ) : null}
         </button>
         <div className="mt-auto flex flex-col items-center gap-3">
-          <div className="text-xs text-gray-500">{loading ? "…" : ""}</div>
+          <div className="text-xs text-white/60">{loading ? "…" : ""}</div>
           {isManager ? (
             <div className="relative">
               <button
-                className="w-10 h-10 rounded flex items-center justify-center border"
+                className="w-10 h-10 rounded flex items-center justify-center border border-white/20 hover:bg-white/5"
                 title="Settings"
                 onClick={() => setSettingsOpen(v => !v)}
               >
