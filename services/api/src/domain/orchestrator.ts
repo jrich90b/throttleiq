@@ -686,8 +686,14 @@ export async function orchestrateInbound(
 
   if (useLLM) {
     try {
-      const today = new Date().toLocaleDateString("en-US", { weekday: "long" });
       const dealerProfile = await getDealerProfile();
+      const cfg = await getSchedulerConfig();
+      const tz = cfg.timezone ?? "America/New_York";
+      const today = new Date().toLocaleDateString("en-US", { weekday: "long", timeZone: tz });
+      const todayKey = dayKey(new Date(), tz);
+      const todayHours = cfg.businessHours?.[todayKey];
+      const dealerClosedToday = !todayHours?.open || !todayHours?.close;
+      const dealerHoursToday = todayHours?.open && todayHours?.close ? `${todayHours.open}–${todayHours.close}` : null;
       const appointment = ctx?.appointment ?? null;
       const followUp = ctx?.followUp ?? null;
       let listPrice: number | null = null;
@@ -1170,6 +1176,9 @@ export async function orchestrateInbound(
         inventoryStatus,
         inventoryNote,
         dealerProfile,
+        dealerTimeZone: tz,
+        dealerClosedToday,
+        dealerHoursToday,
         today,
         appointment,
         followUp,

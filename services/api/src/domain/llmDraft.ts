@@ -13,6 +13,9 @@ export type DraftContext = {
   lead?: Conversation["lead"];
   dealerProfile?: any;
   today?: string;
+  dealerTimeZone?: string;
+  dealerClosedToday?: boolean;
+  dealerHoursToday?: string | null;
   appointment?: any;
   followUp?: any;
   suggestedSlots?: any[];
@@ -73,6 +76,8 @@ SMS RULES (strict):
 - If not first outbound, do NOT repeat the intro.
 - Do NOT offer appointment times unless the customer explicitly asks to schedule or stop in.
 - If the customer says "later/next month/next year/I’ll let you know", acknowledge and offer a reminder instead of scheduling.
+- If the customer asks for a phone call today/now and dealerClosedToday is true, say we’re closed today and someone will call tomorrow. Do NOT offer appointment times.
+- If the customer asks for a phone call today/now and dealerClosedToday is false, acknowledge and confirm someone can call today.
 `;
 
   const instructions = `
@@ -223,6 +228,11 @@ FOLLOW-UP MODE (strict):
   - Do NOT propose appointment time options.
   - Keep it short: status + notify/next steps only.
 
+CALL REQUESTS (strict):
+- If the customer asks for a phone call and the dealer is closed today, say you’re closed today and will have someone call tomorrow.
+- If open today, say you can have someone call today.
+- Do NOT offer appointment times in a call-request reply unless the customer explicitly asked to schedule.
+
 COMPARING RESPONSE (strict):
 - If the customer says they are comparing bikes:
   - Acknowledge and offer help comparing.
@@ -337,6 +347,9 @@ Pricing objections:
 First outbound message: ${ctx.history.some(h => h.direction === "out") ? "no" : "yes"}
 
 Today is: ${ctx.today ?? "unknown"}
+Dealer timezone: ${ctx.dealerTimeZone ?? "unknown"}
+Dealer closed today: ${ctx.dealerClosedToday ? "yes" : "no"}
+Dealer hours today: ${ctx.dealerHoursToday ?? "unknown"}
 
 Inventory check:
 - stockId: ${ctx.stockId ?? "none"}
