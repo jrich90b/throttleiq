@@ -2342,7 +2342,7 @@ export default function Home() {
                     {t.reason} • {new Date(t.createdAt).toLocaleString()}
                   </div>
                   <div className="text-sm text-gray-700 mt-2 line-clamp-3">{t.summary}</div>
-                  <div className="text-sm font-medium text-gray-800 mt-2">
+                  <div className="text-sm font-semibold text-red-600 mt-2">
                     Action: {todoActionLabel(t)}
                   </div>
                   <button
