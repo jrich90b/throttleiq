@@ -2125,7 +2125,9 @@ export default function Home() {
         </div>
       </aside>
 
-      <section className={`w-96 border-r p-4 overflow-y-auto ${section === "calendar" ? "hidden" : ""}`}>
+      <section
+        className={`w-96 border-r border-[var(--border)] bg-[var(--surface)] p-4 overflow-y-auto shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${section === "calendar" ? "hidden" : ""}`}
+      >
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-xl font-semibold">
@@ -2163,17 +2165,17 @@ export default function Home() {
                           : `${suppressions.length} suppressed`}
             </p>
           </div>
-          <div className="border rounded-lg p-2">
-            <div className="text-[10px] text-gray-500">System Mode</div>
+          <div className="border border-[var(--border)] rounded-lg p-2 bg-[var(--surface-2)]">
+            <div className="text-[10px] text-[var(--palette-graphite)]">System Mode</div>
             <div className="mt-1 flex gap-1">
                 <button
-                  className={`px-2 py-1 border rounded text-xs cursor-pointer ${mode === "suggest" ? "font-semibold" : ""}`}
+                  className={`px-2 py-1 border border-[var(--border)] rounded text-xs cursor-pointer ${mode === "suggest" ? "font-semibold bg-[var(--accent)] text-white border-[var(--accent)]" : "hover:bg-white"}`}
                 onClick={() => updateMode("suggest")}
               >
                 Suggest
               </button>
                 <button
-                  className={`px-2 py-1 border rounded text-xs cursor-pointer ${mode === "autopilot" ? "font-semibold" : ""}`}
+                  className={`px-2 py-1 border border-[var(--border)] rounded text-xs cursor-pointer ${mode === "autopilot" ? "font-semibold bg-[var(--accent)] text-white border-[var(--accent)]" : "hover:bg-white"}`}
                 onClick={() => updateMode("autopilot")}
                 title="Autopilot will auto-reply on inbound SMS"
               >
@@ -2206,19 +2208,19 @@ export default function Home() {
             <div className="mt-4 flex items-center justify-between">
               <div className="flex gap-2">
                 <button
-                  className={`px-3 py-2 border rounded cursor-pointer ${view === "inbox" ? "font-semibold" : ""}`}
+                  className={`px-3 py-2 border border-[var(--border)] rounded cursor-pointer ${view === "inbox" ? "font-semibold bg-[var(--accent)] text-white border-[var(--accent)]" : "hover:bg-[var(--surface-2)]"}`}
                   onClick={() => setView("inbox")}
                 >
                   Inbox
                 </button>
                 <button
-                  className={`px-3 py-2 border rounded cursor-pointer ${view === "archive" ? "font-semibold" : ""}`}
+                  className={`px-3 py-2 border border-[var(--border)] rounded cursor-pointer ${view === "archive" ? "font-semibold bg-[var(--accent)] text-white border-[var(--accent)]" : "hover:bg-[var(--surface-2)]"}`}
                   onClick={() => setView("archive")}
                 >
                   Archive
                 </button>
               </div>
-              <div className="text-xs text-gray-500">
+              <div className="text-xs text-[var(--palette-graphite)]">
                 {view === "inbox"
                   ? `Open: ${visibleConversations.length}`
                   : `Closed: ${visibleConversations.length}`}
@@ -2228,16 +2230,16 @@ export default function Home() {
             <div className="mt-3 space-y-3">
               {groupedConversations.map(group => (
                 <div key={group.label}>
-                  <div className="px-1 pb-1 text-xs font-semibold text-blue-600 border-b">
+                  <div className="px-1 pb-1 text-xs font-semibold text-[var(--accent)] border-b border-[var(--border)]">
                     {group.label}
                   </div>
-                  <div className="mt-2 border rounded-lg divide-y">
+                  <div className="mt-2 border border-[var(--border)] rounded-lg divide-y bg-[var(--surface)]">
                     {group.items.map(c => (
                       <div key={c.id} className="flex items-stretch">
                         <button
                           onClick={() => setSelectedId(c.id)}
-                          className={`block w-full text-left p-4 hover:bg-gray-50 ${
-                            selectedId === c.id ? "bg-gray-50" : ""
+                          className={`block w-full text-left p-4 hover:bg-[var(--surface-2)] ${
+                            selectedId === c.id ? "bg-[var(--surface-2)]" : ""
                           }`}
                         >
                           <div className="flex items-center justify-between gap-3">
@@ -2606,7 +2608,11 @@ export default function Home() {
         ) : null}
       </section>
 
-      <section className={`flex-1 ${section === "calendar" ? "p-2 overflow-hidden" : "p-6 overflow-y-auto"}`}>
+      <section
+        className={`flex-1 bg-[var(--surface)] shadow-[inset_0_1px_0_rgba(255,255,255,0.6)] ${
+          section === "calendar" ? "p-2 overflow-hidden" : "p-6 overflow-y-auto"
+        }`}
+      >
         {section === "calendar" ? (
           <div className="flex flex-col h-full">
             <div className="flex items-center justify-between gap-4">
