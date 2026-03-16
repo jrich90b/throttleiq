@@ -2411,43 +2411,6 @@ export default function Home() {
                               </button>
                               {c.pendingDraft ? <span className="text-xs px-2 py-1 rounded border">Draft</span> : null}
                               <span className="text-xs px-2 py-1 rounded border">{c.messageCount}</span>
-                              <div className="relative">
-                                <button
-                                  className="text-xs px-2 py-1 rounded border"
-                                  aria-label="Conversation actions"
-                                  onClick={e => {
-                                    e.stopPropagation();
-                                    setListActionsOpenId(prev => (prev === c.id ? null : c.id));
-                                  }}
-                                >
-                                  ⋯
-                                </button>
-                                {listActionsOpenId === c.id ? (
-                                  <div
-                                    className="absolute right-0 mt-2 w-40 border rounded bg-white shadow z-10"
-                                    onClick={e => e.stopPropagation()}
-                                  >
-                                    <button
-                                      className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
-                                      onClick={async () => {
-                                        setListActionsOpenId(null);
-                                        await createManualTodoForId(c.id);
-                                      }}
-                                    >
-                                      Create to-do
-                                    </button>
-                                    <button
-                                      className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-                                      onClick={() => {
-                                        setListActionsOpenId(null);
-                                        void deleteConvFromList(c.id);
-                                      }}
-                                    >
-                                      Delete
-                                    </button>
-                                  </div>
-                                ) : null}
-                              </div>
                             </div>
                           </div>
 
@@ -2467,6 +2430,43 @@ export default function Home() {
                               : `updated: ${new Date(c.updatedAt).toLocaleString()}`}
                           </div>
                         </button>
+                        <div className="relative border-l">
+                          <button
+                            className="px-3 h-full text-sm hover:bg-gray-50"
+                            aria-label="Conversation actions"
+                            onClick={e => {
+                              e.stopPropagation();
+                              setListActionsOpenId(prev => (prev === c.id ? null : c.id));
+                            }}
+                          >
+                            ⋯
+                          </button>
+                          {listActionsOpenId === c.id ? (
+                            <div
+                              className="absolute right-0 mt-2 w-40 border rounded bg-white shadow z-10"
+                              onClick={e => e.stopPropagation()}
+                            >
+                              <button
+                                className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
+                                onClick={async () => {
+                                  setListActionsOpenId(null);
+                                  await createManualTodoForId(c.id);
+                                }}
+                              >
+                                Create to-do
+                              </button>
+                              <button
+                                className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                                onClick={() => {
+                                  setListActionsOpenId(null);
+                                  void deleteConvFromList(c.id);
+                                }}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
                       </div>
                     ))}
                   </div>
