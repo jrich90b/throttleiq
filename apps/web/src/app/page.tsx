@@ -2455,7 +2455,7 @@ export default function Home() {
                         </button>
                         <div className="relative border-l shrink-0">
                           <button
-                            className="px-3 h-full text-sm hover:bg-gray-50"
+                            className="px-3 h-full text-lg leading-none text-gray-600 hover:bg-gray-50 hover:text-gray-900"
                             aria-label="Conversation actions"
                             data-actions-button
                             onClick={e => {
@@ -2464,7 +2464,7 @@ export default function Home() {
                             }}
                             onMouseDown={e => e.stopPropagation()}
                           >
-                            ⋯
+                            ...
                           </button>
                           {listActionsOpenId === c.id ? (
                             <div
