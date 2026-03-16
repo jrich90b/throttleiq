@@ -40,6 +40,74 @@ import {
   localPartsToUtcDate
 } from "../domain/schedulerEngine.js";
 import { getDealerProfile } from "../domain/dealerProfile.js";
+
+function inferAppointmentTypeFromConv(conv: any): string | null {
+  const bucket = conv?.classification?.bucket ?? "";
+  const cta = conv?.classification?.cta ?? "";
+  if (bucket === "test_ride" || cta === "schedule_test_ride") return "test_ride";
+  if (bucket === "trade_in_sell" || cta === "value_my_trade" || cta === "trade_in_value") return "trade_appraisal";
+  if (bucket === "finance_prequal" || /prequal|credit|finance|hdfs/i.test(cta)) return "finance_discussion";
+  return "inventory_visit";
+}
+
+function buildBookingUrlForLead(baseUrl: string | undefined | null, conv: any): string | null {
+  const raw = (baseUrl ?? "").trim();
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    const type = inferAppointmentTypeFromConv(conv);
+    const firstName = conv?.lead?.firstName ?? "";
+    const lastName = conv?.lead?.lastName ?? "";
+    const email = conv?.lead?.email ?? "";
+    const phone = conv?.lead?.phone ?? "";
+    const leadKey = conv?.leadKey ?? "";
+    if (type) url.searchParams.set("type", type);
+    if (firstName) url.searchParams.set("firstName", firstName);
+    if (lastName) url.searchParams.set("lastName", lastName);
+    if (email) url.searchParams.set("email", email);
+    if (phone) url.searchParams.set("phone", phone);
+    if (leadKey) url.searchParams.set("leadKey", leadKey);
+    return url.toString();
+  } catch {
+    return raw;
+  }
+}
+
+function formatModelLabel(year?: string | null, model?: string | null): string | null {
+  if (!model) return null;
+  const clean = String(model).trim();
+  if (!clean || /full line|other/i.test(clean)) return null;
+  return year ? `${year} ${clean}` : clean;
+}
+
+function buildInitialEmailDraft(conv: any, dealerProfile: any): string {
+  const rawName = conv?.lead?.firstName?.trim() || conv?.lead?.name?.trim() || "there";
+  const name = rawName.split(" ")[0] || "there";
+  const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+  const agentName = dealerProfile?.agentName ?? "our team";
+  const bookingUrl = buildBookingUrlForLead(dealerProfile?.bookingUrl, conv);
+  const model = formatModelLabel(conv?.lead?.vehicle?.year ?? conv?.lead?.year, conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description);
+  const isTestRide =
+    conv?.classification?.bucket === "test_ride" || conv?.classification?.cta === "schedule_test_ride";
+  const thanks = isTestRide
+    ? model
+      ? `Thanks for your interest in a test ride on the ${model}.`
+      : "Thanks for your interest in a test ride."
+    : model
+      ? `Thanks for your interest in the ${model}.`
+      : "Thanks for your interest.";
+  const intro = `This is ${agentName} at ${dealerName}.`;
+  const help = "I’m happy to help with pricing, options, and availability.";
+  const visit = model
+    ? "If you want to stop in to check out the bike and go over options, you can book an appointment below."
+    : "If you want to stop in to go over options, you can book an appointment below.";
+  const bookingLine = bookingUrl
+    ? `You can book an appointment here: ${bookingUrl}`
+    : "Just reply with a day and time that works for you.";
+  const extra = "If a walkaround or extra photos would help, just let me know.";
+
+  return `Hi ${name},\n\n${thanks} ${intro} ${help} ${visit}\n\n${bookingLine}\n\n${extra}`;
+}
 import { getSystemMode } from "../domain/settingsStore.js";
 import { sendEmail } from "../domain/emailSender.js";
 import { upsertContact } from "../domain/contactsStore.js";
@@ -805,7 +873,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     incrementPricingAttempt(conv);
   }
 
-  conv.emailDraft = result.draft;
+  if (isInitialAdf) {
+    const profile = await getDealerProfile();
+    conv.emailDraft = buildInitialEmailDraft(conv, profile);
+  } else {
+    conv.emailDraft = result.draft;
+  }
 
   if (result.requestedTime && !conv.appointment?.bookedEventId) {
     try {
