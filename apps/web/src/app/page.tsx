@@ -72,6 +72,7 @@ type ConversationListItem = {
   status?: "open" | "closed";
   closedAt?: string | null;
   closedReason?: string | null;
+  contactPreference?: "call_only";
   leadName?: string | null;
   vehicleDescription?: string | null;
   updatedAt: string;
@@ -100,6 +101,7 @@ type ConversationDetail = {
   status?: "open" | "closed";
   closedAt?: string | null;
   closedReason?: string | null;
+  contactPreference?: "call_only";
   lead?: { leadRef?: string };
   messages: Message[];
 };
@@ -1176,6 +1178,9 @@ export default function Home() {
 
   async function send() {
     if (!selectedConv) return;
+    if (messageFilter === "sms" && selectedConv.contactPreference === "call_only") {
+      return;
+    }
     const useEmailDraft = messageFilter === "email" && !!emailDraft;
     const effectiveDraft = useEmailDraft ? null : pendingDraft;
     const bodySource =
@@ -1201,6 +1206,24 @@ export default function Home() {
       return;
     }
     await doSend(draftId ? { body, draftId } : { body });
+  }
+
+  async function clearContactPreference() {
+    if (!selectedConv) return;
+    const ok = window.confirm(
+      "This lead requested call only. Allow SMS for this lead?"
+    );
+    if (!ok) return;
+    await fetch(
+      `/api/conversations/${encodeURIComponent(selectedConv.id)}/contact-preference`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contactPreference: null })
+      }
+    );
+    await loadConversation(selectedConv.id);
+    await load();
   }
 
   async function closeConv() {
@@ -4433,7 +4456,14 @@ export default function Home() {
           <div>
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-2xl font-semibold">{selectedConv.leadKey}</div>
+                <div className="text-2xl font-semibold flex items-center gap-2">
+                  <span>{selectedConv.leadKey}</span>
+                  {selectedConv.contactPreference === "call_only" ? (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
+                      Call Only
+                    </span>
+                  ) : null}
+                </div>
                 {selectedConv.lead?.leadRef ? (
                   <div className="text-xs text-gray-500 mt-1">Lead Ref: {selectedConv.lead.leadRef}</div>
                 ) : null}
@@ -4495,6 +4525,17 @@ export default function Home() {
                   Email
                 </button>
               </div>
+              {messageFilter === "sms" && selectedConv.contactPreference === "call_only" ? (
+                <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
+                  Call only — SMS disabled.
+                  <button
+                    className="ml-2 underline"
+                    onClick={clearContactPreference}
+                  >
+                    Allow SMS
+                  </button>
+                </div>
+              ) : null}
               {selectedConv.messages
                 .filter(m => m.draftStatus !== "stale")
                 .filter(m => {
@@ -4572,7 +4613,11 @@ export default function Home() {
                 className="flex-1 border rounded px-3 py-3.5 min-h-[60px] resize-none leading-7 overflow-hidden box-border"
                 placeholder={pendingDraft ? "Edit draft then Send…" : "Type a message…"}
               />
-              <button className="px-4 py-2 border rounded" onClick={send}>
+              <button
+                className={`px-4 py-2 border rounded ${messageFilter === "sms" && selectedConv.contactPreference === "call_only" ? "opacity-50 cursor-not-allowed" : ""}`}
+                onClick={send}
+                disabled={messageFilter === "sms" && selectedConv.contactPreference === "call_only"}
+              >
                 Send
               </button>
             </div>

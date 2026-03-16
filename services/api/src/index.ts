@@ -37,7 +37,13 @@ import {
   formatSlotLocal,
   localPartsToUtcDate
 } from "./domain/schedulerEngine.js";
-import { extractImageDate, findInventoryMatches, findInventoryPrice, getInventoryFeed } from "./domain/inventoryFeed.js";
+import {
+  extractImageDate,
+  findInventoryMatches,
+  findInventoryPrice,
+  getInventoryFeed,
+  hasInventoryForModelYear
+} from "./domain/inventoryFeed.js";
 import { listInventoryNotes, setInventoryNote } from "./domain/inventoryNotes.js";
 import { sendEmail } from "./domain/emailSender.js";
 
@@ -74,6 +80,7 @@ import {
   getPricingAttempts,
   closeConversation,
   setConversationMode,
+  setContactPreference,
   setCrmLastLoggedAt,
   flushConversationStore,
   reloadConversationStore,
@@ -990,6 +997,90 @@ function formatModelLabelForFollowUp(_year?: string | null, model?: string | nul
   return /^the\s/i.test(base) ? base : `the ${base}`;
 }
 
+async function canOfferTestRideForLead(lead: any, dealerProfile: any): Promise<boolean> {
+  const hasLicense = lead?.hasMotoLicense;
+  if (hasLicense === false) return false;
+  if (!isTestRideSeason(dealerProfile, new Date())) return false;
+  const model = lead?.vehicle?.model ?? lead?.vehicle?.description ?? null;
+  if (!model || /full line|other/i.test(String(model))) return false;
+  const year = lead?.vehicle?.year ?? null;
+  return hasInventoryForModelYear({ model, year, yearDelta: 1 });
+}
+
+const HARLEY_MODELS = [
+  "CVO Road Glide ST",
+  "CVO Street Glide ST",
+  "CVO Street Glide Limited",
+  "CVO Street Glide 3",
+  "CVO Street Glide 3 Limited",
+  "Road Glide 3",
+  "Road Glide III",
+  "Road Glide Limited",
+  "Street Glide Limited",
+  "Street Glide Ultra",
+  "Street Glide Solo",
+  "Road Glide Solo",
+  "Heritage",
+  "Switchback",
+  "Seventy-Two",
+  "72",
+  "Iron 1200",
+  "Sportster S",
+  "Nightster S",
+  "Pan Am",
+  "Pan America ST",
+  "Pan Am ST",
+  "Heritage Classic Liberty Edition",
+  "Heritage Liberty",
+  "Heritage Classic Liberty",
+  "Street Glide Liberty",
+  "Street Glide Liberty Edition",
+  "Street Glide 3",
+  "Pan America Special",
+  "Pan America Limited",
+  "CVO Road Glide",
+  "CVO Street Glide",
+  "Road Glide ST",
+  "Street Glide ST",
+  "Road Glide",
+  "Street Glide",
+  "Road King",
+  "Heritage Classic",
+  "Fat Boy",
+  "Low Rider ST",
+  "Low Rider S",
+  "Low Rider",
+  "Sportster",
+  "Street Bob",
+  "Breakout",
+  "Softail Standard",
+  "Nightster",
+  "Pan America",
+  "Electra Glide",
+  "Ultra Limited",
+  "Tri Glide",
+  "Freewheeler",
+  "Forty-Eight",
+  "Iron 883",
+  "Fat Bob",
+  "Softail"
+];
+
+async function inferModelsFromText(text: string): Promise<string[]> {
+  const t = text.toLowerCase();
+  let candidates: string[] = [];
+  try {
+    const items = await getInventoryFeed();
+    candidates = items.map(i => i.model).filter(Boolean) as string[];
+  } catch {
+    candidates = [];
+  }
+  candidates = Array.from(new Set([...candidates, ...HARLEY_MODELS]));
+  candidates.sort((a, b) => b.length - a.length);
+  const matches = candidates.filter(m => t.includes(m.toLowerCase())).map(m => m.trim());
+  return Array.from(new Set(matches));
+}
+
 function pickBestMatch(
   matches: Array<{ images?: string[]; color?: string }>,
   leadColor?: string | null
@@ -1053,6 +1144,11 @@ async function buildLateFollowUp(
       : imagePick?.color ?? null;
   const hasRecentInventory = imagePick ? isRecent(imagePick.date, 45) : false;
   const testRideOk = isTestRideSeason(dealerProfile, new Date());
+  const canTestRide =
+    testRideOk &&
+    !!model &&
+    !/full line|other/i.test(model) &&
+    (await hasInventoryForModelYear({ model, year, yearDelta: 1 }));
 
   if (stepIndex === 10) {
     if (!hasMatch && !testRideOk) {
@@ -1098,7 +1194,7 @@ async function buildLateFollowUp(
         mediaUrls: [imagePick.url]
       };
     }
-    if (testRideOk && hasMatch) {
+    if (canTestRide) {
       return {
         body: `${greeting}If you want, we can set up a test ride for a ${label}. What day/time works best?`
       };
@@ -1119,7 +1215,7 @@ async function buildLateFollowUp(
         body: `${greeting}Should I keep this open or close it out? If you’re still looking, I’m happy to help.`
       };
     }
-    if (testRideOk && hasMatch) {
+    if (canTestRide) {
       return {
         body: `${greeting}We’re offering test rides this time of year. Want me to reserve a time for you?`
       };
@@ -1164,8 +1260,7 @@ async function buildLongTermFollowUp(
       !imagePick?.color)
       ? leadColor
       : imagePick?.color ?? null;
-  const hasLicense = lead?.hasMotoLicense;
-  const canTestRide = hasLicense !== false && isTestRideSeason(dealerProfile, new Date());
+  const canTestRide = await canOfferTestRideForLead(lead, dealerProfile);
 
   if (imagePick?.url) {
     const colorLabel = colorLabelRaw ? colorLabelRaw.charAt(0).toUpperCase() + colorLabelRaw.slice(1) : null;
@@ -1722,9 +1817,8 @@ async function processDueFollowUps() {
   const now = new Date();
   const convs = getAllConversations();
   const todoConvIds = new Set(listOpenTodos().map(t => t.convId));
-  const canTestRideNow = (conv: any) => {
-    const hasLicense = conv?.lead?.hasMotoLicense;
-    return hasLicense !== false && isTestRideSeason(dealerProfile, new Date());
+  const canTestRideNow = async (conv: any) => {
+    return canOfferTestRideForLead(conv?.lead, dealerProfile);
   };
 
   const getLastInbound = (conv: any) =>
@@ -1862,6 +1956,7 @@ async function processDueFollowUps() {
     if (conv.followUp?.mode === "holding_inventory") continue;
     if (conv.followUp?.mode === "manual_handoff") continue;
 
+    const canTestRideFlag = await canTestRideNow(conv);
     let message = FOLLOW_UP_MESSAGES[cadence.stepIndex] ?? FOLLOW_UP_MESSAGES[FOLLOW_UP_MESSAGES.length - 1];
     let mediaUrls: string[] | undefined;
     if (cadence.kind === "long_term") {
@@ -1881,8 +1976,7 @@ async function processDueFollowUps() {
         message = FOLLOW_UP_MESSAGES[1];
       }
     } else if (cadence.stepIndex === 2) {
-      const canTestRide = canTestRideNow(conv);
-      if (canTestRide) {
+      if (canTestRideFlag) {
         message = "If you’d like to set up a test ride, I can reserve a time. What day/time works best?";
       } else {
         message = FOLLOW_UP_MESSAGES[2];
@@ -1917,7 +2011,7 @@ async function processDueFollowUps() {
           label,
           bookingLine,
           dealerName: dealerProfile?.dealerName ?? "American Harley-Davidson",
-          canTestRide: canTestRideNow(conv)
+          canTestRide: canTestRideFlag
         });
       }
     }
@@ -2930,6 +3024,22 @@ app.post("/conversations/:id/mode", requirePermission("canToggleHumanOverride"),
   return res.json({ ok: true, conversation: conv });
 });
 
+app.post("/conversations/:id/contact-preference", (req, res) => {
+  const conv = getConversation(req.params.id);
+  if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+  const raw = req.body?.contactPreference;
+  const pref = raw === null || raw === undefined ? "" : String(raw).trim();
+  if (!pref) {
+    setContactPreference(conv, null);
+    return res.json({ ok: true, conversation: conv });
+  }
+  if (pref !== "call_only") {
+    return res.status(400).json({ ok: false, error: "Invalid contactPreference" });
+  }
+  setContactPreference(conv, "call_only");
+  return res.json({ ok: true, conversation: conv });
+});
+
 app.post("/conversations/:id/close", (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
@@ -3222,6 +3332,13 @@ app.post("/conversations/:id/send", async (req, res) => {
     !!emailTo &&
     (channel === "email" || rawTo.includes("@") || conv.classification?.channel === "email");
   const emailOptInOk = hasEmailOptIn(conv.lead);
+  if (!wantsEmail && conv.contactPreference === "call_only") {
+    return res.status(400).json({
+      ok: false,
+      error: "call_only",
+      conversation: conv
+    });
+  }
   const digits = rawTo.replace(/\D/g, "");
   const to =
     rawTo.startsWith("+")
@@ -4259,6 +4376,50 @@ if (authToken && signature) {
       (event.body ?? "").trim()
     );
   const textLower = String(event.body ?? "").toLowerCase();
+  const metaPromoSource = /meta promo offer/i.test(conv.lead?.source ?? "");
+  const currentModel = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "";
+  const unknownModel = !currentModel || /other|full line/i.test(currentModel);
+  if (metaPromoSource && unknownModel) {
+    const foundModels = await inferModelsFromText(String(event.body ?? ""));
+    if (foundModels.length === 1) {
+      const foundModel = foundModels[0];
+      const yearMatch = textLower.match(/\b(20\d{2}|19\d{2})\b/);
+      const yearFound = yearMatch?.[1];
+      conv.lead = conv.lead ?? {};
+      conv.lead.vehicle = conv.lead.vehicle ?? {};
+      if (yearFound) conv.lead.vehicle.year = yearFound;
+      conv.lead.vehicle.model = foundModel;
+      if (!conv.lead.vehicle.description) {
+        conv.lead.vehicle.description = foundModel;
+      }
+      saveConversation(conv);
+    } else if (foundModels.length > 1) {
+      conv.lead = conv.lead ?? {};
+      conv.lead.vehicle = conv.lead.vehicle ?? {};
+      conv.lead.vehicle.modelOptions = foundModels;
+      saveConversation(conv);
+      const dealerProfile = await getDealerProfile();
+      const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+      const agentName = dealerProfile?.agentName ?? "Brooke";
+      const firstName = conv.lead?.firstName ?? "";
+      const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
+      const replyRaw =
+        `${greeting}thanks for your H‑D Meta promo offer request. ` +
+        `This is ${agentName} at ${dealerName}. ` +
+        `Are you leaning more toward ${foundModels.join(" or ")}?`;
+      const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
+      if (webhookMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+  }
   const lastOutboundText = lastOutbound?.body ?? "";
   const clarificationReply = isClarificationReply(String(event.body ?? ""));
   const lastWasInventoryUncertain =

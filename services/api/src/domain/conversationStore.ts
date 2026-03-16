@@ -218,6 +218,7 @@ export type Conversation = {
   inventoryWatch?: InventoryWatch;
   inventoryWatchPending?: InventoryWatchPending;
   emailDraft?: string;
+  contactPreference?: "call_only";
 };
 
 const conversations = new Map<string, Conversation>();
@@ -414,6 +415,19 @@ export function setConversationMode(id: string, mode: ConversationMode): Convers
   conv.updatedAt = nowIso();
   scheduleSave();
   return conv;
+}
+
+export function setContactPreference(
+  conv: Conversation,
+  pref?: "call_only" | null
+): void {
+  if (pref) {
+    conv.contactPreference = pref;
+  } else {
+    delete conv.contactPreference;
+  }
+  conv.updatedAt = nowIso();
+  scheduleSave();
 }
 
 export function appendInbound(conv: Conversation, evt: InboundMessageEvent) {
