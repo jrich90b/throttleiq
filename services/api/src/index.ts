@@ -1383,7 +1383,7 @@ async function transcribeRecordingMp3(buffer: Buffer): Promise<string | null> {
   if (deepgramKey) {
     try {
       const resp = await fetch(
-        "https://api.deepgram.com/v1/listen?multichannel=true&punctuate=true&model=nova-2",
+        "https://api.deepgram.com/v1/listen?multichannel=true&punctuate=true&model=nova-2&utterances=true",
         {
           method: "POST",
           headers: {
@@ -1401,6 +1401,12 @@ async function transcribeRecordingMp3(buffer: Buffer): Promise<string | null> {
         const chCount = Array.isArray(data?.results?.channels) ? data.results.channels.length : 0;
         const metaChannels = data?.results?.metadata?.channels ?? null;
         console.log("[voice] deepgram channels", { count: chCount, meta: metaChannels });
+        const utterances = data?.results?.utterances;
+        if (Array.isArray(utterances) && utterances.length) {
+          return utterances
+            .map((u: any) => `Speaker ${Number(u.speaker) + 1}: ${u.transcript}`)
+            .join("\n");
+        }
         const channels = data?.results?.channels;
         if (Array.isArray(channels) && channels.length >= 2) {
           const getText = (ch: any) =>
@@ -1413,12 +1419,6 @@ async function transcribeRecordingMp3(buffer: Buffer): Promise<string | null> {
           if (agentText) parts.push(`Agent: ${agentText}`);
           if (customerText) parts.push(`Customer: ${customerText}`);
           if (parts.length) return parts.join("\n");
-        }
-        const utterances = data?.results?.utterances;
-        if (Array.isArray(utterances) && utterances.length) {
-          return utterances
-            .map((u: any) => `Speaker ${Number(u.speaker) + 1}: ${u.transcript}`)
-            .join("\n");
         }
         const fallback = channels?.[0]?.alternatives?.[0]?.transcript;
         if (typeof fallback === "string" && fallback.trim()) return fallback.trim();
