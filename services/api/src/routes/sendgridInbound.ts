@@ -767,6 +767,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     if (body.toLowerCase().startsWith(prefixLower)) return body;
     body = body.replace(/^hi\s+[^—]+—\s*/i, "");
     body = body.replace(/^thanks for[^.]*\.\s*/i, "");
+    const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const agentEsc = esc(agentName);
+    const dealerEsc = esc(dealerName);
+    body = body.replace(new RegExp(`^this is\\s+${agentEsc}\\s+at\\s+${dealerEsc}\\.?\\s*`, "i"), "");
     return `${prefix}${body}`.trim();
   };
 
