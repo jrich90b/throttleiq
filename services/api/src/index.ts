@@ -3465,6 +3465,8 @@ app.post("/conversations/:id/send", async (req, res) => {
       });
       // Clear stored email draft so the UI doesn't keep pre-filling after send.
       delete conv.emailDraft;
+      saveConversation(conv);
+      await flushConversationStore();
       if (!hadOutbound) {
         await maybeStartCadence(conv, new Date().toISOString());
       }
