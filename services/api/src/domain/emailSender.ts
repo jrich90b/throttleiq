@@ -21,6 +21,14 @@ function toHtml(text: string) {
       return `${prefixWithSpace}<a href="${url}">here</a>`;
     }
   );
+  html = html.replace(
+    /(^|<br\/>)(https?:\/\/[^\s<]+)(?=<br\/>|$)/g,
+    (m, prefix, url) => {
+      if (!/\.(png|jpe?g|gif|webp)(\?|#|$)/i.test(url)) return m;
+      const lead = prefix ?? "";
+      return `${lead}<img src="${url}" alt="Logo" style="max-width:180px;height:auto;display:block;margin-top:8px;" />`;
+    }
+  );
   return html;
 }
 
