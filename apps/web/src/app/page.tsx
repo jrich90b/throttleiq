@@ -878,12 +878,14 @@ export default function Home() {
     return null;
   }, [selectedConv]);
   const emailDraft = useMemo(() => {
-    if (messageFilter !== "email") return null;
     return (selectedConv as any)?.emailDraft ?? null;
-  }, [messageFilter, selectedConv]);
+  }, [selectedConv]);
   const displaySendBody = useMemo(() => {
     if (sendBodySource === "user") return sendBody;
-    if (messageFilter === "email" && emailDraft) return maskBookingLink(emailDraft);
+    if (messageFilter === "email") {
+      if (emailDraft) return maskBookingLink(emailDraft);
+      return sendBody;
+    }
     if (pendingDraft?.body) return pendingDraft.body;
     return sendBody;
   }, [sendBodySource, sendBody, pendingDraft?.body, messageFilter, emailDraft]);
@@ -1081,9 +1083,14 @@ export default function Home() {
   }
 
   useEffect(() => {
-    if (messageFilter === "email" && emailDraft) {
-      setSendBody(emailDraft);
-      setSendBodySource("draft");
+    if (messageFilter === "email") {
+      if (emailDraft) {
+        setSendBody(emailDraft);
+        setSendBodySource("draft");
+      } else if (sendBodySource !== "user") {
+        setSendBody("");
+        setSendBodySource("system");
+      }
       setLastDraftId(null);
       return;
     }
@@ -1097,9 +1104,14 @@ export default function Home() {
   }, [pendingDraft?.id, messageFilter, emailDraft]);
 
   useEffect(() => {
-    if (messageFilter === "email" && emailDraft) {
-      setSendBody(emailDraft);
-      setSendBodySource("draft");
+    if (messageFilter === "email") {
+      if (emailDraft) {
+        setSendBody(emailDraft);
+        setSendBodySource("draft");
+      } else {
+        setSendBody("");
+        setSendBodySource("system");
+      }
       setLastDraftId(null);
       return;
     }
@@ -1196,7 +1208,7 @@ export default function Home() {
       return;
     }
     const useEmailDraft = messageFilter === "email" && !!emailDraft;
-    const effectiveDraft = useEmailDraft ? null : pendingDraft;
+    const effectiveDraft = messageFilter === "email" ? null : pendingDraft;
     const bodySource =
       sendBodySource === "user"
         ? sendBody
