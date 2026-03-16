@@ -1398,6 +1398,9 @@ async function transcribeRecordingMp3(buffer: Buffer): Promise<string | null> {
         console.warn("[voice] deepgram failed:", resp.status, errText);
       } else {
         const data: any = await resp.json().catch(() => null);
+        const chCount = Array.isArray(data?.results?.channels) ? data.results.channels.length : 0;
+        const metaChannels = data?.results?.metadata?.channels ?? null;
+        console.log("[voice] deepgram channels", { count: chCount, meta: metaChannels });
         const channels = data?.results?.channels;
         if (Array.isArray(channels) && channels.length >= 2) {
           const getText = (ch: any) =>
@@ -5648,8 +5651,7 @@ app.post("/webhooks/twilio/voice", async (req, res) => {
       callerId: from,
       answerOnBridge: true,
       timeout: 30,
-      record: "record-from-answer",
-      recordingChannels: "dual",
+      record: "record-from-answer-dual",
       recordingStatusCallback: recordingCb,
       recordingStatusCallbackEvent: ["completed"]
     });
