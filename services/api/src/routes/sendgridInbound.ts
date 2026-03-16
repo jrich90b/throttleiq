@@ -24,6 +24,7 @@ import {
   closeConversation,
   setContactPreference,
   normalizeLeadKey,
+  getConversation,
   saveConversation,
   flushConversationStore
 } from "../domain/conversationStore.js";
@@ -41,6 +42,47 @@ import {
 } from "../domain/schedulerEngine.js";
 import { getDealerProfile } from "../domain/dealerProfile.js";
 import { getInventoryNote } from "../domain/inventoryNotes.js";
+
+function base64UrlDecode(input: string): string | null {
+  try {
+    const padded = input.replace(/-/g, "+").replace(/_/g, "/");
+    const padLen = padded.length % 4;
+    const withPad = padLen ? padded + "=".repeat(4 - padLen) : padded;
+    return Buffer.from(withPad, "base64").toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
+function base64UrlEncode(input: string): string {
+  return Buffer.from(input)
+    .toString("base64")
+    .replace(/=+$/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+}
+
+function extractLeadKeyFromTaggedEmail(addr?: string | null): string | null {
+  if (!addr) return null;
+  const email = extractEmailAddress(addr);
+  if (!email) return null;
+  const m = email.match(/^([^+]+)\+([^@]+)@(.+)$/);
+  if (!m) return null;
+  const domain = m[3].toLowerCase();
+  if (domain !== "inbound.leadrider.ai") return null;
+  return base64UrlDecode(m[2]);
+}
+
+function maybeTagReplyTo(replyTo: string | undefined, conv: any): string | undefined {
+  if (!replyTo) return replyTo;
+  if (!/@inbound\.leadrider\.ai$/i.test(replyTo)) return replyTo;
+  const id = String(conv?.id ?? conv?.leadKey ?? "").trim();
+  if (!id) return replyTo;
+  const tag = base64UrlEncode(id);
+  const [local, domain] = replyTo.split("@");
+  if (!local || !domain) return replyTo;
+  return `${local}+${tag}@${domain}`;
+}
 
 function inferAppointmentTypeFromConv(conv: any): string | null {
   const bucket = conv?.classification?.bucket ?? "";
@@ -356,6 +398,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       (Array.isArray(envelope?.to) ? extractEmailAddress(envelope?.to[0]) : undefined) ??
       extractEmailAddress(envelope?.to) ??
       "dealership";
+    const taggedLeadKey =
+      extractLeadKeyFromTaggedEmail(req.body?.to) ??
+      (Array.isArray(envelope?.to)
+        ? extractLeadKeyFromTaggedEmail(envelope?.to[0])
+        : extractLeadKeyFromTaggedEmail(envelope?.to));
     const subject = typeof req.body?.subject === "string" ? req.body.subject.trim() : "";
     const plain = textBody?.trim();
     const htmlText = stripHtml(htmlBody) ?? stripHtml(emailBody);
@@ -373,12 +420,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       return res.status(200).json({ ok: true, parsed: false, reason: "no_adf_found" });
     }
 
-    const leadKey = fromEmail;
-    const existingConv = getAllConversations().find(c => {
-      const email =
-        (c?.lead?.email ?? (c?.leadKey?.includes?.("@") ? c.leadKey : ""))?.toString().toLowerCase();
-      return !!email && email === fromEmail;
-    });
+    const existingByTag = taggedLeadKey ? getConversation(taggedLeadKey) : null;
+    const existingConv =
+      existingByTag ??
+      getAllConversations().find(c => {
+        const email =
+          (c?.lead?.email ?? (c?.leadKey?.includes?.("@") ? c.leadKey : ""))?.toString().toLowerCase();
+        return !!email && email === fromEmail;
+      });
+    const leadKey = existingConv?.leadKey ?? taggedLeadKey ?? fromEmail;
     const conv = existingConv ?? upsertConversationByLeadKey(leadKey, "suggest");
     mergeConversationLead(conv, {
       email: fromEmail
@@ -1120,6 +1170,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       replyTo: (dealerProfile?.replyToEmail ?? process.env.SENDGRID_REPLY_TO ?? "").trim(),
       signature: String(dealerProfile?.emailSignature ?? "").trim() || undefined
     };
+    const replyTo = maybeTagReplyTo(emailReplyTo || undefined, conv);
     if (emailFrom) {
       try {
         const subject = `Thanks for your inquiry at ${dealerName}`;
@@ -1132,7 +1183,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           subject,
           text: signed,
           from: emailFrom,
-          replyTo: emailReplyTo || undefined
+          replyTo
         });
         appendOutbound(conv, emailFrom, emailTo!, signed, "sendgrid");
         saveConversation(conv);

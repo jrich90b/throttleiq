@@ -250,6 +250,25 @@ function getEmailConfig(profile: any) {
   return { from, replyTo, signature };
 }
 
+function base64UrlEncode(input: string): string {
+  return Buffer.from(input)
+    .toString("base64")
+    .replace(/=+$/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+}
+
+function maybeTagReplyTo(replyTo: string | undefined, conv: any): string | undefined {
+  if (!replyTo) return replyTo;
+  if (!/@inbound\.leadrider\.ai$/i.test(replyTo)) return replyTo;
+  const id = String(conv?.id ?? conv?.leadKey ?? "").trim();
+  if (!id) return replyTo;
+  const tag = base64UrlEncode(id);
+  const [local, domain] = replyTo.split("@");
+  if (!local || !domain) return replyTo;
+  return `${local}+${tag}@${domain}`;
+}
+
 type InventorySnapshot = {
   savedAt: string;
   items: Array<{
@@ -1996,14 +2015,16 @@ async function processDueFollowUps() {
       conv.classification?.channel === "email" && !!emailTo && hasEmailOptIn(conv.lead);
     const systemMode = effectiveMode(conv);
     const { from: emailFrom, replyTo: emailReplyTo, signature } = getEmailConfig(dealerProfile);
-  const bookingUrl = buildBookingUrlForLead(dealerProfile?.bookingUrl, conv);
+    const replyTo = maybeTagReplyTo(emailReplyTo, conv);
+    const replyTo = maybeTagReplyTo(emailReplyTo, conv);
+    const bookingUrl = buildBookingUrlForLead(dealerProfile?.bookingUrl, conv);
     const name = conv.lead?.firstName?.trim() || "there";
     const year = conv.lead?.vehicle?.year ?? null;
     const model = conv.lead?.vehicle?.model ?? null;
     const label = model ? `the ${formatModelLabel(year, model)}` : "your inquiry";
-  const bookingLine = bookingUrl
-    ? `You can book an appointment here: ${bookingUrl}`
-    : "If you want to stop in, reply with a day and time that works.";
+    const bookingLine = bookingUrl
+      ? `You can book an appointment here: ${bookingUrl}`
+      : "If you want to stop in, reply with a day and time that works.";
     let emailMessage: string | null = null;
     if (useEmail) {
       if (cadence.kind === "long_term") {
@@ -2063,7 +2084,7 @@ async function processDueFollowUps() {
           subject,
           text: signed,
           from: emailFrom,
-          replyTo: emailReplyTo
+          replyTo
         });
         appendOutbound(conv, emailFrom, emailTo!, signed, "sendgrid", undefined, mediaUrls);
       } catch (e: any) {
@@ -3440,7 +3461,7 @@ app.post("/conversations/:id/send", async (req, res) => {
         subject,
         text: signed,
         from: emailFrom,
-        replyTo: emailReplyTo
+        replyTo
       });
       // Clear stored email draft so the UI doesn't keep pre-filling after send.
       delete conv.emailDraft;
