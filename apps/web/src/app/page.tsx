@@ -914,7 +914,14 @@ export default function Home() {
 
   useEffect(() => {
     if (!listActionsOpenId) return;
-    const onClick = () => setListActionsOpenId(null);
+    const onClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest("[data-actions-menu]") || target.closest("[data-actions-button]")) {
+        return;
+      }
+      setListActionsOpenId(null);
+    };
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
   }, [listActionsOpenId]);
@@ -2434,6 +2441,7 @@ export default function Home() {
                           <button
                             className="px-3 h-full text-sm hover:bg-gray-50"
                             aria-label="Conversation actions"
+                            data-actions-button
                             onClick={e => {
                               e.stopPropagation();
                               setListActionsOpenId(prev => (prev === c.id ? null : c.id));
@@ -2444,6 +2452,7 @@ export default function Home() {
                           {listActionsOpenId === c.id ? (
                             <div
                               className="absolute right-0 mt-2 w-40 border rounded bg-white shadow z-10"
+                              data-actions-menu
                               onClick={e => e.stopPropagation()}
                             >
                               <button
