@@ -22,6 +22,7 @@ import {
   stopFollowUpCadence,
   markPricingEscalated,
   closeConversation,
+  setContactPreference,
   normalizeLeadKey,
   saveConversation,
   flushConversationStore
@@ -591,6 +592,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   updateHoldingFromInbound(conv, event.body);
 
   if (callOnlyRequested) {
+    setContactPreference(conv, "call_only");
     addTodo(conv, "other", event.body ?? "Call only requested", event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "call_only");
     stopFollowUpCadence(conv, "manual_handoff");
