@@ -40,7 +40,7 @@ import {
   localPartsToUtcDate
 } from "../domain/schedulerEngine.js";
 import { getDealerProfile } from "../domain/dealerProfile.js";
-import { getInventoryNote } from "../domain/inventoryFeed.js";
+import { getInventoryNote } from "../domain/inventoryNotes.js";
 
 function inferAppointmentTypeFromConv(conv: any): string | null {
   const bucket = conv?.classification?.bucket ?? "";
@@ -877,8 +877,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   if (isInitialAdf) {
     const profile = await getDealerProfile();
-    const stockForNote = conv.lead?.vehicle?.stockId ?? conv.lead?.stockId ?? null;
-    const vinForNote = conv.lead?.vehicle?.vin ?? conv.lead?.vin ?? null;
+    const stockForNote = conv.lead?.vehicle?.stockId ?? null;
+    const vinForNote = conv.lead?.vehicle?.vin ?? null;
     const inventoryNote = await getInventoryNote(stockForNote, vinForNote);
     conv.emailDraft = buildInitialEmailDraft(conv, profile, inventoryNote);
   } else {
