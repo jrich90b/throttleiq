@@ -570,6 +570,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     receivedAt: new Date().toISOString()
   };
 
+  const callOnlyRequested = /\b(call only|phone only|call me only|no text|do not text|don't text|text me not)\b/i.test(
+    inquiryText
+  );
+
   const isCreditLead =
     inferredBucket === "finance_prequal" ||
     inferredCta === "hdfs_coa" ||
@@ -585,6 +589,25 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   discardPendingDrafts(conv, "new_inbound");
   confirmAppointmentIfMatchesSuggested(conv, event.body, event.providerMessageId);
   updateHoldingFromInbound(conv, event.body);
+
+  if (callOnlyRequested) {
+    addTodo(conv, "other", event.body ?? "Call only requested", event.providerMessageId);
+    setFollowUpMode(conv, "manual_handoff", "call_only");
+    stopFollowUpCadence(conv, "manual_handoff");
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      note: "call_only_no_text"
+    });
+  }
 
   const isInitialAdf =
     event.provider === "sendgrid_adf" &&
