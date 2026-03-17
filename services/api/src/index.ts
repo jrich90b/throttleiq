@@ -5095,8 +5095,15 @@ if (authToken && signature) {
     const cfg = await getSchedulerConfig();
     const tz = cfg.timezone || "America/New_York";
     const explicitRequested = parseRequestedDayTime(String(event.body ?? ""), tz);
+    const rawText = String(event.body ?? "").toLowerCase();
+    const hasDayToken = /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(
+      rawText
+    );
+    const hasTimeWord = /\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b/i.test(rawText);
+    const hasAtHour = /\b(?:at|for|around|by)\s*(\d{1,2})\b(?!\s*\/)/i.test(rawText);
+    const hasDayTime = hasDayToken && (hasTimeWord || hasAtHour);
     // If the customer explicitly asks for a day/time, let scheduling handle it.
-    if (!explicitRequested && !isExplicitScheduleIntent(event.body)) {
+    if (!explicitRequested && !hasDayTime && !isExplicitScheduleIntent(event.body)) {
       const pending = conv.inventoryWatchPending;
       const pref = parseInventoryWatchPreference(String(event.body ?? ""), pending);
       if (pref.action === "clarify") {
