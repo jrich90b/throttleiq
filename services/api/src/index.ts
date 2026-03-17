@@ -941,15 +941,18 @@ function buildInitialEmailDraft(conv: any, dealerProfile: any): string {
         : "Thanks for your interest.";
   const intro = `This is ${agentName} at ${dealerName}.`;
   const help = "I’m happy to help with pricing, options, and availability.";
-  const visit = label
-    ? "If you want to stop in to check out the bike and go over options, you can book an appointment below."
-    : "If you want to stop in to go over options, you can book an appointment below.";
+  const buildLine = isCustomBuild ? "I can walk you through build options and next steps." : "";
+  const visit = isCustomBuild
+    ? "If you want to stop in to go over build options, you can book an appointment below."
+    : label
+      ? "If you want to stop in to check out the bike and go over options, you can book an appointment below."
+      : "If you want to stop in to go over options, you can book an appointment below.";
   const bookingLine = bookingUrl
     ? `You can book an appointment here: ${bookingUrl}`
     : "Just reply with a day and time that works for you.";
   const extra = "If a walkaround or extra photos would help, just let me know.";
 
-  return `Hi ${name},\n\n${thanks} ${intro} ${help} ${visit}\n\n${bookingLine}\n\n${extra}`;
+  return `Hi ${name},\n\n${thanks} ${intro} ${help} ${buildLine} ${visit}\n\n${bookingLine}\n\n${extra}`;
 }
 
 const FOLLOW_UP_COLOR_WORDS = [
@@ -5644,7 +5647,12 @@ if (authToken && signature) {
   const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
   const agentName = dealerProfile?.agentName ?? "Brooke";
   let reply = ensureUniqueDraft(result.draft, conv, dealerName, agentName);
-  if (!schedulingExplicit && draftHasSchedulingPrompt(reply)) {
+  const hoursRequest =
+    /\bhours?\b/i.test(String(event.body ?? "")) ||
+    /(what time.*open|what time.*close|when.*open|when.*close|opening hours|closing time)/i.test(
+      String(event.body ?? "")
+    );
+  if (!schedulingExplicit && !hoursRequest && draftHasSchedulingPrompt(reply)) {
     reply = "If you’d like, I can set a reminder for you or help with pricing/model comparisons.";
   }
   const effectiveWebhookMode = webhookMode;
