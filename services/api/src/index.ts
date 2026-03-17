@@ -4033,6 +4033,7 @@ if (authToken && signature) {
   const conv = upsertConversationByLeadKey(event.from, "suggest");
   appendInbound(conv, event);
   pauseRelatedCadencesOnInbound(conv, event);
+  let didConfirm = false;
   if (conv.contactPreference === "call_only") {
     if (isOptOut(event.body)) {
       await suppressRelatedPhones(conv, event, "sms_stop", "twilio");
@@ -4406,7 +4407,7 @@ if (authToken && signature) {
       return res.status(200).type("text/xml").send(twiml);
     }
   }
-  const didConfirm = confirmAppointmentIfMatchesSuggested(conv, event.body, event.providerMessageId);
+  didConfirm = confirmAppointmentIfMatchesSuggested(conv, event.body, event.providerMessageId);
   updateHoldingFromInbound(conv, event.body);
 
   const isUsed =
