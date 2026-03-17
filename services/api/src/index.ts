@@ -5379,6 +5379,28 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
+  const testRideQuestion =
+    /\b(test ride|demo ride|ride it|take (it )?for a ride)\b/i.test(textLower) &&
+    /\b(while|when|during|there|visit|come in|stop in|stop by|appointment)\b/i.test(textLower);
+  if (event.provider === "twilio" && testRideQuestion) {
+    const requirements =
+      "For a test ride, please bring a motorcycle endorsement, a DOT helmet, eyewear, long pants, a long sleeve shirt, and over-the-ankle boots.";
+    const reply = conv.appointment?.bookedEventId
+      ? `Yes — we can plan a test ride during your visit. ${requirements}`
+      : `Yes — we can set that up during your visit. ${requirements} If you want me to add a test ride to your visit, just let me know.`;
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+
   if (event.provider === "twilio" && conv.inventoryWatchPending) {
     const cfg = await getSchedulerConfig();
     const tz = cfg.timezone || "America/New_York";
@@ -5447,6 +5469,32 @@ if (authToken && signature) {
     appendOutbound(conv, event.to, event.from, ack, "twilio");
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
       ack
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+  const lastOutboundAskedQuestion =
+    /\?\s*$/.test(lastOutboundText.trim()) ||
+    /\b(do any of these times work|which works best|what day and time works|what day works|what time works|want me to|should i|can i|would you like|does that work|ok to|are you able)\b/i.test(
+      lastOutboundText
+    );
+  if (
+    event.provider === "twilio" &&
+    shortAck &&
+    !lastOutboundAskedQuestion &&
+    !conv.inventoryWatchPending &&
+    !conv.scheduler?.pendingSlot &&
+    !conv.appointment?.reschedulePending
+  ) {
+    const reply = "Thanks — let me know if anything changes.";
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
