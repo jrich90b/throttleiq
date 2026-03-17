@@ -4188,6 +4188,83 @@ if (authToken && signature) {
     return hasSelection || hasConfirm;
   };
 
+  // Auto-reschedule if they confirmed a pending reschedule slot
+  if (conv.appointment?.bookedEventId && conv.scheduler?.pendingSlot?.reschedule) {
+    if (isDeferral(event.body)) {
+      conv.scheduler.pendingSlot = undefined;
+    } else if (isAffirmative(event.body)) {
+      const chosen = conv.scheduler.pendingSlot;
+      try {
+        const cfg = await getSchedulerConfig();
+        const tz = cfg.timezone || "America/New_York";
+        const cal = await getAuthedCalendarClient();
+        const salespeople = cfg.salespeople ?? [];
+
+        const currentSpId = conv.appointment.bookedSalespersonId ?? chosen.salespersonId;
+        const currentSp = salespeople.find(p => p.id === currentSpId);
+        const targetSp = salespeople.find(p => p.id === chosen.salespersonId) ?? currentSp;
+        if (!currentSp || !targetSp) throw new Error("Salesperson not found for reschedule confirm");
+
+        let eventId = conv.appointment.bookedEventId;
+        if (currentSp.calendarId !== targetSp.calendarId) {
+          const moved = await moveEvent(cal, currentSp.calendarId, eventId, targetSp.calendarId);
+          eventId = moved?.id ?? eventId;
+        }
+        const eventObj = await updateEvent(
+          cal,
+          targetSp.calendarId,
+          eventId,
+          tz,
+          chosen.start,
+          chosen.end
+        );
+
+        conv.appointment.status = "confirmed";
+        conv.appointment.whenText = chosen.startLocal ?? chosen.start;
+        conv.appointment.whenIso = chosen.start;
+        conv.appointment.confirmedBy = "customer";
+        conv.appointment.updatedAt = new Date().toISOString();
+        conv.appointment.acknowledged = true;
+        conv.appointment.bookedEventId = eventObj.id ?? eventId;
+        conv.appointment.bookedEventLink = eventObj.htmlLink ?? conv.appointment.bookedEventLink;
+        conv.appointment.bookedSalespersonId = targetSp.id;
+        conv.appointment.reschedulePending = false;
+        onAppointmentBooked(conv);
+
+        if (conv.scheduler) {
+          conv.scheduler.pendingSlot = undefined;
+          conv.scheduler.updatedAt = new Date().toISOString();
+        }
+
+        const dealerName =
+          (conv as any).dealerProfile?.dealerName ?? "American Harley-Davidson";
+        const addressLine = "1149 Erie Ave., North Tonawanda, NY 14120";
+        const when = formatSlotLocal(chosen.start, tz);
+        const repName =
+          chosen?.salespersonName ??
+          cfg.salespeople?.find(p => p.id === chosen?.salespersonId)?.name ??
+          null;
+        const repSuffix = repName ? ` with ${repName}` : "";
+        const reply =
+          `Perfect — you’re booked for ${when}${repSuffix}. ` +
+          `${dealerName} is at ${addressLine}.`;
+        const systemMode = webhookMode;
+        if (systemMode === "suggest") {
+          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+        appendOutbound(conv, event.to, event.from, reply, "twilio", eventObj.id ?? undefined);
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+          reply
+        )}</Message>\n</Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      } catch (e: any) {
+        console.log("[appt-resched-confirm] failed:", e?.message ?? e);
+      }
+    }
+  }
+
   // Auto-book if they confirmed a pending slot
   if (!conv.appointment?.bookedEventId && conv.scheduler?.pendingSlot) {
     if (isDeferral(event.body)) {
@@ -4569,6 +4646,34 @@ if (authToken && signature) {
       }
 
       if (exactMatch) {
+        const systemMode = webhookMode;
+        const when = formatSlotLocal(exactMatch.exact.start, cfg.timezone);
+        const repName = exactMatch.sp.name ? ` with ${exactMatch.sp.name}` : "";
+        if (systemMode === "suggest") {
+          conv.scheduler = conv.scheduler ?? { updatedAt: new Date().toISOString() };
+          conv.scheduler.pendingSlot = {
+            salespersonId: exactMatch.sp.id,
+            salespersonName: exactMatch.sp.name,
+            calendarId: exactMatch.sp.calendarId,
+            start: exactMatch.exact.start,
+            end: exactMatch.exact.end,
+            startLocal: when,
+            endLocal: formatSlotLocal(exactMatch.exact.end, cfg.timezone),
+            appointmentType,
+            reschedule: true
+          };
+          conv.scheduler.updatedAt = new Date().toISOString();
+          conv.appointment.reschedulePending = true;
+          conv.appointment.matchedSlot = {
+            ...conv.scheduler.pendingSlot
+          };
+          conv.appointment.updatedAt = new Date().toISOString();
+          const ask = `I can move you to ${when}${repName}. Want me to lock that in?`;
+          appendOutbound(conv, event.to, event.from, ask, "draft_ai");
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+
         const sameCalendar = exactMatch.sp.id === primarySalespersonId;
         let eventId = conv.appointment.bookedEventId;
         if (!sameCalendar) {
@@ -4604,17 +4709,9 @@ if (authToken && signature) {
         const dealerName =
           (conv as any).dealerProfile?.dealerName ?? "American Harley-Davidson";
         const addressLine = "1149 Erie Ave., North Tonawanda, NY 14120";
-        const when = formatSlotLocal(exactMatch.exact.start, cfg.timezone);
-        const repName = exactMatch.sp.name ? ` with ${exactMatch.sp.name}` : "";
         const confirmText =
           `Perfect — you’re booked for ${when}${repName}. ` +
           `${dealerName} is at ${addressLine}.`;
-        const systemMode = webhookMode;
-        if (systemMode === "suggest") {
-          appendOutbound(conv, event.to, event.from, confirmText, "draft_ai");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-          return res.status(200).type("text/xml").send(twiml);
-        }
         appendOutbound(conv, event.to, event.from, confirmText, "twilio", eventObj.id ?? undefined);
         const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
           confirmText
@@ -5729,6 +5826,32 @@ if (authToken && signature) {
               .filter(Boolean)
               .join("\n");
 
+            const dealerName =
+              (conv as any).dealerProfile?.dealerName ?? "American Harley-Davidson";
+            const addressLine = "1149 Erie Ave., North Tonawanda, NY 14120";
+            const when = formatSlotLocal(exact.start, cfg.timezone);
+            const repName = sp.name ? ` with ${sp.name}` : "";
+            const systemMode = webhookMode;
+
+            if (systemMode === "suggest") {
+              conv.scheduler = conv.scheduler ?? { updatedAt: new Date().toISOString() };
+              conv.scheduler.pendingSlot = {
+                salespersonId: sp.id,
+                salespersonName: sp.name,
+                calendarId: sp.calendarId,
+                start: exact.start,
+                end: exact.end,
+                startLocal: when,
+                endLocal: formatSlotLocal(exact.end, cfg.timezone),
+                appointmentType
+              };
+              conv.scheduler.updatedAt = new Date().toISOString();
+              const ask = `I can do ${when}${repName}. Want me to lock that in?`;
+              appendOutbound(conv, event.to, event.from, ask, "draft_ai");
+              const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+              return res.status(200).type("text/xml").send(twiml);
+            }
+
             const eventObj = await insertEvent(
               cal,
               exact.calendarId,
@@ -5756,21 +5879,10 @@ if (authToken && signature) {
               conv.scheduler.updatedAt = new Date().toISOString();
             }
 
-            const dealerName =
-              (conv as any).dealerProfile?.dealerName ?? "American Harley-Davidson";
-            const addressLine = "1149 Erie Ave., North Tonawanda, NY 14120";
-            const when = formatSlotLocal(exact.start, cfg.timezone);
-            const repName = sp.name ? ` with ${sp.name}` : "";
             const confirmText =
               `Perfect — you’re booked for ${when}${repName}. ` +
               `${dealerName} is at ${addressLine}.`;
 
-            const systemMode = webhookMode;
-            if (systemMode === "suggest") {
-              appendOutbound(conv, event.to, event.from, confirmText, "draft_ai");
-              const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-              return res.status(200).type("text/xml").send(twiml);
-            }
             appendOutbound(conv, event.to, event.from, confirmText, "twilio", eventObj.id ?? undefined);
 
             const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
