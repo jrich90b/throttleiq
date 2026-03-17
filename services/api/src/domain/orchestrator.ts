@@ -5,6 +5,7 @@ import { generateDraftWithLLM } from "./llmDraft.js";
 import { resolveInventoryUrlByStock } from "./inventoryUrlResolver.js";
 import { checkInventorySalePendingByUrl, type InventoryStatus } from "./inventoryChecker.js";
 import { findInventoryMatches, findInventoryPrice, findPriceRange, hasInventoryForModelYear } from "./inventoryFeed.js";
+import { findMsrpPricing } from "./msrpPriceList.js";
 import { getInventoryNote } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
 import type { LeadProfile } from "./conversationStore.js";
@@ -638,8 +639,56 @@ export async function orchestrateInbound(
       if (!stockForPrice && !vinForPrice && range?.count && range.count > 1) {
         price = null;
       }
+      const hintText = [leadForPrice?.vehicle?.description, event.body].filter(Boolean).join(" ");
+      const trimHint = [leadForPrice?.vehicle?.modelOptions?.join(" "), hintText].filter(Boolean).join(" ");
+      const colorHint = [leadForPrice?.vehicle?.color, hintText].filter(Boolean).join(" ");
+      const msrpLookup = await findMsrpPricing({
+        year: yearForRange,
+        model: modelForRange,
+        trimText: trimHint,
+        colorText: colorHint
+      });
       const numericYear = yearForRange ? Number(yearForRange) : null;
       if (!price && !range) {
+        if (msrpLookup && modelForRange && !isUnknownModel(modelForRange)) {
+          const nf = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+          const firstName = leadForPrice?.firstName?.trim() || "there";
+          const modelLabel = normalizeModelLabel(modelForRange);
+          const yearLabel = yearForRange ? `${yearForRange} ` : "";
+          const trimLabel = msrpLookup.trim?.name ? msrpLookup.trim.name.trim() : "";
+          const colorLabel = msrpLookup.color?.name ? msrpLookup.color.name.trim() : "";
+          const detail = [trimLabel, colorLabel].filter(Boolean).join(", ");
+
+          let priceLine = "";
+          if (msrpLookup.exact != null) {
+            priceLine = detail
+              ? `MSRP for a ${yearLabel}${modelLabel} (${detail}) is about ${nf.format(msrpLookup.exact)}.`
+              : `MSRP for a ${yearLabel}${modelLabel} is about ${nf.format(msrpLookup.exact)}.`;
+          } else if (trimLabel && msrpLookup.rangeForTrim) {
+            priceLine =
+              `With the ${trimLabel} trim, MSRP runs about ${nf.format(msrpLookup.rangeForTrim.min)} ` +
+              `to ${nf.format(msrpLookup.rangeForTrim.max)}, depending on color.`;
+          } else if (colorLabel && msrpLookup.rangeForColor) {
+            priceLine =
+              `In ${colorLabel}, MSRP runs about ${nf.format(msrpLookup.rangeForColor.min)} ` +
+              `to ${nf.format(msrpLookup.rangeForColor.max)}, depending on trim.`;
+          } else {
+            priceLine =
+              `MSRP for a ${yearLabel}${modelLabel} runs about ${nf.format(msrpLookup.range.min)} ` +
+              `to ${nf.format(msrpLookup.range.max)}, depending on trim and color.`;
+          }
+
+          const disclaimer = "MSRP is before tax, fees, trade-in, and financing.";
+          const draft =
+            `Hi ${firstName} — thanks for your interest in the ${yearLabel}${modelLabel}. ` +
+            `This is ${agentName} at ${dealerName}. ${longTermInvite}${priceLine} ${disclaimer}`;
+          return finalize({
+            intent,
+            stage: "ENGAGED",
+            shouldRespond: true,
+            draft
+          });
+        }
         if (
           numericYear &&
           Number.isFinite(numericYear) &&

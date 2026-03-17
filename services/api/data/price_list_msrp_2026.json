@@ -1,0 +1,1094 @@
+[
+  {
+    "family": "REVOLUTIONMAX",
+    "model_code": "RH975",
+    "model_name": "Nightster\u00ae",
+    "spec_code": "1ZH11*T",
+    "base_msrp": 9999,
+    "base_option_type": "Color",
+    "base_option_spec": "M85",
+    "base_option_name": "Dark Billiard Gray",
+    "colors": [
+      {
+        "name": "Dark Billiard Gray",
+        "adder": 0
+      },
+      {
+        "name": "Vivid Black",
+        "adder": 300
+      },
+      {
+        "name": "Blood Orange",
+        "adder": 1200
+      }
+    ],
+    "trims": [],
+    "msrp_range": {
+      "min": 9999,
+      "max": 11199
+    },
+    "max_color_adder": 1200,
+    "max_trim_adder": 0
+  },
+  {
+    "family": "REVOLUTIONMAX",
+    "model_code": "RH975S",
+    "model_name": "Nightster\u00ae Special",
+    "spec_code": "1ZF11*T",
+    "base_msrp": 12499,
+    "base_option_type": "Color",
+    "base_option_spec": "M85",
+    "base_option_name": "Dark Billiard Gray",
+    "colors": [
+      {
+        "name": "Dark Billiard Gray",
+        "adder": 0
+      },
+      {
+        "name": "Black Denim",
+        "adder": 450
+      },
+      {
+        "name": "Blood Orange",
+        "adder": 450
+      },
+      {
+        "name": "Olive Steel Metallic",
+        "adder": 650
+      }
+    ],
+    "trims": [],
+    "msrp_range": {
+      "min": 12499,
+      "max": 13149
+    },
+    "max_color_adder": 650,
+    "max_trim_adder": 0
+  },
+  {
+    "family": "REVOLUTIONMAX",
+    "model_code": "RA1250L",
+    "model_name": "Pan America 1250 L",
+    "spec_code": "1ZLS1*T",
+    "base_msrp": 26499,
+    "base_option_type": "Color",
+    "base_option_spec": "M85",
+    "base_option_name": "Dark Billiard Gray",
+    "colors": [
+      {
+        "name": "Dark Billiard Gray",
+        "adder": 0
+      },
+      {
+        "name": "Olive Steel Metallic",
+        "adder": 700
+      },
+      {
+        "name": "White Onyx Pearl",
+        "adder": 700
+      }
+    ],
+    "trims": [],
+    "msrp_range": {
+      "min": 26499,
+      "max": 27199
+    },
+    "max_color_adder": 700,
+    "max_trim_adder": 0
+  },
+  {
+    "family": "REVOLUTIONMAX",
+    "model_code": "RA1250ST",
+    "model_name": "Pan America\u00ae 1250 ST",
+    "spec_code": "1ZJS1*T",
+    "base_msrp": 19999,
+    "base_option_type": "Color",
+    "base_option_spec": "M85",
+    "base_option_name": "Dark Billiard Gray",
+    "colors": [
+      {
+        "name": "Dark Billiard Gray",
+        "adder": 0
+      },
+      {
+        "name": "Vivid Black",
+        "adder": 350
+      },
+      {
+        "name": "Aurora Blue Denim",
+        "adder": 700
+      }
+    ],
+    "trims": [],
+    "msrp_range": {
+      "min": 19999,
+      "max": 20699
+    },
+    "max_color_adder": 700,
+    "max_trim_adder": 0
+  },
+  {
+    "family": "REVOLUTIONMAX",
+    "model_code": "RA1250S",
+    "model_name": "Pan America\u00ae Special",
+    "spec_code": "1ZES1*T",
+    "base_msrp": 19999,
+    "base_option_type": "Color",
+    "base_option_spec": "M85",
+    "base_option_name": "Dark Billiard Gray",
+    "colors": [
+      {
+        "name": "Dark Billiard Gray",
+        "adder": 0
+      },
+      {
+        "name": "Vivid Black",
+        "adder": 350
+      },
+      {
+        "name": "Blood Orange",
+        "adder": 525
+      }
+    ],
+    "trims": [],
+    "msrp_range": {
+      "min": 19999,
+      "max": 20524
+    },
+    "max_color_adder": 525,
+    "max_trim_adder": 0
+  },
+  {
+    "family": "REVOLUTIONMAX",
+    "model_code": "RH1250S",
+    "model_name": "Sportster\u00ae S",
+    "spec_code": "1ZC41*T",
+    "base_msrp": 15999,
+    "base_option_type": "Color",
+    "base_option_spec": "M85",
+    "base_option_name": "Dark Billiard Gray",
+    "colors": [
+      {
+        "name": "Dark Billiard Gray",
+        "adder": 0
+      },
+      {
+        "name": "Vivid Black",
+        "adder": 300
+      },
+      {
+        "name": "Blood Orange",
+        "adder": 450
+      },
+      {
+        "name": "Aurora Blue Denim",
+        "adder": 650
+      },
+      {
+        "name": "White Onyx Pearl",
+        "adder": 650
+      }
+    ],
+    "trims": [],
+    "msrp_range": {
+      "min": 15999,
+      "max": 16649
+    },
+    "max_color_adder": 650,
+    "max_trim_adder": 0
+  },
+  {
+    "family": "SOFTAIL",
+    "model_code": "FXBR",
+    "model_name": "Breakout\u00ae",
+    "spec_code": "1YE91*T",
+    "base_msrp": 22999,
+    "base_option_type": "Trim-Color",
+    "base_option_spec": "G00-M85",
+    "base_option_name": "Chrome Dark Billiard Gray",
+    "colors": [
+      {
+        "name": "Chrome Dark Billiard Gray",
+        "adder": 0
+      },
+      {
+        "name": "Vivid Black",
+        "adder": 300
+      },
+      {
+        "name": "Blood Orange",
+        "adder": 450
+      },
+      {
+        "name": "Iron Horse Mtlc",
+        "adder": 650
+      },
+      {
+        "name": "Teal Thunder",
+        "adder": 650
+      }
+    ],
+    "trims": [
+      {
+        "spec": "G00-M85",
+        "type": "Trim-Color",
+        "name": "Chrome Dark Billiard Gray",
+        "adder": 0,
+        "msrp": 22999
+      }
+    ],
+    "msrp_range": {
+      "min": 22999,
+      "max": 23649
+    },
+    "max_color_adder": 650,
+    "max_trim_adder": 0
+  },
+  {
+    "family": "SOFTAIL",
+    "model_code": "FLFB",
+    "model_name": "Fat Boy\u00ae",
+    "spec_code": "1YF91*T",
+    "base_msrp": 22599,
+    "base_option_type": "Trim-Color",
+    "base_option_spec": "G00-M85",
+    "base_option_name": "Chrome Dark Billiard Gray",
+    "colors": [
+      {
+        "name": "Chrome Dark Billiard Gray",
+        "adder": 0
+      },
+      {
+        "name": "Vivid Black",
+        "adder": 300
+      },
+      {
+        "name": "Brilliant Red",
+        "adder": 650
+      },
+      {
+        "name": "White Onyx Pearl",
+        "adder": 650
+      },
+      {
+        "name": "Olive Steel Metallic/Black",
+        "adder": 1100
+      }
+    ],
+    "trims": [
+      {
+        "spec": "G00-M85",
+        "type": "Trim-Color",
+        "name": "Chrome Dark Billiard Gray",
+        "adder": 0,
+        "msrp": 22599
+      }
+    ],
+    "msrp_range": {
+      "min": 22599,
+      "max": 23699
+    },
+    "max_color_adder": 1100,
+    "max_trim_adder": 0
+  },
+  {
+    "family": "SOFTAIL",
+    "model_code": "FLHC",
+    "model_name": "Heritage Classic",
+    "spec_code": "1YA91*T",
+    "base_msrp": 19999,
+    "base_option_type": "Trim-Color",
+    "base_option_spec": "G06-M85",
+    "base_option_name": "Black Solo Dark Billiard Gray",
+    "colors": [
+      {
+        "name": "Black Solo Dark Billiard Gray",
+        "adder": 0
+      },
+      {
+        "name": "Vivid Black",
+        "adder": 300
+      },
+      {
+        "name": "Brilliant Red",
+        "adder": 650
+      },
+      {
+        "name": "Purple Abyss",
+        "adder": 650
+      },
+      {
+        "name": "Teal Thunder/Black",
+        "adder": 1100
+      }
+    ],
+    "trims": [
+      {
+        "spec": "G06-M85",
+        "type": "Trim-Color",
+        "name": "Black Solo Dark Billiard Gray",
+        "adder": 0,
+        "msrp": 19999
+      },
+      {
+        "spec": "G01 -M85",
+        "type": "Trim",
+        "name": "Black Two-Up Dark Billiard Gray",
+        "adder": 2000,
+        "msrp": 21999
+      },
+      {
+        "spec": "G05 -M80",
+        "type": "Trim",
+        "name": "Enthusiast",
+        "adder": 4000,
+        "msrp": 23999
+      }
+    ],
+    "msrp_range": {
+      "min": 19999,
+      "max": 25099
+    },
+    "max_color_adder": 1100,
+    "max_trim_adder": 4000
+  },
+  {
+    "family": "SOFTAIL",
+    "model_code": "FXLRS",
+    "model_name": "Low Rider\u00ae S",
+    "spec_code": "1YWA1*T",
+    "base_msrp": 18999,
+    "base_option_type": "Trim-Color",
+    "base_option_spec": "G00-M85",
+    "base_option_name": "Chrome Dark Billiard Gray",
+    "colors": [
+      {
+        "name": "Chrome Dark Billiard Gray",
+        "adder": 0
+      },
+      {
+        "name": "Vivid Black",
+        "adder": 300
+      },
+      {
+        "name": "Blood Orange",
+        "adder": 450
+      },
+      {
+        "name": "Aurora Blue Denim",
+        "adder": 650
+      },
+      {
+        "name": "Olive Steel Metallic",
+        "adder": 650
+      },
+      {
+        "name": "White Onyx Pearl",
+        "adder": 650
+      }
+    ],
+    "trims": [
+      {
+        "spec": "G00-M85",
+        "type": "Trim-Color",
+        "name": "Chrome Dark Billiard Gray",
+        "adder": 0,
+        "msrp": 18999
+      },
+      {
+        "spec": "G01-M85",
+        "type": "Trim-Color",
+        "name": "Black Dark Billiard Gray",
+        "adder": 1000,
+        "msrp": 19999
+      }
+    ],
+    "msrp_range": {
+      "min": 18999,
+      "max": 20649
+    },
+    "max_color_adder": 650,
+    "max_trim_adder": 1000
+  },
+  {
+    "family": "SOFTAIL",
+    "model_code": "FXLRST",
+    "model_name": "Low Rider\u00ae ST",
+    "spec_code": "1YXA1*T",
+    "base_msrp": 23999,
+    "base_option_type": "Trim-Color",
+    "base_option_spec": "G00-M85",
+    "base_option_name": "Chrome Dark Billiard Gray",
+    "colors": [
+      {
+        "name": "Chrome Dark Billiard Gray",
+        "adder": 0
+      },
+      {
+        "name": "Vivid Black",
+        "adder": 450
+      },
+      {
+        "name": "Blood Orange",
+        "adder": 700
+      },
+      {
+        "name": "Aurora Blue Denim",
+        "adder": 900
+      },
+      {
+        "name": "Olive Steel Metallic",
+        "adder": 900
+      },
+      {
+        "name": "White Onyx Pearl",
+        "adder": 900
+      }
+    ],
+    "trims": [
+      {
+        "spec": "G00-M85",
+        "type": "Trim-Color",
+        "name": "Chrome Dark Billiard Gray",
+        "adder": 0,
+        "msrp": 23999
+      },
+      {
+        "spec": "G01-M85",
+        "type": "Trim",
+        "name": "Black Dark Billiard Gray",
+        "adder": 1150,
+        "msrp": 25149
+      }
+    ],
+    "msrp_range": {
+      "min": 23999,
+      "max": 26049
+    },
+    "max_color_adder": 900,
+    "max_trim_adder": 1150
+  },
+  {
+    "family": "SOFTAIL",
+    "model_code": "FXBB",
+    "model_name": "Street Bob\u00ae",
+    "spec_code": "1YJ91*T",
+    "base_msrp": 14999,
+    "base_option_type": "Trim-Color",
+    "base_option_spec": "G06-M85",
+    "base_option_name": "Chrome Solo Dark Billiard Gray",
+    "colors": [
+      {
+        "name": "Chrome Solo Dark Billiard Gray",
+        "adder": 0
+      },
+      {
+        "name": "Vivid Black",
+        "adder": 300
+      },
+      {
+        "name": "Aurora Blue Denim",
+        "adder": 650
+      },
+      {
+        "name": "Brilliant Red",
+        "adder": 650
+      },
+      {
+        "name": "Olive Steel Metallic",
+        "adder": 650
+      }
+    ],
+    "trims": [
+      {
+        "spec": "G06-M85",
+        "type": "Trim-Color",
+        "name": "Chrome Solo Dark Billiard Gray",
+        "adder": 0,
+        "msrp": 14999
+      },
+      {
+        "spec": "G00-M85",
+        "type": "Trim-Color",
+        "name": "Chrome Two-Up Dark Billiard Gray",
+        "adder": 1000,
+        "msrp": 15999
+      }
+    ],
+    "msrp_range": {
+      "min": 14999,
+      "max": 16649
+    },
+    "max_color_adder": 650,
+    "max_trim_adder": 1000
+  },
+  {
+    "family": "TOURING",
+    "model_code": "FLTRXSTSE",
+    "model_name": "CVO Road Glide ST",
+    "spec_code": "1TL81*T",
+    "base_msrp": 44999,
+    "base_option_type": "Trim-Color",
+    "base_option_spec": "G00-M64",
+    "base_option_name": "Chrome-Electric Coast",
+    "colors": [
+      {
+        "name": "Chrome-Electric Coast",
+        "adder": 0
+      },
+      {
+        "name": "Inferno Gray Standard",
+        "adder": 0
+      },
+      {
+        "name": "Citrus Heat",
+        "adder": 4500
+      }
+    ],
+    "trims": [
+      {
+        "spec": "G00-M64",
+        "type": "Trim-Color",
+        "name": "Chrome-Electric Coast",
+        "adder": 0,
+        "msrp": 44999
+      }
+    ],
+    "msrp_range": {
+      "min": 44999,
+      "max": 49499
+    },
+    "max_color_adder": 4500,
+    "max_trim_adder": 0
+  },
+  {
+    "family": "TOURING",
+    "model_code": "FLHXSE",
+    "model_name": "CVO Street Glide",
+    "spec_code": "1PX61*T",
+    "base_msrp": 49999,
+    "base_option_type": "Trim-Color",
+    "base_option_spec": "G00-M63",
+    "base_option_name": "Chrome-Torched Orange",
+    "colors": [
+      {
+        "name": "Chrome-Torched Orange",
+        "adder": 0
+      }
+    ],
+    "trims": [
+      {
+        "spec": "G00-M63",
+        "type": "Trim-Color",
+        "name": "Chrome-Torched Orange",
+        "adder": 0,
+        "msrp": 49999
+      }
+    ],
+    "msrp_range": {
+      "min": 49999,
+      "max": 49999
+    },
+    "max_color_adder": 0,
+    "max_trim_adder": 0
+  },
+  {
+    "family": "TOURING",
+    "model_code": "FLHXSTSE",
+    "model_name": "CVO Street Glide ST",
+    "spec_code": "1TR81*T",
+    "base_msrp": 44999,
+    "base_option_type": "Trim-Color",
+    "base_option_spec": "G01-M64",
+    "base_option_name": "Black-Electric Coast",
+    "colors": [
+      {
+        "name": "Black-Electric Coast",
+        "adder": 0
+      },
+      {
+        "name": "Inferno Gray Standard",
+        "adder": 0
+      }
+    ],
+    "trims": [
+      {
+        "spec": "G01-M64",
+        "type": "Trim-Color",
+        "name": "Black-Electric Coast",
+        "adder": 0,
+        "msrp": 44999
+      }
+    ],
+    "msrp_range": {
+      "min": 44999,
+      "max": 44999
+    },
+    "max_color_adder": 0,
+    "max_trim_adder": 0
+  },
+  {
+    "family": "TOURING",
+    "model_code": "FLTRXL",
+    "model_name": "Road Glide Limited",
+    "spec_code": "1ALN1*T",
+    "base_msrp": 32999,
+    "base_option_type": "Trim-Color",
+    "base_option_spec": "G00-M85",
+    "base_option_name": "Chrome Dark Billiard Gray",
+    "colors": [
+      {
+        "name": "Chrome Dark Billiard Gray",
+        "adder": 0
+      },
+      {
+        "name": "Vivid Black",
+        "adder": 600
+      },
+      {
+        "name": "Brilliant Red",
+        "adder": 1200
+      },
+      {
+        "name": "Iron Horse Metallic",
+        "adder": 1200
+      },
+      {
+        "name": "White Onyx Pearl",
+        "adder": 1200
+      },
+      {
+        "name": "Olive Steel Metallic/Black",
+        "adder": 2000
+      },
+      {
+        "name": "Purple Abyss/Black",
+        "adder": 2000
+      }
+    ],
+    "trims": [
+      {
+        "spec": "G00-M85",
+        "type": "Trim-Color",
+        "name": "Chrome Dark Billiard Gray",
+        "adder": 0,
+        "msrp": 32999
+      },
+      {
+        "spec": "G01",
+        "type": "Trim-Color",
+        "name": "Black Dark Billiard Gray",
+        "adder": 1400,
+        "msrp": 34399
+      }
+    ],
+    "msrp_range": {
+      "min": 32999,
+      "max": 36399
+    },
+    "max_color_adder": 2000,
+    "max_trim_adder": 1400
+  },
+  {
+    "family": "TOURING",
+    "model_code": "FLTRX",
+    "model_name": "Road Glide\u00ae",
+    "spec_code": "1KH71*T",
+    "base_msrp": 25999,
+    "base_option_type": "Trim-Color",
+    "base_option_spec": "G06-M85",
+    "base_option_name": "Chrome Solo Dark Billiard Gray",
+    "colors": [
+      {
+        "name": "Chrome Solo Dark Billiard Gray",
+        "adder": 0
+      },
+      {
+        "name": "Vivid Black",
+        "adder": 500
+      },
+      {
+        "name": "Blood Orange",
+        "adder": 750
+      },
+      {
+        "name": "Aurora Blue Denim",
+        "adder": 950
+      },
+      {
+        "name": "Purple Abyss",
+        "adder": 950
+      },
+      {
+        "name": "Olive Steel Metallic/Black",
+        "adder": 1800
+      },
+      {
+        "name": "Teal Thunder/Black",
+        "adder": 1800
+      }
+    ],
+    "trims": [
+      {
+        "spec": "G06-M85",
+        "type": "Trim-Color",
+        "name": "Chrome Solo Dark Billiard Gray",
+        "adder": 0,
+        "msrp": 25999
+      },
+      {
+        "spec": "G00-M85",
+        "type": "Trim-Color",
+        "name": "Chrome Two-Up Dark Billiard Gray",
+        "adder": 2000,
+        "msrp": 27999
+      },
+      {
+        "spec": "G01-M85",
+        "type": "Trim-Color",
+        "name": "Black Two-Up-Dark Billiard Gray",
+        "adder": 3400,
+        "msrp": 29399
+      }
+    ],
+    "msrp_range": {
+      "min": 25999,
+      "max": 31199
+    },
+    "max_color_adder": 1800,
+    "max_trim_adder": 3400
+  },
+  {
+    "family": "TOURING",
+    "model_code": "FLHXL",
+    "model_name": "Street Glide Limited",
+    "spec_code": "1AHN1*T",
+    "base_msrp": 32999,
+    "base_option_type": "Trim-Color",
+    "base_option_spec": "G00-M85",
+    "base_option_name": "Chrome-Dark Billiard Gray",
+    "colors": [
+      {
+        "name": "Chrome-Dark Billiard Gray",
+        "adder": 0
+      },
+      {
+        "name": "Vivid Black",
+        "adder": 600
+      },
+      {
+        "name": "Brilliant Red",
+        "adder": 1200
+      },
+      {
+        "name": "Iron Horse Mtlc",
+        "adder": 1200
+      },
+      {
+        "name": "White Onyx Pearl",
+        "adder": 1200
+      },
+      {
+        "name": "Olive Steel Metallic/Black",
+        "adder": 2000
+      },
+      {
+        "name": "Purple Abyss/Vivid Black",
+        "adder": 2000
+      }
+    ],
+    "trims": [
+      {
+        "spec": "G00-M85",
+        "type": "Trim-Color",
+        "name": "Chrome-Dark Billiard Gray",
+        "adder": 0,
+        "msrp": 32999
+      },
+      {
+        "spec": "G01",
+        "type": "Trim",
+        "name": "Black",
+        "adder": 1400,
+        "msrp": 34399
+      }
+    ],
+    "msrp_range": {
+      "min": 32999,
+      "max": 36399
+    },
+    "max_color_adder": 2000,
+    "max_trim_adder": 1400
+  },
+  {
+    "family": "TOURING",
+    "model_code": "FLHX",
+    "model_name": "Street Glide\u00ae",
+    "spec_code": "1KB71*T",
+    "base_msrp": 24999,
+    "base_option_type": "Trim-Color",
+    "base_option_spec": "G06-M85",
+    "base_option_name": "Chrome Solo Dark Billiard Gray",
+    "colors": [
+      {
+        "name": "Chrome Solo Dark Billiard Gray",
+        "adder": 0
+      },
+      {
+        "name": "Vivid Black",
+        "adder": 500
+      },
+      {
+        "name": "Blood Orange",
+        "adder": 750
+      },
+      {
+        "name": "Aurora Blue Denim",
+        "adder": 950
+      },
+      {
+        "name": "Purple Abyss",
+        "adder": 950
+      },
+      {
+        "name": "Olive Steel Metallic/Black",
+        "adder": 1800
+      },
+      {
+        "name": "Teal Thunder/Black",
+        "adder": 1800
+      }
+    ],
+    "trims": [
+      {
+        "spec": "G06-M85",
+        "type": "Trim-Color",
+        "name": "Chrome Solo Dark Billiard Gray",
+        "adder": 0,
+        "msrp": 24999
+      },
+      {
+        "spec": "G00-M85",
+        "type": "Trim-Color",
+        "name": "Chrome Two-Up-Dark Billiard Gray",
+        "adder": 2000,
+        "msrp": 26999
+      },
+      {
+        "spec": "G01-M85",
+        "type": "Trim-Color",
+        "name": "Black Two-Up Dark Billiard Gray",
+        "adder": 3400,
+        "msrp": 28399
+      },
+      {
+        "spec": "G05-M80",
+        "type": "Trim-Color",
+        "name": "Enthusiast",
+        "adder": 5000,
+        "msrp": 29999
+      }
+    ],
+    "msrp_range": {
+      "min": 24999,
+      "max": 31799
+    },
+    "max_color_adder": 1800,
+    "max_trim_adder": 5000
+  },
+  {
+    "family": "TRIKE",
+    "model_code": "FLHLTSE",
+    "model_name": "CVO Street Glide 3 Limited",
+    "spec_code": "1TN61*T",
+    "base_msrp": 54999,
+    "base_option_type": "Trim-Color",
+    "base_option_spec": "G00-M64",
+    "base_option_name": "Chrome-Electric Coast",
+    "colors": [
+      {
+        "name": "Chrome-Electric Coast",
+        "adder": 0
+      }
+    ],
+    "trims": [
+      {
+        "spec": "G00-M64",
+        "type": "Trim-Color",
+        "name": "Chrome-Electric Coast",
+        "adder": 0,
+        "msrp": 54999
+      },
+      {
+        "spec": "G01-M77",
+        "type": "Trim-Color",
+        "name": "Black-Citrus Heat",
+        "adder": 4500,
+        "msrp": 59499
+      }
+    ],
+    "msrp_range": {
+      "min": 54999,
+      "max": 59499
+    },
+    "max_color_adder": 0,
+    "max_trim_adder": 4500
+  },
+  {
+    "family": "TRIKE",
+    "model_code": "FLTRT",
+    "model_name": "Road Glide Trike",
+    "spec_code": "1MFN1*T",
+    "base_msrp": 35399,
+    "base_option_type": "Trim-Color",
+    "base_option_spec": "G00-M85",
+    "base_option_name": "Chrome-Dark Billiard Gray",
+    "colors": [
+      {
+        "name": "Chrome-Dark Billiard Gray",
+        "adder": 0
+      },
+      {
+        "name": "Vivid Black",
+        "adder": 700
+      },
+      {
+        "name": "Blood Orange",
+        "adder": 1050
+      },
+      {
+        "name": "Iron Horse Metallic",
+        "adder": 1350
+      },
+      {
+        "name": "Teal Thunder",
+        "adder": 1350
+      }
+    ],
+    "trims": [
+      {
+        "spec": "G00-M85",
+        "type": "Trim-Color",
+        "name": "Chrome-Dark Billiard Gray",
+        "adder": 0,
+        "msrp": 35399
+      },
+      {
+        "spec": "G01-M85",
+        "type": "Trim-Color",
+        "name": "Black-Dark Billiard Gray",
+        "adder": 1400,
+        "msrp": 36799
+      }
+    ],
+    "msrp_range": {
+      "min": 35399,
+      "max": 38149
+    },
+    "max_color_adder": 1350,
+    "max_trim_adder": 1400
+  },
+  {
+    "family": "TRIKE",
+    "model_code": "FLHLT",
+    "model_name": "Str Glide 3 Limited",
+    "spec_code": "1MGN1*T",
+    "base_msrp": 39199,
+    "base_option_type": "Trim-Color",
+    "base_option_spec": "G00-M85",
+    "base_option_name": "Chrome-Dark Billiard Gray",
+    "colors": [
+      {
+        "name": "Chrome-Dark Billiard Gray",
+        "adder": 0
+      },
+      {
+        "name": "Vivid Black",
+        "adder": 800
+      },
+      {
+        "name": "Brilliant Red",
+        "adder": 1450
+      },
+      {
+        "name": "Iron Horse Mtlc",
+        "adder": 1450
+      },
+      {
+        "name": "Olive Steel Metallic/Black",
+        "adder": 2250
+      },
+      {
+        "name": "Purple Abyss/Vivid Black",
+        "adder": 2250
+      }
+    ],
+    "trims": [
+      {
+        "spec": "G00-M85",
+        "type": "Trim-Color",
+        "name": "Chrome-Dark Billiard Gray",
+        "adder": 0,
+        "msrp": 39199
+      },
+      {
+        "spec": "G01",
+        "type": "Trim",
+        "name": "Black",
+        "adder": 1400,
+        "msrp": 40599
+      },
+      {
+        "spec": "G05-M80",
+        "type": "Trim-Color",
+        "name": "Enthusiast",
+        "adder": 4000,
+        "msrp": 43199
+      }
+    ],
+    "msrp_range": {
+      "min": 39199,
+      "max": 45449
+    },
+    "max_color_adder": 2250,
+    "max_trim_adder": 4000
+  },
+  {
+    "family": "Touring",
+    "model_code": "FLHXLSE",
+    "model_name": "CVO Street Glide Limited",
+    "spec_code": "1TM61*T",
+    "base_msrp": 51999,
+    "base_option_type": "Trim-Color",
+    "base_option_spec": "G00-M64",
+    "base_option_name": "Chrome-Electric Coast",
+    "colors": [
+      {
+        "name": "Chrome-Electric Coast",
+        "adder": 0
+      }
+    ],
+    "trims": [
+      {
+        "spec": "G00-M64",
+        "type": "Trim-Color",
+        "name": "Chrome-Electric Coast",
+        "adder": 0,
+        "msrp": 51999
+      },
+      {
+        "spec": "G01-M77",
+        "type": "Trim-Color",
+        "name": "Black-Citrus Heat",
+        "adder": 4500,
+        "msrp": 56499
+      }
+    ],
+    "msrp_range": {
+      "min": 51999,
+      "max": 56499
+    },
+    "max_color_adder": 0,
+    "max_trim_adder": 4500
+  }
+]

@@ -13,7 +13,9 @@
     "dev": "concurrently -n api,worker -c auto \"npm:dev:api\" \"npm:dev:worker\"",
     "build": "npm -ws run build",
     "start:api": "npm --workspace @throttleiq/api run start",
-    "start:worker": "npm --workspace @throttleiq/worker run start"
+    "start:worker": "npm --workspace @throttleiq/worker run start",
+    "intent:eval": "LLM_ENABLED=1 LLM_INTENT_PARSER_ENABLED=1 npx tsx scripts/intent_parser_eval.ts",
+    "intent:add": "npx tsx scripts/intent_parser_add.ts"
   },
   "devDependencies": {
     "concurrently": "^9.0.0",

@@ -1,0 +1,279 @@
+[
+  {
+    "id": "callback_1",
+    "text": "Can you have someone call me back?",
+    "expected": {
+      "intent": "callback",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "callback_2",
+    "text": "Call me after 5 today.",
+    "expected": {
+      "intent": "callback",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "callback_3",
+    "text": "Please call me at 716-555-1234 when you get a chance.",
+    "expected": {
+      "intent": "callback",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "callback_4",
+    "text": "Give me a quick call about financing.",
+    "expected": {
+      "intent": "callback",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "callback_5",
+    "text": "You can call my husband at 716-555-9999.",
+    "expected": {
+      "intent": "callback",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "callback_6",
+    "text": "I'm in meetings, can you call later this afternoon?",
+    "expected": {
+      "intent": "callback",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "callback_7",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Want me to call you?"
+      }
+    ],
+    "text": "Yes, call me tomorrow morning.",
+    "expected": {
+      "intent": "callback",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "no_call_1",
+    "text": "I prefer text, please don't call.",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "availability_1",
+    "text": "Is the 2025 Road Glide in purple still available?",
+    "expected": {
+      "intent": "availability",
+      "explicit_request": true,
+      "availability": {
+        "model": "Road Glide",
+        "year": "2025",
+        "color": "purple"
+      }
+    }
+  },
+  {
+    "id": "availability_2",
+    "text": "Do you still have stock #U123-456?",
+    "expected": {
+      "intent": "availability",
+      "explicit_request": true,
+      "availability": {
+        "stock_id": "U123-456"
+      }
+    }
+  },
+  {
+    "id": "availability_3",
+    "text": "Any Road Glide Specials in stock?",
+    "expected": {
+      "intent": "availability",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "availability_4",
+    "text": "I'm looking for a used Road King. Anything in stock?",
+    "expected": {
+      "intent": "availability",
+      "explicit_request": true,
+      "availability": {
+        "model": "Road King",
+        "condition": "used"
+      }
+    }
+  },
+  {
+    "id": "availability_5",
+    "lead": {
+      "vehicle": {
+        "model": "Street Glide",
+        "year": "2024",
+        "color": "Vivid Black",
+        "stockId": "SG-24-001"
+      }
+    },
+    "text": "Is that Street Glide still there?",
+    "expected": {
+      "intent": "availability",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "availability_6",
+    "text": "Is the bike still there or did it sell?",
+    "expected": {
+      "intent": "availability",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "availability_7",
+    "text": "Do you have any 2024 Heritage Classics in blue?",
+    "expected": {
+      "intent": "availability",
+      "explicit_request": true,
+      "availability": {
+        "model": "Heritage Classic",
+        "year": "2024",
+        "color": "blue"
+      }
+    }
+  },
+  {
+    "id": "availability_8",
+    "text": "Is there anything like a 2023 Low Rider S available?",
+    "expected": {
+      "intent": "availability",
+      "explicit_request": true,
+      "availability": {
+        "model": "Low Rider S",
+        "year": "2023"
+      }
+    }
+  },
+  {
+    "id": "test_ride_1",
+    "text": "Can I test ride it?",
+    "expected": {
+      "intent": "test_ride",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "test_ride_2",
+    "text": "Is a demo ride available this weekend?",
+    "expected": {
+      "intent": "test_ride",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "test_ride_3",
+    "history": [
+      {
+        "direction": "out",
+        "body": "I can set up a time to stop in."
+      }
+    ],
+    "text": "I'd like to take a test ride when I'm there.",
+    "expected": {
+      "intent": "test_ride",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "test_ride_4",
+    "text": "Can I schedule a test ride for Friday?",
+    "expected": {
+      "intent": "test_ride",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "test_ride_5",
+    "text": "Is the bike available for a test ride today?",
+    "expected": {
+      "intent": "test_ride",
+      "intent_any": [
+        "test_ride",
+        "availability"
+      ],
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "test_ride_6",
+    "text": "Do you do demo rides on the Road Glide?",
+    "expected": {
+      "intent": "test_ride",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "none_1",
+    "text": "I can't do tomorrow. Do you have time Friday?",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "none_2",
+    "text": "Do you have any availability on Friday at 4?",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "none_3",
+    "text": "Thanks",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "none_4",
+    "text": "Can you email me a brochure?",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "none_5",
+    "text": "What's the out-the-door price?",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "none_6",
+    "text": "Can you send a video walkaround?",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "callback_8",
+    "text": "Can you call me after 5?",
+    "expected": {
+      "intent": "callback",
+      "explicit_request": true
+    }
+  }
+]

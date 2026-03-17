@@ -64,3 +64,13 @@ When changing responses:
 - `services/api/src/domain/orchestrator.ts` — routing + LLM gating + scheduling logic.
 - `services/api/src/domain/llmDraft.ts` — LLM prompt + strict rules.
 
+## Ops Note
+- On the Ubuntu instance, `rg` may not be installed. Use `grep` for on‑box searches.
+
+## Intent Parser Eval (Local)
+- Run eval:
+  - `export OPENAI_API_KEY="sk-..."`
+  - `npm run intent:eval`
+- Add a new example:
+  - `npm run intent:add -- --text "..." --intent callback|test_ride|availability|none --explicit true|false --id example_id`
+  - Optional: `--availability "model=Road Glide;year=2025;color=purple"`, `--history '[{"direction":"out","body":"..."}]'`, `--lead '{"vehicle":{"model":"Street Glide"}}'`
