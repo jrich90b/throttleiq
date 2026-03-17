@@ -499,7 +499,8 @@ app.post("/debug/inbound/process", express.json(), async (req, res) => {
       bucket: conv.classification?.bucket ?? null,
       cta: conv.classification?.cta ?? null,
       lead: conv.lead ?? null,
-      pricingAttempts: getPricingAttempts(conv)
+      pricingAttempts: getPricingAttempts(conv),
+      allowSchedulingOffer: isExplicitScheduleIntent(body)
     });
 
     if (result?.draft && result.shouldRespond) {
@@ -5406,7 +5407,8 @@ if (authToken && signature) {
     bucket: conv.classification?.bucket ?? null,
     cta: conv.classification?.cta ?? null,
     lead: conv.lead ?? null,
-    pricingAttempts: getPricingAttempts(conv)
+    pricingAttempts: getPricingAttempts(conv),
+    allowSchedulingOffer: schedulingExplicit
   });
   console.log("[twilio] result.suggestedSlots len:", result.suggestedSlots?.length ?? 0);
   if ((result.suggestedSlots?.length ?? 0) === 0 && draftHasSpecificTimes(result.draft ?? "")) {

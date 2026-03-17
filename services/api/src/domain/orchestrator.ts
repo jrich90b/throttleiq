@@ -202,9 +202,6 @@ function hasSchedulingIntent(text: string): boolean {
     /(test ride|demo ride)/.test(t) ||
     /(trade appraisal|appraisal|value my trade)/.test(t) ||
     /(finance|credit|prequal)/.test(t) ||
-    /\b(today|tomorrow|sat|saturday|sun|sunday|mon|monday|tue|tuesday|wed|wednesday|thu|thursday|fri|friday)\b/.test(
-      t
-    ) ||
     /\b\d{1,2}(:\d{2})?\s*(am|pm)\b/.test(t)
   );
 }
@@ -349,6 +346,7 @@ export async function orchestrateInbound(
     cta?: string | null;
     lead?: LeadProfile | null;
     pricingAttempts?: number;
+    allowSchedulingOffer?: boolean;
   }
 ): Promise<OrchestratorResult> {
   await loadSystemPrompt("orchestrator");
@@ -836,8 +834,13 @@ export async function orchestrateInbound(
       const ctxSuggestsScheduling =
         /(check_availability|inventory_interest|appointment|schedule|book|visit|test_ride)/i.test(cta) ||
         /(inventory_interest|appointment|schedule|book|visit|test_ride)/i.test(bucket);
+      const allowSchedulingOffer =
+        ctx?.allowSchedulingOffer ?? event.provider === "sendgrid_adf" || isAdfLead || hasIntent;
       const schedulingIntent =
-        hasIntent || event.provider === "sendgrid_adf" || isAdfLead || ctxSuggestsScheduling;
+        hasIntent ||
+        event.provider === "sendgrid_adf" ||
+        isAdfLead ||
+        (ctxSuggestsScheduling && allowSchedulingOffer);
       const appointmentType = inferAppointmentType(event.body);
 
       const apptBooked = appointment?.bookedEventId;

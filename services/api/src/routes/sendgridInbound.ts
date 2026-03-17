@@ -501,6 +501,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
 
     const history = conv.messages.slice(-20).map(m => ({ direction: m.direction, body: m.body }));
+    const allowSchedulingOffer =
+      /(appointment|appt|schedule|book|reserve|come in|stop in|stop by|visit|test ride|demo ride|\b\d{1,2}(:\d{2})?\s*(am|pm)\b)/i.test(
+        event.body ?? ""
+      );
     const result = await orchestrateInbound(event, history, {
       appointment: conv.appointment,
       followUp: conv.followUp,
@@ -508,7 +512,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       leadSource: conv.lead?.source ?? null,
       bucket: conv.classification?.bucket ?? null,
       cta: conv.classification?.cta ?? null,
-      pricingAttempts: getPricingAttempts(conv)
+      pricingAttempts: getPricingAttempts(conv),
+      allowSchedulingOffer
     });
 
     if (result.handoff?.required) {
@@ -896,7 +901,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     leadSource: conv.lead?.source ?? null,
     bucket: conv.classification?.bucket ?? null,
     cta: conv.classification?.cta ?? null,
-    pricingAttempts: getPricingAttempts(conv)
+    pricingAttempts: getPricingAttempts(conv),
+    allowSchedulingOffer: true
   });
   console.log("[sendgrid inbound] requestedTime", result.requestedTime);
 
