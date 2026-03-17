@@ -4501,7 +4501,8 @@ if (authToken && signature) {
         }
       }
     }
-    const rescheduleIntent = reschedulePending || reschedulePhrase || !!requestedReschedule;
+    const rescheduleIntent =
+      reschedulePending || reschedulePhrase || !!requestedReschedule || isExplicitScheduleIntent(event.body);
     if (!rescheduleIntent) {
       // fall through
     } else {
@@ -4528,60 +4529,83 @@ if (authToken && signature) {
       const appointmentType = "inventory_visit";
       const durationMinutes = appointmentTypes[appointmentType]?.durationMinutes ?? 60;
 
-      const salespersonId = conv.appointment.bookedSalespersonId ?? preferredSalespeople[0];
-      const sp = salespeople.find((p: any) => p.id === salespersonId);
-      if (!sp) throw new Error("Salesperson not found for reschedule");
+      const primarySalespersonId = conv.appointment.bookedSalespersonId ?? preferredSalespeople[0];
+      const primarySp = salespeople.find((p: any) => p.id === primarySalespersonId);
+      if (!primarySp) throw new Error("Salesperson not found for reschedule");
 
       const timeMin = new Date().toISOString();
       const timeMax = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
-      const fb = await queryFreeBusy(cal, [sp.calendarId], timeMin, timeMax, cfg.timezone);
-      let busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any[];
+      const candidateSalespeople = [
+        primarySalespersonId,
+        ...preferredSalespeople.filter(id => id !== primarySalespersonId)
+      ];
 
-      if (conv.appointment.whenIso) {
-        const oldStart = new Date(conv.appointment.whenIso);
-        const oldEnd = new Date(oldStart.getTime() + durationMinutes * 60_000);
-        busy = busy.filter(
-          b => !(new Date(b.start) < oldEnd && oldStart < new Date(b.end))
+      let exactMatch: { exact: any; sp: any } | null = null;
+      let expandedPrimary: any[] | null = null;
+      for (const spId of candidateSalespeople) {
+        const sp = salespeople.find((p: any) => p.id === spId);
+        if (!sp) continue;
+        const fb = await queryFreeBusy(cal, [sp.calendarId], timeMin, timeMax, cfg.timezone);
+        let busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any[];
+        if (conv.appointment.whenIso && sp.id === primarySalespersonId) {
+          const oldStart = new Date(conv.appointment.whenIso);
+          const oldEnd = new Date(oldStart.getTime() + durationMinutes * 60_000);
+          busy = busy.filter(b => !(new Date(b.start) < oldEnd && oldStart < new Date(b.end)));
+        }
+        const expanded = expandBusyBlocks(busy as any, gapMinutes);
+        if (sp.id === primarySalespersonId) expandedPrimary = expanded;
+        const exact = findExactSlotForSalesperson(
+          cfg,
+          sp.id,
+          sp.calendarId,
+          requested,
+          durationMinutes,
+          expanded
         );
+        if (exact) {
+          exactMatch = { exact, sp };
+          break;
+        }
       }
-      const expanded = expandBusyBlocks(busy as any, gapMinutes);
 
-      const exact = findExactSlotForSalesperson(
-        cfg,
-        sp.id,
-        sp.calendarId,
-        requested,
-        durationMinutes,
-        expanded
-      );
-
-      if (exact) {
+      if (exactMatch) {
+        const sameCalendar = exactMatch.sp.id === primarySalespersonId;
+        let eventId = conv.appointment.bookedEventId;
+        if (!sameCalendar) {
+          const moved = await moveEvent(
+            cal,
+            primarySp.calendarId,
+            conv.appointment.bookedEventId,
+            exactMatch.sp.calendarId
+          );
+          eventId = moved?.id ?? eventId;
+        }
         const eventObj = await updateEvent(
           cal,
-          sp.calendarId,
-          conv.appointment.bookedEventId,
+          exactMatch.sp.calendarId,
+          eventId,
           cfg.timezone,
-          exact.start,
-          exact.end
+          exactMatch.exact.start,
+          exactMatch.exact.end
         );
 
         conv.appointment.status = "confirmed";
-        conv.appointment.whenText = formatSlotLocal(exact.start, cfg.timezone);
-        conv.appointment.whenIso = exact.start;
+        conv.appointment.whenText = formatSlotLocal(exactMatch.exact.start, cfg.timezone);
+        conv.appointment.whenIso = exactMatch.exact.start;
         conv.appointment.confirmedBy = "customer";
         conv.appointment.updatedAt = new Date().toISOString();
         conv.appointment.acknowledged = true;
-        conv.appointment.bookedEventId = eventObj.id ?? conv.appointment.bookedEventId;
+        conv.appointment.bookedEventId = eventObj.id ?? eventId;
         conv.appointment.bookedEventLink = eventObj.htmlLink ?? conv.appointment.bookedEventLink;
-        conv.appointment.bookedSalespersonId = sp.id;
+        conv.appointment.bookedSalespersonId = exactMatch.sp.id;
         conv.appointment.reschedulePending = false;
         onAppointmentBooked(conv);
 
         const dealerName =
           (conv as any).dealerProfile?.dealerName ?? "American Harley-Davidson";
         const addressLine = "1149 Erie Ave., North Tonawanda, NY 14120";
-        const when = formatSlotLocal(exact.start, cfg.timezone);
-        const repName = sp.name ? ` with ${sp.name}` : "";
+        const when = formatSlotLocal(exactMatch.exact.start, cfg.timezone);
+        const repName = exactMatch.sp.name ? ` with ${exactMatch.sp.name}` : "";
         const confirmText =
           `Perfect — you’re booked for ${when}${repName}. ` +
           `${dealerName} is at ${addressLine}.`;
@@ -4605,6 +4629,7 @@ if (authToken && signature) {
       const sameDay = candidatesByDay.filter(d => dayKey(d.dayStart, cfg.timezone) === requestedDayKey);
       const pool = sameDay.length > 0 ? sameDay : candidatesByDay;
       const flat = pool.flatMap(d => d.candidates);
+      const expanded = expandedPrimary ?? [];
       const available = flat.filter(c => !expanded.some(b => c.start < b.end && b.start < c.end));
       available.sort(
         (a, b) =>
@@ -4692,6 +4717,26 @@ if (authToken && signature) {
         )}</Message>\n</Response>`;
         return res.status(200).type("text/xml").send(twiml);
       }
+      const dayName = requested.dayOfWeek.charAt(0).toUpperCase() + requested.dayOfWeek.slice(1);
+      const hh = String(requested.hour24).padStart(2, "0");
+      const mm = String(requested.minute).padStart(2, "0");
+      const timeText = formatTime12h(`${hh}:${mm}`);
+      const reply =
+        `I can try ${dayName} at ${timeText}. ` +
+        "If that doesn't work, what other time could you do?";
+      conv.appointment.reschedulePending = true;
+      conv.appointment.updatedAt = new Date().toISOString();
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
     } catch (e: any) {
       console.log("[reschedule] failed:", e?.message ?? e);
     }
