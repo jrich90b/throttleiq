@@ -4133,15 +4133,34 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
-  const isAffirmative = (text: string) => {
-    if (extractTimeToken(text)) return false;
-    return /\b(yes|yep|yeah|yup|ok|okay|sure|confirmed|confirm|works|that works|sounds good)\b/i.test(
-      text
+  const isDeferral = (text: string) => {
+    const t = String(text ?? "").toLowerCase();
+    return (
+      /(let me|lemme)\s+(talk|check|see|confirm|ask|figure)/.test(t) ||
+      /\btalk to (my )?(wife|husband|spouse|partner)\b/.test(t) ||
+      /\bget back to you\b/.test(t) ||
+      /\bnot sure\b/.test(t) ||
+      /\bmaybe\b/.test(t)
     );
+  };
+  const isAffirmative = (text: string) => {
+    const t = String(text ?? "");
+    const lower = t.toLowerCase();
+    if (extractTimeToken(t)) return true;
+    if (isDeferral(t)) return false;
+    const hasSelection = /\b(first|second|earlier|later)\b/i.test(lower);
+    const hasConfirm =
+      /\b(yes|yep|yeah|yup|sure|confirmed|confirm|that works|works|works for me|sounds good|book it|perfect)\b/i.test(
+        lower
+      );
+    return hasSelection || hasConfirm;
   };
 
   // Auto-book if they confirmed a pending slot
-  if (!conv.appointment?.bookedEventId && conv.scheduler?.pendingSlot && isAffirmative(event.body)) {
+  if (!conv.appointment?.bookedEventId && conv.scheduler?.pendingSlot) {
+    if (isDeferral(event.body)) {
+      conv.scheduler.pendingSlot = undefined;
+    } else if (isAffirmative(event.body)) {
     const chosen = conv.scheduler.pendingSlot;
     try {
       const cfg = await getSchedulerConfig();
@@ -4790,6 +4809,7 @@ if (authToken && signature) {
     } catch (e: any) {
       console.log("[auto-book] failed:", e?.message ?? e);
       // If booking fails, fall through to normal draft behavior
+    }
     }
   }
 
