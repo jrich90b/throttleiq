@@ -42,6 +42,7 @@ import {
 } from "../domain/schedulerEngine.js";
 import { getDealerProfile } from "../domain/dealerProfile.js";
 import { getInventoryNote } from "../domain/inventoryNotes.js";
+import { hasInventoryForModelYear } from "../domain/inventoryFeed.js";
 
 function base64UrlDecode(input: string): string | null {
   try {
@@ -123,34 +124,54 @@ function formatModelLabel(year?: string | null, model?: string | null): string |
   return year ? `${year} ${clean}` : clean;
 }
 
-function buildInitialEmailDraft(conv: any, dealerProfile: any, inventoryNote?: string | null): string {
+function buildInitialEmailDraft(
+  conv: any,
+  dealerProfile: any,
+  inventoryNote?: string | null,
+  buildInventoryAvailable?: boolean | null
+): string {
   const rawName = conv?.lead?.firstName?.trim() || conv?.lead?.name?.trim() || "there";
   const name = rawName.split(" ")[0] || "there";
   const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
   const agentName = dealerProfile?.agentName ?? "our team";
   const bookingUrl = buildBookingUrlForLead(dealerProfile?.bookingUrl, conv);
   const model = formatModelLabel(conv?.lead?.vehicle?.year ?? conv?.lead?.year, conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description);
+  const leadSourceLower = (conv?.lead?.source ?? conv?.leadSource ?? "").toLowerCase();
+  const isCustomBuild = /custom build/.test(leadSourceLower);
   const isTestRide =
     conv?.classification?.bucket === "test_ride" || conv?.classification?.cta === "schedule_test_ride";
   const thanks = isTestRide
     ? model
       ? `Thanks for your interest in a test ride on the ${model}.`
       : "Thanks for your interest in a test ride."
-    : model
-      ? `Thanks for your interest in the ${model}.`
-      : "Thanks for your interest.";
+    : isCustomBuild
+      ? model
+        ? `Thanks for building your ${model} online.`
+        : "Thanks for your custom build request."
+      : model
+        ? `Thanks for your interest in the ${model}.`
+        : "Thanks for your interest.";
   const intro = `This is ${agentName} at ${dealerName}.`;
   const help = "I’m happy to help with pricing, options, and availability.";
   const noteLine = inventoryNote ? `Right now there’s ${inventoryNote} available.` : "";
-  const visit = model
-    ? "If you want to stop in to check out the bike and go over options, you can book an appointment below."
-    : "If you want to stop in to go over options, you can book an appointment below.";
+  const buildLine = isCustomBuild
+    ? buildInventoryAvailable
+      ? "We do have one in stock if you’d like to check it out. I can also walk you through build options and next steps."
+      : "I can walk you through build options and next steps."
+    : "";
+  const visit = isCustomBuild
+    ? buildInventoryAvailable
+      ? "If you want to stop in to check it out and go over build options, you can book an appointment below."
+      : "If you want to stop in to go over build options, you can book an appointment below."
+    : model
+      ? "If you want to stop in to check out the bike and go over options, you can book an appointment below."
+      : "If you want to stop in to go over options, you can book an appointment below.";
   const bookingLine = bookingUrl
     ? `You can book an appointment here: ${bookingUrl}`
     : "Just reply with a day and time that works for you.";
   const extra = "If a walkaround or extra photos would help, just let me know.";
 
-  return `Hi ${name},\n\n${thanks} ${intro} ${help} ${noteLine} ${visit}\n\n${bookingLine}\n\n${extra}`.replace(/\s+\n/g, "\n").trim();
+  return `Hi ${name},\n\n${thanks} ${intro} ${help} ${noteLine} ${buildLine} ${visit}\n\n${bookingLine}\n\n${extra}`.replace(/\s+\n/g, "\n").trim();
 }
 import { getSystemMode } from "../domain/settingsStore.js";
 import { sendEmail } from "../domain/emailSender.js";
@@ -715,13 +736,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   const callOnlyRequested = isCallOnlyText(inquiryText);
 
+  let creditTodoCreated = false;
   const isCreditLead =
     inferredBucket === "finance_prequal" ||
     inferredCta === "hdfs_coa" ||
     inferredCta === "prequalify" ||
     /coa|credit application|apply for credit|finance application|prequal/i.test(leadSourceLower);
   if (isCreditLead) {
-    addTodo(conv, "other", event.body ?? "Credit application", event.providerMessageId);
+    addTodo(conv, "approval", event.body ?? "Credit application", event.providerMessageId);
+    creditTodoCreated = true;
     setFollowUpMode(conv, "manual_handoff", "credit_app");
     stopFollowUpCadence(conv, "manual_handoff");
   }
@@ -770,7 +793,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const agentEsc = esc(agentName);
     const dealerEsc = esc(dealerName);
-    body = body.replace(new RegExp(`^this is\\s+${agentEsc}\\s+at\\s+${dealerEsc}\\.?\\s*`, "i"), "");
+    body = body.replace(new RegExp(`\\bthis is\\s+${agentEsc}\\s+at\\s+${dealerEsc}\\.?\\s*`, "ig"), "");
     return `${prefix}${body}`.trim();
   };
 
@@ -880,7 +903,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (result.handoff?.required) {
     const reason = result.handoff.reason;
     const ack = await applyInitialAdfPrefix(result.handoff.ack);
-    addTodo(conv, reason, event.body, event.providerMessageId);
+    if (!creditTodoCreated) {
+      addTodo(conv, reason, event.body, event.providerMessageId);
+    }
     setFollowUpMode(conv, "manual_handoff", `handoff:${reason}`);
     stopFollowUpCadence(conv, "manual_handoff");
     if (reason === "pricing" || reason === "payments") {
@@ -934,7 +959,22 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const stockForNote = conv.lead?.vehicle?.stockId ?? null;
     const vinForNote = conv.lead?.vehicle?.vin ?? null;
     const inventoryNote = await getInventoryNote(stockForNote, vinForNote);
-    conv.emailDraft = buildInitialEmailDraft(conv, profile, inventoryNote);
+    const leadSourceLower = (conv.lead?.source ?? "").toLowerCase();
+    let buildInventoryAvailable: boolean | null = null;
+    if (leadSourceLower.includes("custom build")) {
+      const modelForBuild = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null;
+      const yearForBuild = conv.lead?.vehicle?.year ?? null;
+      if (modelForBuild && !/full line|other/i.test(modelForBuild)) {
+        buildInventoryAvailable = await hasInventoryForModelYear({
+          model: modelForBuild,
+          year: yearForBuild,
+          yearDelta: 1
+        });
+      } else {
+        buildInventoryAvailable = false;
+      }
+    }
+    conv.emailDraft = buildInitialEmailDraft(conv, profile, inventoryNote, buildInventoryAvailable);
   } else {
     conv.emailDraft = result.draft;
   }

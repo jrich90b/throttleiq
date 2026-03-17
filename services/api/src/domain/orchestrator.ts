@@ -54,6 +54,50 @@ function detectCallbackRequest(text: string): boolean {
   return hasCallback || (hasTimeframe && (hasPhone || hasTrade));
 }
 
+function detectHoursRequest(text: string): boolean {
+  const t = text.toLowerCase();
+  return (
+    /\bhours?\b/.test(t) ||
+    /(what time.*open|what time.*close|when.*open|when.*close|opening hours|closing time)/.test(t)
+  );
+}
+
+function formatHoursRange(open: string, close: string): string {
+  return `${open}–${close}`;
+}
+
+function formatDayLabel(day: string): string {
+  return day.slice(0, 3).replace(/^\w/, c => c.toUpperCase());
+}
+
+function formatBusinessHours(hours?: Record<string, any> | null): string | null {
+  if (!hours) return null;
+  const dayOrder = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+  const entries = dayOrder
+    .map(day => ({ day, open: hours?.[day]?.open, close: hours?.[day]?.close }))
+    .filter(d => d.open && d.close);
+  if (!entries.length) return null;
+
+  const groups: Array<{ start: number; end: number; open: string; close: string }> = [];
+  for (let i = 0; i < entries.length; i++) {
+    const { open, close } = entries[i];
+    const prev = groups[groups.length - 1];
+    if (prev && prev.open === open && prev.close === close && prev.end === i - 1) {
+      prev.end = i;
+    } else {
+      groups.push({ start: i, end: i, open, close });
+    }
+  }
+
+  const parts = groups.map(g => {
+    const startDay = formatDayLabel(entries[g.start].day);
+    const endDay = formatDayLabel(entries[g.end].day);
+    const label = g.start === g.end ? startDay : `${startDay}–${endDay}`;
+    return `${label} ${formatHoursRange(g.open, g.close)}`;
+  });
+  return parts.join(", ");
+}
+
 function escapeRegExp(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -435,6 +479,7 @@ export async function orchestrateInbound(
   const managerRequest = detectManagerRequest(event.body);
   const approvalStatus = detectApprovalStatus(event.body);
   const callbackRequest = detectCallbackRequest(event.body);
+  const hoursRequest = detectHoursRequest(event.body);
   const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
   const pricingIntent =
     detectPricingOrPayment(event.body, intent) ||
@@ -506,6 +551,27 @@ export async function orchestrateInbound(
     }
     callbackRequested = true;
     if (!handoff) handoff = { required: true, reason: "other" };
+  }
+
+  if (hoursRequest) {
+    try {
+      const cfg = await getSchedulerConfig();
+      const hoursLine = formatBusinessHours(cfg.businessHours);
+      if (hoursLine) {
+        return finalize({
+          intent,
+          stage: "ENGAGED",
+          shouldRespond: true,
+          draft: `Our hours this week are ${hoursLine}.`
+        });
+      }
+    } catch {}
+    return finalize({
+      intent,
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft: "Our hours vary by day. What day are you thinking?"
+    });
   }
 
   if (pricingIntent && pricingAttempts >= 1) {
@@ -1246,15 +1312,33 @@ export async function orchestrateInbound(
           }
         }
         const canScheduleNow = !(availabilityAsked && (inventoryStatus === "UNKNOWN" || !inventoryStatus));
-        const hasConcreteInventory = !!stockId || inventoryStatus === "AVAILABLE";
+        let hasBuildInventory = false;
+        if (isCustomBuild) {
+          const modelForBuild = lead.vehicle?.model ?? lead.vehicle?.description ?? null;
+          const modelKnown = !!modelForBuild && !isUnknownModel(modelForBuild);
+          if (modelKnown) {
+            try {
+              hasBuildInventory = await hasInventoryForModelYear({
+                model: modelForBuild,
+                year: lead.vehicle?.year ?? null,
+                yearDelta: 1
+              });
+            } catch {}
+          }
+        }
+        const hasConcreteInventory =
+          !!stockId || inventoryStatus === "AVAILABLE" || (isCustomBuild && hasBuildInventory);
         const scheduleInvite = buildScheduleInvite(hasConcreteInventory);
         const noteLine = inventoryNote ? `Right now there's ${inventoryNote} available. ` : "";
+        const buildLine = isCustomBuild
+          ? "I can walk you through build options and next steps. "
+          : "";
         if (canScheduleNow && suggestedSlots.length >= 2) {
           const a = suggestedSlots[0].startLocal;
           const b = suggestedSlots[1].startLocal;
-          finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}${noteLine}${scheduleInvite} I have ${a} or ${b} — do any of these times work?`.trim();
+          finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}${noteLine}${buildLine}${scheduleInvite} I have ${a} or ${b} — do any of these times work?`.trim();
         } else if (canScheduleNow) {
-          finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}${noteLine}${scheduleInvite} What day and time works for you?`.trim();
+          finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}${noteLine}${buildLine}${scheduleInvite} What day and time works for you?`.trim();
         } else {
           finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}I'll confirm availability shortly and follow up.`;
         }
