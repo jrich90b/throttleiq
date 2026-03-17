@@ -5519,7 +5519,23 @@ if (authToken && signature) {
   });
   console.log("[twilio] result.suggestedSlots len:", result.suggestedSlots?.length ?? 0);
   if ((result.suggestedSlots?.length ?? 0) === 0 && draftHasSpecificTimes(result.draft ?? "")) {
-    result.draft = "What day and time works for you to stop in?";
+    let requested = result.requestedTime ?? null;
+    if (!requested) {
+      try {
+        const cfg = await getSchedulerConfig();
+        const tz = cfg.timezone || "America/New_York";
+        requested = parseRequestedDayTime(String(event.body ?? ""), tz);
+      } catch {}
+    }
+    if (requested) {
+      const dayName = requested.dayOfWeek.charAt(0).toUpperCase() + requested.dayOfWeek.slice(1);
+      const hh = String(requested.hour24).padStart(2, "0");
+      const mm = String(requested.minute).padStart(2, "0");
+      const timeText = formatTime12h(`${hh}:${mm}`);
+      result.draft = `Got it. I can check ${dayName} at ${timeText}. If that doesn't work, what other time could you do?`;
+    } else {
+      result.draft = "What day and time works for you to stop in?";
+    }
   }
   if (result.handoff?.required) {
     const reason = result.handoff.reason;
