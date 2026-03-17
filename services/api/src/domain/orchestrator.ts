@@ -315,23 +315,16 @@ function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
   return aStart < bEnd && bStart < aEnd;
 }
 
-function enforceNoPrematureBooking(draft: string, appointment: any, suggestedSlots: any[]) {
+function enforceNoPrematureBooking(draft: string, appointment: any) {
   if (appointment?.status === "confirmed") return draft;
 
-  let out = draft
+  const out = draft
     .replace(
       /\b(i have you|you('| a)?re|you are)\s+(scheduled|booked|confirmed|all set|set)\b/gi,
       "I can set up a time"
     )
     .replace(/\bsee you\b/gi, "I can set up a time")
     .trim();
-
-  if (Array.isArray(suggestedSlots) && suggestedSlots.length >= 2) {
-    const a = suggestedSlots[0].startLocal;
-    const b = suggestedSlots[1].startLocal;
-    out = `I can set up a time to stop in. I have ${a} or ${b} — do any of these times work?`;
-  }
-
   return out;
 }
 
@@ -1276,7 +1269,7 @@ export async function orchestrateInbound(
 
       let finalDraft = (draft || fallbackDraft).trim();
       finalDraft = stripRescheduleOffers(finalDraft);
-      finalDraft = enforceNoPrematureBooking(finalDraft, appointment, suggestedSlots);
+      finalDraft = enforceNoPrematureBooking(finalDraft, appointment);
       if (pricingAttempted && prevAskedAvailability && !/available|sale pending|verify availability/i.test(finalDraft)) {
         if (inventoryStatus === "PENDING") {
           finalDraft = `That unit is sale pending. ${finalDraft}`;
