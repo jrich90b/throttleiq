@@ -1,16 +1,16 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { apiFetch } from "../../../../../lib/apiFetch";
 
 export async function POST(
-  _req: Request,
-  { params }: { params: { id: string } }
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const base = process.env.API_BASE_URL;
   if (!base) {
     return NextResponse.json({ ok: false, error: "API_BASE_URL not set" }, { status: 500 });
   }
 
-  const id = params.id;
+  const { id } = await params;
   const r = await apiFetch(`${base}/conversations/${encodeURIComponent(id)}/reopen`, {
     method: "POST",
     headers: { "Content-Type": "application/json" }
