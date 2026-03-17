@@ -58,6 +58,139 @@ export async function classifySchedulingIntent(input: string): Promise<boolean> 
   }
 }
 
+export type BookingParse = {
+  intent: "schedule" | "reschedule" | "cancel" | "availability" | "question" | "none";
+  explicitRequest: boolean;
+  requested?: {
+    day?: string | null;
+    timeText?: string | null;
+    timeWindow?: "exact" | "range" | "unknown";
+  };
+  reference?: "last_suggested" | "last_appointment" | "none";
+  normalizedText?: string | null;
+  confidence?: number;
+};
+
+function safeParseJson(text: string): any | null {
+  const raw = String(text ?? "").trim();
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {}
+  const first = raw.indexOf("{");
+  const last = raw.lastIndexOf("}");
+  if (first >= 0 && last > first) {
+    try {
+      return JSON.parse(raw.slice(first, last + 1));
+    } catch {}
+  }
+  return null;
+}
+
+export async function parseBookingIntentWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lastSuggestedSlots?: { startLocal?: string | null }[];
+  appointment?: any;
+}): Promise<BookingParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_BOOKING_PARSER_ENABLED === "1" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const model = process.env.OPENAI_BOOKING_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const lastSlots = (args.lastSuggestedSlots ?? [])
+    .map(s => s.startLocal)
+    .filter(Boolean)
+    .slice(0, 2)
+    .join(" | ");
+  const apptStatus = args.appointment?.status ?? "none";
+
+  const prompt = [
+    "You are a scheduling parser for dealership SMS. Return ONLY valid JSON.",
+    "Do not include extra text. Do not invent dates. Use day-of-week or today/tomorrow.",
+    "",
+    "JSON SCHEMA:",
+    "{",
+    '  "intent": "schedule|reschedule|cancel|availability|question|none",',
+    '  "explicit_request": true|false,',
+    '  "requested": { "day": "monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow|this week|next week|weekend|this weekend", "time_text": "4pm", "time_window": "exact|range|unknown" },',
+    '  "reference": "last_suggested|last_appointment|none",',
+    '  "normalized_text": "friday at 4 pm",',
+    '  "confidence": 0.0',
+    "}",
+    "",
+    "Guidelines:",
+    "- explicit_request is true only if the customer is asking to schedule/stop in/reschedule/cancel.",
+    "- If the customer gives a day without a time, set requested.day and leave time_text empty.",
+    "- If the customer references a prior offer (e.g., 'that time', 'earlier', 'later'), set reference to last_suggested.",
+    "- normalized_text should be a compact day/time phrase when possible; otherwise empty string.",
+    "",
+    `Appointment status: ${apptStatus}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    lastSlots ? `Last suggested slots: ${lastSlots}` : "Last suggested slots: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  try {
+    const resp = await client.responses.create({
+      model,
+      input: prompt,
+      temperature: 0,
+      max_output_tokens: 220
+    });
+    const raw = resp.output_text?.trim() ?? "";
+    const parsed = safeParseJson(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+
+    const intentRaw = String(parsed.intent ?? "").toLowerCase();
+    const intent: BookingParse["intent"] =
+      intentRaw === "schedule" ||
+      intentRaw === "reschedule" ||
+      intentRaw === "cancel" ||
+      intentRaw === "availability" ||
+      intentRaw === "question"
+        ? intentRaw
+        : "none";
+    const explicitRequest = !!parsed.explicit_request;
+    const requested = parsed.requested && typeof parsed.requested === "object" ? parsed.requested : null;
+    const day = typeof requested?.day === "string" ? requested.day.trim() : null;
+    const timeText = typeof requested?.time_text === "string" ? requested.time_text.trim() : null;
+    const timeWindowRaw = typeof requested?.time_window === "string" ? requested.time_window : "unknown";
+    const timeWindow: "exact" | "range" | "unknown" =
+      timeWindowRaw === "exact" || timeWindowRaw === "range" ? timeWindowRaw : "unknown";
+    const referenceRaw = typeof parsed.reference === "string" ? parsed.reference : "none";
+    const reference: BookingParse["reference"] =
+      referenceRaw === "last_suggested" || referenceRaw === "last_appointment" ? referenceRaw : "none";
+    const normalizedTextRaw =
+      typeof parsed.normalized_text === "string" ? parsed.normalized_text.trim() : "";
+    let normalizedText = normalizedTextRaw;
+    if (!normalizedText && day) {
+      normalizedText = timeText ? `${day} at ${timeText}` : day;
+    }
+    const confidence =
+      typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+        ? Math.max(0, Math.min(1, parsed.confidence))
+        : undefined;
+
+    return {
+      intent,
+      explicitRequest,
+      requested: { day, timeText, timeWindow },
+      reference,
+      normalizedText: normalizedText || null,
+      confidence
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function generateDraftWithLLM(ctx: DraftContext): Promise<string> {
   const model = process.env.OPENAI_MODEL || "gpt-5-mini";
 

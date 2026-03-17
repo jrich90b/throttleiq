@@ -345,6 +345,7 @@ export async function orchestrateInbound(
     lead?: LeadProfile | null;
     pricingAttempts?: number;
     allowSchedulingOffer?: boolean;
+    schedulingText?: string | null;
   }
 ): Promise<OrchestratorResult> {
   await loadSystemPrompt("orchestrator");
@@ -825,7 +826,8 @@ export async function orchestrateInbound(
       let requestedDaySpecified = false;
       let requestedDayClosed = false;
       let requestedDayMaxSlots = 0;
-      const hasIntent = hasSchedulingIntent(event.body);
+      const schedulingText = ctx?.schedulingText || event.body;
+      const hasIntent = hasSchedulingIntent(schedulingText);
       const isAdfLead = /adf/i.test(ctx?.leadSource ?? "") || /adf/i.test(ctx?.lead?.source ?? "");
       const cta = ctx?.cta ?? "";
       const bucket = ctx?.bucket ?? "";
@@ -886,7 +888,8 @@ export async function orchestrateInbound(
           const candidatesByDay = generateCandidateSlots(cfg, now, durationMinutes, 14);
           const preferredDate = ctx?.lead?.preferredDate;
           const preferredTime = ctx?.lead?.preferredTime;
-          const requestedSeed = [preferredDate, preferredTime].filter(Boolean).join(" ").trim() || event.body;
+          const requestedSeed =
+            [preferredDate, preferredTime].filter(Boolean).join(" ").trim() || schedulingText;
           let requestedDay = inferRequestedDay(requestedSeed);
           requestedTime =
             preferredDate && preferredTime

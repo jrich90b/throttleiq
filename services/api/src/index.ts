@@ -8,7 +8,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import OpenAI from "openai";
 import { orchestrateInbound } from "./domain/orchestrator.js";
-import { classifySchedulingIntent } from "./domain/llmDraft.js";
+import { classifySchedulingIntent, parseBookingIntentWithLLM } from "./domain/llmDraft.js";
 import type { InboundMessageEvent } from "./domain/types.js";
 import { sendgridInboundMiddleware, handleSendgridInbound } from "./routes/sendgridInbound.js";
 import { resolveInventoryUrlByStock } from "./domain/inventoryUrlResolver.js";
@@ -5022,10 +5022,72 @@ if (authToken && signature) {
   const lastOutbound = [...(conv.messages ?? [])]
     .filter(m => m.direction === "out")
     .slice(-1)[0];
+  const lastOutboundText = lastOutbound?.body ?? "";
   const outboundHoldNotice =
     lastOutbound?.body &&
     /(on hold|hold with deposit|deposit|sale pending|pending|sold|already sold)/i.test(lastOutbound.body);
-  const schedulingSignals = detectSchedulingSignals(event.body);
+  const textLower = String(event.body ?? "").toLowerCase();
+  const shortAck =
+    /^(ok|okay|k|kk|thanks|thank you|got it|will do|sounds good|sounds great|appreciate it|cool)\b/i.test(
+      (event.body ?? "").trim()
+    );
+  const recentHistory = (conv.messages ?? []).slice(-6).map(m => ({
+    direction: m.direction,
+    body: m.body
+  }));
+  const bookingParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_BOOKING_PARSER_ENABLED === "1" &&
+    !!process.env.OPENAI_API_KEY;
+  const bookingParserHint =
+    !!conv.scheduler?.lastSuggestedSlots?.length ||
+    draftHasSpecificTimes(lastOutboundText) ||
+    /\b(schedule|book|appt|appointment|stop in|stop by|come in|visit|time|times|available|availability|today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(
+      textLower
+    );
+  const bookingParse =
+    bookingParserEligible && bookingParserHint && !shortAck
+      ? await parseBookingIntentWithLLM({
+          text: event.body,
+          history: recentHistory,
+          lastSuggestedSlots: conv.scheduler?.lastSuggestedSlots,
+          appointment: conv.appointment
+        })
+      : null;
+  if (process.env.DEBUG_BOOKING_PARSER === "1" && bookingParse) {
+    console.log("[llm-booking-parse]", {
+      intent: bookingParse.intent,
+      explicitRequest: bookingParse.explicitRequest,
+      normalizedText: bookingParse.normalizedText,
+      reference: bookingParse.reference,
+      confidence: bookingParse.confidence
+    });
+  }
+  const bookingParseText = bookingParse?.normalizedText ?? "";
+  const llmHasDayToken = bookingParseText
+    ? /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week|this weekend|weekend|next month)\b/i.test(
+        bookingParseText
+      )
+    : false;
+  const llmHasTimeWord = bookingParseText
+    ? /\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b/i.test(bookingParseText)
+    : false;
+  const llmHasAtHour = bookingParseText
+    ? /\b(?:at|for|around|by)\s*(\d{1,2})\b(?!\s*\/)/i.test(bookingParseText)
+    : false;
+  const llmHasDayTime = !!llmHasDayToken && (llmHasTimeWord || llmHasAtHour);
+  const llmHasDayOnlyAvailability =
+    !!llmHasDayToken && /\b(availability|available|openings|open|time|times)\b/i.test(bookingParseText);
+  const llmHasDayOnlyRequest = !!bookingParse?.explicitRequest && !!llmHasDayToken && !llmHasDayTime;
+  const schedulingSignalsBase = detectSchedulingSignals(event.body);
+  const schedulingSignals = {
+    explicit: schedulingSignalsBase.explicit || !!bookingParse?.explicitRequest,
+    hasDayTime: schedulingSignalsBase.hasDayTime || llmHasDayTime,
+    hasDayOnlyAvailability:
+      schedulingSignalsBase.hasDayOnlyAvailability || llmHasDayOnlyAvailability,
+    hasDayOnlyRequest: schedulingSignalsBase.hasDayOnlyRequest || llmHasDayOnlyRequest
+  };
   const schedulingExplicit = schedulingSignals.explicit;
   if (event.provider === "twilio" && schedulingExplicit && conv.followUp?.mode === "holding_inventory") {
     setFollowUpMode(conv, "active", "customer_requested_appointment");
@@ -5035,11 +5097,6 @@ if (authToken && signature) {
     conv.followUp?.mode === "holding_inventory" ||
     outboundHoldNotice;
   console.log("[deterministic-offer] scheduleExplicit", { schedulingExplicit });
-  const shortAck =
-    /^(ok|okay|k|kk|thanks|thank you|got it|will do|sounds good|sounds great|appreciate it|cool)\b/i.test(
-      (event.body ?? "").trim()
-    );
-  const textLower = String(event.body ?? "").toLowerCase();
   const metaPromoSource = /meta promo offer/i.test(conv.lead?.source ?? "");
   const currentModel = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "";
   const unknownModel = !currentModel || /other|full line/i.test(currentModel);
@@ -5122,7 +5179,6 @@ if (authToken && signature) {
       return res.status(200).type("text/xml").send(twiml);
     }
   }
-  const lastOutboundText = lastOutbound?.body ?? "";
   const clarificationReply = isClarificationReply(String(event.body ?? ""));
   const lastWasInventoryUncertain =
     /(not seeing|live feed|verify|inventory availability|check.*inventory|follow up shortly)/i.test(
@@ -5678,6 +5734,16 @@ if (authToken && signature) {
     }
   }
 
+  const schedulingTextForOrchestrator =
+    bookingParse?.explicitRequest &&
+    bookingParse?.normalizedText &&
+    !shortAck &&
+    !isAffirmative(event.body) &&
+    (bookingParse.intent === "schedule" ||
+      bookingParse.intent === "reschedule" ||
+      bookingParse.intent === "availability")
+      ? bookingParse.normalizedText
+      : null;
   const history = conv.messages.slice(-20).map(m => ({ direction: m.direction, body: m.body }));
   const result = await orchestrateInbound(event, history, {
     appointment: conv.appointment,
@@ -5687,7 +5753,8 @@ if (authToken && signature) {
     cta: conv.classification?.cta ?? null,
     lead: conv.lead ?? null,
     pricingAttempts: getPricingAttempts(conv),
-    allowSchedulingOffer: schedulingExplicit
+    allowSchedulingOffer: schedulingExplicit,
+    schedulingText: schedulingTextForOrchestrator
   });
   if (
     !result.requestedTime &&
