@@ -1225,7 +1225,12 @@ export async function orchestrateInbound(
         const leadName = lead?.firstName?.trim() || "there";
         const thankLabel = normalizeModelLabel(lead.vehicle?.model ?? lead.vehicle?.description);
         const thankYear = lead.vehicle?.year ? `${lead.vehicle.year} ` : "";
-        const greeting = `Hi ${leadName} — thanks for your interest in the ${thankYear}${thankLabel}. `;
+        const leadSourceLower = (ctx?.leadSource ?? lead?.source ?? "").toLowerCase();
+        const isCustomBuild = /custom build/.test(leadSourceLower);
+        const thanksLine = isCustomBuild
+          ? `thanks for building your ${thankYear}${thankLabel} online. `
+          : `thanks for your interest in the ${thankYear}${thankLabel}. `;
+        const greeting = `Hi ${leadName} — ${thanksLine}`;
         const availabilityAsked = /(available|availability|still there|in stock)/i.test(event.body);
         const hasAvailabilityAnswer = inventoryStatus === "AVAILABLE";
         const hasPendingAnswer = inventoryStatus === "PENDING";

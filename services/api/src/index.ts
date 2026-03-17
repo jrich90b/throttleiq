@@ -890,6 +890,21 @@ const EMAIL_FOLLOW_UP_MESSAGES: Array<(ctx: EmailFollowUpCtx) => string> = [
     `Hi ${name},\n\nStill interested in taking a look at ${label}? ${bookingLine} I’m happy to help with anything you need in the meantime.\n\nThanks,`
 ];
 
+function isUnknownInterestVehicle(conv: any): boolean {
+  const raw =
+    conv?.lead?.vehicle?.model ??
+    conv?.lead?.vehicle?.description ??
+    conv?.lead?.vehicleDescription ??
+    "";
+  if (!raw) return true;
+  return /full line|other/i.test(raw);
+}
+
+function isTradeAcceleratorLead(conv: any): boolean {
+  const source = (conv?.lead?.source ?? conv?.leadSource ?? "").toLowerCase();
+  return source.includes("trade accelerator");
+}
+
 function normalizeLeadLabel(conv: any): string | null {
   const raw =
     conv?.lead?.vehicle?.model ??
@@ -909,15 +924,21 @@ function buildInitialEmailDraft(conv: any, dealerProfile: any): string {
   const agentName = dealerProfile?.agentName ?? "our team";
   const bookingUrl = buildBookingUrlForLead(dealerProfile?.bookingUrl, conv);
   const label = normalizeLeadLabel(conv);
+  const leadSourceLower = (conv?.lead?.source ?? conv?.leadSource ?? "").toLowerCase();
+  const isCustomBuild = /custom build/.test(leadSourceLower);
   const isTestRide =
     conv?.classification?.bucket === "test_ride" || conv?.classification?.cta === "schedule_test_ride";
-  const thanks = isTestRide
+  const thanks = isCustomBuild
     ? label
-      ? `Thanks for your interest in a test ride on the ${label}.`
-      : "Thanks for your interest in a test ride."
-    : label
-      ? `Thanks for your interest in the ${label}.`
-      : "Thanks for your interest.";
+      ? `Thanks for building your ${label} online.`
+      : "Thanks for your custom build request."
+    : isTestRide
+      ? label
+        ? `Thanks for your interest in a test ride on the ${label}.`
+        : "Thanks for your interest in a test ride."
+      : label
+        ? `Thanks for your interest in the ${label}.`
+        : "Thanks for your interest.";
   const intro = `This is ${agentName} at ${dealerName}.`;
   const help = "I’m happy to help with pricing, options, and availability.";
   const visit = label
@@ -2126,12 +2147,25 @@ async function processDueFollowUps() {
     if (conv.followUp?.mode === "manual_handoff") continue;
 
     const canTestRideFlag = await canTestRideNow(conv);
+    const isTradeNoInterest =
+      conv?.classification?.bucket === "trade_in_sell" &&
+      isUnknownInterestVehicle(conv) &&
+      isTradeAcceleratorLead(conv);
     let message = FOLLOW_UP_MESSAGES[cadence.stepIndex] ?? FOLLOW_UP_MESSAGES[FOLLOW_UP_MESSAGES.length - 1];
     let mediaUrls: string[] | undefined;
     if (cadence.kind === "long_term") {
       const longTerm = await buildLongTermFollowUp(conv, dealerProfile);
       message = longTerm.body;
       mediaUrls = longTerm.mediaUrls;
+    } else if (isTradeNoInterest) {
+      const day2 = cadence.stepIndex === 0 ? await buildDay2Options(cfg) : null;
+      if (day2) {
+        message = `Just checking in on your trade‑in estimate. What model are you interested in? I can set up a trade appraisal. I have ${day2.slots[0].startLocal} or ${day2.slots[1].startLocal} — do any of these times work?`;
+        setLastSuggestedSlots(conv, day2.slots);
+      } else {
+        message =
+          "Just checking in on your trade‑in estimate. What model are you interested in? I can set up a trade appraisal. What day and time works for you?";
+      }
     } else if (cadence.stepIndex === 0) {
       const day2 = await buildDay2Options(cfg);
       if (day2) {
@@ -2174,6 +2208,14 @@ async function processDueFollowUps() {
     if (useEmail) {
       if (cadence.kind === "long_term") {
         emailMessage = `Hi ${name},\n\n${message}\n\n${bookingLine}\n\nThanks,`;
+      } else if (isTradeNoInterest) {
+        const tradeBookingLine = bookingUrl
+          ? `You can book an appointment here: ${bookingUrl}`
+          : "If you'd like a trade appraisal, just reply with a day and time that works.";
+        emailMessage =
+          `Hi ${name},\n\nJust checking in on your trade‑in estimate. ` +
+          `If you’d like a trade appraisal, I can set a time. Also, which model are you interested in? ` +
+          `${tradeBookingLine}\n\nThanks,`;
       } else {
         const idx = Math.min(cadence.stepIndex, EMAIL_FOLLOW_UP_MESSAGES.length - 1);
         emailMessage = EMAIL_FOLLOW_UP_MESSAGES[idx]({
