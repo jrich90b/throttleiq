@@ -1696,13 +1696,40 @@ function isExplicitScheduleIntent(text: string): boolean {
   return false;
 }
 
-function formatBusinessHoursForReply(hours?: Record<string, any> | null): string | null {
+function isDecisionDeferral(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  return (
+    /(let me|lemme)\s+(talk|check|see|figure|confirm)\b/.test(t) ||
+    /\b(talk to (my )?(wife|husband|spouse|partner))\b/.test(t) ||
+    /\b(check|look at|review)\s+(my )?(schedule|calendar)\b/.test(t) ||
+    /\bsee what i have going on\b/.test(t) ||
+    /\bget back to you\b/.test(t)
+  );
+}
+
+function formatTime12h(time: string): string {
+  const m = time.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return time;
+  let hour = Number(m[1]);
+  const minute = m[2];
+  const ampm = hour >= 12 ? "PM" : "AM";
+  hour = hour % 12;
+  if (hour === 0) hour = 12;
+  return `${hour}:${minute} ${ampm}`;
+}
+
+function formatBusinessHoursForReply(
+  hours?: Record<string, any> | null,
+  country?: string | null
+): string | null {
   if (!hours) return null;
   const dayOrder = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
   const entries = dayOrder
     .map(day => ({ day, open: hours?.[day]?.open, close: hours?.[day]?.close }))
     .filter(d => d.open && d.close);
   if (!entries.length) return null;
+
+  const use12h = !country || ["us", "usa", "ca", "can", "canada"].includes(country.toLowerCase());
 
   const groups: Array<{ start: number; end: number; open: string; close: string }> = [];
   for (let i = 0; i < entries.length; i++) {
@@ -1720,9 +1747,39 @@ function formatBusinessHoursForReply(hours?: Record<string, any> | null): string
   return groups
     .map(g => {
       const dayLabel = g.start === g.end ? label(g.start) : `${label(g.start)}–${label(g.end)}`;
-      return `${dayLabel} ${g.open}–${g.close}`;
+      const open = use12h ? formatTime12h(g.open) : g.open;
+      const close = use12h ? formatTime12h(g.close) : g.close;
+      return `${dayLabel} ${open}–${close}`;
     })
     .join(", ");
+}
+
+function extractDayRequest(text: string): string | null {
+  const t = text.toLowerCase();
+  const map: Record<string, string> = {
+    monday: "monday",
+    mon: "monday",
+    tuesday: "tuesday",
+    tue: "tuesday",
+    tues: "tuesday",
+    wednesday: "wednesday",
+    wed: "wednesday",
+    thursday: "thursday",
+    thu: "thursday",
+    thur: "thursday",
+    thurs: "thursday",
+    friday: "friday",
+    fri: "friday",
+    saturday: "saturday",
+    sat: "saturday",
+    sunday: "sunday",
+    sun: "sunday"
+  };
+  for (const key of Object.keys(map)) {
+    const re = new RegExp(`\\b${key}\\b`, "i");
+    if (re.test(t)) return map[key];
+  }
+  return null;
 }
 
 function escapeRegex(s: string): string {
@@ -4772,10 +4829,25 @@ if (authToken && signature) {
 
   if (event.provider === "twilio" && hoursQuestion) {
     const cfg = await getSchedulerConfig();
-    const hoursLine = formatBusinessHoursForReply(cfg.businessHours);
-    const reply = hoursLine
-      ? `Our hours this week are ${hoursLine}.`
-      : "Our hours vary by day. What day are you thinking?";
+    const dealerProfile = await getDealerProfile();
+    const country = dealerProfile?.address?.country ?? null;
+    const dayRequest = extractDayRequest(textLower);
+    const hoursLine = formatBusinessHoursForReply(cfg.businessHours, country);
+    let reply = "Our hours vary by day. What day are you thinking?";
+    if (dayRequest) {
+      const dayHours = cfg.businessHours?.[dayRequest];
+      if (dayHours?.open && dayHours?.close) {
+        const open = formatTime12h(dayHours.open);
+        const close = formatTime12h(dayHours.close);
+        const dayLabel = dayRequest.replace(/^\w/, c => c.toUpperCase());
+        reply = `Our hours on ${dayLabel} are ${open}–${close}.`;
+      } else {
+        const dayLabel = dayRequest.replace(/^\w/, c => c.toUpperCase());
+        reply = `We’re closed on ${dayLabel}.`;
+      }
+    } else if (hoursLine) {
+      reply = `Our hours this week are ${hoursLine}.`;
+    }
     if (webhookMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
@@ -5707,14 +5779,6 @@ if (authToken && signature) {
   const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
   const agentName = dealerProfile?.agentName ?? "Brooke";
   let reply = ensureUniqueDraft(result.draft, conv, dealerName, agentName);
-  const hoursRequest =
-    /\bhours?\b/i.test(String(event.body ?? "")) ||
-    /(what time.*open|what time.*close|when.*open|when.*close|opening hours|closing time)/i.test(
-      String(event.body ?? "")
-    );
-  if (!schedulingExplicit && !hoursRequest && draftHasSchedulingPrompt(reply)) {
-    reply = "If you’d like, I can set a reminder for you or help with pricing/model comparisons.";
-  }
   const effectiveWebhookMode = webhookMode;
   const hadOutbound = conv.messages.some(m => m.direction === "out");
 
