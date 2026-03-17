@@ -426,6 +426,22 @@ Transcript:
 ${clipped}
 `.trim();
 
+  const stripUnknownYears = (summary: string, transcriptText: string) => {
+    const transcriptYears = new Set<string>();
+    const yearRe = /\b(19|20)\d{2}\b/g;
+    let match: RegExpExecArray | null;
+    while ((match = yearRe.exec(transcriptText)) !== null) {
+      transcriptYears.add(match[0]);
+    }
+    const cleaned = summary.replace(yearRe, value =>
+      transcriptYears.size > 0 && transcriptYears.has(value) ? value : ""
+    );
+    return cleaned
+      .replace(/\s{2,}/g, " ")
+      .replace(/\s+([,.;:])/g, "$1")
+      .trim();
+  };
+
   try {
     const resp = await client.responses.create({
       model,
@@ -435,7 +451,8 @@ ${clipped}
       max_output_tokens: 180
     });
     const out = resp.output_text?.trim() ?? "";
-    return out || null;
+    const cleaned = stripUnknownYears(out, raw);
+    return cleaned || null;
   } catch {
     return null;
   }
