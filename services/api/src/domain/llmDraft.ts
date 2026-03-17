@@ -25,6 +25,7 @@ export type DraftContext = {
   pricingIntent?: boolean;
   inquiry: string;
   history: { direction: "in" | "out"; body: string }[];
+  voiceSummary?: string | null;
 
   // Inventory verification inputs (optional)
   stockId?: string | null;
@@ -372,6 +373,69 @@ export async function parseIntentWithLLM(args: {
   };
 }
 
+export async function summarizeVoiceTranscriptWithLLM(args: {
+  transcript: string;
+  lead?: Conversation["lead"];
+}): Promise<string | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_VOICE_SUMMARIZER_ENABLED === "1" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const raw = String(args.transcript ?? "").trim();
+  if (!raw) return null;
+
+  const model =
+    process.env.OPENAI_VOICE_SUMMARIZER_MODEL ||
+    process.env.OPENAI_MODEL ||
+    "gpt-4o-mini";
+
+  const clipped = raw.length > 4000 ? raw.slice(-4000) : raw;
+  const lead = args.lead ?? {};
+
+  const instructions = `
+Summarize the phone call transcript for internal sales context.
+- 2–3 sentences max.
+- Focus on what the customer wants and key constraints (model/year/trim/color, timing, pricing, trade, test ride, callback).
+- Include any clear next action or commitment.
+- Do NOT invent details not stated in the transcript.
+- Do NOT mention that this is a summary.
+Return only the summary text.
+`.trim();
+
+  const input = `
+Known lead info (may help resolve model names):
+${JSON.stringify(
+    {
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null,
+      color: lead?.vehicle?.color ?? null,
+      stockId: lead?.vehicle?.stockId ?? null
+    },
+    null,
+    2
+  )}
+
+Transcript:
+${clipped}
+`.trim();
+
+  try {
+    const resp = await client.responses.create({
+      model,
+      instructions,
+      input,
+      temperature: 0,
+      max_output_tokens: 180
+    });
+    const out = resp.output_text?.trim() ?? "";
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function generateDraftWithLLM(ctx: DraftContext): Promise<string> {
   const model = process.env.OPENAI_MODEL || "gpt-5-mini";
 
@@ -622,6 +686,11 @@ AVAILABLE INVENTORY BEHAVIOR (tone + close):
 INVENTORY NOTES (optional):
 - If inventoryNote is present, weave it into the response as ONE short sentence.
 
+VOICE SUMMARY (context-only):
+- If voiceSummary is provided, treat it as background from a recent call.
+- Do NOT mention the call or say “on the phone”.
+- If the current message conflicts with the summary, ask a brief clarifying question.
+
 LEAD SOURCE CLOSE INTENSITY:
 - High intent (appointment times strongly):
   - "HDFS COA Online"
@@ -663,6 +732,9 @@ ${JSON.stringify(ctx.appointment ?? {}, null, 2)}
 
 Follow-up mode:
 ${JSON.stringify(ctx.followUp ?? {}, null, 2)}
+
+Latest voice call summary (if any):
+${ctx.voiceSummary ?? "none"}
 
 Suggested appointment slots (if any):
 ${JSON.stringify(ctx.suggestedSlots ?? [], null, 2)}

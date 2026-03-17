@@ -349,6 +349,7 @@ export async function orchestrateInbound(
     schedulingText?: string | null;
     callbackRequestedOverride?: boolean;
     appointmentTypeOverride?: "inventory_visit" | "test_ride" | "trade_appraisal" | "finance_discussion";
+    voiceSummary?: string | null;
   }
 ): Promise<OrchestratorResult> {
   await loadSystemPrompt("orchestrator");
@@ -1326,7 +1327,8 @@ export async function orchestrateInbound(
         pricingAttempts,
         pricingIntent,
         handoff,
-        callbackRequest: callbackRequested
+        callbackRequest: callbackRequested,
+        voiceSummary: ctx?.voiceSummary ?? null
       });
 
       let finalDraft = (draft || fallbackDraft).trim();

@@ -15,6 +15,14 @@ export type MessageProvider =
   | "voice_call"
   | "voice_transcript";
 
+export type VoiceContext = {
+  summary: string;
+  updatedAt: string;
+  expiresAt?: string;
+  sourceMessageId?: string;
+  contacted?: boolean;
+};
+
 export type AppointmentStatus = "none" | "proposed" | "confirmed";
 
 export type AppointmentMemory = {
@@ -228,6 +236,7 @@ export type Conversation = {
   inventoryWatchPending?: InventoryWatchPending;
   emailDraft?: string;
   contactPreference?: "call_only";
+  voiceContext?: VoiceContext;
 };
 
 const conversations = new Map<string, Conversation>();
@@ -1419,6 +1428,35 @@ export function setCrmLastLoggedAt(conv: Conversation, iso: string) {
   conv.crm.lastLoggedAt = iso;
   conv.updatedAt = nowIso();
   scheduleSave();
+}
+
+export function setVoiceContext(conv: Conversation, voiceContext: VoiceContext | null) {
+  if (!voiceContext) {
+    if (conv.voiceContext) {
+      conv.voiceContext = undefined;
+      conv.updatedAt = nowIso();
+      scheduleSave();
+    }
+    return;
+  }
+  conv.voiceContext = voiceContext;
+  conv.updatedAt = nowIso();
+  scheduleSave();
+}
+
+export function getActiveVoiceContext(conv: Conversation): VoiceContext | null {
+  const ctx = conv.voiceContext;
+  if (!ctx) return null;
+  if (ctx.expiresAt) {
+    const expiresAt = new Date(ctx.expiresAt).getTime();
+    if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
+      conv.voiceContext = undefined;
+      conv.updatedAt = nowIso();
+      scheduleSave();
+      return null;
+    }
+  }
+  return ctx;
 }
 
 export function deleteConversation(convId: string): boolean {

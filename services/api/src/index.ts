@@ -8,7 +8,12 @@ import * as path from "node:path";
 import * as os from "node:os";
 import OpenAI from "openai";
 import { orchestrateInbound } from "./domain/orchestrator.js";
-import { classifySchedulingIntent, parseBookingIntentWithLLM, parseIntentWithLLM } from "./domain/llmDraft.js";
+import {
+  classifySchedulingIntent,
+  parseBookingIntentWithLLM,
+  parseIntentWithLLM,
+  summarizeVoiceTranscriptWithLLM
+} from "./domain/llmDraft.js";
 import type { InboundMessageEvent } from "./domain/types.js";
 import { sendgridInboundMiddleware, handleSendgridInbound } from "./routes/sendgridInbound.js";
 import { resolveInventoryUrlByStock } from "./domain/inventoryUrlResolver.js";
@@ -84,6 +89,8 @@ import {
   setConversationMode,
   setContactPreference,
   setCrmLastLoggedAt,
+  setVoiceContext,
+  getActiveVoiceContext,
   flushConversationStore,
   reloadConversationStore,
   saveConversation,
@@ -491,7 +498,7 @@ app.post("/debug/inbound/process", express.json(), async (req, res) => {
 
     const conv = upsertConversationByLeadKey(event.from, "suggest");
     appendInbound(conv, event);
-    const history = conv.messages.slice(-20).map(m => ({ direction: m.direction, body: m.body }));
+    const history = buildHistory(conv, 20);
     const result = await orchestrateInbound(event, history, {
       appointment: conv.appointment,
       followUp: conv.followUp,
@@ -500,7 +507,8 @@ app.post("/debug/inbound/process", express.json(), async (req, res) => {
       cta: conv.classification?.cta ?? null,
       lead: conv.lead ?? null,
       pricingAttempts: getPricingAttempts(conv),
-      allowSchedulingOffer: isExplicitScheduleIntent(body)
+      allowSchedulingOffer: isExplicitScheduleIntent(body),
+      voiceSummary: getActiveVoiceContext(conv)?.summary ?? null
     });
 
     if (result?.draft && result.shouldRespond) {
@@ -1508,6 +1516,26 @@ function isLikelyVoicemailTranscript(text: string): boolean {
     /record your message/.test(t) ||
     /sorry we (missed|couldn't take) your call/.test(t)
   );
+}
+
+function isVoiceProvider(msg: { provider?: string } | null | undefined): boolean {
+  return msg?.provider === "voice_call" || msg?.provider === "voice_transcript";
+}
+
+function getNonVoiceMessages(conv: any) {
+  return (conv?.messages ?? []).filter((m: any) => !isVoiceProvider(m));
+}
+
+function buildHistory(conv: any, limit = 20) {
+  return getNonVoiceMessages(conv)
+    .slice(-limit)
+    .map((m: any) => ({ direction: m.direction, body: m.body }));
+}
+
+function getLastNonVoiceOutbound(conv: any) {
+  return getNonVoiceMessages(conv)
+    .filter((m: any) => m.direction === "out")
+    .slice(-1)[0];
 }
 
 function normalizeTimeToken(s: string): string {
@@ -5079,9 +5107,7 @@ if (authToken && signature) {
     cta: conv.classification?.cta ?? null,
     bucket: conv.classification?.bucket ?? null
   });
-  const lastOutbound = [...(conv.messages ?? [])]
-    .filter(m => m.direction === "out")
-    .slice(-1)[0];
+  const lastOutbound = getLastNonVoiceOutbound(conv);
   const lastOutboundText = lastOutbound?.body ?? "";
   const outboundHoldNotice =
     lastOutbound?.body &&
@@ -5091,10 +5117,7 @@ if (authToken && signature) {
     /^(ok|okay|k|kk|thanks|thank you|got it|will do|sounds good|sounds great|appreciate it|cool)\b/i.test(
       (event.body ?? "").trim()
     );
-  const recentHistory = (conv.messages ?? []).slice(-6).map(m => ({
-    direction: m.direction,
-    body: m.body
-  }));
+  const recentHistory = buildHistory(conv, 6);
   const bookingParserEligible =
     event.provider === "twilio" &&
     process.env.LLM_ENABLED === "1" &&
@@ -5913,7 +5936,7 @@ if (authToken && signature) {
       ? bookingParseText
       : null;
   const appointmentTypeOverride = llmTestRideIntent ? "test_ride" : undefined;
-  const history = conv.messages.slice(-20).map(m => ({ direction: m.direction, body: m.body }));
+  const history = buildHistory(conv, 20);
   const result = await orchestrateInbound(event, history, {
     appointment: conv.appointment,
     followUp: conv.followUp,
@@ -5925,7 +5948,8 @@ if (authToken && signature) {
     allowSchedulingOffer: schedulingExplicit,
     schedulingText: schedulingTextForOrchestrator,
     callbackRequestedOverride: llmCallbackRequested ? true : undefined,
-    appointmentTypeOverride
+    appointmentTypeOverride,
+    voiceSummary: getActiveVoiceContext(conv)?.summary ?? null
   });
   if (
     !result.requestedTime &&
@@ -6533,6 +6557,23 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
     const contactedValue: "YES" | "NO" =
       transcriptText && !isLikelyVoicemailTranscript(transcriptText) ? "YES" : "NO";
     if (noteText) {
+      if (contactedValue === "YES") {
+        const summary = await summarizeVoiceTranscriptWithLLM({
+          transcript: transcriptText,
+          lead: conv.lead ?? null
+        });
+        if (summary) {
+          const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
+          setVoiceContext(conv, {
+            summary,
+            updatedAt: new Date().toISOString(),
+            expiresAt,
+            sourceMessageId: recordingSid || undefined,
+            contacted: true
+          });
+        }
+      }
+
       appendOutbound(
         conv,
         "voice",
