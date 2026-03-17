@@ -5092,8 +5092,11 @@ if (authToken && signature) {
   }
 
   if (event.provider === "twilio" && conv.inventoryWatchPending) {
+    const cfg = await getSchedulerConfig();
+    const tz = cfg.timezone || "America/New_York";
+    const explicitRequested = parseRequestedDayTime(String(event.body ?? ""), tz);
     // If the customer explicitly asks for a day/time, let scheduling handle it.
-    if (!isExplicitScheduleIntent(event.body)) {
+    if (!explicitRequested && !isExplicitScheduleIntent(event.body)) {
       const pending = conv.inventoryWatchPending;
       const pref = parseInventoryWatchPreference(String(event.body ?? ""), pending);
       if (pref.action === "clarify") {
