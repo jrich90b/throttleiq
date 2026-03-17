@@ -1518,6 +1518,42 @@ function isLikelyVoicemailTranscript(text: string): boolean {
   );
 }
 
+function findConversationByCallSid(callSid?: string | null) {
+  const sid = String(callSid ?? "").trim();
+  if (!sid) return null;
+  for (const conv of getAllConversations()) {
+    if (
+      (conv.messages ?? []).some(
+        m => m.provider === "voice_call" && m.providerMessageId && m.providerMessageId === sid
+      )
+    ) {
+      return conv;
+    }
+  }
+  return null;
+}
+
+function findConversationByPhone(rawPhone?: string | null) {
+  const normalized = normalizePhone(String(rawPhone ?? "").trim());
+  if (!normalized) return null;
+  const direct = getConversation(normalized);
+  if (direct) return direct;
+  const digits = normalized.replace(/\D/g, "");
+  if (!digits) return null;
+  for (const conv of getAllConversations()) {
+    if (
+      (conv.messages ?? []).some(m => {
+        const fromDigits = String(m.from ?? "").replace(/\D/g, "");
+        const toDigits = String(m.to ?? "").replace(/\D/g, "");
+        return fromDigits === digits || toDigits === digits;
+      })
+    ) {
+      return conv;
+    }
+  }
+  return null;
+}
+
 function isVoiceProvider(msg: { provider?: string } | null | undefined): boolean {
   return msg?.provider === "voice_call" || msg?.provider === "voice_transcript";
 }
@@ -6485,9 +6521,11 @@ app.post("/webhooks/twilio/voice", async (req, res) => {
   const agentNameRaw = String(req.query?.agentName ?? "").trim();
   const customerPhone = normalizePhone(customerRaw);
   const leadKey = String(req.query?.leadKey ?? "").trim();
+  const callSid = String(req.body?.CallSid ?? "").trim();
   const from = process.env.TWILIO_FROM_NUMBER ?? "";
 
-  const recordingCb = `${publicBase ?? `${req.protocol}://${req.get("host")}`}/webhooks/twilio/voice/recording?leadKey=${encodeURIComponent(leadKey)}${agentNameRaw ? `&agentName=${encodeURIComponent(agentNameRaw)}` : ""}`;
+  const leadKeyParam = leadKey || customerPhone || "";
+  const recordingCb = `${publicBase ?? `${req.protocol}://${req.get("host")}`}/webhooks/twilio/voice/recording?leadKey=${encodeURIComponent(leadKeyParam)}${customerPhone ? `&customer=${encodeURIComponent(customerPhone)}` : ""}${callSid ? `&callSid=${encodeURIComponent(callSid)}` : ""}${agentNameRaw ? `&agentName=${encodeURIComponent(agentNameRaw)}` : ""}`;
 
   const response = new (twilio as any).twiml.VoiceResponse();
   if (agentDigits) {
@@ -6524,16 +6562,40 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
   }
 
   const leadKey = String(req.query?.leadKey ?? "").trim();
+  const customerRaw = String(req.query?.customer ?? "").trim();
+  const callbackCallSid = String(req.query?.callSid ?? "").trim();
   const agentName = String(req.query?.agentName ?? "").trim();
   const recordingUrl = String(req.body?.RecordingUrl ?? "").trim();
   const recordingSid = String(req.body?.RecordingSid ?? "").trim();
+  const bodyCallSid = String(req.body?.CallSid ?? "").trim();
 
-  if (!leadKey || !recordingUrl) {
-    return res.json({ ok: false, error: "missing leadKey or RecordingUrl" });
+  if (!recordingUrl) {
+    return res.json({ ok: false, error: "missing RecordingUrl" });
   }
 
-  const conv = getConversation(leadKey);
-  if (!conv) return res.json({ ok: true });
+  let conv = leadKey ? getConversation(leadKey) : null;
+  if (!conv && callbackCallSid) {
+    conv = findConversationByCallSid(callbackCallSid);
+  }
+  if (!conv && bodyCallSid) {
+    conv = findConversationByCallSid(bodyCallSid);
+  }
+  if (!conv) {
+    const fallbackPhone =
+      customerRaw ||
+      String(req.body?.To ?? "").trim() ||
+      String(req.body?.From ?? "").trim();
+    conv = findConversationByPhone(fallbackPhone);
+  }
+  if (!conv) {
+    console.warn("[voice] recording skip: conversation not found", {
+      leadKey,
+      customerRaw,
+      callbackCallSid,
+      bodyCallSid
+    });
+    return res.json({ ok: true });
+  }
 
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken2 = process.env.TWILIO_AUTH_TOKEN;
@@ -6560,7 +6622,7 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
       if (contactedValue === "YES") {
         const summary = await summarizeVoiceTranscriptWithLLM({
           transcript: transcriptText,
-          lead: conv.lead ?? null
+          lead: conv.lead ?? undefined
         });
         if (summary) {
           const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
