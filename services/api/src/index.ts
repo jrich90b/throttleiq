@@ -2056,6 +2056,33 @@ function parseOfferSlotsFromReply(reply: string): { startLocal: string; endLocal
   ];
 }
 
+function inferDayTokenFromSlot(text: string): string | null {
+  const t = String(text ?? "").toLowerCase();
+  const m = t.match(/\b(mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)\b/);
+  if (!m) return null;
+  const token = m[1];
+  const map: Record<string, string> = {
+    mon: "monday",
+    monday: "monday",
+    tue: "tuesday",
+    tues: "tuesday",
+    tuesday: "tuesday",
+    wed: "wednesday",
+    wednesday: "wednesday",
+    thu: "thursday",
+    thur: "thursday",
+    thurs: "thursday",
+    thursday: "thursday",
+    fri: "friday",
+    friday: "friday",
+    sat: "saturday",
+    saturday: "saturday",
+    sun: "sunday",
+    sunday: "sunday"
+  };
+  return map[token] ?? null;
+}
+
 function slotMatchesReply(slotStartLocal: string, reply: string): boolean {
   const slotToken = extractTimeToken(slotStartLocal);
   const replyToken = extractTimeToken(reply);
@@ -4208,75 +4235,83 @@ if (authToken && signature) {
   if (conv.appointment?.bookedEventId && conv.scheduler?.pendingSlot?.reschedule) {
     if (isDeferral(event.body)) {
       conv.scheduler.pendingSlot = undefined;
-    } else if (isAffirmative(event.body)) {
+    } else {
       const chosen = conv.scheduler.pendingSlot;
-      try {
-        const cfg = await getSchedulerConfig();
-        const tz = cfg.timezone || "America/New_York";
-        const cal = await getAuthedCalendarClient();
-        const salespeople = cfg.salespeople ?? [];
+      const hasTimeToken = !!extractTimeToken(event.body);
+      const matchesPending = hasTimeToken
+        ? slotMatchesReply(chosen?.startLocal ?? "", event.body)
+        : false;
+      if (hasTimeToken && !matchesPending) {
+        conv.scheduler.pendingSlot = undefined;
+      } else if ((hasTimeToken && matchesPending) || (!hasTimeToken && isAffirmative(event.body))) {
+        try {
+          const cfg = await getSchedulerConfig();
+          const tz = cfg.timezone || "America/New_York";
+          const cal = await getAuthedCalendarClient();
+          const salespeople = cfg.salespeople ?? [];
 
-        const currentSpId = conv.appointment.bookedSalespersonId ?? chosen.salespersonId;
-        const currentSp = salespeople.find(p => p.id === currentSpId);
-        const targetSp = salespeople.find(p => p.id === chosen.salespersonId) ?? currentSp;
-        if (!currentSp || !targetSp) throw new Error("Salesperson not found for reschedule confirm");
+          const currentSpId = conv.appointment.bookedSalespersonId ?? chosen.salespersonId;
+          const currentSp = salespeople.find(p => p.id === currentSpId);
+          const targetSp = salespeople.find(p => p.id === chosen.salespersonId) ?? currentSp;
+          if (!currentSp || !targetSp) throw new Error("Salesperson not found for reschedule confirm");
 
-        let eventId = conv.appointment.bookedEventId;
-        if (currentSp.calendarId !== targetSp.calendarId) {
-          const moved = await moveEvent(cal, currentSp.calendarId, eventId, targetSp.calendarId);
-          eventId = moved?.id ?? eventId;
-        }
-        const eventObj = await updateEvent(
-          cal,
-          targetSp.calendarId,
-          eventId,
-          tz,
-          chosen.start,
-          chosen.end
-        );
+          let eventId = conv.appointment.bookedEventId;
+          if (currentSp.calendarId !== targetSp.calendarId) {
+            const moved = await moveEvent(cal, currentSp.calendarId, eventId, targetSp.calendarId);
+            eventId = moved?.id ?? eventId;
+          }
+          const eventObj = await updateEvent(
+            cal,
+            targetSp.calendarId,
+            eventId,
+            tz,
+            chosen.start,
+            chosen.end
+          );
 
-        conv.appointment.status = "confirmed";
-        conv.appointment.whenText = chosen.startLocal ?? chosen.start;
-        conv.appointment.whenIso = chosen.start;
-        conv.appointment.confirmedBy = "customer";
-        conv.appointment.updatedAt = new Date().toISOString();
-        conv.appointment.acknowledged = true;
-        conv.appointment.bookedEventId = eventObj.id ?? eventId;
-        conv.appointment.bookedEventLink = eventObj.htmlLink ?? conv.appointment.bookedEventLink;
-        conv.appointment.bookedSalespersonId = targetSp.id;
-        conv.appointment.reschedulePending = false;
-        onAppointmentBooked(conv);
+          conv.appointment.status = "confirmed";
+          conv.appointment.whenText = chosen.startLocal ?? chosen.start;
+          conv.appointment.whenIso = chosen.start;
+          conv.appointment.confirmedBy = "customer";
+          conv.appointment.updatedAt = new Date().toISOString();
+          conv.appointment.acknowledged = true;
+          conv.appointment.bookedEventId = eventObj.id ?? eventId;
+          conv.appointment.bookedEventLink = eventObj.htmlLink ?? conv.appointment.bookedEventLink;
+          conv.appointment.bookedSalespersonId = targetSp.id;
+          conv.appointment.reschedulePending = false;
+          onAppointmentBooked(conv);
 
-        if (conv.scheduler) {
-          conv.scheduler.pendingSlot = undefined;
-          conv.scheduler.updatedAt = new Date().toISOString();
-        }
+          if (conv.scheduler) {
+            conv.scheduler.pendingSlot = undefined;
+            conv.scheduler.updatedAt = new Date().toISOString();
+          }
 
-        const dealerName =
-          (conv as any).dealerProfile?.dealerName ?? "American Harley-Davidson";
-        const addressLine = "1149 Erie Ave., North Tonawanda, NY 14120";
-        const when = formatSlotLocal(chosen.start, tz);
-        const repName =
-          chosen?.salespersonName ??
-          cfg.salespeople?.find(p => p.id === chosen?.salespersonId)?.name ??
-          null;
-        const repSuffix = repName ? ` with ${repName}` : "";
-        const reply =
-          `Perfect — you’re booked for ${when}${repSuffix}. ` +
-          `${dealerName} is at ${addressLine}.`;
-        const systemMode = webhookMode;
-        if (systemMode === "suggest") {
-          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+          const dealerName =
+            (conv as any).dealerProfile?.dealerName ?? "American Harley-Davidson";
+          const addressLine = "1149 Erie Ave., North Tonawanda, NY 14120";
+          const when = formatSlotLocal(chosen.start, tz);
+          const repName =
+            chosen?.salespersonName ??
+            cfg.salespeople?.find(p => p.id === chosen?.salespersonId)?.name ??
+            null;
+          const repSuffix = repName ? ` with ${repName}` : "";
+          const reply =
+            `Perfect — you’re booked for ${when}${repSuffix}. ` +
+            `${dealerName} is at ${addressLine}.`;
+          const systemMode = webhookMode;
+          if (systemMode === "suggest") {
+            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+            return res.status(200).type("text/xml").send(twiml);
+          }
+          appendOutbound(conv, event.to, event.from, reply, "twilio", eventObj.id ?? undefined);
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+            reply
+          )}</Message>\n</Response>`;
           return res.status(200).type("text/xml").send(twiml);
+        } catch (e: any) {
+          console.log("[appt-resched-confirm] failed:", e?.message ?? e);
         }
-        appendOutbound(conv, event.to, event.from, reply, "twilio", eventObj.id ?? undefined);
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-          reply
-        )}</Message>\n</Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      } catch (e: any) {
-        console.log("[appt-resched-confirm] failed:", e?.message ?? e);
       }
     }
   }
@@ -4285,87 +4320,96 @@ if (authToken && signature) {
   if (!conv.appointment?.bookedEventId && conv.scheduler?.pendingSlot) {
     if (isDeferral(event.body)) {
       conv.scheduler.pendingSlot = undefined;
-    } else if (isAffirmative(event.body)) {
-    const chosen = conv.scheduler.pendingSlot;
-    try {
-      const cfg = await getSchedulerConfig();
-      const tz = cfg.timezone || "America/New_York";
-      const cal = await getAuthedCalendarClient();
-
-      const stockId = conv.lead?.vehicle?.stockId ?? null;
-      const leadNameRaw = conv.lead?.name?.trim() ?? "";
-      const firstName = conv.lead?.firstName ?? "";
-      const lastName = conv.lead?.lastName ?? "";
-      const leadName = leadNameRaw || [firstName, lastName].filter(Boolean).join(" ").trim() || conv.leadKey;
-      const appointmentType = chosen.appointmentType ?? "inventory_visit";
-
-      const summary = `Appt: ${appointmentType} – ${leadName}${stockId ? ` – ${stockId}` : ""}`;
-      const description = [
-        `LeadKey: ${conv.leadKey}`,
-        `Phone: ${conv.lead?.phone ?? conv.leadKey}`,
-        `Email: ${conv.lead?.email ?? ""}`,
-        `Stock: ${stockId ?? ""}`,
-        `VIN: ${conv.lead?.vehicle?.vin ?? ""}`,
-        `Source: ${conv.lead?.source ?? ""}`
-      ]
-        .filter(Boolean)
-        .join("\n");
-
-      const created = await insertEvent(
-        cal,
-        chosen.calendarId,
-        tz,
-        summary,
-        description,
-        chosen.start,
-        chosen.end
-      );
-
-      conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
-      conv.appointment.status = "confirmed";
-      conv.appointment.whenText = chosen.startLocal ?? chosen.start;
-      conv.appointment.whenIso = chosen.start;
-      conv.appointment.confirmedBy = "customer";
-      conv.appointment.updatedAt = new Date().toISOString();
-      conv.appointment.acknowledged = true;
-      conv.appointment.bookedEventId = created.id ?? null;
-      conv.appointment.bookedEventLink = created.htmlLink ?? null;
-      conv.appointment.bookedSalespersonId = chosen.salespersonId ?? null;
-      conv.appointment.matchedSlot = chosen;
-      conv.appointment.reschedulePending = false;
-      onAppointmentBooked(conv);
-
-      if (conv.scheduler) {
+    } else {
+      const chosen = conv.scheduler.pendingSlot;
+      const hasTimeToken = !!extractTimeToken(event.body);
+      const matchesPending = hasTimeToken
+        ? slotMatchesReply(chosen?.startLocal ?? "", event.body)
+        : false;
+      if (hasTimeToken && !matchesPending) {
         conv.scheduler.pendingSlot = undefined;
-        conv.scheduler.updatedAt = new Date().toISOString();
-      }
+      } else if ((hasTimeToken && matchesPending) || (!hasTimeToken && isAffirmative(event.body))) {
+        try {
+          const cfg = await getSchedulerConfig();
+          const tz = cfg.timezone || "America/New_York";
+          const cal = await getAuthedCalendarClient();
 
-      console.log("[auto-book] chosen slot", chosen?.startLocal, chosen?.calendarId);
-      console.log("[auto-book] booked", created?.id, "calendarId", chosen.calendarId);
+          const stockId = conv.lead?.vehicle?.stockId ?? null;
+          const leadNameRaw = conv.lead?.name?.trim() ?? "";
+          const firstName = conv.lead?.firstName ?? "";
+          const lastName = conv.lead?.lastName ?? "";
+          const leadName = leadNameRaw || [firstName, lastName].filter(Boolean).join(" ").trim() || conv.leadKey;
+          const appointmentType = chosen.appointmentType ?? "inventory_visit";
 
-      const repName =
-        chosen?.salespersonName ??
-        cfg.salespeople?.find(p => p.id === chosen?.salespersonId)?.name ??
-        null;
-      const repSuffix = repName ? ` with ${repName}` : "";
-      const reply = `Perfect — you’re all set for ${conv.appointment.whenText}${repSuffix}. See you then.`;
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        saveConversation(conv);
-        await flushConversationStore();
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
+          const summary = `Appt: ${appointmentType} – ${leadName}${stockId ? ` – ${stockId}` : ""}`;
+          const description = [
+            `LeadKey: ${conv.leadKey}`,
+            `Phone: ${conv.lead?.phone ?? conv.leadKey}`,
+            `Email: ${conv.lead?.email ?? ""}`,
+            `Stock: ${stockId ?? ""}`,
+            `VIN: ${conv.lead?.vehicle?.vin ?? ""}`,
+            `Source: ${conv.lead?.source ?? ""}`
+          ]
+            .filter(Boolean)
+            .join("\n");
+
+          const created = await insertEvent(
+            cal,
+            chosen.calendarId,
+            tz,
+            summary,
+            description,
+            chosen.start,
+            chosen.end
+          );
+
+          conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
+          conv.appointment.status = "confirmed";
+          conv.appointment.whenText = chosen.startLocal ?? chosen.start;
+          conv.appointment.whenIso = chosen.start;
+          conv.appointment.confirmedBy = "customer";
+          conv.appointment.updatedAt = new Date().toISOString();
+          conv.appointment.acknowledged = true;
+          conv.appointment.bookedEventId = created.id ?? null;
+          conv.appointment.bookedEventLink = created.htmlLink ?? null;
+          conv.appointment.bookedSalespersonId = chosen.salespersonId ?? null;
+          conv.appointment.matchedSlot = chosen;
+          conv.appointment.reschedulePending = false;
+          onAppointmentBooked(conv);
+
+          if (conv.scheduler) {
+            conv.scheduler.pendingSlot = undefined;
+            conv.scheduler.updatedAt = new Date().toISOString();
+          }
+
+          console.log("[auto-book] chosen slot", chosen?.startLocal, chosen?.calendarId);
+          console.log("[auto-book] booked", created?.id, "calendarId", chosen.calendarId);
+
+          const repName =
+            chosen?.salespersonName ??
+            cfg.salespeople?.find(p => p.id === chosen?.salespersonId)?.name ??
+            null;
+          const repSuffix = repName ? ` with ${repName}` : "";
+          const reply = `Perfect — you’re all set for ${conv.appointment.whenText}${repSuffix}. See you then.`;
+          const systemMode = webhookMode;
+          if (systemMode === "suggest") {
+            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+            saveConversation(conv);
+            await flushConversationStore();
+            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+            return res.status(200).type("text/xml").send(twiml);
+          }
+          appendOutbound(conv, event.to, event.from, reply, "twilio", created.id ?? undefined);
+          saveConversation(conv);
+          await flushConversationStore();
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+            reply
+          )}</Message>\n</Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        } catch (e: any) {
+          console.log("[auto-book] failed:", e?.message ?? e);
+        }
       }
-      appendOutbound(conv, event.to, event.from, reply, "twilio", created.id ?? undefined);
-      saveConversation(conv);
-      await flushConversationStore();
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    } catch (e: any) {
-      console.log("[auto-book] failed:", e?.message ?? e);
     }
   }
 
@@ -5007,7 +5051,6 @@ if (authToken && signature) {
       console.log("[auto-book] failed:", e?.message ?? e);
       // If booking fails, fall through to normal draft behavior
     }
-    }
   }
 
   console.log("[deterministic-offer] precheck", {
@@ -5064,7 +5107,27 @@ if (authToken && signature) {
       confidence: bookingParse.confidence
     });
   }
-  const bookingParseText = bookingParse?.normalizedText ?? "";
+  const bookingParseTimeText =
+    bookingParse?.requested?.timeText ??
+    (bookingParse?.explicitRequest ? extractTimeToken(event.body) ?? "" : "");
+  let bookingParseText = bookingParse?.normalizedText ?? "";
+  if (bookingParse?.explicitRequest && bookingParse?.reference === "last_suggested") {
+    const dayFromSlot = inferDayTokenFromSlot(conv.scheduler?.lastSuggestedSlots?.[0]?.startLocal ?? "");
+    const hasDayToken = bookingParseText
+      ? /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week|this weekend|weekend|next month)\b/i.test(
+          bookingParseText
+        )
+      : false;
+    if (dayFromSlot && !hasDayToken) {
+      if (bookingParseTimeText) {
+        bookingParseText = `${dayFromSlot} ${bookingParseTimeText}`;
+      } else if (bookingParseText) {
+        bookingParseText = `${dayFromSlot} ${bookingParseText}`;
+      } else {
+        bookingParseText = dayFromSlot;
+      }
+    }
+  }
   const llmHasDayToken = bookingParseText
     ? /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week|this weekend|weekend|next month)\b/i.test(
         bookingParseText
@@ -5736,13 +5799,13 @@ if (authToken && signature) {
 
   const schedulingTextForOrchestrator =
     bookingParse?.explicitRequest &&
-    bookingParse?.normalizedText &&
+    bookingParseText &&
     !shortAck &&
     !isAffirmative(event.body) &&
     (bookingParse.intent === "schedule" ||
       bookingParse.intent === "reschedule" ||
       bookingParse.intent === "availability")
-      ? bookingParse.normalizedText
+      ? bookingParseText
       : null;
   const history = conv.messages.slice(-20).map(m => ({ direction: m.direction, body: m.body }));
   const result = await orchestrateInbound(event, history, {
@@ -6193,10 +6256,17 @@ if (authToken && signature) {
         "[twilio] after persist lastSuggestedSlots",
         conv.scheduler?.lastSuggestedSlots?.length ?? 0
       );
-      const pending = chooseSlotFromReply(result.suggestedSlots, reply);
-      if (pending && conv.scheduler) {
-        conv.scheduler.pendingSlot = pending;
-        conv.scheduler.updatedAt = new Date().toISOString();
+      const offerSlots = parseOfferSlotsFromReply(reply);
+      const asksToLock =
+        /\b(lock (that|it) in|book (that|it)|schedule (that|it)|confirm (that|it)|want me to (book|lock|schedule)|should i (book|schedule)|ok to (book|schedule)|sound good to (book|schedule))\b/i.test(
+          reply
+        );
+      if (asksToLock && offerSlots.length < 2 && conv.scheduler) {
+        const pending = chooseSlotFromReply(result.suggestedSlots, reply) ?? result.suggestedSlots[0];
+        if (pending) {
+          conv.scheduler.pendingSlot = pending;
+          conv.scheduler.updatedAt = new Date().toISOString();
+        }
       }
     }
     console.log("[twilio] result.suggestedSlots len:", result.suggestedSlots?.length ?? 0);
@@ -6216,10 +6286,17 @@ if (authToken && signature) {
       "[twilio] after persist lastSuggestedSlots",
       conv.scheduler?.lastSuggestedSlots?.length ?? 0
     );
-    const pending = chooseSlotFromReply(result.suggestedSlots, reply);
-    if (pending && conv.scheduler) {
-      conv.scheduler.pendingSlot = pending;
-      conv.scheduler.updatedAt = new Date().toISOString();
+    const offerSlots = parseOfferSlotsFromReply(reply);
+    const asksToLock =
+      /\b(lock (that|it) in|book (that|it)|schedule (that|it)|confirm (that|it)|want me to (book|lock|schedule)|should i (book|schedule)|ok to (book|schedule)|sound good to (book|schedule))\b/i.test(
+        reply
+      );
+    if (asksToLock && offerSlots.length < 2 && conv.scheduler) {
+      const pending = chooseSlotFromReply(result.suggestedSlots, reply) ?? result.suggestedSlots[0];
+      if (pending) {
+        conv.scheduler.pendingSlot = pending;
+        conv.scheduler.updatedAt = new Date().toISOString();
+      }
     }
   }
   appendOutbound(conv, event.to, event.from, reply, "twilio");
