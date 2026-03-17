@@ -4860,11 +4860,14 @@ if (authToken && signature) {
   const outboundHoldNotice =
     lastOutbound?.body &&
     /(on hold|hold with deposit|deposit|sale pending|pending|sold|already sold)/i.test(lastOutbound.body);
+  const schedulingExplicit = isExplicitScheduleIntent(event.body);
+  if (event.provider === "twilio" && schedulingExplicit && conv.followUp?.mode === "holding_inventory") {
+    setFollowUpMode(conv, "active", "customer_requested_appointment");
+  }
   const schedulingBlocked =
     conv.followUp?.mode === "manual_handoff" ||
     conv.followUp?.mode === "holding_inventory" ||
     outboundHoldNotice;
-  const schedulingExplicit = isExplicitScheduleIntent(event.body);
   console.log("[deterministic-offer] scheduleExplicit", { schedulingExplicit });
   const shortAck =
     /^(ok|okay|k|kk|thanks|thank you|got it|will do|sounds good|sounds great|appreciate it|cool)\b/i.test(
