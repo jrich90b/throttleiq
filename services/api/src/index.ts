@@ -1663,18 +1663,26 @@ function parseFutureTimeframe(text: string, base: Date): { label: string; until?
 
 function isExplicitScheduleIntent(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
+  const scheduleWords =
+    /\b(schedule|appointment|appt|book|reserve|set\s+up|come\s+in|stop\s+(in|by)|visit|test ride|demo ride)\b/i;
+  const hoursQuestion =
+    /\bhours?\b/i.test(t) ||
+    /(what time.*open|what time.*close|when.*open|when.*close|opening hours|closing time)/i.test(t);
+  if (hoursQuestion && !scheduleWords.test(t)) {
+    return false;
+  }
   // If they’re asking for a phone call, do not treat it as an appointment request.
   if (/\b(call|phone|call me|give me a call|reach me|reach out)\b/i.test(t) &&
-      !/\b(schedule|appointment|appt|book|reserve|set\s+up|come\s+in|stop\s+(in|by)|visit|test ride|demo ride)\b/i.test(t)) {
+      !scheduleWords.test(t)) {
     return false;
   }
   // Deferrals like "wait until warmer" shouldn't trigger scheduling.
   if (/\b(wait|later|not yet|not now|when (it'?s|it is) warmer|once (it'?s|it is) warmer|warmer)\b/i.test(t) &&
-      !/\b(schedule|appointment|appt|book|reserve|set\s+up|come\s+in|stop\s+(in|by)|visit|test ride|demo ride)\b/i.test(t)) {
+      !scheduleWords.test(t)) {
     return false;
   }
   if (looksLikeTimeSelection(t)) return true;
-  if (/\b(schedule|appointment|appt|book|reserve|set\s+up|come\s+in|stop\s+(in|by)|visit|test ride|demo ride)\b/i.test(t)) {
+  if (scheduleWords.test(t)) {
     return true;
   }
   if (/\b(when|what time|what day|availability|available|openings|open)\b/i.test(t)) {
