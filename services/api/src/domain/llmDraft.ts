@@ -33,6 +33,29 @@ export type DraftContext = {
   inventoryNote?: string | null;
 };
 
+function userAskedForEmail(ctx: DraftContext): boolean {
+  const parts = [ctx.inquiry, ...(ctx.history ?? []).filter(h => h.direction === "in").map(h => h.body)];
+  const text = parts.filter(Boolean).join(" ").toLowerCase();
+  return (
+    /\b(e-?mail|email)\b/.test(text) ||
+    /\b(mail me|email me|send (me )?an? email|send (me )?e-?mail)\b/.test(text)
+  );
+}
+
+function sanitizeSmsDraftNoEmail(draft: string, allowEmail: boolean): string {
+  if (allowEmail) return draft;
+  if (!/\b(e-?mail|email)\b/i.test(draft)) return draft;
+  let out = draft;
+  out = out.replace(/\b(i'?ll|i will|we will|we'll|can)\s+e-?mail\b/gi, "$1 text");
+  out = out.replace(/\bemail the details to you\b/gi, "text the details to you");
+  out = out.replace(/\bemail the details\b/gi, "text the details");
+  out = out.replace(/\bemail you\b/gi, "text you");
+  out = out.replace(/\be-?mail\b/gi, "text");
+  out = out.replace(/\btext\b([^.]*)\band text\b/gi, "text$1and reach out");
+  out = out.replace(/\btext\b\s+\btext\b/gi, "text");
+  return out;
+}
+
 export async function classifySchedulingIntent(input: string): Promise<boolean> {
   const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
   if (!useLLM) return false;
@@ -68,6 +91,24 @@ export type BookingParse = {
   };
   reference?: "last_suggested" | "last_appointment" | "none";
   normalizedText?: string | null;
+  confidence?: number;
+};
+
+export type IntentParse = {
+  intent: "callback" | "test_ride" | "availability" | "none";
+  explicitRequest: boolean;
+  availability?: {
+    model?: string | null;
+    year?: string | null;
+    color?: string | null;
+    stockId?: string | null;
+    condition?: "new" | "used" | "unknown";
+  };
+  callback?: {
+    requested?: boolean;
+    timeText?: string | null;
+    phone?: string | null;
+  };
   confidence?: number;
 };
 
@@ -191,6 +232,146 @@ export async function parseBookingIntentWithLLM(args: {
   }
 }
 
+export async function parseIntentWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<IntentParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_INTENT_PARSER_ENABLED === "1" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_INTENT_PARSER_DEBUG === "1";
+  const primaryModel = process.env.OPENAI_INTENT_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_INTENT_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+
+  const prompt = [
+    "You are a parser for dealership SMS. Return ONLY valid JSON.",
+    "Do not include extra text. Do not invent details.",
+    "",
+    "JSON SCHEMA:",
+    "{",
+    '  \"intent\": \"callback|test_ride|availability|none\",',
+    '  \"explicit_request\": true|false,',
+    '  \"availability\": {',
+    '    \"model\": \"Road Glide\",',
+    '    \"year\": \"2025\",',
+    '    \"color\": \"purple\",',
+    '    \"stock_id\": \"U123-456\",',
+    '    \"condition\": \"new|used|unknown\"',
+    "  },",
+    '  \"callback\": {',
+    '    \"requested\": true|false,',
+    '    \"time_text\": \"after 5\",',
+    '    \"phone\": \"+15551234567\"',
+    "  },",
+    '  \"confidence\": 0.0',
+    "}",
+    "",
+    "Guidelines:",
+    "- explicit_request is true only if the customer is asking for a call back, test ride, or availability.",
+    "- intent=availability if they ask if a bike is available/in stock/still there.",
+    "- intent=test_ride if they ask to test ride or demo the bike.",
+    "- intent=callback if they ask for a call or ask you to call them.",
+    "- If no clear request, intent=none and explicit_request=false.",
+    "",
+    `Known lead info: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null,
+      color: lead?.vehicle?.color ?? null,
+      stockId: lead?.vehicle?.stockId ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> => {
+    try {
+      const resp = await client.responses.create({
+        model,
+        input: prompt,
+        temperature: 0,
+        max_output_tokens: 220
+      });
+      const raw = resp.output_text?.trim() ?? "";
+      const parsed = safeParseJson(raw);
+      if (!parsed || typeof parsed !== "object") {
+        if (debug) {
+          console.warn("[llm-intent-parser] parse failed", { model, raw });
+        }
+        return null;
+      }
+      return parsed;
+    } catch (error) {
+      if (debug) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("[llm-intent-parser] request failed", { model, error: message });
+      }
+      return null;
+    }
+  };
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const intentRaw = String(parsed.intent ?? "").toLowerCase();
+  const intent: IntentParse["intent"] =
+    intentRaw === "callback" || intentRaw === "test_ride" || intentRaw === "availability"
+      ? intentRaw
+      : "none";
+  const explicitRequest = !!parsed.explicit_request;
+
+  const availabilityRaw = parsed.availability && typeof parsed.availability === "object"
+    ? parsed.availability
+    : null;
+  const availability = availabilityRaw
+    ? {
+        model: typeof availabilityRaw.model === "string" ? availabilityRaw.model.trim() : null,
+        year: typeof availabilityRaw.year === "string" ? availabilityRaw.year.trim() : null,
+        color: typeof availabilityRaw.color === "string" ? availabilityRaw.color.trim() : null,
+        stockId: typeof availabilityRaw.stock_id === "string" ? availabilityRaw.stock_id.trim() : null,
+        condition:
+          availabilityRaw.condition === "new" || availabilityRaw.condition === "used"
+            ? availabilityRaw.condition
+            : "unknown"
+      }
+    : undefined;
+
+  const callbackRaw = parsed.callback && typeof parsed.callback === "object" ? parsed.callback : null;
+  const callback = callbackRaw
+    ? {
+        requested: typeof callbackRaw.requested === "boolean" ? callbackRaw.requested : undefined,
+        timeText: typeof callbackRaw.time_text === "string" ? callbackRaw.time_text.trim() : null,
+        phone: typeof callbackRaw.phone === "string" ? callbackRaw.phone.trim() : null
+      }
+    : undefined;
+
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    intent,
+    explicitRequest,
+    availability,
+    callback,
+    confidence
+  };
+}
+
 export async function generateDraftWithLLM(ctx: DraftContext): Promise<string> {
   const model = process.env.OPENAI_MODEL || "gpt-5-mini";
 
@@ -210,6 +391,7 @@ SMS RULES (strict):
 - No signatures.
 - If not first outbound, do NOT repeat the intro.
 - Do NOT offer appointment times unless the customer explicitly asks to schedule or stop in.
+- Do NOT mention email unless the customer explicitly asked to email.
 - If the customer says "later/next month/next year/I’ll let you know", acknowledge and offer a reminder instead of scheduling.
 - If the customer asks for a phone call today/now and dealerClosedToday is true, say we’re closed today and someone will call tomorrow. Do NOT offer appointment times.
 - If the customer asks for a phone call today/now and dealerClosedToday is false, acknowledge and confirm someone can call today.
@@ -519,5 +701,9 @@ ${ctx.history.map(h => `${h.direction.toUpperCase()}: ${h.body}`).join("\n\n")}
     input
   });
 
-  return (response.output_text || "").trim();
+  let draft = (response.output_text || "").trim();
+  if (ctx.channel === "sms") {
+    draft = sanitizeSmsDraftNoEmail(draft, userAskedForEmail(ctx));
+  }
+  return draft;
 }

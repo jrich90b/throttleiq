@@ -8,7 +8,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import OpenAI from "openai";
 import { orchestrateInbound } from "./domain/orchestrator.js";
-import { classifySchedulingIntent, parseBookingIntentWithLLM } from "./domain/llmDraft.js";
+import { classifySchedulingIntent, parseBookingIntentWithLLM, parseIntentWithLLM } from "./domain/llmDraft.js";
 import type { InboundMessageEvent } from "./domain/types.js";
 import { sendgridInboundMiddleware, handleSendgridInbound } from "./routes/sendgridInbound.js";
 import { resolveInventoryUrlByStock } from "./domain/inventoryUrlResolver.js";
@@ -5127,6 +5127,40 @@ if (authToken && signature) {
   const bookingParseTimeText =
     bookingParse?.requested?.timeText ??
     (bookingParse?.explicitRequest ? extractTimeToken(event.body) ?? "" : "");
+
+  const intentParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_INTENT_PARSER_ENABLED === "1" &&
+    !!process.env.OPENAI_API_KEY;
+  const intentParserHint =
+    /\b(call|phone|callback|call me|give me a call|reach me|test ride|demo|demo ride|ride it|take .* ride|available|availability|in stock|still there)\b/i.test(
+      textLower
+    );
+  const intentParse =
+    intentParserEligible && intentParserHint && !shortAck
+      ? await parseIntentWithLLM({
+          text: event.body,
+          history: recentHistory,
+          lead: conv.lead
+        })
+      : null;
+  if (process.env.DEBUG_INTENT_PARSER === "1" && intentParse) {
+    console.log("[llm-intent-parse]", {
+      intent: intentParse.intent,
+      explicitRequest: intentParse.explicitRequest,
+      confidence: intentParse.confidence,
+      availability: intentParse.availability,
+      callback: intentParse.callback
+    });
+  }
+  const intentConfidence =
+    typeof intentParse?.confidence === "number" ? intentParse.confidence : 0;
+  const intentAccepted = !!intentParse?.explicitRequest && intentConfidence >= 0.75;
+  const llmCallbackRequested = intentAccepted && intentParse?.intent === "callback";
+  const llmAvailabilityIntent = intentAccepted && intentParse?.intent === "availability";
+  const llmTestRideIntent = intentAccepted && intentParse?.intent === "test_ride";
+  const llmAvailability = llmAvailabilityIntent ? intentParse?.availability ?? null : null;
   let bookingParseText = bookingParse?.normalizedText ?? "";
   if (bookingParse?.explicitRequest && bookingParse?.reference === "last_suggested") {
     const dayFromSlot = inferDayTokenFromSlot(conv.scheduler?.lastSuggestedSlots?.[0]?.startLocal ?? "");
@@ -5162,7 +5196,10 @@ if (authToken && signature) {
   const llmHasDayOnlyRequest = !!bookingParse?.explicitRequest && !!llmHasDayToken && !llmHasDayTime;
   const schedulingSignalsBase = detectSchedulingSignals(event.body);
   const schedulingSignals = {
-    explicit: schedulingSignalsBase.explicit || !!bookingParse?.explicitRequest,
+    explicit:
+      schedulingSignalsBase.explicit ||
+      !!bookingParse?.explicitRequest ||
+      !!llmTestRideIntent,
     hasDayTime: schedulingSignalsBase.hasDayTime || llmHasDayTime,
     hasDayOnlyAvailability:
       schedulingSignalsBase.hasDayOnlyAvailability || llmHasDayOnlyAvailability,
@@ -5517,6 +5554,7 @@ if (authToken && signature) {
   }
 
   const inventoryQuestion =
+    llmAvailabilityIntent ||
     /(in stock|available|availability|do you have|any .* in stock)/i.test(textLower) ||
     (!!conv.lead?.vehicle?.model &&
       /\b(\d{4}|blue|black|white|red|green|gray|grey|silver|chrome|trim|color|standard|special|st)\b/i.test(
@@ -5532,8 +5570,9 @@ if (authToken && signature) {
   ) {
     try {
       const yearMatch = textLower.match(/\b(20\d{2}|19\d{2})\b/);
-      const year = yearMatch?.[1] ?? conv.lead?.vehicle?.year ?? null;
+      const year = yearMatch?.[1] ?? llmAvailability?.year ?? conv.lead?.vehicle?.year ?? null;
       let model =
+        llmAvailability?.model ??
         conv.lead?.vehicle?.model ??
         conv.lead?.vehicle?.description ??
         null;
@@ -5559,6 +5598,7 @@ if (authToken && signature) {
         "tan"
       ];
       const color =
+        llmAvailability?.color ??
         colorTokens.find(c => textLower.includes(c)) ??
         conv.lead?.vehicle?.color ??
         null;
@@ -5872,6 +5912,7 @@ if (authToken && signature) {
       bookingParse.intent === "availability")
       ? bookingParseText
       : null;
+  const appointmentTypeOverride = llmTestRideIntent ? "test_ride" : undefined;
   const history = conv.messages.slice(-20).map(m => ({ direction: m.direction, body: m.body }));
   const result = await orchestrateInbound(event, history, {
     appointment: conv.appointment,
@@ -5882,7 +5923,9 @@ if (authToken && signature) {
     lead: conv.lead ?? null,
     pricingAttempts: getPricingAttempts(conv),
     allowSchedulingOffer: schedulingExplicit,
-    schedulingText: schedulingTextForOrchestrator
+    schedulingText: schedulingTextForOrchestrator,
+    callbackRequestedOverride: llmCallbackRequested ? true : undefined,
+    appointmentTypeOverride
   });
   if (
     !result.requestedTime &&

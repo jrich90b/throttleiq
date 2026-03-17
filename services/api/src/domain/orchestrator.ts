@@ -346,6 +346,8 @@ export async function orchestrateInbound(
     pricingAttempts?: number;
     allowSchedulingOffer?: boolean;
     schedulingText?: string | null;
+    callbackRequestedOverride?: boolean;
+    appointmentTypeOverride?: "inventory_visit" | "test_ride" | "trade_appraisal" | "finance_discussion";
   }
 ): Promise<OrchestratorResult> {
   await loadSystemPrompt("orchestrator");
@@ -475,7 +477,10 @@ export async function orchestrateInbound(
   const pricingAttempts = ctx?.pricingAttempts ?? 0;
   const managerRequest = detectManagerRequest(event.body);
   const approvalStatus = detectApprovalStatus(event.body);
-  const callbackRequest = detectCallbackRequest(event.body);
+  const callbackRequest =
+    typeof ctx?.callbackRequestedOverride === "boolean"
+      ? ctx.callbackRequestedOverride
+      : detectCallbackRequest(event.body);
   const hoursRequest = detectHoursRequest(event.body);
   const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
   const pricingIntent =
@@ -841,7 +846,7 @@ export async function orchestrateInbound(
         event.provider === "sendgrid_adf" ||
         isAdfLead ||
         (ctxSuggestsScheduling && allowSchedulingOffer);
-      const appointmentType = inferAppointmentType(event.body);
+      const appointmentType = ctx?.appointmentTypeOverride ?? inferAppointmentType(event.body);
 
       const apptBooked = appointment?.bookedEventId;
       const apptConfirmed = !!apptBooked;
