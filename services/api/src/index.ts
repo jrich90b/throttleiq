@@ -1708,6 +1708,37 @@ function isDecisionDeferral(text: string): boolean {
   );
 }
 
+function nextWeekdayDate(base: Date, weekday: number): Date {
+  const d = new Date(base);
+  d.setHours(9, 0, 0, 0);
+  while (d.getDay() !== weekday) {
+    d.setDate(d.getDate() + 1);
+  }
+  if (d.getTime() <= base.getTime()) {
+    d.setDate(d.getDate() + 7);
+  }
+  return d;
+}
+
+function parseDayOfWeek(text: string): { day: string; date: Date } | null {
+  const t = text.toLowerCase();
+  const map: Array<{ re: RegExp; idx: number; label: string }> = [
+    { re: /\bmonday|mon\b/, idx: 1, label: "Monday" },
+    { re: /\btuesday|tue|tues\b/, idx: 2, label: "Tuesday" },
+    { re: /\bwednesday|wed\b/, idx: 3, label: "Wednesday" },
+    { re: /\bthursday|thu|thur|thurs\b/, idx: 4, label: "Thursday" },
+    { re: /\bfriday|fri\b/, idx: 5, label: "Friday" },
+    { re: /\bsaturday|sat\b/, idx: 6, label: "Saturday" },
+    { re: /\bsunday|sun\b/, idx: 0, label: "Sunday" }
+  ];
+  for (const entry of map) {
+    if (entry.re.test(t)) {
+      return { day: entry.label, date: nextWeekdayDate(new Date(), entry.idx) };
+    }
+  }
+  return null;
+}
+
 function formatTime12h(time: string): string {
   const m = time.match(/^(\d{1,2}):(\d{2})$/);
   if (!m) return time;
@@ -4945,6 +4976,40 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
+  const lastAskedReminder =
+    /\b(set a reminder|reminder|check back)\b/i.test(lastOutboundText) &&
+    /\?\s*$/.test(lastOutboundText.trim());
+  if (event.provider === "twilio" && lastAskedReminder && isAffirmative(event.body)) {
+    const futureFromReply = parseFutureTimeframe(String(event.body ?? ""), new Date());
+    if (futureFromReply?.until) {
+      pauseFollowUpCadence(conv, futureFromReply.until.toISOString(), "customer_reminder");
+    } else if (!conv.followUpCadence?.pausedUntil) {
+      const pauseUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+      pauseFollowUpCadence(conv, pauseUntil, "customer_reminder");
+    }
+    const dealerProfile = await getDealerProfile();
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const label = futureFromReply?.label;
+    const labelText = label ? label.charAt(0).toUpperCase() + label.slice(1) : "then";
+    const replyRaw =
+      label
+        ? `Sounds good — I’ll set a reminder and check back ${labelText}.`
+        : "Sounds good — I’ll set a reminder and check back then.";
+    const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+
   const future = parseFutureTimeframe(String(event.body ?? ""), new Date());
   if (event.provider === "twilio" && future) {
     if (future.until) {
@@ -5027,47 +5092,50 @@ if (authToken && signature) {
   }
 
   if (event.provider === "twilio" && conv.inventoryWatchPending) {
-    const pending = conv.inventoryWatchPending;
-    const pref = parseInventoryWatchPreference(String(event.body ?? ""), pending);
-    if (pref.action === "clarify") {
-      const reply =
-        "Got it — just to confirm, should I watch for the exact year/color, the same year any color, or a year range? " +
-        "If a range, tell me the years you want.";
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+    // If the customer explicitly asks for a day/time, let scheduling handle it.
+    if (!isExplicitScheduleIntent(event.body)) {
+      const pending = conv.inventoryWatchPending;
+      const pref = parseInventoryWatchPreference(String(event.body ?? ""), pending);
+      if (pref.action === "clarify") {
+        const reply =
+          "Got it — just to confirm, should I watch for the exact year/color, the same year any color, or a year range? " +
+          "If a range, tell me the years you want.";
+        const systemMode = webhookMode;
+        if (systemMode === "suggest") {
+          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+        appendOutbound(conv, event.to, event.from, reply, "twilio");
+        const twiml = `<?xml version="1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
+          reply
+        )}</Message>\n</Response>`;
         return res.status(200).type("text/xml").send(twiml);
       }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    if (pref.action === "set" && pref.watch) {
-      conv.inventoryWatch = pref.watch;
-      conv.inventoryWatchPending = undefined;
-      setFollowUpMode(conv, "holding_inventory", "inventory_watch");
-      stopFollowUpCadence(conv, "holding_inventory");
-      const yearText = pref.watch.year
-        ? `${pref.watch.year} `
-        : pref.watch.yearMin && pref.watch.yearMax
-          ? `${pref.watch.yearMin}-${pref.watch.yearMax} `
-          : "";
-      const colorText = pref.watch.color ? ` in ${pref.watch.color}` : "";
-      const reply = `Got it — I’ll keep an eye out for ${yearText}${pref.watch.model}${colorText} and text you as soon as one comes in.`;
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      if (pref.action === "set" && pref.watch) {
+        conv.inventoryWatch = pref.watch;
+        conv.inventoryWatchPending = undefined;
+        setFollowUpMode(conv, "holding_inventory", "inventory_watch");
+        stopFollowUpCadence(conv, "holding_inventory");
+        const yearText = pref.watch.year
+          ? `${pref.watch.year} `
+          : pref.watch.yearMin && pref.watch.yearMax
+            ? `${pref.watch.yearMin}-${pref.watch.yearMax} `
+            : "";
+        const colorText = pref.watch.color ? ` in ${pref.watch.color}` : "";
+        const reply = `Got it — I’ll keep an eye out for ${yearText}${pref.watch.model}${colorText} and text you as soon as one comes in.`;
+        const systemMode = webhookMode;
+        if (systemMode === "suggest") {
+          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+        appendOutbound(conv, event.to, event.from, reply, "twilio");
+        const twiml = `<?xml version="1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
+          reply
+        )}</Message>\n</Response>`;
         return res.status(200).type("text/xml").send(twiml);
       }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
     }
   }
   if (event.provider === "twilio" && schedulingBlocked && shortAck) {
