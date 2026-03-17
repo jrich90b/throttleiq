@@ -5517,6 +5517,27 @@ if (authToken && signature) {
     pricingAttempts: getPricingAttempts(conv),
     allowSchedulingOffer: schedulingExplicit
   });
+  if (
+    !result.requestedTime &&
+    !conv.appointment?.bookedEventId &&
+    isAffirmative(event.body) &&
+    conv.scheduler?.requested?.timeText
+  ) {
+    const requestedAt = conv.scheduler.requested.requestedAt;
+    const isFresh = !requestedAt || Date.now() - new Date(requestedAt).getTime() < 36 * 60 * 60 * 1000;
+    const lastHadTime =
+      !!extractTimeToken(lastOutboundText) || draftHasSpecificTimes(lastOutboundText ?? "");
+    if (isFresh && lastHadTime) {
+      try {
+        const cfg = await getSchedulerConfig();
+        const tz = cfg.timezone || "America/New_York";
+        const parsed = parseRequestedDayTime(conv.scheduler.requested.timeText, tz);
+        if (parsed) {
+          result.requestedTime = parsed;
+        }
+      } catch {}
+    }
+  }
   console.log("[twilio] result.suggestedSlots len:", result.suggestedSlots?.length ?? 0);
   if ((result.suggestedSlots?.length ?? 0) === 0 && draftHasSpecificTimes(result.draft ?? "")) {
     let requested = result.requestedTime ?? null;
