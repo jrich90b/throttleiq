@@ -1696,6 +1696,35 @@ function isExplicitScheduleIntent(text: string): boolean {
   return false;
 }
 
+function formatBusinessHoursForReply(hours?: Record<string, any> | null): string | null {
+  if (!hours) return null;
+  const dayOrder = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+  const entries = dayOrder
+    .map(day => ({ day, open: hours?.[day]?.open, close: hours?.[day]?.close }))
+    .filter(d => d.open && d.close);
+  if (!entries.length) return null;
+
+  const groups: Array<{ start: number; end: number; open: string; close: string }> = [];
+  for (let i = 0; i < entries.length; i++) {
+    const { open, close } = entries[i];
+    const prev = groups[groups.length - 1];
+    if (prev && prev.open === open && prev.close === close && prev.end === i - 1) {
+      prev.end = i;
+    } else {
+      groups.push({ start: i, end: i, open, close });
+    }
+  }
+
+  const label = (idx: number) =>
+    entries[idx].day.slice(0, 3).replace(/^\w/, c => c.toUpperCase());
+  return groups
+    .map(g => {
+      const dayLabel = g.start === g.end ? label(g.start) : `${label(g.start)}–${label(g.end)}`;
+      return `${dayLabel} ${g.open}–${g.close}`;
+    })
+    .join(", ");
+}
+
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -4735,6 +4764,29 @@ if (authToken && signature) {
   const metaPromoSource = /meta promo offer/i.test(conv.lead?.source ?? "");
   const currentModel = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "";
   const unknownModel = !currentModel || /other|full line/i.test(currentModel);
+  const hoursQuestion =
+    /\bhours?\b/.test(textLower) ||
+    /(what time.*open|what time.*close|when.*open|when.*close|opening hours|closing time)/.test(
+      textLower
+    );
+
+  if (event.provider === "twilio" && hoursQuestion) {
+    const cfg = await getSchedulerConfig();
+    const hoursLine = formatBusinessHoursForReply(cfg.businessHours);
+    const reply = hoursLine
+      ? `Our hours this week are ${hoursLine}.`
+      : "Our hours vary by day. What day are you thinking?";
+    if (webhookMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (metaPromoSource && unknownModel) {
     const foundModels = await inferModelsFromText(String(event.body ?? ""));
     if (foundModels.length === 1) {
