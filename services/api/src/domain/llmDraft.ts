@@ -399,7 +399,12 @@ Summarize the phone call transcript for internal sales context.
 - 2–3 sentences max.
 - Focus on what the customer wants and key constraints (model/year/trim/color, timing, pricing, trade, test ride, callback).
 - Include any clear next action or commitment.
-- Do NOT invent details not stated in the transcript.
+- Use ONLY facts stated in the transcript.
+- Do NOT invent or infer details (no guesswork).
+- Do NOT convert spoken numbers into different values (e.g., "ninety five" must not become "2025").
+- If a number or amount is unclear/ambiguous, omit it.
+- Only say "callback" if the customer explicitly asked for a callback.
+- Only say "scheduled/booked" if a specific time was clearly agreed to.
 - Do NOT mention that this is a summary.
 Return only the summary text.
 `.trim();
