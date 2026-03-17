@@ -6468,20 +6468,36 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
     }
     const buf = Buffer.from(await recResp.arrayBuffer());
     const transcript = await transcribeRecordingMp3(buf, agentName || "Agent");
-    const body = transcript
-      ? `Call transcript:\n${transcript}`
-      : `Call recording saved: ${mp3Url}`;
-    appendInbound(conv, {
-      channel: "sms",
-      provider: "voice_transcript",
-      from: "voice",
-      to: conv.leadKey,
-      body,
-      providerMessageId: recordingSid || undefined,
-      receivedAt: new Date().toISOString()
-    });
-    saveConversation(conv);
-    await flushConversationStore();
+    const transcriptText = (transcript ?? "").trim();
+    if (transcriptText) {
+      appendOutbound(
+        conv,
+        "voice",
+        conv.leadKey,
+        transcriptText,
+        "voice_transcript",
+        recordingSid || undefined
+      );
+      saveConversation(conv);
+      await flushConversationStore();
+
+      const leadRef = conv.lead?.leadRef;
+      if (leadRef) {
+        try {
+          await tlpLogCustomerContact({ leadRef, note: transcriptText });
+          const lastAt = conv.messages[conv.messages.length - 1]?.at;
+          if (lastAt) setCrmLastLoggedAt(conv, lastAt);
+        } catch (err: any) {
+          const msg = `TLP log failed for leadRef ${leadRef}. Retry in TLP or update manually.`;
+          addInternalQuestion(conv.id, conv.leadKey, msg);
+          console.warn("[voice] TLP log failed:", err?.message ?? err);
+        }
+      } else {
+        console.log("[voice] TLP skip: missing leadRef", { convId: conv.id });
+      }
+    } else {
+      console.warn("[voice] empty transcript, skipping CRM log", { leadKey });
+    }
     return res.json({ ok: true });
   } catch (err: any) {
     console.warn("[voice] recording handle failed:", err?.message ?? err);
