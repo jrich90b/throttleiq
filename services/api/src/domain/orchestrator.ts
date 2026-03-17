@@ -835,7 +835,7 @@ export async function orchestrateInbound(
         /(check_availability|inventory_interest|appointment|schedule|book|visit|test_ride)/i.test(cta) ||
         /(inventory_interest|appointment|schedule|book|visit|test_ride)/i.test(bucket);
       const allowSchedulingOffer =
-        ctx?.allowSchedulingOffer ?? event.provider === "sendgrid_adf" || isAdfLead || hasIntent;
+        ctx?.allowSchedulingOffer ?? (event.provider === "sendgrid_adf" || isAdfLead || hasIntent);
       const schedulingIntent =
         hasIntent ||
         event.provider === "sendgrid_adf" ||
