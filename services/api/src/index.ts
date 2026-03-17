@@ -4665,7 +4665,14 @@ if (authToken && signature) {
           conv.scheduler.updatedAt = new Date().toISOString();
           conv.appointment.reschedulePending = true;
           conv.appointment.matchedSlot = {
-            ...conv.scheduler.pendingSlot
+            salespersonId: exactMatch.sp.id,
+            salespersonName: exactMatch.sp.name,
+            calendarId: exactMatch.sp.calendarId,
+            start: exactMatch.exact.start,
+            end: exactMatch.exact.end,
+            startLocal: when,
+            endLocal: formatSlotLocal(exactMatch.exact.end, cfg.timezone),
+            appointmentType
           };
           conv.appointment.updatedAt = new Date().toISOString();
           const ask = `I can move you to ${when}${repName}. Want me to lock that in?`;
@@ -4734,9 +4741,9 @@ if (authToken && signature) {
           Math.abs(b.start.getTime() - requestedStartUtc.getTime())
       );
       const picked = available.slice(0, 2).map(s => ({
-        salespersonId: sp.id,
-        salespersonName: sp.name,
-        calendarId: sp.calendarId,
+        salespersonId: primarySp.id,
+        salespersonName: primarySp.name,
+        calendarId: primarySp.calendarId,
         start: s.start.toISOString(),
         end: s.end.toISOString(),
         startLocal: formatSlotLocal(s.start.toISOString(), cfg.timezone),

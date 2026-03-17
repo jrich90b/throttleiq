@@ -63,9 +63,11 @@ export type SchedulerMemory = {
     start: string;
     end: string;
     startLocal?: string;
+    endLocal?: string;
     salespersonId?: string;
     salespersonName?: string;
     appointmentType?: string;
+    reschedule?: boolean;
   };
   requested?: { day?: string; timeText?: string; requestedAt: string };
   updatedAt: string;
