@@ -5163,13 +5163,17 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
+  const schedulingDayTime =
+    /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(textLower) &&
+    (/\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b/i.test(textLower) ||
+      /\b(?:at|for|around|by)\s*(\d{1,2})\b(?!\s*\/)/i.test(textLower));
   const inventoryQuestion =
     /(in stock|available|availability|do you have|any .* in stock)/i.test(textLower) ||
     (!!conv.lead?.vehicle?.model &&
       /\b(\d{4}|blue|black|white|red|green|gray|grey|silver|chrome|trim|color|standard|special|st)\b/i.test(
         textLower
       ));
-  if (event.provider === "twilio" && inventoryQuestion && !schedulingBlocked) {
+  if (event.provider === "twilio" && inventoryQuestion && !schedulingBlocked && !schedulingDayTime) {
     try {
       const yearMatch = textLower.match(/\b(20\d{2}|19\d{2})\b/);
       const year = yearMatch?.[1] ?? conv.lead?.vehicle?.year ?? null;
