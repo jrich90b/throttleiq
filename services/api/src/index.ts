@@ -1697,6 +1697,21 @@ function isExplicitScheduleIntent(text: string): boolean {
   return false;
 }
 
+function detectSchedulingSignals(text: string) {
+  const t = String(text ?? "").toLowerCase();
+  const hasDayToken =
+    /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week|this weekend|weekend|next month)\b/i.test(
+      t
+    );
+  const hasTimeWord = /\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b/i.test(t);
+  const hasAtHour = /\b(?:at|for|around|by)\s*(\d{1,2})\b(?!\s*\/)/i.test(t);
+  const hasDayTime = hasDayToken && (hasTimeWord || hasAtHour);
+  const hasDayOnlyAvailability =
+    hasDayToken && /\b(availability|available|openings|open|time|times)\b/i.test(t);
+  const explicit = isExplicitScheduleIntent(t);
+  return { explicit, hasDayTime, hasDayOnlyAvailability };
+}
+
 function isDecisionDeferral(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   return (
@@ -5009,7 +5024,8 @@ if (authToken && signature) {
   const outboundHoldNotice =
     lastOutbound?.body &&
     /(on hold|hold with deposit|deposit|sale pending|pending|sold|already sold)/i.test(lastOutbound.body);
-  const schedulingExplicit = isExplicitScheduleIntent(event.body);
+  const schedulingSignals = detectSchedulingSignals(event.body);
+  const schedulingExplicit = schedulingSignals.explicit;
   if (event.provider === "twilio" && schedulingExplicit && conv.followUp?.mode === "holding_inventory") {
     setFollowUpMode(conv, "active", "customer_requested_appointment");
   }
@@ -5247,15 +5263,15 @@ if (authToken && signature) {
     const cfg = await getSchedulerConfig();
     const tz = cfg.timezone || "America/New_York";
     const explicitRequested = parseRequestedDayTime(String(event.body ?? ""), tz);
-    const rawText = String(event.body ?? "").toLowerCase();
-    const hasDayToken = /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(
-      rawText
-    );
-    const hasTimeWord = /\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b/i.test(rawText);
-    const hasAtHour = /\b(?:at|for|around|by)\s*(\d{1,2})\b(?!\s*\/)/i.test(rawText);
-    const hasDayTime = hasDayToken && (hasTimeWord || hasAtHour);
+    const hasDayTime = schedulingSignals.hasDayTime;
+    const hasDayOnlyAvailability = schedulingSignals.hasDayOnlyAvailability;
     // If the customer explicitly asks for a day/time, let scheduling handle it.
-    if (!explicitRequested && !hasDayTime && !isExplicitScheduleIntent(event.body)) {
+    if (
+      !explicitRequested &&
+      !hasDayTime &&
+      !hasDayOnlyAvailability &&
+      !schedulingExplicit
+    ) {
       const pending = conv.inventoryWatchPending;
       const pref = parseInventoryWatchPreference(String(event.body ?? ""), pending);
       if (pref.action === "clarify") {
@@ -5315,17 +5331,19 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
-  const schedulingDayTime =
-    /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(textLower) &&
-    (/\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b/i.test(textLower) ||
-      /\b(?:at|for|around|by)\s*(\d{1,2})\b(?!\s*\/)/i.test(textLower));
   const inventoryQuestion =
     /(in stock|available|availability|do you have|any .* in stock)/i.test(textLower) ||
     (!!conv.lead?.vehicle?.model &&
       /\b(\d{4}|blue|black|white|red|green|gray|grey|silver|chrome|trim|color|standard|special|st)\b/i.test(
         textLower
       ));
-  if (event.provider === "twilio" && inventoryQuestion && !schedulingBlocked && !schedulingDayTime) {
+  if (
+    event.provider === "twilio" &&
+    inventoryQuestion &&
+    !schedulingBlocked &&
+    !schedulingSignals.hasDayTime &&
+    !schedulingSignals.hasDayOnlyAvailability
+  ) {
     try {
       const yearMatch = textLower.match(/\b(20\d{2}|19\d{2})\b/);
       const year = yearMatch?.[1] ?? conv.lead?.vehicle?.year ?? null;
@@ -5483,7 +5501,8 @@ if (authToken && signature) {
       }
     }
     const schedulingIntent =
-      schedulingExplicit && (ctxSuggestsScheduling || llmSuggestsScheduling || schedulingDayTime);
+      schedulingExplicit &&
+      (ctxSuggestsScheduling || llmSuggestsScheduling || schedulingSignals.hasDayTime);
     if (schedulingIntent) {
       try {
         const cfg = await getSchedulerConfig();
