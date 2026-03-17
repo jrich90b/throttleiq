@@ -5,6 +5,7 @@ export type TlpLogCustomerContactArgs = {
   leadRef: string;          // Ref #
   note: string;             // compiled transcript
   categoryValue?: string;   // default: "MOTORCYCLES"
+  contactedValue?: "YES" | "NO"; // default: "YES"
 };
 
 function env(name: string): string {
@@ -144,11 +145,11 @@ async function selectMotorcyclesCategory(page: Page, categoryValue: string) {
   await cat.selectOption({ value: categoryValue });
 }
 
-async function selectCustomerContacted(page: Page) {
+async function selectCustomerContacted(page: Page, contactedValue: "YES" | "NO") {
   // <select id="TLPLOG_comments_contacted"> with option value YES
   const status = page.locator("#TLPLOG_comments_contacted");
   await status.waitFor({ state: "visible", timeout: 15_000 });
-  await status.selectOption({ value: "YES" });
+  await status.selectOption({ value: contactedValue });
 }
 
 async function fillComments(page: Page, note: string) {
@@ -185,6 +186,7 @@ async function submitLog(page: Page) {
 
 export async function tlpLogCustomerContact(args: TlpLogCustomerContactArgs): Promise<void> {
   const categoryValue = args.categoryValue ?? "MOTORCYCLES";
+  const contactedValue: "YES" | "NO" = args.contactedValue ?? "YES";
 
   await withBrowser(async (browser) => {
     const context = await browser.newContext({
@@ -201,7 +203,7 @@ export async function tlpLogCustomerContact(args: TlpLogCustomerContactArgs): Pr
     await openLeadByRef(page, args.leadRef);
 
     // 3) Set contact outcome to "Customer Was Contacted"
-    await selectCustomerContacted(page);
+    await selectCustomerContacted(page, contactedValue);
 
     // 4) Set category to Motorcycles
     await selectMotorcyclesCategory(page, categoryValue);

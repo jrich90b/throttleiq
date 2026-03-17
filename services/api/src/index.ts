@@ -1493,6 +1493,23 @@ async function transcribeRecordingMp3(buffer: Buffer, agentLabel = "Agent"): Pro
   }
 }
 
+function isLikelyVoicemailTranscript(text: string): boolean {
+  const t = text.toLowerCase();
+  if (!t.trim()) return true;
+  return (
+    /voicemail|voice mail|mailbox/.test(t) ||
+    /leave (a )?message/.test(t) ||
+    /after the (tone|beep)/.test(t) ||
+    /at the (tone|beep)/.test(t) ||
+    /please leave/.test(t) ||
+    /not available/.test(t) ||
+    /unable to (answer|take your call)/.test(t) ||
+    /your call has been forwarded/.test(t) ||
+    /record your message/.test(t) ||
+    /sorry we (missed|couldn't take) your call/.test(t)
+  );
+}
+
 function normalizeTimeToken(s: string): string {
   return s
     .toLowerCase()
@@ -6469,12 +6486,15 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
     const buf = Buffer.from(await recResp.arrayBuffer());
     const transcript = await transcribeRecordingMp3(buf, agentName || "Agent");
     const transcriptText = (transcript ?? "").trim();
-    if (transcriptText) {
+    const noteText = transcriptText || "Not contacted.";
+    const contactedValue: "YES" | "NO" =
+      transcriptText && !isLikelyVoicemailTranscript(transcriptText) ? "YES" : "NO";
+    if (noteText) {
       appendOutbound(
         conv,
         "voice",
         conv.leadKey,
-        transcriptText,
+        noteText,
         "voice_transcript",
         recordingSid || undefined
       );
@@ -6484,7 +6504,7 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
       const leadRef = conv.lead?.leadRef;
       if (leadRef) {
         try {
-          await tlpLogCustomerContact({ leadRef, note: transcriptText });
+          await tlpLogCustomerContact({ leadRef, note: noteText, contactedValue });
           const lastAt = conv.messages[conv.messages.length - 1]?.at;
           if (lastAt) setCrmLastLoggedAt(conv, lastAt);
         } catch (err: any) {
@@ -6495,8 +6515,6 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
       } else {
         console.log("[voice] TLP skip: missing leadRef", { convId: conv.id });
       }
-    } else {
-      console.warn("[voice] empty transcript, skipping CRM log", { leadKey });
     }
     return res.json({ ok: true });
   } catch (err: any) {
