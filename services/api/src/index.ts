@@ -1706,10 +1706,11 @@ function detectSchedulingSignals(text: string) {
   const hasTimeWord = /\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b/i.test(t);
   const hasAtHour = /\b(?:at|for|around|by)\s*(\d{1,2})\b(?!\s*\/)/i.test(t);
   const hasDayTime = hasDayToken && (hasTimeWord || hasAtHour);
+  const explicit = isExplicitScheduleIntent(t);
   const hasDayOnlyAvailability =
     hasDayToken && /\b(availability|available|openings|open|time|times)\b/i.test(t);
-  const explicit = isExplicitScheduleIntent(t);
-  return { explicit, hasDayTime, hasDayOnlyAvailability };
+  const hasDayOnlyRequest = hasDayToken && explicit && !hasDayTime;
+  return { explicit, hasDayTime, hasDayOnlyAvailability, hasDayOnlyRequest };
 }
 
 function isDecisionDeferral(text: string): boolean {
@@ -5342,7 +5343,8 @@ if (authToken && signature) {
     inventoryQuestion &&
     !schedulingBlocked &&
     !schedulingSignals.hasDayTime &&
-    !schedulingSignals.hasDayOnlyAvailability
+    !schedulingSignals.hasDayOnlyAvailability &&
+    !schedulingSignals.hasDayOnlyRequest
   ) {
     try {
       const yearMatch = textLower.match(/\b(20\d{2}|19\d{2})\b/);
@@ -5482,7 +5484,9 @@ if (authToken && signature) {
     event.provider === "twilio" &&
     !conv.appointment?.bookedEventId &&
     (!conv.scheduler?.lastSuggestedSlots || conv.scheduler.lastSuggestedSlots.length === 0) &&
-    !schedulingBlocked
+    !schedulingBlocked &&
+    !schedulingSignals.hasDayOnlyRequest &&
+    !schedulingSignals.hasDayOnlyAvailability
   ) {
     const cta = conv.classification?.cta ?? "";
     const bucket = conv.classification?.bucket ?? "";
