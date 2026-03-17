@@ -11,6 +11,8 @@ export type DraftContext = {
   cta?: string | null;
   leadKey: string;
   lead?: Conversation["lead"];
+  handoff?: { required: boolean; reason: string } | null;
+  callbackRequest?: boolean;
   dealerProfile?: any;
   today?: string;
   dealerTimeZone?: string;
@@ -233,6 +235,16 @@ CALL REQUESTS (strict):
 - If open today, say you can have someone call today.
 - Do NOT offer appointment times in a call-request reply unless the customer explicitly asked to schedule.
 
+HANDOFF (strict):
+- If handoff.required is true:
+  - Keep it short (1–2 sentences).
+  - Do NOT offer appointment times or ask to schedule.
+  - Use reason-specific wording:
+    - "manager" or "pricing" or "payments": say a manager will follow up.
+    - "approval": say the business manager will follow up.
+    - "other": say someone from the sales team will follow up.
+  - If callbackRequest is true, say someone will call; do NOT ask for best time unless provided by the customer.
+
 COMPARING RESPONSE (strict):
 - If the customer says they are comparing bikes:
   - Acknowledge and offer help comparing.
@@ -343,6 +355,10 @@ ${JSON.stringify(ctx.suggestedSlots ?? [], null, 2)}
 Pricing objections:
 - pricingAttempts: ${ctx.pricingAttempts ?? 0}
 - pricingIntent: ${ctx.pricingIntent ? "true" : "false"}
+
+Handoff:
+${JSON.stringify(ctx.handoff ?? null, null, 2)}
+Callback requested: ${ctx.callbackRequest ? "yes" : "no"}
 
 First outbound message: ${ctx.history.some(h => h.direction === "out") ? "no" : "yes"}
 

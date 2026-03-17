@@ -219,6 +219,8 @@ function inferAppointmentType(
   return "inventory_visit";
 }
 
+type HandoffReason = "pricing" | "payments" | "approval" | "manager" | "other";
+
 function buildLongTermMessage(timeframe?: string, hasLicense?: boolean) {
   const tf = timeframe ? timeframe.trim() : "a future";
   if (hasLicense === true) {
@@ -433,6 +435,7 @@ export async function orchestrateInbound(
   const managerRequest = detectManagerRequest(event.body);
   const approvalStatus = detectApprovalStatus(event.body);
   const callbackRequest = detectCallbackRequest(event.body);
+  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
   const pricingIntent =
     detectPricingOrPayment(event.body, intent) ||
     /request a quote|raq/i.test(ctx?.leadSource ?? "");
@@ -440,70 +443,86 @@ export async function orchestrateInbound(
   const pricingAttempted = pricingIntent && pricingAttempts === 0;
   const stockIdFromText = event.body.match(/\b[A-Z0-9]{1,5}-\d{1,4}\b/i)?.[0]?.toUpperCase() ?? null;
 
+  let handoff: { required: true; reason: HandoffReason } | null = null;
+  let callbackRequested = false;
+
   if (managerRequest) {
-    const ack = "Got it — I’ll have a manager follow up shortly.";
-    return finalize({
-      intent,
-      stage: "ENGAGED",
-      shouldRespond: true,
-      draft: ack,
-      handoff: { required: true, reason: "manager", ack }
-    });
+    if (!useLLM) {
+      const ack = "Got it — I’ll have a manager follow up shortly.";
+      return finalize({
+        intent,
+        stage: "ENGAGED",
+        shouldRespond: true,
+        draft: ack,
+        handoff: { required: true, reason: "manager", ack }
+      });
+    }
+    if (!handoff) handoff = { required: true, reason: "manager" };
   }
 
   if (approvalStatus) {
-    const ack = "Got it — I’ll have our team check the status and follow up shortly.";
-    return finalize({
-      intent,
-      stage: "ENGAGED",
-      shouldRespond: true,
-      draft: ack,
-      handoff: { required: true, reason: "approval", ack }
-    });
+    if (!useLLM) {
+      const ack = "Got it — I’ll have our team check the status and follow up shortly.";
+      return finalize({
+        intent,
+        stage: "ENGAGED",
+        shouldRespond: true,
+        draft: ack,
+        handoff: { required: true, reason: "approval", ack }
+      });
+    }
+    if (!handoff) handoff = { required: true, reason: "approval" };
   }
 
   if (callbackRequest) {
-    const dealerProfile = await getDealerProfile();
-    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = dealerProfile?.agentName ?? "Brooke";
-    const firstName = ctx?.lead?.firstName?.trim() || "";
-    const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
-    const rawModel = ctx?.lead?.vehicle?.model ?? ctx?.lead?.vehicle?.description ?? "";
-    const modelKnown = !!rawModel && !isUnknownModel(rawModel);
-    const yearLabel = ctx?.lead?.vehicle?.year ? `${ctx.lead.vehicle.year} ` : "";
-    const modelLabel = normalizeModelLabel(rawModel);
-    const thanks = modelKnown
-      ? `Thanks for your interest in the ${yearLabel}${modelLabel}. `
-      : "Thanks for your inquiry. ";
-    const salesName = await detectSalespersonMention(event.body);
-    const reachOut = salesName
-      ? `I’ll have ${salesName} reach out.`
-      : "I’ll have someone from our sales team reach out.";
-    const ack =
-      `${greeting}${thanks}` +
-      `This is ${agentName} at ${dealerName}. ` +
-      `${reachOut}`;
-    return finalize({
-      intent,
-      stage: "ENGAGED",
-      shouldRespond: true,
-      draft: ack,
-      handoff: { required: true, reason: "other", ack }
-    });
+    if (!useLLM) {
+      const dealerProfile = await getDealerProfile();
+      const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+      const agentName = dealerProfile?.agentName ?? "Brooke";
+      const firstName = ctx?.lead?.firstName?.trim() || "";
+      const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
+      const rawModel = ctx?.lead?.vehicle?.model ?? ctx?.lead?.vehicle?.description ?? "";
+      const modelKnown = !!rawModel && !isUnknownModel(rawModel);
+      const yearLabel = ctx?.lead?.vehicle?.year ? `${ctx.lead.vehicle.year} ` : "";
+      const modelLabel = normalizeModelLabel(rawModel);
+      const thanks = modelKnown
+        ? `Thanks for your interest in the ${yearLabel}${modelLabel}. `
+        : "Thanks for your inquiry. ";
+      const salesName = await detectSalespersonMention(event.body);
+      const reachOut = salesName
+        ? `I’ll have ${salesName} reach out.`
+        : "I’ll have someone from our sales team reach out.";
+      const ack =
+        `${greeting}${thanks}` +
+        `This is ${agentName} at ${dealerName}. ` +
+        `${reachOut}`;
+      return finalize({
+        intent,
+        stage: "ENGAGED",
+        shouldRespond: true,
+        draft: ack,
+        handoff: { required: true, reason: "other", ack }
+      });
+    }
+    callbackRequested = true;
+    if (!handoff) handoff = { required: true, reason: "other" };
   }
 
   if (pricingIntent && pricingAttempts >= 1) {
     const reason = detectPaymentPressure(event.body) ? "payments" : "pricing";
-    const ack = exactPressure
-      ? "Got it — I’ll have a manager pull the exact numbers and follow up shortly."
-      : "Got it — I’ll have a manager pull the most accurate numbers and follow up shortly.";
-    return finalize({
-      intent,
-      stage: "ENGAGED",
-      shouldRespond: true,
-      draft: ack,
-      handoff: { required: true, reason, ack }
-    });
+    if (!useLLM) {
+      const ack = exactPressure
+        ? "Got it — I’ll have a manager pull the exact numbers and follow up shortly."
+        : "Got it — I’ll have a manager pull the most accurate numbers and follow up shortly.";
+      return finalize({
+        intent,
+        stage: "ENGAGED",
+        shouldRespond: true,
+        draft: ack,
+        handoff: { required: true, reason, ack }
+      });
+    }
+    if (!handoff) handoff = { required: true, reason };
   }
 
   const fallbackDraft = "Thanks for reaching out. How can I help?";
@@ -680,9 +699,6 @@ export async function orchestrateInbound(
       handoff: { required: true, reason: "other", ack }
     });
   }
-
-  // Use LLM when enabled; otherwise fall back to template.
-  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
 
   if (useLLM) {
     try {
@@ -1184,7 +1200,9 @@ export async function orchestrateInbound(
         followUp,
         suggestedSlots,
         pricingAttempts,
-        pricingIntent
+        pricingIntent,
+        handoff,
+        callbackRequest: callbackRequested
       });
 
       let finalDraft = (draft || fallbackDraft).trim();
@@ -1245,7 +1263,8 @@ export async function orchestrateInbound(
         suggestedSlots,
         requestedTime,
         requestedAppointmentType: appointmentType,
-        pricingAttempted
+        pricingAttempted,
+        handoff: handoff ? { ...handoff, ack: finalDraft } : undefined
       });
     } catch {
       return finalize({
