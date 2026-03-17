@@ -196,6 +196,11 @@ function detectInternationalBuyer(text: string, from?: string): boolean {
 
 function hasSchedulingIntent(text: string): boolean {
   const t = text.toLowerCase();
+  const hasDayToken = /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(t);
+  const hasTimeWord = /\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b/.test(t);
+  const hasAtHour = /\b(?:at|for|around|by)\s*(\d{1,2})\b(?!\s*\/)/.test(t);
+  const hasBareHour = /\b(1[0-2]|[1-9])\b(?!\s*\/)/.test(t);
+  if (hasDayToken && (hasTimeWord || hasAtHour || hasBareHour)) return true;
   return (
     /(appointment|appt|schedule|book|reserve)/.test(t) ||
     /(come in|stop in|stop by|swing by|visit)/.test(t) ||

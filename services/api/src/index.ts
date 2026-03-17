@@ -5330,7 +5330,8 @@ if (authToken && signature) {
         });
       }
     }
-    const schedulingIntent = (ctxSuggestsScheduling || llmSuggestsScheduling) && schedulingExplicit;
+    const schedulingIntent =
+      schedulingExplicit && (ctxSuggestsScheduling || llmSuggestsScheduling || schedulingDayTime);
     if (schedulingIntent) {
       try {
         const cfg = await getSchedulerConfig();
