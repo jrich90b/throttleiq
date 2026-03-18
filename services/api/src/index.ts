@@ -2158,6 +2158,18 @@ function looksLikeTimeSelection(text: string): boolean {
   return /\b(first|second|earlier|later)\b/i.test(String(text ?? ""));
 }
 
+function isSlotOfferMessage(text: string): boolean {
+  return /\b(do any of these times work|which works best)\b/i.test(String(text ?? ""));
+}
+
+function applySlotOfferPolicy(conv: any, reply: string, lastOutboundText: string): string {
+  if (getDialogState(conv) !== "schedule_offer_sent") return reply;
+  if (!isSlotOfferMessage(reply)) return reply;
+  if (!isSlotOfferMessage(lastOutboundText)) return reply;
+  setDialogState(conv, "schedule_request");
+  return "If those times don't work, what day and time works for you?";
+}
+
 function parseSellOptionFromText(text: string): "cash" | "trade" | "either" | null {
   const t = String(text ?? "").toLowerCase();
   if (!t) return null;
@@ -6263,6 +6275,28 @@ if (authToken && signature) {
     !schedulingSignals.hasDayOnlyAvailability &&
     !schedulingSignals.hasDayOnlyRequest
   ) {
+    if (getDialogState(conv) === "inventory_watch_active" && conv.inventoryWatch) {
+      const watch = conv.inventoryWatch;
+      const yearText = watch.year
+        ? `${watch.year} `
+        : watch.yearMin && watch.yearMax
+          ? `${watch.yearMin}-${watch.yearMax} `
+          : "";
+      const modelText = watch.model ?? "that model";
+      const colorText = watch.color ? ` in ${watch.color}` : "";
+      const reply = `I’ve already got a watch set for ${yearText}${modelText}${colorText}. If you want me to update it, just tell me the year, model, and color.`;
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
     try {
       const yearMatch = textLower.match(/\b(20\d{2}|19\d{2})\b/);
       const year = yearMatch?.[1] ?? llmAvailability?.year ?? conv.lead?.vehicle?.year ?? null;
@@ -6568,8 +6602,12 @@ if (authToken && signature) {
             "[scheduler] bestSlots preview:",
             bestSlots.slice(0, 2).map(s => s.startLocal)
           );
-          const reply = `I have ${bestSlots[0].startLocal} or ${bestSlots[1].startLocal} — do any of these times work?`;
-          setDialogState(conv, "schedule_offer_sent");
+          const lastOutboundTextOffer = getLastNonVoiceOutbound(conv)?.body ?? "";
+          let reply = `I have ${bestSlots[0].startLocal} or ${bestSlots[1].startLocal} — do any of these times work?`;
+          reply = applySlotOfferPolicy(conv, reply, lastOutboundTextOffer);
+          if (isSlotOfferMessage(reply)) {
+            setDialogState(conv, "schedule_offer_sent");
+          }
           const systemMode = webhookMode;
           if (systemMode === "suggest") {
             appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -6988,7 +7026,12 @@ if (authToken && signature) {
             prefix = `I'm booked up for the rest of ${dayName}, but`;
           }
         }
-        const reply = `${prefix ? `${prefix} ` : ""}I have ${bestSlots[0].startLocal} or ${bestSlots[1].startLocal} — do any of these times work?`;
+        const lastOutboundTextOffer = getLastNonVoiceOutbound(conv)?.body ?? "";
+        let reply = `${prefix ? `${prefix} ` : ""}I have ${bestSlots[0].startLocal} or ${bestSlots[1].startLocal} — do any of these times work?`;
+        reply = applySlotOfferPolicy(conv, reply, lastOutboundTextOffer);
+        if (isSlotOfferMessage(reply)) {
+          setDialogState(conv, "schedule_offer_sent");
+        }
         const systemMode = webhookMode;
         if (systemMode === "suggest") {
           // Persist suggested slots before early return so the next inbound can match.
@@ -7066,7 +7109,12 @@ if (authToken && signature) {
   const dealerProfile = await getDealerProfile();
   const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
   const agentName = dealerProfile?.agentName ?? "Brooke";
+  const lastOutboundTextFinal = getLastNonVoiceOutbound(conv)?.body ?? "";
   let reply = ensureUniqueDraft(result.draft, conv, dealerName, agentName);
+  reply = applySlotOfferPolicy(conv, reply, lastOutboundTextFinal);
+  if (isSlotOfferMessage(reply)) {
+    setDialogState(conv, "schedule_offer_sent");
+  }
   const effectiveWebhookMode = webhookMode;
   const hadOutbound = conv.messages.some(m => m.direction === "out");
 
