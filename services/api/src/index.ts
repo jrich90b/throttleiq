@@ -1568,6 +1568,97 @@ function buildHistory(conv: any, limit = 20) {
     .map((m: any) => ({ direction: m.direction, body: m.body }));
 }
 
+function normalizePersonName(value: string): string {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function resolveSalespersonByName(
+  cfg: Awaited<ReturnType<typeof getSchedulerConfig>>,
+  name: string
+) {
+  const target = normalizePersonName(name);
+  if (!target) return null;
+  const salespeople = cfg.salespeople ?? [];
+  let match = salespeople.find(sp => normalizePersonName(sp.name ?? "") === target) ?? null;
+  if (!match) {
+    match =
+      salespeople.find(sp => normalizePersonName(sp.name ?? "").includes(target)) ??
+      salespeople.find(sp => target.includes(normalizePersonName(sp.name ?? ""))) ??
+      null;
+  }
+  return match ? { id: match.id, name: match.name, calendarId: match.calendarId } : null;
+}
+
+function resolveSalespersonForUser(
+  cfg: Awaited<ReturnType<typeof getSchedulerConfig>>,
+  user: { name?: string | null; email?: string | null; calendarId?: string | null } | null
+) {
+  if (!user) return null;
+  const salespeople = cfg.salespeople ?? [];
+  if (user.calendarId) {
+    const byCal = salespeople.find(sp => sp.calendarId === user.calendarId);
+    if (byCal) return { id: byCal.id, name: byCal.name, calendarId: byCal.calendarId };
+  }
+  const name = user.name ?? "";
+  if (name) {
+    const byName = resolveSalespersonByName(cfg, name);
+    if (byName) return byName;
+  }
+  return null;
+}
+
+function setPreferredSalespersonForConv(
+  conv: any,
+  sp: { id: string; name?: string | null },
+  source: string
+) {
+  if (!sp?.id) return;
+  conv.scheduler = conv.scheduler ?? { updatedAt: new Date().toISOString() };
+  const nextId = sp.id;
+  const nextName = sp.name ?? conv.scheduler.preferredSalespersonName ?? null;
+  if (
+    conv.scheduler.preferredSalespersonId === nextId &&
+    conv.scheduler.preferredSalespersonName === nextName
+  ) {
+    return;
+  }
+  conv.scheduler.preferredSalespersonId = nextId;
+  conv.scheduler.preferredSalespersonName = nextName ?? undefined;
+  conv.scheduler.preferredSetAt = new Date().toISOString();
+  conv.scheduler.updatedAt = new Date().toISOString();
+  if (process.env.DEBUG_SCHEDULER === "1") {
+    console.log("[scheduler] preferred salesperson set", {
+      leadKey: conv.leadKey,
+      salespersonId: nextId,
+      salespersonName: nextName,
+      source
+    });
+  }
+}
+
+function getPreferredSalespeopleForConv(
+  cfg: Awaited<ReturnType<typeof getSchedulerConfig>>,
+  conv: any
+): string[] {
+  const base = getPreferredSalespeople(cfg);
+  const prefId = conv?.scheduler?.preferredSalespersonId ?? null;
+  if (prefId && base.includes(prefId)) {
+    return [prefId, ...base.filter(id => id !== prefId)];
+  }
+  if (prefId && !base.includes(prefId)) {
+    return [prefId, ...base];
+  }
+  const prefName = conv?.scheduler?.preferredSalespersonName ?? "";
+  const byName = prefName ? resolveSalespersonByName(cfg, prefName) : null;
+  if (byName) {
+    return [byName.id, ...base.filter(id => id !== byName.id)];
+  }
+  return base;
+}
+
 function getLastNonVoiceOutbound(conv: any) {
   return getNonVoiceMessages(conv)
     .filter((m: any) => m.direction === "out")
@@ -2787,6 +2878,7 @@ app.post("/scheduler/book", async (req, res) => {
 
   const slot = req.body?.slot as { salespersonId: string; calendarId: string; start: string; end: string };
   const lead = req.body?.lead as any;
+  const appointmentType = String(req.body?.appointmentType ?? "inventory_visit");
 
   if (!slot?.calendarId || !slot?.start || !slot?.end) {
     return res.status(400).json({ ok: false, error: "Missing slot.calendarId/start/end" });
@@ -2800,15 +2892,18 @@ app.post("/scheduler/book", async (req, res) => {
     leadNameRaw ||
     [firstName, lastName].filter(Boolean).join(" ").trim() ||
     String(req.body?.leadKey ?? "");
-  const summary = `Appt: ${String(req.body?.appointmentType ?? "inventory_visit")} – ${leadName}`.trim();
+  const summary = `Appt: ${appointmentType} – ${leadName}`.trim();
 
   const descriptionLines = [
     `LeadKey: ${lead?.leadKey ?? ""}`,
     `Phone: ${lead?.phone ?? ""}`,
     `Email: ${lead?.email ?? ""}`,
+    `FirstName: ${firstName ?? ""}`,
+    `LastName: ${lastName ?? ""}`,
     `Stock: ${lead?.stockId ?? ""}`,
     `VIN: ${lead?.vin ?? ""}`,
     `Source: ${lead?.leadSource ?? ""}`,
+    `VisitType: ${appointmentType}`,
     "",
     `Notes: ${lead?.notes ?? ""}`
   ].filter(Boolean);
@@ -2997,9 +3092,12 @@ app.post("/public/booking/book", async (req, res) => {
     `LeadKey: ${leadKey}`,
     `Phone: ${lead?.phone ?? ""}`,
     `Email: ${lead?.email ?? ""}`,
+    `FirstName: ${firstName ?? ""}`,
+    `LastName: ${lastName ?? ""}`,
     `Stock: ${lead?.stockId ?? ""}`,
     `VIN: ${lead?.vin ?? ""}`,
     `Source: ${lead?.leadSource ?? "public_booking"}`,
+    `VisitType: ${appointmentType}`,
     "",
     `Notes: ${lead?.notes ?? ""}`
   ].filter(Boolean);
@@ -3809,6 +3907,7 @@ app.post("/conversations/:id/send", async (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
 
+  const user = (req as any).user ?? null;
   const body = String(req.body?.body ?? "").trim();
   if (!body) return res.status(400).json({ ok: false, error: "Missing body" });
 
@@ -3823,6 +3922,16 @@ app.post("/conversations/:id/send", async (req, res) => {
   const draft =
     draftCandidate && draftCandidate.provider === "draft_ai" ? draftCandidate : null;
   const draftTextForLog = draft?.body ?? null;
+
+  try {
+    const cfg = await getSchedulerConfig();
+    const sp = resolveSalespersonForUser(cfg, user);
+    if (sp) {
+      setPreferredSalespersonForConv(conv, sp, "manual_send");
+    }
+  } catch (err: any) {
+    console.warn("[scheduler] preferred salesperson resolve failed:", err?.message ?? err);
+  }
 
   // Normalize destination number from conversation leadKey
   const rawTo = String(conv.leadKey ?? "").trim();
@@ -4122,6 +4231,15 @@ app.post("/conversations/:id/call", async (req, res) => {
     ? publicBase
     : `${req.protocol}://${req.get("host")}`;
   const agentName = String(user?.name ?? user?.email ?? "Agent").trim() || "Agent";
+  try {
+    const cfg = await getSchedulerConfig();
+    const sp = resolveSalespersonForUser(cfg, user);
+    if (sp) {
+      setPreferredSalespersonForConv(conv, sp, "voice_call");
+    }
+  } catch (err: any) {
+    console.warn("[scheduler] preferred salesperson resolve failed:", err?.message ?? err);
+  }
   const voiceUrl = `${baseUrl}/webhooks/twilio/voice?customer=${encodeURIComponent(
     customerPhone
   )}&leadKey=${encodeURIComponent(conv.leadKey)}${agentDigits ? `&agentDigits=${encodeURIComponent(agentDigits)}` : ""}&agentName=${encodeURIComponent(agentName)}`;
@@ -4312,8 +4430,12 @@ if (authToken && signature) {
     return hasSelection || hasConfirm;
   };
 
+  const isServiceLead =
+    conv.classification?.bucket === "service" || conv.classification?.cta === "service_request";
+  const schedulingAllowed = !isServiceLead;
+
   // Auto-reschedule if they confirmed a pending reschedule slot
-  if (conv.appointment?.bookedEventId && conv.scheduler?.pendingSlot?.reschedule) {
+  if (schedulingAllowed && conv.appointment?.bookedEventId && conv.scheduler?.pendingSlot?.reschedule) {
     if (isDeferral(event.body)) {
       conv.scheduler.pendingSlot = undefined;
     } else {
@@ -4398,7 +4520,7 @@ if (authToken && signature) {
   }
 
   // Auto-book if they confirmed a pending slot
-  if (!conv.appointment?.bookedEventId && conv.scheduler?.pendingSlot) {
+  if (schedulingAllowed && !conv.appointment?.bookedEventId && conv.scheduler?.pendingSlot) {
     if (isDeferral(event.body)) {
       conv.scheduler.pendingSlot = undefined;
     } else {
@@ -4427,9 +4549,12 @@ if (authToken && signature) {
             `LeadKey: ${conv.leadKey}`,
             `Phone: ${conv.lead?.phone ?? conv.leadKey}`,
             `Email: ${conv.lead?.email ?? ""}`,
+            `FirstName: ${firstName ?? ""}`,
+            `LastName: ${lastName ?? ""}`,
             `Stock: ${stockId ?? ""}`,
             `VIN: ${conv.lead?.vehicle?.vin ?? ""}`,
-            `Source: ${conv.lead?.source ?? ""}`
+            `Source: ${conv.lead?.source ?? ""}`,
+            `VisitType: ${appointmentType}`
           ]
             .filter(Boolean)
             .join("\n");
@@ -4496,6 +4621,7 @@ if (authToken && signature) {
 
   // Auto-book if they accept a suggested slot
   if (
+    schedulingAllowed &&
     !conv.appointment?.bookedEventId &&
     Array.isArray(conv.scheduler?.lastSuggestedSlots) &&
     conv.scheduler.lastSuggestedSlots.length > 0
@@ -4525,9 +4651,12 @@ if (authToken && signature) {
           `LeadKey: ${conv.leadKey}`,
           `Phone: ${conv.lead?.phone ?? conv.leadKey}`,
           `Email: ${conv.lead?.email ?? ""}`,
+          `FirstName: ${firstName ?? ""}`,
+          `LastName: ${lastName ?? ""}`,
           `Stock: ${stockId ?? ""}`,
           `VIN: ${conv.lead?.vehicle?.vin ?? ""}`,
-          `Source: ${conv.lead?.source ?? ""}`
+          `Source: ${conv.lead?.source ?? ""}`,
+          `VisitType: ${appointmentType}`
         ]
           .filter(Boolean)
           .join("\n");
@@ -4691,7 +4820,7 @@ if (authToken && signature) {
   if (conv.appointment?.bookedEventId) {
     const cfg = await getSchedulerConfig();
     const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
-    const preferredSalespeople = getPreferredSalespeople(cfg);
+    const preferredSalespeople = getPreferredSalespeopleForConv(cfg, conv);
     const salespeople = cfg.salespeople ?? [];
     const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
     requestedReschedule = parseRequestedDayTime(event.body, cfg.timezone);
@@ -5158,7 +5287,8 @@ if (authToken && signature) {
     event.provider === "twilio" &&
     process.env.LLM_ENABLED === "1" &&
     process.env.LLM_BOOKING_PARSER_ENABLED === "1" &&
-    !!process.env.OPENAI_API_KEY;
+    !!process.env.OPENAI_API_KEY &&
+    schedulingAllowed;
   const bookingParserHint =
     !!conv.scheduler?.lastSuggestedSlots?.length ||
     draftHasSpecificTimes(lastOutboundText) ||
@@ -5264,14 +5394,15 @@ if (authToken && signature) {
       schedulingSignalsBase.hasDayOnlyAvailability || llmHasDayOnlyAvailability,
     hasDayOnlyRequest: schedulingSignalsBase.hasDayOnlyRequest || llmHasDayOnlyRequest
   };
-  const schedulingExplicit = schedulingSignals.explicit;
+  const schedulingExplicit = schedulingAllowed ? schedulingSignals.explicit : false;
   if (event.provider === "twilio" && schedulingExplicit && conv.followUp?.mode === "holding_inventory") {
     setFollowUpMode(conv, "active", "customer_requested_appointment");
   }
   const schedulingBlocked =
     conv.followUp?.mode === "manual_handoff" ||
     conv.followUp?.mode === "holding_inventory" ||
-    outboundHoldNotice;
+    outboundHoldNotice ||
+    !schedulingAllowed;
   console.log("[deterministic-offer] scheduleExplicit", { schedulingExplicit });
   const metaPromoSource = /meta promo offer/i.test(conv.lead?.source ?? "");
   const currentModel = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "";
@@ -5799,7 +5930,7 @@ if (authToken && signature) {
           // Let orchestrator/exact-booking handle explicit day+time requests.
         } else {
         const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
-        const preferredSalespeople = getPreferredSalespeople(cfg);
+        const preferredSalespeople = getPreferredSalespeopleForConv(cfg, conv);
         const salespeople = cfg.salespeople ?? [];
         const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
         const appointmentType = "inventory_visit";
@@ -5966,6 +6097,7 @@ if (authToken && signature) {
     bookingParseText &&
     !shortAck &&
     !isAffirmative(event.body) &&
+    schedulingAllowed &&
     (bookingParse.intent === "schedule" ||
       bookingParse.intent === "reschedule" ||
       bookingParse.intent === "availability")
@@ -5981,7 +6113,7 @@ if (authToken && signature) {
     cta: conv.classification?.cta ?? null,
     lead: conv.lead ?? null,
     pricingAttempts: getPricingAttempts(conv),
-    allowSchedulingOffer: schedulingExplicit,
+    allowSchedulingOffer: schedulingExplicit && schedulingAllowed,
     schedulingText: schedulingTextForOrchestrator,
     callbackRequestedOverride: llmCallbackRequested ? true : undefined,
     appointmentTypeOverride,
@@ -6076,6 +6208,16 @@ if (authToken && signature) {
     incrementPricingAttempt(conv);
   }
   if (result.suggestedSlots && result.suggestedSlots.length > 0) {
+    const prefId = conv.scheduler?.preferredSalespersonId ?? null;
+    if (prefId) {
+      const preferred = result.suggestedSlots.filter(s => s.salespersonId === prefId);
+      if (preferred.length >= 2) {
+        result.suggestedSlots = preferred;
+      } else if (preferred.length > 0) {
+        const rest = result.suggestedSlots.filter(s => s.salespersonId !== prefId);
+        result.suggestedSlots = [...preferred, ...rest];
+      }
+    }
     console.log("[scheduler] persist suggestedSlots", result.suggestedSlots.length);
     setLastSuggestedSlots(conv, result.suggestedSlots);
     console.log(
@@ -6101,12 +6243,12 @@ if (authToken && signature) {
     setRequestedTime(conv, { day: result.requestedTime.dayOfWeek, timeText: event.body });
   }
 
-  if (!didConfirm && result.requestedTime) {
+  if (schedulingAllowed && !didConfirm && result.requestedTime) {
     try {
       const skipExactBooking = /(this time|same time)/i.test(event.body);
       const cfg = await getSchedulerConfig();
       const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
-      const preferredSalespeople = getPreferredSalespeople(cfg);
+      const preferredSalespeople = getPreferredSalespeopleForConv(cfg, conv);
       const salespeople = cfg.salespeople ?? [];
       const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
       const appointmentType = String(result.requestedAppointmentType ?? "inventory_visit");
@@ -6147,9 +6289,12 @@ if (authToken && signature) {
               `LeadKey: ${conv.leadKey}`,
               `Phone: ${conv.lead?.phone ?? conv.leadKey}`,
               `Email: ${conv.lead?.email ?? ""}`,
+              `FirstName: ${firstName ?? ""}`,
+              `LastName: ${lastName ?? ""}`,
               `Stock: ${stockId ?? ""}`,
               `VIN: ${conv.lead?.vehicle?.vin ?? ""}`,
-              `Source: ${conv.lead?.source ?? ""}`
+              `Source: ${conv.lead?.source ?? ""}`,
+              `VisitType: ${appointmentType}`
             ]
               .filter(Boolean)
               .join("\n");
@@ -6595,6 +6740,18 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
       bodyCallSid
     });
     return res.json({ ok: true });
+  }
+
+  if (agentName) {
+    try {
+      const cfg = await getSchedulerConfig();
+      const sp = resolveSalespersonByName(cfg, agentName);
+      if (sp) {
+        setPreferredSalespersonForConv(conv, sp, "voice_transcript");
+      }
+    } catch (err: any) {
+      console.warn("[scheduler] preferred salesperson resolve failed:", err?.message ?? err);
+    }
   }
 
   const accountSid = process.env.TWILIO_ACCOUNT_SID;

@@ -77,6 +77,9 @@ export type SchedulerMemory = {
     appointmentType?: string;
     reschedule?: boolean;
   };
+  preferredSalespersonId?: string;
+  preferredSalespersonName?: string;
+  preferredSetAt?: string;
   requested?: { day?: string; timeText?: string; requestedAt: string };
   updatedAt: string;
 };
