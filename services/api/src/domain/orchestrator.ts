@@ -377,6 +377,9 @@ export async function orchestrateInbound(
 
   const leadSourceRaw = (ctx?.leadSource ?? ctx?.lead?.source ?? "").toLowerCase();
   const isSellMyBike = /sell my bike/.test(leadSourceRaw);
+  const hasPriorOutbound =
+    Array.isArray(history) &&
+    history.some(m => m.direction === "out");
   if (isSellMyBike) {
     const leadFirst = ctx?.lead?.firstName?.trim() || "there";
     const yearLabel = ctx?.lead?.vehicle?.year ? `${ctx.lead.vehicle.year} ` : "";
@@ -392,6 +395,22 @@ export async function orchestrateInbound(
           : sellOption === "either"
             ? "Are you leaning more toward a cash offer or trade credit?"
             : "Are you looking for a cash offer or trade credit?";
+    if (hasPriorOutbound) {
+      const followUp =
+        sellOption === "cash"
+          ? "Got it — for a straight cash offer, we’ll need an in‑person appraisal. What day and time works for you to stop in with the bike?"
+          : sellOption === "trade"
+            ? "Great — what model are you hoping to trade into?"
+            : sellOption === "either"
+              ? "Understood — are you leaning more toward a cash offer or trade credit?"
+              : "Are you looking for a cash offer or trade credit?";
+      return finalize({
+        intent: "TRADE_IN",
+        stage: "ENGAGED",
+        shouldRespond: true,
+        draft: followUp
+      });
+    }
     const draft = `Hi ${leadFirst} — thanks for reaching out about selling your ${yearLabel}${modelLabel}. I can help with a trade‑in appraisal.${mileageLine} ${optionLine} If you want to stop in, I can set a time.`;
     return finalize({
       intent: "TRADE_IN",
