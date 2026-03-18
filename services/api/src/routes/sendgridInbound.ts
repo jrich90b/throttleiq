@@ -321,6 +321,23 @@ function normalizeVehicleCondition(raw?: string | null): "new" | "used" | undefi
   return undefined;
 }
 
+function escapeRegExp(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeVehicleModel(raw?: string | null, make?: string | null): string | undefined {
+  let model = raw ? String(raw).trim() : "";
+  if (!model) return undefined;
+  const makeClean = make ? String(make).trim() : "";
+  if (makeClean) {
+    const re = new RegExp(`^${escapeRegExp(makeClean)}\\s+`, "i");
+    model = model.replace(re, "").trim();
+  }
+  model = model.replace(/\bharley[-\s]?davidson\b/gi, "").replace(/\bh[-\s]?d\b/gi, "").trim();
+  model = model.replace(/^[\s\-–—:,]+|[\s\-–—:,]+$/g, "").trim();
+  return model || undefined;
+}
+
 function parseTimeframeMonths(raw?: string): { start?: number; end?: number } | null {
   if (!raw) return null;
   const t = raw.toLowerCase();
@@ -572,6 +589,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const leadSource = meta.leadSource?.trim() || undefined;
   const leadSourceId = lead.leadSourceId ?? undefined;
   const timeframeInfo = parseTimeframeMonths(lead.purchaseTimeframe);
+  const make = lead.vehicleMake ?? undefined;
+  const model = normalizeVehicleModel(
+    lead.vehicleModel ?? meta.model ?? lead.vehicleDescription ?? undefined,
+    make ?? null
+  );
 
   // Choose a stable conversation key
   const leadKey =
@@ -603,8 +625,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       stockId: lead.stockId,
       vin: lead.vin,
       year: lead.year,
-      make: lead.vehicleMake,
-      model: lead.vehicleModel ?? meta.model,
+      make,
+      model,
       trim: lead.vehicleTrim,
       color: lead.vehicleColor,
       condition: lead.vehicleCondition,
@@ -641,7 +663,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     stockId: lead.stockId,
     vin: lead.vin,
     year: lead.year,
-    vehicle: meta.model,
+    vehicle: model ?? meta.model,
     inquiry: lead.inquiry,
     lastAdfAt: new Date().toISOString()
   });
