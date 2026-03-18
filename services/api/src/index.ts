@@ -4158,7 +4158,7 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
           "Appreciate the update — if anything changes, just let me know."
         ]);
       }
-      if (["pause_7", "pause_30", "pause_indef", "resume_on"].includes(action)) {
+      if (["pause_7", "pause_30", "pause_indef", "resume_on", "hold"].includes(action)) {
         return pickUnusedAck([
           "Sounds good — I’ll be here when you’re ready. If anything changes, just let me know.",
           "No problem — I’ll be here when you’re ready. If anything changes, just let me know."
@@ -4279,6 +4279,25 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
       stopFollowUpCadence(conv, "manual_appointment");
       setFollowUpMode(conv, "manual_handoff", "manual_appointment");
       stopRelatedCadences(conv, "manual_appointment", { setMode: "manual_handoff" });
+    } else if (effectiveResolution === "hold") {
+      if (!shouldApplyWatch) {
+        setFollowUpMode(conv, "active", "manual_hold");
+      }
+      const holdUntilIso = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+      applyPauseUntil(holdUntilIso, "manual_hold");
+      cadenceNotice = `Hold set until ${formatSlotLocal(holdUntilIso, tz)}.`;
+      if (conv.status !== "closed") {
+        const holdQuestionText = `Hold set until ${formatSlotLocal(
+          holdUntilIso,
+          tz
+        )}. Resume follow-ups or update status?`;
+        const hasHoldQuestion = listOpenQuestions().some(
+          q => q.convId === conv.id && /hold set/i.test(q.text)
+        );
+        if (!hasHoldQuestion) {
+          addInternalQuestion(conv.id, conv.leadKey, holdQuestionText);
+        }
+      }
     } else if (effectiveResolution === "pause_indef") {
       applyPauseIndef(shouldApplyWatch);
     } else if (effectiveResolution === "pause_7" || effectiveResolution === "pause_30") {
@@ -4303,6 +4322,7 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
 
     if (!cadenceNotice) {
       if (effectiveResolution === "resume") cadenceNotice = "Follow-ups resumed.";
+      else if (effectiveResolution === "hold") cadenceNotice = "Hold set for 7 days.";
       else if (effectiveResolution === "pause_7") cadenceNotice = "Follow-ups paused for 7 days.";
       else if (effectiveResolution === "pause_30") cadenceNotice = "Follow-ups paused for 30 days.";
       else if (effectiveResolution === "pause_indef") cadenceNotice = "Follow-ups paused indefinitely.";
@@ -4315,6 +4335,7 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
     if (effectiveResolution === "resume") {
       setDialogState(conv, "followup_resumed");
     } else if (
+      effectiveResolution === "hold" ||
       effectiveResolution === "pause_7" ||
       effectiveResolution === "pause_30" ||
       effectiveResolution === "pause_indef" ||

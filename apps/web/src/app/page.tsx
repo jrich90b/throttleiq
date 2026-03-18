@@ -1832,6 +1832,16 @@ export default function Home() {
 
   async function closeConv() {
     if (!selectedConv) return;
+    if (closeReason === "hold") {
+      await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/followup-action`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resolution: "hold" })
+      });
+      await loadConversation(selectedConv.id);
+      await load();
+      return;
+    }
     await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/close`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -5330,6 +5340,24 @@ export default function Home() {
                       [selectedConv.lead?.firstName, selectedConv.lead?.lastName].filter(Boolean).join(" ") ||
                       selectedConv.leadKey}
                   </span>
+                  {(() => {
+                    const holdUntil =
+                      selectedConv.followUpCadence?.pauseReason === "manual_hold"
+                        ? selectedConv.followUpCadence?.pausedUntil
+                        : null;
+                    const statusLabel = selectedConv.status === "closed" ? "Closed" : holdUntil ? "Hold" : "Open";
+                    const badgeClass =
+                      statusLabel === "Closed"
+                        ? "bg-gray-100 text-gray-700 border-gray-200"
+                        : statusLabel === "Hold"
+                          ? "bg-amber-100 text-amber-800 border-amber-200"
+                          : "bg-emerald-100 text-emerald-800 border-emerald-200";
+                    return (
+                      <span className={`text-xs px-2 py-0.5 rounded-full border ${badgeClass}`}>
+                        {statusLabel}
+                      </span>
+                    );
+                  })()}
                   {selectedConv.contactPreference === "call_only" ? (
                     <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
                       Call Only
@@ -5386,9 +5414,14 @@ export default function Home() {
                   );
                 })()}
                 <div className="text-xs text-gray-500 mt-1">
-                  {selectedConv.status === "closed" && selectedConv.closedAt
-                    ? `closed: ${new Date(selectedConv.closedAt).toLocaleString()}`
-                    : "active"}
+                  {selectedConv.status === "closed" && selectedConv.closedAt ? (
+                    `Closed: ${new Date(selectedConv.closedAt).toLocaleString()}`
+                  ) : selectedConv.followUpCadence?.pauseReason === "manual_hold" &&
+                    selectedConv.followUpCadence?.pausedUntil ? (
+                    `Hold until ${formatCadenceDate(selectedConv.followUpCadence.pausedUntil)}`
+                  ) : (
+                    "Active"
+                  )}
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -6038,10 +6071,11 @@ export default function Home() {
                   <option value="sold">Sold</option>
                   <option value="not_interested">Not interested</option>
                   <option value="no_response">No response</option>
+                  <option value="hold">Hold (7 days)</option>
                   <option value="other">Other</option>
                 </select>
                 <button className="px-3 py-2 border rounded text-sm" onClick={closeConv}>
-                  Mark Closed
+                  Update
                 </button>
                 <button
                   className="px-3 py-2 border rounded text-sm text-red-600 border-red-200 hover:bg-red-50"
