@@ -97,44 +97,18 @@ function normalizeCondition(raw?: string): "new" | "used" | undefined {
   return undefined;
 }
 
-function parseInventoryItemLine(item?: string) {
+function normalizeMake(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  const t = raw.trim();
+  if (!t) return undefined;
+  if (/^harley[-\s]?davidson$/i.test(t) || /^h[-\s]?d$/i.test(t)) return "Harley-Davidson";
+  return t;
+}
+
+function parseColorTrimFromItem(item?: string) {
   if (!item) return {};
   let working = item.replace(/\s+/g, " ").trim();
   if (!working) return {};
-
-  const yearMatch = working.match(/\b(19|20)\d{2}\b/);
-  const year = yearMatch?.[0];
-  if (year) working = working.replace(year, " ").trim();
-
-  let make: string | undefined;
-  const hdMatch = working.match(/\bharley[-\s]?davidson\b/i) ?? working.match(/\bh[-\s]?d\b/i);
-  if (hdMatch) {
-    make = "Harley-Davidson";
-    working = working.replace(hdMatch[0], " ").trim();
-  } else {
-    const knownMakes = [
-      "Honda",
-      "Yamaha",
-      "Kawasaki",
-      "Suzuki",
-      "BMW",
-      "Ducati",
-      "Triumph",
-      "Indian",
-      "KTM",
-      "Can-Am",
-      "Polaris",
-      "Aprilia",
-      "Moto Guzzi",
-      "Royal Enfield",
-      "Vespa"
-    ];
-    const makeMatch = knownMakes.find(m => new RegExp(`\\b${m}\\b`, "i").test(working));
-    if (makeMatch) {
-      make = makeMatch;
-      working = working.replace(new RegExp(`\\b${makeMatch}\\b`, "i"), " ").trim();
-    }
-  }
 
   let trim: string | undefined;
   const trimMatch = working.match(/\b([A-Za-z0-9][A-Za-z0-9\s&-]{0,40})\s+Trim\b/i);
@@ -143,10 +117,12 @@ function parseInventoryItemLine(item?: string) {
     working = working.replace(trimMatch[0], " ").trim();
   }
 
-  working = working.replace(/\b[A-Z]{2,5}\d{0,3}\b/g, " ").replace(/\s+/g, " ").trim();
+  working = working.replace(/\b(19|20)\d{2}\b/g, " ").trim();
+  working = working.replace(/\b[A-Z]{2,5}\d{0,3}\b/g, " ").trim();
+  working = working.replace(/\bharley[-\s]?davidson\b/gi, " ").replace(/\bh[-\s]?d\b/gi, " ");
+  working = working.replace(/\s+/g, " ").trim();
 
   let color: string | undefined;
-  let model: string | undefined;
   if (working) {
     const tokens = working.split(/\s+/);
     const colorKeywords = [
@@ -189,18 +165,16 @@ function parseInventoryItemLine(item?: string) {
       "Atlas",
       "Metallic"
     ];
-    for (let len = Math.min(3, tokens.length - 1); len >= 1; len--) {
+    for (let len = Math.min(3, tokens.length); len >= 1; len--) {
       const candidate = tokens.slice(-len).join(" ");
       if (colorKeywords.some(k => candidate.toLowerCase().includes(k.toLowerCase()))) {
-        color = candidate;
-        model = tokens.slice(0, -len).join(" ").trim() || undefined;
+        color = candidate.trim();
         break;
       }
     }
-    if (!color) model = tokens.join(" ").trim() || undefined;
   }
 
-  return { year, make, model, trim, color };
+  return { color, trim };
 }
 
 function parseFromComment(comment?: string) {
@@ -210,13 +184,17 @@ function parseFromComment(comment?: string) {
   const stockMatch = clean.match(/inventory stock id:\s*([A-Z0-9-]+)/i);
   const vinMatch = clean.match(/vin:\s*([A-HJ-NPR-Z0-9]{8,17})/i);
   const yearMatch = clean.match(/inventory year:\s*(\d{4})/i);
+  const modelYearMatch = clean.match(/model year:\s*(\d{4})/i);
   const itemMatch = clean.match(/inventory item:\s*([^\n\r]+)/i);
-  const itemParsed = parseInventoryItemLine(itemMatch?.[1]?.trim());
+  const itemDetails = parseColorTrimFromItem(itemMatch?.[1]?.trim());
   const itemColor = extractColorFromDescription(
     itemMatch?.[1]?.trim(),
     stockMatch?.[1]?.trim() ?? null
   );
   const colorMatch = clean.match(/color:\s*([^\n\r]+)/i);
+  const makeMatch = clean.match(/\bmake\s*:\s*([^\n\r,]+)/i);
+  const modelMatch = clean.match(/\bmodel\s*:\s*([^\n\r,]+)/i);
+  const trimMatch = clean.match(/\btrim\s*:\s*([^\n\r,]+)/i);
   const statusMatch = clean.match(/status\s*[:=]\s*\"?(new|used|pre[-\s]?owned)\"?/i);
   const phoneMatch = clean.match(/phone:\s*([0-9\-\s\(\)\.]+)/i);
   const emailMatch = clean.match(/email:\s*([^\s\n\r]+)/i);
@@ -250,12 +228,12 @@ function parseFromComment(comment?: string) {
     inquiry: inquiryMatch?.[1]?.trim(),
     stockId: stockMatch?.[1]?.trim(),
     vin: vinMatch?.[1]?.trim(),
-    year: yearMatch?.[1]?.trim() ?? itemParsed.year,
+    year: yearMatch?.[1]?.trim() ?? modelYearMatch?.[1]?.trim(),
     item: itemMatch?.[1]?.trim(),
-    make: itemParsed.make,
-    model: itemParsed.model,
-    trim: itemParsed.trim,
-    color: colorMatch?.[1]?.trim() ?? itemParsed.color ?? itemColor,
+    make: normalizeMake(makeMatch?.[1]?.trim()),
+    model: modelMatch?.[1]?.trim(),
+    trim: trimMatch?.[1]?.trim() ?? itemDetails.trim,
+    color: colorMatch?.[1]?.trim() ?? itemDetails.color ?? itemColor,
     condition: normalizeCondition(statusMatch?.[1]),
     phone: phoneMatch?.[1]?.trim(),
     email: emailMatch?.[1]?.trim(),
@@ -384,8 +362,16 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
   const stockId =
     text(vehicle?.stock) ?? text(vehicle?.stock_id) ?? text(vehicle?.stockid) ?? parsedFromComment.stockId;
   const year = text(vehicle?.year) ?? parsedFromComment.year;
-  const vehicleMake = text(vehicle?.make) ?? parsedFromComment.make;
-  const vehicleModel = text(vehicle?.model) ?? parsedFromComment.model;
+  let vehicleMake = normalizeMake(text(vehicle?.make)) ?? parsedFromComment.make;
+  let vehicleModel = text(vehicle?.model) ?? parsedFromComment.model;
+  if (vehicleModel) {
+    const makeInModelMatch = vehicleModel.match(/\b(harley[-\s]?davidson|h[-\s]?d)\b/i);
+    if (makeInModelMatch) {
+      vehicleMake = "Harley-Davidson";
+      vehicleModel = vehicleModel.replace(makeInModelMatch[0], "").trim();
+    }
+    vehicleModel = vehicleModel.replace(/^[\s\-–—:,]+|[\s\-–—:,]+$/g, "").trim();
+  }
   const vehicleTrim = text(vehicle?.trim) ?? parsedFromComment.trim;
   const vehicleCondition =
     normalizeCondition(attr(vehicle, "status") ?? attr(vehicleRaw, "status")) ??

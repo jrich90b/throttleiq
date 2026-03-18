@@ -113,14 +113,6 @@ export type IntentParse = {
   confidence?: number;
 };
 
-export type AdfVehicleParse = {
-  year?: string | null;
-  make?: string | null;
-  model?: string | null;
-  trim?: string | null;
-  color?: string | null;
-};
-
 function safeParseJson(text: string): any | null {
   const raw = String(text ?? "").trim();
   if (!raw) return null;
@@ -135,65 +127,6 @@ function safeParseJson(text: string): any | null {
     } catch {}
   }
   return null;
-}
-
-export async function parseAdfVehicleFromCommentWithLLM(args: {
-  comment: string;
-  existing?: { year?: string | null; make?: string | null; model?: string | null; trim?: string | null; color?: string | null };
-}): Promise<AdfVehicleParse | null> {
-  const useLLM =
-    process.env.LLM_ENABLED === "1" &&
-    process.env.LLM_ADF_PARSER_ENABLED === "1" &&
-    !!process.env.OPENAI_API_KEY;
-  if (!useLLM) return null;
-
-  const model = process.env.OPENAI_ADF_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
-  const comment = String(args.comment ?? "").trim();
-  if (!comment) return null;
-
-  const prompt = [
-    "You are a strict parser for ADF inventory comment lines.",
-    "Return ONLY valid JSON. Do not include extra text.",
-    "Use ONLY facts stated in the comment. Do not infer or guess.",
-    "If a field is missing or unclear, set it to null.",
-    "",
-    "JSON SCHEMA:",
-    "{",
-    '  \"year\": \"2026\",',
-    '  \"make\": \"Harley-Davidson\",',
-    '  \"model\": \"Street Glide\",',
-    '  \"trim\": \"Chrome Trim\",',
-    '  \"color\": \"Midnight Ember\"',
-    "}",
-    "",
-    `Known fields (do not override if not in comment): ${JSON.stringify(args.existing ?? {})}`,
-    `Comment: ${comment}`
-  ].join("\n");
-
-  try {
-    const resp = await client.responses.create({
-      model,
-      input: prompt,
-      temperature: 0,
-      max_output_tokens: 180
-    });
-    const raw = resp.output_text?.trim() ?? "";
-    const parsed = safeParseJson(raw);
-    if (!parsed || typeof parsed !== "object") return null;
-
-    const out: AdfVehicleParse = {
-      year: typeof parsed.year === "string" ? parsed.year.trim() : null,
-      make: typeof parsed.make === "string" ? parsed.make.trim() : null,
-      model: typeof parsed.model === "string" ? parsed.model.trim() : null,
-      trim: typeof parsed.trim === "string" ? parsed.trim.trim() : null,
-      color: typeof parsed.color === "string" ? parsed.color.trim() : null
-    };
-    const hasAny =
-      !!(out.year || out.make || out.model || out.trim || out.color);
-    return hasAny ? out : null;
-  } catch {
-    return null;
-  }
 }
 
 export async function parseBookingIntentWithLLM(args: {

@@ -43,7 +43,6 @@ import {
 import { getDealerProfile } from "../domain/dealerProfile.js";
 import { getInventoryNote } from "../domain/inventoryNotes.js";
 import { hasInventoryForModelYear } from "../domain/inventoryFeed.js";
-import { parseAdfVehicleFromCommentWithLLM } from "../domain/llmDraft.js";
 
 function base64UrlDecode(input: string): string | null {
   try {
@@ -554,29 +553,6 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   );
 
   const lead = parseAdfXml(adfXml);
-  if (lead.comment && /inventory item/i.test(lead.comment)) {
-    const needsVehicleDetails =
-      !lead.year || !lead.vehicleMake || !lead.vehicleModel || !lead.vehicleTrim || !lead.vehicleColor;
-    if (needsVehicleDetails) {
-      const parsed = await parseAdfVehicleFromCommentWithLLM({
-        comment: lead.comment,
-        existing: {
-          year: lead.year ?? null,
-          make: lead.vehicleMake ?? null,
-          model: lead.vehicleModel ?? null,
-          trim: lead.vehicleTrim ?? null,
-          color: lead.vehicleColor ?? null
-        }
-      });
-      if (parsed) {
-        if (!lead.year && parsed.year) lead.year = parsed.year;
-        if (!lead.vehicleMake && parsed.make) lead.vehicleMake = parsed.make;
-        if (!lead.vehicleModel && parsed.model) lead.vehicleModel = parsed.model;
-        if (!lead.vehicleTrim && parsed.trim) lead.vehicleTrim = parsed.trim;
-        if (!lead.vehicleColor && parsed.color) lead.vehicleColor = parsed.color;
-      }
-    }
-  }
   const leadRefFallback =
     adfXml.match(/<prospect[^>]*>[\s\S]*?<id[^>]*>([^<]+)<\/id>/i)?.[1]?.trim() ??
     undefined;
