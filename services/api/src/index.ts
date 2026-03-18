@@ -3837,7 +3837,7 @@ app.post("/conversations/:id/appointment", requirePermission("canEditAppointment
       }
     }
 
-    conv.updatedAt = nowIso;
+    conv.updatedAt = new Date().toISOString();
     saveConversation(conv);
     await flushConversationStore();
 
