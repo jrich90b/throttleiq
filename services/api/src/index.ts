@@ -4080,11 +4080,12 @@ app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
   }
   const conv = getConversation(convId);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
-  const allowedReasons: Array<"pricing" | "payments" | "approval" | "manager" | "other"> = [
+  const allowedReasons: Array<"pricing" | "payments" | "approval" | "manager" | "service" | "other"> = [
     "pricing",
     "payments",
     "approval",
     "manager",
+    "service",
     "other"
   ];
   const reason = allowedReasons.includes(reasonRaw as any)

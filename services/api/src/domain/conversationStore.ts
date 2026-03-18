@@ -112,7 +112,7 @@ export type TodoTask = {
   id: string;
   convId: string;
   leadKey: string;
-  reason: "pricing" | "payments" | "approval" | "manager" | "other";
+  reason: "pricing" | "payments" | "approval" | "manager" | "service" | "other";
   summary: string;
   createdAt: string;
   sourceMessageId?: string;
