@@ -160,7 +160,9 @@ export type LeadProfile = {
     stockId?: string;
     vin?: string;
     year?: string;
+    make?: string;
     model?: string;
+    trim?: string;
     modelOptions?: string[];
     color?: string;
     condition?: string;
@@ -187,8 +189,11 @@ export type InventoryWatch = {
   year?: number;
   yearMin?: number;
   yearMax?: number;
+  make?: string;
+  condition?: string;
   color?: string;
   trim?: string;
+  note?: string;
   exactness?: "exact" | "year_model" | "model_range" | "model_only";
   status?: "active" | "paused";
   createdAt: string;
@@ -236,6 +241,7 @@ export type Conversation = {
   objections?: ObjectionState;
   crm?: { lastLoggedAt?: string };
   inventoryWatch?: InventoryWatch;
+  inventoryWatches?: InventoryWatch[];
   inventoryWatchPending?: InventoryWatchPending;
   emailDraft?: string;
   contactPreference?: "call_only";
@@ -634,6 +640,8 @@ export function listConversations() {
         contactPreference: c.contactPreference,
         leadSource: c.lead?.source ?? null,
         classification: c.classification ?? null,
+        followUpCadence: c.followUpCadence ?? null,
+        followUp: c.followUp ?? null,
         ...pd
       };
     })

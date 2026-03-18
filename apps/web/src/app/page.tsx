@@ -63,6 +63,33 @@ function injectBookingUrl(body: string, url: string) {
   return `${body}\n\nYou can book an appointment here: ${url}`;
 }
 
+const CADENCE_ALERT_WINDOW_HOURS = 24;
+
+function normalizeWatchCondition(raw?: string | null): string {
+  const t = String(raw ?? "").toLowerCase().trim();
+  if (!t) return "";
+  if (/(pre|used|pre-owned|preowned|owned)/.test(t)) return "used";
+  if (/new/.test(t)) return "new";
+  return t;
+}
+
+function formatCadenceDate(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString();
+}
+
+function getCadenceAlert(cadence?: { status?: string; pausedUntil?: string | null }) {
+  if (!cadence || cadence.status !== "active") return null;
+  if (!cadence.pausedUntil) return null;
+  const resumeAt = new Date(cadence.pausedUntil);
+  if (Number.isNaN(resumeAt.getTime())) return null;
+  const msUntil = resumeAt.getTime() - Date.now();
+  if (msUntil <= 0) return null;
+  if (msUntil > CADENCE_ALERT_WINDOW_HOURS * 60 * 60 * 1000) return null;
+  return { resumeAt, msUntil };
+}
+
 type SystemMode = "suggest" | "autopilot";
 
 type ConversationListItem = {
@@ -75,6 +102,13 @@ type ConversationListItem = {
   contactPreference?: "call_only";
   leadName?: string | null;
   vehicleDescription?: string | null;
+  followUpCadence?: {
+    status?: string;
+    nextDueAt?: string | null;
+    pausedUntil?: string | null;
+    pauseReason?: string | null;
+  } | null;
+  followUp?: { mode?: string; reason?: string; updatedAt?: string } | null;
   updatedAt: string;
   messageCount: number;
   lastMessage?: { direction: "in" | "out"; body: string; provider?: string } | null;
@@ -102,6 +136,37 @@ type ConversationDetail = {
   closedAt?: string | null;
   closedReason?: string | null;
   contactPreference?: "call_only";
+  followUpCadence?: {
+    status?: string;
+    nextDueAt?: string | null;
+    pausedUntil?: string | null;
+    pauseReason?: string | null;
+  };
+  followUp?: { mode?: string; reason?: string; updatedAt?: string };
+  inventoryWatches?: Array<{
+    model: string;
+    year?: number | string;
+    make?: string;
+    trim?: string;
+    color?: string;
+    condition?: string;
+    note?: string;
+    status?: string;
+    createdAt?: string;
+    lastNotifiedAt?: string;
+  }>;
+  inventoryWatch?: {
+    model: string;
+    year?: number | string;
+    make?: string;
+    trim?: string;
+    color?: string;
+    condition?: string;
+    note?: string;
+    status?: string;
+    createdAt?: string;
+    lastNotifiedAt?: string;
+  };
   lead?: {
     leadRef?: string;
     source?: string;
@@ -114,9 +179,12 @@ type ConversationDetail = {
       stockId?: string;
       vin?: string;
       year?: string;
+      make?: string;
       model?: string;
+      trim?: string;
       color?: string;
       description?: string;
+      condition?: string;
     };
   };
   appointment?: {
@@ -151,6 +219,15 @@ type QuestionItem = {
   type?: string;
   outcome?: string;
   followUpAction?: string;
+};
+
+type WatchFormItem = {
+  condition: string;
+  year: string;
+  make: string;
+  model: string;
+  trim: string;
+  color: string;
 };
 
 function todoActionLabel(todo: TodoItem): string {
@@ -219,6 +296,16 @@ export default function Home() {
   >("inbox");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedConv, setSelectedConv] = useState<ConversationDetail | null>(null);
+  const [cadenceResolveOpen, setCadenceResolveOpen] = useState(false);
+  const [cadenceResolveMode, setCadenceResolveMode] = useState<"alert" | "watch">("alert");
+  const [cadenceResolveConv, setCadenceResolveConv] = useState<ConversationDetail | null>(null);
+  const [cadenceResolution, setCadenceResolution] = useState("resume");
+  const [cadenceResumeDate, setCadenceResumeDate] = useState("");
+  const [cadenceWatchEnabled, setCadenceWatchEnabled] = useState(false);
+  const [cadenceWatchItems, setCadenceWatchItems] = useState<WatchFormItem[]>([]);
+  const [cadenceWatchNote, setCadenceWatchNote] = useState("");
+  const [cadenceResolveSaving, setCadenceResolveSaving] = useState(false);
+  const [cadenceResolveError, setCadenceResolveError] = useState<string | null>(null);
   const [selectedContact, setSelectedContact] = useState<ContactItem | null>(null);
   const [contactEdit, setContactEdit] = useState(false);
   const [contactForm, setContactForm] = useState({
@@ -507,6 +594,12 @@ export default function Home() {
     setDetailLoading(false);
   }
 
+  async function fetchConversationDetail(id: string): Promise<ConversationDetail | null> {
+    const r = await fetch(`/api/conversations/${encodeURIComponent(id)}`, { cache: "no-store" });
+    const data = await r.json().catch(() => null);
+    return data?.conversation ?? null;
+  }
+
   async function refreshConversations() {
     if (document.visibilityState === "hidden") return;
     const r = await fetch("/api/conversations", { cache: "no-store" });
@@ -536,6 +629,117 @@ export default function Home() {
     if (sig && sig === lastSelectedSigRef.current) return;
     lastSelectedSigRef.current = sig;
     setSelectedConv(conv);
+  }
+
+  function seedWatchItemsFromConv(conv: ConversationDetail | null): WatchFormItem[] {
+    const fromExisting =
+      conv?.inventoryWatches?.length
+        ? conv.inventoryWatches
+        : conv?.inventoryWatch
+          ? [conv.inventoryWatch]
+          : [];
+    if (fromExisting.length) {
+      return fromExisting.map(w => ({
+        condition: normalizeWatchCondition(w.condition),
+        year: w.year ? String(w.year) : "",
+        make: w.make ?? "",
+        model: w.model ?? "",
+        trim: w.trim ?? "",
+        color: w.color ?? ""
+      }));
+    }
+    const vehicle = conv?.lead?.vehicle;
+    return [
+      {
+        condition: normalizeWatchCondition(vehicle?.condition),
+        year: vehicle?.year ?? "",
+        make: vehicle?.make ?? "",
+        model: vehicle?.model ?? vehicle?.description ?? "",
+        trim: vehicle?.trim ?? "",
+        color: vehicle?.color ?? ""
+      }
+    ];
+  }
+
+  async function openCadenceResolve(convId: string, mode: "alert" | "watch") {
+    setCadenceResolveError(null);
+    setCadenceResolveMode(mode);
+    const conv =
+      selectedConv?.id === convId ? selectedConv : await fetchConversationDetail(convId);
+    setCadenceResolveConv(conv);
+    setCadenceWatchItems(seedWatchItemsFromConv(conv));
+    setCadenceWatchNote("");
+    setCadenceWatchEnabled(mode === "watch");
+    setCadenceResolution(mode === "watch" ? "pause_7" : "resume");
+    setCadenceResumeDate("");
+    setCadenceResolveOpen(true);
+  }
+
+  function updateWatchItem(idx: number, patch: Partial<WatchFormItem>) {
+    setCadenceWatchItems(prev =>
+      prev.map((item, i) => (i === idx ? { ...item, ...patch } : item))
+    );
+  }
+
+  function addWatchItem() {
+    setCadenceWatchItems(prev => {
+      const base = prev[0] ?? { condition: "", year: "", make: "", model: "", trim: "", color: "" };
+      return [...prev, { ...base, model: "" }];
+    });
+  }
+
+  function removeWatchItem(idx: number) {
+    setCadenceWatchItems(prev => prev.filter((_, i) => i !== idx));
+  }
+
+  async function submitCadenceResolve() {
+    if (!cadenceResolveConv) return;
+    if (cadenceResolution === "resume_on" && !cadenceResumeDate) {
+      setCadenceResolveError("Please choose a resume date.");
+      return;
+    }
+    if (cadenceWatchEnabled) {
+      const hasModel = cadenceWatchItems.some(item => item.model.trim());
+      if (!hasModel) {
+        setCadenceResolveError("Please enter at least one model to watch.");
+        return;
+      }
+    }
+    setCadenceResolveSaving(true);
+    setCadenceResolveError(null);
+    try {
+      const payload = {
+        resolution: cadenceResolution,
+        resumeDate: cadenceResolution === "resume_on" ? cadenceResumeDate : undefined,
+        watch: cadenceWatchEnabled
+          ? {
+              note: cadenceWatchNote,
+              items: cadenceWatchItems
+            }
+          : undefined
+      };
+      const resp = await fetch(
+        `/api/conversations/${encodeURIComponent(cadenceResolveConv.id)}/followup-action`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        }
+      );
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || data?.ok === false) {
+        throw new Error(data?.error ?? "Failed to update follow-up cadence");
+      }
+      if (selectedConv?.id === cadenceResolveConv.id && data?.conversation) {
+        setSelectedConv(data.conversation);
+      }
+      await load();
+      setCadenceResolveOpen(false);
+    } catch (err: any) {
+      setCadenceResolveError(err?.message ?? "Failed to update follow-up cadence");
+    } finally {
+      setCadenceResolveSaving(false);
+    }
   }
 
   async function updateMode(next: SystemMode) {
@@ -989,6 +1193,28 @@ export default function Home() {
       ""
     );
   }, [selectedConv?.appointment?.bookedSalespersonId, salespeopleList, usersList]);
+  const cadenceAlert = useMemo(() => {
+    return getCadenceAlert(selectedConv?.followUpCadence);
+  }, [selectedConv?.followUpCadence]);
+  const cadenceAlerts = useMemo(() => {
+    return conversations
+      .map(c => {
+        const alert = getCadenceAlert(c.followUpCadence ?? undefined);
+        if (!alert) return null;
+        return {
+          convId: c.id,
+          leadKey: c.leadKey,
+          leadName: c.leadName ?? null,
+          resumeAt: alert.resumeAt
+        };
+      })
+      .filter(Boolean) as Array<{
+      convId: string;
+      leadKey: string;
+      leadName: string | null;
+      resumeAt: Date;
+    }>;
+  }, [conversations]);
   const displaySendBody = useMemo(() => {
     if (sendBodySource === "user") return sendBody;
     if (messageFilter === "calls") return "";
@@ -2774,6 +3000,41 @@ export default function Home() {
 
         {section === "questions" ? (
           <div className="mt-3 border rounded-lg divide-y">
+            {cadenceAlerts.length ? (
+              <>
+                {cadenceAlerts.map(alert => (
+                  <div key={`cadence-${alert.convId}`} className="p-4 flex items-start justify-between gap-4 bg-amber-50">
+                    <div>
+                      <div className="text-sm font-medium">
+                        {alert.leadName ? `${alert.leadName}` : alert.leadKey}
+                      </div>
+                      {alert.leadName ? (
+                        <div className="text-xs text-gray-600 mt-1">{alert.leadKey}</div>
+                      ) : null}
+                      <div className="text-xs text-amber-800 mt-2">
+                        Follow-up cadence resumes on {formatCadenceDate(alert.resumeAt.toISOString())}.
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <button
+                        className="px-3 py-2 border rounded text-sm bg-white"
+                        onClick={() => openCadenceResolve(alert.convId, "alert")}
+                      >
+                        Resolve
+                      </button>
+                      <button
+                        className="px-3 py-2 border rounded text-sm"
+                        onClick={() => {
+                          setSelectedId(alert.convId);
+                        }}
+                      >
+                        Open conversation
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </>
+            ) : null}
             {questions.map(q => (
               <div key={q.id} className="p-4 flex items-start justify-between gap-4">
                 <div>
@@ -2857,7 +3118,7 @@ export default function Home() {
                 })()}
               </div>
             ))}
-            {!loading && questions.length === 0 ? (
+            {!loading && questions.length === 0 && cadenceAlerts.length === 0 ? (
               <div className="p-4 text-sm text-gray-600">No open questions.</div>
             ) : null}
           </div>
@@ -4994,6 +5255,28 @@ export default function Home() {
                     ) : null}
                   </div>
                 ) : null}
+                {(() => {
+                  const watches =
+                    selectedConv.inventoryWatches?.length
+                      ? selectedConv.inventoryWatches
+                      : selectedConv.inventoryWatch
+                        ? [selectedConv.inventoryWatch]
+                        : [];
+                  if (!watches.length) return null;
+                  const labels = watches.map(w => {
+                    const year = w.year ? String(w.year) : "";
+                    const make = w.make ?? "";
+                    const model = w.model ?? "";
+                    const trim = w.trim ?? "";
+                    const color = w.color ? ` (${w.color})` : "";
+                    return [year, make, model, trim].filter(Boolean).join(" ").trim() + color;
+                  });
+                  return (
+                    <div className="text-xs text-gray-600 mt-1">
+                      Watch: {labels.join(" • ")}
+                    </div>
+                  );
+                })()}
                 <div className="text-xs text-gray-500 mt-1">
                   {selectedConv.status === "closed" && selectedConv.closedAt
                     ? `closed: ${new Date(selectedConv.closedAt).toLocaleString()}`
@@ -5034,6 +5317,15 @@ export default function Home() {
                     📅
                   </button>
                 ) : null}
+                {!(selectedConv.classification?.bucket === "service" || selectedConv.classification?.cta === "service_request") ? (
+                  <button
+                    className="px-2 py-1 border rounded text-sm"
+                    onClick={() => openCadenceResolve(selectedConv.id, "watch")}
+                    title="Add vehicle watch"
+                  >
+                    👀
+                  </button>
+                ) : null}
                 {(authUser?.role === "manager" || authUser?.permissions?.canToggleHumanOverride) ? (
                   <button
                     className={`px-2 py-1 border rounded text-sm cursor-pointer ${selectedConv.mode === "human" ? "font-semibold bg-black text-white" : "hover:bg-gray-50"}`}
@@ -5060,6 +5352,24 @@ export default function Home() {
               </div>
             </div>
             {modeError ? <div className="text-xs text-red-600 mt-1">{modeError}</div> : null}
+            {cadenceAlert ? (
+              <div className="mt-3 border rounded-lg bg-amber-50 px-3 py-2 text-sm flex items-center justify-between gap-3">
+                <div>
+                  <div className="font-medium text-amber-900">
+                    Follow-up cadence resumes soon
+                  </div>
+                  <div className="text-xs text-amber-800">
+                    Scheduled to resume: {formatCadenceDate(cadenceAlert.resumeAt.toISOString())}
+                  </div>
+                </div>
+                <button
+                  className="px-3 py-2 border rounded text-sm bg-white"
+                  onClick={() => openCadenceResolve(selectedConv.id, "alert")}
+                >
+                  Review
+                </button>
+              </div>
+            ) : null}
 
             {callPickerOpen ? (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
@@ -5197,6 +5507,179 @@ export default function Home() {
                       disabled={manualApptSaving}
                     >
                       {manualApptSaving ? "Saving…" : "Set appointment"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {cadenceResolveOpen ? (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+                <div className="w-full max-w-lg rounded-lg bg-white shadow-lg border p-4">
+                  <div className="text-sm font-semibold">
+                    {cadenceResolveMode === "watch" ? "Add vehicle watch" : "Follow-up cadence"}
+                  </div>
+                  {cadenceResolveConv ? (
+                    <div className="text-xs text-gray-600 mt-1">
+                      {cadenceResolveConv.lead?.name ||
+                        [cadenceResolveConv.lead?.firstName, cadenceResolveConv.lead?.lastName]
+                          .filter(Boolean)
+                          .join(" ") ||
+                        cadenceResolveConv.leadKey}
+                      {cadenceResolveConv.lead?.phone ? ` • ${cadenceResolveConv.lead.phone}` : ""}
+                    </div>
+                  ) : null}
+
+                  <div className="mt-3">
+                    <div className="text-xs text-gray-500 mb-1">Follow-up action</div>
+                    <select
+                      className="border rounded px-3 py-2 text-sm w-full"
+                      value={cadenceResolution}
+                      onChange={e => setCadenceResolution(e.target.value)}
+                    >
+                      <option value="resume">Resume follow-ups now</option>
+                      <option value="resume_on">Resume on selected date</option>
+                      <option value="pause_7">Pause for 7 days</option>
+                      <option value="pause_30">Pause for 30 days</option>
+                      <option value="pause_indef">Pause indefinitely</option>
+                      <option value="appointment_set">Appointment set manually</option>
+                      <option value="archive">Archive conversation</option>
+                    </select>
+                  </div>
+
+                  {cadenceResolution === "resume_on" ? (
+                    <div className="mt-3">
+                      <div className="text-xs text-gray-500 mb-1">Resume date</div>
+                      <input
+                        type="date"
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={cadenceResumeDate}
+                        onChange={e => setCadenceResumeDate(e.target.value)}
+                      />
+                    </div>
+                  ) : null}
+
+                  <div className="mt-4 border-t pt-3">
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={cadenceWatchEnabled}
+                        onChange={e => setCadenceWatchEnabled(e.target.checked)}
+                      />
+                      Add inventory watch (pauses cadence)
+                    </label>
+                    {cadenceWatchEnabled ? (
+                      <div className="mt-3 space-y-3">
+                        {cadenceWatchItems.map((item, idx) => (
+                          <div key={`watch-${idx}`} className="border rounded p-3">
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <div className="text-xs text-gray-500 mb-1">Condition</div>
+                                <select
+                                  className="border rounded px-2 py-2 text-sm w-full"
+                                  value={item.condition}
+                                  onChange={e => updateWatchItem(idx, { condition: e.target.value })}
+                                >
+                                  <option value="">Any</option>
+                                  <option value="new">New</option>
+                                  <option value="used">Pre-owned</option>
+                                </select>
+                              </div>
+                              <div>
+                                <div className="text-xs text-gray-500 mb-1">Year</div>
+                                <input
+                                  className="border rounded px-2 py-2 text-sm w-full"
+                                  placeholder="2026"
+                                  value={item.year}
+                                  onChange={e => updateWatchItem(idx, { year: e.target.value })}
+                                />
+                              </div>
+                              <div>
+                                <div className="text-xs text-gray-500 mb-1">Make</div>
+                                <input
+                                  className="border rounded px-2 py-2 text-sm w-full"
+                                  placeholder="Harley-Davidson"
+                                  value={item.make}
+                                  onChange={e => updateWatchItem(idx, { make: e.target.value })}
+                                />
+                              </div>
+                              <div>
+                                <div className="text-xs text-gray-500 mb-1">Model</div>
+                                <input
+                                  className="border rounded px-2 py-2 text-sm w-full"
+                                  placeholder="Low Rider S"
+                                  value={item.model}
+                                  onChange={e => updateWatchItem(idx, { model: e.target.value })}
+                                />
+                              </div>
+                              <div>
+                                <div className="text-xs text-gray-500 mb-1">Trim/Finish</div>
+                                <input
+                                  className="border rounded px-2 py-2 text-sm w-full"
+                                  placeholder="Special, ST, Chrome trim…"
+                                  value={item.trim}
+                                  onChange={e => updateWatchItem(idx, { trim: e.target.value })}
+                                />
+                              </div>
+                              <div>
+                                <div className="text-xs text-gray-500 mb-1">Color</div>
+                                <input
+                                  className="border rounded px-2 py-2 text-sm w-full"
+                                  placeholder="Vivid Black"
+                                  value={item.color}
+                                  onChange={e => updateWatchItem(idx, { color: e.target.value })}
+                                />
+                              </div>
+                            </div>
+                            {cadenceWatchItems.length > 1 ? (
+                              <div className="mt-2 text-right">
+                                <button
+                                  className="text-xs text-red-600"
+                                  onClick={() => removeWatchItem(idx)}
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                        ))}
+                        <button
+                          className="px-3 py-2 border rounded text-sm"
+                          onClick={addWatchItem}
+                        >
+                          Add another model
+                        </button>
+                        <div>
+                          <div className="text-xs text-gray-500 mb-1">Note (optional)</div>
+                          <textarea
+                            className="border rounded px-3 py-2 text-sm w-full"
+                            rows={2}
+                            value={cadenceWatchNote}
+                            onChange={e => setCadenceWatchNote(e.target.value)}
+                          />
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {cadenceResolveError ? (
+                    <div className="text-xs text-red-600 mt-2">{cadenceResolveError}</div>
+                  ) : null}
+
+                  <div className="mt-4 flex justify-end gap-2">
+                    <button
+                      className="px-3 py-2 border rounded text-sm"
+                      onClick={() => setCadenceResolveOpen(false)}
+                      disabled={cadenceResolveSaving}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="px-3 py-2 border rounded text-sm"
+                      onClick={submitCadenceResolve}
+                      disabled={cadenceResolveSaving}
+                    >
+                      {cadenceResolveSaving ? "Saving…" : "Save"}
                     </button>
                   </div>
                 </div>

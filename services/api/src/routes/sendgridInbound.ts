@@ -43,6 +43,7 @@ import {
 import { getDealerProfile } from "../domain/dealerProfile.js";
 import { getInventoryNote } from "../domain/inventoryNotes.js";
 import { hasInventoryForModelYear } from "../domain/inventoryFeed.js";
+import { parseAdfVehicleFromCommentWithLLM } from "../domain/llmDraft.js";
 
 function base64UrlDecode(input: string): string | null {
   try {
@@ -313,6 +314,14 @@ function extractLeadMeta(adfXml: string): { leadSource?: string; model?: string 
   }
 }
 
+function normalizeVehicleCondition(raw?: string | null): "new" | "used" | undefined {
+  if (!raw) return undefined;
+  const t = String(raw).toLowerCase();
+  if (t.includes("used") || t.includes("pre-owned") || t.includes("preowned")) return "used";
+  if (t.includes("new")) return "new";
+  return undefined;
+}
+
 function parseTimeframeMonths(raw?: string): { start?: number; end?: number } | null {
   if (!raw) return null;
   const t = raw.toLowerCase();
@@ -545,6 +554,29 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   );
 
   const lead = parseAdfXml(adfXml);
+  if (lead.comment && /inventory item/i.test(lead.comment)) {
+    const needsVehicleDetails =
+      !lead.year || !lead.vehicleMake || !lead.vehicleModel || !lead.vehicleTrim || !lead.vehicleColor;
+    if (needsVehicleDetails) {
+      const parsed = await parseAdfVehicleFromCommentWithLLM({
+        comment: lead.comment,
+        existing: {
+          year: lead.year ?? null,
+          make: lead.vehicleMake ?? null,
+          model: lead.vehicleModel ?? null,
+          trim: lead.vehicleTrim ?? null,
+          color: lead.vehicleColor ?? null
+        }
+      });
+      if (parsed) {
+        if (!lead.year && parsed.year) lead.year = parsed.year;
+        if (!lead.vehicleMake && parsed.make) lead.vehicleMake = parsed.make;
+        if (!lead.vehicleModel && parsed.model) lead.vehicleModel = parsed.model;
+        if (!lead.vehicleTrim && parsed.trim) lead.vehicleTrim = parsed.trim;
+        if (!lead.vehicleColor && parsed.color) lead.vehicleColor = parsed.color;
+      }
+    }
+  }
   const leadRefFallback =
     adfXml.match(/<prospect[^>]*>[\s\S]*?<id[^>]*>([^<]+)<\/id>/i)?.[1]?.trim() ??
     undefined;
@@ -595,8 +627,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       stockId: lead.stockId,
       vin: lead.vin,
       year: lead.year,
-      model: meta.model,
+      make: lead.vehicleMake,
+      model: lead.vehicleModel ?? meta.model,
+      trim: lead.vehicleTrim,
       color: lead.vehicleColor,
+      condition: lead.vehicleCondition,
       description: lead.vehicleDescription,
       mileage: lead.mileage
     },
@@ -605,8 +640,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const stockId = lead.stockId?.trim() || undefined;
   conv.lead = conv.lead ?? {};
   conv.lead.vehicle = conv.lead.vehicle ?? {};
-  if (stockId) {
-    conv.lead.vehicle.stockId = stockId;
+  if (stockId) conv.lead.vehicle.stockId = stockId;
+  const parsedCondition = normalizeVehicleCondition(lead.vehicleCondition);
+  if (parsedCondition) {
+    conv.lead.vehicle.condition = parsedCondition;
+  } else if (stockId) {
     conv.lead.vehicle.condition = /^u/i.test(stockId) ? "used" : "new";
   } else {
     conv.lead.vehicle.condition = "new_model_interest";

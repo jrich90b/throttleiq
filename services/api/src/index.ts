@@ -337,19 +337,42 @@ async function saveInventorySnapshot(items: any[]) {
   }
 }
 
+function normalizeWatchCondition(raw?: string | null): "new" | "used" | undefined {
+  const t = String(raw ?? "").toLowerCase().trim();
+  if (!t) return undefined;
+  if (/(pre|used|pre-owned|preowned|owned)/.test(t)) return "used";
+  if (/new/.test(t)) return "new";
+  return undefined;
+}
+
 function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
   if (!item?.model || !watch?.model) return false;
   const itemModel = normalizeModelName(String(item.model));
   const watchModel = normalizeModelName(String(watch.model));
   if (!itemModel.includes(watchModel) && !watchModel.includes(itemModel)) return false;
+  if (watch.trim) {
+    const trimToken = normalizeModelName(String(watch.trim));
+    if (trimToken && !itemModel.includes(trimToken)) return false;
+  }
+  if (watch.make) {
+    const itemMake = normalizeModelName(String(item.make ?? ""));
+    const watchMake = normalizeModelName(String(watch.make));
+    if (!itemMake || (!itemMake.includes(watchMake) && !watchMake.includes(itemMake))) return false;
+  }
+  const watchCondition = normalizeWatchCondition(watch.condition);
+  if (watchCondition) {
+    const itemCondition = normalizeWatchCondition(item.condition);
+    if (!itemCondition || itemCondition !== watchCondition) return false;
+  }
   if (watch.year && String(item.year) !== String(watch.year)) return false;
   if (watch.yearMin && watch.yearMax) {
     const y = Number(item.year ?? 0);
     if (!Number.isFinite(y) || y < watch.yearMin || y > watch.yearMax) return false;
   }
   if (watch.color) {
-    const color = String(item.color ?? "").toLowerCase();
-    if (!color.includes(String(watch.color).toLowerCase())) return false;
+    const itemColor = normalizeColorBase(String(item.color ?? ""), !!watch.trim);
+    const watchColor = normalizeColorBase(String(watch.color), !!watch.trim);
+    if (!itemColor || !watchColor || !itemColor.includes(watchColor)) return false;
   }
   return true;
 }
@@ -360,6 +383,8 @@ async function processInventoryWatchlist() {
   try {
     const items = await getInventoryFeed();
     if (!items.length) return;
+    const cfg = await getSchedulerConfig();
+    const tz = cfg.timezone || "America/New_York";
     const snapshot = await loadInventorySnapshot();
     const prevKeys = new Set(snapshot.items.map(i => i.key));
     const newItems = items.filter(i => {
@@ -372,30 +397,64 @@ async function processInventoryWatchlist() {
     const nowIso = new Date().toISOString();
     const convs = getAllConversations();
     for (const conv of convs) {
-      const watch = conv.inventoryWatch;
-      if (!watch || watch.status === "paused") continue;
+      const watches =
+        conv.inventoryWatches?.length
+          ? conv.inventoryWatches
+          : conv.inventoryWatch
+            ? [conv.inventoryWatch]
+            : [];
+      if (!watches.length) continue;
+      if (!conv.inventoryWatches && conv.inventoryWatch) {
+        conv.inventoryWatches = [conv.inventoryWatch];
+      }
       if (conv.status === "closed") continue;
       const phone = conv.lead?.phone ?? conv.leadKey;
       if (phone && isSuppressed(phone)) continue;
       if (conv.followUp?.mode === "manual_handoff") continue;
-      if (watch.lastNotifiedAt && Date.now() - new Date(watch.lastNotifiedAt).getTime() < 24 * 60 * 60 * 1000) {
-        continue;
+      let matchedWatch: InventoryWatch | null = null;
+      let matchedItem: any | null = null;
+      for (const watch of watches) {
+        if (!watch || watch.status === "paused") continue;
+        if (
+          watch.lastNotifiedAt &&
+          Date.now() - new Date(watch.lastNotifiedAt).getTime() < 24 * 60 * 60 * 1000
+        ) {
+          continue;
+        }
+        const match = newItems.find(i => inventoryItemMatchesWatch(i, watch));
+        if (!match) continue;
+        matchedWatch = watch;
+        matchedItem = match;
+        break;
       }
+      if (!matchedWatch || !matchedItem) continue;
 
-      const match = newItems.find(i => inventoryItemMatchesWatch(i, watch));
-      if (!match) continue;
-
-      const year = match.year ?? (watch.year ? String(watch.year) : undefined);
-      const model = match.model ?? watch.model;
-      const color = match.color ?? watch.color;
-      const name = [year, model].filter(Boolean).join(" ");
+      const year = matchedItem.year ?? (matchedWatch.year ? String(matchedWatch.year) : undefined);
+      const make = matchedItem.make ?? matchedWatch.make;
+      const model = matchedItem.model ?? matchedWatch.model;
+      const trim = matchedWatch.trim;
+      const color = matchedItem.color ?? matchedWatch.color;
+      const name = [year, make, model, trim].filter(Boolean).join(" ");
       const colorText = color ? ` in ${color}` : "";
       const reply = `Good news — we just got ${name}${colorText} in stock. Want details or a time to check it out?`;
-      const imageUrl = Array.isArray(match.images) && match.images.length ? match.images[0] : undefined;
+      const imageUrl =
+        Array.isArray(matchedItem.images) && matchedItem.images.length
+          ? matchedItem.images[0]
+          : undefined;
       const to = conv.lead?.phone ?? conv.leadKey;
       appendOutbound(conv, "salesperson", to, reply, "draft_ai", undefined, imageUrl ? [imageUrl] : undefined);
-      watch.lastNotifiedAt = nowIso;
-      watch.lastNotifiedStockId = match.stockId ?? match.vin ?? undefined;
+      matchedWatch.lastNotifiedAt = nowIso;
+      matchedWatch.lastNotifiedStockId = matchedItem.stockId ?? matchedItem.vin ?? undefined;
+      setFollowUpMode(conv, "holding_inventory", "inventory_watch_match");
+      if (!conv.followUpCadence) {
+        startFollowUpCadence(conv, nowIso, tz);
+      }
+      if (conv.followUpCadence && conv.followUpCadence.status === "active") {
+        const pauseUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+        conv.followUpCadence.pausedUntil = pauseUntil;
+        conv.followUpCadence.pauseReason = "inventory_watch_match";
+        conv.followUpCadence.nextDueAt = pauseUntil;
+      }
       conv.updatedAt = nowIso;
       saveConversation(conv);
     }
@@ -3778,6 +3837,7 @@ app.post("/conversations/:id/appointment", requirePermission("canEditAppointment
       }
     }
 
+    conv.updatedAt = nowIso;
     saveConversation(conv);
     await flushConversationStore();
 
@@ -3792,6 +3852,188 @@ app.post("/conversations/:id/appointment", requirePermission("canEditAppointment
   } catch (err: any) {
     console.log("[manual-appointment] failed:", err?.message ?? err);
     return res.status(500).json({ ok: false, error: err?.message ?? "Failed to book appointment" });
+  }
+});
+
+app.post("/conversations/:id/followup-action", async (req, res) => {
+  try {
+    const conv = getConversation(req.params.id);
+    if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+
+    const resolutionRaw = String(req.body?.resolution ?? "resume").trim();
+    const resolution = resolutionRaw || "resume";
+    const resumeDateRaw = String(req.body?.resumeDate ?? "").trim();
+    const watchInput = req.body?.watch ?? null;
+    const watchItemsInput = Array.isArray(watchInput?.items) ? watchInput.items : [];
+    const watchNote = String(watchInput?.note ?? "").trim();
+    const nowIso = new Date().toISOString();
+    const cfg = await getSchedulerConfig();
+    const tz = cfg.timezone || "America/New_York";
+
+    const normalizeInputCondition = (raw?: string | null) => {
+      const t = String(raw ?? "").toLowerCase().trim();
+      if (!t) return undefined;
+      if (/(pre|used|pre-owned|preowned|owned)/.test(t)) return "used";
+      if (/new/.test(t)) return "new";
+      return undefined;
+    };
+
+    const buildWatchList = (): InventoryWatch[] => {
+      const createdAt = nowIso;
+      const list = watchItemsInput
+        .map((item: any) => {
+          const model = String(item?.model ?? "").trim();
+          if (!model) return null;
+          const yearNum = Number(String(item?.year ?? "").trim());
+          const year = Number.isFinite(yearNum) && yearNum > 1900 ? yearNum : undefined;
+          const watch: InventoryWatch = {
+            model,
+            year,
+            make: String(item?.make ?? "").trim() || undefined,
+            trim: String(item?.trim ?? "").trim() || undefined,
+            color: String(item?.color ?? "").trim() || undefined,
+            condition: normalizeInputCondition(item?.condition),
+            note: watchNote || undefined,
+            exactness: "model_only",
+            status: "active",
+            createdAt
+          };
+          if (watch.year && watch.color) watch.exactness = "exact";
+          else if (watch.year) watch.exactness = "year_model";
+          return watch;
+        })
+        .filter(Boolean) as InventoryWatch[];
+      return list;
+    };
+
+    const toResumeIso = (dateStr: string): string | null => {
+      if (!dateStr) return null;
+      const [sy, sm, sd] = dateStr.split("-").map(Number);
+      if (!sy || !sm || !sd) return null;
+      const resumeAt = localPartsToUtcDate(tz, {
+        year: sy,
+        month: sm,
+        day: sd,
+        hour24: 9,
+        minute: 0
+      });
+      return resumeAt.toISOString();
+    };
+
+    const ensureCadenceActive = (nextDueAtOverride?: string) => {
+      if (!conv.followUpCadence) {
+        startFollowUpCadence(conv, nowIso, tz);
+      }
+      if (!conv.followUpCadence) return;
+      if (conv.followUpCadence.status === "stopped") {
+        conv.followUpCadence.status = "active";
+        conv.followUpCadence.anchorAt = conv.followUpCadence.anchorAt ?? nowIso;
+      }
+      if (nextDueAtOverride) {
+        conv.followUpCadence.nextDueAt = nextDueAtOverride;
+      } else if (!conv.followUpCadence.nextDueAt) {
+        const idx = Math.min(
+          conv.followUpCadence.stepIndex ?? 0,
+          FOLLOW_UP_DAY_OFFSETS.length - 1
+        );
+        conv.followUpCadence.nextDueAt = computeFollowUpDueAt(
+          conv.followUpCadence.anchorAt ?? nowIso,
+          FOLLOW_UP_DAY_OFFSETS[idx],
+          tz
+        );
+      }
+    };
+
+    const applyPauseUntil = (untilIso: string, reason: string) => {
+      ensureCadenceActive(untilIso);
+      if (conv.followUpCadence) {
+        conv.followUpCadence.status = "active";
+        conv.followUpCadence.pausedUntil = untilIso;
+        conv.followUpCadence.pauseReason = reason;
+        conv.followUpCadence.nextDueAt = untilIso;
+        conv.followUpCadence.lastSentAt = conv.followUpCadence.lastSentAt ?? nowIso;
+      }
+    };
+
+    const applyResume = (holdForWatch: boolean) => {
+      if (!holdForWatch) {
+        setFollowUpMode(conv, "active", "manual_resume");
+      }
+      ensureCadenceActive();
+      if (conv.followUpCadence) {
+        conv.followUpCadence.pausedUntil = undefined;
+        conv.followUpCadence.pauseReason = undefined;
+      }
+    };
+
+    const applyPauseDays = (days: number, reason: string) => {
+      const untilIso = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+      applyPauseUntil(untilIso, reason);
+    };
+
+    const applyPauseIndef = (holdForWatch: boolean) => {
+      stopFollowUpCadence(conv, "manual_pause_indef");
+      if (!holdForWatch) {
+        setFollowUpMode(conv, "paused_indefinite", "manual_pause_indef");
+      }
+    };
+
+    const watchList = buildWatchList();
+    const watchEnabled = watchItemsInput.length > 0;
+    if (watchEnabled && watchList.length === 0) {
+      return res.status(400).json({ ok: false, error: "At least one watch model is required." });
+    }
+
+    const shouldApplyWatch = watchList.length > 0 && resolution !== "archive";
+    if (shouldApplyWatch) {
+      conv.inventoryWatches = watchList;
+      conv.inventoryWatch = watchList[0];
+      conv.inventoryWatchPending = undefined;
+      setFollowUpMode(conv, "holding_inventory", "inventory_watch");
+    }
+
+    const effectiveResolution =
+      shouldApplyWatch && resolution === "resume" ? "pause_7" : resolution;
+
+    if (effectiveResolution === "archive") {
+      stopFollowUpCadence(conv, "manual_archive");
+      closeConversation(conv, "manual_archive");
+      stopRelatedCadences(conv, "manual_archive", { close: true });
+    } else if (effectiveResolution === "appointment_set") {
+      stopFollowUpCadence(conv, "manual_appointment");
+      setFollowUpMode(conv, "manual_handoff", "manual_appointment");
+      stopRelatedCadences(conv, "manual_appointment", { setMode: "manual_handoff" });
+    } else if (effectiveResolution === "pause_indef") {
+      applyPauseIndef(shouldApplyWatch);
+    } else if (effectiveResolution === "pause_7" || effectiveResolution === "pause_30") {
+      if (!shouldApplyWatch) {
+        setFollowUpMode(conv, "active", "manual_pause");
+      }
+      const days = effectiveResolution === "pause_7" ? 7 : 30;
+      applyPauseDays(days, "manual_pause");
+    } else if (effectiveResolution === "resume_on") {
+      const resumeIso = toResumeIso(resumeDateRaw);
+      if (!resumeIso) {
+        return res.status(400).json({ ok: false, error: "Missing or invalid resume date." });
+      }
+      if (!shouldApplyWatch) {
+        setFollowUpMode(conv, "active", "manual_pause");
+      }
+      applyPauseUntil(resumeIso, "manual_pause");
+    } else {
+      applyResume(shouldApplyWatch);
+    }
+
+    if (shouldApplyWatch && !["archive", "appointment_set"].includes(effectiveResolution)) {
+      setFollowUpMode(conv, "holding_inventory", "inventory_watch");
+    }
+
+    saveConversation(conv);
+    await flushConversationStore();
+    return res.json({ ok: true, conversation: conv });
+  } catch (err: any) {
+    console.log("[followup-action] failed:", err?.message ?? err);
+    return res.status(500).json({ ok: false, error: err?.message ?? "Failed to update follow-ups" });
   }
 });
 
@@ -5873,9 +6115,15 @@ if (authToken && signature) {
       }
       if (pref.action === "set" && pref.watch) {
         conv.inventoryWatch = pref.watch;
+        conv.inventoryWatches = [pref.watch];
         conv.inventoryWatchPending = undefined;
         setFollowUpMode(conv, "holding_inventory", "inventory_watch");
-        stopFollowUpCadence(conv, "holding_inventory");
+        if (conv.followUpCadence && conv.followUpCadence.status === "active") {
+          const pauseUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+          conv.followUpCadence.pausedUntil = pauseUntil;
+          conv.followUpCadence.pauseReason = "inventory_watch";
+          conv.followUpCadence.nextDueAt = pauseUntil;
+        }
         const yearText = pref.watch.year
           ? `${pref.watch.year} `
           : pref.watch.yearMin && pref.watch.yearMax

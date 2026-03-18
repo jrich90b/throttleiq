@@ -14,11 +14,16 @@ export type ParsedAdfLead = {
   sellOption?: "cash" | "trade" | "either";
   leadSourceId?: number;
   inquiry?: string;
+  comment?: string;
   stockId?: string;
   vin?: string;
   year?: string;
+  vehicleMake?: string;
+  vehicleModel?: string;
+  vehicleTrim?: string;
   vehicleDescription?: string;
   vehicleColor?: string;
+  vehicleCondition?: "new" | "used";
   purchaseTimeframe?: string;
   hasMotoLicense?: boolean;
   emailOptIn?: boolean;
@@ -84,6 +89,120 @@ function stripHtml(s: string): string {
   return s.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "").trim();
 }
 
+function normalizeCondition(raw?: string): "new" | "used" | undefined {
+  if (!raw) return undefined;
+  const t = raw.toLowerCase();
+  if (t.includes("used") || t.includes("pre-owned") || t.includes("preowned")) return "used";
+  if (t.includes("new")) return "new";
+  return undefined;
+}
+
+function parseInventoryItemLine(item?: string) {
+  if (!item) return {};
+  let working = item.replace(/\s+/g, " ").trim();
+  if (!working) return {};
+
+  const yearMatch = working.match(/\b(19|20)\d{2}\b/);
+  const year = yearMatch?.[0];
+  if (year) working = working.replace(year, " ").trim();
+
+  let make: string | undefined;
+  const hdMatch = working.match(/\bharley[-\s]?davidson\b/i) ?? working.match(/\bh[-\s]?d\b/i);
+  if (hdMatch) {
+    make = "Harley-Davidson";
+    working = working.replace(hdMatch[0], " ").trim();
+  } else {
+    const knownMakes = [
+      "Honda",
+      "Yamaha",
+      "Kawasaki",
+      "Suzuki",
+      "BMW",
+      "Ducati",
+      "Triumph",
+      "Indian",
+      "KTM",
+      "Can-Am",
+      "Polaris",
+      "Aprilia",
+      "Moto Guzzi",
+      "Royal Enfield",
+      "Vespa"
+    ];
+    const makeMatch = knownMakes.find(m => new RegExp(`\\b${m}\\b`, "i").test(working));
+    if (makeMatch) {
+      make = makeMatch;
+      working = working.replace(new RegExp(`\\b${makeMatch}\\b`, "i"), " ").trim();
+    }
+  }
+
+  let trim: string | undefined;
+  const trimMatch = working.match(/\b([A-Za-z0-9][A-Za-z0-9\s&-]{0,40})\s+Trim\b/i);
+  if (trimMatch?.[0]) {
+    trim = trimMatch[0].trim();
+    working = working.replace(trimMatch[0], " ").trim();
+  }
+
+  working = working.replace(/\b[A-Z]{2,5}\d{0,3}\b/g, " ").replace(/\s+/g, " ").trim();
+
+  let color: string | undefined;
+  let model: string | undefined;
+  if (working) {
+    const tokens = working.split(/\s+/);
+    const colorKeywords = [
+      "Black",
+      "White",
+      "Red",
+      "Blue",
+      "Gray",
+      "Grey",
+      "Silver",
+      "Gold",
+      "Green",
+      "Orange",
+      "Yellow",
+      "Purple",
+      "Pink",
+      "Pearl",
+      "Ember",
+      "Billiard",
+      "Whiskey",
+      "Cobalt",
+      "Sapphire",
+      "Teal",
+      "Sky",
+      "Sand",
+      "Ice",
+      "Storm",
+      "Azure",
+      "Crimson",
+      "Charcoal",
+      "Denim",
+      "Eclipse",
+      "Sunset",
+      "Midnight",
+      "Stiletto",
+      "Abyss",
+      "Smoke",
+      "Frost",
+      "Gunship",
+      "Atlas",
+      "Metallic"
+    ];
+    for (let len = Math.min(3, tokens.length - 1); len >= 1; len--) {
+      const candidate = tokens.slice(-len).join(" ");
+      if (colorKeywords.some(k => candidate.toLowerCase().includes(k.toLowerCase()))) {
+        color = candidate;
+        model = tokens.slice(0, -len).join(" ").trim() || undefined;
+        break;
+      }
+    }
+    if (!color) model = tokens.join(" ").trim() || undefined;
+  }
+
+  return { year, make, model, trim, color };
+}
+
 function parseFromComment(comment?: string) {
   if (!comment) return {};
   const clean = stripHtml(comment);
@@ -92,11 +211,13 @@ function parseFromComment(comment?: string) {
   const vinMatch = clean.match(/vin:\s*([A-HJ-NPR-Z0-9]{8,17})/i);
   const yearMatch = clean.match(/inventory year:\s*(\d{4})/i);
   const itemMatch = clean.match(/inventory item:\s*([^\n\r]+)/i);
+  const itemParsed = parseInventoryItemLine(itemMatch?.[1]?.trim());
   const itemColor = extractColorFromDescription(
     itemMatch?.[1]?.trim(),
     stockMatch?.[1]?.trim() ?? null
   );
   const colorMatch = clean.match(/color:\s*([^\n\r]+)/i);
+  const statusMatch = clean.match(/status\s*[:=]\s*\"?(new|used|pre[-\s]?owned)\"?/i);
   const phoneMatch = clean.match(/phone:\s*([0-9\-\s\(\)\.]+)/i);
   const emailMatch = clean.match(/email:\s*([^\s\n\r]+)/i);
   const timeframeMatch = clean.match(/purchase timeframe:\s*([^\n\r]+)/i);
@@ -129,9 +250,13 @@ function parseFromComment(comment?: string) {
     inquiry: inquiryMatch?.[1]?.trim(),
     stockId: stockMatch?.[1]?.trim(),
     vin: vinMatch?.[1]?.trim(),
-    year: yearMatch?.[1]?.trim(),
+    year: yearMatch?.[1]?.trim() ?? itemParsed.year,
     item: itemMatch?.[1]?.trim(),
-    color: colorMatch?.[1]?.trim() ?? itemColor,
+    make: itemParsed.make,
+    model: itemParsed.model,
+    trim: itemParsed.trim,
+    color: colorMatch?.[1]?.trim() ?? itemParsed.color ?? itemColor,
+    condition: normalizeCondition(statusMatch?.[1]),
     phone: phoneMatch?.[1]?.trim(),
     email: emailMatch?.[1]?.trim(),
     purchaseTimeframe: timeframeMatch?.[1]?.trim(),
@@ -259,9 +384,15 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
   const stockId =
     text(vehicle?.stock) ?? text(vehicle?.stock_id) ?? text(vehicle?.stockid) ?? parsedFromComment.stockId;
   const year = text(vehicle?.year) ?? parsedFromComment.year;
+  const vehicleMake = text(vehicle?.make) ?? parsedFromComment.make;
+  const vehicleModel = text(vehicle?.model) ?? parsedFromComment.model;
+  const vehicleTrim = text(vehicle?.trim) ?? parsedFromComment.trim;
+  const vehicleCondition =
+    normalizeCondition(attr(vehicle, "status") ?? attr(vehicleRaw, "status")) ??
+    parsedFromComment.condition;
 
   const vehicleDescription =
-    [text(vehicle?.make), text(vehicle?.model), text(vehicle?.trim)]
+    [vehicleMake, vehicleModel, vehicleTrim]
       .filter(Boolean)
       .join(" ") || text(vehicle?.description);
   const odometerRaw = text(vehicle?.odometer);
@@ -326,11 +457,16 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
     sellOption: parsedFromComment.sellOption,
     leadSourceId: parsedFromComment.leadSourceId,
     inquiry,
+    comment: commentText ?? undefined,
     stockId,
     vin,
     year,
+    vehicleMake,
+    vehicleModel,
+    vehicleTrim,
     vehicleDescription: desc,
     vehicleColor,
+    vehicleCondition,
     purchaseTimeframe: parsedFromComment.purchaseTimeframe,
     hasMotoLicense: parsedFromComment.hasMotoLicense,
     preferredDate: parsedFromComment.preferredDate,
