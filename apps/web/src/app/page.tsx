@@ -102,7 +102,33 @@ type ConversationDetail = {
   closedAt?: string | null;
   closedReason?: string | null;
   contactPreference?: "call_only";
-  lead?: { leadRef?: string };
+  lead?: {
+    leadRef?: string;
+    source?: string;
+    name?: string;
+    firstName?: string;
+    lastName?: string;
+    email?: string;
+    phone?: string;
+    vehicle?: {
+      stockId?: string;
+      vin?: string;
+      year?: string;
+      model?: string;
+      color?: string;
+      description?: string;
+    };
+  };
+  appointment?: {
+    status?: string;
+    whenText?: string;
+    whenIso?: string | null;
+    bookedEventId?: string | null;
+    bookedEventLink?: string | null;
+    bookedSalespersonId?: string | null;
+  };
+  classification?: { bucket?: string; cta?: string };
+  scheduler?: { preferredSalespersonId?: string; preferredSalespersonName?: string };
   messages: Message[];
 };
 
@@ -300,6 +326,16 @@ export default function Home() {
     Array<{ key: string; durationMinutes: string }>
   >([{ key: "inventory_visit", durationMinutes: "60" }]);
   const [appointmentTypeToAdd, setAppointmentTypeToAdd] = useState("inventory_visit");
+  const [manualApptOpen, setManualApptOpen] = useState(false);
+  const [manualApptSaving, setManualApptSaving] = useState(false);
+  const [manualApptError, setManualApptError] = useState<string | null>(null);
+  const [manualApptForm, setManualApptForm] = useState({
+    date: "",
+    time: "",
+    appointmentType: "inventory_visit",
+    salespersonId: "",
+    notes: ""
+  });
   const [newSalespersonName, setNewSalespersonName] = useState("");
   const [creatingCalendar, setCreatingCalendar] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
@@ -742,6 +778,53 @@ export default function Home() {
     void loadEvents();
   }, [section, schedulerConfig, calendarDate, calendarView, calendarSalespeople]);
 
+  useEffect(() => {
+    if (!manualApptOpen) return;
+    if (schedulerConfig) return;
+    void (async () => {
+      try {
+        const resp = await fetch("/api/scheduler-config", { cache: "no-store" });
+        const json = await resp.json();
+        const cfg = json?.config ?? {};
+        setSchedulerConfig(cfg);
+        setSalespeopleList(cfg.salespeople ?? []);
+        const at = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
+        setAppointmentTypesList(
+          Object.entries(at).map(([key, val]: any) => ({
+            key,
+            durationMinutes: String(val?.durationMinutes ?? 60)
+          }))
+        );
+      } catch {
+        // ignore
+      }
+    })();
+  }, [manualApptOpen, schedulerConfig]);
+
+  useEffect(() => {
+    if (!manualApptOpen) return;
+    if (!selectedConv) return;
+    if (!salespeopleList.length) return;
+    if (!manualApptForm.salespersonId) {
+      setManualApptForm(prev => ({ ...prev, salespersonId: resolveDefaultSalespersonId(selectedConv) }));
+    }
+    if (manualApptForm.appointmentType && appointmentTypesList.some(row => row.key === manualApptForm.appointmentType)) {
+      return;
+    }
+    const inferred = inferAppointmentTypeForConv(selectedConv);
+    const nextType = appointmentTypesList.some(row => row.key === inferred)
+      ? inferred
+      : appointmentTypesList[0]?.key ?? "inventory_visit";
+    setManualApptForm(prev => ({ ...prev, appointmentType: nextType }));
+  }, [
+    manualApptOpen,
+    selectedConv,
+    salespeopleList.length,
+    manualApptForm.salespersonId,
+    manualApptForm.appointmentType,
+    appointmentTypesList
+  ]);
+
   async function saveInventoryNote(stockId?: string, vin?: string) {
     const key = String(stockId ?? vin ?? "").trim().toLowerCase();
     if (!key) return;
@@ -897,6 +980,15 @@ export default function Home() {
   const emailDraft = useMemo(() => {
     return (selectedConv as any)?.emailDraft ?? null;
   }, [selectedConv]);
+  const appointmentSalespersonName = useMemo(() => {
+    const id = selectedConv?.appointment?.bookedSalespersonId ?? "";
+    if (!id) return "";
+    return (
+      salespeopleList.find(sp => sp.id === id)?.name ||
+      usersList.find(u => u.id === id)?.name ||
+      ""
+    );
+  }, [selectedConv?.appointment?.bookedSalespersonId, salespeopleList, usersList]);
   const displaySendBody = useMemo(() => {
     if (sendBodySource === "user") return sendBody;
     if (messageFilter === "calls") return "";
@@ -1037,6 +1129,26 @@ export default function Home() {
     const base = preferredOrderIds.length ? preferredOrderIds : salespeopleList.map(sp => sp.id);
     return [...base, ...salespeopleList.map(sp => sp.id).filter(id => !base.includes(id))];
   }, [preferredOrderIds, salespeopleList]);
+  const inferAppointmentTypeForConv = (conv?: ConversationDetail | null) => {
+    const bucket = conv?.classification?.bucket ?? "";
+    const cta = conv?.classification?.cta ?? "";
+    if (bucket === "test_ride" || cta === "schedule_test_ride") return "test_ride";
+    if (bucket === "trade_in_sell" || cta === "value_my_trade" || cta === "sell_my_bike") {
+      return "trade_appraisal";
+    }
+    if (bucket === "finance_prequal" || cta === "prequalify" || cta === "hdfs_coa") {
+      return "finance_discussion";
+    }
+    return "inventory_visit";
+  };
+  const resolveDefaultSalespersonId = (conv?: ConversationDetail | null) => {
+    const preferred = conv?.scheduler?.preferredSalespersonId ?? "";
+    if (preferred) return preferred;
+    if (authUser?.id && salespeopleList.some(sp => sp.id === authUser.id)) {
+      return authUser.id;
+    }
+    return salespeopleList[0]?.id ?? "";
+  };
 
   const buildCalendarEvents = (json: any) => {
     if (Array.isArray(json?.events)) {
@@ -1347,6 +1459,66 @@ export default function Home() {
       window.alert("Call failed");
     } finally {
       setCallBusy(false);
+    }
+  }
+
+  function openManualAppointment() {
+    if (!selectedConv) return;
+    const tz = schedulerConfig?.timezone ?? "America/New_York";
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+    const inferred = inferAppointmentTypeForConv(selectedConv);
+    const hasInferred = appointmentTypesList.some(row => row.key === inferred);
+    const type = hasInferred ? inferred : appointmentTypesList[0]?.key ?? "inventory_visit";
+    const defaultTime = schedulerConfig?.bookingWindows?.weekday?.earliestStart ?? "09:30";
+    setManualApptForm({
+      date: today,
+      time: defaultTime,
+      appointmentType: type,
+      salespersonId: resolveDefaultSalespersonId(selectedConv),
+      notes: ""
+    });
+    setManualApptError(null);
+    setManualApptOpen(true);
+  }
+
+  async function saveManualAppointment() {
+    if (!selectedConv) return;
+    setManualApptSaving(true);
+    setManualApptError(null);
+    try {
+      const resp = await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/appointment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          date: manualApptForm.date.trim(),
+          time: manualApptForm.time.trim(),
+          appointmentType: manualApptForm.appointmentType,
+          salespersonId: manualApptForm.salespersonId,
+          notes: manualApptForm.notes
+        })
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || data?.ok === false) {
+        throw new Error(data?.error ?? "Failed to set appointment");
+      }
+      if (data?.conversation) {
+        setSelectedConv(data.conversation);
+      } else {
+        await loadConversation(selectedConv.id);
+      }
+      if (data?.sms?.sent === false) {
+        const reason = String(data?.sms?.reason ?? "");
+        const label = reason ? `SMS not sent (${reason})` : "SMS not sent";
+        setSaveToast(`Appointment set — ${label}.`);
+      } else if (data?.sms?.sent === true) {
+        setSaveToast("Appointment set and confirmation sent.");
+      }
+      await load();
+      setManualApptOpen(false);
+    } catch (err: any) {
+      setManualApptError(err?.message ?? "Failed to set appointment");
+    } finally {
+      setManualApptSaving(false);
     }
   }
 
@@ -4794,6 +4966,26 @@ export default function Home() {
                 {selectedConv.lead?.leadRef ? (
                   <div className="text-xs text-gray-500 mt-1">Lead Ref: {selectedConv.lead.leadRef}</div>
                 ) : null}
+                {selectedConv.appointment?.whenText ? (
+                  <div className="text-xs text-gray-600 mt-1">
+                    Appointment: {selectedConv.appointment.whenText}
+                    {appointmentSalespersonName ? ` • ${appointmentSalespersonName}` : ""}
+                    {selectedConv.appointment.bookedEventLink ? (
+                      <>
+                        {" "}
+                        •{" "}
+                        <a
+                          className="underline"
+                          href={selectedConv.appointment.bookedEventLink}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Calendar
+                        </a>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div className="text-xs text-gray-500 mt-1">
                   {selectedConv.status === "closed" && selectedConv.closedAt
                     ? `closed: ${new Date(selectedConv.closedAt).toLocaleString()}`
@@ -4823,6 +5015,16 @@ export default function Home() {
                       Call
                     </button>
                   </div>
+                ) : null}
+                {(authUser?.role === "manager" || authUser?.permissions?.canEditAppointments) &&
+                !(selectedConv.classification?.bucket === "service" || selectedConv.classification?.cta === "service_request") ? (
+                  <button
+                    className="px-2 py-1 border rounded text-sm"
+                    onClick={openManualAppointment}
+                    title="Set appointment"
+                  >
+                    📅
+                  </button>
                 ) : null}
                 {(authUser?.role === "manager" || authUser?.permissions?.canToggleHumanOverride) ? (
                   <button
@@ -4889,6 +5091,104 @@ export default function Home() {
                       onClick={() => setCallPickerOpen(false)}
                     >
                       Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {manualApptOpen ? (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+                <div className="w-full max-w-md rounded-lg bg-white shadow-lg border p-4">
+                  <div className="text-sm font-semibold">Set appointment</div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {schedulerConfig?.timezone ?? "America/New_York"} time
+                  </div>
+                  <div className="text-xs text-gray-600 mt-2">
+                    {[selectedConv.lead?.firstName, selectedConv.lead?.lastName]
+                      .filter(Boolean)
+                      .join(" ") || selectedConv.lead?.name || selectedConv.leadKey}
+                    {selectedConv.lead?.phone ? ` • ${selectedConv.lead.phone}` : ""}
+                    {selectedConv.lead?.email ? ` • ${selectedConv.lead.email}` : ""}
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-2 gap-3">
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">Date</div>
+                      <input
+                        type="date"
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={manualApptForm.date}
+                        onChange={e => setManualApptForm(prev => ({ ...prev, date: e.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">Time</div>
+                      <input
+                        type="time"
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={manualApptForm.time}
+                        onChange={e => setManualApptForm(prev => ({ ...prev, time: e.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">Appointment type</div>
+                      <select
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={manualApptForm.appointmentType}
+                        onChange={e => setManualApptForm(prev => ({ ...prev, appointmentType: e.target.value }))}
+                      >
+                        {appointmentTypesList.map(row => (
+                          <option key={row.key} value={row.key}>
+                            {row.key}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">Salesperson</div>
+                      <select
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={manualApptForm.salespersonId}
+                        onChange={e => setManualApptForm(prev => ({ ...prev, salespersonId: e.target.value }))}
+                      >
+                        {salespeopleList.map(sp => (
+                          <option key={sp.id} value={sp.id}>
+                            {sp.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="mt-3">
+                    <div className="text-xs text-gray-500 mb-1">Notes (optional)</div>
+                    <textarea
+                      className="border rounded px-3 py-2 text-sm w-full"
+                      rows={3}
+                      value={manualApptForm.notes}
+                      onChange={e => setManualApptForm(prev => ({ ...prev, notes: e.target.value }))}
+                    />
+                  </div>
+
+                  {manualApptError ? (
+                    <div className="text-xs text-red-600 mt-2">{manualApptError}</div>
+                  ) : null}
+
+                  <div className="mt-4 flex justify-end gap-2">
+                    <button
+                      className="px-3 py-2 border rounded text-sm"
+                      onClick={() => setManualApptOpen(false)}
+                      disabled={manualApptSaving}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="px-3 py-2 border rounded text-sm"
+                      onClick={saveManualAppointment}
+                      disabled={manualApptSaving}
+                    >
+                      {manualApptSaving ? "Saving…" : "Set appointment"}
                     </button>
                   </div>
                 </div>

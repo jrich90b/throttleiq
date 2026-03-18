@@ -3623,6 +3623,178 @@ app.post("/conversations/:id/reopen", (req, res) => {
   return res.json({ ok: true, conversation: conv });
 });
 
+app.post("/conversations/:id/appointment", requirePermission("canEditAppointments"), async (req, res) => {
+  try {
+    const conv = getConversation(req.params.id);
+    if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+
+    const isServiceLead =
+      conv.classification?.bucket === "service" || conv.classification?.cta === "service_request";
+    if (isServiceLead) {
+      return res.status(403).json({ ok: false, error: "Service leads cannot be scheduled here" });
+    }
+
+    const cfg = await getSchedulerConfig();
+    const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
+    const rawType = String(req.body?.appointmentType ?? "").trim();
+    const appointmentType = rawType || inferAppointmentTypeFromConv(conv) || "inventory_visit";
+    const durationMinutes = appointmentTypes[appointmentType]?.durationMinutes ?? 60;
+
+    const date = String(req.body?.date ?? "").trim(); // YYYY-MM-DD
+    const time = String(req.body?.time ?? "").trim(); // HH:mm
+    if (!date || !time) {
+      return res.status(400).json({ ok: false, error: "Missing date/time" });
+    }
+    const [sy, sm, sd] = date.split("-").map(Number);
+    const [sh, smin] = time.split(":").map(Number);
+    if (!sy || !sm || !sd || Number.isNaN(sh) || Number.isNaN(smin)) {
+      return res.status(400).json({ ok: false, error: "Invalid date/time" });
+    }
+
+    const start = localPartsToUtcDate(cfg.timezone, {
+      year: sy,
+      month: sm,
+      day: sd,
+      hour24: sh,
+      minute: smin
+    });
+    const end = new Date(start.getTime() + durationMinutes * 60_000);
+
+    const salespeople = cfg.salespeople ?? [];
+    const requestedSalespersonId = String(req.body?.salespersonId ?? "").trim();
+    let salesperson = salespeople.find((s: any) => s.id === requestedSalespersonId) ?? null;
+    if (!salesperson) {
+      const user = (req as any).user ?? null;
+      salesperson = user ? resolveSalespersonForUser(cfg, user) : null;
+    }
+    if (!salesperson) {
+      const prefIds = getPreferredSalespeopleForConv(cfg, conv);
+      salesperson = prefIds
+        .map(id => salespeople.find((s: any) => s.id === id))
+        .find(sp => sp?.calendarId) ?? null;
+    }
+    if (!salesperson?.calendarId) {
+      return res.status(400).json({ ok: false, error: "No salesperson calendar available" });
+    }
+
+    const startIso = start.toISOString();
+    const endIso = end.toISOString();
+    const cal = await getAuthedCalendarClient();
+    const fb = await queryFreeBusy(cal, [salesperson.calendarId], startIso, endIso, cfg.timezone);
+    const busy = (fb.calendars?.[salesperson.calendarId]?.busy ?? []) as any[];
+    const blocked = busy.some((b: any) => {
+      const bStart = new Date(b.start);
+      const bEnd = new Date(b.end);
+      return start < bEnd && bStart < end;
+    });
+    if (blocked) {
+      return res.status(409).json({ ok: false, error: "Time is no longer available" });
+    }
+
+    const lead = conv.lead ?? {};
+    const leadNameRaw = String(lead?.name ?? "").trim();
+    const firstName = lead?.firstName ?? "";
+    const lastName = lead?.lastName ?? "";
+    const leadName =
+      leadNameRaw || [firstName, lastName].filter(Boolean).join(" ").trim() || conv.leadKey;
+    const summary = `Appt: ${appointmentType} – ${leadName}`.trim();
+
+    const notes = String(req.body?.notes ?? "").trim();
+    const descriptionLines = [
+      `LeadKey: ${conv.leadKey}`,
+      `LeadRef: ${lead?.leadRef ?? ""}`,
+      `Phone: ${lead?.phone ?? ""}`,
+      `Email: ${lead?.email ?? ""}`,
+      `FirstName: ${firstName ?? ""}`,
+      `LastName: ${lastName ?? ""}`,
+      `Stock: ${lead?.vehicle?.stockId ?? ""}`,
+      `VIN: ${lead?.vehicle?.vin ?? ""}`,
+      `Source: ${lead?.source ?? ""}`,
+      `VisitType: ${appointmentType}`,
+      "",
+      `Notes: ${notes}`
+    ].filter(Boolean);
+
+    const event = await insertEvent(
+      cal,
+      salesperson.calendarId,
+      cfg.timezone,
+      summary,
+      descriptionLines.join("\n"),
+      startIso,
+      endIso
+    );
+
+    conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
+    conv.appointment.status = "confirmed";
+    conv.appointment.whenText = formatSlotLocal(startIso, cfg.timezone);
+    conv.appointment.whenIso = startIso;
+    conv.appointment.confirmedBy = "salesperson";
+    conv.appointment.updatedAt = new Date().toISOString();
+    conv.appointment.acknowledged = true;
+    conv.appointment.bookedEventId = event.id ?? null;
+    conv.appointment.bookedEventLink = event.htmlLink ?? null;
+    conv.appointment.bookedSalespersonId = salesperson.id ?? null;
+    conv.appointment.matchedSlot = {
+      salespersonId: salesperson.id,
+      salespersonName: salesperson.name,
+      calendarId: salesperson.calendarId,
+      start: startIso,
+      end: endIso,
+      startLocal: formatSlotLocal(startIso, cfg.timezone),
+      endLocal: formatSlotLocal(endIso, cfg.timezone),
+      appointmentType
+    };
+    conv.appointment.reschedulePending = false;
+    setPreferredSalespersonForConv(conv, { id: salesperson.id, name: salesperson.name }, "manual-appointment");
+    onAppointmentBooked(conv);
+
+    const smsMessage = `Perfect — you’re all set for ${conv.appointment.whenText}${salesperson?.name ? ` with ${salesperson.name}` : ""}. See you then.`;
+    const toNumber = normalizePhone(lead?.phone ?? conv.leadKey ?? "");
+    const accountSid = process.env.TWILIO_ACCOUNT_SID;
+    const authToken = process.env.TWILIO_AUTH_TOKEN;
+    const from = process.env.TWILIO_FROM_NUMBER;
+    let smsResult: { sent: boolean; sid?: string; reason?: string } = { sent: false };
+
+    if (conv.contactPreference === "call_only") {
+      smsResult = { sent: false, reason: "call_only" };
+    } else if (!toNumber.startsWith("+")) {
+      smsResult = { sent: false, reason: "invalid_phone" };
+    } else if (isSuppressed(toNumber)) {
+      smsResult = { sent: false, reason: "suppressed" };
+    } else if (!accountSid || !authToken || !from) {
+      appendOutbound(conv, "salesperson", toNumber, smsMessage, "human");
+      smsResult = { sent: false, reason: "twilio_not_configured" };
+    } else {
+      try {
+        const client = twilio(accountSid, authToken);
+        const msg = await client.messages.create({ from, to: toNumber, body: smsMessage });
+        appendOutbound(conv, from, toNumber, smsMessage, "twilio", msg.sid);
+        smsResult = { sent: true, sid: msg.sid };
+      } catch (e: any) {
+        appendOutbound(conv, "salesperson", toNumber, smsMessage, "human");
+        smsResult = { sent: false, reason: "send_failed" };
+        console.log("[manual-appointment] sms failed:", e?.message ?? e);
+      }
+    }
+
+    saveConversation(conv);
+    await flushConversationStore();
+
+    return res.json({
+      ok: true,
+      eventId: event.id,
+      htmlLink: event.htmlLink,
+      salesperson: { id: salesperson.id, name: salesperson.name },
+      conversation: conv,
+      sms: smsResult
+    });
+  } catch (err: any) {
+    console.log("[manual-appointment] failed:", err?.message ?? err);
+    return res.status(500).json({ ok: false, error: err?.message ?? "Failed to book appointment" });
+  }
+});
+
 app.delete("/conversations/:id", (req, res) => {
   const id = req.params.id;
   const ok = deleteConversation(id);
@@ -6870,6 +7042,7 @@ app.listen(port, () => {
   console.log("   - POST   /conversations/:id/mode");
   console.log("   - POST   /conversations/:id/close");
   console.log("   - POST   /conversations/:id/reopen");
+  console.log("   - POST   /conversations/:id/appointment");
   console.log("   - POST   /conversations/:id/send");
   console.log("   - GET    /todos");
   console.log("   - POST   /todos");
