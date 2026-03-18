@@ -2839,6 +2839,20 @@ app.get("/integrations/google/start", async (_req, res) => {
   res.redirect(url);
 });
 
+app.get("/integrations/google/status", async (_req, res) => {
+  try {
+    const cal = await getAuthedCalendarClient();
+    await cal.calendarList.list({ maxResults: 1 });
+    return res.json({ ok: true, connected: true });
+  } catch (err: any) {
+    const message = err?.message ?? String(err);
+    let reason = "error";
+    if (/invalid_grant/i.test(message)) reason = "invalid_grant";
+    else if (/not connected/i.test(message)) reason = "not_connected";
+    return res.json({ ok: true, connected: false, reason, error: message });
+  }
+});
+
 app.get("/integrations/google/callback", async (req, res) => {
   const code = String(req.query.code ?? "");
   if (!code) return res.status(400).send("Missing code");

@@ -435,6 +435,7 @@ export default function Home() {
   const [calendarFilterOpen, setCalendarFilterOpen] = useState(false);
   const [calendarEdit, setCalendarEdit] = useState<any | null>(null);
   const [calendarRowHeight, setCalendarRowHeight] = useState(40);
+  const [googleStatus, setGoogleStatus] = useState<{ connected: boolean; reason?: string; error?: string } | null>(null);
   const [inventoryItems, setInventoryItems] = useState<any[]>([]);
   const [inventoryLoading, setInventoryLoading] = useState(false);
   const [inventoryQuery, setInventoryQuery] = useState("");
@@ -981,6 +982,23 @@ export default function Home() {
     };
     void loadEvents();
   }, [section, schedulerConfig, calendarDate, calendarView, calendarSalespeople]);
+
+  useEffect(() => {
+    if (section !== "calendar") return;
+    void (async () => {
+      try {
+        const resp = await fetch("/api/google/status", { cache: "no-store" });
+        const json = await resp.json();
+        if (json?.ok && typeof json.connected === "boolean") {
+          setGoogleStatus({ connected: json.connected, reason: json.reason, error: json.error });
+        } else {
+          setGoogleStatus(null);
+        }
+      } catch {
+        setGoogleStatus(null);
+      }
+    })();
+  }, [section]);
 
   useEffect(() => {
     if (!manualApptOpen) return;
@@ -3416,6 +3434,16 @@ export default function Home() {
                 ) : null}
               </div>
             </div>
+
+            {googleStatus && !googleStatus.connected ? (
+              <div className="mt-3 mb-2 rounded border border-amber-200 bg-amber-50 text-amber-900 px-3 py-2 text-sm">
+                Google Calendar is not connected
+                {googleStatus.reason ? ` (${googleStatus.reason})` : ""}.{" "}
+                <a className="underline" href="/integrations/google/start">
+                  Reconnect
+                </a>
+              </div>
+            ) : null}
 
             <div className="flex-1 min-h-0 overflow-auto" ref={calendarGridRef}>
               {calendarLoading ? (
