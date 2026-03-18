@@ -746,6 +746,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (!conv.dialogState?.name || conv.dialogState.name === "none") {
     if (inferredBucket === "inventory_interest") {
       conv.dialogState = { name: "inventory_init", updatedAt: new Date().toISOString() };
+    } else if (inferredBucket === "trade_in_sell" || inferredCta === "sell_my_bike") {
+      conv.dialogState = { name: "trade_init", updatedAt: new Date().toISOString() };
+    } else if (inferredBucket === "service" || inferredCta === "service_request") {
+      conv.dialogState = { name: "service_request", updatedAt: new Date().toISOString() };
     }
   }
 
@@ -846,10 +850,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     return `${prefix}${body}`.trim();
   };
 
-  if (serviceVinRequest) {
+  const isServiceLead = inferredBucket === "service" || inferredCta === "service_request" || serviceVinRequest;
+  if (isServiceLead) {
     let ack =
       "We’ve received your service request and will have the service department reach out.";
     ack = await applyInitialAdfPrefix(ack);
+    conv.dialogState = { name: "service_handoff", updatedAt: new Date().toISOString() };
     addTodo(conv, "service", event.body, event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "service_request");
     stopFollowUpCadence(conv, "manual_handoff");
