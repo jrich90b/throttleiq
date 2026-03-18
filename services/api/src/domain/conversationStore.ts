@@ -132,6 +132,16 @@ export type InternalQuestion = {
   followUpAction?: string;
 };
 
+export type DialogStateName =
+  | "none"
+  | "inventory_init"
+  | "inventory_watch_prompted"
+  | "inventory_watch_active"
+  | "inventory_answered"
+  | "schedule_request"
+  | "schedule_offer_sent"
+  | "schedule_booked";
+
 export type LeadProfile = {
   leadRef?: string;
   source?: string;
@@ -155,6 +165,7 @@ export type LeadProfile = {
   purchaseTimeframeMonthsEnd?: number;
   hasMotoLicense?: boolean;
   sellOption?: "cash" | "trade" | "either";
+  sellOptionUpdatedAt?: string;
   sourceId?: number;
   vehicle?: {
     stockId?: string;
@@ -246,6 +257,7 @@ export type Conversation = {
   emailDraft?: string;
   contactPreference?: "call_only";
   voiceContext?: VoiceContext;
+  dialogState?: { name: DialogStateName; updatedAt: string };
 };
 
 const conversations = new Map<string, Conversation>();

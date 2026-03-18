@@ -95,7 +95,8 @@ import {
   reloadConversationStore,
   saveConversation,
   getConversationStorePath,
-  type InventoryWatch
+  type InventoryWatch,
+  type DialogStateName
 } from "./domain/conversationStore.js";
 import { logTuningRow } from "./domain/tuningLogger.js";
 import {
@@ -1627,6 +1628,20 @@ function buildHistory(conv: any, limit = 20) {
     .map((m: any) => ({ direction: m.direction, body: m.body }));
 }
 
+function getDialogState(conv: any): DialogStateName {
+  return conv?.dialogState?.name ?? "none";
+}
+
+function setDialogState(conv: any, name: DialogStateName) {
+  if (!conv) return;
+  const updatedAt = new Date().toISOString();
+  if (conv.dialogState?.name === name) {
+    conv.dialogState.updatedAt = updatedAt;
+    return;
+  }
+  conv.dialogState = { name, updatedAt };
+}
+
 function normalizePersonName(value: string): string {
   return String(value ?? "")
     .toLowerCase()
@@ -2141,6 +2156,18 @@ function wantsReminder(text: string): boolean {
 function looksLikeTimeSelection(text: string): boolean {
   if (extractTimeToken(text)) return true;
   return /\b(first|second|earlier|later)\b/i.test(String(text ?? ""));
+}
+
+function parseSellOptionFromText(text: string): "cash" | "trade" | "either" | null {
+  const t = String(text ?? "").toLowerCase();
+  if (!t) return null;
+  const cash = /\b(cash offer|straight cash|cash)\b/.test(t) && !/\b(cash down|down payment)\b/.test(t);
+  const trade = /\b(trade[-\s]?in|trade in|trading in|trade credit|trade toward|trade for)\b/.test(t);
+  if (cash && trade) return "either";
+  if (cash) return "cash";
+  if (trade) return "trade";
+  if (/\b(either|both)\b/.test(t)) return "either";
+  return null;
 }
 
 function normalizeModelName(s: string): string {
@@ -4763,6 +4790,9 @@ if (authToken && signature) {
   const conv = upsertConversationByLeadKey(event.from, "suggest");
   appendInbound(conv, event);
   pauseRelatedCadencesOnInbound(conv, event);
+  if (getDialogState(conv) === "none" && conv.classification?.bucket === "inventory_interest") {
+    setDialogState(conv, "inventory_init");
+  }
   let didConfirm = false;
   if (conv.contactPreference === "call_only") {
     if (isOptOut(event.body)) {
@@ -5687,6 +5717,7 @@ if (authToken && signature) {
       conv.appointment.acknowledged = true;
       conv.appointment.reschedulePending = false;
       onAppointmentBooked(conv);
+      setDialogState(conv, "schedule_booked");
 
       // Build confirmation message (SMS)
       const dealerName =
@@ -5735,6 +5766,16 @@ if (authToken && signature) {
     lastOutbound?.body &&
     /(on hold|hold with deposit|deposit|sale pending|pending|sold|already sold)/i.test(lastOutbound.body);
   const textLower = String(event.body ?? "").toLowerCase();
+  const isSellMyBikeLead =
+    /sell my bike/.test(String(conv.lead?.source ?? "").toLowerCase()) ||
+    conv.classification?.cta === "sell_my_bike";
+  if (isSellMyBikeLead && conv.lead) {
+    const parsedSellOption = parseSellOptionFromText(event.body ?? "");
+    if (parsedSellOption) {
+      conv.lead.sellOption = parsedSellOption;
+      conv.lead.sellOptionUpdatedAt = new Date().toISOString();
+    }
+  }
   const shortAck =
     /^(ok|okay|k|kk|thanks|thank you|got it|will do|sounds good|sounds great|appreciate it|cool)\b/i.test(
       (event.body ?? "").trim()
@@ -6137,6 +6178,7 @@ if (authToken && signature) {
         conv.inventoryWatch = pref.watch;
         conv.inventoryWatches = [pref.watch];
         conv.inventoryWatchPending = undefined;
+        setDialogState(conv, "inventory_watch_active");
         setFollowUpMode(conv, "holding_inventory", "inventory_watch");
         if (conv.followUpCadence && conv.followUpCadence.status === "active") {
           const pauseUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
@@ -6262,17 +6304,18 @@ if (authToken && signature) {
           const c = color.toLowerCase();
           matches = matches.filter(i => (i.color ?? "").toLowerCase().includes(c));
         }
-        if (matches.length > 0) {
-          conv.lead = conv.lead ?? {};
-          conv.lead.vehicle = conv.lead.vehicle ?? {};
-          if (year) conv.lead.vehicle.year = year;
-          conv.lead.vehicle.model = model ?? conv.lead.vehicle.model;
-          if (color) conv.lead.vehicle.color = color;
-          const imageUrl =
-            matches.find(m => Array.isArray(m.images) && m.images.length)?.images?.[0] ?? null;
-          const reply =
-            year
-              ? `Yes — we do have ${year} ${model}${color ? ` in ${color}` : ""} in stock. Would you like to stop by to take a look?`
+      if (matches.length > 0) {
+        conv.lead = conv.lead ?? {};
+        conv.lead.vehicle = conv.lead.vehicle ?? {};
+        if (year) conv.lead.vehicle.year = year;
+        conv.lead.vehicle.model = model ?? conv.lead.vehicle.model;
+        if (color) conv.lead.vehicle.color = color;
+        setDialogState(conv, "inventory_answered");
+        const imageUrl =
+          matches.find(m => Array.isArray(m.images) && m.images.length)?.images?.[0] ?? null;
+        const reply =
+          year
+            ? `Yes — we do have ${year} ${model}${color ? ` in ${color}` : ""} in stock. Would you like to stop by to take a look?`
               : `Yes — we do have ${model} in stock. Any specific year, trim, or color you’re after?`;
           const systemMode = webhookMode;
           if (systemMode === "suggest") {
@@ -6309,6 +6352,7 @@ if (authToken && signature) {
             color: color ?? undefined,
             askedAt: new Date().toISOString()
           };
+          setDialogState(conv, "inventory_watch_prompted");
         }
         const reply =
           `I’m not seeing ${year ? `${year} ` : ""}${model}${color ? ` in ${color}` : ""} in our live feed. ` +
@@ -6482,6 +6526,7 @@ if (authToken && signature) {
             conv.appointment.matchedSlot = chosen;
             conv.appointment.reschedulePending = false;
             onAppointmentBooked(conv);
+            setDialogState(conv, "schedule_booked");
 
             if (conv.scheduler) {
               conv.scheduler.lastSuggestedSlots = [];
@@ -6524,6 +6569,7 @@ if (authToken && signature) {
             bestSlots.slice(0, 2).map(s => s.startLocal)
           );
           const reply = `I have ${bestSlots[0].startLocal} or ${bestSlots[1].startLocal} — do any of these times work?`;
+          setDialogState(conv, "schedule_offer_sent");
           const systemMode = webhookMode;
           if (systemMode === "suggest") {
             appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -6621,6 +6667,7 @@ if (authToken && signature) {
       result.draft = `Got it. I can check ${dayName} at ${timeText}. If that doesn't work, what other time could you do?`;
     } else {
       result.draft = "What day and time works for you to stop in?";
+      setDialogState(conv, "schedule_request");
     }
   }
   if (result.handoff?.required) {
@@ -6683,6 +6730,7 @@ if (authToken && signature) {
     }
     console.log("[scheduler] persist suggestedSlots", result.suggestedSlots.length);
     setLastSuggestedSlots(conv, result.suggestedSlots);
+    setDialogState(conv, "schedule_offer_sent");
     console.log(
       "[scheduler] persisted lastSuggestedSlots",
       result.suggestedSlots.length,
@@ -6704,6 +6752,7 @@ if (authToken && signature) {
   }
   if (result.requestedTime) {
     setRequestedTime(conv, { day: result.requestedTime.dayOfWeek, timeText: event.body });
+    setDialogState(conv, "schedule_request");
   }
 
   if (schedulingAllowed && !didConfirm && result.requestedTime) {

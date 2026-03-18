@@ -743,6 +743,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     channel,
     ruleName: forcedTestRide ? "room58_book_test_ride_forced" : rule.ruleName
   });
+  if (!conv.dialogState?.name || conv.dialogState.name === "none") {
+    if (inferredBucket === "inventory_interest") {
+      conv.dialogState = { name: "inventory_init", updatedAt: new Date().toISOString() };
+    }
+  }
 
   const inboundBody =
     [
