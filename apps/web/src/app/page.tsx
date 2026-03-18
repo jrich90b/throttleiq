@@ -3542,15 +3542,11 @@ export default function Home() {
                                 }
                                 const toHHMM = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
                                 const day = calendarDate.toLocaleDateString("en-CA", { timeZone: tz });
-                                setCalendarEdit({ calendarId: sp.calendarId });
-                                setCalendarEditForm({
-                                  summary: "",
-                                  startDate: day,
-                                  startTime: toHHMM(startMin),
-                                  endDate: day,
-                                  endTime: toHHMM(endMin),
-                                  status: "scheduled",
-                                  reason: ""
+                                setCalendarEdit({
+                                  calendarId: sp.calendarId,
+                                  salespersonId: sp.id,
+                                  _dragStart: startMin,
+                                  _dragEnd: endMin
                                 });
                               }}
                               onMouseMove={e => {
