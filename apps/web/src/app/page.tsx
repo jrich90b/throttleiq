@@ -2282,7 +2282,14 @@ export default function Home() {
   }
 
   async function saveCalendarEdit() {
-    if (!calendarEdit?.calendarId) return;
+    if (!calendarEdit?.calendarId) {
+      setSaveToast("Missing calendar owner.");
+      return;
+    }
+    if (!calendarEditForm.startDate || !calendarEditForm.startTime || !calendarEditForm.endDate || !calendarEditForm.endTime) {
+      setSaveToast("Please set start and end date/time.");
+      return;
+    }
     const isCreate = !calendarEdit?.id;
     try {
       const url = isCreate
@@ -2333,7 +2340,9 @@ export default function Home() {
       setCalendarEvents(buildCalendarEvents(refreshJson));
       setSaveToast("Saved");
     } catch (err: any) {
-      setSettingsError(err?.message ?? "Failed to update event");
+      const message = err?.message ?? "Failed to update event";
+      setSettingsError(message);
+      setSaveToast(message);
     }
   }
 
