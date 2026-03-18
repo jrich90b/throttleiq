@@ -4956,13 +4956,21 @@ export default function Home() {
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-2xl font-semibold flex items-center gap-2">
-                  <span>{selectedConv.leadKey}</span>
+                  <span>
+                    {selectedConv.lead?.name ||
+                      [selectedConv.lead?.firstName, selectedConv.lead?.lastName].filter(Boolean).join(" ") ||
+                      selectedConv.leadKey}
+                  </span>
                   {selectedConv.contactPreference === "call_only" ? (
                     <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
                       Call Only
                     </span>
                   ) : null}
                 </div>
+                {(selectedConv.lead?.name ||
+                  [selectedConv.lead?.firstName, selectedConv.lead?.lastName].filter(Boolean).join(" ")) ? (
+                  <div className="text-lg text-gray-700 mt-1">{selectedConv.leadKey}</div>
+                ) : null}
                 {selectedConv.lead?.leadRef ? (
                   <div className="text-xs text-gray-500 mt-1">Lead Ref: {selectedConv.lead.leadRef}</div>
                 ) : null}
