@@ -3350,6 +3350,7 @@ app.get("/calendar/events", requirePermission("canEditAppointments"), async (req
           description: ev?.description ?? "",
           start: startIso,
           end: endIso,
+          colorId: ev?.colorId ?? null,
           salespersonId: userId,
           salespersonName: user.name || user.email || user.id,
           fullName,
@@ -3374,6 +3375,7 @@ app.post("/calendar/events", requirePermission("canEditAppointments"), async (re
     const startTime = String(req.body?.startTime ?? "").trim();
     const endDate = String(req.body?.endDate ?? "").trim();
     const endTime = String(req.body?.endTime ?? "").trim();
+    const colorId = req.body?.colorId != null ? String(req.body.colorId).trim() : "";
     const tz = String(req.body?.timeZone ?? "America/New_York").trim();
 
     if (!calendarId || !startDate || !startTime || !endDate || !endTime) {
@@ -3396,7 +3398,8 @@ app.post("/calendar/events", requirePermission("canEditAppointments"), async (re
       summary,
       "",
       start.toISOString(),
-      end.toISOString()
+      end.toISOString(),
+      colorId || undefined
     );
 
     return res.json({ ok: true, event });
@@ -3422,6 +3425,7 @@ app.patch("/calendar/events/:calendarId/:eventId", requirePermission("canEditApp
     const status = req.body?.status != null ? String(req.body.status) : undefined;
     const newCalendarId = req.body?.calendarId != null ? String(req.body.calendarId).trim() : "";
     const reason = req.body?.reason != null ? String(req.body.reason) : "";
+    const colorId = req.body?.colorId != null ? String(req.body.colorId).trim() : undefined;
 
     let startIso: string | undefined;
     let endIso: string | undefined;
@@ -3456,7 +3460,8 @@ app.patch("/calendar/events/:calendarId/:eventId", requirePermission("canEditApp
       endIso,
       summary,
       description,
-      status: status === "cancelled" ? "cancelled" : undefined
+      status: status === "cancelled" ? "cancelled" : undefined,
+      colorId
     });
     res.json({ ok: true, event: updated });
   } catch (err: any) {

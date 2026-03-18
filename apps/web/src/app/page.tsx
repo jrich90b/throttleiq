@@ -65,6 +65,25 @@ function injectBookingUrl(body: string, url: string) {
 
 const CADENCE_ALERT_WINDOW_HOURS = 24;
 
+const CALENDAR_COLORS = [
+  { id: "1", label: "Lavender", bg: "#a4bdfc", border: "#7ea2f8", text: "#1f2937" },
+  { id: "2", label: "Sage", bg: "#7ae7bf", border: "#4fd3a0", text: "#1f2937" },
+  { id: "3", label: "Grape", bg: "#dbadff", border: "#c18bff", text: "#1f2937" },
+  { id: "4", label: "Flamingo", bg: "#ff887c", border: "#ff6f60", text: "#1f2937" },
+  { id: "5", label: "Banana", bg: "#fbd75b", border: "#f7c93d", text: "#1f2937" },
+  { id: "6", label: "Tangerine", bg: "#ffb878", border: "#ff9f4d", text: "#1f2937" },
+  { id: "7", label: "Peacock", bg: "#46d6db", border: "#2fc4ca", text: "#1f2937" },
+  { id: "8", label: "Graphite", bg: "#e1e1e1", border: "#cfcfcf", text: "#111827" },
+  { id: "9", label: "Blueberry", bg: "#5484ed", border: "#3b6fe6", text: "#ffffff" },
+  { id: "10", label: "Basil", bg: "#51b749", border: "#3fa83a", text: "#ffffff" },
+  { id: "11", label: "Tomato", bg: "#dc2127", border: "#c51a1f", text: "#ffffff" }
+];
+
+function getCalendarColor(colorId?: string | null) {
+  if (!colorId) return null;
+  return CALENDAR_COLORS.find(c => c.id === colorId) ?? null;
+}
+
 function normalizeWatchCondition(raw?: string | null): string {
   const t = String(raw ?? "").toLowerCase().trim();
   if (!t) return "";
@@ -465,7 +484,8 @@ export default function Home() {
     endDate: "",
     endTime: "",
     status: "scheduled",
-    reason: ""
+    reason: "",
+    colorId: ""
   });
   const [calendarEditSalespersonId, setCalendarEditSalespersonId] = useState("");
   const [todoResolveOpen, setTodoResolveOpen] = useState(false);
@@ -1139,7 +1159,8 @@ export default function Home() {
       endDate: endParts?.date ?? "",
       endTime: endParts?.time ?? "",
       status: "scheduled",
-      reason: ""
+      reason: "",
+      colorId: calendarEdit.colorId ?? ""
     });
     if (calendarEdit.calendarId) {
       const sp = calendarUsers.find((u: any) => u.calendarId === calendarEdit.calendarId) ??
@@ -1418,13 +1439,24 @@ export default function Home() {
           calendarId: user.calendarId,
           salespersonId: userId,
           salespersonName: user.name || user.email || user.id,
-          readOnly: true
+          readOnly: true,
+          colorId: "8"
         });
       }
     }
     return events;
   };
   const getEventTitle = (ev: any) => ev?.fullName || ev?.customerName || ev?.summary || "Busy";
+  const getEventStyle = (ev: any) => {
+    if (ev?.readOnly) return undefined;
+    const c = getCalendarColor(ev?.colorId);
+    if (!c) return undefined;
+    return {
+      backgroundColor: c.bg,
+      borderColor: c.border,
+      color: c.text
+    };
+  };
   const getEventDetails = (ev: any) => {
     const parts = [];
     if (ev?.phone) parts.push(`Phone: ${ev.phone}`);
@@ -2336,7 +2368,8 @@ export default function Home() {
         endDate: "",
         endTime: "",
         status: "scheduled",
-        reason: ""
+        reason: "",
+        colorId: ""
       });
       // refresh calendar
       const start = new Date(calendarDate);
@@ -3612,12 +3645,15 @@ export default function Home() {
                                 };
                                 const timeLabel = `${minToLabel(renderStart)}–${minToLabel(renderEnd)}`;
                                 const detail = getEventDetails(ev);
+                                const eventStyle = getEventStyle(ev);
                                 return (
                                   <div
                                     key={ev.id}
                                     data-cal-event
-                                    className="absolute left-2 right-2 bg-blue-100 text-blue-900 border border-blue-200 rounded px-2 py-1 text-xs overflow-hidden cursor-pointer"
-                                    style={{ top: `${top}%`, height: `${height}%` }}
+                                    className={`absolute left-2 right-2 border rounded px-2 py-1 text-xs overflow-hidden cursor-pointer ${
+                                      ev.readOnly ? "bg-gray-100 text-gray-700 border-gray-200" : ""
+                                    }`}
+                                    style={{ top: `${top}%`, height: `${height}%`, ...(eventStyle ?? {}) }}
                                     title={detail || ev.summary}
                                     onMouseDown={e => {
                                       e.stopPropagation();
@@ -3637,9 +3673,9 @@ export default function Home() {
                                     <div className="flex items-start justify-between gap-2">
                                       <div className="min-w-0">
                                         <div className="font-medium truncate">{getEventTitle(ev)}</div>
-                                        <div className="text-[10px] text-blue-900/70 mt-1">{timeLabel}</div>
+                                        <div className="text-[10px] opacity-80 mt-1">{timeLabel}</div>
                                         {detail ? (
-                                          <div className="text-[10px] text-blue-900/60 mt-1 truncate">
+                                          <div className="text-[10px] opacity-70 mt-1 truncate">
                                             {detail}
                                           </div>
                                         ) : null}
@@ -3731,7 +3767,10 @@ export default function Home() {
                                         events.map((ev: any) => (
                                           <div
                                             key={ev.id}
-                                            className="text-xs bg-blue-100 border border-blue-200 rounded px-2 py-1 cursor-pointer"
+                                            className={`text-xs border rounded px-2 py-1 cursor-pointer ${
+                                              ev.readOnly ? "bg-gray-100 text-gray-700 border-gray-200" : ""
+                                            }`}
+                                            style={getEventStyle(ev)}
                                             title={getEventDetails(ev) || ev.summary}
                                             onClick={() => {
                                               if (ev.readOnly) return;
@@ -3820,6 +3859,28 @@ export default function Home() {
                       <option value="cancelled">Cancelled</option>
                       <option value="no_show">No show</option>
                     </select>
+                    <div className="col-span-2">
+                      <div className="text-xs text-gray-500 mb-1">Color</div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className={`w-8 h-8 rounded border ${calendarEditForm.colorId ? "border-gray-300" : "ring-2 ring-blue-400"}`}
+                          title="Default"
+                          style={{ backgroundColor: "#f3f4f6" }}
+                          onClick={() => setCalendarEditForm({ ...calendarEditForm, colorId: "" })}
+                        />
+                        {CALENDAR_COLORS.map(c => (
+                          <button
+                            key={c.id}
+                            type="button"
+                            className={`w-8 h-8 rounded border ${calendarEditForm.colorId === c.id ? "ring-2 ring-blue-400" : "border-transparent"}`}
+                            title={c.label}
+                            style={{ backgroundColor: c.bg, borderColor: c.border }}
+                            onClick={() => setCalendarEditForm({ ...calendarEditForm, colorId: c.id })}
+                          />
+                        ))}
+                      </div>
+                    </div>
                     <textarea
                       className="border rounded px-3 py-2 text-sm col-span-2"
                       placeholder="Reason (optional)"

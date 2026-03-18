@@ -63,7 +63,16 @@ export async function queryFreeBusy(calendar: any, calendarIds: string[], timeMi
 /**
  * Create event: events.insert with start/end dateTime :contentReference[oaicite:5]{index=5}
  */
-export async function insertEvent(calendar: any, calendarId: string, timeZone: string, summary: string, description: string, startIso: string, endIso: string) {
+export async function insertEvent(
+  calendar: any,
+  calendarId: string,
+  timeZone: string,
+  summary: string,
+  description: string,
+  startIso: string,
+  endIso: string,
+  colorId?: string
+) {
   console.log("[gcal] insertEvent.request", { calendarId, summary, startIso, endIso, timeZone });
   try {
     const resp = await calendar.events.insert({
@@ -71,6 +80,7 @@ export async function insertEvent(calendar: any, calendarId: string, timeZone: s
       requestBody: {
         summary,
         description,
+        ...(colorId ? { colorId } : {}),
         start: { dateTime: startIso, timeZone },
         end: { dateTime: endIso, timeZone }
       }
@@ -106,12 +116,14 @@ export async function updateEventDetails(
     summary?: string;
     description?: string;
     status?: string;
+    colorId?: string;
   }
 ) {
   const requestBody: any = {};
   if (params.summary != null) requestBody.summary = params.summary;
   if (params.description != null) requestBody.description = params.description;
   if (params.status != null) requestBody.status = params.status;
+  if (params.colorId != null) requestBody.colorId = params.colorId || null;
   if (params.startIso) requestBody.start = { dateTime: params.startIso, timeZone };
   if (params.endIso) requestBody.end = { dateTime: params.endIso, timeZone };
   const resp = await calendar.events.patch({
