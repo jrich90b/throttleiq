@@ -66,17 +66,17 @@ function injectBookingUrl(body: string, url: string) {
 const CADENCE_ALERT_WINDOW_HOURS = 24;
 
 const CALENDAR_COLORS = [
-  { id: "1", label: "Lavender", bg: "#a4bdfc", border: "#7ea2f8", text: "#1f2937" },
-  { id: "2", label: "Sage", bg: "#7ae7bf", border: "#4fd3a0", text: "#1f2937" },
-  { id: "3", label: "Grape", bg: "#dbadff", border: "#c18bff", text: "#1f2937" },
-  { id: "4", label: "Flamingo", bg: "#ff887c", border: "#ff6f60", text: "#1f2937" },
-  { id: "5", label: "Banana", bg: "#fbd75b", border: "#f7c93d", text: "#1f2937" },
-  { id: "6", label: "Tangerine", bg: "#ffb878", border: "#ff9f4d", text: "#1f2937" },
-  { id: "7", label: "Peacock", bg: "#46d6db", border: "#2fc4ca", text: "#1f2937" },
-  { id: "8", label: "Graphite", bg: "#e1e1e1", border: "#cfcfcf", text: "#111827" },
-  { id: "9", label: "Blueberry", bg: "#5484ed", border: "#3b6fe6", text: "#ffffff" },
-  { id: "10", label: "Basil", bg: "#51b749", border: "#3fa83a", text: "#ffffff" },
-  { id: "11", label: "Tomato", bg: "#dc2127", border: "#c51a1f", text: "#ffffff" }
+  { id: "1", label: "White", bg: "#FFFFFF", border: "#D1D5DB", text: "#111827" },
+  { id: "2", label: "Black", bg: "#000000", border: "#111827", text: "#FFFFFF" },
+  { id: "3", label: "Purple", bg: "#800080", border: "#6B006B", text: "#FFFFFF" },
+  { id: "4", label: "Coral", bg: "#FF7F50", border: "#F26B3A", text: "#111827" },
+  { id: "5", label: "Gold", bg: "#FFD700", border: "#E6C200", text: "#111827" },
+  { id: "6", label: "Navy", bg: "#000080", border: "#000066", text: "#FFFFFF" },
+  { id: "7", label: "Aqua", bg: "#00FFFF", border: "#00C8C8", text: "#111827" },
+  { id: "8", label: "Gray", bg: "#808080", border: "#6B7280", text: "#FFFFFF" },
+  { id: "9", label: "Blue", bg: "#0000FF", border: "#0000CC", text: "#FFFFFF" },
+  { id: "10", label: "Lime", bg: "#00FF00", border: "#00D400", text: "#111827" },
+  { id: "11", label: "Red", bg: "#FF0000", border: "#D10000", text: "#FFFFFF" }
 ];
 
 function getCalendarColor(colorId?: string | null) {
