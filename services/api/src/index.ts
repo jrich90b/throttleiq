@@ -3631,6 +3631,17 @@ app.delete("/conversations/:id", (req, res) => {
 });
 
 app.get("/todos", requirePermission("canAccessTodos"), (_req, res) => {
+  const extractNameFromSummary = (summary?: string | null) => {
+    const text = String(summary ?? "");
+    const match =
+      text.match(/\bName:\s*([A-Za-z][^\n,]*)/i) ||
+      text.match(/\bCustomer:\s*([A-Za-z][^\n,]*)/i) ||
+      text.match(/\bLead:\s*([A-Za-z][^\n,]*)/i);
+    const raw = match?.[1]?.trim() ?? "";
+    if (!raw) return null;
+    const cleaned = raw.replace(/\s{2,}/g, " ").trim();
+    return cleaned || null;
+  };
   const todos = listOpenTodos().map(t => {
     const conv = getConversation(t.convId);
     const leadNameRaw = conv?.lead?.name?.trim() ?? "";
@@ -3639,6 +3650,7 @@ app.get("/todos", requirePermission("canAccessTodos"), (_req, res) => {
     const leadName =
       leadNameRaw ||
       [firstName, lastName].filter(Boolean).join(" ").trim() ||
+      extractNameFromSummary(t.summary) ||
       null;
     return { ...t, leadName };
   });
