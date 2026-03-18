@@ -670,6 +670,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   const rule = resolveLeadRule(leadSource, leadSourceId);
   const inquiryText = (lead.inquiry ?? "").toLowerCase();
+  const serviceVinRequest =
+    /registration\s+or\s+vin\s+number/i.test(lead.comment ?? "") ||
+    /registration\s+or\s+vin\s+number/i.test(lead.inquiry ?? "");
   const hasStockIntent =
     !!lead.stockId || !!lead.vin || inquiryText.includes("available");
 
@@ -697,7 +700,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     ) {
       inferredBucket = "trade_in_sell";
       inferredCta = inquiryText.includes("sell") ? "sell_my_bike" : "value_my_trade";
-    } else if (inquiryText.includes("service")) {
+    } else if (inquiryText.includes("service") || serviceVinRequest) {
       inferredBucket = "service";
       inferredCta = "service_request";
     } else {
@@ -837,6 +840,29 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     body = body.replace(new RegExp(`\\bthis is\\s+${agentEsc}\\s+at\\s+${dealerEsc}\\.?\\s*`, "ig"), "");
     return `${prefix}${body}`.trim();
   };
+
+  if (serviceVinRequest) {
+    let ack =
+      "We’ve received your service request and will have the service department reach out.";
+    ack = await applyInitialAdfPrefix(ack);
+    addTodo(conv, "service", event.body, event.providerMessageId);
+    setFollowUpMode(conv, "manual_handoff", "service_request");
+    stopFollowUpCadence(conv, "manual_handoff");
+    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai");
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      draft: ack
+    });
+  }
 
   const isUsed =
     conv.lead?.vehicle?.condition === "used" ||
@@ -1293,6 +1319,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     !conv.followUpCadence?.status &&
     !conv.appointment?.bookedEventId &&
     conv.classification?.bucket !== "finance_prequal" &&
+    conv.classification?.bucket !== "service" &&
     conv.classification?.bucket !== "event_promo" &&
     conv.classification?.cta !== "hdfs_coa" &&
     conv.classification?.cta !== "prequalify";
