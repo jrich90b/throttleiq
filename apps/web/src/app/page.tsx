@@ -110,6 +110,7 @@ type TodoItem = {
   id: string;
   convId: string;
   leadKey: string;
+  leadName?: string | null;
   reason: string;
   summary: string;
   createdAt: string;
@@ -2557,7 +2558,14 @@ export default function Home() {
             {todos.map(t => (
               <div key={t.id} className="p-4 flex items-start justify-between gap-4">
                 <div>
-                  <div className="text-sm font-medium">{t.leadKey}</div>
+                  {t.leadName ? (
+                    <>
+                      <div className="text-sm font-medium">{t.leadName}</div>
+                      <div className="text-sm text-gray-600">{t.leadKey}</div>
+                    </>
+                  ) : (
+                    <div className="text-sm font-medium">{t.leadKey}</div>
+                  )}
                   <div className="text-xs text-gray-500 mt-1">
                     {t.reason} • {new Date(t.createdAt).toLocaleString()}
                   </div>

@@ -3631,7 +3631,18 @@ app.delete("/conversations/:id", (req, res) => {
 });
 
 app.get("/todos", requirePermission("canAccessTodos"), (_req, res) => {
-  res.json({ ok: true, todos: listOpenTodos() });
+  const todos = listOpenTodos().map(t => {
+    const conv = getConversation(t.convId);
+    const leadNameRaw = conv?.lead?.name?.trim() ?? "";
+    const firstName = conv?.lead?.firstName ?? "";
+    const lastName = conv?.lead?.lastName ?? "";
+    const leadName =
+      leadNameRaw ||
+      [firstName, lastName].filter(Boolean).join(" ").trim() ||
+      null;
+    return { ...t, leadName };
+  });
+  res.json({ ok: true, todos });
 });
 
 app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
