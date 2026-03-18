@@ -7315,4 +7315,25 @@ app.listen(port, () => {
   console.log("   - DELETE /suppressions/:phone");
   console.log("   - POST   /crm/tlp/log-contact");
   console.log("   - POST   /webhooks/twilio");
+
+  const keepaliveEnabled =
+    (process.env.GOOGLE_KEEPALIVE_ENABLED ?? "true").toLowerCase() === "true";
+  const keepaliveMinutesRaw = Number(process.env.GOOGLE_KEEPALIVE_MINUTES ?? "720");
+  const keepaliveMinutes = Number.isFinite(keepaliveMinutesRaw) && keepaliveMinutesRaw >= 5
+    ? keepaliveMinutesRaw
+    : 720;
+  if (keepaliveEnabled) {
+    console.log(`[gcal] keepalive enabled (${keepaliveMinutes} min interval)`);
+    const runKeepalive = async () => {
+      try {
+        const cal = await getAuthedCalendarClient();
+        await cal.calendarList.list({ maxResults: 1 });
+      } catch (err: any) {
+        console.warn("[gcal] keepalive failed:", err?.message ?? err);
+      }
+    };
+    setTimeout(runKeepalive, 10_000).unref?.();
+    const interval = setInterval(runKeepalive, keepaliveMinutes * 60 * 1000);
+    (interval as any).unref?.();
+  }
 });
