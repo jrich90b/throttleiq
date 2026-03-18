@@ -325,6 +325,8 @@ export default function Home() {
   const [cadenceWatchNote, setCadenceWatchNote] = useState("");
   const [cadenceResolveSaving, setCadenceResolveSaving] = useState(false);
   const [cadenceResolveError, setCadenceResolveError] = useState<string | null>(null);
+  const [cadenceResolveNotice, setCadenceResolveNotice] = useState<string | null>(null);
+  const cadenceResolveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [selectedContact, setSelectedContact] = useState<ContactItem | null>(null);
   const [contactEdit, setContactEdit] = useState(false);
   const [contactForm, setContactForm] = useState({
@@ -750,6 +752,18 @@ export default function Home() {
       const data = await resp.json().catch(() => null);
       if (!resp.ok || data?.ok === false) {
         throw new Error(data?.error ?? "Failed to update follow-up cadence");
+      }
+      if (data?.notice) {
+        if (cadenceResolveNoticeTimer.current) {
+          clearTimeout(cadenceResolveNoticeTimer.current);
+        }
+        if (data.notice !== cadenceResolveNotice) {
+          setCadenceResolveNotice(data.notice);
+        }
+        cadenceResolveNoticeTimer.current = setTimeout(() => {
+          setCadenceResolveNotice(null);
+          cadenceResolveNoticeTimer.current = null;
+        }, 4500);
       }
       if (selectedConv?.id === cadenceResolveConv.id && data?.conversation) {
         setSelectedConv(data.conversation);
@@ -5446,6 +5460,11 @@ export default function Home() {
               </div>
             </div>
             {modeError ? <div className="text-xs text-red-600 mt-1">{modeError}</div> : null}
+            {cadenceResolveNotice ? (
+              <div className="mt-2 border rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+                {cadenceResolveNotice}
+              </div>
+            ) : null}
             {cadenceAlert ? (
               <div className="mt-3 border rounded-lg bg-amber-50 px-3 py-2 text-sm flex items-center justify-between gap-3">
                 <div>

@@ -1632,6 +1632,27 @@ function getDialogState(conv: any): DialogStateName {
   return conv?.dialogState?.name ?? "none";
 }
 
+function isScheduleDialogState(name: DialogStateName): boolean {
+  return (
+    name === "clarify_schedule" ||
+    name === "schedule_request" ||
+    name === "schedule_offer_sent" ||
+    name === "schedule_booked"
+  );
+}
+
+function isTradeDialogState(name: DialogStateName): boolean {
+  return name === "trade_init" || name === "trade_cash" || name === "trade_trade" || name === "trade_either";
+}
+
+function isServiceDialogState(name: DialogStateName): boolean {
+  return name === "service_request" || name === "service_handoff";
+}
+
+function isFollowUpDialogState(name: DialogStateName): boolean {
+  return name === "followup_paused" || name === "followup_resumed";
+}
+
 function setDialogState(conv: any, name: DialogStateName) {
   if (!conv) return;
   const updatedAt = new Date().toISOString();
@@ -2168,6 +2189,144 @@ function applySlotOfferPolicy(conv: any, reply: string, lastOutboundText: string
   if (!isSlotOfferMessage(lastOutboundText)) return reply;
   setDialogState(conv, "schedule_request");
   return "If those times don't work, what day and time works for you?";
+}
+
+function stripTradeIntroSentence(text: string): string {
+  return String(text ?? "")
+    .replace(
+      /^([^.!?]*\bthanks for (reaching out about selling|using our trade[-\s]?in estimator)[^.!?]*[.!?]\s*)/i,
+      ""
+    )
+    .trim();
+}
+
+function applyTradePolicy(
+  conv: any,
+  reply: string,
+  lastOutboundText: string,
+  suggestedSlots?: Array<{ startLocal?: string | null }>
+): string {
+  const state = getDialogState(conv);
+  if (!state.startsWith("trade_")) return reply;
+  let out = reply;
+  if (state !== "trade_init") {
+    out = stripTradeIntroSentence(out);
+  }
+  if (state === "trade_cash" && suggestedSlots && suggestedSlots.length >= 2) {
+    if (!isSlotOfferMessage(out)) {
+      const a = suggestedSlots[0]?.startLocal ?? "";
+      const b = suggestedSlots[1]?.startLocal ?? "";
+      if (a && b) {
+        out = `I can set up a trade appraisal. I have ${a} or ${b} — do any of these times work?`;
+      }
+    }
+  }
+  const cashTradeQuestion =
+    /\b(are you looking for (a )?(straight )?cash offer|cash offer|trade credit|trading toward another bike)\b/i;
+  if (cashTradeQuestion.test(out)) {
+    if (state === "trade_cash") {
+      out =
+        "Got it — for a straight cash offer, we’ll need an in‑person appraisal. What day and time works for you to stop in with the bike?";
+    } else if (state === "trade_trade") {
+      out = "Great — what model are you hoping to trade into?";
+    } else if (state === "trade_either") {
+      out = "Understood — are you leaning more toward a cash offer or trade credit?";
+    }
+  }
+  if (normalizeOutboundText(out) === normalizeOutboundText(lastOutboundText)) {
+    if (state === "trade_cash") {
+      out = "Whenever you’re ready, what day and time works to stop in with the bike?";
+    } else if (state === "trade_trade") {
+      out = "If you have a model in mind, let me know — I can also set a time to stop in.";
+    } else if (state === "trade_either") {
+      out = "I can do either — just let me know which direction you prefer.";
+    }
+  }
+  return out;
+}
+
+function isPricingText(text: string): boolean {
+  return /(price|otd|out the door|payment|monthly|down|apr|term|finance|credit|quote)/i.test(String(text ?? ""));
+}
+
+function isPaymentText(text: string): boolean {
+  return /(monthly payment|what would it be a month|what would it be per month|how much down|\bapr\b|term)/i.test(
+    String(text ?? "")
+  );
+}
+
+function detectsModelQuestion(text: string): boolean {
+  return /\b(which|what)\b.*\bmodel\b/i.test(String(text ?? ""));
+}
+
+function detectsPricingAnswer(text: string): boolean {
+  return /\b(msrp|price we have listed|prices we have listed|listed price|prices.*range|runs about)\b/i.test(
+    String(text ?? "")
+  );
+}
+
+function isCallOnlyText(text: string): boolean {
+  return /\b(call only|phone only|call me only|no text|do not text|don't text|text me not)\b/i.test(
+    String(text ?? "")
+  );
+}
+
+function detectCallbackText(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  const hasCallback =
+    /(call me|call him|call her|give me a call|give (him|her) a call|reach me|reach him|reach her|contact me|can you call|can you have|please call|have .* call|tell .* i will call|i will call)/.test(
+      t
+    );
+  const hasTimeframe =
+    /(today|tomorrow|this weekend|this week|next week|tuesday|wednesday|thursday|friday|saturday|sunday|monday|\bmon\b|\btue\b|\bwed\b|\bthu\b|\bfri\b|\bsat\b|\bsun\b|\b\d{1,2}:\d{2}\s*(am|pm)?\b|\b\d{1,2}\s*(am|pm)\b)/.test(
+      t
+    );
+  const hasPhone = /\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/.test(t);
+  const hasTrade = /(trade[-\s]?in|trade in|trading in)/.test(t);
+  return hasCallback || (hasTimeframe && (hasPhone || hasTrade));
+}
+
+function applyPricingPolicy(conv: any, reply: string, lastOutboundText: string): string {
+  const state = getDialogState(conv);
+  if (!(state.startsWith("pricing_") || state === "payments_handoff")) return reply;
+  let out = reply;
+  if (state === "pricing_need_model" && !detectsModelQuestion(out)) {
+    out = "Which model are you interested in (and any trim or color)?";
+  }
+  if (normalizeOutboundText(out) === normalizeOutboundText(lastOutboundText)) {
+    if (state === "pricing_need_model") {
+      out = "Which model are you interested in? If you have a trim or color in mind, share that too.";
+    } else if (state === "pricing_answered") {
+      out = "If you want a full out‑the‑door quote, I can set a time to stop in or have a manager follow up.";
+    } else if (state === "pricing_handoff" || state === "payments_handoff") {
+      out = "Got it — I’ll have a manager pull the exact numbers and follow up shortly.";
+    }
+  }
+  return out;
+}
+
+function applyCallbackPolicy(conv: any, reply: string, lastOutboundText: string): string {
+  const state = getDialogState(conv);
+  if (state !== "callback_requested" && state !== "callback_handoff") return reply;
+  let out = "Got it — I’ll have someone call you shortly.";
+  if (normalizeOutboundText(out) === normalizeOutboundText(lastOutboundText)) {
+    out = "Thanks — we’ll give you a call soon.";
+  }
+  return out;
+}
+
+function applyServicePolicy(conv: any, reply: string, lastOutboundText: string): string {
+  const state = getDialogState(conv);
+  const isService =
+    isServiceDialogState(state) ||
+    conv.classification?.bucket === "service" ||
+    conv.classification?.cta === "service_request";
+  if (!isService) return reply;
+  let out = "We’ve received your service request and will have the service department reach out.";
+  if (normalizeOutboundText(out) === normalizeOutboundText(lastOutboundText)) {
+    out = "Got it — our service department will be in touch shortly.";
+  }
+  return out;
 }
 
 function parseSellOptionFromText(text: string): "cash" | "trade" | "either" | null {
@@ -2862,6 +3021,7 @@ async function processAppointmentQuestions() {
 async function maybeStartCadence(conv: any, sentAtIso: string) {
   if (conv.appointment?.bookedEventId) return;
   if (conv.status === "closed") return;
+  if (conv.classification?.bucket === "service" || conv.classification?.cta === "service_request") return;
   if (conv.followUpCadence?.status === "active" || conv.followUpCadence?.status === "stopped") return;
   const cfg = await getSchedulerConfig();
   startFollowUpCadence(conv, sentAtIso, cfg.timezone);
@@ -3927,6 +4087,7 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
     const nowIso = new Date().toISOString();
     const cfg = await getSchedulerConfig();
     const tz = cfg.timezone || "America/New_York";
+    let cadenceNotice: string | null = null;
 
     const normalizeInputCondition = (raw?: string | null) => {
       const t = String(raw ?? "").toLowerCase().trim();
@@ -3976,6 +4137,63 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
         minute: 0
       });
       return resumeAt.toISOString();
+    };
+
+    const pickUnusedAck = (options: string[]): string | null => {
+      const used = new Set(
+        (conv.messages ?? [])
+          .filter((m: any) => m.direction === "out")
+          .map((m: any) => normalizeOutboundText(m.body))
+      );
+      for (const opt of options) {
+        if (!used.has(normalizeOutboundText(opt))) return opt;
+      }
+      return null;
+    };
+
+    const buildCadenceAck = (action: string): string | null => {
+      if (action === "resume") {
+        return pickUnusedAck([
+          "Thanks for the update — let me know if anything changes.",
+          "Appreciate the update — if anything changes, just let me know."
+        ]);
+      }
+      if (["pause_7", "pause_30", "pause_indef", "resume_on"].includes(action)) {
+        return pickUnusedAck([
+          "Sounds good — I’ll be here when you’re ready. If anything changes, just let me know.",
+          "No problem — I’ll be here when you’re ready. If anything changes, just let me know."
+        ]);
+      }
+      return null;
+    };
+
+    const sendCadenceAck = async (message: string) => {
+      const accountSid = process.env.TWILIO_ACCOUNT_SID;
+      const authToken = process.env.TWILIO_AUTH_TOKEN;
+      const from = process.env.TWILIO_FROM_NUMBER;
+      const toNumber = normalizePhone(conv.lead?.phone ?? conv.leadKey ?? "");
+      if (conv.contactPreference === "call_only") {
+        return { sent: false, reason: "call_only" };
+      }
+      if (!toNumber.startsWith("+")) {
+        return { sent: false, reason: "invalid_phone" };
+      }
+      if (isSuppressed(toNumber)) {
+        return { sent: false, reason: "suppressed" };
+      }
+      if (!accountSid || !authToken || !from) {
+        appendOutbound(conv, "salesperson", toNumber, message, "human");
+        return { sent: false, reason: "twilio_not_configured" };
+      }
+      try {
+        const client = twilio(accountSid, authToken);
+        const msg = await client.messages.create({ from, to: toNumber, body: message });
+        appendOutbound(conv, from, toNumber, message, "twilio", msg.sid);
+        return { sent: true, sid: msg.sid };
+      } catch (e: any) {
+        appendOutbound(conv, "salesperson", toNumber, message, "human");
+        return { sent: false, reason: "send_failed" };
+      }
     };
 
     const ensureCadenceActive = (nextDueAtOverride?: string) => {
@@ -4078,17 +4296,42 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
         setFollowUpMode(conv, "active", "manual_pause");
       }
       applyPauseUntil(resumeIso, "manual_pause");
+      cadenceNotice = `Follow-ups paused until ${formatSlotLocal(resumeIso, tz)}.`;
     } else {
       applyResume(shouldApplyWatch);
+    }
+
+    if (!cadenceNotice) {
+      if (effectiveResolution === "resume") cadenceNotice = "Follow-ups resumed.";
+      else if (effectiveResolution === "pause_7") cadenceNotice = "Follow-ups paused for 7 days.";
+      else if (effectiveResolution === "pause_30") cadenceNotice = "Follow-ups paused for 30 days.";
+      else if (effectiveResolution === "pause_indef") cadenceNotice = "Follow-ups paused indefinitely.";
     }
 
     if (shouldApplyWatch && !["archive", "appointment_set"].includes(effectiveResolution)) {
       setFollowUpMode(conv, "holding_inventory", "inventory_watch");
     }
 
+    if (effectiveResolution === "resume") {
+      setDialogState(conv, "followup_resumed");
+    } else if (
+      effectiveResolution === "pause_7" ||
+      effectiveResolution === "pause_30" ||
+      effectiveResolution === "pause_indef" ||
+      effectiveResolution === "resume_on"
+    ) {
+      setDialogState(conv, "followup_paused");
+    }
+
+    let cadenceAckResult: { sent: boolean; reason?: string; sid?: string } | null = null;
+    const cadenceAck = buildCadenceAck(effectiveResolution);
+    if (cadenceAck) {
+      cadenceAckResult = await sendCadenceAck(cadenceAck);
+    }
+
     saveConversation(conv);
     await flushConversationStore();
-    return res.json({ ok: true, conversation: conv });
+    return res.json({ ok: true, conversation: conv, notice: cadenceNotice, cadenceAck: cadenceAckResult });
   } catch (err: any) {
     console.log("[followup-action] failed:", err?.message ?? err);
     return res.status(500).json({ ok: false, error: err?.message ?? "Failed to update follow-ups" });
@@ -4869,10 +5112,52 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
+  if (isCallOnlyText(event.body)) {
+    setContactPreference(conv, "call_only");
+    setDialogState(conv, "call_only");
+    addTodo(conv, "other", event.body ?? "Call only requested", event.providerMessageId);
+    setFollowUpMode(conv, "manual_handoff", "call_only");
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+
   if (isVideoRequest(event.body)) {
     const reply =
       "Got it — I’ll have a salesperson send a walkaround video by text shortly.";
     addTodo(conv, "other", `Video request: ${event.body}`, event.providerMessageId);
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+
+  const isServiceLead =
+    conv.classification?.bucket === "service" || conv.classification?.cta === "service_request";
+  if (isServiceLead) {
+    if (getDialogState(conv) === "none") {
+      setDialogState(conv, "service_request");
+    }
+    setDialogState(conv, "service_handoff");
+    const hasServiceTodo = listOpenTodos().some(
+      t => t.convId === conv.id && t.reason === "service"
+    );
+    if (!hasServiceTodo) {
+      addTodo(conv, "service", event.body ?? "Service request", event.providerMessageId);
+    }
+    setFollowUpMode(conv, "manual_handoff", "service_request");
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    const reply =
+      "We’ve received your service request and will have the service department reach out.";
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -4929,8 +5214,6 @@ if (authToken && signature) {
     return hasSelection || hasConfirm;
   };
 
-  const isServiceLead =
-    conv.classification?.bucket === "service" || conv.classification?.cta === "service_request";
   const schedulingAllowed = !isServiceLead;
 
   // Auto-reschedule if they confirmed a pending reschedule slot
@@ -5774,19 +6057,45 @@ if (authToken && signature) {
   });
   const lastOutbound = getLastNonVoiceOutbound(conv);
   const lastOutboundText = lastOutbound?.body ?? "";
+  const lastOutboundAskedQuestion =
+    /\?\s*$/.test(lastOutboundText.trim()) ||
+    /\b(do any of these times work|which works best|what day and time works|what day works|what time works|want me to|should i|can i|would you like|does that work|ok to|are you able|set a time|schedule|appointment)\b/i.test(
+      lastOutboundText
+    );
   const outboundHoldNotice =
     lastOutbound?.body &&
     /(on hold|hold with deposit|deposit|sale pending|pending|sold|already sold)/i.test(lastOutbound.body);
   const textLower = String(event.body ?? "").toLowerCase();
-  const isSellMyBikeLead =
-    /sell my bike/.test(String(conv.lead?.source ?? "").toLowerCase()) ||
-    conv.classification?.cta === "sell_my_bike";
-  if (isSellMyBikeLead && conv.lead) {
+  const schedulingSignalsBase = detectSchedulingSignals(event.body);
+  const leadSourceText = String(conv.lead?.source ?? "").toLowerCase();
+  const isTradeLead =
+    /sell my bike/.test(leadSourceText) ||
+    /trade[-\s]?in|trade accelerator/.test(leadSourceText) ||
+    conv.classification?.cta === "sell_my_bike" ||
+    conv.classification?.bucket === "trade_in_sell";
+  const isSellMyBikeLead = /sell my bike/.test(leadSourceText) || conv.classification?.cta === "sell_my_bike";
+  if (isTradeLead && conv.lead) {
     const parsedSellOption = parseSellOptionFromText(event.body ?? "");
     if (parsedSellOption) {
       conv.lead.sellOption = parsedSellOption;
       conv.lead.sellOptionUpdatedAt = new Date().toISOString();
+      if (!isScheduleDialogState(getDialogState(conv))) {
+        if (parsedSellOption === "cash") setDialogState(conv, "trade_cash");
+        else if (parsedSellOption === "trade") setDialogState(conv, "trade_trade");
+        else setDialogState(conv, "trade_either");
+      }
     }
+    if (getDialogState(conv) === "none") {
+      setDialogState(conv, "trade_init");
+    }
+  }
+  if (
+    getDialogState(conv) === "none" &&
+    !isScheduleDialogState(getDialogState(conv)) &&
+    !isTradeDialogState(getDialogState(conv)) &&
+    isPricingText(event.body ?? "")
+  ) {
+    setDialogState(conv, "pricing_init");
   }
   const shortAck =
     /^(ok|okay|k|kk|thanks|thank you|got it|will do|sounds good|sounds great|appreciate it|cool)\b/i.test(
@@ -5855,13 +6164,24 @@ if (authToken && signature) {
   }
   const intentConfidence =
     typeof intentParse?.confidence === "number" ? intentParse.confidence : 0;
-  const intentAccepted = !!intentParse?.explicitRequest && intentConfidence >= 0.75;
+  const intentConfidenceMin = Number(process.env.LLM_INTENT_CONFIDENCE_MIN ?? 0.75);
+  const intentAccepted = !!intentParse?.explicitRequest && intentConfidence >= intentConfidenceMin;
+  const intentLow =
+    !!intentParse?.explicitRequest && intentConfidence > 0 && intentConfidence < intentConfidenceMin;
   const llmCallbackRequested = intentAccepted && intentParse?.intent === "callback";
+  const callbackRequestedOverride = llmCallbackRequested || detectCallbackText(event.body ?? "");
   const llmAvailabilityIntent = intentAccepted && intentParse?.intent === "availability";
   const llmTestRideIntent = intentAccepted && intentParse?.intent === "test_ride";
   const llmAvailability = llmAvailabilityIntent ? intentParse?.availability ?? null : null;
-  let bookingParseText = bookingParse?.normalizedText ?? "";
-  if (bookingParse?.explicitRequest && bookingParse?.reference === "last_suggested") {
+  const bookingConfidence =
+    typeof bookingParse?.confidence === "number" ? bookingParse.confidence : 0;
+  const bookingConfidenceMin = Number(process.env.LLM_BOOKING_CONFIDENCE_MIN ?? 0.7);
+  const bookingIntentAccepted =
+    !!bookingParse?.explicitRequest && bookingConfidence >= bookingConfidenceMin;
+  const bookingIntentLow =
+    !!bookingParse?.explicitRequest && bookingConfidence > 0 && bookingConfidence < bookingConfidenceMin;
+  let bookingParseText = bookingIntentAccepted ? bookingParse?.normalizedText ?? "" : "";
+  if (bookingIntentAccepted && bookingParse?.reference === "last_suggested") {
     const dayFromSlot = inferDayTokenFromSlot(conv.scheduler?.lastSuggestedSlots?.[0]?.startLocal ?? "");
     const hasDayToken = bookingParseText
       ? /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week|this weekend|weekend|next month)\b/i.test(
@@ -5892,12 +6212,11 @@ if (authToken && signature) {
   const llmHasDayTime = !!llmHasDayToken && (llmHasTimeWord || llmHasAtHour);
   const llmHasDayOnlyAvailability =
     !!llmHasDayToken && /\b(availability|available|openings|open|time|times)\b/i.test(bookingParseText);
-  const llmHasDayOnlyRequest = !!bookingParse?.explicitRequest && !!llmHasDayToken && !llmHasDayTime;
-  const schedulingSignalsBase = detectSchedulingSignals(event.body);
+  const llmHasDayOnlyRequest = bookingIntentAccepted && !!llmHasDayToken && !llmHasDayTime;
   const schedulingSignals = {
     explicit:
       schedulingSignalsBase.explicit ||
-      !!bookingParse?.explicitRequest ||
+      bookingIntentAccepted ||
       !!llmTestRideIntent,
     hasDayTime: schedulingSignalsBase.hasDayTime || llmHasDayTime,
     hasDayOnlyAvailability:
@@ -5905,6 +6224,64 @@ if (authToken && signature) {
     hasDayOnlyRequest: schedulingSignalsBase.hasDayOnlyRequest || llmHasDayOnlyRequest
   };
   const schedulingExplicit = schedulingAllowed ? schedulingSignals.explicit : false;
+  if (callbackRequestedOverride && !isScheduleDialogState(getDialogState(conv))) {
+    setDialogState(conv, "callback_requested");
+  }
+  if (
+    event.provider === "twilio" &&
+    intentLow &&
+    !shortAck &&
+    !lastOutboundAskedQuestion &&
+    !schedulingSignalsBase.explicit &&
+    !schedulingSignalsBase.hasDayTime &&
+    !schedulingSignalsBase.hasDayOnlyAvailability &&
+    !schedulingSignalsBase.hasDayOnlyRequest
+  ) {
+    let reply = "";
+    if (intentParse?.intent === "callback") {
+      reply = "Just to confirm — do you want me to have someone call you?";
+    } else if (intentParse?.intent === "test_ride") {
+      reply = "Just to confirm — are you looking to set up a test ride?";
+    } else if (intentParse?.intent === "availability") {
+      reply = "Just to confirm — are you asking about availability on a bike?";
+    }
+    if (reply) {
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+  }
+  if (
+    event.provider === "twilio" &&
+    schedulingAllowed &&
+    bookingIntentLow &&
+    !schedulingSignalsBase.hasDayTime &&
+    !schedulingSignalsBase.hasDayOnlyRequest &&
+    !schedulingSignalsBase.hasDayOnlyAvailability &&
+    !lastOutboundAskedQuestion
+  ) {
+    const reply = "Just to confirm — are you looking to set a time to stop in?";
+    setDialogState(conv, "clarify_schedule");
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (event.provider === "twilio" && schedulingExplicit && conv.followUp?.mode === "holding_inventory") {
     setFollowUpMode(conv, "active", "customer_requested_appointment");
   }
@@ -6233,11 +6610,6 @@ if (authToken && signature) {
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
-  const lastOutboundAskedQuestion =
-    /\?\s*$/.test(lastOutboundText.trim()) ||
-    /\b(do any of these times work|which works best|what day and time works|what day works|what time works|want me to|should i|can i|would you like|does that work|ok to|are you able)\b/i.test(
-      lastOutboundText
-    );
   if (
     event.provider === "twilio" &&
     shortAck &&
@@ -6640,7 +7012,7 @@ if (authToken && signature) {
   }
 
   const schedulingTextForOrchestrator =
-    bookingParse?.explicitRequest &&
+    bookingIntentAccepted &&
     bookingParseText &&
     !shortAck &&
     !isAffirmative(event.body) &&
@@ -6662,7 +7034,7 @@ if (authToken && signature) {
     pricingAttempts: getPricingAttempts(conv),
     allowSchedulingOffer: schedulingExplicit && schedulingAllowed,
     schedulingText: schedulingTextForOrchestrator,
-    callbackRequestedOverride: llmCallbackRequested ? true : undefined,
+    callbackRequestedOverride: callbackRequestedOverride ? true : undefined,
     appointmentTypeOverride,
     voiceSummary: getActiveVoiceContext(conv)?.summary ?? null
   });
@@ -6708,12 +7080,38 @@ if (authToken && signature) {
       setDialogState(conv, "schedule_request");
     }
   }
+  const dialogState = getDialogState(conv);
+  const canUpdatePricingState =
+    !isScheduleDialogState(dialogState) &&
+    !isTradeDialogState(dialogState) &&
+    !isServiceDialogState(dialogState) &&
+    dialogState !== "callback_requested" &&
+    dialogState !== "callback_handoff" &&
+    dialogState !== "call_only";
+  if (canUpdatePricingState) {
+    if (result.handoff?.required) {
+      if (result.handoff.reason === "payments") {
+        setDialogState(conv, "payments_handoff");
+      } else if (result.handoff.reason === "pricing") {
+        setDialogState(conv, "pricing_handoff");
+      }
+    } else if (detectsModelQuestion(result.draft ?? "")) {
+      setDialogState(conv, "pricing_need_model");
+    } else if (detectsPricingAnswer(result.draft ?? "")) {
+      setDialogState(conv, "pricing_answered");
+    } else if (isPricingText(event.body ?? "") && dialogState === "none") {
+      setDialogState(conv, "pricing_init");
+    }
+  }
   if (result.handoff?.required) {
     const reason = result.handoff.reason;
     const dealerProfile = await getDealerProfile();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = dealerProfile?.agentName ?? "Brooke";
     const ack = ensureUniqueDraft(result.handoff.ack, conv, dealerName, agentName);
+    if (getDialogState(conv) === "callback_requested") {
+      setDialogState(conv, "callback_handoff");
+    }
     addTodo(conv, reason, event.body, event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", `handoff:${reason}`);
     stopFollowUpCadence(conv, "manual_handoff");
@@ -7112,6 +7510,10 @@ if (authToken && signature) {
   const lastOutboundTextFinal = getLastNonVoiceOutbound(conv)?.body ?? "";
   let reply = ensureUniqueDraft(result.draft, conv, dealerName, agentName);
   reply = applySlotOfferPolicy(conv, reply, lastOutboundTextFinal);
+  reply = applyTradePolicy(conv, reply, lastOutboundTextFinal, result.suggestedSlots);
+  reply = applyPricingPolicy(conv, reply, lastOutboundTextFinal);
+  reply = applyCallbackPolicy(conv, reply, lastOutboundTextFinal);
+  reply = applyServicePolicy(conv, reply, lastOutboundTextFinal);
   if (isSlotOfferMessage(reply)) {
     setDialogState(conv, "schedule_offer_sent");
   }
