@@ -4794,8 +4794,10 @@ app.post("/conversations/:id/send", async (req, res) => {
     draftCandidate && draftCandidate.provider === "draft_ai" ? draftCandidate : null;
   const draftTextForLog = draft?.body ?? null;
 
+  let schedulerTimezone = "America/New_York";
   try {
     const cfg = await getSchedulerConfig();
+    schedulerTimezone = cfg.timezone || schedulerTimezone;
     const sp = resolveSalespersonForUser(cfg, user);
     if (sp) {
       setPreferredSalespersonForConv(conv, sp, "manual_send");
@@ -4803,6 +4805,12 @@ app.post("/conversations/:id/send", async (req, res) => {
   } catch (err: any) {
     console.warn("[scheduler] preferred salesperson resolve failed:", err?.message ?? err);
   }
+
+  const applyManualCadenceAdvance = (hadOutbound: boolean) => {
+    if (!manualTakeover || !hadOutbound) return;
+    if (!conv.followUpCadence || conv.followUpCadence.status !== "active") return;
+    advanceFollowUpCadence(conv, schedulerTimezone);
+  };
 
   // Normalize destination number from conversation leadKey
   const rawTo = String(conv.leadKey ?? "").trim();
@@ -4924,6 +4932,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       if (!hadOutbound) {
         await maybeStartCadence(conv, new Date().toISOString());
       }
+      applyManualCadenceAdvance(hadOutbound);
       const hasOpenTodo = listOpenTodos().some(t => t.convId === conv.id);
       if (!hasOpenTodo) {
         pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
@@ -4949,6 +4958,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
     }
+    applyManualCadenceAdvance(hadOutbound);
     const hasOpenTodo = listOpenTodos().some(t => t.convId === conv.id);
     if (!hasOpenTodo) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
@@ -4977,6 +4987,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
     }
+    applyManualCadenceAdvance(hadOutbound);
     const hasOpenTodo = listOpenTodos().some(t => t.convId === conv.id);
     if (!hasOpenTodo) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
@@ -5005,6 +5016,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
     }
+    applyManualCadenceAdvance(hadOutbound);
     const hasOpenTodo = listOpenTodos().some(t => t.convId === conv.id);
     if (!hasOpenTodo) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
@@ -5030,6 +5042,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
     }
+    applyManualCadenceAdvance(hadOutbound);
     const hasOpenTodo = listOpenTodos().some(t => t.convId === conv.id);
     if (!hasOpenTodo) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
