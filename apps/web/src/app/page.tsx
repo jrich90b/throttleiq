@@ -122,6 +122,11 @@ type ConversationListItem = {
   status?: "open" | "closed";
   closedAt?: string | null;
   closedReason?: string | null;
+  sale?: {
+    soldAt?: string;
+    soldById?: string;
+    soldByName?: string;
+  } | null;
   contactPreference?: "call_only";
   leadName?: string | null;
   vehicleDescription?: string | null;
@@ -170,6 +175,11 @@ type ConversationDetail = {
   status?: "open" | "closed";
   closedAt?: string | null;
   closedReason?: string | null;
+  sale?: {
+    soldAt?: string;
+    soldById?: string;
+    soldByName?: string;
+  } | null;
   contactPreference?: "call_only";
   hold?: {
     key?: string;
@@ -383,6 +393,7 @@ export default function Home() {
   const [editNote, setEditNote] = useState("");
   const [pendingSend, setPendingSend] = useState<{ body: string; draftId?: string } | null>(null);
   const [closeReason, setCloseReason] = useState("sold");
+  const [soldById, setSoldById] = useState("");
   const [listActionsOpenId, setListActionsOpenId] = useState<string | null>(null);
   const [todoInlineOpenId, setTodoInlineOpenId] = useState<string | null>(null);
   const [todoInlineText, setTodoInlineText] = useState("");
@@ -1388,6 +1399,27 @@ export default function Home() {
       ""
     );
   }, [selectedConv?.appointment?.bookedSalespersonId, salespeopleList, usersList]);
+  useEffect(() => {
+    if (!selectedConv || closeReason !== "sold") return;
+    if (soldById) return;
+    const existing = selectedConv.sale?.soldById;
+    if (existing) {
+      setSoldById(existing);
+      return;
+    }
+    if (authUser?.id && salespeopleList.some(sp => sp.id === authUser.id)) {
+      setSoldById(authUser.id);
+      return;
+    }
+    const apptSp = selectedConv.appointment?.bookedSalespersonId;
+    if (apptSp && salespeopleList.some(sp => sp.id === apptSp)) {
+      setSoldById(apptSp);
+      return;
+    }
+    if (salespeopleList.length === 1) {
+      setSoldById(salespeopleList[0].id);
+    }
+  }, [selectedConv, closeReason, soldById, authUser?.id, salespeopleList]);
   const cadenceAlert = useMemo(() => {
     if (!selectedConv) return null;
     const listItem = conversations.find(
@@ -1984,10 +2016,17 @@ export default function Home() {
       await openHoldModal(selectedConv.id);
       return;
     }
+    if (closeReason === "sold" && !soldById && salespeopleList.length) {
+      window.alert("Please select who sold the bike.");
+      return;
+    }
     await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/close`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reason: closeReason })
+      body: JSON.stringify({
+        reason: closeReason,
+        soldById: closeReason === "sold" ? soldById : undefined
+      })
     });
     await loadConversation(selectedConv.id);
     await load();
@@ -3044,7 +3083,15 @@ export default function Home() {
                                   </span>
                                 ) : null}
                                 {c.status === "closed" ? (
-                                  <span className="text-xs px-2 py-1 rounded border bg-gray-50">Closed</span>
+                                  <span
+                                    className={`text-xs px-2 py-1 rounded border ${
+                                      c.closedReason === "sold"
+                                        ? "bg-blue-50 text-blue-700 border-blue-200"
+                                        : "bg-gray-50"
+                                    }`}
+                                  >
+                                    {c.closedReason === "sold" ? "Sold" : "Closed"}
+                                  </span>
                                 ) : c.followUpCadence?.pauseReason === "manual_hold" ||
                                   c.followUpCadence?.pauseReason === "unit_hold" ||
                                   c.followUpCadence?.stopReason === "unit_hold" ||
@@ -5499,16 +5546,26 @@ export default function Home() {
                       selectedConv.followUp?.reason === "manual_hold" ||
                       selectedConv.followUp?.reason === "unit_hold" ||
                       !!selectedConv.hold;
+                    const isSold =
+                      selectedConv.status === "closed" && selectedConv.closedReason === "sold";
                     const holdUntil =
                       selectedConv.hold?.until ??
                       (isHold ? selectedConv.followUpCadence?.pausedUntil : null);
-                    const statusLabel = selectedConv.status === "closed" ? "Closed" : isHold ? "Hold" : "Open";
+                    const statusLabel = isSold
+                      ? "Sold"
+                      : selectedConv.status === "closed"
+                        ? "Closed"
+                        : isHold
+                          ? "Hold"
+                          : "Open";
                     const badgeClass =
                       statusLabel === "Closed"
                         ? "bg-gray-100 text-gray-700 border-gray-200"
-                        : statusLabel === "Hold"
-                          ? "bg-red-100 text-red-700 border-red-200"
-                          : "bg-emerald-100 text-emerald-800 border-emerald-200";
+                        : statusLabel === "Sold"
+                          ? "bg-blue-100 text-blue-700 border-blue-200"
+                          : statusLabel === "Hold"
+                            ? "bg-red-100 text-red-700 border-red-200"
+                            : "bg-emerald-100 text-emerald-800 border-emerald-200";
                     return (
                       <span className={`text-xs px-2 py-0.5 rounded-full border ${badgeClass}`}>
                         {statusLabel}
@@ -5582,8 +5639,13 @@ export default function Home() {
                     const holdUntil =
                       selectedConv.hold?.until ??
                       (isHold ? selectedConv.followUpCadence?.pausedUntil : null);
-                    if (selectedConv.status === "closed" && selectedConv.closedAt) {
-                      return `Closed: ${new Date(selectedConv.closedAt).toLocaleString()}`;
+                    if (selectedConv.status === "closed") {
+                      if (selectedConv.closedReason === "sold") {
+                        return "Sold";
+                      }
+                      if (selectedConv.closedAt) {
+                        return `Closed: ${new Date(selectedConv.closedAt).toLocaleString()}`;
+                      }
                     }
                     if (isHold && holdUntil) {
                       return `Hold until ${formatCadenceDate(holdUntil)}`;
@@ -6412,6 +6474,20 @@ export default function Home() {
                   <option value="hold">Hold unit</option>
                   <option value="other">Other</option>
                 </select>
+                {closeReason === "sold" ? (
+                  <select
+                    className="border rounded px-2 py-2 text-sm"
+                    value={soldById}
+                    onChange={e => setSoldById(e.target.value)}
+                  >
+                    <option value="">Sold by…</option>
+                    {salespeopleList.map(sp => (
+                      <option key={sp.id} value={sp.id}>
+                        {sp.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
                 <button className="px-3 py-2 border rounded text-sm" onClick={closeConv}>
                   Update
                 </button>

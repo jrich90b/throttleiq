@@ -92,7 +92,7 @@ export type FollowUpCadence = {
   lastSentAt?: string;
   lastSentStep?: number;
   stopReason?: string;
-  kind?: "standard" | "long_term";
+  kind?: "standard" | "long_term" | "post_sale";
   deferredMessage?: string;
   pausedUntil?: string;
   pauseReason?: string;
@@ -257,6 +257,11 @@ export type Conversation = {
   status?: "open" | "closed";
   closedAt?: string;
   closedReason?: string;
+  sale?: {
+    soldAt?: string;
+    soldById?: string;
+    soldByName?: string;
+  };
   hold?: {
     key?: string;
     stockId?: string;
@@ -1012,6 +1017,7 @@ function localPartsToUtcDate(
 }
 
 export const FOLLOW_UP_DAY_OFFSETS = [2, 3, 5, 7, 10, 14, 18, 21, 27, 30, 45, 60, 90];
+export const POST_SALE_DAY_OFFSETS = [1, 60, 365, 690];
 
 export function computeFollowUpDueAt(anchorAtIso: string, offsetDays: number, timeZone: string) {
   const anchor = new Date(anchorAtIso);
@@ -1035,6 +1041,21 @@ export function computeFollowUpDueAt(anchorAtIso: string, offsetDays: number, ti
   }).toISOString();
 }
 
+export function computePostSaleDueAt(anchorAtIso: string, offsetDays: number, timeZone: string) {
+  const anchor = new Date(anchorAtIso);
+  const anchorParts = getZonedParts(anchor, timeZone);
+  const base = new Date(Date.UTC(anchorParts.year, anchorParts.month - 1, anchorParts.day));
+  base.setUTCDate(base.getUTCDate() + offsetDays);
+  const baseParts = getZonedParts(base, timeZone);
+  return localPartsToUtcDate(timeZone, {
+    year: baseParts.year,
+    month: baseParts.month,
+    day: baseParts.day,
+    hour24: 10,
+    minute: 30
+  }).toISOString();
+}
+
 export function startFollowUpCadence(conv: Conversation, anchorAtIso: string, timeZone: string) {
   if (conv.status === "closed") return;
   if (conv.followUpCadence?.status === "active" || conv.followUpCadence?.status === "stopped") return;
@@ -1045,6 +1066,19 @@ export function startFollowUpCadence(conv: Conversation, anchorAtIso: string, ti
     nextDueAt,
     stepIndex: 0,
     kind: "standard"
+  };
+  conv.updatedAt = nowIso();
+  scheduleSave();
+}
+
+export function startPostSaleCadence(conv: Conversation, anchorAtIso: string, timeZone: string) {
+  const nextDueAt = computePostSaleDueAt(anchorAtIso, POST_SALE_DAY_OFFSETS[0], timeZone);
+  conv.followUpCadence = {
+    status: "active",
+    anchorAt: anchorAtIso,
+    nextDueAt,
+    stepIndex: 0,
+    kind: "post_sale"
   };
   conv.updatedAt = nowIso();
   scheduleSave();
@@ -1106,15 +1140,15 @@ export function advanceFollowUpCadence(conv: Conversation, timeZone: string) {
   conv.followUpCadence.lastSentAt = nowIso();
   conv.followUpCadence.lastSentStep = conv.followUpCadence.stepIndex;
   conv.followUpCadence.stepIndex = nextStep;
-  if (nextStep >= FOLLOW_UP_DAY_OFFSETS.length) {
+  const isPostSale = conv.followUpCadence.kind === "post_sale";
+  const offsets = isPostSale ? POST_SALE_DAY_OFFSETS : FOLLOW_UP_DAY_OFFSETS;
+  if (nextStep >= offsets.length) {
     conv.followUpCadence.status = "completed";
     conv.followUpCadence.nextDueAt = undefined;
   } else {
-    conv.followUpCadence.nextDueAt = computeFollowUpDueAt(
-      conv.followUpCadence.anchorAt,
-      FOLLOW_UP_DAY_OFFSETS[nextStep],
-      timeZone
-    );
+    conv.followUpCadence.nextDueAt = isPostSale
+      ? computePostSaleDueAt(conv.followUpCadence.anchorAt, offsets[nextStep], timeZone)
+      : computeFollowUpDueAt(conv.followUpCadence.anchorAt, offsets[nextStep], timeZone);
   }
   conv.updatedAt = nowIso();
   scheduleSave();
