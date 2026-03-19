@@ -4028,12 +4028,13 @@ app.post("/conversations/:id/close", async (req, res) => {
     const nowIso = new Date().toISOString();
     const cfg = await getSchedulerConfig();
     const soldById = String(req.body?.soldById ?? "").trim();
+    const soldByNameRaw = String(req.body?.soldByName ?? "").trim();
     const salespeople = cfg.salespeople ?? [];
     const sp = soldById ? salespeople.find(s => s.id === soldById) ?? null : null;
     conv.sale = {
       soldAt: nowIso,
       soldById: sp?.id ?? (soldById || undefined),
-      soldByName: sp?.name
+      soldByName: sp?.name ?? (soldByNameRaw || undefined)
     };
     conv.status = "closed";
     conv.closedAt = nowIso;

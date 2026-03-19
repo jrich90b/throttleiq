@@ -1399,6 +1399,20 @@ export default function Home() {
       ""
     );
   }, [selectedConv?.appointment?.bookedSalespersonId, salespeopleList, usersList]);
+  const soldByOptions = useMemo(() => {
+    const fromScheduler = salespeopleList ?? [];
+    const fromUsers = (usersList ?? [])
+      .filter((u: any) => u.role === "salesperson")
+      .map((u: any) => ({ id: u.id, name: u.name || u.email || u.id }));
+    const source = fromScheduler.length ? fromScheduler : fromUsers;
+    const deduped = new Map<string, { id: string; name: string }>();
+    source.forEach(sp => {
+      if (sp?.id && !deduped.has(sp.id)) {
+        deduped.set(sp.id, { id: sp.id, name: sp.name });
+      }
+    });
+    return Array.from(deduped.values());
+  }, [salespeopleList, usersList]);
   useEffect(() => {
     if (!selectedConv || closeReason !== "sold") return;
     if (soldById) return;
@@ -1407,19 +1421,19 @@ export default function Home() {
       setSoldById(existing);
       return;
     }
-    if (authUser?.id && salespeopleList.some(sp => sp.id === authUser.id)) {
+    if (authUser?.id && soldByOptions.some(sp => sp.id === authUser.id)) {
       setSoldById(authUser.id);
       return;
     }
     const apptSp = selectedConv.appointment?.bookedSalespersonId;
-    if (apptSp && salespeopleList.some(sp => sp.id === apptSp)) {
+    if (apptSp && soldByOptions.some(sp => sp.id === apptSp)) {
       setSoldById(apptSp);
       return;
     }
-    if (salespeopleList.length === 1) {
-      setSoldById(salespeopleList[0].id);
+    if (soldByOptions.length === 1) {
+      setSoldById(soldByOptions[0].id);
     }
-  }, [selectedConv, closeReason, soldById, authUser?.id, salespeopleList]);
+  }, [selectedConv, closeReason, soldById, authUser?.id, soldByOptions]);
   const cadenceAlert = useMemo(() => {
     if (!selectedConv) return null;
     const listItem = conversations.find(
@@ -2016,16 +2030,21 @@ export default function Home() {
       await openHoldModal(selectedConv.id);
       return;
     }
-    if (closeReason === "sold" && !soldById && salespeopleList.length) {
+    if (closeReason === "sold" && !soldById && soldByOptions.length) {
       window.alert("Please select who sold the bike.");
       return;
     }
+    const soldByName =
+      closeReason === "sold"
+        ? soldByOptions.find(sp => sp.id === soldById)?.name ?? ""
+        : "";
     await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/close`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         reason: closeReason,
-        soldById: closeReason === "sold" ? soldById : undefined
+        soldById: closeReason === "sold" ? soldById : undefined,
+        soldByName: closeReason === "sold" ? soldByName : undefined
       })
     });
     await loadConversation(selectedConv.id);
@@ -6481,7 +6500,7 @@ export default function Home() {
                     onChange={e => setSoldById(e.target.value)}
                   >
                     <option value="">Sold by…</option>
-                    {salespeopleList.map(sp => (
+                    {soldByOptions.map(sp => (
                       <option key={sp.id} value={sp.id}>
                         {sp.name}
                       </option>
