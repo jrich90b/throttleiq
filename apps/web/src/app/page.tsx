@@ -6022,10 +6022,12 @@ export default function Home() {
                           const isSelected = key && key === selectedKey;
                           const label = [it.year, it.make, it.model, it.trim].filter(Boolean).join(" ");
                           const color = it.color ? ` • ${it.color}` : "";
+                          const preview =
+                            Array.isArray(it.images) && it.images.length ? it.images[0] : null;
                           return (
                             <button
                               key={key || label}
-                              className={`w-full text-left px-3 py-2 border-b last:border-b-0 hover:bg-gray-50 ${
+                              className={`relative group w-full text-left px-3 py-2 border-b last:border-b-0 hover:bg-gray-50 ${
                                 isSelected ? "bg-blue-50" : ""
                               }`}
                               onClick={() => setHoldSelection(it)}
@@ -6049,6 +6051,15 @@ export default function Home() {
                                   </span>
                                 ) : null}
                               </div>
+                              {preview ? (
+                                <div className="absolute right-2 top-2 hidden group-hover:block z-50 pointer-events-none">
+                                  <img
+                                    src={preview}
+                                    alt={`${label || it.model || "Unit"} preview`}
+                                    className="w-28 h-20 object-cover rounded border border-gray-200 shadow"
+                                  />
+                                </div>
+                              ) : null}
                             </button>
                           );
                         })
