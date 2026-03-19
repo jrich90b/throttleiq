@@ -98,15 +98,20 @@ function formatCadenceDate(iso: string) {
   return d.toLocaleString();
 }
 
-function getCadenceAlert(cadence?: { status?: string; pausedUntil?: string | null }) {
+function getCadenceAlert(cadence?: {
+  status?: string;
+  pausedUntil?: string | null;
+  nextDueAt?: string | null;
+}) {
   if (!cadence || cadence.status !== "active") return null;
-  if (!cadence.pausedUntil) return null;
-  const resumeAt = new Date(cadence.pausedUntil);
-  if (Number.isNaN(resumeAt.getTime())) return null;
-  const msUntil = resumeAt.getTime() - Date.now();
+  const sendAtRaw = cadence.nextDueAt ?? cadence.pausedUntil ?? null;
+  if (!sendAtRaw) return null;
+  const sendAt = new Date(sendAtRaw);
+  if (Number.isNaN(sendAt.getTime())) return null;
+  const msUntil = sendAt.getTime() - Date.now();
   if (msUntil <= 0) return null;
   if (msUntil > CADENCE_ALERT_WINDOW_HOURS * 60 * 60 * 1000) return null;
-  return { resumeAt, msUntil };
+  return { sendAt, msUntil };
 }
 
 type SystemMode = "suggest" | "autopilot";
@@ -1370,14 +1375,14 @@ export default function Home() {
           convId: c.id,
           leadKey: c.leadKey,
           leadName: c.leadName ?? null,
-          resumeAt: alert.resumeAt
+          sendAt: alert.sendAt
         };
       })
       .filter(Boolean) as Array<{
       convId: string;
       leadKey: string;
       leadName: string | null;
-      resumeAt: Date;
+      sendAt: Date;
     }>;
   }, [conversations]);
   const displaySendBody = useMemo(() => {
@@ -3208,7 +3213,7 @@ export default function Home() {
                         <div className="text-xs text-gray-600 mt-1">{alert.leadKey}</div>
                       ) : null}
                       <div className="text-xs text-amber-800 mt-2">
-                        Follow-up cadence resumes on {formatCadenceDate(alert.resumeAt.toISOString())}.
+                        Follow-up message scheduled for {formatCadenceDate(alert.sendAt.toISOString())}.
                       </div>
                     </div>
                     <div className="flex flex-col gap-2">
@@ -5628,10 +5633,10 @@ export default function Home() {
               <div className="mt-3 border rounded-lg bg-amber-50 px-3 py-2 text-sm flex items-center justify-between gap-3">
                 <div>
                   <div className="font-medium text-amber-900">
-                    Follow-up cadence resumes soon
+                    Follow-up message scheduled soon
                   </div>
                   <div className="text-xs text-amber-800">
-                    Scheduled to resume: {formatCadenceDate(cadenceAlert.resumeAt.toISOString())}
+                    Scheduled to send: {formatCadenceDate(cadenceAlert.sendAt.toISOString())}
                   </div>
                 </div>
                 <button
