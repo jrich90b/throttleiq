@@ -257,6 +257,20 @@ type ConversationDetail = {
   messages: Message[];
 };
 
+function normalizeUserRow(user: any) {
+  const first = String(user?.firstName ?? "").trim();
+  const last = String(user?.lastName ?? "").trim();
+  if (first || last) return { ...user };
+  const name = String(user?.name ?? "").trim();
+  if (!name) return { ...user };
+  const parts = name.split(/\s+/).filter(Boolean);
+  return {
+    ...user,
+    firstName: parts[0] ?? "",
+    lastName: parts.slice(1).join(" ")
+  };
+}
+
 type TodoItem = {
   id: string;
   convId: string;
@@ -421,6 +435,8 @@ export default function Home() {
     email: "",
     password: "",
     name: "",
+    firstName: "",
+    lastName: "",
     phone: "",
     extension: "",
     role: "salesperson",
@@ -1042,7 +1058,7 @@ export default function Home() {
         setSalespeopleList(cfg.salespeople ?? []);
         setAvailabilityBlocks(cfg.availabilityBlocks ?? {});
         setPreferredOrderIds(cfg.preferredSalespeople ?? []);
-      setUsersList(usersJson?.users ?? []);
+        setUsersList((usersJson?.users ?? []).map(normalizeUserRow));
         const at = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
         setAppointmentTypesList(
           Object.entries(at).map(([key, val]: any) => ({
@@ -1100,7 +1116,7 @@ export default function Home() {
       try {
         const resp = await fetch("/api/users", { cache: "no-store" });
         const json = await resp.json();
-        setUsersList(json?.users ?? []);
+        setUsersList((json?.users ?? []).map(normalizeUserRow));
       } catch {
         // ignore
       }
@@ -1400,19 +1416,36 @@ export default function Home() {
     );
   }, [selectedConv?.appointment?.bookedSalespersonId, salespeopleList, usersList]);
   const soldByOptions = useMemo(() => {
-    const fromScheduler = salespeopleList ?? [];
+    const fromScheduler = (salespeopleList ?? []).map(sp => {
+      const name = sp.name || "";
+      const first = name.trim().split(/\s+/).filter(Boolean)[0] || "";
+      return { id: sp.id, name, firstName: first };
+    });
     const fromUsers = (usersList ?? [])
       .filter((u: any) => u.role === "salesperson")
-      .map((u: any) => ({ id: u.id, name: u.name || u.email || u.id }));
-    const source = fromScheduler.length ? fromScheduler : fromUsers;
-    const deduped = new Map<string, { id: string; name: string }>();
+      .map((u: any) => {
+        const name =
+          [u.firstName, u.lastName].filter(Boolean).join(" ") || u.name || u.email || u.id;
+        const first =
+          String(u.firstName ?? "").trim() ||
+          String(u.name ?? "").trim().split(/\s+/).filter(Boolean)[0] ||
+          "";
+        return { id: u.id, name, firstName: first };
+      });
+    const source = fromUsers.length ? fromUsers : fromScheduler;
+    const deduped = new Map<string, { id: string; name: string; firstName?: string }>();
     source.forEach(sp => {
       if (sp?.id && !deduped.has(sp.id)) {
-        deduped.set(sp.id, { id: sp.id, name: sp.name });
+        deduped.set(sp.id, { id: sp.id, name: sp.name, firstName: sp.firstName });
       }
     });
     return Array.from(deduped.values());
   }, [salespeopleList, usersList]);
+  useEffect(() => {
+    if (closeReason !== "sold") return;
+    if (soldByOptions.length) return;
+    void reloadUsers();
+  }, [closeReason, soldByOptions.length]);
   useEffect(() => {
     if (!selectedConv || closeReason !== "sold") return;
     if (soldById) return;
@@ -2036,7 +2069,9 @@ export default function Home() {
     }
     const soldByName =
       closeReason === "sold"
-        ? soldByOptions.find(sp => sp.id === soldById)?.name ?? ""
+        ? soldByOptions.find(sp => sp.id === soldById)?.firstName ??
+          soldByOptions.find(sp => sp.id === soldById)?.name ??
+          ""
         : "";
     await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/close`, {
       method: "POST",
@@ -2434,7 +2469,7 @@ export default function Home() {
     try {
       const resp = await fetch("/api/users", { cache: "no-store" });
       const json = await resp.json();
-      if (resp.ok) setUsersList(json?.users ?? []);
+      if (resp.ok) setUsersList((json?.users ?? []).map(normalizeUserRow));
     } catch {
       // ignore
     }
@@ -2458,14 +2493,18 @@ export default function Home() {
   async function addUser() {
     setSettingsError(null);
     try {
+      const fullName = [userForm.firstName, userForm.lastName].filter(Boolean).join(" ").trim();
       const resp = await fetch("/api/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(userForm)
+        body: JSON.stringify({
+          ...userForm,
+          name: fullName || userForm.name
+        })
       });
       const json = await resp.json();
       if (!resp.ok) throw new Error(json?.error ?? "Failed to add user");
-      setUsersList(prev => [...prev, json.user]);
+      setUsersList(prev => [...prev, normalizeUserRow(json.user)]);
       await reloadScheduler();
       setEditingUserId(json.user?.id ?? null);
       setShowNewUserForm(false);
@@ -2476,6 +2515,8 @@ export default function Home() {
         email: "",
         password: "",
         name: "",
+        firstName: "",
+        lastName: "",
         phone: "",
         extension: "",
         role: "salesperson",
@@ -2507,7 +2548,7 @@ export default function Home() {
       });
       const json = await resp.json();
       if (!resp.ok) throw new Error(json?.error ?? "Failed to update user");
-      setUsersList(prev => prev.map(u => (u.id === userId ? json.user : u)));
+      setUsersList(prev => prev.map(u => (u.id === userId ? normalizeUserRow(json.user) : u)));
       await reloadScheduler();
       setEditingUserId(null);
       setShowNewUserForm(false);
@@ -4613,7 +4654,12 @@ export default function Home() {
                   {usersList.map(user => (
                     <div key={user.id} className="border rounded-lg p-3 flex items-center justify-between">
                       <div>
-                        <div className="text-sm font-medium">{user.name || user.email || "Unnamed"}</div>
+                        <div className="text-sm font-medium">
+                          {[user.firstName, user.lastName].filter(Boolean).join(" ") ||
+                            user.name ||
+                            user.email ||
+                            "Unnamed"}
+                        </div>
                                 <div className="text-xs text-gray-600">
                                   {user.email || "No email"} • {user.role}
                                   {user.phone ? ` • ${user.phone}` : ""}
@@ -4674,11 +4720,25 @@ export default function Home() {
                                 <div className="grid grid-cols-2 gap-2">
                                   <input
                                     className="border rounded px-2 py-1 text-sm"
-                                    value={user.name ?? ""}
-                                    placeholder="Name"
+                                    value={user.firstName ?? ""}
+                                    placeholder="First name"
                                     onChange={e =>
                                       setUsersList(prev =>
-                                        prev.map(u => (u.id === user.id ? { ...u, name: e.target.value } : u))
+                                        prev.map(u =>
+                                          u.id === user.id ? { ...u, firstName: e.target.value } : u
+                                        )
+                                      )
+                                    }
+                                  />
+                                  <input
+                                    className="border rounded px-2 py-1 text-sm"
+                                    value={user.lastName ?? ""}
+                                    placeholder="Last name"
+                                    onChange={e =>
+                                      setUsersList(prev =>
+                                        prev.map(u =>
+                                          u.id === user.id ? { ...u, lastName: e.target.value } : u
+                                        )
                                       )
                                     }
                                   />
@@ -4842,9 +4902,15 @@ export default function Home() {
                                     className="px-3 py-2 border rounded text-sm"
                                     onClick={() => {
                                       const password = userPasswords[user.id];
+                                      const fullName = [user.firstName, user.lastName]
+                                        .filter(Boolean)
+                                        .join(" ")
+                                        .trim();
                                       updateUserRow(user.id, {
                                         email: user.email,
-                                        name: user.name,
+                                        name: fullName || user.name,
+                                        firstName: user.firstName,
+                                        lastName: user.lastName,
                                         role: user.role,
                                         calendarId: user.calendarId,
                                         phone: user.phone,
@@ -4862,9 +4928,21 @@ export default function Home() {
                                   {(user.role === "salesperson" || user.role === "manager") ? (
                                     <button
                                       className="px-3 py-2 border rounded text-sm"
-                                      disabled={creatingCalendar || !(user.name || user.email)}
+                                      disabled={
+                                        creatingCalendar ||
+                                        !(
+                                          [user.firstName, user.lastName].filter(Boolean).join(" ").trim() ||
+                                          user.name ||
+                                          user.email
+                                        )
+                                      }
                                       onClick={async () => {
-                                        const name = String(user.name || user.email || "").trim();
+                                        const name = String(
+                                          [user.firstName, user.lastName].filter(Boolean).join(" ").trim() ||
+                                            user.name ||
+                                            user.email ||
+                                            ""
+                                        ).trim();
                                         if (!name) return;
                                         setCreatingCalendar(true);
                                         try {
@@ -4898,9 +4976,15 @@ export default function Home() {
                           <div className="grid grid-cols-2 gap-3">
                             <input
                               className="border rounded px-3 py-2 text-sm"
-                              placeholder="Name"
-                              value={userForm.name}
-                              onChange={e => setUserForm({ ...userForm, name: e.target.value })}
+                              placeholder="First name"
+                              value={userForm.firstName}
+                              onChange={e => setUserForm({ ...userForm, firstName: e.target.value })}
+                              />
+                            <input
+                              className="border rounded px-3 py-2 text-sm"
+                              placeholder="Last name"
+                              value={userForm.lastName}
+                              onChange={e => setUserForm({ ...userForm, lastName: e.target.value })}
                               />
                               <input
                                 className="border rounded px-3 py-2 text-sm"
@@ -4999,10 +5083,20 @@ export default function Home() {
                                 <button
                                   className="px-3 py-2 border rounded text-sm"
                                   disabled={
-                                    creatingCalendar || !(userForm.name.trim() || userForm.email.trim())
+                                    creatingCalendar ||
+                                    !(
+                                      [userForm.firstName, userForm.lastName].filter(Boolean).join(" ").trim() ||
+                                      userForm.name.trim() ||
+                                      userForm.email.trim()
+                                    )
                                   }
                                   onClick={async () => {
-                                    const name = (userForm.name || userForm.email).trim();
+                                    const name = String(
+                                      [userForm.firstName, userForm.lastName].filter(Boolean).join(" ").trim() ||
+                                        userForm.name ||
+                                        userForm.email ||
+                                        ""
+                                    ).trim();
                                     if (!name) return;
                                     setCreatingCalendar(true);
                                     try {

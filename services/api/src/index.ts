@@ -249,7 +249,11 @@ async function syncSchedulerSalespeopleFromUsers() {
   const users = await listUsers();
   const salespeople = users
     .filter(u => u.role === "salesperson" && u.calendarId)
-    .map(u => ({ id: u.id, name: u.name || u.email || u.id, calendarId: u.calendarId! }));
+    .map(u => ({
+      id: u.id,
+      name: [u.firstName, u.lastName].filter(Boolean).join(" ") || u.name || u.email || u.id,
+      calendarId: u.calendarId!
+    }));
   const preferredExisting = (cfg.preferredSalespeople ?? []).filter(id => salespeople.some(s => s.id === id));
   const preferredSalespeople = preferredExisting.length ? preferredExisting : salespeople.map(s => s.id);
   await saveSchedulerConfig({ ...(cfg as any), salespeople, preferredSalespeople });
@@ -658,6 +662,8 @@ app.get("/auth/me", async (req, res) => {
       id: user.id,
       email: user.email,
       name: user.name,
+      firstName: user.firstName,
+      lastName: user.lastName,
       role: user.role,
       calendarId: user.calendarId,
       phone: user.phone,
@@ -682,6 +688,8 @@ app.post("/auth/login", async (req, res) => {
       id: user.id,
       email: user.email,
       name: user.name,
+      firstName: user.firstName,
+      lastName: user.lastName,
       role: user.role,
       calendarId: user.calendarId,
       phone: user.phone,
@@ -707,6 +715,8 @@ app.get("/users", requireManager, async (_req, res) => {
       id: u.id,
       email: u.email,
       name: u.name,
+      firstName: u.firstName,
+      lastName: u.lastName,
       role: u.role,
       calendarId: u.calendarId,
       phone: u.phone,
@@ -724,14 +734,28 @@ app.post("/users", async (req, res) => {
   const email = String(req.body?.email ?? "").trim();
   const password = String(req.body?.password ?? "");
   const role = (String(req.body?.role ?? "salesperson") as "manager" | "salesperson") ?? "salesperson";
-  const name = String(req.body?.name ?? "").trim();
+  const firstName = String(req.body?.firstName ?? "").trim();
+  const lastName = String(req.body?.lastName ?? "").trim();
+  const nameRaw = String(req.body?.name ?? "").trim();
+  const name = [firstName, lastName].filter(Boolean).join(" ").trim() || nameRaw;
   const calendarId = String(req.body?.calendarId ?? "").trim();
   const phone = String(req.body?.phone ?? "").trim();
   const extension = String(req.body?.extension ?? "").trim();
   const permissions = req.body?.permissions ?? undefined;
   if (!email || !password) return res.status(400).json({ ok: false, error: "Missing email/password" });
   try {
-    const user = await createUser({ email, password, role, name, calendarId, phone, extension, permissions });
+    const user = await createUser({
+      email,
+      password,
+      role,
+      name,
+      firstName,
+      lastName,
+      calendarId,
+      phone,
+      extension,
+      permissions
+    });
     await syncSchedulerSalespeopleFromUsers();
     res.json({
       ok: true,
@@ -739,6 +763,8 @@ app.post("/users", async (req, res) => {
         id: user.id,
         email: user.email,
         name: user.name,
+        firstName: user.firstName,
+        lastName: user.lastName,
         role: user.role,
         calendarId: user.calendarId,
         phone: user.phone,
@@ -760,6 +786,8 @@ app.put("/users/:id", requireManager, async (req, res) => {
       password: req.body?.password,
       role: req.body?.role,
       name: req.body?.name,
+      firstName: req.body?.firstName,
+      lastName: req.body?.lastName,
       calendarId: req.body?.calendarId,
       phone: req.body?.phone,
       extension: req.body?.extension,
@@ -772,6 +800,8 @@ app.put("/users/:id", requireManager, async (req, res) => {
         id: user.id,
         email: user.email,
         name: user.name,
+        firstName: user.firstName,
+        lastName: user.lastName,
         role: user.role,
         calendarId: user.calendarId,
         phone: user.phone,
@@ -2685,6 +2715,8 @@ async function processDueFollowUps() {
   const cfg = await getSchedulerConfig();
   if (cfg.enabled === false) return;
   const dealerProfile = await getDealerProfile();
+  const users = await listUsers();
+  const userById = new Map(users.map(u => [u.id, u]));
   const now = new Date();
   const convs = getAllConversations();
   const todoConvIds = new Set(listOpenTodos().map(t => t.convId));
@@ -2695,9 +2727,13 @@ async function processDueFollowUps() {
     const agentName = dealerProfile?.agentName ?? "our team";
     const soldById = conv?.sale?.soldById;
     if (!soldById) return agentName;
-    const sp = (cfg.salespeople ?? []).find((s: any) => s.id === soldById);
-    if (!sp) return agentName;
-    return conv?.sale?.soldByName ?? sp.name ?? agentName;
+    const user = userById.get(soldById);
+    if (!user) return agentName;
+    const first =
+      String(user.firstName ?? "").trim() ||
+      String(user.name ?? "").trim().split(/\s+/).filter(Boolean)[0] ||
+      "";
+    return first || user.name || user.email || agentName;
   };
   const normalizeModelForPostSale = (model: string) => {
     const trimmed = model.trim();

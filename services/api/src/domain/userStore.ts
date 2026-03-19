@@ -16,6 +16,8 @@ export type UserRecord = {
   id: string;
   email: string;
   name?: string;
+  firstName?: string;
+  lastName?: string;
   role: UserRole;
   calendarId?: string;
   phone?: string;
@@ -90,6 +92,8 @@ export async function createUser(input: {
   password: string;
   role: UserRole;
   name?: string;
+  firstName?: string;
+  lastName?: string;
   calendarId?: string;
   phone?: string;
   extension?: string;
@@ -114,6 +118,8 @@ export async function createUser(input: {
     id: randomUUID(),
     email: input.email.trim(),
     name: input.name?.trim() || undefined,
+    firstName: input.firstName?.trim() || undefined,
+    lastName: input.lastName?.trim() || undefined,
     role: input.role,
     calendarId: input.calendarId?.trim() || undefined,
     phone: input.phone?.trim() || undefined,
@@ -134,6 +140,8 @@ export async function updateUser(
     password: string;
     role: UserRole;
     name: string;
+    firstName: string;
+    lastName: string;
     calendarId: string;
     phone: string;
     extension: string;
@@ -164,6 +172,8 @@ export async function updateUser(
     ...existing,
     email: patch.email?.trim() || existing.email,
     name: patch.name?.trim() || existing.name,
+    firstName: patch.firstName?.trim() || existing.firstName,
+    lastName: patch.lastName?.trim() || existing.lastName,
     role: nextRole,
     calendarId: patch.calendarId?.trim() || undefined,
     phone: patch.phone?.trim() || undefined,
