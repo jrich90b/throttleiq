@@ -20,7 +20,11 @@ import { resolveInventoryUrlByStock } from "./domain/inventoryUrlResolver.js";
 import { checkInventorySalePendingByUrl } from "./domain/inventoryChecker.js";
 import { getDealerProfile, saveDealerProfile } from "./domain/dealerProfile.js";
 import { getDataDir } from "./domain/dataDir.js";
-import { computeFollowUpDueAt, FOLLOW_UP_DAY_OFFSETS } from "./domain/conversationStore.js";
+import {
+  computeFollowUpDueAt,
+  FOLLOW_UP_DAY_OFFSETS,
+  startPostSaleCadence
+} from "./domain/conversationStore.js";
 import { getSchedulerConfig, saveSchedulerConfig, dayKey, getPreferredSalespeople } from "./domain/schedulerConfig.js";
 import {
   getOAuthClient,
@@ -2687,6 +2691,26 @@ async function processDueFollowUps() {
   const canTestRideNow = async (conv: any) => {
     return canOfferTestRideForLead(conv?.lead, dealerProfile);
   };
+  const resolvePostSaleSender = (conv: any) => {
+    const agentName = dealerProfile?.agentName ?? "our team";
+    const soldById = conv?.sale?.soldById;
+    if (!soldById) return agentName;
+    const sp = (cfg.salespeople ?? []).find((s: any) => s.id === soldById);
+    if (!sp) return agentName;
+    return conv?.sale?.soldByName ?? sp.name ?? agentName;
+  };
+  const normalizeModelForPostSale = (model: string) => {
+    const trimmed = model.trim();
+    if (!trimmed) return trimmed;
+    const letters = trimmed.replace(/[^A-Za-z]/g, "");
+    if (letters && trimmed === trimmed.toUpperCase()) return trimmed.toLowerCase();
+    return trimmed;
+  };
+  const getPostSaleModel = (conv: any) => {
+    const raw = conv?.lead?.vehicle?.model ?? "";
+    const normalized = normalizeModelForPostSale(String(raw));
+    return normalized || "bike";
+  };
 
   const getLastInbound = (conv: any) =>
     [...(conv.messages ?? [])].reverse().find((m: any) => m.direction === "in") ?? null;
@@ -2783,11 +2807,12 @@ async function processDueFollowUps() {
   for (const conv of convs) {
     const cadence = conv.followUpCadence;
     if (!cadence || cadence.status !== "active" || !cadence.nextDueAt) continue;
+    const isPostSale = cadence.kind === "post_sale";
     if (conv.contactPreference === "call_only") {
       stopFollowUpCadence(conv, "call_only");
       continue;
     }
-    if (conv.status === "closed") {
+    if (conv.status === "closed" && !isPostSale) {
       stopFollowUpCadence(conv, "closed");
       continue;
     }
@@ -2811,51 +2836,65 @@ async function processDueFollowUps() {
       stopFollowUpCadence(conv, "suppressed");
       continue;
     }
-    const lastInbound = getLastInbound(conv);
-    if (lastInbound?.body && lastInbound?.at) {
-      const inboundAt = new Date(lastInbound.at);
-      const { until, indefinite } = parsePauseUntil(lastInbound.body, inboundAt);
-      if (indefinite) continue;
-      if (until && now < until) setBlockUntil(until);
-      if (isMeaningfulInbound(lastInbound.body) && now.getTime() - inboundAt.getTime() < 72 * 60 * 60 * 1000) {
-        setBlockUntil(new Date(inboundAt.getTime() + 72 * 60 * 60 * 1000));
+    if (!isPostSale) {
+      const lastInbound = getLastInbound(conv);
+      if (lastInbound?.body && lastInbound?.at) {
+        const inboundAt = new Date(lastInbound.at);
+        const { until, indefinite } = parsePauseUntil(lastInbound.body, inboundAt);
+        if (indefinite) continue;
+        if (until && now < until) setBlockUntil(until);
+        if (isMeaningfulInbound(lastInbound.body) && now.getTime() - inboundAt.getTime() < 72 * 60 * 60 * 1000) {
+          setBlockUntil(new Date(inboundAt.getTime() + 72 * 60 * 60 * 1000));
+        }
       }
-    }
-    const lastOutbound = getLastOutbound(conv, ["human", "twilio", "sendgrid"]);
-    if (lastOutbound?.at) {
-      const outboundAt = new Date(lastOutbound.at);
-      if (now.getTime() - outboundAt.getTime() < 72 * 60 * 60 * 1000) {
-        setBlockUntil(new Date(outboundAt.getTime() + 72 * 60 * 60 * 1000));
+      const lastOutbound = getLastOutbound(conv, ["human", "twilio", "sendgrid"]);
+      if (lastOutbound?.at) {
+        const outboundAt = new Date(lastOutbound.at);
+        if (now.getTime() - outboundAt.getTime() < 72 * 60 * 60 * 1000) {
+          setBlockUntil(new Date(outboundAt.getTime() + 72 * 60 * 60 * 1000));
+        }
       }
-    }
-    const lastDraft = getLastOutbound(conv, ["draft_ai"]);
-    if (lastDraft?.at) {
-      const draftAt = new Date(lastDraft.at);
-      // Avoid stacking multiple follow-up drafts within a day.
-      if (now.getTime() - draftAt.getTime() < 24 * 60 * 60 * 1000) {
-        setBlockUntil(new Date(draftAt.getTime() + 24 * 60 * 60 * 1000));
+      const lastDraft = getLastOutbound(conv, ["draft_ai"]);
+      if (lastDraft?.at) {
+        const draftAt = new Date(lastDraft.at);
+        // Avoid stacking multiple follow-up drafts within a day.
+        if (now.getTime() - draftAt.getTime() < 24 * 60 * 60 * 1000) {
+          setBlockUntil(new Date(draftAt.getTime() + 24 * 60 * 60 * 1000));
+        }
       }
-    }
-    if (blockUntilMs != null && blockUntilMs > now.getTime()) {
-      bumpCadenceNextDueAt(conv, new Date(blockUntilMs));
-      continue;
+      if (blockUntilMs != null && blockUntilMs > now.getTime()) {
+        bumpCadenceNextDueAt(conv, new Date(blockUntilMs));
+        continue;
+      }
     }
     if (new Date(cadence.nextDueAt) > now) continue;
     if (conv.appointment?.bookedEventId) {
       onAppointmentBooked(conv);
       continue;
     }
-    if (conv.followUp?.mode === "holding_inventory") continue;
-    if (conv.followUp?.mode === "manual_handoff") continue;
+    if (!isPostSale && conv.followUp?.mode === "holding_inventory") continue;
+    if (!isPostSale && conv.followUp?.mode === "manual_handoff") continue;
 
     const canTestRideFlag = await canTestRideNow(conv);
     const isTradeNoInterest =
       conv?.classification?.bucket === "trade_in_sell" &&
       isUnknownInterestVehicle(conv) &&
       isTradeAcceleratorLead(conv);
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     let message = FOLLOW_UP_MESSAGES[cadence.stepIndex] ?? FOLLOW_UP_MESSAGES[FOLLOW_UP_MESSAGES.length - 1];
     let mediaUrls: string[] | undefined;
-    if (cadence.kind === "long_term") {
+    if (isPostSale) {
+      const repName = resolvePostSaleSender(conv);
+      const firstName = conv.lead?.firstName?.trim() || "there";
+      const bikeModel = getPostSaleModel(conv);
+      const smsTemplates = [
+        `Hi ${firstName} — this is ${repName} at ${dealerName}. Thanks again for coming to see us for your ${bikeModel}. If you need anything, just let me know.`,
+        `Hi ${firstName} — ${repName} at ${dealerName}. Quick reminder about Custom Coverage. Any Harley-Davidson accessory we install will go under your full factory warranty on the bike. If you have questions, just let me know.`,
+        `Hi ${firstName} — ${repName} at ${dealerName}. Happy 1-year anniversary with your ${bikeModel}. If you’re ever thinking about trading in, let me know.`,
+        `Hi ${firstName} — ${repName} at ${dealerName}. Just checking in. How are you liking your ${bikeModel}? If you’re ever thinking about trading in, let me know.`
+      ];
+      message = smsTemplates[Math.min(cadence.stepIndex, smsTemplates.length - 1)];
+    } else if (cadence.kind === "long_term") {
       const longTerm = await buildLongTermFollowUp(conv, dealerProfile);
       message = longTerm.body;
       mediaUrls = longTerm.mediaUrls;
@@ -2894,7 +2933,7 @@ async function processDueFollowUps() {
 
     const emailTo = conv.lead?.email;
     const useEmail =
-      conv.classification?.channel === "email" && !!emailTo && hasEmailOptIn(conv.lead);
+      !isPostSale && conv.classification?.channel === "email" && !!emailTo && hasEmailOptIn(conv.lead);
     const systemMode = effectiveMode(conv);
     const { from: emailFrom, replyTo: emailReplyTo, signature } = getEmailConfig(dealerProfile);
     const replyTo = maybeTagReplyTo(emailReplyTo, conv);
@@ -3981,10 +4020,29 @@ app.post("/conversations/:id/contact-preference", (req, res) => {
   return res.json({ ok: true, conversation: conv });
 });
 
-app.post("/conversations/:id/close", (req, res) => {
+app.post("/conversations/:id/close", async (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
   const reason = String(req.body?.reason ?? "closed").trim() || "closed";
+  if (reason === "sold") {
+    const nowIso = new Date().toISOString();
+    const cfg = await getSchedulerConfig();
+    const soldById = String(req.body?.soldById ?? "").trim();
+    const salespeople = cfg.salespeople ?? [];
+    const sp = soldById ? salespeople.find(s => s.id === soldById) ?? null : null;
+    conv.sale = {
+      soldAt: nowIso,
+      soldById: sp?.id ?? (soldById || undefined),
+      soldByName: sp?.name
+    };
+    conv.status = "closed";
+    conv.closedAt = nowIso;
+    conv.closedReason = "sold";
+    setFollowUpMode(conv, "active", "post_sale");
+    startPostSaleCadence(conv, nowIso, cfg.timezone);
+    saveConversation(conv);
+    return res.json({ ok: true, conversation: conv });
+  }
   closeConversation(conv, reason);
   stopRelatedCadences(conv, reason, { close: true });
   return res.json({ ok: true, conversation: conv });
