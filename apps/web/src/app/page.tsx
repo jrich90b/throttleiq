@@ -121,6 +121,7 @@ type ConversationListItem = {
   contactPreference?: "call_only";
   leadName?: string | null;
   vehicleDescription?: string | null;
+  hold?: { until?: string | null; reason?: string; updatedAt?: string } | null;
   followUpCadence?: {
     status?: string;
     nextDueAt?: string | null;
@@ -155,6 +156,7 @@ type ConversationDetail = {
   closedAt?: string | null;
   closedReason?: string | null;
   contactPreference?: "call_only";
+  hold?: { until?: string | null; reason?: string; updatedAt?: string } | null;
   followUpCadence?: {
     status?: string;
     nextDueAt?: string | null;
@@ -2904,7 +2906,9 @@ export default function Home() {
                                 {c.status === "closed" ? (
                                   <span className="text-xs px-2 py-1 rounded border bg-gray-50">Closed</span>
                                 ) : c.followUpCadence?.pauseReason === "manual_hold" ||
-                                  c.followUp?.reason === "manual_hold" ? (
+                                  c.followUp?.reason === "manual_hold" ||
+                                  c.hold?.reason === "manual_hold" ||
+                                  c.hold?.until ? (
                                   <span className="text-xs px-2 py-1 rounded border bg-red-100 text-red-700 border-red-200">
                                     Hold
                                   </span>
@@ -5348,8 +5352,12 @@ export default function Home() {
                   {(() => {
                     const isHold =
                       selectedConv.followUpCadence?.pauseReason === "manual_hold" ||
-                      selectedConv.followUp?.reason === "manual_hold";
-                    const holdUntil = isHold ? selectedConv.followUpCadence?.pausedUntil : null;
+                      selectedConv.followUp?.reason === "manual_hold" ||
+                      selectedConv.hold?.reason === "manual_hold" ||
+                      !!selectedConv.hold?.until;
+                    const holdUntil =
+                      selectedConv.hold?.until ??
+                      (isHold ? selectedConv.followUpCadence?.pausedUntil : null);
                     const statusLabel = selectedConv.status === "closed" ? "Closed" : isHold ? "Hold" : "Open";
                     const badgeClass =
                       statusLabel === "Closed"
@@ -5422,8 +5430,12 @@ export default function Home() {
                   {(() => {
                     const isHold =
                       selectedConv.followUpCadence?.pauseReason === "manual_hold" ||
-                      selectedConv.followUp?.reason === "manual_hold";
-                    const holdUntil = isHold ? selectedConv.followUpCadence?.pausedUntil : null;
+                      selectedConv.followUp?.reason === "manual_hold" ||
+                      selectedConv.hold?.reason === "manual_hold" ||
+                      !!selectedConv.hold?.until;
+                    const holdUntil =
+                      selectedConv.hold?.until ??
+                      (isHold ? selectedConv.followUpCadence?.pausedUntil : null);
                     if (selectedConv.status === "closed" && selectedConv.closedAt) {
                       return `Closed: ${new Date(selectedConv.closedAt).toLocaleString()}`;
                     }

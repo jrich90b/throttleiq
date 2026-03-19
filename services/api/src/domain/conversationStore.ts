@@ -257,6 +257,7 @@ export type Conversation = {
   status?: "open" | "closed";
   closedAt?: string;
   closedReason?: string;
+  hold?: { until?: string; reason?: string; updatedAt: string };
   createdAt: string;
   updatedAt: string;
   messages: Message[];
@@ -671,6 +672,7 @@ export function listConversations() {
         classification: c.classification ?? null,
         followUpCadence: c.followUpCadence ?? null,
         followUp: c.followUp ?? null,
+        hold: c.hold ?? null,
         ...pd
       };
     })

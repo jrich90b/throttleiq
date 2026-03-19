@@ -4262,6 +4262,10 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
     }
 
     const shouldApplyWatch = watchList.length > 0 && resolution !== "archive";
+
+    if (resolution !== "hold" && conv.hold?.reason === "manual_hold") {
+      conv.hold = undefined;
+    }
     if (shouldApplyWatch) {
       conv.inventoryWatches = watchList;
       conv.inventoryWatch = watchList[0];
@@ -4285,6 +4289,7 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
         setFollowUpMode(conv, "active", "manual_hold");
       }
       const holdUntilIso = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+      conv.hold = { until: holdUntilIso, reason: "manual_hold", updatedAt: nowIso };
       applyPauseUntil(holdUntilIso, "manual_hold");
       cadenceNotice = `Hold set until ${formatSlotLocal(holdUntilIso, tz)}.`;
       if (conv.status !== "closed") {
