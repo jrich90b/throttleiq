@@ -1388,7 +1388,13 @@ export default function Home() {
   }, [selectedConv?.appointment?.bookedSalespersonId, salespeopleList, usersList]);
   const cadenceAlert = useMemo(() => {
     if (!selectedConv) return null;
-    const listItem = conversations.find(c => c.id === selectedConv.id);
+    const listItem = conversations.find(
+      c =>
+        c.id === selectedConv.id ||
+        c.leadKey === selectedConv.id ||
+        c.id === selectedConv.leadKey ||
+        c.leadKey === selectedConv.leadKey
+    );
     const cadence = selectedConv.followUpCadence ?? listItem?.followUpCadence ?? undefined;
     return getCadenceAlert(cadence);
   }, [selectedConv, conversations]);
