@@ -2792,10 +2792,11 @@ async function processDueFollowUps() {
       continue;
     }
     if (todoConvIds.has(conv.id)) continue;
-    let blockUntil: Date | null = null;
+    let blockUntilMs: number | null = null;
     const setBlockUntil = (d?: Date | null) => {
       if (!d || Number.isNaN(d.getTime())) return;
-      if (!blockUntil || d.getTime() > blockUntil.getTime()) blockUntil = d;
+      const ms = d.getTime();
+      if (blockUntilMs == null || ms > blockUntilMs) blockUntilMs = ms;
     };
     if (cadence.pausedUntil) {
       const resumeAt = new Date(cadence.pausedUntil);
@@ -2835,8 +2836,8 @@ async function processDueFollowUps() {
         setBlockUntil(new Date(draftAt.getTime() + 24 * 60 * 60 * 1000));
       }
     }
-    if (blockUntil && blockUntil.getTime() > now.getTime()) {
-      bumpCadenceNextDueAt(conv, blockUntil);
+    if (blockUntilMs != null && blockUntilMs > now.getTime()) {
+      bumpCadenceNextDueAt(conv, new Date(blockUntilMs));
       continue;
     }
     if (new Date(cadence.nextDueAt) > now) continue;
