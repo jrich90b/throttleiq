@@ -232,6 +232,15 @@ function normalizeModelLabel(label?: string | null): string {
   return isAllCaps ? toTitleCase(trimmed) : trimmed;
 }
 
+function mapMsrpModelAlias(model?: string | null): string | null {
+  const raw = String(model ?? "").toLowerCase().trim();
+  if (!raw) return null;
+  if (/road glide\s*3/.test(raw) || /\brg3\b/.test(raw) || /\bfltrt\b/.test(raw)) {
+    return "Road Glide Trike";
+  }
+  return model ?? null;
+}
+
 function isUnknownModel(label?: string | null): boolean {
   if (!label) return true;
   const trimmed = label.trim().toLowerCase();
@@ -621,7 +630,9 @@ export async function orchestrateInbound(
       const leadForPrice = ctx?.lead ?? {};
       const longTermMonths = leadForPrice?.purchaseTimeframeMonthsStart ?? null;
       const longTermTimeframe = leadForPrice?.purchaseTimeframe ?? "";
-      const wantsLongTerm = event.provider === "sendgrid_adf" && !!longTermMonths && longTermMonths >= 12;
+      const wantsSoftTimeline =
+        event.provider === "sendgrid_adf" &&
+        ((!!longTermMonths && longTermMonths >= 7) || /\bmonth|months|year|years\b/i.test(longTermTimeframe));
       const dealerProfile = await getDealerProfile();
       const agentName = dealerProfile?.agentName ?? "Brooke";
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
@@ -633,15 +644,9 @@ export async function orchestrateInbound(
         leadForPrice?.vehicle?.model ??
         deriveModelFromDescription(leadForPrice?.vehicle?.description ?? null) ??
         null;
-      const testRideEnabled = dealerProfile?.followUp?.testRideEnabled !== false;
-      const canOfferTestRide =
-        testRideEnabled &&
-        !!modelForRange &&
-        !isUnknownModel(modelForRange) &&
-        (await hasInventoryForModelYear({ model: modelForRange, year: yearForRange, yearDelta: 1 }));
-      const longTermInvite = wantsLongTerm
-        ? `I know you mentioned a ${longTermTimeframe || "longer-term"} timeline — ` +
-          `if you’d like to check out current inventory${canOfferTestRide ? " or take a test ride" : ""}, I’m happy to help. `
+      const longTermInvite = wantsSoftTimeline
+        ? `I know you mentioned a ${longTermTimeframe || "longer-term"} timeline — no rush at all. ` +
+          `I’m here when you’re ready. `
         : "";
       const modelUnknown = isUnknownModel(modelForRange);
       const stockForPrice = leadForPrice?.vehicle?.stockId ?? stockIdFromText ?? null;
@@ -664,7 +669,7 @@ export async function orchestrateInbound(
       const colorHint = [leadForPrice?.vehicle?.color, hintText].filter(Boolean).join(" ");
       const msrpLookup = await findMsrpPricing({
         year: yearForRange,
-        model: modelForRange,
+        model: mapMsrpModelAlias(modelForRange),
         trimText: trimHint,
         colorText: colorHint
       });
@@ -699,9 +704,11 @@ export async function orchestrateInbound(
           }
 
           const disclaimer = "MSRP is before tax, fees, trade-in, and financing.";
+          const timelineNote = longTermInvite ? longTermInvite.trim() : "";
           const draft =
             `Hi ${firstName} — thanks for your interest in the ${yearLabel}${modelLabel}. ` +
-            `This is ${agentName} at ${dealerName}. ${longTermInvite}${priceLine} ${disclaimer}`;
+            `This is ${agentName} at ${dealerName}. ${priceLine} ${disclaimer}` +
+            (timelineNote ? ` ${timelineNote}` : "");
           return finalize({
             intent,
             stage: "ENGAGED",
@@ -738,13 +745,15 @@ export async function orchestrateInbound(
             const fallbackNote = fallbackItem
               ? await getInventoryNote(fallbackItem.stockId ?? null, fallbackItem.vin ?? null)
               : null;
+            const timelineNote = longTermInvite ? longTermInvite.trim() : "";
             const draft =
               `Hi ${firstName} — thanks for your interest in the ${originalLabel}. ` +
-              `This is ${agentName} at ${dealerName}. ${longTermInvite}` +
+              `This is ${agentName} at ${dealerName}. ` +
               `We don’t have a ${originalLabel} in stock right now, ` +
               `but we do have ${fallbackLabel} units available. ${priceLine} ` +
               `${fallbackNote ? `Right now there's ${fallbackNote} available. ` : ""}` +
-              `If you want, I can send photos or details.`;
+              `If you want, I can send photos or details.` +
+              (timelineNote ? ` ${timelineNote}` : "");
           return finalize({
               intent,
               stage: "ENGAGED",
@@ -756,9 +765,11 @@ export async function orchestrateInbound(
         if (modelUnknown) {
           const firstName = leadForPrice?.firstName?.trim() || "there";
           const yearLabel = yearForRange ? `${yearForRange} ` : "";
+          const timelineNote = longTermInvite ? longTermInvite.trim() : "";
           const draft =
             `Hi ${firstName} — this is ${agentName} at ${dealerName}. ` +
-            `${longTermInvite}Thanks for your Facebook quote request. I’d love to help with pricing. Which ${yearLabel}model are you interested in?`;
+            `Thanks for your Facebook quote request. I’d love to help with pricing. Which ${yearLabel}model are you interested in?` +
+            (timelineNote ? ` ${timelineNote}` : "");
           return finalize({
             intent,
             stage: "ENGAGED",
@@ -773,10 +784,11 @@ export async function orchestrateInbound(
         const thankLine = modelKnown
           ? `Thanks for your interest in the ${yearLabel}${modelLabel}. `
           : "Thanks for your Facebook quote request. ";
+        const timelineNote = longTermInvite ? longTermInvite.trim() : "";
         const ack =
           `Hi ${firstName} — ${thankLine}This is ${agentName} at ${dealerName}. ` +
-          `${longTermInvite}` +
-          "I’ll have a manager pull the exact pricing and follow up shortly.";
+          "I’ll have a manager pull the exact pricing and follow up shortly." +
+          (timelineNote ? ` ${timelineNote}` : "");
         return finalize({
           intent,
           stage: "ENGAGED",

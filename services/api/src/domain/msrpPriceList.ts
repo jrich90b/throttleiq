@@ -94,8 +94,11 @@ async function loadMsrpList(): Promise<MsrpEntry[]> {
 }
 
 function matchModel(items: MsrpEntry[], model?: string | null): MsrpEntry | null {
-  const query = normalizeToken(model);
+  let query = normalizeToken(model);
   if (!query) return null;
+  if (/\broad glide 3\b/.test(query) || /\brg3\b/.test(query) || /\bfltrt\b/.test(query)) {
+    query = "road glide trike";
+  }
   let best: MsrpEntry | null = null;
   let bestScore = 0;
   for (const entry of items) {

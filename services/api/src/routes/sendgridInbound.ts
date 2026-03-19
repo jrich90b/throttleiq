@@ -837,7 +837,37 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const agentName = profile?.agentName ?? "Brooke";
     const firstName = conv.lead?.firstName?.trim() || "";
     const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
-    const prefix = `${greeting}Thanks for your inquiry. This is ${agentName} at ${dealerName}. `;
+    const sourceLower = String(conv.lead?.source ?? "").toLowerCase();
+    const sourceLabel = sourceLower.includes("facebook") || sourceLower.includes("meta") ? "Facebook " : "";
+    const rawModel =
+      conv.lead?.vehicle?.model ??
+      conv.lead?.vehicle?.description ??
+      (conv.lead as any)?.vehicleDescription ??
+      "";
+    const rawMake = conv.lead?.vehicle?.make ?? "";
+    const rawYear = conv.lead?.vehicle?.year ?? "";
+    const modelText = String(rawModel ?? "").trim();
+    const modelLower = modelText.toLowerCase();
+    const isGenericModel = /^(other|full line|full lineup)$/i.test(modelText) || modelLower === "other";
+    const normalizeToken = (s: string) =>
+      s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const makeText = String(rawMake ?? "").trim();
+    const hasMake =
+      makeText &&
+      modelText &&
+      normalizeToken(modelText).includes(normalizeToken(makeText));
+    const vehicleLabel = !modelText || isGenericModel
+      ? ""
+      : [
+          rawYear ? String(rawYear).trim() : "",
+          hasMake ? "" : makeText,
+          modelText
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+    const prefix = `${greeting}Thanks for your ${sourceLabel}inquiry${vehicleLabel ? ` on the ${vehicleLabel}` : ""}. ` +
+      `This is ${agentName} at ${dealerName}. `;
     const prefixLower = prefix.toLowerCase();
     let body = String(text ?? "").trim();
     if (body.toLowerCase().startsWith(prefixLower)) return body;
