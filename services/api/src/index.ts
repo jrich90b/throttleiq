@@ -4427,6 +4427,13 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
         await clearInventoryHold(clearKey, null);
       }
       conv.hold = undefined;
+      if (conv.followUpCadence?.stopReason === "unit_hold") {
+        conv.followUpCadence.stopReason = undefined;
+      }
+      if (!shouldApplyWatch && conv.followUp?.reason === "unit_hold") {
+        setFollowUpMode(conv, "active", "manual_hold_clear");
+      }
+      applyResume(shouldApplyWatch);
       cadenceNotice = "Unit hold removed.";
     } else if (effectiveResolution === "pause_indef") {
       applyPauseIndef(shouldApplyWatch);

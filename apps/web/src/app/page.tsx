@@ -6016,12 +6016,16 @@ export default function Home() {
                       holdModalConv?.leadKey}
                     {holdModalConv?.lead?.phone ? ` • ${holdModalConv.lead.phone}` : ""}
                   </div>
-                  {holdModalConv?.hold ? (
+                  {(holdModalConv?.hold ||
+                    holdModalConv?.followUpCadence?.pauseReason === "unit_hold" ||
+                    holdModalConv?.followUpCadence?.stopReason === "unit_hold" ||
+                    holdModalConv?.followUp?.reason === "unit_hold") ? (
                     <div className="text-xs text-gray-500 mt-2">
                       Current hold:{" "}
-                      {holdModalConv.hold.label ??
-                        holdModalConv.hold.stockId ??
-                        holdModalConv.hold.vin}
+                      {holdModalConv?.hold?.label ??
+                        holdModalConv?.hold?.stockId ??
+                        holdModalConv?.hold?.vin ??
+                        "Unit hold active"}
                     </div>
                   ) : null}
 
@@ -6134,7 +6138,10 @@ export default function Home() {
                         : "No unit selected"}
                     </div>
                     <div className="flex gap-2">
-                      {holdModalConv?.hold ? (
+                      {holdModalConv?.hold ||
+                      holdModalConv?.followUpCadence?.pauseReason === "unit_hold" ||
+                      holdModalConv?.followUpCadence?.stopReason === "unit_hold" ||
+                      holdModalConv?.followUp?.reason === "unit_hold" ? (
                         <button
                           className="px-3 py-2 border rounded text-sm text-red-600 border-red-200 hover:bg-red-50"
                           onClick={() => submitHold(null, "hold_clear")}
