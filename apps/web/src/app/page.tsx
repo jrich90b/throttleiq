@@ -1179,15 +1179,18 @@ export default function Home() {
     if (!selectedConv) return;
     if (!salespeopleList.length) return;
     if (!manualApptForm.salespersonId) {
-      setManualApptForm(prev => ({ ...prev, salespersonId: resolveDefaultSalespersonId(selectedConv) }));
+      const fallbackId = resolveDefaultSalespersonId();
+      if (fallbackId) {
+        setManualApptForm(prev => ({ ...prev, salespersonId: fallbackId }));
+      }
     }
-    if (manualApptForm.appointmentType && appointmentTypesList.some(row => row.key === manualApptForm.appointmentType)) {
+    if (manualApptForm.appointmentType && manualAppointmentTypes.some(row => row.key === manualApptForm.appointmentType)) {
       return;
     }
     const inferred = inferAppointmentTypeForConv(selectedConv);
-    const nextType = appointmentTypesList.some(row => row.key === inferred)
+    const nextType = manualAppointmentTypes.some(row => row.key === inferred)
       ? inferred
-      : appointmentTypesList[0]?.key ?? "inventory_visit";
+      : manualAppointmentTypes[0]?.key ?? "inventory_visit";
     setManualApptForm(prev => ({ ...prev, appointmentType: nextType }));
   }, [
     manualApptOpen,
@@ -1195,7 +1198,7 @@ export default function Home() {
     salespeopleList.length,
     manualApptForm.salespersonId,
     manualApptForm.appointmentType,
-    appointmentTypesList
+    manualAppointmentTypes
   ]);
 
   async function saveInventoryNote(stockId?: string, vin?: string) {
@@ -1537,14 +1540,28 @@ export default function Home() {
     }
     return "inventory_visit";
   };
-  const resolveDefaultSalespersonId = (conv?: ConversationDetail | null) => {
-    const preferred = conv?.scheduler?.preferredSalespersonId ?? "";
-    if (preferred) return preferred;
+  const resolveDefaultSalespersonId = () => {
     if (authUser?.id && salespeopleList.some(sp => sp.id === authUser.id)) {
       return authUser.id;
     }
-    return salespeopleList[0]?.id ?? "";
+    if (salespeopleList.length === 1) return salespeopleList[0]?.id ?? "";
+    return "";
   };
+
+  const manualAppointmentTypes = useMemo(() => {
+    const byKey = new Map<string, { key: string; durationMinutes: string }>();
+    appointmentTypesList.forEach(row => {
+      const key = row.key.trim();
+      if (!key) return;
+      byKey.set(key, row);
+    });
+    defaultAppointmentTypes.forEach(key => {
+      if (!byKey.has(key)) {
+        byKey.set(key, { key, durationMinutes: "60" });
+      }
+    });
+    return Array.from(byKey.values());
+  }, [appointmentTypesList, defaultAppointmentTypes]);
 
   const buildCalendarEvents = (json: any) => {
     if (Array.isArray(json?.events)) {
@@ -1874,14 +1891,14 @@ export default function Home() {
     const tz = schedulerConfig?.timezone ?? "America/New_York";
     const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
     const inferred = inferAppointmentTypeForConv(selectedConv);
-    const hasInferred = appointmentTypesList.some(row => row.key === inferred);
-    const type = hasInferred ? inferred : appointmentTypesList[0]?.key ?? "inventory_visit";
+    const hasInferred = manualAppointmentTypes.some(row => row.key === inferred);
+    const type = hasInferred ? inferred : manualAppointmentTypes[0]?.key ?? "inventory_visit";
     const defaultTime = schedulerConfig?.bookingWindows?.weekday?.earliestStart ?? "09:30";
     setManualApptForm({
       date: today,
       time: defaultTime,
       appointmentType: type,
-      salespersonId: resolveDefaultSalespersonId(selectedConv),
+      salespersonId: resolveDefaultSalespersonId(),
       notes: ""
     });
     setManualApptError(null);
@@ -1893,6 +1910,9 @@ export default function Home() {
     setManualApptSaving(true);
     setManualApptError(null);
     try {
+      if (!manualApptForm.salespersonId) {
+        throw new Error("Select a salesperson.");
+      }
       const resp = await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/appointment`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -5733,7 +5753,7 @@ export default function Home() {
                         value={manualApptForm.appointmentType}
                         onChange={e => setManualApptForm(prev => ({ ...prev, appointmentType: e.target.value }))}
                       >
-                        {appointmentTypesList.map(row => (
+                        {manualAppointmentTypes.map(row => (
                           <option key={row.key} value={row.key}>
                             {row.key}
                           </option>
@@ -5747,6 +5767,7 @@ export default function Home() {
                         value={manualApptForm.salespersonId}
                         onChange={e => setManualApptForm(prev => ({ ...prev, salespersonId: e.target.value }))}
                       >
+                        <option value="">Select salesperson</option>
                         {salespeopleList.map(sp => (
                           <option key={sp.id} value={sp.id}>
                             {sp.name}

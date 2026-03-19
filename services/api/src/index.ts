@@ -4024,14 +4024,8 @@ app.post("/conversations/:id/appointment", requirePermission("canEditAppointment
       const user = (req as any).user ?? null;
       salesperson = user ? resolveSalespersonForUser(cfg, user) : null;
     }
-    if (!salesperson) {
-      const prefIds = getPreferredSalespeopleForConv(cfg, conv);
-      salesperson = prefIds
-        .map(id => salespeople.find((s: any) => s.id === id))
-        .find(sp => sp?.calendarId) ?? null;
-    }
     if (!salesperson?.calendarId) {
-      return res.status(400).json({ ok: false, error: "No salesperson calendar available" });
+      return res.status(400).json({ ok: false, error: "Select a salesperson" });
     }
 
     const startIso = start.toISOString();
