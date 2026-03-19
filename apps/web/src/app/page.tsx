@@ -1174,6 +1174,27 @@ export default function Home() {
     })();
   }, [manualApptOpen, schedulerConfig]);
 
+  const defaultAppointmentTypes = [
+    "inventory_visit",
+    "test_ride",
+    "trade_appraisal",
+    "finance_discussion"
+  ];
+  const manualAppointmentTypes = useMemo(() => {
+    const byKey = new Map<string, { key: string; durationMinutes: string }>();
+    appointmentTypesList.forEach(row => {
+      const key = row.key.trim();
+      if (!key) return;
+      byKey.set(key, row);
+    });
+    defaultAppointmentTypes.forEach(key => {
+      if (!byKey.has(key)) {
+        byKey.set(key, { key, durationMinutes: "60" });
+      }
+    });
+    return Array.from(byKey.values());
+  }, [appointmentTypesList, defaultAppointmentTypes]);
+
   useEffect(() => {
     if (!manualApptOpen) return;
     if (!selectedConv) return;
@@ -1504,12 +1525,6 @@ export default function Home() {
     { value: 11, label: "Nov" },
     { value: 12, label: "Dec" }
   ];
-  const defaultAppointmentTypes = [
-    "inventory_visit",
-    "test_ride",
-    "trade_appraisal",
-    "finance_discussion"
-  ];
   const isUsTimeZone = (tz?: string) => (tz ?? "").startsWith("America/");
   const formatTimeLabel = (t: string, tz?: string) => {
     if (!isUsTimeZone(tz)) return t;
@@ -1548,20 +1563,6 @@ export default function Home() {
     return "";
   };
 
-  const manualAppointmentTypes = useMemo(() => {
-    const byKey = new Map<string, { key: string; durationMinutes: string }>();
-    appointmentTypesList.forEach(row => {
-      const key = row.key.trim();
-      if (!key) return;
-      byKey.set(key, row);
-    });
-    defaultAppointmentTypes.forEach(key => {
-      if (!byKey.has(key)) {
-        byKey.set(key, { key, durationMinutes: "60" });
-      }
-    });
-    return Array.from(byKey.values());
-  }, [appointmentTypesList, defaultAppointmentTypes]);
 
   const buildCalendarEvents = (json: any) => {
     if (Array.isArray(json?.events)) {
