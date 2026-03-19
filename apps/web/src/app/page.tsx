@@ -141,6 +141,7 @@ type ConversationListItem = {
     nextDueAt?: string | null;
     pausedUntil?: string | null;
     pauseReason?: string | null;
+    stopReason?: string | null;
   } | null;
   followUp?: { mode?: string; reason?: string; updatedAt?: string } | null;
   updatedAt: string;
@@ -186,6 +187,7 @@ type ConversationDetail = {
     nextDueAt?: string | null;
     pausedUntil?: string | null;
     pauseReason?: string | null;
+    stopReason?: string | null;
   };
   followUp?: { mode?: string; reason?: string; updatedAt?: string };
   inventoryWatches?: Array<{
@@ -3044,7 +3046,10 @@ export default function Home() {
                                 {c.status === "closed" ? (
                                   <span className="text-xs px-2 py-1 rounded border bg-gray-50">Closed</span>
                                 ) : c.followUpCadence?.pauseReason === "manual_hold" ||
+                                  c.followUpCadence?.pauseReason === "unit_hold" ||
+                                  c.followUpCadence?.stopReason === "unit_hold" ||
                                   c.followUp?.reason === "manual_hold" ||
+                                  c.followUp?.reason === "unit_hold" ||
                                   !!c.hold ? (
                                   <span className="text-xs px-2 py-1 rounded border bg-red-100 text-red-700 border-red-200">
                                     Hold
@@ -5489,7 +5494,10 @@ export default function Home() {
                   {(() => {
                     const isHold =
                       selectedConv.followUpCadence?.pauseReason === "manual_hold" ||
+                      selectedConv.followUpCadence?.pauseReason === "unit_hold" ||
+                      selectedConv.followUpCadence?.stopReason === "unit_hold" ||
                       selectedConv.followUp?.reason === "manual_hold" ||
+                      selectedConv.followUp?.reason === "unit_hold" ||
                       !!selectedConv.hold;
                     const holdUntil =
                       selectedConv.hold?.until ??
@@ -5566,7 +5574,10 @@ export default function Home() {
                   {(() => {
                     const isHold =
                       selectedConv.followUpCadence?.pauseReason === "manual_hold" ||
+                      selectedConv.followUpCadence?.pauseReason === "unit_hold" ||
+                      selectedConv.followUpCadence?.stopReason === "unit_hold" ||
                       selectedConv.followUp?.reason === "manual_hold" ||
+                      selectedConv.followUp?.reason === "unit_hold" ||
                       !!selectedConv.hold;
                     const holdUntil =
                       selectedConv.hold?.until ??
