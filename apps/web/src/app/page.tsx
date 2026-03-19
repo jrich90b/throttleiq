@@ -109,9 +109,9 @@ function getCadenceAlert(cadence?: {
   const sendAt = new Date(sendAtRaw);
   if (Number.isNaN(sendAt.getTime())) return null;
   const msUntil = sendAt.getTime() - Date.now();
-  if (msUntil <= 0) return null;
-  if (msUntil > CADENCE_ALERT_WINDOW_HOURS * 60 * 60 * 1000) return null;
-  return { sendAt, msUntil };
+  const windowMs = CADENCE_ALERT_WINDOW_HOURS * 60 * 60 * 1000;
+  if (Math.abs(msUntil) > windowMs) return null;
+  return { sendAt, msUntil, overdue: msUntil < 0 };
 }
 
 type SystemMode = "suggest" | "autopilot";
@@ -1399,7 +1399,8 @@ export default function Home() {
           convId: c.id,
           leadKey: c.leadKey,
           leadName: c.leadName ?? null,
-          sendAt: alert.sendAt
+          sendAt: alert.sendAt,
+          overdue: alert.overdue
         };
       })
       .filter(Boolean) as Array<{
@@ -1407,6 +1408,7 @@ export default function Home() {
       leadKey: string;
       leadName: string | null;
       sendAt: Date;
+      overdue: boolean;
     }>;
   }, [conversations]);
   const displaySendBody = useMemo(() => {
@@ -3234,7 +3236,8 @@ export default function Home() {
                         <div className="text-xs text-gray-600 mt-1">{alert.leadKey}</div>
                       ) : null}
                       <div className="text-xs text-amber-800 mt-2">
-                        Follow-up message scheduled for {formatCadenceDate(alert.sendAt.toISOString())}.
+                        {alert.overdue ? "Follow-up message overdue" : "Follow-up message scheduled for"}{" "}
+                        {formatCadenceDate(alert.sendAt.toISOString())}.
                       </div>
                     </div>
                     <div className="flex flex-col gap-2">
@@ -5654,10 +5657,13 @@ export default function Home() {
               <div className="mt-3 border rounded-lg bg-amber-50 px-3 py-2 text-sm flex items-center justify-between gap-3">
                 <div>
                   <div className="font-medium text-amber-900">
-                    Follow-up message scheduled soon
+                    {cadenceAlert.overdue
+                      ? "Follow-up message overdue"
+                      : "Follow-up message scheduled soon"}
                   </div>
                   <div className="text-xs text-amber-800">
-                    Scheduled to send: {formatCadenceDate(cadenceAlert.sendAt.toISOString())}
+                    {cadenceAlert.overdue ? "Scheduled send time:" : "Scheduled to send:"}{" "}
+                    {formatCadenceDate(cadenceAlert.sendAt.toISOString())}
                   </div>
                 </div>
                 <button
