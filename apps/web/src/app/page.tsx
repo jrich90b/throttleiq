@@ -109,8 +109,6 @@ function getCadenceAlert(cadence?: {
   const sendAt = new Date(sendAtRaw);
   if (Number.isNaN(sendAt.getTime())) return null;
   const msUntil = sendAt.getTime() - Date.now();
-  const windowMs = CADENCE_ALERT_WINDOW_HOURS * 60 * 60 * 1000;
-  if (Math.abs(msUntil) > windowMs) return null;
   return { sendAt, msUntil, overdue: msUntil < 0 };
 }
 
