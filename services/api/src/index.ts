@@ -104,6 +104,7 @@ import {
   saveConversation,
   getConversationStorePath,
   type InventoryWatch,
+  type InventoryWatchPending,
   type DialogStateName
 } from "./domain/conversationStore.js";
 import { logTuningRow } from "./domain/tuningLogger.js";
@@ -2452,13 +2453,22 @@ function parseInventoryWatchPreference(
   const t = text.toLowerCase();
   if (!pending.model) return { action: "ignore" };
 
+  const similar =
+    /(similar|anything like|anything similar|anything close|whatever you can find|open to similar)/.test(
+      t
+    );
   const mentionsPreference =
     /(exact|only|same|any|no preference|no pref|either|range|year|color)/.test(t) ||
+    similar ||
     /\b(20\d{2})\b/.test(t);
   if (!mentionsPreference) return { action: "ignore" };
 
-  const anyColor = /(any color|no color preference|no preference|any colour|no colour preference)/.test(t);
-  const anyYear = /(any year|no year preference|no preference|open to other years|either year)/.test(t);
+  const anyColor =
+    /(any color|no color preference|no preference|any colour|no colour preference)/.test(t) ||
+    similar;
+  const anyYear =
+    /(any year|no year preference|no preference|open to other years|either year)/.test(t) ||
+    similar;
   const exact = /(exact|only|same color|same colour|only that|just that|same year)/.test(t);
 
   const color = anyColor ? undefined : extractColorToken(t) ?? pending.color;
@@ -2503,6 +2513,33 @@ function parseInventoryWatchPreference(
   }
 
   return { action: "set", watch };
+}
+
+function buildInventoryWatchConfirmation(watch: InventoryWatch): string {
+  const yearText = watch.year
+    ? `${watch.year} `
+    : watch.yearMin && watch.yearMax
+      ? `${watch.yearMin}-${watch.yearMax} `
+      : "";
+  const colorText = watch.color ? ` in ${watch.color}` : "";
+  return `Got it — I’ll keep an eye out for ${yearText}${watch.model}${colorText} and text you as soon as one comes in.`;
+}
+
+async function resolveWatchModelFromText(
+  textLower: string,
+  fallbackModel?: string | null
+): Promise<string | null> {
+  const fallback = String(fallbackModel ?? "").trim();
+  try {
+    const items = await getInventoryFeed();
+    const models = Array.from(new Set(items.map(i => i.model).filter(Boolean))) as string[];
+    models.sort((a, b) => b.length - a.length);
+    const match = models.find(m => textLower.includes(m.toLowerCase()));
+    if (match) return match;
+  } catch (e) {
+    // ignore inventory feed lookup failures; fall back to lead model
+  }
+  return fallback || null;
 }
 
 function isVideoRequest(text: string): boolean {
@@ -6700,7 +6737,49 @@ if (authToken && signature) {
       !schedulingExplicit
     ) {
       const pending = conv.inventoryWatchPending;
-      const pref = parseInventoryWatchPreference(String(event.body ?? ""), pending);
+      if (!pending.model) {
+        const resolvedModel = await resolveWatchModelFromText(
+          textLower,
+          conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null
+        );
+        if (!resolvedModel) {
+          const reply = "Got it — which model should I watch for?";
+          setDialogState(conv, "inventory_watch_prompted");
+          const systemMode = webhookMode;
+          if (systemMode === "suggest") {
+            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+            return res.status(200).type("text/xml").send(twiml);
+          }
+          appendOutbound(conv, event.to, event.from, reply, "twilio");
+          const twiml = `<?xml version="1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
+            reply
+          )}</Message>\n</Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+        pending.model = resolvedModel;
+        if (!pending.year) {
+          const yearFromText = extractYearSingle(textLower);
+          if (yearFromText) pending.year = yearFromText;
+        }
+        if (!pending.color) {
+          const colorFromText = extractColorToken(textLower);
+          if (colorFromText) pending.color = colorFromText;
+        }
+      }
+      let pref = parseInventoryWatchPreference(String(event.body ?? ""), pending);
+      if (pref.action === "ignore" && pending.model && isAffirmative(event.body)) {
+        const watch: InventoryWatch = {
+          model: pending.model,
+          year: pending.year,
+          color: undefined,
+          exactness: "model_only",
+          status: "active",
+          createdAt: new Date().toISOString()
+        };
+        if (watch.year) watch.exactness = "year_model";
+        pref = { action: "set", watch };
+      }
       if (pref.action === "clarify") {
         const reply =
           "Got it — just to confirm, should I watch for the exact year/color, the same year any color, or a year range? " +
@@ -6718,6 +6797,14 @@ if (authToken && signature) {
         return res.status(200).type("text/xml").send(twiml);
       }
       if (pref.action === "set" && pref.watch) {
+        const leadVehicle = conv.lead?.vehicle ?? {};
+        if (!pref.watch.make && leadVehicle.make) pref.watch.make = leadVehicle.make;
+        if (!pref.watch.trim && leadVehicle.trim) pref.watch.trim = leadVehicle.trim;
+        const conditionFromText = normalizeWatchCondition(textLower);
+        if (!pref.watch.condition && conditionFromText) pref.watch.condition = conditionFromText;
+        if (!pref.watch.condition && leadVehicle.condition) {
+          pref.watch.condition = normalizeWatchCondition(leadVehicle.condition);
+        }
         conv.inventoryWatch = pref.watch;
         conv.inventoryWatches = [pref.watch];
         conv.inventoryWatchPending = undefined;
@@ -6729,13 +6816,7 @@ if (authToken && signature) {
           conv.followUpCadence.pauseReason = "inventory_watch";
           conv.followUpCadence.nextDueAt = pauseUntil;
         }
-        const yearText = pref.watch.year
-          ? `${pref.watch.year} `
-          : pref.watch.yearMin && pref.watch.yearMax
-            ? `${pref.watch.yearMin}-${pref.watch.yearMax} `
-            : "";
-        const colorText = pref.watch.color ? ` in ${pref.watch.color}` : "";
-        const reply = `Got it — I’ll keep an eye out for ${yearText}${pref.watch.model}${colorText} and text you as soon as one comes in.`;
+        const reply = buildInventoryWatchConfirmation(pref.watch);
         const systemMode = webhookMode;
         if (systemMode === "suggest") {
           appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -6749,6 +6830,131 @@ if (authToken && signature) {
         return res.status(200).type("text/xml").send(twiml);
       }
     }
+  }
+
+  const watchPrompted = /\b(keep an eye|keep me posted|watch for|watch\b)\b/i.test(
+    lastOutboundText
+  );
+  const watchIntentText =
+    /\b(keep (an )?eye( out)?|keep me posted|watch for|watch\b|notify me|text me|call me|reach out|let me know)\b/i.test(
+      textLower
+    ) &&
+    (/\b(if|when|whenever|once|as soon as)\b/.test(textLower) ||
+      /\b(comes in|available|in stock|get one|get any|find one|similar)\b/.test(textLower));
+  const watchIntent =
+    event.provider === "twilio" &&
+    !conv.inventoryWatchPending &&
+    !inventoryQuestion &&
+    !schedulingSignals.hasDayTime &&
+    !schedulingSignals.hasDayOnlyAvailability &&
+    !schedulingSignals.hasDayOnlyRequest &&
+    !schedulingExplicit &&
+    ((watchPrompted && isAffirmative(event.body)) || watchIntentText);
+  if (watchIntent) {
+    if (getDialogState(conv) === "inventory_watch_active" && conv.inventoryWatch) {
+      const watch = conv.inventoryWatch;
+      const yearText = watch.year
+        ? `${watch.year} `
+        : watch.yearMin && watch.yearMax
+          ? `${watch.yearMin}-${watch.yearMax} `
+          : "";
+      const modelText = watch.model ?? "that model";
+      const colorText = watch.color ? ` in ${watch.color}` : "";
+      const reply = `I’ve already got a watch set for ${yearText}${modelText}${colorText}. If you want me to update it, just tell me the year, model, and color.`;
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+
+    const nowIso = new Date().toISOString();
+    const leadVehicle = conv.lead?.vehicle ?? {};
+    const leadYearNum = Number(leadVehicle.year ?? "");
+    const leadYear = Number.isFinite(leadYearNum) ? leadYearNum : undefined;
+    const resolvedModel = await resolveWatchModelFromText(
+      textLower,
+      leadVehicle.model ?? leadVehicle.description ?? null
+    );
+    if (!resolvedModel) {
+      const reply = "Got it — which model should I watch for?";
+      conv.inventoryWatchPending = { askedAt: nowIso };
+      setDialogState(conv, "inventory_watch_prompted");
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+
+    const pending: InventoryWatchPending = {
+      model: resolvedModel,
+      year: extractYearSingle(textLower) ?? leadYear,
+      color: extractColorToken(textLower) ?? leadVehicle.color ?? undefined,
+      askedAt: nowIso
+    };
+    let pref = parseInventoryWatchPreference(String(event.body ?? ""), pending);
+    if (pref.action === "set" && pref.watch) {
+      if (!pref.watch.make && leadVehicle.make) pref.watch.make = leadVehicle.make;
+      if (!pref.watch.trim && leadVehicle.trim) pref.watch.trim = leadVehicle.trim;
+      const conditionFromText = normalizeWatchCondition(textLower);
+      if (!pref.watch.condition && conditionFromText) pref.watch.condition = conditionFromText;
+      if (!pref.watch.condition && leadVehicle.condition) {
+        pref.watch.condition = normalizeWatchCondition(leadVehicle.condition);
+      }
+      conv.inventoryWatch = pref.watch;
+      conv.inventoryWatches = [pref.watch];
+      conv.inventoryWatchPending = undefined;
+      setDialogState(conv, "inventory_watch_active");
+      setFollowUpMode(conv, "holding_inventory", "inventory_watch");
+      if (conv.followUpCadence && conv.followUpCadence.status === "active") {
+        const pauseUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+        conv.followUpCadence.pausedUntil = pauseUntil;
+        conv.followUpCadence.pauseReason = "inventory_watch";
+        conv.followUpCadence.nextDueAt = pauseUntil;
+      }
+      const reply = buildInventoryWatchConfirmation(pref.watch);
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+
+    conv.inventoryWatchPending = pending;
+    setDialogState(conv, "inventory_watch_prompted");
+    const reply =
+      "Got it — just to confirm, should I watch for the exact year/color, the same year any color, or a year range? " +
+      "If a range, tell me the years you want.";
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
   }
   if (event.provider === "twilio" && schedulingBlocked && shortAck) {
     const ack = "Sounds good. If anything changes, I’ll let you know.";
