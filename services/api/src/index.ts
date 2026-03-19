@@ -2771,6 +2771,14 @@ async function processDueFollowUps() {
     const list = conv.messages?.filter((m: any) => m.direction === "out" && providers.includes(m.provider)) ?? [];
     return list.sort((a: any, b: any) => new Date(a.at).getTime() - new Date(b.at).getTime()).slice(-1)[0];
   };
+  const bumpCadenceNextDueAt = (conv: any, nextAt: Date) => {
+    if (!conv.followUpCadence || conv.followUpCadence.status !== "active") return;
+    if (!nextAt || Number.isNaN(nextAt.getTime())) return;
+    const current = conv.followUpCadence.nextDueAt ? new Date(conv.followUpCadence.nextDueAt) : null;
+    if (!current || current.getTime() < nextAt.getTime()) {
+      conv.followUpCadence.nextDueAt = nextAt.toISOString();
+    }
+  };
 
   for (const conv of convs) {
     const cadence = conv.followUpCadence;
@@ -2784,11 +2792,19 @@ async function processDueFollowUps() {
       continue;
     }
     if (todoConvIds.has(conv.id)) continue;
+    let blockUntil: Date | null = null;
+    const setBlockUntil = (d?: Date | null) => {
+      if (!d || Number.isNaN(d.getTime())) return;
+      if (!blockUntil || d.getTime() > blockUntil.getTime()) blockUntil = d;
+    };
     if (cadence.pausedUntil) {
       const resumeAt = new Date(cadence.pausedUntil);
-      if (now < resumeAt) continue;
-      cadence.pausedUntil = undefined;
-      cadence.pauseReason = undefined;
+      if (now < resumeAt) {
+        setBlockUntil(resumeAt);
+      } else {
+        cadence.pausedUntil = undefined;
+        cadence.pauseReason = undefined;
+      }
     }
     if (isSuppressed(conv.leadKey)) {
       stopFollowUpCadence(conv, "suppressed");
@@ -2799,16 +2815,16 @@ async function processDueFollowUps() {
       const inboundAt = new Date(lastInbound.at);
       const { until, indefinite } = parsePauseUntil(lastInbound.body, inboundAt);
       if (indefinite) continue;
-      if (until && now < until) continue;
+      if (until && now < until) setBlockUntil(until);
       if (isMeaningfulInbound(lastInbound.body) && now.getTime() - inboundAt.getTime() < 72 * 60 * 60 * 1000) {
-        continue;
+        setBlockUntil(new Date(inboundAt.getTime() + 72 * 60 * 60 * 1000));
       }
     }
     const lastOutbound = getLastOutbound(conv, ["human", "twilio", "sendgrid"]);
     if (lastOutbound?.at) {
       const outboundAt = new Date(lastOutbound.at);
       if (now.getTime() - outboundAt.getTime() < 72 * 60 * 60 * 1000) {
-        continue;
+        setBlockUntil(new Date(outboundAt.getTime() + 72 * 60 * 60 * 1000));
       }
     }
     const lastDraft = getLastOutbound(conv, ["draft_ai"]);
@@ -2816,8 +2832,12 @@ async function processDueFollowUps() {
       const draftAt = new Date(lastDraft.at);
       // Avoid stacking multiple follow-up drafts within a day.
       if (now.getTime() - draftAt.getTime() < 24 * 60 * 60 * 1000) {
-        continue;
+        setBlockUntil(new Date(draftAt.getTime() + 24 * 60 * 60 * 1000));
       }
+    }
+    if (blockUntil && blockUntil.getTime() > now.getTime()) {
+      bumpCadenceNextDueAt(conv, blockUntil);
+      continue;
     }
     if (new Date(cadence.nextDueAt) > now) continue;
     if (conv.appointment?.bookedEventId) {
