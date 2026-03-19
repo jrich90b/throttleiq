@@ -2903,6 +2903,11 @@ export default function Home() {
                                 ) : null}
                                 {c.status === "closed" ? (
                                   <span className="text-xs px-2 py-1 rounded border bg-gray-50">Closed</span>
+                                ) : c.followUpCadence?.pauseReason === "manual_hold" ||
+                                  c.followUp?.reason === "manual_hold" ? (
+                                  <span className="text-xs px-2 py-1 rounded border bg-red-100 text-red-700 border-red-200">
+                                    Hold
+                                  </span>
                                 ) : null}
                               </div>
                               {c.vehicleDescription ? (
@@ -5341,16 +5346,16 @@ export default function Home() {
                       selectedConv.leadKey}
                   </span>
                   {(() => {
-                    const holdUntil =
-                      selectedConv.followUpCadence?.pauseReason === "manual_hold"
-                        ? selectedConv.followUpCadence?.pausedUntil
-                        : null;
-                    const statusLabel = selectedConv.status === "closed" ? "Closed" : holdUntil ? "Hold" : "Open";
+                    const isHold =
+                      selectedConv.followUpCadence?.pauseReason === "manual_hold" ||
+                      selectedConv.followUp?.reason === "manual_hold";
+                    const holdUntil = isHold ? selectedConv.followUpCadence?.pausedUntil : null;
+                    const statusLabel = selectedConv.status === "closed" ? "Closed" : isHold ? "Hold" : "Open";
                     const badgeClass =
                       statusLabel === "Closed"
                         ? "bg-gray-100 text-gray-700 border-gray-200"
                         : statusLabel === "Hold"
-                          ? "bg-amber-100 text-amber-800 border-amber-200"
+                          ? "bg-red-100 text-red-700 border-red-200"
                           : "bg-emerald-100 text-emerald-800 border-emerald-200";
                     return (
                       <span className={`text-xs px-2 py-0.5 rounded-full border ${badgeClass}`}>
@@ -5414,14 +5419,22 @@ export default function Home() {
                   );
                 })()}
                 <div className="text-xs text-gray-500 mt-1">
-                  {selectedConv.status === "closed" && selectedConv.closedAt ? (
-                    `Closed: ${new Date(selectedConv.closedAt).toLocaleString()}`
-                  ) : selectedConv.followUpCadence?.pauseReason === "manual_hold" &&
-                    selectedConv.followUpCadence?.pausedUntil ? (
-                    `Hold until ${formatCadenceDate(selectedConv.followUpCadence.pausedUntil)}`
-                  ) : (
-                    "Active"
-                  )}
+                  {(() => {
+                    const isHold =
+                      selectedConv.followUpCadence?.pauseReason === "manual_hold" ||
+                      selectedConv.followUp?.reason === "manual_hold";
+                    const holdUntil = isHold ? selectedConv.followUpCadence?.pausedUntil : null;
+                    if (selectedConv.status === "closed" && selectedConv.closedAt) {
+                      return `Closed: ${new Date(selectedConv.closedAt).toLocaleString()}`;
+                    }
+                    if (isHold && holdUntil) {
+                      return `Hold until ${formatCadenceDate(holdUntil)}`;
+                    }
+                    if (isHold) {
+                      return "Hold";
+                    }
+                    return "Active";
+                  })()}
                 </div>
               </div>
               <div className="flex items-center gap-2">
