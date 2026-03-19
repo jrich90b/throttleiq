@@ -52,6 +52,13 @@ import {
   hasInventoryForModelYear
 } from "./domain/inventoryFeed.js";
 import { listInventoryNotes, setInventoryNote } from "./domain/inventoryNotes.js";
+import {
+  listInventoryHolds,
+  getInventoryHold,
+  setInventoryHold,
+  clearInventoryHold,
+  normalizeInventoryHoldKey
+} from "./domain/inventoryHolds.js";
 import { sendEmail } from "./domain/emailSender.js";
 
 import {
@@ -468,6 +475,37 @@ async function processInventoryWatchlist() {
   }
 }
 
+async function processInventoryHolds() {
+  try {
+    const holds = await listInventoryHolds();
+    const now = new Date();
+    const openQuestions = listOpenQuestions();
+    for (const hold of Object.values(holds ?? {})) {
+      const createdAt = hold.createdAt || hold.updatedAt;
+      if (!createdAt) continue;
+      const created = new Date(createdAt);
+      if (Number.isNaN(created.getTime())) continue;
+      const ageDays = Math.floor((now.getTime() - created.getTime()) / (24 * 60 * 60 * 1000));
+      if (ageDays < 30) continue;
+      const conv =
+        (hold.convId && getConversation(hold.convId)) ||
+        (hold.leadKey && getConversation(hold.leadKey)) ||
+        null;
+      if (!conv) continue;
+      const label = hold.label ?? hold.stockId ?? hold.vin ?? "this unit";
+      const text = `Unit on hold for ${ageDays} days (${label}). Keep hold or release?`;
+      const hasQuestion = openQuestions.some(
+        q => q.convId === conv.id && /unit on hold/i.test(q.text)
+      );
+      if (!hasQuestion) {
+        addInternalQuestion(conv.id, conv.leadKey, text);
+      }
+    }
+  } catch (e: any) {
+    console.warn("[inventory-holds] failed:", e?.message ?? e);
+  }
+}
+
 setInterval(() => {
   void processDueFollowUps();
   void processAppointmentConfirmations();
@@ -476,10 +514,12 @@ setInterval(() => {
 
 setTimeout(() => {
   void processInventoryWatchlist();
+  void processInventoryHolds();
 }, 60_000);
 
 setInterval(() => {
   void processInventoryWatchlist();
+  void processInventoryHolds();
 }, 24 * 60 * 60 * 1000);
 
 app.get("/health", (_req, res) => {
@@ -495,10 +535,12 @@ app.get("/inventory", async (_req, res) => {
   try {
     const items = await getInventoryFeed();
     const notes = await listInventoryNotes();
+    const holds = await listInventoryHolds();
     const withNotes = items.map(item => {
-      const key = (item.stockId ?? item.vin ?? "").trim().toLowerCase();
+      const key = normalizeInventoryHoldKey(item.stockId, item.vin) ?? "";
       const entry = key ? notes?.[key] : undefined;
-      return { ...item, notes: entry?.notes ?? [] };
+      const hold = key ? holds?.[key] : undefined;
+      return { ...item, notes: entry?.notes ?? [], hold: hold ?? null };
     });
     return res.json({ ok: true, items: withNotes });
   } catch (err: any) {
@@ -4085,6 +4127,11 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
     const watchInput = req.body?.watch ?? null;
     const watchItemsInput = Array.isArray(watchInput?.items) ? watchInput.items : [];
     const watchNote = String(watchInput?.note ?? "").trim();
+    const holdInput = req.body?.holdUnit ?? null;
+    const holdStockId = String(holdInput?.stockId ?? "").trim() || undefined;
+    const holdVin = String(holdInput?.vin ?? "").trim() || undefined;
+    const holdLabel = String(holdInput?.label ?? "").trim() || undefined;
+    const holdNote = String(holdInput?.note ?? "").trim() || undefined;
     const nowIso = new Date().toISOString();
     const cfg = await getSchedulerConfig();
     const tz = cfg.timezone || "America/New_York";
@@ -4263,9 +4310,11 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
 
     const shouldApplyWatch = watchList.length > 0 && resolution !== "archive";
 
-    if (resolution !== "hold" && conv.hold?.reason === "manual_hold") {
-      conv.hold = undefined;
+    const holdKey = normalizeInventoryHoldKey(holdStockId, holdVin);
+    if (resolution === "hold" && !holdKey) {
+      return res.status(400).json({ ok: false, error: "Missing hold unit (stockId or VIN)." });
     }
+
     if (shouldApplyWatch) {
       conv.inventoryWatches = watchList;
       conv.inventoryWatch = watchList[0];
@@ -4285,25 +4334,48 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
       setFollowUpMode(conv, "manual_handoff", "manual_appointment");
       stopRelatedCadences(conv, "manual_appointment", { setMode: "manual_handoff" });
     } else if (effectiveResolution === "hold") {
-      if (!shouldApplyWatch) {
-        setFollowUpMode(conv, "active", "manual_hold");
+      if (!holdKey) {
+        return res.status(400).json({ ok: false, error: "Missing hold unit (stockId or VIN)." });
       }
-      const holdUntilIso = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-      conv.hold = { until: holdUntilIso, reason: "manual_hold", updatedAt: nowIso };
-      applyPauseUntil(holdUntilIso, "manual_hold");
-      cadenceNotice = `Hold set until ${formatSlotLocal(holdUntilIso, tz)}.`;
-      if (conv.status !== "closed") {
-        const holdQuestionText = `Hold set until ${formatSlotLocal(
-          holdUntilIso,
-          tz
-        )}. Resume follow-ups or update status?`;
-        const hasHoldQuestion = listOpenQuestions().some(
-          q => q.convId === conv.id && /hold set/i.test(q.text)
-        );
-        if (!hasHoldQuestion) {
-          addInternalQuestion(conv.id, conv.leadKey, holdQuestionText);
-        }
+      const prevKey = conv.hold?.key ?? null;
+      if (prevKey && prevKey !== holdKey) {
+        await clearInventoryHold(prevKey, null);
       }
+      const createdAt = conv.hold?.createdAt ?? nowIso;
+      const holdEntry = {
+        id: holdKey,
+        stockId: holdStockId,
+        vin: holdVin,
+        label: holdLabel,
+        leadKey: conv.leadKey,
+        convId: conv.id,
+        note: holdNote,
+        createdAt,
+        updatedAt: nowIso
+      };
+      await setInventoryHold({ stockId: holdStockId, vin: holdVin, hold: holdEntry });
+      conv.hold = {
+        key: holdKey,
+        stockId: holdStockId,
+        vin: holdVin,
+        label: holdLabel,
+        note: holdNote,
+        reason: "unit_hold",
+        createdAt,
+        updatedAt: nowIso
+      };
+      stopFollowUpCadence(conv, "unit_hold");
+      if (!shouldApplyWatch && conv.followUp?.mode !== "manual_handoff") {
+        setFollowUpMode(conv, "paused_indefinite", "unit_hold");
+      }
+      cadenceNotice = "Unit marked on hold.";
+    } else if (effectiveResolution === "hold_clear") {
+      const clearKey = holdKey ?? conv.hold?.key ?? null;
+      if (clearKey) {
+        await clearInventoryHold(clearKey, null);
+      }
+      conv.hold = undefined;
+      cadenceNotice = "Unit hold removed.";
     } else if (effectiveResolution === "pause_indef") {
       applyPauseIndef(shouldApplyWatch);
     } else if (effectiveResolution === "pause_7" || effectiveResolution === "pause_30") {
@@ -4328,7 +4400,8 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
 
     if (!cadenceNotice) {
       if (effectiveResolution === "resume") cadenceNotice = "Follow-ups resumed.";
-      else if (effectiveResolution === "hold") cadenceNotice = "Hold set for 7 days.";
+      else if (effectiveResolution === "hold") cadenceNotice = "Unit marked on hold.";
+      else if (effectiveResolution === "hold_clear") cadenceNotice = "Unit hold removed.";
       else if (effectiveResolution === "pause_7") cadenceNotice = "Follow-ups paused for 7 days.";
       else if (effectiveResolution === "pause_30") cadenceNotice = "Follow-ups paused for 30 days.";
       else if (effectiveResolution === "pause_indef") cadenceNotice = "Follow-ups paused indefinitely.";
@@ -6791,7 +6864,72 @@ if (authToken && signature) {
           const c = color.toLowerCase();
           matches = matches.filter(i => (i.color ?? "").toLowerCase().includes(c));
         }
-      if (matches.length > 0) {
+        const holds = await listInventoryHolds();
+        const leadHoldKey = normalizeInventoryHoldKey(
+          conv.lead?.vehicle?.stockId,
+          conv.lead?.vehicle?.vin
+        );
+        const leadHold = leadHoldKey ? holds?.[leadHoldKey] : null;
+        const availableMatches = matches.filter(m => {
+          const key = normalizeInventoryHoldKey(m.stockId, m.vin);
+          return key ? !holds?.[key] : true;
+        });
+
+        if (matches.length === 0 && leadHold) {
+          const label =
+            leadHold.label ??
+            formatModelLabelForFollowUp(
+              conv.lead?.vehicle?.year ?? null,
+              conv.lead?.vehicle?.model ?? null
+            );
+          const reply =
+            `Looks like that unit has sold. ` +
+            `Want me to keep an eye out for another ${label}?`;
+          const systemMode = webhookMode;
+          if (systemMode === "suggest") {
+            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+            return res.status(200).type("text/xml").send(twiml);
+          }
+          appendOutbound(conv, event.to, event.from, reply, "twilio");
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+            reply
+          )}</Message>\n</Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+
+        if (matches.length > 0 && availableMatches.length === 0) {
+          const reply =
+            "That unit is on hold right now. I can reach out if it becomes available — want me to keep an eye on it?";
+          const systemMode = webhookMode;
+          if (systemMode === "suggest") {
+            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+            const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response></Response>`;
+            return res.status(200).type("text/xml").send(twiml);
+          }
+          appendOutbound(conv, event.to, event.from, reply, "twilio");
+          const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
+            reply
+          )}</Message>\n</Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+
+        if (leadHold && availableMatches.length > 0) {
+          const reply = `That specific unit is on hold right now, but we do have other ${model} options available. Want details?`;
+          const systemMode = webhookMode;
+          if (systemMode === "suggest") {
+            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+            const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response></Response>`;
+            return res.status(200).type("text/xml").send(twiml);
+          }
+          appendOutbound(conv, event.to, event.from, reply, "twilio");
+          const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
+            reply
+          )}</Message>\n</Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+
+        if (availableMatches.length > 0) {
         conv.lead = conv.lead ?? {};
         conv.lead.vehicle = conv.lead.vehicle ?? {};
         if (year) conv.lead.vehicle.year = year;
@@ -6799,7 +6937,7 @@ if (authToken && signature) {
         if (color) conv.lead.vehicle.color = color;
         setDialogState(conv, "inventory_answered");
         const imageUrl =
-          matches.find(m => Array.isArray(m.images) && m.images.length)?.images?.[0] ?? null;
+          availableMatches.find(m => Array.isArray(m.images) && m.images.length)?.images?.[0] ?? null;
         const reply =
           year
             ? `Yes — we do have ${year} ${model}${color ? ` in ${color}` : ""} in stock. Would you like to stop by to take a look?`

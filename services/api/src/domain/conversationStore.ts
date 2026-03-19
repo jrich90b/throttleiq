@@ -257,7 +257,17 @@ export type Conversation = {
   status?: "open" | "closed";
   closedAt?: string;
   closedReason?: string;
-  hold?: { until?: string; reason?: string; updatedAt: string };
+  hold?: {
+    key?: string;
+    stockId?: string;
+    vin?: string;
+    label?: string;
+    note?: string;
+    until?: string;
+    reason?: string;
+    createdAt?: string;
+    updatedAt?: string;
+  };
   createdAt: string;
   updatedAt: string;
   messages: Message[];

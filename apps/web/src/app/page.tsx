@@ -121,7 +121,17 @@ type ConversationListItem = {
   contactPreference?: "call_only";
   leadName?: string | null;
   vehicleDescription?: string | null;
-  hold?: { until?: string | null; reason?: string; updatedAt?: string } | null;
+  hold?: {
+    key?: string;
+    stockId?: string;
+    vin?: string;
+    label?: string;
+    note?: string;
+    until?: string | null;
+    reason?: string;
+    updatedAt?: string;
+    createdAt?: string;
+  } | null;
   followUpCadence?: {
     status?: string;
     nextDueAt?: string | null;
@@ -156,7 +166,17 @@ type ConversationDetail = {
   closedAt?: string | null;
   closedReason?: string | null;
   contactPreference?: "call_only";
-  hold?: { until?: string | null; reason?: string; updatedAt?: string } | null;
+  hold?: {
+    key?: string;
+    stockId?: string;
+    vin?: string;
+    label?: string;
+    note?: string;
+    until?: string | null;
+    reason?: string;
+    updatedAt?: string;
+    createdAt?: string;
+  } | null;
   followUpCadence?: {
     status?: string;
     nextDueAt?: string | null;
@@ -329,6 +349,16 @@ export default function Home() {
   const [cadenceResolveError, setCadenceResolveError] = useState<string | null>(null);
   const [cadenceResolveNotice, setCadenceResolveNotice] = useState<string | null>(null);
   const cadenceResolveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [holdModalOpen, setHoldModalOpen] = useState(false);
+  const [holdModalConv, setHoldModalConv] = useState<ConversationDetail | null>(null);
+  const [holdInventoryItems, setHoldInventoryItems] = useState<any[]>([]);
+  const [holdInventoryLoading, setHoldInventoryLoading] = useState(false);
+  const [holdSearch, setHoldSearch] = useState("");
+  const [holdSelection, setHoldSelection] = useState<any | null>(null);
+  const [holdNote, setHoldNote] = useState("");
+  const [holdError, setHoldError] = useState<string | null>(null);
+  const [holdSaving, setHoldSaving] = useState(false);
   const [selectedContact, setSelectedContact] = useState<ContactItem | null>(null);
   const [contactEdit, setContactEdit] = useState(false);
   const [contactForm, setContactForm] = useState({
@@ -698,6 +728,86 @@ export default function Home() {
     setCadenceResolution(mode === "watch" ? "pause_7" : "resume");
     setCadenceResumeDate("");
     setCadenceResolveOpen(true);
+  }
+
+  async function openHoldModal(convId: string) {
+    setHoldError(null);
+    setHoldSearch("");
+    setHoldSelection(null);
+    setHoldModalOpen(true);
+    const conv =
+      selectedConv?.id === convId ? selectedConv : await fetchConversationDetail(convId);
+    setHoldModalConv(conv);
+    setHoldNote(conv?.hold?.note ?? "");
+    setHoldInventoryLoading(true);
+    try {
+      const resp = await fetch("/api/inventory", { cache: "no-store" });
+      const json = await resp.json();
+      const items = Array.isArray(json?.items) ? json.items : [];
+      setHoldInventoryItems(items);
+      const leadStock = conv?.lead?.vehicle?.stockId ?? "";
+      const leadVin = conv?.lead?.vehicle?.vin ?? "";
+      const normalizedLead = String(leadStock || leadVin).trim().toLowerCase();
+      const normalizedHold = String(conv?.hold?.stockId || conv?.hold?.vin || conv?.hold?.key || "")
+        .trim()
+        .toLowerCase();
+      const preselect = items.find((it: any) => {
+        const key = String(it.stockId ?? it.vin ?? "").trim().toLowerCase();
+        return (normalizedHold && key === normalizedHold) || (normalizedLead && key === normalizedLead);
+      });
+      if (preselect) {
+        setHoldSelection(preselect);
+      }
+    } catch (err: any) {
+      setHoldError(err?.message ?? "Failed to load inventory.");
+    } finally {
+      setHoldInventoryLoading(false);
+    }
+  }
+
+  async function submitHold(selection: any | null, action: "hold" | "hold_clear") {
+    if (!holdModalConv) return;
+    if (action === "hold" && !selection) {
+      setHoldError("Please select a unit to hold.");
+      return;
+    }
+    setHoldSaving(true);
+    setHoldError(null);
+    try {
+      const holdPayload =
+        action === "hold"
+          ? {
+              stockId: selection?.stockId ?? "",
+              vin: selection?.vin ?? "",
+              label: [selection?.year, selection?.make, selection?.model, selection?.trim]
+                .filter(Boolean)
+                .join(" ")
+                .trim(),
+              note: holdNote?.trim() || undefined
+            }
+          : undefined;
+      const resp = await fetch(
+        `/api/conversations/${encodeURIComponent(holdModalConv.id)}/followup-action`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ resolution: action, holdUnit: holdPayload })
+        }
+      );
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || data?.ok === false) {
+        throw new Error(data?.error ?? "Failed to update hold");
+      }
+      if (selectedConv?.id === holdModalConv.id && data?.conversation) {
+        setSelectedConv(data.conversation);
+      }
+      await load();
+      setHoldModalOpen(false);
+    } catch (err: any) {
+      setHoldError(err?.message ?? "Failed to update hold");
+    } finally {
+      setHoldSaving(false);
+    }
   }
 
   function updateWatchItem(idx: number, patch: Partial<WatchFormItem>) {
@@ -1835,13 +1945,7 @@ export default function Home() {
   async function closeConv() {
     if (!selectedConv) return;
     if (closeReason === "hold") {
-      await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/followup-action`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ resolution: "hold" })
-      });
-      await loadConversation(selectedConv.id);
-      await load();
+      await openHoldModal(selectedConv.id);
       return;
     }
     await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/close`, {
@@ -2907,8 +3011,7 @@ export default function Home() {
                                   <span className="text-xs px-2 py-1 rounded border bg-gray-50">Closed</span>
                                 ) : c.followUpCadence?.pauseReason === "manual_hold" ||
                                   c.followUp?.reason === "manual_hold" ||
-                                  c.hold?.reason === "manual_hold" ||
-                                  c.hold?.until ? (
+                                  !!c.hold ? (
                                   <span className="text-xs px-2 py-1 rounded border bg-red-100 text-red-700 border-red-200">
                                     Hold
                                   </span>
@@ -5353,8 +5456,7 @@ export default function Home() {
                     const isHold =
                       selectedConv.followUpCadence?.pauseReason === "manual_hold" ||
                       selectedConv.followUp?.reason === "manual_hold" ||
-                      selectedConv.hold?.reason === "manual_hold" ||
-                      !!selectedConv.hold?.until;
+                      !!selectedConv.hold;
                     const holdUntil =
                       selectedConv.hold?.until ??
                       (isHold ? selectedConv.followUpCadence?.pausedUntil : null);
@@ -5431,8 +5533,7 @@ export default function Home() {
                     const isHold =
                       selectedConv.followUpCadence?.pauseReason === "manual_hold" ||
                       selectedConv.followUp?.reason === "manual_hold" ||
-                      selectedConv.hold?.reason === "manual_hold" ||
-                      !!selectedConv.hold?.until;
+                      !!selectedConv.hold;
                     const holdUntil =
                       selectedConv.hold?.until ??
                       (isHold ? selectedConv.followUpCadence?.pausedUntil : null);
@@ -5857,6 +5958,154 @@ export default function Home() {
               </div>
             ) : null}
 
+            {holdModalOpen ? (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+                <div className="w-full max-w-2xl rounded-lg bg-white shadow-lg border p-4">
+                  <div className="text-sm font-semibold">Mark unit on hold</div>
+                  <div className="text-xs text-gray-600 mt-1">
+                    {holdModalConv?.lead?.name ||
+                      [holdModalConv?.lead?.firstName, holdModalConv?.lead?.lastName]
+                        .filter(Boolean)
+                        .join(" ") ||
+                      holdModalConv?.leadKey}
+                    {holdModalConv?.lead?.phone ? ` • ${holdModalConv.lead.phone}` : ""}
+                  </div>
+                  {holdModalConv?.hold ? (
+                    <div className="text-xs text-gray-500 mt-2">
+                      Current hold:{" "}
+                      {holdModalConv.hold.label ??
+                        holdModalConv.hold.stockId ??
+                        holdModalConv.hold.vin}
+                    </div>
+                  ) : null}
+
+                  <div className="mt-3">
+                    <div className="text-xs text-gray-500 mb-1">Search inventory</div>
+                    <input
+                      className="border rounded px-3 py-2 text-sm w-full"
+                      placeholder="Search by model, stock, VIN, color..."
+                      value={holdSearch}
+                      onChange={e => setHoldSearch(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="mt-3 max-h-64 overflow-auto border rounded">
+                    {holdInventoryLoading ? (
+                      <div className="p-3 text-sm text-gray-500">Loading inventory…</div>
+                    ) : holdInventoryItems.length === 0 ? (
+                      <div className="p-3 text-sm text-gray-500">No inventory items found.</div>
+                    ) : (
+                      holdInventoryItems
+                        .filter((it: any) => {
+                          if (!holdSearch.trim()) return true;
+                          const q = holdSearch.trim().toLowerCase();
+                          const hay = [
+                            it.year,
+                            it.make,
+                            it.model,
+                            it.trim,
+                            it.color,
+                            it.stockId,
+                            it.vin
+                          ]
+                            .filter(Boolean)
+                            .join(" ")
+                            .toLowerCase();
+                          return hay.includes(q);
+                        })
+                        .slice(0, 60)
+                        .map((it: any) => {
+                          const key = String(it.stockId ?? it.vin ?? "").trim().toLowerCase();
+                          const selectedKey = String(holdSelection?.stockId ?? holdSelection?.vin ?? "")
+                            .trim()
+                            .toLowerCase();
+                          const isSelected = key && key === selectedKey;
+                          const label = [it.year, it.make, it.model, it.trim].filter(Boolean).join(" ");
+                          const color = it.color ? ` • ${it.color}` : "";
+                          return (
+                            <button
+                              key={key || label}
+                              className={`w-full text-left px-3 py-2 border-b last:border-b-0 hover:bg-gray-50 ${
+                                isSelected ? "bg-blue-50" : ""
+                              }`}
+                              onClick={() => setHoldSelection(it)}
+                              type="button"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="text-sm">
+                                  <div className="font-medium">
+                                    {label || it.model || it.stockId || it.vin}
+                                    {color}
+                                  </div>
+                                  <div className="text-xs text-gray-500">
+                                    {it.stockId ? `Stock ${it.stockId}` : ""}
+                                    {it.stockId && it.vin ? " • " : ""}
+                                    {it.vin ? `VIN ${it.vin}` : ""}
+                                  </div>
+                                </div>
+                                {it.hold ? (
+                                  <span className="text-[11px] px-2 py-0.5 rounded-full border bg-red-100 text-red-700 border-red-200">
+                                    Held
+                                  </span>
+                                ) : null}
+                              </div>
+                            </button>
+                          );
+                        })
+                    )}
+                  </div>
+
+                  <div className="mt-3">
+                    <div className="text-xs text-gray-500 mb-1">Note (optional)</div>
+                    <textarea
+                      className="border rounded px-3 py-2 text-sm w-full"
+                      rows={2}
+                      value={holdNote}
+                      onChange={e => setHoldNote(e.target.value)}
+                      placeholder="Deposit received, hold requested…"
+                    />
+                  </div>
+
+                  {holdError ? <div className="text-xs text-red-600 mt-2">{holdError}</div> : null}
+
+                  <div className="mt-4 flex items-center justify-between">
+                    <div className="text-xs text-gray-500">
+                      {holdSelection
+                        ? `Selected: ${[holdSelection.year, holdSelection.make, holdSelection.model, holdSelection.trim]
+                            .filter(Boolean)
+                            .join(" ") || holdSelection.stockId || holdSelection.vin}`
+                        : "No unit selected"}
+                    </div>
+                    <div className="flex gap-2">
+                      {holdModalConv?.hold ? (
+                        <button
+                          className="px-3 py-2 border rounded text-sm text-red-600 border-red-200 hover:bg-red-50"
+                          onClick={() => submitHold(null, "hold_clear")}
+                          disabled={holdSaving}
+                        >
+                          Remove hold
+                        </button>
+                      ) : null}
+                      <button
+                        className="px-3 py-2 border rounded text-sm"
+                        onClick={() => setHoldModalOpen(false)}
+                        disabled={holdSaving}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        className="px-3 py-2 border rounded text-sm"
+                        onClick={() => submitHold(holdSelection, "hold")}
+                        disabled={holdSaving}
+                      >
+                        {holdSaving ? "Saving…" : "Save hold"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
             {pendingDraft ? (
               <div className="mt-4 border rounded-lg p-3 text-sm">
                 <div className="font-medium">Draft ready to send</div>
@@ -6096,7 +6345,7 @@ export default function Home() {
                   <option value="sold">Sold</option>
                   <option value="not_interested">Not interested</option>
                   <option value="no_response">No response</option>
-                  <option value="hold">Hold (7 days)</option>
+                  <option value="hold">Hold unit</option>
                   <option value="other">Other</option>
                 </select>
                 <button className="px-3 py-2 border rounded text-sm" onClick={closeConv}>
