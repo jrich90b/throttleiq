@@ -6832,6 +6832,13 @@ if (authToken && signature) {
     }
   }
 
+  const inventoryQuestion =
+    llmAvailabilityIntent ||
+    /(in stock|available|availability|do you have|any .* in stock)/i.test(textLower) ||
+    (!!conv.lead?.vehicle?.model &&
+      /\b(\d{4}|blue|black|white|red|green|gray|grey|silver|chrome|trim|color|standard|special|st)\b/i.test(
+        textLower
+      ));
   const watchPrompted = /\b(keep an eye|keep me posted|watch for|watch\b)\b/i.test(
     lastOutboundText
   );
@@ -6992,13 +6999,6 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
-  const inventoryQuestion =
-    llmAvailabilityIntent ||
-    /(in stock|available|availability|do you have|any .* in stock)/i.test(textLower) ||
-    (!!conv.lead?.vehicle?.model &&
-      /\b(\d{4}|blue|black|white|red|green|gray|grey|silver|chrome|trim|color|standard|special|st)\b/i.test(
-        textLower
-      ));
   if (
     event.provider === "twilio" &&
     inventoryQuestion &&
