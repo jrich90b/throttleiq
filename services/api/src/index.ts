@@ -4159,7 +4159,7 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
           "Appreciate the update — if anything changes, just let me know."
         ]);
       }
-      if (["pause_7", "pause_30", "pause_indef", "resume_on", "hold"].includes(action)) {
+      if (["pause_7", "pause_30", "pause_indef", "resume_on"].includes(action)) {
         return pickUnusedAck([
           "Sounds good — I’ll be here when you’re ready. If anything changes, just let me know.",
           "No problem — I’ll be here when you’re ready. If anything changes, just let me know."
@@ -4351,7 +4351,8 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
     }
 
     let cadenceAckResult: { sent: boolean; reason?: string; sid?: string } | null = null;
-    const cadenceAck = buildCadenceAck(effectiveResolution);
+    const cadenceAck =
+      effectiveResolution === "hold" ? null : buildCadenceAck(effectiveResolution);
     if (cadenceAck) {
       cadenceAckResult = await sendCadenceAck(cadenceAck);
     }
