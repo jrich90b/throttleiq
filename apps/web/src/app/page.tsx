@@ -1387,8 +1387,11 @@ export default function Home() {
     );
   }, [selectedConv?.appointment?.bookedSalespersonId, salespeopleList, usersList]);
   const cadenceAlert = useMemo(() => {
-    return getCadenceAlert(selectedConv?.followUpCadence);
-  }, [selectedConv?.followUpCadence]);
+    if (!selectedConv) return null;
+    const listItem = conversations.find(c => c.id === selectedConv.id);
+    const cadence = selectedConv.followUpCadence ?? listItem?.followUpCadence ?? undefined;
+    return getCadenceAlert(cadence);
+  }, [selectedConv, conversations]);
   const cadenceAlerts = useMemo(() => {
     return conversations
       .map(c => {
