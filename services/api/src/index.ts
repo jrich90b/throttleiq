@@ -70,6 +70,7 @@ import {
   startFollowUpCadence,
   pauseFollowUpCadence,
   stopFollowUpCadence,
+  scheduleLongTermFollowUp,
   advanceFollowUpCadence,
   getAllConversations,
   finalizeDraftAsSent,
@@ -6421,21 +6422,30 @@ if (authToken && signature) {
     /\?\s*$/.test(lastOutboundText.trim());
   if (event.provider === "twilio" && lastAskedReminder && isAffirmative(event.body)) {
     const futureFromReply = parseFutureTimeframe(String(event.body ?? ""), new Date());
-    if (futureFromReply?.until) {
-      pauseFollowUpCadence(conv, futureFromReply.until.toISOString(), "customer_reminder");
-    } else if (!conv.followUpCadence?.pausedUntil) {
-      const pauseUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-      pauseFollowUpCadence(conv, pauseUntil, "customer_reminder");
-    }
+      if (futureFromReply?.until) {
+        const untilIso = futureFromReply.until.toISOString();
+        if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
+          scheduleLongTermFollowUp(conv, untilIso, "customer_reminder");
+        } else {
+          pauseFollowUpCadence(conv, untilIso, "customer_reminder");
+        }
+        if (conv.followUp?.mode !== "holding_inventory" && conv.followUp?.mode !== "manual_handoff") {
+          setFollowUpMode(conv, "active", "customer_reminder");
+          setDialogState(conv, "followup_resumed");
+        }
+      } else {
+        stopFollowUpCadence(conv, "customer_reminder");
+        setFollowUpMode(conv, "paused_indefinite", "customer_reminder");
+        setDialogState(conv, "followup_paused");
+      }
     const dealerProfile = await getDealerProfile();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = dealerProfile?.agentName ?? "Brooke";
     const label = futureFromReply?.label;
-    const labelText = label ? label.charAt(0).toUpperCase() + label.slice(1) : "then";
-    const replyRaw =
-      label
-        ? `Sounds good — I’ll set a reminder and check back ${labelText}.`
-        : "Sounds good — I’ll set a reminder and check back then.";
+    const labelText = label ? label.charAt(0).toUpperCase() + label.slice(1) : "";
+    const replyRaw = label
+      ? `Sounds good — I’ll check back ${labelText}.`
+      : "Got it — what timeframe should I check back?";
     const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
@@ -6450,22 +6460,66 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
+  const notReadyToBuy =
+    /\b(not ready|not (yet|right now)|not in the market|not looking to buy|not looking for|just browsing|just looking|window shopping|not ready to purchase|not ready to buy)\b/i.test(
+      textLower
+    );
+  if (event.provider === "twilio" && notReadyToBuy) {
+    const futureFromNotReady = parseFutureTimeframe(String(event.body ?? ""), new Date());
+    if (!futureFromNotReady) {
+      const alreadyAsked =
+        conv.followUp?.reason === "not_ready_no_timeframe" ||
+        /\bcheck back\b/i.test(lastOutboundText);
+      stopFollowUpCadence(conv, "not_ready_no_timeframe");
+      setFollowUpMode(conv, "paused_indefinite", "not_ready_no_timeframe");
+      setDialogState(conv, "followup_paused");
+      const dealerProfile = await getDealerProfile();
+      const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+      const agentName = dealerProfile?.agentName ?? "Brooke";
+      const replyRaw = alreadyAsked
+        ? "Understood — I’m here when you’re ready."
+        : "No problem — I’m here when you’re ready. If you want me to check back, what timeframe works best?";
+      const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+  }
+
   const future = parseFutureTimeframe(String(event.body ?? ""), new Date());
   if (event.provider === "twilio" && future) {
+    conv.lead = conv.lead ?? {};
+    if (future.label) conv.lead.purchaseTimeframe = future.label;
     if (future.until) {
-      pauseFollowUpCadence(conv, future.until.toISOString(), "future_timeframe");
+      const untilIso = future.until.toISOString();
+      if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
+        scheduleLongTermFollowUp(conv, untilIso, "future_timeframe");
+      } else {
+        pauseFollowUpCadence(conv, untilIso, "future_timeframe");
+      }
+      if (conv.followUp?.mode !== "holding_inventory" && conv.followUp?.mode !== "manual_handoff") {
+        setFollowUpMode(conv, "active", "future_timeframe");
+        setDialogState(conv, "followup_resumed");
+      }
     } else {
+      stopFollowUpCadence(conv, "future_timeframe");
       setFollowUpMode(conv, "paused_indefinite", "future_timeframe");
+      setDialogState(conv, "followup_paused");
     }
     const dealerProfile = await getDealerProfile();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = dealerProfile?.agentName ?? "Brooke";
     const label = future.label;
     const labelText = label.charAt(0).toUpperCase() + label.slice(1);
-    const replyRaw =
-      label === "next week"
-        ? "Got it — next week works. Want me to set a reminder, or would you like to pick a day/time now?"
-        : `Got it — ${labelText} works. I can set a reminder for you. If you’d rather pick a day/time now, just say the word.`;
+    const replyRaw = `Got it — I’ll check back ${labelText}. If you want to come in sooner, just let me know.`;
     const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
