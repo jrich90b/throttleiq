@@ -4807,7 +4807,7 @@ app.post("/conversations/:id/send", async (req, res) => {
   }
 
   const applyManualCadenceAdvance = (hadOutbound: boolean) => {
-    if (!manualTakeover || !hadOutbound) return;
+    if (!hadOutbound) return;
     if (!conv.followUpCadence || conv.followUpCadence.status !== "active") return;
     advanceFollowUpCadence(conv, schedulerTimezone);
   };
