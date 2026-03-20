@@ -42,7 +42,7 @@ import {
 } from "../domain/schedulerEngine.js";
 import { getDealerProfile } from "../domain/dealerProfile.js";
 import { getInventoryNote } from "../domain/inventoryNotes.js";
-import { hasInventoryForModelYear } from "../domain/inventoryFeed.js";
+import { getInventoryFeed, hasInventoryForModelYear } from "../domain/inventoryFeed.js";
 
 function base64UrlDecode(input: string): string | null {
   try {
@@ -83,6 +83,102 @@ function maybeTagReplyTo(replyTo: string | undefined, conv: any): string | undef
   const [local, domain] = replyTo.split("@");
   if (!local || !domain) return replyTo;
   return `${local}+${tag}@${domain}`;
+}
+
+function normalizeModelToken(raw: string): string {
+  return String(raw ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function normalizeModelForMatch(modelRaw: string, makeRaw?: string | null): string {
+  const base = normalizeModelToken(modelRaw);
+  if (!base) return "";
+  const makeNorm = normalizeModelToken(makeRaw ?? "");
+  if (!makeNorm) return base;
+  const makeTokens = new Set(makeNorm.split(" ").filter(Boolean));
+  const filtered = base
+    .split(" ")
+    .filter(t => t && !makeTokens.has(t))
+    .join(" ")
+    .trim();
+  return filtered || base;
+}
+
+function isGenericLeadModel(modelText: string): boolean {
+  const t = modelText.trim().toLowerCase();
+  return !t || /^(other|full line|full lineup|null)$/.test(t);
+}
+
+async function pickLeadInventoryMediaUrls(conv: any): Promise<string[] | undefined> {
+  try {
+    const modelRaw =
+      conv?.lead?.vehicle?.model ??
+      conv?.lead?.vehicle?.description ??
+      (conv?.lead as any)?.vehicleDescription ??
+      "";
+    const modelText = String(modelRaw ?? "").trim();
+    if (isGenericLeadModel(modelText)) return undefined;
+
+    const items = await getInventoryFeed();
+    if (!items.length) return undefined;
+
+    const leadStock = String(conv?.lead?.vehicle?.stockId ?? "").trim().toLowerCase();
+    const leadVin = String(conv?.lead?.vehicle?.vin ?? "").trim().toLowerCase();
+    if (leadStock || leadVin) {
+      const direct = items.find(
+        i =>
+          (leadStock && (i.stockId ?? "").toLowerCase() === leadStock) ||
+          (leadVin && (i.vin ?? "").toLowerCase() === leadVin)
+      );
+      const url = direct?.images?.find(u => /^https?:\/\//i.test(u));
+      if (url) return [url];
+    }
+
+    const modelNorm = normalizeModelForMatch(modelText, conv?.lead?.vehicle?.make ?? "");
+    if (!modelNorm) return undefined;
+    const makeNorm = normalizeModelToken(conv?.lead?.vehicle?.make ?? "");
+    const yearText = String(conv?.lead?.vehicle?.year ?? "").trim();
+    const colorNorm = normalizeModelToken(conv?.lead?.vehicle?.color ?? "");
+
+    let best: { score: number; url: string } | null = null;
+    for (const item of items) {
+      const itemModel = String(item.model ?? "").trim();
+      if (!itemModel) continue;
+      const itemModelNorm = normalizeModelForMatch(itemModel, item.make ?? "");
+      if (!itemModelNorm) continue;
+      const hasImages = Array.isArray(item.images) && item.images.length > 0;
+      if (!hasImages) continue;
+
+      let score = 0;
+      if (itemModelNorm === modelNorm) score += 4;
+      else if (itemModelNorm.includes(modelNorm) || modelNorm.includes(itemModelNorm)) score += 3;
+      else continue;
+
+      if (yearText && String(item.year ?? "").trim() === yearText) score += 1;
+      if (makeNorm) {
+        const itemMakeNorm = normalizeModelToken(item.make ?? "");
+        if (itemMakeNorm && (itemMakeNorm.includes(makeNorm) || makeNorm.includes(itemMakeNorm))) {
+          score += 1;
+        }
+      }
+      if (colorNorm) {
+        const itemColorNorm = normalizeModelToken(item.color ?? "");
+        if (itemColorNorm && itemColorNorm.includes(colorNorm)) score += 1;
+      }
+
+      const url = item.images?.find(u => /^https?:\/\//i.test(u));
+      if (!url) continue;
+      if (!best || score > best.score) {
+        best = { score, url };
+      }
+    }
+
+    return best?.url ? [best.url] : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function inferAppointmentTypeFromConv(conv: any): string | null {
@@ -881,6 +977,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   };
 
   const isServiceLead = inferredBucket === "service" || inferredCta === "service_request" || serviceVinRequest;
+  const room58Source = /room58/i.test(String(conv.lead?.source ?? ""));
+  const initialMediaUrls =
+    isInitialAdf && !isServiceLead && !room58Source
+      ? await pickLeadInventoryMediaUrls(conv)
+      : undefined;
   if (isServiceLead) {
     let ack =
       "We’ve received your service request and will have the service department reach out.";
@@ -889,7 +990,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     addTodo(conv, "service", event.body, event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "service_request");
     stopFollowUpCadence(conv, "manual_handoff");
-    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai");
+    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -919,7 +1020,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     addTodo(conv, "other", event.body, event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "pending_used_followup");
     stopFollowUpCadence(conv, "manual_handoff");
-    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai");
+    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -949,7 +1050,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     addTodo(conv, "other", event.body, event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "room58_standard");
     stopFollowUpCadence(conv, "manual_handoff");
-    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai");
+    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -979,7 +1080,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       `I’d love to help with pricing. Which model are you interested in (and any trim or color)?`;
     ack = await applyInitialAdfPrefix(ack);
 
-    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai");
+    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
     conv.emailDraft = ack;
     return res.status(200).json({
       ok: true,
@@ -1020,7 +1121,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     if (reason === "pricing" || reason === "payments") {
       markPricingEscalated(conv);
     }
-    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai");
+    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
     conv.emailDraft = ack;
     return res.status(200).json({
       ok: true,
@@ -1041,7 +1142,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (result.autoClose?.reason) {
     const ack = await applyInitialAdfPrefix(result.draft);
     closeConversation(conv, result.autoClose.reason);
-    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai");
+    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
     conv.emailDraft = ack;
     return res.status(200).json({
       ok: true,
@@ -1343,14 +1444,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         await flushConversationStore();
       } catch (e: any) {
         console.log("[sendgrid inbound] email send failed:", e?.message ?? e);
-        appendOutbound(conv, "dealership", leadKey, draft, "draft_ai");
+        appendOutbound(conv, "dealership", leadKey, draft, "draft_ai", undefined, initialMediaUrls);
       }
     } else {
-      appendOutbound(conv, "dealership", leadKey, draft, "draft_ai");
+      appendOutbound(conv, "dealership", leadKey, draft, "draft_ai", undefined, initialMediaUrls);
     }
   } else {
     // Store the draft as an outbound message (suggest-only for now)
-    appendOutbound(conv, "dealership", leadKey, draft, "draft_ai");
+    appendOutbound(conv, "dealership", leadKey, draft, "draft_ai", undefined, initialMediaUrls);
   }
   if (conv.classification?.bucket === "event_promo") {
     closeConversation(conv, "event_promo_no_cadence");
