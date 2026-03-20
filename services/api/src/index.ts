@@ -103,6 +103,7 @@ import {
   markPricingEscalated,
   getPricingAttempts,
   closeConversation,
+  mergeConversationLead,
   setConversationMode,
   setContactPreference,
   setCrmLastLoggedAt,
@@ -4027,6 +4028,47 @@ app.post("/inventory/status", (req, res) => {
 // Inbox endpoints
 app.get("/conversations", (_req, res) => {
   res.json({ ok: true, systemMode: getSystemMode(), conversations: listConversations() });
+});
+
+app.post("/conversations/compose", (req, res) => {
+  const rawPhone = String(req.body?.phone ?? "").trim();
+  if (!rawPhone) {
+    return res.status(400).json({ ok: false, error: "Missing phone" });
+  }
+  const firstName = String(req.body?.firstName ?? "").trim() || undefined;
+  const lastName = String(req.body?.lastName ?? "").trim() || undefined;
+  const email = String(req.body?.email ?? "").trim() || undefined;
+  const leadName =
+    firstName || lastName ? [firstName, lastName].filter(Boolean).join(" ").trim() : undefined;
+  const vehicleInput = req.body?.vehicle ?? null;
+  const vehicle = vehicleInput
+    ? {
+        year: String(vehicleInput.year ?? "").trim() || undefined,
+        make: String(vehicleInput.make ?? "").trim() || undefined,
+        model: String(vehicleInput.model ?? "").trim() || undefined,
+        trim: String(vehicleInput.trim ?? "").trim() || undefined,
+        color: String(vehicleInput.color ?? "").trim() || undefined,
+        stockId: String(vehicleInput.stockId ?? "").trim() || undefined,
+        vin: String(vehicleInput.vin ?? "").trim() || undefined,
+        condition: String(vehicleInput.condition ?? "").trim() || undefined
+      }
+    : null;
+
+  const conv = upsertConversationByLeadKey(rawPhone, "human");
+  setConversationMode(conv.id, "human");
+  const leadPatch: any = {
+    ...(firstName ? { firstName } : {}),
+    ...(lastName ? { lastName } : {}),
+    ...(leadName ? { name: leadName } : {}),
+    ...(email ? { email } : {}),
+    phone: normalizePhone(rawPhone)
+  };
+  if (vehicle && Object.values(vehicle).some(v => v)) {
+    leadPatch.vehicle = vehicle;
+  }
+  mergeConversationLead(conv, leadPatch);
+  saveConversation(conv);
+  return res.json({ ok: true, conversation: conv });
 });
 
 app.get("/conversations/:id", async (req, res) => {
