@@ -2851,6 +2851,10 @@ async function processDueFollowUps() {
     const cadence = conv.followUpCadence;
     if (!cadence || cadence.status !== "active" || !cadence.nextDueAt) continue;
     const isPostSale = cadence.kind === "post_sale";
+    if (isPostSale && conv.closedReason !== "sold" && !conv.sale?.soldAt) {
+      stopFollowUpCadence(conv, "invalid_post_sale");
+      continue;
+    }
     if (conv.contactPreference === "call_only") {
       stopFollowUpCadence(conv, "call_only");
       continue;
@@ -4132,6 +4136,15 @@ app.post("/conversations/:id/reopen", (req, res) => {
   conv.status = "open";
   conv.closedAt = undefined;
   conv.closedReason = undefined;
+  if (conv.sale) {
+    conv.sale = undefined;
+  }
+  if (conv.followUpCadence?.kind === "post_sale") {
+    conv.followUpCadence = undefined;
+  }
+  if (conv.followUp?.reason === "post_sale") {
+    conv.followUp = undefined;
+  }
   conv.updatedAt = new Date().toISOString();
   saveConversation(conv);
   return res.json({ ok: true, conversation: conv });
