@@ -126,6 +126,10 @@ type ConversationListItem = {
     soldAt?: string;
     soldById?: string;
     soldByName?: string;
+    stockId?: string;
+    vin?: string;
+    label?: string;
+    note?: string;
   } | null;
   contactPreference?: "call_only";
   leadName?: string | null;
@@ -179,6 +183,10 @@ type ConversationDetail = {
     soldAt?: string;
     soldById?: string;
     soldByName?: string;
+    stockId?: string;
+    vin?: string;
+    label?: string;
+    note?: string;
   } | null;
   contactPreference?: "call_only";
   hold?: {
@@ -389,6 +397,15 @@ export default function Home() {
   const [holdNote, setHoldNote] = useState("");
   const [holdError, setHoldError] = useState<string | null>(null);
   const [holdSaving, setHoldSaving] = useState(false);
+  const [soldModalOpen, setSoldModalOpen] = useState(false);
+  const [soldModalConv, setSoldModalConv] = useState<ConversationDetail | null>(null);
+  const [soldInventoryItems, setSoldInventoryItems] = useState<any[]>([]);
+  const [soldInventoryLoading, setSoldInventoryLoading] = useState(false);
+  const [soldSearch, setSoldSearch] = useState("");
+  const [soldSelection, setSoldSelection] = useState<any | null>(null);
+  const [soldNote, setSoldNote] = useState("");
+  const [soldError, setSoldError] = useState<string | null>(null);
+  const [soldSaving, setSoldSaving] = useState(false);
   const [selectedContact, setSelectedContact] = useState<ContactItem | null>(null);
   const [contactEdit, setContactEdit] = useState(false);
   const [contactForm, setContactForm] = useState({
@@ -840,6 +857,89 @@ export default function Home() {
       setHoldError(err?.message ?? "Failed to update hold");
     } finally {
       setHoldSaving(false);
+    }
+  }
+
+  async function openSoldModal(convId: string) {
+    setSoldError(null);
+    setSoldSearch("");
+    setSoldSelection(null);
+    setSoldModalOpen(true);
+    const conv =
+      selectedConv?.id === convId ? selectedConv : await fetchConversationDetail(convId);
+    setSoldModalConv(conv);
+    setSoldNote(conv?.sale?.note ?? "");
+    setSoldInventoryLoading(true);
+    try {
+      const resp = await fetch("/api/inventory", { cache: "no-store" });
+      const json = await resp.json();
+      const items = Array.isArray(json?.items) ? json.items : [];
+      setSoldInventoryItems(items);
+      const leadStock = conv?.lead?.vehicle?.stockId ?? "";
+      const leadVin = conv?.lead?.vehicle?.vin ?? "";
+      const normalizedLead = String(leadStock || leadVin).trim().toLowerCase();
+      const normalizedSold = String(conv?.sale?.stockId || conv?.sale?.vin || "")
+        .trim()
+        .toLowerCase();
+      const preselect = items.find((it: any) => {
+        const key = String(it.stockId ?? it.vin ?? "").trim().toLowerCase();
+        return (normalizedSold && key === normalizedSold) || (normalizedLead && key === normalizedLead);
+      });
+      if (preselect) {
+        setSoldSelection(preselect);
+      }
+    } catch (err: any) {
+      setSoldError(err?.message ?? "Failed to load inventory.");
+    } finally {
+      setSoldInventoryLoading(false);
+    }
+  }
+
+  async function submitSold(selection: any) {
+    if (!soldModalConv) return;
+    if (!selection) {
+      setSoldError("Please select a unit to mark sold.");
+      return;
+    }
+    setSoldSaving(true);
+    setSoldError(null);
+    try {
+      const soldByName =
+        soldByOptions.find(sp => sp.id === soldById)?.firstName ??
+        soldByOptions.find(sp => sp.id === soldById)?.name ??
+        "";
+      const soldPayload = {
+        stockId: selection?.stockId ?? "",
+        vin: selection?.vin ?? "",
+        label: [selection?.year, selection?.make, selection?.model, selection?.trim]
+          .filter(Boolean)
+          .join(" ")
+          .trim(),
+        note: soldNote?.trim() || undefined
+      };
+      const resp = await fetch(`/api/conversations/${encodeURIComponent(soldModalConv.id)}/close`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reason: "sold",
+          soldById,
+          soldByName,
+          soldUnit: soldPayload
+        })
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || data?.ok === false) {
+        throw new Error(data?.error ?? "Failed to mark sold");
+      }
+      if (selectedConv?.id === soldModalConv.id && data?.conversation) {
+        setSelectedConv(data.conversation);
+      }
+      setSoldModalOpen(false);
+      await load();
+    } catch (err: any) {
+      setSoldError(err?.message ?? "Failed to mark sold");
+    } finally {
+      setSoldSaving(false);
     }
   }
 
@@ -2067,20 +2167,14 @@ export default function Home() {
       window.alert("Please select who sold the bike.");
       return;
     }
-    const soldByName =
-      closeReason === "sold"
-        ? soldByOptions.find(sp => sp.id === soldById)?.firstName ??
-          soldByOptions.find(sp => sp.id === soldById)?.name ??
-          ""
-        : "";
+    if (closeReason === "sold") {
+      await openSoldModal(selectedConv.id);
+      return;
+    }
     await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/close`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        reason: closeReason,
-        soldById: closeReason === "sold" ? soldById : undefined,
-        soldByName: closeReason === "sold" ? soldByName : undefined
-      })
+      body: JSON.stringify({ reason: closeReason })
     });
     await loadConversation(selectedConv.id);
     await load();
@@ -6338,6 +6432,165 @@ export default function Home() {
                         disabled={holdSaving}
                       >
                         {holdSaving ? "Saving…" : "Save hold"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {soldModalOpen ? (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+                <div className="w-full max-w-2xl rounded-lg bg-white shadow-lg border p-4">
+                  <div className="text-sm font-semibold">Mark unit sold</div>
+                  <div className="text-xs text-gray-600 mt-1">
+                    {soldModalConv?.lead?.name ||
+                      [soldModalConv?.lead?.firstName, soldModalConv?.lead?.lastName]
+                        .filter(Boolean)
+                        .join(" ") ||
+                      soldModalConv?.leadKey}
+                    {soldModalConv?.lead?.phone ? ` • ${soldModalConv.lead.phone}` : ""}
+                  </div>
+                  {soldModalConv?.sale?.label ||
+                  soldModalConv?.sale?.stockId ||
+                  soldModalConv?.sale?.vin ? (
+                    <div className="text-xs text-gray-500 mt-2">
+                      Current sold:{" "}
+                      {soldModalConv?.sale?.label ??
+                        soldModalConv?.sale?.stockId ??
+                        soldModalConv?.sale?.vin}
+                    </div>
+                  ) : null}
+
+                  <div className="mt-3">
+                    <div className="text-xs text-gray-500 mb-1">Search inventory</div>
+                    <input
+                      className="border rounded px-3 py-2 text-sm w-full"
+                      placeholder="Search by model, stock, VIN, color..."
+                      value={soldSearch}
+                      onChange={e => setSoldSearch(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="mt-3 max-h-64 overflow-auto border rounded">
+                    {soldInventoryLoading ? (
+                      <div className="p-3 text-sm text-gray-500">Loading inventory…</div>
+                    ) : soldInventoryItems.length === 0 ? (
+                      <div className="p-3 text-sm text-gray-500">No inventory items found.</div>
+                    ) : (
+                      soldInventoryItems
+                        .filter((it: any) => {
+                          if (!soldSearch.trim()) return true;
+                          const q = soldSearch.trim().toLowerCase();
+                          const hay = [
+                            it.year,
+                            it.make,
+                            it.model,
+                            it.trim,
+                            it.color,
+                            it.stockId,
+                            it.vin
+                          ]
+                            .filter(Boolean)
+                            .join(" ")
+                            .toLowerCase();
+                          return hay.includes(q);
+                        })
+                        .slice(0, 60)
+                        .map((it: any) => {
+                          const key = String(it.stockId ?? it.vin ?? "").trim().toLowerCase();
+                          const selectedKey = String(soldSelection?.stockId ?? soldSelection?.vin ?? "")
+                            .trim()
+                            .toLowerCase();
+                          const isSelected = key && key === selectedKey;
+                          const label = [it.year, it.make, it.model, it.trim].filter(Boolean).join(" ");
+                          const color = it.color ? ` • ${it.color}` : "";
+                          const preview =
+                            Array.isArray(it.images) && it.images.length ? it.images[0] : null;
+                          return (
+                            <button
+                              key={key || label}
+                              className={`relative group w-full text-left px-3 py-2 border-b last:border-b-0 hover:bg-gray-50 ${
+                                isSelected ? "bg-blue-50" : ""
+                              }`}
+                              onClick={() => setSoldSelection(it)}
+                              type="button"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="text-sm">
+                                  <div className="font-medium">
+                                    {label || it.model || it.stockId || it.vin}
+                                    {color}
+                                  </div>
+                                  <div className="text-xs text-gray-500">
+                                    {it.stockId ? `Stock ${it.stockId}` : ""}
+                                    {it.stockId && it.vin ? " • " : ""}
+                                    {it.vin ? `VIN ${it.vin}` : ""}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  {it.hold ? (
+                                    <span className="text-[11px] px-2 py-0.5 rounded-full border bg-red-100 text-red-700 border-red-200">
+                                      Held
+                                    </span>
+                                  ) : null}
+                                  {it.sold ? (
+                                    <span className="text-[11px] px-2 py-0.5 rounded-full border bg-blue-100 text-blue-700 border-blue-200">
+                                      Sold
+                                    </span>
+                                  ) : null}
+                                </div>
+                              </div>
+                              {preview ? (
+                                <div className="absolute right-2 top-2 hidden group-hover:block z-50 pointer-events-none">
+                                  <img
+                                    src={preview}
+                                    alt={`${label || it.model || "Unit"} preview`}
+                                    className="w-28 h-20 object-cover rounded border border-gray-200 shadow"
+                                  />
+                                </div>
+                              ) : null}
+                            </button>
+                          );
+                        })
+                    )}
+                  </div>
+
+                  <div className="mt-3">
+                    <div className="text-xs text-gray-500 mb-1">Note (optional)</div>
+                    <textarea
+                      className="border rounded px-3 py-2 text-sm w-full"
+                      rows={2}
+                      value={soldNote}
+                      onChange={e => setSoldNote(e.target.value)}
+                      placeholder="Sold details (optional)…"
+                    />
+                  </div>
+
+                  {soldError ? <div className="text-xs text-red-600 mt-2">{soldError}</div> : null}
+
+                  <div className="mt-4 flex items-center justify-between">
+                    <div className="text-xs text-gray-500">
+                      {soldSelection
+                        ? `Selected: ${[soldSelection.year, soldSelection.make, soldSelection.model, soldSelection.trim]
+                            .filter(Boolean)
+                            .join(" ") || soldSelection.stockId || soldSelection.vin}`
+                        : "No unit selected"}
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        className="px-3 py-2 border rounded text-sm"
+                        onClick={() => setSoldModalOpen(false)}
+                        disabled={soldSaving}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        className="px-3 py-2 border rounded text-sm"
+                        onClick={() => submitSold(soldSelection)}
+                        disabled={soldSaving}
+                      >
+                        {soldSaving ? "Saving…" : "Save sold"}
                       </button>
                     </div>
                   </div>

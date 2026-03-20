@@ -63,6 +63,11 @@ import {
   clearInventoryHold,
   normalizeInventoryHoldKey
 } from "./domain/inventoryHolds.js";
+import {
+  listInventorySolds,
+  setInventorySold,
+  normalizeInventorySoldKey
+} from "./domain/inventorySolds.js";
 import { sendEmail } from "./domain/emailSender.js";
 
 import {
@@ -545,11 +550,13 @@ app.get("/inventory", async (_req, res) => {
     const items = await getInventoryFeed();
     const notes = await listInventoryNotes();
     const holds = await listInventoryHolds();
+    const solds = await listInventorySolds();
     const withNotes = items.map(item => {
       const key = normalizeInventoryHoldKey(item.stockId, item.vin) ?? "";
       const entry = key ? notes?.[key] : undefined;
       const hold = key ? holds?.[key] : undefined;
-      return { ...item, notes: entry?.notes ?? [], hold: hold ?? null };
+      const sold = key ? solds?.[key] : undefined;
+      return { ...item, notes: entry?.notes ?? [], hold: hold ?? null, sold: sold ?? null };
     });
     return res.json({ ok: true, items: withNotes });
   } catch (err: any) {
@@ -4065,16 +4072,50 @@ app.post("/conversations/:id/close", async (req, res) => {
     const cfg = await getSchedulerConfig();
     const soldById = String(req.body?.soldById ?? "").trim();
     const soldByNameRaw = String(req.body?.soldByName ?? "").trim();
+    const soldInput = req.body?.soldUnit ?? null;
+    const soldStockId = String(soldInput?.stockId ?? "").trim() || undefined;
+    const soldVin = String(soldInput?.vin ?? "").trim() || undefined;
+    const soldLabel = String(soldInput?.label ?? "").trim() || undefined;
+    const soldNote = String(soldInput?.note ?? "").trim() || undefined;
+    const soldKey = soldInput ? normalizeInventorySoldKey(soldStockId, soldVin) : null;
+    if (soldInput && !soldKey) {
+      return res.status(400).json({ ok: false, error: "Missing sold unit (stockId or VIN)." });
+    }
     const salespeople = cfg.salespeople ?? [];
     const sp = soldById ? salespeople.find(s => s.id === soldById) ?? null : null;
     conv.sale = {
       soldAt: nowIso,
       soldById: sp?.id ?? (soldById || undefined),
-      soldByName: sp?.name ?? (soldByNameRaw || undefined)
+      soldByName: sp?.name ?? (soldByNameRaw || undefined),
+      stockId: soldStockId,
+      vin: soldVin,
+      label: soldLabel,
+      note: soldNote
     };
     conv.status = "closed";
     conv.closedAt = nowIso;
     conv.closedReason = "sold";
+    if (soldKey) {
+      const soldEntry = {
+        id: soldKey,
+        stockId: soldStockId,
+        vin: soldVin,
+        label: soldLabel,
+        note: soldNote,
+        leadKey: conv.leadKey,
+        convId: conv.id,
+        soldAt: nowIso,
+        soldById: sp?.id ?? (soldById || undefined),
+        soldByName: sp?.name ?? (soldByNameRaw || undefined),
+        createdAt: conv.sale?.soldAt ?? nowIso,
+        updatedAt: nowIso
+      };
+      await setInventorySold({ stockId: soldStockId, vin: soldVin, sold: soldEntry });
+      await clearInventoryHold(soldStockId, soldVin);
+      if (conv.hold?.key && conv.hold.key === soldKey) {
+        conv.hold = undefined;
+      }
+    }
     setFollowUpMode(conv, "active", "post_sale");
     startPostSaleCadence(conv, nowIso, cfg.timezone);
     saveConversation(conv);
@@ -7201,26 +7242,37 @@ if (authToken && signature) {
           matches = matches.filter(i => (i.color ?? "").toLowerCase().includes(c));
         }
         const holds = await listInventoryHolds();
+        const solds = await listInventorySolds();
         const leadHoldKey = normalizeInventoryHoldKey(
           conv.lead?.vehicle?.stockId,
           conv.lead?.vehicle?.vin
         );
         const leadHold = leadHoldKey ? holds?.[leadHoldKey] : null;
+        const leadSoldKey = normalizeInventorySoldKey(
+          conv.lead?.vehicle?.stockId,
+          conv.lead?.vehicle?.vin
+        );
+        const leadSold = leadSoldKey ? solds?.[leadSoldKey] : null;
         const availableMatches = matches.filter(m => {
           const key = normalizeInventoryHoldKey(m.stockId, m.vin);
-          return key ? !holds?.[key] : true;
+          return key ? !holds?.[key] && !solds?.[key] : true;
+        });
+        const hasSoldMatch = matches.some(m => {
+          const key = normalizeInventorySoldKey(m.stockId, m.vin);
+          return key ? !!solds?.[key] : false;
         });
 
-        if (matches.length === 0 && leadHold) {
+        if (matches.length === 0 && (leadSold || leadHold)) {
           const label =
-            leadHold.label ??
+            leadSold?.label ??
+            leadHold?.label ??
             formatModelLabelForFollowUp(
               conv.lead?.vehicle?.year ?? null,
               conv.lead?.vehicle?.model ?? null
             );
-          const reply =
-            `Looks like that unit has sold. ` +
-            `Want me to keep an eye out for another ${label}?`;
+          const reply = leadSold
+            ? `Looks like that unit has sold. Want me to keep an eye out for another ${label}?`
+            : `That unit is on hold right now. I can reach out if it becomes available — want me to keep an eye on it?`;
           const systemMode = webhookMode;
           if (systemMode === "suggest") {
             appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -7235,8 +7287,9 @@ if (authToken && signature) {
         }
 
         if (matches.length > 0 && availableMatches.length === 0) {
-          const reply =
-            "That unit is on hold right now. I can reach out if it becomes available — want me to keep an eye on it?";
+          const reply = hasSoldMatch
+            ? "Looks like that unit has sold. Want me to keep an eye out for another one?"
+            : "That unit is on hold right now. I can reach out if it becomes available — want me to keep an eye on it?";
           const systemMode = webhookMode;
           if (systemMode === "suggest") {
             appendOutbound(conv, event.to, event.from, reply, "draft_ai");
