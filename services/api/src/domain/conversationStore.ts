@@ -112,7 +112,7 @@ export type TodoTask = {
   id: string;
   convId: string;
   leadKey: string;
-  reason: "pricing" | "payments" | "approval" | "manager" | "service" | "other";
+  reason: "pricing" | "payments" | "approval" | "manager" | "service" | "call" | "other";
   summary: string;
   createdAt: string;
   sourceMessageId?: string;
@@ -1465,6 +1465,14 @@ export function addTodo(
   conv.updatedAt = nowIso();
   scheduleSave();
   return task;
+}
+
+export function addCallTodoIfMissing(conv: Conversation, summary: string): TodoTask | null {
+  const existing = todos.find(
+    t => t.convId === conv.id && t.status === "open" && t.reason === "call"
+  );
+  if (existing) return null;
+  return addTodo(conv, "call", summary);
 }
 
 export function listOpenTodos(): TodoTask[] {

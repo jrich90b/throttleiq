@@ -313,6 +313,7 @@ function todoActionLabel(todo: TodoItem): string {
   const reason = (todo.reason ?? "").toLowerCase();
   const summary = (todo.summary ?? "").toLowerCase();
   const text = `${reason} ${summary}`;
+  if (/(^|\\b)call(\\b|$)/.test(reason)) return "Call customer.";
   if (/(call only|phone only|no text|do not text)/.test(text)) return "Call customer (call-only).";
   if (/(credit|prequal|finance)/.test(text)) return "Business manager follow-up (credit app).";
   if (/(trade|appraisal|trade[- ]in)/.test(text)) return "Discuss trade appraisal and next steps.";
@@ -735,6 +736,12 @@ export default function Home() {
     if (sig && sig === lastConversationsSigRef.current) return;
     lastConversationsSigRef.current = sig;
     setConversations(next);
+  }
+
+  async function refreshTodos() {
+    const r = await fetch("/api/todos", { cache: "no-store" });
+    const data = await r.json().catch(() => null);
+    setTodos((data?.todos as TodoItem[]) ?? []);
   }
 
   async function refreshSelectedConversation(id: string) {
@@ -2180,8 +2187,12 @@ export default function Home() {
     await doSend(draftId ? { body, draftId, manualTakeover } : { body, manualTakeover });
   }
 
-  async function startCall(method?: "cell" | "extension") {
-    if (!selectedConv || callBusy) return;
+  async function startCall(
+    method?: "cell" | "extension",
+    convOverride?: ConversationDetail | null
+  ) {
+    const target = convOverride ?? selectedConv;
+    if (!target || callBusy) return;
     if (!authUser?.phone && !authUser?.extension) {
       window.alert("No phone or extension configured for your user.");
       return;
@@ -2189,7 +2200,7 @@ export default function Home() {
     setCallBusy(true);
     try {
       const methodToUse = method ?? callMethod;
-      const resp = await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/call`, {
+      const resp = await fetch(`/api/conversations/${encodeURIComponent(target.id)}/call`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ useExtension: methodToUse === "extension" })
@@ -2199,12 +2210,33 @@ export default function Home() {
         window.alert(data?.error ?? "Call failed");
       } else {
         setSaveToast("Call started");
+        await refreshTodos();
       }
     } catch {
       window.alert("Call failed");
     } finally {
       setCallBusy(false);
     }
+  }
+
+  async function openCallFromTodo(todo: TodoItem) {
+    if (callBusy) return;
+    if (!authUser?.phone && !authUser?.extension) {
+      window.alert("No phone or extension configured for your user.");
+      return;
+    }
+    setSelectedId(todo.convId);
+    const conv = await fetchConversationDetail(todo.convId);
+    if (conv) setSelectedConv(conv);
+    if (authUser?.phone && authUser?.extension) {
+      setCallPickerOpen(true);
+      return;
+    }
+    if (authUser?.extension && !authUser?.phone) {
+      await startCall("extension", conv ?? selectedConv);
+      return;
+    }
+    await startCall("cell", conv ?? selectedConv);
   }
 
   function openManualAppointment() {
@@ -3529,9 +3561,11 @@ export default function Home() {
 
         {section === "todos" && (authUser?.role === "manager" || authUser?.permissions?.canAccessTodos) ? (
           <div className="mt-3 border rounded-lg divide-y">
-            {todos.map(t => (
-              <div key={t.id} className="p-4 flex items-start justify-between gap-4">
-                <div>
+            {todos.map(t => {
+              const isCallTodo = (t.reason ?? "").toLowerCase() === "call";
+              return (
+                <div key={t.id} className="p-4 flex items-start justify-between gap-4">
+                  <div>
                   {t.leadName ? (
                     <>
                       <div className="text-sm font-medium">{t.leadName}</div>
@@ -3555,19 +3589,32 @@ export default function Home() {
                   >
                     Open conversation
                   </button>
+                  </div>
+                  <div className="flex flex-col items-end gap-2">
+                    {isCallTodo ? (
+                      <button
+                        className="px-3 py-2 border rounded text-sm"
+                        onClick={() => openCallFromTodo(t)}
+                        title="Call customer"
+                      >
+                        <span className="mr-1">📞</span>
+                        Call
+                      </button>
+                    ) : null}
+                    <button
+                      className="px-3 py-2 border rounded text-sm"
+                      onClick={() => {
+                        setTodoResolveTarget(t);
+                        setTodoResolution("resume");
+                        setTodoResolveOpen(true);
+                      }}
+                    >
+                      Done
+                    </button>
+                  </div>
                 </div>
-                <button
-                  className="px-3 py-2 border rounded text-sm"
-                  onClick={() => {
-                    setTodoResolveTarget(t);
-                    setTodoResolution("resume");
-                    setTodoResolveOpen(true);
-                  }}
-                >
-                  Done
-                </button>
-              </div>
-            ))}
+              );
+            })}
             {!loading && todos.length === 0 && (
               <div className="p-4 text-sm text-gray-600">No open To-Dos.</div>
             )}

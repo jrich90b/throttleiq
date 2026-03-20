@@ -92,6 +92,7 @@ import {
   finalizeDraftAsSent,
   discardPendingDrafts,
   addTodo,
+  addCallTodoIfMissing,
   listOpenTodos,
   addInternalQuestion,
   listOpenQuestions,
@@ -2727,7 +2728,11 @@ async function processDueFollowUps() {
   const userById = new Map(users.map(u => [u.id, u]));
   const now = new Date();
   const convs = getAllConversations();
-  const todoConvIds = new Set(listOpenTodos().map(t => t.convId));
+  const todoConvIds = new Set(
+    listOpenTodos()
+      .filter(t => t.reason !== "call")
+      .map(t => t.convId)
+  );
   const canTestRideNow = async (conv: any) => {
     return canOfferTestRideForLead(conv?.lead, dealerProfile);
   };
@@ -3021,10 +3026,16 @@ async function processDueFollowUps() {
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
     const authToken = process.env.TWILIO_AUTH_TOKEN;
 
+    const maybeAddCallTodoForFollowUp = () => {
+      if (isPostSale) return;
+      addCallTodoIfMissing(conv, "Call customer (follow-up).");
+    };
+
     if (systemMode === "suggest") {
       const draftTo = useEmail ? emailTo! : to;
       const draftMessage = useEmail && emailMessage ? emailMessage : message;
       appendOutbound(conv, from ?? "salesperson", draftTo, draftMessage, "draft_ai", undefined, mediaUrls);
+      maybeAddCallTodoForFollowUp();
       if (cadence.kind === "long_term") {
         const nowIso = new Date().toISOString();
         conv.followUpCadence = {
@@ -3046,6 +3057,7 @@ async function processDueFollowUps() {
       if (!emailFrom) {
         const fallbackMessage = emailMessage ?? message;
         appendOutbound(conv, "salesperson", emailTo!, fallbackMessage, "human", undefined, mediaUrls);
+        maybeAddCallTodoForFollowUp();
       } else {
         try {
         const dealerName = dealerProfile?.dealerName ?? "Dealership";
@@ -3063,10 +3075,12 @@ async function processDueFollowUps() {
           replyTo
         });
         appendOutbound(conv, emailFrom, emailTo!, signed, "sendgrid", undefined, mediaUrls);
+        maybeAddCallTodoForFollowUp();
       } catch (e: any) {
         console.log("[followup] email send failed:", e?.message ?? e);
         const fallbackMessage = emailMessage ?? message;
         appendOutbound(conv, "salesperson", emailTo!, fallbackMessage, "human", undefined, mediaUrls);
+        maybeAddCallTodoForFollowUp();
       }
       }
       if (cadence.kind === "long_term") {
@@ -3088,6 +3102,7 @@ async function processDueFollowUps() {
 
     if (!from || !accountSid || !authToken || !to.startsWith("+")) {
       appendOutbound(conv, "salesperson", to, message, "human", undefined, mediaUrls);
+      maybeAddCallTodoForFollowUp();
       if (cadence.kind === "long_term") {
         const nowIso = new Date().toISOString();
         conv.followUpCadence = {
@@ -3114,6 +3129,7 @@ async function processDueFollowUps() {
         ...(mediaUrls && mediaUrls.length ? { mediaUrl: mediaUrls } : {})
       });
       appendOutbound(conv, from, to, message, "twilio", msg.sid, mediaUrls);
+      maybeAddCallTodoForFollowUp();
       if (cadence.kind === "long_term") {
         const nowIso = new Date().toISOString();
         conv.followUpCadence = {
@@ -4732,12 +4748,13 @@ app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
   }
   const conv = getConversation(convId);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
-  const allowedReasons: Array<"pricing" | "payments" | "approval" | "manager" | "service" | "other"> = [
+  const allowedReasons: Array<"pricing" | "payments" | "approval" | "manager" | "service" | "call" | "other"> = [
     "pricing",
     "payments",
     "approval",
     "manager",
     "service",
+    "call",
     "other"
   ];
   const reason = allowedReasons.includes(reasonRaw as any)
@@ -5012,6 +5029,7 @@ app.post("/conversations/:id/send", async (req, res) => {
   const draft =
     draftCandidate && draftCandidate.provider === "draft_ai" ? draftCandidate : null;
   const draftTextForLog = draft?.body ?? null;
+  const mediaUrls = draft?.mediaUrls && draft.mediaUrls.length ? draft.mediaUrls : undefined;
 
   let schedulerTimezone = "America/New_York";
   try {
@@ -5030,6 +5048,8 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!conv.followUpCadence || conv.followUpCadence.status !== "active") return;
     advanceFollowUpCadence(conv, schedulerTimezone);
   };
+  const hasOpenNonCallTodo = () =>
+    listOpenTodos().some(t => t.convId === conv.id && t.reason !== "call");
 
   // Normalize destination number from conversation leadKey
   const rawTo = String(conv.leadKey ?? "").trim();
@@ -5152,8 +5172,7 @@ app.post("/conversations/:id/send", async (req, res) => {
         await maybeStartCadence(conv, new Date().toISOString());
       }
       applyManualCadenceAdvance(hadOutbound);
-      const hasOpenTodo = listOpenTodos().some(t => t.convId === conv.id);
-      if (!hasOpenTodo) {
+      if (!hasOpenNonCallTodo()) {
         pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
       }
       if (manualTakeover && !fin.usedDraft) setConversationMode(conv.id, "human");
@@ -5172,14 +5191,13 @@ app.post("/conversations/:id/send", async (req, res) => {
     const hadOutbound = conv.messages.some(m => m.direction === "out");
     const fin = finalizeDraftAsSent(conv, draftId, body, "human");
     if (!fin.usedDraft) {
-      appendOutbound(conv, "salesperson", conv.leadKey, body, "human");
+      appendOutbound(conv, "salesperson", conv.leadKey, body, "human", undefined, mediaUrls);
     }
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
     }
     applyManualCadenceAdvance(hadOutbound);
-    const hasOpenTodo = listOpenTodos().some(t => t.convId === conv.id);
-    if (!hasOpenTodo) {
+    if (!hasOpenNonCallTodo()) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
     }
     if (manualTakeover && !fin.usedDraft) setConversationMode(conv.id, "human");
@@ -5201,14 +5219,13 @@ app.post("/conversations/:id/send", async (req, res) => {
     const hadOutbound = conv.messages.some(m => m.direction === "out");
     const fin = finalizeDraftAsSent(conv, draftId, body, "human");
     if (!fin.usedDraft) {
-      appendOutbound(conv, "salesperson", to, body, "human");
+      appendOutbound(conv, "salesperson", to, body, "human", undefined, mediaUrls);
     }
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
     }
     applyManualCadenceAdvance(hadOutbound);
-    const hasOpenTodo = listOpenTodos().some(t => t.convId === conv.id);
-    if (!hasOpenTodo) {
+    if (!hasOpenNonCallTodo()) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
     }
     if (manualTakeover && !fin.usedDraft) setConversationMode(conv.id, "human");
@@ -5224,20 +5241,24 @@ app.post("/conversations/:id/send", async (req, res) => {
 
   try {
     const client = twilio(accountSid, authToken);
-    const msg = await client.messages.create({ from, to, body });
+    const msg = await client.messages.create({
+      from,
+      to,
+      body,
+      ...(mediaUrls && mediaUrls.length ? { mediaUrl: mediaUrls } : {})
+    });
 
     // Log as truly sent via Twilio (store SID)
     const hadOutbound = conv.messages.some(m => m.direction === "out");
     const fin = finalizeDraftAsSent(conv, draftId, body, "twilio", msg.sid);
     if (!fin.usedDraft) {
-      appendOutbound(conv, from, to, body, "twilio", msg.sid);
+      appendOutbound(conv, from, to, body, "twilio", msg.sid, mediaUrls);
     }
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
     }
     applyManualCadenceAdvance(hadOutbound);
-    const hasOpenTodo = listOpenTodos().some(t => t.convId === conv.id);
-    if (!hasOpenTodo) {
+    if (!hasOpenNonCallTodo()) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
     }
     if (manualTakeover && !fin.usedDraft) setConversationMode(conv.id, "human");
@@ -5256,14 +5277,13 @@ app.post("/conversations/:id/send", async (req, res) => {
     const hadOutbound = conv.messages.some(m => m.direction === "out");
     const fin = finalizeDraftAsSent(conv, draftId, body, "human");
     if (!fin.usedDraft) {
-      appendOutbound(conv, "salesperson", to, body, "human");
+      appendOutbound(conv, "salesperson", to, body, "human", undefined, mediaUrls);
     }
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
     }
     applyManualCadenceAdvance(hadOutbound);
-    const hasOpenTodo = listOpenTodos().some(t => t.convId === conv.id);
-    if (!hasOpenTodo) {
+    if (!hasOpenNonCallTodo()) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
     }
     if (manualTakeover && !fin.usedDraft) setConversationMode(conv.id, "human");
@@ -5362,6 +5382,10 @@ app.post("/conversations/:id/call", async (req, res) => {
       "voice_call",
       call.sid
     );
+    const callTodos = listOpenTodos().filter(t => t.convId === conv.id && t.reason === "call");
+    for (const todo of callTodos) {
+      markTodoDone(conv.id, todo.id);
+    }
     saveConversation(conv);
     await flushConversationStore();
     return res.json({ ok: true, callSid: call.sid, agentPhone: agentTo, customerPhone });

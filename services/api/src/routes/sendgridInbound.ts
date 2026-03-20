@@ -17,6 +17,7 @@ import {
   getPricingAttempts,
   incrementPricingAttempt,
   addTodo,
+  addCallTodoIfMissing,
   setFollowUpMode,
   pauseFollowUpCadence,
   stopFollowUpCadence,
@@ -1027,6 +1028,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     if (/here['’]s a photo/i.test(text)) return text;
     return `${text} ${initialPhotoLine}`.trim();
   };
+  const maybeAddInitialCallTodo = () => {
+    if (!isInitialAdf) return;
+    addCallTodoIfMissing(conv, "Call customer (initial reply sent).");
+  };
   if (isServiceLead) {
     let ack =
       "We’ve received your service request and will have the service department reach out.";
@@ -1037,6 +1042,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     setFollowUpMode(conv, "manual_handoff", "service_request");
     stopFollowUpCadence(conv, "manual_handoff");
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
+    maybeAddInitialCallTodo();
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -1068,6 +1074,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     setFollowUpMode(conv, "manual_handoff", "pending_used_followup");
     stopFollowUpCadence(conv, "manual_handoff");
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
+    maybeAddInitialCallTodo();
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -1099,6 +1106,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     setFollowUpMode(conv, "manual_handoff", "room58_standard");
     stopFollowUpCadence(conv, "manual_handoff");
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
+    maybeAddInitialCallTodo();
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -1130,6 +1138,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     ack = withInitialPhoto(ack);
 
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
+    maybeAddInitialCallTodo();
     conv.emailDraft = ack;
     return res.status(200).json({
       ok: true,
@@ -1172,6 +1181,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       markPricingEscalated(conv);
     }
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
+    maybeAddInitialCallTodo();
     conv.emailDraft = ack;
     return res.status(200).json({
       ok: true,
@@ -1194,6 +1204,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     ack = withInitialPhoto(ack);
     closeConversation(conv, result.autoClose.reason);
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
+    maybeAddInitialCallTodo();
     conv.emailDraft = ack;
     return res.status(200).json({
       ok: true,
@@ -1391,6 +1402,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
             `${dealerName} is at ${addressLine}.`;
 
           appendOutbound(conv, "dealership", leadKey, confirmText, "draft_ai", eventObj.id ?? undefined);
+          maybeAddInitialCallTodo();
           saveConversation(conv);
           await flushConversationStore();
           return res.status(200).json({
@@ -1492,18 +1504,22 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           replyTo
         });
         appendOutbound(conv, emailFrom, emailTo!, signed, "sendgrid");
+        maybeAddInitialCallTodo();
         saveConversation(conv);
         await flushConversationStore();
       } catch (e: any) {
         console.log("[sendgrid inbound] email send failed:", e?.message ?? e);
         appendOutbound(conv, "dealership", leadKey, draft, "draft_ai", undefined, initialMediaUrls);
+        maybeAddInitialCallTodo();
       }
     } else {
       appendOutbound(conv, "dealership", leadKey, draft, "draft_ai", undefined, initialMediaUrls);
+      maybeAddInitialCallTodo();
     }
   } else {
     // Store the draft as an outbound message (suggest-only for now)
     appendOutbound(conv, "dealership", leadKey, draft, "draft_ai", undefined, initialMediaUrls);
+    maybeAddInitialCallTodo();
   }
   if (conv.classification?.bucket === "event_promo") {
     closeConversation(conv, "event_promo_no_cadence");
