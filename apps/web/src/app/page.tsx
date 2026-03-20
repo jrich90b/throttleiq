@@ -3341,11 +3341,11 @@ export default function Home() {
                     : `Closed: ${visibleConversations.length}`}
                 </div>
                 <button
-                  className="px-2 py-2 border border-[var(--border)] rounded hover:bg-[var(--surface-2)]"
+                  className="px-3 py-2 text-xs font-semibold border border-[var(--accent)] text-[var(--accent)] rounded hover:bg-[var(--surface-2)]"
                   onClick={openCompose}
                   title="Compose SMS"
                 >
-                  +
+                  Compose SMS
                 </button>
               </div>
             </div>

@@ -1076,6 +1076,7 @@ export function startFollowUpCadence(conv: Conversation, anchorAtIso: string, ti
 }
 
 export function startPostSaleCadence(conv: Conversation, anchorAtIso: string, timeZone: string) {
+  if (conv.closedReason !== "sold" && !conv.sale?.soldAt) return;
   const nextDueAt = computePostSaleDueAt(anchorAtIso, POST_SALE_DAY_OFFSETS[0], timeZone);
   conv.followUpCadence = {
     status: "active",
