@@ -111,7 +111,14 @@ function isGenericLeadModel(modelText: string): boolean {
   return !t || /^(other|full line|full lineup|null)$/.test(t);
 }
 
-async function pickLeadInventoryMediaUrls(conv: any): Promise<string[] | undefined> {
+type LeadInventoryMediaPick = {
+  mediaUrls: string[];
+  year?: string;
+  model?: string;
+  color?: string;
+};
+
+async function pickLeadInventoryMedia(conv: any): Promise<LeadInventoryMediaPick | undefined> {
   try {
     const modelRaw =
       conv?.lead?.vehicle?.model ??
@@ -133,7 +140,14 @@ async function pickLeadInventoryMediaUrls(conv: any): Promise<string[] | undefin
           (leadVin && (i.vin ?? "").toLowerCase() === leadVin)
       );
       const url = direct?.images?.find(u => /^https?:\/\//i.test(u));
-      if (url) return [url];
+      if (url) {
+        return {
+          mediaUrls: [url],
+          year: direct?.year,
+          model: direct?.model,
+          color: direct?.color
+        };
+      }
     }
 
     const modelNorm = normalizeModelForMatch(modelText, conv?.lead?.vehicle?.make ?? "");
@@ -142,7 +156,7 @@ async function pickLeadInventoryMediaUrls(conv: any): Promise<string[] | undefin
     const yearText = String(conv?.lead?.vehicle?.year ?? "").trim();
     const colorNorm = normalizeModelToken(conv?.lead?.vehicle?.color ?? "");
 
-    let best: { score: number; url: string } | null = null;
+    let best: { score: number; url: string; item: any } | null = null;
     for (const item of items) {
       const itemModel = String(item.model ?? "").trim();
       if (!itemModel) continue;
@@ -171,14 +185,38 @@ async function pickLeadInventoryMediaUrls(conv: any): Promise<string[] | undefin
       const url = item.images?.find(u => /^https?:\/\//i.test(u));
       if (!url) continue;
       if (!best || score > best.score) {
-        best = { score, url };
+        best = { score, url, item };
       }
     }
 
-    return best?.url ? [best.url] : undefined;
+    if (!best?.url) return undefined;
+    return {
+      mediaUrls: [best.url],
+      year: best.item?.year,
+      model: best.item?.model,
+      color: best.item?.color
+    };
   } catch {
     return undefined;
   }
+}
+
+function buildInitialPhotoLine(conv: any, pick?: LeadInventoryMediaPick): string | null {
+  if (!pick?.mediaUrls?.length) return null;
+  const modelRaw =
+    pick.model ??
+    conv?.lead?.vehicle?.model ??
+    conv?.lead?.vehicle?.description ??
+    (conv?.lead as any)?.vehicleDescription ??
+    "";
+  const modelText = String(modelRaw ?? "").trim();
+  if (isGenericLeadModel(modelText)) return null;
+  const yearText = String(pick.year ?? conv?.lead?.vehicle?.year ?? "").trim();
+  const colorText = String(pick.color ?? conv?.lead?.vehicle?.color ?? "").trim();
+  const label = [yearText, modelText].filter(Boolean).join(" ").trim();
+  if (!label) return null;
+  const colorPart = colorText ? ` in ${colorText}` : "";
+  return `Here’s a photo of a ${label}${colorPart} we have in stock.`;
 }
 
 function inferAppointmentTypeFromConv(conv: any): string | null {
@@ -978,14 +1016,22 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   const isServiceLead = inferredBucket === "service" || inferredCta === "service_request" || serviceVinRequest;
   const room58Source = /room58/i.test(String(conv.lead?.source ?? ""));
-  const initialMediaUrls =
+  const initialMedia =
     isInitialAdf && !isServiceLead && !room58Source
-      ? await pickLeadInventoryMediaUrls(conv)
+      ? await pickLeadInventoryMedia(conv)
       : undefined;
+  const initialMediaUrls = initialMedia?.mediaUrls;
+  const initialPhotoLine = buildInitialPhotoLine(conv, initialMedia);
+  const withInitialPhoto = (text: string) => {
+    if (!initialPhotoLine) return text;
+    if (/here['’]s a photo/i.test(text)) return text;
+    return `${text} ${initialPhotoLine}`.trim();
+  };
   if (isServiceLead) {
     let ack =
       "We’ve received your service request and will have the service department reach out.";
     ack = await applyInitialAdfPrefix(ack);
+    ack = withInitialPhoto(ack);
     conv.dialogState = { name: "service_handoff", updatedAt: new Date().toISOString() };
     addTodo(conv, "service", event.body, event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "service_request");
@@ -1017,6 +1063,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     let ack =
       "Thanks for the heads-up. I’ll have someone check the sale‑pending status and follow up soon.";
     ack = await applyInitialAdfPrefix(ack);
+    ack = withInitialPhoto(ack);
     addTodo(conv, "other", event.body, event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "pending_used_followup");
     stopFollowUpCadence(conv, "manual_handoff");
@@ -1046,6 +1093,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
     let ack = `${greeting}thanks for reaching out. This is ${agentName} at ${dealerName}. We got your inquiry and someone will follow up soon.`;
     ack = await applyInitialAdfPrefix(ack);
+    ack = withInitialPhoto(ack);
 
     addTodo(conv, "other", event.body, event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "room58_standard");
@@ -1079,6 +1127,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       `This is ${agentName} at ${dealerName}. ` +
       `I’d love to help with pricing. Which model are you interested in (and any trim or color)?`;
     ack = await applyInitialAdfPrefix(ack);
+    ack = withInitialPhoto(ack);
 
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
     conv.emailDraft = ack;
@@ -1112,7 +1161,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   if (result.handoff?.required) {
     const reason = result.handoff.reason;
-    const ack = await applyInitialAdfPrefix(result.handoff.ack);
+    let ack = await applyInitialAdfPrefix(result.handoff.ack);
+    ack = withInitialPhoto(ack);
     if (!creditTodoCreated) {
       addTodo(conv, reason, event.body, event.providerMessageId);
     }
@@ -1140,7 +1190,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
 
   if (result.autoClose?.reason) {
-    const ack = await applyInitialAdfPrefix(result.draft);
+    let ack = await applyInitialAdfPrefix(result.draft);
+    ack = withInitialPhoto(ack);
     closeConversation(conv, result.autoClose.reason);
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
     conv.emailDraft = ack;
@@ -1411,6 +1462,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
 
   draft = await applyInitialAdfPrefix(draft);
+  draft = withInitialPhoto(draft);
 
   const systemMode = getSystemMode();
   const emailTo = lead.email?.trim();
