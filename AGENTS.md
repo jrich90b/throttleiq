@@ -10,7 +10,7 @@ These must remain deterministic to avoid brittle or risky LLM behavior:
 
 1) **Initial ADF reply prefix**
    - Always start with:  
-     `Hi {firstName} — Thanks for your inquiry. This is {agentName} at {dealerName}.`
+     `Hi {firstName} — This is {agentName} at {dealerName}.`
    - Implemented in `services/api/src/routes/sendgridInbound.ts` (`applyInitialAdfPrefix`).
 
 2) **Follow‑up cadence templates**
@@ -45,10 +45,50 @@ Key hard rules:
 - Manager/approval/callback/pricing‑after‑attempts now flow through LLM **only** with the handoff guardrail.
 - When LLM is disabled, deterministic replies are used.
 
+## NLU Confidence + Clarification (Policy)
+We gate LLM intent/booking parsing by confidence and ask a clarification when low confidence:
+- Intent parser: `explicit_request && confidence >= LLM_INTENT_CONFIDENCE_MIN` (default 0.75)
+- Booking parser: `explicit_request && confidence >= LLM_BOOKING_CONFIDENCE_MIN` (default 0.70)
+- If booking confidence is low and there’s no clear day/time signal, ask a single clarification:
+  - “Just to confirm — are you looking to set a time to stop in?”
+- If callback/test‑ride/availability confidence is low, ask a single clarification:
+  - Callback: “Just to confirm — do you want me to have someone call you?”
+  - Test ride: “Just to confirm — are you looking to set up a test ride?”
+  - Availability: “Just to confirm — are you asking about availability on a bike?”
+
+Env vars:
+- `LLM_INTENT_CONFIDENCE_MIN` (default 0.75)
+- `LLM_BOOKING_CONFIDENCE_MIN` (default 0.70)
+
 ## Appointment Offer Rules (Source of Truth)
 - Use suggested slots only if customer asked to schedule.
 - Do not confirm unless booked.
 - Avoid offering times if “holding_inventory” or “manual_handoff”.
+
+## Dialog State (Policy)
+Dialog state is tracked in `conv.dialogState` to avoid repeats and guide flow:
+- Inventory: `inventory_init`, `inventory_watch_prompted`, `inventory_watch_active`, `inventory_answered`
+- Scheduling: `clarify_schedule`, `schedule_request`, `schedule_offer_sent`, `schedule_booked`
+- Trade‑in: `trade_init`, `trade_cash`, `trade_trade`, `trade_either`
+- Pricing/Payments: `pricing_init`, `pricing_need_model`, `pricing_answered`, `pricing_handoff`, `payments_handoff`
+- Callback/Call‑Only: `callback_requested`, `callback_handoff`, `call_only`
+
+Initial state is set in `services/api/src/routes/sendgridInbound.ts`. Updates occur in `services/api/src/index.ts`.
+
+Trade‑in policy enforcement (runtime):
+- If trade state is set, do not re‑ask cash vs trade.
+- When `trade_cash`, offer two concrete times if available; otherwise ask for a stop‑in time.
+- When `trade_trade`, ask what model they want to trade into.
+- When `trade_either`, ask which direction they prefer.
+
+Pricing/Payments policy enforcement (runtime):
+- If `pricing_need_model`, always ask which model (and trim/color if known).
+- If `pricing_answered`, avoid repeating the exact same pricing reply.
+- If `pricing_handoff`/`payments_handoff`, send a manager follow‑up ack.
+
+Callback/Call‑Only policy enforcement (runtime):
+- If callback is requested, respond with a call‑back ack and create a handoff todo.
+- If call‑only is requested, set `contactPreference=call_only`, stop cadence, and do not send SMS.
 
 ## Safe Edit Checklist
 When changing responses:
@@ -74,3 +114,24 @@ When changing responses:
 - Add a new example:
   - `npm run intent:add -- --text "..." --intent callback|test_ride|availability|none --explicit true|false --id example_id`
   - Optional: `--availability "model=Road Glide;year=2025;color=purple"`, `--history '[{"direction":"out","body":"..."}]'`, `--lead '{"vehicle":{"model":"Street Glide"}}'`
+
+## After Any Code Change (Always Include These)
+- Local (push):
+  - `cd ~/throttleiq`
+  - `git status -sb`
+  - `git add <files>`
+  - `git commit -m "..." `
+  - `git push`
+- Instance (pull/build/restart API):
+  - `cd ~/throttleiq`
+  - `git pull`
+  - `cd services/api`
+  - `NODE_OPTIONS="--max-old-space-size=4096" npm run build`
+  - `pm2 restart /home/ubuntu/throttleiq/ecosystem.config.cjs --update-env`
+- If web app changed:
+  - `cd ~/throttleiq/apps/web`
+  - `npm run build`
+  - `pm2 restart leadrider-web --update-env`
+- If you add a new Next.js API route (e.g., under `apps/web/src/app/api/...`), you must:
+  - Commit the route file(s) locally.
+  - Pull + rebuild the web app on the instance (otherwise the route 404s).

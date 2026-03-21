@@ -259,6 +259,65 @@ function formatModelLabel(year?: string | null, model?: string | null): string |
   return year ? `${year} ${clean}` : clean;
 }
 
+async function getLeadInventoryMatchStatus(
+  conv: any
+): Promise<"in_stock" | "not_found" | "unknown"> {
+  try {
+    const modelRaw =
+      conv?.lead?.vehicle?.model ??
+      conv?.lead?.vehicle?.description ??
+      (conv?.lead as any)?.vehicleDescription ??
+      "";
+    const modelText = String(modelRaw ?? "").trim();
+    if (isGenericLeadModel(modelText)) return "unknown";
+    const items = await getInventoryFeed();
+    if (!items.length) return "unknown";
+
+    const leadStock = String(conv?.lead?.vehicle?.stockId ?? "").trim().toLowerCase();
+    const leadVin = String(conv?.lead?.vehicle?.vin ?? "").trim().toLowerCase();
+    if (leadStock || leadVin) {
+      const direct = items.find(
+        i =>
+          (leadStock && (i.stockId ?? "").toLowerCase() === leadStock) ||
+          (leadVin && (i.vin ?? "").toLowerCase() === leadVin)
+      );
+      return direct ? "in_stock" : "not_found";
+    }
+
+    const modelNorm = normalizeModelForMatch(modelText, conv?.lead?.vehicle?.make ?? "");
+    if (!modelNorm) return "unknown";
+    const yearText = String(conv?.lead?.vehicle?.year ?? "").trim();
+    const matches = items.filter(item => {
+      const itemModel = String(item.model ?? "").trim();
+      if (!itemModel) return false;
+      const itemModelNorm = normalizeModelForMatch(itemModel, item.make ?? "");
+      if (!itemModelNorm) return false;
+      if (itemModelNorm !== modelNorm) return false;
+      if (yearText) return String(item.year ?? "").trim() === yearText;
+      return true;
+    });
+    return matches.length ? "in_stock" : "not_found";
+  } catch {
+    return "unknown";
+  }
+}
+
+function buildInitialAvailabilityLine(
+  status: "in_stock" | "not_found" | "unknown",
+  conv: any
+): string | null {
+  if (status === "unknown") return null;
+  const modelLabel = formatModelLabel(
+    conv?.lead?.vehicle?.year ?? conv?.lead?.year ?? null,
+    conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description ?? null
+  );
+  if (!modelLabel) return null;
+  if (status === "in_stock") {
+    return `I saw you wanted to learn more about the ${modelLabel}. Are you interested in checking it out?`;
+  }
+  return `I’m not seeing a ${modelLabel} in stock right now. If you want to stop in, I can go over options, or I can keep an eye out for you.`;
+}
+
 function buildInitialEmailDraft(
   conv: any,
   dealerProfile: any,
@@ -972,42 +1031,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const agentName = profile?.agentName ?? "Brooke";
     const firstName = conv.lead?.firstName?.trim() || "";
     const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
-    const sourceLower = String(conv.lead?.source ?? "").toLowerCase();
-    const sourceLabel = sourceLower.includes("facebook") || sourceLower.includes("meta") ? "Facebook " : "";
-    const rawModel =
-      conv.lead?.vehicle?.model ??
-      conv.lead?.vehicle?.description ??
-      (conv.lead as any)?.vehicleDescription ??
-      "";
-    const rawMake = conv.lead?.vehicle?.make ?? "";
-    const rawYear = conv.lead?.vehicle?.year ?? "";
-    const modelText = String(rawModel ?? "").trim();
-    const modelLower = modelText.toLowerCase();
-    const isGenericModel = /^(other|full line|full lineup)$/i.test(modelText) || modelLower === "other";
-    const normalizeToken = (s: string) =>
-      s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-    const makeText = String(rawMake ?? "").trim();
-    const hasMake =
-      makeText &&
-      modelText &&
-      normalizeToken(modelText).includes(normalizeToken(makeText));
-    const vehicleLabel = !modelText || isGenericModel
-      ? ""
-      : [
-          rawYear ? String(rawYear).trim() : "",
-          hasMake ? "" : makeText,
-          modelText
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .trim();
-    const prefix = `${greeting}Thanks for your ${sourceLabel}inquiry${vehicleLabel ? ` on the ${vehicleLabel}` : ""}. ` +
-      `This is ${agentName} at ${dealerName}. `;
+    const prefix = `${greeting}This is ${agentName} at ${dealerName}. `;
     const prefixLower = prefix.toLowerCase();
     let body = String(text ?? "").trim();
     if (body.toLowerCase().startsWith(prefixLower)) return body;
     body = body.replace(/^hi\s+[^—]+—\s*/i, "");
     body = body.replace(/^thanks for[^.]*\.\s*/i, "");
+    body = body.replace(/^i (just )?saw[^.]*\.\s*/i, "");
     const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const agentEsc = esc(agentName);
     const dealerEsc = esc(dealerName);
@@ -1017,16 +1047,37 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   const isServiceLead = inferredBucket === "service" || inferredCta === "service_request" || serviceVinRequest;
   const room58Source = /room58/i.test(String(conv.lead?.source ?? ""));
+  const isRoom58Standard =
+    leadSourceLower.includes("room58 - standard") || rule.ruleName === "room58_standard";
+  const metaOfferRawModel = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "";
+  const isMetaPromoOffer = /meta promo offer/i.test(leadSourceLower);
+  const skipAvailabilityLine =
+    isServiceLead ||
+    isRoom58Standard ||
+    (isMetaPromoOffer && /^(other|full line)$/i.test(metaOfferRawModel.trim()));
   const initialMedia =
     isInitialAdf && !isServiceLead && !room58Source
       ? await pickLeadInventoryMedia(conv)
       : undefined;
   const initialMediaUrls = initialMedia?.mediaUrls;
   const initialPhotoLine = buildInitialPhotoLine(conv, initialMedia);
+  const initialAvailability =
+    isInitialAdf && !skipAvailabilityLine ? await getLeadInventoryMatchStatus(conv) : "unknown";
+  const initialAvailabilityLine = buildInitialAvailabilityLine(initialAvailability, conv);
   const withInitialPhoto = (text: string) => {
     if (!initialPhotoLine) return text;
     if (/here['’]s a photo/i.test(text)) return text;
     return `${text} ${initialPhotoLine}`.trim();
+  };
+  const withInitialAvailabilityLine = (text: string) => {
+    if (!initialAvailabilityLine) return text;
+    const lower = text.toLowerCase();
+    if (/which model|what model|trim or color/i.test(lower)) return text;
+    if (/i (just )?saw you wanted to learn more|interested in checking it out/i.test(lower)) return text;
+    if (/\b(checking it out|come by|stop in|stop by|take a look|in stock|available)\b/i.test(lower)) {
+      return text;
+    }
+    return `${text} ${initialAvailabilityLine}`.trim();
   };
   const maybeAddInitialCallTodo = () => {
     if (!isInitialAdf) return;
@@ -1034,9 +1085,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   };
   if (isServiceLead) {
     let ack =
-      "We’ve received your service request and will have the service department reach out.";
+      "Got it — I’ve received your service request. I’ll have our service department reach out shortly.";
     ack = await applyInitialAdfPrefix(ack);
     ack = withInitialPhoto(ack);
+    ack = withInitialAvailabilityLine(ack);
     conv.dialogState = { name: "service_handoff", updatedAt: new Date().toISOString() };
     addTodo(conv, "service", event.body, event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "service_request");
@@ -1067,9 +1119,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   );
   if (isUsed && isPendingComplaint) {
     let ack =
-      "Thanks for the heads-up. I’ll have someone check the sale‑pending status and follow up soon.";
+      "Thanks for the heads-up — I’ll check the sale‑pending status and follow up soon.";
     ack = await applyInitialAdfPrefix(ack);
     ack = withInitialPhoto(ack);
+    ack = withInitialAvailabilityLine(ack);
     addTodo(conv, "other", event.body, event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "pending_used_followup");
     stopFollowUpCadence(conv, "manual_handoff");
@@ -1090,17 +1143,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     });
   }
 
-  const isRoom58Standard =
-    leadSourceLower.includes("room58 - standard") || rule.ruleName === "room58_standard";
   if (isRoom58Standard) {
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
     const agentName = profile?.agentName ?? "Brooke";
     const firstName = conv.lead?.firstName ?? "";
     const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
-    let ack = `${greeting}thanks for reaching out. This is ${agentName} at ${dealerName}. We got your inquiry and someone will follow up soon.`;
+    let ack = `${greeting}thanks for reaching out. This is ${agentName} at ${dealerName}. I got your inquiry and I’ll make sure the team follows up soon.`;
     ack = await applyInitialAdfPrefix(ack);
     ack = withInitialPhoto(ack);
+    ack = withInitialAvailabilityLine(ack);
 
     addTodo(conv, "other", event.body, event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "room58_standard");
@@ -1122,8 +1174,6 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     });
   }
 
-  const metaOfferRawModel = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "";
-  const isMetaPromoOffer = /meta promo offer/i.test(leadSourceLower);
   if (isMetaPromoOffer && /^(other|full line)$/i.test(metaOfferRawModel.trim())) {
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
@@ -1133,9 +1183,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     let ack =
       `${greeting}thanks for your H‑D Meta promo offer request. ` +
       `This is ${agentName} at ${dealerName}. ` +
-      `I’d love to help with pricing. Which model are you interested in (and any trim or color)?`;
+      `I can help with pricing — which model are you interested in, and any trim or color?`;
     ack = await applyInitialAdfPrefix(ack);
     ack = withInitialPhoto(ack);
+    ack = withInitialAvailabilityLine(ack);
 
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
     maybeAddInitialCallTodo();
@@ -1172,6 +1223,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const reason = result.handoff.reason;
     let ack = await applyInitialAdfPrefix(result.handoff.ack);
     ack = withInitialPhoto(ack);
+    ack = withInitialAvailabilityLine(ack);
     if (!creditTodoCreated) {
       addTodo(conv, reason, event.body, event.providerMessageId);
     }
@@ -1202,6 +1254,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (result.autoClose?.reason) {
     let ack = await applyInitialAdfPrefix(result.draft);
     ack = withInitialPhoto(ack);
+    ack = withInitialAvailabilityLine(ack);
     closeConversation(conv, result.autoClose.reason);
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
     maybeAddInitialCallTodo();
@@ -1475,6 +1528,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   draft = await applyInitialAdfPrefix(draft);
   draft = withInitialPhoto(draft);
+  draft = withInitialAvailabilityLine(draft);
 
   const systemMode = getSystemMode();
   const emailTo = lead.email?.trim();
