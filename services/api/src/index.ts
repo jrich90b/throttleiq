@@ -8461,7 +8461,7 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
             conv.leadKey,
             summary,
             "voice_summary",
-            recordingSid || callSid || undefined
+            recordingSid || bodyCallSid || callbackCallSid || undefined
           );
         }
       }
