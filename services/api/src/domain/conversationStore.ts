@@ -185,6 +185,7 @@ export type LeadProfile = {
   sellOption?: "cash" | "trade" | "either";
   sellOptionUpdatedAt?: string;
   sourceId?: number;
+  walkIn?: boolean;
   vehicle?: {
     stockId?: string;
     vin?: string;
@@ -672,6 +673,9 @@ export function listConversations() {
         c.messages[c.messages.length - 1] ??
         null;
       const updatedAt = lastNonCall?.at ?? c.updatedAt;
+      const leadSource = c.lead?.source ?? null;
+      const leadEmail = (c.lead?.email ?? "").trim().toLowerCase();
+      const inferredWalkIn = /traffic log pro/i.test(leadSource ?? "") && leadEmail === "na@na.com";
       return {
         id: c.id,
         leadKey: c.leadKey,
@@ -689,7 +693,8 @@ export function listConversations() {
           null,
         vehicleDescription: c.lead?.vehicle?.description ?? null,
         contactPreference: c.contactPreference,
-        leadSource: c.lead?.source ?? null,
+        leadSource,
+        walkIn: c.lead?.walkIn ?? inferredWalkIn ?? null,
         classification: c.classification ?? null,
         followUpCadence: c.followUpCadence ?? null,
         followUp: c.followUp ?? null,

@@ -1154,6 +1154,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
     const agentName = profile?.agentName ?? "Brooke";
     const firstName = conv.lead?.firstName?.trim() || "there";
+    if (conv.lead) conv.lead.walkIn = true;
     const vendorFirst = vendorContactName.split(/\s+/).filter(Boolean)[0] || "";
     const salespersonName = vendorFirst || agentName;
     const modelRaw =

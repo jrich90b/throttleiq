@@ -162,6 +162,7 @@ type ConversationListItem = {
   contactPreference?: "call_only";
   leadName?: string | null;
   vehicleDescription?: string | null;
+  walkIn?: boolean | null;
   hold?: {
     key?: string;
     stockId?: string;
@@ -247,6 +248,7 @@ type ConversationDetail = {
     note?: string;
   } | null;
   contactPreference?: "call_only";
+  walkIn?: boolean | null;
   hold?: {
     key?: string;
     stockId?: string;
@@ -3656,6 +3658,15 @@ export default function Home() {
                                 <span className="truncate">
                                   {c.leadName && c.leadName.length > 0 ? c.leadName : c.leadKey}
                                 </span>
+                                {c.walkIn ? (
+                                  <span
+                                    className="text-blue-600 text-sm"
+                                    title="Walk-in"
+                                    aria-label="Walk-in"
+                                  >
+                                    🚶
+                                  </span>
+                                ) : null}
                                 {c.contactPreference === "call_only" ? (
                                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
                                     Call Only
