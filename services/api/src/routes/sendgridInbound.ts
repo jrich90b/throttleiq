@@ -417,6 +417,34 @@ function decodeQuotedPrintable(input: string): string {
   );
 }
 
+function extractYearRangeFromText(text?: string | null): { min: number; max: number } | null {
+  if (!text) return null;
+  const t = String(text).toLowerCase();
+  const range = t.match(/\b(20\d{2})\s*(?:-|to)\s*(20\d{2})\b/);
+  if (range) {
+    const a = Number(range[1]);
+    const b = Number(range[2]);
+    if (Number.isFinite(a) && Number.isFinite(b)) {
+      return { min: Math.min(a, b), max: Math.max(a, b) };
+    }
+  }
+  const shortRange = t.match(/\b(20\d{2})\s*-\s*(\d{2})\b/);
+  if (shortRange) {
+    const a = Number(shortRange[1]);
+    const b = Number(`20${shortRange[2]}`);
+    if (Number.isFinite(a) && Number.isFinite(b)) {
+      return { min: Math.min(a, b), max: Math.max(a, b) };
+    }
+  }
+  const years = Array.from(t.matchAll(/\b(20\d{2})\b/g)).map(m => Number(m[1]));
+  if (years.length >= 2) {
+    const min = Math.min(...years);
+    const max = Math.max(...years);
+    if (Number.isFinite(min) && Number.isFinite(max)) return { min, max };
+  }
+  return null;
+}
+
 function extractEmailAddress(input?: string): string | undefined {
   if (!input) return undefined;
   const m = String(input)
@@ -1137,6 +1165,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const wantsUsed =
       conv.lead?.vehicle?.condition === "used" ||
       /pre[-\s]?owned|used/.test(commentLower);
+    const yearRange = extractYearRangeFromText(lead.comment ?? lead.inquiry ?? "");
+    const rangeLabel = yearRange ? `${yearRange.min}-${yearRange.max} ` : "";
     let hasUsedMatch = false;
     if (modelLabel) {
       try {
@@ -1148,7 +1178,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
     let tail = "I’ll keep an eye out and let you know if one comes in.";
     if (modelLabel) {
-      const usedLabel = wantsUsed ? `used ${modelLabel}` : modelLabel;
+      const usedLabel = wantsUsed ? `used ${rangeLabel}${modelLabel}` : `${rangeLabel}${modelLabel}`;
       tail = hasUsedMatch
         ? `We do have a ${usedLabel} in stock right now — want me to send details?`
         : `I’ll keep an eye out for a ${usedLabel} and let you know if one comes in.`;
@@ -1162,11 +1192,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       const watch: InventoryWatch = {
         model: modelLabel,
         condition: "used",
+        yearMin: yearRange?.min,
+        yearMax: yearRange?.max,
         exactness: "model_only",
         status: "active",
         createdAt: new Date().toISOString(),
         note: "walk_in"
       };
+      if (watch.yearMin && watch.yearMax) {
+        watch.exactness = "model_range";
+      }
       conv.inventoryWatch = watch;
       conv.inventoryWatches = [watch];
       conv.inventoryWatchPending = undefined;
