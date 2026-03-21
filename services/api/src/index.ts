@@ -1003,16 +1003,16 @@ function buildBookingUrlForLead(baseUrl: string | undefined | null, conv: any): 
 }
 
 const FOLLOW_UP_MESSAGES = [
-  "Just checking in. Want to come by and look at the bike? I have {a} or {b} — do any of these times work?",
-  "If you want a quick walkaround video, I can send one. If you'd rather come by, what day works for you?",
-  "If you still want to see it, what day and time works for you?",
-  "Quick question — are you comparing a few bikes, or is this one your top choice?",
-  "Still interested? I can set a time. What day and time works for you?",
-  "If you're still shopping, what day and time works for you?",
-  "No rush. If you want to see it, what day and time should I hold?",
-  "Want to set a visit? What day and time works for you?",
-  "Should I hold a time for you? If so, what day and time?",
-  "Still want to take a look? If so, what day and time works for you?"
+  "Just checking in — still interested? If you want to stop by, I have {a} or {b} open. Which works best?",
+  "If a quick walkaround video would help, I can send one. What would you like to see?",
+  "Are you mostly shopping or looking to come in soon? I’m happy to help either way.",
+  "Quick check — is this still the model you’re leaning toward, or are you comparing a few?",
+  "If you want to stop by, just tell me a day that works and I’ll line it up.",
+  "No rush at all. Want me to keep an eye on availability or set a reminder for you?",
+  "If timing is tricky, just tell me what works and I’ll make it easy.",
+  "Want me to hold a time for you? If so, which day is best?",
+  "If you’d like to come by, I can set something up. What day works for you?",
+  "Still thinking it over? If you want to stop in, tell me a good day and I’ll take care of the rest."
 ];
 
 type EmailFollowUpCtx = {
@@ -1025,25 +1025,25 @@ type EmailFollowUpCtx = {
 
 const EMAIL_FOLLOW_UP_MESSAGES: Array<(ctx: EmailFollowUpCtx) => string> = [
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nJust checking in about ${label}. I can help with pricing, options, and availability. ${bookingLine} If you’d rather reply by email, just send a day and time that works for you.\n\nThanks,`,
+    `Hi ${name},\n\nJust checking in about ${label}. If you want to stop by, ${bookingLine} I’m happy to help with details in the meantime.\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nI wanted to see if you’d like more details on ${label}. If a walkaround video would help, I can send one. ${bookingLine} I’m happy to answer any questions by email.\n\nThanks,`,
+    `Hi ${name},\n\nIf a walkaround video or more details on ${label} would help, I can send that. ${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine, canTestRide }) =>
-    `Hi ${name},\n\nThanks again for your interest in ${label}. ${canTestRide ? "If you want a test ride, I can reserve a time." : "If you want to stop by, I can reserve a time."} ${bookingLine} If you prefer, just reply with a day and time that works.\n\nThanks,`,
+    `Hi ${name},\n\nThanks again for your interest in ${label}. ${canTestRide ? "If you want a test ride, I can reserve a time." : "If you want to stop by, I can reserve a time."} ${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nQuick question: is ${label} still at the top of your list? If you’d like to see it in person, ${bookingLine} I’m here to help with any questions in the meantime.\n\nThanks,`,
+    `Hi ${name},\n\nQuick question: is ${label} still at the top of your list? If you’d like to see it in person, ${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nJust checking in on ${label}. If you’d like to take a closer look, ${bookingLine} I can also help with pricing or availability by email.\n\nThanks,`,
+    `Hi ${name},\n\nJust checking in on ${label}. If you’d like to take a closer look, ${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nI hope your week is going well. If you’re still shopping for ${label}, I’m happy to help with options and next steps. ${bookingLine} Let me know if there’s anything specific you want to see.\n\nThanks,`,
+    `Hi ${name},\n\nNo rush at all — if you’re still shopping for ${label}, I’m here to help. ${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nNo rush at all — I just wanted to keep the conversation open on ${label}. ${bookingLine} If it’s easier, reply with a day and time and I’ll take care of the rest.\n\nThanks,`,
+    `Hi ${name},\n\nIf it’s easier, tell me what day works for you and I’ll take care of the rest. ${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nIf you want to set a time to check out ${label}, I can get that on the calendar. ${bookingLine} I can also answer any questions by email before you visit.\n\nThanks,`,
+    `Hi ${name},\n\nIf you want to set a time to check out ${label}, I can get that on the calendar. ${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nShould I hold a time for you to see ${label}? ${bookingLine} If a different approach is better, just tell me what works.\n\nThanks,`,
+    `Hi ${name},\n\nShould I hold a time for you to see ${label}? ${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nStill interested in taking a look at ${label}? ${bookingLine} I’m happy to help with anything you need in the meantime.\n\nThanks,`
+    `Hi ${name},\n\nStill interested in taking a look at ${label}? ${bookingLine}\n\nThanks,`
 ];
 
 function isUnknownInterestVehicle(conv: any): boolean {
