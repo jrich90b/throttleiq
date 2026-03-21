@@ -21,10 +21,12 @@ import {
 
 function simpleIntent(body: string): OrchestratorResult["intent"] {
   const t = body.toLowerCase();
+  if (/(trade|trade-in|trade in|trade appraisal|value my trade|trade value|trade price)/.test(t)) {
+    return "TRADE_IN";
+  }
   if (/(stock|vin|available|availability|still there)/.test(t)) return "AVAILABILITY";
   if (/(price|otd|out the door|payment|monthly)/.test(t)) return "PRICING";
   if (/(finance|credit|apr)/.test(t)) return "FINANCING";
-  if (/(trade|trade-in|trade in)/.test(t)) return "TRADE_IN";
   if (/(test ride|ride it|demo)/.test(t)) return "TEST_RIDE";
   if (/(spec|seat height|weight|hp|horsepower|torque)/.test(t)) return "SPECS";
   return "GENERAL";

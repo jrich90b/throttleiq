@@ -2261,13 +2261,14 @@ function stripIntroIfRepeated(text: string, conv: any, dealerName?: string, agen
   let out = text.trim();
   out = out.replace(/^hi[^.]*?\s*[-—]\s*/i, "");
   if (agentName) {
-    const r = new RegExp(`^\\s*(this is[^.]*${escapeRegex(agentName)}[^.]*\\.)\\s*`, "i");
+    const r = new RegExp(`\\bthis is[^.]*${escapeRegex(agentName)}[^.]*\\.?\\s*`, "i");
     out = out.replace(r, "");
   }
   if (dealerName) {
-    const r = new RegExp(`^\\s*(this is[^.]*${escapeRegex(dealerName)}[^.]*\\.)\\s*`, "i");
+    const r = new RegExp(`\\bthis is[^.]*${escapeRegex(dealerName)}[^.]*\\.?\\s*`, "i");
     out = out.replace(r, "");
   }
+  out = out.replace(/\s{2,}/g, " ").replace(/\s+([,.;:])/g, "$1").trim();
   return out.trim();
 }
 
