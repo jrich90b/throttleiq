@@ -7048,7 +7048,10 @@ export default function Home() {
                 .filter(m => {
                   const provider = m.provider ?? "";
                   const isEmail = provider === "sendgrid";
-                  const isCall = provider === "voice_call" || provider === "voice_transcript";
+                  const isCall =
+                    provider === "voice_call" ||
+                    provider === "voice_transcript" ||
+                    provider === "voice_summary";
                   const isSms =
                     provider === "twilio" ||
                     provider === "human" ||
@@ -7065,9 +7068,12 @@ export default function Home() {
                       ? "call"
                       : m.provider === "voice_transcript"
                         ? "call transcript"
-                        : (m.provider ?? "?");
+                        : m.provider === "voice_summary"
+                          ? "call summary"
+                          : (m.provider ?? "?");
+                  const isSummary = m.provider === "voice_summary";
                   return (
-                    <div key={m.id} className={`text-sm ${m.direction === "in" ? "" : "text-right"}`}>
+                    <div key={m.id} className={`text-sm ${m.direction === "in" || isSummary ? "" : "text-right"}`}>
                       <div className="text-xs text-gray-500">
                         {m.direction.toUpperCase()} • {providerLabel} •{" "}
                         {new Date(m.at).toLocaleString()}
@@ -7075,9 +7081,11 @@ export default function Home() {
                       </div>
                       <div
                         className={`inline-block mt-1 px-3 py-2 rounded-2xl border max-w-[85%] whitespace-pre-wrap text-base font-medium ${
-                          m.direction === "in"
-                            ? "bg-gray-100 text-gray-900 border-gray-200"
-                            : "bg-blue-600 text-white border-blue-600"
+                          isSummary
+                            ? "bg-gray-50 text-gray-800 border-gray-200"
+                            : m.direction === "in"
+                              ? "bg-gray-100 text-gray-900 border-gray-200"
+                              : "bg-blue-600 text-white border-blue-600"
                         }`}
                       >
                         {renderMessageBody(m.body)}

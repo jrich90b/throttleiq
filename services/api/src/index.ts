@@ -8455,6 +8455,14 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
             sourceMessageId: recordingSid || undefined,
             contacted: true
           });
+          appendOutbound(
+            conv,
+            "system",
+            conv.leadKey,
+            summary,
+            "voice_summary",
+            recordingSid || callSid || undefined
+          );
         }
       }
 

@@ -13,7 +13,8 @@ export type MessageProvider =
   | "draft_ai"
   | "human"
   | "voice_call"
-  | "voice_transcript";
+  | "voice_transcript"
+  | "voice_summary";
 
 export type VoiceContext = {
   summary: string;
