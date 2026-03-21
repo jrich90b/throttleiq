@@ -8310,16 +8310,32 @@ app.post("/webhooks/twilio/voice", async (req, res) => {
     if (!ok) return res.status(403).json({ ok: false, error: "Invalid Twilio signature" });
   }
 
-  const customerRaw = String(req.query?.customer ?? req.body?.To ?? "").trim();
+  const requestedCustomerRaw = String(req.query?.customer ?? "").trim();
+  const inboundFromRaw = String(req.body?.From ?? "").trim();
+  const inboundToRaw = String(req.body?.To ?? "").trim();
   const agentDigits = String(req.query?.agentDigits ?? "").trim();
   const agentNameRaw = String(req.query?.agentName ?? "").trim();
-  const customerPhone = normalizePhone(customerRaw);
+  const requestedCustomerPhone = normalizePhone(requestedCustomerRaw);
+  const inboundFromPhone = normalizePhone(inboundFromRaw);
+  const inboundToPhone = normalizePhone(inboundToRaw);
   const leadKey = String(req.query?.leadKey ?? "").trim();
   const callSid = String(req.body?.CallSid ?? "").trim();
   const from = process.env.TWILIO_FROM_NUMBER ?? "";
 
-  const leadKeyParam = leadKey || customerPhone || "";
-  const recordingCb = `${publicBase ?? `${req.protocol}://${req.get("host")}`}/webhooks/twilio/voice/recording?leadKey=${encodeURIComponent(leadKeyParam)}${customerPhone ? `&customer=${encodeURIComponent(customerPhone)}` : ""}${callSid ? `&callSid=${encodeURIComponent(callSid)}` : ""}${agentNameRaw ? `&agentName=${encodeURIComponent(agentNameRaw)}` : ""}`;
+  const isInbound = !requestedCustomerPhone && !!inboundFromPhone && !!inboundToPhone;
+  let dialTarget: string | null = requestedCustomerPhone || null;
+  let callerId = from;
+  if (isInbound) {
+    const dealerProfile = await getDealerProfile();
+    const dealerPhone = normalizePhone(String(dealerProfile?.phone ?? "").trim());
+    if (dealerPhone && dealerPhone.startsWith("+")) {
+      dialTarget = dealerPhone;
+      callerId = inboundFromPhone && inboundFromPhone.startsWith("+") ? inboundFromPhone : from;
+    }
+  }
+
+  const leadKeyParam = leadKey || requestedCustomerPhone || inboundFromPhone || "";
+  const recordingCb = `${publicBase ?? `${req.protocol}://${req.get("host")}`}/webhooks/twilio/voice/recording?leadKey=${encodeURIComponent(leadKeyParam)}${requestedCustomerPhone ? `&customer=${encodeURIComponent(requestedCustomerPhone)}` : ""}${callSid ? `&callSid=${encodeURIComponent(callSid)}` : ""}${agentNameRaw ? `&agentName=${encodeURIComponent(agentNameRaw)}` : ""}`;
 
   const response = new (twilio as any).twiml.VoiceResponse();
   if (agentDigits) {
@@ -8327,18 +8343,18 @@ app.post("/webhooks/twilio/voice", async (req, res) => {
     response.play({ digits: agentDigits });
     response.pause({ length: 1 });
   }
-  if (customerPhone && customerPhone.startsWith("+")) {
+  if (dialTarget && dialTarget.startsWith("+")) {
     const dial = response.dial({
-      callerId: from,
+      callerId,
       answerOnBridge: true,
       timeout: 30,
       record: "record-from-answer-dual",
       recordingStatusCallback: recordingCb,
       recordingStatusCallbackEvent: ["completed"]
     });
-    dial.number(customerPhone);
+    dial.number(dialTarget);
   } else {
-    response.say("No customer number provided.");
+    response.say("We were unable to complete your call.");
   }
   return res.type("text/xml").send(response.toString());
 });
