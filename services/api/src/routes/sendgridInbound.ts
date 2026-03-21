@@ -1207,12 +1207,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       conv.inventoryWatchPending = undefined;
       conv.dialogState = { name: "inventory_watch_active", updatedAt: new Date().toISOString() };
       setFollowUpMode(conv, "holding_inventory", "inventory_watch");
-      if (conv.followUpCadence && conv.followUpCadence.status === "active") {
-        const pauseUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-        conv.followUpCadence.pausedUntil = pauseUntil;
-        conv.followUpCadence.pauseReason = "inventory_watch";
-        conv.followUpCadence.nextDueAt = pauseUntil;
-      }
+      stopFollowUpCadence(conv, "inventory_watch");
     }
 
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);

@@ -471,7 +471,8 @@ async function processInventoryWatchlist() {
       matchedWatch.lastNotifiedAt = nowIso;
       matchedWatch.lastNotifiedStockId = matchedItem.stockId ?? matchedItem.vin ?? undefined;
       setFollowUpMode(conv, "holding_inventory", "inventory_watch_match");
-      if (!conv.followUpCadence) {
+      if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
+        conv.followUpCadence = undefined;
         startFollowUpCadence(conv, nowIso, tz);
       }
       if (conv.followUpCadence && conv.followUpCadence.status === "active") {
@@ -4631,12 +4632,20 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
       conv.inventoryWatch = watchList[0];
       conv.inventoryWatchPending = undefined;
       setFollowUpMode(conv, "holding_inventory", "inventory_watch");
+      stopFollowUpCadence(conv, "inventory_watch");
     }
 
     const effectiveResolution =
       shouldApplyWatch && resolution === "resume" ? "pause_7" : resolution;
 
-    if (effectiveResolution === "archive") {
+    const cadenceBlockedByWatch =
+      shouldApplyWatch &&
+      ["resume", "pause_7", "pause_30", "pause_indef", "resume_on"].includes(effectiveResolution);
+
+    if (cadenceBlockedByWatch) {
+      stopFollowUpCadence(conv, "inventory_watch");
+      cadenceNotice = "Vehicle watch active — follow-ups paused until a match is found.";
+    } else if (effectiveResolution === "archive") {
       stopFollowUpCadence(conv, "manual_archive");
       closeConversation(conv, "manual_archive");
       stopRelatedCadences(conv, "manual_archive", { close: true });
@@ -7112,12 +7121,7 @@ if (authToken && signature) {
         conv.inventoryWatchPending = undefined;
         setDialogState(conv, "inventory_watch_active");
         setFollowUpMode(conv, "holding_inventory", "inventory_watch");
-        if (conv.followUpCadence && conv.followUpCadence.status === "active") {
-          const pauseUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-          conv.followUpCadence.pausedUntil = pauseUntil;
-          conv.followUpCadence.pauseReason = "inventory_watch";
-          conv.followUpCadence.nextDueAt = pauseUntil;
-        }
+        stopFollowUpCadence(conv, "inventory_watch");
         const reply = buildInventoryWatchConfirmation(pref.watch);
         const systemMode = webhookMode;
         if (systemMode === "suggest") {
@@ -7228,12 +7232,7 @@ if (authToken && signature) {
       conv.inventoryWatchPending = undefined;
       setDialogState(conv, "inventory_watch_active");
       setFollowUpMode(conv, "holding_inventory", "inventory_watch");
-      if (conv.followUpCadence && conv.followUpCadence.status === "active") {
-        const pauseUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-        conv.followUpCadence.pausedUntil = pauseUntil;
-        conv.followUpCadence.pauseReason = "inventory_watch";
-        conv.followUpCadence.nextDueAt = pauseUntil;
-      }
+      stopFollowUpCadence(conv, "inventory_watch");
       const reply = buildInventoryWatchConfirmation(pref.watch);
       const systemMode = webhookMode;
       if (systemMode === "suggest") {
