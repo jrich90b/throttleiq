@@ -169,6 +169,7 @@ type Message = {
   mediaUrls?: string[];
   at: string;
   provider?: string;
+  providerMessageId?: string;
   draftStatus?: "pending" | "stale";
 };
 
