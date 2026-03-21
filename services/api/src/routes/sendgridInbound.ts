@@ -29,6 +29,7 @@ import {
   saveConversation,
   flushConversationStore
 } from "../domain/conversationStore.js";
+import type { InventoryWatch } from "../domain/conversationStore.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { resolveChannel, resolveLeadRule } from "../domain/leadSourceRules.js";
 import type { InboundMessageEvent } from "../domain/types.js";
@@ -43,7 +44,7 @@ import {
 } from "../domain/schedulerEngine.js";
 import { getDealerProfile } from "../domain/dealerProfile.js";
 import { getInventoryNote } from "../domain/inventoryNotes.js";
-import { getInventoryFeed, hasInventoryForModelYear } from "../domain/inventoryFeed.js";
+import { getInventoryFeed, hasInventoryForModelYear, findInventoryMatches } from "../domain/inventoryFeed.js";
 
 function base64UrlDecode(input: string): string | null {
   try {
@@ -466,7 +467,7 @@ function pauseRelatedCadencesOnInbound(conv: any, fromEmail?: string) {
   pauseFollowUpCadence(conv, pauseUntil, "inbound_email");
 }
 
-function extractLeadMeta(adfXml: string): { leadSource?: string; model?: string } {
+function extractLeadMeta(adfXml: string): { leadSource?: string; model?: string; vendorContactName?: string } {
   try {
     const cleaned = decodeQuotedPrintable(adfXml);
     const parser = new XMLParser({ ignoreAttributes: false });
@@ -485,6 +486,9 @@ function extractLeadMeta(adfXml: string): { leadSource?: string; model?: string 
       text(prospect?.vendor) ??
       pickNameValue(adf?.vendor?.name) ??
       text(adf?.vendor);
+    const vendorContactName =
+      pickNameValue(prospect?.vendor?.contact?.name) ??
+      pickNameValue(adf?.vendor?.contact?.name);
 
     let leadSource = [providerName, vendorName, sourceFromId].find(v => v && v.length > 0);
     if (!leadSource) {
@@ -501,7 +505,7 @@ function extractLeadMeta(adfXml: string): { leadSource?: string; model?: string 
     const vehicle = prospect?.vehicle ?? prospect?.request?.vehicle ?? adf?.vehicle ?? {};
     const model = text(vehicle?.model);
 
-    return { leadSource, model };
+    return { leadSource, model, vendorContactName };
   } catch {
     return {};
   }
@@ -781,6 +785,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   });
   const meta = extractLeadMeta(adfXml);
   const leadSource = meta.leadSource?.trim() || undefined;
+  const vendorContactName = meta.vendorContactName?.trim() || "";
   const leadSourceId = lead.leadSourceId ?? undefined;
   const timeframeInfo = parseTimeframeMonths(lead.purchaseTimeframe);
   const make = lead.vehicleMake ?? undefined;
@@ -1095,6 +1100,87 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     stopFollowUpCadence(conv, "manual_handoff");
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
     maybeAddInitialCallTodo();
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      draft: ack
+    });
+  }
+
+  const commentLower = (lead.comment ?? "").toLowerCase();
+  const emailLower = (lead.email ?? "").toLowerCase();
+  const isWalkInLead =
+    isInitialAdf &&
+    /traffic log pro/i.test(leadSourceLower) &&
+    (commentLower.includes("step 2") || commentLower.includes("walk in") || emailLower === "na@na.com");
+  if (isWalkInLead) {
+    const profile = await getDealerProfile();
+    const dealerName = profile?.dealerName ?? "American Harley-Davidson";
+    const agentName = profile?.agentName ?? "Brooke";
+    const firstName = conv.lead?.firstName?.trim() || "there";
+    const vendorFirst = vendorContactName.split(/\s+/).filter(Boolean)[0] || "";
+    const salespersonName = vendorFirst || agentName;
+    const modelRaw =
+      conv.lead?.vehicle?.model ??
+      conv.lead?.vehicle?.description ??
+      meta.model ??
+      "";
+    const modelLabel = normalizeVehicleModel(String(modelRaw ?? ""), conv.lead?.vehicle?.make ?? null);
+    const wantsUsed =
+      conv.lead?.vehicle?.condition === "used" ||
+      /pre[-\s]?owned|used/.test(commentLower);
+    let hasUsedMatch = false;
+    if (modelLabel) {
+      try {
+        const matches = await findInventoryMatches({ year: null, model: modelLabel });
+        if (matches.length) {
+          hasUsedMatch = matches.some(m => String(m.condition ?? "").toLowerCase().includes("used"));
+        }
+      } catch {}
+    }
+    let tail = "I’ll keep an eye out and let you know if one comes in.";
+    if (modelLabel) {
+      const usedLabel = wantsUsed ? `used ${modelLabel}` : modelLabel;
+      tail = hasUsedMatch
+        ? `We do have a ${usedLabel} in stock right now — want me to send details?`
+        : `I’ll keep an eye out for a ${usedLabel} and let you know if one comes in.`;
+    }
+    const ack =
+      `Hi ${firstName} — this is ${salespersonName} at ${dealerName}. ` +
+      "Thanks for stopping in, it was nice chatting with you. " +
+      tail;
+
+    if (modelLabel && wantsUsed && !hasUsedMatch) {
+      const watch: InventoryWatch = {
+        model: modelLabel,
+        condition: "used",
+        exactness: "model_only",
+        status: "active",
+        createdAt: new Date().toISOString(),
+        note: "walk_in"
+      };
+      conv.inventoryWatch = watch;
+      conv.inventoryWatches = [watch];
+      conv.inventoryWatchPending = undefined;
+      conv.dialogState = { name: "inventory_watch_active", updatedAt: new Date().toISOString() };
+      setFollowUpMode(conv, "holding_inventory", "inventory_watch");
+      if (conv.followUpCadence && conv.followUpCadence.status === "active") {
+        const pauseUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+        conv.followUpCadence.pausedUntil = pauseUntil;
+        conv.followUpCadence.pauseReason = "inventory_watch";
+        conv.followUpCadence.nextDueAt = pauseUntil;
+      }
+    }
+
+    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
     return res.status(200).json({
       ok: true,
       parsed: true,
