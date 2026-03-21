@@ -1347,6 +1347,57 @@ function pickBestMatch(
   return { url, date: url ? extractImageDate(url) : null, color: fallback.color };
 }
 
+function formatColorLabel(value?: string | null): string | null {
+  if (!value) return null;
+  const cleaned = value.trim();
+  if (!cleaned) return null;
+  return cleaned
+    .toLowerCase()
+    .split(/\s+/)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function pickClosestInventoryItem(
+  items: Array<{ year?: string; images?: string[]; color?: string }>,
+  targetYear?: string | null,
+  leadColor?: string | null
+): { item?: any; imageUrl?: string | null } | null {
+  if (!items.length) return null;
+  const leadTrim = extractTrimToken(leadColor ?? null);
+  let pool = items.slice();
+  if (leadColor) {
+    const colorPool = pool.filter(
+      i =>
+        colorMatchesExact(i.color, leadColor, leadTrim) ||
+        colorMatchesAlias(i.color, leadColor, leadTrim)
+    );
+    if (colorPool.length) pool = colorPool;
+  }
+  const withImages = pool.filter(i => Array.isArray(i.images) && i.images.length > 0);
+  if (withImages.length) pool = withImages;
+  const targetYearNum = targetYear ? Number(targetYear) : null;
+  pool.sort((a, b) => {
+    const aYear = Number(a.year);
+    const bYear = Number(b.year);
+    const aDiff =
+      targetYearNum && Number.isFinite(targetYearNum) && Number.isFinite(aYear)
+        ? Math.abs(aYear - targetYearNum)
+        : 9999;
+    const bDiff =
+      targetYearNum && Number.isFinite(targetYearNum) && Number.isFinite(bYear)
+        ? Math.abs(bYear - targetYearNum)
+        : 9999;
+    if (aDiff !== bDiff) return aDiff - bDiff;
+    if (Number.isFinite(aYear) && Number.isFinite(bYear) && aYear !== bYear) return bYear - aYear;
+    return 0;
+  });
+  const picked = pool[0];
+  if (!picked) return null;
+  const imageUrl = picked.images?.find((u: string) => /^https?:\/\//i.test(u)) ?? null;
+  return { item: picked, imageUrl };
+}
+
 function isRecent(date: Date | null, days: number): boolean {
   if (!date) return false;
   const ageMs = Date.now() - date.getTime();
@@ -7315,6 +7366,7 @@ if (authToken && signature) {
         null;
 
       if (model) {
+        const hasIdentifiers = !!conv.lead?.vehicle?.stockId || !!conv.lead?.vehicle?.vin || !!color;
         let matches = await findInventoryMatches({ year: year ?? null, model });
         if (color) {
           const c = color.toLowerCase();
@@ -7430,6 +7482,58 @@ if (authToken && signature) {
             reply
           )}</Body>${mediaTag}\\n  </Message>\\n</Response>`;
           return res.status(200).type("text/xml").send(twiml);
+        }
+        if (matches.length === 0 && !hasIdentifiers) {
+          let fallback = await findInventoryMatches({ year: null, model });
+          if (color) {
+            const c = color.toLowerCase();
+            fallback = fallback.filter(i => (i.color ?? "").toLowerCase().includes(c));
+          }
+          const availableFallback = fallback.filter(m => {
+            const key = normalizeInventoryHoldKey(m.stockId, m.vin);
+            return key ? !holds?.[key] && !solds?.[key] : true;
+          });
+          const pick = pickClosestInventoryItem(availableFallback, year ?? null, color ?? null);
+          if (pick?.item) {
+            const picked = pick.item;
+            const yearLabel = picked.year ? `${picked.year} ` : "";
+            const modelLabel = picked.model ?? model ?? "that model";
+            const colorLabel = formatColorLabel(picked.color ?? null);
+            const label = `${yearLabel}${modelLabel}`.trim();
+            const reply =
+              year
+                ? `Got it — I’m not seeing a ${year} ${model} in stock right now, but we do have a ${colorLabel ? `${colorLabel} ` : ""}${label} available. Here’s a photo — is this the one you had in mind? If not, I can keep an eye out for the exact year/color.`
+                : `Got it — we do have a ${colorLabel ? `${colorLabel} ` : ""}${label} available. Here’s a photo — is this the one you had in mind? If not, I can keep an eye out for the exact year/color.`;
+            setDialogState(conv, "inventory_answered");
+            const systemMode = webhookMode;
+            if (systemMode === "suggest") {
+              appendOutbound(
+                conv,
+                event.to,
+                event.from,
+                reply,
+                "draft_ai",
+                undefined,
+                pick.imageUrl ? [pick.imageUrl] : undefined
+              );
+              const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+              return res.status(200).type("text/xml").send(twiml);
+            }
+            appendOutbound(
+              conv,
+              event.to,
+              event.from,
+              reply,
+              "twilio",
+              undefined,
+              pick.imageUrl ? [pick.imageUrl] : undefined
+            );
+            const mediaTag = pick.imageUrl ? `\n    <Media>${escapeXml(pick.imageUrl)}</Media>` : "";
+            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>\n    <Body>${escapeXml(
+              reply
+            )}</Body>${mediaTag}\n  </Message>\n</Response>`;
+            return res.status(200).type("text/xml").send(twiml);
+          }
         }
         addTodo(
           conv,
