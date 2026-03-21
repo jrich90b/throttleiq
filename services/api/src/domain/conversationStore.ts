@@ -657,8 +657,7 @@ export function inferWalkIn(conv: Conversation): boolean {
     conv.messages.find(m => m.provider === "sendgrid_adf" && typeof m.body === "string")?.body ?? "";
   const sourceMatch =
     /traffic log pro/i.test(leadSource) || /source:\s*traffic log pro/i.test(adfBody);
-  if (!sourceMatch) return false;
-  return /(step 2|walk in|walk-in|dealership visit)/i.test(adfBody);
+  return sourceMatch;
 }
 
 export function listConversations() {
