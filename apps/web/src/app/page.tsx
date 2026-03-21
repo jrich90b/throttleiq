@@ -3619,16 +3619,6 @@ export default function Home() {
                         Call
                       </button>
                     ) : null}
-                    <button
-                      className="px-3 py-2 border rounded text-sm"
-                      onClick={() => {
-                        setTodoResolveTarget(t);
-                        setTodoResolution("resume");
-                        setTodoResolveOpen(true);
-                      }}
-                    >
-                      Done
-                    </button>
                   </div>
                 </div>
               );
