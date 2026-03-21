@@ -1,7 +1,7 @@
 // services/api/src/domain/orchestrator.ts
 import { loadSystemPrompt } from "./loadPrompt.js";
 import type { InboundMessageEvent, OrchestratorResult } from "./types.js";
-import { generateDraftWithLLM } from "./llmDraft.js";
+import { generateDraftWithLLM, summarizeConversationMemoryWithLLM } from "./llmDraft.js";
 import { resolveInventoryUrlByStock } from "./inventoryUrlResolver.js";
 import { checkInventorySalePendingByUrl, type InventoryStatus } from "./inventoryChecker.js";
 import { findInventoryMatches, findInventoryPrice, findPriceRange, hasInventoryForModelYear } from "./inventoryFeed.js";
@@ -361,6 +361,12 @@ export async function orchestrateInbound(
     callbackRequestedOverride?: boolean;
     appointmentTypeOverride?: "inventory_visit" | "test_ride" | "trade_appraisal" | "finance_discussion";
     voiceSummary?: string | null;
+    memorySummary?: string | null;
+    memorySummaryShouldUpdate?: boolean;
+    inventoryWatch?: any;
+    inventoryWatches?: any;
+    hold?: any;
+    sale?: any;
   }
 ): Promise<OrchestratorResult> {
   await loadSystemPrompt("orchestrator");
@@ -1394,8 +1400,24 @@ export async function orchestrateInbound(
         pricingIntent,
         handoff,
         callbackRequest: callbackRequested,
-        voiceSummary: ctx?.voiceSummary ?? null
+        voiceSummary: ctx?.voiceSummary ?? null,
+        memorySummary: ctx?.memorySummary ?? null
       });
+
+      let memorySummary: string | null = null;
+      if (ctx?.memorySummaryShouldUpdate) {
+        memorySummary = await summarizeConversationMemoryWithLLM({
+          existingSummary: ctx?.memorySummary ?? null,
+          lead: ctx?.lead ?? null,
+          appointment,
+          followUp,
+          hold: ctx?.hold ?? null,
+          sale: ctx?.sale ?? null,
+          inventoryWatch: ctx?.inventoryWatch ?? null,
+          inventoryWatches: ctx?.inventoryWatches ?? null,
+          history
+        });
+      }
 
       let finalDraft = (draft || fallbackDraft).trim();
       finalDraft = stripRescheduleOffers(finalDraft);
@@ -1479,7 +1501,8 @@ export async function orchestrateInbound(
         requestedTime,
         requestedAppointmentType: appointmentType,
         pricingAttempted,
-        handoff: handoff ? { ...handoff, ack: finalDraft } : undefined
+        handoff: handoff ? { ...handoff, ack: finalDraft } : undefined,
+        memorySummary
       });
     } catch {
       return finalize({

@@ -41,4 +41,5 @@ export type OrchestratorResult = {
   suggestedSlots?: any[];
   requestedTime?: { year: number; month: number; day: number; hour24: number; minute: number; dayOfWeek: string } | null;
   requestedAppointmentType?: string;
+  memorySummary?: string | null;
 };

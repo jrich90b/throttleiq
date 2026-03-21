@@ -26,6 +26,7 @@ export type DraftContext = {
   inquiry: string;
   history: { direction: "in" | "out"; body: string }[];
   voiceSummary?: string | null;
+  memorySummary?: string | null;
 
   // Inventory verification inputs (optional)
   stockId?: string | null;
@@ -458,6 +459,84 @@ ${clipped}
   }
 }
 
+export async function summarizeConversationMemoryWithLLM(args: {
+  existingSummary?: string | null;
+  lead?: Conversation["lead"] | null;
+  appointment?: any;
+  followUp?: any;
+  hold?: Conversation["hold"] | null;
+  sale?: Conversation["sale"] | null;
+  inventoryWatch?: Conversation["inventoryWatch"] | null;
+  inventoryWatches?: Conversation["inventoryWatches"] | null;
+  history: { direction: "in" | "out"; body: string }[];
+}): Promise<string | null> {
+  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  const history = args.history ?? [];
+  if (history.length < 2) return null;
+
+  const instructions = `
+Summarize this conversation for internal memory.
+- Output 4–6 short lines, each "Label: value".
+- Use ONLY facts from the provided data.
+- If a field is unknown or unclear, omit that line.
+- Do NOT invent dates, numbers, or names.
+- Do NOT mention this is a summary.
+- Keep it concise.
+
+Preferred labels:
+- Intent
+- Vehicle
+- Trade-in
+- Timing
+- Preferences
+- Status
+
+Status should mention watch/hold/sold/appointment only if clearly present.
+`.trim();
+
+  const input = `
+Existing memory (if any):
+${args.existingSummary ?? "none"}
+
+Lead info:
+${JSON.stringify(args.lead ?? {}, null, 2)}
+
+Appointment:
+${JSON.stringify(args.appointment ?? {}, null, 2)}
+
+Follow-up:
+${JSON.stringify(args.followUp ?? {}, null, 2)}
+
+Hold:
+${JSON.stringify(args.hold ?? null, null, 2)}
+
+Sale:
+${JSON.stringify(args.sale ?? null, null, 2)}
+
+Inventory watch:
+${JSON.stringify(args.inventoryWatches ?? args.inventoryWatch ?? null, null, 2)}
+
+Recent history:
+${history.map(h => `${h.direction.toUpperCase()}: ${h.body}`).join("\n")}
+`.trim();
+
+  try {
+    const resp = await client.responses.create({
+      model,
+      instructions,
+      input,
+      temperature: 0,
+      max_output_tokens: 220
+    });
+    const out = resp.output_text?.trim() ?? "";
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function generateDraftWithLLM(ctx: DraftContext): Promise<string> {
   const model = process.env.OPENAI_MODEL || "gpt-5-mini";
 
@@ -488,11 +567,14 @@ You write dealership sales replies for a Harley-Davidson dealership.
 
 VOICE / STYLE (strict):
 - Friendly, professional, concise.
+- Sound like a real dealership rep: warm, confident, low‑pressure.
 - Use "I" language (not "we") unless dealerProfile.voice explicitly says otherwise.
 - Do NOT use the customer’s last name.
 - Write at about a 7th–8th grade reading level.
 - Keep sentences short (aim under ~18 words).
 - Avoid jargon and long, complex clauses.
+- Use light, natural acknowledgments (e.g., "Gotcha", "Totally fair", "That makes sense") when appropriate.
+- If the customer sounds frustrated or confused, add one short empathy line ("I get that" / "I know that's frustrating") and move on.
 ${channelRules}
 
 CONTROLLED VARIATIONS (use these to sound human):
@@ -519,6 +601,12 @@ SMS VARIATIONS:
 - Reminder offer (when they say later / next month / I’ll let you know):
   1) "Want me to set a reminder and follow up then?"
   2) "I can set a reminder for that timeframe—want me to?"
+- Soft scheduling when timing is uncertain (only if they asked to schedule):
+  1) "I can pencil you in and we can adjust if needed."
+  2) "If you want, I can hold a time and we can move it if needed."
+- If asked “Are you AI?” (or similar), respond briefly and move forward:
+  1) "Nope—real person here at the dealership. I handle online inquiries so I reply fast. Want me to pull the exact numbers for you?"
+  2) "I’m a real person at the store. I just respond quick to online leads. Want me to get that lined up for you?"
 
 EMAIL VARIATIONS:
 - Intro (first outbound only):
@@ -741,6 +829,11 @@ VOICE SUMMARY (context-only):
 - Do NOT mention the call or say “on the phone”.
 - If the current message conflicts with the summary, ask a brief clarifying question.
 
+MEMORY SUMMARY (authoritative):
+- If memorySummary is provided, treat it as the source of truth for ongoing context.
+- Do NOT ask for info already in memorySummary.
+- If the current message conflicts with memorySummary, ask ONE brief clarifying question.
+
 LEAD SOURCE CLOSE INTENSITY:
 - High intent (appointment times strongly):
   - "HDFS COA Online"
@@ -785,6 +878,9 @@ ${JSON.stringify(ctx.followUp ?? {}, null, 2)}
 
 Latest voice call summary (if any):
 ${ctx.voiceSummary ?? "none"}
+
+Memory summary (if any):
+${ctx.memorySummary ?? "none"}
 
 Suggested appointment slots (if any):
 ${JSON.stringify(ctx.suggestedSlots ?? [], null, 2)}

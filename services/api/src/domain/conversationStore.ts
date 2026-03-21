@@ -295,6 +295,7 @@ export type Conversation = {
   emailDraft?: string;
   contactPreference?: "call_only";
   voiceContext?: VoiceContext;
+  memorySummary?: { text: string; updatedAt: string; messageCount: number };
   dialogState?: { name: DialogStateName; updatedAt: string };
 };
 
@@ -1550,6 +1551,27 @@ export function setVoiceContext(conv: Conversation, voiceContext: VoiceContext |
   conv.voiceContext = voiceContext;
   conv.updatedAt = nowIso();
   scheduleSave();
+}
+
+export function setMemorySummary(
+  conv: Conversation,
+  text: string,
+  messageCount: number,
+  updatedAt?: string
+) {
+  const trimmed = String(text ?? "").trim();
+  if (!trimmed) return;
+  conv.memorySummary = {
+    text: trimmed,
+    messageCount,
+    updatedAt: updatedAt ?? nowIso()
+  };
+  conv.updatedAt = nowIso();
+  scheduleSave();
+}
+
+export function getMemorySummary(conv: Conversation): string | null {
+  return conv.memorySummary?.text ?? null;
 }
 
 export function getActiveVoiceContext(conv: Conversation): VoiceContext | null {

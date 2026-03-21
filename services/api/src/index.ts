@@ -110,6 +110,7 @@ import {
   setCrmLastLoggedAt,
   setVoiceContext,
   getActiveVoiceContext,
+  setMemorySummary,
   flushConversationStore,
   reloadConversationStore,
   saveConversation,
@@ -196,6 +197,13 @@ function parseCookies(header: string | undefined): Record<string, string> {
     acc[k] = decodeURIComponent(rest.join("="));
     return acc;
   }, {} as Record<string, string>);
+}
+
+function shouldUpdateMemorySummary(conv: { messages?: any[]; memorySummary?: { messageCount?: number } | undefined }) {
+  const messageCount = conv.messages?.length ?? 0;
+  const lastCount = conv.memorySummary?.messageCount ?? 0;
+  if (!conv.memorySummary) return messageCount >= 4;
+  return messageCount - lastCount >= 6;
 }
 
 function isPublicPath(pathname: string): boolean {
@@ -621,6 +629,8 @@ app.post("/debug/inbound/process", express.json(), async (req, res) => {
     const conv = upsertConversationByLeadKey(event.from, "suggest");
     appendInbound(conv, event);
     const history = buildHistory(conv, 20);
+    const memorySummary = conv.memorySummary?.text ?? null;
+    const memorySummaryShouldUpdate = shouldUpdateMemorySummary(conv);
     const result = await orchestrateInbound(event, history, {
       appointment: conv.appointment,
       followUp: conv.followUp,
@@ -630,7 +640,13 @@ app.post("/debug/inbound/process", express.json(), async (req, res) => {
       lead: conv.lead ?? null,
       pricingAttempts: getPricingAttempts(conv),
       allowSchedulingOffer: isExplicitScheduleIntent(body),
-      voiceSummary: getActiveVoiceContext(conv)?.summary ?? null
+      voiceSummary: getActiveVoiceContext(conv)?.summary ?? null,
+      memorySummary,
+      memorySummaryShouldUpdate,
+      inventoryWatch: conv.inventoryWatch ?? null,
+      inventoryWatches: conv.inventoryWatches ?? null,
+      hold: conv.hold ?? null,
+      sale: conv.sale ?? null
     });
 
     if (result?.draft && result.shouldRespond) {
@@ -641,6 +657,9 @@ app.post("/debug/inbound/process", express.json(), async (req, res) => {
       }
       if (result.requestedTime) {
         setRequestedTime(conv, { day: result.requestedTime.dayOfWeek, timeText: event.body });
+      }
+      if (result.memorySummary) {
+        setMemorySummary(conv, result.memorySummary, conv.messages.length);
       }
     }
 
@@ -7815,6 +7834,8 @@ if (authToken && signature) {
       : null;
   const appointmentTypeOverride = llmTestRideIntent ? "test_ride" : undefined;
   const history = buildHistory(conv, 20);
+  const memorySummary = conv.memorySummary?.text ?? null;
+  const memorySummaryShouldUpdate = shouldUpdateMemorySummary(conv);
   const result = await orchestrateInbound(event, history, {
     appointment: conv.appointment,
     followUp: conv.followUp,
@@ -7827,7 +7848,13 @@ if (authToken && signature) {
     schedulingText: schedulingTextForOrchestrator,
     callbackRequestedOverride: callbackRequestedOverride ? true : undefined,
     appointmentTypeOverride,
-    voiceSummary: getActiveVoiceContext(conv)?.summary ?? null
+    voiceSummary: getActiveVoiceContext(conv)?.summary ?? null,
+    memorySummary,
+    memorySummaryShouldUpdate,
+    inventoryWatch: conv.inventoryWatch ?? null,
+    inventoryWatches: conv.inventoryWatches ?? null,
+    hold: conv.hold ?? null,
+    sale: conv.sale ?? null
   });
   if (
     !result.requestedTime &&
@@ -8346,6 +8373,9 @@ if (authToken && signature) {
     }
     console.log("[twilio] result.suggestedSlots len:", result.suggestedSlots?.length ?? 0);
     appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+    if (result.memorySummary) {
+      setMemorySummary(conv, result.memorySummary, conv.messages.length);
+    }
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
     }
@@ -8375,6 +8405,9 @@ if (authToken && signature) {
     }
   }
   appendOutbound(conv, event.to, event.from, reply, "twilio");
+  if (result.memorySummary) {
+    setMemorySummary(conv, result.memorySummary, conv.messages.length);
+  }
   console.log("[twilio] result.suggestedSlots len:", result.suggestedSlots?.length ?? 0);
   if (
     (conv.scheduler?.lastSuggestedSlots?.length ?? 0) === 0 &&
