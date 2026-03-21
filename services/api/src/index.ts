@@ -1035,6 +1035,15 @@ const FOLLOW_UP_MESSAGES = [
   "Still thinking it over? If you want to stop in, tell me a good day and I’ll take care of the rest."
 ];
 
+const SELL_FOLLOW_UP_MESSAGES = [
+  "Just checking in — if you'd like a quick in‑person appraisal on {bike}, I can set a time. I have {a} or {b} open. Which works best?",
+  "If it’s easier, we can start with an estimate and then confirm in person. What day works for you?",
+  "Still looking to sell? I can set a quick appraisal time for {bike}. What day and time works best?",
+  "No rush — when you’re ready, I can line up an appraisal. Want me to hold a time?",
+  "If you want, we can go over numbers and then set a quick appraisal time. What day is best for you?",
+  "If you’d like to move forward, just tell me a good day to bring the bike in and I’ll line it up."
+];
+
 type EmailFollowUpCtx = {
   name: string;
   label: string;
@@ -1079,6 +1088,27 @@ function isUnknownInterestVehicle(conv: any): boolean {
 function isTradeAcceleratorLead(conv: any): boolean {
   const source = (conv?.lead?.source ?? conv?.leadSource ?? "").toLowerCase();
   return source.includes("trade accelerator");
+}
+
+function isSellLead(conv: any): boolean {
+  const source = (conv?.lead?.source ?? conv?.leadSource ?? "").toLowerCase();
+  const bucket = conv?.classification?.bucket ?? "";
+  const cta = conv?.classification?.cta ?? "";
+  return (
+    bucket === "trade_in_sell" ||
+    cta === "sell_my_bike" ||
+    cta === "value_my_trade" ||
+    /sell my bike|sell your bike|sell your vehicle/.test(source)
+  );
+}
+
+function getSellBikeLabel(conv: any): string {
+  const trade = conv?.lead?.tradeVehicle ?? {};
+  const vehicle = conv?.lead?.vehicle ?? {};
+  const model = trade.model ?? trade.description ?? vehicle.model ?? vehicle.description ?? null;
+  const year = trade.year ?? vehicle.year ?? null;
+  if (!model) return "your bike";
+  return `your ${formatModelLabel(year, model)}`;
 }
 
 function normalizeLeadLabel(conv: any): string | null {
@@ -3005,6 +3035,8 @@ async function processDueFollowUps() {
       conv?.classification?.bucket === "trade_in_sell" &&
       isUnknownInterestVehicle(conv) &&
       isTradeAcceleratorLead(conv);
+    const isSellMyBikeLead = isSellLead(conv);
+    const sellBikeLabel = isSellMyBikeLead ? getSellBikeLabel(conv) : null;
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     let message = FOLLOW_UP_MESSAGES[cadence.stepIndex] ?? FOLLOW_UP_MESSAGES[FOLLOW_UP_MESSAGES.length - 1];
     let mediaUrls: string[] | undefined;
@@ -3031,6 +3063,24 @@ async function processDueFollowUps() {
       } else {
         message =
           "Just checking in on your trade‑in estimate. What model are you interested in? I can set up a trade appraisal. What day and time works for you?";
+      }
+    } else if (isSellMyBikeLead) {
+      const template = SELL_FOLLOW_UP_MESSAGES[Math.min(cadence.stepIndex, SELL_FOLLOW_UP_MESSAGES.length - 1)];
+      if (cadence.stepIndex === 0) {
+        const day2 = await buildDay2Options(cfg);
+        if (day2) {
+          message = template
+            .replace("{bike}", sellBikeLabel ?? "your bike")
+            .replace("{a}", day2.slots[0].startLocal)
+            .replace("{b}", day2.slots[1].startLocal);
+          setLastSuggestedSlots(conv, day2.slots);
+        } else {
+          message = `Just checking in — if you'd like a quick in‑person appraisal on ${
+            sellBikeLabel ?? "your bike"
+          }, what day and time works for you?`;
+        }
+      } else {
+        message = template.replace("{bike}", sellBikeLabel ?? "your bike");
       }
     } else if (cadence.stepIndex === 0) {
       const day2 = await buildDay2Options(cfg);
@@ -3082,6 +3132,13 @@ async function processDueFollowUps() {
           `Hi ${name},\n\nJust checking in on your trade‑in estimate. ` +
           `If you’d like a trade appraisal, I can set a time. Also, which model are you interested in? ` +
           `${tradeBookingLine}\n\nThanks,`;
+      } else if (isSellMyBikeLead) {
+        const tradeBookingLine = bookingUrl
+          ? `You can book an appointment here: ${bookingUrl}`
+          : "If you'd like a trade appraisal, just reply with a day and time that works.";
+        emailMessage =
+          `Hi ${name},\n\nJust checking in — if you'd like a quick in‑person appraisal on ` +
+          `${sellBikeLabel ?? "your bike"}, I can set a time. ${tradeBookingLine}\n\nThanks,`;
       } else {
         const idx = Math.min(cadence.stepIndex, EMAIL_FOLLOW_UP_MESSAGES.length - 1);
         emailMessage = EMAIL_FOLLOW_UP_MESSAGES[idx]({
