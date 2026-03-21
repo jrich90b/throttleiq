@@ -510,6 +510,7 @@ export default function Home() {
   );
   const [schedulerConfig, setSchedulerConfig] = useState<any>(null);
   const [messageFilter, setMessageFilter] = useState<"sms" | "email" | "calls">("sms");
+  const [expandedCallSummaries, setExpandedCallSummaries] = useState<Record<string, boolean>>({});
   const [schedulerForm, setSchedulerForm] = useState({
     timezone: "America/New_York",
     assignmentMode: "preferred",
@@ -1640,6 +1641,22 @@ export default function Home() {
     }
     if (lastDraftIdx > lastSentIdx) return selectedConv.messages[lastDraftIdx];
     return null;
+  }, [selectedConv]);
+  const callSummaryLookup = useMemo(() => {
+    if (!selectedConv) {
+      return { full: [] as any[], byId: new Map<string, string>(), indexById: new Map<string, number>() };
+    }
+    const full = selectedConv.messages ?? [];
+    const byId = new Map<string, string>();
+    const indexById = new Map<string, number>();
+    for (let i = 0; i < full.length; i += 1) {
+      const msg = full[i];
+      indexById.set(msg.id, i);
+      if (msg.provider === "voice_summary" && msg.providerMessageId) {
+        byId.set(msg.providerMessageId, msg.body ?? "");
+      }
+    }
+    return { full, byId, indexById };
   }, [selectedConv]);
   const emailDraft = useMemo(() => {
     return (selectedConv as any)?.emailDraft ?? null;
@@ -7069,9 +7086,23 @@ export default function Home() {
                       : m.provider === "voice_transcript"
                         ? "call transcript"
                         : m.provider === "voice_summary"
-                          ? "call summary"
-                          : (m.provider ?? "?");
+                        ? "call summary"
+                        : (m.provider ?? "?");
                   const isSummary = m.provider === "voice_summary";
+                  const summaryText = (() => {
+                    if (m.provider !== "voice_transcript") return null;
+                    const id = m.providerMessageId ?? "";
+                    if (id && callSummaryLookup.byId.has(id)) {
+                      return callSummaryLookup.byId.get(id) ?? null;
+                    }
+                    const idxFull = callSummaryLookup.indexById.get(m.id);
+                    if (idxFull == null) return null;
+                    const prev = callSummaryLookup.full[idxFull - 1];
+                    const next = callSummaryLookup.full[idxFull + 1];
+                    if (prev?.provider === "voice_summary") return prev.body ?? null;
+                    if (next?.provider === "voice_summary") return next.body ?? null;
+                    return null;
+                  })();
                   return (
                     <div key={m.id} className={`text-sm ${m.direction === "in" || isSummary ? "" : "text-right"}`}>
                       <div className="text-xs text-gray-500">
@@ -7090,6 +7121,32 @@ export default function Home() {
                       >
                         {renderMessageBody(m.body)}
                       </div>
+                      {m.provider === "voice_transcript" ? (
+                        <div className="mt-2 text-xs text-gray-600">
+                          {summaryText ? (
+                            <>
+                              <button
+                                className="underline"
+                                onClick={() =>
+                                  setExpandedCallSummaries(prev => ({
+                                    ...prev,
+                                    [m.id]: !prev[m.id]
+                                  }))
+                                }
+                              >
+                                {expandedCallSummaries[m.id] ? "Hide call summary" : "Show call summary"}
+                              </button>
+                              {expandedCallSummaries[m.id] ? (
+                                <div className="mt-2 px-3 py-2 rounded-xl border bg-gray-50 text-gray-800 border-gray-200">
+                                  {summaryText}
+                                </div>
+                              ) : null}
+                            </>
+                          ) : (
+                            <span className="text-gray-400">No summary yet.</span>
+                          )}
+                        </div>
+                      ) : null}
                       {m.direction === "in" &&
                       (m.provider === "sendgrid_adf" || /web lead \\(adf\\)/i.test(m.body || "")) ? (
                         <div className="mt-1">
