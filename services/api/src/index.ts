@@ -23,6 +23,7 @@ import { getDataDir } from "./domain/dataDir.js";
 import {
   computeFollowUpDueAt,
   FOLLOW_UP_DAY_OFFSETS,
+  inferWalkIn,
   startPostSaleCadence
 } from "./domain/conversationStore.js";
 import { getSchedulerConfig, saveSchedulerConfig, dayKey, getPreferredSalespeople } from "./domain/schedulerConfig.js";
@@ -4220,10 +4221,12 @@ app.get("/conversations/:id", async (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
   const emailDraft = conv.emailDraft ?? null;
+  const leadSource = conv.lead?.source ?? null;
+  const walkIn = inferWalkIn(conv) ? true : null;
   res.json({
     ok: true,
     systemMode: getSystemMode(),
-    conversation: { ...conv, emailDraft }
+    conversation: { ...conv, emailDraft, leadSource, walkIn }
   });
 });
 

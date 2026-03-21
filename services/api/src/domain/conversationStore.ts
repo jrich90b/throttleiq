@@ -650,7 +650,19 @@ export function getLatestPendingDraft(conv: Conversation): Message | null {
   return null;
 }
 
+export function inferWalkIn(conv: Conversation): boolean {
+  if (conv.lead?.walkIn) return true;
+  const leadSource = conv.lead?.source ?? "";
+  const adfBody =
+    conv.messages.find(m => m.provider === "sendgrid_adf" && typeof m.body === "string")?.body ?? "";
+  const sourceMatch =
+    /traffic log pro/i.test(leadSource) || /source:\s*traffic log pro/i.test(adfBody);
+  if (!sourceMatch) return false;
+  return /(step 2|walk in|walk-in|dealership visit)/i.test(adfBody);
+}
+
 export function listConversations() {
+
   function pendingDraftInfo(c: Conversation) {
     const pendingDraftMsg = getLatestPendingDraft(c);
     const pendingDraft = !!pendingDraftMsg;
@@ -674,7 +686,7 @@ export function listConversations() {
         null;
       const updatedAt = lastNonCall?.at ?? c.updatedAt;
       const leadSource = c.lead?.source ?? null;
-      const inferredWalkIn = /traffic log pro/i.test(leadSource ?? "");
+      const inferredWalkIn = inferWalkIn(c);
       return {
         id: c.id,
         leadKey: c.leadKey,
@@ -693,7 +705,7 @@ export function listConversations() {
         vehicleDescription: c.lead?.vehicle?.description ?? null,
         contactPreference: c.contactPreference,
         leadSource,
-        walkIn: c.lead?.walkIn ?? inferredWalkIn ?? null,
+        walkIn: inferredWalkIn ? true : null,
         classification: c.classification ?? null,
         followUpCadence: c.followUpCadence ?? null,
         followUp: c.followUp ?? null,
