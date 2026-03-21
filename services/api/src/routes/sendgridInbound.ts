@@ -1259,6 +1259,43 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     });
   }
 
+  const isRoom58Sell =
+    /room58/i.test(leadSourceLower) && /(sell|sell your vehicle|sell your bike)/i.test(leadSourceLower);
+  const isSellLead = inferredBucket === "trade_in_sell" || inferredCta === "sell_my_bike";
+  if (isRoom58Sell && isSellLead) {
+    const profile = await getDealerProfile();
+    const dealerName = profile?.dealerName ?? "American Harley-Davidson";
+    const agentName = profile?.agentName ?? "Brooke";
+    const firstName = conv.lead?.firstName ?? "";
+    const modelLabel = normalizeVehicleModel(
+      conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "",
+      conv.lead?.vehicle?.make ?? null
+    );
+    const yearLabel = conv.lead?.vehicle?.year ? `${conv.lead?.vehicle?.year} ` : "";
+    const bikeLabel = modelLabel ? `${yearLabel}${modelLabel}`.trim() : "your bike";
+    let ack =
+      `Hi ${firstName} — you mentioned you’re looking to sell ${bikeLabel}. ` +
+      `This is ${agentName} at ${dealerName}. ` +
+      "We can do a quick in‑person appraisal and give you a firm offer. " +
+      "If you’re open to stopping by, what day and time works best?";
+    ack = await applyInitialAdfPrefix(ack);
+    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
+    maybeAddInitialCallTodo();
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      draft: ack
+    });
+  }
+
   if (isRoom58Standard) {
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
