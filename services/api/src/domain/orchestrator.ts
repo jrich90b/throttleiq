@@ -1201,7 +1201,8 @@ export async function orchestrateInbound(
 
       const isTradeValueLead =
         ctx?.bucket === "trade_in_sell" &&
-        (ctx?.cta === "value_my_trade" || ctx?.cta === "trade_in_value");
+        (ctx?.cta === "value_my_trade" || ctx?.cta === "trade_in_value") &&
+        !hasPriorOutbound;
       if (isTradeValueLead) {
         const dealerProfile = await getDealerProfile();
         const agentName = dealerProfile?.agentName ?? "Brooke";
