@@ -674,8 +674,7 @@ export function listConversations() {
         null;
       const updatedAt = lastNonCall?.at ?? c.updatedAt;
       const leadSource = c.lead?.source ?? null;
-      const leadEmail = (c.lead?.email ?? "").trim().toLowerCase();
-      const inferredWalkIn = /traffic log pro/i.test(leadSource ?? "") && leadEmail === "na@na.com";
+      const inferredWalkIn = /traffic log pro/i.test(leadSource ?? "");
       return {
         id: c.id,
         leadKey: c.leadKey,
