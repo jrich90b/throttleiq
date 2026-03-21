@@ -518,6 +518,38 @@ export async function orchestrateInbound(
   const pricingIntent =
     detectPricingOrPayment(event.body, intent) ||
     /request a quote|raq/i.test(ctx?.leadSource ?? "");
+
+  if (
+    intent === "TRADE_IN" &&
+    /(trade[-\s]?in|trade in|trade appraisal|value my trade|trade value|trade price|trade[-\s]?in price)/i.test(
+      event.body
+    ) &&
+    /(how|what|price|value|appraisal|bring|see it|pickup|pick up)/i.test(event.body)
+  ) {
+    const trade = ctx?.lead?.tradeVehicle ?? {};
+    const tradeYear = trade?.year ? `${trade.year} ` : "";
+    const tradeMake = trade?.make ? `${trade.make} ` : "";
+    const tradeModel = trade?.model ?? trade?.description ?? "";
+    const tradeLabel = `${tradeYear}${tradeMake}${tradeModel}`.replace(/\s+/g, " ").trim();
+    const hasTrade = tradeLabel.length > 0;
+    const mileage = trade?.mileage;
+    const mileageLine = mileage ? `I have it at about ${mileage.toLocaleString()} miles. ` : "";
+    const mileageAsk = mileage ? "" : "How many miles are on it?";
+    const leadLine = hasTrade ? `I have you on a ${tradeLabel}. ` : "";
+    const draft =
+      "Totally fair question. " +
+      leadLine +
+      mileageLine +
+      "We can start with an estimate based on the bike details. " +
+      "If the numbers look good, you can bring it in for an appraisal or I can schedule a pickup. " +
+      mileageAsk;
+    return finalize({
+      intent: "TRADE_IN",
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft
+    });
+  }
   const exactPressure = detectExactNumberPressure(event.body);
   const pricingAttempted = pricingIntent && pricingAttempts === 0;
   const stockIdFromText = event.body.match(/\b[A-Z0-9]{1,5}-\d{1,4}\b/i)?.[0]?.toUpperCase() ?? null;
