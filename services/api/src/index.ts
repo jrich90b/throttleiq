@@ -7880,6 +7880,15 @@ if (authToken && signature) {
     dialogState !== "callback_requested" &&
     dialogState !== "callback_handoff" &&
     dialogState !== "call_only";
+  if (result.intent === "TRADE_IN" && !isScheduleDialogState(dialogState)) {
+    if (!isTradeDialogState(dialogState)) {
+      const sellOption = conv.lead?.sellOption;
+      if (sellOption === "cash") setDialogState(conv, "trade_cash");
+      else if (sellOption === "trade") setDialogState(conv, "trade_trade");
+      else if (sellOption === "either") setDialogState(conv, "trade_either");
+      else setDialogState(conv, "trade_init");
+    }
+  }
   if (canUpdatePricingState) {
     if (result.handoff?.required) {
       if (result.handoff.reason === "payments") {
