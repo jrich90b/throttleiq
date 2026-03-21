@@ -693,6 +693,14 @@ export function listConversations() {
         followUpCadence: c.followUpCadence ?? null,
         followUp: c.followUp ?? null,
         hold: c.hold ?? null,
+        inventoryWatch: c.inventoryWatch ?? null,
+        inventoryWatches: c.inventoryWatches ?? null,
+        scheduler: c.scheduler
+          ? {
+              preferredSalespersonId: c.scheduler.preferredSalespersonId,
+              preferredSalespersonName: c.scheduler.preferredSalespersonName
+            }
+          : null,
         ...pd
       };
     })

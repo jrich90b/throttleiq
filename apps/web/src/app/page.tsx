@@ -98,6 +98,34 @@ function formatCadenceDate(iso: string) {
   return d.toLocaleString();
 }
 
+function formatWatchLabel(watch?: {
+  year?: number | string;
+  yearMin?: number;
+  yearMax?: number;
+  make?: string;
+  model?: string;
+  trim?: string;
+  color?: string;
+  condition?: string;
+}) {
+  if (!watch) return "Inventory watch";
+  const yearText =
+    watch.year ??
+    (watch.yearMin && watch.yearMax ? `${watch.yearMin}-${watch.yearMax}` : undefined);
+  const parts = [yearText, watch.make, watch.model, watch.trim].filter(Boolean).join(" ");
+  const colorText = watch.color ? ` in ${watch.color}` : "";
+  const condition = normalizeWatchCondition(watch.condition);
+  const conditionText = condition ? ` (${condition})` : "";
+  return `${parts || "Inventory watch"}${colorText}${conditionText}`;
+}
+
+function formatWatchDate(iso?: string) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString();
+}
+
 function getCadenceAlert(cadence?: {
   status?: string;
   pausedUntil?: string | null;
@@ -153,6 +181,35 @@ type ConversationListItem = {
     stopReason?: string | null;
   } | null;
   followUp?: { mode?: string; reason?: string; updatedAt?: string } | null;
+  inventoryWatches?: Array<{
+    model: string;
+    year?: number | string;
+    yearMin?: number;
+    yearMax?: number;
+    make?: string;
+    trim?: string;
+    color?: string;
+    condition?: string;
+    note?: string;
+    status?: string;
+    createdAt?: string;
+    lastNotifiedAt?: string;
+  }> | null;
+  inventoryWatch?: {
+    model: string;
+    year?: number | string;
+    yearMin?: number;
+    yearMax?: number;
+    make?: string;
+    trim?: string;
+    color?: string;
+    condition?: string;
+    note?: string;
+    status?: string;
+    createdAt?: string;
+    lastNotifiedAt?: string;
+  } | null;
+  scheduler?: { preferredSalespersonId?: string; preferredSalespersonName?: string } | null;
   updatedAt: string;
   messageCount: number;
   lastMessage?: { direction: "in" | "out"; body: string; provider?: string } | null;
@@ -212,6 +269,8 @@ type ConversationDetail = {
   inventoryWatches?: Array<{
     model: string;
     year?: number | string;
+    yearMin?: number;
+    yearMax?: number;
     make?: string;
     trim?: string;
     color?: string;
@@ -224,6 +283,8 @@ type ConversationDetail = {
   inventoryWatch?: {
     model: string;
     year?: number | string;
+    yearMin?: number;
+    yearMax?: number;
     make?: string;
     trim?: string;
     color?: string;
@@ -371,6 +432,7 @@ export default function Home() {
     | "questions"
     | "suppressions"
     | "contacts"
+    | "watches"
     | "inventory"
     | "settings"
     | "calendar"
@@ -388,6 +450,8 @@ export default function Home() {
   const [cadenceResolveSaving, setCadenceResolveSaving] = useState(false);
   const [cadenceResolveError, setCadenceResolveError] = useState<string | null>(null);
   const [cadenceResolveNotice, setCadenceResolveNotice] = useState<string | null>(null);
+  const [watchQuery, setWatchQuery] = useState("");
+  const [watchSalespersonFilter, setWatchSalespersonFilter] = useState("all");
   const cadenceResolveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [holdModalOpen, setHoldModalOpen] = useState(false);
@@ -1606,6 +1670,27 @@ export default function Home() {
 
   const isManager = authUser?.role === "manager";
 
+  const watchSalespeople = useMemo(() => {
+    const fromUsers = (usersList ?? [])
+      .filter((u: any) => u.role === "salesperson")
+      .map((u: any) => ({
+        id: u.id,
+        name:
+          [u.firstName, u.lastName].filter(Boolean).join(" ") ||
+          u.name ||
+          u.email ||
+          u.id
+      }));
+    const fromScheduler = (salespeopleList ?? []).map(sp => ({
+      id: sp.id,
+      name: sp.name || sp.id
+    }));
+    const merged = new Map<string, { id: string; name: string }>();
+    fromScheduler.forEach(sp => merged.set(sp.id, sp));
+    fromUsers.forEach(sp => merged.set(sp.id, sp));
+    return Array.from(merged.values());
+  }, [usersList, salespeopleList]);
+
   useEffect(() => {
     if (blockForm.salespersonId) return;
     const first = usersList.find(u => u.role === "salesperson")?.id;
@@ -1703,6 +1788,12 @@ export default function Home() {
     void reloadUsers();
   }, [closeReason, soldByOptions.length]);
   useEffect(() => {
+    if (section !== "watches") return;
+    if (!isManager) return;
+    if (watchSalespeople.length) return;
+    void reloadUsers();
+  }, [section, isManager, watchSalespeople.length]);
+  useEffect(() => {
     if (!selectedConv || closeReason !== "sold") return;
     if (soldById) return;
     const existing = selectedConv.sale?.soldById;
@@ -1754,6 +1845,62 @@ export default function Home() {
       sendAt: Date;
     }>;
   }, [conversations]);
+  const watchItems = useMemo(() => {
+    return conversations.flatMap(conv => {
+      const watches =
+        conv.inventoryWatches && conv.inventoryWatches.length
+          ? conv.inventoryWatches
+          : conv.inventoryWatch
+            ? [conv.inventoryWatch]
+            : [];
+      if (!watches.length) return [];
+      return watches.map((watch, idx) => ({
+        key: `${conv.id}-${idx}`,
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        leadName: conv.leadName ?? null,
+        ownerId: conv.scheduler?.preferredSalespersonId ?? null,
+        ownerName: conv.scheduler?.preferredSalespersonName ?? null,
+        watch
+      }));
+    });
+  }, [conversations]);
+  const activeWatchItems = useMemo(() => {
+    return watchItems.filter(item => (item.watch?.status ?? "active") !== "paused");
+  }, [watchItems]);
+  const watchCount = useMemo(() => {
+    if (isManager) return activeWatchItems.length;
+    const userId = authUser?.id;
+    if (!userId) return 0;
+    return activeWatchItems.filter(item => item.ownerId === userId).length;
+  }, [activeWatchItems, authUser?.id, isManager]);
+  const visibleWatchItems = useMemo(() => {
+    let items = activeWatchItems;
+    if (!isManager) {
+      const userId = authUser?.id;
+      items = userId ? items.filter(item => item.ownerId === userId) : [];
+    } else if (watchSalespersonFilter !== "all") {
+      items = items.filter(item => item.ownerId === watchSalespersonFilter);
+    }
+    if (watchQuery.trim()) {
+      const q = watchQuery.trim().toLowerCase();
+      items = items.filter(item => {
+        const haystack = [
+          item.leadName,
+          item.leadKey,
+          item.watch?.model,
+          item.watch?.make,
+          item.watch?.trim,
+          item.watch?.color
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(q);
+      });
+    }
+    return items;
+  }, [activeWatchItems, authUser?.id, isManager, watchQuery, watchSalespersonFilter]);
   const displaySendBody = useMemo(() => {
     if (sendBodySource === "user") return sendBody;
     if (messageFilter === "calls") return "";
@@ -1883,7 +2030,8 @@ export default function Home() {
       key => !appointmentTypesList.some(row => row.key.trim().toLowerCase() === key.toLowerCase())
     );
   }, [appointmentTypesList]);
-  const canViewConversation = section === "inbox" || section === "todos" || section === "questions";
+  const canViewConversation =
+    section === "inbox" || section === "todos" || section === "questions" || section === "watches";
   const preferredOrder = useMemo(() => {
     const base = preferredOrderIds.length ? preferredOrderIds : salespeopleList.map(sp => sp.id);
     return [...base, ...salespeopleList.map(sp => sp.id).filter(id => !base.includes(id))];
@@ -3217,6 +3365,18 @@ export default function Home() {
           📦
         </button>
         <button
+          className={`relative w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "watches" ? "bg-white/10" : "hover:bg-white/5"}`}
+          title="Watches"
+          onClick={() => setSection("watches")}
+        >
+          👀
+          {watchCount > 0 ? (
+            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-semibold flex items-center justify-center border border-white">
+              {watchCount > 99 ? "99+" : watchCount}
+            </span>
+          ) : null}
+        </button>
+        <button
           className={`relative w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "questions" ? "bg-white/10" : "hover:bg-white/5"}`}
           title="Questions"
           onClick={() => setSection("questions")}
@@ -3305,8 +3465,10 @@ export default function Home() {
                   ? "Contacts"
                   : section === "inventory"
                     ? "Inventory"
-                    : section === "calendar"
-                      ? "Calendar"
+                    : section === "watches"
+                      ? "Vehicle Watches"
+                      : section === "calendar"
+                        ? "Calendar"
                         : section === "settings"
                           ? "Settings"
                           : "Suppression List"}
@@ -3322,8 +3484,10 @@ export default function Home() {
                   ? `${contacts.length} contacts`
                   : section === "inventory"
                     ? `${inventoryItems.length} bikes`
-                    : section === "calendar"
-                      ? "Google Calendar view"
+                    : section === "watches"
+                      ? `${visibleWatchItems.length} active`
+                      : section === "calendar"
+                        ? "Google Calendar view"
                         : section === "settings"
                           ? "Configure dealer & scheduling"
                           : `${suppressions.length} suppressed`}
@@ -3364,6 +3528,77 @@ export default function Home() {
             ) : (
               <div className="text-xs text-gray-500">
                 Showing {inventoryItems.length} bikes
+              </div>
+            )}
+          </div>
+        ) : section === "watches" ? (
+          <div className="mt-4 space-y-3">
+            <input
+              className="w-full border rounded px-3 py-2 text-sm"
+              placeholder="Search watches..."
+              value={watchQuery}
+              onChange={e => setWatchQuery(e.target.value)}
+            />
+            {isManager ? (
+              <select
+                className="w-full border rounded px-3 py-2 text-sm"
+                value={watchSalespersonFilter}
+                onChange={e => setWatchSalespersonFilter(e.target.value)}
+              >
+                <option value="all">All salespeople</option>
+                {watchSalespeople.map(sp => (
+                  <option key={sp.id} value={sp.id}>
+                    {sp.name}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            {visibleWatchItems.length === 0 ? (
+              <div className="text-sm text-gray-500">No active watches.</div>
+            ) : (
+              <div className="border border-[var(--border)] rounded-lg divide-y bg-[var(--surface)]">
+                {visibleWatchItems.map(item => {
+                  const label = formatWatchLabel(item.watch);
+                  const createdAt = formatWatchDate(item.watch?.createdAt);
+                  const lastNotified = formatWatchDate(item.watch?.lastNotifiedAt);
+                  const ownerName = item.ownerId
+                    ? watchSalespeople.find(sp => sp.id === item.ownerId)?.name ||
+                      item.ownerName ||
+                      "Unassigned"
+                    : "Unassigned";
+                  return (
+                    <button
+                      key={item.key}
+                      onClick={() => setSelectedId(item.convId)}
+                      className={`w-full text-left p-4 hover:bg-[var(--surface-2)] ${
+                        selectedId === item.convId ? "bg-[var(--surface-2)]" : ""
+                      }`}
+                    >
+                      <div className="font-medium truncate">
+                        {item.leadName && item.leadName.length > 0 ? item.leadName : item.leadKey}
+                      </div>
+                      <div className="text-xs text-gray-600 mt-1">{label}</div>
+                      {item.watch?.note ? (
+                        <div className="text-xs text-gray-500 mt-1">Note: {item.watch.note}</div>
+                      ) : null}
+                      {createdAt ? (
+                        <div className="text-[11px] text-gray-500 mt-1">
+                          Created: {createdAt}
+                        </div>
+                      ) : null}
+                      {lastNotified ? (
+                        <div className="text-[11px] text-gray-500">
+                          Last notified: {lastNotified}
+                        </div>
+                      ) : null}
+                      {isManager ? (
+                        <div className="text-[11px] text-gray-500 mt-1">
+                          Salesperson: {ownerName}
+                        </div>
+                      ) : null}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
