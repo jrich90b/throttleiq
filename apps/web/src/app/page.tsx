@@ -512,6 +512,7 @@ export default function Home() {
   const [editPromptOpen, setEditPromptOpen] = useState(false);
   const [editNote, setEditNote] = useState("");
   const [pendingSend, setPendingSend] = useState<{ body: string; draftId?: string } | null>(null);
+  const [regenBusy, setRegenBusy] = useState(false);
   const [closeReason, setCloseReason] = useState("sold");
   const [soldById, setSoldById] = useState("");
   const [listActionsOpenId, setListActionsOpenId] = useState<string | null>(null);
@@ -2487,6 +2488,54 @@ export default function Home() {
     }
     const manualTakeover = messageFilter === "email" ? !emailDraft : !draftId;
     await doSend(draftId ? { body, draftId, manualTakeover } : { body, manualTakeover });
+  }
+
+  async function regenerateDraft() {
+    if (!selectedConv) return;
+    if (messageFilter === "calls") return;
+    if (mode !== "suggest" || selectedConv.mode === "human") return;
+    setRegenBusy(true);
+    try {
+      const resp = await fetch(
+        `/api/conversations/${encodeURIComponent(selectedConv.id)}/regenerate`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ channel: messageFilter })
+        }
+      );
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) {
+        window.alert(data?.error ?? "Regenerate failed");
+        return;
+      }
+      if (data?.conversation) {
+        const conv = data.conversation;
+        setSelectedConv(conv);
+        setConversations(prev =>
+          prev.map(c => {
+            if (c.id !== conv.id) return c;
+            const last = conv.messages?.[conv.messages.length - 1];
+            return {
+              ...c,
+              updatedAt: conv.updatedAt ?? c.updatedAt,
+              lastMessage: last?.body ?? c.lastMessage,
+              messageCount: conv.messages?.length ?? c.messageCount,
+              pendingDraft: true,
+              pendingDraftPreview: last?.body ?? c.pendingDraftPreview ?? null,
+              mode: conv.mode ?? c.mode
+            };
+          })
+        );
+      } else {
+        await loadConversation(selectedConv.id);
+      }
+      await load();
+    } catch {
+      window.alert("Regenerate failed");
+    } finally {
+      setRegenBusy(false);
+    }
   }
 
   async function startCall(
@@ -7649,17 +7698,28 @@ export default function Home() {
                 }
                 disabled={messageFilter === "calls"}
               />
-              <button
-                className={`px-4 py-2 border rounded ${
-                  messageFilter === "calls" || (messageFilter === "sms" && selectedConv.contactPreference === "call_only")
-                    ? "opacity-50 cursor-not-allowed"
-                    : ""
-                }`}
-                onClick={send}
-                disabled={messageFilter === "calls" || (messageFilter === "sms" && selectedConv.contactPreference === "call_only")}
-              >
-                Send
-              </button>
+              <div className="flex flex-col gap-2">
+                <button
+                  className={`px-4 py-2 border rounded ${
+                    messageFilter === "calls" || (messageFilter === "sms" && selectedConv.contactPreference === "call_only")
+                      ? "opacity-50 cursor-not-allowed"
+                      : ""
+                  }`}
+                  onClick={send}
+                  disabled={messageFilter === "calls" || (messageFilter === "sms" && selectedConv.contactPreference === "call_only")}
+                >
+                  Send
+                </button>
+                {mode === "suggest" && selectedConv.mode !== "human" ? (
+                  <button
+                    className={`px-4 py-2 border rounded text-xs ${regenBusy ? "opacity-50 cursor-not-allowed" : ""}`}
+                    onClick={regenerateDraft}
+                    disabled={regenBusy}
+                  >
+                    Regenerate
+                  </button>
+                ) : null}
+              </div>
             </div>
 
             {editPromptOpen && pendingSend ? (

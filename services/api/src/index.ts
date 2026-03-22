@@ -5670,6 +5670,91 @@ app.post("/conversations/:id/send", async (req, res) => {
   }
 });
 
+app.post("/conversations/:id/regenerate", async (req, res) => {
+  const conv = getConversation(req.params.id);
+  if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+  if (conv.mode === "human") {
+    return res.status(400).json({ ok: false, error: "human_override" });
+  }
+
+  const channel =
+    req.body?.channel === "email" ? "email" : req.body?.channel === "sms" ? "sms" : "sms";
+  const inbound = [...(conv.messages ?? [])]
+    .reverse()
+    .find(m => m.direction === "in");
+  if (!inbound?.body) {
+    return res.status(400).json({ ok: false, error: "no_inbound_message" });
+  }
+
+  const event: InboundMessageEvent = {
+    channel,
+    provider: inbound.provider ?? "twilio",
+    from: inbound.from ?? conv.leadKey,
+    to: inbound.to ?? "dealership",
+    body: String(inbound.body ?? ""),
+    providerMessageId: inbound.providerMessageId ?? `regen_${Date.now()}`,
+    receivedAt: inbound.at ?? new Date().toISOString()
+  };
+
+  const history = buildHistory(conv, 20);
+  const memorySummary = conv.memorySummary?.text ?? null;
+  const memorySummaryShouldUpdate = shouldUpdateMemorySummary(conv);
+  const dealerProfile = await getDealerProfile();
+  const weatherStatus = await getDealerWeatherStatus(dealerProfile);
+
+  const result = await orchestrateInbound(event, history, {
+    appointment: conv.appointment,
+    followUp: conv.followUp,
+    leadSource: conv.lead?.source ?? null,
+    bucket: conv.classification?.bucket ?? null,
+    cta: conv.classification?.cta ?? null,
+    lead: conv.lead ?? null,
+    pricingAttempts: getPricingAttempts(conv),
+    allowSchedulingOffer: isExplicitScheduleIntent(event.body),
+    voiceSummary: getActiveVoiceContext(conv)?.summary ?? null,
+    memorySummary,
+    memorySummaryShouldUpdate,
+    inventoryWatch: conv.inventoryWatch ?? null,
+    inventoryWatches: conv.inventoryWatches ?? null,
+    hold: conv.hold ?? null,
+    sale: conv.sale ?? null,
+    pickup: conv.pickup ?? null,
+    weather: weatherStatus ?? null
+  });
+
+  if (!result?.draft || result.shouldRespond === false) {
+    return res.json({ ok: true, conversation: conv, skipped: true });
+  }
+
+  if (result.pickupUpdate) {
+    conv.pickup = { ...(conv.pickup ?? {}), ...result.pickupUpdate, updatedAt: nowIso() };
+  }
+
+  const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+  const agentName = dealerProfile?.agentName ?? "Brooke";
+  const lastOutboundTextFinal = getLastNonVoiceOutbound(conv)?.body ?? "";
+  let reply = ensureUniqueDraft(result.draft, conv, dealerName, agentName);
+  reply = applySlotOfferPolicy(conv, reply, lastOutboundTextFinal);
+  reply = applyTradePolicy(conv, reply, lastOutboundTextFinal, result.suggestedSlots);
+  reply = applyPricingPolicy(conv, reply, lastOutboundTextFinal);
+  reply = applyCallbackPolicy(conv, reply, lastOutboundTextFinal);
+  reply = applyServicePolicy(conv, reply, lastOutboundTextFinal);
+  if (isSlotOfferMessage(reply)) {
+    setDialogState(conv, "schedule_offer_sent");
+  }
+  if (result.suggestedSlots && result.suggestedSlots.length > 0) {
+    setLastSuggestedSlots(conv, result.suggestedSlots);
+  }
+  if (result.memorySummary) {
+    setMemorySummary(conv, result.memorySummary, conv.messages.length);
+  }
+
+  discardPendingDrafts(conv);
+  appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+  saveConversation(conv);
+  return res.json({ ok: true, conversation: conv });
+});
+
 app.post("/conversations/:id/call", async (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
