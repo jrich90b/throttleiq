@@ -5144,6 +5144,8 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), (re
     const nowIso = new Date().toISOString();
     if (resolution === "resume") {
       setFollowUpMode(conv, "active", "todo_done");
+    } else if (resolution === "dismiss") {
+      // No follow-up changes; just close the todo.
     } else if (resolution === "pause_7" || resolution === "pause_30") {
       setFollowUpMode(conv, "active", "todo_pause");
       const days = resolution === "pause_7" ? 7 : 30;
