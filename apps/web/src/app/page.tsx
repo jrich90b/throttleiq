@@ -576,7 +576,10 @@ export default function Home() {
     state: "",
     zip: "",
     testRideEnabled: true,
-    testRideMonths: [4, 5, 6, 7, 8, 9, 10]
+    testRideMonths: [4, 5, 6, 7, 8, 9, 10],
+    weatherPickupRadiusMiles: "25",
+    weatherColdThresholdF: "50",
+    weatherForecastHours: "48"
   });
   const [dealerHours, setDealerHours] = useState<Record<string, { open: string | null; close: string | null }>>(
     {}
@@ -1447,6 +1450,10 @@ export default function Home() {
         const usersJson = await usersResp.json();
         const profile = dealerJson?.profile ?? {};
         const followUp = profile.followUp ?? {};
+        const weather = profile.weather ?? {};
+        const pickupRadius = weather.pickupRadiusMiles ?? 25;
+        const coldThreshold = weather.coldThresholdF ?? 50;
+        const forecastHours = weather.forecastHours ?? 48;
         const followUpMonths = Array.isArray(followUp.testRideMonths) ? followUp.testRideMonths : [4, 5, 6, 7, 8, 9, 10];
         setDealerProfile(profile);
         setDealerProfileForm({
@@ -1467,7 +1474,10 @@ export default function Home() {
           state: profile.address?.state ?? "",
           zip: profile.address?.zip ?? "",
           testRideEnabled: followUp.testRideEnabled !== false,
-          testRideMonths: followUpMonths
+          testRideMonths: followUpMonths,
+          weatherPickupRadiusMiles: String(pickupRadius),
+          weatherColdThresholdF: String(coldThreshold),
+          weatherForecastHours: String(forecastHours)
         });
         setDealerHours(profile.hours ?? {});
 
@@ -2798,6 +2808,11 @@ export default function Home() {
         followUp: {
           testRideEnabled: !!dealerProfileForm.testRideEnabled,
           testRideMonths: dealerProfileForm.testRideMonths ?? [4, 5, 6, 7, 8, 9, 10]
+        },
+        weather: {
+          pickupRadiusMiles: Number(dealerProfileForm.weatherPickupRadiusMiles) || 25,
+          coldThresholdF: Number(dealerProfileForm.weatherColdThresholdF) || 50,
+          forecastHours: Number(dealerProfileForm.weatherForecastHours) || 48
         }
       };
       const resp = await fetch("/api/dealer-profile", {
@@ -5328,6 +5343,38 @@ export default function Home() {
                         </label>
                       );
                     })}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-sm font-medium mb-2">Weather & Pickup</div>
+                  <div className="grid grid-cols-3 gap-2 text-sm">
+                    <input
+                      className="border rounded px-3 py-2 text-sm"
+                      placeholder="Pickup radius (miles)"
+                      value={dealerProfileForm.weatherPickupRadiusMiles}
+                      onChange={e =>
+                        setDealerProfileForm({ ...dealerProfileForm, weatherPickupRadiusMiles: e.target.value })
+                      }
+                    />
+                    <input
+                      className="border rounded px-3 py-2 text-sm"
+                      placeholder="Cold threshold (°F)"
+                      value={dealerProfileForm.weatherColdThresholdF}
+                      onChange={e =>
+                        setDealerProfileForm({ ...dealerProfileForm, weatherColdThresholdF: e.target.value })
+                      }
+                    />
+                    <input
+                      className="border rounded px-3 py-2 text-sm"
+                      placeholder="Forecast window (hours)"
+                      value={dealerProfileForm.weatherForecastHours}
+                      onChange={e =>
+                        setDealerProfileForm({ ...dealerProfileForm, weatherForecastHours: e.target.value })
+                      }
+                    />
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    Used to decide when to offer pickup or delay test rides (snow or &lt; threshold).
                   </div>
                 </div>
                 <div>

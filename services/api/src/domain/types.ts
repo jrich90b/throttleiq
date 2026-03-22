@@ -42,4 +42,12 @@ export type OrchestratorResult = {
   requestedTime?: { year: number; month: number; day: number; hour24: number; minute: number; dayOfWeek: string } | null;
   requestedAppointmentType?: string;
   memorySummary?: string | null;
+  pickupUpdate?: {
+    stage?: "need_town" | "need_street" | "need_time" | "ready";
+    town?: string;
+    street?: string;
+    preferredTimeText?: string;
+    distanceMiles?: number;
+    eligible?: boolean;
+  };
 };

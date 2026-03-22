@@ -25,6 +25,14 @@ export type DealerProfile = {
     testRideEnabled?: boolean;
     testRideMonths?: number[];
   };
+  weather?: {
+    zip?: string;
+    latitude?: number;
+    longitude?: number;
+    coldThresholdF?: number;
+    forecastHours?: number;
+    pickupRadiusMiles?: number;
+  };
 };
 
 const __filename = fileURLToPath(import.meta.url);

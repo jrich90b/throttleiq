@@ -19,6 +19,8 @@ import { sendgridInboundMiddleware, handleSendgridInbound } from "./routes/sendg
 import { resolveInventoryUrlByStock } from "./domain/inventoryUrlResolver.js";
 import { checkInventorySalePendingByUrl } from "./domain/inventoryChecker.js";
 import { getDealerProfile, saveDealerProfile } from "./domain/dealerProfile.js";
+import { getDealerWeatherStatus, getWeatherConfig, resolveDealerLatLon } from "./domain/weather.js";
+import { resolveTownNearestDealer, formatTownLabel } from "./domain/geo.js";
 import { getDataDir } from "./domain/dataDir.js";
 import {
   computeFollowUpDueAt,
@@ -632,6 +634,8 @@ app.post("/debug/inbound/process", express.json(), async (req, res) => {
     const history = buildHistory(conv, 20);
     const memorySummary = conv.memorySummary?.text ?? null;
     const memorySummaryShouldUpdate = shouldUpdateMemorySummary(conv);
+    const dealerProfile = await getDealerProfile();
+    const weatherStatus = await getDealerWeatherStatus(dealerProfile);
     const result = await orchestrateInbound(event, history, {
       appointment: conv.appointment,
       followUp: conv.followUp,
@@ -647,7 +651,9 @@ app.post("/debug/inbound/process", express.json(), async (req, res) => {
       inventoryWatch: conv.inventoryWatch ?? null,
       inventoryWatches: conv.inventoryWatches ?? null,
       hold: conv.hold ?? null,
-      sale: conv.sale ?? null
+      sale: conv.sale ?? null,
+      pickup: conv.pickup ?? null,
+      weather: weatherStatus ?? null
     });
 
     if (result?.draft && result.shouldRespond) {
@@ -661,6 +667,9 @@ app.post("/debug/inbound/process", express.json(), async (req, res) => {
       }
       if (result.memorySummary) {
         setMemorySummary(conv, result.memorySummary, conv.messages.length);
+      }
+      if (result.pickupUpdate) {
+        conv.pickup = { ...(conv.pickup ?? {}), ...result.pickupUpdate, updatedAt: nowIso() };
       }
     }
 
@@ -967,6 +976,8 @@ function stopRelatedCadences(
     }
   }
 }
+
+const nowIso = () => new Date().toISOString();
 
 function onAppointmentBooked(conv: any) {
   stopFollowUpCadence(conv, "appointment_booked");
@@ -1278,6 +1289,16 @@ function isTestRideSeason(profile: any, now: Date): boolean {
     : [4, 5, 6, 7, 8, 9, 10];
   const current = now.getMonth() + 1;
   return months.includes(current);
+}
+
+function shouldAskForTown(text: string): boolean {
+  const t = String(text ?? "").trim().toLowerCase();
+  if (!t) return true;
+  if (/\b(\d+)\s*(min|mins|minutes|hour|hours|hr|hrs|mile|miles)\b/.test(t)) return true;
+  if (/\b(street|st\.|road|rd\.|avenue|ave\.|blvd|boulevard|drive|dr\.|lane|ln\.|route|rt\.|highway|hwy|pkwy|parkway)\b/.test(t)) {
+    return true;
+  }
+  return false;
 }
 
 function toTitleCase(input: string): string {
@@ -3077,8 +3098,26 @@ async function processDueFollowUps() {
           "Just checking in on your trade‑in estimate. What model are you interested in? I can set up a trade appraisal. What day and time works for you?";
       }
     } else if (isSellMyBikeLead) {
+      const weatherStatus = await getDealerWeatherStatus(dealerProfile);
+      const pickupEligible = conv.pickup?.eligible === true;
+      const pickupKnown = !!conv.pickup?.town;
       const template = SELL_FOLLOW_UP_MESSAGES[Math.min(cadence.stepIndex, SELL_FOLLOW_UP_MESSAGES.length - 1)];
-      if (cadence.stepIndex === 0) {
+      if (weatherStatus?.bad) {
+        if (!pickupKnown) {
+          message = `Just checking in — if you want us to pick up ${
+            sellBikeLabel ?? "your bike"
+          }, what town are you located in?`;
+          conv.pickup = { ...(conv.pickup ?? {}), stage: "need_town", updatedAt: nowIso() };
+        } else if (pickupEligible) {
+          message = `Just checking in — if the weather’s rough, we can pick up ${
+            sellBikeLabel ?? "your bike"
+          }. If you’d rather stop in, what day and time works for you?`;
+        } else {
+          message = `Just checking in — if you'd like a quick in‑person appraisal on ${
+            sellBikeLabel ?? "your bike"
+          }, what day and time works for you?`;
+        }
+      } else if (cadence.stepIndex === 0) {
         const day2 = await buildDay2Options(cfg);
         if (day2) {
           message = template
@@ -7245,9 +7284,15 @@ if (authToken && signature) {
   if (event.provider === "twilio" && testRideQuestion) {
     const requirements =
       "For a test ride, please bring a motorcycle endorsement, a DOT helmet, eyewear, long pants, a long sleeve shirt, and over-the-ankle boots.";
+    const dealerProfile = await getDealerProfile();
+    const weather = await getDealerWeatherStatus(dealerProfile);
     const reply = conv.appointment?.bookedEventId
-      ? `Yes — we can plan a test ride during your visit. ${requirements}`
-      : `Yes — we can set that up during your visit. ${requirements} If you want me to add a test ride to your visit, just let me know.`;
+      ? weather?.bad
+        ? `If the weather’s rough, we can plan the test ride for a better day. ${requirements} If you want to reschedule, just let me know.`
+        : `Yes — we can plan a test ride during your visit. ${requirements}`
+      : weather?.bad
+        ? `If the weather’s rough, we can plan the test ride for a better day. ${requirements} If you want me to set one up, just let me know.`
+        : `Yes — we can set that up during your visit. ${requirements} If you want me to add a test ride to your visit, just let me know.`;
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -7259,6 +7304,157 @@ if (authToken && signature) {
       reply
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
+  }
+
+  if (event.provider === "twilio" && conv.pickup?.stage) {
+    const stage = conv.pickup.stage;
+    const townRaw = String(event.body ?? "").trim();
+    if (stage === "need_town") {
+      if (shouldAskForTown(townRaw)) {
+        const reply = "Got it — what town are you located in?";
+        const systemMode = webhookMode;
+        if (systemMode === "suggest") {
+          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+        appendOutbound(conv, event.to, event.from, reply, "twilio");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+          reply
+        )}</Message>\n</Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+
+      const dealerProfile = await getDealerProfile();
+      const coords = await resolveDealerLatLon(dealerProfile);
+      const cfg = getWeatherConfig(dealerProfile);
+      let townLabel = townRaw;
+      let eligible: boolean | undefined;
+      let distance: number | undefined;
+      if (coords) {
+        const match = await resolveTownNearestDealer(townRaw, coords.lat, coords.lon);
+        if (match) {
+          distance = Math.round(match.distanceMiles * 10) / 10;
+          eligible = distance <= Number(cfg.pickupRadiusMiles ?? 25);
+          townLabel = formatTownLabel(match.name, match.state);
+        }
+      }
+      conv.pickup = {
+        ...(conv.pickup ?? {}),
+        stage: "need_street",
+        town: townLabel,
+        distanceMiles: distance,
+        eligible,
+        updatedAt: nowIso()
+      };
+      saveConversation(conv);
+      const reply = eligible === false
+        ? `Thanks — ${townLabel} is about ${distance ?? ""} miles from us. I’ll have to check with the driver to see if we can get a pick-up scheduled. What street address (number and street) should we use?`
+        : eligible === true
+          ? `Thanks — ${townLabel} is within our pickup range. What street address (number and street) should we use?`
+          : "Thanks — I’ll have to check with the driver to see if we can get a pick-up scheduled. What street address (number and street) should we use?";
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+
+    if (stage === "need_street") {
+      const streetRaw = String(event.body ?? "").trim();
+      if (!/\d+/.test(streetRaw)) {
+        const reply = "Thanks — can you share the street number and street name for pickup?";
+        const systemMode = webhookMode;
+        if (systemMode === "suggest") {
+          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+        appendOutbound(conv, event.to, event.from, reply, "twilio");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+          reply
+        )}</Message>\n</Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      conv.pickup = {
+        ...(conv.pickup ?? {}),
+        stage: "need_time",
+        street: streetRaw,
+        updatedAt: nowIso()
+      };
+      saveConversation(conv);
+      const reply = "Great — what day and time would you prefer for pickup?";
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+
+    if (stage === "need_time") {
+      const timeRaw = String(event.body ?? "").trim();
+      if (!timeRaw) {
+        const reply = "Thanks — what day and time would you prefer for pickup?";
+        const systemMode = webhookMode;
+        if (systemMode === "suggest") {
+          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+        appendOutbound(conv, event.to, event.from, reply, "twilio");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+          reply
+        )}</Message>\n</Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      conv.pickup = {
+        ...(conv.pickup ?? {}),
+        stage: "ready",
+        preferredTimeText: timeRaw,
+        updatedAt: nowIso()
+      };
+      saveConversation(conv);
+      const bikeLabel = getSellBikeLabel(conv);
+      const town = conv.pickup?.town ?? "";
+      const street = conv.pickup?.street ?? "";
+      const distance = conv.pickup?.distanceMiles;
+      const eligible = conv.pickup?.eligible;
+      const summary =
+        `Pickup request: ${bikeLabel}. ` +
+        `Address: ${street}${town ? `, ${town}` : ""}. ` +
+        `Preferred time: ${timeRaw}. ` +
+        (typeof distance === "number"
+          ? `Distance: ${distance} miles${eligible === false ? " (outside pickup range)" : ""}.`
+          : "Distance: unknown.");
+      addTodo(conv, "service", summary, event.providerMessageId);
+      setFollowUpMode(conv, "manual_handoff", "pickup_request");
+      stopFollowUpCadence(conv, "pickup_request");
+      stopRelatedCadences(conv, "pickup_request", { setMode: "manual_handoff" });
+      const reply = "Thanks — I’ll have our service department reach out to confirm pickup details.";
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
   }
 
   if (event.provider === "twilio" && conv.inventoryWatchPending) {
@@ -8044,6 +8240,8 @@ if (authToken && signature) {
   const history = buildHistory(conv, 20);
   const memorySummary = conv.memorySummary?.text ?? null;
   const memorySummaryShouldUpdate = shouldUpdateMemorySummary(conv);
+  const dealerProfile = await getDealerProfile();
+  const weatherStatus = await getDealerWeatherStatus(dealerProfile);
   const result = await orchestrateInbound(event, history, {
     appointment: conv.appointment,
     followUp: conv.followUp,
@@ -8062,8 +8260,13 @@ if (authToken && signature) {
     inventoryWatch: conv.inventoryWatch ?? null,
     inventoryWatches: conv.inventoryWatches ?? null,
     hold: conv.hold ?? null,
-    sale: conv.sale ?? null
+    sale: conv.sale ?? null,
+    pickup: conv.pickup ?? null,
+    weather: weatherStatus ?? null
   });
+  if (result.pickupUpdate) {
+    conv.pickup = { ...(conv.pickup ?? {}), ...result.pickupUpdate, updatedAt: nowIso() };
+  }
   if (
     !result.requestedTime &&
     !conv.appointment?.bookedEventId &&

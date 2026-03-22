@@ -367,6 +367,8 @@ export async function orchestrateInbound(
     inventoryWatches?: any;
     hold?: any;
     sale?: any;
+    pickup?: any;
+    weather?: { bad?: boolean; cold?: boolean; snow?: boolean } | null;
   }
 ): Promise<OrchestratorResult> {
   await loadSystemPrompt("orchestrator");
@@ -412,15 +414,40 @@ export async function orchestrateInbound(
           : sellOption === "either"
             ? "Are you leaning more toward a cash offer or trade credit?"
             : "Are you looking for a cash offer or trade credit?";
+    const weatherBad = !!ctx?.weather?.bad;
+    const pickup = ctx?.pickup ?? {};
+    const pickupKnown = !!pickup?.town;
+    const pickupEligible = pickup?.eligible === true;
+    const pickupPendingTown = pickup?.stage === "need_town";
+    const pickupUnknown = !pickupKnown && !pickupPendingTown;
+    const wantsPickupPrompt = weatherBad && pickupUnknown;
+    const pickupOfferLine = pickupEligible
+      ? " If the weather’s rough, we can pick the bike up."
+      : weatherBad && pickupKnown && pickup?.eligible === false
+        ? ""
+        : "";
+
     if (hasPriorOutbound) {
       const followUp =
         sellOption === "cash"
-          ? "Got it — for a straight cash offer, we’ll need an in‑person appraisal. What day and time works for you to stop in with the bike?"
+          ? `Got it — for a straight cash offer, we’ll need an in‑person appraisal.${pickupOfferLine} What day and time works best?`
           : sellOption === "trade"
             ? "Great — what model are you hoping to trade into?"
             : sellOption === "either"
               ? "Understood — are you leaning more toward a cash offer or trade credit?"
               : "Are you looking for a cash offer or trade credit?";
+      if (wantsPickupPrompt) {
+        const prompt =
+          "Got it — for a straight cash offer, we’ll need an in‑person appraisal. " +
+          "If the weather’s rough, we can pick the bike up. What town are you located in?";
+        return finalize({
+          intent: "TRADE_IN",
+          stage: "ENGAGED",
+          shouldRespond: true,
+          draft: prompt,
+          pickupUpdate: { stage: "need_town" }
+        });
+      }
       return finalize({
         intent: "TRADE_IN",
         stage: "ENGAGED",
@@ -428,7 +455,23 @@ export async function orchestrateInbound(
         draft: followUp
       });
     }
-    const draft = `Hi ${leadFirst} — thanks for reaching out about selling your ${yearLabel}${modelLabel}. I can help with a trade‑in appraisal.${mileageLine} ${optionLine} If you want to stop in, I can set a time.`;
+    if (wantsPickupPrompt) {
+      const draft =
+        `Hi ${leadFirst} — thanks for reaching out about selling your ${yearLabel}${modelLabel}. ` +
+        `I can help with a trade‑in appraisal.${mileageLine} If the weather’s rough, we can pick the bike up. ` +
+        "What town are you located in?";
+      return finalize({
+        intent: "TRADE_IN",
+        stage: "ENGAGED",
+        shouldRespond: true,
+        draft,
+        pickupUpdate: { stage: "need_town" }
+      });
+    }
+    const draft =
+      `Hi ${leadFirst} — thanks for reaching out about selling your ${yearLabel}${modelLabel}. ` +
+      `I can help with a trade‑in appraisal.${mileageLine} ${optionLine}` +
+      `${pickupOfferLine} If you want to stop in, I can set a time.`;
     return finalize({
       intent: "TRADE_IN",
       stage: "ENGAGED",

@@ -293,6 +293,15 @@ export type Conversation = {
   inventoryWatch?: InventoryWatch;
   inventoryWatches?: InventoryWatch[];
   inventoryWatchPending?: InventoryWatchPending;
+  pickup?: {
+    stage?: "need_town" | "need_street" | "need_time" | "ready";
+    town?: string;
+    street?: string;
+    preferredTimeText?: string;
+    distanceMiles?: number;
+    eligible?: boolean;
+    updatedAt?: string;
+  };
   emailDraft?: string;
   contactPreference?: "call_only";
   voiceContext?: VoiceContext;
