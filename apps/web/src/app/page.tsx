@@ -4087,15 +4087,13 @@ export default function Home() {
                         Call
                       </button>
                     ) : null}
-                    {isCallTodo ? (
-                      <button
-                        className="px-3 py-2 border rounded text-sm text-gray-600"
-                        onClick={() => markTodoDone(t, "dismiss")}
-                        title="Close this call to-do"
-                      >
-                        Close
-                      </button>
-                    ) : null}
+                    <button
+                      className="px-3 py-2 border rounded text-sm text-gray-600"
+                      onClick={() => markTodoDone(t, "dismiss")}
+                      title="Close this to-do"
+                    >
+                      Close
+                    </button>
                   </div>
                 </div>
               );
