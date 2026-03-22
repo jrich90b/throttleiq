@@ -1274,12 +1274,54 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     );
     const yearLabel = conv.lead?.vehicle?.year ? `${conv.lead?.vehicle?.year} ` : "";
     const bikeLabel = modelLabel ? `${yearLabel}${modelLabel}`.trim() : "your bike";
+    const sellLabel = bikeLabel.startsWith("your ") ? bikeLabel.slice(5) : bikeLabel;
     let ack =
-      `Hi ${firstName} — you mentioned you’re looking to sell ${bikeLabel}. ` +
+      `You are looking to sell your ${sellLabel}. ` +
       `This is ${agentName} at ${dealerName}. ` +
       "We can do a quick in‑person appraisal and give you a firm offer. " +
       "If you’re open to stopping by, what day and time works best?";
     ack = await applyInitialAdfPrefix(ack);
+    const bookingUrl = buildBookingUrlForLead(profile?.bookingUrl, conv);
+    const bookingLine = bookingUrl
+      ? `You can book an appointment here: ${bookingUrl}`
+      : "Just reply with a day and time that works for you.";
+    const rawName = firstName.trim() || conv.lead?.name?.trim() || "there";
+    const name = rawName.split(" ")[0] || "there";
+    const emailDraft = `Hi ${name},\n\nYou are looking to sell your ${sellLabel}. ` +
+      `This is ${agentName} at ${dealerName}. ` +
+      "We can do a quick in‑person appraisal and give you a firm offer. " +
+      `If you’d like to stop in, ${bookingLine}\n\nThanks,`;
+    conv.emailDraft = emailDraft;
+    const systemMode = getSystemMode();
+    const emailTo = conv.lead?.email?.trim();
+    const canSendEmail = systemMode !== "suggest" && !!emailTo && conv.lead?.emailOptIn === true;
+    if (canSendEmail) {
+      const { from: emailFrom, replyTo: emailReplyTo, signature } = {
+        from: (profile?.fromEmail ?? process.env.SENDGRID_FROM_EMAIL ?? "").trim(),
+        replyTo: (profile?.replyToEmail ?? process.env.SENDGRID_REPLY_TO ?? "").trim(),
+        signature: String(profile?.emailSignature ?? "").trim() || undefined
+      };
+      const replyTo = maybeTagReplyTo(emailReplyTo || undefined, conv);
+      if (emailFrom) {
+        try {
+          const subject = `Thanks for your inquiry at ${dealerName}`;
+          const signed =
+            signature
+              ? `${emailDraft}\n\n${signature}${profile?.logoUrl ? `\n\n${profile.logoUrl}` : ""}`
+              : emailDraft;
+          await sendEmail({
+            to: emailTo!,
+            subject,
+            text: signed,
+            from: emailFrom,
+            replyTo
+          });
+          appendOutbound(conv, emailFrom, emailTo!, signed, "sendgrid");
+        } catch (e: any) {
+          console.log("[sendgrid inbound] email send failed:", e?.message ?? e);
+        }
+      }
+    }
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
     maybeAddInitialCallTodo();
     return res.status(200).json({
