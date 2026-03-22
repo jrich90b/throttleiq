@@ -7335,17 +7335,17 @@ if (authToken && signature) {
     if (!forecast) {
       reply = "I couldn’t pull the forecast just now. If you want, I can check again shortly.";
     } else {
-      const low = forecast.minTempF;
-      const high = forecast.maxTempF;
+      const lowVal = typeof forecast.minTempF === "number" ? Math.round(forecast.minTempF) : null;
+      const highVal = typeof forecast.maxTempF === "number" ? Math.round(forecast.maxTempF) : null;
       const tempText =
-        Number.isFinite(low) && Number.isFinite(high)
-          ? `${Math.round(low)}–${Math.round(high)}°F`
-          : Number.isFinite(high)
-            ? `${Math.round(high)}°F`
-            : Number.isFinite(low)
-              ? `${Math.round(low)}°F`
+        lowVal !== null && highVal !== null
+          ? `${lowVal}–${highVal}°F`
+          : highVal !== null
+            ? `${highVal}°F`
+            : lowVal !== null
+              ? `${lowVal}°F`
               : "mild";
-      const cold = Number.isFinite(low) ? low < coldThreshold : Number.isFinite(high) ? high < coldThreshold : false;
+      const cold = lowVal !== null ? lowVal < coldThreshold : highVal !== null ? highVal < coldThreshold : false;
       const rough = cold || forecast.snow;
       const lineA = forecast.snow
         ? `Looks like ${dayLabel} is around ${tempText} here at the dealership, and snow is possible.`
