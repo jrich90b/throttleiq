@@ -7170,8 +7170,8 @@ if (authToken && signature) {
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
       const agentName = dealerProfile?.agentName ?? "Brooke";
       const replyRaw = alreadyAsked
-        ? "Understood — I’m here when you’re ready."
-        : "No problem — I’m here when you’re ready. If you want me to check back, what timeframe works best?";
+        ? "Understood — I’m here when you’re ready. You have my contact info, so just reach out if you want to set a time to stop in and check out some bikes."
+        : "No problem — I’m here when you’re ready. You have my contact info, so just reach out if you want to set a time to stop in and check out some bikes.";
       const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
       const systemMode = webhookMode;
       if (systemMode === "suggest") {
