@@ -1506,10 +1506,8 @@ export function addTodo(
 }
 
 export function addCallTodoIfMissing(conv: Conversation, summary: string): TodoTask | null {
-  const existing = todos.find(
-    t => t.convId === conv.id && t.status === "open" && t.reason === "call"
-  );
-  if (existing) return null;
+  const hasOpen = todos.some(t => t.convId === conv.id && t.status === "open");
+  if (hasOpen) return null;
   return addTodo(conv, "call", summary);
 }
 
