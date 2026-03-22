@@ -1262,8 +1262,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   const isRoom58Sell =
     /room58/i.test(leadSourceLower) && /(sell|sell your vehicle|sell your bike)/i.test(leadSourceLower);
+  const isMarketplaceSell = /marketplace/i.test(leadSourceLower) && /sell/.test(leadSourceLower);
   const isSellLead = inferredBucket === "trade_in_sell" || inferredCta === "sell_my_bike";
-  if (isRoom58Sell && isSellLead) {
+  if ((isRoom58Sell || isMarketplaceSell) && isSellLead) {
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
     const agentName = profile?.agentName ?? "Brooke";
