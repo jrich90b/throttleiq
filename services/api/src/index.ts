@@ -8852,6 +8852,85 @@ if (authToken && signature) {
       }
 
       if (bestSlots.length >= 2) {
+        if (schedulingSignals.hasDayTime && result.requestedTime) {
+          const requestedStartUtc = localPartsToUtcDate(cfg.timezone, result.requestedTime);
+          const match = bestSlots.find(s => {
+            const startMs = new Date(s.start).getTime();
+            return Math.abs(startMs - requestedStartUtc.getTime()) <= 60_000;
+          });
+          if (match) {
+            const matchSp = salespeople.find((p: any) => p.id === match.salespersonId);
+            const stockId = conv.lead?.vehicle?.stockId ?? null;
+            const leadNameRaw = conv.lead?.name?.trim() ?? "";
+            const firstName = normalizeDisplayCase(conv.lead?.firstName);
+            const lastName = conv.lead?.lastName ?? "";
+            const leadName = leadNameRaw || [firstName, lastName].filter(Boolean).join(" ").trim() || conv.leadKey;
+
+            const summary = `Appt: ${appointmentType} – ${leadName}${stockId ? ` – ${stockId}` : ""}`;
+            const description = [
+              `LeadKey: ${conv.leadKey}`,
+              `Phone: ${conv.lead?.phone ?? conv.leadKey}`,
+              `Email: ${conv.lead?.email ?? ""}`,
+              `FirstName: ${firstName ?? ""}`,
+              `LastName: ${lastName ?? ""}`,
+              `Stock: ${stockId ?? ""}`,
+              `VIN: ${conv.lead?.vehicle?.vin ?? ""}`,
+              `Source: ${conv.lead?.source ?? ""}`,
+              `VisitType: ${appointmentType}`
+            ]
+              .filter(Boolean)
+              .join("\n");
+
+            const eventObj = await insertEvent(
+              cal,
+              match.calendarId,
+              cfg.timezone,
+              summary,
+              description,
+              match.start,
+              match.end
+            );
+
+            conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
+            conv.appointment.status = "confirmed";
+            conv.appointment.whenText = match.startLocal ?? formatSlotLocal(match.start, cfg.timezone);
+            conv.appointment.whenIso = match.start;
+            conv.appointment.confirmedBy = "customer";
+            conv.appointment.updatedAt = new Date().toISOString();
+            conv.appointment.acknowledged = true;
+            conv.appointment.bookedEventId = eventObj.id ?? null;
+            conv.appointment.bookedEventLink = eventObj.htmlLink ?? null;
+            conv.appointment.bookedSalespersonId = match.salespersonId ?? null;
+            onAppointmentBooked(conv);
+
+            if (conv.scheduler) {
+              conv.scheduler.lastSuggestedSlots = [];
+              conv.scheduler.updatedAt = new Date().toISOString();
+            }
+
+            const dealerName =
+              (conv as any).dealerProfile?.dealerName ?? "American Harley-Davidson";
+            const addressLine = "1149 Erie Ave., North Tonawanda, NY 14120";
+            const when = match.startLocal ?? formatSlotLocal(match.start, cfg.timezone);
+            const repName = matchSp?.name ? ` with ${matchSp.name}` : "";
+            const confirmText =
+              `Perfect — you’re booked for ${when}${repName}. ` +
+              `${dealerName} is at ${addressLine}.`;
+            const systemMode = webhookMode;
+            if (systemMode === "suggest") {
+              appendOutbound(conv, event.to, event.from, confirmText, "draft_ai", eventObj.id ?? undefined);
+              saveConversation(conv);
+              await flushConversationStore();
+              const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+              return res.status(200).type("text/xml").send(twiml);
+            }
+            appendOutbound(conv, event.to, event.from, confirmText, "twilio", eventObj.id ?? undefined);
+            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+              confirmText
+            )}</Message>\n</Response>`;
+            return res.status(200).type("text/xml").send(twiml);
+          }
+        }
         setLastSuggestedSlots(conv, bestSlots);
         console.log("[scheduler] persisted lastSuggestedSlots len:", bestSlots.length);
         console.log(
