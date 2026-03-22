@@ -94,6 +94,20 @@ function normalizeModelToken(raw: string): string {
     .trim();
 }
 
+function toTitleCase(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function normalizeDisplayCase(raw?: string | null): string {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) return "";
+  const letters = trimmed.replace(/[^A-Za-z]/g, "");
+  if (!letters) return trimmed;
+  return letters === letters.toUpperCase() ? toTitleCase(trimmed) : trimmed;
+}
+
 function normalizeModelForMatch(modelRaw: string, makeRaw?: string | null): string {
   const base = normalizeModelToken(modelRaw);
   if (!base) return "";
@@ -255,7 +269,7 @@ function buildBookingUrlForLead(baseUrl: string | undefined | null, conv: any): 
 
 function formatModelLabel(year?: string | null, model?: string | null): string | null {
   if (!model) return null;
-  const clean = String(model).trim();
+  const clean = normalizeDisplayCase(model);
   if (!clean || /full line|other/i.test(clean)) return null;
   return year ? `${year} ${clean}` : clean;
 }
@@ -325,7 +339,10 @@ function buildInitialEmailDraft(
   inventoryNote?: string | null,
   buildInventoryAvailable?: boolean | null
 ): string {
-  const rawName = conv?.lead?.firstName?.trim() || conv?.lead?.name?.trim() || "there";
+  const rawName =
+    normalizeDisplayCase(conv?.lead?.firstName) ||
+    normalizeDisplayCase(conv?.lead?.name) ||
+    "there";
   const name = rawName.split(" ")[0] || "there";
   const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
   const agentName = dealerProfile?.agentName ?? "our team";
@@ -1062,7 +1079,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
     const agentName = profile?.agentName ?? "Brooke";
-    const firstName = conv.lead?.firstName?.trim() || "";
+    const firstName = normalizeDisplayCase(conv.lead?.firstName);
     const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
     const prefix = `${greeting}This is ${agentName} at ${dealerName}. `;
     const prefixLower = prefix.toLowerCase();
@@ -1153,7 +1170,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
     const agentName = profile?.agentName ?? "Brooke";
-    const firstName = conv.lead?.firstName?.trim() || "there";
+    const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
     if (conv.lead) conv.lead.walkIn = true;
     const vendorFirst = vendorContactName.split(/\s+/).filter(Boolean)[0] || "";
     const salespersonName = vendorFirst || agentName;
@@ -1268,7 +1285,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
     const agentName = profile?.agentName ?? "Brooke";
-    const firstName = conv.lead?.firstName ?? "";
+    const firstName = normalizeDisplayCase(conv.lead?.firstName);
     const modelLabel = normalizeVehicleModel(
       conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "",
       conv.lead?.vehicle?.make ?? null
@@ -1286,7 +1303,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const bookingLine = bookingUrl
       ? `You can book an appointment here: ${bookingUrl}`
       : "Just reply with a day and time that works for you.";
-    const rawName = firstName.trim() || conv.lead?.name?.trim() || "there";
+    const rawName =
+      firstName || normalizeDisplayCase(conv.lead?.name) || "there";
     const name = rawName.split(" ")[0] || "there";
     const emailDraft = `Hi ${name},\n\nYou are looking to sell your ${sellLabel}. ` +
       `This is ${agentName} at ${dealerName}. ` +
@@ -1344,7 +1362,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
     const agentName = profile?.agentName ?? "Brooke";
-    const firstName = conv.lead?.firstName ?? "";
+    const firstName = normalizeDisplayCase(conv.lead?.firstName);
     const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
     let ack = `${greeting}thanks for reaching out. This is ${agentName} at ${dealerName}. I got your inquiry and I’ll make sure the team follows up soon.`;
     ack = await applyInitialAdfPrefix(ack);
@@ -1375,7 +1393,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
     const agentName = profile?.agentName ?? "Brooke";
-    const firstName = conv.lead?.firstName ?? "";
+    const firstName = normalizeDisplayCase(conv.lead?.firstName);
     const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
     let ack =
       `${greeting}thanks for your H‑D Meta promo offer request. ` +
@@ -1586,7 +1604,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         if (exact) {
           const stockId = conv.lead?.vehicle?.stockId ?? null;
           const leadNameRaw = conv.lead?.name?.trim() ?? "";
-          const firstName = conv.lead?.firstName ?? "";
+          const firstName = normalizeDisplayCase(conv.lead?.firstName);
           const lastName = conv.lead?.lastName ?? "";
           const leadName = leadNameRaw || [firstName, lastName].filter(Boolean).join(" ").trim() || conv.leadKey;
 

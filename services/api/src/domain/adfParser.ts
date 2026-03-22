@@ -105,6 +105,21 @@ function normalizeMake(raw?: string): string | undefined {
   return t;
 }
 
+function toTitleCase(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function normalizeDisplayCase(raw?: string | null): string | undefined {
+  if (!raw) return undefined;
+  const trimmed = String(raw).trim();
+  if (!trimmed) return undefined;
+  const letters = trimmed.replace(/[^A-Za-z]/g, "");
+  if (!letters) return trimmed;
+  return letters === letters.toUpperCase() ? toTitleCase(trimmed) : trimmed;
+}
+
 function parseColorTrimFromItem(item?: string) {
   if (!item) return {};
   let working = item.replace(/\s+/g, " ").trim();
@@ -332,6 +347,8 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
       if (!lastName && rest.length) lastName = rest.join(" ");
     }
   }
+  firstName = normalizeDisplayCase(firstName);
+  lastName = normalizeDisplayCase(lastName);
 
   const emails = asArray(contact?.email);
   const email = text(emails[0]);
@@ -372,7 +389,9 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
     }
     vehicleModel = vehicleModel.replace(/^[\s\-–—:,]+|[\s\-–—:,]+$/g, "").trim();
   }
-  const vehicleTrim = text(vehicle?.trim) ?? parsedFromComment.trim;
+  vehicleModel = normalizeDisplayCase(vehicleModel);
+  let vehicleTrim = text(vehicle?.trim) ?? parsedFromComment.trim;
+  vehicleTrim = normalizeDisplayCase(vehicleTrim);
   const vehicleCondition =
     normalizeCondition(attr(vehicle, "status") ?? attr(vehicleRaw, "status")) ??
     parsedFromComment.condition;
@@ -408,11 +427,12 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
   if (tradeVehicleRaw) {
     const tradeYear = text(tradeVehicleRaw?.year);
     const tradeMake = text(tradeVehicleRaw?.make);
-    const tradeModel = text(tradeVehicleRaw?.model);
+    let tradeModel = text(tradeVehicleRaw?.model);
     const tradeVin = text(tradeVehicleRaw?.vin);
     const tradeOdometerRaw = text(tradeVehicleRaw?.odometer);
     const tradeMileage =
       tradeOdometerRaw != null ? Number(String(tradeOdometerRaw).replace(/,/g, "")) : undefined;
+    tradeModel = normalizeDisplayCase(tradeModel);
     const tradeDesc =
       [tradeMake, tradeModel].filter(Boolean).join(" ") ||
       text(tradeVehicleRaw?.description) ||

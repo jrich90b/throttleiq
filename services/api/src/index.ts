@@ -1280,14 +1280,29 @@ function isTestRideSeason(profile: any, now: Date): boolean {
   return months.includes(current);
 }
 
+function toTitleCase(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function normalizeDisplayCase(raw?: string | null): string {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) return "";
+  const letters = trimmed.replace(/[^A-Za-z]/g, "");
+  if (!letters) return trimmed;
+  return letters === letters.toUpperCase() ? toTitleCase(trimmed) : trimmed;
+}
+
 function formatModelLabel(year?: string | null, model?: string | null): string {
   const yr = year ? `${year} ` : "";
-  return `${yr}${model ?? "that model"}`.trim();
+  const clean = normalizeDisplayCase(model) || "that model";
+  return `${yr}${clean}`.trim();
 }
 
 function formatModelLabelForFollowUp(_year?: string | null, model?: string | null): string {
   if (!model || /full line/i.test(model)) return "the bike";
-  const base = String(model).trim();
+  const base = normalizeDisplayCase(model);
   return /^the\s/i.test(base) ? base : `the ${base}`;
 }
 
@@ -2852,11 +2867,7 @@ async function processDueFollowUps() {
     return first || user.name || user.email || agentName;
   };
   const normalizeModelForPostSale = (model: string) => {
-    const trimmed = model.trim();
-    if (!trimmed) return trimmed;
-    const letters = trimmed.replace(/[^A-Za-z]/g, "");
-    if (letters && trimmed === trimmed.toUpperCase()) return trimmed.toLowerCase();
-    return trimmed;
+    return normalizeDisplayCase(model);
   };
   const getPostSaleModel = (conv: any) => {
     const raw = conv?.lead?.vehicle?.model ?? "";
@@ -3043,7 +3054,7 @@ async function processDueFollowUps() {
     let mediaUrls: string[] | undefined;
     if (isPostSale) {
       const repName = resolvePostSaleSender(conv);
-      const firstName = conv.lead?.firstName?.trim() || "there";
+      const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
       const bikeModel = getPostSaleModel(conv);
       const smsTemplates = [
         `Hi ${firstName} — this is ${repName} at ${dealerName}. Thanks again for coming to see us for your ${bikeModel}. If you need anything, just let me know.`,
@@ -5986,7 +5997,7 @@ if (authToken && signature) {
 
           const stockId = conv.lead?.vehicle?.stockId ?? null;
           const leadNameRaw = conv.lead?.name?.trim() ?? "";
-          const firstName = conv.lead?.firstName ?? "";
+          const firstName = normalizeDisplayCase(conv.lead?.firstName);
           const lastName = conv.lead?.lastName ?? "";
           const leadName = leadNameRaw || [firstName, lastName].filter(Boolean).join(" ").trim() || conv.leadKey;
           const appointmentType = chosen.appointmentType ?? "inventory_visit";
@@ -6088,7 +6099,7 @@ if (authToken && signature) {
 
         const stockId = conv.lead?.vehicle?.stockId ?? null;
         const leadNameRaw = conv.lead?.name?.trim() ?? "";
-        const firstName = conv.lead?.firstName ?? "";
+        const firstName = normalizeDisplayCase(conv.lead?.firstName);
         const lastName = conv.lead?.lastName ?? "";
         const leadName = leadNameRaw || [firstName, lastName].filter(Boolean).join(" ").trim() || conv.leadKey;
         const appointmentType = chosen.appointmentType ?? "inventory_visit";
@@ -6642,7 +6653,7 @@ if (authToken && signature) {
 
       const stockId = conv.lead?.vehicle?.stockId ?? null;
       const leadNameRaw = conv.lead?.name?.trim() ?? "";
-      const firstName = conv.lead?.firstName ?? "";
+      const firstName = normalizeDisplayCase(conv.lead?.firstName);
       const lastName = conv.lead?.lastName ?? "";
       const leadName = leadNameRaw || [firstName, lastName].filter(Boolean).join(" ").trim() || conv.leadKey;
 
@@ -7019,7 +7030,7 @@ if (authToken && signature) {
       const dealerProfile = await getDealerProfile();
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
       const agentName = dealerProfile?.agentName ?? "Brooke";
-      const firstName = conv.lead?.firstName ?? "";
+      const firstName = normalizeDisplayCase(conv.lead?.firstName);
       const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
       const replyRaw =
         `${greeting}thanks for your H‑D Meta promo offer request. ` +
@@ -7902,7 +7913,7 @@ if (authToken && signature) {
           if (chosen) {
             const stockId = conv.lead?.vehicle?.stockId ?? null;
             const leadNameRaw = conv.lead?.name?.trim() ?? "";
-            const firstName = conv.lead?.firstName ?? "";
+            const firstName = normalizeDisplayCase(conv.lead?.firstName);
             const lastName = conv.lead?.lastName ?? "";
             const leadName = leadNameRaw || [firstName, lastName].filter(Boolean).join(" ").trim() || conv.leadKey;
             const summary = `Appt: ${appointmentType} – ${leadName}${stockId ? ` – ${stockId}` : ""}`;
@@ -8252,7 +8263,7 @@ if (authToken && signature) {
           if (exact) {
             const stockId = conv.lead?.vehicle?.stockId ?? null;
             const leadNameRaw = conv.lead?.name?.trim() ?? "";
-            const firstName = conv.lead?.firstName ?? "";
+            const firstName = normalizeDisplayCase(conv.lead?.firstName);
             const lastName = conv.lead?.lastName ?? "";
             const leadName = leadNameRaw || [firstName, lastName].filter(Boolean).join(" ").trim() || conv.leadKey;
 
