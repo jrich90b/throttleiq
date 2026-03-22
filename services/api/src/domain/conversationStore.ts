@@ -1275,12 +1275,16 @@ function parseExactTime(text: string): { hour24: number; minute: number; timeTex
   if (minute < 0 || minute > 59) return null;
   if (hourRaw < 0 || hourRaw > 23) return null;
   if (meridiem && (hourRaw < 1 || hourRaw > 12)) return null;
-  if (!meridiem && hourRaw <= 12) return null;
 
   let hour24 = hourRaw;
   if (meridiem) {
     if (meridiem === "am") hour24 = hourRaw === 12 ? 0 : hourRaw;
     if (meridiem === "pm") hour24 = hourRaw === 12 ? 12 : hourRaw + 12;
+  } else if (hourRaw <= 12) {
+    // Heuristic for ambiguous times like "1:30" without am/pm.
+    if (hourRaw !== 12) {
+      hour24 = hourRaw <= 7 ? hourRaw + 12 : hourRaw;
+    }
   }
   return { hour24, minute, timeText };
 }
