@@ -23,6 +23,13 @@ type WeatherStatus = {
 
 type LatLon = { lat: number; lon: number };
 
+export type DailyForecast = {
+  date: string;
+  minTempF?: number;
+  maxTempF?: number;
+  snow?: boolean;
+};
+
 const geoCache = new Map<string, { value: LatLon; expiresAt: number }>();
 const weatherCache = new Map<string, { value: WeatherStatus; expiresAt: number }>();
 
@@ -135,6 +142,42 @@ export async function getDealerWeatherStatus(
     };
     weatherCache.set(key, { value: status, expiresAt: now + WEATHER_TTL_MS });
     return status;
+  } catch {
+    return null;
+  }
+}
+
+export async function getDealerDailyForecast(
+  profile: DealerProfileLike | null | undefined,
+  targetDateIso: string
+): Promise<DailyForecast | null> {
+  const coords = await resolveDealerLatLon(profile);
+  if (!coords) return null;
+  const url =
+    `https://api.open-meteo.com/v1/forecast?latitude=${coords.lat}` +
+    `&longitude=${coords.lon}` +
+    `&daily=temperature_2m_max,temperature_2m_min,snowfall_sum` +
+    `&forecast_days=7&temperature_unit=fahrenheit&timezone=auto`;
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) return null;
+    const data = (await resp.json()) as any;
+    const daily = data?.daily ?? {};
+    const dates: string[] = Array.isArray(daily.time) ? daily.time : [];
+    const maxTemps: number[] = Array.isArray(daily.temperature_2m_max) ? daily.temperature_2m_max : [];
+    const minTemps: number[] = Array.isArray(daily.temperature_2m_min) ? daily.temperature_2m_min : [];
+    const snowSums: number[] = Array.isArray(daily.snowfall_sum) ? daily.snowfall_sum : [];
+    const idx = dates.findIndex(d => d === targetDateIso);
+    if (idx === -1) return null;
+    const maxTemp = Number(maxTemps[idx]);
+    const minTemp = Number(minTemps[idx]);
+    const snow = Number(snowSums[idx] ?? 0);
+    return {
+      date: targetDateIso,
+      minTempF: Number.isFinite(minTemp) ? minTemp : undefined,
+      maxTempF: Number.isFinite(maxTemp) ? maxTemp : undefined,
+      snow: Number.isFinite(snow) ? snow > 0 : undefined
+    };
   } catch {
     return null;
   }

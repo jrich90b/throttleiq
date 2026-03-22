@@ -19,7 +19,12 @@ import { sendgridInboundMiddleware, handleSendgridInbound } from "./routes/sendg
 import { resolveInventoryUrlByStock } from "./domain/inventoryUrlResolver.js";
 import { checkInventorySalePendingByUrl } from "./domain/inventoryChecker.js";
 import { getDealerProfile, saveDealerProfile } from "./domain/dealerProfile.js";
-import { getDealerWeatherStatus, getWeatherConfig, resolveDealerLatLon } from "./domain/weather.js";
+import {
+  getDealerWeatherStatus,
+  getWeatherConfig,
+  resolveDealerLatLon,
+  getDealerDailyForecast
+} from "./domain/weather.js";
 import { resolveTownNearestDealer, formatTownLabel } from "./domain/geo.js";
 import { getDataDir } from "./domain/dataDir.js";
 import {
@@ -1313,6 +1318,36 @@ function normalizeDisplayCase(raw?: string | null): string {
   const letters = trimmed.replace(/[^A-Za-z]/g, "");
   if (!letters) return trimmed;
   return letters === letters.toUpperCase() ? toTitleCase(trimmed) : trimmed;
+}
+
+function pickVariantByKey(key: string | null | undefined, variants: string[]): string {
+  if (!variants.length) return "";
+  const raw = String(key ?? "");
+  if (!raw) return variants[0];
+  let hash = 0;
+  for (let i = 0; i < raw.length; i += 1) {
+    hash = (hash + raw.charCodeAt(i)) % variants.length;
+  }
+  return variants[hash];
+}
+
+function formatDatePartsIso(parts: { year: number; month: number; day: number }): string {
+  const yyyy = String(parts.year).padStart(4, "0");
+  const mm = String(parts.month).padStart(2, "0");
+  const dd = String(parts.day).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function nextLocalDateForWeekday(dayName: string, timeZone: string): { year: number; month: number; day: number } | null {
+  for (let i = 0; i <= 7; i += 1) {
+    const d = new Date();
+    d.setDate(d.getDate() + i);
+    if (dayKey(d, timeZone) === dayName) {
+      const parts = getLocalDateParts(d, timeZone);
+      return { year: parts.year, month: parts.month, day: parts.day };
+    }
+  }
+  return null;
 }
 
 function formatModelLabel(year?: string | null, model?: string | null): string {
@@ -7252,6 +7287,92 @@ if (authToken && signature) {
   const locationQuestion = /(where are you|what location|what address|address|located|location)\b/i.test(
     textLower
   );
+  const weatherQuestion = /\b(weather|forecast|temperature|temp|snow|cold|rain)\b/i.test(textLower);
+  if (event.provider === "twilio" && weatherQuestion) {
+    const cfg = await getSchedulerConfig();
+    const tz = cfg.timezone || "America/New_York";
+    const dayRequest = extractDayRequest(textLower);
+    const wantsToday = /\btoday\b/.test(textLower);
+    const wantsTomorrow = /\btomorrow\b/.test(textLower);
+    let targetParts: { year: number; month: number; day: number } | null = null;
+    let dayLabel = "";
+    if (dayRequest) {
+      targetParts = nextLocalDateForWeekday(dayRequest, tz);
+      dayLabel = dayRequest.replace(/^\w/, c => c.toUpperCase());
+    } else if (wantsTomorrow) {
+      const d = new Date();
+      d.setDate(d.getDate() + 1);
+      const parts = getLocalDateParts(d, tz);
+      targetParts = { year: parts.year, month: parts.month, day: parts.day };
+      dayLabel = "Tomorrow";
+    } else if (wantsToday) {
+      const parts = getLocalDateParts(new Date(), tz);
+      targetParts = { year: parts.year, month: parts.month, day: parts.day };
+      dayLabel = "Today";
+    }
+
+    if (!targetParts) {
+      const reply = "Sure — which day are you wondering about?";
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+
+    const dealerProfile = await getDealerProfile();
+    const dateIso = formatDatePartsIso(targetParts);
+    const forecast = await getDealerDailyForecast(dealerProfile, dateIso);
+    const cfgWeather = getWeatherConfig(dealerProfile);
+    const coldThreshold = Number(cfgWeather.coldThresholdF ?? 50);
+    let reply = "";
+    if (!forecast) {
+      reply = "I couldn’t pull the forecast just now. If you want, I can check again shortly.";
+    } else {
+      const low = forecast.minTempF;
+      const high = forecast.maxTempF;
+      const tempText =
+        Number.isFinite(low) && Number.isFinite(high)
+          ? `${Math.round(low)}–${Math.round(high)}°F`
+          : Number.isFinite(high)
+            ? `${Math.round(high)}°F`
+            : Number.isFinite(low)
+              ? `${Math.round(low)}°F`
+              : "mild";
+      const cold = Number.isFinite(low) ? low < coldThreshold : Number.isFinite(high) ? high < coldThreshold : false;
+      const rough = cold || forecast.snow;
+      const lineA = forecast.snow
+        ? `Looks like ${dayLabel} is around ${tempText} here at the dealership, and snow is possible.`
+        : `Looks like ${dayLabel} is around ${tempText} here at the dealership.`;
+      const lineB = rough
+        ? `${dayLabel} here looks ${forecast.snow ? "rough" : "cold"} — about ${tempText}.`
+        : `${dayLabel} here looks around ${tempText}.`;
+      const pickupA = rough
+        ? ` If it stays ${forecast.snow ? "cold or snowy" : "cold"}, we can do pickup instead.`
+        : "";
+      const pickupB = rough
+        ? " If the weather’s rough, we can grab the bike instead of having you ride it in."
+        : "";
+      reply = pickVariantByKey(conv.leadKey ?? event.from, [lineA + pickupA, lineB + pickupB]);
+    }
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (event.provider === "twilio" && locationQuestion) {
     const dealerProfile = await getDealerProfile();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
@@ -7384,45 +7505,8 @@ if (authToken && signature) {
       }
       conv.pickup = {
         ...(conv.pickup ?? {}),
-        stage: "need_time",
-        street: streetRaw,
-        updatedAt: nowIso()
-      };
-      saveConversation(conv);
-      const reply = "Great — what day and time would you prefer for pickup?";
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-
-    if (stage === "need_time") {
-      const timeRaw = String(event.body ?? "").trim();
-      if (!timeRaw) {
-        const reply = "Thanks — what day and time would you prefer for pickup?";
-        const systemMode = webhookMode;
-        if (systemMode === "suggest") {
-          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-          return res.status(200).type("text/xml").send(twiml);
-        }
-        appendOutbound(conv, event.to, event.from, reply, "twilio");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-          reply
-        )}</Message>\n</Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      conv.pickup = {
-        ...(conv.pickup ?? {}),
         stage: "ready",
-        preferredTimeText: timeRaw,
+        street: streetRaw,
         updatedAt: nowIso()
       };
       saveConversation(conv);
@@ -7431,10 +7515,11 @@ if (authToken && signature) {
       const street = conv.pickup?.street ?? "";
       const distance = conv.pickup?.distanceMiles;
       const eligible = conv.pickup?.eligible;
+      const mileage = conv.lead?.vehicle?.mileage ?? conv.lead?.tradeVehicle?.mileage;
       const summary =
         `Pickup request: ${bikeLabel}. ` +
         `Address: ${street}${town ? `, ${town}` : ""}. ` +
-        `Preferred time: ${timeRaw}. ` +
+        (mileage ? `Mileage: ${mileage}. ` : "") +
         (typeof distance === "number"
           ? `Distance: ${distance} miles${eligible === false ? " (outside pickup range)" : ""}.`
           : "Distance: unknown.");
@@ -7442,7 +7527,7 @@ if (authToken && signature) {
       setFollowUpMode(conv, "manual_handoff", "pickup_request");
       stopFollowUpCadence(conv, "pickup_request");
       stopRelatedCadences(conv, "pickup_request", { setMode: "manual_handoff" });
-      const reply = "Thanks — I’ll have our service department reach out to confirm pickup details.";
+      const reply = "Thanks — I’ll have our service department reach out to schedule the pickup.";
       const systemMode = webhookMode;
       if (systemMode === "suggest") {
         appendOutbound(conv, event.to, event.from, reply, "draft_ai");
