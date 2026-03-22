@@ -2155,9 +2155,17 @@ function parseFutureTimeframe(text: string, base: Date): { label: string; until?
     may: 4, jun: 5, june: 5, jul: 6, july: 6, aug: 7, august: 7, sep: 8, sept: 8, september: 8,
     oct: 9, october: 9, nov: 10, november: 10, dec: 11, december: 11
   };
-  const monthMatch = t.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/);
+  const monthMatch = t.match(
+    /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/
+  );
   if (monthMatch) {
     const monthKey = monthMatch[1];
+    if (monthKey === "may") {
+      const explicitMonth =
+        /\bmay\s+\d{1,2}\b/.test(t) ||
+        /\b(in|this|next|on|by|during|around|early|late)\s+may\b/.test(t);
+      if (!explicitMonth) return null;
+    }
     const month = monthMap[monthKey];
     const year = base.getFullYear();
     let d = new Date(year, month, 1, 9, 0, 0, 0);
@@ -7223,7 +7231,11 @@ if (authToken && signature) {
   }
 
   const future = parseFutureTimeframe(String(event.body ?? ""), new Date());
-  if (event.provider === "twilio" && future) {
+  const shouldSkipFuture =
+    schedulingSignalsBase.hasDayTime ||
+    looksLikeTimeSelection(textLower) ||
+    schedulingSignalsBase.explicit;
+  if (event.provider === "twilio" && future && !shouldSkipFuture) {
     conv.lead = conv.lead ?? {};
     if (future.label) conv.lead.purchaseTimeframe = future.label;
     if (future.until) {
