@@ -57,7 +57,7 @@ async function geocodeZip(zip: string): Promise<LatLon | null> {
   try {
     const resp = await fetch(url);
     if (!resp.ok) return null;
-    const data = await resp.json();
+    const data = (await resp.json()) as any;
     const results = Array.isArray(data?.results) ? data.results : [];
     const best = results.find((r: any) => String(r?.country_code ?? "").toUpperCase() === "US") ?? results[0];
     if (!best) return null;
@@ -103,7 +103,7 @@ export async function getDealerWeatherStatus(
   try {
     const resp = await fetch(url);
     if (!resp.ok) return null;
-    const data = await resp.json();
+    const data = (await resp.json()) as any;
     const hourly = data?.hourly ?? {};
     const times: string[] = Array.isArray(hourly.time) ? hourly.time : [];
     const temps: number[] = Array.isArray(hourly.temperature_2m) ? hourly.temperature_2m : [];

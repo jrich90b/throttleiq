@@ -30,7 +30,7 @@ export async function resolveTownNearestDealer(
   try {
     const resp = await fetch(url);
     if (!resp.ok) return null;
-    const data = await resp.json();
+    const data = (await resp.json()) as any;
     const results = Array.isArray(data?.results) ? data.results : [];
     const filtered = results.filter(
       (r: any) => String(r?.country_code ?? "").toUpperCase() === "US"

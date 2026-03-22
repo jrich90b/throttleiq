@@ -8240,8 +8240,8 @@ if (authToken && signature) {
   const history = buildHistory(conv, 20);
   const memorySummary = conv.memorySummary?.text ?? null;
   const memorySummaryShouldUpdate = shouldUpdateMemorySummary(conv);
-  const dealerProfile = await getDealerProfile();
-  const weatherStatus = await getDealerWeatherStatus(dealerProfile);
+  const weatherProfile = await getDealerProfile();
+  const weatherStatus = await getDealerWeatherStatus(weatherProfile);
   const result = await orchestrateInbound(event, history, {
     appointment: conv.appointment,
     followUp: conv.followUp,
