@@ -132,6 +132,11 @@ When changing responses:
   - `cd ~/throttleiq/apps/web`
   - `npm run build`
   - `pm2 restart leadrider-web --update-env`
+- If the web UI still shows "Application error" or stale bundles after a web change:
+  - Fully reset the web process to ensure it picks up the new `.next` build:
+  - `pm2 delete leadrider-web`
+  - `pm2 start "npm run start -- --port 3000" --name leadrider-web --cwd /home/ubuntu/throttleiq/apps/web`
+  - `pm2 save`
 - If you add a new Next.js API route (e.g., under `apps/web/src/app/api/...`), you must:
   - Commit the route file(s) locally.
   - Pull + rebuild the web app on the instance (otherwise the route 404s).

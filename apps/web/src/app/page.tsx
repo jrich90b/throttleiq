@@ -455,6 +455,12 @@ export default function Home() {
   const [watchQuery, setWatchQuery] = useState("");
   const [watchSalespersonFilter, setWatchSalespersonFilter] = useState("all");
   const cadenceResolveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [watchEditOpen, setWatchEditOpen] = useState(false);
+  const [watchEditConvId, setWatchEditConvId] = useState<string | null>(null);
+  const [watchEditItems, setWatchEditItems] = useState<WatchFormItem[]>([]);
+  const [watchEditNote, setWatchEditNote] = useState("");
+  const [watchEditSaving, setWatchEditSaving] = useState(false);
+  const [watchEditError, setWatchEditError] = useState<string | null>(null);
 
   const [holdModalOpen, setHoldModalOpen] = useState(false);
   const [holdModalConv, setHoldModalConv] = useState<ConversationDetail | null>(null);
@@ -1166,6 +1172,123 @@ export default function Home() {
     setCadenceWatchItems(prev => prev.filter((_, i) => i !== idx));
   }
 
+  function updateWatchEditItem(idx: number, patch: Partial<WatchFormItem>) {
+    setWatchEditItems(prev => prev.map((item, i) => (i === idx ? { ...item, ...patch } : item)));
+  }
+
+  function addWatchEditItem() {
+    setWatchEditItems(prev => {
+      const base = prev[0] ?? { condition: "", year: "", make: "", model: "", trim: "", color: "" };
+      return [...prev, { ...base, model: "" }];
+    });
+  }
+
+  function removeWatchEditItem(idx: number) {
+    setWatchEditItems(prev => prev.filter((_, i) => i !== idx));
+  }
+
+  function watchToFormItem(watch: any): WatchFormItem {
+    const yearText =
+      watch?.year ??
+      (watch?.yearMin && watch?.yearMax
+        ? `${watch.yearMin}-${watch.yearMax}`
+        : watch?.yearMin ?? watch?.yearMax ?? "") ??
+      "";
+    return {
+      condition: watch?.condition ?? "",
+      year: yearText ? String(yearText) : "",
+      make: watch?.make ?? "",
+      model: watch?.model ?? "",
+      trim: watch?.trim ?? "",
+      color: watch?.color ?? ""
+    };
+  }
+
+  function openWatchEdit(convId: string) {
+    const conv = conversations.find(c => c.id === convId || c.leadKey === convId);
+    if (!conv) return;
+    const watches =
+      conv.inventoryWatches && conv.inventoryWatches.length
+        ? conv.inventoryWatches
+        : conv.inventoryWatch
+          ? [conv.inventoryWatch]
+          : [];
+    setWatchEditConvId(conv.id);
+    setWatchEditItems(watches.map(watchToFormItem));
+    const note =
+      watches.find(w => String(w?.note ?? "").trim())?.note ??
+      "";
+    setWatchEditNote(note);
+    setWatchEditError(null);
+    setWatchEditOpen(true);
+  }
+
+  async function saveWatchEdit() {
+    if (!watchEditConvId) return;
+    const hasModel = watchEditItems.some(item => item.model.trim());
+    if (!hasModel) {
+      setWatchEditError("Please enter at least one model to watch.");
+      return;
+    }
+    setWatchEditSaving(true);
+    setWatchEditError(null);
+    try {
+      const payload = {
+        items: watchEditItems,
+        note: watchEditNote.trim() || undefined
+      };
+      const resp = await fetch(`/api/conversations/${encodeURIComponent(watchEditConvId)}/watch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || data?.ok === false) {
+        throw new Error(data?.error ?? "Failed to update watch");
+      }
+      setWatchEditOpen(false);
+      await load();
+      if (selectedConv?.id === watchEditConvId) {
+        setSelectedConv(data?.conversation ?? selectedConv);
+      }
+    } catch (err: any) {
+      setWatchEditError(err?.message ?? "Failed to update watch");
+    } finally {
+      setWatchEditSaving(false);
+    }
+  }
+
+  async function deleteWatchForConv(convId: string, watchIndex?: number) {
+    if (!window.confirm("Delete this watch?")) return;
+    const conv = conversations.find(c => c.id === convId || c.leadKey === convId);
+    if (!conv) return;
+    const watches =
+      conv.inventoryWatches && conv.inventoryWatches.length
+        ? conv.inventoryWatches
+        : conv.inventoryWatch
+          ? [conv.inventoryWatch]
+          : [];
+    if (!watches.length) return;
+    if (typeof watchIndex === "number" && watches.length > 1) {
+      const remaining = watches.filter((_, idx) => idx !== watchIndex);
+      const next = remaining.map(watchToFormItem);
+      const note =
+        remaining.find(w => String(w?.note ?? "").trim())?.note ?? undefined;
+      await fetch(`/api/conversations/${encodeURIComponent(convId)}/watch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: next,
+          note
+        })
+      });
+      await load();
+      return;
+    }
+    await fetch(`/api/conversations/${encodeURIComponent(convId)}/watch`, { method: "DELETE" });
+    await load();
+  }
+
   async function submitCadenceResolve() {
     if (!cadenceResolveConv) return;
     if (cadenceResolution === "resume_on" && !cadenceResumeDate) {
@@ -1863,6 +1986,7 @@ export default function Home() {
         leadName: conv.leadName ?? null,
         ownerId: conv.scheduler?.preferredSalespersonId ?? null,
         ownerName: conv.scheduler?.preferredSalespersonName ?? null,
+        watchIndex: idx,
         watch
       }));
     });
@@ -3569,36 +3693,62 @@ export default function Home() {
                       "Unassigned"
                     : "Unassigned";
                   return (
-                    <button
+                    <div
                       key={item.key}
-                      onClick={() => setSelectedId(item.convId)}
-                      className={`w-full text-left p-4 hover:bg-[var(--surface-2)] ${
+                      className={`flex items-stretch ${
                         selectedId === item.convId ? "bg-[var(--surface-2)]" : ""
                       }`}
                     >
-                      <div className="font-medium truncate">
-                        {item.leadName && item.leadName.length > 0 ? item.leadName : item.leadKey}
+                      <button
+                        onClick={() => setSelectedId(item.convId)}
+                        className="flex-1 text-left p-4 hover:bg-[var(--surface-2)]"
+                      >
+                        <div className="font-medium truncate">
+                          {item.leadName && item.leadName.length > 0 ? item.leadName : item.leadKey}
+                        </div>
+                        <div className="text-xs text-gray-600 mt-1">{label}</div>
+                        {item.watch?.note ? (
+                          <div className="text-xs text-gray-500 mt-1">Note: {item.watch.note}</div>
+                        ) : null}
+                        {createdAt ? (
+                          <div className="text-[11px] text-gray-500 mt-1">
+                            Created: {createdAt}
+                          </div>
+                        ) : null}
+                        {lastNotified ? (
+                          <div className="text-[11px] text-gray-500">
+                            Last notified: {lastNotified}
+                          </div>
+                        ) : null}
+                        {isManager ? (
+                          <div className="text-[11px] text-gray-500 mt-1">
+                            Salesperson: {ownerName}
+                          </div>
+                        ) : null}
+                      </button>
+                      <div className="flex flex-col border-l">
+                        <button
+                          className="w-10 h-10 text-xs text-gray-600 hover:text-gray-900 hover:bg-[var(--surface-2)]"
+                          title="Edit watch"
+                          onClick={e => {
+                            e.stopPropagation();
+                            openWatchEdit(item.convId);
+                          }}
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          className="w-10 h-10 text-xs text-red-600 hover:text-red-700 hover:bg-red-50"
+                          title="Delete watch"
+                          onClick={e => {
+                            e.stopPropagation();
+                            void deleteWatchForConv(item.convId, item.watchIndex);
+                          }}
+                        >
+                          🗑️
+                        </button>
                       </div>
-                      <div className="text-xs text-gray-600 mt-1">{label}</div>
-                      {item.watch?.note ? (
-                        <div className="text-xs text-gray-500 mt-1">Note: {item.watch.note}</div>
-                      ) : null}
-                      {createdAt ? (
-                        <div className="text-[11px] text-gray-500 mt-1">
-                          Created: {createdAt}
-                        </div>
-                      ) : null}
-                      {lastNotified ? (
-                        <div className="text-[11px] text-gray-500">
-                          Last notified: {lastNotified}
-                        </div>
-                      ) : null}
-                      {isManager ? (
-                        <div className="text-[11px] text-gray-500 mt-1">
-                          Salesperson: {ownerName}
-                        </div>
-                      ) : null}
-                    </button>
+                    </div>
                   );
                 })}
               </div>
@@ -6716,6 +6866,133 @@ export default function Home() {
                       disabled={cadenceResolveSaving}
                     >
                       {cadenceResolveSaving ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {watchEditOpen ? (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+                <div className="w-full max-w-lg rounded-lg bg-white shadow-lg border p-4">
+                  <div className="text-sm font-semibold">Edit vehicle watch</div>
+                  <div className="mt-3 space-y-3">
+                    {watchEditItems.map((item, idx) => (
+                      <div key={`watch-edit-${idx}`} className="border rounded p-3">
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Condition</div>
+                            <select
+                              className="border rounded px-2 py-2 text-sm w-full"
+                              value={item.condition}
+                              onChange={e => updateWatchEditItem(idx, { condition: e.target.value })}
+                            >
+                              <option value="">Any</option>
+                              <option value="new">New</option>
+                              <option value="used">Pre-owned</option>
+                            </select>
+                          </div>
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Year</div>
+                            <input
+                              className="border rounded px-2 py-2 text-sm w-full"
+                              placeholder="2026 or 2018-2021"
+                              value={item.year}
+                              onChange={e => updateWatchEditItem(idx, { year: e.target.value })}
+                            />
+                          </div>
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Make</div>
+                            <input
+                              className="border rounded px-2 py-2 text-sm w-full"
+                              placeholder="Harley-Davidson"
+                              value={item.make}
+                              onChange={e => updateWatchEditItem(idx, { make: e.target.value })}
+                            />
+                          </div>
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Model</div>
+                            <input
+                              className="border rounded px-2 py-2 text-sm w-full"
+                              placeholder="Low Rider S"
+                              value={item.model}
+                              onChange={e => updateWatchEditItem(idx, { model: e.target.value })}
+                            />
+                          </div>
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Trim/Finish</div>
+                            <input
+                              className="border rounded px-2 py-2 text-sm w-full"
+                              placeholder="Special, ST, Chrome trim…"
+                              value={item.trim}
+                              onChange={e => updateWatchEditItem(idx, { trim: e.target.value })}
+                            />
+                          </div>
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Color</div>
+                            <input
+                              className="border rounded px-2 py-2 text-sm w-full"
+                              placeholder="Vivid Black"
+                              value={item.color}
+                              onChange={e => updateWatchEditItem(idx, { color: e.target.value })}
+                            />
+                          </div>
+                        </div>
+                        {watchEditItems.length > 1 ? (
+                          <div className="mt-2 text-right">
+                            <button
+                              className="text-xs text-red-600"
+                              onClick={() => removeWatchEditItem(idx)}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                    <button className="px-3 py-2 border rounded text-sm" onClick={addWatchEditItem}>
+                      Add another model
+                    </button>
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">Note (optional)</div>
+                      <textarea
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        rows={2}
+                        value={watchEditNote}
+                        onChange={e => setWatchEditNote(e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  {watchEditError ? (
+                    <div className="text-xs text-red-600 mt-2">{watchEditError}</div>
+                  ) : null}
+
+                  <div className="mt-4 flex justify-end gap-2">
+                    <button
+                      className="px-3 py-2 border rounded text-sm"
+                      onClick={() => setWatchEditOpen(false)}
+                      disabled={watchEditSaving}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="px-3 py-2 border rounded text-sm text-red-600 border-red-200 hover:bg-red-50"
+                      onClick={async () => {
+                        if (!watchEditConvId) return;
+                        await deleteWatchForConv(watchEditConvId);
+                        setWatchEditOpen(false);
+                      }}
+                      disabled={watchEditSaving}
+                    >
+                      Delete watch
+                    </button>
+                    <button
+                      className="px-3 py-2 border rounded text-sm"
+                      onClick={saveWatchEdit}
+                      disabled={watchEditSaving}
+                    >
+                      {watchEditSaving ? "Saving…" : "Save"}
                     </button>
                   </div>
                 </div>

@@ -4845,6 +4845,143 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
   }
 });
 
+app.post("/conversations/:id/watch", async (req, res) => {
+  try {
+    const conv = getConversation(req.params.id);
+    if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    const note = String(req.body?.note ?? "").trim();
+    if (!items.length) {
+      return res.status(400).json({ ok: false, error: "At least one watch model is required." });
+    }
+    const nowIso = new Date().toISOString();
+    const cfg = await getSchedulerConfig();
+    const tz = cfg.timezone || "America/New_York";
+
+    const normalizeInputCondition = (raw?: string | null) => {
+      const t = String(raw ?? "").toLowerCase().trim();
+      if (!t) return undefined;
+      if (/(pre|used|pre-owned|preowned|owned)/.test(t)) return "used";
+      if (/new/.test(t)) return "new";
+      return undefined;
+    };
+
+    const parseYearInput = (raw?: string | null) => {
+      const t = String(raw ?? "").trim();
+      if (!t) return {};
+      const range = t.match(/(\d{4})\s*[-–]\s*(\d{4})/);
+      if (range) {
+        const min = Number(range[1]);
+        const max = Number(range[2]);
+        if (Number.isFinite(min) && Number.isFinite(max)) {
+          return { yearMin: min, yearMax: max };
+        }
+      }
+      const year = Number(t);
+      if (Number.isFinite(year) && year > 1900) {
+        return { year };
+      }
+      return {};
+    };
+
+    const watchList: InventoryWatch[] = items
+      .map((item: any) => {
+        const model = String(item?.model ?? "").trim();
+        if (!model) return null;
+        const yearMin =
+          Number(String(item?.yearMin ?? "").trim()) || undefined;
+        const yearMax =
+          Number(String(item?.yearMax ?? "").trim()) || undefined;
+        const parsedYear = parseYearInput(item?.year);
+        const year = parsedYear.year;
+        const watch: InventoryWatch = {
+          model,
+          year,
+          yearMin: parsedYear.yearMin ?? yearMin,
+          yearMax: parsedYear.yearMax ?? yearMax,
+          make: String(item?.make ?? "").trim() || undefined,
+          trim: String(item?.trim ?? "").trim() || undefined,
+          color: String(item?.color ?? "").trim() || undefined,
+          condition: normalizeInputCondition(item?.condition),
+          note: note || undefined,
+          exactness: "model_only",
+          status: "active",
+          createdAt: nowIso
+        };
+        if (watch.yearMin && watch.yearMax) watch.exactness = "model_range";
+        else if (watch.year && watch.color) watch.exactness = "exact";
+        else if (watch.year) watch.exactness = "year_model";
+        return watch;
+      })
+      .filter(Boolean) as InventoryWatch[];
+
+    if (!watchList.length) {
+      return res.status(400).json({ ok: false, error: "At least one watch model is required." });
+    }
+
+    conv.inventoryWatches = watchList;
+    conv.inventoryWatch = watchList[0];
+    conv.inventoryWatchPending = undefined;
+    setFollowUpMode(conv, "holding_inventory", "inventory_watch");
+    stopFollowUpCadence(conv, "inventory_watch");
+    setDialogState(conv, "inventory_watch_active");
+    conv.updatedAt = nowIso;
+    saveConversation(conv);
+    await flushConversationStore();
+    return res.json({ ok: true, conversation: conv });
+  } catch (err: any) {
+    console.log("[watch-update] failed:", err?.message ?? err);
+    return res.status(500).json({ ok: false, error: err?.message ?? "Failed to update watch" });
+  }
+});
+
+app.delete("/conversations/:id/watch", async (req, res) => {
+  try {
+    const conv = getConversation(req.params.id);
+    if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+    const nowIso = new Date().toISOString();
+    const cfg = await getSchedulerConfig();
+    const tz = cfg.timezone || "America/New_York";
+
+    conv.inventoryWatch = undefined;
+    conv.inventoryWatches = undefined;
+    conv.inventoryWatchPending = undefined;
+    if (conv.followUp?.mode === "holding_inventory") {
+      setFollowUpMode(conv, "active", "inventory_watch_clear");
+    }
+    if (conv.followUpCadence) {
+      if (conv.followUpCadence.status === "stopped") {
+        conv.followUpCadence.status = "active";
+        conv.followUpCadence.stopReason = undefined;
+      }
+      conv.followUpCadence.pausedUntil = undefined;
+      conv.followUpCadence.pauseReason = undefined;
+      if (!conv.followUpCadence.nextDueAt) {
+        const idx = Math.min(
+          conv.followUpCadence.stepIndex ?? 0,
+          FOLLOW_UP_DAY_OFFSETS.length - 1
+        );
+        conv.followUpCadence.nextDueAt = computeFollowUpDueAt(
+          conv.followUpCadence.anchorAt ?? nowIso,
+          FOLLOW_UP_DAY_OFFSETS[idx],
+          tz
+        );
+      }
+    } else {
+      startFollowUpCadence(conv, nowIso, tz);
+    }
+
+    conv.updatedAt = nowIso;
+    saveConversation(conv);
+    await flushConversationStore();
+    return res.json({ ok: true, conversation: conv });
+  } catch (err: any) {
+    console.log("[watch-delete] failed:", err?.message ?? err);
+    return res.status(500).json({ ok: false, error: err?.message ?? "Failed to delete watch" });
+  }
+});
+
 app.delete("/conversations/:id", (req, res) => {
   const id = req.params.id;
   const ok = deleteConversation(id);
