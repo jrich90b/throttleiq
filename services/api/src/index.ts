@@ -8460,6 +8460,16 @@ if (authToken && signature) {
   if (result.pickupUpdate) {
     conv.pickup = { ...(conv.pickup ?? {}), ...result.pickupUpdate, updatedAt: nowIso() };
   }
+  if (!result.requestedTime && schedulingAllowed && schedulingSignals.hasDayTime) {
+    try {
+      const cfg = await getSchedulerConfig();
+      const tz = cfg.timezone || "America/New_York";
+      const parsed = parseRequestedDayTime(String(event.body ?? ""), tz);
+      if (parsed) {
+        result.requestedTime = parsed;
+      }
+    } catch {}
+  }
   if (
     !result.requestedTime &&
     !conv.appointment?.bookedEventId &&
@@ -8684,8 +8694,9 @@ if (authToken && signature) {
             const when = formatSlotLocal(exact.start, cfg.timezone);
             const repName = sp.name ? ` with ${sp.name}` : "";
             const systemMode = webhookMode;
+            const autoBookInSuggest = systemMode === "suggest" && schedulingSignals.hasDayTime;
 
-            if (systemMode === "suggest") {
+            if (systemMode === "suggest" && !autoBookInSuggest) {
               conv.scheduler = conv.scheduler ?? { updatedAt: new Date().toISOString() };
               conv.scheduler.pendingSlot = {
                 salespersonId: sp.id,
@@ -8734,6 +8745,14 @@ if (authToken && signature) {
             const confirmText =
               `Perfect — you’re booked for ${when}${repName}. ` +
               `${dealerName} is at ${addressLine}.`;
+
+            if (systemMode === "suggest") {
+              appendOutbound(conv, event.to, event.from, confirmText, "draft_ai", eventObj.id ?? undefined);
+              saveConversation(conv);
+              await flushConversationStore();
+              const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+              return res.status(200).type("text/xml").send(twiml);
+            }
 
             appendOutbound(conv, event.to, event.from, confirmText, "twilio", eventObj.id ?? undefined);
 
