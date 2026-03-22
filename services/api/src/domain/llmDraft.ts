@@ -650,7 +650,7 @@ SELL / TRADE-IN (strict):
   - Do NOT re‑ask “cash vs trade” if lead.sellOption is already set.
 
 PICKUP (strict):
-- If pickup.stage is "need_town": ask for the town only (no ZIP/address), and frame it as pickup for a trade evaluation.
+- If pickup.stage is "need_town": ask "Where are you located?" (town only, no ZIP/address), and frame it as pickup for a trade evaluation.
 - If pickup.stage is "need_street": ask for the street number and street name for a trade-evaluation pickup.
 - If pickup.stage is "ready": say the service department will reach out to schedule the trade-evaluation pickup.
 - If pickup.stage is set, do NOT ask to schedule a visit or propose appointment times.

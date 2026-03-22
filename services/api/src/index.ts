@@ -3149,7 +3149,7 @@ async function processDueFollowUps() {
         if (!pickupKnown) {
           message = `Just checking in — if you want us to pick up ${
             sellBikeLabel ?? "your bike"
-          } for a trade evaluation, what town are you located in?`;
+          } for a trade evaluation, where are you located?`;
           conv.pickup = { ...(conv.pickup ?? {}), stage: "need_town", updatedAt: nowIso() };
         } else if (pickupEligible) {
           message = `Just checking in — if the weather’s rough, we can pick up ${
@@ -7542,7 +7542,7 @@ if (authToken && signature) {
     const townRaw = String(event.body ?? "").trim();
     if (stage === "need_town") {
       if (shouldAskForTown(townRaw)) {
-        const reply = "Got it — what town are you located in?";
+        const reply = "Got it — where are you located?";
         const systemMode = webhookMode;
         if (systemMode === "suggest") {
           appendOutbound(conv, event.to, event.from, reply, "draft_ai");
