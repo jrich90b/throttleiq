@@ -6872,133 +6872,6 @@ export default function Home() {
               </div>
             ) : null}
 
-            {watchEditOpen ? (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-                <div className="w-full max-w-lg rounded-lg bg-white shadow-lg border p-4">
-                  <div className="text-sm font-semibold">Edit vehicle watch</div>
-                  <div className="mt-3 space-y-3">
-                    {watchEditItems.map((item, idx) => (
-                      <div key={`watch-edit-${idx}`} className="border rounded p-3">
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <div className="text-xs text-gray-500 mb-1">Condition</div>
-                            <select
-                              className="border rounded px-2 py-2 text-sm w-full"
-                              value={item.condition}
-                              onChange={e => updateWatchEditItem(idx, { condition: e.target.value })}
-                            >
-                              <option value="">Any</option>
-                              <option value="new">New</option>
-                              <option value="used">Pre-owned</option>
-                            </select>
-                          </div>
-                          <div>
-                            <div className="text-xs text-gray-500 mb-1">Year</div>
-                            <input
-                              className="border rounded px-2 py-2 text-sm w-full"
-                              placeholder="2026 or 2018-2021"
-                              value={item.year}
-                              onChange={e => updateWatchEditItem(idx, { year: e.target.value })}
-                            />
-                          </div>
-                          <div>
-                            <div className="text-xs text-gray-500 mb-1">Make</div>
-                            <input
-                              className="border rounded px-2 py-2 text-sm w-full"
-                              placeholder="Harley-Davidson"
-                              value={item.make}
-                              onChange={e => updateWatchEditItem(idx, { make: e.target.value })}
-                            />
-                          </div>
-                          <div>
-                            <div className="text-xs text-gray-500 mb-1">Model</div>
-                            <input
-                              className="border rounded px-2 py-2 text-sm w-full"
-                              placeholder="Low Rider S"
-                              value={item.model}
-                              onChange={e => updateWatchEditItem(idx, { model: e.target.value })}
-                            />
-                          </div>
-                          <div>
-                            <div className="text-xs text-gray-500 mb-1">Trim/Finish</div>
-                            <input
-                              className="border rounded px-2 py-2 text-sm w-full"
-                              placeholder="Special, ST, Chrome trim…"
-                              value={item.trim}
-                              onChange={e => updateWatchEditItem(idx, { trim: e.target.value })}
-                            />
-                          </div>
-                          <div>
-                            <div className="text-xs text-gray-500 mb-1">Color</div>
-                            <input
-                              className="border rounded px-2 py-2 text-sm w-full"
-                              placeholder="Vivid Black"
-                              value={item.color}
-                              onChange={e => updateWatchEditItem(idx, { color: e.target.value })}
-                            />
-                          </div>
-                        </div>
-                        {watchEditItems.length > 1 ? (
-                          <div className="mt-2 text-right">
-                            <button
-                              className="text-xs text-red-600"
-                              onClick={() => removeWatchEditItem(idx)}
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        ) : null}
-                      </div>
-                    ))}
-                    <button className="px-3 py-2 border rounded text-sm" onClick={addWatchEditItem}>
-                      Add another model
-                    </button>
-                    <div>
-                      <div className="text-xs text-gray-500 mb-1">Note (optional)</div>
-                      <textarea
-                        className="border rounded px-3 py-2 text-sm w-full"
-                        rows={2}
-                        value={watchEditNote}
-                        onChange={e => setWatchEditNote(e.target.value)}
-                      />
-                    </div>
-                  </div>
-
-                  {watchEditError ? (
-                    <div className="text-xs text-red-600 mt-2">{watchEditError}</div>
-                  ) : null}
-
-                  <div className="mt-4 flex justify-end gap-2">
-                    <button
-                      className="px-3 py-2 border rounded text-sm"
-                      onClick={() => setWatchEditOpen(false)}
-                      disabled={watchEditSaving}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      className="px-3 py-2 border rounded text-sm text-red-600 border-red-200 hover:bg-red-50"
-                      onClick={async () => {
-                        if (!watchEditConvId) return;
-                        await deleteWatchForConv(watchEditConvId);
-                        setWatchEditOpen(false);
-                      }}
-                      disabled={watchEditSaving}
-                    >
-                      Delete watch
-                    </button>
-                    <button
-                      className="px-3 py-2 border rounded text-sm"
-                      onClick={saveWatchEdit}
-                      disabled={watchEditSaving}
-                    >
-                      {watchEditSaving ? "Saving…" : "Save"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-
             {holdModalOpen ? (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
                 <div className="w-full max-w-2xl rounded-lg bg-white shadow-lg border p-4">
@@ -7873,6 +7746,133 @@ export default function Home() {
           <div className="text-gray-500">Conversation not found.</div>
         )}
       </section>
+
+      {watchEditOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-lg rounded-lg bg-white shadow-lg border p-4">
+            <div className="text-sm font-semibold">Edit vehicle watch</div>
+            <div className="mt-3 space-y-3">
+              {watchEditItems.map((item, idx) => (
+                <div key={`watch-edit-${idx}`} className="border rounded p-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">Condition</div>
+                      <select
+                        className="border rounded px-2 py-2 text-sm w-full"
+                        value={item.condition}
+                        onChange={e => updateWatchEditItem(idx, { condition: e.target.value })}
+                      >
+                        <option value="">Any</option>
+                        <option value="new">New</option>
+                        <option value="used">Pre-owned</option>
+                      </select>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">Year</div>
+                      <input
+                        className="border rounded px-2 py-2 text-sm w-full"
+                        placeholder="2026 or 2018-2021"
+                        value={item.year}
+                        onChange={e => updateWatchEditItem(idx, { year: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">Make</div>
+                      <input
+                        className="border rounded px-2 py-2 text-sm w-full"
+                        placeholder="Harley-Davidson"
+                        value={item.make}
+                        onChange={e => updateWatchEditItem(idx, { make: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">Model</div>
+                      <input
+                        className="border rounded px-2 py-2 text-sm w-full"
+                        placeholder="Low Rider S"
+                        value={item.model}
+                        onChange={e => updateWatchEditItem(idx, { model: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">Trim/Finish</div>
+                      <input
+                        className="border rounded px-2 py-2 text-sm w-full"
+                        placeholder="Special, ST, Chrome trim…"
+                        value={item.trim}
+                        onChange={e => updateWatchEditItem(idx, { trim: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">Color</div>
+                      <input
+                        className="border rounded px-2 py-2 text-sm w-full"
+                        placeholder="Vivid Black"
+                        value={item.color}
+                        onChange={e => updateWatchEditItem(idx, { color: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                  {watchEditItems.length > 1 ? (
+                    <div className="mt-2 text-right">
+                      <button
+                        className="text-xs text-red-600"
+                        onClick={() => removeWatchEditItem(idx)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+              <button className="px-3 py-2 border rounded text-sm" onClick={addWatchEditItem}>
+                Add another model
+              </button>
+              <div>
+                <div className="text-xs text-gray-500 mb-1">Note (optional)</div>
+                <textarea
+                  className="border rounded px-3 py-2 text-sm w-full"
+                  rows={2}
+                  value={watchEditNote}
+                  onChange={e => setWatchEditNote(e.target.value)}
+                />
+              </div>
+            </div>
+
+            {watchEditError ? (
+              <div className="text-xs text-red-600 mt-2">{watchEditError}</div>
+            ) : null}
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                className="px-3 py-2 border rounded text-sm"
+                onClick={() => setWatchEditOpen(false)}
+                disabled={watchEditSaving}
+              >
+                Cancel
+              </button>
+              <button
+                className="px-3 py-2 border rounded text-sm text-red-600 border-red-200 hover:bg-red-50"
+                onClick={async () => {
+                  if (!watchEditConvId) return;
+                  await deleteWatchForConv(watchEditConvId);
+                  setWatchEditOpen(false);
+                }}
+                disabled={watchEditSaving}
+              >
+                Delete watch
+              </button>
+              <button
+                className="px-3 py-2 border rounded text-sm"
+                onClick={saveWatchEdit}
+                disabled={watchEditSaving}
+              >
+                {watchEditSaving ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
     </main>
   );
