@@ -1621,7 +1621,7 @@ export default function Home() {
 
   useEffect(() => {
     if (!manualApptOpen) return;
-    if (schedulerConfig) return;
+    if (schedulerConfig && salespeopleList.length) return;
     void (async () => {
       try {
         const resp = await fetch("/api/scheduler-config", { cache: "no-store" });
@@ -1640,7 +1640,7 @@ export default function Home() {
         // ignore
       }
     })();
-  }, [manualApptOpen, schedulerConfig]);
+  }, [manualApptOpen, schedulerConfig, salespeopleList.length]);
 
   const defaultAppointmentTypes = [
     "inventory_visit",
