@@ -3149,12 +3149,12 @@ async function processDueFollowUps() {
         if (!pickupKnown) {
           message = `Just checking in — if you want us to pick up ${
             sellBikeLabel ?? "your bike"
-          }, what town are you located in?`;
+          } for a trade evaluation, what town are you located in?`;
           conv.pickup = { ...(conv.pickup ?? {}), stage: "need_town", updatedAt: nowIso() };
         } else if (pickupEligible) {
           message = `Just checking in — if the weather’s rough, we can pick up ${
             sellBikeLabel ?? "your bike"
-          }. If you’d rather stop in, what day and time works for you?`;
+          } for a trade evaluation. If you’d rather stop in, what day and time works for you?`;
         } else {
           message = `Just checking in — if you'd like a quick in‑person appraisal on ${
             sellBikeLabel ?? "your bike"
@@ -7464,10 +7464,10 @@ if (authToken && signature) {
         ? `${dayLabel} here looks ${forecast.snow ? "rough" : "cold"} — about ${tempText}.`
         : `${dayLabel} here looks around ${tempText}.`;
       const pickupA = rough
-        ? ` If it stays ${forecast.snow ? "cold or snowy" : "cold"}, we can do pickup instead.`
+        ? ` If it stays ${forecast.snow ? "cold or snowy" : "cold"}, we can pick it up for a trade evaluation instead.`
         : "";
       const pickupB = rough
-        ? " If the weather’s rough, we can grab the bike instead of having you ride it in."
+        ? " If the weather’s rough, we can pick it up for a trade evaluation instead of having you ride it in."
         : "";
       reply = pickVariantByKey(conv.leadKey ?? event.from, [lineA + pickupA, lineB + pickupB]);
     }
