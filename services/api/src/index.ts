@@ -5686,9 +5686,20 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return res.status(400).json({ ok: false, error: "no_inbound_message" });
   }
 
+  const inboundProvider = inbound.provider;
+  const provider: InboundMessageEvent["provider"] =
+    inboundProvider === "twilio" ||
+    inboundProvider === "sendgrid" ||
+    inboundProvider === "sendgrid_adf" ||
+    inboundProvider === "voice_transcript"
+      ? inboundProvider
+      : channel === "email"
+        ? "sendgrid"
+        : "twilio";
+
   const event: InboundMessageEvent = {
     channel,
-    provider: inbound.provider ?? "twilio",
+    provider,
     from: inbound.from ?? conv.leadKey,
     to: inbound.to ?? "dealership",
     body: String(inbound.body ?? ""),
