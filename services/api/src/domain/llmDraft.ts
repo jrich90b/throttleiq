@@ -27,6 +27,8 @@ export type DraftContext = {
   history: { direction: "in" | "out"; body: string }[];
   voiceSummary?: string | null;
   memorySummary?: string | null;
+  pickup?: any;
+  weather?: any;
 
   // Inventory verification inputs (optional)
   stockId?: string | null;
@@ -647,6 +649,15 @@ SELL / TRADE-IN (strict):
   - either: ask which direction they prefer.
   - Do NOT re‑ask “cash vs trade” if lead.sellOption is already set.
 
+PICKUP (strict):
+- If pickup.stage is "need_town": ask for the town only (no ZIP/address).
+- If pickup.stage is "need_street": ask for the street number and street name.
+- If pickup.stage is "ready": say the service department will reach out to schedule pickup.
+- If pickup.stage is set, do NOT ask to schedule a visit or propose appointment times.
+- Do NOT ask whether the bike is drivable or needs a trailer.
+- Do NOT ask for pickup day/time.
+- Do NOT ask for ZIP.
+
 SERVICE REQUESTS (strict):
 - If bucket is "service" OR cta is "service_request":
   - Acknowledge the service request and say the service department will reach out.
@@ -693,7 +704,7 @@ PRICING/PAYMENT OBJECTION HANDLING (attempt 0 only):
   - Offer to confirm in person and propose two appointment times using suggestedSlots if present.
   - Use scheduling language like: "I could get you scheduled to meet with our sales team."
   - Avoid "I can meet" phrasing.
-  - Ask ONE qualifier; prefer trade or zip/county. Avoid asking finance vs cash by default.
+  - Ask ONE qualifier; prefer trade or town/county. Avoid asking finance vs cash by default.
 
 EXACT REQUESTED TIME (hard rule):
 - If a requested time was proposed but not booked and suggestedSlots are provided, offer those two suggestedSlots and ask which works best.
@@ -875,6 +886,12 @@ ${JSON.stringify(ctx.appointment ?? {}, null, 2)}
 
 Follow-up mode:
 ${JSON.stringify(ctx.followUp ?? {}, null, 2)}
+
+Pickup context:
+${JSON.stringify(ctx.pickup ?? {}, null, 2)}
+
+Weather context:
+${JSON.stringify(ctx.weather ?? {}, null, 2)}
 
 Latest voice call summary (if any):
 ${ctx.voiceSummary ?? "none"}

@@ -430,7 +430,7 @@ export async function orchestrateInbound(
     if (hasPriorOutbound) {
       const followUp =
         sellOption === "cash"
-          ? `Got it — for a straight cash offer, we’ll need an in‑person appraisal.${pickupOfferLine} What day and time works best?`
+          ? `Got it — for a straight cash offer, we’ll need an in‑person appraisal.${pickupOfferLine} If you want to stop in, I can set a time.`
           : sellOption === "trade"
             ? "Great — what model are you hoping to trade into?"
             : sellOption === "either"
@@ -1441,6 +1441,8 @@ export async function orchestrateInbound(
         suggestedSlots,
         pricingAttempts,
         pricingIntent,
+        pickup: ctx?.pickup ?? null,
+        weather: ctx?.weather ?? null,
         handoff,
         callbackRequest: callbackRequested,
         voiceSummary: ctx?.voiceSummary ?? null,
