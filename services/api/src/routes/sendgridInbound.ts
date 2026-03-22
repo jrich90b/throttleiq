@@ -1794,6 +1794,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     closeConversation(conv, "event_promo_no_cadence");
     stopFollowUpCadence(conv, "manual_handoff");
   }
+  const purchaseTimeframeRaw = String(conv.lead?.purchaseTimeframe ?? "").toLowerCase();
+  const notReadyTimeframe =
+    /\b(not interested|not ready|not (yet|right now)|not in the market|not looking)\b/i.test(
+      purchaseTimeframeRaw
+    );
   const shouldStartCadence =
     !conv.followUpCadence?.status &&
     !conv.appointment?.bookedEventId &&
@@ -1801,7 +1806,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     conv.classification?.bucket !== "service" &&
     conv.classification?.bucket !== "event_promo" &&
     conv.classification?.cta !== "hdfs_coa" &&
-    conv.classification?.cta !== "prequalify";
+    conv.classification?.cta !== "prequalify" &&
+    !notReadyTimeframe;
   if (shouldStartCadence) {
     const cfg = await getSchedulerConfig();
     const monthsStart = conv.lead?.purchaseTimeframeMonthsStart;
@@ -1814,6 +1820,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     } else {
       startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
     }
+  } else if (notReadyTimeframe) {
+    stopFollowUpCadence(conv, "not_ready_no_timeframe");
+    setFollowUpMode(conv, "paused_indefinite", "not_ready_no_timeframe");
   }
 
   return res.status(200).json({
