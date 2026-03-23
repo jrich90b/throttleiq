@@ -1612,7 +1612,7 @@ async function buildLateFollowUp(
     }
     if (canTestRide) {
       return {
-        body: `${greeting}If you want, we can set up a test ride for a ${label}. What day and time works for you?`
+        body: `${greeting}If you want to take one for a ride, I can set up a test ride for a ${label}. What day and time works for you?`
       };
     }
     if (hasMatch) {
@@ -1633,7 +1633,7 @@ async function buildLateFollowUp(
   }
   if (canTestRide) {
     return {
-      body: `${greeting}We’re offering test rides right now. Want me to reserve a time for you?`
+      body: `${greeting}Test rides are open right now. Want me to reserve a time for you?`
     };
   }
     return {

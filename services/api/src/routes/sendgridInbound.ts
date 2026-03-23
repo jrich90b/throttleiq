@@ -333,6 +333,16 @@ function buildInitialAvailabilityLine(
   return `I’m not seeing a ${modelLabel} in stock right now. If you want to stop in, I can go over options, or I can keep an eye out for you.`;
 }
 
+function isTestRideSeason(profile: any, now: Date): boolean {
+  const enabled = profile?.followUp?.testRideEnabled;
+  if (enabled === false) return false;
+  const months: number[] = Array.isArray(profile?.followUp?.testRideMonths)
+    ? profile.followUp.testRideMonths
+    : [4, 5, 6, 7, 8, 9, 10];
+  const current = now.getMonth() + 1;
+  return months.includes(current);
+}
+
 function buildInitialEmailDraft(
   conv: any,
   dealerProfile: any,
@@ -1721,7 +1731,20 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
   }
 
+  const dealerProfile = await getDealerProfile();
+  const testRideInSeason = isTestRideSeason(dealerProfile, new Date());
   let draft = result.shouldRespond ? result.draft : "Thanks — I’ll follow up shortly.";
+  if (inferredBucket === "test_ride" && !testRideInSeason) {
+    const modelLabel = formatModelLabel(
+      conv.lead?.vehicle?.year ?? conv.lead?.year ?? null,
+      conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null
+    );
+    const modelClause = modelLabel ? ` on the ${modelLabel}` : "";
+    draft =
+      `I saw you’re interested in a test ride${modelClause}. ` +
+      "We’re not scheduling test rides right now, but I’m happy to help with pricing or set one up when we reopen. " +
+      "If you want to stop by to check it out, just let me know.";
+  }
   if (
     inferredBucket === "test_ride" &&
     typeof draft === "string" &&
@@ -1774,7 +1797,6 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const systemMode = getSystemMode();
   const emailTo = lead.email?.trim();
   const useEmail = channel === "email" && !!emailTo && lead.emailOptIn === true;
-  const dealerProfile = await getDealerProfile();
 
   if (systemMode !== "suggest" && useEmail) {
     const dealerName = dealerProfile?.dealerName ?? "Dealership";

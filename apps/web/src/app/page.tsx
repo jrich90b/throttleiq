@@ -5409,19 +5409,6 @@ export default function Home() {
                   </div>
                 </div>
                 <div>
-                  <div className="text-sm font-medium mb-2">Buying Used Bikes</div>
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={!!dealerProfileForm.buyingUsedBikesEnabled}
-                      onChange={e =>
-                        setDealerProfileForm({ ...dealerProfileForm, buyingUsedBikesEnabled: e.target.checked })
-                      }
-                    />
-                    Currently buying used bikes (Sell Your Bike leads)
-                  </label>
-                </div>
-                <div>
                   <div className="text-sm font-medium mb-2">Weather & Pickup</div>
                   <div className="grid grid-cols-3 gap-2 text-sm">
                     <input
@@ -5452,6 +5439,19 @@ export default function Home() {
                   <div className="text-xs text-gray-500 mt-1">
                     Used to decide when to offer pickup or delay test rides (snow or &lt; threshold).
                   </div>
+                </div>
+                <div>
+                  <div className="text-sm font-medium mb-2">Buying Used Bikes</div>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={!!dealerProfileForm.buyingUsedBikesEnabled}
+                      onChange={e =>
+                        setDealerProfileForm({ ...dealerProfileForm, buyingUsedBikesEnabled: e.target.checked })
+                      }
+                    />
+                    Currently buying used bikes (Sell Your Bike leads)
+                  </label>
                 </div>
                 <div>
                   <button
