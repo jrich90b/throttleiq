@@ -148,6 +148,7 @@ export type DialogStateName =
   | "pricing_init"
   | "pricing_need_model"
   | "pricing_answered"
+  | "payments_answered"
   | "pricing_handoff"
   | "payments_handoff"
   | "service_request"

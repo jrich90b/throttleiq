@@ -140,6 +140,51 @@ function detectPaymentPressure(text: string): boolean {
   );
 }
 
+function extractPreferredTermMonths(text: string): number | null {
+  const t = text.toLowerCase();
+  const termMatch = t.match(/\b(60|72|84)\s*(month|mo|mos|months|term)?\b/);
+  if (termMatch) return Number(termMatch[1]);
+  return null;
+}
+
+function calcMonthlyPayment(principal: number, apr: number, months: number): number {
+  const rate = apr / 12;
+  if (rate <= 0) return principal / months;
+  const pow = Math.pow(1 + rate, months);
+  return (principal * rate * pow) / (pow - 1);
+}
+
+function buildMonthlyPaymentLine(opts: {
+  priceMin: number;
+  priceMax: number;
+  isUsed: boolean;
+  termMonths: number;
+}): string {
+  const nf = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+  const feeMin = opts.isUsed ? 200 : 1200;
+  const feeMax = opts.isUsed ? 300 : 1200;
+  const totalMin = opts.priceMin + feeMin;
+  const totalMax = opts.priceMax + feeMax;
+  const aprMin = opts.isUsed ? 0.08 : 0.06;
+  const aprMax = opts.isUsed ? 0.09 : 0.08;
+  const low = calcMonthlyPayment(totalMin, aprMin, opts.termMonths);
+  const high = calcMonthlyPayment(totalMax, aprMax, opts.termMonths);
+  const round10 = (v: number) => Math.round(v / 10) * 10;
+  const payLow = nf.format(round10(low));
+  const payHigh = nf.format(round10(high));
+  const feeLabel = opts.isUsed ? "~$200–$300" : "~$1,200";
+  const priceLabel =
+    opts.priceMin === opts.priceMax
+      ? nf.format(opts.priceMin)
+      : `${nf.format(opts.priceMin)}–${nf.format(opts.priceMax)}`;
+
+  return (
+    `Good question. Ballpark, on about ${priceLabel} plus ${feeLabel} in fees, ` +
+    `you’re around ${payLow}–${payHigh}/mo at ${opts.termMonths} months depending on credit. ` +
+    `Were you thinking 60, 72, or 84 months, and about how much down?`
+  );
+}
+
 function detectPricingOrPayment(text: string, intent?: OrchestratorResult["intent"]): boolean {
   if (intent === "PRICING" || intent === "FINANCING") return true;
   const t = text.toLowerCase();
@@ -689,7 +734,7 @@ export async function orchestrateInbound(
     });
   }
 
-  if (pricingIntent && pricingAttempts >= 1) {
+  if (pricingIntent && pricingAttempts >= 1 && !detectPaymentPressure(event.body)) {
     const reason = detectPaymentPressure(event.body) ? "payments" : "pricing";
     if (!useLLM) {
       const ack = exactPressure
@@ -757,6 +802,41 @@ export async function orchestrateInbound(
         colorText: colorHint
       });
       const numericYear = yearForRange ? Number(yearForRange) : null;
+      const paymentQuestion = detectPaymentPressure(event.body);
+      const preferredTerm = extractPreferredTermMonths(event.body) ?? 60;
+      const conditionRaw = [
+        leadForPrice?.vehicle?.condition,
+        (priceLookup as any)?.item?.condition
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      const isUsed = /(pre|used|pre-owned|preowned|owned)/.test(conditionRaw);
+      const paymentRange =
+        price != null
+          ? { min: price, max: price }
+          : range?.min != null && range?.max != null
+            ? { min: range.min, max: range.max }
+            : msrpLookup?.exact != null
+              ? { min: msrpLookup.exact, max: msrpLookup.exact }
+              : msrpLookup?.rangeForTrim ?? msrpLookup?.rangeForColor ?? msrpLookup?.range ?? null;
+
+      if (paymentQuestion && paymentRange) {
+        const draft = buildMonthlyPaymentLine({
+          priceMin: paymentRange.min,
+          priceMax: paymentRange.max,
+          isUsed,
+          termMonths: preferredTerm
+        });
+        return finalize({
+          intent,
+          stage: "ENGAGED",
+          shouldRespond: true,
+          draft,
+          pricingAttempted,
+          paymentsAnswered: true
+        });
+      }
       if (!price && !range) {
         if (msrpLookup && modelForRange && !isUnknownModel(modelForRange)) {
           const nf = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });

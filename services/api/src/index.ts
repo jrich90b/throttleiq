@@ -665,6 +665,7 @@ app.post("/debug/inbound/process", express.json(), async (req, res) => {
     if (result?.draft && result.shouldRespond) {
       appendOutbound(conv, event.to, event.from, result.draft, "draft_ai");
       if (result.pricingAttempted) incrementPricingAttempt(conv);
+      if (result.paymentsAnswered) setDialogState(conv, "payments_answered");
       if (result.suggestedSlots && result.suggestedSlots.length > 0) {
         setLastSuggestedSlots(conv, result.suggestedSlots);
       }
@@ -2586,7 +2587,9 @@ function detectCallbackText(text: string): boolean {
 
 function applyPricingPolicy(conv: any, reply: string, lastOutboundText: string): string {
   const state = getDialogState(conv);
-  if (!(state.startsWith("pricing_") || state === "payments_handoff")) return reply;
+  if (!(state.startsWith("pricing_") || state === "payments_handoff" || state === "payments_answered")) {
+    return reply;
+  }
   let out = reply;
   if (state === "pricing_need_model" && !detectsModelQuestion(out)) {
     out = "Which model are you interested in (and any trim or color)?";
@@ -2596,6 +2599,8 @@ function applyPricingPolicy(conv: any, reply: string, lastOutboundText: string):
       out = "Which model are you interested in? If you have a trim or color in mind, share that too.";
     } else if (state === "pricing_answered") {
       out = "If you want a full out‑the‑door quote, I can set a time to stop in or have a manager follow up.";
+    } else if (state === "payments_answered") {
+      out = "If you want me to tighten that payment estimate, just tell me term and down payment.";
     } else if (state === "pricing_handoff" || state === "payments_handoff") {
       out = "Got it — I’ll have a manager pull the exact numbers and follow up shortly.";
     }

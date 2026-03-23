@@ -38,6 +38,7 @@ export type OrchestratorResult = {
   handoff?: { required: boolean; reason: "pricing" | "payments" | "approval" | "manager" | "other"; ack: string };
   autoClose?: { reason: "international" | "corporate" | "other" };
   pricingAttempted?: boolean;
+  paymentsAnswered?: boolean;
   suggestedSlots?: any[];
   requestedTime?: { year: number; month: number; day: number; hour24: number; minute: number; dayOfWeek: string } | null;
   requestedAppointmentType?: string;
