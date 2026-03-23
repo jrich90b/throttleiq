@@ -3164,7 +3164,11 @@ async function processDueFollowUps() {
     const pricingLine =
       getPricingAttempts(conv) > 0 ? " If you want me to run numbers, just say the word." : "";
     const tradeLine = tradeLabel ? ` If you want to go over the trade on ${tradeLabel}, just let me know.` : "";
-    const extraLine = pricingLine || tradeLine;
+    const paymentLine =
+      getDialogState(conv) === "payments_answered"
+        ? " If you want a more exact payment, I can run a quick credit app or set a time to go over numbers."
+        : "";
+    const extraLine = paymentLine || pricingLine || tradeLine;
     const baseCtx = {
       name: firstName,
       agent: agentName,
