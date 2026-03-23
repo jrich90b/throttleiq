@@ -136,6 +136,7 @@ import {
 } from "./domain/suppressionStore.js";
 import { tlpLogCustomerContact } from "./connectors/crm/tlpPlaywright.js";
 import { listContacts, updateContact, deleteContact } from "./domain/contactsStore.js";
+import { isLikelyVoicemailTranscript, maybeMarkEngagedFromCall } from "./domain/engagement.js";
 
 import { getSystemMode, setSystemMode, type SystemMode } from "./domain/settingsStore.js";
 import {
@@ -1864,23 +1865,6 @@ async function transcribeRecordingMp3(buffer: Buffer, agentLabel = "Agent"): Pro
   } finally {
     fs.promises.unlink(tmpPath).catch(() => null);
   }
-}
-
-function isLikelyVoicemailTranscript(text: string): boolean {
-  const t = text.toLowerCase();
-  if (!t.trim()) return true;
-  return (
-    /voicemail|voice mail|mailbox/.test(t) ||
-    /leave (a )?message/.test(t) ||
-    /after the (tone|beep)/.test(t) ||
-    /at the (tone|beep)/.test(t) ||
-    /please leave/.test(t) ||
-    /not available/.test(t) ||
-    /unable to (answer|take your call)/.test(t) ||
-    /your call has been forwarded/.test(t) ||
-    /record your message/.test(t) ||
-    /sorry we (missed|couldn't take) your call/.test(t)
-  );
 }
 
 function findConversationByCallSid(callSid?: string | null) {
@@ -9456,10 +9440,15 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
     const transcript = await transcribeRecordingMp3(buf, agentName || "Agent");
     const transcriptText = (transcript ?? "").trim();
     const noteText = transcriptText || "Not contacted.";
+    const isVoicemail = transcriptText ? isLikelyVoicemailTranscript(transcriptText) : true;
     const contactedValue: "YES" | "NO" =
-      transcriptText && !isLikelyVoicemailTranscript(transcriptText) ? "YES" : "NO";
+      transcriptText && !isVoicemail ? "YES" : "NO";
     if (noteText) {
       if (contactedValue === "YES") {
+        maybeMarkEngagedFromCall(conv, transcriptText, {
+          isVoicemail,
+          messageId: recordingSid || bodyCallSid || callbackCallSid || undefined
+        });
         const summary = await summarizeVoiceTranscriptWithLLM({
           transcript: transcriptText,
           lead: conv.lead ?? undefined

@@ -150,6 +150,12 @@ type ConversationListItem = {
   status?: "open" | "closed";
   closedAt?: string | null;
   closedReason?: string | null;
+  engagement?: {
+    at?: string;
+    source?: "sms" | "email" | "call";
+    reason?: string;
+    messageId?: string;
+  } | null;
   sale?: {
     soldAt?: string;
     soldById?: string;
@@ -238,6 +244,12 @@ type ConversationDetail = {
   status?: "open" | "closed";
   closedAt?: string | null;
   closedReason?: string | null;
+  engagement?: {
+    at?: string;
+    source?: "sms" | "email" | "call";
+    reason?: string;
+    messageId?: string;
+  } | null;
   sale?: {
     soldAt?: string;
     soldById?: string;
@@ -3896,6 +3908,15 @@ export default function Home() {
                                     </svg>
                                   </span>
                                 ) : null}
+                                {c.engagement?.at ? (
+                                  <span
+                                    className="text-orange-500 text-lg leading-none"
+                                    title="Engaged"
+                                    aria-label="Engaged"
+                                  >
+                                    🔥
+                                  </span>
+                                ) : null}
                                 {c.contactPreference === "call_only" ? (
                                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
                                     Call Only
@@ -6467,6 +6488,15 @@ export default function Home() {
                       [selectedConv.lead?.firstName, selectedConv.lead?.lastName].filter(Boolean).join(" ") ||
                       selectedConv.leadKey}
                   </span>
+                  {selectedConv.engagement?.at ? (
+                    <span
+                      className="text-orange-500 text-xl leading-none"
+                      title="Engaged"
+                      aria-label="Engaged"
+                    >
+                      🔥
+                    </span>
+                  ) : null}
                   {(() => {
                     const isHold =
                       selectedConv.followUpCadence?.pauseReason === "manual_hold" ||

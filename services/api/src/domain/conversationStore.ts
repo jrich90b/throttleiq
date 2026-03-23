@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import type { InboundMessageEvent } from "./types.js";
+import { maybeMarkEngagedFromInbound } from "./engagement.js";
 import { fileURLToPath } from "node:url";
 import { dataPath } from "./dataDir.js";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
@@ -307,6 +308,12 @@ export type Conversation = {
   voiceContext?: VoiceContext;
   memorySummary?: { text: string; updatedAt: string; messageCount: number };
   dialogState?: { name: DialogStateName; updatedAt: string };
+  engagement?: {
+    at: string;
+    source: "sms" | "email" | "call";
+    reason?: string;
+    messageId?: string;
+  };
 };
 
 const conversations = new Map<string, Conversation>();
@@ -534,6 +541,7 @@ export function appendInbound(conv: Conversation, evt: InboundMessageEvent) {
     provider: evt.provider as MessageProvider,
     providerMessageId: evt.providerMessageId
   });
+  maybeMarkEngagedFromInbound(conv, evt);
   conv.updatedAt = nowIso();
   scheduleSave();
 }
@@ -714,6 +722,7 @@ export function listConversations() {
         contactPreference: c.contactPreference,
         leadSource,
         walkIn: inferredWalkIn ? true : null,
+        engagement: c.engagement ?? null,
         classification: c.classification ?? null,
         followUpCadence: c.followUpCadence ?? null,
         followUp: c.followUp ?? null,
