@@ -4991,7 +4991,9 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
 
     let cadenceAckResult: { sent: boolean; reason?: string; sid?: string } | null = null;
     const cadenceAck =
-      effectiveResolution === "hold" ? null : buildCadenceAck(effectiveResolution);
+      effectiveResolution === "hold" || shouldApplyWatch
+        ? null
+        : buildCadenceAck(effectiveResolution);
     if (cadenceAck) {
       cadenceAckResult = await sendCadenceAck(cadenceAck);
     }
