@@ -2316,7 +2316,7 @@ const STATE_NAME_TO_CODE: Record<string, string> = {
 function extractStateFromText(text: string): string | null {
   const t = String(text ?? "").toLowerCase();
   for (const [name, code] of Object.entries(STATE_NAME_TO_CODE)) {
-    const re = new RegExp(`\\b${name.replace(/\s+/g, "\\s+")}\\b`, "i");
+    const re = new RegExp(`\\b${name.replace(/\\s+/g, \"\\\\s+\")}\\b`, "i");
     if (re.test(t)) return code;
   }
   const abbrMatch = t.match(/\b(?:in|from|near|located in|located|at)\s+([a-z]{2})\b/i);
@@ -2351,7 +2351,8 @@ function detectWrongDealerSignal(text: string, dealerState?: string | null): boo
 
 function detectWrongDealerConfirm(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
-  if (/(yes|yep|yeah|yup|correct|right|that's right|different dealer|another dealer|not your dealer|wrong dealer)/i.test(t)) {
+  if (isAffirmative(t)) return true;
+  if (/(yes|yep|yeah|correct|right|that's right|different dealer|another dealer|not your dealer|wrong dealer)/i.test(t)) {
     return true;
   }
   return false;
@@ -9279,6 +9280,7 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
+  const dealerProfile = await getDealerProfile();
   const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
   const agentName = dealerProfile?.agentName ?? "Brooke";
   const lastOutboundTextFinal = getLastNonVoiceOutbound(conv)?.body ?? "";
