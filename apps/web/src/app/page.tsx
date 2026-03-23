@@ -580,7 +580,8 @@ export default function Home() {
     testRideMonths: [4, 5, 6, 7, 8, 9, 10],
     weatherPickupRadiusMiles: "25",
     weatherColdThresholdF: "50",
-    weatherForecastHours: "48"
+    weatherForecastHours: "48",
+    buyingUsedBikesEnabled: true
   });
   const [dealerHours, setDealerHours] = useState<Record<string, { open: string | null; close: string | null }>>(
     {}
@@ -1451,10 +1452,12 @@ export default function Home() {
         const usersJson = await usersResp.json();
         const profile = dealerJson?.profile ?? {};
         const followUp = profile.followUp ?? {};
+        const buying = profile.buying ?? {};
         const weather = profile.weather ?? {};
         const pickupRadius = weather.pickupRadiusMiles ?? 25;
         const coldThreshold = weather.coldThresholdF ?? 50;
         const forecastHours = weather.forecastHours ?? 48;
+        const buyingUsedEnabled = buying.usedBikesEnabled !== false;
         const followUpMonths = Array.isArray(followUp.testRideMonths) ? followUp.testRideMonths : [4, 5, 6, 7, 8, 9, 10];
         setDealerProfile(profile);
         setDealerProfileForm({
@@ -1478,7 +1481,8 @@ export default function Home() {
           testRideMonths: followUpMonths,
           weatherPickupRadiusMiles: String(pickupRadius),
           weatherColdThresholdF: String(coldThreshold),
-          weatherForecastHours: String(forecastHours)
+          weatherForecastHours: String(forecastHours),
+          buyingUsedBikesEnabled: buyingUsedEnabled
         });
         setDealerHours(profile.hours ?? {});
 
@@ -2862,6 +2866,9 @@ export default function Home() {
           pickupRadiusMiles: Number(dealerProfileForm.weatherPickupRadiusMiles) || 25,
           coldThresholdF: Number(dealerProfileForm.weatherColdThresholdF) || 50,
           forecastHours: Number(dealerProfileForm.weatherForecastHours) || 48
+        },
+        buying: {
+          usedBikesEnabled: !!dealerProfileForm.buyingUsedBikesEnabled
         }
       };
       const resp = await fetch("/api/dealer-profile", {
@@ -5400,6 +5407,19 @@ export default function Home() {
                       );
                     })}
                   </div>
+                </div>
+                <div>
+                  <div className="text-sm font-medium mb-2">Buying Used Bikes</div>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={!!dealerProfileForm.buyingUsedBikesEnabled}
+                      onChange={e =>
+                        setDealerProfileForm({ ...dealerProfileForm, buyingUsedBikesEnabled: e.target.checked })
+                      }
+                    />
+                    Currently buying used bikes (Sell Your Bike leads)
+                  </label>
                 </div>
                 <div>
                   <div className="text-sm font-medium mb-2">Weather & Pickup</div>

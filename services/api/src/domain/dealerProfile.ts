@@ -33,6 +33,9 @@ export type DealerProfile = {
     forecastHours?: number;
     pickupRadiusMiles?: number;
   };
+  buying?: {
+    usedBikesEnabled?: boolean;
+  };
 };
 
 const __filename = fileURLToPath(import.meta.url);
