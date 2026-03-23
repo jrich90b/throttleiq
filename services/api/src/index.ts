@@ -4644,35 +4644,10 @@ app.post("/conversations/:id/appointment", requirePermission("canEditAppointment
     conv.appointment.reschedulePending = false;
     setPreferredSalespersonForConv(conv, { id: salesperson.id, name: salesperson.name }, "manual-appointment");
     onAppointmentBooked(conv);
-
-    const smsMessage = `Perfect — you’re all set for ${conv.appointment.whenText}${salesperson?.name ? ` with ${salesperson.name}` : ""}. See you then.`;
-    const toNumber = normalizePhone(lead?.phone ?? conv.leadKey ?? "");
-    const accountSid = process.env.TWILIO_ACCOUNT_SID;
-    const authToken = process.env.TWILIO_AUTH_TOKEN;
-    const from = process.env.TWILIO_FROM_NUMBER;
-    let smsResult: { sent: boolean; sid?: string; reason?: string } = { sent: false };
-
-    if (conv.contactPreference === "call_only") {
-      smsResult = { sent: false, reason: "call_only" };
-    } else if (!toNumber.startsWith("+")) {
-      smsResult = { sent: false, reason: "invalid_phone" };
-    } else if (isSuppressed(toNumber)) {
-      smsResult = { sent: false, reason: "suppressed" };
-    } else if (!accountSid || !authToken || !from) {
-      appendOutbound(conv, "salesperson", toNumber, smsMessage, "human");
-      smsResult = { sent: false, reason: "twilio_not_configured" };
-    } else {
-      try {
-        const client = twilio(accountSid, authToken);
-        const msg = await client.messages.create({ from, to: toNumber, body: smsMessage });
-        appendOutbound(conv, from, toNumber, smsMessage, "twilio", msg.sid);
-        smsResult = { sent: true, sid: msg.sid };
-      } catch (e: any) {
-        appendOutbound(conv, "salesperson", toNumber, smsMessage, "human");
-        smsResult = { sent: false, reason: "send_failed" };
-        console.log("[manual-appointment] sms failed:", e?.message ?? e);
-      }
-    }
+    const smsResult: { sent: boolean; reason?: string; sid?: string } = {
+      sent: false,
+      reason: "manual_no_notify"
+    };
 
     conv.updatedAt = new Date().toISOString();
     saveConversation(conv);
