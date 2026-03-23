@@ -159,12 +159,14 @@ function buildMonthlyPaymentLine(opts: {
   priceMax: number;
   isUsed: boolean;
   termMonths: number;
+  taxRate: number;
 }): string {
   const nf = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
   const feeMin = opts.isUsed ? 200 : 1200;
   const feeMax = opts.isUsed ? 300 : 1200;
-  const totalMin = opts.priceMin + feeMin;
-  const totalMax = opts.priceMax + feeMax;
+  const taxRate = Number.isFinite(opts.taxRate) ? opts.taxRate : 0;
+  const totalMin = (opts.priceMin + feeMin) * (1 + taxRate);
+  const totalMax = (opts.priceMax + feeMax) * (1 + taxRate);
   const aprMin = opts.isUsed ? 0.08 : 0.06;
   const aprMax = opts.isUsed ? 0.09 : 0.08;
   const low = calcMonthlyPayment(totalMin, aprMin, opts.termMonths);
@@ -172,14 +174,13 @@ function buildMonthlyPaymentLine(opts: {
   const round10 = (v: number) => Math.round(v / 10) * 10;
   const payLow = nf.format(round10(low));
   const payHigh = nf.format(round10(high));
-  const feeLabel = opts.isUsed ? "~$200–$300" : "~$1,200";
   const priceLabel =
     opts.priceMin === opts.priceMax
       ? nf.format(opts.priceMin)
       : `${nf.format(opts.priceMin)}–${nf.format(opts.priceMax)}`;
 
   return (
-    `Good question. Ballpark, on about ${priceLabel} plus ${feeLabel} in fees, ` +
+    `Good question. Ballpark, on about ${priceLabel}, ` +
     `you’re around ${payLow}–${payHigh}/mo at ${opts.termMonths} months depending on credit. ` +
     `Were you thinking 60, 72, or 84 months, and about how much down?`
   );
@@ -812,6 +813,13 @@ export async function orchestrateInbound(
         .join(" ")
         .toLowerCase();
       const isUsed = /(pre|used|pre-owned|preowned|owned)/.test(conditionRaw);
+      const taxRateRaw = Number(dealerProfile?.taxRate ?? 8);
+      const taxRate =
+        Number.isFinite(taxRateRaw) && taxRateRaw > 0
+          ? taxRateRaw > 1
+            ? taxRateRaw / 100
+            : taxRateRaw
+          : 0.08;
       const paymentRange =
         price != null
           ? { min: price, max: price }
@@ -826,7 +834,8 @@ export async function orchestrateInbound(
           priceMin: paymentRange.min,
           priceMax: paymentRange.max,
           isUsed,
-          termMonths: preferredTerm
+          termMonths: preferredTerm,
+          taxRate
         });
         return finalize({
           intent,
