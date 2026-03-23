@@ -1052,6 +1052,51 @@ const FOLLOW_UP_MESSAGES = [
   "Still thinking it over? If you want to stop in, tell me a good day and I’ll take care of the rest."
 ];
 
+const FOLLOW_UP_VARIANTS_WITH_SLOTS: string[] = [
+  "Hi {name}, it’s {agent} again. Just wanted to see if you caught my last message{labelClause}. If you want to stop by, I have {a} or {b} open. Which works best?{extraLine}",
+  "Hi {name} — {agent} again. Any thoughts on{label}? If stopping in helps, I have {a} or {b} open. Which works better?{extraLine}",
+  "Hi {name}, quick follow‑up{labelClause}. If you want to take a look, {a} or {b} work on my end. Which is better for you?{extraLine}"
+];
+
+const SELL_FOLLOW_UP_VARIANTS_WITH_SLOTS: string[] = [
+  "Hi {name}, it’s {agent} again. If you want a quick in‑person appraisal on {bike}, I have {a} or {b} open. Which works best?",
+  "Hi {name} — {agent} again. If it helps, I can set an appraisal time for {bike}. I have {a} or {b} open. Which works better?",
+  "Hi {name}, quick follow‑up on {bike}. If you want to bring it by for a quick appraisal, {a} or {b} are open. Which is better for you?"
+];
+
+const FOLLOW_UP_VARIANTS_NO_SLOTS: Record<number, string[]> = {
+  0: [
+    "Hi {name}, it’s {agent} again. Just checking in{labelClause}. Your thoughts would be appreciated when you have a moment.{extraLine}",
+    "Hi {name} — {agent} again. Just wanted to see if you caught my last note{labelClause}. Let me know what you’re thinking.{extraLine}",
+    "Hi {name}, quick follow‑up{labelClause}. If you want to swing by, just tell me what day works best.{extraLine}"
+  ],
+  1: [
+    "If a quick walkaround video of{label} would help, I can send one. Anything you want to see?",
+    "Want a short walkaround video of{label}? I’m happy to send it over."
+  ],
+  2: [
+    "Are you mostly comparing a few bikes, or is{label} at the top of your list?",
+    "Quick question — are you still leaning toward{label}, or still comparing?"
+  ]
+};
+
+function pickVariant(variants: string[], seed: string): string {
+  if (!variants.length) return "";
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  }
+  return variants[hash % variants.length];
+}
+
+function renderFollowUpTemplate(template: string, ctx: Record<string, string>): string {
+  let out = template;
+  for (const [key, value] of Object.entries(ctx)) {
+    out = out.replace(new RegExp(`\\{${key}\\}`, "g"), value);
+  }
+  return out.replace(/\s+/g, " ").trim();
+}
+
 const SELL_FOLLOW_UP_MESSAGES = [
   "Just checking in — if you'd like a quick in‑person appraisal on {bike}, I can set a time. I have {a} or {b} open. Which works best?",
   "If it’s easier, we can start with an estimate and then confirm in person. What day works for you?",
@@ -3114,6 +3159,30 @@ async function processDueFollowUps() {
     const isSellMyBikeLead = isSellLead(conv);
     const sellBikeLabel = isSellMyBikeLead ? getSellBikeLabel(conv) : null;
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const agentName = dealerProfile?.agentName ?? "our team";
+    const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
+    const followUpLabel = formatModelLabelForFollowUp(
+      conv.lead?.vehicle?.year ?? null,
+      conv.lead?.vehicle?.model ?? null
+    );
+    const labelClause = followUpLabel ? ` about ${followUpLabel}` : "";
+    const labelWithThe = followUpLabel ? ` ${followUpLabel}` : " the bike";
+    const tradeVehicle = conv?.lead?.tradeVehicle ?? null;
+    const tradeLabel =
+      tradeVehicle && (tradeVehicle.model || tradeVehicle.description)
+        ? getSellBikeLabel(conv)
+        : "";
+    const pricingLine =
+      getPricingAttempts(conv) > 0 ? " If you want me to run numbers, just say the word." : "";
+    const tradeLine = tradeLabel ? ` If you want to go over the trade on ${tradeLabel}, just let me know.` : "";
+    const extraLine = pricingLine || tradeLine;
+    const baseCtx = {
+      name: firstName,
+      agent: agentName,
+      labelClause,
+      label: labelWithThe,
+      extraLine
+    };
     let message = FOLLOW_UP_MESSAGES[cadence.stepIndex] ?? FOLLOW_UP_MESSAGES[FOLLOW_UP_MESSAGES.length - 1];
     let mediaUrls: string[] | undefined;
     if (isPostSale) {
@@ -3163,10 +3232,19 @@ async function processDueFollowUps() {
       } else if (cadence.stepIndex === 0) {
         const day2 = await buildDay2Options(cfg);
         if (day2) {
-          message = template
-            .replace("{bike}", sellBikeLabel ?? "your bike")
-            .replace("{a}", day2.slots[0].startLocal)
-            .replace("{b}", day2.slots[1].startLocal);
+          message = renderFollowUpTemplate(
+            pickVariant(
+              SELL_FOLLOW_UP_VARIANTS_WITH_SLOTS,
+              `${conv.leadKey}|sell|${cadence.stepIndex}`
+            ),
+            {
+              name: firstName,
+              agent: agentName,
+              bike: sellBikeLabel ?? "your bike",
+              a: day2.slots[0].startLocal,
+              b: day2.slots[1].startLocal
+            }
+          );
           setLastSuggestedSlots(conv, day2.slots);
         } else {
           message = `Just checking in — if you'd like a quick in‑person appraisal on ${
@@ -3179,21 +3257,35 @@ async function processDueFollowUps() {
     } else if (cadence.stepIndex === 0) {
       const day2 = await buildDay2Options(cfg);
       if (day2) {
-        const followUpLabel = formatModelLabelForFollowUp(
-          conv.lead?.vehicle?.year ?? null,
-          conv.lead?.vehicle?.model ?? null
+        message = renderFollowUpTemplate(
+          pickVariant(FOLLOW_UP_VARIANTS_WITH_SLOTS, `${conv.leadKey}|${cadence.stepIndex}`),
+          {
+            ...baseCtx,
+            a: day2.slots[0].startLocal,
+            b: day2.slots[1].startLocal
+          }
         );
-        message = `Just checking in — want to come by and look at ${followUpLabel}? I have ${day2.slots[0].startLocal} or ${day2.slots[1].startLocal} if that helps.`;
         setLastSuggestedSlots(conv, day2.slots);
       } else {
-        message = FOLLOW_UP_MESSAGES[1];
+        const variants = FOLLOW_UP_VARIANTS_NO_SLOTS[cadence.stepIndex] ?? [];
+        message = variants.length
+          ? renderFollowUpTemplate(pickVariant(variants, `${conv.leadKey}|${cadence.stepIndex}`), baseCtx)
+          : FOLLOW_UP_MESSAGES[1];
       }
     } else if (cadence.stepIndex === 2) {
       if (canTestRideFlag) {
         message = "If you want to set up a test ride, I can hold a time. What day and time works for you?";
       } else {
-        message = FOLLOW_UP_MESSAGES[2];
+        const variants = FOLLOW_UP_VARIANTS_NO_SLOTS[cadence.stepIndex] ?? [];
+        message = variants.length
+          ? renderFollowUpTemplate(pickVariant(variants, `${conv.leadKey}|${cadence.stepIndex}`), baseCtx)
+          : FOLLOW_UP_MESSAGES[2];
       }
+    } else if (FOLLOW_UP_VARIANTS_NO_SLOTS[cadence.stepIndex]) {
+      const variants = FOLLOW_UP_VARIANTS_NO_SLOTS[cadence.stepIndex] ?? [];
+      message = variants.length
+        ? renderFollowUpTemplate(pickVariant(variants, `${conv.leadKey}|${cadence.stepIndex}`), baseCtx)
+        : message;
     } else if (cadence.stepIndex >= 10) {
       const late = await buildLateFollowUp(conv, cadence.stepIndex, dealerProfile);
       message = late.body;
