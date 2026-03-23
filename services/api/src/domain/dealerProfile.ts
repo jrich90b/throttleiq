@@ -36,6 +36,7 @@ export type DealerProfile = {
   buying?: {
     usedBikesEnabled?: boolean;
   };
+  taxRate?: number;
 };
 
 const __filename = fileURLToPath(import.meta.url);

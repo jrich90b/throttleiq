@@ -593,7 +593,8 @@ export default function Home() {
     weatherPickupRadiusMiles: "25",
     weatherColdThresholdF: "50",
     weatherForecastHours: "48",
-    buyingUsedBikesEnabled: true
+    buyingUsedBikesEnabled: true,
+    taxRate: "8"
   });
   const [dealerHours, setDealerHours] = useState<Record<string, { open: string | null; close: string | null }>>(
     {}
@@ -1470,6 +1471,7 @@ export default function Home() {
         const coldThreshold = weather.coldThresholdF ?? 50;
         const forecastHours = weather.forecastHours ?? 48;
         const buyingUsedEnabled = buying.usedBikesEnabled !== false;
+        const taxRate = profile.taxRate ?? 8;
         const followUpMonths = Array.isArray(followUp.testRideMonths) ? followUp.testRideMonths : [4, 5, 6, 7, 8, 9, 10];
         setDealerProfile(profile);
         setDealerProfileForm({
@@ -1494,7 +1496,8 @@ export default function Home() {
           weatherPickupRadiusMiles: String(pickupRadius),
           weatherColdThresholdF: String(coldThreshold),
           weatherForecastHours: String(forecastHours),
-          buyingUsedBikesEnabled: buyingUsedEnabled
+          buyingUsedBikesEnabled: buyingUsedEnabled,
+          taxRate: String(taxRate)
         });
         setDealerHours(profile.hours ?? {});
 
@@ -2881,7 +2884,8 @@ export default function Home() {
         },
         buying: {
           usedBikesEnabled: !!dealerProfileForm.buyingUsedBikesEnabled
-        }
+        },
+        taxRate: Number(dealerProfileForm.taxRate) || 0
       };
       const resp = await fetch("/api/dealer-profile", {
         method: "PUT",
@@ -5459,6 +5463,22 @@ export default function Home() {
                   </div>
                   <div className="text-xs text-gray-500 mt-1">
                     Used to decide when to offer pickup or delay test rides (snow or &lt; threshold).
+                  </div>
+                </div>
+                <div>
+                  <div className="text-sm font-medium mb-2">Pricing Defaults</div>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <input
+                      className="border rounded px-3 py-2 text-sm"
+                      placeholder="Default tax rate (%)"
+                      value={dealerProfileForm.taxRate}
+                      onChange={e =>
+                        setDealerProfileForm({ ...dealerProfileForm, taxRate: e.target.value })
+                      }
+                    />
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    Used for ballpark payment estimates when county tax is unknown.
                   </div>
                 </div>
                 <div>
