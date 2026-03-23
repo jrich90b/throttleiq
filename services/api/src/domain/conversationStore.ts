@@ -153,6 +153,7 @@ export type DialogStateName =
   | "payments_handoff"
   | "service_request"
   | "service_handoff"
+  | "small_talk"
   | "callback_requested"
   | "callback_handoff"
   | "call_only"

@@ -1,7 +1,11 @@
 // services/api/src/domain/orchestrator.ts
 import { loadSystemPrompt } from "./loadPrompt.js";
 import type { InboundMessageEvent, OrchestratorResult } from "./types.js";
-import { generateDraftWithLLM, summarizeConversationMemoryWithLLM } from "./llmDraft.js";
+import {
+  classifySmallTalkWithLLM,
+  generateDraftWithLLM,
+  summarizeConversationMemoryWithLLM
+} from "./llmDraft.js";
 import { resolveInventoryUrlByStock } from "./inventoryUrlResolver.js";
 import { checkInventorySalePendingByUrl, type InventoryStatus } from "./inventoryChecker.js";
 import { findInventoryMatches, findInventoryPrice, findPriceRange, hasInventoryForModelYear } from "./inventoryFeed.js";
@@ -30,6 +34,119 @@ function simpleIntent(body: string): OrchestratorResult["intent"] {
   if (/(test ride|ride it|demo)/.test(t)) return "TEST_RIDE";
   if (/(spec|seat height|weight|hp|horsepower|torque)/.test(t)) return "SPECS";
   return "GENERAL";
+}
+
+function hasStrongIntentSignal(text: string): boolean {
+  const t = text.toLowerCase();
+  return (
+    /(trade|trade[-\s]?in|value my trade|trade value|trade price)/.test(t) ||
+    /(stock|vin|available|availability|still there|in stock)/.test(t) ||
+    /(price|otd|out the door|payment|monthly|finance|credit|apr|down|term)/.test(t) ||
+    /(test ride|ride it|demo)/.test(t) ||
+    /(call me|give me a call|call back|callback|please call)/.test(t) ||
+    /(appointment|schedule|book|set up|come in|stop in|visit)/.test(t) ||
+    /(hours|open|close|location|address|where are you)/.test(t)
+  );
+}
+
+function isEmojiOnly(text: string): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  if (/[a-z0-9]/i.test(t)) return false;
+  return t.length <= 6;
+}
+
+function isShortPleasantry(text: string): boolean {
+  const raw = String(text ?? "").trim();
+  if (!raw) return false;
+  const t = raw.toLowerCase();
+  if (/^(yes|yeah|yep|yup|no|nah|nope)$/i.test(t)) return false;
+  if (/[0-9]/.test(t)) return false;
+  if (/\?/.test(t)) return false;
+  if (hasStrongIntentSignal(t)) return false;
+  const tokens = t
+    .replace(/[^a-z0-9\s]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!tokens.length || tokens.length > 5) return false;
+  const allowed = new Set([
+    "ok",
+    "okay",
+    "k",
+    "kk",
+    "thanks",
+    "thank",
+    "you",
+    "thx",
+    "ty",
+    "appreciate",
+    "it",
+    "got",
+    "sounds",
+    "good",
+    "cool",
+    "awesome",
+    "great",
+    "perfect",
+    "no",
+    "problem",
+    "np",
+    "alright",
+    "alrighty",
+    "lol",
+    "haha",
+    "ha"
+  ]);
+  const pleasantry = new Set([
+    "thanks",
+    "thank",
+    "thx",
+    "ty",
+    "appreciate",
+    "got",
+    "sounds",
+    "good",
+    "cool",
+    "awesome",
+    "great",
+    "perfect",
+    "problem",
+    "np",
+    "alright",
+    "alrighty",
+    "lol",
+    "haha",
+    "ha"
+  ]);
+  if (!tokens.every(tok => allowed.has(tok))) return false;
+  if (!tokens.some(tok => pleasantry.has(tok))) return false;
+  return true;
+}
+
+function isSmallTalkCandidate(text: string): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  if (/[0-9]/.test(t)) return false;
+  if (/\?/.test(t)) return false;
+  if (hasStrongIntentSignal(t)) return false;
+  const words = t.split(/\s+/).filter(Boolean);
+  return words.length <= 10 && t.length <= 120;
+}
+
+function pickSmallTalkReply(seed: string): string {
+  const variants = [
+    "Thanks — I’m here if you need anything.",
+    "Sounds good. I’m here when you’re ready.",
+    "Got it — just let me know if you want to move forward."
+  ];
+  const raw = String(seed ?? "");
+  if (!raw) return variants[0];
+  let hash = 0;
+  for (let i = 0; i < raw.length; i++) {
+    hash = (hash + raw.charCodeAt(i)) % variants.length;
+  }
+  return variants[hash];
 }
 
 function detectManagerRequest(text: string): boolean {
@@ -431,6 +548,8 @@ export async function orchestrateInbound(
     return out;
   };
 
+  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
+
   if (looksLikeOptOut(event.body)) {
     return finalize({
       intent: "GENERAL",
@@ -438,6 +557,32 @@ export async function orchestrateInbound(
       shouldRespond: true,
       draft: "Got it — I won’t message you again."
     });
+  }
+
+  const canSmallTalk =
+    event.provider !== "sendgrid_adf" &&
+    event.provider !== "debug" &&
+    event.provider !== "voice_transcript";
+  if (canSmallTalk) {
+    const rawText = String(event.body ?? "").trim();
+    const quickSmallTalk = isEmojiOnly(rawText) || isShortPleasantry(rawText);
+    let smallTalk = quickSmallTalk;
+    if (!smallTalk && useLLM && isSmallTalkCandidate(rawText)) {
+      const classified = await classifySmallTalkWithLLM({ text: rawText, history });
+      if (classified?.smallTalk && (classified.confidence ?? 0) >= 0.7) {
+        smallTalk = true;
+      }
+    }
+    if (smallTalk) {
+      const draft = pickSmallTalkReply(rawText);
+      return finalize({
+        intent: "GENERAL",
+        stage: "ENGAGED",
+        shouldRespond: true,
+        draft,
+        smallTalk: true
+      });
+    }
   }
 
   const leadSourceRaw = (ctx?.leadSource ?? ctx?.lead?.source ?? "").toLowerCase();
@@ -609,7 +754,6 @@ export async function orchestrateInbound(
       ? ctx.callbackRequestedOverride
       : detectCallbackRequest(event.body);
   const hoursRequest = detectHoursRequest(event.body);
-  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
   const pricingIntent =
     detectPricingOrPayment(event.body, intent) ||
     /request a quote|raq/i.test(ctx?.leadSource ?? "");

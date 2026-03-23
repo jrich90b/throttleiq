@@ -35,6 +35,7 @@ export type OrchestratorResult = {
   stage: LeadStage;
   shouldRespond: boolean;
   draft: string;
+  smallTalk?: boolean;
   handoff?: { required: boolean; reason: "pricing" | "payments" | "approval" | "manager" | "other"; ack: string };
   autoClose?: { reason: "international" | "corporate" | "other" };
   pricingAttempted?: boolean;

@@ -666,6 +666,7 @@ app.post("/debug/inbound/process", express.json(), async (req, res) => {
       appendOutbound(conv, event.to, event.from, result.draft, "draft_ai");
       if (result.pricingAttempted) incrementPricingAttempt(conv);
       if (result.paymentsAnswered) setDialogState(conv, "payments_answered");
+      if (result.smallTalk) setDialogState(conv, "small_talk");
       if (result.suggestedSlots && result.suggestedSlots.length > 0) {
         setLastSuggestedSlots(conv, result.suggestedSlots);
       }
@@ -8521,6 +8522,9 @@ if (authToken && signature) {
     pickup: conv.pickup ?? null,
     weather: weatherStatus ?? null
   });
+  if (result.smallTalk) {
+    setDialogState(conv, "small_talk");
+  }
   if (result.pickupUpdate) {
     conv.pickup = { ...(conv.pickup ?? {}), ...result.pickupUpdate, updatedAt: nowIso() };
   }

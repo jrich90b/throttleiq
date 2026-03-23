@@ -85,6 +85,55 @@ export async function classifySchedulingIntent(input: string): Promise<boolean> 
   }
 }
 
+export async function classifySmallTalkWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<{ smallTalk: boolean; confidence?: number } | null> {
+  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+  const history = (args.history ?? []).slice(-4).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "You are a classifier for dealership SMS. Return ONLY valid JSON.",
+    "Decide if the message is small talk/pleasantry with no actionable intent.",
+    "",
+    "JSON SCHEMA:",
+    "{",
+    '  \"small_talk\": true|false,',
+    '  \"confidence\": 0.0',
+    "}",
+    "",
+    "Guidelines:",
+    "- small_talk=true only for acknowledgements, thanks, emojis, or brief pleasantries.",
+    "- small_talk=false if the message asks a question or contains a request.",
+    "- small_talk=false if it mentions scheduling, pricing, payments, availability, trade-in, test ride, callback, or hours.",
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+  try {
+    const resp = await client.responses.create({
+      model,
+      input: prompt,
+      temperature: 0,
+      max_output_tokens: 120
+    });
+    const raw = resp.output_text?.trim() ?? "";
+    const parsed = safeParseJson(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    const smallTalk = !!parsed.small_talk;
+    const confidence =
+      typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+        ? Math.max(0, Math.min(1, parsed.confidence))
+        : undefined;
+    return { smallTalk, confidence };
+  } catch {
+    return null;
+  }
+}
+
 export type BookingParse = {
   intent: "schedule" | "reschedule" | "cancel" | "availability" | "question" | "none";
   explicitRequest: boolean;
