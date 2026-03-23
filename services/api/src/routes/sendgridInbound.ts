@@ -1736,7 +1736,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   let draft = result.shouldRespond ? result.draft : "Thanks — I’ll follow up shortly.";
   if (inferredBucket === "test_ride" && !testRideInSeason) {
     const modelLabel = formatModelLabel(
-      conv.lead?.vehicle?.year ?? conv.lead?.year ?? null,
+      conv.lead?.vehicle?.year ?? null,
       conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null
     );
     const modelClause = modelLabel ? ` on the ${modelLabel}` : "";
