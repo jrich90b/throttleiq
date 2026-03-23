@@ -252,8 +252,10 @@ function detectExactNumberPressure(text: string): boolean {
 
 function detectPaymentPressure(text: string): boolean {
   const t = text.toLowerCase();
-  return /(monthly payment|what would it be a month|what would it be per month|how much down|\bapr\b|term)/.test(
-    t
+  return (
+    /(monthly payment|payments?\b|what.*payment|payment.*(month|monthly)|how much.*(payment|monthly)|how much down|\bapr\b|term)/.test(
+      t
+    )
   );
 }
 
