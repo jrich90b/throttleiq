@@ -10,7 +10,6 @@ import OpenAI from "openai";
 import { orchestrateInbound } from "./domain/orchestrator.js";
 import {
   classifySchedulingIntent,
-  classifyWrongDealerIntent,
   parseBookingIntentWithLLM,
   parseIntentWithLLM,
   summarizeVoiceTranscriptWithLLM
@@ -2258,104 +2257,6 @@ function isDecisionDeferral(text: string): boolean {
     /\bsee what i have going on\b/.test(t) ||
     /\bget back to you\b/.test(t)
   );
-}
-
-const STATE_NAME_TO_CODE: Record<string, string> = {
-  alabama: "AL",
-  alaska: "AK",
-  arizona: "AZ",
-  arkansas: "AR",
-  california: "CA",
-  colorado: "CO",
-  connecticut: "CT",
-  delaware: "DE",
-  florida: "FL",
-  georgia: "GA",
-  hawaii: "HI",
-  idaho: "ID",
-  illinois: "IL",
-  indiana: "IN",
-  iowa: "IA",
-  kansas: "KS",
-  kentucky: "KY",
-  louisiana: "LA",
-  maine: "ME",
-  maryland: "MD",
-  massachusetts: "MA",
-  michigan: "MI",
-  minnesota: "MN",
-  mississippi: "MS",
-  missouri: "MO",
-  montana: "MT",
-  nebraska: "NE",
-  nevada: "NV",
-  "new hampshire": "NH",
-  "new jersey": "NJ",
-  "new mexico": "NM",
-  "new york": "NY",
-  "north carolina": "NC",
-  "north dakota": "ND",
-  ohio: "OH",
-  oklahoma: "OK",
-  oregon: "OR",
-  pennsylvania: "PA",
-  "rhode island": "RI",
-  "south carolina": "SC",
-  "south dakota": "SD",
-  tennessee: "TN",
-  texas: "TX",
-  utah: "UT",
-  vermont: "VT",
-  virginia: "VA",
-  washington: "WA",
-  "west virginia": "WV",
-  wisconsin: "WI",
-  wyoming: "WY"
-};
-
-function extractStateFromText(text: string): string | null {
-  const t = String(text ?? "").toLowerCase();
-  for (const [name, code] of Object.entries(STATE_NAME_TO_CODE)) {
-    const re = new RegExp(`\\b${name.replace(/\\s+/g, \"\\\\s+\")}\\b`, "i");
-    if (re.test(t)) return code;
-  }
-  const abbrMatch = t.match(/\b(?:in|from|near|located in|located|at)\s+([a-z]{2})\b/i);
-  if (abbrMatch) {
-    const code = abbrMatch[1].toUpperCase();
-    if (STATE_NAME_TO_CODE[Object.keys(STATE_NAME_TO_CODE).find(k => STATE_NAME_TO_CODE[k] === code) ?? ""]) {
-      return code;
-    }
-    if (/^(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)$/i.test(code)) {
-      return code;
-    }
-  }
-  return null;
-}
-
-function detectWrongDealerSignal(text: string, dealerState?: string | null): boolean {
-  const t = String(text ?? "").toLowerCase();
-  if (
-    /(wrong dealer|different dealer|another dealer|not your dealer|not your dealership|different location|other dealership|clicked the wrong|meant the other dealer|wrong store)/i.test(
-      t
-    )
-  ) {
-    return true;
-  }
-  const state = extractStateFromText(t);
-  const dealer = String(dealerState ?? "").toUpperCase();
-  if (state && dealer && state !== dealer) {
-    return true;
-  }
-  return false;
-}
-
-function detectWrongDealerConfirm(text: string): boolean {
-  const t = String(text ?? "").toLowerCase();
-  if (isAffirmative(t)) return true;
-  if (/(yes|yep|yeah|correct|right|that's right|different dealer|another dealer|not your dealer|wrong dealer)/i.test(t)) {
-    return true;
-  }
-  return false;
 }
 
 function nextWeekdayDate(base: Date, weekday: number): Date {
@@ -6082,53 +5983,6 @@ if (authToken && signature) {
     const reply =
       "Got it — I’ll have a salesperson send a walkaround video by text shortly.";
     addTodo(conv, "other", `Video request: ${event.body}`, event.providerMessageId);
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
-  }
-
-  const dealerProfile = await getDealerProfile();
-  const dealerCity = dealerProfile?.address?.city ?? "North Tonawanda";
-  const dealerState = dealerProfile?.address?.state ?? "NY";
-  const wrongDealerSignal = detectWrongDealerSignal(event.body ?? "", dealerState);
-  let wrongDealerLLM = false;
-  if (!wrongDealerSignal && process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY) {
-    wrongDealerLLM = await classifyWrongDealerIntent(event.body ?? "");
-  }
-  const wrongDealerIntent = wrongDealerSignal || wrongDealerLLM;
-  const wrongDealerPending = getDialogState(conv) === "wrong_dealer_pending";
-  if (wrongDealerPending) {
-    if (wrongDealerIntent || detectWrongDealerConfirm(event.body ?? "")) {
-      const reply = "Got it — sounds like you were trying to reach another dealer. I’ll close this out on my end.";
-      closeConversation(conv, "wrong_dealer");
-      stopFollowUpCadence(conv, "wrong_dealer");
-      stopRelatedCadences(conv, "wrong_dealer", { close: true });
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    if (/\bno|not really|not exactly\b/i.test(String(event.body ?? ""))) {
-      setDialogState(conv, "none");
-    }
-  } else if (wrongDealerIntent) {
-    const reply = `Just to confirm, we’re the Harley‑Davidson dealership in ${dealerCity}, ${dealerState}. Are you trying to contact another dealer?`;
-    setDialogState(conv, "wrong_dealer_pending");
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");

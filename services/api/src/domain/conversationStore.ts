@@ -151,7 +151,6 @@ export type DialogStateName =
   | "payments_handoff"
   | "service_request"
   | "service_handoff"
-  | "wrong_dealer_pending"
   | "callback_requested"
   | "callback_handoff"
   | "call_only"

@@ -85,31 +85,6 @@ export async function classifySchedulingIntent(input: string): Promise<boolean> 
   }
 }
 
-export async function classifyWrongDealerIntent(input: string): Promise<boolean> {
-  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
-  if (!useLLM) return false;
-  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
-  const text = String(input ?? "").trim();
-  if (!text) return false;
-  const prompt = [
-    "You are a classifier for dealership SMS.",
-    "Question: Is the customer saying they contacted the wrong dealership or a different location/out-of-market dealer?",
-    "Answer with only YES or NO.",
-    "",
-    `Message: ${text}`
-  ].join("\n");
-  try {
-    const resp = await client.responses.create({
-      model,
-      input: prompt
-    });
-    const out = resp.output_text?.trim().toLowerCase() ?? "";
-    return out.startsWith("y");
-  } catch {
-    return false;
-  }
-}
-
 export type BookingParse = {
   intent: "schedule" | "reschedule" | "cancel" | "availability" | "question" | "none";
   explicitRequest: boolean;
