@@ -479,7 +479,20 @@ function inferRequestedDay(text: string): string | null {
 }
 
 function looksLikeOptOut(body: string): boolean {
-  const t = body.trim().toLowerCase();
+  const t = String(body ?? "").trim().toLowerCase();
+  if (!t) return false;
+  if (/\?/.test(t)) return false;
+  if (detectPricingOrPayment(t) || detectPaymentPressure(t) || detectExactNumberPressure(t)) {
+    return false;
+  }
+  if (detectCallbackRequest(t)) return false;
+  if (
+    /(schedule|book|appointment|come in|stop in|set up|availability|available|in stock|test ride|demo|hours|open|close|location|address)/.test(
+      t
+    )
+  ) {
+    return false;
+  }
   return t === "stop" || t === "unsubscribe" || t === "cancel";
 }
 
