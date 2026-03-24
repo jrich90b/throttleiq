@@ -6366,8 +6366,15 @@ export default function Home() {
                           >
                             <option value="">No color</option>
                             {CALENDAR_COLORS.map(c => (
-                              <option key={c.id} value={c.id}>
-                                {c.label}
+                              <option
+                                key={c.id}
+                                value={c.id}
+                                style={{
+                                  backgroundColor: c.bg,
+                                  color: c.text
+                                }}
+                              >
+                                ● {c.label}
                               </option>
                             ))}
                           </select>
