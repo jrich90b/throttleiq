@@ -1361,6 +1361,41 @@ function shouldAskForTown(text: string): boolean {
   return false;
 }
 
+function extractTownFromMessage(text: string): string | null {
+  const raw = String(text ?? "").trim();
+  if (!raw) return null;
+  const match = raw.match(
+    /\b(?:i(?:'m| am)?\s+in|i\s+live\s+in|from|located in|out of)\s+([A-Za-z][A-Za-z .'-]{1,40})/i
+  );
+  let town = match?.[1] ?? "";
+  if (!town) {
+    if (
+      /^[A-Za-z][A-Za-z .'-]{1,30}$/.test(raw) &&
+      !/\b(street|st\.|road|rd\.|avenue|ave\.|blvd|boulevard|drive|dr\.|lane|ln\.|route|rt\.|highway|hwy|pkwy|parkway)\b/i.test(
+        raw
+      )
+    ) {
+      town = raw;
+    }
+  }
+  if (!town) return null;
+  town = town
+    .split(/,|\(|\)|\s+so\b|\s+but\b|\s+and\b|\s+lol\b/i)[0]
+    .trim();
+  return town ? toTitleCase(town) : null;
+}
+
+function inferPickupTownFromHistory(conv: any): string | null {
+  const msgs = conv?.messages ?? [];
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m?.direction !== "in") continue;
+    const town = extractTownFromMessage(m.body);
+    if (town) return town;
+  }
+  return null;
+}
+
 function toTitleCase(input: string): string {
   return input
     .toLowerCase()
@@ -3237,8 +3272,35 @@ async function processDueFollowUps() {
       }
     } else if (isSellMyBikeLead) {
       const weatherStatus = await getDealerWeatherStatus(dealerProfile);
-      const pickupEligible = conv.pickup?.eligible === true;
-      const pickupKnown = !!conv.pickup?.town;
+      let pickupEligible = conv.pickup?.eligible === true;
+      let pickupKnown = !!conv.pickup?.town;
+      if (!pickupKnown) {
+        const inferredTown = inferPickupTownFromHistory(conv);
+        if (inferredTown) {
+          const coords = await resolveDealerLatLon(dealerProfile);
+          const cfg = getWeatherConfig(dealerProfile);
+          let townLabel = inferredTown;
+          let eligible: boolean | undefined;
+          let distance: number | undefined;
+          if (coords) {
+            const match = await resolveTownNearestDealer(inferredTown, coords.lat, coords.lon);
+            if (match) {
+              distance = Math.round(match.distanceMiles * 10) / 10;
+              eligible = distance <= Number(cfg.pickupRadiusMiles ?? 25);
+              townLabel = formatTownLabel(match.name, match.state);
+            }
+          }
+          conv.pickup = {
+            ...(conv.pickup ?? {}),
+            town: townLabel,
+            distanceMiles: distance,
+            eligible,
+            updatedAt: nowIso()
+          };
+          pickupKnown = true;
+          pickupEligible = eligible === true;
+        }
+      }
       const template = SELL_FOLLOW_UP_MESSAGES[Math.min(cadence.stepIndex, SELL_FOLLOW_UP_MESSAGES.length - 1)];
       if (weatherStatus?.bad) {
         if (!pickupKnown) {
@@ -8007,6 +8069,34 @@ if (authToken && signature) {
     !conv.appointment?.reschedulePending
   ) {
     const reply = "Thanks — let me know if anything changes.";
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+
+  if (
+    event.provider === "twilio" &&
+    /(?:\bwho('?s| is)\s+this\b|^who dis\??$)/i.test(textLower)
+  ) {
+    const dealerProfile = await getDealerProfile();
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const agentName = dealerProfile?.agentName ?? "Alexandra";
+    const bikeLabel = formatModelLabelForFollowUp(
+      conv.lead?.vehicle?.year ?? null,
+      conv.lead?.vehicle?.model ?? null
+    );
+    const context = bikeLabel ? ` You asked about the ${bikeLabel}.` : "";
+    const firstName = conv.lead?.firstName?.trim();
+    const greeting = firstName ? `Hi ${firstName} — ` : "";
+    const reply = `${greeting}This is ${agentName} at ${dealerName}.${context} Want a quick walkaround video or to stop in?`;
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
