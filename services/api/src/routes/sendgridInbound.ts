@@ -1172,10 +1172,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   const commentLower = (lead.comment ?? "").toLowerCase();
   const emailLower = (lead.email ?? "").toLowerCase();
-  const isWalkInLead =
-    isInitialAdf &&
-    /traffic log pro/i.test(leadSourceLower) &&
-    (commentLower.includes("step 2") || commentLower.includes("walk in") || emailLower === "na@na.com");
+  const isWalkInLead = isInitialAdf && /traffic log pro/i.test(leadSourceLower);
   if (isWalkInLead) {
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
