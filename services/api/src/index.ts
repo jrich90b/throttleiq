@@ -281,7 +281,11 @@ async function syncSchedulerSalespeopleFromUsers() {
   const cfg = await getSchedulerConfig();
   const users = await listUsers();
   const salespeople = users
-    .filter(u => u.role === "salesperson" && u.calendarId)
+    .filter(
+      u =>
+        !!u.calendarId &&
+        (u.role === "salesperson" || (u.role === "manager" && u.includeInSchedule))
+    )
     .map(u => ({
       id: u.id,
       name: [u.firstName, u.lastName].filter(Boolean).join(" ") || u.name || u.email || u.id,
@@ -722,6 +726,7 @@ app.get("/auth/me", async (req, res) => {
       firstName: user.firstName,
       lastName: user.lastName,
       role: user.role,
+      includeInSchedule: user.includeInSchedule,
       calendarId: user.calendarId,
       phone: user.phone,
       extension: user.extension,
@@ -775,6 +780,7 @@ app.get("/users", requireManager, async (_req, res) => {
       firstName: u.firstName,
       lastName: u.lastName,
       role: u.role,
+      includeInSchedule: u.includeInSchedule,
       calendarId: u.calendarId,
       phone: u.phone,
       extension: u.extension,
@@ -798,6 +804,8 @@ app.post("/users", async (req, res) => {
   const calendarId = String(req.body?.calendarId ?? "").trim();
   const phone = String(req.body?.phone ?? "").trim();
   const extension = String(req.body?.extension ?? "").trim();
+  const includeInSchedule =
+    req.body?.includeInSchedule == null ? undefined : Boolean(req.body.includeInSchedule);
   const permissions = req.body?.permissions ?? undefined;
   if (!email || !password) return res.status(400).json({ ok: false, error: "Missing email/password" });
   try {
@@ -808,6 +816,7 @@ app.post("/users", async (req, res) => {
       name,
       firstName,
       lastName,
+      includeInSchedule,
       calendarId,
       phone,
       extension,
@@ -823,6 +832,7 @@ app.post("/users", async (req, res) => {
         firstName: user.firstName,
         lastName: user.lastName,
         role: user.role,
+        includeInSchedule: user.includeInSchedule,
         calendarId: user.calendarId,
         phone: user.phone,
         extension: user.extension,
@@ -845,6 +855,7 @@ app.put("/users/:id", requireManager, async (req, res) => {
       name: req.body?.name,
       firstName: req.body?.firstName,
       lastName: req.body?.lastName,
+      includeInSchedule: req.body?.includeInSchedule,
       calendarId: req.body?.calendarId,
       phone: req.body?.phone,
       extension: req.body?.extension,
@@ -860,6 +871,7 @@ app.put("/users/:id", requireManager, async (req, res) => {
         firstName: user.firstName,
         lastName: user.lastName,
         role: user.role,
+        includeInSchedule: user.includeInSchedule,
         calendarId: user.calendarId,
         phone: user.phone,
         extension: user.extension,

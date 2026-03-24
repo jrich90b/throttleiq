@@ -19,6 +19,7 @@ export type UserRecord = {
   firstName?: string;
   lastName?: string;
   role: UserRole;
+  includeInSchedule?: boolean;
   calendarId?: string;
   phone?: string;
   extension?: string;
@@ -94,6 +95,7 @@ export async function createUser(input: {
   name?: string;
   firstName?: string;
   lastName?: string;
+  includeInSchedule?: boolean;
   calendarId?: string;
   phone?: string;
   extension?: string;
@@ -114,6 +116,10 @@ export async function createUser(input: {
     input.role === "manager"
       ? { ...basePerms, canEditAppointments: true, canToggleHumanOverride: true, canAccessTodos: true, canAccessSuppressions: true }
       : { ...basePerms, ...(input.permissions ?? {}) };
+  const includeInSchedule =
+    typeof input.includeInSchedule === "boolean"
+      ? input.includeInSchedule
+      : input.role === "salesperson";
   const user: UserRecord = {
     id: randomUUID(),
     email: input.email.trim(),
@@ -121,6 +127,7 @@ export async function createUser(input: {
     firstName: input.firstName?.trim() || undefined,
     lastName: input.lastName?.trim() || undefined,
     role: input.role,
+    includeInSchedule,
     calendarId: input.calendarId?.trim() || undefined,
     phone: input.phone?.trim() || undefined,
     extension: input.extension?.trim() || undefined,
@@ -142,6 +149,7 @@ export async function updateUser(
     name: string;
     firstName: string;
     lastName: string;
+    includeInSchedule: boolean;
     calendarId: string;
     phone: string;
     extension: string;
@@ -168,6 +176,10 @@ export async function updateUser(
     nextRole === "manager"
       ? { ...basePerms, canEditAppointments: true, canToggleHumanOverride: true, canAccessTodos: true, canAccessSuppressions: true }
       : { ...basePerms, ...(existing.permissions ?? basePerms), ...(patch.permissions ?? {}) };
+  const includeInSchedule =
+    typeof patch.includeInSchedule === "boolean"
+      ? patch.includeInSchedule
+      : existing.includeInSchedule ?? (nextRole === "salesperson");
   const updated: UserRecord = {
     ...existing,
     email: patch.email?.trim() || existing.email,
@@ -175,6 +187,7 @@ export async function updateUser(
     firstName: patch.firstName?.trim() || existing.firstName,
     lastName: patch.lastName?.trim() || existing.lastName,
     role: nextRole,
+    includeInSchedule,
     calendarId: patch.calendarId?.trim() || undefined,
     phone: patch.phone?.trim() || undefined,
     extension: patch.extension?.trim() || undefined,

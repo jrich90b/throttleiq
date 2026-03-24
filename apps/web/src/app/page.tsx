@@ -560,6 +560,7 @@ export default function Home() {
     phone: "",
     extension: "",
     role: "salesperson",
+    includeInSchedule: false,
     calendarId: "",
     permissions: {
       canEditAppointments: false,
@@ -1912,7 +1913,9 @@ export default function Home() {
 
   useEffect(() => {
     if (blockForm.salespersonId) return;
-    const first = usersList.find(u => u.role === "salesperson")?.id;
+    const first = usersList.find(
+      u => u.role === "salesperson" || (u.role === "manager" && u.includeInSchedule)
+    )?.id;
     if (first) setBlockForm(prev => ({ ...prev, salespersonId: first }));
   }, [blockForm.salespersonId, usersList]);
 
@@ -2989,7 +2992,11 @@ export default function Home() {
         return;
       }
       const salespeople = (usersList ?? [])
-        .filter((u: any) => u.role === "salesperson" && u.calendarId)
+        .filter(
+          (u: any) =>
+            !!u.calendarId &&
+            (u.role === "salesperson" || (u.role === "manager" && u.includeInSchedule))
+        )
         .map((u: any) => ({
           id: String(u.id),
           name: String(u.name || u.email || u.id),
@@ -3224,6 +3231,7 @@ export default function Home() {
         phone: "",
         extension: "",
         role: "salesperson",
+        includeInSchedule: false,
         calendarId: "",
         permissions: {
           canEditAppointments: false,
@@ -5705,6 +5713,22 @@ export default function Home() {
                                     <option value="salesperson">Salesperson</option>
                                     <option value="manager">Manager</option>
                                   </select>
+                                  {user.role === "manager" ? (
+                                    <label className="col-span-2 flex items-center gap-2 text-xs">
+                                      <input
+                                        type="checkbox"
+                                        checked={!!user.includeInSchedule}
+                                        onChange={e =>
+                                          setUsersList(prev =>
+                                            prev.map(u =>
+                                              u.id === user.id ? { ...u, includeInSchedule: e.target.checked } : u
+                                            )
+                                          )
+                                        }
+                                      />
+                                      Include on schedule (show in booking dropdowns)
+                                    </label>
+                                  ) : null}
                                   <input
                                     className="border rounded px-2 py-1 text-sm"
                                     placeholder="Calendar ID"
@@ -5853,6 +5877,7 @@ export default function Home() {
                                         firstName: user.firstName,
                                         lastName: user.lastName,
                                         role: user.role,
+                                        includeInSchedule: user.includeInSchedule,
                                         calendarId: user.calendarId,
                                         phone: user.phone,
                                         extension: user.extension,
@@ -5960,6 +5985,18 @@ export default function Home() {
                               <option value="salesperson">Salesperson</option>
                               <option value="manager">Manager</option>
                             </select>
+                            {userForm.role === "manager" ? (
+                              <label className="col-span-2 flex items-center gap-2 text-xs">
+                                <input
+                                  type="checkbox"
+                                  checked={!!userForm.includeInSchedule}
+                                  onChange={e =>
+                                    setUserForm({ ...userForm, includeInSchedule: e.target.checked })
+                                  }
+                                />
+                                Include on schedule (show in booking dropdowns)
+                              </label>
+                            ) : null}
                             <div className="col-span-2 grid grid-cols-2 gap-2 text-xs">
                               <label className="flex items-center gap-2">
                                 <input
@@ -6087,7 +6124,9 @@ export default function Home() {
                               >
                                 <option value="">Select salesperson</option>
                                 {usersList
-                                  .filter(u => u.role === "salesperson")
+                                  .filter(
+                                    u => u.role === "salesperson" || (u.role === "manager" && u.includeInSchedule)
+                                  )
                                   .map(sp => (
                                     <option key={sp.id} value={sp.id}>
                                       {sp.name || sp.email || sp.id}
