@@ -205,3 +205,21 @@ export async function findMsrpPricing(opts: MsrpLookup): Promise<MsrpLookupResul
     color
   };
 }
+
+export async function modelHasFinishOptions(opts: {
+  year?: string | number | null;
+  model?: string | null;
+}): Promise<boolean> {
+  const year = opts.year != null ? String(opts.year) : null;
+  if (!isSupportedYear(year)) return false;
+  const items = await loadMsrpList();
+  if (!items.length) return false;
+  const entry = matchModel(items, opts.model ?? null);
+  if (!entry) return false;
+  const trims = entry.trims ?? [];
+  if (trims.length < 2) return false;
+  return trims.some(t => {
+    const token = normalizeToken(t.name ?? t.spec ?? "");
+    return token.includes("chrome") || token.includes("black");
+  });
+}

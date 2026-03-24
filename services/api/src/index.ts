@@ -31,8 +31,10 @@ import {
   getModelsByYear,
   getModelsForYear,
   getModelsForYearRange,
-  getAllModels
+  getAllModels,
+  isModelInRecentYears
 } from "./domain/modelsByYear.js";
+import { modelHasFinishOptions } from "./domain/msrpPriceList.js";
 import {
   computeFollowUpDueAt,
   FOLLOW_UP_DAY_OFFSETS,
@@ -129,6 +131,7 @@ import {
   reloadConversationStore,
   saveConversation,
   getConversationStorePath,
+  type Conversation,
   type InventoryWatch,
   type InventoryWatchPending,
   type DialogStateName
@@ -2753,6 +2756,48 @@ function extractFinishToken(text: string): "chrome" | "black" | null {
   if (/\bchrome(\s+(trim|finish))?\b/.test(t)) return "chrome";
   if (/\bblack(ed)?\s*(out|trim|finish)\b/.test(t) || /\bblack\s+trim\b/.test(t)) return "black";
   return null;
+}
+
+function inferWatchCondition(
+  model: string | undefined,
+  year: number | undefined,
+  conv: Conversation
+): "new" | "used" | undefined {
+  const leadCondition = normalizeWatchCondition(conv.lead?.vehicle?.condition);
+  if (leadCondition) return leadCondition;
+  const currentYear = new Date().getFullYear();
+  if (year && year === currentYear) return "new";
+  if (model && !isModelInRecentYears(model, currentYear, 1)) return "used";
+  return undefined;
+}
+
+async function shouldAskFinishPreference(
+  model: string | undefined,
+  year: number | undefined,
+  condition?: string | null
+): Promise<boolean> {
+  if (condition !== "new" || !model) return false;
+  const targetYear = year ?? new Date().getFullYear();
+  return modelHasFinishOptions({ year: String(targetYear), model });
+}
+
+function buildWatchPreferencePrompt(
+  condition?: string | null,
+  finishEligible?: boolean
+): string {
+  if (condition !== "new") {
+    return "Got it — should I watch for a specific year or a year range? If a range, tell me the years you want.";
+  }
+  if (finishEligible) {
+    return "Got it — just to confirm, should I watch for the exact year/color/finish, the same year any color, or a year range? If a range, tell me the years you want.";
+  }
+  return "Got it — just to confirm, should I watch for the exact year/color, the same year any color, or a year range? If a range, tell me the years you want.";
+}
+
+function buildWatchUpdateHint(condition?: string | null, finishEligible?: boolean): string {
+  if (condition !== "new") return "year and model";
+  if (finishEligible) return "year, model, and any color/finish preference";
+  return "year, model, and any color preference";
 }
 
 function parseInventoryWatchPreference(
@@ -7858,6 +7903,12 @@ if (authToken && signature) {
           if (colorFromText) pending.color = colorFromText;
         }
       }
+      const pendingCondition = inferWatchCondition(pending.model, pending.year, conv);
+      const finishEligible = await shouldAskFinishPreference(
+        pending.model,
+        pending.year,
+        pendingCondition
+      );
       let pref = parseInventoryWatchPreference(String(event.body ?? ""), pending);
       if (pref.action === "ignore" && pending.model && isAffirmative(event.body)) {
         const watch: InventoryWatch = {
@@ -7872,9 +7923,7 @@ if (authToken && signature) {
         pref = { action: "set", watch };
       }
       if (pref.action === "clarify") {
-        const reply =
-          "Got it — just to confirm, should I watch for the exact year/color, the same year any color, or a year range? " +
-          "If a range, tell me the years you want.";
+        const reply = buildWatchPreferencePrompt(pendingCondition, finishEligible);
         const systemMode = webhookMode;
         if (systemMode === "suggest") {
           appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -7948,6 +7997,15 @@ if (authToken && signature) {
   if (watchIntent) {
     if (getDialogState(conv) === "inventory_watch_active" && conv.inventoryWatch) {
       const watch = conv.inventoryWatch;
+      const watchCondition =
+        normalizeWatchCondition(watch.condition) ??
+        inferWatchCondition(watch.model, watch.year, conv);
+      const finishEligible = await shouldAskFinishPreference(
+        watch.model,
+        watch.year,
+        watchCondition
+      );
+      const updateHint = buildWatchUpdateHint(watchCondition, finishEligible);
       const yearText = watch.year
         ? `${watch.year} `
         : watch.yearMin && watch.yearMax
@@ -7955,7 +8013,7 @@ if (authToken && signature) {
           : "";
       const modelText = watch.model ?? "that model";
       const colorText = watch.color ? ` in ${watch.color}` : "";
-      const reply = `I’ve already got a watch set for ${yearText}${modelText}${colorText}. If you want me to update it, just tell me the year, model, and color.`;
+      const reply = `I’ve already got a watch set for ${yearText}${modelText}${colorText}. If you want me to update it, just tell me the ${updateHint}.`;
       const systemMode = webhookMode;
       if (systemMode === "suggest") {
         appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -8031,9 +8089,13 @@ if (authToken && signature) {
 
     conv.inventoryWatchPending = pending;
     setDialogState(conv, "inventory_watch_prompted");
-    const reply =
-      "Got it — just to confirm, should I watch for the exact year/color, the same year any color, or a year range? " +
-      "If a range, tell me the years you want.";
+    const pendingCondition = inferWatchCondition(pending.model, pending.year, conv);
+    const finishEligible = await shouldAskFinishPreference(
+      pending.model,
+      pending.year,
+      pendingCondition
+    );
+    const reply = buildWatchPreferencePrompt(pendingCondition, finishEligible);
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -8119,6 +8181,15 @@ if (authToken && signature) {
   ) {
     if (getDialogState(conv) === "inventory_watch_active" && conv.inventoryWatch) {
       const watch = conv.inventoryWatch;
+      const watchCondition =
+        normalizeWatchCondition(watch.condition) ??
+        inferWatchCondition(watch.model, watch.year, conv);
+      const finishEligible = await shouldAskFinishPreference(
+        watch.model,
+        watch.year,
+        watchCondition
+      );
+      const updateHint = buildWatchUpdateHint(watchCondition, finishEligible);
       const yearText = watch.year
         ? `${watch.year} `
         : watch.yearMin && watch.yearMax
@@ -8126,7 +8197,7 @@ if (authToken && signature) {
           : "";
       const modelText = watch.model ?? "that model";
       const colorText = watch.color ? ` in ${watch.color}` : "";
-      const reply = `I’ve already got a watch set for ${yearText}${modelText}${colorText}. If you want me to update it, just tell me the year, model, and color.`;
+      const reply = `I’ve already got a watch set for ${yearText}${modelText}${colorText}. If you want me to update it, just tell me the ${updateHint}.`;
       const systemMode = webhookMode;
       if (systemMode === "suggest") {
         appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -8308,10 +8379,16 @@ if (authToken && signature) {
             const modelLabel = picked.model ?? model ?? "that model";
             const colorLabel = formatColorLabel(picked.color ?? null);
             const label = `${yearLabel}${modelLabel}`.trim();
+            const watchCondition = inferWatchCondition(
+              model ?? undefined,
+              year ? Number(year) : undefined,
+              conv
+            );
+            const watchExactLabel = watchCondition === "new" ? "exact year/color" : "exact year";
             const reply =
               year
-                ? `Got it — I’m not seeing a ${year} ${model} in stock right now, but we do have a ${colorLabel ? `${colorLabel} ` : ""}${label} available. Here’s a photo — is this the one you had in mind? If not, I can keep an eye out for the exact year/color.`
-                : `Got it — we do have a ${colorLabel ? `${colorLabel} ` : ""}${label} available. Here’s a photo — is this the one you had in mind? If not, I can keep an eye out for the exact year/color.`;
+                ? `Got it — I’m not seeing a ${year} ${model} in stock right now, but we do have a ${colorLabel ? `${colorLabel} ` : ""}${label} available. Here’s a photo — is this the one you had in mind? If not, I can keep an eye out for the ${watchExactLabel}.`
+                : `Got it — we do have a ${colorLabel ? `${colorLabel} ` : ""}${label} available. Here’s a photo — is this the one you had in mind? If not, I can keep an eye out for the ${watchExactLabel}.`;
             setDialogState(conv, "inventory_answered");
             const systemMode = webhookMode;
             if (systemMode === "suggest") {
@@ -8363,14 +8440,24 @@ if (authToken && signature) {
         const leadYearNum = Number(String(year ?? ""));
         const currentYear = new Date().getFullYear();
         const assumeNew = !leadCondition && Number.isFinite(leadYearNum) && leadYearNum === currentYear;
-        const conditionLabel = leadCondition ?? (assumeNew ? "new" : undefined);
+        const modelRecent = model ? isModelInRecentYears(model, currentYear, 1) : false;
+        const conditionLabel =
+          leadCondition ?? (assumeNew ? "new" : modelRecent ? undefined : "used");
         const yearLabel = year ? `${year}${conditionLabel ? `/${conditionLabel}` : ""}` : null;
         const needsYear = !yearFromText;
-        const needsColor = !colorFromText;
-        const needsFinish = !finishFromText;
+        const allowColorFinish = conditionLabel === "new";
+        const finishEligible = allowColorFinish
+          ? await shouldAskFinishPreference(model ?? undefined, year ? Number(year) : undefined, conditionLabel)
+          : false;
+        const needsColor = allowColorFinish && !colorFromText;
+        const needsFinish = allowColorFinish && finishEligible && !finishFromText;
         let clarify = "";
         if (!isGenericModel) {
-          if (needsYear && needsColor && needsFinish) {
+          if (needsYear && !allowColorFinish) {
+            clarify = yearLabel
+              ? `Are you looking for ${yearLabel}, or a year range?`
+              : "Any specific year or year range you're after?";
+          } else if (needsYear && needsColor && needsFinish) {
             clarify = yearLabel
               ? `Are you looking for ${yearLabel}, and any color or finish preference (chrome vs blacked-out)?`
               : "Any specific year, color, or finish preference (chrome vs blacked-out)?";
@@ -8392,11 +8479,12 @@ if (authToken && signature) {
             clarify = yearLabel ? `Are you looking for ${yearLabel}?` : "Any specific year you're after?";
           }
         }
+        const watchPrompt = buildWatchPreferencePrompt(conditionLabel, finishEligible);
         const reply =
           `I’m not seeing ${year ? `${year} ` : ""}${model}${color ? ` in ${color}` : ""} in stock right now. ` +
           (isGenericModel
             ? "I’ll have someone verify and follow up shortly."
-            : clarify || "Do you want me to watch for the exact year/color, the same year any color, or a year range?");
+            : clarify || watchPrompt);
         const systemMode = webhookMode;
         if (systemMode === "suggest") {
           appendOutbound(conv, event.to, event.from, reply, "draft_ai");
