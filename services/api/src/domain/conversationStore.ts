@@ -38,6 +38,10 @@ export type AppointmentMemory = {
   bookedEventId?: string | null;
   bookedEventLink?: string | null;
   bookedSalespersonId?: string | null;
+  bookedSalespersonName?: string | null;
+  bookedCalendarId?: string | null;
+  whenLocal?: string | null;
+  appointmentType?: string | null;
   reschedulePending?: boolean;
   attendanceQuestionedAt?: string;
   confirmation?: {
