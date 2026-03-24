@@ -6342,7 +6342,7 @@ export default function Home() {
                             setAppointmentTypesList(next);
                           }}
                         />
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 relative">
                           {(() => {
                             const color = getCalendarColor(row.colorId);
                             return (
@@ -6355,29 +6355,61 @@ export default function Home() {
                               />
                             );
                           })()}
-                          <select
-                            className="border rounded px-2 py-1 text-sm"
-                            value={row.colorId ?? ""}
-                            onChange={e => {
-                              const next = [...appointmentTypesList];
-                              next[idx] = { ...row, colorId: e.target.value };
-                              setAppointmentTypesList(next);
-                            }}
-                          >
-                            <option value="">No color</option>
-                            {CALENDAR_COLORS.map(c => (
-                              <option
-                                key={c.id}
-                                value={c.id}
-                                style={{
-                                  backgroundColor: c.bg,
-                                  color: c.text
+                          <details className="relative">
+                            <summary className="list-none border rounded px-2 py-1 text-sm cursor-pointer bg-white flex items-center gap-2">
+                              {(() => {
+                                const color = getCalendarColor(row.colorId);
+                                return (
+                                  <>
+                                    <span
+                                      className="inline-block w-3 h-3 rounded border"
+                                      style={{
+                                        backgroundColor: color?.bg ?? "#FFFFFF",
+                                        borderColor: color?.border ?? "#D1D5DB"
+                                      }}
+                                    />
+                                    <span>{color?.label ?? "No color"}</span>
+                                  </>
+                                );
+                              })()}
+                            </summary>
+                            <div className="absolute z-10 mt-1 w-44 rounded border bg-white shadow">
+                              <button
+                                className="w-full px-2 py-1 text-sm text-left hover:bg-gray-100 flex items-center gap-2"
+                                onClick={e => {
+                                  const next = [...appointmentTypesList];
+                                  next[idx] = { ...row, colorId: "" };
+                                  setAppointmentTypesList(next);
+                                  (e.currentTarget.closest("details") as HTMLDetailsElement | null)?.removeAttribute(
+                                    "open"
+                                  );
                                 }}
                               >
-                                ● {c.label}
-                              </option>
-                            ))}
-                          </select>
+                                <span className="inline-block w-3 h-3 rounded border bg-white border-gray-300" />
+                                No color
+                              </button>
+                              {CALENDAR_COLORS.map(c => (
+                                <button
+                                  key={c.id}
+                                  className="w-full px-2 py-1 text-sm text-left hover:bg-gray-100 flex items-center gap-2"
+                                  onClick={e => {
+                                    const next = [...appointmentTypesList];
+                                    next[idx] = { ...row, colorId: c.id };
+                                    setAppointmentTypesList(next);
+                                    (e.currentTarget.closest("details") as HTMLDetailsElement | null)?.removeAttribute(
+                                      "open"
+                                    );
+                                  }}
+                                >
+                                  <span
+                                    className="inline-block w-3 h-3 rounded border"
+                                    style={{ backgroundColor: c.bg, borderColor: c.border }}
+                                  />
+                                  <span>{c.label}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </details>
                         </div>
                         <button
                           className="px-2 py-1 border rounded text-xs text-red-600"
