@@ -5920,6 +5920,7 @@ app.post("/conversations/:id/send", async (req, res) => {
   const applyManualCadenceAdvance = (hadOutbound: boolean) => {
     if (!hadOutbound) return;
     if (!conv.followUpCadence || conv.followUpCadence.status !== "active") return;
+    if (conv.followUpCadence.kind === "post_sale") return;
     advanceFollowUpCadence(conv, schedulerTimezone);
   };
   const hasOpenNonCallTodo = () =>
