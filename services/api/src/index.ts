@@ -2852,8 +2852,7 @@ function applyPickupPolicy(conv: any, reply: string): string {
   if (!/(pick[-\s]?up|pickup range|street number|street name|address)/i.test(text)) {
     return reply;
   }
-  const inbound = getLastInbound(conv)?.body ?? "";
-  const inboundText = String(inbound ?? "");
+  const inboundText = String(getLastInboundBody(conv) ?? "");
   const visitIntent =
     /(come (in|by|up)|stop (in|by)|swing by|drive (up|down)|ride (up|down)|take a ride|look at (it|the)|check (it|them) out|see (it|them))/i;
   const pickupRequested =
