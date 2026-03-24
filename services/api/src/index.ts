@@ -10080,6 +10080,11 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
               : "Voicemail received — call back.";
             addTodo(conv, "call", label, recordingSid || bodyCallSid || callbackCallSid || undefined);
           }
+          pauseFollowUpCadence(
+            conv,
+            new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString(),
+            "voicemail"
+          );
         }
         if (!isVoicemail) {
           await applyPostCallSummaryActions({
