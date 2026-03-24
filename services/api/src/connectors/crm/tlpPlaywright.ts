@@ -313,11 +313,13 @@ async function openDealershipVisitByRef(page: Page, leadRef: string, step: StepF
   });
 }
 
-async function markDeliveredStep(page: Page, step: StepFn) {
+async function markDeliveredStep(page: Page, step: StepFn, note: string) {
   const delivered = page.locator("text=/9[-\\s]*Delivered/i").first();
   await step("visit: click 9-Delivered", async () => {
     await delivered.click({ force: true });
   });
+
+  await fillComments(page, note, step);
 
   const submit = page
     .locator('button:has-text("SUBMIT LOG"), button:has-text("Submit Log"), input[value*="Submit"]')
@@ -447,7 +449,7 @@ export async function tlpLogCustomerContact(args: TlpLogCustomerContactArgs): Pr
   });
 }
 
-export async function tlpMarkDealershipVisitDelivered(args: { leadRef: string }): Promise<void> {
+export async function tlpMarkDealershipVisitDelivered(args: { leadRef: string; note: string }): Promise<void> {
   await withBrowser(async (browser) => {
     const context = await browser.newContext({
       viewport: { width: 1440, height: 900 },
@@ -471,7 +473,7 @@ export async function tlpMarkDealershipVisitDelivered(args: { leadRef: string })
     try {
       await loginTlp(page, step);
       await openDealershipVisitByRef(page, args.leadRef, step);
-      await markDeliveredStep(page, step);
+      await markDeliveredStep(page, step, args.note);
       await context.close();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

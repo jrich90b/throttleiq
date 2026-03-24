@@ -4919,7 +4919,10 @@ app.post("/conversations/:id/close", async (req, res) => {
     saveConversation(conv);
     if (conv.lead?.leadRef) {
       try {
-        await tlpMarkDealershipVisitDelivered({ leadRef: conv.lead.leadRef });
+        const soldBy = conv.sale?.soldByName || conv.sale?.soldById || "Unknown";
+        const soldUnit = conv.sale?.label || conv.sale?.stockId || conv.sale?.vin || "unit";
+        const note = `Sold/Delivered: ${soldUnit}. Salesperson: ${soldBy}.`;
+        await tlpMarkDealershipVisitDelivered({ leadRef: conv.lead.leadRef, note });
       } catch (err: any) {
         const msg = `TLP delivered step failed for leadRef ${conv.lead.leadRef}. Retry in TLP or update manually.`;
         addInternalQuestion(conv.id, conv.leadKey, msg);
