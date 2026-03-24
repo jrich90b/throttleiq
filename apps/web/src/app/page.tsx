@@ -1249,6 +1249,29 @@ export default function Home() {
     return null;
   }
 
+  function sameWatchGroup(a: WatchFormItem, b: WatchFormItem): boolean {
+    return (
+      (a.condition ?? "") === (b.condition ?? "") &&
+      (a.year ?? "") === (b.year ?? "") &&
+      (a.make ?? "") === (b.make ?? "") &&
+      (a.trim ?? "") === (b.trim ?? "") &&
+      (a.color ?? "") === (b.color ?? "")
+    );
+  }
+
+  function applyWatchGroupModels(
+    items: WatchFormItem[],
+    base: WatchFormItem,
+    models: string[]
+  ): WatchFormItem[] {
+    const selected = Array.from(new Set(models.map(m => m.trim()).filter(Boolean)));
+    const rest = items.filter(item => !sameWatchGroup(item, base));
+    if (!selected.length) {
+      return [...rest, { ...base, model: "" }];
+    }
+    return [...rest, ...selected.map(model => ({ ...base, model }))];
+  }
+
   function getModelsForYearValue(yearValue: string, makeValue?: string): string[] {
     const make = (makeValue ?? "").trim().toLowerCase();
     if (make && make !== "harley-davidson" && make !== "harley davidson") {
@@ -7152,8 +7175,19 @@ export default function Home() {
                           const modelOptions = getModelsForYearValue(item.year, item.make);
                           const modelOptionsLower = new Set(modelOptions.map(o => o.toLowerCase()));
                           const modelInOptions = modelOptionsLower.has((item.model ?? "").toLowerCase());
-                          const modelSelectValue = modelInOptions ? item.model : "__custom__";
-                          const showCustomModelInput = modelOptions.length === 0 || !modelInOptions;
+                          const baseGroup: WatchFormItem = { ...item, model: "" };
+                          const groupModels = cadenceWatchItems
+                            .filter(it => sameWatchGroup(it, baseGroup))
+                            .map(it => it.model)
+                            .filter(Boolean);
+                          const multiSelected = groupModels.length > 1;
+                          const modelSelectValue = multiSelected
+                            ? "__multi__"
+                            : modelInOptions
+                              ? item.model
+                              : "__custom__";
+                          const showCustomModelInput =
+                            (modelOptions.length === 0 || !modelInOptions) && !multiSelected;
 
                           const makeOptionsLower = new Set(watchMakeOptions.map(o => o.toLowerCase()));
                           const makeInOptions = makeOptionsLower.has((item.make ?? "").toLowerCase());
@@ -7221,11 +7255,14 @@ export default function Home() {
                                   value={modelSelectValue}
                                   onChange={e => {
                                     const value = e.target.value;
+                                    if (value === "__multi__") return;
                                     if (value === "__custom__") {
                                       updateWatchItem(idx, { model: modelInOptions ? "" : item.model });
                                       return;
                                     }
-                                    updateWatchItem(idx, { model: value });
+                                    setCadenceWatchItems(prev =>
+                                      applyWatchGroupModels(prev, baseGroup, [value])
+                                    );
                                   }}
                                 >
                                   <option value="">Select model</option>
@@ -7234,6 +7271,9 @@ export default function Home() {
                                       {option}
                                     </option>
                                   ))}
+                                  {multiSelected ? (
+                                    <option value="__multi__">Multiple selected</option>
+                                  ) : null}
                                   <option value="__custom__">Other (type manually)</option>
                                 </select>
                                 {showCustomModelInput ? (
@@ -7241,8 +7281,41 @@ export default function Home() {
                                     className="border rounded px-2 py-2 text-sm w-full mt-2"
                                     placeholder="Type model"
                                     value={item.model}
-                                    onChange={e => updateWatchItem(idx, { model: e.target.value })}
+                                    onChange={e =>
+                                      setCadenceWatchItems(prev =>
+                                        applyWatchGroupModels(prev, baseGroup, [e.target.value])
+                                      )
+                                    }
                                   />
+                                ) : null}
+                                {modelOptions.length ? (
+                                  <div className="mt-2 border rounded p-2 max-h-40 overflow-auto">
+                                    {modelOptions.map(option => {
+                                      const checked = groupModels
+                                        .map(m => m.toLowerCase())
+                                        .includes(option.toLowerCase());
+                                      return (
+                                        <label
+                                          key={`${option}-multi`}
+                                          className="flex items-center gap-2 text-xs py-1"
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            checked={checked}
+                                            onChange={e => {
+                                              const next = new Set(groupModels);
+                                              if (e.target.checked) next.add(option);
+                                              else next.delete(option);
+                                              setCadenceWatchItems(prev =>
+                                                applyWatchGroupModels(prev, baseGroup, Array.from(next))
+                                              );
+                                            }}
+                                          />
+                                          <span>{option}</span>
+                                        </label>
+                                      );
+                                    })}
+                                  </div>
                                 ) : null}
                               </div>
                               <div>
@@ -8215,8 +8288,19 @@ export default function Home() {
                 const modelOptions = getModelsForYearValue(item.year, item.make);
                 const modelOptionsLower = new Set(modelOptions.map(o => o.toLowerCase()));
                 const modelInOptions = modelOptionsLower.has((item.model ?? "").toLowerCase());
-                const modelSelectValue = modelInOptions ? item.model : "__custom__";
-                const showCustomModelInput = modelOptions.length === 0 || !modelInOptions;
+                const baseGroup: WatchFormItem = { ...item, model: "" };
+                const groupModels = watchEditItems
+                  .filter(it => sameWatchGroup(it, baseGroup))
+                  .map(it => it.model)
+                  .filter(Boolean);
+                const multiSelected = groupModels.length > 1;
+                const modelSelectValue = multiSelected
+                  ? "__multi__"
+                  : modelInOptions
+                    ? item.model
+                    : "__custom__";
+                const showCustomModelInput =
+                  (modelOptions.length === 0 || !modelInOptions) && !multiSelected;
 
                 const makeOptionsLower = new Set(watchMakeOptions.map(o => o.toLowerCase()));
                 const makeInOptions = makeOptionsLower.has((item.make ?? "").toLowerCase());
@@ -8277,37 +8361,76 @@ export default function Home() {
                         />
                       ) : null}
                     </div>
-                    <div>
-                      <div className="text-xs text-gray-500 mb-1">Model</div>
-                      <select
-                        className="border rounded px-2 py-2 text-sm w-full"
-                        value={modelSelectValue}
-                        onChange={e => {
-                          const value = e.target.value;
-                          if (value === "__custom__") {
-                            updateWatchEditItem(idx, { model: modelInOptions ? "" : item.model });
-                            return;
-                          }
-                          updateWatchEditItem(idx, { model: value });
-                        }}
-                      >
-                        <option value="">Select model</option>
-                        {modelOptions.map(option => (
-                          <option key={option} value={option}>
-                            {option}
-                          </option>
-                        ))}
-                        <option value="__custom__">Other (type manually)</option>
-                      </select>
-                      {showCustomModelInput ? (
-                        <input
-                          className="border rounded px-2 py-2 text-sm w-full mt-2"
-                          placeholder="Type model"
-                          value={item.model}
-                          onChange={e => updateWatchEditItem(idx, { model: e.target.value })}
-                        />
-                      ) : null}
-                    </div>
+                      <div>
+                        <div className="text-xs text-gray-500 mb-1">Model</div>
+                        <select
+                          className="border rounded px-2 py-2 text-sm w-full"
+                          value={modelSelectValue}
+                          onChange={e => {
+                            const value = e.target.value;
+                            if (value === "__multi__") return;
+                            if (value === "__custom__") {
+                              updateWatchEditItem(idx, { model: modelInOptions ? "" : item.model });
+                              return;
+                            }
+                            setWatchEditItems(prev =>
+                              applyWatchGroupModels(prev, baseGroup, [value])
+                            );
+                          }}
+                        >
+                          <option value="">Select model</option>
+                          {modelOptions.map(option => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                          {multiSelected ? (
+                            <option value="__multi__">Multiple selected</option>
+                          ) : null}
+                          <option value="__custom__">Other (type manually)</option>
+                        </select>
+                        {showCustomModelInput ? (
+                          <input
+                            className="border rounded px-2 py-2 text-sm w-full mt-2"
+                            placeholder="Type model"
+                            value={item.model}
+                            onChange={e =>
+                              setWatchEditItems(prev =>
+                                applyWatchGroupModels(prev, baseGroup, [e.target.value])
+                              )
+                            }
+                          />
+                        ) : null}
+                        {modelOptions.length ? (
+                          <div className="mt-2 border rounded p-2 max-h-40 overflow-auto">
+                            {modelOptions.map(option => {
+                              const checked = groupModels
+                                .map(m => m.toLowerCase())
+                                .includes(option.toLowerCase());
+                              return (
+                                <label
+                                  key={`${option}-edit-multi`}
+                                  className="flex items-center gap-2 text-xs py-1"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={e => {
+                                      const next = new Set(groupModels);
+                                      if (e.target.checked) next.add(option);
+                                      else next.delete(option);
+                                      setWatchEditItems(prev =>
+                                        applyWatchGroupModels(prev, baseGroup, Array.from(next))
+                                      );
+                                    }}
+                                  />
+                                  <span>{option}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
                     <div>
                       <div className="text-xs text-gray-500 mb-1">Trim/Finish</div>
                       <input
