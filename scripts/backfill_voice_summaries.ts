@@ -29,20 +29,22 @@ function makeId(prefix: string) {
 }
 
 function isLikelyVoicemailTranscript(text: string): boolean {
-  const t = text.toLowerCase();
+  const raw = text ?? "";
+  const t = raw.toLowerCase();
   if (!t.trim()) return true;
-  return (
-    /voicemail|voice mail|mailbox/.test(t) ||
-    /leave (a )?message/.test(t) ||
-    /after the (tone|beep)/.test(t) ||
-    /at the (tone|beep)/.test(t) ||
-    /please leave/.test(t) ||
-    /not available/.test(t) ||
-    /unable to (answer|take your call)/.test(t) ||
-    /your call has been forwarded/.test(t) ||
-    /record your message/.test(t) ||
-    /sorry we (missed|couldn't take) your call/.test(t)
-  );
+  const vmRe =
+    /voicemail|voice mail|mailbox|leave (a )?message|after the (tone|beep)|at the (tone|beep)|please leave|not available|unable to (answer|take your call)|your call has been forwarded|record your message|sorry we (missed|couldn't take) your call/;
+  const lines = raw
+    .split(/\n+/)
+    .map(line => line.trim())
+    .filter(Boolean);
+  const customerLines = lines
+    .filter(line => /^customer:/i.test(line))
+    .map(line => line.replace(/^customer:\s*/i, "").trim().toLowerCase())
+    .filter(Boolean);
+  const hasNonVoicemailCustomer = customerLines.some(line => !vmRe.test(line));
+  if (hasNonVoicemailCustomer) return false;
+  return vmRe.test(t);
 }
 
 const args = parseArgs(process.argv.slice(2));
@@ -88,10 +90,9 @@ for (const conv of convs) {
     if (created >= args.limit) break;
 
     const body = String(transcript.body ?? "").trim();
-    if (!body || /^not contacted\.?$/i.test(body) || isLikelyVoicemailTranscript(body)) {
-      skipped += 1;
-      continue;
-    }
+    const isNotContacted = /^not contacted\.?$/i.test(body);
+    const isVoicemail = isLikelyVoicemailTranscript(body);
+    const isVoicemailSummary = isNotContacted || isVoicemail;
 
     const transcriptId = String(transcript.providerMessageId ?? "").trim();
     if (!transcriptId && !args.includeNoId) {
@@ -109,11 +110,16 @@ for (const conv of convs) {
       continue;
     }
 
-    const summary = await summarizeVoiceTranscriptWithLLM({
-      transcript: body,
-      lead: conv.lead ?? undefined
-    });
-    processed += 1;
+    let summary = "";
+    if (isVoicemailSummary) {
+      summary = "Voicemail — not contacted.";
+    } else {
+      summary = (await summarizeVoiceTranscriptWithLLM({
+        transcript: body,
+        lead: conv.lead ?? undefined
+      })) ?? "";
+      processed += 1;
+    }
     if (!summary) {
       skipped += 1;
       continue;
@@ -139,7 +145,7 @@ for (const conv of convs) {
       if (transcriptId) summaryIds.add(transcriptId);
       changed = true;
 
-      if (transcript === lastTranscript) {
+      if (transcript === lastTranscript && !isVoicemailSummary) {
         const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
         conv.voiceContext = {
           summary,

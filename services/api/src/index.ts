@@ -9775,33 +9775,37 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
     const contactedValue: "YES" | "NO" =
       transcriptText && !isVoicemail ? "YES" : "NO";
     if (noteText) {
-      if (contactedValue === "YES") {
+      const summaryText = isVoicemail
+        ? "Voicemail — not contacted."
+        : await summarizeVoiceTranscriptWithLLM({
+            transcript: transcriptText,
+            lead: conv.lead ?? undefined
+          });
+      if (!isVoicemail) {
         maybeMarkEngagedFromCall(conv, transcriptText, {
           isVoicemail,
           messageId: recordingSid || bodyCallSid || callbackCallSid || undefined
         });
-        const summary = await summarizeVoiceTranscriptWithLLM({
-          transcript: transcriptText,
-          lead: conv.lead ?? undefined
-        });
-        if (summary) {
+      }
+      if (summaryText) {
+        if (!isVoicemail) {
           const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
           setVoiceContext(conv, {
-            summary,
+            summary: summaryText,
             updatedAt: new Date().toISOString(),
             expiresAt,
             sourceMessageId: recordingSid || undefined,
             contacted: true
           });
-          appendOutbound(
-            conv,
-            "system",
-            conv.leadKey,
-            summary,
-            "voice_summary",
-            recordingSid || bodyCallSid || callbackCallSid || undefined
-          );
         }
+        appendOutbound(
+          conv,
+          "system",
+          conv.leadKey,
+          summaryText,
+          "voice_summary",
+          recordingSid || bodyCallSid || callbackCallSid || undefined
+        );
       }
 
       appendOutbound(
