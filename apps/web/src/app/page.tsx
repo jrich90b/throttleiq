@@ -5743,26 +5743,35 @@ export default function Home() {
                                       )
                                     }
                                   />
-                                  <input
-                                    className="border rounded px-2 py-1 text-sm"
-                                    placeholder="Phone (for calls)"
-                                    value={user.phone ?? ""}
-                                    onChange={e =>
-                                      setUsersList(prev =>
-                                        prev.map(u => (u.id === user.id ? { ...u, phone: e.target.value } : u))
-                                      )
-                                    }
-                                  />
-                                  <input
-                                    className="border rounded px-2 py-1 text-sm"
-                                    placeholder="Extension / dial digits"
-                                    value={user.extension ?? ""}
-                                    onChange={e =>
-                                      setUsersList(prev =>
-                                        prev.map(u => (u.id === user.id ? { ...u, extension: e.target.value } : u))
-                                      )
-                                    }
-                                  />
+                                  <div className="col-span-2 text-xs text-gray-500 -mt-1">
+                                    Calendar ID is required to show on the schedule.
+                                  </div>
+                                  <div>
+                                    <div className="text-xs text-gray-500 mb-1">Phone (for calls)</div>
+                                    <input
+                                      className="border rounded px-2 py-1 text-sm w-full"
+                                      placeholder="Phone (for calls)"
+                                      value={user.phone ?? ""}
+                                      onChange={e =>
+                                        setUsersList(prev =>
+                                          prev.map(u => (u.id === user.id ? { ...u, phone: e.target.value } : u))
+                                        )
+                                      }
+                                    />
+                                  </div>
+                                  <div>
+                                    <div className="text-xs text-gray-500 mb-1">Extension / dial digits</div>
+                                    <input
+                                      className="border rounded px-2 py-1 text-sm w-full"
+                                      placeholder="Extension / dial digits"
+                                      value={user.extension ?? ""}
+                                      onChange={e =>
+                                        setUsersList(prev =>
+                                          prev.map(u => (u.id === user.id ? { ...u, extension: e.target.value } : u))
+                                        )
+                                      }
+                                    />
+                                  </div>
                                   <input
                                     className="border rounded px-2 py-1 text-sm col-span-2"
                                     placeholder="Set new password"
@@ -5962,18 +5971,24 @@ export default function Home() {
                                 value={userForm.email}
                                 onChange={e => setUserForm({ ...userForm, email: e.target.value })}
                               />
-                              <input
-                                className="border rounded px-3 py-2 text-sm"
-                                placeholder="Phone (for calls)"
-                                value={(userForm as any).phone ?? ""}
-                                onChange={e => setUserForm({ ...userForm, phone: e.target.value })}
-                              />
-                              <input
-                                className="border rounded px-3 py-2 text-sm"
-                                placeholder="Extension / dial digits"
-                                value={(userForm as any).extension ?? ""}
-                                onChange={e => setUserForm({ ...userForm, extension: e.target.value })}
-                              />
+                              <div>
+                                <div className="text-xs text-gray-500 mb-1">Phone (for calls)</div>
+                                <input
+                                  className="border rounded px-3 py-2 text-sm w-full"
+                                  placeholder="Phone (for calls)"
+                                  value={(userForm as any).phone ?? ""}
+                                  onChange={e => setUserForm({ ...userForm, phone: e.target.value })}
+                                />
+                              </div>
+                              <div>
+                                <div className="text-xs text-gray-500 mb-1">Extension / dial digits</div>
+                                <input
+                                  className="border rounded px-3 py-2 text-sm w-full"
+                                  placeholder="Extension / dial digits"
+                                  value={(userForm as any).extension ?? ""}
+                                  onChange={e => setUserForm({ ...userForm, extension: e.target.value })}
+                                />
+                              </div>
                               <input
                                 className="border rounded px-3 py-2 text-sm"
                                 placeholder="Password"
@@ -6056,12 +6071,15 @@ export default function Home() {
                               </label>
                             </div>
                               <div className="col-span-2 flex gap-2">
-                                <input
-                                  className="border rounded px-3 py-2 text-sm flex-1"
-                                  placeholder="Calendar ID (salespeople only)"
-                                  value={userForm.calendarId}
-                                  onChange={e => setUserForm({ ...userForm, calendarId: e.target.value })}
-                                />
+                                <div className="flex-1">
+                                  <div className="text-xs text-gray-500 mb-1">Calendar ID</div>
+                                  <input
+                                    className="border rounded px-3 py-2 text-sm w-full"
+                                    placeholder="Calendar ID"
+                                    value={userForm.calendarId}
+                                    onChange={e => setUserForm({ ...userForm, calendarId: e.target.value })}
+                                  />
+                                </div>
                                 <button
                                   className="px-3 py-2 border rounded text-sm"
                                   disabled={
