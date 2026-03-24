@@ -1065,6 +1065,197 @@ function buildBookingUrlForLead(baseUrl: string | undefined | null, conv: any): 
   }
 }
 
+function detectSummaryCallback(summaryText: string, transcriptText: string): { label: string } | null {
+  const source = `${summaryText}\n${transcriptText}`.toLowerCase();
+  if (!/(call back|call me back|call him back|call her back|call you back|call around|call after|follow up|check back|reach back|call later)/i.test(source)) {
+    return null;
+  }
+  const dayMatch = source.match(
+    /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i
+  );
+  const dayLabel = dayMatch ? dayMatch[1] : /next day/.test(source) ? "tomorrow" : "";
+  const timeMatch = source.match(/\b(after|around|by|at)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
+  let timeLabel = "";
+  if (timeMatch) {
+    const minute = timeMatch[3] ? `:${timeMatch[3]}` : "";
+    timeLabel = `${timeMatch[1]} ${timeMatch[2]}${minute} ${timeMatch[4].toUpperCase()}`;
+  }
+  const when = [dayLabel, timeLabel].filter(Boolean).join(" ").trim();
+  const label = when ? `Call back ${when}` : "Call back when available";
+  return { label };
+}
+
+function findModelMention(text: string): string | null {
+  const models = getAllModels();
+  if (!models.length) return null;
+  const hay = text.toLowerCase();
+  let best: string | null = null;
+  for (const model of models) {
+    const m = String(model ?? "").trim();
+    if (!m) continue;
+    const needle = m.toLowerCase();
+    if (!hay.includes(needle)) continue;
+    if (!best || needle.length > best.toLowerCase().length) {
+      best = m;
+    }
+  }
+  return best;
+}
+
+function extractYear(text: string): number | null {
+  const match = text.match(/\b(19|20)\d{2}\b/);
+  if (!match) return null;
+  const year = Number(match[0]);
+  return Number.isFinite(year) ? year : null;
+}
+
+function detectCondition(text: string, year: number | null): "new" | "used" | "unknown" {
+  const t = text.toLowerCase();
+  if (/\b(pre[-\s]?owned|used)\b/.test(t)) return "used";
+  if (/\bnew\b/.test(t)) return "new";
+  if (year) {
+    const nowYear = new Date().getFullYear();
+    if (year >= nowYear - 1) return "new";
+    if (year <= nowYear - 2) return "used";
+  }
+  return "unknown";
+}
+
+async function applyPostCallSummaryActions(opts: {
+  conv: Conversation;
+  summaryText: string;
+  transcriptText: string;
+  sourceMessageId?: string;
+}) {
+  const { conv, summaryText, transcriptText, sourceMessageId } = opts;
+  const lowerSummary = summaryText.toLowerCase();
+  const lowerTranscript = transcriptText.toLowerCase();
+
+  const callback = detectSummaryCallback(summaryText, transcriptText);
+  if (callback) {
+    const hasOpenCall = listOpenTodos().some(
+      t => t.convId === conv.id && t.status === "open" && t.reason === "call"
+    );
+    if (!hasOpenCall) {
+      addTodo(conv, "call", callback.label, sourceMessageId);
+    }
+  }
+
+  const watchCue = /(looking for|interested in|shopping for|considering|plans to buy|wants to buy|still interested)/i;
+  if (watchCue.test(lowerSummary) || watchCue.test(lowerTranscript)) {
+    const model = findModelMention(summaryText) || findModelMention(transcriptText);
+    const hasWatch = !!(conv.inventoryWatch || (conv.inventoryWatches && conv.inventoryWatches.length));
+    if (model && !hasWatch) {
+      const year = extractYear(summaryText) || extractYear(transcriptText);
+      const cond = detectCondition(summaryText + " " + transcriptText, year);
+      const watch: InventoryWatch = {
+        model,
+        year: year ?? undefined,
+        make: conv.lead?.vehicle?.make,
+        condition: cond === "unknown" ? undefined : cond,
+        exactness: year ? "year_model" : "model_only",
+        status: "active",
+        createdAt: new Date().toISOString(),
+        note: "call_summary"
+      };
+      conv.inventoryWatch = watch;
+      conv.inventoryWatches = [watch];
+      conv.inventoryWatchPending = undefined;
+      setDialogState(conv, "inventory_watch_active");
+      setFollowUpMode(conv, "holding_inventory", "inventory_watch");
+      stopFollowUpCadence(conv, "inventory_watch");
+    }
+  }
+
+  const bookingCue = /(scheduled|booked|appointment|set for|confirmed|coming in|stop(ping)? in|visit)/i;
+  if (bookingCue.test(lowerSummary) || bookingCue.test(lowerTranscript)) {
+    if (!conv.appointment?.bookedEventId) {
+      try {
+        const cfg = await getSchedulerConfig();
+        const requested =
+          parseRequestedDayTime(summaryText, cfg.timezone) ||
+          parseRequestedDayTime(transcriptText, cfg.timezone);
+        if (requested) {
+          const appointmentType = inferAppointmentTypeFromConv(conv) || "inventory_visit";
+          const durationMinutes = cfg.appointmentTypes?.[appointmentType]?.durationMinutes ?? 60;
+          const salespeople = cfg.salespeople ?? [];
+          const preferred = getPreferredSalespeople(cfg);
+          const primaryId = conv.appointment?.bookedSalespersonId ?? preferred[0];
+          const candidateIds = [
+            primaryId,
+            ...preferred.filter(id => id && id !== primaryId)
+          ].filter(Boolean) as string[];
+          const cal = await getAuthedCalendarClient();
+          const timeMin = new Date().toISOString();
+          const timeMax = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+          let exactMatch: { exact: any; sp: any } | null = null;
+          for (const spId of candidateIds) {
+            const sp = salespeople.find((p: any) => p.id === spId);
+            if (!sp) continue;
+            const fb = await queryFreeBusy(cal, [sp.calendarId], timeMin, timeMax, cfg.timezone);
+            const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any[];
+            const expanded = expandBusyBlocks(busy as any, cfg.minGapBetweenAppointmentsMinutes ?? 60);
+            const exact = findExactSlotForSalesperson(
+              cfg,
+              sp.id,
+              sp.calendarId,
+              requested,
+              durationMinutes,
+              expanded
+            );
+            if (exact) {
+              exactMatch = { exact, sp };
+              break;
+            }
+          }
+          if (exactMatch) {
+            const leadName =
+              conv.lead?.name?.trim() ||
+              [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() ||
+              conv.leadKey;
+            const stockId = conv.lead?.vehicle?.stockId ?? "";
+            const summary = `Appt: ${appointmentType} – ${leadName}${stockId ? ` – ${stockId}` : ""}`;
+            const descriptionLines = [
+              `LeadKey: ${conv.leadKey ?? ""}`,
+              `Phone: ${conv.lead?.phone ?? ""}`,
+              `Email: ${conv.lead?.email ?? ""}`,
+              `FirstName: ${conv.lead?.firstName ?? ""}`,
+              `LastName: ${conv.lead?.lastName ?? ""}`,
+              `Stock: ${conv.lead?.vehicle?.stockId ?? ""}`,
+              `VIN: ${conv.lead?.vehicle?.vin ?? ""}`,
+              `Source: ${conv.lead?.source ?? ""}`,
+              `VisitType: ${appointmentType}`
+            ].filter(Boolean);
+            const colorId = getAppointmentTypeColorId(cfg, appointmentType);
+            const event = await insertEvent(
+              cal,
+              exactMatch.sp.calendarId,
+              cfg.timezone,
+              summary,
+              descriptionLines.join("\n"),
+              exactMatch.exact.start,
+              exactMatch.exact.end,
+              colorId
+            );
+            conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
+            conv.appointment.bookedEventId = event.id ?? null;
+            conv.appointment.bookedSalespersonId = exactMatch.sp.id;
+            conv.appointment.bookedSalespersonName = exactMatch.sp.name;
+            conv.appointment.bookedCalendarId = exactMatch.sp.calendarId;
+            conv.appointment.whenIso = exactMatch.exact.start;
+            conv.appointment.whenLocal = formatSlotLocal(exactMatch.exact.start, cfg.timezone);
+            conv.appointment.appointmentType = appointmentType;
+            conv.appointment.updatedAt = new Date().toISOString();
+            onAppointmentBooked(conv);
+          }
+        }
+      } catch (err: any) {
+        console.warn("[voice] post-summary booking failed:", err?.message ?? err);
+      }
+    }
+  }
+}
+
 const FOLLOW_UP_MESSAGES = [
   "Hi {name} — {agent} again. Just checking in{labelClause}. If you want to stop by, I can line up a time.{extraLine}",
   "Hi {name} — if a quick walkaround video of{label} would help, I can send one. Anything you want to see?",
@@ -9806,6 +9997,14 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
           "voice_summary",
           recordingSid || bodyCallSid || callbackCallSid || undefined
         );
+        if (!isVoicemail) {
+          await applyPostCallSummaryActions({
+            conv,
+            summaryText,
+            transcriptText,
+            sourceMessageId: recordingSid || bodyCallSid || callbackCallSid || undefined
+          });
+        }
       }
 
       appendOutbound(
