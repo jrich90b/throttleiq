@@ -42,8 +42,8 @@ function hasStrongIntentSignal(text: string): boolean {
   return (
     /(trade|trade[-\s]?in|value my trade|trade value|trade price)/.test(t) ||
     /(stock|vin|available|availability|still there|in stock)/.test(t) ||
-    /(price|otd|out the door|payment|monthly|finance|credit|apr|down|term)/.test(t) ||
-    /(test ride|ride it|demo)/.test(t) ||
+    /(price|pricing|tax|fees|total|otd|out the door|payment|monthly|finance|credit|apr|down|term|budget|deal|rebate|incentive)/.test(t) ||
+    /(test ride|ride it|demo|ride up|take a ride|check it out|look at (it|the)|see (it|the)|come (in|by|up|down)|stop by|swing by|visit|drive (up|down))/i.test(t) ||
     /(call me|give me a call|call back|callback|please call)/.test(t) ||
     /(appointment|schedule|book|set up|come in|stop in|visit)/.test(t) ||
     /(hours|open|close|location|address|where are you)/.test(t)
