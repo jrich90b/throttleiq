@@ -3611,7 +3611,7 @@ export default function Home() {
         >
           📥
         </button>
-        {(authUser?.role === "manager" || authUser?.permissions?.canAccessTodos) ? (
+        {(authUser?.role === "manager" || authUser?.role === "salesperson" || authUser?.permissions?.canAccessTodos) ? (
           <button
             className={`relative w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "todos" ? "bg-white/10" : "hover:bg-white/5"}`}
             title="To-Dos"
@@ -3657,6 +3657,7 @@ export default function Home() {
         >
           📦
         </button>
+        {(authUser?.role === "manager" || authUser?.role === "salesperson") ? (
         <button
           className={`relative w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "watches" ? "bg-white/10" : "hover:bg-white/5"}`}
           title="Watches"
@@ -3669,6 +3670,7 @@ export default function Home() {
             </span>
           ) : null}
         </button>
+        ) : null}
         <button
           className={`relative w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "questions" ? "bg-white/10" : "hover:bg-white/5"}`}
           title="Questions"
@@ -4173,7 +4175,8 @@ export default function Home() {
           </>
         ) : null}
 
-        {section === "todos" && (authUser?.role === "manager" || authUser?.permissions?.canAccessTodos) ? (
+        {section === "todos" &&
+        (authUser?.role === "manager" || authUser?.role === "salesperson" || authUser?.permissions?.canAccessTodos) ? (
           <div className="mt-3 border rounded-lg divide-y">
             {todos.map(t => {
               const isCallTodo = (t.reason ?? "").toLowerCase() === "call";
