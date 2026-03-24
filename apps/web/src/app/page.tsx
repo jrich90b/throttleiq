@@ -473,6 +473,7 @@ export default function Home() {
   const [watchEditNote, setWatchEditNote] = useState("");
   const [watchEditSaving, setWatchEditSaving] = useState(false);
   const [watchEditError, setWatchEditError] = useState<string | null>(null);
+  const [modelsByYear, setModelsByYear] = useState<Record<string, string[]>>({});
 
   const [holdModalOpen, setHoldModalOpen] = useState(false);
   const [holdModalConv, setHoldModalConv] = useState<ConversationDetail | null>(null);
@@ -732,10 +733,11 @@ export default function Home() {
     setNeedsBootstrap(false);
     setAuthUser(authJson?.user ?? null);
 
-    const [s, c, contactsResp] = await Promise.all([
+    const [s, c, contactsResp, modelsResp] = await Promise.all([
       fetch("/api/settings", { cache: "no-store" }),
       fetch("/api/conversations", { cache: "no-store" }),
-      fetch("/api/contacts", { cache: "no-store" })
+      fetch("/api/contacts", { cache: "no-store" }),
+      fetch("/api/models-by-year", { cache: "no-store" })
     ]);
     const [t, q, sup] = await Promise.all([
       fetch("/api/todos", { cache: "no-store" }),
@@ -746,6 +748,7 @@ export default function Home() {
     const settings = await s.json();
     const convs = await c.json();
     const contactsJson = await contactsResp.json();
+    const modelsJson = await modelsResp.json().catch(() => null);
     const todosResp = await t.json();
     const questionsResp = await q.json();
     const suppressionsResp = await sup.json();
@@ -760,6 +763,10 @@ export default function Home() {
     setTodos((todosResp?.todos as TodoItem[]) ?? []);
     setQuestions((questionsResp?.questions as QuestionItem[]) ?? []);
     setSuppressions((suppressionsResp?.suppressions as SuppressionItem[]) ?? []);
+
+    if (modelsJson?.ok && modelsJson?.modelsByYear) {
+      setModelsByYear(modelsJson.modelsByYear as Record<string, string[]>);
+    }
     setContacts((contactsJson?.contacts as ContactItem[]) ?? []);
     setLoading(false);
     setAuthLoading(false);
@@ -1220,6 +1227,35 @@ export default function Home() {
       trim: watch?.trim ?? "",
       color: watch?.color ?? ""
     };
+  }
+
+  function parseYearRangeValue(value: string): { min: number; max: number } | null {
+    const t = (value ?? "").trim();
+    if (!t) return null;
+    const range = t.match(/\b(20\d{2})\s*-\s*(20\d{2})\b/);
+    if (range) {
+      const a = Number(range[1]);
+      const b = Number(range[2]);
+      if (Number.isFinite(a) && Number.isFinite(b)) {
+        return { min: Math.min(a, b), max: Math.max(a, b) };
+      }
+    }
+    const single = t.match(/\b(20\d{2})\b/);
+    if (single) {
+      const y = Number(single[1]);
+      if (Number.isFinite(y)) return { min: y, max: y };
+    }
+    return null;
+  }
+
+  function getModelsForYearValue(yearValue: string): string[] {
+    const range = parseYearRangeValue(yearValue);
+    if (!range) return [];
+    const out = new Set<string>();
+    for (let y = range.min; y <= range.max; y++) {
+      for (const name of modelsByYear[String(y)] ?? []) out.add(name);
+    }
+    return Array.from(out).sort((a, b) => a.localeCompare(b));
   }
 
   function openWatchEdit(convId: string) {
@@ -7936,7 +7972,10 @@ export default function Home() {
           <div className="w-full max-w-lg rounded-lg bg-white shadow-lg border p-4">
             <div className="text-sm font-semibold">Edit vehicle watch</div>
             <div className="mt-3 space-y-3">
-              {watchEditItems.map((item, idx) => (
+              {watchEditItems.map((item, idx) => {
+                const modelOptions = getModelsForYearValue(item.year);
+                const listId = `watch-models-${idx}`;
+                return (
                 <div key={`watch-edit-${idx}`} className="border rounded p-3">
                   <div className="grid grid-cols-2 gap-3">
                     <div>
@@ -7975,8 +8014,16 @@ export default function Home() {
                         className="border rounded px-2 py-2 text-sm w-full"
                         placeholder="Low Rider S"
                         value={item.model}
+                        list={modelOptions.length ? listId : undefined}
                         onChange={e => updateWatchEditItem(idx, { model: e.target.value })}
                       />
+                      {modelOptions.length ? (
+                        <datalist id={listId}>
+                          {modelOptions.map(option => (
+                            <option key={option} value={option} />
+                          ))}
+                        </datalist>
+                      ) : null}
                     </div>
                     <div>
                       <div className="text-xs text-gray-500 mb-1">Trim/Finish</div>
@@ -8008,7 +8055,8 @@ export default function Home() {
                     </div>
                   ) : null}
                 </div>
-              ))}
+                );
+              })}
               <button className="px-3 py-2 border rounded text-sm" onClick={addWatchEditItem}>
                 Add another model
               </button>

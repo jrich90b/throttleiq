@@ -28,6 +28,12 @@ import {
 import { resolveTownNearestDealer, formatTownLabel } from "./domain/geo.js";
 import { getDataDir } from "./domain/dataDir.js";
 import {
+  getModelsByYear,
+  getModelsForYear,
+  getModelsForYearRange,
+  getAllModels
+} from "./domain/modelsByYear.js";
+import {
   computeFollowUpDueAt,
   FOLLOW_UP_DAY_OFFSETS,
   inferWalkIn,
@@ -2806,7 +2812,19 @@ async function resolveWatchModelFromText(
   const fallback = String(fallbackModel ?? "").trim();
   try {
     const items = await getInventoryFeed();
-    const models = Array.from(new Set(items.map(i => i.model).filter(Boolean))) as string[];
+    const inventoryModels = Array.from(new Set(items.map(i => i.model).filter(Boolean))) as string[];
+    const range = extractYearRange(textLower);
+    const singleYear = extractYearSingle(textLower);
+    const rangeModels = range ? getModelsForYearRange(range.min, range.max) : [];
+    const yearModels = !range && singleYear ? getModelsForYear(singleYear) : [];
+    const allModels = !range && !singleYear ? getAllModels() : [];
+    const models = Array.from(
+      new Set(
+        [...inventoryModels, ...rangeModels, ...yearModels, ...allModels]
+          .filter(Boolean)
+          .map(m => String(m))
+      )
+    );
     models.sort((a, b) => b.length - a.length);
     const match = models.find(m => textLower.includes(m.toLowerCase()));
     if (match) return match;
@@ -4307,6 +4325,11 @@ app.get("/debug/dealer-profile", async (_req, res) => {
 app.get("/dealer-profile", async (_req, res) => {
   const profile = await getDealerProfile();
   res.json({ ok: true, profile });
+});
+
+app.get("/models-by-year", async (_req, res) => {
+  const modelsByYear = getModelsByYear();
+  res.json({ ok: true, modelsByYear });
 });
 
 app.post("/dealer-profile/logo", requireManager, upload.single("file"), async (req, res) => {
