@@ -8038,7 +8038,7 @@ export default function Home() {
                     provider === "draft_ai" ||
                     provider === "sendgrid_adf";
                   if (messageFilter === "email") return isEmail;
-                  if (messageFilter === "calls") return isCall;
+                  if (messageFilter === "calls") return isCall && provider !== "voice_summary";
                   return isSms;
                 })
                 .map(m => {
@@ -8052,6 +8052,7 @@ export default function Home() {
                         ? "call summary"
                         : (m.provider ?? "?");
                   const isSummary = m.provider === "voice_summary";
+                  if (isSummary) return null;
                   const summaryText = (() => {
                     if (m.provider !== "voice_transcript") return null;
                     const id = m.providerMessageId ?? "";
