@@ -136,6 +136,7 @@ export type InternalQuestion = {
   doneAt?: string;
   outcome?: string;
   followUpAction?: string;
+  type?: "attendance" | "cadence_checkin";
 };
 
 export type DialogStateName =
@@ -1566,14 +1567,20 @@ export function listOpenTodos(): TodoTask[] {
   return todos.filter(t => t.status === "open");
 }
 
-export function addInternalQuestion(convId: string, leadKey: string, text: string): InternalQuestion {
+export function addInternalQuestion(
+  convId: string,
+  leadKey: string,
+  text: string,
+  type?: InternalQuestion["type"]
+): InternalQuestion {
   const q: InternalQuestion = {
     id: makeId("q"),
     convId,
     leadKey,
     text,
     createdAt: nowIso(),
-    status: "open"
+    status: "open",
+    type
   };
   questions.push(q);
   scheduleSave();

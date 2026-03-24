@@ -455,6 +455,8 @@ export default function Home() {
   >("inbox");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedConv, setSelectedConv] = useState<ConversationDetail | null>(null);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [mobilePanel, setMobilePanel] = useState<"list" | "detail">("list");
   const [cadenceResolveOpen, setCadenceResolveOpen] = useState(false);
   const [cadenceResolveMode, setCadenceResolveMode] = useState<"alert" | "watch">("alert");
   const [cadenceResolveConv, setCadenceResolveConv] = useState<ConversationDetail | null>(null);
@@ -1173,7 +1175,7 @@ export default function Home() {
         throw new Error(sendData?.error ?? "Failed to send SMS");
       }
       setComposeOpen(false);
-      setSelectedId(conv.id);
+      openConversation(conv.id);
       setSelectedConv(sendData?.conversation ?? conv);
       await load();
     } catch (err: any) {
@@ -1952,6 +1954,86 @@ export default function Home() {
   }, [selectedContact?.id]);
 
   const isManager = authUser?.role === "manager";
+  const isConversationSection =
+    section === "inbox" ||
+    section === "todos" ||
+    section === "questions" ||
+    section === "watches" ||
+    section === "contacts";
+  const getSectionTitle = () =>
+    section === "inbox"
+      ? "Inbox"
+      : section === "todos"
+        ? "To-Do Inbox"
+        : section === "questions"
+          ? "Internal Questions"
+        : section === "contacts"
+          ? "Contacts"
+          : section === "inventory"
+            ? "Inventory"
+            : section === "watches"
+              ? "Vehicle Watches"
+              : section === "calendar"
+                ? "Calendar"
+                : section === "settings"
+                  ? "Settings"
+                  : "Suppression List";
+  const getSectionSubTitle = () =>
+    section === "inbox"
+      ? `${conversations.length} conversations`
+      : section === "todos"
+        ? `${todos.length} open`
+        : section === "questions"
+          ? `${questions.length} open`
+        : section === "contacts"
+          ? `${contacts.length} contacts`
+          : section === "inventory"
+            ? `${inventoryItems.length} bikes`
+            : section === "watches"
+              ? `${visibleWatchItems.length} active`
+              : section === "calendar"
+                ? "Google Calendar view"
+                : section === "settings"
+                  ? "Configure dealer & scheduling"
+                  : `${suppressions.length} suppressed`;
+
+  useEffect(() => {
+    if (!selectedId) setMobilePanel("list");
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (section === "calendar" || section === "settings" || section === "inventory" || section === "suppressions") {
+      setMobilePanel("detail");
+      return;
+    }
+    setMobilePanel("list");
+  }, [section]);
+
+  function openConversation(id: string) {
+    setSelectedId(id);
+    setMobilePanel("detail");
+  }
+
+  function goToSection(
+    next:
+      | "inbox"
+      | "todos"
+      | "questions"
+      | "suppressions"
+      | "contacts"
+      | "watches"
+      | "inventory"
+      | "settings"
+      | "calendar"
+  ) {
+    setSection(next);
+    setMobileNavOpen(false);
+    if (next === "calendar" || next === "settings" || next === "inventory" || next === "suppressions") {
+      setMobilePanel("detail");
+    } else {
+      setMobilePanel("list");
+    }
+  }
 
   const watchSalespeople = useMemo(() => {
     const fromUsers = (usersList ?? [])
@@ -2757,7 +2839,7 @@ export default function Home() {
       window.alert("No phone or extension configured for your user.");
       return;
     }
-    setSelectedId(todo.convId);
+    openConversation(todo.convId);
     const conv = await fetchConversationDetail(todo.convId);
     if (conv) setSelectedConv(conv);
     if (authUser?.phone && authUser?.extension) {
@@ -3684,19 +3766,46 @@ export default function Home() {
   }
 
   return (
-    <main className="h-screen flex bg-[var(--background)] text-[var(--foreground)]">
+    <main className="h-screen flex flex-col md:flex-row bg-[var(--background)] text-[var(--foreground)]">
       {saveToast ? (
         <div className="fixed top-4 right-4 z-[60] px-3 py-2 rounded border bg-white text-sm shadow">
           {saveToast}
         </div>
       ) : null}
-      <aside className="w-16 border-r border-[var(--palette-graphite)] bg-[var(--palette-graphite)] text-white flex flex-col items-center py-4 gap-4 cursor-pointer relative">
+      {mobileNavOpen ? (
+        <div
+          className="fixed inset-0 bg-black/40 z-40 md:hidden"
+          onClick={() => setMobileNavOpen(false)}
+        />
+      ) : null}
+      <div className="md:hidden w-full flex items-center justify-between px-3 py-2 border-b border-[var(--border)] bg-[var(--surface)]">
+        <button
+          className="px-2 py-1 border rounded text-sm"
+          onClick={() => setMobileNavOpen(true)}
+          title="Menu"
+        >
+          ☰
+        </button>
+        <div className="text-sm font-semibold">{getSectionTitle()}</div>
+        {isConversationSection && mobilePanel === "detail" ? (
+          <button
+            className="px-2 py-1 border rounded text-sm"
+            onClick={() => setMobilePanel("list")}
+          >
+            Back
+          </button>
+        ) : (
+          <div className="w-[52px]" />
+        )}
+      </div>
+      <div className="flex-1 flex md:flex-row flex-col min-h-0">
+      <aside className={`fixed md:relative z-50 w-16 h-screen border-r border-[var(--palette-graphite)] bg-[var(--palette-graphite)] text-white flex flex-col items-center py-4 gap-4 cursor-pointer transform transition-transform duration-200 ${mobileNavOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"} md:flex`}>
         <div className="text-lg font-semibold">TI</div>
         <button
           className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "inbox" ? "bg-white/10" : "hover:bg-white/5"}`}
           title="Inbox"
           onClick={() => {
-            setSection("inbox");
+            goToSection("inbox");
             setEditingUserId(null);
             setShowNewUserForm(false);
             setSelectedContact(null);
@@ -3708,7 +3817,7 @@ export default function Home() {
           <button
             className={`relative w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "todos" ? "bg-white/10" : "hover:bg-white/5"}`}
             title="To-Dos"
-            onClick={() => setSection("todos")}
+            onClick={() => goToSection("todos")}
           >
             ✅
             {todos.length > 0 ? (
@@ -3721,7 +3830,7 @@ export default function Home() {
         <button
           className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "contacts" ? "bg-white/10" : "hover:bg-white/5"}`}
           title="Contacts"
-          onClick={() => setSection("contacts")}
+          onClick={() => goToSection("contacts")}
         >
           👥
         </button>
@@ -3729,7 +3838,7 @@ export default function Home() {
           <button
             className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "suppressions" ? "bg-white/10" : "hover:bg-white/5"}`}
             title="Suppressions"
-            onClick={() => setSection("suppressions")}
+            onClick={() => goToSection("suppressions")}
           >
             ⛔
           </button>
@@ -3738,7 +3847,7 @@ export default function Home() {
           <button
             className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "calendar" ? "bg-white/10" : "hover:bg-white/5"}`}
             title="Calendar"
-            onClick={() => setSection("calendar")}
+            onClick={() => goToSection("calendar")}
           >
             📅
           </button>
@@ -3746,7 +3855,7 @@ export default function Home() {
         <button
           className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "inventory" ? "bg-white/10" : "hover:bg-white/5"}`}
           title="Inventory"
-          onClick={() => setSection("inventory")}
+          onClick={() => goToSection("inventory")}
         >
           📦
         </button>
@@ -3754,7 +3863,7 @@ export default function Home() {
         <button
           className={`relative w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "watches" ? "bg-white/10" : "hover:bg-white/5"}`}
           title="Watches"
-          onClick={() => setSection("watches")}
+          onClick={() => goToSection("watches")}
         >
           👀
           {watchCount > 0 ? (
@@ -3767,7 +3876,7 @@ export default function Home() {
         <button
           className={`relative w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "questions" ? "bg-white/10" : "hover:bg-white/5"}`}
           title="Questions"
-          onClick={() => setSection("questions")}
+          onClick={() => goToSection("questions")}
         >
           🔔
           {questions.length > 0 ? (
@@ -3794,7 +3903,7 @@ export default function Home() {
                     className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
                     onClick={() => {
                       setSettingsTab("dealer");
-                      setSection("settings");
+                      goToSection("settings");
                       setSettingsOpen(false);
                     }}
                   >
@@ -3804,7 +3913,7 @@ export default function Home() {
                     className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
                     onClick={() => {
                       setSettingsTab("users");
-                      setSection("settings");
+                      goToSection("settings");
                       setSettingsOpen(false);
                     }}
                   >
@@ -3814,7 +3923,7 @@ export default function Home() {
                     className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
                     onClick={() => {
                       setSettingsTab("scheduler");
-                      setSection("settings");
+                      goToSection("settings");
                       setSettingsOpen(false);
                     }}
                   >
@@ -3838,47 +3947,13 @@ export default function Home() {
       </aside>
 
       <section
-        className={`w-96 border-r border-[var(--border)] bg-[var(--surface)] p-4 overflow-y-auto shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${section === "calendar" ? "hidden" : ""}`}
+        className={`w-full md:w-96 border-r border-[var(--border)] bg-[var(--surface)] p-4 overflow-y-auto shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${section === "calendar" ? "hidden" : ""} ${isConversationSection && mobilePanel === "detail" ? "hidden md:block" : ""}`}
       >
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-xl font-semibold">
-              {section === "inbox"
-                ? "Inbox"
-                : section === "todos"
-                  ? "To-Do Inbox"
-                  : section === "questions"
-                    ? "Internal Questions"
-                : section === "contacts"
-                  ? "Contacts"
-                  : section === "inventory"
-                    ? "Inventory"
-                    : section === "watches"
-                      ? "Vehicle Watches"
-                      : section === "calendar"
-                        ? "Calendar"
-                        : section === "settings"
-                          ? "Settings"
-                          : "Suppression List"}
-            </h1>
+            <h1 className="text-xl font-semibold">{getSectionTitle()}</h1>
             <p className="text-xs text-gray-600 mt-1">
-              {section === "inbox"
-                ? `${conversations.length} conversations`
-                : section === "todos"
-                  ? `${todos.length} open`
-                  : section === "questions"
-                    ? `${questions.length} open`
-                : section === "contacts"
-                  ? `${contacts.length} contacts`
-                  : section === "inventory"
-                    ? `${inventoryItems.length} bikes`
-                    : section === "watches"
-                      ? `${visibleWatchItems.length} active`
-                      : section === "calendar"
-                        ? "Google Calendar view"
-                        : section === "settings"
-                          ? "Configure dealer & scheduling"
-                          : `${suppressions.length} suppressed`}
+              {getSectionSubTitle()}
             </p>
           </div>
           <div className="border border-[var(--border)] rounded-lg p-2 bg-[var(--surface-2)]">
@@ -3976,7 +4051,7 @@ export default function Home() {
                       }`}
                     >
                       <button
-                        onClick={() => setSelectedId(item.convId)}
+                        onClick={() => openConversation(item.convId)}
                         className="flex-1 text-left p-4 hover:bg-[var(--surface-2)]"
                       >
                         <div className="font-medium truncate">
@@ -4084,7 +4159,7 @@ export default function Home() {
                     {group.items.map(c => (
                       <div key={c.id} className="flex items-stretch">
                         <button
-                          onClick={() => setSelectedId(c.id)}
+                          onClick={() => openConversation(c.id)}
                           className={`flex-1 min-w-0 text-left p-4 hover:bg-[var(--surface-2)] ${
                             selectedId === c.id ? "bg-[var(--surface-2)]" : ""
                           }`}
@@ -4307,7 +4382,7 @@ export default function Home() {
                   <button
                     className="text-xs text-blue-600 mt-2 inline-block"
                     onClick={() => {
-                      setSelectedId(t.convId);
+                      openConversation(t.convId);
                     }}
                   >
                     Open conversation
@@ -4368,7 +4443,7 @@ export default function Home() {
                       <button
                         className="px-3 py-2 border rounded text-sm"
                         onClick={() => {
-                          setSelectedId(alert.convId);
+                          openConversation(alert.convId);
                         }}
                       >
                         Open conversation
@@ -4386,7 +4461,7 @@ export default function Home() {
                     {new Date(q.createdAt).toLocaleString()}
                   </div>
                   <div className="text-sm text-gray-700 mt-2 line-clamp-3">{q.text}</div>
-                  {q.type === "attendance" ? (
+                  {q.type === "attendance" || q.type === "cadence_checkin" ? (
                     <div className="mt-3 grid grid-cols-1 gap-2">
                       <label className="text-xs text-gray-600">
                         Outcome
@@ -4427,7 +4502,7 @@ export default function Home() {
                   <button
                     className="text-xs text-blue-600 mt-2 inline-block"
                     onClick={() => {
-                      setSelectedId(q.convId);
+                      openConversation(q.convId);
                     }}
                   >
                     Open conversation
@@ -4650,7 +4725,7 @@ export default function Home() {
       <section
         className={`flex-1 bg-[var(--surface)] shadow-[inset_0_1px_0_rgba(255,255,255,0.6)] ${
           section === "calendar" ? "p-2 overflow-hidden" : "p-6 overflow-y-auto"
-        }`}
+        } ${isConversationSection && mobilePanel === "list" ? "hidden md:block" : ""}`}
       >
         {section === "calendar" ? (
           <div className="flex flex-col h-full">
@@ -6692,9 +6767,9 @@ export default function Home() {
                       className="px-2 py-1 border rounded text-xs"
                       title="Open chat"
                       onClick={() => {
-                        setSection("inbox");
+                        goToSection("inbox");
                         const id = selectedContact.conversationId ?? selectedContact.leadKey ?? null;
-                        if (id) setSelectedId(id);
+                        if (id) openConversation(id);
                       }}
                     >
                       💬
@@ -8587,6 +8662,7 @@ export default function Home() {
           </div>
         </div>
       ) : null}
+      </div>
 
     </main>
   );

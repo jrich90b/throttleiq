@@ -1315,7 +1315,7 @@ const FOLLOW_UP_MESSAGES = [
   "Hi {name} — are you mostly shopping or looking to come in soon? I’m happy to help either way.",
   "Quick check {name} — is{label} still the one you’re leaning toward, or are you comparing a few?",
   "If you want to stop by{labelClause}, just tell me a day that works and I’ll line it up.",
-  "No rush at all {name}. Want me to keep an eye on availability{labelClause} or set a reminder for you?",
+  "No rush at all {name}. If you want me to keep an eye on availability{labelClause}, just let me know.",
   "If timing is tricky {name}, just tell me what works and I’ll make it easy.",
   "Want me to hold a time for you{labelClause}? If so, which day is best?",
   "If you’d like to come by{labelClause}, I can set something up. What day works for you?",
@@ -2039,12 +2039,12 @@ async function buildLongTermFollowUp(
 
   if (canTestRide) {
     return {
-      body: `${greeting}You mentioned a ${timeframe} timeline. I’m here when you’re ready. Want me to set a reminder?`
+      body: `${greeting}You mentioned a ${timeframe} timeline. I’m here when you’re ready. Just give me a heads up when you want to stop in.`
     };
   }
 
   return {
-    body: `${greeting}You mentioned a ${timeframe} timeline. I’m here when you’re ready. Want me to set a reminder?`
+    body: `${greeting}You mentioned a ${timeframe} timeline. I’m here when you’re ready. Just give me a heads up when you want to stop in.`
   };
 }
 
@@ -3352,6 +3352,10 @@ async function processDueFollowUps() {
       .filter(t => t.reason !== "call")
       .map(t => t.convId)
   );
+  const openQuestions = listOpenQuestions();
+  const openCheckinByConv = new Set(
+    openQuestions.filter(q => q.type === "cadence_checkin").map(q => q.convId)
+  );
   const canTestRideNow = async (conv: any) => {
     return canOfferTestRideForLead(conv?.lead, dealerProfile);
   };
@@ -3542,6 +3546,16 @@ async function processDueFollowUps() {
     }
     if (!isPostSale && conv.followUp?.mode === "holding_inventory") continue;
     if (!isPostSale && conv.followUp?.mode === "manual_handoff") continue;
+    if (!isPostSale) {
+      if (!openCheckinByConv.has(conv.id)) {
+        const text = "Follow-up scheduled — did the customer come in?";
+        addInternalQuestion(conv.id, conv.leadKey, text, "cadence_checkin");
+        openCheckinByConv.add(conv.id);
+      }
+      const pauseUntil = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
+      pauseFollowUpCadence(conv, pauseUntil, "cadence_checkin");
+      continue;
+    }
 
     const canTestRideFlag = await canTestRideNow(conv);
     const isTradeNoInterest =
@@ -3964,7 +3978,7 @@ async function processAppointmentQuestions() {
 
     const whenText = formatSlotLocal(appt.whenIso, cfg.timezone);
     const text = `Did the customer show for the ${whenText} appointment?`;
-    addInternalQuestion(conv.id, conv.leadKey, text);
+    addInternalQuestion(conv.id, conv.leadKey, text, "attendance");
     appt.attendanceQuestionedAt = now.toISOString();
   }
 }
@@ -7853,8 +7867,8 @@ if (authToken && signature) {
     const label = futureFromReply?.label;
     const labelText = label ? label.charAt(0).toUpperCase() + label.slice(1) : "";
     const replyRaw = label
-      ? `Sounds good — I’ll check back ${labelText}.`
-      : "Got it — what timeframe should I check back?";
+      ? `Sounds good — I’ll pause things until ${labelText}. Just give me a heads up when you want to stop in.`
+      : "Got it — I’m here when you’re ready. Just give me a heads up when you want to stop in.";
     const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
@@ -7886,8 +7900,8 @@ if (authToken && signature) {
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
       const agentName = dealerProfile?.agentName ?? "Brooke";
       const replyRaw = alreadyAsked
-        ? "Understood — I’m here when you’re ready. You have my contact info, so just reach out if you want to set a time to stop in and check out some bikes."
-        : "No problem — I’m here when you’re ready. You have my contact info, so just reach out if you want to set a time to stop in and check out some bikes.";
+        ? "Understood — I’m here when you’re ready. Just give me a heads up when you want to stop in and check out some bikes."
+        : "No problem — I’m here when you’re ready. Just give me a heads up when you want to stop in and check out some bikes.";
       const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
       const systemMode = webhookMode;
       if (systemMode === "suggest") {
@@ -7932,7 +7946,7 @@ if (authToken && signature) {
     const agentName = dealerProfile?.agentName ?? "Brooke";
     const label = future.label;
     const labelText = label.charAt(0).toUpperCase() + label.slice(1);
-    const replyRaw = `Got it — I’ll check back ${labelText}. If you want to come in sooner, just let me know.`;
+    const replyRaw = `Got it — I’ll pause things until ${labelText}. Just give me a heads up when you want to stop in.`;
     const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
@@ -7954,7 +7968,7 @@ if (authToken && signature) {
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = dealerProfile?.agentName ?? "Brooke";
     const replyRaw =
-      "Sounds good — I’ll set a reminder and check back closer to then. If you want pricing or a model comparison sooner, just let me know.";
+      "Sounds good — I’m here when you’re ready. Just give me a heads up when you want to stop in.";
     const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
