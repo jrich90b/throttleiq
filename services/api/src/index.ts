@@ -7059,6 +7059,7 @@ if (authToken && signature) {
       const cal = await getAuthedCalendarClient();
 
       const slot = conv.appointment.matchedSlot;
+      const appointmentType = String(slot?.appointmentType ?? "inventory_visit");
 
       const stockId = conv.lead?.vehicle?.stockId ?? null;
       const leadNameRaw = conv.lead?.name?.trim() ?? "";
