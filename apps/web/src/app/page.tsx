@@ -2070,7 +2070,21 @@ export default function Home() {
     if (closeReason !== "sold") return;
     if (soldByOptions.length) return;
     void reloadUsers();
-  }, [closeReason, soldByOptions.length]);
+    if (!salespeopleList.length) {
+      void (async () => {
+        try {
+          const resp = await fetch("/api/scheduler-config", { cache: "no-store" });
+          const json = await resp.json();
+          const cfg = json?.config ?? {};
+          if (Array.isArray(cfg.salespeople)) {
+            setSalespeopleList(cfg.salespeople);
+          }
+        } catch {
+          // ignore
+        }
+      })();
+    }
+  }, [closeReason, soldByOptions.length, salespeopleList.length]);
   useEffect(() => {
     if (section !== "watches") return;
     if (!isManager) return;
