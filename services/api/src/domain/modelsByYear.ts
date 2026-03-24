@@ -18,14 +18,19 @@ function toTitleCaseIfAllCaps(value: string): string {
 function stripModelCode(raw: string): string {
   const parts = String(raw ?? "").trim().split(/\s+/).filter(Boolean);
   if (!parts.length) return "";
-  let idx = parts.findIndex(p => /\d/.test(p));
-  let modelParts = idx >= 0 ? parts.slice(idx + 1) : parts;
-  if (!modelParts.length && parts.length > 1) modelParts = parts.slice(1);
-  if (idx === -1 && parts.length > 1 && /^[A-Z0-9]{2,6}$/.test(parts[0])) {
-    modelParts = parts.slice(1);
+  const first = parts[0] ?? "";
+  const second = parts[1] ?? "";
+  const isCodeToken = (token: string) => /^[A-Z0-9]{2,6}$/.test(token);
+  const secondHasDigit = /\d/.test(second);
+  // Only strip leading codes when the pattern looks like CODE + CODE_WITH_DIGIT (e.g., "FLFB 1YF9 FAT BOY")
+  if (parts.length >= 3 && isCodeToken(first) && secondHasDigit) {
+    return toTitleCaseIfAllCaps(parts.slice(2).join(" ").trim());
   }
-  const model = modelParts.join(" ").trim();
-  return toTitleCaseIfAllCaps(model);
+  // If the first token itself is a compact code with digits (e.g., "1YF9 FAT BOY")
+  if (parts.length >= 2 && isCodeToken(first) && /\d/.test(first)) {
+    return toTitleCaseIfAllCaps(parts.slice(1).join(" ").trim());
+  }
+  return toTitleCaseIfAllCaps(parts.join(" ").trim());
 }
 
 function normalizeModelName(value: string | null | undefined): string {
