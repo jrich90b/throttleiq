@@ -7984,7 +7984,6 @@ if (authToken && signature) {
   if (
     event.provider === "twilio" &&
     inventoryQuestion &&
-    !schedulingBlocked &&
     !schedulingSignals.hasDayTime &&
     !schedulingSignals.hasDayOnlyAvailability &&
     !schedulingSignals.hasDayOnlyRequest
