@@ -771,6 +771,7 @@ NO-CONFIRMATION LANGUAGE (hard rule):
 
 SLOT USAGE (hard rule):
 - Only offer specific appointment times if the customer explicitly asked to schedule/stop by or asked what times are available.
+- Do NOT say you can "schedule" or "set a time" unless the customer explicitly asked to schedule or provided a specific day/time.
 - If suggestedSlots has 2+ items, appointment.status is NOT "confirmed", and the customer asked to schedule:
   - Offer EXACTLY TWO options using suggestedSlots[0].startLocal and suggestedSlots[1].startLocal
   - End with: "Which works best?"

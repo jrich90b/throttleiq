@@ -2814,7 +2814,12 @@ function applyTradePolicy(
   if (state !== "trade_init") {
     out = stripTradeIntroSentence(out);
   }
-  if (state === "trade_cash" && suggestedSlots && suggestedSlots.length >= 2) {
+  const lastInboundText = String(getLastInboundBody(conv) ?? "");
+  const askedToSchedule =
+    /(schedule|appointment|set (up )?a time|come (in|by)|stop (in|by)|what time|what day|when can i come|can i come|stop by)/i.test(
+      lastInboundText
+    );
+  if (state === "trade_cash" && askedToSchedule && suggestedSlots && suggestedSlots.length >= 2) {
     if (!isSlotOfferMessage(out)) {
       const a = suggestedSlots[0]?.startLocal ?? "";
       const b = suggestedSlots[1]?.startLocal ?? "";
@@ -2828,7 +2833,7 @@ function applyTradePolicy(
   if (cashTradeQuestion.test(out)) {
     if (state === "trade_cash") {
       out =
-        "Got it — for a straight cash offer, we’ll need an in‑person appraisal. What day and time works for you to stop in with the bike?";
+        "Got it — for a straight cash offer, we’ll need an in‑person appraisal. Do you have any lien or payoff on the bike?";
     } else if (state === "trade_trade") {
       out = "Great — what model are you hoping to trade into?";
     } else if (state === "trade_either") {
@@ -2837,7 +2842,7 @@ function applyTradePolicy(
   }
   if (normalizeOutboundText(out) === normalizeOutboundText(lastOutboundText)) {
     if (state === "trade_cash") {
-      out = "Whenever you’re ready, what day and time works to stop in with the bike?";
+      out = "Whenever you’re ready, just reach out and we can take a look in person.";
     } else if (state === "trade_trade") {
       out = "If you have a model in mind, let me know — I can also set a time to stop in.";
     } else if (state === "trade_either") {
@@ -2861,10 +2866,10 @@ function applyPickupPolicy(conv: any, reply: string): string {
     if (conv.pickup?.stage) {
       conv.pickup = { ...(conv.pickup ?? {}), stage: undefined, updatedAt: nowIso() };
     }
-    return "Got it — if you want to come by and take a look, I can work around your schedule. What day works best? We can go over the trade value in person.";
+    return "Got it — if you want to come by and take a look, just let me know. We can go over the trade value in person.";
   }
   if (conv.pickup?.eligible === false) {
-    return "Got it — we’re outside the usual pickup range for that area. If you can make it in, I can work around your schedule. What day works best to stop in?";
+    return "Got it — we’re outside the usual pickup range for that area. If you can make it in, we can go over the trade value in person. Just let me know when you’re ready.";
   }
   return reply;
 }
