@@ -1142,8 +1142,24 @@ async function applyPostCallSummaryActions(opts: {
   }
 
   const watchCue = /(looking for|interested in|shopping for|considering|plans to buy|wants to buy|still interested)/i;
-  if (watchCue.test(lowerSummary) || watchCue.test(lowerTranscript)) {
-    const model = findModelMention(summaryText) || findModelMention(transcriptText);
+  const notInStockCue =
+    /\b(don'?t|do not|not)\s+(currently\s+)?(have|see|show|carry|stock)\b.*\b(in stock|available)\b|\bnot available\b|\bsold out\b|\bno\s+.*\bin stock\b/i;
+  const notifyCue =
+    /\b(let (you|me) know|keep (you|me) posted|keep an eye out|watch for|call (you|me) if|text (you|me) if)\b.*\b(comes in|available|get one|get it|in stock|find one)\b/i;
+  if (
+    watchCue.test(lowerSummary) ||
+    watchCue.test(lowerTranscript) ||
+    notInStockCue.test(lowerSummary) ||
+    notInStockCue.test(lowerTranscript) ||
+    notifyCue.test(lowerSummary) ||
+    notifyCue.test(lowerTranscript)
+  ) {
+    const model =
+      findModelMention(summaryText) ||
+      findModelMention(transcriptText) ||
+      conv.lead?.vehicle?.model ||
+      conv.lead?.vehicle?.description ||
+      undefined;
     const hasWatch = !!(conv.inventoryWatch || (conv.inventoryWatches && conv.inventoryWatches.length));
     if (model && !hasWatch) {
       const year = extractYear(summaryText) || extractYear(transcriptText);
