@@ -381,6 +381,7 @@ type WatchFormItem = {
   year: string;
   make: string;
   model: string;
+  models?: string[];
   trim: string;
   color: string;
 };
@@ -866,14 +867,12 @@ export default function Home() {
           ? [conv.inventoryWatch]
           : [];
     if (fromExisting.length) {
-      return fromExisting.map(w => ({
-        condition: normalizeWatchCondition(w.condition),
-        year: w.year ? String(w.year) : "",
-        make: w.make ?? "",
-        model: w.model ?? "",
-        trim: w.trim ?? "",
-        color: w.color ?? ""
-      }));
+      return groupWatchesToFormItems(
+        fromExisting.map(w => ({
+          ...w,
+          condition: normalizeWatchCondition(w.condition)
+        }))
+      );
     }
     const vehicle = conv?.lead?.vehicle;
     return [
@@ -882,6 +881,7 @@ export default function Home() {
         year: vehicle?.year ?? "",
         make: vehicle?.make ?? "",
         model: vehicle?.model ?? vehicle?.description ?? "",
+        models: vehicle?.model || vehicle?.description ? [String(vehicle?.model ?? vehicle?.description)] : [],
         trim: vehicle?.trim ?? "",
         color: vehicle?.color ?? ""
       }
@@ -1190,7 +1190,7 @@ export default function Home() {
   function addWatchItem() {
     setCadenceWatchItems(prev => {
       const base = prev[0] ?? { condition: "", year: "", make: "", model: "", trim: "", color: "" };
-      return [...prev, { ...base, model: "" }];
+      return [...prev, { ...base, model: "", models: [] }];
     });
   }
 
@@ -1205,7 +1205,7 @@ export default function Home() {
   function addWatchEditItem() {
     setWatchEditItems(prev => {
       const base = prev[0] ?? { condition: "", year: "", make: "", model: "", trim: "", color: "" };
-      return [...prev, { ...base, model: "" }];
+      return [...prev, { ...base, model: "", models: [] }];
     });
   }
 
@@ -1220,14 +1220,70 @@ export default function Home() {
         ? `${watch.yearMin}-${watch.yearMax}`
         : watch?.yearMin ?? watch?.yearMax ?? "") ??
       "";
+    const model = watch?.model ?? "";
     return {
       condition: watch?.condition ?? "",
       year: yearText ? String(yearText) : "",
       make: watch?.make ?? "",
-      model: watch?.model ?? "",
+      model,
+      models: model ? [model] : [],
       trim: watch?.trim ?? "",
       color: watch?.color ?? ""
     };
+  }
+
+  function getItemModels(item: WatchFormItem): string[] {
+    const raw = item.models && item.models.length ? item.models : item.model ? [item.model] : [];
+    return Array.from(new Set(raw.map(m => m.trim()).filter(Boolean)));
+  }
+
+  function groupWatchesToFormItems(watches: any[]): WatchFormItem[] {
+    const map = new Map<string, WatchFormItem>();
+    watches.forEach(watch => {
+      const base = watchToFormItem(watch);
+      const key = [
+        base.condition ?? "",
+        base.year ?? "",
+        base.make ?? "",
+        base.trim ?? "",
+        base.color ?? ""
+      ]
+        .map(v => String(v).toLowerCase())
+        .join("|");
+      const existing = map.get(key);
+      const models = getItemModels(base);
+      if (!existing) {
+        map.set(key, { ...base, models: models.length ? models : [], model: models[0] ?? base.model });
+        return;
+      }
+      const next = new Set([...(existing.models ?? []), ...models]);
+      existing.models = Array.from(next);
+      existing.model = existing.models[0] ?? existing.model ?? "";
+      map.set(key, existing);
+    });
+    return Array.from(map.values()).map(item => {
+      const models = getItemModels(item);
+      return { ...item, models, model: models[0] ?? item.model ?? "" };
+    });
+  }
+
+  function expandWatchItems(items: WatchFormItem[]): WatchFormItem[] {
+    const expanded: WatchFormItem[] = [];
+    items.forEach(item => {
+      const models = getItemModels(item);
+      if (!models.length) return;
+      models.forEach(model => {
+        expanded.push({
+          condition: item.condition,
+          year: item.year,
+          make: item.make,
+          model,
+          trim: item.trim,
+          color: item.color
+        });
+      });
+    });
+    return expanded;
   }
 
   function parseYearRangeValue(value: string): { min: number; max: number } | null {
@@ -1247,29 +1303,6 @@ export default function Home() {
       if (Number.isFinite(y)) return { min: y, max: y };
     }
     return null;
-  }
-
-  function sameWatchGroup(a: WatchFormItem, b: WatchFormItem): boolean {
-    return (
-      (a.condition ?? "") === (b.condition ?? "") &&
-      (a.year ?? "") === (b.year ?? "") &&
-      (a.make ?? "") === (b.make ?? "") &&
-      (a.trim ?? "") === (b.trim ?? "") &&
-      (a.color ?? "") === (b.color ?? "")
-    );
-  }
-
-  function applyWatchGroupModels(
-    items: WatchFormItem[],
-    base: WatchFormItem,
-    models: string[]
-  ): WatchFormItem[] {
-    const selected = Array.from(new Set(models.map(m => m.trim()).filter(Boolean)));
-    const rest = items.filter(item => !sameWatchGroup(item, base));
-    if (!selected.length) {
-      return [...rest, { ...base, model: "" }];
-    }
-    return [...rest, ...selected.map(model => ({ ...base, model }))];
   }
 
   function getModelsForYearValue(yearValue: string, makeValue?: string): string[] {
@@ -1322,7 +1355,7 @@ export default function Home() {
           ? [conv.inventoryWatch]
           : [];
     setWatchEditConvId(conv.id);
-    setWatchEditItems(watches.map(watchToFormItem));
+    setWatchEditItems(groupWatchesToFormItems(watches));
     const note =
       watches.find(w => String(w?.note ?? "").trim())?.note ??
       "";
@@ -1333,7 +1366,7 @@ export default function Home() {
 
   async function saveWatchEdit() {
     if (!watchEditConvId) return;
-    const hasModel = watchEditItems.some(item => item.model.trim());
+    const hasModel = watchEditItems.some(item => getItemModels(item).length > 0);
     if (!hasModel) {
       setWatchEditError("Please enter at least one model to watch.");
       return;
@@ -1342,7 +1375,7 @@ export default function Home() {
     setWatchEditError(null);
     try {
       const payload = {
-        items: watchEditItems,
+        items: expandWatchItems(watchEditItems),
         note: watchEditNote.trim() || undefined
       };
       const resp = await fetch(`/api/conversations/${encodeURIComponent(watchEditConvId)}/watch`, {
@@ -1404,7 +1437,7 @@ export default function Home() {
       return;
     }
     if (cadenceWatchEnabled) {
-      const hasModel = cadenceWatchItems.some(item => item.model.trim());
+      const hasModel = cadenceWatchItems.some(item => getItemModels(item).length > 0);
       if (!hasModel) {
         setCadenceResolveError("Please enter at least one model to watch.");
         return;
@@ -1419,7 +1452,7 @@ export default function Home() {
         watch: cadenceWatchEnabled
           ? {
               note: cadenceWatchNote,
-              items: cadenceWatchItems
+              items: expandWatchItems(cadenceWatchItems)
             }
           : undefined
       };
@@ -7173,18 +7206,15 @@ export default function Home() {
                       <div className="mt-3 space-y-3">
                         {cadenceWatchItems.map((item, idx) => {
                           const modelOptions = getModelsForYearValue(item.year, item.make);
+                          const groupModels = getItemModels(item);
+                          const singleModel = groupModels.length === 1 ? groupModels[0] : "";
                           const modelOptionsLower = new Set(modelOptions.map(o => o.toLowerCase()));
-                          const modelInOptions = modelOptionsLower.has((item.model ?? "").toLowerCase());
-                          const baseGroup: WatchFormItem = { ...item, model: "" };
-                          const groupModels = cadenceWatchItems
-                            .filter(it => sameWatchGroup(it, baseGroup))
-                            .map(it => it.model)
-                            .filter(Boolean);
+                          const modelInOptions = modelOptionsLower.has(singleModel.toLowerCase());
                           const multiSelected = groupModels.length > 1;
                           const modelSelectValue = multiSelected
                             ? "__multi__"
                             : modelInOptions
-                              ? item.model
+                              ? singleModel
                               : "__custom__";
                           const showCustomModelInput =
                             (modelOptions.length === 0 || !modelInOptions) && !multiSelected;
@@ -7214,7 +7244,13 @@ export default function Home() {
                                   className="border rounded px-2 py-2 text-sm w-full"
                                   placeholder="2026 or 2018-2021"
                                   value={item.year}
-                                  onChange={e => updateWatchItem(idx, { year: e.target.value })}
+                                  onChange={e =>
+                                    updateWatchItem(idx, {
+                                      year: e.target.value,
+                                      model: "",
+                                      models: []
+                                    })
+                                  }
                                 />
                               </div>
                               <div>
@@ -7225,10 +7261,14 @@ export default function Home() {
                                   onChange={e => {
                                     const value = e.target.value;
                                     if (value === "__custom__") {
-                                      updateWatchItem(idx, { make: makeInOptions ? "" : item.make });
+                                      updateWatchItem(idx, {
+                                        make: makeInOptions ? "" : item.make,
+                                        model: "",
+                                        models: []
+                                      });
                                       return;
                                     }
-                                    updateWatchItem(idx, { make: value });
+                                    updateWatchItem(idx, { make: value, model: "", models: [] });
                                   }}
                                 >
                                   <option value="">Select make</option>
@@ -7256,13 +7296,18 @@ export default function Home() {
                                   onChange={e => {
                                     const value = e.target.value;
                                     if (value === "__multi__") return;
-                                    if (value === "__custom__") {
-                                      updateWatchItem(idx, { model: modelInOptions ? "" : item.model });
+                                    if (!value) {
+                                      updateWatchItem(idx, { model: "", models: [] });
                                       return;
                                     }
-                                    setCadenceWatchItems(prev =>
-                                      applyWatchGroupModels(prev, baseGroup, [value])
-                                    );
+                                    if (value === "__custom__") {
+                                      updateWatchItem(idx, {
+                                        model: modelInOptions ? "" : singleModel,
+                                        models: []
+                                      });
+                                      return;
+                                    }
+                                    updateWatchItem(idx, { model: value, models: [value] });
                                   }}
                                 >
                                   <option value="">Select model</option>
@@ -7280,12 +7325,8 @@ export default function Home() {
                                   <input
                                     className="border rounded px-2 py-2 text-sm w-full mt-2"
                                     placeholder="Type model"
-                                    value={item.model}
-                                    onChange={e =>
-                                      setCadenceWatchItems(prev =>
-                                        applyWatchGroupModels(prev, baseGroup, [e.target.value])
-                                      )
-                                    }
+                                    value={singleModel}
+                                    onChange={e => updateWatchItem(idx, { model: e.target.value, models: e.target.value ? [e.target.value] : [] })}
                                   />
                                 ) : null}
                                 {modelOptions.length ? (
@@ -7306,9 +7347,11 @@ export default function Home() {
                                               const next = new Set(groupModels);
                                               if (e.target.checked) next.add(option);
                                               else next.delete(option);
-                                              setCadenceWatchItems(prev =>
-                                                applyWatchGroupModels(prev, baseGroup, Array.from(next))
-                                              );
+                                              const list = Array.from(next);
+                                              updateWatchItem(idx, {
+                                                model: list[0] ?? "",
+                                                models: list
+                                              });
                                             }}
                                           />
                                           <span>{option}</span>
@@ -8286,18 +8329,15 @@ export default function Home() {
             <div className="mt-3 space-y-3">
               {watchEditItems.map((item, idx) => {
                 const modelOptions = getModelsForYearValue(item.year, item.make);
+                const groupModels = getItemModels(item);
+                const singleModel = groupModels.length === 1 ? groupModels[0] : "";
                 const modelOptionsLower = new Set(modelOptions.map(o => o.toLowerCase()));
-                const modelInOptions = modelOptionsLower.has((item.model ?? "").toLowerCase());
-                const baseGroup: WatchFormItem = { ...item, model: "" };
-                const groupModels = watchEditItems
-                  .filter(it => sameWatchGroup(it, baseGroup))
-                  .map(it => it.model)
-                  .filter(Boolean);
+                const modelInOptions = modelOptionsLower.has(singleModel.toLowerCase());
                 const multiSelected = groupModels.length > 1;
                 const modelSelectValue = multiSelected
                   ? "__multi__"
                   : modelInOptions
-                    ? item.model
+                    ? singleModel
                     : "__custom__";
                 const showCustomModelInput =
                   (modelOptions.length === 0 || !modelInOptions) && !multiSelected;
@@ -8327,7 +8367,13 @@ export default function Home() {
                         className="border rounded px-2 py-2 text-sm w-full"
                         placeholder="2026 or 2018-2021"
                         value={item.year}
-                        onChange={e => updateWatchEditItem(idx, { year: e.target.value })}
+                        onChange={e =>
+                          updateWatchEditItem(idx, {
+                            year: e.target.value,
+                            model: "",
+                            models: []
+                          })
+                        }
                       />
                     </div>
                     <div>
@@ -8338,10 +8384,14 @@ export default function Home() {
                         onChange={e => {
                           const value = e.target.value;
                           if (value === "__custom__") {
-                            updateWatchEditItem(idx, { make: makeInOptions ? "" : item.make });
+                            updateWatchEditItem(idx, {
+                              make: makeInOptions ? "" : item.make,
+                              model: "",
+                              models: []
+                            });
                             return;
                           }
-                          updateWatchEditItem(idx, { make: value });
+                          updateWatchEditItem(idx, { make: value, model: "", models: [] });
                         }}
                       >
                         <option value="">Select make</option>
@@ -8361,26 +8411,31 @@ export default function Home() {
                         />
                       ) : null}
                     </div>
-                      <div>
-                        <div className="text-xs text-gray-500 mb-1">Model</div>
-                        <select
-                          className="border rounded px-2 py-2 text-sm w-full"
-                          value={modelSelectValue}
-                          onChange={e => {
-                            const value = e.target.value;
-                            if (value === "__multi__") return;
-                            if (value === "__custom__") {
-                              updateWatchEditItem(idx, { model: modelInOptions ? "" : item.model });
-                              return;
-                            }
-                            setWatchEditItems(prev =>
-                              applyWatchGroupModels(prev, baseGroup, [value])
-                            );
-                          }}
-                        >
-                          <option value="">Select model</option>
-                          {modelOptions.map(option => (
-                            <option key={option} value={option}>
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">Model</div>
+                      <select
+                        className="border rounded px-2 py-2 text-sm w-full"
+                        value={modelSelectValue}
+                                  onChange={e => {
+                                    const value = e.target.value;
+                                    if (value === "__multi__") return;
+                                    if (!value) {
+                                      updateWatchEditItem(idx, { model: "", models: [] });
+                                      return;
+                                    }
+                                    if (value === "__custom__") {
+                                      updateWatchEditItem(idx, {
+                                        model: modelInOptions ? "" : singleModel,
+                                        models: []
+                                      });
+                            return;
+                          }
+                          updateWatchEditItem(idx, { model: value, models: [value] });
+                        }}
+                      >
+                        <option value="">Select model</option>
+                        {modelOptions.map(option => (
+                          <option key={option} value={option}>
                               {option}
                             </option>
                           ))}
@@ -8389,43 +8444,46 @@ export default function Home() {
                           ) : null}
                           <option value="__custom__">Other (type manually)</option>
                         </select>
-                        {showCustomModelInput ? (
-                          <input
-                            className="border rounded px-2 py-2 text-sm w-full mt-2"
-                            placeholder="Type model"
-                            value={item.model}
-                            onChange={e =>
-                              setWatchEditItems(prev =>
-                                applyWatchGroupModels(prev, baseGroup, [e.target.value])
-                              )
-                            }
-                          />
-                        ) : null}
-                        {modelOptions.length ? (
-                          <div className="mt-2 border rounded p-2 max-h-40 overflow-auto">
-                            {modelOptions.map(option => {
-                              const checked = groupModels
-                                .map(m => m.toLowerCase())
-                                .includes(option.toLowerCase());
+                      {showCustomModelInput ? (
+                        <input
+                          className="border rounded px-2 py-2 text-sm w-full mt-2"
+                          placeholder="Type model"
+                          value={singleModel}
+                          onChange={e =>
+                            updateWatchEditItem(idx, {
+                              model: e.target.value,
+                              models: e.target.value ? [e.target.value] : []
+                            })
+                          }
+                        />
+                      ) : null}
+                      {modelOptions.length ? (
+                        <div className="mt-2 border rounded p-2 max-h-40 overflow-auto">
+                          {modelOptions.map(option => {
+                            const checked = groupModels
+                              .map(m => m.toLowerCase())
+                              .includes(option.toLowerCase());
                               return (
                                 <label
                                   key={`${option}-edit-multi`}
                                   className="flex items-center gap-2 text-xs py-1"
                                 >
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={e => {
-                                      const next = new Set(groupModels);
-                                      if (e.target.checked) next.add(option);
-                                      else next.delete(option);
-                                      setWatchEditItems(prev =>
-                                        applyWatchGroupModels(prev, baseGroup, Array.from(next))
-                                      );
-                                    }}
-                                  />
-                                  <span>{option}</span>
-                                </label>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={e => {
+                                    const next = new Set(groupModels);
+                                    if (e.target.checked) next.add(option);
+                                    else next.delete(option);
+                                    const list = Array.from(next);
+                                    updateWatchEditItem(idx, {
+                                      model: list[0] ?? "",
+                                      models: list
+                                    });
+                                  }}
+                                />
+                                <span>{option}</span>
+                              </label>
                               );
                             })}
                           </div>
