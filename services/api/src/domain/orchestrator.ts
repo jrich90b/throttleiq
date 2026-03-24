@@ -266,6 +266,27 @@ function extractPreferredTermMonths(text: string): number | null {
   return null;
 }
 
+function parseDownPayment(text: string): { amount: number; assumedThousands: boolean } | null {
+  const t = text.toLowerCase();
+  const match = t.match(
+    /(?:\$\s*)?(\d{1,3}(?:,\d{3})+|\d+)\s*(k|grand)?\s*(?:down|down payment|deposit|dp|put down)/
+  );
+  if (!match) return null;
+  const rawNum = Number(String(match[1]).replace(/,/g, ""));
+  if (!Number.isFinite(rawNum) || rawNum <= 0) return null;
+  const hasK = !!match[2];
+  const hasDollar = t.includes("$");
+  let amount = rawNum;
+  let assumedThousands = false;
+  if (hasK) {
+    amount = rawNum * 1000;
+  } else if (!hasDollar && rawNum <= 99) {
+    amount = rawNum * 1000;
+    assumedThousands = true;
+  }
+  return { amount, assumedThousands };
+}
+
 function calcMonthlyPayment(principal: number, apr: number, months: number): number {
   const rate = apr / 12;
   if (rate <= 0) return principal / months;
@@ -279,13 +300,19 @@ function buildMonthlyPaymentLine(opts: {
   isUsed: boolean;
   termMonths: number;
   taxRate: number;
+  downPayment?: number;
+  downPaymentAssumed?: boolean;
 }): string {
   const nf = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
   const feeMin = opts.isUsed ? 200 : 1200;
   const feeMax = opts.isUsed ? 300 : 1200;
   const taxRate = Number.isFinite(opts.taxRate) ? opts.taxRate : 0;
-  const totalMin = (opts.priceMin + feeMin) * (1 + taxRate);
-  const totalMax = (opts.priceMax + feeMax) * (1 + taxRate);
+  let totalMin = (opts.priceMin + feeMin) * (1 + taxRate);
+  let totalMax = (opts.priceMax + feeMax) * (1 + taxRate);
+  if (opts.downPayment && opts.downPayment > 0) {
+    totalMin = Math.max(0, totalMin - opts.downPayment);
+    totalMax = Math.max(0, totalMax - opts.downPayment);
+  }
   const aprMin = opts.isUsed ? 0.08 : 0.06;
   const aprMax = opts.isUsed ? 0.09 : 0.08;
   const low = calcMonthlyPayment(totalMin, aprMin, opts.termMonths);
@@ -297,12 +324,30 @@ function buildMonthlyPaymentLine(opts: {
     opts.priceMin === opts.priceMax
       ? nf.format(opts.priceMin)
       : `${nf.format(opts.priceMin)}–${nf.format(opts.priceMax)}`;
+  const downLabel =
+    opts.downPayment && opts.downPayment > 0
+      ? `${opts.downPaymentAssumed ? "assuming " : ""}${nf.format(opts.downPayment)} down, `
+      : "";
 
   return (
-    `Good question. Ballpark, on about ${priceLabel}, ` +
+    `Good question. Ballpark, on about ${priceLabel}, ${downLabel}` +
     `you’re around ${payLow}–${payHigh}/mo at ${opts.termMonths} months depending on credit. ` +
     `Were you thinking 60, 72, or 84 months, and about how much down?`
   );
+}
+
+function looksLikePaymentEstimateMessage(text: string): boolean {
+  const t = text.toLowerCase();
+  return /(ballpark|\/mo|per month|monthly|payments?)/.test(t);
+}
+
+function detectPaymentFollowUp(text: string, history: { direction: "in" | "out"; body: string }[]): boolean {
+  const t = String(text ?? "").toLowerCase();
+  const lastOutbound = [...(history ?? [])].reverse().find(h => h.direction === "out")?.body ?? "";
+  if (!looksLikePaymentEstimateMessage(lastOutbound)) return false;
+  const hasTerm = extractPreferredTermMonths(t) != null;
+  const hasDown = /(down|down payment|deposit|dp|put down)/.test(t);
+  return hasTerm || hasDown;
 }
 
 function detectPricingOrPayment(text: string, intent?: OrchestratorResult["intent"]): boolean {
@@ -962,8 +1007,12 @@ export async function orchestrateInbound(
         colorText: colorHint
       });
       const numericYear = yearForRange ? Number(yearForRange) : null;
-      const paymentQuestion = detectPaymentPressure(event.body);
+      const paymentFollowUp = detectPaymentFollowUp(event.body, history ?? []);
+      const paymentQuestion = detectPaymentPressure(event.body) || paymentFollowUp;
       const preferredTerm = extractPreferredTermMonths(event.body) ?? 60;
+      const downInfo = parseDownPayment(event.body);
+      const downPayment = downInfo?.amount;
+      const downPaymentAssumed = downInfo?.assumedThousands ?? false;
       const conditionRaw = [
         leadForPrice?.vehicle?.condition,
         (priceLookup as any)?.item?.condition
@@ -989,13 +1038,26 @@ export async function orchestrateInbound(
               : msrpLookup?.rangeForTrim ?? msrpLookup?.rangeForColor ?? msrpLookup?.range ?? null;
 
       if (paymentQuestion && paymentRange) {
-        const draft = buildMonthlyPaymentLine({
+        let draft = buildMonthlyPaymentLine({
           priceMin: paymentRange.min,
           priceMax: paymentRange.max,
           isUsed,
           termMonths: preferredTerm,
-          taxRate
+          taxRate,
+          downPayment,
+          downPaymentAssumed
         });
+        if (downPayment && extractPreferredTermMonths(event.body)) {
+          draft = draft.replace(
+            /Were you thinking[^.]*\./i,
+            "If you want me to run it with a different amount, just tell me."
+          );
+        } else if (downPayment) {
+          draft = draft.replace(
+            /Were you thinking[^.]*\./i,
+            "If you want me to run it at a different term, just tell me."
+          );
+        }
         return finalize({
           intent,
           stage: "ENGAGED",
