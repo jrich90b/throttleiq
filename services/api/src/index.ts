@@ -2847,6 +2847,29 @@ function applyTradePolicy(
   return out;
 }
 
+function applyPickupPolicy(conv: any, reply: string): string {
+  const text = String(reply ?? "");
+  if (!/(pick[-\s]?up|pickup range|street number|street name|address)/i.test(text)) {
+    return reply;
+  }
+  const inbound = getLastInbound(conv)?.body ?? "";
+  const inboundText = String(inbound ?? "");
+  const visitIntent =
+    /(come (in|by|up)|stop (in|by)|swing by|drive (up|down)|ride (up|down)|take a ride|look at (it|the)|check (it|them) out|see (it|them))/i;
+  const pickupRequested =
+    /(pick[-\s]?up|can you pick|have you pick|come get|driver pick)/i;
+  if (visitIntent.test(inboundText) && !pickupRequested.test(inboundText)) {
+    if (conv.pickup?.stage) {
+      conv.pickup = { ...(conv.pickup ?? {}), stage: undefined, updatedAt: nowIso() };
+    }
+    return "Got it — if you want to come by and take a look, I can work around your schedule. What day works best? We can go over the trade value in person.";
+  }
+  if (conv.pickup?.eligible === false) {
+    return "Got it — we’re outside the usual pickup range for that area. If you can make it in, I can work around your schedule. What day works best to stop in?";
+  }
+  return reply;
+}
+
 function isPricingText(text: string): boolean {
   return /(price|otd|out the door|payment|monthly|down|apr|term|finance|credit|quote)/i.test(String(text ?? ""));
 }
@@ -6265,6 +6288,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   let reply = ensureUniqueDraft(result.draft, conv, dealerName, agentName);
   reply = applySlotOfferPolicy(conv, reply, lastOutboundTextFinal);
   reply = applyTradePolicy(conv, reply, lastOutboundTextFinal, result.suggestedSlots);
+  reply = applyPickupPolicy(conv, reply);
   reply = applyPricingPolicy(conv, reply, lastOutboundTextFinal);
   reply = applyCallbackPolicy(conv, reply, lastOutboundTextFinal);
   reply = applyServicePolicy(conv, reply, lastOutboundTextFinal);
@@ -9782,6 +9806,7 @@ if (authToken && signature) {
   let reply = ensureUniqueDraft(result.draft, conv, dealerName, agentName);
   reply = applySlotOfferPolicy(conv, reply, lastOutboundTextFinal);
   reply = applyTradePolicy(conv, reply, lastOutboundTextFinal, result.suggestedSlots);
+  reply = applyPickupPolicy(conv, reply);
   reply = applyPricingPolicy(conv, reply, lastOutboundTextFinal);
   reply = applyCallbackPolicy(conv, reply, lastOutboundTextFinal);
   reply = applyServicePolicy(conv, reply, lastOutboundTextFinal);
