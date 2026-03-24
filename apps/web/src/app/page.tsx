@@ -1248,7 +1248,11 @@ export default function Home() {
     return null;
   }
 
-  function getModelsForYearValue(yearValue: string): string[] {
+  function getModelsForYearValue(yearValue: string, makeValue?: string): string[] {
+    const make = (makeValue ?? "").trim().toLowerCase();
+    if (make && make !== "harley-davidson" && make !== "harley davidson") {
+      return [];
+    }
     const range = parseYearRangeValue(yearValue);
     if (!range) return [];
     const out = new Set<string>();
@@ -1257,6 +1261,20 @@ export default function Home() {
     }
     return Array.from(out).sort((a, b) => a.localeCompare(b));
   }
+
+  const watchMakeOptions = useMemo(() => {
+    const set = new Set<string>();
+    if (Object.keys(modelsByYear).length) set.add("Harley-Davidson");
+    inventoryItems.forEach(item => {
+      const make = String(item?.make ?? "").trim();
+      if (make) set.add(make);
+    });
+    watchEditItems.forEach(item => {
+      const make = String(item?.make ?? "").trim();
+      if (make) set.add(make);
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [modelsByYear, inventoryItems, watchEditItems]);
 
   function openWatchEdit(convId: string) {
     const conv = conversations.find(c => c.id === convId || c.leadKey === convId);
@@ -7973,8 +7991,16 @@ export default function Home() {
             <div className="text-sm font-semibold">Edit vehicle watch</div>
             <div className="mt-3 space-y-3">
               {watchEditItems.map((item, idx) => {
-                const modelOptions = getModelsForYearValue(item.year);
-                const listId = `watch-models-${idx}`;
+                const modelOptions = getModelsForYearValue(item.year, item.make);
+                const modelOptionsLower = new Set(modelOptions.map(o => o.toLowerCase()));
+                const modelInOptions = modelOptionsLower.has((item.model ?? "").toLowerCase());
+                const modelSelectValue = modelInOptions ? item.model : "__custom__";
+                const showCustomModelInput = modelOptions.length === 0 || !modelInOptions;
+
+                const makeOptionsLower = new Set(watchMakeOptions.map(o => o.toLowerCase()));
+                const makeInOptions = makeOptionsLower.has((item.make ?? "").toLowerCase());
+                const makeSelectValue = makeInOptions ? item.make : "__custom__";
+                const showCustomMakeInput = watchMakeOptions.length === 0 || !makeInOptions;
                 return (
                 <div key={`watch-edit-${idx}`} className="border rounded p-3">
                   <div className="grid grid-cols-2 gap-3">
@@ -8001,28 +8027,64 @@ export default function Home() {
                     </div>
                     <div>
                       <div className="text-xs text-gray-500 mb-1">Make</div>
-                      <input
+                      <select
                         className="border rounded px-2 py-2 text-sm w-full"
-                        placeholder="Harley-Davidson"
-                        value={item.make}
-                        onChange={e => updateWatchEditItem(idx, { make: e.target.value })}
-                      />
+                        value={makeSelectValue}
+                        onChange={e => {
+                          const value = e.target.value;
+                          if (value === "__custom__") {
+                            updateWatchEditItem(idx, { make: makeInOptions ? "" : item.make });
+                            return;
+                          }
+                          updateWatchEditItem(idx, { make: value });
+                        }}
+                      >
+                        <option value="">Select make</option>
+                        {watchMakeOptions.map(option => (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        ))}
+                        <option value="__custom__">Other (type manually)</option>
+                      </select>
+                      {showCustomMakeInput ? (
+                        <input
+                          className="border rounded px-2 py-2 text-sm w-full mt-2"
+                          placeholder="Type make"
+                          value={item.make}
+                          onChange={e => updateWatchEditItem(idx, { make: e.target.value })}
+                        />
+                      ) : null}
                     </div>
                     <div>
                       <div className="text-xs text-gray-500 mb-1">Model</div>
-                      <input
+                      <select
                         className="border rounded px-2 py-2 text-sm w-full"
-                        placeholder="Low Rider S"
-                        value={item.model}
-                        list={modelOptions.length ? listId : undefined}
-                        onChange={e => updateWatchEditItem(idx, { model: e.target.value })}
-                      />
-                      {modelOptions.length ? (
-                        <datalist id={listId}>
-                          {modelOptions.map(option => (
-                            <option key={option} value={option} />
-                          ))}
-                        </datalist>
+                        value={modelSelectValue}
+                        onChange={e => {
+                          const value = e.target.value;
+                          if (value === "__custom__") {
+                            updateWatchEditItem(idx, { model: modelInOptions ? "" : item.model });
+                            return;
+                          }
+                          updateWatchEditItem(idx, { model: value });
+                        }}
+                      >
+                        <option value="">Select model</option>
+                        {modelOptions.map(option => (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        ))}
+                        <option value="__custom__">Other (type manually)</option>
+                      </select>
+                      {showCustomModelInput ? (
+                        <input
+                          className="border rounded px-2 py-2 text-sm w-full mt-2"
+                          placeholder="Type model"
+                          value={item.model}
+                          onChange={e => updateWatchEditItem(idx, { model: e.target.value })}
+                        />
                       ) : null}
                     </div>
                     <div>
