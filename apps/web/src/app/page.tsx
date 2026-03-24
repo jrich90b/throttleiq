@@ -3260,7 +3260,11 @@ export default function Home() {
       });
       const json = await resp.json();
       if (!resp.ok) throw new Error(json?.error ?? "Failed to update user");
-      setUsersList(prev => prev.map(u => (u.id === userId ? normalizeUserRow(json.user) : u)));
+      const normalized = normalizeUserRow(json.user);
+      setUsersList(prev => prev.map(u => (u.id === userId ? normalized : u)));
+      if (authUser?.id === userId) {
+        setAuthUser(normalized);
+      }
       await reloadScheduler();
       setEditingUserId(null);
       setShowNewUserForm(false);
