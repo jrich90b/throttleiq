@@ -213,6 +213,122 @@ async function openLeadByRef(page: Page, leadRef: string, step: StepFn) {
   });
 }
 
+async function openDealershipVisitByRef(page: Page, leadRef: string, step: StepFn) {
+  const refInput = page.locator("#QL_Ref");
+  await step("lead: fill #QL_Ref", async () => {
+    await refInput.fill(leadRef);
+  });
+  await step("lead: submit ref", async () => {
+    await refInput.press("Enter");
+  });
+
+  const row = page.locator('tr[id^="NOTEPAD_DATUM_"]').first();
+  await step("lead: wait row tr[id^=NOTEPAD_DATUM_]", async () => {
+    await row.waitFor({ state: "visible", timeout: DEFAULT_TIMEOUT_MS });
+  });
+
+  const actionCell = row.locator("td.actionListing.action_dt.min-mobile.noxls").first();
+  const openActions = row
+    .locator("ul.pencilOnly a.action1[title='Open Lead Actions Menu']")
+    .first();
+  await step("lead: wait actions menu", async () => {
+    await openActions.waitFor({ state: "visible", timeout: SHORT_TIMEOUT_MS });
+  });
+
+  let popupVisible = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await step(`lead: open actions menu (attempt ${attempt + 1})`, async () => {
+      await openActions.click({ force: true });
+    });
+    try {
+      await step("lead: wait #pencilPopupInner", async () => {
+        await page.locator("#pencilPopupInner").waitFor({ state: "visible", timeout: SHORT_TIMEOUT_MS });
+      });
+      popupVisible = true;
+      break;
+    } catch {
+      await step(`lead: click action cell (attempt ${attempt + 1})`, async () => {
+        await actionCell.click({ force: true });
+      });
+    }
+  }
+  if (!popupVisible) {
+    throw new Error("lead: menu did not open (#pencilPopupInner)");
+  }
+
+  const bubbleLoader = page.locator("#bubbleLoader");
+  try {
+    await step("lead: wait #bubbleLoader hidden", async () => {
+      await bubbleLoader.waitFor({ state: "hidden", timeout: SHORT_TIMEOUT_MS });
+    });
+  } catch {
+    // best-effort
+  }
+
+  let clicked = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const visitItem = page
+        .locator("#pencilPopupInner")
+        .locator("a, button, li")
+        .filter({ hasText: /Dealership Visit/i })
+        .first();
+      await step(`lead: wait dealership visit (attempt ${attempt + 1})`, async () => {
+        await visitItem.waitFor({ state: "visible", timeout: SHORT_TIMEOUT_MS });
+      });
+      await step(`lead: click dealership visit (attempt ${attempt + 1})`, async () => {
+        await visitItem.click({ force: true });
+      });
+      clicked = true;
+      break;
+    } catch {
+      await step(`lead: re-open actions menu (attempt ${attempt + 1})`, async () => {
+        await actionCell.click({ force: true });
+        await openActions.click({ force: true });
+      });
+      await page.waitForTimeout(300);
+    }
+  }
+  if (!clicked) {
+    const jsClicked = await step("lead: js click dealership visit", async () => {
+      return await page.evaluate(() => {
+        const root = (globalThis as any).document?.querySelector?.("#pencilPopupInner");
+        if (!root) return false;
+        const btn = Array.from(root.querySelectorAll("a,button,li") ?? []).find((el: any) =>
+          /Dealership Visit/i.test(el?.textContent || "")
+        );
+        if (btn && (btn as any).click) {
+          (btn as any).click();
+          return true;
+        }
+        return false;
+      });
+    });
+    if (!jsClicked) throw new Error("lead: dealership visit menu item not found");
+  }
+
+  const delivered = page.locator("text=/9[-\\s]*Delivered/i").first();
+  await step("visit: wait 9-Delivered", async () => {
+    await delivered.waitFor({ state: "visible", timeout: DEFAULT_TIMEOUT_MS });
+  });
+}
+
+async function markDeliveredStep(page: Page, step: StepFn) {
+  const delivered = page.locator("text=/9[-\\s]*Delivered/i").first();
+  await step("visit: click 9-Delivered", async () => {
+    await delivered.click({ force: true });
+  });
+
+  const submit = page
+    .locator('button:has-text("SUBMIT LOG"), button:has-text("Submit Log"), input[value*="Submit"]')
+    .first();
+  await step("visit: submit log", async () => {
+    await submit.waitFor({ state: "visible", timeout: DEFAULT_TIMEOUT_MS });
+    await submit.click({ force: true });
+  });
+  await page.waitForTimeout(1000);
+}
+
 async function selectMotorcyclesCategory(page: Page, categoryValue: string, step: StepFn) {
   // Stable selector you provided:
   // <select id="TLPLOG_product_category"> with option value MOTORCYCLES
@@ -324,6 +440,42 @@ export async function tlpLogCustomerContact(args: TlpLogCustomerContactArgs): Pr
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("[tlp] log failed", { leadRef: args.leadRef, step: currentStep, error: message });
+      await captureDebugArtifacts(page, currentStep);
+      await context.close();
+      throw error;
+    }
+  });
+}
+
+export async function tlpMarkDealershipVisitDelivered(args: { leadRef: string }): Promise<void> {
+  await withBrowser(async (browser) => {
+    const context = await browser.newContext({
+      viewport: { width: 1440, height: 900 },
+      userAgent:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    });
+    const page = await context.newPage();
+    page.setDefaultTimeout(DEFAULT_TIMEOUT_MS);
+    page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+    let currentStep = "init";
+    const step: StepFn = async (label, fn) => {
+      currentStep = label;
+      if (DEBUG) console.log(`[tlp] ${label}`);
+      try {
+        return await fn();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`${label}: ${message}`);
+      }
+    };
+    try {
+      await loginTlp(page, step);
+      await openDealershipVisitByRef(page, args.leadRef, step);
+      await markDeliveredStep(page, step);
+      await context.close();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[tlp] delivered mark failed", { leadRef: args.leadRef, step: currentStep, error: message });
       await captureDebugArtifacts(page, currentStep);
       await context.close();
       throw error;

@@ -144,7 +144,7 @@ import {
   listSuppressions,
   removeSuppression
 } from "./domain/suppressionStore.js";
-import { tlpLogCustomerContact } from "./connectors/crm/tlpPlaywright.js";
+import { tlpLogCustomerContact, tlpMarkDealershipVisitDelivered } from "./connectors/crm/tlpPlaywright.js";
 import { listContacts, updateContact, deleteContact } from "./domain/contactsStore.js";
 import { isLikelyVoicemailTranscript, maybeMarkEngagedFromCall } from "./domain/engagement.js";
 
@@ -4917,6 +4917,15 @@ app.post("/conversations/:id/close", async (req, res) => {
     setFollowUpMode(conv, "active", "post_sale");
     startPostSaleCadence(conv, nowIso, cfg.timezone);
     saveConversation(conv);
+    if (conv.lead?.leadRef) {
+      try {
+        await tlpMarkDealershipVisitDelivered({ leadRef: conv.lead.leadRef });
+      } catch (err: any) {
+        const msg = `TLP delivered step failed for leadRef ${conv.lead.leadRef}. Retry in TLP or update manually.`;
+        addInternalQuestion(conv.id, conv.leadKey, msg);
+        console.warn("[tlp] delivered mark failed:", err?.message ?? err);
+      }
+    }
     return res.json({ ok: true, conversation: conv });
   }
   closeConversation(conv, reason);
