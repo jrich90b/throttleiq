@@ -5917,9 +5917,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
 
   const channel =
     req.body?.channel === "email" ? "email" : req.body?.channel === "sms" ? "sms" : "sms";
-  const inbound = [...(conv.messages ?? [])]
-    .reverse()
-    .find(m => m.direction === "in");
+  const inboundMessages = [...(conv.messages ?? [])].reverse().filter(m => m.direction === "in");
+  const inbound =
+    inboundMessages.find(m => m.provider !== "sendgrid_adf" && m.body) ??
+    inboundMessages.find(m => m.body);
   if (!inbound?.body) {
     return res.status(400).json({ ok: false, error: "no_inbound_message" });
   }
