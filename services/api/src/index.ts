@@ -9912,7 +9912,11 @@ app.post("/webhooks/twilio/voice", async (req, res) => {
   }
 
   const leadKeyParam = leadKey || requestedCustomerPhone || inboundFromPhone || "";
-  const recordingCb = `${publicBase ?? `${req.protocol}://${req.get("host")}`}/webhooks/twilio/voice/recording?leadKey=${encodeURIComponent(leadKeyParam)}${requestedCustomerPhone ? `&customer=${encodeURIComponent(requestedCustomerPhone)}` : ""}${callSid ? `&callSid=${encodeURIComponent(callSid)}` : ""}${agentNameRaw ? `&agentName=${encodeURIComponent(agentNameRaw)}` : ""}`;
+  const customerForCb = requestedCustomerPhone || inboundFromPhone || "";
+  const recordingCb = `${publicBase ?? `${req.protocol}://${req.get("host")}`}/webhooks/twilio/voice/recording?leadKey=${encodeURIComponent(leadKeyParam)}${customerForCb ? `&customer=${encodeURIComponent(customerForCb)}` : ""}${callSid ? `&callSid=${encodeURIComponent(callSid)}` : ""}${agentNameRaw ? `&agentName=${encodeURIComponent(agentNameRaw)}` : ""}`;
+  const statusCb = `${publicBase ?? `${req.protocol}://${req.get("host")}`}/webhooks/twilio/voice/status?leadKey=${encodeURIComponent(
+    leadKeyParam
+  )}${inboundFromPhone ? `&from=${encodeURIComponent(inboundFromPhone)}` : ""}${isInbound ? "&inbound=1" : ""}${callSid ? `&callSid=${encodeURIComponent(callSid)}` : ""}`;
 
   const response = new (twilio as any).twiml.VoiceResponse();
   if (agentDigits) {
@@ -9927,7 +9931,10 @@ app.post("/webhooks/twilio/voice", async (req, res) => {
       timeout: 30,
       record: "record-from-answer-dual",
       recordingStatusCallback: recordingCb,
-      recordingStatusCallbackEvent: ["completed"]
+      recordingStatusCallbackEvent: ["completed"],
+      statusCallback: statusCb,
+      statusCallbackEvent: ["completed"],
+      statusCallbackMethod: "POST"
     });
     dial.number(dialTarget);
   } else {
@@ -10050,6 +10057,17 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
           "voice_summary",
           recordingSid || bodyCallSid || callbackCallSid || undefined
         );
+        if (isVoicemail) {
+          const existing = listOpenTodos().some(
+            t => t.convId === conv.id && t.status === "open" && t.reason === "call"
+          );
+          if (!existing) {
+            const label = customerRaw
+              ? `Voicemail from ${customerRaw}`
+              : "Voicemail received — call back.";
+            addTodo(conv, "call", label, recordingSid || bodyCallSid || callbackCallSid || undefined);
+          }
+        }
         if (!isVoicemail) {
           await applyPostCallSummaryActions({
             conv,
@@ -10091,6 +10109,48 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
     console.warn("[voice] recording handle failed:", err?.message ?? err);
     return res.json({ ok: false, error: "recording handle failed" });
   }
+});
+
+app.post("/webhooks/twilio/voice/status", async (req, res) => {
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const signature = req.header("x-twilio-signature");
+  const publicBase = process.env.PUBLIC_BASE_URL?.replace(/\/+$/, "");
+  const requestUrl = publicBase
+    ? `${publicBase}${req.originalUrl}`
+    : `${req.protocol}://${req.get("host")}${req.originalUrl}`;
+  if (authToken && signature) {
+    const ok = twilio.validateRequest(authToken, signature, requestUrl, req.body);
+    if (!ok) return res.status(403).json({ ok: false, error: "Invalid Twilio signature" });
+  }
+
+  const leadKey = String(req.query?.leadKey ?? "").trim();
+  const inbound = String(req.query?.inbound ?? "") === "1";
+  const fromRaw = String(req.query?.from ?? req.body?.From ?? "").trim();
+  const from = normalizePhone(fromRaw);
+  const dialStatusRaw = String(req.body?.DialCallStatus ?? req.body?.CallStatus ?? "")
+    .trim()
+    .toLowerCase();
+
+  if (!inbound || !leadKey) {
+    return res.json({ ok: true });
+  }
+
+  const missedStatuses = new Set(["no-answer", "busy", "failed", "canceled"]);
+  if (missedStatuses.has(dialStatusRaw)) {
+    const conv = getConversation(leadKey) || upsertConversationByLeadKey(leadKey, "suggest");
+    if (conv) {
+      const hasOpenCall = listOpenTodos().some(
+        t => t.convId === conv.id && t.status === "open" && t.reason === "call"
+      );
+      if (!hasOpenCall) {
+        const label = from ? `Missed call from ${from}` : "Missed inbound call — call back.";
+        addTodo(conv, "call", label, String(req.query?.callSid ?? req.body?.CallSid ?? ""));
+      }
+      saveConversation(conv);
+      await flushConversationStore();
+    }
+  }
+  return res.json({ ok: true });
 });
 
 function escapeXml(s: string): string {
