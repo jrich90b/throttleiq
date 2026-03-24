@@ -7478,6 +7478,33 @@ if (authToken && signature) {
     conv.classification?.cta === "sell_my_bike" ||
     conv.classification?.bucket === "trade_in_sell";
   const isSellMyBikeLead = /sell my bike/.test(leadSourceText) || conv.classification?.cta === "sell_my_bike";
+  if (event.provider === "twilio" && isTradeLead) {
+    const townMention = extractTownFromMessage(event.body ?? "");
+    if (townMention && !conv.pickup?.town) {
+      const dealerProfile = await getDealerProfile();
+      const coords = await resolveDealerLatLon(dealerProfile);
+      const cfg = getWeatherConfig(dealerProfile);
+      let townLabel = townMention;
+      let eligible: boolean | undefined;
+      let distance: number | undefined;
+      if (coords) {
+        const match = await resolveTownNearestDealer(townMention, coords.lat, coords.lon);
+        if (match) {
+          distance = Math.round(match.distanceMiles * 10) / 10;
+          eligible = distance <= Number(cfg.pickupRadiusMiles ?? 25);
+          townLabel = formatTownLabel(match.name, match.state);
+        }
+      }
+      conv.pickup = {
+        ...(conv.pickup ?? {}),
+        town: townLabel,
+        distanceMiles: distance,
+        eligible,
+        updatedAt: nowIso()
+      };
+      saveConversation(conv);
+    }
+  }
   if (isTradeLead && conv.lead) {
     const parsedSellOption = parseSellOptionFromText(event.body ?? "");
     if (parsedSellOption) {
