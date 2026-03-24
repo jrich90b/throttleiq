@@ -2999,6 +2999,17 @@ function draftHasSpecificTimes(text: string): boolean {
   return hasTwoOptions || (hasWeekday && timePattern.test(s));
 }
 
+function getAppointmentTypeColorId(
+  cfg: Awaited<ReturnType<typeof getSchedulerConfig>>,
+  appointmentType?: string | null
+): string | undefined {
+  const key = String(appointmentType ?? "").trim();
+  if (!key) return undefined;
+  const raw = (cfg.appointmentTypes ?? {})[key]?.colorId;
+  const colorId = typeof raw === "string" ? raw.trim() : "";
+  return colorId ? colorId : undefined;
+}
+
 async function buildDay2Options(
   cfg: Awaited<ReturnType<typeof getSchedulerConfig>>
 ): Promise<{ message: string; slots: any[] } | null> {
@@ -3833,6 +3844,7 @@ app.post("/scheduler/book", async (req, res) => {
   ].filter(Boolean);
 
   const cal = await getAuthedCalendarClient();
+  const colorId = getAppointmentTypeColorId(cfg, appointmentType);
   const event = await insertEvent(
     cal,
     slot.calendarId,
@@ -3840,7 +3852,8 @@ app.post("/scheduler/book", async (req, res) => {
     summary,
     descriptionLines.join("\n"),
     slot.start,
-    slot.end
+    slot.end,
+    colorId
   );
 
   const leadKey = String(req.body?.lead?.leadKey ?? "").trim();
@@ -4051,6 +4064,7 @@ app.post("/public/booking/book", async (req, res) => {
     return res.status(409).json({ ok: false, error: "No longer available" });
   }
 
+  const colorId = getAppointmentTypeColorId(cfg, appointmentType);
   const event = await insertEvent(
     cal,
     chosenSp.calendarId,
@@ -4058,7 +4072,8 @@ app.post("/public/booking/book", async (req, res) => {
     summary,
     descriptionLines.join("\n"),
     slot.start,
-    slot.end
+    slot.end,
+    colorId
   );
 
   const conv = upsertConversationByLeadKey(leadKey, "suggest");
@@ -4749,6 +4764,7 @@ app.post("/conversations/:id/appointment", requirePermission("canEditAppointment
       `Notes: ${notes}`
     ].filter(Boolean);
 
+    const colorId = getAppointmentTypeColorId(cfg, appointmentType);
     const event = await insertEvent(
       cal,
       salesperson.calendarId,
@@ -4756,7 +4772,8 @@ app.post("/conversations/:id/appointment", requirePermission("canEditAppointment
       summary,
       descriptionLines.join("\n"),
       startIso,
-      endIso
+      endIso,
+      colorId
     );
 
     conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
@@ -6404,6 +6421,7 @@ if (authToken && signature) {
             .filter(Boolean)
             .join("\n");
 
+          const colorId = getAppointmentTypeColorId(cfg, appointmentType);
           const created = await insertEvent(
             cal,
             chosen.calendarId,
@@ -6411,7 +6429,8 @@ if (authToken && signature) {
             summary,
             description,
             chosen.start,
-            chosen.end
+            chosen.end,
+            colorId
           );
 
           conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
@@ -6506,6 +6525,7 @@ if (authToken && signature) {
           .filter(Boolean)
           .join("\n");
 
+        const colorId = getAppointmentTypeColorId(cfg, appointmentType);
         const created = await insertEvent(
           cal,
           chosen.calendarId,
@@ -6513,7 +6533,8 @@ if (authToken && signature) {
           summary,
           description,
           chosen.start,
-          chosen.end
+          chosen.end,
+          colorId
         );
 
         conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
@@ -6974,6 +6995,7 @@ if (authToken && signature) {
       const salespeople = cfg.salespeople ?? [];
       const cal = await getAuthedCalendarClient();
       const slot = conv.appointment.matchedSlot;
+      const appointmentType = String(slot?.appointmentType ?? "inventory_visit");
       const salespersonId = conv.appointment.bookedSalespersonId ?? slot.salespersonId;
       const sp = salespeople.find((p: any) => p.id === salespersonId);
       if (!sp) throw new Error("Salesperson not found for reschedule");
@@ -7044,7 +7066,7 @@ if (authToken && signature) {
       const lastName = conv.lead?.lastName ?? "";
       const leadName = leadNameRaw || [firstName, lastName].filter(Boolean).join(" ").trim() || conv.leadKey;
 
-      const summary = `Appt: Inventory Visit – ${leadName}${stockId ? ` – ${stockId}` : ""}`;
+      const summary = `Appt: ${appointmentType} – ${leadName}${stockId ? ` – ${stockId}` : ""}`;
 
       const description = [
         `LeadKey: ${conv.leadKey}`,
@@ -7052,11 +7074,13 @@ if (authToken && signature) {
         `Email: ${conv.lead?.email ?? ""}`,
         `Stock: ${stockId ?? ""}`,
         `VIN: ${conv.lead?.vehicle?.vin ?? ""}`,
-        `Source: ${conv.lead?.source ?? ""}`
+        `Source: ${conv.lead?.source ?? ""}`,
+        `VisitType: ${appointmentType}`
       ]
         .filter(Boolean)
         .join("\n");
 
+      const colorId = getAppointmentTypeColorId(cfg, appointmentType);
       const eventObj = await insertEvent(
         cal,
         slot.calendarId,
@@ -7064,7 +7088,8 @@ if (authToken && signature) {
         summary,
         description,
         slot.start,
-        slot.end
+        slot.end,
+        colorId
       );
 
       // Mark appointment as truly booked
@@ -8625,10 +8650,12 @@ if (authToken && signature) {
               `Email: ${conv.lead?.email ?? ""}`,
               `Stock: ${stockId ?? ""}`,
               `VIN: ${conv.lead?.vehicle?.vin ?? ""}`,
-              `Source: ${conv.lead?.source ?? ""}`
+              `Source: ${conv.lead?.source ?? ""}`,
+              `VisitType: ${appointmentType}`
             ]
               .filter(Boolean)
               .join("\n");
+            const colorId = getAppointmentTypeColorId(cfg, appointmentType);
             const created = await insertEvent(
               cal,
               chosen.calendarId,
@@ -8636,7 +8663,8 @@ if (authToken && signature) {
               summary,
               description,
               chosen.start,
-              chosen.end
+              chosen.end,
+              colorId
             );
 
             conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
@@ -8956,6 +8984,7 @@ if (authToken && signature) {
               .filter(Boolean)
               .join("\n");
 
+            const colorId = getAppointmentTypeColorId(cfg, appointmentType);
             const eventObj = await insertEvent(
               cal,
               match.calendarId,
@@ -8963,7 +8992,8 @@ if (authToken && signature) {
               summary,
               description,
               match.start,
-              match.end
+              match.end,
+              colorId
             );
 
             conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
@@ -9130,6 +9160,7 @@ if (authToken && signature) {
               return res.status(200).type("text/xml").send(twiml);
             }
 
+            const colorId = getAppointmentTypeColorId(cfg, appointmentType);
             const eventObj = await insertEvent(
               cal,
               exact.calendarId,
@@ -9137,7 +9168,8 @@ if (authToken && signature) {
               summary,
               description,
               exact.start,
-              exact.end
+              exact.end,
+              colorId
             );
 
             conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
@@ -9296,6 +9328,7 @@ if (authToken && signature) {
               .filter(Boolean)
               .join("\n");
 
+            const colorId = getAppointmentTypeColorId(cfg, appointmentType);
             const eventObj = await insertEvent(
               cal,
               match.calendarId,
@@ -9303,7 +9336,8 @@ if (authToken && signature) {
               summary,
               description,
               match.start,
-              match.end
+              match.end,
+              colorId
             );
 
             conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };

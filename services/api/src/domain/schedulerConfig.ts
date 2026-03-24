@@ -19,7 +19,7 @@ export type SchedulerConfig = {
   };
   minLeadTimeHours: number;
   minGapBetweenAppointmentsMinutes: number;
-  appointmentTypes: Record<string, { durationMinutes: number }>;
+  appointmentTypes: Record<string, { durationMinutes: number; colorId?: string }>;
   availabilityBlocks?: Record<
     string,
     Array<{
@@ -49,7 +49,7 @@ type SchedulerConfigRaw = {
   };
   minLeadTimeHours?: number;
   minGapBetweenAppointmentsMinutes?: number;
-  appointmentTypes?: Record<string, { durationMinutes: number }>;
+  appointmentTypes?: Record<string, { durationMinutes: number; colorId?: string }>;
   availabilityBlocks?: Record<
     string,
     Array<{

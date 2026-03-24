@@ -622,8 +622,8 @@ export default function Home() {
   >([]);
   const [preferredOrderIds, setPreferredOrderIds] = useState<string[]>([]);
   const [appointmentTypesList, setAppointmentTypesList] = useState<
-    Array<{ key: string; durationMinutes: string }>
-  >([{ key: "inventory_visit", durationMinutes: "60" }]);
+    Array<{ key: string; durationMinutes: string; colorId?: string }>
+  >([{ key: "inventory_visit", durationMinutes: "60", colorId: "" }]);
   const [appointmentTypeToAdd, setAppointmentTypeToAdd] = useState("inventory_visit");
   const [manualApptOpen, setManualApptOpen] = useState(false);
   const [manualApptSaving, setManualApptSaving] = useState(false);
@@ -1584,7 +1584,8 @@ export default function Home() {
         setAppointmentTypesList(
           Object.entries(at).map(([key, val]: any) => ({
             key,
-            durationMinutes: String(val?.durationMinutes ?? 60)
+            durationMinutes: String(val?.durationMinutes ?? 60),
+            colorId: val?.colorId ? String(val.colorId) : ""
           }))
         );
         const firstSp =
@@ -1714,7 +1715,8 @@ export default function Home() {
         setAppointmentTypesList(
           Object.entries(at).map(([key, val]: any) => ({
             key,
-            durationMinutes: String(val?.durationMinutes ?? 60)
+            durationMinutes: String(val?.durationMinutes ?? 60),
+            colorId: val?.colorId ? String(val.colorId) : ""
           }))
         );
       } catch {
@@ -1730,7 +1732,7 @@ export default function Home() {
     "finance_discussion"
   ];
   const manualAppointmentTypes = useMemo(() => {
-    const byKey = new Map<string, { key: string; durationMinutes: string }>();
+    const byKey = new Map<string, { key: string; durationMinutes: string; colorId?: string }>();
     appointmentTypesList.forEach(row => {
       const key = row.key.trim();
       if (!key) return;
@@ -1738,7 +1740,7 @@ export default function Home() {
     });
     defaultAppointmentTypes.forEach(key => {
       if (!byKey.has(key)) {
-        byKey.set(key, { key, durationMinutes: "60" });
+        byKey.set(key, { key, durationMinutes: "60", colorId: "" });
       }
     });
     return Array.from(byKey.values());
@@ -2994,12 +2996,13 @@ export default function Home() {
           calendarId: String(u.calendarId || "")
         }))
         .filter((s: any) => s.id && s.name && s.calendarId);
-      const appointmentTypes = appointmentTypesList.reduce<Record<string, { durationMinutes: number }>>(
+      const appointmentTypes = appointmentTypesList.reduce<Record<string, { durationMinutes: number; colorId?: string }>>(
         (acc, row) => {
           const key = row.key.trim();
           if (!key) return acc;
           const mins = Number(row.durationMinutes || 0);
-          acc[key] = { durationMinutes: mins > 0 ? mins : 60 };
+          const colorId = String(row.colorId ?? "").trim();
+          acc[key] = { durationMinutes: mins > 0 ? mins : 60, ...(colorId ? { colorId } : {}) };
           return acc;
         },
         {}
@@ -3055,7 +3058,8 @@ export default function Home() {
       setAppointmentTypesList(
         Object.entries(at).map(([key, val]: any) => ({
           key,
-          durationMinutes: String(val?.durationMinutes ?? 60)
+          durationMinutes: String(val?.durationMinutes ?? 60),
+          colorId: val?.colorId ? String(val.colorId) : ""
         }))
       );
       setEditingUserId(null);
@@ -6317,9 +6321,9 @@ export default function Home() {
                   <div className="text-sm font-medium mb-2">Appointment types</div>
                   <div className="space-y-2">
                     {appointmentTypesList.map((row, idx) => (
-                      <div key={`${row.key}-${idx}`} className="grid grid-cols-2 gap-2 items-center">
+                      <div key={`${row.key}-${idx}`} className="flex flex-wrap gap-2 items-center">
                         <input
-                          className="border rounded px-2 py-1 text-sm"
+                          className="border rounded px-2 py-1 text-sm flex-[2] min-w-[180px]"
                           placeholder="Type key (e.g., inventory_visit)"
                           value={row.key}
                           onChange={e => {
@@ -6328,24 +6332,52 @@ export default function Home() {
                             setAppointmentTypesList(next);
                           }}
                         />
-                        <div className="flex gap-2">
-                          <input
-                            className="border rounded px-2 py-1 text-sm flex-1"
-                            placeholder="Duration (minutes)"
-                            value={row.durationMinutes}
+                        <input
+                          className="border rounded px-2 py-1 text-sm w-32"
+                          placeholder="Duration (minutes)"
+                          value={row.durationMinutes}
+                          onChange={e => {
+                            const next = [...appointmentTypesList];
+                            next[idx] = { ...row, durationMinutes: e.target.value };
+                            setAppointmentTypesList(next);
+                          }}
+                        />
+                        <div className="flex items-center gap-2">
+                          {(() => {
+                            const color = getCalendarColor(row.colorId);
+                            return (
+                              <div
+                                className="w-4 h-4 rounded border"
+                                style={{
+                                  backgroundColor: color?.bg ?? "#FFFFFF",
+                                  borderColor: color?.border ?? "#D1D5DB"
+                                }}
+                              />
+                            );
+                          })()}
+                          <select
+                            className="border rounded px-2 py-1 text-sm"
+                            value={row.colorId ?? ""}
                             onChange={e => {
                               const next = [...appointmentTypesList];
-                              next[idx] = { ...row, durationMinutes: e.target.value };
+                              next[idx] = { ...row, colorId: e.target.value };
                               setAppointmentTypesList(next);
                             }}
-                          />
-                          <button
-                            className="px-2 py-1 border rounded text-xs text-red-600"
-                            onClick={() => setAppointmentTypesList(prev => prev.filter((_, i) => i !== idx))}
                           >
-                            Remove
-                          </button>
+                            <option value="">No color</option>
+                            {CALENDAR_COLORS.map(c => (
+                              <option key={c.id} value={c.id}>
+                                {c.label}
+                              </option>
+                            ))}
+                          </select>
                         </div>
+                        <button
+                          className="px-2 py-1 border rounded text-xs text-red-600"
+                          onClick={() => setAppointmentTypesList(prev => prev.filter((_, i) => i !== idx))}
+                        >
+                          Remove
+                        </button>
                       </div>
                     ))}
                     <div className="flex gap-2 items-center">
@@ -6365,14 +6397,14 @@ export default function Home() {
                         className="px-3 py-2 border rounded text-sm"
                         onClick={() => {
                           if (appointmentTypeToAdd === "custom") {
-                            setAppointmentTypesList(prev => [...prev, { key: "", durationMinutes: "60" }]);
+                            setAppointmentTypesList(prev => [...prev, { key: "", durationMinutes: "60", colorId: "" }]);
                             return;
                           }
                           const key = availableAppointmentTypes.includes(appointmentTypeToAdd)
                             ? appointmentTypeToAdd
                             : availableAppointmentTypes[0];
                           if (!key) return;
-                          setAppointmentTypesList(prev => [...prev, { key, durationMinutes: "60" }]);
+                          setAppointmentTypesList(prev => [...prev, { key, durationMinutes: "60", colorId: "" }]);
                         }}
                       >
                         Add
