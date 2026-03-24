@@ -1254,7 +1254,15 @@ export default function Home() {
       return [];
     }
     const range = parseYearRangeValue(yearValue);
-    if (!range) return [];
+    if (!range) {
+      const all = new Set<string>();
+      Object.values(modelsByYear).forEach(list => {
+        (list ?? []).forEach(name => {
+          if (name) all.add(name);
+        });
+      });
+      return Array.from(all).sort((a, b) => a.localeCompare(b));
+    }
     const out = new Set<string>();
     for (let y = range.min; y <= range.max; y++) {
       for (const name of modelsByYear[String(y)] ?? []) out.add(name);
