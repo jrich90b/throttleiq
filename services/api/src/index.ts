@@ -7821,7 +7821,9 @@ if (authToken && signature) {
 
   const inventoryQuestion =
     llmAvailabilityIntent ||
-    /(in stock|available|availability|do you have|any .* in stock)/i.test(textLower) ||
+    /(in[-\s]?stock|available|availability|do you have|have .* in[-\s]?stock|any .* in[-\s]?stock|do you carry|carry any)/i.test(
+      textLower
+    ) ||
     (!!conv.lead?.vehicle?.model &&
       /\b(\d{4}|blue|black|white|red|green|gray|grey|silver|chrome|trim|color|standard|special|st)\b/i.test(
         textLower
