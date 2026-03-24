@@ -412,8 +412,9 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
     if (!Number.isFinite(y) || y < watch.yearMin || y > watch.yearMax) return false;
   }
   if (watch.color) {
-    const itemColor = normalizeColorBase(String(item.color ?? ""), !!watch.trim);
-    const watchColor = normalizeColorBase(String(watch.color), !!watch.trim);
+    const keepTrim = !!watch.trim || /\b(trim|finish)\b/i.test(String(watch.color));
+    const itemColor = normalizeColorBase(String(item.color ?? ""), keepTrim);
+    const watchColor = normalizeColorBase(String(watch.color), keepTrim);
     if (!itemColor || !watchColor || !itemColor.includes(watchColor)) return false;
   }
   return true;
@@ -2706,6 +2707,13 @@ function extractColorToken(text: string): string | null {
   return colors.find(c => t.includes(c)) ?? null;
 }
 
+function extractFinishToken(text: string): "chrome" | "black" | null {
+  const t = text.toLowerCase();
+  if (/\bchrome(\s+(trim|finish))?\b/.test(t)) return "chrome";
+  if (/\bblack(ed)?\s*(out|trim|finish)\b/.test(t) || /\bblack\s+trim\b/.test(t)) return "black";
+  return null;
+}
+
 function parseInventoryWatchPreference(
   text: string,
   pending: { model?: string; year?: number; color?: string }
@@ -2731,7 +2739,13 @@ function parseInventoryWatchPreference(
     similar;
   const exact = /(exact|only|same color|same colour|only that|just that|same year)/.test(t);
 
-  const color = anyColor ? undefined : extractColorToken(t) ?? pending.color;
+  const finish = extractFinishToken(t);
+  const baseColor = anyColor ? undefined : extractColorToken(t) ?? pending.color;
+  const color = finish
+    ? baseColor
+      ? `${baseColor} ${finish} trim`
+      : `${finish} trim`
+    : baseColor;
   const range = extractYearRange(t);
   let yearMin: number | undefined;
   let yearMax: number | undefined;
@@ -7294,12 +7308,12 @@ if (authToken && signature) {
   }
   const clarificationReply = isClarificationReply(String(event.body ?? ""));
   const lastWasInventoryUncertain =
-    /(not seeing|live feed|verify|inventory availability|check.*inventory|follow up shortly)/i.test(
+    /(not seeing|in stock|verify|inventory availability|check.*inventory|follow up shortly)/i.test(
       lastOutboundText
     );
   if (event.provider === "twilio" && clarificationReply && lastWasInventoryUncertain) {
     const reply =
-      "Sorry for the confusion — I meant I don’t see that exact bike/color in our live feed yet. " +
+      "Sorry for the confusion — I meant I don’t see that exact bike/color in stock right now. " +
       "Want me to check similar options or other years/colors?";
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
@@ -8014,7 +8028,8 @@ if (authToken && signature) {
     }
     try {
       const yearMatch = textLower.match(/\b(20\d{2}|19\d{2})\b/);
-      const year = yearMatch?.[1] ?? llmAvailability?.year ?? conv.lead?.vehicle?.year ?? null;
+      const yearFromText = yearMatch?.[1] ?? llmAvailability?.year ?? null;
+      const year = yearFromText ?? conv.lead?.vehicle?.year ?? null;
       let model =
         llmAvailability?.model ??
         conv.lead?.vehicle?.model ??
@@ -8041,11 +8056,9 @@ if (authToken && signature) {
         "brown",
         "tan"
       ];
-      const color =
-        llmAvailability?.color ??
-        colorTokens.find(c => textLower.includes(c)) ??
-        conv.lead?.vehicle?.color ??
-        null;
+      const colorFromText = llmAvailability?.color ?? colorTokens.find(c => textLower.includes(c)) ?? null;
+      const color = colorFromText ?? conv.lead?.vehicle?.color ?? null;
+      const finishFromText = extractFinishToken(textLower);
 
       if (model) {
         const hasIdentifiers = !!conv.lead?.vehicle?.stockId || !!conv.lead?.vehicle?.vin || !!color;
@@ -8233,11 +8246,44 @@ if (authToken && signature) {
           };
           setDialogState(conv, "inventory_watch_prompted");
         }
+        const leadCondition = normalizeWatchCondition(conv.lead?.vehicle?.condition);
+        const leadYearNum = Number(String(year ?? ""));
+        const currentYear = new Date().getFullYear();
+        const assumeNew = !leadCondition && Number.isFinite(leadYearNum) && leadYearNum === currentYear;
+        const conditionLabel = leadCondition ?? (assumeNew ? "new" : undefined);
+        const yearLabel = year ? `${year}${conditionLabel ? `/${conditionLabel}` : ""}` : null;
+        const needsYear = !yearFromText;
+        const needsColor = !colorFromText;
+        const needsFinish = !finishFromText;
+        let clarify = "";
+        if (!isGenericModel) {
+          if (needsYear && needsColor && needsFinish) {
+            clarify = yearLabel
+              ? `Are you looking for ${yearLabel}, and any color or finish preference (chrome vs blacked-out)?`
+              : "Any specific year, color, or finish preference (chrome vs blacked-out)?";
+          } else if (needsYear && needsFinish) {
+            clarify = yearLabel
+              ? `Are you looking for ${yearLabel}, and do you have a finish preference (chrome vs blacked-out)?`
+              : "Any specific year you're after, and do you have a finish preference (chrome vs blacked-out)?";
+          } else if (needsYear && needsColor) {
+            clarify = yearLabel
+              ? `Are you looking for ${yearLabel}, and any color preference?`
+              : "Any specific year or color you're after?";
+          } else if (needsFinish && needsColor) {
+            clarify = "Any color or finish preference (chrome vs blacked-out)?";
+          } else if (needsFinish) {
+            clarify = "Do you have a finish preference (chrome vs blacked-out)?";
+          } else if (needsColor) {
+            clarify = "Any specific color you're after?";
+          } else if (needsYear) {
+            clarify = yearLabel ? `Are you looking for ${yearLabel}?` : "Any specific year you're after?";
+          }
+        }
         const reply =
-          `I’m not seeing ${year ? `${year} ` : ""}${model}${color ? ` in ${color}` : ""} in our live feed. ` +
+          `I’m not seeing ${year ? `${year} ` : ""}${model}${color ? ` in ${color}` : ""} in stock right now. ` +
           (isGenericModel
             ? "I’ll have someone verify and follow up shortly."
-            : "Do you want me to watch for the exact year/color, the same year any color, or a year range?");
+            : clarify || "Do you want me to watch for the exact year/color, the same year any color, or a year range?");
         const systemMode = webhookMode;
         if (systemMode === "suggest") {
           appendOutbound(conv, event.to, event.from, reply, "draft_ai");
