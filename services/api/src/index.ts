@@ -1130,8 +1130,39 @@ async function applyPostCallSummaryActions(opts: {
   const { conv, summaryText, transcriptText, sourceMessageId } = opts;
   const lowerSummary = summaryText.toLowerCase();
   const lowerTranscript = transcriptText.toLowerCase();
+  const extractCustomerUtterances = (text: string) => {
+    if (!text) return "";
+    const lines = text.split(/\r?\n/);
+    const customerLines = lines
+      .map(line => line.trim())
+      .filter(line =>
+        /^(customer|caller|client|prospect)\s*:/i.test(line)
+      )
+      .map(line => line.replace(/^(customer|caller|client|prospect)\s*:\s*/i, ""));
+    return customerLines.length ? customerLines.join(" ") : "";
+  };
+  const customerText = extractCustomerUtterances(transcriptText) || summaryText;
 
-  const callback = detectSummaryCallback(summaryText, transcriptText);
+  const intentParse = await parseIntentWithLLM({
+    text: customerText,
+    lead: conv.lead
+  });
+  const intentConfidence =
+    typeof intentParse?.confidence === "number" ? intentParse.confidence : 0;
+  const intentConfidenceMin = Number(process.env.LLM_INTENT_CONFIDENCE_MIN ?? 0.75);
+  const intentAccepted = !!intentParse?.explicitRequest && intentConfidence >= intentConfidenceMin;
+  const llmCallbackRequested = intentAccepted && intentParse?.intent === "callback";
+  const llmAvailabilityIntent = intentAccepted && intentParse?.intent === "availability";
+  const llmTestRideIntent = intentAccepted && intentParse?.intent === "test_ride";
+  const llmAvailability = llmAvailabilityIntent ? intentParse?.availability ?? null : null;
+
+  const callback = llmCallbackRequested
+    ? {
+        label: intentParse?.callback?.timeText
+          ? `Customer requested a call back ${intentParse.callback.timeText}`
+          : "Customer requested a call back."
+      }
+    : detectSummaryCallback(summaryText, transcriptText);
   if (callback) {
     const hasOpenCall = listOpenTodos().some(
       t => t.convId === conv.id && t.status === "open" && t.reason === "call"
@@ -1155,6 +1186,7 @@ async function applyPostCallSummaryActions(opts: {
     notifyCue.test(lowerTranscript)
   ) {
     const model =
+      llmAvailability?.model ||
       findModelMention(summaryText) ||
       findModelMention(transcriptText) ||
       conv.lead?.vehicle?.model ||
@@ -1162,8 +1194,12 @@ async function applyPostCallSummaryActions(opts: {
       undefined;
     const hasWatch = !!(conv.inventoryWatch || (conv.inventoryWatches && conv.inventoryWatches.length));
     if (model && !hasWatch) {
-      const year = extractYear(summaryText) || extractYear(transcriptText);
-      const cond = detectCondition(summaryText + " " + transcriptText, year);
+      const yearFromIntent = llmAvailability?.year ? Number(llmAvailability.year) : undefined;
+      const year = yearFromIntent || extractYear(summaryText) || extractYear(transcriptText);
+      const cond =
+        llmAvailability?.condition && llmAvailability.condition !== "unknown"
+          ? llmAvailability.condition
+          : detectCondition(summaryText + " " + transcriptText, year);
       const watch: InventoryWatch = {
         model,
         year: year ?? undefined,
@@ -1174,6 +1210,7 @@ async function applyPostCallSummaryActions(opts: {
         createdAt: new Date().toISOString(),
         note: "call_summary"
       };
+      if (llmAvailability?.color) watch.color = llmAvailability.color;
       conv.inventoryWatch = watch;
       conv.inventoryWatches = [watch];
       conv.inventoryWatchPending = undefined;
@@ -1184,7 +1221,7 @@ async function applyPostCallSummaryActions(opts: {
   }
 
   const bookingCue = /(scheduled|booked|appointment|set for|confirmed|coming in|stop(ping)? in|visit)/i;
-  if (bookingCue.test(lowerSummary) || bookingCue.test(lowerTranscript)) {
+  if (bookingCue.test(lowerSummary) || bookingCue.test(lowerTranscript) || llmTestRideIntent) {
     if (!conv.appointment?.bookedEventId) {
       try {
         const cfg = await getSchedulerConfig();
