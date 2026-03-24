@@ -3226,7 +3226,7 @@ async function processDueFollowUps() {
         if (!pickupKnown) {
           message = `Just checking in — if you want us to pick up ${
             sellBikeLabel ?? "your bike"
-          } for a trade evaluation, where are you located?`;
+          } for a trade evaluation, let me know where you’re located.`;
           conv.pickup = { ...(conv.pickup ?? {}), stage: "need_town", updatedAt: nowIso() };
         } else if (pickupEligible) {
           message = `Just checking in — if the weather’s rough, we can pick up ${
