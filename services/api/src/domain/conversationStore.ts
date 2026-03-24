@@ -759,6 +759,42 @@ export function getConversation(id: string): Conversation | null {
   return null;
 }
 
+export function updateConversationContact(
+  conv: Conversation,
+  patch: {
+    phone?: string;
+    email?: string;
+    firstName?: string;
+    lastName?: string;
+    name?: string;
+  }
+): void {
+  const prevKey = normalizeLeadKey(conv.leadKey || conv.id || "");
+  const nextKey = patch.phone ? normalizeLeadKey(patch.phone) : "";
+  const lead = (conv.lead = conv.lead ?? {});
+
+  if (patch.firstName !== undefined) lead.firstName = patch.firstName;
+  if (patch.lastName !== undefined) lead.lastName = patch.lastName;
+  if (patch.name !== undefined) lead.name = patch.name;
+  if (patch.email !== undefined) lead.email = patch.email;
+  if (patch.phone !== undefined) {
+    if (nextKey) {
+      lead.phone = nextKey;
+    } else {
+      lead.phone = patch.phone;
+    }
+  }
+
+  if (nextKey && nextKey !== prevKey) {
+    conversations.delete(prevKey);
+    conv.leadKey = nextKey;
+    conv.id = nextKey;
+    conversations.set(nextKey, conv);
+  }
+  conv.updatedAt = nowIso();
+  scheduleSave();
+}
+
 
 function ensureAppointment(conv: Conversation): AppointmentMemory {
   if (!conv.appointment) {

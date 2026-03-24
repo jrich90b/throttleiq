@@ -123,6 +123,7 @@ import {
   mergeConversationLead,
   setConversationMode,
   setContactPreference,
+  updateConversationContact,
   setCrmLastLoggedAt,
   setVoiceContext,
   getActiveVoiceContext,
@@ -5531,6 +5532,18 @@ app.get("/contacts", (_req, res) => {
 app.patch("/contacts/:id", (req, res) => {
   const updated = updateContact(req.params.id, req.body ?? {});
   if (!updated) return res.status(404).json({ ok: false, error: "Not found" });
+  const convId = updated.conversationId ?? updated.leadKey ?? "";
+  const conv = convId ? getConversation(convId) : null;
+  if (conv) {
+    updateConversationContact(conv, {
+      phone: updated.phone,
+      email: updated.email,
+      firstName: updated.firstName,
+      lastName: updated.lastName,
+      name: updated.name
+    });
+    saveConversation(conv);
+  }
   res.json({ ok: true, contact: updated });
 });
 

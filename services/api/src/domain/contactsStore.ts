@@ -173,13 +173,23 @@ export function updateContact(
   const existing = contacts.get(id);
   if (!existing) return null;
   const now = nowIso();
+  const nextPhone = normalizePhone(patch.phone ?? existing.phone);
+  const prevPhone = normalizePhone(existing.phone);
+  const leadKeyLooksPhone = !!(existing.leadKey && normalizePhone(existing.leadKey));
+  let nextLeadKey = existing.leadKey;
+  if (patch.phone !== undefined) {
+    if (!existing.leadKey || leadKeyLooksPhone || (prevPhone && normalizePhone(existing.leadKey) === prevPhone)) {
+      nextLeadKey = nextPhone ?? existing.leadKey;
+    }
+  }
   const next: ContactEntry = {
     ...existing,
+    leadKey: nextLeadKey,
     firstName: patch.firstName ?? existing.firstName,
     lastName: patch.lastName ?? existing.lastName,
     name: patch.name ?? existing.name,
     email: normalizeEmail(patch.email ?? existing.email),
-    phone: normalizePhone(patch.phone ?? existing.phone),
+    phone: nextPhone,
     leadSource: patch.leadSource ?? existing.leadSource,
     leadSourceId: patch.leadSourceId ?? existing.leadSourceId,
     leadRef: patch.leadRef ?? existing.leadRef,
