@@ -650,8 +650,8 @@ SMS VARIATIONS:
   1) "Do any of these times work?"
   2) "Which works best?"
 - Reminder offer (when they say later / next month / I’ll let you know):
-  1) "No rush — I’m here when you’re ready. Just give me a heads up when you want to stop in."
-  2) "Totally fine. I’ll be here when you’re ready — just let me know when you want to stop by."
+  1) "No rush — I’m here when you’re ready. Just reach out when the time is right."
+  2) "Totally fine. I’ll be here when you’re ready — just reach out when you’re ready to move forward."
 - Soft scheduling when timing is uncertain (only if they asked to schedule):
   1) "I can pencil you in and we can adjust if needed."
   2) "If you want, I can hold a time and we can move it if needed."

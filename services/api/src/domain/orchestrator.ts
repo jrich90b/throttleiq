@@ -493,9 +493,9 @@ type HandoffReason = "pricing" | "payments" | "approval" | "manager" | "other";
 function buildLongTermMessage(timeframe?: string, hasLicense?: boolean) {
   const tf = timeframe ? timeframe.trim() : "a future";
   if (hasLicense === true) {
-    return `Hi, this is Brooke at American Harley-Davidson. You mentioned a ${tf} timeline. I’m here when you’re ready. Just give me a heads up when you want to stop in.`;
+    return `Hi, this is Brooke at American Harley-Davidson. You mentioned a ${tf} timeline. I’m here when you’re ready. Just reach out when the time is right.`;
   }
-  return `Hi, this is Brooke at American Harley-Davidson. You mentioned a ${tf} timeline. I’m here when you’re ready. Just give me a heads up when you want to stop in.`;
+  return `Hi, this is Brooke at American Harley-Davidson. You mentioned a ${tf} timeline. I’m here when you’re ready. Just reach out when the time is right.`;
 }
 
 function deriveModelFromDescription(desc?: string | null): string | null {
