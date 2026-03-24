@@ -2070,22 +2070,22 @@ export default function Home() {
           : conv.inventoryWatch
             ? [conv.inventoryWatch]
             : [];
-      if (!watches.length) return [];
-      return watches.map((watch, idx) => ({
-        key: `${conv.id}-${idx}`,
-        convId: conv.id,
-        leadKey: conv.leadKey,
-        leadName: conv.leadName ?? null,
-        ownerId: conv.scheduler?.preferredSalespersonId ?? null,
-        ownerName: conv.scheduler?.preferredSalespersonName ?? null,
-        watchIndex: idx,
-        watch
-      }));
+      const activeWatches = watches.filter(w => (w?.status ?? "active") !== "paused");
+      if (!activeWatches.length) return [];
+      return [
+        {
+          key: conv.id,
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          leadName: conv.leadName ?? null,
+          ownerId: conv.scheduler?.preferredSalespersonId ?? null,
+          ownerName: conv.scheduler?.preferredSalespersonName ?? null,
+          watches: activeWatches
+        }
+      ];
     });
   }, [conversations]);
-  const activeWatchItems = useMemo(() => {
-    return watchItems.filter(item => (item.watch?.status ?? "active") !== "paused");
-  }, [watchItems]);
+  const activeWatchItems = useMemo(() => watchItems, [watchItems]);
   const watchCount = useMemo(() => {
     if (isManager) return activeWatchItems.length;
     const userId = authUser?.id;
@@ -2106,10 +2106,12 @@ export default function Home() {
         const haystack = [
           item.leadName,
           item.leadKey,
-          item.watch?.model,
-          item.watch?.make,
-          item.watch?.trim,
-          item.watch?.color
+          ...((item.watches ?? []).flatMap(w => [
+            w?.model,
+            w?.make,
+            w?.trim,
+            w?.color
+          ]) as string[])
         ]
           .filter(Boolean)
           .join(" ")
@@ -3833,9 +3835,23 @@ export default function Home() {
             ) : (
               <div className="border border-[var(--border)] rounded-lg divide-y bg-[var(--surface)]">
                 {visibleWatchItems.map(item => {
-                  const label = formatWatchLabel(item.watch);
-                  const createdAt = formatWatchDate(item.watch?.createdAt);
-                  const lastNotified = formatWatchDate(item.watch?.lastNotifiedAt);
+                  const labels = (item.watches ?? []).map(w => formatWatchLabel(w));
+                  const createdAt = formatWatchDate(
+                    (item.watches ?? [])
+                      .map(w => w?.createdAt)
+                      .filter(Boolean)
+                      .sort()[0]
+                  );
+                  const lastNotified = formatWatchDate(
+                    (item.watches ?? [])
+                      .map(w => w?.lastNotifiedAt)
+                      .filter(Boolean)
+                      .sort()
+                      .slice(-1)[0]
+                  );
+                  const note = (item.watches ?? [])
+                    .map(w => String(w?.note ?? "").trim())
+                    .find(n => n);
                   const ownerName = item.ownerId
                     ? watchSalespeople.find(sp => sp.id === item.ownerId)?.name ||
                       item.ownerName ||
@@ -3855,9 +3871,11 @@ export default function Home() {
                         <div className="font-medium truncate">
                           {item.leadName && item.leadName.length > 0 ? item.leadName : item.leadKey}
                         </div>
-                        <div className="text-xs text-gray-600 mt-1">{label}</div>
-                        {item.watch?.note ? (
-                          <div className="text-xs text-gray-500 mt-1">Note: {item.watch.note}</div>
+                        <div className="text-xs text-gray-600 mt-1">
+                          {labels.join(" • ")}
+                        </div>
+                        {note ? (
+                          <div className="text-xs text-gray-500 mt-1">Note: {note}</div>
                         ) : null}
                         {createdAt ? (
                           <div className="text-[11px] text-gray-500 mt-1">
@@ -3891,7 +3909,7 @@ export default function Home() {
                           title="Delete watch"
                           onClick={e => {
                             e.stopPropagation();
-                            void deleteWatchForConv(item.convId, item.watchIndex);
+                            void deleteWatchForConv(item.convId);
                           }}
                         >
                           🗑️
