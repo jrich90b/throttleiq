@@ -468,6 +468,7 @@ export default function Home() {
   const [cadenceResolveNotice, setCadenceResolveNotice] = useState<string | null>(null);
   const [watchQuery, setWatchQuery] = useState("");
   const [watchSalespersonFilter, setWatchSalespersonFilter] = useState("all");
+  const [inboxQuery, setInboxQuery] = useState("");
   const cadenceResolveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [watchEditOpen, setWatchEditOpen] = useState(false);
   const [watchEditConvId, setWatchEditConvId] = useState<string | null>(null);
@@ -2283,10 +2284,26 @@ export default function Home() {
     );
   }, [conversations, view]);
 
+  const filteredConversations = useMemo(() => {
+    const q = inboxQuery.trim().toLowerCase();
+    if (!q) return visibleConversations;
+    const qDigits = q.replace(/\D/g, "");
+    return visibleConversations.filter(c => {
+      const name = (c.leadName ?? "").toLowerCase();
+      const key = (c.leadKey ?? "").toLowerCase();
+      if (name.includes(q) || key.includes(q)) return true;
+      if (qDigits) {
+        const keyDigits = (c.leadKey ?? "").replace(/\D/g, "");
+        if (keyDigits.includes(qDigits)) return true;
+      }
+      return false;
+    });
+  }, [visibleConversations, inboxQuery]);
+
   const groupedConversations = useMemo(() => {
     const groups: Array<{ label: string; items: ConversationListItem[] }> = [];
     let lastLabel = "";
-    for (const c of visibleConversations) {
+    for (const c of filteredConversations) {
       const label = new Date(c.updatedAt).toLocaleDateString("en-US", {
         weekday: "long",
         year: "numeric",
@@ -2301,7 +2318,7 @@ export default function Home() {
       }
     }
     return groups;
-  }, [visibleConversations]);
+  }, [filteredConversations]);
 
   const days = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"];
   const followUpMonths = [
@@ -4035,8 +4052,8 @@ export default function Home() {
               <div className="flex items-center gap-2">
                 <div className="text-xs text-[var(--palette-graphite)]">
                   {view === "inbox"
-                    ? `Open: ${visibleConversations.length}`
-                    : `Closed: ${visibleConversations.length}`}
+                    ? `Open: ${filteredConversations.length}`
+                    : `Closed: ${filteredConversations.length}`}
                 </div>
                 <button
                   className="px-3 py-2 text-xs font-semibold border border-[var(--accent)] text-[var(--accent)] rounded hover:bg-[var(--surface-2)]"
@@ -4046,6 +4063,15 @@ export default function Home() {
                   Compose SMS
                 </button>
               </div>
+            </div>
+
+            <div className="mt-3">
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="Search name or phone..."
+                value={inboxQuery}
+                onChange={e => setInboxQuery(e.target.value)}
+              />
             </div>
 
             <div className="mt-3 space-y-3">
@@ -4242,9 +4268,13 @@ export default function Home() {
                 </div>
               ))}
 
-              {!loading && visibleConversations.length === 0 && (
+              {!loading && filteredConversations.length === 0 && (
                 <div className="p-4 text-sm text-gray-600 border rounded-lg">
-                  {view === "inbox" ? "No open conversations." : "No archived conversations."}
+                  {inboxQuery.trim()
+                    ? "No conversations match your search."
+                    : view === "inbox"
+                      ? "No open conversations."
+                      : "No archived conversations."}
                 </div>
               )}
             </div>
