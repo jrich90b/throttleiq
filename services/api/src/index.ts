@@ -1065,16 +1065,16 @@ function buildBookingUrlForLead(baseUrl: string | undefined | null, conv: any): 
 }
 
 const FOLLOW_UP_MESSAGES = [
-  "Just checking in — still interested? If you want to stop by, I have {a} or {b} open. Which works best?",
-  "If a quick walkaround video would help, I can send one. What would you like to see?",
-  "Are you mostly shopping or looking to come in soon? I’m happy to help either way.",
-  "Quick check — is this still the model you’re leaning toward, or are you comparing a few?",
-  "If you want to stop by, just tell me a day that works and I’ll line it up.",
-  "No rush at all. Want me to keep an eye on availability or set a reminder for you?",
-  "If timing is tricky, just tell me what works and I’ll make it easy.",
-  "Want me to hold a time for you? If so, which day is best?",
-  "If you’d like to come by, I can set something up. What day works for you?",
-  "Still thinking it over? If you want to stop in, tell me a good day and I’ll take care of the rest."
+  "Hi {name} — {agent} again. Just checking in{labelClause}. If you want to stop by, I can line up a time.{extraLine}",
+  "Hi {name} — if a quick walkaround video of{label} would help, I can send one. Anything you want to see?",
+  "Hi {name} — are you mostly shopping or looking to come in soon? I’m happy to help either way.",
+  "Quick check {name} — is{label} still the one you’re leaning toward, or are you comparing a few?",
+  "If you want to stop by{labelClause}, just tell me a day that works and I’ll line it up.",
+  "No rush at all {name}. Want me to keep an eye on availability{labelClause} or set a reminder for you?",
+  "If timing is tricky {name}, just tell me what works and I’ll make it easy.",
+  "Want me to hold a time for you{labelClause}? If so, which day is best?",
+  "If you’d like to come by{labelClause}, I can set something up. What day works for you?",
+  "Still thinking it over {name}? If you want to stop in{labelClause}, tell me a good day and I’ll take care of the rest."
 ];
 
 const FOLLOW_UP_VARIANTS_WITH_SLOTS: string[] = [
@@ -1096,12 +1096,12 @@ const FOLLOW_UP_VARIANTS_NO_SLOTS: Record<number, string[]> = {
     "Hi {name}, quick follow‑up{labelClause}. If you want to swing by, just tell me what day works best.{extraLine}"
   ],
   1: [
-    "If a quick walkaround video of{label} would help, I can send one. Anything you want to see?",
-    "Want a short walkaround video of{label}? I’m happy to send it over."
+    "Hi {name} — if a quick walkaround video of{label} would help, I can send one. Anything you want to see?",
+    "Hi {name} — want a short walkaround video of{label}? I’m happy to send it over."
   ],
   2: [
-    "Are you mostly comparing a few bikes, or is{label} at the top of your list?",
-    "Quick question — are you still leaning toward{label}, or still comparing?"
+    "Quick question {name} — are you mostly comparing a few bikes, or is{label} at the top of your list?",
+    "Hi {name} — are you still leaning toward{label}, or still comparing?"
   ]
 };
 
@@ -3446,6 +3446,15 @@ async function processDueFollowUps() {
       const late = await buildLateFollowUp(conv, cadence.stepIndex, dealerProfile);
       message = late.body;
       mediaUrls = late.mediaUrls;
+    }
+    if (
+      !isPostSale &&
+      cadence.kind !== "long_term" &&
+      !isTradeNoInterest &&
+      !isSellMyBikeLead &&
+      message.includes("{")
+    ) {
+      message = renderFollowUpTemplate(message, baseCtx);
     }
 
     const emailTo = conv.lead?.email;
