@@ -839,6 +839,8 @@ INVENTORY CONDITION RULES:
   - "new" (stockId exists and does not start with U)
   - "used" (stockId starts with U)
   - "new_model_interest" (no stockId)
+- If lead.vehicle.condition is "used":
+  - Do NOT ask whether they want new or used. Treat it as used.
 - If lead.vehicle.condition is "new_model_interest":
   - Do NOT mention "sale pending" or unit-level availability checks.
   - Invite them to come in to meet the sales team and check out current inventory/options.

@@ -12,6 +12,7 @@ import { findInventoryMatches, findInventoryPrice, findPriceRange, hasInventoryF
 import { findMsrpPricing } from "./msrpPriceList.js";
 import { getInventoryNote } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
+import { isModelInRecentYears } from "./modelsByYear.js";
 import type { LeadProfile } from "./conversationStore.js";
 import { parsePreferredDateTime, parseRequestedDayTime } from "./conversationStore.js";
 import { getSchedulerConfig, dayKey, getPreferredSalespeople } from "./schedulerConfig.js";
@@ -331,8 +332,8 @@ function buildMonthlyPaymentLine(opts: {
 
   return (
     `Good question. Ballpark, on about ${priceLabel}, ${downLabel}` +
-    `you’re around ${payLow}–${payHigh}/mo at ${opts.termMonths} months depending on credit. ` +
-    `Were you thinking 60, 72, or 84 months, and about how much down?`
+    `you’re around ${payLow}–${payHigh}/mo at ${opts.termMonths} months depending on credit, ` +
+    `before taxes and fees, depending on your APR.`
   );
 }
 
@@ -1038,7 +1039,7 @@ export async function orchestrateInbound(
               : msrpLookup?.rangeForTrim ?? msrpLookup?.rangeForColor ?? msrpLookup?.range ?? null;
 
       if (paymentQuestion && paymentRange) {
-        let draft = buildMonthlyPaymentLine({
+        const draft = buildMonthlyPaymentLine({
           priceMin: paymentRange.min,
           priceMax: paymentRange.max,
           isUsed,
@@ -1047,17 +1048,6 @@ export async function orchestrateInbound(
           downPayment,
           downPaymentAssumed
         });
-        if (downPayment && extractPreferredTermMonths(event.body)) {
-          draft = draft.replace(
-            /Were you thinking[^.]*\./i,
-            "If you want me to run it with a different amount, just tell me."
-          );
-        } else if (downPayment) {
-          draft = draft.replace(
-            /Were you thinking[^.]*\./i,
-            "If you want me to run it at a different term, just tell me."
-          );
-        }
         return finalize({
           intent,
           stage: "ENGAGED",
@@ -1213,7 +1203,27 @@ export async function orchestrateInbound(
   const stockMatch = event.body.match(/\b[A-Z0-9]{1,5}-\d{1,4}\b/i);
   if (stockMatch?.[0]) stockId = stockMatch[0].toUpperCase();
 
-  const condition = stockId ? (/^u/i.test(stockId) ? "used" : "new") : "new_model_interest";
+  const normalizeLeadCondition = (raw?: string | null): "new" | "used" | null => {
+    const t = String(raw ?? "").toLowerCase();
+    if (!t) return null;
+    if (/(pre|used|pre-owned|preowned|owned)/.test(t)) return "used";
+    if (/new/.test(t)) return "new";
+    return null;
+  };
+  const leadModelForCondition =
+    ctx?.lead?.vehicle?.model ??
+    deriveModelFromDescription(ctx?.lead?.vehicle?.description ?? null) ??
+    null;
+  const leadCondition = normalizeLeadCondition(ctx?.lead?.vehicle?.condition ?? null);
+  const currentYear = new Date().getFullYear();
+  const modelRecent = leadModelForCondition
+    ? isModelInRecentYears(leadModelForCondition, currentYear, 1)
+    : false;
+  const condition = stockId
+    ? /^u/i.test(stockId)
+      ? "used"
+      : "new"
+    : leadCondition ?? (modelRecent ? "new_model_interest" : "used");
 
   if (intent === "AVAILABILITY" && stockId && event.body.toLowerCase().includes(stockId.toLowerCase())) {
 

@@ -28,6 +28,14 @@ function stripModelCode(raw: string): string {
   return toTitleCaseIfAllCaps(model);
 }
 
+function normalizeModelName(value: string | null | undefined): string {
+  return String(value ?? "")
+    .replace(/harley-?davidson\s+/i, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
 export function getModelsByYear(): Record<string, string[]> {
   if (cached) return cached;
   try {
@@ -80,4 +88,22 @@ export function getAllModels(): string[] {
     for (const name of list) out.add(name);
   }
   return Array.from(out).sort((a, b) => a.localeCompare(b));
+}
+
+export function isModelInRecentYears(
+  model: string | null | undefined,
+  currentYear: number,
+  yearsBack = 1
+): boolean {
+  if (!model || !Number.isFinite(currentYear)) return false;
+  const target = normalizeModelName(model);
+  if (!target) return false;
+  const map = getModelsByYear();
+  const minYear = currentYear - Math.max(0, yearsBack);
+  for (let y = currentYear; y >= minYear; y--) {
+    for (const name of map[String(y)] ?? []) {
+      if (normalizeModelName(name) === target) return true;
+    }
+  }
+  return false;
 }
