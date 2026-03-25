@@ -3074,6 +3074,18 @@ function applyCallbackPolicy(conv: any, reply: string, lastOutboundText: string)
   return out;
 }
 
+function stripNonAdfThanks(reply: string, provider?: string): string {
+  if (provider === "sendgrid_adf") return reply;
+  let out = reply;
+  out = out.replace(
+    /^(\\s*(hi|hey)\\s+[^—\\n]+—\\s*)(thanks for[^.]+\\.\\s*)/i,
+    "$1"
+  );
+  out = out.replace(/^(\\s*)thanks for[^.]+\\.\\s*/i, "$1");
+  out = out.replace(/\s{2,}/g, " ").replace(/—\s+/g, "— ").trim();
+  return out;
+}
+
 function applyServicePolicy(conv: any, reply: string, lastOutboundText: string): string {
   const state = getDialogState(conv);
   const isService =
@@ -6485,6 +6497,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   reply = applyServicePolicy(conv, reply, lastOutboundTextFinal);
   reply = applySoftSchedulePolicy(conv, reply, String(event.body ?? ""));
   reply = stripSchedulingLanguageIfNotAsked(reply, String(event.body ?? ""));
+  reply = stripNonAdfThanks(reply, provider);
+  reply = stripNonAdfThanks(reply, event.provider);
   if (isSlotOfferMessage(reply)) {
     setDialogState(conv, "schedule_offer_sent");
   }
