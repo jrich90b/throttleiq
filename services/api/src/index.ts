@@ -1313,7 +1313,7 @@ async function applyPostCallSummaryActions(opts: {
 }
 
 const FOLLOW_UP_MESSAGES = [
-  "Hi {name} — {agent} again. Just checking in{labelClause}. If you want to stop by, I can line up a time.{extraLine}",
+  "Hi {name} — it’s {agent} again. Just wanted to see if you caught my previous message{labelClause}. Your thoughts would be appreciated when you have a moment.{extraLine}",
   "Hi {name} — if a quick walkaround video of{label} would help, I can send one. Anything you want to see?",
   "Hi {name} — are you mostly shopping or looking to come in soon? I’m happy to help either way.",
   "Quick check {name} — is{label} still the one you’re leaning toward, or are you comparing a few?",
@@ -1339,7 +1339,7 @@ const SELL_FOLLOW_UP_VARIANTS_WITH_SLOTS: string[] = [
 
 const FOLLOW_UP_VARIANTS_NO_SLOTS: Record<number, string[]> = {
   0: [
-    "Hi {name}, it’s {agent} again. Just checking in{labelClause}. Your thoughts would be appreciated when you have a moment.{extraLine}",
+    "Hi {name}, it’s {agent} again. Just wanted to see if you caught my previous message{labelClause}. Your thoughts would be appreciated when you have a moment.{extraLine}",
     "Hi {name} — {agent} again. Just wanted to see if you caught my last note{labelClause}. Let me know what you’re thinking.{extraLine}",
     "Hi {name}, quick follow‑up{labelClause}. If you want to swing by, just tell me what day works best.{extraLine}"
   ],
@@ -1602,6 +1602,11 @@ function colorMatchesAlias(
 function getLastInboundBody(conv: any): string | null {
   const msg = conv.messages?.slice().reverse().find((m: any) => m.direction === "in");
   return msg?.body ?? null;
+}
+
+function getLastInboundMessage(conv: any): any | null {
+  const msg = conv.messages?.slice().reverse().find((m: any) => m.direction === "in");
+  return msg ?? null;
 }
 
 function isTestRideSeason(profile: any, now: Date): boolean {
@@ -2933,7 +2938,7 @@ function shouldAllowProactiveScheduleAsk(conv: any, now: Date): boolean {
     ? new Date(soft.cooldownUntil)
     : new Date(new Date(soft.requestedAt).getTime() + SOFT_SCHEDULE_COOLDOWN_MS);
   if (now < cooldownUntil) return false;
-  const lastInbound = getLastInbound(conv);
+  const lastInbound = getLastInboundMessage(conv);
   if (!lastInbound?.at) return false;
   const lastInboundAt = new Date(lastInbound.at);
   if (now.getTime() - lastInboundAt.getTime() < SOFT_SCHEDULE_COOLDOWN_MS) return false;

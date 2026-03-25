@@ -1117,7 +1117,7 @@ function localPartsToUtcDate(
   return new Date(guess.getTime() - diffMs);
 }
 
-export const FOLLOW_UP_DAY_OFFSETS = [2, 3, 5, 7, 10, 14, 18, 21, 27, 30, 45, 60, 90];
+export const FOLLOW_UP_DAY_OFFSETS = [1, 3, 5, 7, 10, 14, 18, 21, 27, 30, 45, 60, 90];
 export const POST_SALE_DAY_OFFSETS = [1, 60, 365, 690];
 
 export function computeFollowUpDueAt(anchorAtIso: string, offsetDays: number, timeZone: string) {
