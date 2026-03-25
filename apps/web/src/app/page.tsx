@@ -495,6 +495,7 @@ export default function Home() {
   const [watchEditItems, setWatchEditItems] = useState<WatchFormItem[]>([]);
   const [watchEditNote, setWatchEditNote] = useState("");
   const [watchEditSaving, setWatchEditSaving] = useState(false);
+  const [outcomeNoteOpen, setOutcomeNoteOpen] = useState(false);
   const [watchEditError, setWatchEditError] = useState<string | null>(null);
   const [modelsByYear, setModelsByYear] = useState<Record<string, string[]>>({});
 
@@ -2099,6 +2100,9 @@ export default function Home() {
       setCallMethod("extension");
     }
   }, [authUser?.phone, authUser?.extension]);
+  useEffect(() => {
+    setOutcomeNoteOpen(false);
+  }, [selectedConv?.id]);
 
   const pendingDraft = useMemo(() => {
     if (!selectedConv) return null;
@@ -7013,9 +7017,20 @@ export default function Home() {
                   if (!outcome?.note) return null;
                   if (!authUser?.role) return null;
                   return (
-                    <div className="mt-2 rounded border bg-slate-50 px-3 py-2 text-xs text-slate-700">
-                      <div className="font-semibold">Outcome note</div>
-                      <div className="mt-1 whitespace-pre-wrap">{outcome.note}</div>
+                    <div className="mt-2 text-xs text-slate-700">
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-2 rounded border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                        onClick={() => setOutcomeNoteOpen(v => !v)}
+                      >
+                        Outcome note
+                        <span className="text-[10px] text-slate-500">{outcomeNoteOpen ? "Hide" : "View"}</span>
+                      </button>
+                      {outcomeNoteOpen ? (
+                        <div className="mt-2 rounded border bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                          <div className="mt-1 whitespace-pre-wrap">{outcome.note}</div>
+                        </div>
+                      ) : null}
                     </div>
                   );
                 })()}
