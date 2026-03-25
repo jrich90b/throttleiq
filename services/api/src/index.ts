@@ -2449,6 +2449,36 @@ async function transcribeRecordingMp3(buffer: Buffer, agentLabel = "Agent"): Pro
   }
 }
 
+async function transcribeAudioBuffer(buffer: Buffer, mimeType?: string): Promise<string | null> {
+  const deepgramKey = process.env.DEEPGRAM_API_KEY?.trim();
+  if (!deepgramKey) return null;
+  try {
+    const resp = await fetch("https://api.deepgram.com/v1/listen?punctuate=true&model=nova-2", {
+      method: "POST",
+      headers: {
+        Authorization: `Token ${deepgramKey}`,
+        "Content-Type": mimeType || "application/octet-stream"
+      },
+      body: buffer
+    });
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => "");
+      console.warn("[voice] deepgram note failed:", resp.status, errText);
+      return null;
+    }
+    const data: any = await resp.json().catch(() => null);
+    const transcript =
+      data?.results?.channels?.[0]?.alternatives?.[0]?.transcript ??
+      data?.results?.channels?.[0]?.alternatives?.[0]?.text ??
+      "";
+    const cleaned = String(transcript ?? "").trim();
+    return cleaned || null;
+  } catch (e: any) {
+    console.warn("[voice] deepgram note error:", e?.message ?? e);
+    return null;
+  }
+}
+
 function findConversationByCallSid(callSid?: string | null) {
   const sid = String(callSid ?? "").trim();
   if (!sid) return null;
@@ -5035,6 +5065,8 @@ app.get("/public/appointment/outcome", async (req, res) => {
       button { padding: 10px 14px; margin-right: 8px; }
       select, textarea, input { width: 100%; padding: 8px; margin-top: 6px; }
       textarea { min-height: 90px; }
+      .muted { color: #666; font-size: 12px; margin-top: 6px; }
+      .rec-btn { margin-top: 8px; }
     </style>
   </head>
   <body>
@@ -5051,7 +5083,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
     </div>
 
     <div class="card">
-      <form method="POST" action="/public/appointment/outcome">
+      <form id="outcome-form" method="POST" action="/public/appointment/outcome">
         <input type="hidden" name="token" value="${escapeHtml(token)}" />
         <label>Outcome</label>
         <select name="outcome">
@@ -5065,10 +5097,85 @@ app.get("/public/appointment/outcome", async (req, res) => {
           <option value="other">Other</option>
         </select>
         <label>Notes (optional)</label>
-        <textarea name="note" placeholder="Add any context for the agent…"></textarea>
+        <textarea name="note" id="note-field" placeholder="Add any context for the agent…"></textarea>
+        <div class="muted">Tap record to add a quick voice note (auto‑saved).</div>
+        <button type="button" class="rec-btn" id="rec-btn">🎤 Record note</button>
+        <div class="muted" id="rec-status"></div>
         <button type="submit">Submit outcome</button>
       </form>
     </div>
+    <script>
+      (function() {
+        const token = "${escapeHtml(token)}";
+        const recBtn = document.getElementById("rec-btn");
+        const statusEl = document.getElementById("rec-status");
+        const noteEl = document.getElementById("note-field");
+        const outcomeEl = document.querySelector("select[name='outcome']");
+        if (!recBtn) return;
+        let recorder = null;
+        let chunks = [];
+        let stream = null;
+
+        async function stopRecording() {
+          if (!recorder) return;
+          recorder.stop();
+        }
+
+        async function startRecording() {
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            statusEl.textContent = "Recording not supported on this device.";
+            return;
+          }
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          recorder = new MediaRecorder(stream);
+          chunks = [];
+          recorder.ondataavailable = e => {
+            if (e.data) chunks.push(e.data);
+          };
+          recorder.onstop = async () => {
+            try {
+              statusEl.textContent = "Transcribing…";
+              const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+              const fd = new FormData();
+              fd.append("token", token);
+              fd.append("outcome", outcomeEl ? outcomeEl.value : "");
+              fd.append("audio", blob, "note.webm");
+              const resp = await fetch("/public/appointment/outcome/transcribe", { method: "POST", body: fd });
+              const json = await resp.json().catch(() => null);
+              if (json && json.ok) {
+                if (noteEl && json.transcript) noteEl.value = json.transcript;
+                statusEl.textContent = "Saved.";
+              } else {
+                statusEl.textContent = (json && json.error) ? json.error : "Transcription failed.";
+              }
+            } catch (e) {
+              statusEl.textContent = "Transcription failed.";
+            } finally {
+              if (stream) {
+                stream.getTracks().forEach(t => t.stop());
+                stream = null;
+              }
+              recorder = null;
+              recBtn.dataset.recording = "0";
+              recBtn.textContent = "🎤 Record note";
+            }
+          };
+          recorder.start();
+          recBtn.dataset.recording = "1";
+          recBtn.textContent = "⏺ Stop recording";
+          statusEl.textContent = "Recording… tap again to stop.";
+        }
+
+        recBtn.addEventListener("click", () => {
+          const recording = recBtn.dataset.recording === "1";
+          if (recording) {
+            void stopRecording();
+          } else {
+            void startRecording();
+          }
+        });
+      })();
+    </script>
   </body>
 </html>`;
 
@@ -5106,6 +5213,43 @@ app.post("/public/appointment/outcome", async (req, res) => {
   saveConversation(conv);
   await flushConversationStore();
   return res.send("Thanks — your update was saved.");
+});
+
+app.post("/public/appointment/outcome/transcribe", upload.single("audio"), async (req, res) => {
+  const token = String(req.body?.token ?? "").trim();
+  const outcomeRaw = String(req.body?.outcome ?? "").trim();
+  if (!token) return res.status(400).json({ ok: false, error: "Missing token" });
+  const conv = findConversationByOutcomeToken(token);
+  if (!conv || !conv.appointment) return res.status(404).json({ ok: false, error: "Not found" });
+  const file = (req as any).file;
+  if (!file?.buffer) return res.status(400).json({ ok: false, error: "Missing audio" });
+
+  const transcript = await transcribeAudioBuffer(file.buffer, file.mimetype);
+  if (!transcript) return res.status(500).json({ ok: false, error: "Transcription failed" });
+
+  const allowed = new Set([
+    "showed_up",
+    "no_show",
+    "sold",
+    "hold",
+    "financing_declined",
+    "bought_elsewhere",
+    "follow_up",
+    "other"
+  ]);
+  const fallbackStatus = conv.appointment.staffNotify?.outcome?.status ?? "follow_up";
+  const status = allowed.has(outcomeRaw) ? outcomeRaw : fallbackStatus;
+
+  conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
+  conv.appointment.staffNotify.outcome = {
+    status: status as any,
+    note: transcript,
+    updatedAt: new Date().toISOString()
+  };
+  conv.appointment.updatedAt = new Date().toISOString();
+  saveConversation(conv);
+  await flushConversationStore();
+  return res.json({ ok: true, transcript, status });
 });
 
 
