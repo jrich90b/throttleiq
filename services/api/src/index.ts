@@ -4486,6 +4486,16 @@ async function processStaffAppointmentNotifications() {
   const now = new Date();
   const convs = getAllConversations();
   let changed = false;
+  const cal = await getAuthedCalendarClient();
+
+  const resolveCalendarId = (appt: any): string | null => {
+    if (appt?.bookedCalendarId) return appt.bookedCalendarId;
+    if (appt?.matchedSlot?.calendarId) return appt.matchedSlot.calendarId;
+    const spId = appt?.bookedSalespersonId ?? "";
+    if (!spId) return null;
+    const sp = (cfg.salespeople ?? []).find(s => s.id === spId);
+    return sp?.calendarId ?? null;
+  };
 
   for (const conv of convs) {
     const appt = conv.appointment;
@@ -4519,6 +4529,19 @@ async function processStaffAppointmentNotifications() {
 
     const eventChanged =
       appt.bookedEventId && appt.staffNotify.lastEventId && appt.bookedEventId !== appt.staffNotify.lastEventId;
+
+    const calendarId = resolveCalendarId(appt);
+    if (!calendarId) continue;
+    try {
+      await cal.events.get({ calendarId, eventId: appt.bookedEventId });
+    } catch (e: any) {
+      const status = e?.code ?? e?.status;
+      if (status === 404) {
+        continue;
+      }
+      console.warn("[staff-sms] event lookup failed:", e?.message ?? e);
+      continue;
+    }
 
     if (!appt.staffNotify.bookedSentAt || eventChanged) {
       const bookedText = [
