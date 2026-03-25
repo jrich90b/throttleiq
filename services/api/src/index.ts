@@ -4501,11 +4501,15 @@ async function processStaffAppointmentNotifications() {
     const token = ensureAppointmentOutcomeToken(appt);
     const link = buildStaffOutcomeLink(token);
     const whenLocal = formatSlotLocal(appt.whenIso, cfg.timezone);
-    const customerName = conv.lead?.name ?? conv.leadName ?? conv.leadKey ?? "Customer";
+    const customerName =
+      [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() ||
+      conv.lead?.name ||
+      conv.leadKey ||
+      "Customer";
     const vehicle =
-      conv.vehicleDescription ??
       conv.lead?.vehicle?.model ??
       conv.lead?.vehicle?.description ??
+      conv.sale?.label ??
       "the bike";
     const apptType =
       appt.appointmentType ??
