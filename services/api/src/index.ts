@@ -3099,6 +3099,16 @@ function stripNonAdfThanks(reply: string, provider?: string): string {
   return out;
 }
 
+function stripCallTimingQuestions(reply: string): string {
+  const text = String(reply ?? "");
+  if (!/(call|phone|reach|give (me|you) a call)/i.test(text)) return reply;
+  const sentences = text.split(/(?<=[.!?])\s+/);
+  const dropPattern =
+    /(good time to call|when can (i|we) call|when should (i|we) call|what time (works|is best) (for|to) (a )?call|is now a good time to call|can i call (you )?(now|today|tomorrow)|what time should i call)/i;
+  const filtered = sentences.filter(s => !dropPattern.test(s));
+  return filtered.length ? filtered.join(" ").trim() : reply;
+}
+
 function applyServicePolicy(conv: any, reply: string, lastOutboundText: string): string {
   const state = getDialogState(conv);
   const isService =
@@ -6510,8 +6520,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   reply = applyServicePolicy(conv, reply, lastOutboundTextFinal);
   reply = applySoftSchedulePolicy(conv, reply, String(event.body ?? ""));
   reply = stripSchedulingLanguageIfNotAsked(reply, String(event.body ?? ""));
+  reply = stripNonAdfThanks(reply, event.provider);
+  reply = stripCallTimingQuestions(reply);
   reply = stripNonAdfThanks(reply, provider);
   reply = stripNonAdfThanks(reply, event.provider);
+  reply = stripCallTimingQuestions(reply);
   if (isSlotOfferMessage(reply)) {
     setDialogState(conv, "schedule_offer_sent");
   }
