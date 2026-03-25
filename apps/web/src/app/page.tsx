@@ -514,6 +514,16 @@ export default function Home() {
   const [soldInventoryLoading, setSoldInventoryLoading] = useState(false);
   const [soldSearch, setSoldSearch] = useState("");
   const [soldSelection, setSoldSelection] = useState<any | null>(null);
+  const [soldManualOpen, setSoldManualOpen] = useState(false);
+  const [soldManualUnit, setSoldManualUnit] = useState<any>({
+    year: "",
+    make: "",
+    model: "",
+    trim: "",
+    color: "",
+    stockId: "",
+    vin: ""
+  });
   const [soldNote, setSoldNote] = useState("");
   const [soldError, setSoldError] = useState<string | null>(null);
   const [soldSaving, setSoldSaving] = useState(false);
@@ -1009,11 +1019,22 @@ export default function Home() {
     setSoldError(null);
     setSoldSearch("");
     setSoldSelection(null);
+    setSoldManualOpen(false);
     setSoldModalOpen(true);
     const conv =
       selectedConv?.id === convId ? selectedConv : await fetchConversationDetail(convId);
     setSoldModalConv(conv);
     setSoldNote(conv?.sale?.note ?? "");
+    const leadVehicle = conv?.lead?.vehicle ?? {};
+    setSoldManualUnit({
+      year: String(conv?.sale?.year ?? leadVehicle?.year ?? "") || "",
+      make: conv?.sale?.make ?? leadVehicle?.make ?? "",
+      model: conv?.sale?.model ?? leadVehicle?.model ?? "",
+      trim: conv?.sale?.trim ?? leadVehicle?.trim ?? "",
+      color: conv?.sale?.color ?? leadVehicle?.color ?? "",
+      stockId: conv?.sale?.stockId ?? leadVehicle?.stockId ?? "",
+      vin: conv?.sale?.vin ?? leadVehicle?.vin ?? ""
+    });
     setSoldInventoryLoading(true);
     try {
       const resp = await fetch("/api/inventory", { cache: "no-store" });
@@ -1040,10 +1061,27 @@ export default function Home() {
     }
   }
 
+  function resolveSoldSelection() {
+    if (soldSelection) return soldSelection;
+    const stockId = String(soldManualUnit?.stockId ?? "").trim();
+    const vin = String(soldManualUnit?.vin ?? "").trim();
+    if (!stockId && !vin) return null;
+    return {
+      year: String(soldManualUnit?.year ?? "").trim(),
+      make: String(soldManualUnit?.make ?? "").trim(),
+      model: String(soldManualUnit?.model ?? "").trim(),
+      trim: String(soldManualUnit?.trim ?? "").trim(),
+      color: String(soldManualUnit?.color ?? "").trim(),
+      stockId,
+      vin
+    };
+  }
+
   async function submitSold(selection: any) {
     if (!soldModalConv) return;
-    if (!selection) {
-      setSoldError("Please select a unit to mark sold.");
+    const resolved = selection ?? resolveSoldSelection();
+    if (!resolved) {
+      setSoldError("Please select a unit or enter a stock/VIN to mark sold.");
       return;
     }
     setSoldSaving(true);
@@ -1054,13 +1092,18 @@ export default function Home() {
         soldByOptions.find(sp => sp.id === soldById)?.name ??
         "";
       const soldPayload = {
-        stockId: selection?.stockId ?? "",
-        vin: selection?.vin ?? "",
-        label: [selection?.year, selection?.make, selection?.model, selection?.trim]
+        stockId: resolved?.stockId ?? "",
+        vin: resolved?.vin ?? "",
+        label: [resolved?.year, resolved?.make, resolved?.model, resolved?.trim]
           .filter(Boolean)
           .join(" ")
           .trim(),
-        note: soldNote?.trim() || undefined
+        note: soldNote?.trim() || undefined,
+        year: resolved?.year ?? "",
+        make: resolved?.make ?? "",
+        model: resolved?.model ?? "",
+        trim: resolved?.trim ?? "",
+        color: resolved?.color ?? ""
       };
       const resp = await fetch(`/api/conversations/${encodeURIComponent(soldModalConv.id)}/close`, {
         method: "POST",
@@ -7883,6 +7926,65 @@ export default function Home() {
                   </div>
 
                   <div className="mt-3">
+                    <button
+                      type="button"
+                      className="text-xs text-blue-700 underline"
+                      onClick={() => setSoldManualOpen(v => !v)}
+                    >
+                      {soldManualOpen ? "Hide manual unit entry" : "Add unit manually"}
+                    </button>
+                  </div>
+                  {soldManualOpen ? (
+                    <div className="mt-2 grid gap-2 grid-cols-2 text-xs">
+                      <input
+                        className="border rounded px-2 py-1"
+                        placeholder="Year"
+                        value={soldManualUnit.year ?? ""}
+                        onChange={e => setSoldManualUnit((prev: any) => ({ ...prev, year: e.target.value }))}
+                      />
+                      <input
+                        className="border rounded px-2 py-1"
+                        placeholder="Make"
+                        value={soldManualUnit.make ?? ""}
+                        onChange={e => setSoldManualUnit((prev: any) => ({ ...prev, make: e.target.value }))}
+                      />
+                      <input
+                        className="border rounded px-2 py-1"
+                        placeholder="Model"
+                        value={soldManualUnit.model ?? ""}
+                        onChange={e => setSoldManualUnit((prev: any) => ({ ...prev, model: e.target.value }))}
+                      />
+                      <input
+                        className="border rounded px-2 py-1"
+                        placeholder="Trim"
+                        value={soldManualUnit.trim ?? ""}
+                        onChange={e => setSoldManualUnit((prev: any) => ({ ...prev, trim: e.target.value }))}
+                      />
+                      <input
+                        className="border rounded px-2 py-1"
+                        placeholder="Color"
+                        value={soldManualUnit.color ?? ""}
+                        onChange={e => setSoldManualUnit((prev: any) => ({ ...prev, color: e.target.value }))}
+                      />
+                      <input
+                        className="border rounded px-2 py-1"
+                        placeholder="Stock #"
+                        value={soldManualUnit.stockId ?? ""}
+                        onChange={e => setSoldManualUnit((prev: any) => ({ ...prev, stockId: e.target.value }))}
+                      />
+                      <input
+                        className="border rounded px-2 py-1 col-span-2"
+                        placeholder="VIN"
+                        value={soldManualUnit.vin ?? ""}
+                        onChange={e => setSoldManualUnit((prev: any) => ({ ...prev, vin: e.target.value }))}
+                      />
+                      <div className="col-span-2 text-[11px] text-gray-500">
+                        Stock # or VIN is required to save a sold unit.
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="mt-3">
                     <div className="text-xs text-gray-500 mb-1">Note (optional)</div>
                     <textarea
                       className="border rounded px-3 py-2 text-sm w-full"
@@ -7901,7 +8003,14 @@ export default function Home() {
                         ? `Selected: ${[soldSelection.year, soldSelection.make, soldSelection.model, soldSelection.trim]
                             .filter(Boolean)
                             .join(" ") || soldSelection.stockId || soldSelection.vin}`
-                        : "No unit selected"}
+                        : (() => {
+                            const resolved = resolveSoldSelection();
+                            return resolved
+                              ? `Manual: ${[resolved.year, resolved.make, resolved.model, resolved.trim]
+                                  .filter(Boolean)
+                                  .join(" ") || resolved.stockId || resolved.vin}`
+                              : "No unit selected";
+                          })()}
                     </div>
                     <div className="flex gap-2">
                       <button
