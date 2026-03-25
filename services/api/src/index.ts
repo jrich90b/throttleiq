@@ -2996,6 +2996,23 @@ function detectCallbackText(text: string): boolean {
   return hasCallback || (hasTimeframe && (hasPhone || hasTrade));
 }
 
+function findMentionedUser(text: string, users: Array<any>): any | null {
+  const body = String(text ?? "");
+  if (!body) return null;
+  for (const user of users ?? []) {
+    const name = String(user?.firstName ?? "").trim() || String(user?.name ?? "").split(" ")[0];
+    if (!name) continue;
+    const token = escapeRegex(name);
+    const direct = new RegExp(`^\\s*(hey|hi|yo|ok|okay)?\\s*${token}\\b`, "i");
+    const refer = new RegExp(`\\b${token}\\b`, "i");
+    const tell = new RegExp(`\\b(tell|let)\\s+${token}\\b`, "i");
+    if (direct.test(body) || tell.test(body) || refer.test(body)) {
+      return user;
+    }
+  }
+  return null;
+}
+
 function applyPricingPolicy(conv: any, reply: string, lastOutboundText: string): string {
   const state = getDialogState(conv);
   if (!(state.startsWith("pricing_") || state === "payments_handoff" || state === "payments_answered")) {
@@ -7725,6 +7742,37 @@ if (authToken && signature) {
   const llmAvailabilityIntent = intentAccepted && intentParse?.intent === "availability";
   const llmTestRideIntent = intentAccepted && intentParse?.intent === "test_ride";
   const llmAvailability = llmAvailabilityIntent ? intentParse?.availability ?? null : null;
+  let mentionedUser: any | null = null;
+  if (event.provider === "twilio") {
+    const users = await listUsers();
+    mentionedUser = findMentionedUser(event.body ?? "", users);
+  }
+  if (event.provider === "twilio" && mentionedUser) {
+    const firstName =
+      String(mentionedUser.firstName ?? "").trim() ||
+      String(mentionedUser.name ?? "").trim().split(/\s+/).filter(Boolean)[0] ||
+      "them";
+    const updateText = String(event.body ?? "").trim();
+    const todoText = updateText ? `Update for ${firstName}: ${updateText}` : `Update for ${firstName}`;
+    addTodo(conv, "other", todoText, event.providerMessageId);
+    const sensitive = /\b(cancer|chemo|chemotherapy|radiation|hospice|icu|hospital|surgery|surgical|terminal|stage\s*(four|4)|death|dying|funeral|passed away|stroke|heart attack)\b/i.test(
+      String(event.body ?? "")
+    );
+    const reply = sensitive
+      ? `I'm really sorry to hear that. I'll let ${firstName} know.`
+      : `Got it — I'll let ${firstName} know.`;
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   const bookingConfidence =
     typeof bookingParse?.confidence === "number" ? bookingParse.confidence : 0;
   const bookingConfidenceMin = Number(process.env.LLM_BOOKING_CONFIDENCE_MIN ?? 0.7);
