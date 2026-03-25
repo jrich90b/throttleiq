@@ -235,6 +235,7 @@ function isPublicPath(pathname: string): boolean {
     pathname.startsWith("/webhooks/twilio") ||
     pathname.startsWith("/crm/leads/adf/sendgrid") ||
     pathname.startsWith("/public/booking") ||
+    pathname.startsWith("/public/appointment") ||
     pathname.startsWith("/integrations/google") ||
     pathname.startsWith("/debug/inbound") ||
     pathname.startsWith("/auth/login") ||
