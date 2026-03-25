@@ -1485,7 +1485,9 @@ function mapDialogStateToCadenceTag(name: DialogStateName): string | null {
   return null;
 }
 
-function mapDialogStateToIntent(name: DialogStateName): Conversation["lastIntent"]["name"] | null {
+type LastIntentName = NonNullable<Conversation["lastIntent"]>["name"];
+
+function mapDialogStateToIntent(name: DialogStateName): LastIntentName | null {
   if (!name || name === "none") return null;
   if (name.startsWith("trade_")) return "trade";
   if (name.startsWith("pricing_")) return "pricing";
@@ -1499,7 +1501,7 @@ function mapDialogStateToIntent(name: DialogStateName): Conversation["lastIntent
   return null;
 }
 
-function updateLastIntent(conv: any, intent: Conversation["lastIntent"]["name"], source: "dialog_state" | "llm" | "manual") {
+function updateLastIntent(conv: any, intent: LastIntentName, source: "dialog_state" | "llm" | "manual") {
   if (!conv || !intent) return;
   const updatedAt = nowIso();
   if (conv.lastIntent?.name === intent) {
