@@ -299,6 +299,11 @@ export type Conversation = {
     soldAt?: string;
     soldById?: string;
     soldByName?: string;
+    year?: string;
+    make?: string;
+    model?: string;
+    trim?: string;
+    color?: string;
     stockId?: string;
     vin?: string;
     label?: string;

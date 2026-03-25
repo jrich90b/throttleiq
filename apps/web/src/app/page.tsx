@@ -160,6 +160,11 @@ type ConversationListItem = {
     soldAt?: string;
     soldById?: string;
     soldByName?: string;
+    year?: string;
+    make?: string;
+    model?: string;
+    trim?: string;
+    color?: string;
     stockId?: string;
     vin?: string;
     label?: string;
@@ -259,6 +264,11 @@ type ConversationDetail = {
     soldAt?: string;
     soldById?: string;
     soldByName?: string;
+    year?: string;
+    make?: string;
+    model?: string;
+    trim?: string;
+    color?: string;
     stockId?: string;
     vin?: string;
     label?: string;
