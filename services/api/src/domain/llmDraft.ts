@@ -167,6 +167,47 @@ export async function classifyEmpathyNeedWithLLM(args: {
   }
 }
 
+export async function classifyCadenceContextWithLLM(args: {
+  history: { direction: "in" | "out"; body: string }[];
+}): Promise<string | null> {
+  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  if (!history.length) return null;
+  const prompt = [
+    "You are a classifier for dealership follow-up context.",
+    "Return ONLY one label from this list:",
+    "trade, pricing, payments, inventory, scheduling, general",
+    "",
+    "Guidelines:",
+    "- trade: trade-in, appraisal, sell my bike, cash offer, payoff/lien.",
+    "- pricing: MSRP, price, OTD, quote, rebates.",
+    "- payments: monthly payment, APR, term, down payment, financing numbers.",
+    "- inventory: availability, in stock, model/trim/color/finish questions.",
+    "- scheduling: appointment time, stop in, visit, test ride scheduling.",
+    "- general: none of the above.",
+    "",
+    `Recent messages:\n${history.join("\n")}`
+  ].join("\n");
+  try {
+    const resp = await client.responses.create({
+      model,
+      input: prompt,
+      temperature: 0,
+      max_output_tokens: 20
+    });
+    const out = resp.output_text?.trim().toLowerCase() ?? "";
+    const label = out.split(/\s+/)[0];
+    if (["trade", "pricing", "payments", "inventory", "scheduling", "general"].includes(label)) {
+      return label;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export async function summarizeSalespersonNoteWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];

@@ -10,6 +10,7 @@ import OpenAI from "openai";
 import { orchestrateInbound } from "./domain/orchestrator.js";
 import {
   classifySchedulingIntent,
+  classifyCadenceContextWithLLM,
   classifyEmpathyNeedWithLLM,
   summarizeSalespersonNoteWithLLM,
   parseBookingIntentWithLLM,
@@ -1355,6 +1356,108 @@ const FOLLOW_UP_VARIANTS_NO_SLOTS: Record<number, string[]> = {
   ]
 };
 
+const ENGAGED_FOLLOW_UP_VARIANTS_WITH_SLOTS: Record<string, string[]> = {
+  general: [
+    "Hi {name}, it’s {agent} again. If you want to stop by, I have {a} or {b} open. Which works best?{extraLine}",
+    "Hi {name} — {agent} again. If stopping in helps, I have {a} or {b} open. Which works better?{extraLine}"
+  ],
+  trade: [
+    "Hi {name}, it’s {agent} again. If you want to go over the trade and appraisal, I have {a} or {b} open. Which works best?{extraLine}",
+    "Hi {name} — {agent} again. If you'd like to line up a quick trade appraisal, I have {a} or {b} open. Which works better?{extraLine}"
+  ],
+  pricing: [
+    "Hi {name}, it’s {agent} again. If you'd like to go over the numbers, I have {a} or {b} open. Which works best?{extraLine}",
+    "Hi {name} — {agent} again. If a quick sit‑down helps, I have {a} or {b} open. Which works better?{extraLine}"
+  ],
+  payments: [
+    "Hi {name}, it’s {agent} again. If you want to review payments, I have {a} or {b} open. Which works best?{extraLine}",
+    "Hi {name} — {agent} again. If you'd like to go over payment options, I have {a} or {b} open. Which works better?{extraLine}"
+  ],
+  inventory: [
+    "Hi {name}, it’s {agent} again. If you want to see{label}, I have {a} or {b} open. Which works best?{extraLine}",
+    "Hi {name} — {agent} again. If stopping by helps, I have {a} or {b} open. Which works better?{extraLine}"
+  ],
+  scheduling: [
+    "Hi {name}, it’s {agent} again. If you want to lock a time, I have {a} or {b} open. Which works best?{extraLine}",
+    "Hi {name} — {agent} again. If you'd like to set a time, I have {a} or {b} open. Which works better?{extraLine}"
+  ]
+};
+
+const ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS: Record<string, Record<number, string[]>> = {
+  general: {
+    0: [
+      "Hi {name} — it’s {agent} again. Just wanted to see if you caught my last note{labelClause}. Let me know what you’re thinking.{extraLine}",
+      "Hi {name}, it’s {agent} again. Quick follow‑up{labelClause}. If you want to stop by, just tell me what day works.{extraLine}"
+    ],
+    1: [
+      "Hi {name} — if a quick walkaround video of{label} would help, I can send one. Anything you want to see?"
+    ],
+    2: [
+      "Quick question {name} — are you still leaning toward{label}, or comparing a few?"
+    ]
+  },
+  trade: {
+    0: [
+      "Hi {name} — it’s {agent} again. If you want me to run a rough trade idea on {label}, just say the word.{extraLine}",
+      "Hi {name}, it’s {agent} again. I can walk you through a trade estimate and next steps when you’re ready.{extraLine}"
+    ],
+    1: [
+      "Hi {name} — if you want, I can go over trade numbers and what to expect. Just let me know."
+    ],
+    2: [
+      "Quick check {name} — still thinking about a trade, or want to wait a bit?"
+    ]
+  },
+  pricing: {
+    0: [
+      "Hi {name} — it’s {agent} again. Any questions on the pricing we sent{labelClause}? I can clarify anything.{extraLine}",
+      "Hi {name}, it’s {agent} again. Just checking in on the numbers{labelClause}. Happy to help.{extraLine}"
+    ],
+    1: [
+      "Hi {name} — if a quick walkaround video of{label} would help, I can send one."
+    ],
+    2: [
+      "Quick check {name} — is{label} still the one you’re leaning toward?"
+    ]
+  },
+  payments: {
+    0: [
+      "Hi {name} — it’s {agent} again. Any questions on the payment numbers? I can refine it if you want.{extraLine}",
+      "Hi {name}, it’s {agent} again. Just checking in on the payment side. Happy to walk through options.{extraLine}"
+    ],
+    1: [
+      "Hi {name} — if you'd like, I can send a quick breakdown of payment options."
+    ],
+    2: [
+      "Quick check {name} — are you still considering payments, or holding off for now?"
+    ]
+  },
+  inventory: {
+    0: [
+      "Hi {name} — it’s {agent} again. Any questions about{label}? I can send a walkaround or confirm availability.{extraLine}",
+      "Hi {name}, it’s {agent} again. Just checking in on{label}. If you want a quick video, I can send one.{extraLine}"
+    ],
+    1: [
+      "Hi {name} — want a quick walkaround video of{label}? I’m happy to send it."
+    ],
+    2: [
+      "Quick check {name} — still interested in{label}, or comparing a few?"
+    ]
+  },
+  scheduling: {
+    0: [
+      "Hi {name} — it’s {agent} again. If you'd like to lock a time to stop in, just tell me what works.{extraLine}",
+      "Hi {name}, it’s {agent} again. If you want to come by, just give me a day that works and I’ll line it up.{extraLine}"
+    ],
+    1: [
+      "Hi {name} — if a quick walkaround video of{label} would help, I can send one."
+    ],
+    2: [
+      "Quick check {name} — are you aiming to come in soon, or still deciding?"
+    ]
+  }
+};
+
 function pickVariant(variants: string[], seed: string): string {
   if (!variants.length) return "";
   let hash = 0;
@@ -1370,6 +1473,53 @@ function renderFollowUpTemplate(template: string, ctx: Record<string, string>): 
     out = out.replace(new RegExp(`\\{${key}\\}`, "g"), value);
   }
   return out.replace(/\s+/g, " ").trim();
+}
+
+function mapDialogStateToCadenceTag(name: DialogStateName): string | null {
+  if (!name || name === "none") return null;
+  if (name.startsWith("trade_")) return "trade";
+  if (name.startsWith("pricing_")) return "pricing";
+  if (name.startsWith("payments_")) return "payments";
+  if (name.startsWith("inventory_")) return "inventory";
+  if (name.startsWith("schedule_") || name === "clarify_schedule") return "scheduling";
+  return null;
+}
+
+function mapBucketToCadenceTag(bucket?: string | null): string | null {
+  if (!bucket) return null;
+  if (bucket === "trade_in_sell") return "trade";
+  if (bucket === "inventory_interest") return "inventory";
+  if (bucket === "pricing_payments") return "pricing";
+  return null;
+}
+
+async function resolveCadenceContextTag(conv: any, cadence: any): Promise<string> {
+  const cached = cadence?.contextTag;
+  const cachedAt = cadence?.contextTagUpdatedAt ? new Date(cadence.contextTagUpdatedAt) : null;
+  if (cached && cachedAt && Date.now() - cachedAt.getTime() < 24 * 60 * 60 * 1000) {
+    return cached;
+  }
+  const dialogTag = mapDialogStateToCadenceTag(getDialogState(conv));
+  if (dialogTag) {
+    cadence.contextTag = dialogTag;
+    cadence.contextTagUpdatedAt = nowIso();
+    return dialogTag;
+  }
+  const bucketTag = mapBucketToCadenceTag(conv.classification?.bucket ?? null);
+  if (bucketTag) {
+    cadence.contextTag = bucketTag;
+    cadence.contextTagUpdatedAt = nowIso();
+    return bucketTag;
+  }
+  const history = (conv.messages ?? [])
+    .filter((m: any) => m?.body && m.direction && !["voice_call", "voice_transcript", "voice_summary"].includes(m.provider))
+    .slice(-6)
+    .map((m: any) => ({ direction: m.direction, body: String(m.body ?? "") }));
+  const llmTag = history.length ? await classifyCadenceContextWithLLM({ history }) : null;
+  const finalTag = llmTag || "general";
+  cadence.contextTag = finalTag;
+  cadence.contextTagUpdatedAt = nowIso();
+  return finalTag;
 }
 
 const SELL_FOLLOW_UP_MESSAGES = [
@@ -3763,6 +3913,19 @@ async function processDueFollowUps() {
       label: labelWithThe,
       extraLine
     };
+    if (!isPostSale && !isTradeNoInterest && !isSellMyBikeLead && conv.engagement?.at && cadence.kind !== "engaged") {
+      cadence.kind = "engaged";
+    }
+    const isEngagedCadence = cadence.kind === "engaged";
+    const contextTag = isEngagedCadence
+      ? await resolveCadenceContextTag(conv, cadence)
+      : null;
+    const engagedNoSlotMap =
+      (contextTag && ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS[contextTag]) ||
+      ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS.general;
+    const engagedWithSlot =
+      (contextTag && ENGAGED_FOLLOW_UP_VARIANTS_WITH_SLOTS[contextTag]) ||
+      ENGAGED_FOLLOW_UP_VARIANTS_WITH_SLOTS.general;
     let message = FOLLOW_UP_MESSAGES[cadence.stepIndex] ?? FOLLOW_UP_MESSAGES[FOLLOW_UP_MESSAGES.length - 1];
     let mediaUrls: string[] | undefined;
     if (isPostSale) {
@@ -3864,34 +4027,61 @@ async function processDueFollowUps() {
     } else if (cadence.stepIndex === 0) {
       const day2 = await buildDay2Options(cfg);
       if (day2) {
-        message = renderFollowUpTemplate(
-          pickVariant(FOLLOW_UP_VARIANTS_WITH_SLOTS, `${conv.leadKey}|${cadence.stepIndex}`),
-          {
-            ...baseCtx,
-            a: day2.slots[0].startLocal,
-            b: day2.slots[1].startLocal
-          }
-        );
+        const variant = isEngagedCadence
+          ? pickVariant(engagedWithSlot, `${conv.leadKey}|engaged|${cadence.stepIndex}`)
+          : pickVariant(FOLLOW_UP_VARIANTS_WITH_SLOTS, `${conv.leadKey}|${cadence.stepIndex}`);
+        message = renderFollowUpTemplate(variant, {
+          ...baseCtx,
+          a: day2.slots[0].startLocal,
+          b: day2.slots[1].startLocal
+        });
         setLastSuggestedSlots(conv, day2.slots);
       } else {
-        const variants = FOLLOW_UP_VARIANTS_NO_SLOTS[cadence.stepIndex] ?? [];
+        const variants = isEngagedCadence
+          ? engagedNoSlotMap[cadence.stepIndex] ?? []
+          : FOLLOW_UP_VARIANTS_NO_SLOTS[cadence.stepIndex] ?? [];
         message = variants.length
-          ? renderFollowUpTemplate(pickVariant(variants, `${conv.leadKey}|${cadence.stepIndex}`), baseCtx)
+          ? renderFollowUpTemplate(
+              pickVariant(
+                variants,
+                `${conv.leadKey}|${isEngagedCadence ? "engaged" : "standard"}|${cadence.stepIndex}`
+              ),
+              baseCtx
+            )
           : FOLLOW_UP_MESSAGES[1];
       }
     } else if (cadence.stepIndex === 2) {
       if (canTestRideFlag) {
         message = "If you want to set up a test ride, I can hold a time. What day and time works for you?";
       } else {
-        const variants = FOLLOW_UP_VARIANTS_NO_SLOTS[cadence.stepIndex] ?? [];
+        const variants = isEngagedCadence
+          ? engagedNoSlotMap[cadence.stepIndex] ?? []
+          : FOLLOW_UP_VARIANTS_NO_SLOTS[cadence.stepIndex] ?? [];
         message = variants.length
-          ? renderFollowUpTemplate(pickVariant(variants, `${conv.leadKey}|${cadence.stepIndex}`), baseCtx)
+          ? renderFollowUpTemplate(
+              pickVariant(
+                variants,
+                `${conv.leadKey}|${isEngagedCadence ? "engaged" : "standard"}|${cadence.stepIndex}`
+              ),
+              baseCtx
+            )
           : FOLLOW_UP_MESSAGES[2];
       }
-    } else if (FOLLOW_UP_VARIANTS_NO_SLOTS[cadence.stepIndex]) {
-      const variants = FOLLOW_UP_VARIANTS_NO_SLOTS[cadence.stepIndex] ?? [];
+    } else if (
+      FOLLOW_UP_VARIANTS_NO_SLOTS[cadence.stepIndex] ||
+      (isEngagedCadence && engagedNoSlotMap[cadence.stepIndex])
+    ) {
+      const variants = isEngagedCadence
+        ? engagedNoSlotMap[cadence.stepIndex] ?? []
+        : FOLLOW_UP_VARIANTS_NO_SLOTS[cadence.stepIndex] ?? [];
       message = variants.length
-        ? renderFollowUpTemplate(pickVariant(variants, `${conv.leadKey}|${cadence.stepIndex}`), baseCtx)
+        ? renderFollowUpTemplate(
+            pickVariant(
+              variants,
+              `${conv.leadKey}|${isEngagedCadence ? "engaged" : "standard"}|${cadence.stepIndex}`
+            ),
+            baseCtx
+          )
         : message;
     } else if (cadence.stepIndex >= 10) {
       const late = await buildLateFollowUp(conv, cadence.stepIndex, dealerProfile);

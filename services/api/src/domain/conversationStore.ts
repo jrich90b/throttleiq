@@ -104,10 +104,12 @@ export type FollowUpCadence = {
   lastSentAt?: string;
   lastSentStep?: number;
   stopReason?: string;
-  kind?: "standard" | "long_term" | "post_sale";
+  kind?: "standard" | "engaged" | "long_term" | "post_sale";
   deferredMessage?: string;
   pausedUntil?: string;
   pauseReason?: string;
+  contextTag?: string;
+  contextTagUpdatedAt?: string;
 };
 
 export type PricingObjectionState = {
@@ -1126,6 +1128,7 @@ function localPartsToUtcDate(
 }
 
 export const FOLLOW_UP_DAY_OFFSETS = [1, 3, 5, 7, 10, 14, 18, 21, 27, 30, 45, 60, 90];
+export const ENGAGED_DAY_OFFSETS = FOLLOW_UP_DAY_OFFSETS;
 export const POST_SALE_DAY_OFFSETS = [1, 60, 365, 690];
 
 export function computeFollowUpDueAt(anchorAtIso: string, offsetDays: number, timeZone: string) {
@@ -1251,7 +1254,12 @@ export function advanceFollowUpCadence(conv: Conversation, timeZone: string) {
   conv.followUpCadence.lastSentStep = conv.followUpCadence.stepIndex;
   conv.followUpCadence.stepIndex = nextStep;
   const isPostSale = conv.followUpCadence.kind === "post_sale";
-  const offsets = isPostSale ? POST_SALE_DAY_OFFSETS : FOLLOW_UP_DAY_OFFSETS;
+  const isEngaged = conv.followUpCadence.kind === "engaged";
+  const offsets = isPostSale
+    ? POST_SALE_DAY_OFFSETS
+    : isEngaged
+      ? ENGAGED_DAY_OFFSETS
+      : FOLLOW_UP_DAY_OFFSETS;
   if (nextStep >= offsets.length) {
     conv.followUpCadence.status = "completed";
     conv.followUpCadence.nextDueAt = undefined;
