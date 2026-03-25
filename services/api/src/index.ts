@@ -11,6 +11,7 @@ import { orchestrateInbound } from "./domain/orchestrator.js";
 import {
   classifySchedulingIntent,
   classifyEmpathyNeedWithLLM,
+  summarizeSalespersonNoteWithLLM,
   parseBookingIntentWithLLM,
   parseIntentWithLLM,
   summarizeVoiceTranscriptWithLLM
@@ -7794,8 +7795,10 @@ if (authToken && signature) {
       String(mentionedUser.name ?? "").trim().split(/\s+/).filter(Boolean)[0] ||
       "them";
     const updateText = String(event.body ?? "").trim();
-    const todoText = updateText ? `Update for ${firstName}: ${updateText}` : `Update for ${firstName}`;
-    addTodo(conv, "other", todoText, event.providerMessageId);
+    const noteSummary =
+      (await summarizeSalespersonNoteWithLLM({ text: updateText, history: recentHistory })) ?? "";
+    const todoText = noteSummary || updateText || `Update for ${firstName}`;
+    addTodo(conv, "note", todoText, event.providerMessageId);
     const fallbackSensitive = /\b(cancer|chemo|chemotherapy|radiation|hospice|icu|hospital|surgery|surgical|terminal|stage\s*(four|4)|death|dying|funeral|passed away|stroke|heart attack)\b/i.test(
       String(event.body ?? "")
     );

@@ -399,6 +399,7 @@ function todoActionLabel(todo: TodoItem): string {
   if (/(video|walkaround|photos)/.test(text)) return "Send a walkaround video or photos.";
   if (/(appointment|schedule|book)/.test(text)) return "Schedule an appointment.";
   if (/(pricing|price|quote|payment)/.test(text)) return "Provide pricing or payment details.";
+  if (/(^|\\b)note(\\b|$)/.test(reason) || /update for/.test(text)) return "Internal note (no customer follow-up).";
   return "Follow up with the customer.";
 }
 

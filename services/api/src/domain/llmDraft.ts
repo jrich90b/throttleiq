@@ -167,6 +167,40 @@ export async function classifyEmpathyNeedWithLLM(args: {
   }
 }
 
+export async function summarizeSalespersonNoteWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<string | null> {
+  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+  const history = (args.history ?? []).slice(-2).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "Summarize the customer's message for internal salesperson context.",
+    "- 1 sentence max.",
+    "- Focus on the key update or request.",
+    "- Do not add advice or next steps.",
+    "Return only the summary.",
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+  try {
+    const resp = await client.responses.create({
+      model,
+      input: prompt,
+      temperature: 0.2,
+      max_output_tokens: 80
+    });
+    const out = resp.output_text?.trim() ?? "";
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+
 export type BookingParse = {
   intent: "schedule" | "reschedule" | "cancel" | "availability" | "question" | "none";
   explicitRequest: boolean;
