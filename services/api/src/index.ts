@@ -6400,6 +6400,36 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const dealerProfile = await getDealerProfile();
   const weatherStatus = await getDealerWeatherStatus(dealerProfile);
 
+  const mentionedUser = findMentionedUser(event.body ?? "", await listUsers());
+  if (mentionedUser) {
+    const firstName =
+      String(mentionedUser.firstName ?? "").trim() ||
+      String(mentionedUser.name ?? "").trim().split(/\s+/).filter(Boolean)[0] ||
+      "them";
+    const fallbackSensitive = /\b(cancer|chemo|chemotherapy|radiation|hospice|icu|hospital|surgery|surgical|terminal|stage\s*(four|4)|death|dying|funeral|passed away|stroke|heart attack)\b/i.test(
+      String(event.body ?? "")
+    );
+    const empathyNeeded =
+      (await classifyEmpathyNeedWithLLM({ text: event.body ?? "", history })) ?? fallbackSensitive;
+    const wantsCall = /\b(call me|give me a call|can you call|please call|have .* call|reach me|contact me)\b/i.test(
+      String(event.body ?? "")
+    );
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const agentName = dealerProfile?.agentName ?? "our team";
+    const customerName = normalizeDisplayCase(conv.lead?.firstName) || "there";
+    const intro = isDirectUserMention(event.body ?? "", mentionedUser)
+      ? `Hey ${customerName} — this is ${agentName} at ${dealerName}. `
+      : "";
+    const handoff = wantsCall
+      ? `I'll have ${firstName} reach out.`
+      : `I'll let ${firstName} know.`;
+    const reply = `${intro}${empathyNeeded ? "I'm really sorry to hear that. " : "Got it — "}${handoff}`;
+    discardPendingDrafts(conv);
+    appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+    saveConversation(conv);
+    return res.json({ ok: true, conversation: conv, draft: reply });
+  }
+
   const result = await orchestrateInbound(event, history, {
     appointment: conv.appointment,
     followUp: conv.followUp,
