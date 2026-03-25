@@ -4729,6 +4729,9 @@ async function processStaffAppointmentNotifications() {
 }
 
 async function processAppointmentQuestions() {
+  if (String(process.env.APPOINTMENT_INTERNAL_QUESTIONS ?? "").trim() !== "1") {
+    return;
+  }
   const cfg = await getSchedulerConfig();
   const now = new Date();
   const convs = getAllConversations();
