@@ -2889,6 +2889,9 @@ function applyTradePolicy(
     if (filtered.length) {
       out = filtered.join(" ").trim();
     }
+    if (!/(call|reach out|phone)\b/i.test(out)) {
+      out = `${out} I can have someone call you today to go over a rough idea.`;
+    }
   }
   return out;
 }
