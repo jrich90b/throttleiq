@@ -10,6 +10,7 @@ import OpenAI from "openai";
 import { orchestrateInbound } from "./domain/orchestrator.js";
 import {
   classifySchedulingIntent,
+  classifyEmpathyNeedWithLLM,
   parseBookingIntentWithLLM,
   parseIntentWithLLM,
   summarizeVoiceTranscriptWithLLM
@@ -7755,10 +7756,13 @@ if (authToken && signature) {
     const updateText = String(event.body ?? "").trim();
     const todoText = updateText ? `Update for ${firstName}: ${updateText}` : `Update for ${firstName}`;
     addTodo(conv, "other", todoText, event.providerMessageId);
-    const sensitive = /\b(cancer|chemo|chemotherapy|radiation|hospice|icu|hospital|surgery|surgical|terminal|stage\s*(four|4)|death|dying|funeral|passed away|stroke|heart attack)\b/i.test(
+    const fallbackSensitive = /\b(cancer|chemo|chemotherapy|radiation|hospice|icu|hospital|surgery|surgical|terminal|stage\s*(four|4)|death|dying|funeral|passed away|stroke|heart attack)\b/i.test(
       String(event.body ?? "")
     );
-    const reply = sensitive
+    const empathyNeeded =
+      (await classifyEmpathyNeedWithLLM({ text: event.body ?? "", history: recentHistory })) ??
+      fallbackSensitive;
+    const reply = empathyNeeded
       ? `I'm really sorry to hear that. I'll let ${firstName} know.`
       : `Got it — I'll let ${firstName} know.`;
     const systemMode = webhookMode;
