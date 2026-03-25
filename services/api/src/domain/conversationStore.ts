@@ -334,6 +334,20 @@ export type Conversation = {
   contactPreference?: "call_only";
   voiceContext?: VoiceContext;
   memorySummary?: { text: string; updatedAt: string; messageCount: number };
+  lastIntent?: {
+    name:
+      | "trade"
+      | "pricing"
+      | "payments"
+      | "inventory"
+      | "scheduling"
+      | "callback"
+      | "service"
+      | "small_talk"
+      | "general";
+    updatedAt: string;
+    source?: "dialog_state" | "llm" | "manual";
+  };
   dialogState?: { name: DialogStateName; updatedAt: string };
   engagement?: {
     at: string;

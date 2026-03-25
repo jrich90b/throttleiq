@@ -1485,6 +1485,31 @@ function mapDialogStateToCadenceTag(name: DialogStateName): string | null {
   return null;
 }
 
+function mapDialogStateToIntent(name: DialogStateName): Conversation["lastIntent"]["name"] | null {
+  if (!name || name === "none") return null;
+  if (name.startsWith("trade_")) return "trade";
+  if (name.startsWith("pricing_")) return "pricing";
+  if (name.startsWith("payments_")) return "payments";
+  if (name.startsWith("inventory_")) return "inventory";
+  if (name.startsWith("schedule_") || name === "clarify_schedule") return "scheduling";
+  if (name.startsWith("callback_")) return "callback";
+  if (name.startsWith("service_")) return "service";
+  if (name === "small_talk") return "small_talk";
+  if (name.startsWith("followup_")) return null;
+  return null;
+}
+
+function updateLastIntent(conv: any, intent: Conversation["lastIntent"]["name"], source: "dialog_state" | "llm" | "manual") {
+  if (!conv || !intent) return;
+  const updatedAt = nowIso();
+  if (conv.lastIntent?.name === intent) {
+    conv.lastIntent.updatedAt = updatedAt;
+    conv.lastIntent.source = source;
+    return;
+  }
+  conv.lastIntent = { name: intent, updatedAt, source };
+}
+
 function mapBucketToCadenceTag(bucket?: string | null): string | null {
   if (!bucket) return null;
   if (bucket === "trade_in_sell") return "trade";
@@ -1493,11 +1518,29 @@ function mapBucketToCadenceTag(bucket?: string | null): string | null {
   return null;
 }
 
+function mapLastIntentToCadenceTag(name?: string | null): string | null {
+  if (!name) return null;
+  if (["trade", "pricing", "payments", "inventory", "scheduling"].includes(name)) return name;
+  return "general";
+}
+
 async function resolveCadenceContextTag(conv: any, cadence: any): Promise<string> {
   const cached = cadence?.contextTag;
   const cachedAt = cadence?.contextTagUpdatedAt ? new Date(cadence.contextTagUpdatedAt) : null;
   if (cached && cachedAt && Date.now() - cachedAt.getTime() < 24 * 60 * 60 * 1000) {
     return cached;
+  }
+  const lastIntent = conv?.lastIntent;
+  if (lastIntent?.name && lastIntent.updatedAt) {
+    const lastAt = new Date(lastIntent.updatedAt);
+    if (!Number.isNaN(lastAt.getTime()) && Date.now() - lastAt.getTime() < 30 * 24 * 60 * 60 * 1000) {
+      const fromLast = mapLastIntentToCadenceTag(lastIntent.name);
+      if (fromLast) {
+        cadence.contextTag = fromLast;
+        cadence.contextTagUpdatedAt = nowIso();
+        return fromLast;
+      }
+    }
   }
   const dialogTag = mapDialogStateToCadenceTag(getDialogState(conv));
   if (dialogTag) {
@@ -2414,6 +2457,10 @@ function setDialogState(conv: any, name: DialogStateName) {
     return;
   }
   conv.dialogState = { name, updatedAt };
+  const intent = mapDialogStateToIntent(name);
+  if (intent) {
+    updateLastIntent(conv, intent, "dialog_state");
+  }
 }
 
 function normalizePersonName(value: string): string {
