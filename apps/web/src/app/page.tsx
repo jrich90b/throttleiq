@@ -345,6 +345,13 @@ type ConversationDetail = {
     bookedEventId?: string | null;
     bookedEventLink?: string | null;
     bookedSalespersonId?: string | null;
+    staffNotify?: {
+      outcome?: {
+        status?: string;
+        note?: string;
+        updatedAt?: string;
+      };
+    };
   };
   classification?: { bucket?: string; cta?: string };
   scheduler?: { preferredSalespersonId?: string; preferredSalespersonName?: string };
@@ -7001,6 +7008,17 @@ export default function Home() {
                     ) : null}
                   </div>
                 ) : null}
+                {(() => {
+                  const outcome = selectedConv.appointment?.staffNotify?.outcome;
+                  if (!outcome?.note) return null;
+                  if (!authUser?.role) return null;
+                  return (
+                    <div className="mt-2 rounded border bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                      <div className="font-semibold">Outcome note</div>
+                      <div className="mt-1 whitespace-pre-wrap">{outcome.note}</div>
+                    </div>
+                  );
+                })()}
                 {(() => {
                   const watches =
                     selectedConv.inventoryWatches?.length
