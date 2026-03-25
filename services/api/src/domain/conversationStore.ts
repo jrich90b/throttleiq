@@ -146,6 +146,7 @@ export type DialogStateName =
   | "inventory_watch_active"
   | "inventory_answered"
   | "clarify_schedule"
+  | "schedule_soft"
   | "trade_init"
   | "trade_cash"
   | "trade_trade"
@@ -306,6 +307,11 @@ export type Conversation = {
   inventoryWatch?: InventoryWatch;
   inventoryWatches?: InventoryWatch[];
   inventoryWatchPending?: InventoryWatchPending;
+  scheduleSoft?: {
+    requestedAt: string;
+    cooldownUntil?: string;
+    lastAskAt?: string;
+  };
   pickup?: {
     stage?: "need_town" | "need_street" | "need_time" | "ready";
     town?: string;

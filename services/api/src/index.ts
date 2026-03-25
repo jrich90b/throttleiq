@@ -1013,6 +1013,9 @@ const nowIso = () => new Date().toISOString();
 function onAppointmentBooked(conv: any) {
   stopFollowUpCadence(conv, "appointment_booked");
   stopRelatedCadences(conv, "appointment_booked");
+  if (conv) {
+    conv.scheduleSoft = undefined;
+  }
 }
 
 function getBookingToken(profile: Awaited<ReturnType<typeof getDealerProfile>> | null): string {
@@ -2565,6 +2568,23 @@ function isExplicitScheduleIntent(text: string): boolean {
   return false;
 }
 
+const SOFT_SCHEDULE_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
+
+function detectSoftVisitIntent(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  const hasTime = /\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b/i.test(t);
+  if (hasTime) return false;
+  if (isExplicitScheduleIntent(t)) return false;
+  const visitVerb =
+    /\b(come|stop|swing|drop|head|drive|ride|make it|make it in|get there|come up|come down|stop by|come by|come in)\b/i;
+  if (!visitVerb.test(t)) return false;
+  const softQualifier =
+    /\b(might|maybe|probably|try|trying|hope|hoping|plan|planning|if i can|if i could|if possible|sometime|some time|soon|eventually|later|in a few|in a couple|a couple (days|weeks)|next week|next month|this week|this weekend|weekend)\b/i;
+  const dayToken =
+    /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|this week|this weekend|weekend|next month)\b/i;
+  return visitVerb.test(t) && (softQualifier.test(t) || dayToken.test(t));
+}
+
 function detectSchedulingSignals(text: string) {
   const t = String(text ?? "").toLowerCase();
   const hasDayToken =
@@ -2574,11 +2594,12 @@ function detectSchedulingSignals(text: string) {
   const hasTimeWord = /\b(\d{1,2}):(\d{2})\s*(am|pm)?\b/i.test(t);
   const hasAtHour = /\b(?:at|for|around|by)\s*(\d{1,2})(?::\d{2})?\b(?!\s*\/)/i.test(t);
   const hasDayTime = hasDayToken && (hasTimeWord || hasAtHour);
-  const explicit = isExplicitScheduleIntent(t);
+  const softVisit = detectSoftVisitIntent(t);
+  const explicit = softVisit ? false : isExplicitScheduleIntent(t);
   const hasDayOnlyAvailability =
     hasDayToken && /\b(availability|available|openings|open|time|times)\b/i.test(t);
-  const hasDayOnlyRequest = hasDayToken && explicit && !hasDayTime;
-  return { explicit, hasDayTime, hasDayOnlyAvailability, hasDayOnlyRequest };
+  const hasDayOnlyRequest = !softVisit && hasDayToken && explicit && !hasDayTime;
+  return { explicit, hasDayTime: softVisit ? false : hasDayTime, hasDayOnlyAvailability, hasDayOnlyRequest, softVisit };
 }
 
 function isDecisionDeferral(text: string): boolean {
@@ -2877,6 +2898,7 @@ function applyPickupPolicy(conv: any, reply: string): string {
 function inboundAskedToSchedule(text: string): boolean {
   const t = String(text ?? "");
   if (!t.trim()) return false;
+  if (detectSoftVisitIntent(t)) return false;
   if (isExplicitScheduleIntent(t)) return true;
   return (
     /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week|this weekend|weekend)\b/i.test(
@@ -2896,6 +2918,36 @@ function stripSchedulingLanguageIfNotAsked(reply: string, inboundText: string): 
   const trimmed = kept.join(" ").trim();
   if (trimmed) return trimmed;
   return reply.replace(schedulePhrase, "").replace(/\s{2,}/g, " ").trim();
+}
+
+function stripSchedulingPromptFromFollowUp(message: string): string {
+  const stripped = stripSchedulingLanguageIfNotAsked(message, "");
+  if (normalizeOutboundText(stripped)) return stripped;
+  return "Just checking in — I’m here if you need anything.";
+}
+
+function shouldAllowProactiveScheduleAsk(conv: any, now: Date): boolean {
+  const soft = conv?.scheduleSoft;
+  if (!soft || soft.lastAskAt) return false;
+  const cooldownUntil = soft.cooldownUntil
+    ? new Date(soft.cooldownUntil)
+    : new Date(new Date(soft.requestedAt).getTime() + SOFT_SCHEDULE_COOLDOWN_MS);
+  if (now < cooldownUntil) return false;
+  const lastInbound = getLastInbound(conv);
+  if (!lastInbound?.at) return false;
+  const lastInboundAt = new Date(lastInbound.at);
+  if (now.getTime() - lastInboundAt.getTime() < SOFT_SCHEDULE_COOLDOWN_MS) return false;
+  return true;
+}
+
+function applySoftSchedulePolicy(conv: any, reply: string, inboundText: string): string {
+  if (!detectSoftVisitIntent(inboundText)) return reply;
+  let out = stripSchedulingLanguageIfNotAsked(reply, inboundText);
+  const softLine = "Sounds good — just give me a heads-up when you want to stop in.";
+  if (!normalizeOutboundText(out)) return softLine;
+  if (/heads[-\s]?up|reach out|just let me know/i.test(out)) return out;
+  if (!/[.!?]$/.test(out)) out = `${out}.`;
+  return `${out} ${softLine}`.trim();
 }
 
 function isPricingText(text: string): boolean {
@@ -3772,6 +3824,14 @@ async function processDueFollowUps() {
       message = renderFollowUpTemplate(message, baseCtx);
     }
 
+    const allowProactiveSchedule = shouldAllowProactiveScheduleAsk(conv, now);
+    if (conv.scheduleSoft && !allowProactiveSchedule) {
+      message = stripSchedulingPromptFromFollowUp(message);
+    }
+    if (allowProactiveSchedule && conv.scheduleSoft && draftHasSchedulingPrompt(message)) {
+      conv.scheduleSoft.lastAskAt = nowIso();
+    }
+
     const emailTo = conv.lead?.email;
     const useEmail =
       !isPostSale && conv.classification?.channel === "email" && !!emailTo && hasEmailOptIn(conv.lead);
@@ -3783,9 +3843,11 @@ async function processDueFollowUps() {
     const year = conv.lead?.vehicle?.year ?? null;
     const model = conv.lead?.vehicle?.model ?? null;
     const label = model ? `the ${formatModelLabel(year, model)}` : "your inquiry";
-    const bookingLine = bookingUrl
-      ? `You can book an appointment here: ${bookingUrl}`
-      : "If you want to stop in, reply with a day and time that works.";
+    const bookingLine = conv.scheduleSoft && !allowProactiveSchedule
+      ? "If you need anything, just let me know."
+      : bookingUrl
+        ? `You can book an appointment here: ${bookingUrl}`
+        : "If you want to stop in, reply with a day and time that works.";
     let emailMessage: string | null = null;
     if (useEmail) {
       if (cadence.kind === "long_term") {
@@ -6343,6 +6405,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   reply = applyPricingPolicy(conv, reply, lastOutboundTextFinal);
   reply = applyCallbackPolicy(conv, reply, lastOutboundTextFinal);
   reply = applyServicePolicy(conv, reply, lastOutboundTextFinal);
+  reply = applySoftSchedulePolicy(conv, reply, String(event.body ?? ""));
   reply = stripSchedulingLanguageIfNotAsked(reply, String(event.body ?? ""));
   if (isSlotOfferMessage(reply)) {
     setDialogState(conv, "schedule_offer_sent");
@@ -7707,7 +7770,28 @@ if (authToken && signature) {
       schedulingSignalsBase.hasDayOnlyAvailability || llmHasDayOnlyAvailability,
     hasDayOnlyRequest: schedulingSignalsBase.hasDayOnlyRequest || llmHasDayOnlyRequest
   };
+  if (schedulingSignalsBase.softVisit) {
+    schedulingSignals.explicit = false;
+    schedulingSignals.hasDayTime = false;
+    schedulingSignals.hasDayOnlyAvailability = false;
+    schedulingSignals.hasDayOnlyRequest = false;
+  }
+  const softVisitIntent = schedulingSignalsBase.softVisit === true;
+  if (event.provider === "twilio" && softVisitIntent) {
+    conv.scheduleSoft = {
+      requestedAt: nowIso(),
+      cooldownUntil: new Date(Date.now() + SOFT_SCHEDULE_COOLDOWN_MS).toISOString()
+    };
+    if (getDialogState(conv) === "none") {
+      setDialogState(conv, "schedule_soft");
+    }
+  }
   const schedulingExplicit = schedulingAllowed ? schedulingSignals.explicit : false;
+  if (schedulingSignals.explicit || schedulingSignals.hasDayTime) {
+    if (conv.scheduleSoft) {
+      conv.scheduleSoft = undefined;
+    }
+  }
   if (callbackRequestedOverride && !isScheduleDialogState(getDialogState(conv))) {
     setDialogState(conv, "callback_requested");
   }
@@ -9889,6 +9973,7 @@ if (authToken && signature) {
   reply = applyPricingPolicy(conv, reply, lastOutboundTextFinal);
   reply = applyCallbackPolicy(conv, reply, lastOutboundTextFinal);
   reply = applyServicePolicy(conv, reply, lastOutboundTextFinal);
+  reply = applySoftSchedulePolicy(conv, reply, String(event.body ?? ""));
   reply = stripSchedulingLanguageIfNotAsked(reply, String(event.body ?? ""));
   if (isSlotOfferMessage(reply)) {
     setDialogState(conv, "schedule_offer_sent");
