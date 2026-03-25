@@ -3690,16 +3690,6 @@ async function processDueFollowUps() {
         const { until, indefinite } = parsePauseUntil(lastInbound.body, inboundAt);
         if (indefinite) continue;
         if (until && now < until) setBlockUntil(until);
-        if (isMeaningfulInbound(lastInbound.body) && now.getTime() - inboundAt.getTime() < 72 * 60 * 60 * 1000) {
-          setBlockUntil(new Date(inboundAt.getTime() + 72 * 60 * 60 * 1000));
-        }
-      }
-      const lastOutbound = getLastOutbound(conv, ["human", "twilio", "sendgrid"]);
-      if (lastOutbound?.at) {
-        const outboundAt = new Date(lastOutbound.at);
-        if (now.getTime() - outboundAt.getTime() < 72 * 60 * 60 * 1000) {
-          setBlockUntil(new Date(outboundAt.getTime() + 72 * 60 * 60 * 1000));
-        }
       }
       const lastDraft = getLastOutbound(conv, ["draft_ai"]);
       if (lastDraft?.at) {
