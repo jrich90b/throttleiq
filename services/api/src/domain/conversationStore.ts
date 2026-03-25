@@ -1552,6 +1552,37 @@ export function addTodo(
   summary: string,
   sourceMessageId?: string
 ): TodoTask {
+  const existing = todos.find(t => t.convId === conv.id && t.status === "open");
+  if (existing) {
+    const priorities: Record<TodoTask["reason"], number> = {
+      call: 7,
+      service: 6,
+      payments: 5,
+      pricing: 4,
+      manager: 3,
+      approval: 3,
+      note: 2,
+      other: 1
+    };
+    const existingPriority = priorities[existing.reason] ?? 1;
+    const incomingPriority = priorities[reason] ?? 1;
+    if (incomingPriority > existingPriority) {
+      existing.reason = reason;
+    }
+    const incoming = String(summary ?? "").trim();
+    if (incoming) {
+      const current = String(existing.summary ?? "").trim();
+      const currentLower = current.toLowerCase();
+      const incomingLower = incoming.toLowerCase();
+      if (!currentLower.includes(incomingLower)) {
+        existing.summary = current ? `${current}\n${incoming}` : incoming;
+      }
+    }
+    if (sourceMessageId) existing.sourceMessageId = sourceMessageId;
+    conv.updatedAt = nowIso();
+    scheduleSave();
+    return existing;
+  }
   const task: TodoTask = {
     id: makeId("todo"),
     convId: conv.id,
