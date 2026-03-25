@@ -50,6 +50,25 @@ export type AppointmentMemory = {
   appointmentType?: string | null;
   reschedulePending?: boolean;
   attendanceQuestionedAt?: string;
+  staffNotify?: {
+    bookedSentAt?: string;
+    followUpSentAt?: string;
+    lastEventId?: string | null;
+    outcomeToken?: string;
+    outcome?: {
+      status:
+        | "showed_up"
+        | "no_show"
+        | "sold"
+        | "hold"
+        | "financing_declined"
+        | "bought_elsewhere"
+        | "follow_up"
+        | "other";
+      note?: string;
+      updatedAt: string;
+    };
+  };
   confirmation?: {
     sentAt?: string;
     status?: "pending" | "confirmed" | "declined";

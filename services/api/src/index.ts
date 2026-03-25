@@ -6,6 +6,7 @@ import multer from "multer";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import crypto from "node:crypto";
 import OpenAI from "openai";
 import { orchestrateInbound } from "./domain/orchestrator.js";
 import {
@@ -561,6 +562,7 @@ async function processInventoryHolds() {
 setInterval(() => {
   void processDueFollowUps();
   void processAppointmentConfirmations();
+  void processStaffAppointmentNotifications();
   void processAppointmentQuestions();
 }, 60_000);
 
@@ -1806,6 +1808,16 @@ function getLastInboundMessage(conv: any): any | null {
   return msg ?? null;
 }
 
+function findConversationByOutcomeToken(token: string): any | null {
+  if (!token) return null;
+  const convs = getAllConversations();
+  return (
+    convs.find(
+      (c: any) => c?.appointment?.staffNotify?.outcomeToken === token
+    ) ?? null
+  );
+}
+
 function isTestRideSeason(profile: any, now: Date): boolean {
   const enabled = profile?.followUp?.testRideEnabled;
   if (enabled === false) return false;
@@ -2284,6 +2296,67 @@ function normalizePhone(raw: string): string {
   if (digits.length === 10) return `+1${digits}`;
   if (digits.length > 10) return `+${digits}`;
   return trimmed;
+}
+
+function buildStaffOutcomeLink(token: string): string | null {
+  const base = process.env.PUBLIC_BASE_URL?.replace(/\/+$/, "");
+  if (!base) return null;
+  return `${base}/public/appointment/outcome?token=${encodeURIComponent(token)}`;
+}
+
+function summarizeConversationForStaff(conv: any): string {
+  const lastInbound = String(getLastInboundBody(conv) ?? "").trim();
+  if (lastInbound) {
+    return lastInbound.replace(/\s+/g, " ").slice(0, 140);
+  }
+  const inquiry =
+    conv?.lead?.inquiry ??
+    conv?.lead?.notes ??
+    conv?.lead?.summary ??
+    "";
+  return String(inquiry ?? "").replace(/\s+/g, " ").slice(0, 140);
+}
+
+async function sendInternalSms(toNumber: string, body: string): Promise<boolean> {
+  const from = normalizePhone(String(process.env.TWILIO_FROM_NUMBER ?? "").trim());
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  if (!from || !accountSid || !authToken || !toNumber.startsWith("+")) return false;
+  try {
+    const client = twilio(accountSid, authToken);
+    await client.messages.create({ from, to: toNumber, body });
+    return true;
+  } catch (e: any) {
+    console.warn("[staff-sms] send failed:", e?.message ?? e);
+    return false;
+  }
+}
+
+function ensureAppointmentOutcomeToken(appt: any): string {
+  if (appt?.staffNotify?.outcomeToken) return appt.staffNotify.outcomeToken;
+  const token = crypto.randomBytes(12).toString("hex");
+  appt.staffNotify = appt.staffNotify ?? {};
+  appt.staffNotify.outcomeToken = token;
+  return token;
+}
+
+function escapeHtml(input: string): string {
+  return String(input ?? "").replace(/[&<>"']/g, s => {
+    switch (s) {
+      case "&":
+        return "&amp;";
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      case "\"":
+        return "&quot;";
+      case "'":
+        return "&#39;";
+      default:
+        return s;
+    }
+  });
 }
 
 async function transcribeRecordingMp3(buffer: Buffer, agentLabel = "Agent"): Promise<string | null> {
@@ -4377,6 +4450,83 @@ async function processAppointmentConfirmations() {
   }
 }
 
+async function processStaffAppointmentNotifications() {
+  const cfg = await getSchedulerConfig();
+  const users = await listUsers();
+  const now = new Date();
+  const convs = getAllConversations();
+  let changed = false;
+
+  for (const conv of convs) {
+    const appt = conv.appointment;
+    if (!appt?.bookedEventId || !appt.bookedSalespersonId || !appt.whenIso) continue;
+    if (conv.status === "closed") continue;
+
+    const user = users.find(u => u.id === appt.bookedSalespersonId);
+    if (!user?.phone) continue;
+    const toNumber = normalizePhone(user.phone);
+    if (!toNumber.startsWith("+")) continue;
+
+    appt.staffNotify = appt.staffNotify ?? {};
+    const token = ensureAppointmentOutcomeToken(appt);
+    const link = buildStaffOutcomeLink(token);
+    const whenLocal = formatSlotLocal(appt.whenIso, cfg.timezone);
+    const customerName = conv.lead?.name ?? conv.leadName ?? conv.leadKey ?? "Customer";
+    const vehicle =
+      conv.vehicleDescription ??
+      conv.lead?.vehicle?.model ??
+      conv.lead?.vehicle?.description ??
+      "the bike";
+    const apptType =
+      appt.appointmentType ??
+      appt.matchedSlot?.appointmentType ??
+      "appointment";
+    const summary = summarizeConversationForStaff(conv);
+
+    const eventChanged =
+      appt.bookedEventId && appt.staffNotify.lastEventId && appt.bookedEventId !== appt.staffNotify.lastEventId;
+
+    if (!appt.staffNotify.bookedSentAt || eventChanged) {
+      const bookedText = [
+        `New appointment booked`,
+        `${customerName} — ${vehicle}`,
+        `Type: ${apptType} | ${whenLocal}`,
+        summary ? `Notes: ${summary}` : null,
+        link ? `Outcome: ${link}` : null
+      ]
+        .filter(Boolean)
+        .join("\n");
+      const sent = await sendInternalSms(toNumber, bookedText);
+      if (sent) {
+        appt.staffNotify.bookedSentAt = new Date().toISOString();
+        appt.staffNotify.lastEventId = appt.bookedEventId;
+        changed = true;
+      }
+    }
+
+    if (appt.staffNotify.outcome) continue;
+    if (appt.staffNotify.followUpSentAt) continue;
+
+    const start = new Date(appt.whenIso);
+    if (Number.isNaN(start.getTime())) continue;
+    const followAt = new Date(start.getTime() + 15 * 60 * 1000);
+    if (now < followAt) continue;
+
+    const followText = link
+      ? `Did ${customerName} show for the ${whenLocal} appointment? Update here: ${link}`
+      : `Did ${customerName} show for the ${whenLocal} appointment?`;
+    const followSent = await sendInternalSms(toNumber, followText);
+    if (followSent) {
+      appt.staffNotify.followUpSentAt = new Date().toISOString();
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    await flushConversationStore();
+  }
+}
+
 async function processAppointmentQuestions() {
   const cfg = await getSchedulerConfig();
   const now = new Date();
@@ -4854,6 +5004,108 @@ app.get("/public/booking/prefill", async (req, res) => {
       appointmentType: inferAppointmentTypeFromConv(conv)
     }
   });
+});
+
+app.get("/public/appointment/outcome", async (req, res) => {
+  const token = String(req.query?.token ?? "").trim();
+  if (!token) return res.status(400).send("Missing token");
+  const conv = findConversationByOutcomeToken(token);
+  if (!conv) return res.status(404).send("Not found");
+  const cfg = await getSchedulerConfig();
+  const whenIso = conv.appointment?.whenIso ?? "";
+  const whenText = whenIso ? formatSlotLocal(whenIso, cfg.timezone) : "appointment";
+  const customer = conv.lead?.name ?? conv.leadName ?? conv.leadKey ?? "Customer";
+  const vehicle =
+    conv.vehicleDescription ??
+    conv.lead?.vehicle?.model ??
+    conv.lead?.vehicle?.description ??
+    "the bike";
+
+  const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Appointment Outcome</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px; color: #111; }
+      h1 { font-size: 20px; margin: 0 0 8px; }
+      .card { border: 1px solid #ddd; border-radius: 10px; padding: 16px; margin-top: 12px; }
+      .row { margin: 8px 0; }
+      button { padding: 10px 14px; margin-right: 8px; }
+      select, textarea, input { width: 100%; padding: 8px; margin-top: 6px; }
+      textarea { min-height: 90px; }
+    </style>
+  </head>
+  <body>
+    <h1>Appointment Outcome</h1>
+    <div class="row"><strong>${escapeHtml(customer)}</strong> — ${escapeHtml(vehicle)}</div>
+    <div class="row">${escapeHtml(whenText)}</div>
+
+    <div class="card">
+      <form method="POST" action="/public/appointment/outcome">
+        <input type="hidden" name="token" value="${escapeHtml(token)}" />
+        <button type="submit" name="outcome" value="showed_up">Customer Showed</button>
+        <button type="submit" name="outcome" value="no_show">No Show</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <form method="POST" action="/public/appointment/outcome">
+        <input type="hidden" name="token" value="${escapeHtml(token)}" />
+        <label>Outcome</label>
+        <select name="outcome">
+          <option value="showed_up">Showed up</option>
+          <option value="no_show">No show</option>
+          <option value="sold">Sold</option>
+          <option value="hold">Hold</option>
+          <option value="financing_declined">Financing not approved</option>
+          <option value="bought_elsewhere">Bought elsewhere</option>
+          <option value="follow_up">Needs follow up</option>
+          <option value="other">Other</option>
+        </select>
+        <label>Notes (optional)</label>
+        <textarea name="note" placeholder="Add any context for the agent…"></textarea>
+        <button type="submit">Submit outcome</button>
+      </form>
+    </div>
+  </body>
+</html>`;
+
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  return res.send(html);
+});
+
+app.post("/public/appointment/outcome", async (req, res) => {
+  const token = String(req.body?.token ?? "").trim();
+  const outcome = String(req.body?.outcome ?? "").trim();
+  const note = String(req.body?.note ?? "").trim();
+  if (!token || !outcome) return res.status(400).send("Missing data");
+  const conv = findConversationByOutcomeToken(token);
+  if (!conv || !conv.appointment) return res.status(404).send("Not found");
+
+  const allowed = new Set([
+    "showed_up",
+    "no_show",
+    "sold",
+    "hold",
+    "financing_declined",
+    "bought_elsewhere",
+    "follow_up",
+    "other"
+  ]);
+  if (!allowed.has(outcome)) return res.status(400).send("Invalid outcome");
+
+  conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
+  conv.appointment.staffNotify.outcome = {
+    status: outcome as any,
+    note: note || undefined,
+    updatedAt: new Date().toISOString()
+  };
+  conv.appointment.updatedAt = new Date().toISOString();
+  saveConversation(conv);
+  await flushConversationStore();
+  return res.send("Thanks — your update was saved.");
 });
 
 
