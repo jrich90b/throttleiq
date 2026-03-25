@@ -41,7 +41,9 @@ import {
 import { modelHasFinishOptions } from "./domain/msrpPriceList.js";
 import {
   computeFollowUpDueAt,
+  computePostSaleDueAt,
   FOLLOW_UP_DAY_OFFSETS,
+  POST_SALE_DAY_OFFSETS,
   inferWalkIn,
   startPostSaleCadence
 } from "./domain/conversationStore.js";
@@ -1017,6 +1019,9 @@ function stopRelatedCadences(
 const nowIso = () => new Date().toISOString();
 
 function onAppointmentBooked(conv: any) {
+  if (conv?.closedReason === "sold" || conv?.sale?.soldAt || conv?.followUpCadence?.kind === "post_sale") {
+    return;
+  }
   stopFollowUpCadence(conv, "appointment_booked");
   stopRelatedCadences(conv, "appointment_booked");
   if (conv) {
@@ -4075,6 +4080,21 @@ async function processDueFollowUps() {
 
   for (const conv of convs) {
     const cadence = conv.followUpCadence;
+    if (
+      cadence?.kind === "post_sale" &&
+      cadence.status === "stopped" &&
+      cadence.stopReason === "appointment_booked" &&
+      (conv.closedReason === "sold" || conv.sale?.soldAt)
+    ) {
+      const anchor = conv.sale?.soldAt ?? cadence.anchorAt ?? nowIso();
+      conv.followUpCadence = {
+        status: "active",
+        anchorAt: anchor,
+        nextDueAt: computePostSaleDueAt(anchor, POST_SALE_DAY_OFFSETS[0], cfg.timezone),
+        stepIndex: 0,
+        kind: "post_sale"
+      };
+    }
     if (!cadence || cadence.status !== "active" || !cadence.nextDueAt) continue;
     const isPostSale = cadence.kind === "post_sale";
     if (isPostSale && conv.closedReason !== "sold" && !conv.sale?.soldAt) {
