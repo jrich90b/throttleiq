@@ -2360,6 +2360,129 @@ function escapeHtml(input: string): string {
   });
 }
 
+type OutcomeUnitInput = {
+  stockId?: string;
+  vin?: string;
+  year?: string;
+  make?: string;
+  model?: string;
+  trim?: string;
+  color?: string;
+  label?: string;
+};
+
+function buildUnitLabel(unit: OutcomeUnitInput): string | undefined {
+  const label = [unit.year, unit.make, unit.model, unit.trim].filter(Boolean).join(" ").trim();
+  if (label) return label;
+  return unit.stockId || unit.vin || undefined;
+}
+
+function readOutcomeUnit(body: any): OutcomeUnitInput {
+  const unit: OutcomeUnitInput = {
+    stockId: String(body?.unitStockId ?? "").trim() || undefined,
+    vin: String(body?.unitVin ?? "").trim() || undefined,
+    year: String(body?.unitYear ?? "").trim() || undefined,
+    make: String(body?.unitMake ?? "").trim() || undefined,
+    model: String(body?.unitModel ?? "").trim() || undefined,
+    trim: String(body?.unitTrim ?? "").trim() || undefined,
+    color: String(body?.unitColor ?? "").trim() || undefined
+  };
+  unit.label = buildUnitLabel(unit);
+  return unit;
+}
+
+async function applyOutcomeHold(conv: any, unit: OutcomeUnitInput, note: string | undefined, nowIso: string) {
+  const holdKey = normalizeInventoryHoldKey(unit.stockId, unit.vin);
+  if (!holdKey) return "Missing hold unit (stockId or VIN).";
+  const createdAt = conv.hold?.createdAt ?? nowIso;
+  const holdEntry = {
+    id: holdKey,
+    stockId: unit.stockId,
+    vin: unit.vin,
+    label: unit.label,
+    note,
+    leadKey: conv.leadKey,
+    convId: conv.id,
+    createdAt,
+    updatedAt: nowIso
+  };
+  await setInventoryHold({ stockId: unit.stockId, vin: unit.vin, hold: holdEntry });
+  conv.hold = {
+    key: holdKey,
+    stockId: unit.stockId,
+    vin: unit.vin,
+    label: unit.label,
+    note,
+    reason: "unit_hold",
+    createdAt,
+    updatedAt: nowIso
+  };
+  stopFollowUpCadence(conv, "unit_hold");
+  setFollowUpMode(conv, "paused_indefinite", "unit_hold");
+  return null;
+}
+
+async function applyOutcomeSold(
+  conv: any,
+  unit: OutcomeUnitInput,
+  note: string | undefined,
+  nowIso: string,
+  soldById: string,
+  soldByNameRaw: string
+) {
+  const soldKey = normalizeInventorySoldKey(unit.stockId, unit.vin);
+  if (!soldKey) return "Missing sold unit (stockId or VIN).";
+  const cfg = await getSchedulerConfig();
+  const salespeople = cfg.salespeople ?? [];
+  const sp = soldById ? salespeople.find(s => s.id === soldById) ?? null : null;
+  conv.sale = {
+    soldAt: nowIso,
+    soldById: sp?.id ?? (soldById || undefined),
+    soldByName: sp?.name ?? (soldByNameRaw || undefined),
+    stockId: unit.stockId,
+    vin: unit.vin,
+    label: unit.label,
+    note
+  };
+  conv.status = "closed";
+  conv.closedAt = nowIso;
+  conv.closedReason = "sold";
+  const soldEntry = {
+    id: soldKey,
+    stockId: unit.stockId,
+    vin: unit.vin,
+    label: unit.label,
+    note,
+    leadKey: conv.leadKey,
+    convId: conv.id,
+    soldAt: nowIso,
+    soldById: sp?.id ?? (soldById || undefined),
+    soldByName: sp?.name ?? (soldByNameRaw || undefined),
+    createdAt: conv.sale?.soldAt ?? nowIso,
+    updatedAt: nowIso
+  };
+  await setInventorySold({ stockId: unit.stockId, vin: unit.vin, sold: soldEntry });
+  await clearInventoryHold(unit.stockId, unit.vin);
+  if (conv.hold?.key && conv.hold.key === soldKey) {
+    conv.hold = undefined;
+  }
+  setFollowUpMode(conv, "active", "post_sale");
+  startPostSaleCadence(conv, nowIso, cfg.timezone);
+  if (conv.lead?.leadRef) {
+    try {
+      const soldBy = conv.sale?.soldByName || conv.sale?.soldById || "Unknown";
+      const soldUnit = conv.sale?.label || conv.sale?.stockId || conv.sale?.vin || "unit";
+      const tlpNote = `Sold/Delivered: ${soldUnit}. Salesperson: ${soldBy}.`;
+      await tlpMarkDealershipVisitDelivered({ leadRef: conv.lead.leadRef, note: tlpNote });
+    } catch (err: any) {
+      const msg = `TLP delivered step failed for leadRef ${conv.lead.leadRef}. Retry in TLP or update manually.`;
+      addInternalQuestion(conv.id, conv.leadKey, msg);
+      console.warn("[tlp] delivered mark failed:", err?.message ?? err);
+    }
+  }
+  return null;
+}
+
 async function transcribeRecordingMp3(buffer: Buffer, agentLabel = "Agent"): Promise<string | null> {
   const deepgramKey = process.env.DEEPGRAM_API_KEY?.trim();
   if (deepgramKey) {
@@ -5078,6 +5201,16 @@ app.get("/public/appointment/outcome", async (req, res) => {
     conv.lead?.vehicle?.model ??
     conv.lead?.vehicle?.description ??
     "the bike";
+  const leadVehicle = conv.lead?.vehicle ?? {};
+  const unitPrefill = {
+    year: String(leadVehicle?.year ?? ""),
+    make: String(leadVehicle?.make ?? ""),
+    model: String(leadVehicle?.model ?? ""),
+    trim: String(leadVehicle?.trim ?? ""),
+    color: String(leadVehicle?.color ?? ""),
+    stockId: String(leadVehicle?.stockId ?? ""),
+    vin: String(leadVehicle?.vin ?? "")
+  };
 
   const html = `<!doctype html>
 <html>
@@ -5095,6 +5228,11 @@ app.get("/public/appointment/outcome", async (req, res) => {
       textarea { min-height: 90px; }
       .muted { color: #666; font-size: 12px; margin-top: 6px; }
       .rec-btn { margin-top: 8px; }
+      .unit-results { border: 1px solid #ddd; border-radius: 8px; max-height: 220px; overflow: auto; margin-top: 8px; }
+      .unit-item { padding: 8px 10px; border-bottom: 1px solid #eee; cursor: pointer; }
+      .unit-item:last-child { border-bottom: none; }
+      .unit-item.active { background: #eef6ff; }
+      .unit-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
     </style>
   </head>
   <body>
@@ -5116,6 +5254,19 @@ app.get("/public/appointment/outcome", async (req, res) => {
           <option value="bought_elsewhere">Bought elsewhere</option>
           <option value="other">Other</option>
         </select>
+        <label>Unit (optional)</label>
+        <input id="unit-search" placeholder="Search inventory by model, stock, VIN, color…" />
+        <div class="unit-results" id="unit-results"></div>
+        <div class="muted">Not in inventory? Enter details below. Stock # or VIN required for Sold/Hold.</div>
+        <div class="unit-grid">
+          <input name="unitYear" id="unitYear" placeholder="Year" value="${escapeHtml(unitPrefill.year)}" />
+          <input name="unitMake" id="unitMake" placeholder="Make" value="${escapeHtml(unitPrefill.make)}" />
+          <input name="unitModel" id="unitModel" placeholder="Model" value="${escapeHtml(unitPrefill.model)}" />
+          <input name="unitTrim" id="unitTrim" placeholder="Trim" value="${escapeHtml(unitPrefill.trim)}" />
+          <input name="unitColor" id="unitColor" placeholder="Color" value="${escapeHtml(unitPrefill.color)}" />
+          <input name="unitStockId" id="unitStockId" placeholder="Stock #" value="${escapeHtml(unitPrefill.stockId)}" />
+          <input name="unitVin" id="unitVin" placeholder="VIN" value="${escapeHtml(unitPrefill.vin)}" />
+        </div>
         <label>Notes (optional)</label>
         <textarea name="note" id="note-field" placeholder="Add any context for the agent…"></textarea>
         <div class="muted">Tap record to add a quick voice note (auto‑saved).</div>
@@ -5131,6 +5282,97 @@ app.get("/public/appointment/outcome", async (req, res) => {
         const statusEl = document.getElementById("rec-status");
         const noteEl = document.getElementById("note-field");
         const outcomeEl = document.querySelector("select[name='outcome']");
+        const outcomeForm = document.getElementById("outcome-form");
+        const unitSearch = document.getElementById("unit-search");
+        const unitResults = document.getElementById("unit-results");
+        const unitYear = document.getElementById("unitYear");
+        const unitMake = document.getElementById("unitMake");
+        const unitModel = document.getElementById("unitModel");
+        const unitTrim = document.getElementById("unitTrim");
+        const unitColor = document.getElementById("unitColor");
+        const unitStock = document.getElementById("unitStockId");
+        const unitVin = document.getElementById("unitVin");
+
+        let inventory = [];
+        function setUnitInputs(item) {
+          if (!item) return;
+          if (unitYear) unitYear.value = item.year || "";
+          if (unitMake) unitMake.value = item.make || "";
+          if (unitModel) unitModel.value = item.model || "";
+          if (unitTrim) unitTrim.value = item.trim || "";
+          if (unitColor) unitColor.value = item.color || "";
+          if (unitStock) unitStock.value = item.stockId || "";
+          if (unitVin) unitVin.value = item.vin || "";
+        }
+        function renderInventory(list, selectedKey) {
+          if (!unitResults) return;
+          unitResults.innerHTML = "";
+          if (!list.length) {
+            const empty = document.createElement("div");
+            empty.className = "unit-item";
+            empty.textContent = "No matching units.";
+            unitResults.appendChild(empty);
+            return;
+          }
+          list.slice(0, 50).forEach(item => {
+            const key = (item.stockId || item.vin || "").toLowerCase();
+            const row = document.createElement("div");
+            row.className = "unit-item" + (selectedKey && key === selectedKey ? " active" : "");
+            const label = [item.year, item.make, item.model, item.trim].filter(Boolean).join(" ");
+            const color = item.color ? " • " + item.color : "";
+            const sub = [];
+            if (item.stockId) sub.push("Stock " + item.stockId);
+            if (item.vin) sub.push("VIN " + item.vin);
+            row.textContent = (label || item.model || item.stockId || item.vin) + color + (sub.length ? " (" + sub.join(" • ") + ")" : "");
+            row.addEventListener("click", () => {
+              setUnitInputs(item);
+              renderInventory(list, key);
+            });
+            unitResults.appendChild(row);
+          });
+        }
+        function filterInventory(q) {
+          if (!inventory.length) return [];
+          const query = (q || "").toLowerCase().trim();
+          if (!query) return inventory.slice(0, 20);
+          return inventory.filter(it => {
+            const hay = [it.year, it.make, it.model, it.trim, it.color, it.stockId, it.vin]
+              .filter(Boolean)
+              .join(" ")
+              .toLowerCase();
+            return hay.includes(query);
+          });
+        }
+        if (unitSearch && unitResults) {
+          fetch("/inventory")
+            .then(r => r.json())
+            .then(data => {
+              inventory = Array.isArray(data?.items) ? data.items : [];
+              const preKey = ((unitStock && unitStock.value) || (unitVin && unitVin.value) || "").toLowerCase();
+              const list = filterInventory(unitSearch.value || "");
+              renderInventory(list, preKey);
+            })
+            .catch(() => {
+              renderInventory([], "");
+            });
+          unitSearch.addEventListener("input", () => {
+            const list = filterInventory(unitSearch.value || "");
+            const selectedKey = ((unitStock && unitStock.value) || (unitVin && unitVin.value) || "").toLowerCase();
+            renderInventory(list, selectedKey);
+          });
+        }
+        if (outcomeForm && outcomeEl) {
+          outcomeForm.addEventListener("submit", e => {
+            const status = outcomeEl.value || "";
+            const requiresUnit = status === "sold" || status === "hold";
+            const hasId = ((unitStock && unitStock.value) || (unitVin && unitVin.value) || "").trim();
+            if (requiresUnit && !hasId) {
+              e.preventDefault();
+              alert("Please enter a Stock # or VIN for Sold/Hold.");
+              return;
+            }
+          });
+        }
         if (!recBtn) return;
         let recorder = null;
         let chunks = [];
@@ -5159,6 +5401,13 @@ app.get("/public/appointment/outcome", async (req, res) => {
               const fd = new FormData();
               fd.append("token", token);
               fd.append("outcome", outcomeEl ? outcomeEl.value : "");
+              fd.append("unitYear", unitYear ? unitYear.value : "");
+              fd.append("unitMake", unitMake ? unitMake.value : "");
+              fd.append("unitModel", unitModel ? unitModel.value : "");
+              fd.append("unitTrim", unitTrim ? unitTrim.value : "");
+              fd.append("unitColor", unitColor ? unitColor.value : "");
+              fd.append("unitStockId", unitStock ? unitStock.value : "");
+              fd.append("unitVin", unitVin ? unitVin.value : "");
               fd.append("audio", blob, "note.webm");
               const resp = await fetch("/public/appointment/outcome/transcribe", { method: "POST", body: fd });
               const json = await resp.json().catch(() => null);
@@ -5223,11 +5472,22 @@ app.post("/public/appointment/outcome", async (req, res) => {
   ]);
   if (!allowed.has(outcome)) return res.status(400).send("Invalid outcome");
 
+  const nowIso = new Date().toISOString();
+  const unit = readOutcomeUnit(req.body);
+  if (outcome === "hold") {
+    const err = await applyOutcomeHold(conv, unit, note || undefined, nowIso);
+    if (err) return res.status(400).send(err);
+  } else if (outcome === "sold") {
+    const soldById = conv.appointment?.bookedSalespersonId ?? "";
+    const err = await applyOutcomeSold(conv, unit, note || undefined, nowIso, soldById, "");
+    if (err) return res.status(400).send(err);
+  }
+
   conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
   conv.appointment.staffNotify.outcome = {
     status: outcome as any,
     note: note || undefined,
-    updatedAt: new Date().toISOString()
+    updatedAt: nowIso
   };
   conv.appointment.updatedAt = new Date().toISOString();
   saveConversation(conv);
@@ -5259,12 +5519,22 @@ app.post("/public/appointment/outcome/transcribe", upload.single("audio"), async
   ]);
   const fallbackStatus = conv.appointment.staffNotify?.outcome?.status ?? "follow_up";
   const status = allowed.has(outcomeRaw) ? outcomeRaw : fallbackStatus;
+  const nowIso = new Date().toISOString();
+  const unit = readOutcomeUnit(req.body);
+  if (status === "hold") {
+    const err = await applyOutcomeHold(conv, unit, transcript, nowIso);
+    if (err) return res.status(400).json({ ok: false, error: err });
+  } else if (status === "sold") {
+    const soldById = conv.appointment?.bookedSalespersonId ?? "";
+    const err = await applyOutcomeSold(conv, unit, transcript, nowIso, soldById, "");
+    if (err) return res.status(400).json({ ok: false, error: err });
+  }
 
   conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
   conv.appointment.staffNotify.outcome = {
     status: status as any,
     note: transcript,
-    updatedAt: new Date().toISOString()
+    updatedAt: nowIso
   };
   conv.appointment.updatedAt = new Date().toISOString();
   saveConversation(conv);
