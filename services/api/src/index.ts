@@ -2877,6 +2877,19 @@ function applyTradePolicy(
       out = "I can do either — just let me know which direction you prefer.";
     }
   }
+  const phoneNumbersIntent =
+    /(over the phone|on the phone|phone|numbers|ballpark|rough (idea|number)|general numbers|give me something|where i'm thinking|way out of where i'm thinking)/i.test(
+      lastInboundText
+    );
+  if (phoneNumbersIntent) {
+    const sentences = String(out ?? "").split(/(?<=[.!?])\s+/);
+    const dropPattern =
+      /(in[-\s]?person appraisal|bring (it|the bike) (by|in)|come (in|by)|stop (in|by)|set up a time|schedule|appraisal time)/i;
+    const filtered = sentences.filter(s => !dropPattern.test(s));
+    if (filtered.length) {
+      out = filtered.join(" ").trim();
+    }
+  }
   return out;
 }
 
