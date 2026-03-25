@@ -4079,7 +4079,7 @@ async function processDueFollowUps() {
   };
 
   for (const conv of convs) {
-    const cadence = conv.followUpCadence;
+    let cadence = conv.followUpCadence;
     if (
       cadence?.kind === "post_sale" &&
       cadence.status === "stopped" &&
@@ -4094,6 +4094,9 @@ async function processDueFollowUps() {
         stepIndex: 0,
         kind: "post_sale"
       };
+      conv.updatedAt = nowIso();
+      saveConversation(conv);
+      cadence = conv.followUpCadence;
     }
     if (!cadence || cadence.status !== "active" || !cadence.nextDueAt) continue;
     const isPostSale = cadence.kind === "post_sale";
