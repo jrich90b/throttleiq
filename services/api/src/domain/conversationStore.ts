@@ -1197,13 +1197,19 @@ export function computePostSaleDueAt(anchorAtIso: string, offsetDays: number, ti
   const base = new Date(Date.UTC(anchorParts.year, anchorParts.month - 1, anchorParts.day));
   base.setUTCDate(base.getUTCDate() + offsetDays);
   const baseParts = getZonedParts(base, timeZone);
-  return localPartsToUtcDate(timeZone, {
+  let due = localPartsToUtcDate(timeZone, {
     year: baseParts.year,
     month: baseParts.month,
     day: baseParts.day,
     hour24: 10,
     minute: 30
-  }).toISOString();
+  });
+  if (offsetDays > 0) {
+    while (due.getTime() <= anchor.getTime()) {
+      due = new Date(due.getTime() + 24 * 60 * 60 * 1000);
+    }
+  }
+  return due.toISOString();
 }
 
 export function startFollowUpCadence(conv: Conversation, anchorAtIso: string, timeZone: string) {
