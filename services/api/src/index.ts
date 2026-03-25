@@ -5103,25 +5103,17 @@ app.get("/public/appointment/outcome", async (req, res) => {
     <div class="row">${escapeHtml(whenText)}</div>
 
     <div class="card">
-      <form method="POST" action="/public/appointment/outcome">
-        <input type="hidden" name="token" value="${escapeHtml(token)}" />
-        <button type="submit" name="outcome" value="showed_up">Customer Showed</button>
-        <button type="submit" name="outcome" value="no_show">No Show</button>
-      </form>
-    </div>
-
-    <div class="card">
       <form id="outcome-form" method="POST" action="/public/appointment/outcome">
         <input type="hidden" name="token" value="${escapeHtml(token)}" />
         <label>Outcome</label>
         <select name="outcome">
+          <option value="follow_up">Needs follow up</option>
           <option value="showed_up">Showed up</option>
           <option value="no_show">No show</option>
           <option value="sold">Sold</option>
           <option value="hold">Hold</option>
           <option value="financing_declined">Financing not approved</option>
           <option value="bought_elsewhere">Bought elsewhere</option>
-          <option value="follow_up">Needs follow up</option>
           <option value="other">Other</option>
         </select>
         <label>Notes (optional)</label>
