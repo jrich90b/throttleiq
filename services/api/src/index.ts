@@ -3025,6 +3025,22 @@ function isDirectUserMention(text: string, user: any): boolean {
   return direct.test(body);
 }
 
+function inboundReferencesOtherPerson(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  return /\b(he|him|she|her)\b/.test(t) || /\b(call|reach|talk to|speak to|tell)\s+(him|her)\b/.test(t);
+}
+
+function findUserFromRecentOutbound(conv: any, users: Array<any>): any | null {
+  const outbounds = [...(conv?.messages ?? [])]
+    .reverse()
+    .filter((m: any) => m.direction === "out" && m.body);
+  for (const m of outbounds.slice(0, 6)) {
+    const found = findMentionedUser(m.body, users);
+    if (found) return found;
+  }
+  return null;
+}
+
 function applyPricingPolicy(conv: any, reply: string, lastOutboundText: string): string {
   const state = getDialogState(conv);
   if (!(state.startsWith("pricing_") || state === "payments_handoff" || state === "payments_answered")) {
@@ -5786,15 +5802,9 @@ app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
   }
   const conv = getConversation(convId);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
-  const allowedReasons: Array<"pricing" | "payments" | "approval" | "manager" | "service" | "call" | "other"> = [
-    "pricing",
-    "payments",
-    "approval",
-    "manager",
-    "service",
-    "call",
-    "other"
-  ];
+  const allowedReasons: Array<
+    "pricing" | "payments" | "approval" | "manager" | "service" | "call" | "note" | "other"
+  > = ["pricing", "payments", "approval", "manager", "service", "call", "note", "other"];
   const reason = allowedReasons.includes(reasonRaw as any)
     ? (reasonRaw as any)
     : "other";
@@ -6401,7 +6411,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const dealerProfile = await getDealerProfile();
   const weatherStatus = await getDealerWeatherStatus(dealerProfile);
 
-  const mentionedUser = findMentionedUser(event.body ?? "", await listUsers());
+  const usersForMentions = await listUsers();
+  let mentionedUser = findMentionedUser(event.body ?? "", usersForMentions);
+  if (!mentionedUser && inboundReferencesOtherPerson(event.body ?? "")) {
+    mentionedUser = findUserFromRecentOutbound(conv, usersForMentions);
+  }
   if (mentionedUser) {
     const firstName =
       String(mentionedUser.firstName ?? "").trim() ||
@@ -7785,9 +7799,13 @@ if (authToken && signature) {
   const llmTestRideIntent = intentAccepted && intentParse?.intent === "test_ride";
   const llmAvailability = llmAvailabilityIntent ? intentParse?.availability ?? null : null;
   let mentionedUser: any | null = null;
+  let usersForMentions: Array<any> = [];
   if (event.provider === "twilio") {
-    const users = await listUsers();
-    mentionedUser = findMentionedUser(event.body ?? "", users);
+    usersForMentions = await listUsers();
+    mentionedUser = findMentionedUser(event.body ?? "", usersForMentions);
+    if (!mentionedUser && inboundReferencesOtherPerson(event.body ?? "")) {
+      mentionedUser = findUserFromRecentOutbound(conv, usersForMentions);
+    }
   }
   if (event.provider === "twilio" && mentionedUser) {
     const firstName =
