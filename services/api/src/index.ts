@@ -3014,6 +3014,16 @@ function findMentionedUser(text: string, users: Array<any>): any | null {
   return null;
 }
 
+function isDirectUserMention(text: string, user: any): boolean {
+  const body = String(text ?? "");
+  if (!body || !user) return false;
+  const name = String(user?.firstName ?? "").trim() || String(user?.name ?? "").split(" ")[0];
+  if (!name) return false;
+  const token = escapeRegex(name);
+  const direct = new RegExp(`^\\s*(hey|hi|yo|ok|okay)?\\s*${token}\\b`, "i");
+  return direct.test(body);
+}
+
 function applyPricingPolicy(conv: any, reply: string, lastOutboundText: string): string {
   const state = getDialogState(conv);
   if (!(state.startsWith("pricing_") || state === "payments_handoff" || state === "payments_answered")) {
@@ -7762,9 +7772,24 @@ if (authToken && signature) {
     const empathyNeeded =
       (await classifyEmpathyNeedWithLLM({ text: event.body ?? "", history: recentHistory })) ??
       fallbackSensitive;
-    const reply = empathyNeeded
-      ? `I'm really sorry to hear that. I'll let ${firstName} know.`
-      : `Got it — I'll let ${firstName} know.`;
+    const wantsCall = llmCallbackRequested
+      ? true
+      : /\b(call me|give me a call|can you call|please call|have .* call|reach me|contact me)\b/i.test(
+          String(event.body ?? "")
+        );
+    const dealerProfile = await getDealerProfile();
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const agentName = dealerProfile?.agentName ?? "our team";
+    const customerName = normalizeDisplayCase(conv.lead?.firstName) || "there";
+    const intro = isDirectUserMention(event.body ?? "", mentionedUser)
+      ? `Hey ${customerName} — this is ${agentName} at ${dealerName}. `
+      : "";
+    const handoff = wantsCall
+      ? `I'll have ${firstName} reach out.`
+      : `I'll let ${firstName} know.`;
+    const reply = `${intro}${
+      empathyNeeded ? "I'm really sorry to hear that. " : "Got it — "
+    }${handoff}`;
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
