@@ -2877,23 +2877,29 @@ function applyTradePolicy(
       out = "I can do either — just let me know which direction you prefer.";
     }
   }
-  const phoneNumbersIntent =
-    /(over the phone|on the phone|phone|numbers|ballpark|rough (idea|number)|general numbers|give me something|where i'm thinking|way out of where i'm thinking)/i.test(
-      lastInboundText
-    );
+  const phoneNumbersIntent = detectPhoneNumbersIntent(lastInboundText);
   if (phoneNumbersIntent) {
     const sentences = String(out ?? "").split(/(?<=[.!?])\s+/);
     const dropPattern =
       /(in[-\s]?person appraisal|bring (it|the bike) (by|in)|come (in|by)|stop (in|by)|set up a time|schedule|appraisal time|good time to call|when can i call|when should i call|what time to call|call you (today|tomorrow)|is now a good time to call)/i;
-    const filtered = sentences.filter(s => !dropPattern.test(s));
+    const callQuestion =
+      /\b(want|would you like|ok to|okay to|can we|should we|do you want)\b[^.?!]*\bcall\b[^.?!]*\?/i;
+    const filtered = sentences.filter(s => !dropPattern.test(s) && !callQuestion.test(s));
     if (filtered.length) {
       out = filtered.join(" ").trim();
     }
-    if (!/(call|reach out|phone)\b/i.test(out)) {
-      out = `${out} I can have someone call you today to go over a rough idea.`;
+    const callLine = "I'll have someone call you today to go over a rough idea.";
+    if (!/call you today|reach out today|give you a call today/i.test(out)) {
+      out = `${out} ${callLine}`.trim();
     }
   }
   return out;
+}
+
+function detectPhoneNumbersIntent(text: string): boolean {
+  return /(over the phone|on the phone|phone|numbers|ballpark|rough (idea|number)|general numbers|give me something|where i'm thinking|way out of where i'm thinking)/i.test(
+    String(text ?? "")
+  );
 }
 
 function applyPickupPolicy(conv: any, reply: string): string {
@@ -7741,6 +7747,9 @@ if (authToken && signature) {
       };
       saveConversation(conv);
     }
+  }
+  if (event.provider === "twilio" && isTradeLead && detectPhoneNumbersIntent(event.body ?? "")) {
+    addTodo(conv, "call", "Customer wants a rough trade idea over the phone.", event.providerMessageId);
   }
   if (isTradeLead && conv.lead) {
     const parsedSellOption = parseSellOptionFromText(event.body ?? "");
