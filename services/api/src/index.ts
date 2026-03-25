@@ -3107,7 +3107,7 @@ function stripCallTimingQuestions(reply: string): string {
   if (!/(call|phone|reach|give (me|you) a call)/i.test(text)) return reply;
   const sentences = text.split(/(?<=[.!?])\s+/);
   const dropPattern =
-    /(good time to call|when can (i|we) call|when should (i|we) call|what time (works|is best) (for|to) (a )?call|is now a good time to call|can i call (you )?(now|today|tomorrow)|what time should i call)/i;
+    /(good time to (call|talk)|when can (i|we) (call|talk)|when should (i|we) (call|talk)|what time (works|is best) (for|to) (a )?(call|talk)|is now a good time to (call|talk)|can i (call|talk) (to )?(you )?(now|today|tomorrow)|what time should i (call|talk))/i;
   const filtered = sentences.filter(s => !dropPattern.test(s));
   return filtered.length ? filtered.join(" ").trim() : reply;
 }
