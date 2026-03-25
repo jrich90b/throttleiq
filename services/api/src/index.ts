@@ -2884,7 +2884,7 @@ function applyTradePolicy(
   if (phoneNumbersIntent) {
     const sentences = String(out ?? "").split(/(?<=[.!?])\s+/);
     const dropPattern =
-      /(in[-\s]?person appraisal|bring (it|the bike) (by|in)|come (in|by)|stop (in|by)|set up a time|schedule|appraisal time)/i;
+      /(in[-\s]?person appraisal|bring (it|the bike) (by|in)|come (in|by)|stop (in|by)|set up a time|schedule|appraisal time|good time to call|when can i call|when should i call|what time to call|call you (today|tomorrow)|is now a good time to call)/i;
     const filtered = sentences.filter(s => !dropPattern.test(s));
     if (filtered.length) {
       out = filtered.join(" ").trim();
