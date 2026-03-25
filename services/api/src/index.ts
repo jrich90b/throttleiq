@@ -2874,6 +2874,30 @@ function applyPickupPolicy(conv: any, reply: string): string {
   return reply;
 }
 
+function inboundAskedToSchedule(text: string): boolean {
+  const t = String(text ?? "");
+  if (!t.trim()) return false;
+  if (isExplicitScheduleIntent(t)) return true;
+  return (
+    /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week|this weekend|weekend)\b/i.test(
+      t
+    ) ||
+    /\b\d{1,2}(:\d{2})?\s*(am|pm)\b/i.test(t)
+  );
+}
+
+function stripSchedulingLanguageIfNotAsked(reply: string, inboundText: string): string {
+  if (inboundAskedToSchedule(inboundText)) return reply;
+  const schedulePhrase =
+    /\b(schedule|appointment|appt|book|reserve|calendar|set (up )?a time|come in|stop in|stop by|visit|which works best|do any of these times work|what day|what time)\b/i;
+  if (!schedulePhrase.test(reply)) return reply;
+  const sentences = reply.split(/(?<=[.!?])\s+/);
+  const kept = sentences.filter(s => !schedulePhrase.test(s));
+  const trimmed = kept.join(" ").trim();
+  if (trimmed) return trimmed;
+  return reply.replace(schedulePhrase, "").replace(/\s{2,}/g, " ").trim();
+}
+
 function isPricingText(text: string): boolean {
   return /(price|otd|out the door|payment|monthly|down|apr|term|finance|credit|quote)/i.test(String(text ?? ""));
 }
@@ -6319,6 +6343,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   reply = applyPricingPolicy(conv, reply, lastOutboundTextFinal);
   reply = applyCallbackPolicy(conv, reply, lastOutboundTextFinal);
   reply = applyServicePolicy(conv, reply, lastOutboundTextFinal);
+  reply = stripSchedulingLanguageIfNotAsked(reply, String(event.body ?? ""));
   if (isSlotOfferMessage(reply)) {
     setDialogState(conv, "schedule_offer_sent");
   }
@@ -9864,6 +9889,7 @@ if (authToken && signature) {
   reply = applyPricingPolicy(conv, reply, lastOutboundTextFinal);
   reply = applyCallbackPolicy(conv, reply, lastOutboundTextFinal);
   reply = applyServicePolicy(conv, reply, lastOutboundTextFinal);
+  reply = stripSchedulingLanguageIfNotAsked(reply, String(event.body ?? ""));
   if (isSlotOfferMessage(reply)) {
     setDialogState(conv, "schedule_offer_sent");
   }
