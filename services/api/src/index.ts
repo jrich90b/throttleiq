@@ -4161,7 +4161,7 @@ async function processDueFollowUps() {
       if (conv.followUp?.skipNextCheckin) {
         conv.followUp.skipNextCheckin = false;
         conv.followUp.updatedAt = nowIso();
-      } else {
+      } else if (conv.appointment?.whenIso) {
         if (!openCheckinByConv.has(conv.id)) {
           const text = "Follow-up scheduled — did the customer come in?";
           addInternalQuestion(conv.id, conv.leadKey, text, "cadence_checkin");
