@@ -2141,7 +2141,7 @@ export default function Home() {
       return { id: sp.id, name, firstName: first };
     });
     const fromUsers = (usersList ?? [])
-      .filter((u: any) => u.role === "salesperson")
+      .filter((u: any) => u.role === "salesperson" || (u.role === "manager" && u.includeInSchedule))
       .map((u: any) => {
         const name =
           [u.firstName, u.lastName].filter(Boolean).join(" ") || u.name || u.email || u.id;
