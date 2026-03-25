@@ -25,6 +25,12 @@ export type VoiceContext = {
   contacted?: boolean;
 };
 
+export type LeadOwner = {
+  id: string;
+  name?: string;
+  assignedAt?: string;
+};
+
 export type AppointmentStatus = "none" | "proposed" | "confirmed";
 
 export type AppointmentMemory = {
@@ -291,6 +297,7 @@ export type Conversation = {
   createdAt: string;
   updatedAt: string;
   messages: Message[];
+  leadOwner?: LeadOwner;
   lead?: LeadProfile;
   classification?: { bucket?: string; cta?: string; channel?: string; ruleName?: string };
   appointment?: AppointmentMemory;
@@ -747,6 +754,7 @@ export function listConversations() {
         hold: c.hold ?? null,
         inventoryWatch: c.inventoryWatch ?? null,
         inventoryWatches: c.inventoryWatches ?? null,
+        leadOwner: c.leadOwner ?? null,
         scheduler: c.scheduler
           ? {
               preferredSalespersonId: c.scheduler.preferredSalespersonId,

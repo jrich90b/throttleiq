@@ -6570,6 +6570,17 @@ app.post("/conversations/:id/call", async (req, res) => {
   const userPhoneRaw = String(user?.phone ?? "").trim();
   const userExtRaw = String(user?.extension ?? "").trim();
   const dealerPhoneRaw = String(dealerProfile?.phone ?? "").trim();
+  const ownerId = String(user?.id ?? "").trim();
+  const ownerNameRaw = String(user?.name ?? user?.email ?? "").trim();
+  if (ownerId && (!conv.leadOwner || !conv.leadOwner.id)) {
+    conv.leadOwner = {
+      id: ownerId,
+      name: ownerNameRaw || undefined,
+      assignedAt: new Date().toISOString()
+    };
+  } else if (conv.leadOwner && !conv.leadOwner.name && ownerNameRaw) {
+    conv.leadOwner.name = ownerNameRaw;
+  }
 
   let agentTo = "";
   let agentDigits = "";
@@ -6597,6 +6608,11 @@ app.post("/conversations/:id/call", async (req, res) => {
   const customerPhone = normalizePhone(customerRaw);
   if (!customerPhone || !customerPhone.startsWith("+")) {
     return res.status(400).json({ ok: false, error: "Customer phone not available" });
+  }
+
+  if (conv.leadOwner) {
+    saveConversation(conv);
+    await flushConversationStore();
   }
 
   const publicBase = process.env.PUBLIC_BASE_URL?.replace(/\/+$/, "");

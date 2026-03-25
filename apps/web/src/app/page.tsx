@@ -166,6 +166,11 @@ type ConversationListItem = {
     note?: string;
   } | null;
   contactPreference?: "call_only";
+  leadOwner?: {
+    id?: string;
+    name?: string;
+    assignedAt?: string;
+  } | null;
   leadName?: string | null;
   vehicleDescription?: string | null;
   walkIn?: boolean | null;
@@ -260,6 +265,11 @@ type ConversationDetail = {
     note?: string;
   } | null;
   contactPreference?: "call_only";
+  leadOwner?: {
+    id?: string;
+    name?: string;
+    assignedAt?: string;
+  } | null;
   walkIn?: boolean | null;
   hold?: {
     key?: string;
@@ -4262,6 +4272,11 @@ export default function Home() {
                               ? `closed: ${new Date(c.closedAt).toLocaleString()}`
                               : `updated: ${new Date(c.updatedAt).toLocaleString()}`}
                           </div>
+                          {c.leadOwner?.name || c.leadOwner?.id ? (
+                            <div className="text-xs text-red-600 mt-1">
+                              Owner: {c.leadOwner?.name || c.leadOwner?.id}
+                            </div>
+                          ) : null}
                         </button>
                         <div className="relative border-l shrink-0 w-10 flex items-center justify-center bg-[var(--surface-2)]">
                           <button
@@ -6951,6 +6966,11 @@ export default function Home() {
                   {selectedConv.contactPreference === "call_only" ? (
                     <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
                       Call Only
+                    </span>
+                  ) : null}
+                  {selectedConv.leadOwner?.name || selectedConv.leadOwner?.id ? (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-200">
+                      Owner: {selectedConv.leadOwner?.name || selectedConv.leadOwner?.id}
                     </span>
                   ) : null}
                 </div>
