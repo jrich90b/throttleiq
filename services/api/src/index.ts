@@ -5541,10 +5541,11 @@ app.get("/public/appointment/outcome", async (req, res) => {
       .modal.open { display: flex; }
       .modal-card { background: #fff; border-radius: 12px; width: min(980px, 92vw); max-height: 85vh; display: flex; flex-direction: column; }
       .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid #eee; }
-      .modal-body { display: grid; grid-template-columns: 1fr 280px; gap: 12px; padding: 12px 16px 16px; overflow: hidden; }
+      .modal-body { display: grid; grid-template-columns: 1fr 280px; gap: 12px; padding: 12px 16px 8px; overflow: hidden; }
       .modal-list { overflow: auto; border: 1px solid #ddd; border-radius: 8px; }
       .modal-preview { border: 1px solid #ddd; border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
       .preview-img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 6px; background: #f2f2f2; }
+      .modal-footer { display: flex; justify-content: space-between; align-items: center; padding: 8px 16px 12px; }
       .unit-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
     </style>
   </head>
@@ -5585,6 +5586,10 @@ app.get("/public/appointment/outcome", async (req, res) => {
                   <div id="unit-preview-text" class="muted">Hover a unit to preview</div>
                 </div>
               </div>
+              <div class="modal-footer">
+                <div id="unit-count" class="muted"></div>
+                <button type="button" id="unit-more">Show more</button>
+              </div>
             </div>
           </div>
           <div class="muted">Not in inventory? Enter details below. Stock # or VIN required for Sold/Hold.</div>
@@ -5621,6 +5626,8 @@ app.get("/public/appointment/outcome", async (req, res) => {
         const unitModalClose = document.getElementById("unit-modal-close");
         const unitPreviewImg = document.getElementById("unit-preview-img");
         const unitPreviewText = document.getElementById("unit-preview-text");
+        const unitCount = document.getElementById("unit-count");
+        const unitMore = document.getElementById("unit-more");
         const unitYear = document.getElementById("unitYear");
         const unitMake = document.getElementById("unitMake");
         const unitModel = document.getElementById("unitModel");
@@ -5653,17 +5660,25 @@ app.get("/public/appointment/outcome", async (req, res) => {
           if (unitStock) unitStock.value = "";
           if (unitVin) unitVin.value = "";
         }
+        let listLimit = 50;
+        let lastList = [];
+        let lastSelectedKey = "";
         function renderInventory(list, selectedKey) {
           if (!unitModalList) return;
           unitModalList.innerHTML = "";
-          if (!list.length) {
+          lastList = list || [];
+          lastSelectedKey = selectedKey || "";
+          if (!lastList.length) {
             const empty = document.createElement("div");
             empty.className = "unit-item";
             empty.textContent = "No matching units.";
             unitModalList.appendChild(empty);
+            if (unitCount) unitCount.textContent = "";
+            if (unitMore) unitMore.style.display = "none";
             return;
           }
-          list.slice(0, 50).forEach(item => {
+          const slice = lastList.slice(0, listLimit);
+          slice.forEach(item => {
             const key = (item.stockId || item.vin || "").toLowerCase();
             const row = document.createElement("div");
             row.className = "unit-item" + (selectedKey && key === selectedKey ? " active" : "");
@@ -5706,6 +5721,8 @@ app.get("/public/appointment/outcome", async (req, res) => {
             });
             unitModalList.appendChild(row);
           });
+          if (unitCount) unitCount.textContent = `Showing ${Math.min(listLimit, lastList.length)} of ${lastList.length}`;
+          if (unitMore) unitMore.style.display = lastList.length > listLimit ? "inline-block" : "none";
         }
         function filterInventory(q) {
           if (!inventory.length) return [];
@@ -5774,6 +5791,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
         function showInventoryList() {
           if (!isUnitOutcome()) return;
           if (unitModal) unitModal.classList.add("open");
+          listLimit = 50;
           if (!inventoryLoaded) {
             showAllOnLoad = true;
             ensureInventoryLoaded();
@@ -5791,6 +5809,12 @@ app.get("/public/appointment/outcome", async (req, res) => {
         if (unitModalClose) {
           unitModalClose.addEventListener("click", () => {
             if (unitModal) unitModal.classList.remove("open");
+          });
+        }
+        if (unitMore) {
+          unitMore.addEventListener("click", () => {
+            listLimit += 50;
+            renderInventory(lastList, lastSelectedKey);
           });
         }
         if (unitModal) {
