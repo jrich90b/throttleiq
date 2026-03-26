@@ -10475,6 +10475,43 @@ if (authToken && signature) {
         }
 
         if (availableMatches.length > 0) {
+        const pick = pickClosestInventoryItem(availableMatches, year ?? null, color ?? null);
+        const picked = pick?.item ?? null;
+        if (!year && (color || finishFromText) && picked) {
+          const pickedYear = picked.year ? `${picked.year} ` : "";
+          const pickedModel = picked.model ?? model ?? "that model";
+          const pickedColor = formatColorLabel(picked.color ?? null);
+          const reply = `Yes — we do have a ${pickedYear}${pickedModel}${pickedColor ? ` in ${pickedColor}` : ""} in stock. Want details or to stop by?`;
+          setDialogState(conv, "inventory_answered");
+          const systemMode = webhookMode;
+          if (systemMode === "suggest") {
+            appendOutbound(
+              conv,
+              event.to,
+              event.from,
+              reply,
+              "draft_ai",
+              undefined,
+              picked.images?.[0] ? [picked.images[0]] : undefined
+            );
+            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+            return res.status(200).type("text/xml").send(twiml);
+          }
+          appendOutbound(
+            conv,
+            event.to,
+            event.from,
+            reply,
+            "twilio",
+            undefined,
+            picked.images?.[0] ? [picked.images[0]] : undefined
+          );
+          const mediaTag = picked.images?.[0] ? `\n    <Media>${escapeXml(picked.images[0])}</Media>` : "";
+          const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<Response>\\n  <Message>\\n    <Body>${escapeXml(
+            reply
+          )}</Body>${mediaTag}\\n  </Message>\\n</Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
         conv.lead = conv.lead ?? {};
         conv.lead.vehicle = conv.lead.vehicle ?? {};
         if (year) conv.lead.vehicle.year = year;
