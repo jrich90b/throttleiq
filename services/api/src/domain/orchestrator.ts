@@ -57,6 +57,20 @@ function isEmojiOnly(text: string): boolean {
   return t.length <= 6;
 }
 
+function extractDayPart(text: string): string | null {
+  const t = String(text ?? "").toLowerCase();
+  const m = t.match(/\b(morning|afternoon|evening|tonight)\b/);
+  if (!m) return null;
+  return m[1] === "tonight" ? "evening" : m[1];
+}
+
+function extractDayName(text: string): string | null {
+  const t = String(text ?? "").toLowerCase();
+  const m = t.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/);
+  if (!m) return null;
+  return m[1].replace(/^\w/, c => c.toUpperCase());
+}
+
 function isShortPleasantry(text: string): boolean {
   const raw = String(text ?? "").trim();
   if (!raw) return false;
@@ -1259,6 +1273,23 @@ export async function orchestrateInbound(
       shouldRespond: true,
       draft: ack,
       handoff: { required: true, reason: "other", ack }
+    });
+  }
+
+  if (availabilityAsked && stockId && inventoryStatus === "AVAILABLE") {
+    const dayName = extractDayName(event.body);
+    const dayPart = extractDayPart(event.body);
+    const urlLine = inventoryUrl ? ` Here’s the listing: ${inventoryUrl}.` : "";
+    const whenLine =
+      dayName && dayPart
+        ? ` If you want to come by ${dayName} ${dayPart}, what time works best?`
+        : " If you want to stop in, what day and time works best?";
+    const ack = `Got it — ${stockId} is available right now.${urlLine}${whenLine}`.trim();
+    return finalize({
+      intent,
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft: ack
     });
   }
 
