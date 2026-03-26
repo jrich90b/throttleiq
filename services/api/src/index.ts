@@ -5428,7 +5428,13 @@ app.get("/public/appointment/outcome", async (req, res) => {
     conv.lead?.vehicle?.description ??
     "the bike";
   const leadVehicle = conv.lead?.vehicle ?? {};
-  const holdUnit = conv.hold ?? null;
+  const holds = await listInventoryHolds();
+  const holdUnit =
+    conv.hold ??
+    Object.values(holds ?? {}).find(
+      (h: any) => h?.leadKey === conv.leadKey || h?.convId === conv.id
+    ) ??
+    null;
   const saleUnit = conv.sale ?? null;
   const preferredStock = String(saleUnit?.stockId ?? holdUnit?.stockId ?? leadVehicle?.stockId ?? "").trim();
   const preferredVin = String(saleUnit?.vin ?? holdUnit?.vin ?? leadVehicle?.vin ?? "").trim();
@@ -5631,7 +5637,11 @@ app.get("/public/appointment/outcome", async (req, res) => {
           fetch("/inventory")
             .then(r => r.json())
             .then(data => {
-              inventory = Array.isArray(data?.items) ? data.items : [];
+              if (data?.ok === false) {
+                inventory = [];
+              } else {
+                inventory = Array.isArray(data?.items) ? data.items : [];
+              }
               inventoryLoaded = true;
               const preKey = ((unitStock && unitStock.value) || (unitVin && unitVin.value) || "").toLowerCase();
               const list = filterInventory(unitSearch ? unitSearch.value : "");
@@ -5651,6 +5661,10 @@ app.get("/public/appointment/outcome", async (req, res) => {
             });
         }
         if (unitSearch && unitResults) {
+          unitSearch.addEventListener("focus", () => {
+            if (!isUnitOutcome()) return;
+            ensureInventoryLoaded();
+          });
           unitSearch.addEventListener("input", () => {
             if (!isUnitOutcome()) return;
             ensureInventoryLoaded();
