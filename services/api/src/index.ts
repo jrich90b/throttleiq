@@ -1510,6 +1510,24 @@ function pickVariant(variants: string[], seed: string): string {
   return variants[hash % variants.length];
 }
 
+function pickVariantNoRepeat(
+  cadence: any,
+  variants: string[],
+  seed: string,
+  key: string
+): string {
+  if (!variants.length) return "";
+  const usedMap = (cadence.usedVariants = cadence.usedVariants ?? {});
+  const used = usedMap[key] ?? [];
+  const remaining = variants.filter(v => !used.includes(v));
+  const pool = remaining.length ? remaining : variants;
+  const pick = pickVariant(pool, `${seed}|${used.length}`);
+  if (!used.includes(pick)) {
+    usedMap[key] = [...used, pick];
+  }
+  return pick;
+}
+
 function renderFollowUpTemplate(template: string, ctx: Record<string, string>): string {
   let out = template;
   for (const [key, value] of Object.entries(ctx)) {
@@ -4363,9 +4381,11 @@ async function processDueFollowUps() {
         const day2 = await buildDay2Options(cfg);
         if (day2) {
           message = renderFollowUpTemplate(
-            pickVariant(
+            pickVariantNoRepeat(
+              cadence,
               SELL_FOLLOW_UP_VARIANTS_WITH_SLOTS,
-              `${conv.leadKey}|sell|${cadence.stepIndex}`
+              `${conv.leadKey}|sell|${cadence.stepIndex}`,
+              `sell:${cadence.stepIndex}:slots`
             ),
             {
               name: firstName,
@@ -4388,8 +4408,18 @@ async function processDueFollowUps() {
       const day2 = await buildDay2Options(cfg);
       if (day2) {
         const variant = isEngagedCadence
-          ? pickVariant(engagedWithSlot, `${conv.leadKey}|engaged|${cadence.stepIndex}`)
-          : pickVariant(FOLLOW_UP_VARIANTS_WITH_SLOTS, `${conv.leadKey}|${cadence.stepIndex}`);
+          ? pickVariantNoRepeat(
+              cadence,
+              engagedWithSlot,
+              `${conv.leadKey}|engaged|${cadence.stepIndex}`,
+              `engaged:${contextTag ?? "general"}:${cadence.stepIndex}:slots`
+            )
+          : pickVariantNoRepeat(
+              cadence,
+              FOLLOW_UP_VARIANTS_WITH_SLOTS,
+              `${conv.leadKey}|${cadence.stepIndex}`,
+              `standard:${cadence.stepIndex}:slots`
+            );
         message = renderFollowUpTemplate(variant, {
           ...baseCtx,
           a: day2.slots[0].startLocal,
@@ -4402,9 +4432,11 @@ async function processDueFollowUps() {
           : FOLLOW_UP_VARIANTS_NO_SLOTS[cadence.stepIndex] ?? [];
         message = variants.length
           ? renderFollowUpTemplate(
-              pickVariant(
+              pickVariantNoRepeat(
+                cadence,
                 variants,
-                `${conv.leadKey}|${isEngagedCadence ? "engaged" : "standard"}|${cadence.stepIndex}`
+                `${conv.leadKey}|${isEngagedCadence ? "engaged" : "standard"}|${cadence.stepIndex}`,
+                `${isEngagedCadence ? `engaged:${contextTag ?? "general"}` : "standard"}:${cadence.stepIndex}:noslots`
               ),
               baseCtx
             )
@@ -4419,9 +4451,11 @@ async function processDueFollowUps() {
           : FOLLOW_UP_VARIANTS_NO_SLOTS[cadence.stepIndex] ?? [];
         message = variants.length
           ? renderFollowUpTemplate(
-              pickVariant(
+              pickVariantNoRepeat(
+                cadence,
                 variants,
-                `${conv.leadKey}|${isEngagedCadence ? "engaged" : "standard"}|${cadence.stepIndex}`
+                `${conv.leadKey}|${isEngagedCadence ? "engaged" : "standard"}|${cadence.stepIndex}`,
+                `${isEngagedCadence ? `engaged:${contextTag ?? "general"}` : "standard"}:${cadence.stepIndex}:noslots`
               ),
               baseCtx
             )
@@ -4436,9 +4470,11 @@ async function processDueFollowUps() {
         : FOLLOW_UP_VARIANTS_NO_SLOTS[cadence.stepIndex] ?? [];
       message = variants.length
         ? renderFollowUpTemplate(
-            pickVariant(
+            pickVariantNoRepeat(
+              cadence,
               variants,
-              `${conv.leadKey}|${isEngagedCadence ? "engaged" : "standard"}|${cadence.stepIndex}`
+              `${conv.leadKey}|${isEngagedCadence ? "engaged" : "standard"}|${cadence.stepIndex}`,
+              `${isEngagedCadence ? `engaged:${contextTag ?? "general"}` : "standard"}:${cadence.stepIndex}:noslots`
             ),
             baseCtx
           )

@@ -129,6 +129,7 @@ export type FollowUpCadence = {
   pauseReason?: string;
   contextTag?: string;
   contextTagUpdatedAt?: string;
+  usedVariants?: Record<string, string[]>;
 };
 
 export type PricingObjectionState = {
