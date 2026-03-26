@@ -9133,10 +9133,30 @@ if (authToken && signature) {
     /\b(do any of these times work|which works best|what day and time works|what day works|what time works|want me to|should i|can i|would you like|does that work|ok to|are you able|set a time|schedule|appointment)\b/i.test(
       lastOutboundText
     );
+  const inboundText = String(event.body ?? "").trim();
+  const inboundLower = inboundText.toLowerCase();
+  const emojiOnly =
+    inboundText.length > 0 && /^[\p{Extended_Pictographic}\s]+$/u.test(inboundText);
+  const isShortAckText = (text: string): boolean => {
+    const t = text.trim().toLowerCase();
+    if (!t) return false;
+    if (/^[\p{Extended_Pictographic}\s]+$/u.test(t)) return true;
+    if (t.length > 60) return false;
+    if (/[?]/.test(t)) return false;
+    return /\b(thanks|thank you|thanks again|thx|ty|appreciate|got it|sounds good|sounds great|will do|ok|okay|k|kk|cool|perfect|great|all good|no problem|you bet|yep|yup|sure)\b/.test(
+      t
+    );
+  };
+  const pickShortAckReply = (text: string): string => {
+    const t = text.toLowerCase();
+    if (/\b(thanks|thank you|thanks again|thx|ty|appreciate)\b/.test(t)) return "You're welcome!";
+    return "Sounds good.";
+  };
+  const lastOutboundAck = isShortAckText(lastOutboundText);
   const outboundHoldNotice =
     lastOutbound?.body &&
     /(on hold|hold with deposit|deposit|sale pending|pending|sold|already sold)/i.test(lastOutbound.body);
-  const textLower = String(event.body ?? "").toLowerCase();
+  const textLower = inboundLower;
   const schedulingSignalsBase = detectSchedulingSignals(event.body);
   const leadSourceText = String(conv.lead?.source ?? "").toLowerCase();
   const isTradeLead =
@@ -9198,10 +9218,7 @@ if (authToken && signature) {
   ) {
     setDialogState(conv, "pricing_init");
   }
-  const shortAck =
-    /^(ok|okay|k|kk|thanks|thank you|got it|will do|sounds good|sounds great|appreciate it|cool)\b/i.test(
-      (event.body ?? "").trim()
-    );
+  const shortAck = isShortAckText(inboundText) || emojiOnly;
   const recentHistory = buildHistory(conv, 6);
   const bookingParserEligible =
     event.provider === "twilio" &&
@@ -10269,7 +10286,12 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
   if (event.provider === "twilio" && schedulingBlocked && shortAck) {
-    const ack = "Sounds good. If anything changes, I’ll let you know.";
+    const suppressShortAckReply = shortAck && (emojiOnly || lastOutboundAck);
+    if (suppressShortAckReply) {
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    const ack = pickShortAckReply(inboundText);
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, ack, "draft_ai");
@@ -10290,7 +10312,12 @@ if (authToken && signature) {
     !conv.scheduler?.pendingSlot &&
     !conv.appointment?.reschedulePending
   ) {
-    const reply = "Thanks — let me know if anything changes.";
+    const suppressShortAckReply = shortAck && (emojiOnly || lastOutboundAck);
+    if (suppressShortAckReply) {
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    const reply = pickShortAckReply(inboundText);
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
