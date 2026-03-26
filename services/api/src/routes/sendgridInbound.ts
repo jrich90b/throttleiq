@@ -1488,6 +1488,27 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   });
   console.log("[sendgrid inbound] requestedTime", result.requestedTime);
 
+  const setDialogState = (name: string) => {
+    const updatedAt = new Date().toISOString();
+    if (conv.dialogState?.name === name) {
+      conv.dialogState.updatedAt = updatedAt;
+      return;
+    }
+    conv.dialogState = { name, updatedAt } as any;
+  };
+  const draftText = String(result.draft ?? "");
+  if (/(still available|in stock right now|not seeing .* in stock|checking availability)/i.test(draftText)) {
+    setDialogState("inventory_answered");
+  }
+  if (
+    !conv.appointment?.bookedEventId &&
+    /(what time works best|what day and time works best|what time were you thinking|reserve that time)/i.test(
+      draftText
+    )
+  ) {
+    setDialogState("schedule_request");
+  }
+
   if (result.handoff?.required) {
     const reason = result.handoff.reason;
     let ack = await applyInitialAdfPrefix(result.handoff.ack);

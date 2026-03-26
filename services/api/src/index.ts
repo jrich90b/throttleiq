@@ -10706,6 +10706,22 @@ if (authToken && signature) {
     }
   }
   const dialogState = getDialogState(conv);
+  const draftText = String(result.draft ?? "");
+  if (
+    !conv.appointment?.bookedEventId &&
+    !isScheduleDialogState(dialogState) &&
+    /(what time works best|what day and time works best|what time were you thinking|reserve that time)/i.test(
+      draftText
+    )
+  ) {
+    setDialogState(conv, "schedule_request");
+  }
+  if (
+    !isTradeDialogState(dialogState) &&
+    /(still available|in stock right now|not seeing .* in stock|checking availability)/i.test(draftText)
+  ) {
+    setDialogState(conv, "inventory_answered");
+  }
   const canUpdatePricingState =
     !isScheduleDialogState(dialogState) &&
     !isTradeDialogState(dialogState) &&

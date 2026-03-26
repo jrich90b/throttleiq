@@ -954,6 +954,151 @@ export async function orchestrateInbound(
     });
   }
 
+  const fallbackDraft = "Thanks for reaching out. How can I help?";
+  const dayName = extractDayName(event.body);
+  const dayPart = extractDayPart(event.body);
+  const timeMatch = String(event.body ?? "").match(/\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b/i);
+  const availabilityAsked = /(available|availability|still there|in stock|do you have|have any)/i.test(event.body);
+  const wantsAvailability = availabilityAsked || intent === "AVAILABILITY";
+  const wantsScheduling = hasSchedulingIntent(event.body) || !!dayName || !!dayPart || !!timeMatch;
+  const wantsPayments =
+    detectPricingOrPayment(event.body, intent) ||
+    detectPaymentPressure(event.body) ||
+    detectPaymentFollowUp(event.body, history ?? []);
+  const wantsTrade =
+    intent === "TRADE_IN" ||
+    /(trade[-\s]?in|trade appraisal|trade value|value my trade)/i.test(event.body);
+  const multiIntentCount = [wantsAvailability, wantsScheduling, wantsPayments, wantsTrade].filter(Boolean).length;
+
+  if (multiIntentCount >= 2) {
+    const leadVehicle = ctx?.lead?.vehicle ?? {};
+    const modelRaw =
+      leadVehicle?.model ??
+      leadVehicle?.description ??
+      deriveModelFromDescription(leadVehicle?.description ?? null) ??
+      null;
+    const yearRaw =
+      leadVehicle?.year ??
+      deriveYearFromText(leadVehicle?.description ?? null) ??
+      null;
+    const modelKnown = !!modelRaw && !isUnknownModel(modelRaw);
+    const modelLabel = modelKnown ? normalizeModelLabel(modelRaw) : "that bike";
+    const yearLabel = yearRaw ? `${yearRaw} ` : "";
+    const bikeLabel = modelKnown ? `${yearLabel}${modelLabel}`.trim() : "that bike";
+    const stockId = leadVehicle?.stockId ?? stockIdFromText ?? null;
+    const vin = leadVehicle?.vin ?? null;
+
+    let availabilityLine = "";
+    if (wantsAvailability) {
+      let availabilityState: "available" | "unavailable" | "unknown" = "unknown";
+      try {
+        if (stockId || vin) {
+          const feedMatch = await findInventoryPrice({ stockId, vin, year: yearRaw, model: modelRaw });
+          if (feedMatch?.item) {
+            availabilityState = "available";
+          } else if (stockId) {
+            const resolved = await resolveInventoryUrlByStock(stockId);
+            if (resolved.ok) {
+              const status = await checkInventorySalePendingByUrl(resolved.url);
+              availabilityState = status === "AVAILABLE" ? "available" : status === "PENDING" ? "unavailable" : "unknown";
+            }
+          }
+        } else if (modelRaw) {
+          const matches = await findInventoryMatches({ year: yearRaw, model: modelRaw });
+          availabilityState = matches.length ? "available" : "unavailable";
+        }
+      } catch {
+        availabilityState = "unknown";
+      }
+
+      if (availabilityState === "available") {
+        availabilityLine = `The ${bikeLabel} is still available.`;
+      } else if (availabilityState === "unavailable") {
+        availabilityLine = modelKnown
+          ? `I’m not seeing a ${bikeLabel} in stock right now.`
+          : "I’m not seeing that bike in stock right now.";
+      } else {
+        availabilityLine = modelKnown
+          ? `I’m checking availability on the ${bikeLabel} and will update you shortly.`
+          : "I’m checking availability and will update you shortly.";
+      }
+    }
+
+    let schedulingLine = "";
+    if (wantsScheduling) {
+      if (dayName || dayPart || timeMatch) {
+        if (timeMatch) {
+          const when = `${dayName ? `${dayName} ` : ""}${timeMatch[0]}`.trim();
+          schedulingLine = `If you want to come by ${when}, I can reserve that time. Does that work on your end?`;
+        } else if (dayName && dayPart) {
+          schedulingLine = `If you want to come by ${dayName} ${dayPart}, what time works best?`;
+        } else if (dayName) {
+          schedulingLine = `If you want to come by ${dayName}, what time works best?`;
+        } else if (dayPart) {
+          schedulingLine = `If ${dayPart} works, what time should I plan for?`;
+        }
+      } else {
+        schedulingLine = "If you’d like to stop in, what day and time works best?";
+      }
+    }
+
+    let paymentsLine = "";
+    if (wantsPayments) {
+      try {
+        const priceLookup = await findInventoryPrice({ stockId, vin, year: yearRaw, model: modelRaw });
+        const range = modelRaw ? await findPriceRange({ year: yearRaw, model: modelRaw }) : null;
+        const paymentRange =
+          priceLookup?.price != null
+            ? { min: priceLookup.price, max: priceLookup.price }
+            : range?.min != null && range?.max != null
+              ? { min: range.min, max: range.max }
+              : null;
+        const conditionRaw = [leadVehicle?.condition, (priceLookup as any)?.item?.condition]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        const isUsed = /(pre|used|pre-owned|preowned|owned)/.test(conditionRaw);
+        const dealerProfile = await getDealerProfile();
+        const taxRateRaw = Number((dealerProfile as any)?.taxRate ?? 8);
+        const taxRate = Number.isFinite(taxRateRaw) ? (taxRateRaw > 1 ? taxRateRaw / 100 : taxRateRaw) : 0.08;
+        const preferredTerm = extractPreferredTermMonths(event.body) ?? 60;
+        const downInfo = parseDownPayment(event.body);
+        const downPayment = downInfo?.amount;
+        const downPaymentAssumed = downInfo?.assumedThousands ?? false;
+
+        if (paymentRange) {
+          paymentsLine = buildMonthlyPaymentLine({
+            priceMin: paymentRange.min,
+            priceMax: paymentRange.max,
+            isUsed,
+            termMonths: preferredTerm,
+            taxRate,
+            downPayment,
+            downPaymentAssumed
+          });
+        } else {
+          paymentsLine = "I can ballpark payments once I confirm the exact price.";
+        }
+      } catch {
+        paymentsLine = "I can ballpark payments once I confirm the exact price.";
+      }
+    }
+
+    let tradeLine = "";
+    if (wantsTrade) {
+      tradeLine = "We can start with an estimate based on the bike details and finalize it in person.";
+    }
+
+    const parts = [availabilityLine, paymentsLine, tradeLine, schedulingLine].filter(Boolean);
+    const draft = parts.join(" ").trim() || fallbackDraft;
+    return finalize({
+      intent,
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft
+    });
+  }
+
   if (pricingIntent && pricingAttempts >= 1 && !detectPaymentPressure(event.body)) {
     const reason = detectPaymentPressure(event.body) ? "payments" : "pricing";
     if (!useLLM) {
@@ -970,8 +1115,6 @@ export async function orchestrateInbound(
     }
     if (!handoff) handoff = { required: true, reason };
   }
-
-  const fallbackDraft = "Thanks for reaching out. How can I help?";
 
   if (pricingIntent) {
     try {
