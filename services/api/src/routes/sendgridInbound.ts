@@ -1136,11 +1136,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     isServiceLead ||
     isRoom58Standard ||
     (isMetaPromoOffer && /^(other|full line)$/i.test(metaOfferRawModel.trim()));
-  const initialMedia =
+  let initialMedia =
     isInitialAdf && !isServiceLead && !room58Source
       ? await pickLeadInventoryMedia(conv)
       : undefined;
-  const initialMediaUrls = initialMedia?.mediaUrls;
+  let initialMediaUrls = initialMedia?.mediaUrls;
   const initialPhotoLine = buildInitialPhotoLine(conv, initialMedia);
   const initialAvailability =
     isInitialAdf && !skipAvailabilityLine ? await getLeadInventoryMatchStatus(conv) : "unknown";
@@ -1195,6 +1195,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const emailLower = (lead.email ?? "").toLowerCase();
   const isWalkInLead = isInitialAdf && /traffic log pro/i.test(leadSourceLower);
   if (isWalkInLead) {
+    initialMedia = undefined;
+    initialMediaUrls = undefined;
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
     const agentName = profile?.agentName ?? "Brooke";
