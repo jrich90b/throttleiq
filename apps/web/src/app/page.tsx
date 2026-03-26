@@ -4017,7 +4017,18 @@ export default function Home() {
                 </div>
               ) : null}
             </div>
-          ) : null}
+          ) : (
+            <button
+              className="w-10 h-10 rounded flex items-center justify-center border border-white/20 hover:bg-white/5"
+              title="Sign out"
+              onClick={async () => {
+                await fetch("/api/auth/logout", { method: "POST" });
+                setAuthUser(null);
+              }}
+            >
+              ⎋
+            </button>
+          )}
         </div>
       </aside>
 
