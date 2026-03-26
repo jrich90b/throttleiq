@@ -591,6 +591,18 @@ app.get("/health", (_req, res) => {
 app.get("/inventory", async (_req, res) => {
   try {
     const items = await getInventoryFeed();
+    if (!items.length) {
+      const snap = await loadInventorySnapshot();
+      if (snap.items.length) {
+        const withNotes = snap.items.map(item => ({
+          ...item,
+          notes: [],
+          hold: null,
+          sold: null
+        }));
+        return res.json({ ok: true, items: withNotes, snapshot: true });
+      }
+    }
     const notes = await listInventoryNotes();
     const holds = await listInventoryHolds();
     const solds = await listInventorySolds();
@@ -5628,7 +5640,11 @@ app.get("/public/appointment/outcome", async (req, res) => {
             .catch(() => {
               inventory = [];
               inventoryLoaded = true;
-              renderInventory([], "");
+              unitResults.innerHTML = "";
+              const empty = document.createElement("div");
+              empty.className = "unit-item";
+              empty.textContent = "Inventory unavailable — enter details below.";
+              unitResults.appendChild(empty);
             })
             .finally(() => {
               inventoryLoading = false;
