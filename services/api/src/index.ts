@@ -1393,12 +1393,22 @@ const ENGAGED_FOLLOW_UP_VARIANTS_WITH_SLOTS: Record<string, string[]> = {
   trade: [
     "Hi {name}, it’s {agent} again. If you want to go over the trade and appraisal, I have {a} or {b} open. Which works best?{extraLine}",
     "Hi {name} — {agent} again. If you'd like to line up a quick trade appraisal, I have {a} or {b} open. Which works better?{extraLine}",
-    "Hi {name} — {agent} again. If you want to review the trade on {trade}, I have {a} or {b} open. Which works best?{extraLine}"
+    "Hi {name} — {agent} again. If you want to review the trade on {trade}, I have {a} or {b} open. Which works best?{extraLine}",
+    "Hi {name} — {agent} again. If you want a quick appraisal on {trade}, I have {a} or {b} open. Which works best?{extraLine}",
+    "Hi {name}, it’s {agent} again. Want to go over trade details for {trade}? I have {a} or {b} open. Which works best?{extraLine}",
+    "Hi {name} — {agent} again. If you'd like to review trade numbers, {a} or {b} work. Which works better?{extraLine}",
+    "Hi {name}, it’s {agent} again. If stopping in to look at the trade makes sense, I have {a} or {b} open. Which works best?{extraLine}",
+    "Hi {name} — {agent} again. If you want to talk trade value on {trade}, {a} or {b} are open. Which works best?{extraLine}"
   ],
   pricing: [
     "Hi {name}, it’s {agent} again. If you'd like to go over the numbers, I have {a} or {b} open. Which works best?{extraLine}",
     "Hi {name} — {agent} again. If a quick sit‑down helps, I have {a} or {b} open. Which works better?{extraLine}",
-    "Hi {name} — {agent} again. If you want to review numbers on the {model}, I have {a} or {b} open. Which works best?{extraLine}"
+    "Hi {name} — {agent} again. If you want to review numbers on the {model}, I have {a} or {b} open. Which works best?{extraLine}",
+    "Hi {name} — {agent} again. If you want to go over pricing on the {model}, {a} or {b} work. Which works best?{extraLine}",
+    "Hi {name}, it’s {agent} again. If a quick pricing run‑through helps, I have {a} or {b} open. Which works best?{extraLine}",
+    "Hi {name} — {agent} again. If you want to review the numbers, {a} or {b} are open. Which works better?{extraLine}",
+    "Hi {name}, it’s {agent} again. I can walk through pricing on the {model} at {a} or {b}. Which works best?{extraLine}",
+    "Hi {name} — {agent} again. If you want to go over the quote, {a} or {b} work. Which works better?{extraLine}"
   ],
   payments: [
     "Hi {name}, it’s {agent} again. If you want to review payments, I have {a} or {b} open. Which works best?{extraLine}",
@@ -1407,12 +1417,22 @@ const ENGAGED_FOLLOW_UP_VARIANTS_WITH_SLOTS: Record<string, string[]> = {
   inventory: [
     "Hi {name}, it’s {agent} again. If you want to see{label}, I have {a} or {b} open. Which works best?{extraLine}",
     "Hi {name} — {agent} again. If stopping by helps, I have {a} or {b} open. Which works better?{extraLine}",
-    "Hi {name} — {agent} again. If you want to check out the {model}, I have {a} or {b} open. Which works best?{extraLine}"
+    "Hi {name} — {agent} again. If you want to check out the {model}, I have {a} or {b} open. Which works best?{extraLine}",
+    "Hi {name} — {agent} again. If you want to see the {model}, {a} or {b} work. Which works best?{extraLine}",
+    "Hi {name}, it’s {agent} again. If you’d like to stop in for the {model}, {a} or {b} are open. Which works better?{extraLine}",
+    "Hi {name} — {agent} again. If you want to check it out, {a} or {b} work. Which works best?{extraLine}",
+    "Hi {name}, it’s {agent} again. If you want to see it in person, {a} or {b} are open. Which works better?{extraLine}",
+    "Hi {name} — {agent} again. If you want to take a look at the {model}, {a} or {b} work. Which works best?{extraLine}"
   ],
   scheduling: [
     "Hi {name}, it’s {agent} again. If you want to lock a time, I have {a} or {b} open. Which works best?{extraLine}",
     "Hi {name} — {agent} again. If you'd like to set a time, I have {a} or {b} open. Which works better?{extraLine}",
-    "Hi {name} — {agent} again. If you want to lock a time for the {model}, I have {a} or {b} open. Which works best?{extraLine}"
+    "Hi {name} — {agent} again. If you want to lock a time for the {model}, I have {a} or {b} open. Which works best?{extraLine}",
+    "Hi {name} — {agent} again. If you want to lock in a time for the {model}, {a} or {b} are open. Which works best?{extraLine}",
+    "Hi {name}, it’s {agent} again. If you want to set a time, {a} or {b} work. Which works better?{extraLine}",
+    "Hi {name} — {agent} again. If you want to book a visit, {a} or {b} are open. Which works best?{extraLine}",
+    "Hi {name}, it’s {agent} again. If you’d like to set a time, {a} or {b} are open. Which works better?{extraLine}",
+    "Hi {name} — {agent} again. If you want to reserve a time, {a} or {b} work. Which works best?{extraLine}"
   ]
 };
 
@@ -1433,29 +1453,60 @@ const ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS: Record<string, Record<number, string[
     0: [
       "Hi {name} — it’s {agent} again. If you want me to run a rough trade idea on {label}, just say the word.{extraLine}",
       "Hi {name}, it’s {agent} again. I can walk you through a trade estimate and next steps when you’re ready.{extraLine}",
-      "Hi {name} — it’s {agent} again. If you want to talk trade numbers on your {trade}, I’m happy to help.{extraLine}"
+      "Hi {name} — it’s {agent} again. If you want to talk trade numbers on your {trade}, I’m happy to help.{extraLine}",
+      "Hi {name} — it’s {agent} again. If you want to walk through trade value on {trade}, I’m happy to help.{extraLine}",
+      "Hi {name}, it’s {agent} again. I can check trade numbers on {trade} whenever you’re ready.{extraLine}",
+      "Hi {name} — it’s {agent} again. If you'd like a rough idea on {trade}, just let me know.{extraLine}",
+      "Hi {name}, it’s {agent} again. Happy to go over trade value and next steps on {trade}.{extraLine}",
+      "Hi {name} — it’s {agent} again. Want me to pull a trade estimate on {trade}?{extraLine}"
     ],
     1: [
       "Hi {name} — if you want, I can go over trade numbers and what to expect. Just let me know.",
-      "Hi {name} — want me to check trade options for your {trade}? I can walk through it with you."
+      "Hi {name} — want me to check trade options for your {trade}? I can walk through it with you.",
+      "Hi {name} — want me to run a rough trade idea on {trade}? I can do that.",
+      "Hi {name} — I can explain how we handle trade value on {trade} if helpful.",
+      "Hi {name} — if you'd like a rough trade range for {trade}, I can walk you through it.",
+      "Hi {name} — happy to review trade value on {trade} when you’re ready.",
+      "Hi {name} — if you want me to check trade options on {trade}, just let me know."
     ],
     2: [
-      "Quick check {name} — still thinking about a trade, or want to wait a bit?"
+      "Quick check {name} — still thinking about a trade, or want to wait a bit?",
+      "Quick check {name} — still thinking about trading in {trade}?",
+      "Quick check {name} — do you want me to run trade numbers on {trade}, or wait?",
+      "Quick check {name} — still considering a trade, or hold off for now?",
+      "Quick check {name} — want to circle back on the trade for {trade}?",
+      "Quick check {name} — still interested in a trade evaluation?",
+      "Quick check {name} — still thinking about a trade‑in?"
     ]
   },
   pricing: {
     0: [
       "Hi {name} — it’s {agent} again. Any questions on the pricing we sent{labelClause}? I can clarify anything.{extraLine}",
       "Hi {name}, it’s {agent} again. Just checking in on the numbers{labelClause}. Happy to help.{extraLine}",
-      "Hi {name} — it’s {agent} again. Want me to re‑check numbers on the {model}? I can do that.{extraLine}"
+      "Hi {name} — it’s {agent} again. Want me to re‑check numbers on the {model}? I can do that.{extraLine}",
+      "Hi {name} — it’s {agent} again. If you want me to re‑price the {model}, I can.{extraLine}",
+      "Hi {name}, it’s {agent} again. I can break down pricing on the {model} anytime.{extraLine}",
+      "Hi {name} — it’s {agent} again. Want me to clarify the numbers for the {model}?{extraLine}",
+      "Hi {name}, it’s {agent} again. If you want, I can re‑send pricing on the {model}.{extraLine}",
+      "Hi {name} — it’s {agent} again. Happy to go over pricing on the {model}.{extraLine}"
     ],
     1: [
       "Hi {name} — if a quick walkaround video of{label} would help, I can send one.",
-      "Hi {name} — want a quick walkaround of the {model}? I’m happy to send one."
+      "Hi {name} — want a quick walkaround of the {model}? I’m happy to send one.",
+      "Hi {name} — if you want, I can send a quick pricing breakdown on the {model}.",
+      "Hi {name} — want me to send a quick pricing recap for the {model}?",
+      "Hi {name} — I can send a quick summary of the numbers on the {model}.",
+      "Hi {name} — if a quick pricing recap helps, I can send one.",
+      "Hi {name} — want a quick pricing rundown on the {model}?"
     ],
     2: [
       "Quick check {name} — is{label} still the one you’re leaning toward?",
-      "Quick check {name} — still leaning toward the {model}, or comparing a few?"
+      "Quick check {name} — still leaning toward the {model}, or comparing a few?",
+      "Quick check {name} — still interested in the {model} pricing, or holding off?",
+      "Quick check {name} — want me to re‑check pricing on the {model}?",
+      "Quick check {name} — still leaning toward the {model} at this price?",
+      "Quick check {name} — are the numbers on the {model} still in your range?",
+      "Quick check {name} — want me to revisit the pricing on the {model}?"
     ]
   },
   payments: {
@@ -1474,29 +1525,59 @@ const ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS: Record<string, Record<number, string[
     0: [
       "Hi {name} — it’s {agent} again. Any questions about{label}? I can send a walkaround or confirm availability.{extraLine}",
       "Hi {name}, it’s {agent} again. Just checking in on{label}. If you want a quick video, I can send one.{extraLine}",
-      "Hi {name} — it’s {agent} again. Still interested in the {model}? I can confirm availability or send a quick walkaround.{extraLine}"
+      "Hi {name} — it’s {agent} again. Still interested in the {model}? I can confirm availability or send a quick walkaround.{extraLine}",
+      "Hi {name} — it’s {agent} again. Want me to confirm availability on the {model}?{extraLine}",
+      "Hi {name}, it’s {agent} again. I can send a quick walkaround of the {model} if helpful.{extraLine}",
+      "Hi {name} — it’s {agent} again. If you want details on the {model}, I’m happy to help.{extraLine}",
+      "Hi {name}, it’s {agent} again. Want me to double‑check stock on the {model}?{extraLine}",
+      "Hi {name} — it’s {agent} again. If you want to see the {model}, just say the word.{extraLine}"
     ],
     1: [
       "Hi {name} — want a quick walkaround video of{label}? I’m happy to send it.",
-      "Hi {name} — want a quick walkaround video of the {model}? I can send one."
+      "Hi {name} — want a quick walkaround video of the {model}? I can send one.",
+      "Hi {name} — I can send a quick walkaround of the {model} if you want.",
+      "Hi {name} — want a short video of the {model}? I can send one.",
+      "Hi {name} — if you want a quick video of the {model}, I can send it.",
+      "Hi {name} — I can send a walkaround video of the {model} if that helps.",
+      "Hi {name} — want me to grab a quick walkaround of the {model}?"
     ],
     2: [
       "Quick check {name} — still interested in{label}, or comparing a few?",
-      "Quick check {name} — still leaning toward the {model}, or comparing a few?"
+      "Quick check {name} — still leaning toward the {model}, or comparing a few?",
+      "Quick check {name} — still interested in the {model}, or looking at others?",
+      "Quick check {name} — still leaning toward the {model}?",
+      "Quick check {name} — want me to keep an eye on the {model} for you?",
+      "Quick check {name} — are you still thinking about the {model}?",
+      "Quick check {name} — still shopping, or focusing on the {model}?"
     ]
   },
   scheduling: {
     0: [
       "Hi {name} — it’s {agent} again. If you'd like to lock a time to stop in, just tell me what works.{extraLine}",
       "Hi {name}, it’s {agent} again. If you want to come by, just give me a day that works and I’ll line it up.{extraLine}",
-      "Hi {name} — it’s {agent} again. If you'd like to come by for the {model}, just tell me a day that works.{extraLine}"
+      "Hi {name} — it’s {agent} again. If you'd like to come by for the {model}, just tell me a day that works.{extraLine}",
+      "Hi {name} — {agent} again. If you want to set a time for the {model}, just tell me what works.{extraLine}",
+      "Hi {name}, it’s {agent} again. If you want to stop in for the {model}, just pick a day.{extraLine}",
+      "Hi {name} — {agent} again. If you want to come by, just give me a day and I’ll line it up.{extraLine}",
+      "Hi {name}, it’s {agent} again. If you want to schedule a visit for the {model}, just say the word.{extraLine}",
+      "Hi {name} — {agent} again. If you want to lock a time, just tell me a day that works.{extraLine}"
     ],
     1: [
-      "Hi {name} — if a quick walkaround video of{label} would help, I can send one."
+      "Hi {name} — if a quick walkaround video of{label} would help, I can send one.",
+      "Hi {name} — if a quick walkaround video of the {model} would help, I can send one.",
+      "Hi {name} — want a short walkaround of the {model}? I can send it.",
+      "Hi {name} — I can send a quick video of the {model} if you’d like.",
+      "Hi {name} — want me to send a quick walkaround of the {model}?",
+      "Hi {name} — happy to send a quick walkaround video of the {model}."
     ],
     2: [
       "Quick check {name} — are you aiming to come in soon, or still deciding?",
-      "Quick check {name} — do you want to line up a time for the {model}, or hold off for now?"
+      "Quick check {name} — do you want to line up a time for the {model}, or hold off for now?",
+      "Quick check {name} — want to line up a time for the {model}, or hold off?",
+      "Quick check {name} — do you want to set a time to come by?",
+      "Quick check {name} — aiming to come in soon, or still deciding?",
+      "Quick check {name} — want me to hold a time for the {model}?",
+      "Quick check {name} — still planning to stop in?"
     ]
   }
 };
