@@ -45,6 +45,7 @@ import {
 import { getDealerProfile } from "../domain/dealerProfile.js";
 import { getInventoryNote } from "../domain/inventoryNotes.js";
 import { getInventoryFeed, hasInventoryForModelYear, findInventoryMatches } from "../domain/inventoryFeed.js";
+import { resolveInventoryUrlByStock } from "../domain/inventoryUrlResolver.js";
 
 function base64UrlDecode(input: string): string | null {
   try {
@@ -125,6 +126,17 @@ function normalizeModelForMatch(modelRaw: string, makeRaw?: string | null): stri
 function isGenericLeadModel(modelText: string): boolean {
   const t = modelText.trim().toLowerCase();
   return !t || /^(other|full line|full lineup|null)$/.test(t);
+}
+
+function extractDayPartRequest(text: string): { dayLabel: string; dayPart: string } | null {
+  const t = String(text ?? "").toLowerCase();
+  const dayMatch = t.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/);
+  const partMatch = t.match(/\b(morning|afternoon|evening|tonight)\b/);
+  if (!dayMatch || !partMatch) return null;
+  const dayLabel = dayMatch[1].replace(/^\w/, c => c.toUpperCase());
+  let dayPart = partMatch[1];
+  if (dayPart === "tonight") dayPart = "evening";
+  return { dayLabel, dayPart };
 }
 
 type LeadInventoryMediaPick = {
@@ -296,7 +308,14 @@ async function getLeadInventoryMatchStatus(
           (leadStock && (i.stockId ?? "").toLowerCase() === leadStock) ||
           (leadVin && (i.vin ?? "").toLowerCase() === leadVin)
       );
-      return direct ? "in_stock" : "not_found";
+      if (direct) return "in_stock";
+      if (leadStock) {
+        try {
+          const resolved = await resolveInventoryUrlByStock(leadStock);
+          if (resolved.ok) return "in_stock";
+        } catch {}
+      }
+      return "not_found";
     }
 
     const modelNorm = normalizeModelForMatch(modelText, conv?.lead?.vehicle?.make ?? "");
@@ -923,7 +942,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   });
 
   const rule = resolveLeadRule(leadSource, leadSourceId);
-  const inquiryText = (lead.inquiry ?? "").toLowerCase();
+  const inquiryRaw = lead.inquiry ?? "";
+  const inquiryText = String(inquiryRaw).toLowerCase();
+  const inquiryDayPart = extractDayPartRequest(inquiryRaw);
   const serviceVinRequest =
     /registration\s+or\s+vin\s+number/i.test(lead.comment ?? "") ||
     /registration\s+or\s+vin\s+number/i.test(lead.inquiry ?? "");
@@ -1731,6 +1752,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const dealerProfile = await getDealerProfile();
   const testRideInSeason = isTestRideSeason(dealerProfile, new Date());
   let draft = result.shouldRespond ? result.draft : "Thanks — I’ll follow up shortly.";
+  if (isInitialAdf && inquiryDayPart) {
+    const dayPhrase = `${inquiryDayPart.dayLabel} ${inquiryDayPart.dayPart}`;
+    if (initialAvailability === "in_stock") {
+      draft = `Thanks for checking — yes, it’s still available. If you want to come by ${dayPhrase}, what time works best?`;
+    } else if (initialAvailability === "not_found") {
+      draft = `I’m not seeing that in stock right now, but I can double‑check. If you still want to come by ${dayPhrase}, what time works best?`;
+    } else {
+      draft = `If you want to come by ${dayPhrase}, what time works best?`;
+    }
+  }
   if (inferredBucket === "test_ride" && !testRideInSeason) {
     const modelLabel = formatModelLabel(
       conv.lead?.vehicle?.year ?? null,

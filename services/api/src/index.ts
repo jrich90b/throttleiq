@@ -3006,10 +3006,18 @@ function isExplicitScheduleIntent(text: string): boolean {
   return false;
 }
 
+function extractDayPart(text: string): string | null {
+  const t = String(text ?? "").toLowerCase();
+  const m = t.match(/\b(morning|afternoon|evening|tonight)\b/);
+  if (!m) return null;
+  return m[1] === "tonight" ? "evening" : m[1];
+}
+
 const SOFT_SCHEDULE_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
 
 function detectSoftVisitIntent(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
+  const hasDayPart = /\b(morning|afternoon|evening|tonight)\b/i.test(t);
   const hasTime = /\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b/i.test(t);
   if (hasTime) return false;
   if (isExplicitScheduleIntent(t)) return false;
@@ -3020,6 +3028,7 @@ function detectSoftVisitIntent(text: string): boolean {
     /\b(might|maybe|probably|try|trying|hope|hoping|plan|planning|if i can|if i could|if possible|sometime|some time|soon|eventually|later|in a few|in a couple|a couple (days|weeks)|next week|next month|this week|this weekend|weekend)\b/i;
   const dayToken =
     /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|this week|this weekend|weekend|next month)\b/i;
+  if (hasDayPart && dayToken.test(t)) return false;
   return visitVerb.test(t) && (softQualifier.test(t) || dayToken.test(t));
 }
 
@@ -3029,6 +3038,7 @@ function detectSchedulingSignals(text: string) {
     /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week|this weekend|weekend|next month)\b/i.test(
       t
     );
+  const hasDayPart = /\b(morning|afternoon|evening|tonight)\b/i.test(t);
   const hasTimeWord = /\b(\d{1,2}):(\d{2})\s*(am|pm)?\b/i.test(t);
   const hasAtHour = /\b(?:at|for|around|by)\s*(\d{1,2})(?::\d{2})?\b(?!\s*\/)/i.test(t);
   const hasDayTime = hasDayToken && (hasTimeWord || hasAtHour);
@@ -3036,7 +3046,7 @@ function detectSchedulingSignals(text: string) {
   const explicit = softVisit ? false : isExplicitScheduleIntent(t);
   const hasDayOnlyAvailability =
     hasDayToken && /\b(availability|available|openings|open|time|times)\b/i.test(t);
-  const hasDayOnlyRequest = !softVisit && hasDayToken && explicit && !hasDayTime;
+  const hasDayOnlyRequest = !softVisit && hasDayToken && (explicit || hasDayPart) && !hasDayTime;
   return { explicit, hasDayTime: softVisit ? false : hasDayTime, hasDayOnlyAvailability, hasDayOnlyRequest, softVisit };
 }
 
@@ -10435,6 +10445,18 @@ if (authToken && signature) {
         result.requestedTime = parsed;
       }
     } catch {}
+  }
+  if (!result.requestedTime && schedulingAllowed && schedulingSignals.hasDayOnlyRequest) {
+    const dayPart = extractDayPart(textLower);
+    const dayInfo = parseDayOfWeek(textLower);
+    if (dayInfo?.day) {
+      const partLabel = dayPart ? ` ${dayPart}` : "";
+      result.draft = `Got it — ${dayInfo.day}${partLabel} works. What time were you thinking?`;
+      setDialogState(conv, "schedule_request");
+    } else if (dayPart) {
+      result.draft = `Got it — ${dayPart} works. What time were you thinking?`;
+      setDialogState(conv, "schedule_request");
+    }
   }
   if (
     !result.requestedTime &&
