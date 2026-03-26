@@ -2120,6 +2120,11 @@ function formatModelLabelForFollowUp(_year?: string | null, model?: string | nul
   return /^the\s/i.test(base) ? base : `the ${base}`;
 }
 
+function formatModelToken(model?: string | null): string {
+  if (!model || /full line|other/i.test(String(model))) return "bike";
+  return normalizeDisplayCase(model);
+}
+
 async function canOfferTestRideForLead(lead: any, dealerProfile: any): Promise<boolean> {
   const hasLicense = lead?.hasMotoLicense;
   if (hasLicense === false) return false;
@@ -4400,7 +4405,7 @@ async function processDueFollowUps() {
       tradeVehicle && (tradeVehicle.model || tradeVehicle.description)
         ? getSellBikeLabel(conv)
         : "";
-    const modelName = normalizeDisplayCase(conv.lead?.vehicle?.model) || "bike";
+    const modelName = formatModelToken(conv.lead?.vehicle?.model);
     const modelYear = conv.lead?.vehicle?.year
       ? `${conv.lead?.vehicle?.year} ${modelName}`
       : modelName;

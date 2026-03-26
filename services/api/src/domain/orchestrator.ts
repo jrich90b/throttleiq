@@ -461,6 +461,7 @@ function normalizeModelLabel(label?: string | null): string {
   if (!label) return "that bike";
   const trimmed = label.trim();
   if (!trimmed) return "that bike";
+  if (isUnknownModel(trimmed)) return "that bike";
   const letters = trimmed.replace(/[^A-Za-z]/g, "");
   const isAllCaps = letters.length > 0 && letters === letters.toUpperCase();
   return isAllCaps ? toTitleCase(trimmed) : trimmed;
