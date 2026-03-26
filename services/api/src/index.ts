@@ -819,7 +819,7 @@ app.post("/auth/logout", async (req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/users", requireManager, async (_req, res) => {
+app.get("/users", requirePermission("canEditAppointments"), async (_req, res) => {
   const users = await listUsers();
   res.json({
     ok: true,
