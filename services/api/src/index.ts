@@ -5727,7 +5727,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
         function filterInventory(q) {
           if (!inventory.length) return [];
           const query = (q || "").toLowerCase().trim();
-          if (!query) return inventory.slice(0, 20);
+          if (!query) return inventory;
           return inventory.filter(it => {
             const hay = [it.year, it.make, it.model, it.trim, it.color, it.stockId, it.vin]
               .filter(Boolean)
