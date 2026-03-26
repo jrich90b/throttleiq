@@ -5429,15 +5429,32 @@ app.get("/public/appointment/outcome", async (req, res) => {
     "the bike";
   const leadVehicle = conv.lead?.vehicle ?? {};
   const holds = await listInventoryHolds();
+  const leadStock = String(leadVehicle?.stockId ?? "").trim();
+  const leadVin = String(leadVehicle?.vin ?? "").trim();
+  const holdByKey =
+    leadStock || leadVin ? await getInventoryHold(leadStock || null, leadVin || null) : null;
+  const digitsOnly = (raw: any) => String(raw ?? "").replace(/\D/g, "");
+  const leadDigits = digitsOnly(conv.leadKey) || digitsOnly(conv.lead?.phone);
   const holdUnit =
     conv.hold ??
-    Object.values(holds ?? {}).find(
-      (h: any) => h?.leadKey === conv.leadKey || h?.convId === conv.id
-    ) ??
+    holdByKey ??
+    Object.values(holds ?? {}).find((h: any) => {
+      if (!h) return false;
+      if (h?.leadKey === conv.leadKey || h?.convId === conv.id) return true;
+      const hDigits = digitsOnly(h?.leadKey);
+      return Boolean(hDigits && leadDigits && hDigits.endsWith(leadDigits.slice(-10)));
+    }) ??
     null;
   const saleUnit = conv.sale ?? null;
-  const preferredStock = String(saleUnit?.stockId ?? holdUnit?.stockId ?? leadVehicle?.stockId ?? "").trim();
-  const preferredVin = String(saleUnit?.vin ?? holdUnit?.vin ?? leadVehicle?.vin ?? "").trim();
+  const preferredStock = String(saleUnit?.stockId ?? holdUnit?.stockId ?? leadStock ?? "").trim();
+  const preferredVin = String(saleUnit?.vin ?? holdUnit?.vin ?? leadVin ?? "").trim();
+  const preferredSource = saleUnit?.stockId || saleUnit?.vin
+    ? "sale"
+    : holdUnit?.stockId || holdUnit?.vin
+      ? "hold"
+      : leadStock || leadVin
+        ? "lead"
+        : null;
   let matchedUnit: any = null;
   if (preferredStock || preferredVin) {
     try {
@@ -5462,7 +5479,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
     unitPrefill.color = String(matchedUnit.color ?? unitPrefill.color ?? "");
     unitPrefill.stockId = String(matchedUnit.stockId ?? unitPrefill.stockId ?? "");
     unitPrefill.vin = String(matchedUnit.vin ?? unitPrefill.vin ?? "");
-  } else if (preferredStock) {
+  } else if (preferredStock && preferredSource === "lead") {
     unitPrefill.stockId = "";
   }
 
@@ -5510,7 +5527,10 @@ app.get("/public/appointment/outcome", async (req, res) => {
         </select>
         <div id="unit-section">
           <label>Unit (optional)</label>
-          <input id="unit-search" placeholder="Search inventory by model, stock, VIN, color…" />
+          <div style="display:flex; gap:8px; align-items:center;">
+            <input id="unit-search" placeholder="Search inventory by model, stock, VIN, color…" style="flex:1;" />
+            <button type="button" id="unit-search-btn">Search</button>
+          </div>
           <div class="unit-results" id="unit-results"></div>
           <div class="muted">Not in inventory? Enter details below. Stock # or VIN required for Sold/Hold.</div>
           <div class="unit-grid">
@@ -5551,6 +5571,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
         const unitStock = document.getElementById("unitStockId");
         const unitVin = document.getElementById("unitVin");
         const unitClear = document.getElementById("unit-clear");
+        const unitSearchBtn = document.getElementById("unit-search-btn");
 
         let inventory = [];
         let inventoryLoaded = false;
@@ -5660,17 +5681,37 @@ app.get("/public/appointment/outcome", async (req, res) => {
               inventoryLoading = false;
             });
         }
+        function runUnitSearch() {
+          if (!isUnitOutcome()) return;
+          ensureInventoryLoaded();
+          const list = filterInventory(unitSearch ? unitSearch.value : "");
+          const selectedKey = ((unitStock && unitStock.value) || (unitVin && unitVin.value) || "").toLowerCase();
+          renderInventory(list, selectedKey);
+        }
         if (unitSearch && unitResults) {
           unitSearch.addEventListener("focus", () => {
             if (!isUnitOutcome()) return;
             ensureInventoryLoaded();
           });
           unitSearch.addEventListener("input", () => {
-            if (!isUnitOutcome()) return;
-            ensureInventoryLoaded();
-            const list = filterInventory(unitSearch.value || "");
-            const selectedKey = ((unitStock && unitStock.value) || (unitVin && unitVin.value) || "").toLowerCase();
-            renderInventory(list, selectedKey);
+            runUnitSearch();
+          });
+          unitSearch.addEventListener("keyup", () => {
+            runUnitSearch();
+          });
+          unitSearch.addEventListener("change", () => {
+            runUnitSearch();
+          });
+          unitSearch.addEventListener("keydown", e => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              runUnitSearch();
+            }
+          });
+        }
+        if (unitSearchBtn) {
+          unitSearchBtn.addEventListener("click", () => {
+            runUnitSearch();
           });
         }
         if (unitClear) {
