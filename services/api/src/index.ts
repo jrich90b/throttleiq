@@ -9524,6 +9524,14 @@ if (authToken && signature) {
     } else if (hoursLine) {
       reply = `Our hours this week are ${hoursLine}.`;
     }
+    const canInviteSchedule =
+      schedulingAllowed &&
+      conv.followUp?.mode !== "manual_handoff" &&
+      conv.followUp?.mode !== "holding_inventory" &&
+      !outboundHoldNotice;
+    if (canInviteSchedule) {
+      reply = `${reply} If you’re thinking about coming in, what time works best? I can put you down on the schedule.`;
+    }
     if (webhookMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
