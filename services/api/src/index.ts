@@ -5531,8 +5531,6 @@ app.get("/public/appointment/outcome", async (req, res) => {
         <div id="unit-section">
           <label>Unit (optional)</label>
           <div style="display:flex; gap:8px; align-items:center;">
-            <input id="unit-search" placeholder="Search inventory by model, stock, VIN, color…" style="flex:1;" />
-            <button type="button" id="unit-search-btn">Search</button>
             <button type="button" id="unit-browse-btn">Browse inventory</button>
           </div>
           <div class="unit-results" id="unit-results"></div>
@@ -5565,7 +5563,6 @@ app.get("/public/appointment/outcome", async (req, res) => {
         const outcomeEl = document.querySelector("select[name='outcome']");
         const outcomeForm = document.getElementById("outcome-form");
         const unitSection = document.getElementById("unit-section");
-        const unitSearch = document.getElementById("unit-search");
         const unitResults = document.getElementById("unit-results");
         const unitYear = document.getElementById("unitYear");
         const unitMake = document.getElementById("unitMake");
@@ -5575,7 +5572,6 @@ app.get("/public/appointment/outcome", async (req, res) => {
         const unitStock = document.getElementById("unitStockId");
         const unitVin = document.getElementById("unitVin");
         const unitClear = document.getElementById("unit-clear");
-        const unitSearchBtn = document.getElementById("unit-search-btn");
         const unitBrowseBtn = document.getElementById("unit-browse-btn");
 
         let inventory = [];
@@ -5689,49 +5685,12 @@ app.get("/public/appointment/outcome", async (req, res) => {
               inventoryLoading = false;
             });
         }
-        function runUnitSearch() {
-          if (!isUnitOutcome()) return;
-          ensureInventoryLoaded();
-          const list = filterInventory(unitSearch ? unitSearch.value : "");
-          const selectedKey = ((unitStock && unitStock.value) || (unitVin && unitVin.value) || "").toLowerCase();
-          renderInventory(list, selectedKey);
-          if (list.length === 1) {
-            setUnitInputs(list[0]);
-          }
-        }
         function showInventoryList() {
           if (!isUnitOutcome()) return;
-          if (unitSearch) unitSearch.value = "";
           ensureInventoryLoaded();
           const list = filterInventory("");
           const selectedKey = ((unitStock && unitStock.value) || (unitVin && unitVin.value) || "").toLowerCase();
           renderInventory(list, selectedKey);
-        }
-        if (unitSearch && unitResults) {
-          unitSearch.addEventListener("focus", () => {
-            if (!isUnitOutcome()) return;
-            ensureInventoryLoaded();
-          });
-          unitSearch.addEventListener("input", () => {
-            runUnitSearch();
-          });
-          unitSearch.addEventListener("keyup", () => {
-            runUnitSearch();
-          });
-          unitSearch.addEventListener("change", () => {
-            runUnitSearch();
-          });
-          unitSearch.addEventListener("keydown", e => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              runUnitSearch();
-            }
-          });
-        }
-        if (unitSearchBtn) {
-          unitSearchBtn.addEventListener("click", () => {
-            runUnitSearch();
-          });
         }
         if (unitBrowseBtn) {
           unitBrowseBtn.addEventListener("click", () => {
