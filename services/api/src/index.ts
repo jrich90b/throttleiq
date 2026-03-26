@@ -9524,7 +9524,16 @@ if (authToken && signature) {
     } else if (hoursLine) {
       reply = `Our hours this week are ${hoursLine}.`;
     }
+    const isSalesLead =
+      !isServiceLead &&
+      (!!conv.lead?.vehicle?.model ||
+        !!conv.lead?.vehicle?.year ||
+        !!conv.lead?.tradeVehicle?.model ||
+        !!conv.lead?.tradeVehicle?.description ||
+        (conv.classification?.bucket &&
+          !["service", "other"].includes(String(conv.classification.bucket))));
     const canInviteSchedule =
+      isSalesLead &&
       schedulingAllowed &&
       conv.followUp?.mode !== "manual_handoff" &&
       conv.followUp?.mode !== "holding_inventory" &&
