@@ -8944,6 +8944,32 @@ if (authToken && signature) {
       conv.scheduleSoft = undefined;
     }
   }
+  if (event.provider === "twilio" && schedulingAllowed && schedulingSignals.hasDayOnlyRequest) {
+    const dayInfo = parseDayOfWeek(textLower);
+    const dayPart = extractDayPart(textLower);
+    const stockId = conv.lead?.vehicle?.stockId ?? null;
+    const vin = conv.lead?.vehicle?.vin ?? null;
+    if (dayInfo && dayPart && (stockId || vin)) {
+      const match = await findInventoryPrice({ stockId, vin });
+      if (match?.item) {
+        const unitLabel = stockId || vin || "that unit";
+        const dayPhrase = `${dayInfo.day} ${dayPart}`;
+        const reply = `Got it — ${unitLabel} is available right now. ${dayPhrase} works — what time were you thinking?`;
+        setDialogState(conv, "schedule_request");
+        const systemMode = webhookMode;
+        if (systemMode === "suggest") {
+          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+        appendOutbound(conv, event.to, event.from, reply, "twilio");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+          reply
+        )}</Message>\n</Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+    }
+  }
   if (callbackRequestedOverride && !isScheduleDialogState(getDialogState(conv))) {
     setDialogState(conv, "callback_requested");
   }
