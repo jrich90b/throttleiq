@@ -10112,6 +10112,9 @@ if (authToken && signature) {
     /(in[-\s]?stock|available|availability|do you have|have .* in[-\s]?stock|any .* in[-\s]?stock|do you carry|carry any)/i.test(
       textLower
     ) ||
+    HARLEY_MODELS.some(m => textLower.includes(m.toLowerCase())) ||
+    (!!conv.inventoryContext?.model && textLower.includes(conv.inventoryContext.model.toLowerCase())) ||
+    (!!conv.lead?.vehicle?.model && textLower.includes(conv.lead.vehicle.model.toLowerCase())) ||
     (!!conv.lead?.vehicle?.model &&
       /\b(\d{4}|blue|black|white|red|green|gray|grey|silver|chrome|trim|color|standard|special|st)\b/i.test(
         textLower
