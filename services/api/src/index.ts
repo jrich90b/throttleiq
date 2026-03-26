@@ -238,6 +238,7 @@ function isPublicPath(pathname: string): boolean {
     pathname.startsWith("/crm/leads/adf/sendgrid") ||
     pathname.startsWith("/public/booking") ||
     pathname.startsWith("/public/appointment") ||
+    pathname.startsWith("/public/inventory") ||
     pathname.startsWith("/integrations/google") ||
     pathname.startsWith("/debug/inbound") ||
     pathname.startsWith("/auth/login") ||
@@ -616,6 +617,30 @@ app.get("/inventory", async (_req, res) => {
     return res.json({ ok: true, items: withNotes });
   } catch (err: any) {
     console.warn("inventory list failed:", err?.message ?? err);
+    return res.status(500).json({ ok: false, error: "Failed to load inventory" });
+  }
+});
+
+app.get("/public/inventory", async (_req, res) => {
+  try {
+    const items = await getInventoryFeed();
+    let list = items;
+    if (!list.length) {
+      const snap = await loadInventorySnapshot();
+      list = snap.items ?? [];
+    }
+    const sanitized = (list ?? []).map(item => ({
+      year: item.year ?? "",
+      make: item.make ?? "",
+      model: item.model ?? "",
+      trim: item.trim ?? "",
+      color: item.color ?? "",
+      stockId: item.stockId ?? item.stock ?? "",
+      vin: item.vin ?? ""
+    }));
+    return res.json({ ok: true, items: sanitized });
+  } catch (err: any) {
+    console.warn("public inventory list failed:", err?.message ?? err);
     return res.status(500).json({ ok: false, error: "Failed to load inventory" });
   }
 });
@@ -5657,7 +5682,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
           loading.textContent = "Loading inventory…";
           unitResults.innerHTML = "";
           unitResults.appendChild(loading);
-          fetch("/inventory")
+          fetch("/public/inventory")
             .then(r => r.json())
             .then(data => {
               if (data?.ok === false) {
