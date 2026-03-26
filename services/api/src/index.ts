@@ -626,6 +626,9 @@ app.get("/public/inventory", async (_req, res) => {
     const items = await getInventoryFeed();
     let list = items;
     if (!list.length) {
+      list = await getInventoryFeed({ bypassCache: true });
+    }
+    if (!list.length) {
       const snap = await loadInventorySnapshot();
       list = snap.items ?? [];
     }

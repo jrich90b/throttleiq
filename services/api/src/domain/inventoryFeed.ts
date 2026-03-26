@@ -143,9 +143,9 @@ export async function hasInventoryForModelYear(opts: {
   });
 }
 
-export async function getInventoryFeed(): Promise<InventoryFeedItem[]> {
+export async function getInventoryFeed(opts?: { bypassCache?: boolean }): Promise<InventoryFeedItem[]> {
   const now = Date.now();
-  if (cache && now - cache.loadedAt < CACHE_TTL_MS) return cache.items;
+  if (!opts?.bypassCache && cache && now - cache.loadedAt < CACHE_TTL_MS) return cache.items;
   const url = getFeedUrl();
   if (!url) return [];
   const r = await fetch(url, {
