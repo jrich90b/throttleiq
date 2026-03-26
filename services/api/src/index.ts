@@ -7859,6 +7859,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (conv.mode === "human") {
     return res.status(400).json({ ok: false, error: "human_override" });
   }
+  const isWalkInLead =
+    inferWalkIn(conv) || /traffic log pro/i.test(String(conv.lead?.source ?? ""));
+  if (isWalkInLead && Array.isArray(conv.messages)) {
+    for (const m of conv.messages) {
+      if (m.direction === "out" && m.provider === "draft_ai") {
+        m.mediaUrls = undefined;
+      }
+    }
+  }
 
   const channel =
     req.body?.channel === "email" ? "email" : req.body?.channel === "sms" ? "sms" : "sms";
