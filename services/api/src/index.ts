@@ -1382,6 +1382,16 @@ const FOLLOW_UP_VARIANTS_NO_SLOTS: Record<number, string[]> = {
   2: [
     "Quick question {name} — are you mostly comparing a few bikes, or is{label} at the top of your list?",
     "Hi {name} — are you still leaning toward{label}, or still comparing?"
+  ],
+  4: [
+    "If it helps {name}, I can send a couple time options—just say the word.",
+    "If you want {name}, I can share a couple time options to stop by—just let me know.",
+    "If it’s easier {name}, I can toss over a couple time options to come by."
+  ],
+  7: [
+    "If you want to line up a quick visit {name}, I can send a couple options—just say the word.",
+    "If it would help, I can send a couple time options to stop in. Totally up to you.",
+    "If you want, I can share a couple times that work on our end—just let me know."
   ]
 };
 
