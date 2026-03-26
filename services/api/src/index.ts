@@ -2125,6 +2125,10 @@ function formatModelToken(model?: string | null): string {
   return normalizeDisplayCase(model);
 }
 
+function normalizeModelText(val?: string | null): string {
+  return String(val ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
 async function canOfferTestRideForLead(lead: any, dealerProfile: any): Promise<boolean> {
   const hasLicense = lead?.hasMotoLicense;
   if (hasLicense === false) return false;
@@ -3816,6 +3820,9 @@ function extractYearSingle(text: string): number | null {
 function extractColorToken(text: string): string | null {
   const t = text.toLowerCase();
   const colors = [
+    "purple abyss denim",
+    "purple abyss",
+    "purple",
     "vivid black",
     "black",
     "white",
@@ -10346,36 +10353,39 @@ if (authToken && signature) {
     try {
       const yearMatch = textLower.match(/\b(20\d{2}|19\d{2})\b/);
       const yearFromText = yearMatch?.[1] ?? llmAvailability?.year ?? null;
-      const year = yearFromText ?? conv.lead?.vehicle?.year ?? null;
-      let model =
-        llmAvailability?.model ??
+      const priorModel =
+        conv.inventoryContext?.model ??
         conv.lead?.vehicle?.model ??
         conv.lead?.vehicle?.description ??
         null;
-      if (!model || !textLower.includes(model.toLowerCase())) {
-        const items = await getInventoryFeed();
-        const models = Array.from(new Set(items.map(i => i.model).filter(Boolean))) as string[];
-        models.sort((a, b) => b.length - a.length);
-        model = models.find(m => textLower.includes(m.toLowerCase())) ?? model;
-      }
-      const colorTokens = [
-        "vivid black",
-        "black",
-        "white",
-        "red",
-        "blue",
-        "gray",
-        "grey",
-        "silver",
-        "green",
-        "orange",
-        "yellow",
-        "brown",
-        "tan"
-      ];
-      const colorFromText = llmAvailability?.color ?? colorTokens.find(c => textLower.includes(c)) ?? null;
-      const color = colorFromText ?? conv.lead?.vehicle?.color ?? null;
+      const items = await getInventoryFeed();
+      const models = Array.from(new Set(items.map(i => i.model).filter(Boolean))) as string[];
+      models.sort((a, b) => b.length - a.length);
+      const modelFromText = models.find(m => textLower.includes(m.toLowerCase())) ?? null;
+      const model =
+        llmAvailability?.model ??
+        modelFromText ??
+        conv.inventoryContext?.model ??
+        conv.lead?.vehicle?.model ??
+        conv.lead?.vehicle?.description ??
+        null;
+      const modelChanged =
+        modelFromText &&
+        priorModel &&
+        normalizeModelText(modelFromText) !== normalizeModelText(priorModel);
+      const year = yearFromText ?? (!modelChanged ? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null : null);
+      const colorFromText = llmAvailability?.color ?? extractColorToken(textLower) ?? null;
+      const color = colorFromText ?? conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null;
       const finishFromText = extractFinishToken(textLower);
+      if (model || yearFromText || colorFromText || finishFromText) {
+        conv.inventoryContext = {
+          model: model ?? conv.inventoryContext?.model,
+          year: modelChanged && !yearFromText ? undefined : year ?? conv.inventoryContext?.year,
+          color: colorFromText ?? conv.inventoryContext?.color,
+          finish: finishFromText ?? conv.inventoryContext?.finish,
+          updatedAt: nowIso()
+        };
+      }
 
       if (model) {
         const hasIdentifiers = !!conv.lead?.vehicle?.stockId || !!conv.lead?.vehicle?.vin || !!color;

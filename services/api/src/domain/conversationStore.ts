@@ -341,6 +341,13 @@ export type Conversation = {
   inventoryWatch?: InventoryWatch;
   inventoryWatches?: InventoryWatch[];
   inventoryWatchPending?: InventoryWatchPending;
+  inventoryContext?: {
+    model?: string;
+    year?: string;
+    color?: string;
+    finish?: string;
+    updatedAt?: string;
+  };
   scheduleSoft?: {
     requestedAt: string;
     cooldownUntil?: string;
