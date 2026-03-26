@@ -1196,6 +1196,7 @@ export async function orchestrateInbound(
   let inventoryUrl: string | null = null;
   let inventoryStatus: InventoryStatus | null = null;
   let stockId: string | null = null;
+  const vin = ctx?.lead?.vehicle?.vin ?? null;
   const availabilityAsked = /(available|availability|still there|in stock)/i.test(event.body);
 
   // Stock IDs on your site are commonly like C1-26, T11-26, etc.
@@ -1226,12 +1227,21 @@ export async function orchestrateInbound(
     : leadCondition ?? (modelRecent ? "new_model_interest" : "used");
 
   if (intent === "AVAILABILITY" && stockId && event.body.toLowerCase().includes(stockId.toLowerCase())) {
-
-    const resolved = await resolveInventoryUrlByStock(stockId);
-    if (resolved.ok) {
-      inventoryUrl = resolved.url;
-      inventoryStatus = await checkInventorySalePendingByUrl(inventoryUrl);
-    } else {
+    try {
+      const feedMatch = await findInventoryPrice({ stockId, vin });
+      if (feedMatch?.item) {
+        inventoryUrl = feedMatch.item.url ?? inventoryUrl;
+        inventoryStatus = "AVAILABLE";
+      } else {
+        const resolved = await resolveInventoryUrlByStock(stockId);
+        if (resolved.ok) {
+          inventoryUrl = resolved.url;
+          inventoryStatus = await checkInventorySalePendingByUrl(inventoryUrl);
+        } else {
+          inventoryStatus = "UNKNOWN";
+        }
+      }
+    } catch {
       inventoryStatus = "UNKNOWN";
     }
   }
