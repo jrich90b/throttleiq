@@ -4131,6 +4131,14 @@ async function processDueFollowUps() {
     }
     if (!cadence || cadence.status !== "active" || !cadence.nextDueAt) continue;
     const isPostSale = cadence.kind === "post_sale";
+    if (isPostSale) {
+      const current = new Date(cadence.nextDueAt);
+      if (Number.isNaN(current.getTime()) || current.getTime() <= now.getTime()) {
+        const step = Math.min(cadence.stepIndex ?? 0, POST_SALE_DAY_OFFSETS.length - 1);
+        cadence.nextDueAt = computePostSaleDueAt(cadence.anchorAt ?? nowIso(), POST_SALE_DAY_OFFSETS[step], cfg.timezone);
+        saveConversation(conv);
+      }
+    }
     if (isPostSale && conv.closedReason !== "sold" && !conv.sale?.soldAt) {
       stopFollowUpCadence(conv, "invalid_post_sale");
       continue;

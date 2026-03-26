@@ -1204,8 +1204,9 @@ export function computePostSaleDueAt(anchorAtIso: string, offsetDays: number, ti
     hour24: 10,
     minute: 30
   });
+  const now = new Date();
   if (offsetDays > 0) {
-    while (due.getTime() <= anchor.getTime()) {
+    while (due.getTime() <= anchor.getTime() || due.getTime() <= now.getTime()) {
       due = new Date(due.getTime() + 24 * 60 * 60 * 1000);
     }
   }
