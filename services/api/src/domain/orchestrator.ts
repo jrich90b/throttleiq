@@ -150,18 +150,25 @@ function isSmallTalkCandidate(text: string): boolean {
 }
 
 function pickSmallTalkReply(seed: string): string {
-  const variants = [
-    "Thanks — I’m here if you need anything.",
-    "Sounds good. I’m here when you’re ready.",
-    "Got it — just let me know if you want to move forward."
+  const gratitude = [
+    "You're welcome!",
+    "Anytime!",
+    "Happy to help!"
+  ];
+  const ack = [
+    "Got it.",
+    "Sounds good.",
+    "You got it."
   ];
   const raw = String(seed ?? "");
-  if (!raw) return variants[0];
+  if (!raw) return "Got it.";
+  const lower = raw.toLowerCase();
+  const pool = /(thank|thx|ty|appreciate)/.test(lower) ? gratitude : ack;
   let hash = 0;
   for (let i = 0; i < raw.length; i++) {
-    hash = (hash + raw.charCodeAt(i)) % variants.length;
+    hash = (hash + raw.charCodeAt(i)) % pool.length;
   }
-  return variants[hash];
+  return pool[hash];
 }
 
 function detectManagerRequest(text: string): boolean {
@@ -641,7 +648,11 @@ export async function orchestrateInbound(
   if (canSmallTalk) {
     const rawText = String(event.body ?? "").trim();
     const quickSmallTalk = isEmojiOnly(rawText) || isShortPleasantry(rawText);
-    let smallTalk = quickSmallTalk;
+    const gratitude =
+      /(thanks|thank you|thx|ty|appreciate)/i.test(rawText) &&
+      !/\?/.test(rawText) &&
+      !hasStrongIntentSignal(rawText);
+    let smallTalk = quickSmallTalk || gratitude;
     if (!smallTalk && useLLM && isSmallTalkCandidate(rawText)) {
       const classified = await classifySmallTalkWithLLM({ text: rawText, history });
       if (classified?.smallTalk && (classified.confidence ?? 0) >= 0.7) {
