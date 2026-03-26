@@ -5721,7 +5721,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
             });
             unitModalList.appendChild(row);
           });
-          if (unitCount) unitCount.textContent = `Showing ${Math.min(listLimit, lastList.length)} of ${lastList.length}`;
+          if (unitCount) unitCount.textContent = "Showing " + Math.min(listLimit, lastList.length) + " of " + lastList.length;
           if (unitMore) unitMore.style.display = lastList.length > listLimit ? "inline-block" : "none";
         }
         function filterInventory(q) {
