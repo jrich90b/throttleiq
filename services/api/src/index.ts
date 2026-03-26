@@ -629,7 +629,7 @@ app.get("/public/inventory", async (_req, res) => {
       const snap = await loadInventorySnapshot();
       list = snap.items ?? [];
     }
-    const sanitized = (list ?? []).map(item => ({
+    const sanitized = (list ?? []).map((item: any) => ({
       year: item.year ?? "",
       make: item.make ?? "",
       model: item.model ?? "",
