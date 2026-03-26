@@ -5533,6 +5533,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
           <div style="display:flex; gap:8px; align-items:center;">
             <input id="unit-search" placeholder="Search inventory by model, stock, VIN, color…" style="flex:1;" />
             <button type="button" id="unit-search-btn">Search</button>
+            <button type="button" id="unit-browse-btn">Browse inventory</button>
           </div>
           <div class="unit-results" id="unit-results"></div>
           <div class="muted">Not in inventory? Enter details below. Stock # or VIN required for Sold/Hold.</div>
@@ -5575,6 +5576,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
         const unitVin = document.getElementById("unitVin");
         const unitClear = document.getElementById("unit-clear");
         const unitSearchBtn = document.getElementById("unit-search-btn");
+        const unitBrowseBtn = document.getElementById("unit-browse-btn");
 
         let inventory = [];
         let inventoryLoaded = false;
@@ -5697,6 +5699,14 @@ app.get("/public/appointment/outcome", async (req, res) => {
             setUnitInputs(list[0]);
           }
         }
+        function showInventoryList() {
+          if (!isUnitOutcome()) return;
+          if (unitSearch) unitSearch.value = "";
+          ensureInventoryLoaded();
+          const list = filterInventory("");
+          const selectedKey = ((unitStock && unitStock.value) || (unitVin && unitVin.value) || "").toLowerCase();
+          renderInventory(list, selectedKey);
+        }
         if (unitSearch && unitResults) {
           unitSearch.addEventListener("focus", () => {
             if (!isUnitOutcome()) return;
@@ -5721,6 +5731,11 @@ app.get("/public/appointment/outcome", async (req, res) => {
         if (unitSearchBtn) {
           unitSearchBtn.addEventListener("click", () => {
             runUnitSearch();
+          });
+        }
+        if (unitBrowseBtn) {
+          unitBrowseBtn.addEventListener("click", () => {
+            showInventoryList();
           });
         }
         if (unitClear) {
