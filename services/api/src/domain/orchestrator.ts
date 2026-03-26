@@ -1279,12 +1279,23 @@ export async function orchestrateInbound(
   if (availabilityAsked && stockId && inventoryStatus === "AVAILABLE") {
     const dayName = extractDayName(event.body);
     const dayPart = extractDayPart(event.body);
-    const urlLine = inventoryUrl ? ` Here’s the listing: ${inventoryUrl}.` : "";
+    const modelLabelRaw =
+      ctx?.lead?.vehicle?.model ??
+      ctx?.lead?.vehicle?.description ??
+      null;
+    const yearLabelRaw = ctx?.lead?.vehicle?.year ?? null;
+    const modelLabel = modelLabelRaw
+      ? String(modelLabelRaw).trim()
+      : null;
+    const yearLabel = yearLabelRaw ? String(yearLabelRaw).trim() : "";
+    const bikeLabel = modelLabel
+      ? `${yearLabel ? `${yearLabel} ` : ""}${modelLabel}`.trim()
+      : "that bike";
     const whenLine =
       dayName && dayPart
         ? ` If you want to come by ${dayName} ${dayPart}, what time works best?`
         : " If you want to stop in, what day and time works best?";
-    const ack = `Got it — ${stockId} is available right now.${urlLine}${whenLine}`.trim();
+    const ack = `Got it — the ${bikeLabel} is still available.${whenLine}`.trim();
     return finalize({
       intent,
       stage: "ENGAGED",
