@@ -5416,15 +5416,37 @@ app.get("/public/appointment/outcome", async (req, res) => {
     conv.lead?.vehicle?.description ??
     "the bike";
   const leadVehicle = conv.lead?.vehicle ?? {};
+  const holdUnit = conv.hold ?? null;
+  const saleUnit = conv.sale ?? null;
+  const preferredStock = String(saleUnit?.stockId ?? holdUnit?.stockId ?? leadVehicle?.stockId ?? "").trim();
+  const preferredVin = String(saleUnit?.vin ?? holdUnit?.vin ?? leadVehicle?.vin ?? "").trim();
+  let matchedUnit: any = null;
+  if (preferredStock || preferredVin) {
+    try {
+      const match = await findInventoryPrice({ stockId: preferredStock || null, vin: preferredVin || null });
+      matchedUnit = match?.item ?? null;
+    } catch {}
+  }
   const unitPrefill = {
     year: String(leadVehicle?.year ?? ""),
     make: String(leadVehicle?.make ?? ""),
     model: String(leadVehicle?.model ?? ""),
     trim: String(leadVehicle?.trim ?? ""),
     color: String(leadVehicle?.color ?? ""),
-    stockId: String(leadVehicle?.stockId ?? ""),
-    vin: String(leadVehicle?.vin ?? "")
+    stockId: preferredStock,
+    vin: preferredVin
   };
+  if (matchedUnit) {
+    unitPrefill.year = String(matchedUnit.year ?? unitPrefill.year ?? "");
+    unitPrefill.make = String(matchedUnit.make ?? unitPrefill.make ?? "");
+    unitPrefill.model = String(matchedUnit.model ?? unitPrefill.model ?? "");
+    unitPrefill.trim = "";
+    unitPrefill.color = String(matchedUnit.color ?? unitPrefill.color ?? "");
+    unitPrefill.stockId = String(matchedUnit.stockId ?? unitPrefill.stockId ?? "");
+    unitPrefill.vin = String(matchedUnit.vin ?? unitPrefill.vin ?? "");
+  } else if (preferredStock) {
+    unitPrefill.stockId = "";
+  }
 
   const html = `<!doctype html>
 <html>
