@@ -958,8 +958,8 @@ export async function orchestrateInbound(
   const dayName = extractDayName(event.body);
   const dayPart = extractDayPart(event.body);
   const timeMatch = String(event.body ?? "").match(/\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b/i);
-  const availabilityAsked = /(available|availability|still there|in stock|do you have|have any)/i.test(event.body);
-  const wantsAvailability = availabilityAsked || intent === "AVAILABILITY";
+  const availabilityAskedMulti = /(available|availability|still there|in stock|do you have|have any)/i.test(event.body);
+  const wantsAvailability = availabilityAskedMulti || intent === "AVAILABILITY";
   const wantsScheduling = hasSchedulingIntent(event.body) || !!dayName || !!dayPart || !!timeMatch;
   const wantsPayments =
     detectPricingOrPayment(event.body, intent) ||
