@@ -5490,18 +5490,21 @@ app.get("/public/appointment/outcome", async (req, res) => {
           <option value="bought_elsewhere">Bought elsewhere</option>
           <option value="other">Other</option>
         </select>
-        <label>Unit (optional)</label>
-        <input id="unit-search" placeholder="Search inventory by model, stock, VIN, color…" />
-        <div class="unit-results" id="unit-results"></div>
-        <div class="muted">Not in inventory? Enter details below. Stock # or VIN required for Sold/Hold.</div>
-        <div class="unit-grid">
-          <input name="unitYear" id="unitYear" placeholder="Year" value="${escapeHtml(unitPrefill.year)}" />
-          <input name="unitMake" id="unitMake" placeholder="Make" value="${escapeHtml(unitPrefill.make)}" />
-          <input name="unitModel" id="unitModel" placeholder="Model" value="${escapeHtml(unitPrefill.model)}" />
-          <input name="unitTrim" id="unitTrim" placeholder="Trim" value="${escapeHtml(unitPrefill.trim)}" />
-          <input name="unitColor" id="unitColor" placeholder="Color" value="${escapeHtml(unitPrefill.color)}" />
-          <input name="unitStockId" id="unitStockId" placeholder="Stock #" value="${escapeHtml(unitPrefill.stockId)}" />
-          <input name="unitVin" id="unitVin" placeholder="VIN" value="${escapeHtml(unitPrefill.vin)}" />
+        <div id="unit-section">
+          <label>Unit (optional)</label>
+          <input id="unit-search" placeholder="Search inventory by model, stock, VIN, color…" />
+          <div class="unit-results" id="unit-results"></div>
+          <div class="muted">Not in inventory? Enter details below. Stock # or VIN required for Sold/Hold.</div>
+          <div class="unit-grid">
+            <input name="unitYear" id="unitYear" placeholder="Year" value="${escapeHtml(unitPrefill.year)}" />
+            <input name="unitMake" id="unitMake" placeholder="Make" value="${escapeHtml(unitPrefill.make)}" />
+            <input name="unitModel" id="unitModel" placeholder="Model" value="${escapeHtml(unitPrefill.model)}" />
+            <input name="unitTrim" id="unitTrim" placeholder="Trim" value="${escapeHtml(unitPrefill.trim)}" />
+            <input name="unitColor" id="unitColor" placeholder="Color" value="${escapeHtml(unitPrefill.color)}" />
+            <input name="unitStockId" id="unitStockId" placeholder="Stock #" value="${escapeHtml(unitPrefill.stockId)}" />
+            <input name="unitVin" id="unitVin" placeholder="VIN" value="${escapeHtml(unitPrefill.vin)}" />
+          </div>
+          <div class="muted"><button type="button" id="unit-clear">Clear unit</button></div>
         </div>
         <label>Notes (optional)</label>
         <textarea name="note" id="note-field" placeholder="Add any context for the agent…"></textarea>
@@ -5519,6 +5522,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
         const noteEl = document.getElementById("note-field");
         const outcomeEl = document.querySelector("select[name='outcome']");
         const outcomeForm = document.getElementById("outcome-form");
+        const unitSection = document.getElementById("unit-section");
         const unitSearch = document.getElementById("unit-search");
         const unitResults = document.getElementById("unit-results");
         const unitYear = document.getElementById("unitYear");
@@ -5528,8 +5532,11 @@ app.get("/public/appointment/outcome", async (req, res) => {
         const unitColor = document.getElementById("unitColor");
         const unitStock = document.getElementById("unitStockId");
         const unitVin = document.getElementById("unitVin");
+        const unitClear = document.getElementById("unit-clear");
 
         let inventory = [];
+        let inventoryLoaded = false;
+        let inventoryLoading = false;
         function setUnitInputs(item) {
           if (!item) return;
           if (unitYear) unitYear.value = item.year || "";
@@ -5539,6 +5546,15 @@ app.get("/public/appointment/outcome", async (req, res) => {
           if (unitColor) unitColor.value = item.color || "";
           if (unitStock) unitStock.value = item.stockId || "";
           if (unitVin) unitVin.value = item.vin || "";
+        }
+        function clearUnitInputs() {
+          if (unitYear) unitYear.value = "";
+          if (unitMake) unitMake.value = "";
+          if (unitModel) unitModel.value = "";
+          if (unitTrim) unitTrim.value = "";
+          if (unitColor) unitColor.value = "";
+          if (unitStock) unitStock.value = "";
+          if (unitVin) unitVin.value = "";
         }
         function renderInventory(list, selectedKey) {
           if (!unitResults) return;
@@ -5579,23 +5595,73 @@ app.get("/public/appointment/outcome", async (req, res) => {
             return hay.includes(query);
           });
         }
-        if (unitSearch && unitResults) {
+        function isUnitOutcome() {
+          const status = outcomeEl ? outcomeEl.value : "";
+          return status === "sold" || status === "hold";
+        }
+        function toggleUnitSection() {
+          if (!unitSection) return;
+          const show = isUnitOutcome();
+          unitSection.style.display = show ? "block" : "none";
+          if (!show) {
+            clearUnitInputs();
+            if (unitResults) unitResults.innerHTML = "";
+          }
+        }
+        function ensureInventoryLoaded() {
+          if (inventoryLoaded || inventoryLoading || !unitResults) return;
+          inventoryLoading = true;
+          const loading = document.createElement("div");
+          loading.className = "unit-item";
+          loading.textContent = "Loading inventory…";
+          unitResults.innerHTML = "";
+          unitResults.appendChild(loading);
           fetch("/inventory")
             .then(r => r.json())
             .then(data => {
               inventory = Array.isArray(data?.items) ? data.items : [];
+              inventoryLoaded = true;
               const preKey = ((unitStock && unitStock.value) || (unitVin && unitVin.value) || "").toLowerCase();
-              const list = filterInventory(unitSearch.value || "");
+              const list = filterInventory(unitSearch ? unitSearch.value : "");
               renderInventory(list, preKey);
             })
             .catch(() => {
+              inventory = [];
+              inventoryLoaded = true;
               renderInventory([], "");
+            })
+            .finally(() => {
+              inventoryLoading = false;
             });
+        }
+        if (unitSearch && unitResults) {
           unitSearch.addEventListener("input", () => {
+            if (!isUnitOutcome()) return;
+            ensureInventoryLoaded();
             const list = filterInventory(unitSearch.value || "");
             const selectedKey = ((unitStock && unitStock.value) || (unitVin && unitVin.value) || "").toLowerCase();
             renderInventory(list, selectedKey);
           });
+        }
+        if (unitClear) {
+          unitClear.addEventListener("click", () => {
+            clearUnitInputs();
+            if (unitSearch) unitSearch.value = "";
+            const list = filterInventory("");
+            renderInventory(list, "");
+          });
+        }
+        if (outcomeEl) {
+          outcomeEl.addEventListener("change", () => {
+            toggleUnitSection();
+            if (isUnitOutcome()) {
+              ensureInventoryLoaded();
+            }
+          });
+        }
+        toggleUnitSection();
+        if (isUnitOutcome()) {
+          ensureInventoryLoaded();
         }
         if (outcomeForm && outcomeEl) {
           outcomeForm.addEventListener("submit", e => {
