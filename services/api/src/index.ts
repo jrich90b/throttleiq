@@ -5648,6 +5648,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
             if (unitResults) unitResults.innerHTML = "";
           }
         }
+        let showAllOnLoad = false;
         function ensureInventoryLoaded() {
           if (inventoryLoaded || inventoryLoading || !unitResults) return;
           inventoryLoading = true;
@@ -5666,11 +5667,12 @@ app.get("/public/appointment/outcome", async (req, res) => {
               }
               inventoryLoaded = true;
               const preKey = ((unitStock && unitStock.value) || (unitVin && unitVin.value) || "").toLowerCase();
-              let list = filterInventory(unitSearch ? unitSearch.value : "");
+              let list = filterInventory(showAllOnLoad ? "" : "");
               renderInventory(list, preKey);
               if (list.length === 1) {
                 setUnitInputs(list[0]);
               }
+              showAllOnLoad = false;
             })
             .catch(() => {
               inventory = [];
@@ -5687,7 +5689,11 @@ app.get("/public/appointment/outcome", async (req, res) => {
         }
         function showInventoryList() {
           if (!isUnitOutcome()) return;
-          ensureInventoryLoaded();
+          if (!inventoryLoaded) {
+            showAllOnLoad = true;
+            ensureInventoryLoaded();
+            return;
+          }
           const list = filterInventory("");
           const selectedKey = ((unitStock && unitStock.value) || (unitVin && unitVin.value) || "").toLowerCase();
           renderInventory(list, selectedKey);
