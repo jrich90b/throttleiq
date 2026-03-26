@@ -4698,9 +4698,10 @@ async function processDueFollowUps() {
       const contextLine = getFollowUpContextLine(conv, now);
       if (contextLine && !message.toLowerCase().includes(contextLine.toLowerCase())) {
         message = `${message} ${contextLine}`.trim();
-        conv.appointment = conv.appointment ?? {};
-        conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
-        conv.appointment.staffNotify.contextUsedAt = nowIso();
+        if (conv.appointment) {
+          conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
+          conv.appointment.staffNotify.contextUsedAt = nowIso();
+        }
       }
     }
 
