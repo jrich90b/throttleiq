@@ -5435,8 +5435,11 @@ app.get("/public/appointment/outcome", async (req, res) => {
     leadStock || leadVin ? await getInventoryHold(leadStock || null, leadVin || null) : null;
   const digitsOnly = (raw: any) => String(raw ?? "").replace(/\D/g, "");
   const leadDigits = digitsOnly(conv.leadKey) || digitsOnly(conv.lead?.phone);
+  const holdByConvKey =
+    conv.hold?.key && holds ? (holds as any)?.[String(conv.hold.key)] ?? null : null;
   const holdUnit =
     conv.hold ??
+    holdByConvKey ??
     holdByKey ??
     Object.values(holds ?? {}).find((h: any) => {
       if (!h) return false;
@@ -5665,8 +5668,11 @@ app.get("/public/appointment/outcome", async (req, res) => {
               }
               inventoryLoaded = true;
               const preKey = ((unitStock && unitStock.value) || (unitVin && unitVin.value) || "").toLowerCase();
-              const list = filterInventory(unitSearch ? unitSearch.value : "");
+              let list = filterInventory(unitSearch ? unitSearch.value : "");
               renderInventory(list, preKey);
+              if (list.length === 1) {
+                setUnitInputs(list[0]);
+              }
             })
             .catch(() => {
               inventory = [];
@@ -5687,6 +5693,9 @@ app.get("/public/appointment/outcome", async (req, res) => {
           const list = filterInventory(unitSearch ? unitSearch.value : "");
           const selectedKey = ((unitStock && unitStock.value) || (unitVin && unitVin.value) || "").toLowerCase();
           renderInventory(list, selectedKey);
+          if (list.length === 1) {
+            setUnitInputs(list[0]);
+          }
         }
         if (unitSearch && unitResults) {
           unitSearch.addEventListener("focus", () => {
