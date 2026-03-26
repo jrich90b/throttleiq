@@ -981,6 +981,27 @@ function pauseRelatedCadencesOnInbound(conv: any, event?: { from?: string }) {
   }
 }
 
+async function resetFollowUpCadenceOnInbound(conv: any, inboundText: string) {
+  const cadence = conv?.followUpCadence;
+  if (!cadence || cadence.status !== "active") return;
+  if (cadence.kind === "post_sale") return;
+  if (conv?.contactPreference === "call_only") return;
+  if (conv?.followUp?.mode === "manual_handoff") return;
+  if (conv?.inventoryWatch || (conv?.inventoryWatches?.length ?? 0) > 0) return;
+  if (conv?.hold) return;
+
+  const cfg = await getSchedulerConfig();
+  const tz = cfg.timezone || "America/New_York";
+  const anchor = nowIso();
+  cadence.anchorAt = anchor;
+  cadence.stepIndex = 0;
+  cadence.nextDueAt = computeFollowUpDueAt(anchor, FOLLOW_UP_DAY_OFFSETS[0], tz);
+  cadence.lastSentAt = undefined;
+  cadence.lastSentStep = undefined;
+  cadence.pausedUntil = undefined;
+  cadence.pauseReason = undefined;
+}
+
 async function suppressRelatedPhones(
   conv: any,
   event: { from?: string } | undefined,
@@ -7682,6 +7703,7 @@ if (authToken && signature) {
   if (systemMode === "suggest") {
     discardPendingDrafts(conv, "new_inbound");
   }
+  await resetFollowUpCadenceOnInbound(conv, event.body ?? "");
   if (isOptOut(event.body)) {
     await suppressRelatedPhones(conv, event, "sms_stop", "twilio");
     stopFollowUpCadence(conv, "opt_out");

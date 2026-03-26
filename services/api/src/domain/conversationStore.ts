@@ -1165,7 +1165,7 @@ function localPartsToUtcDate(
   return new Date(guess.getTime() - diffMs);
 }
 
-export const FOLLOW_UP_DAY_OFFSETS = [1, 3, 5, 7, 10, 14, 18, 21, 27, 30, 45, 60, 90];
+export const FOLLOW_UP_DAY_OFFSETS = [1, 2, 4, 6, 8, 10, 12, 14, 18, 21, 27, 35, 45];
 export const ENGAGED_DAY_OFFSETS = FOLLOW_UP_DAY_OFFSETS;
 export const POST_SALE_DAY_OFFSETS = [1, 60, 365, 690];
 
