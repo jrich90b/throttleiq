@@ -636,7 +636,8 @@ app.get("/public/inventory", async (_req, res) => {
       trim: item.trim ?? "",
       color: item.color ?? "",
       stockId: item.stockId ?? item.stock ?? "",
-      vin: item.vin ?? ""
+      vin: item.vin ?? "",
+      image: Array.isArray(item.images) && item.images.length ? item.images[0] : ""
     }));
     return res.json({ ok: true, items: sanitized });
   } catch (err: any) {
@@ -5527,10 +5528,20 @@ app.get("/public/appointment/outcome", async (req, res) => {
       textarea { min-height: 90px; }
       .muted { color: #666; font-size: 12px; margin-top: 6px; }
       .rec-btn { margin-top: 8px; }
-      .unit-results { border: 1px solid #ddd; border-radius: 8px; max-height: 220px; overflow: auto; margin-top: 8px; }
-      .unit-item { padding: 8px 10px; border-bottom: 1px solid #eee; cursor: pointer; }
+      .unit-results { border: 1px solid #ddd; border-radius: 8px; max-height: 420px; overflow: auto; }
+      .unit-item { padding: 8px 10px; border-bottom: 1px solid #eee; cursor: pointer; display: flex; gap: 10px; align-items: center; }
       .unit-item:last-child { border-bottom: none; }
       .unit-item.active { background: #eef6ff; }
+      .unit-thumb { width: 56px; height: 56px; border-radius: 6px; background: #f2f2f2; flex: 0 0 56px; object-fit: cover; }
+      .unit-meta { display: flex; flex-direction: column; gap: 2px; }
+      .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: none; align-items: center; justify-content: center; z-index: 9999; }
+      .modal.open { display: flex; }
+      .modal-card { background: #fff; border-radius: 12px; width: min(980px, 92vw); max-height: 85vh; display: flex; flex-direction: column; }
+      .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid #eee; }
+      .modal-body { display: grid; grid-template-columns: 1fr 280px; gap: 12px; padding: 12px 16px 16px; overflow: hidden; }
+      .modal-list { overflow: auto; border: 1px solid #ddd; border-radius: 8px; }
+      .modal-preview { border: 1px solid #ddd; border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+      .preview-img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 6px; background: #f2f2f2; }
       .unit-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
     </style>
   </head>
@@ -5558,7 +5569,21 @@ app.get("/public/appointment/outcome", async (req, res) => {
           <div style="display:flex; gap:8px; align-items:center;">
             <button type="button" id="unit-browse-btn">Browse inventory</button>
           </div>
-          <div class="unit-results" id="unit-results"></div>
+          <div class="modal" id="unit-modal">
+            <div class="modal-card">
+              <div class="modal-header">
+                <strong>Select inventory unit</strong>
+                <button type="button" id="unit-modal-close">Close</button>
+              </div>
+              <div class="modal-body">
+                <div class="unit-results modal-list" id="unit-modal-list"></div>
+                <div class="modal-preview" id="unit-modal-preview">
+                  <img class="preview-img" id="unit-preview-img" src="" alt="Inventory photo" />
+                  <div id="unit-preview-text" class="muted">Hover a unit to preview</div>
+                </div>
+              </div>
+            </div>
+          </div>
           <div class="muted">Not in inventory? Enter details below. Stock # or VIN required for Sold/Hold.</div>
           <div class="unit-grid">
             <input name="unitYear" id="unitYear" placeholder="Year" value="${escapeHtml(unitPrefill.year)}" />
@@ -5588,7 +5613,11 @@ app.get("/public/appointment/outcome", async (req, res) => {
         const outcomeEl = document.querySelector("select[name='outcome']");
         const outcomeForm = document.getElementById("outcome-form");
         const unitSection = document.getElementById("unit-section");
-        const unitResults = document.getElementById("unit-results");
+        const unitModal = document.getElementById("unit-modal");
+        const unitModalList = document.getElementById("unit-modal-list");
+        const unitModalClose = document.getElementById("unit-modal-close");
+        const unitPreviewImg = document.getElementById("unit-preview-img");
+        const unitPreviewText = document.getElementById("unit-preview-text");
         const unitYear = document.getElementById("unitYear");
         const unitMake = document.getElementById("unitMake");
         const unitModel = document.getElementById("unitModel");
@@ -5622,13 +5651,13 @@ app.get("/public/appointment/outcome", async (req, res) => {
           if (unitVin) unitVin.value = "";
         }
         function renderInventory(list, selectedKey) {
-          if (!unitResults) return;
-          unitResults.innerHTML = "";
+          if (!unitModalList) return;
+          unitModalList.innerHTML = "";
           if (!list.length) {
             const empty = document.createElement("div");
             empty.className = "unit-item";
             empty.textContent = "No matching units.";
-            unitResults.appendChild(empty);
+            unitModalList.appendChild(empty);
             return;
           }
           list.slice(0, 50).forEach(item => {
@@ -5640,12 +5669,39 @@ app.get("/public/appointment/outcome", async (req, res) => {
             const sub = [];
             if (item.stockId) sub.push("Stock " + item.stockId);
             if (item.vin) sub.push("VIN " + item.vin);
-            row.textContent = (label || item.model || item.stockId || item.vin) + color + (sub.length ? " (" + sub.join(" • ") + ")" : "");
+            const img = document.createElement("img");
+            img.className = "unit-thumb";
+            img.alt = label || item.model || "Inventory photo";
+            img.src = item.image || "";
+            img.addEventListener("error", () => {
+              img.src = "";
+            });
+            const meta = document.createElement("div");
+            meta.className = "unit-meta";
+            const title = document.createElement("div");
+            title.textContent = (label || item.model || item.stockId || item.vin) + color;
+            const subline = document.createElement("div");
+            subline.className = "muted";
+            subline.textContent = sub.length ? sub.join(" • ") : "";
+            meta.appendChild(title);
+            if (subline.textContent) meta.appendChild(subline);
+            row.appendChild(img);
+            row.appendChild(meta);
+            row.addEventListener("mouseover", () => {
+              if (unitPreviewImg) unitPreviewImg.src = item.image || "";
+              if (unitPreviewText) {
+                unitPreviewText.textContent =
+                  (label || item.model || item.stockId || item.vin) +
+                  (color || "") +
+                  (sub.length ? " (" + sub.join(" • ") + ")" : "");
+              }
+            });
             row.addEventListener("click", () => {
               setUnitInputs(item);
               renderInventory(list, key);
+              if (unitModal) unitModal.classList.remove("open");
             });
-            unitResults.appendChild(row);
+            unitModalList.appendChild(row);
           });
         }
         function filterInventory(q) {
@@ -5675,13 +5731,13 @@ app.get("/public/appointment/outcome", async (req, res) => {
         }
         let showAllOnLoad = false;
         function ensureInventoryLoaded() {
-          if (inventoryLoaded || inventoryLoading || !unitResults) return;
+          if (inventoryLoaded || inventoryLoading || !unitModalList) return;
           inventoryLoading = true;
           const loading = document.createElement("div");
           loading.className = "unit-item";
           loading.textContent = "Loading inventory…";
-          unitResults.innerHTML = "";
-          unitResults.appendChild(loading);
+          unitModalList.innerHTML = "";
+          unitModalList.appendChild(loading);
           fetch("/public/inventory")
             .then(r => r.json())
             .then(data => {
@@ -5702,11 +5758,11 @@ app.get("/public/appointment/outcome", async (req, res) => {
             .catch(() => {
               inventory = [];
               inventoryLoaded = true;
-              unitResults.innerHTML = "";
+              unitModalList.innerHTML = "";
               const empty = document.createElement("div");
               empty.className = "unit-item";
               empty.textContent = "Inventory unavailable — enter details below.";
-              unitResults.appendChild(empty);
+              unitModalList.appendChild(empty);
             })
             .finally(() => {
               inventoryLoading = false;
@@ -5714,6 +5770,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
         }
         function showInventoryList() {
           if (!isUnitOutcome()) return;
+          if (unitModal) unitModal.classList.add("open");
           if (!inventoryLoaded) {
             showAllOnLoad = true;
             ensureInventoryLoaded();
@@ -5726,6 +5783,16 @@ app.get("/public/appointment/outcome", async (req, res) => {
         if (unitBrowseBtn) {
           unitBrowseBtn.addEventListener("click", () => {
             showInventoryList();
+          });
+        }
+        if (unitModalClose) {
+          unitModalClose.addEventListener("click", () => {
+            if (unitModal) unitModal.classList.remove("open");
+          });
+        }
+        if (unitModal) {
+          unitModal.addEventListener("click", e => {
+            if (e.target === unitModal) unitModal.classList.remove("open");
           });
         }
         if (unitClear) {
