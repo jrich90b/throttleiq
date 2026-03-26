@@ -43,6 +43,7 @@ import {
   computeFollowUpDueAt,
   computePostSaleDueAt,
   FOLLOW_UP_DAY_OFFSETS,
+  LONG_TERM_DAY_OFFSETS,
   POST_SALE_DAY_OFFSETS,
   inferWalkIn,
   startPostSaleCadence
@@ -1668,6 +1669,44 @@ function renderFollowUpTemplate(template: string, ctx: Record<string, string>): 
   return out.replace(/\s+/g, " ").trim();
 }
 
+function buildOutcomeContextLine(note: string): string | null {
+  const text = String(note ?? "").trim();
+  if (!text) return null;
+  const t = text.toLowerCase();
+  if (
+    /\b(cancer|chemo|chemotherapy|radiation|hospice|icu|hospital|surgery|surgical|terminal|stage\s*(four|4)|death|dying|funeral|passed away|stroke|heart attack)\b/.test(
+      t
+    )
+  ) {
+    return "Hope everything is okay on your end.";
+  }
+  if (/\b(sick|ill|not feeling well|under the weather|family emergency|daughter|son|wife|husband)\b/.test(t)) {
+    return "Hope things are okay on your end.";
+  }
+  if (/\b(out of town|traveling|travelling|vacation|work trip)\b/.test(t)) {
+    return "Hope your schedule settles down soon.";
+  }
+  return null;
+}
+
+function getFollowUpContextLine(conv: any, now: Date): string | null {
+  const outcome = conv?.appointment?.staffNotify?.outcome;
+  const note = outcome?.note;
+  if (!note || !outcome?.updatedAt) return null;
+  const updatedAt = new Date(outcome.updatedAt);
+  if (Number.isNaN(updatedAt.getTime())) return null;
+  const ageMs = now.getTime() - updatedAt.getTime();
+  if (ageMs > 30 * 24 * 60 * 60 * 1000) return null;
+  const usedAt = conv?.appointment?.staffNotify?.contextUsedAt;
+  if (usedAt) {
+    const usedDate = new Date(usedAt);
+    if (!Number.isNaN(usedDate.getTime()) && usedDate.getTime() >= updatedAt.getTime()) {
+      return null;
+    }
+  }
+  return buildOutcomeContextLine(note);
+}
+
 function mapDialogStateToCadenceTag(name: DialogStateName): string | null {
   if (!name || name === "none") return null;
   if (name.startsWith("trade_")) return "trade";
@@ -2444,6 +2483,15 @@ async function buildLongTermFollowUp(
       ? leadColor
       : imagePick?.color ?? null;
   const canTestRide = await canOfferTestRideForLead(lead, dealerProfile);
+  const financingDeclined =
+    conv?.followUp?.reason === "financing_declined" ||
+    conv?.appointment?.staffNotify?.outcome?.status === "financing_declined";
+
+  if (financingDeclined) {
+    return {
+      body: `${greeting}Just checking in. If you want to revisit options at any point, I’m here.`
+    };
+  }
 
   if (imagePick?.url) {
     const colorLabel = colorLabelRaw ? colorLabelRaw.charAt(0).toUpperCase() + colorLabelRaw.slice(1) : null;
@@ -4646,6 +4694,16 @@ async function processDueFollowUps() {
       conv.scheduleSoft.lastAskAt = nowIso();
     }
 
+    if (!isPostSale && cadence.kind !== "long_term") {
+      const contextLine = getFollowUpContextLine(conv, now);
+      if (contextLine && !message.toLowerCase().includes(contextLine.toLowerCase())) {
+        message = `${message} ${contextLine}`.trim();
+        conv.appointment = conv.appointment ?? {};
+        conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
+        conv.appointment.staffNotify.contextUsedAt = nowIso();
+      }
+    }
+
     const emailTo = conv.lead?.email;
     const useEmail =
       !isPostSale && conv.classification?.channel === "email" && !!emailTo && hasEmailOptIn(conv.lead);
@@ -4707,20 +4765,7 @@ async function processDueFollowUps() {
       const draftMessage = useEmail && emailMessage ? emailMessage : message;
       appendOutbound(conv, from ?? "salesperson", draftTo, draftMessage, "draft_ai", undefined, mediaUrls);
       maybeAddCallTodoForFollowUp();
-      if (cadence.kind === "long_term") {
-        const nowIso = new Date().toISOString();
-        conv.followUpCadence = {
-          status: "active",
-          anchorAt: nowIso,
-          nextDueAt: computeFollowUpDueAt(nowIso, FOLLOW_UP_DAY_OFFSETS[0], cfg.timezone),
-          stepIndex: 0,
-          kind: "standard",
-          lastSentAt: nowIso,
-          lastSentStep: -1
-        };
-      } else {
-        advanceFollowUpCadence(conv, cfg.timezone);
-      }
+      advanceFollowUpCadence(conv, cfg.timezone);
       continue;
     }
 
@@ -4754,40 +4799,14 @@ async function processDueFollowUps() {
         maybeAddCallTodoForFollowUp();
       }
       }
-      if (cadence.kind === "long_term") {
-        const nowIso = new Date().toISOString();
-        conv.followUpCadence = {
-          status: "active",
-          anchorAt: nowIso,
-          nextDueAt: computeFollowUpDueAt(nowIso, FOLLOW_UP_DAY_OFFSETS[0], cfg.timezone),
-          stepIndex: 0,
-          kind: "standard",
-          lastSentAt: nowIso,
-          lastSentStep: -1
-        };
-      } else {
-        advanceFollowUpCadence(conv, cfg.timezone);
-      }
+      advanceFollowUpCadence(conv, cfg.timezone);
       continue;
     }
 
     if (!from || !accountSid || !authToken || !to.startsWith("+")) {
       appendOutbound(conv, "salesperson", to, message, "human", undefined, mediaUrls);
       maybeAddCallTodoForFollowUp();
-      if (cadence.kind === "long_term") {
-        const nowIso = new Date().toISOString();
-        conv.followUpCadence = {
-          status: "active",
-          anchorAt: nowIso,
-          nextDueAt: computeFollowUpDueAt(nowIso, FOLLOW_UP_DAY_OFFSETS[0], cfg.timezone),
-          stepIndex: 0,
-          kind: "standard",
-          lastSentAt: nowIso,
-          lastSentStep: -1
-        };
-      } else {
-        advanceFollowUpCadence(conv, cfg.timezone);
-      }
+      advanceFollowUpCadence(conv, cfg.timezone);
       continue;
     }
 
@@ -4801,20 +4820,7 @@ async function processDueFollowUps() {
       });
       appendOutbound(conv, from, to, message, "twilio", msg.sid, mediaUrls);
       maybeAddCallTodoForFollowUp();
-      if (cadence.kind === "long_term") {
-        const nowIso = new Date().toISOString();
-        conv.followUpCadence = {
-          status: "active",
-          anchorAt: nowIso,
-          nextDueAt: computeFollowUpDueAt(nowIso, FOLLOW_UP_DAY_OFFSETS[0], cfg.timezone),
-          stepIndex: 0,
-          kind: "standard",
-          lastSentAt: nowIso,
-          lastSentStep: -1
-        };
-      } else {
-        advanceFollowUpCadence(conv, cfg.timezone);
-      }
+      advanceFollowUpCadence(conv, cfg.timezone);
     } catch (e: any) {
       console.log("[followup] send failed:", e?.message ?? e);
     }
@@ -5973,6 +5979,20 @@ app.post("/public/appointment/outcome", async (req, res) => {
     const soldById = conv.appointment?.bookedSalespersonId ?? "";
     const err = await applyOutcomeSold(conv, unit, note || undefined, nowIso, soldById, "");
     if (err) return res.status(400).send(err);
+  } else if (outcome === "financing_declined") {
+    const cfg = await getSchedulerConfig();
+    conv.followUp = {
+      mode: "active",
+      reason: "financing_declined",
+      updatedAt: nowIso
+    };
+    conv.followUpCadence = {
+      status: "active",
+      anchorAt: nowIso,
+      nextDueAt: computeFollowUpDueAt(nowIso, LONG_TERM_DAY_OFFSETS[0], cfg.timezone),
+      stepIndex: 0,
+      kind: "long_term"
+    };
   }
 
   conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
@@ -6020,6 +6040,20 @@ app.post("/public/appointment/outcome/transcribe", upload.single("audio"), async
     const soldById = conv.appointment?.bookedSalespersonId ?? "";
     const err = await applyOutcomeSold(conv, unit, transcript, nowIso, soldById, "");
     if (err) return res.status(400).json({ ok: false, error: err });
+  } else if (status === "financing_declined") {
+    const cfg = await getSchedulerConfig();
+    conv.followUp = {
+      mode: "active",
+      reason: "financing_declined",
+      updatedAt: nowIso
+    };
+    conv.followUpCadence = {
+      status: "active",
+      anchorAt: nowIso,
+      nextDueAt: computeFollowUpDueAt(nowIso, LONG_TERM_DAY_OFFSETS[0], cfg.timezone),
+      stepIndex: 0,
+      kind: "long_term"
+    };
   }
 
   conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};

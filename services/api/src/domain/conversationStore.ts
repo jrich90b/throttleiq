@@ -55,6 +55,7 @@ export type AppointmentMemory = {
     followUpSentAt?: string;
     lastEventId?: string | null;
     outcomeToken?: string;
+    contextUsedAt?: string;
     outcome?: {
       status:
         | "showed_up"
@@ -1176,6 +1177,7 @@ function localPartsToUtcDate(
 export const FOLLOW_UP_DAY_OFFSETS = [1, 2, 4, 6, 8, 10, 12, 14, 18, 21, 27, 35, 45];
 export const ENGAGED_DAY_OFFSETS = FOLLOW_UP_DAY_OFFSETS;
 export const POST_SALE_DAY_OFFSETS = [1, 60, 365, 690];
+export const LONG_TERM_DAY_OFFSETS = [30, 90, 180];
 
 export function computeFollowUpDueAt(anchorAtIso: string, offsetDays: number, timeZone: string) {
   const anchor = new Date(anchorAtIso);
@@ -1308,10 +1310,13 @@ export function advanceFollowUpCadence(conv: Conversation, timeZone: string) {
   conv.followUpCadence.stepIndex = nextStep;
   const isPostSale = conv.followUpCadence.kind === "post_sale";
   const isEngaged = conv.followUpCadence.kind === "engaged";
+  const isLongTerm = conv.followUpCadence.kind === "long_term";
   const offsets = isPostSale
     ? POST_SALE_DAY_OFFSETS
     : isEngaged
       ? ENGAGED_DAY_OFFSETS
+      : isLongTerm
+        ? LONG_TERM_DAY_OFFSETS
       : FOLLOW_UP_DAY_OFFSETS;
   if (nextStep >= offsets.length) {
     conv.followUpCadence.status = "completed";
