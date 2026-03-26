@@ -3962,73 +3962,64 @@ export default function Home() {
         </button>
         <div className="mt-auto flex flex-col items-center gap-3">
           <div className="text-xs text-white/60">{loading ? "…" : ""}</div>
-          {isManager ? (
-            <div className="relative">
-              <button
-                className="w-10 h-10 rounded flex items-center justify-center border border-white/20 hover:bg-white/5"
-                title="Settings"
-                onClick={() => setSettingsOpen(v => !v)}
-              >
-                ⚙️
-              </button>
-              {settingsOpen ? (
-                <div className="absolute bottom-12 left-12 w-56 bg-white border rounded-lg shadow-lg p-2 z-50">
-                  <div className="text-xs font-semibold text-gray-600 px-2 py-1">Settings</div>
-                  <button
-                    className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
-                    onClick={() => {
-                      setSettingsTab("dealer");
-                      goToSection("settings");
-                      setSettingsOpen(false);
-                    }}
-                  >
-                    Dealer Profile
-                  </button>
-                  <button
-                    className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
-                    onClick={() => {
-                      setSettingsTab("users");
-                      goToSection("settings");
-                      setSettingsOpen(false);
-                    }}
-                  >
-                    Users
-                  </button>
-                  <button
-                    className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
-                    onClick={() => {
-                      setSettingsTab("scheduler");
-                      goToSection("settings");
-                      setSettingsOpen(false);
-                    }}
-                  >
-                    Scheduling
-                  </button>
-                  <button
-                    className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm text-red-600"
-                    onClick={async () => {
-                      await fetch("/api/auth/logout", { method: "POST" });
-                      setSettingsOpen(false);
-                      setAuthUser(null);
-                    }}
-                  >
-                    Sign out
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          ) : (
+          <div className="relative">
             <button
               className="w-10 h-10 rounded flex items-center justify-center border border-white/20 hover:bg-white/5"
-              title="Sign out"
-              onClick={async () => {
-                await fetch("/api/auth/logout", { method: "POST" });
-                setAuthUser(null);
-              }}
+              title="Settings"
+              onClick={() => setSettingsOpen(v => !v)}
             >
-              ⎋
+              ⚙️
             </button>
-          )}
+            {settingsOpen ? (
+              <div className="absolute bottom-12 left-12 w-56 bg-white border rounded-lg shadow-lg p-2 z-50">
+                <div className="text-xs font-semibold text-gray-600 px-2 py-1">Settings</div>
+                {isManager ? (
+                  <>
+                    <button
+                      className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
+                      onClick={() => {
+                        setSettingsTab("dealer");
+                        goToSection("settings");
+                        setSettingsOpen(false);
+                      }}
+                    >
+                      Dealer Profile
+                    </button>
+                    <button
+                      className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
+                      onClick={() => {
+                        setSettingsTab("users");
+                        goToSection("settings");
+                        setSettingsOpen(false);
+                      }}
+                    >
+                      Users
+                    </button>
+                    <button
+                      className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
+                      onClick={() => {
+                        setSettingsTab("scheduler");
+                        goToSection("settings");
+                        setSettingsOpen(false);
+                      }}
+                    >
+                      Scheduling
+                    </button>
+                  </>
+                ) : null}
+                <button
+                  className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm text-red-600"
+                  onClick={async () => {
+                    await fetch("/api/auth/logout", { method: "POST" });
+                    setSettingsOpen(false);
+                    setAuthUser(null);
+                  }}
+                >
+                  Sign out
+                </button>
+              </div>
+            ) : null}
+          </div>
         </div>
       </aside>
 
