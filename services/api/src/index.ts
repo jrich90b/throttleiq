@@ -5706,7 +5706,6 @@ app.get("/public/appointment/outcome", async (req, res) => {
         if (unitClear) {
           unitClear.addEventListener("click", () => {
             clearUnitInputs();
-            if (unitSearch) unitSearch.value = "";
             const list = filterInventory("");
             renderInventory(list, "");
           });
