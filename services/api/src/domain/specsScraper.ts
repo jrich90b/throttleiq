@@ -200,6 +200,27 @@ function collectSpecsFromJsonNode(node: any, out: Record<string, string>, depth 
     return;
   }
   if (typeof node !== "object") return;
+  const coerceValue = (val: any, depthVal = 0): string | null => {
+    if (depthVal > 6) return null;
+    if (typeof val === "string" || typeof val === "number" || typeof val === "boolean") return String(val);
+    if (Array.isArray(val)) {
+      const parts = val
+        .map(v => coerceValue(v, depthVal + 1))
+        .filter(Boolean)
+        .map(v => String(v));
+      return parts.length ? parts.join(", ") : null;
+    }
+    if (val && typeof val === "object") {
+      const direct = val.value ?? val.displayValue ?? val.text ?? val.label ?? val.name ?? null;
+      const derived = coerceValue(direct, depthVal + 1);
+      if (derived) return derived;
+      for (const v of Object.values(val)) {
+        const candidate = coerceValue(v, depthVal + 1);
+        if (candidate) return candidate;
+      }
+    }
+    return null;
+  };
   const specContainers = [
     node.specs,
     node.specifications,
@@ -245,44 +266,12 @@ function collectSpecsFromJsonNode(node: any, out: Record<string, string>, depth 
     node.detail ??
     node.values ??
     null;
-  let value: string | null = null;
-  if (typeof valueCandidate === "string" || typeof valueCandidate === "number" || typeof valueCandidate === "boolean") {
-    value = String(valueCandidate);
-  } else if (Array.isArray(valueCandidate)) {
-    const parts = valueCandidate
-      .map(item => {
-        if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") {
-          return String(item);
-        }
-        if (item && typeof item === "object") {
-          return (
-            item.value ??
-            item.displayValue ??
-            item.text ??
-            item.label ??
-            item.name ??
-            null
-          );
-        }
-        return null;
-      })
-      .filter(Boolean)
-      .map(v => String(v));
-    if (parts.length) value = parts.join(", ");
-  }
+  let value: string | null = coerceValue(valueCandidate);
   if (label && value) {
     out[label] = value;
   } else if (label && valueCandidate && typeof valueCandidate === "object") {
-    const derived =
-      (valueCandidate as any).value ??
-      (valueCandidate as any).displayValue ??
-      (valueCandidate as any).text ??
-      (valueCandidate as any).label ??
-      (valueCandidate as any).name ??
-      null;
-    if (typeof derived === "string" || typeof derived === "number" || typeof derived === "boolean") {
-      out[label] = String(derived);
-    }
+    const derived = coerceValue(valueCandidate);
+    if (derived) out[label] = derived;
   }
   for (const val of Object.values(node)) {
     collectSpecsFromJsonNode(val, out, depth + 1);
@@ -324,22 +313,24 @@ function extractFromHarleyNextData(html: string): Record<string, string> {
   const options = Array.isArray(specOptions) ? specOptions : specOptions?.items;
   if (!Array.isArray(options)) return specs;
 
-  const coerceValue = (val: any): string | null => {
+  const coerceValue = (val: any, depth = 0): string | null => {
+    if (depth > 6) return null;
     if (typeof val === "string" || typeof val === "number" || typeof val === "boolean") return String(val);
     if (Array.isArray(val)) {
       const parts = val
-        .map(v =>
-          typeof v === "string" || typeof v === "number" || typeof v === "boolean"
-            ? String(v)
-            : v?.value ?? v?.displayValue ?? v?.text ?? v?.label ?? v?.name ?? null
-        )
+        .map(v => coerceValue(v, depth + 1))
         .filter(Boolean)
         .map(v => String(v));
       return parts.length ? parts.join(", ") : null;
     }
     if (val && typeof val === "object") {
-      const derived = val.value ?? val.displayValue ?? val.text ?? val.label ?? val.name ?? null;
-      if (derived !== null && derived !== undefined) return String(derived);
+      const direct = val.value ?? val.displayValue ?? val.text ?? val.label ?? val.name ?? null;
+      const derived = coerceValue(direct, depth + 1);
+      if (derived) return derived;
+      for (const v of Object.values(val)) {
+        const candidate = coerceValue(v, depth + 1);
+        if (candidate) return candidate;
+      }
     }
     return null;
   };
