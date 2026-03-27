@@ -106,6 +106,14 @@ function resolveHarleyUrl(model: string, year?: string | null): string | null {
   return `https://www.harley-davidson.com/us/en/motorcycles/${slug}.html`;
 }
 
+async function fetchSpecsForUrl(url: string | null): Promise<Record<string, string>> {
+  if (!url) return {};
+  const html = await fetchHtmlSmart(url, "specs-scraper");
+  if (!html) return {};
+  const parsed = parseSpecsFromHtml(html);
+  return filterSpecMap(parsed);
+}
+
 function stripTags(html: string): string {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
@@ -372,24 +380,29 @@ export async function getModelSpecs(opts: {
   }
 
   const harleyUrl = resolveHarleyUrl(model, year);
-  if (harleyUrl) {
-    const html = await fetchHtmlSmart(harleyUrl, "specs-scraper");
-    if (html) {
-      const parsed = parseSpecsFromHtml(html);
-      const specs = filterSpecMap(parsed);
-      if (Object.keys(specs).length >= 3) {
-        const payload: ModelSpecs = {
-          model,
-          year,
-          specs,
-          sourceUrl: harleyUrl,
-          updatedAt: new Date().toISOString()
-        };
-        cache[key] = payload;
-        saveCache(cache);
-        return payload;
+  let specs = await fetchSpecsForUrl(harleyUrl);
+  let usedUrl = harleyUrl;
+  if (Object.keys(specs).length < 3 && year) {
+    const fallbackUrl = resolveHarleyUrl(model, null);
+    if (fallbackUrl && fallbackUrl !== harleyUrl) {
+      const fallbackSpecs = await fetchSpecsForUrl(fallbackUrl);
+      if (Object.keys(fallbackSpecs).length >= Object.keys(specs).length) {
+        specs = fallbackSpecs;
+        usedUrl = fallbackUrl;
       }
     }
+  }
+  if (Object.keys(specs).length >= 3) {
+    const payload: ModelSpecs = {
+      model,
+      year,
+      specs,
+      sourceUrl: usedUrl,
+      updatedAt: new Date().toISOString()
+    };
+    cache[key] = payload;
+    saveCache(cache);
+    return payload;
   }
 
   if (HARLEY_SPECS_ONLY) {
