@@ -21,6 +21,7 @@ const DEFAULT_HARLEY_URLS: Record<string, string> = {
 };
 const HARLEY_SPECS_ONLY = (process.env.HARLEY_SPECS_ONLY ?? "true").toLowerCase() === "true";
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const MIN_SPECS_COUNT = 1;
 
 function cleanModelForHarleyUrl(model: string): string {
   return model
@@ -443,7 +444,7 @@ export async function getModelSpecs(opts: {
     const age = Date.now() - new Date(cached.updatedAt).getTime();
     if (!Number.isNaN(age) && age < CACHE_TTL_MS && cached.specs && Object.keys(cached.specs).length) {
       const cleaned = filterSpecMap(cached.specs);
-      if (Object.keys(cleaned).length >= 3) {
+      if (Object.keys(cleaned).length >= MIN_SPECS_COUNT) {
         if (Object.keys(cleaned).length !== Object.keys(cached.specs).length) {
           cache[key] = { ...cached, specs: cleaned };
           saveCache(cache);
@@ -456,7 +457,7 @@ export async function getModelSpecs(opts: {
   const harleyUrl = resolveHarleyUrl(model, year);
   let specs = await fetchSpecsForUrl(harleyUrl);
   let usedUrl = harleyUrl;
-  if (Object.keys(specs).length < 3 && year) {
+  if (Object.keys(specs).length < MIN_SPECS_COUNT && year) {
     const fallbackUrl = resolveHarleyUrl(model, null);
     if (fallbackUrl && fallbackUrl !== harleyUrl) {
       const fallbackSpecs = await fetchSpecsForUrl(fallbackUrl);
@@ -466,7 +467,7 @@ export async function getModelSpecs(opts: {
       }
     }
   }
-  if (Object.keys(specs).length >= 3) {
+  if (Object.keys(specs).length >= MIN_SPECS_COUNT) {
     const payload: ModelSpecs = {
       model,
       year,
@@ -496,7 +497,7 @@ export async function getModelSpecs(opts: {
     if (!html) continue;
     const parsed = parseSpecsFromHtml(html);
     const specs = filterSpecMap(parsed);
-    if (Object.keys(specs).length < 3) continue;
+    if (Object.keys(specs).length < MIN_SPECS_COUNT) continue;
     const payload: ModelSpecs = { model, year, specs, sourceUrl: url, updatedAt: new Date().toISOString() };
     cache[key] = payload;
     saveCache(cache);
