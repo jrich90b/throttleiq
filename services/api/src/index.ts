@@ -10428,13 +10428,18 @@ if (authToken && signature) {
   const infoOnlyRequest = isInfoOnlyRequest(textLower) || isCompare;
   if (event.provider === "twilio" && infoOnlyRequest && !availabilityExplicit) {
     if (isCompare) {
-      const formatChoice = /\b(highlights?|highlight comparison|quick highlights?|quick highlight|quick spec|quick comparison)\b/i.test(
+      const wantsEverythingCompare = /\b(all (the )?details|everything|all (the )?info|all specs?|full details|everything on the page)\b/i.test(
         textLower
-      )
+      );
+      const formatChoice = wantsEverythingCompare
         ? "highlights"
-        : /\b(full specs?|full spec|spec sheet|specs?)\b/i.test(textLower)
-          ? "full"
-          : null;
+        : /\b(highlights?|highlight comparison|quick highlights?|quick highlight|quick spec|quick comparison)\b/i.test(
+            textLower
+          )
+          ? "highlights"
+          : /\b(full specs?|full spec|spec sheet|specs?)\b/i.test(textLower)
+            ? "full"
+            : null;
       const storedFormat = conv.compareContext?.format ?? null;
       const isCompareFormatChoice = !!formatChoice;
       if (isCompareFormatChoice || storedFormat) {
@@ -10503,6 +10508,9 @@ if (authToken && signature) {
             reply = wantsHighlights
               ? `Got it — I’ll pull a quick highlights comparison for ${primaryLabel} and the ${secondaryLabel} and text it over shortly.`
               : `Got it — I’ll pull the full spec sheets for ${primaryLabel} and the ${secondaryLabel} and text them over shortly.`;
+          }
+          if (wantsEverythingCompare) {
+            reply += " Want full spec sheets or safety/features next?";
           }
           const systemMode = webhookMode;
           if (systemMode === "suggest") {
@@ -10608,6 +10616,9 @@ if (authToken && signature) {
       : /\b(full specs?|full spec|spec sheet|specs?)\b/i.test(textLower)
         ? "full"
         : null;
+    const wantsEverything = /\b(all (the )?details|everything|all (the )?info|all specs?|full details|everything on the page)\b/i.test(
+      textLower
+    );
     if (!isCompare && hasBaseModel) {
       conv.specsContext = {
         model: baseModelForLabel ? String(baseModelForLabel) : undefined,
@@ -10615,22 +10626,32 @@ if (authToken && signature) {
         format: specsFormatChoice ?? conv.specsContext?.format ?? null,
         updatedAt: nowIso()
       };
-      const wantsSpecsNow = !!specsFormatChoice || !!specsFocus || /\b(specs?|spec sheet|highlights?|details|info|information)\b/i.test(textLower);
+      const wantsSpecsNow =
+        wantsEverything ||
+        !!specsFormatChoice ||
+        !!specsFocus ||
+        /\b(specs?|spec sheet|highlights?|details|info|information)\b/i.test(textLower);
       if (wantsSpecsNow) {
         setDialogState(conv, "specs_single_answered");
-        const wantsHighlights = (specsFormatChoice ?? conv.specsContext?.format) === "highlights";
+        const wantsHighlights =
+          wantsEverything || (specsFormatChoice ?? conv.specsContext?.format) === "highlights";
         const specs = await getModelSpecs({
           model: String(baseModelForLabel),
           year: baseYearForLabel ? String(baseYearForLabel) : null
         });
         let reply = "";
         if (specs?.specs && Object.keys(specs.specs).length) {
-          const maxItems = wantsHighlights ? 4 : 8;
-          reply = buildFocusedSpecsSummary(baseLabel, specs.specs, specsFocus, maxItems);
+          const maxItems = wantsHighlights ? 6 : 10;
+          const summary = buildFocusedSpecsSummary(baseLabel, specs.specs, specsFocus, maxItems);
+          reply = wantsEverything
+            ? `${summary} If you want more, I can send full specs, key features, or safety next — which should I send?`
+            : summary;
         } else {
-          reply = wantsHighlights
-            ? `Got it — I’ll pull a quick highlights list for ${baseLabelWithThe} and text it over shortly.`
-            : `Got it — I’ll pull the full spec sheet for ${baseLabelWithThe} and text it over shortly.`;
+          reply = wantsEverything
+            ? `Got it — I’ll start with quick highlights for ${baseLabelWithThe}. Do you want full specs, key features, or safety next?`
+            : wantsHighlights
+              ? `Got it — I’ll pull a quick highlights list for ${baseLabelWithThe} and text it over shortly.`
+              : `Got it — I’ll pull the full spec sheet for ${baseLabelWithThe} and text it over shortly.`;
         }
         const systemMode = webhookMode;
         if (systemMode === "suggest") {
