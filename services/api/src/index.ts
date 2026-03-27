@@ -10931,7 +10931,7 @@ if (authToken && signature) {
         const preferredSalespeople = getPreferredSalespeopleForConv(cfg, conv);
         const salespeople = cfg.salespeople ?? [];
         const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
-        const appointmentType = "inventory_visit";
+        const appointmentType = llmTestRideIntent ? "test_ride" : "inventory_visit";
         const durationMinutes = appointmentTypes[appointmentType]?.durationMinutes ?? 60;
 
         const cal = await getAuthedCalendarClient();
