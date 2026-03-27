@@ -401,6 +401,18 @@ function extractFromHarleyNextData(html: string): Record<string, string> {
     if (!Array.isArray(items)) return;
     for (const group of items) {
       if (!group || typeof group !== "object") continue;
+      const groupLabel =
+        group.label ??
+        group.name ??
+        group.title ??
+        group.code ??
+        "";
+      if (groupLabel && typeof groupLabel === "string") {
+        const lower = groupLabel.toLowerCase();
+        if (/(option|color|paint|finish|pricing|msrp|emissions|security|freight|packages?)/i.test(lower)) {
+          continue;
+        }
+      }
       if (group.specGroupsCollection) collectSpecGroups(group.specGroupsCollection);
       collectSpecItems(group.specEntriesCollection?.items ?? group.specEntries?.items ?? group.specEntries ?? []);
       collectSpecItems(group.specItemsCollection?.items ?? group.specItems?.items ?? group.specItems ?? group.items);
@@ -410,7 +422,6 @@ function extractFromHarleyNextData(html: string): Record<string, string> {
   for (const option of options) {
     if (!option || typeof option !== "object") continue;
     collectSpecGroups(option.specGroupsCollection ?? option.specGroupCollection ?? option.specGroups);
-    if (Object.keys(specs).length >= 1) break;
   }
 
   return specs;
@@ -418,13 +429,19 @@ function extractFromHarleyNextData(html: string): Record<string, string> {
 
 function filterSpecMap(specs: Record<string, string>): Record<string, string> {
   const filtered: Record<string, string> = {};
-  const invalidKey = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|hours?|open|closed)\b/i;
+  const invalidKey =
+    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|hours?|open|closed|__typename)\b/i;
+  const optionKey =
+    /\b(option|premium|two-tone|vivid black|color|paint|finish|freight|emissions|security|msrp|price|base)\b/i;
   const invalidValueDays = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
   const invalidValueTimes = /\b\d{1,2}:\d{2}\s*(am|pm)?\b/i;
   const invalidValueStatus = /\b(open|closed)\b/i;
   for (const [key, value] of Object.entries(specs)) {
     if (!key || !value) continue;
     if (invalidKey.test(key)) continue;
+    if (optionKey.test(key)) {
+      if (!/wheelbase/i.test(key)) continue;
+    }
     if (invalidValueDays.test(value) || invalidValueTimes.test(value) || invalidValueStatus.test(value)) continue;
     filtered[key] = value;
   }
