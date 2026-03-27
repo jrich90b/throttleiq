@@ -491,6 +491,7 @@ function extractAtAGlance(html: string): string | null {
     .replace(/Because .*$/i, "")
     .replace(/Nowhere .*$/i, "")
     .replace(/turns .*$/i, "")
+    .replace(/every road.*$/i, "")
     .replace(/\s+/g, " ")
     .trim();
   if (!cleaned) return null;
@@ -626,8 +627,23 @@ export function buildSpecsSummary(
 
 export function buildGlanceSummary(label: string, glance?: string | null): string | null {
   if (!glance) return null;
-  const cleaned = decodeHtmlEntities(stripTags(glance)).replace(/\s+/g, " ").trim();
+  const cleaned = decodeHtmlEntities(stripTags(glance))
+    .replace(/\s+/g, " ")
+    .trim();
   if (!cleaned) return null;
+  const scrubbed = cleaned
+    .replace(/\b(striking|iconic|aggressive|premium|legendary|bold|all-new|new)\b/gi, "")
+    .replace(/colorways?/gi, "")
+    .replace(/optimized for [^,.;]+/gi, "")
+    .replace(/keeping you[^,.;]+/gi, "")
+    .replace(/every road[^.]+/gi, "")
+    .replace(/\s+/g, " ")
+    .replace(/\s+,/g, ",")
+    .replace(/,\s*,/g, ",")
+    .replace(/\s+\./g, ".")
+    .trim()
+    .replace(/^\s*with\s+/i, "");
+  if (!scrubbed) return null;
   const lead = label === "the bike" ? "the bike" : `the ${label}`;
-  return `Quick highlights on ${lead}: ${cleaned}.`;
+  return `Quick highlights on ${lead}: ${scrubbed}.`;
 }
