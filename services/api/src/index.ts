@@ -10344,7 +10344,7 @@ if (authToken && signature) {
   const infoOnlyRequest = isInfoOnlyRequest(textLower) || isCompare;
   if (event.provider === "twilio" && infoOnlyRequest && !availabilityExplicit) {
     if (isCompare) {
-      const isCompareFormatChoice = /\b(full spec|spec sheet|highlights|highlights list|quick highlights)\b/i.test(
+      const isCompareFormatChoice = /\b(full specs?|full spec|spec sheet|specs?|highlights?|highlight comparison|quick highlights?|quick highlight)\b/i.test(
         textLower
       );
       if (isCompareFormatChoice) {
@@ -10366,7 +10366,12 @@ if (authToken && signature) {
             contextModels[1]
           );
           setDialogState(conv, "compare_answered");
-          const reply = `Got it — I’ll send the full spec sheets for ${primaryLabel} and the ${secondaryLabel}.`;
+          const wantsHighlights = /\b(highlights?|highlight comparison|quick highlights?|quick highlight)\b/i.test(
+            textLower
+          );
+          const reply = wantsHighlights
+            ? `Got it — I’ll send a quick highlights comparison for ${primaryLabel} and the ${secondaryLabel}.`
+            : `Got it — I’ll send the full spec sheets for ${primaryLabel} and the ${secondaryLabel}.`;
           const systemMode = webhookMode;
           if (systemMode === "suggest") {
             appendOutbound(conv, event.to, event.from, reply, "draft_ai");
