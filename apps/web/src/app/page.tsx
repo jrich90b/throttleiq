@@ -588,7 +588,7 @@ export default function Home() {
   const [modeSaving, setModeSaving] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"dealer" | "scheduler" | "users">("dealer");
+  const [settingsTab, setSettingsTab] = useState<"dealer" | "scheduler" | "users" | "notifications">("dealer");
   const [authUser, setAuthUser] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -1823,7 +1823,7 @@ export default function Home() {
   }, [section, schedulerConfig, calendarDate, calendarView, calendarSalespeople]);
 
   useEffect(() => {
-    if (section !== "calendar") return;
+    if (section !== "calendar" && !(section === "settings" && settingsTab === "notifications")) return;
     void (async () => {
       try {
         const resp = await fetch("/api/google/status", { cache: "no-store" });
@@ -1837,7 +1837,7 @@ export default function Home() {
         setGoogleStatus(null);
       }
     })();
-  }, [section]);
+  }, [section, settingsTab]);
 
   useEffect(() => {
     if (!manualApptOpen) return;
@@ -2038,7 +2038,7 @@ export default function Home() {
       : section === "todos"
         ? "To-Do Inbox"
         : section === "questions"
-          ? "Internal Questions"
+          ? "Follow-up Schedule"
         : section === "contacts"
           ? "Contacts"
           : section === "inventory"
@@ -2056,7 +2056,7 @@ export default function Home() {
       : section === "todos"
         ? `${todos.length} open`
         : section === "questions"
-          ? `${questions.length} open`
+          ? `${cadenceAlerts.length} scheduled`
         : section === "contacts"
           ? `${contacts.length} contacts`
           : section === "inventory"
@@ -2283,7 +2283,7 @@ export default function Home() {
     return getCadenceAlert(cadence);
   }, [selectedConv, conversations]);
   const cadenceAlerts = useMemo(() => {
-    return conversations
+    const alerts = conversations
       .map(c => {
         const alert = getCadenceAlert(c.followUpCadence ?? undefined);
         if (!alert) return null;
@@ -2300,7 +2300,16 @@ export default function Home() {
       leadName: string | null;
       sendAt: Date;
     }>;
+    return alerts.sort((a, b) => a.sendAt.getTime() - b.sendAt.getTime());
   }, [conversations]);
+  const crmAlerts = useMemo(() => {
+    return questions.filter(q => {
+      const type = (q.type ?? "").toLowerCase();
+      if (type === "crm") return true;
+      const text = (q.text ?? "").toLowerCase();
+      return text.includes("tlp log failed") || text.includes("crm");
+    });
+  }, [questions]);
   const watchItems = useMemo(() => {
     return conversations.flatMap(conv => {
       const watches =
@@ -4005,6 +4014,16 @@ export default function Home() {
                     >
                       Scheduling
                     </button>
+                    <button
+                      className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
+                      onClick={() => {
+                        setSettingsTab("notifications");
+                        goToSection("settings");
+                        setSettingsOpen(false);
+                      }}
+                    >
+                      Notifications
+                    </button>
                   </>
                 ) : null}
                 <button
@@ -4758,6 +4777,14 @@ export default function Home() {
               onClick={() => setSettingsTab("scheduler")}
             >
               Scheduling
+            </button>
+            <button
+              className={`w-full text-left px-4 py-3 hover:bg-gray-50 ${
+                settingsTab === "notifications" ? "bg-gray-50 font-medium" : ""
+              }`}
+              onClick={() => setSettingsTab("notifications")}
+            >
+              Notifications
             </button>
           </div>
         ) : null}
@@ -6513,7 +6540,42 @@ export default function Home() {
                   </div>
                 ) : null}
               </div>
-            ) : (
+            ) : settingsTab === "notifications" ? (
+              <div className="border rounded-lg p-4 space-y-4">
+                <div className="text-lg font-semibold">Notifications</div>
+                <div className="border rounded p-3 text-sm">
+                  <div className="font-medium">Google Calendar</div>
+                  <div className="text-xs text-gray-600 mt-1">
+                    {googleStatus
+                      ? googleStatus.connected
+                        ? "Connected"
+                        : `Disconnected${googleStatus.reason ? ` • ${googleStatus.reason}` : ""}${
+                            googleStatus.error ? ` • ${googleStatus.error}` : ""
+                          }`
+                      : "Status unavailable"}
+                  </div>
+                </div>
+                <div className="border rounded p-3 text-sm">
+                  <div className="font-medium">CRM Updates</div>
+                  {crmAlerts.length ? (
+                    <div className="mt-2 space-y-2">
+                      {crmAlerts.slice(0, 5).map(alert => (
+                        <div key={alert.id} className="text-xs text-gray-600">
+                          {alert.text} • {new Date(alert.createdAt).toLocaleString()}
+                        </div>
+                      ))}
+                      {crmAlerts.length > 5 ? (
+                        <div className="text-xs text-gray-500">
+                          +{crmAlerts.length - 5} more in Follow-up Schedule
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-gray-600 mt-1">No recent CRM errors.</div>
+                  )}
+                </div>
+              </div>
+            ) : settingsTab === "scheduler" ? (
               <div className="border rounded-lg p-4 space-y-4">
                 <div className="text-lg font-semibold">Scheduling</div>
                 <div className="grid grid-cols-2 gap-3">
