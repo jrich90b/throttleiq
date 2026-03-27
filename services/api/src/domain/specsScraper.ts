@@ -108,7 +108,8 @@ function resolveHarleyUrl(model: string, year?: string | null): string | null {
 
 async function fetchSpecsForUrl(url: string | null): Promise<Record<string, string>> {
   if (!url) return {};
-  const html = await fetchHtmlSmart(url, "specs-scraper");
+  const urlWithAnchor = url.includes("#specs") ? url : `${url}#specs`;
+  const html = await fetchHtmlSmart(urlWithAnchor, "specs-scraper");
   if (!html) return {};
   const parsed = parseSpecsFromHtml(html);
   return filterSpecMap(parsed);
