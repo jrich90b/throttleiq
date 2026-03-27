@@ -1023,8 +1023,8 @@ export default function Home() {
       if (selectedConv?.id === holdModalConv.id && data?.conversation) {
         setSelectedConv(data.conversation);
       }
-      await load();
       setHoldModalOpen(false);
+      void load();
     } catch (err: any) {
       setHoldError(err?.message ?? "Failed to update hold");
     } finally {
@@ -1140,7 +1140,7 @@ export default function Home() {
         setSelectedConv(data.conversation);
       }
       setSoldModalOpen(false);
-      await load();
+      void load();
     } catch (err: any) {
       setSoldError(err?.message ?? "Failed to mark sold");
     } finally {
