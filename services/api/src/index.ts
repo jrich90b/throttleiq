@@ -2176,7 +2176,11 @@ function formatModelToken(model?: string | null): string {
 }
 
 function normalizeModelText(val?: string | null): string {
-  return String(val ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  return String(val ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function isCompareRequest(text: string): boolean {
@@ -10382,7 +10386,7 @@ if (authToken && signature) {
             contextModels[1]
           );
           setDialogState(conv, "compare_answered");
-          const wantsHighlights = /\b(highlights?|highlight comparison|quick highlights?|quick highlight)\b/i.test(
+          const wantsHighlights = /\b(highlights?|highlight comparison|quick highlights?|quick highlight|quick spec)\b/i.test(
             textLower
           );
           const primarySpecs = await getModelSpecs({
