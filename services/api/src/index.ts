@@ -10356,7 +10356,7 @@ if (authToken && signature) {
   const infoOnlyRequest = isInfoOnlyRequest(textLower) || isCompare;
   if (event.provider === "twilio" && infoOnlyRequest && !availabilityExplicit) {
     if (isCompare) {
-      const formatChoice = /\b(highlights?|highlight comparison|quick highlights?|quick highlight|quick spec)\b/i.test(
+      const formatChoice = /\b(highlights?|highlight comparison|quick highlights?|quick highlight|quick spec|quick comparison)\b/i.test(
         textLower
       )
         ? "highlights"
