@@ -422,11 +422,20 @@ function filterSpecMap(specs: Record<string, string>): Record<string, string> {
   const invalidValueDays = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
   const invalidValueTimes = /\b\d{1,2}:\d{2}\s*(am|pm)?\b/i;
   const invalidValueStatus = /\b(open|closed)\b/i;
+  const cleanValue = (val: string): string => {
+    if (!val) return val;
+    if (val.includes("<") && val.includes(">")) {
+      return decodeHtmlEntities(stripTags(val));
+    }
+    return decodeHtmlEntities(val).replace(/\s+/g, " ").trim();
+  };
   for (const [key, value] of Object.entries(specs)) {
     if (!key || !value) continue;
     if (invalidKey.test(key)) continue;
-    if (invalidValueDays.test(value) || invalidValueTimes.test(value) || invalidValueStatus.test(value)) continue;
-    filtered[key] = value;
+    const cleanedValue = cleanValue(String(value));
+    if (!cleanedValue) continue;
+    if (invalidValueDays.test(cleanedValue) || invalidValueTimes.test(cleanedValue) || invalidValueStatus.test(cleanedValue)) continue;
+    filtered[key] = cleanedValue;
   }
   return filtered;
 }
