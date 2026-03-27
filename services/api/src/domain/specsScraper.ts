@@ -191,7 +191,13 @@ function collectSpecsFromJsonNode(node: any, out: Record<string, string>, depth 
     return;
   }
   if (typeof node !== "object") return;
-  const specContainers = [node.specs, node.specifications].filter(Boolean);
+  const specContainers = [
+    node.specs,
+    node.specifications,
+    node.items,
+    node.values,
+    node.attributes
+  ].filter(Boolean);
   for (const container of specContainers) {
     const specsNode = container as any;
     if (Array.isArray(specsNode)) {
@@ -228,13 +234,33 @@ function collectSpecsFromJsonNode(node: any, out: Record<string, string>, depth 
     node.displayValue ??
     node.specValue ??
     node.detail ??
+    node.values ??
     null;
-  const value =
-    typeof valueCandidate === "string" ||
-    typeof valueCandidate === "number" ||
-    typeof valueCandidate === "boolean"
-      ? String(valueCandidate)
-      : null;
+  let value: string | null = null;
+  if (typeof valueCandidate === "string" || typeof valueCandidate === "number" || typeof valueCandidate === "boolean") {
+    value = String(valueCandidate);
+  } else if (Array.isArray(valueCandidate)) {
+    const parts = valueCandidate
+      .map(item => {
+        if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") {
+          return String(item);
+        }
+        if (item && typeof item === "object") {
+          return (
+            item.value ??
+            item.displayValue ??
+            item.text ??
+            item.label ??
+            item.name ??
+            null
+          );
+        }
+        return null;
+      })
+      .filter(Boolean)
+      .map(v => String(v));
+    if (parts.length) value = parts.join(", ");
+  }
   if (label && value) {
     out[label] = value;
   } else if (label && valueCandidate && typeof valueCandidate === "object") {
@@ -243,6 +269,7 @@ function collectSpecsFromJsonNode(node: any, out: Record<string, string>, depth 
       (valueCandidate as any).displayValue ??
       (valueCandidate as any).text ??
       (valueCandidate as any).label ??
+      (valueCandidate as any).name ??
       null;
     if (typeof derived === "string" || typeof derived === "number" || typeof derived === "boolean") {
       out[label] = String(derived);
