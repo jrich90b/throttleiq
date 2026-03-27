@@ -10480,7 +10480,7 @@ if (authToken && signature) {
         const colorFromText = llmAvailability?.color ?? extractColorToken(textLower) ?? null;
         const color = colorFromText ?? conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null;
         const finishFromText = extractFinishToken(textLower);
-        const finish = finishFromText ?? conv.inventoryContext?.finish ?? null;
+        const finish = extractTrimToken(finishFromText ?? conv.inventoryContext?.finish ?? null);
       if (model || yearFromText || colorFromText || finishFromText) {
         conv.inventoryContext = {
           model: model ?? conv.inventoryContext?.model,
@@ -10496,7 +10496,7 @@ if (authToken && signature) {
         let matches = await findInventoryMatches({ year: year ?? null, model });
         if (color) {
           const leadColor = String(color);
-          const leadTrim = finish;
+          const leadTrim: "chrome" | "black" | null = finish;
           matches = matches.filter(i => {
             const itemColor = i.color ?? "";
             if (colorMatchesExact(itemColor, leadColor, leadTrim) || colorMatchesAlias(itemColor, leadColor, leadTrim)) {
