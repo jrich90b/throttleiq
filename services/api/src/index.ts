@@ -10386,10 +10386,14 @@ if (authToken && signature) {
     }
   }
 
+  const specsSignal =
+    /\b(specs?|spec sheet|features|highlights|details|info|information|engine|performance|horsepower|torque|displacement|tech|electronics|infotainment|audio|screen|display|safety|dimensions|weight|seat height|fuel capacity|wheelbase|rake|trail|accessories|trim)\b/i.test(
+      textLower
+    );
   const availabilityExplicit =
     /(in[-\s]?stock|available|availability|do you have|have .* in[-\s]?stock|any .* in[-\s]?stock|do you carry|carry any)/i.test(
       textLower
-    );
+    ) && !specsSignal;
   const compareRequest = isCompareRequest(textLower);
   const compareContext = /compare|spec sheet|highlights comparison|highlights list/i.test(
     lastOutboundText
