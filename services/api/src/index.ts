@@ -2323,7 +2323,10 @@ function buildInfotainmentSummary(label: string, specs: Record<string, string>):
 
 function isCompareRequest(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
-  return /\b(compare|comparison|vs\.?|versus)\b/.test(t);
+  return (
+    /\b(compare|comparison|vs\.?|versus)\b/.test(t) ||
+    /\b(difference between|difference in|what'?s the difference|what is the difference)\b/.test(t)
+  );
 }
 
 function isInfoOnlyRequest(text: string): boolean {
