@@ -10394,11 +10394,18 @@ if (authToken && signature) {
   const compareContext = /compare|spec sheet|highlights comparison|highlights list/i.test(
     lastOutboundText
   );
+  const explicitNoCompare = /\b(don't|do not|not)\s+(want|need)?\s*to?\s*compare\b|no compare|not comparing/i.test(
+    textLower
+  );
   const mentionedModelsEarly = findMentionedModels(textLower);
   const lastOutboundInfoPrompt = /quick highlights list for|spec sheet or a quick highlights list for/i.test(
     lastOutboundText
   );
   let isCompare = compareRequest || compareContext;
+  if (explicitNoCompare) {
+    isCompare = false;
+    conv.compareContext = undefined;
+  }
   if (lastOutboundInfoPrompt && !compareRequest) {
     isCompare = false;
   }
