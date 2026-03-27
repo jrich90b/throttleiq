@@ -10356,10 +10356,16 @@ if (authToken && signature) {
   const infoOnlyRequest = isInfoOnlyRequest(textLower) || isCompare;
   if (event.provider === "twilio" && infoOnlyRequest && !availabilityExplicit) {
     if (isCompare) {
-      const isCompareFormatChoice = /\b(full specs?|full spec|spec sheet|specs?|highlights?|highlight comparison|quick highlights?|quick highlight)\b/i.test(
+      const formatChoice = /\b(highlights?|highlight comparison|quick highlights?|quick highlight|quick spec)\b/i.test(
         textLower
-      );
-      if (isCompareFormatChoice) {
+      )
+        ? "highlights"
+        : /\b(full specs?|full spec|spec sheet|specs?)\b/i.test(textLower)
+          ? "full"
+          : null;
+      const storedFormat = conv.compareContext?.format ?? null;
+      const isCompareFormatChoice = !!formatChoice;
+      if (isCompareFormatChoice || storedFormat) {
         const contextModels =
           conv.compareContext?.models?.length && Array.isArray(conv.compareContext.models)
             ? conv.compareContext.models
@@ -10386,9 +10392,7 @@ if (authToken && signature) {
             contextModels[1]
           );
           setDialogState(conv, "compare_answered");
-          const wantsHighlights = /\b(highlights?|highlight comparison|quick highlights?|quick highlight|quick spec)\b/i.test(
-            textLower
-          );
+          const wantsHighlights = (formatChoice ?? storedFormat) === "highlights";
           const primarySpecs = await getModelSpecs({
             model: contextModels[0],
             year: contextYear ? String(contextYear) : null
@@ -10415,6 +10419,30 @@ if (authToken && signature) {
               ? `Got it — I’ll pull a quick highlights comparison for ${primaryLabel} and the ${secondaryLabel} and text it over shortly.`
               : `Got it — I’ll pull the full spec sheets for ${primaryLabel} and the ${secondaryLabel} and text them over shortly.`;
           }
+          const systemMode = webhookMode;
+          if (systemMode === "suggest") {
+            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+            return res.status(200).type("text/xml").send(twiml);
+          }
+          appendOutbound(conv, event.to, event.from, reply, "twilio");
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+            reply
+          )}</Message>\n</Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+        if (isCompareFormatChoice) {
+          conv.compareContext = {
+            models: conv.compareContext?.models,
+            year: conv.compareContext?.year ?? null,
+            format: formatChoice,
+            updatedAt: nowIso()
+          };
+          setDialogState(conv, "compare_request");
+          const reply =
+            formatChoice === "highlights"
+              ? "Got it — I can do a quick highlights comparison. Which two models should I compare?"
+              : "Got it — I can send the full spec sheets. Which two models should I compare?";
           const systemMode = webhookMode;
           if (systemMode === "suggest") {
             appendOutbound(conv, event.to, event.from, reply, "draft_ai");

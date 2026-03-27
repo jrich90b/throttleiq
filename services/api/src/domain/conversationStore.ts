@@ -358,6 +358,7 @@ export type Conversation = {
   compareContext?: {
     models?: string[];
     year?: string | number | null;
+    format?: "highlights" | "full" | null;
     updatedAt?: string;
   };
   scheduleSoft?: {
