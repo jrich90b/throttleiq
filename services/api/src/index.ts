@@ -10347,6 +10347,39 @@ if (authToken && signature) {
       const isCompareFormatChoice = /\b(full spec|spec sheet|highlights|highlights list|quick highlights)\b/i.test(
         textLower
       );
+      if (isCompareFormatChoice) {
+        const contextModels =
+          conv.compareContext?.models?.length && Array.isArray(conv.compareContext.models)
+            ? conv.compareContext.models
+            : findMentionedModels(lastOutboundText);
+        const contextYear =
+          conv.compareContext?.year ??
+          extractYearSingle(lastOutboundText) ??
+          extractYearSingle(textLower);
+        if (contextModels.length >= 2) {
+          const primaryLabel = formatModelLabel(
+            contextYear ? String(contextYear) : null,
+            contextModels[0]
+          );
+          const secondaryLabel = formatModelLabel(
+            contextYear ? String(contextYear) : null,
+            contextModels[1]
+          );
+          setDialogState(conv, "compare_answered");
+          const reply = `Got it — I’ll send the full spec sheets for ${primaryLabel} and the ${secondaryLabel}.`;
+          const systemMode = webhookMode;
+          if (systemMode === "suggest") {
+            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+            return res.status(200).type("text/xml").send(twiml);
+          }
+          appendOutbound(conv, event.to, event.from, reply, "twilio");
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+            reply
+          )}</Message>\n</Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+      }
       setDialogState(conv, isCompareFormatChoice ? "compare_answered" : "compare_request");
     }
     const baseModelRaw =
@@ -10358,6 +10391,12 @@ if (authToken && signature) {
     const mentionedModels = findMentionedModels(textLower);
     const yearFromText = extractYearSingle(textLower);
     if (isCompare && mentionedModels.length >= 2) {
+      conv.compareContext = {
+        models: mentionedModels.slice(0, 2),
+        year: yearFromText ?? null,
+        updatedAt: nowIso()
+      };
+      setDialogState(conv, "compare_request");
       const primaryLabel = formatModelLabel(
         yearFromText ? String(yearFromText) : null,
         mentionedModels[0]

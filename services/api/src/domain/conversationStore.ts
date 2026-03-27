@@ -355,6 +355,11 @@ export type Conversation = {
     finish?: string;
     updatedAt?: string;
   };
+  compareContext?: {
+    models?: string[];
+    year?: string | number | null;
+    updatedAt?: string;
+  };
   scheduleSoft?: {
     requestedAt: string;
     cooldownUntil?: string;
