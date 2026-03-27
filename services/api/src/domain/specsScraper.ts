@@ -300,7 +300,14 @@ export async function getModelSpecs(opts: {
   if (cached?.updatedAt) {
     const age = Date.now() - new Date(cached.updatedAt).getTime();
     if (!Number.isNaN(age) && age < CACHE_TTL_MS && cached.specs && Object.keys(cached.specs).length) {
-      return cached;
+      const cleaned = filterSpecMap(cached.specs);
+      if (Object.keys(cleaned).length >= 3) {
+        if (Object.keys(cleaned).length !== Object.keys(cached.specs).length) {
+          cache[key] = { ...cached, specs: cleaned };
+          saveCache(cache);
+        }
+        return { ...cached, specs: cleaned };
+      }
     }
   }
 
