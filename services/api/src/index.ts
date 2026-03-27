@@ -2178,7 +2178,7 @@ async function canOfferTestRideForLead(lead: any, dealerProfile: any): Promise<b
   return hasInventoryForModelYear({ model, year, yearDelta: 1 });
 }
 
-const HARLEY_MODELS = [
+const DEFAULT_HARLEY_MODELS = [
   "CVO Road Glide ST",
   "CVO Street Glide ST",
   "CVO Street Glide Limited",
@@ -2239,6 +2239,12 @@ const HARLEY_MODELS = [
   "Softail"
 ];
 
+function getHarleyModelLexicon(): string[] {
+  const fromYear = getAllModels();
+  if (fromYear.length) return Array.from(new Set([...fromYear, ...DEFAULT_HARLEY_MODELS]));
+  return DEFAULT_HARLEY_MODELS;
+}
+
 async function inferModelsFromText(text: string): Promise<string[]> {
   const t = text.toLowerCase();
   let candidates: string[] = [];
@@ -2248,7 +2254,7 @@ async function inferModelsFromText(text: string): Promise<string[]> {
   } catch {
     candidates = [];
   }
-  candidates = Array.from(new Set([...candidates, ...HARLEY_MODELS]));
+  candidates = Array.from(new Set([...candidates, ...getHarleyModelLexicon()]));
   candidates.sort((a, b) => b.length - a.length);
   const matches = candidates.filter(m => t.includes(m.toLowerCase())).map(m => m.trim());
   return Array.from(new Set(matches));
@@ -10202,7 +10208,7 @@ if (authToken && signature) {
     /(in[-\s]?stock|available|availability|do you have|have .* in[-\s]?stock|any .* in[-\s]?stock|do you carry|carry any)/i.test(
       textLower
     ) ||
-    HARLEY_MODELS.some(m => textLower.includes(m.toLowerCase())) ||
+    getHarleyModelLexicon().some(m => textLower.includes(m.toLowerCase())) ||
     (!!conv.inventoryContext?.model && textLower.includes(conv.inventoryContext.model.toLowerCase())) ||
     (!!conv.lead?.vehicle?.model && textLower.includes(conv.lead.vehicle.model.toLowerCase())) ||
     (!!conv.lead?.vehicle?.model &&
