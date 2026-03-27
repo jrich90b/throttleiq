@@ -151,6 +151,14 @@ export async function getDealerDailyForecast(
   profile: DealerProfileLike | null | undefined,
   targetDateIso: string
 ): Promise<DailyForecast | null> {
+  const forecasts = await getDealerDailyForecasts(profile);
+  if (!forecasts?.length) return null;
+  return forecasts.find(f => f.date === targetDateIso) ?? null;
+}
+
+export async function getDealerDailyForecasts(
+  profile: DealerProfileLike | null | undefined
+): Promise<DailyForecast[] | null> {
   const coords = await resolveDealerLatLon(profile);
   if (!coords) return null;
   const url =
@@ -167,17 +175,19 @@ export async function getDealerDailyForecast(
     const maxTemps: number[] = Array.isArray(daily.temperature_2m_max) ? daily.temperature_2m_max : [];
     const minTemps: number[] = Array.isArray(daily.temperature_2m_min) ? daily.temperature_2m_min : [];
     const snowSums: number[] = Array.isArray(daily.snowfall_sum) ? daily.snowfall_sum : [];
-    const idx = dates.findIndex(d => d === targetDateIso);
-    if (idx === -1) return null;
-    const maxTemp = Number(maxTemps[idx]);
-    const minTemp = Number(minTemps[idx]);
-    const snow = Number(snowSums[idx] ?? 0);
-    return {
-      date: targetDateIso,
-      minTempF: Number.isFinite(minTemp) ? minTemp : undefined,
-      maxTempF: Number.isFinite(maxTemp) ? maxTemp : undefined,
-      snow: Number.isFinite(snow) ? snow > 0 : undefined
-    };
+    if (!dates.length) return null;
+    const forecasts: DailyForecast[] = dates.map((date, idx) => {
+      const maxTemp = Number(maxTemps[idx]);
+      const minTemp = Number(minTemps[idx]);
+      const snow = Number(snowSums[idx] ?? 0);
+      return {
+        date,
+        minTempF: Number.isFinite(minTemp) ? minTemp : undefined,
+        maxTempF: Number.isFinite(maxTemp) ? maxTemp : undefined,
+        snow: Number.isFinite(snow) ? snow > 0 : undefined
+      };
+    });
+    return forecasts;
   } catch {
     return null;
   }

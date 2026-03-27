@@ -27,8 +27,10 @@ import {
   getDealerWeatherStatus,
   getWeatherConfig,
   resolveDealerLatLon,
-  getDealerDailyForecast
+  getDealerDailyForecast,
+  getDealerDailyForecasts
 } from "./domain/weather.js";
+import type { DailyForecast } from "./domain/weather.js";
 import { resolveTownNearestDealer, formatTownLabel } from "./domain/geo.js";
 import { getDataDir } from "./domain/dataDir.js";
 import {
@@ -9798,10 +9800,13 @@ if (authToken && signature) {
   }
 
   const future = parseFutureTimeframe(String(event.body ?? ""), new Date());
+  const weatherLikeQuestion =
+    /\b(weather|forecast|temperature|temp|snow|cold|rain|nicest day|nice day|best day)\b/i.test(textLower);
   const shouldSkipFuture =
     schedulingSignalsBase.hasDayTime ||
     looksLikeTimeSelection(textLower) ||
-    schedulingSignalsBase.explicit;
+    schedulingSignalsBase.explicit ||
+    weatherLikeQuestion;
   if (event.provider === "twilio" && future && !shouldSkipFuture) {
     conv.lead = conv.lead ?? {};
     if (future.label) conv.lead.purchaseTimeframe = future.label;
@@ -9866,10 +9871,15 @@ if (authToken && signature) {
   const locationQuestion = /(where are you|what location|what address|address|located|location)\b/i.test(
     textLower
   );
-  const weatherQuestion = /\b(weather|forecast|temperature|temp|snow|cold|rain)\b/i.test(textLower);
+  const weatherQuestion = /\b(weather|forecast|temperature|temp|snow|cold|rain|nicest day|nice day|best day)\b/i.test(
+    textLower
+  );
+  const bestDayQuestion = /\b(nicest day|nice day|best day)\b/i.test(textLower);
+  const mentionsNextWeek = /\bnext week\b/i.test(textLower);
   if (event.provider === "twilio" && weatherQuestion) {
     const cfg = await getSchedulerConfig();
     const tz = cfg.timezone || "America/New_York";
+    const dealerProfile = await getDealerProfile();
     const dayRequest = extractDayRequest(textLower);
     const wantsToday = /\btoday\b/.test(textLower);
     const wantsTomorrow = /\btomorrow\b/.test(textLower);
@@ -9883,6 +9893,7 @@ if (authToken && signature) {
     const rideContext = /\b(test ride|ride it in|ride in)\b/i.test(textLower);
     let targetParts: { year: number; month: number; day: number } | null = null;
     let dayLabel = "";
+    let bestForecast: DailyForecast | null = null;
     if (dayRequest) {
       targetParts = nextLocalDateForWeekday(dayRequest, tz);
       dayLabel = dayRequest.replace(/^\w/, c => c.toUpperCase());
@@ -9898,8 +9909,40 @@ if (authToken && signature) {
       dayLabel = "Today";
     }
 
+    if (!targetParts && bestDayQuestion) {
+      const forecasts = await getDealerDailyForecasts(dealerProfile);
+      if (forecasts?.length) {
+        const sorted = forecasts
+          .filter(f => f?.date)
+          .slice()
+          .sort((a, b) => {
+            const aSnow = a.snow ? 1 : 0;
+            const bSnow = b.snow ? 1 : 0;
+            if (aSnow !== bSnow) return aSnow - bSnow;
+            const aMax = typeof a.maxTempF === "number" ? a.maxTempF : -999;
+            const bMax = typeof b.maxTempF === "number" ? b.maxTempF : -999;
+            if (aMax !== bMax) return bMax - aMax;
+            return String(a.date).localeCompare(String(b.date));
+          });
+        bestForecast = sorted[0] ?? null;
+        if (bestForecast?.date) {
+          const [yy, mm, dd] = bestForecast.date.split("-").map(Number);
+          if (Number.isFinite(yy) && Number.isFinite(mm) && Number.isFinite(dd)) {
+            targetParts = { year: yy, month: mm, day: dd };
+            const label = new Date(`${bestForecast.date}T12:00:00`).toLocaleDateString("en-US", {
+              weekday: "long",
+              timeZone: tz
+            });
+            dayLabel = label || (mentionsNextWeek ? "Next week" : "");
+          }
+        }
+      }
+    }
+
     if (!targetParts) {
-      const reply = "Sure — which day are you wondering about?";
+      const reply = bestDayQuestion
+        ? "Happy to check — any specific day next week you’re thinking?"
+        : "Sure — which day are you wondering about?";
       const systemMode = webhookMode;
       if (systemMode === "suggest") {
         appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -9913,9 +9956,8 @@ if (authToken && signature) {
       return res.status(200).type("text/xml").send(twiml);
     }
 
-    const dealerProfile = await getDealerProfile();
     const dateIso = formatDatePartsIso(targetParts);
-    const forecast = await getDealerDailyForecast(dealerProfile, dateIso);
+    const forecast = bestForecast ?? (await getDealerDailyForecast(dealerProfile, dateIso));
     const cfgWeather = getWeatherConfig(dealerProfile);
     const coldThreshold = Number(cfgWeather.coldThresholdF ?? 50);
     let reply = "";
