@@ -33,6 +33,7 @@ import {
 import type { DailyForecast } from "./domain/weather.js";
 import { resolveTownNearestDealer, formatTownLabel } from "./domain/geo.js";
 import { getDataDir } from "./domain/dataDir.js";
+import { getModelSpecs, buildSpecsSummary } from "./domain/specsScraper.js";
 import {
   getModelsByYear,
   getModelsForYear,
@@ -10369,9 +10370,32 @@ if (authToken && signature) {
           const wantsHighlights = /\b(highlights?|highlight comparison|quick highlights?|quick highlight)\b/i.test(
             textLower
           );
-          const reply = wantsHighlights
-            ? `Got it — I’ll send a quick highlights comparison for ${primaryLabel} and the ${secondaryLabel}.`
-            : `Got it — I’ll send the full spec sheets for ${primaryLabel} and the ${secondaryLabel}.`;
+          const primarySpecs = await getModelSpecs({
+            model: contextModels[0],
+            year: contextYear ? String(contextYear) : null
+          });
+          const secondarySpecs = await getModelSpecs({
+            model: contextModels[1],
+            year: contextYear ? String(contextYear) : null
+          });
+          const lines: string[] = [];
+          const maxItems = wantsHighlights ? 4 : 8;
+          if (primarySpecs?.specs && Object.keys(primarySpecs.specs).length) {
+            lines.push(buildSpecsSummary(primaryLabel, primarySpecs.specs, maxItems));
+          }
+          if (secondarySpecs?.specs && Object.keys(secondarySpecs.specs).length) {
+            lines.push(buildSpecsSummary(secondaryLabel, secondarySpecs.specs, maxItems));
+          }
+          let reply = "";
+          if (lines.length >= 2) {
+            reply = lines.join("\n");
+          } else if (lines.length === 1) {
+            reply = `${lines[0]} I’m pulling the rest of the spec sheet and will text it over shortly.`;
+          } else {
+            reply = wantsHighlights
+              ? `Got it — I’ll pull a quick highlights comparison for ${primaryLabel} and the ${secondaryLabel} and text it over shortly.`
+              : `Got it — I’ll pull the full spec sheets for ${primaryLabel} and the ${secondaryLabel} and text them over shortly.`;
+          }
           const systemMode = webhookMode;
           if (systemMode === "suggest") {
             appendOutbound(conv, event.to, event.from, reply, "draft_ai");
