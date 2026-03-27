@@ -10355,10 +10355,33 @@ if (authToken && signature) {
       conv.lead?.vehicle?.description ??
       null;
     const baseYearRaw = conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null;
+    const mentionedModels = findMentionedModels(textLower);
+    const yearFromText = extractYearSingle(textLower);
+    if (isCompare && mentionedModels.length >= 2) {
+      const primaryLabel = formatModelLabel(
+        yearFromText ? String(yearFromText) : null,
+        mentionedModels[0]
+      );
+      const secondaryLabel = formatModelLabel(
+        yearFromText ? String(yearFromText) : null,
+        mentionedModels[1]
+      );
+      const reply = `Got it — I can compare the ${primaryLabel} and the ${secondaryLabel}. Do you want the full spec sheets or a quick highlights comparison?`;
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
     let baseModelForLabel = baseModelRaw;
     let baseYearForLabel = baseYearRaw;
     let hasBaseModel = !!baseModelForLabel && !/full line|other/i.test(String(baseModelForLabel));
-    const mentionedModels = compareContext ? findMentionedModels(textLower) : [];
     if (!hasBaseModel && mentionedModels.length) {
       baseModelForLabel = mentionedModels[0] ?? baseModelForLabel;
       hasBaseModel = !!baseModelForLabel && !/full line|other/i.test(String(baseModelForLabel));
