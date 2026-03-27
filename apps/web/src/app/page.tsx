@@ -6575,7 +6575,7 @@ export default function Home() {
                   )}
                 </div>
               </div>
-            ) : settingsTab === "scheduler" ? (
+            ) : (
               <div className="border rounded-lg p-4 space-y-4">
                 <div className="text-lg font-semibold">Scheduling</div>
                 <div className="grid grid-cols-2 gap-3">
