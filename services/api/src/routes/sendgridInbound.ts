@@ -1191,7 +1191,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     });
   }
 
-  const commentLower = (lead.comment ?? "").toLowerCase();
+  const rawComment = String(lead.comment ?? "");
+  const cleanedComment = rawComment.replace(/<br\s*\/?>/gi, " ").replace(/\s+/g, " ").trim();
+  const commentLower = cleanedComment.toLowerCase();
   const emailLower = (lead.email ?? "").toLowerCase();
   const isWalkInLead = isInitialAdf && /traffic log pro/i.test(leadSourceLower);
   if (isWalkInLead) {
@@ -1231,10 +1233,29 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         ? `We do have a ${usedLabel} in stock right now — want me to send details?`
         : `I’ll keep an eye out for a ${usedLabel} and let you know if one comes in.`;
     }
+    const buildWalkInAddendum = () => {
+      if (!cleanedComment) return "";
+      const followUpHint = /(follow\s*up|check\s*back|reach\s*out).{0,40}\b(next\s+week|next\s+month|this\s+week|this\s+month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.exec(cleanedComment);
+      if (followUpHint?.[2]) {
+        return `If you want me to check back ${followUpHint[2].toLowerCase()}, just say the word.`;
+      }
+      if (/(thinking it over|think it over|sleep on it|not ready|no rush|not ready yet|just looking)/i.test(cleanedComment)) {
+        return "No rush — I’m here whenever you’re ready.";
+      }
+      if (/(order|factory order|place an order|put an order)/i.test(cleanedComment)) {
+        return "If you decide to place an order, I can help with next steps.";
+      }
+      if (/(test ride|demo ride)/i.test(cleanedComment)) {
+        return "If you want a test ride, just let me know.";
+      }
+      return "";
+    };
+    const addendum = buildWalkInAddendum();
     const ack =
       `Hi ${firstName} — this is ${salespersonName} at ${dealerName}. ` +
       "Thanks for stopping in, it was nice chatting with you. " +
-      tail;
+      tail +
+      (addendum ? ` ${addendum}` : "");
 
     if (modelLabel && wantsUsed && !hasUsedMatch) {
       const watch: InventoryWatch = {
