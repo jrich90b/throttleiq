@@ -10352,7 +10352,20 @@ if (authToken && signature) {
   const compareContext = /compare|spec sheet|highlights comparison|highlights list/i.test(
     lastOutboundText
   );
-  const isCompare = compareRequest || compareContext;
+  const mentionedModelsEarly = findMentionedModels(textLower);
+  let isCompare = compareRequest || compareContext;
+  if (isCompare && !compareRequest) {
+    const wantsSingleModelInfo =
+      mentionedModelsEarly.length === 1 &&
+      /\b(tell me about|details|info|specs?|spec sheet|highlights?|quick spec|quick highlights?)\b/i.test(
+        textLower
+      ) &&
+      !/\b(compare|comparison|vs\.?|versus)\b/i.test(textLower);
+    if (wantsSingleModelInfo) {
+      isCompare = false;
+      conv.compareContext = undefined;
+    }
+  }
   const infoOnlyRequest = isInfoOnlyRequest(textLower) || isCompare;
   if (event.provider === "twilio" && infoOnlyRequest && !availabilityExplicit) {
     if (isCompare) {
@@ -10383,6 +10396,13 @@ if (authToken && signature) {
           extractYearSingle(lastOutboundText) ??
           extractYearSingle(textLower);
         if (contextModels.length >= 2) {
+          const format = formatChoice ?? storedFormat ?? null;
+          conv.compareContext = {
+            models: contextModels.slice(0, 2),
+            year: contextYear ?? null,
+            format,
+            updatedAt: nowIso()
+          };
           const primaryLabel = formatModelLabel(
             contextYear ? String(contextYear) : null,
             contextModels[0]
@@ -10392,7 +10412,7 @@ if (authToken && signature) {
             contextModels[1]
           );
           setDialogState(conv, "compare_answered");
-          const wantsHighlights = (formatChoice ?? storedFormat) === "highlights";
+          const wantsHighlights = format === "highlights";
           const primarySpecs = await getModelSpecs({
             model: contextModels[0],
             year: contextYear ? String(contextYear) : null
@@ -10464,7 +10484,7 @@ if (authToken && signature) {
       conv.lead?.vehicle?.description ??
       null;
     const baseYearRaw = conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null;
-    const mentionedModels = findMentionedModels(textLower);
+    const mentionedModels = mentionedModelsEarly;
     const yearFromText = extractYearSingle(textLower);
     if (isCompare && mentionedModels.length >= 2) {
       conv.compareContext = {
