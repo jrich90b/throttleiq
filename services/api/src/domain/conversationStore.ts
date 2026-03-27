@@ -170,6 +170,8 @@ export type InternalQuestion = {
 
 export type DialogStateName =
   | "none"
+  | "specs_single_request"
+  | "specs_single_answered"
   | "inventory_init"
   | "inventory_watch_prompted"
   | "inventory_watch_active"
@@ -357,6 +359,12 @@ export type Conversation = {
   };
   compareContext?: {
     models?: string[];
+    year?: string | number | null;
+    format?: "highlights" | "full" | null;
+    updatedAt?: string;
+  };
+  specsContext?: {
+    model?: string;
     year?: string | number | null;
     format?: "highlights" | "full" | null;
     updatedAt?: string;

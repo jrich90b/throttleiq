@@ -315,7 +315,8 @@ export async function getModelSpecs(opts: {
   if (harleyUrl) {
     const html = await fetchHtmlSmart(harleyUrl, "specs-scraper");
     if (html) {
-      const specs = parseSpecsFromHtml(html);
+      const parsed = parseSpecsFromHtml(html);
+      const specs = filterSpecMap(parsed);
       if (Object.keys(specs).length >= 3) {
         const payload: ModelSpecs = {
           model,
@@ -346,7 +347,8 @@ export async function getModelSpecs(opts: {
   for (const url of urls) {
     const html = await fetchHtmlSmart(url, "specs-scraper");
     if (!html) continue;
-    const specs = parseSpecsFromHtml(html);
+    const parsed = parseSpecsFromHtml(html);
+    const specs = filterSpecMap(parsed);
     if (Object.keys(specs).length < 3) continue;
     const payload: ModelSpecs = { model, year, specs, sourceUrl: url, updatedAt: new Date().toISOString() };
     cache[key] = payload;

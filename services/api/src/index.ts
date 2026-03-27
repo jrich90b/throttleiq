@@ -2183,6 +2183,46 @@ function normalizeModelText(val?: string | null): string {
     .trim();
 }
 
+function extractSpecsFocus(text: string): "engine" | "features" | "dimensions" | "accessories" | null {
+  const t = String(text ?? "").toLowerCase();
+  if (/\b(engine|motor|performance|horsepower|torque|displacement)\b/.test(t)) return "engine";
+  if (/\b(feature|features|tech|electronics|infotainment|audio|screen|display|safety|navigation)\b/.test(t)) {
+    return "features";
+  }
+  if (/\b(dimension|dimensions|weight|seat height|fuel capacity|wheelbase|rake|trail|length)\b/.test(t)) {
+    return "dimensions";
+  }
+  if (/\b(accessories|trim|finish|package)\b/.test(t)) return "accessories";
+  return null;
+}
+
+function buildFocusedSpecsSummary(
+  label: string,
+  specs: Record<string, string>,
+  focus: "engine" | "features" | "dimensions" | "accessories" | null,
+  maxItems: number
+): string {
+  if (!focus) return buildSpecsSummary(label, specs, maxItems);
+  const focusKeys: Record<string, string[]> = {
+    engine: ["engine", "displacement", "horsepower", "torque", "performance"],
+    features: ["infotainment", "screen", "display", "audio", "speaker", "navigation", "tech", "electronics", "safety"],
+    dimensions: ["weight", "seat height", "fuel capacity", "wheelbase", "rake", "trail", "length", "height", "width"],
+    accessories: ["accessories", "trim", "finish", "package"]
+  };
+  const wanted = focusKeys[focus] ?? [];
+  const entries: Array<[string, string]> = [];
+  for (const key of Object.keys(specs)) {
+    const lk = key.toLowerCase();
+    if (wanted.some(w => lk.includes(w))) {
+      entries.push([key, specs[key]]);
+    }
+    if (entries.length >= maxItems) break;
+  }
+  if (!entries.length) return buildSpecsSummary(label, specs, maxItems);
+  const formatted = entries.map(([k, v]) => `${k}: ${v}`).join("; ");
+  return `${label} — ${formatted}`;
+}
+
 function isCompareRequest(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   return /\b(compare|comparison|vs\.?|versus)\b/.test(t);
@@ -2194,7 +2234,9 @@ function isInfoOnlyRequest(text: string): boolean {
     /\b(just want to know|just want info|just want to learn|want to know about|tell me about|more info|more information|details on|information on)\b/.test(
       t
     ) ||
-    /\b(specs?|spec sheet|features|highlights|details)\b/.test(t)
+    /\b(specs?|spec sheet|features|highlights|details|engine|motor|performance|horsepower|torque|displacement|tech|electronics|infotainment|audio|screen|display|safety|dimensions|weight|seat height|fuel capacity|wheelbase|rake|trail|accessories|trim)\b/.test(
+      t
+    )
   );
 }
 
@@ -10353,7 +10395,13 @@ if (authToken && signature) {
     lastOutboundText
   );
   const mentionedModelsEarly = findMentionedModels(textLower);
+  const lastOutboundInfoPrompt = /quick highlights list for|spec sheet or a quick highlights list for/i.test(
+    lastOutboundText
+  );
   let isCompare = compareRequest || compareContext;
+  if (lastOutboundInfoPrompt && !compareRequest) {
+    isCompare = false;
+  }
   if (isCompare && !compareRequest) {
     const wantsSingleModelInfo =
       mentionedModelsEarly.length === 1 &&
@@ -10379,7 +10427,7 @@ if (authToken && signature) {
       const storedFormat = conv.compareContext?.format ?? null;
       const isCompareFormatChoice = !!formatChoice;
       if (isCompareFormatChoice || storedFormat) {
-        const contextModels =
+        let contextModels =
           conv.compareContext?.models?.length && Array.isArray(conv.compareContext.models)
             ? conv.compareContext.models
             : findMentionedModels(lastOutboundText);
@@ -10387,8 +10435,14 @@ if (authToken && signature) {
           const historyText = getRecentMessagesText(conv, 12);
           const historyModels = findMentionedModels(historyText);
           if (historyModels.length >= 2) {
-            contextModels.length = 0;
-            contextModels.push(historyModels[0], historyModels[1]);
+            contextModels = [historyModels[0], historyModels[1]];
+          } else {
+            try {
+              const inferred = await inferModelsFromText(historyText);
+              if (inferred.length >= 2) {
+                contextModels = [inferred[0], inferred[1]];
+              }
+            } catch {}
           }
         }
         const contextYear =
@@ -10478,14 +10532,24 @@ if (authToken && signature) {
       }
       setDialogState(conv, isCompareFormatChoice ? "compare_answered" : "compare_request");
     }
+    const yearFromText = extractYearSingle(textLower);
+    const mentionedModels = mentionedModelsEarly;
+    const singleMention = !isCompare && mentionedModels.length === 1 ? mentionedModels[0] : null;
     const baseModelRaw =
+      singleMention ??
       conv.inventoryContext?.model ??
       conv.lead?.vehicle?.model ??
       conv.lead?.vehicle?.description ??
       null;
-    const baseYearRaw = conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null;
-    const mentionedModels = mentionedModelsEarly;
-    const yearFromText = extractYearSingle(textLower);
+    const baseYearRaw =
+      (singleMention ? yearFromText : null) ?? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null;
+    if (singleMention) {
+      conv.inventoryContext = {
+        model: singleMention,
+        year: baseYearRaw ? String(baseYearRaw) : undefined,
+        updatedAt: nowIso()
+      };
+    }
     if (isCompare && mentionedModels.length >= 2) {
       conv.compareContext = {
         models: mentionedModels.slice(0, 2),
@@ -10525,6 +10589,51 @@ if (authToken && signature) {
       ? formatModelLabel(baseYearForLabel ? String(baseYearForLabel) : null, baseModelForLabel)
       : "the bike";
     const baseLabelWithThe = baseLabel === "the bike" ? baseLabel : `the ${baseLabel}`;
+    const specsFocus = extractSpecsFocus(textLower);
+    const specsFormatChoice = /\b(highlights?|highlight comparison|quick highlights?|quick highlight|quick spec)\b/i.test(
+      textLower
+    )
+      ? "highlights"
+      : /\b(full specs?|full spec|spec sheet|specs?)\b/i.test(textLower)
+        ? "full"
+        : null;
+    if (!isCompare && hasBaseModel) {
+      conv.specsContext = {
+        model: baseModelForLabel ? String(baseModelForLabel) : undefined,
+        year: baseYearForLabel ? String(baseYearForLabel) : null,
+        format: specsFormatChoice ?? conv.specsContext?.format ?? null,
+        updatedAt: nowIso()
+      };
+      const wantsSpecsNow = !!specsFormatChoice || !!specsFocus || /\b(specs?|spec sheet|highlights?|details|info|information)\b/i.test(textLower);
+      if (wantsSpecsNow) {
+        setDialogState(conv, "specs_single_answered");
+        const wantsHighlights = (specsFormatChoice ?? conv.specsContext?.format) === "highlights";
+        const specs = await getModelSpecs({
+          model: String(baseModelForLabel),
+          year: baseYearForLabel ? String(baseYearForLabel) : null
+        });
+        let reply = "";
+        if (specs?.specs && Object.keys(specs.specs).length) {
+          const maxItems = wantsHighlights ? 4 : 8;
+          reply = buildFocusedSpecsSummary(baseLabel, specs.specs, specsFocus, maxItems);
+        } else {
+          reply = wantsHighlights
+            ? `Got it — I’ll pull a quick highlights list for ${baseLabelWithThe} and text it over shortly.`
+            : `Got it — I’ll pull the full spec sheet for ${baseLabelWithThe} and text it over shortly.`;
+        }
+        const systemMode = webhookMode;
+        if (systemMode === "suggest") {
+          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+        appendOutbound(conv, event.to, event.from, reply, "twilio");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+          reply
+        )}</Message>\n</Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+    }
     const compareModelRaw = compareRequest ? findMentionedModel(textLower) : null;
     let compareLabel = compareModelRaw ? normalizeDisplayCase(compareModelRaw) : null;
     if (!compareLabel && compareContext && mentionedModels.length) {
@@ -10551,7 +10660,12 @@ if (authToken && signature) {
         ? `Got it — I can send the full spec sheet for ${baseLabelWithThe} and compare it to the ${compareLabel}. Do you want the full spec sheets or a quick highlights comparison?`
         : "Got it — happy to compare. Which model/year do you want to compare it to? I can send the full spec sheets or a quick highlights comparison.";
     } else {
-      reply = `Got it — want the full spec sheet or a quick highlights list for ${baseLabelWithThe}? If you want specific areas (engine, features, accessories), tell me what to focus on.`;
+      if (!hasBaseModel) {
+        reply = "Which model are you interested in?";
+      } else {
+        setDialogState(conv, "specs_single_request");
+        reply = `Got it — want the full spec sheet or a quick highlights list for ${baseLabelWithThe}? If you want specific areas (engine, features, accessories), tell me what to focus on.`;
+      }
     }
     const systemMode = webhookMode;
     if (systemMode === "suggest") {

@@ -1208,7 +1208,7 @@ export async function orchestrateInbound(
               : msrpLookup?.rangeForTrim ?? msrpLookup?.rangeForColor ?? msrpLookup?.range ?? null;
 
       if (paymentQuestion && paymentRange) {
-        const draft = buildMonthlyPaymentLine({
+        let draft = buildMonthlyPaymentLine({
           priceMin: paymentRange.min,
           priceMax: paymentRange.max,
           isUsed,
@@ -1217,6 +1217,18 @@ export async function orchestrateInbound(
           downPayment,
           downPaymentAssumed
         });
+        const termProvided = extractPreferredTermMonths(event.body) != null;
+        const downProvided = downPayment != null || downPaymentAssumed;
+        if (!termProvided || !downProvided) {
+          const parts: string[] = [];
+          if (!termProvided) parts.push("60, 72, or 84 months");
+          if (!downProvided) parts.push("about how much down");
+          const follow =
+            parts.length === 2
+              ? "Were you thinking 60, 72, or 84 months, and about how much down?"
+              : `Were you thinking ${parts[0]}?`;
+          draft = `${draft} ${follow}`;
+        }
         return finalize({
           intent,
           stage: "ENGAGED",
@@ -1366,7 +1378,7 @@ export async function orchestrateInbound(
   let inventoryStatus: InventoryStatus | null = null;
   let stockId: string | null = null;
   const vin = ctx?.lead?.vehicle?.vin ?? null;
-  const availabilityAsked = /(available|availability|still there|in stock)/i.test(event.body);
+  const availabilityAskedStock = /(available|availability|still there|in stock)/i.test(event.body);
 
   // Stock IDs on your site are commonly like C1-26, T11-26, etc.
   // Keep this permissive; tune later if needed.
@@ -1415,7 +1427,7 @@ export async function orchestrateInbound(
     }
   }
 
-  if (availabilityAsked && stockId && inventoryStatus === "UNKNOWN") {
+  if (availabilityAskedStock && stockId && inventoryStatus === "UNKNOWN") {
     const dealerProfile = await getDealerProfile();
     const agentName = dealerProfile?.agentName ?? "Brooke";
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
@@ -1431,7 +1443,7 @@ export async function orchestrateInbound(
     });
   }
 
-  if (availabilityAsked && stockId && inventoryStatus === "AVAILABLE") {
+  if (availabilityAskedStock && stockId && inventoryStatus === "AVAILABLE") {
     const dayName = extractDayName(event.body);
     const dayPart = extractDayPart(event.body);
     const modelLabelRaw =
@@ -2017,12 +2029,12 @@ export async function orchestrateInbound(
           ? `thanks for building your ${thankYear}${thankLabel} online. `
           : `thanks for your interest in the ${thankYear}${thankLabel}. `;
         const greeting = `Hi ${leadName} — ${thanksLine}`;
-        const availabilityAsked = /(available|availability|still there|in stock)/i.test(event.body);
+        const availabilityAskedLead = /(available|availability|still there|in stock)/i.test(event.body);
         const hasAvailabilityAnswer = inventoryStatus === "AVAILABLE";
         const hasPendingAnswer = inventoryStatus === "PENDING";
         const hasUnknownAnswer = inventoryStatus === "UNKNOWN" || !inventoryStatus;
         let availabilityLine = "";
-        if (availabilityAsked) {
+        if (availabilityAskedLead) {
           if (hasPendingAnswer) {
             availabilityLine = "That unit is sale pending. ";
           } else if (hasAvailabilityAnswer) {
@@ -2031,7 +2043,7 @@ export async function orchestrateInbound(
             availabilityLine = "Let me verify availability and I’ll confirm shortly. ";
           }
         }
-        const canScheduleNow = !(availabilityAsked && (inventoryStatus === "UNKNOWN" || !inventoryStatus));
+        const canScheduleNow = !(availabilityAskedLead && (inventoryStatus === "UNKNOWN" || !inventoryStatus));
         let hasBuildInventory = false;
         if (isCustomBuild) {
           const modelForBuild = lead.vehicle?.model ?? lead.vehicle?.description ?? null;
