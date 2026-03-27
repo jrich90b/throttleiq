@@ -1719,6 +1719,7 @@ function mapDialogStateToCadenceTag(name: DialogStateName): string | null {
   if (name.startsWith("pricing_")) return "pricing";
   if (name.startsWith("payments_")) return "payments";
   if (name.startsWith("inventory_")) return "inventory";
+  if (name.startsWith("compare_")) return "inventory";
   if (name.startsWith("test_ride_")) return "scheduling";
   if (name.startsWith("schedule_") || name === "clarify_schedule") return "scheduling";
   return null;
@@ -1732,6 +1733,7 @@ function mapDialogStateToIntent(name: DialogStateName): LastIntentName | null {
   if (name.startsWith("pricing_")) return "pricing";
   if (name.startsWith("payments_")) return "payments";
   if (name.startsWith("inventory_")) return "inventory";
+  if (name.startsWith("compare_")) return "inventory";
   if (name.startsWith("test_ride_")) return "scheduling";
   if (name.startsWith("schedule_") || name === "clarify_schedule") return "scheduling";
   if (name.startsWith("callback_")) return "callback";
@@ -2199,6 +2201,24 @@ function findMentionedModel(text: string): string | null {
   if (!matches.length) return null;
   matches.sort((a, b) => b.length - a.length);
   return matches[0] ?? null;
+}
+
+function findMentionedModels(text: string): string[] {
+  const t = normalizeModelText(text);
+  const models = getHarleyModelLexicon();
+  if (!t || !models.length) return [];
+  const sorted = [...models].sort((a, b) => b.length - a.length);
+  const found: string[] = [];
+  for (const model of sorted) {
+    const normalized = normalizeModelText(model);
+    if (!normalized || !t.includes(normalized)) continue;
+    const alreadyCovered = found.some(existing =>
+      normalizeModelText(existing).includes(normalized)
+    );
+    if (alreadyCovered) continue;
+    found.push(model);
+  }
+  return found;
 }
 
 async function canOfferTestRideForLead(lead: any, dealerProfile: any): Promise<boolean> {
@@ -10317,28 +10337,58 @@ if (authToken && signature) {
       textLower
     );
   const compareRequest = isCompareRequest(textLower);
-  const infoOnlyRequest = isInfoOnlyRequest(textLower) || compareRequest;
+  const compareContext = /compare|spec sheet|highlights comparison|highlights list/i.test(
+    lastOutboundText
+  );
+  const isCompare = compareRequest || compareContext;
+  const infoOnlyRequest = isInfoOnlyRequest(textLower) || isCompare;
   if (event.provider === "twilio" && infoOnlyRequest && !availabilityExplicit) {
+    if (isCompare) {
+      const isCompareFormatChoice = /\b(full spec|spec sheet|highlights|highlights list|quick highlights)\b/i.test(
+        textLower
+      );
+      setDialogState(conv, isCompareFormatChoice ? "compare_answered" : "compare_request");
+    }
     const baseModelRaw =
       conv.inventoryContext?.model ??
       conv.lead?.vehicle?.model ??
       conv.lead?.vehicle?.description ??
       null;
     const baseYearRaw = conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null;
-    const hasBaseModel = !!baseModelRaw && !/full line|other/i.test(String(baseModelRaw));
+    let baseModelForLabel = baseModelRaw;
+    let baseYearForLabel = baseYearRaw;
+    let hasBaseModel = !!baseModelForLabel && !/full line|other/i.test(String(baseModelForLabel));
+    const mentionedModels = compareContext ? findMentionedModels(textLower) : [];
+    if (!hasBaseModel && mentionedModels.length) {
+      baseModelForLabel = mentionedModels[0] ?? baseModelForLabel;
+      hasBaseModel = !!baseModelForLabel && !/full line|other/i.test(String(baseModelForLabel));
+    }
     const baseLabel = hasBaseModel
-      ? formatModelLabel(baseYearRaw ? String(baseYearRaw) : null, baseModelRaw)
+      ? formatModelLabel(baseYearForLabel ? String(baseYearForLabel) : null, baseModelForLabel)
       : "the bike";
     const baseLabelWithThe = baseLabel === "the bike" ? baseLabel : `the ${baseLabel}`;
     const compareModelRaw = compareRequest ? findMentionedModel(textLower) : null;
     let compareLabel = compareModelRaw ? normalizeDisplayCase(compareModelRaw) : null;
-    if (compareLabel && baseModelRaw) {
-      if (normalizeModelText(compareLabel) === normalizeModelText(baseModelRaw)) {
+    if (!compareLabel && compareContext && mentionedModels.length) {
+      const baseNormalized = baseModelForLabel ? normalizeModelText(baseModelForLabel) : null;
+      const alternate = mentionedModels.find(
+        model => !baseNormalized || normalizeModelText(model) !== baseNormalized
+      );
+      if (alternate) compareLabel = normalizeDisplayCase(alternate);
+      if (!baseModelForLabel && mentionedModels.length >= 2) {
+        baseModelForLabel = mentionedModels[0] ?? baseModelForLabel;
+        baseYearForLabel = baseYearForLabel ?? baseYearRaw;
+        hasBaseModel =
+          !!baseModelForLabel && !/full line|other/i.test(String(baseModelForLabel));
+      }
+    }
+    if (compareLabel && baseModelForLabel) {
+      if (normalizeModelText(compareLabel) === normalizeModelText(baseModelForLabel)) {
         compareLabel = null;
       }
     }
     let reply = "";
-    if (compareRequest) {
+    if (isCompare) {
       reply = compareLabel
         ? `Got it — I can send the full spec sheet for ${baseLabelWithThe} and compare it to the ${compareLabel}. Do you want the full spec sheets or a quick highlights comparison?`
         : "Got it — happy to compare. Which model/year do you want to compare it to? I can send the full spec sheets or a quick highlights comparison.";

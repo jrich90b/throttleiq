@@ -174,6 +174,8 @@ export type DialogStateName =
   | "inventory_watch_prompted"
   | "inventory_watch_active"
   | "inventory_answered"
+  | "compare_request"
+  | "compare_answered"
   | "clarify_schedule"
   | "test_ride_init"
   | "test_ride_offer_sent"
