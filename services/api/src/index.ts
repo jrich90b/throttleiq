@@ -2176,6 +2176,31 @@ function normalizeModelText(val?: string | null): string {
   return String(val ?? "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+function isCompareRequest(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  return /\b(compare|comparison|vs\.?|versus)\b/.test(t);
+}
+
+function isInfoOnlyRequest(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  return (
+    /\b(just want to know|just want info|just want to learn|want to know about|tell me about|more info|more information|details on|information on)\b/.test(
+      t
+    ) ||
+    /\b(specs?|spec sheet|features|highlights|details)\b/.test(t)
+  );
+}
+
+function findMentionedModel(text: string): string | null {
+  const t = normalizeModelText(text);
+  const models = getHarleyModelLexicon();
+  if (!t || !models.length) return null;
+  const matches = models.filter(m => t.includes(normalizeModelText(m)));
+  if (!matches.length) return null;
+  matches.sort((a, b) => b.length - a.length);
+  return matches[0] ?? null;
+}
+
 async function canOfferTestRideForLead(lead: any, dealerProfile: any): Promise<boolean> {
   const hasLicense = lead?.hasMotoLicense;
   if (hasLicense === false) return false;
@@ -10287,11 +10312,55 @@ if (authToken && signature) {
     }
   }
 
-  const inventoryQuestion =
-    llmAvailabilityIntent ||
+  const availabilityExplicit =
     /(in[-\s]?stock|available|availability|do you have|have .* in[-\s]?stock|any .* in[-\s]?stock|do you carry|carry any)/i.test(
       textLower
-    ) ||
+    );
+  const compareRequest = isCompareRequest(textLower);
+  const infoOnlyRequest = isInfoOnlyRequest(textLower) || compareRequest;
+  if (event.provider === "twilio" && infoOnlyRequest && !availabilityExplicit) {
+    const baseModelRaw =
+      conv.inventoryContext?.model ??
+      conv.lead?.vehicle?.model ??
+      conv.lead?.vehicle?.description ??
+      null;
+    const baseYearRaw = conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null;
+    const hasBaseModel = !!baseModelRaw && !/full line|other/i.test(String(baseModelRaw));
+    const baseLabel = hasBaseModel
+      ? formatModelLabel(baseYearRaw ? String(baseYearRaw) : null, baseModelRaw)
+      : "the bike";
+    const baseLabelWithThe = baseLabel === "the bike" ? baseLabel : `the ${baseLabel}`;
+    const compareModelRaw = compareRequest ? findMentionedModel(textLower) : null;
+    let compareLabel = compareModelRaw ? normalizeDisplayCase(compareModelRaw) : null;
+    if (compareLabel && baseModelRaw) {
+      if (normalizeModelText(compareLabel) === normalizeModelText(baseModelRaw)) {
+        compareLabel = null;
+      }
+    }
+    let reply = "";
+    if (compareRequest) {
+      reply = compareLabel
+        ? `Got it — I can send the full spec sheet for ${baseLabelWithThe} and compare it to the ${compareLabel}. Do you want the full spec sheets or a quick highlights comparison?`
+        : "Got it — happy to compare. Which model/year do you want to compare it to? I can send the full spec sheets or a quick highlights comparison.";
+    } else {
+      reply = `Got it — want the full spec sheet or a quick highlights list for ${baseLabelWithThe}? If you want specific areas (engine, features, accessories), tell me what to focus on.`;
+    }
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+
+  const inventoryQuestion =
+    llmAvailabilityIntent ||
+    availabilityExplicit ||
     getHarleyModelLexicon().some(m => textLower.includes(m.toLowerCase())) ||
     (!!conv.inventoryContext?.model && textLower.includes(conv.inventoryContext.model.toLowerCase())) ||
     (!!conv.lead?.vehicle?.model && textLower.includes(conv.lead.vehicle.model.toLowerCase())) ||
