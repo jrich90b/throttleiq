@@ -33,7 +33,7 @@ import {
 import type { DailyForecast } from "./domain/weather.js";
 import { resolveTownNearestDealer, formatTownLabel } from "./domain/geo.js";
 import { getDataDir } from "./domain/dataDir.js";
-import { getModelSpecs, buildSpecsSummary } from "./domain/specsScraper.js";
+import { getModelSpecs, buildSpecsSummary, buildGlanceSummary } from "./domain/specsScraper.js";
 import {
   getModelsByYear,
   getModelsForYear,
@@ -10494,10 +10494,20 @@ if (authToken && signature) {
           const lines: string[] = [];
           const maxItems = wantsHighlights ? 4 : 8;
           if (primarySpecs?.specs && Object.keys(primarySpecs.specs).length) {
-            lines.push(buildSpecsSummary(primaryLabel, primarySpecs.specs, maxItems));
+            if (wantsHighlights) {
+              const glance = buildGlanceSummary(primaryLabel, primarySpecs.glance);
+              lines.push(glance ?? buildSpecsSummary(primaryLabel, primarySpecs.specs, maxItems));
+            } else {
+              lines.push(buildSpecsSummary(primaryLabel, primarySpecs.specs, maxItems));
+            }
           }
           if (secondarySpecs?.specs && Object.keys(secondarySpecs.specs).length) {
-            lines.push(buildSpecsSummary(secondaryLabel, secondarySpecs.specs, maxItems));
+            if (wantsHighlights) {
+              const glance = buildGlanceSummary(secondaryLabel, secondarySpecs.glance);
+              lines.push(glance ?? buildSpecsSummary(secondaryLabel, secondarySpecs.specs, maxItems));
+            } else {
+              lines.push(buildSpecsSummary(secondaryLabel, secondarySpecs.specs, maxItems));
+            }
           }
           let reply = "";
           if (lines.length >= 2) {
@@ -10642,7 +10652,11 @@ if (authToken && signature) {
         let reply = "";
         if (specs?.specs && Object.keys(specs.specs).length) {
           const maxItems = wantsHighlights ? 6 : 10;
-          const summary = buildFocusedSpecsSummary(baseLabel, specs.specs, specsFocus, maxItems);
+          const summary =
+            wantsHighlights && !specsFocus
+              ? buildGlanceSummary(baseLabel, specs.glance) ??
+                buildFocusedSpecsSummary(baseLabel, specs.specs, specsFocus, maxItems)
+              : buildFocusedSpecsSummary(baseLabel, specs.specs, specsFocus, maxItems);
           reply = wantsEverything
             ? `${summary} If you want more, I can send full specs, key features, or safety next — which should I send?`
             : summary;

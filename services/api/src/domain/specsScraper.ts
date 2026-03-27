@@ -7,6 +7,7 @@ export type ModelSpecs = {
   model: string;
   year?: string | null;
   specs: Record<string, string>;
+  glance?: string | null;
   sourceUrl?: string | null;
   updatedAt: string;
 };
@@ -107,13 +108,16 @@ function resolveHarleyUrl(model: string, year?: string | null): string | null {
   return `https://www.harley-davidson.com/us/en/motorcycles/${slug}.html`;
 }
 
-async function fetchSpecsForUrl(url: string | null): Promise<Record<string, string>> {
-  if (!url) return {};
+type SpecsBundle = { specs: Record<string, string>; glance?: string | null };
+
+async function fetchSpecsForUrl(url: string | null): Promise<SpecsBundle> {
+  if (!url) return { specs: {} };
   const urlWithAnchor = url.includes("#specs") ? url : `${url}#specs`;
   const html = await fetchHtmlSmart(urlWithAnchor, "specs-scraper");
-  if (!html) return {};
+  if (!html) return { specs: {} };
   const parsed = parseSpecsFromHtml(html);
-  return filterSpecMap(parsed);
+  const glance = extractAtAGlance(html);
+  return { specs: filterSpecMap(parsed), glance };
 }
 
 function stripTags(html: string): string {
@@ -463,6 +467,36 @@ function parseSpecsFromHtml(html: string): Record<string, string> {
   return filterSpecMap(specs);
 }
 
+function extractAtAGlance(html: string): string | null {
+  if (!html) return null;
+  const segment =
+    html.match(/At a Glance([\s\S]{0,4000}?)(Tech Specs|Technical Specifications|RIDER SAFETY ENHANCEMENTS|Explore the)/i)?.[1] ??
+    null;
+  if (!segment) return null;
+  const plain = decodeHtmlEntities(stripTags(segment)).replace(/\s+/g, " ").trim();
+  if (!plain) return null;
+  const withMatch = plain.match(/With (?:a|an|the)\s+([^\.]+)\./i);
+  if (withMatch?.[1]) {
+    let features = withMatch[1];
+    features = features.replace(/\s*guiding the way\s*/i, "");
+    features = features.replace(/\s+/g, " ").trim();
+    if (features) return features;
+  }
+  const sentences = plain.split(/[.?!]\s+/).map(s => s.trim()).filter(Boolean);
+  const prefer =
+    sentences.find(s => /milwaukee|ride modes|suspension|skyline|display|torque|horsepower|engine/i.test(s)) ??
+    sentences[0];
+  if (!prefer) return null;
+  let cleaned = prefer
+    .replace(/Because .*$/i, "")
+    .replace(/Nowhere .*$/i, "")
+    .replace(/turns .*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return null;
+  return cleaned;
+}
+
 function normalizeModel(val: string): string {
   return val.toLowerCase().replace(/\s+/g, " ").trim();
 }
@@ -500,14 +534,15 @@ export async function getModelSpecs(opts: {
   }
 
   const harleyUrl = resolveHarleyUrl(model, year);
-  let specs = await fetchSpecsForUrl(harleyUrl);
+  let { specs, glance } = await fetchSpecsForUrl(harleyUrl);
   let usedUrl = harleyUrl;
   if (Object.keys(specs).length < MIN_SPECS_COUNT && year) {
     const fallbackUrl = resolveHarleyUrl(model, null);
     if (fallbackUrl && fallbackUrl !== harleyUrl) {
-      const fallbackSpecs = await fetchSpecsForUrl(fallbackUrl);
-      if (Object.keys(fallbackSpecs).length >= Object.keys(specs).length) {
-        specs = fallbackSpecs;
+      const fallback = await fetchSpecsForUrl(fallbackUrl);
+      if (Object.keys(fallback.specs).length >= Object.keys(specs).length) {
+        specs = fallback.specs;
+        glance = fallback.glance ?? glance;
         usedUrl = fallbackUrl;
       }
     }
@@ -517,6 +552,7 @@ export async function getModelSpecs(opts: {
       model,
       year,
       specs,
+      glance,
       sourceUrl: usedUrl,
       updatedAt: new Date().toISOString()
     };
@@ -586,4 +622,12 @@ export function buildSpecsSummary(
     .map(([k, v]) => `${k}: ${v}`)
     .join("; ");
   return `${label} — ${formatted}`;
+}
+
+export function buildGlanceSummary(label: string, glance?: string | null): string | null {
+  if (!glance) return null;
+  const cleaned = decodeHtmlEntities(stripTags(glance)).replace(/\s+/g, " ").trim();
+  if (!cleaned) return null;
+  const lead = label === "the bike" ? "the bike" : `the ${label}`;
+  return `Quick highlights on ${lead}: ${cleaned}.`;
 }
