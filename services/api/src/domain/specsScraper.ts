@@ -195,7 +195,7 @@ function extractFromJsonLd(html: string): Record<string, string> {
 }
 
 function collectSpecsFromJsonNode(node: any, out: Record<string, string>, depth = 0) {
-  if (!node || depth > 8) return;
+  if (!node || depth > 16) return;
   if (Array.isArray(node)) {
     for (const item of node) collectSpecsFromJsonNode(item, out, depth + 1);
     return;
@@ -227,7 +227,9 @@ function collectSpecsFromJsonNode(node: any, out: Record<string, string>, depth 
     node.specifications,
     node.items,
     node.values,
-    node.attributes
+    node.attributes,
+    node.specEntriesCollection,
+    node.specEntries
   ].filter(Boolean);
   for (const container of specContainers) {
     const specsNode = container as any;
@@ -266,6 +268,7 @@ function collectSpecsFromJsonNode(node: any, out: Record<string, string>, depth 
     node.specValue ??
     node.detail ??
     node.values ??
+    node.measurement ??
     null;
   let value: string | null = coerceValue(valueCandidate);
   if (label && value) {
@@ -310,8 +313,31 @@ function extractFromHarleyNextData(html: string): Record<string, string> {
   const specOptions =
     data?.props?.pageProps?.initialState?.bikeProductDetails?.specOptionsCollection?.items ??
     data?.props?.pageProps?.initialState?.bikeProductDetails?.specOptionsCollection ??
+    data?.props?.pageProps?.bikeProductDetails?.specOptionsCollection?.items ??
+    data?.props?.pageProps?.bikeProductDetails?.specOptionsCollection ??
     null;
-  const options = Array.isArray(specOptions) ? specOptions : specOptions?.items;
+  let options = Array.isArray(specOptions) ? specOptions : specOptions?.items;
+
+  const foundCollections: any[] = [];
+  const findSpecOptionsCollections = (node: any, depth = 0) => {
+    if (!node || typeof node !== "object" || depth > 16) return;
+    if (node.specOptionsCollection) foundCollections.push(node.specOptionsCollection);
+    if (Array.isArray(node)) {
+      for (const item of node) findSpecOptionsCollections(item, depth + 1);
+      return;
+    }
+    for (const val of Object.values(node)) findSpecOptionsCollections(val, depth + 1);
+  };
+  if (!Array.isArray(options)) {
+    findSpecOptionsCollections(data, 0);
+    const collected: any[] = [];
+    for (const coll of foundCollections) {
+      if (Array.isArray(coll)) collected.push(...coll);
+      else if (Array.isArray(coll?.items)) collected.push(...coll.items);
+      else if (coll?.items) collected.push(coll.items);
+    }
+    options = collected.filter(Boolean);
+  }
   if (!Array.isArray(options)) return specs;
 
   const coerceValue = (val: any, depth = 0): string | null => {
@@ -325,6 +351,12 @@ function extractFromHarleyNextData(html: string): Record<string, string> {
       return parts.length ? parts.join(", ") : null;
     }
     if (val && typeof val === "object") {
+      if (val.value !== undefined || val.unit !== undefined) {
+        const valuePart = coerceValue(val.value, depth + 1);
+        const unitPart = coerceValue(val.unit, depth + 1);
+        if (valuePart && unitPart) return `${valuePart} ${unitPart}`.trim();
+        if (valuePart) return valuePart;
+      }
       const direct = val.value ?? val.displayValue ?? val.text ?? val.label ?? val.name ?? null;
       const derived = coerceValue(direct, depth + 1);
       if (derived) return derived;
@@ -354,6 +386,9 @@ function extractFromHarleyNextData(html: string): Record<string, string> {
       if (label && value) {
         specs[String(label)] = value;
       }
+      if (item.specEntriesCollection?.items) collectSpecItems(item.specEntriesCollection.items);
+      if (item.specEntries?.items) collectSpecItems(item.specEntries.items);
+      if (item.specEntries) collectSpecItems(item.specEntries);
       if (item.specItemsCollection?.items) collectSpecItems(item.specItemsCollection.items);
       if (item.specItems?.items) collectSpecItems(item.specItems.items);
       if (item.specItems) collectSpecItems(item.specItems);
@@ -367,6 +402,7 @@ function extractFromHarleyNextData(html: string): Record<string, string> {
     for (const group of items) {
       if (!group || typeof group !== "object") continue;
       if (group.specGroupsCollection) collectSpecGroups(group.specGroupsCollection);
+      collectSpecItems(group.specEntriesCollection?.items ?? group.specEntries?.items ?? group.specEntries ?? []);
       collectSpecItems(group.specItemsCollection?.items ?? group.specItems?.items ?? group.specItems ?? group.items);
     }
   };
@@ -374,7 +410,7 @@ function extractFromHarleyNextData(html: string): Record<string, string> {
   for (const option of options) {
     if (!option || typeof option !== "object") continue;
     collectSpecGroups(option.specGroupsCollection ?? option.specGroupCollection ?? option.specGroups);
-    if (Object.keys(specs).length >= 3) break;
+    if (Object.keys(specs).length >= 1) break;
   }
 
   return specs;
