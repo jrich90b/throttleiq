@@ -594,6 +594,31 @@ export function buildSpecsSummary(
   specs: Record<string, string>,
   maxItems: number
 ): string {
+  const formatSpecPhrase = (key: string, value: string): string => {
+    const lk = key.toLowerCase();
+    if (lk.includes("horsepower")) return `${value} horsepower`;
+    if (lk.includes("torque")) return `${value} of torque`;
+    if (lk.includes("displacement")) return `displacement ${value}`;
+    if (lk.includes("fuel capacity")) return `fuel capacity ${value}`;
+    if (lk.includes("seat height")) return `seat height ${value}`;
+    if (lk.includes("wheelbase")) return `wheelbase ${value}`;
+    if (lk.includes("weight")) return `weight ${value}`;
+    if (lk.includes("rake")) return `rake ${value}`;
+    if (lk.includes("trail")) return `trail ${value}`;
+    if (lk.includes("length")) return `length ${value}`;
+    if (lk.includes("width")) return `width ${value}`;
+    if (lk.includes("height")) return `height ${value}`;
+    if (lk.includes("transmission")) return `transmission ${value}`;
+    if (lk.includes("engine")) {
+      return /engine|motor/i.test(value) ? value : `a ${value} engine`;
+    }
+    return `${key.toLowerCase()} ${value}`;
+  };
+  const joinNatural = (parts: string[]): string => {
+    if (parts.length === 1) return parts[0];
+    if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+    return `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
+  };
   const priority = [
     "engine",
     "displacement",
@@ -619,10 +644,9 @@ export function buildSpecsSummary(
     const fallback = Object.entries(specs).slice(0, maxItems);
     entries.push(...fallback);
   }
-  const formatted = entries
-    .map(([k, v]) => `${k}: ${v}`)
-    .join("; ");
-  return `${label} — ${formatted}`;
+  const lead = label === "the bike" ? "the bike" : `the ${label}`;
+  const formatted = joinNatural(entries.map(([k, v]) => formatSpecPhrase(k, v)));
+  return `Quick specs on ${lead}: ${formatted}.`;
 }
 
 export function buildGlanceSummary(label: string, glance?: string | null): string | null {

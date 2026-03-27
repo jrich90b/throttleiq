@@ -2196,6 +2196,56 @@ function extractSpecsFocus(text: string): "engine" | "features" | "dimensions" |
   return null;
 }
 
+function formatSpecPhrase(key: string, value: string): string {
+  const lk = key.toLowerCase();
+  if (lk.includes("horsepower")) return `${value} horsepower`;
+  if (lk.includes("torque")) return `${value} of torque`;
+  if (lk.includes("displacement")) return `displacement ${value}`;
+  if (lk.includes("fuel capacity")) return `fuel capacity ${value}`;
+  if (lk.includes("seat height")) return `seat height ${value}`;
+  if (lk.includes("wheelbase")) return `wheelbase ${value}`;
+  if (lk.includes("weight")) return `weight ${value}`;
+  if (lk.includes("rake")) return `rake ${value}`;
+  if (lk.includes("trail")) return `trail ${value}`;
+  if (lk.includes("length")) return `length ${value}`;
+  if (lk.includes("width")) return `width ${value}`;
+  if (lk.includes("height")) return `height ${value}`;
+  if (lk.includes("transmission")) return `transmission ${value}`;
+  if (lk.includes("engine")) {
+    return /engine|motor/i.test(value) ? value : `a ${value} engine`;
+  }
+  if (lk.includes("infotainment")) return `infotainment system ${value}`;
+  if (lk.includes("screen") || lk.includes("display")) return `${value} screen`;
+  if (lk.includes("speaker")) return `speakers ${value}`;
+  return `${key.toLowerCase()} ${value}`;
+}
+
+function joinNatural(parts: string[]): string {
+  if (parts.length === 1) return parts[0];
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
+}
+
+function formatSpecsSentence(
+  label: string,
+  entries: Array<[string, string]>,
+  focus?: "engine" | "features" | "dimensions" | "accessories"
+): string {
+  const lead = label === "the bike" ? "the bike" : `the ${label}`;
+  const intro =
+    focus === "engine"
+      ? `Quick engine details on ${lead}:`
+      : focus === "features"
+        ? `Tech highlights on ${lead}:`
+        : focus === "dimensions"
+          ? `Key dimensions on ${lead}:`
+          : focus === "accessories"
+            ? `Trim/finish details on ${lead}:`
+            : `Quick specs on ${lead}:`;
+  const phrases = entries.map(([k, v]) => formatSpecPhrase(k, v)).filter(Boolean);
+  return `${intro} ${joinNatural(phrases)}.`;
+}
+
 function buildFocusedSpecsSummary(
   label: string,
   specs: Record<string, string>,
@@ -2205,7 +2255,18 @@ function buildFocusedSpecsSummary(
   if (!focus) return buildSpecsSummary(label, specs, maxItems);
   const focusKeys: Record<string, string[]> = {
     engine: ["engine", "displacement", "horsepower", "torque", "performance"],
-    features: ["infotainment", "screen", "display", "audio", "speaker", "navigation", "tech", "electronics", "safety"],
+    features: [
+      "infotainment",
+      "screen",
+      "display",
+      "audio",
+      "speaker",
+      "navigation",
+      "tech",
+      "electronics",
+      "safety",
+      "suspension"
+    ],
     dimensions: ["weight", "seat height", "fuel capacity", "wheelbase", "rake", "trail", "length", "height", "width"],
     accessories: ["accessories", "trim", "finish", "package"]
   };
@@ -2219,8 +2280,45 @@ function buildFocusedSpecsSummary(
     if (entries.length >= maxItems) break;
   }
   if (!entries.length) return buildSpecsSummary(label, specs, maxItems);
-  const formatted = entries.map(([k, v]) => `${k}: ${v}`).join("; ");
-  return `${label} — ${formatted}`;
+  return formatSpecsSentence(label, entries, focus);
+}
+
+function findSpecValue(specs: Record<string, string>, needles: string[]): string | null {
+  const wanted = needles.map(n => n.toLowerCase());
+  for (const key of Object.keys(specs)) {
+    const lk = key.toLowerCase();
+    if (wanted.some(n => lk.includes(n))) {
+      return specs[key];
+    }
+  }
+  return null;
+}
+
+function buildInfotainmentSummary(label: string, specs: Record<string, string>): string | null {
+  const system = findSpecValue(specs, ["infotainment system", "infotainment"]);
+  const screen = findSpecValue(specs, ["screen size", "display"]);
+  const speakers = findSpecValue(specs, ["speakers"]);
+  const speakerSize = findSpecValue(specs, ["speaker size"]);
+  const voice = findSpecValue(specs, ["voice recognition"]);
+
+  if (!system && !screen && !speakers && !speakerSize) return null;
+
+  const baseLabel = label ? `${label} has` : "It has";
+  const systemLabel = system ?? "an infotainment system";
+  const screenLabel = screen ? ` with a ${screen} screen` : "";
+  const firstSentence = `Yes — ${baseLabel} ${systemLabel}${screenLabel}.`;
+
+  const audioBits: string[] = [];
+  if (speakers) audioBits.push(`${speakers} speakers`);
+  if (speakerSize) audioBits.push(speakerSize);
+  const audioSentence = audioBits.length ? `Audio is ${audioBits.join(" — ")}.` : null;
+
+  let voiceSentence: string | null = null;
+  if (voice && voice.length < 80) {
+    voiceSentence = `Voice recognition: ${voice}.`;
+  }
+
+  return [firstSentence, audioSentence, voiceSentence].filter(Boolean).join(" ");
 }
 
 function isCompareRequest(text: string): boolean {
@@ -10652,11 +10750,19 @@ if (authToken && signature) {
         let reply = "";
         if (specs?.specs && Object.keys(specs.specs).length) {
           const maxItems = wantsHighlights ? 6 : 10;
+          const wantsInfotainment = /\b(infotainment|screen|display|audio|speakers?)\b/i.test(
+            textLower
+          );
+          const infotainmentSummary =
+            specsFocus === "features" && wantsInfotainment
+              ? buildInfotainmentSummary(baseLabel, specs.specs)
+              : null;
           const summary =
-            wantsHighlights && !specsFocus
+            infotainmentSummary ??
+            (wantsHighlights && !specsFocus
               ? buildGlanceSummary(baseLabel, specs.glance) ??
                 buildFocusedSpecsSummary(baseLabel, specs.specs, specsFocus, maxItems)
-              : buildFocusedSpecsSummary(baseLabel, specs.specs, specsFocus, maxItems);
+              : buildFocusedSpecsSummary(baseLabel, specs.specs, specsFocus, maxItems));
           reply = wantsEverything
             ? `${summary} If you want more, I can send full specs, key features, or safety next — which should I send?`
             : summary;
