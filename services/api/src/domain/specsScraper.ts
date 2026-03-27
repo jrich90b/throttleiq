@@ -14,6 +14,11 @@ export type ModelSpecs = {
 type SpecsCache = Record<string, ModelSpecs>;
 
 const CACHE_FILE = "specs_cache.json";
+const HARLEY_URLS_FILE = "harley_model_urls.json";
+const DEFAULT_HARLEY_URLS: Record<string, string> = {
+  "street bob": "https://www.harley-davidson.com/us/en/motorcycles/street-bob.html?color=m44",
+  "road glide": "https://www.harley-davidson.com/us/en/motorcycles/road-glide.html"
+};
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 function cacheKey(model: string, year?: string | null): string {
@@ -38,6 +43,50 @@ function saveCache(cache: SpecsCache) {
   } catch {
     // ignore
   }
+}
+
+function loadHarleyUrlMap(): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  const normalizeKey = (k: string) => k.toLowerCase().replace(/\s+/g, " ").trim();
+  for (const [k, v] of Object.entries(DEFAULT_HARLEY_URLS)) {
+    if (k && v) normalized[normalizeKey(k)] = v;
+  }
+  try {
+    const p = dataPath(HARLEY_URLS_FILE);
+    if (!fs.existsSync(p)) {
+      fs.writeFileSync(p, JSON.stringify(normalized, null, 2));
+      return normalized;
+    }
+    const raw = fs.readFileSync(p, "utf8");
+    const parsed = JSON.parse(raw || "{}");
+    if (parsed && typeof parsed === "object") {
+      for (const [k, v] of Object.entries(parsed)) {
+        if (!k || typeof v !== "string") continue;
+        normalized[normalizeKey(k)] = v;
+      }
+    }
+  } catch {
+    return normalized;
+  }
+  return normalized;
+}
+
+function slugifyModel(model: string): string {
+  return model
+    .toLowerCase()
+    .replace(/harley-davidson/gi, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function resolveHarleyUrl(model: string): string | null {
+  const map = loadHarleyUrlMap();
+  const key = model.toLowerCase().replace(/\s+/g, " ").trim();
+  if (map[key]) return map[key];
+  const slug = slugifyModel(model);
+  if (!slug) return null;
+  return `https://www.harley-davidson.com/us/en/motorcycles/${slug}.html`;
 }
 
 function stripTags(html: string): string {
@@ -66,8 +115,11 @@ function extractFromTable(html: string): Record<string, string> {
   for (const row of rows) {
     const cells = row.match(/<t[hd][\s\S]*?<\/t[hd]>/gi) ?? [];
     if (cells.length < 2) continue;
-    const keyRaw = decodeHtmlEntities(stripTags(cells[0]));
-    const valRaw = decodeHtmlEntities(stripTags(cells[1]));
+    const firstCell = cells[0] ?? "";
+    const secondCell = cells[1] ?? "";
+    if (!firstCell || !secondCell) continue;
+    const keyRaw = decodeHtmlEntities(stripTags(firstCell));
+    const valRaw = decodeHtmlEntities(stripTags(secondCell));
     if (!keyRaw || !valRaw) continue;
     specs[keyRaw] = valRaw;
   }
@@ -162,6 +214,26 @@ export async function getModelSpecs(opts: {
     const age = Date.now() - new Date(cached.updatedAt).getTime();
     if (!Number.isNaN(age) && age < CACHE_TTL_MS && cached.specs && Object.keys(cached.specs).length) {
       return cached;
+    }
+  }
+
+  const harleyUrl = resolveHarleyUrl(model);
+  if (harleyUrl) {
+    const html = await fetchHtmlSmart(harleyUrl, "specs-scraper");
+    if (html) {
+      const specs = parseSpecsFromHtml(html);
+      if (Object.keys(specs).length >= 3) {
+        const payload: ModelSpecs = {
+          model,
+          year,
+          specs,
+          sourceUrl: harleyUrl,
+          updatedAt: new Date().toISOString()
+        };
+        cache[key] = payload;
+        saveCache(cache);
+        return payload;
+      }
     }
   }
 
