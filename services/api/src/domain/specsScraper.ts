@@ -167,6 +167,19 @@ function extractFromJsonLd(html: string): Record<string, string> {
   return specs;
 }
 
+function filterSpecMap(specs: Record<string, string>): Record<string, string> {
+  const filtered: Record<string, string> = {};
+  const invalidKey = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|hours?|open|closed)\b/i;
+  const invalidValue = /\b(open|closed|\d{1,2}:\d{2}\s*(am|pm)|am|pm)\b/i;
+  for (const [key, value] of Object.entries(specs)) {
+    if (!key || !value) continue;
+    if (invalidKey.test(key)) continue;
+    if (invalidValue.test(value) && invalidKey.test(key)) continue;
+    filtered[key] = value;
+  }
+  return filtered;
+}
+
 function parseSpecsFromHtml(html: string): Record<string, string> {
   const specs: Record<string, string> = {};
   if (!html) return specs;
@@ -185,7 +198,7 @@ function parseSpecsFromHtml(html: string): Record<string, string> {
     Object.assign(specs, extractFromDl(specSection));
   }
 
-  return specs;
+  return filterSpecMap(specs);
 }
 
 function normalizeModel(val: string): string {
