@@ -2187,7 +2187,9 @@ const HARLEY_MODELS = [
   "Road Glide 3",
   "Road Glide III",
   "Road Glide Limited",
+  "Road Glide",
   "Street Glide Limited",
+  "Street Glide",
   "Street Glide Ultra",
   "Street Glide Solo",
   "Road Glide Solo",
@@ -9585,6 +9587,16 @@ if (authToken && signature) {
     } else if (hoursLine) {
       reply = `Our hours this week are ${hoursLine}.`;
     }
+    const confirmBike =
+      /\b(that'?s (it|the one|the bike)|that one|yep|yup|yes)\b/i.test(textLower);
+    const contextModel = conv.inventoryContext?.model ?? conv.lead?.vehicle?.model ?? null;
+    const contextYear = conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null;
+    const contextColor = conv.inventoryContext?.color ?? null;
+    if (confirmBike && contextModel) {
+      const label = `${contextYear ? `${contextYear} ` : ""}${contextModel}`.trim();
+      const colorText = contextColor ? ` in ${contextColor}` : "";
+      reply = `Yes — the ${label}${colorText} is in stock. ${reply}`;
+    }
     const isSalesLead =
       !isServiceLead &&
       (!!conv.lead?.vehicle?.model ||
@@ -10465,9 +10477,10 @@ if (authToken && signature) {
         priorModel &&
         normalizeModelText(modelFromText) !== normalizeModelText(priorModel);
       const year = yearFromText ?? (!modelChanged ? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null : null);
-      const colorFromText = llmAvailability?.color ?? extractColorToken(textLower) ?? null;
-      const color = colorFromText ?? conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null;
-      const finishFromText = extractFinishToken(textLower);
+        const colorFromText = llmAvailability?.color ?? extractColorToken(textLower) ?? null;
+        const color = colorFromText ?? conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null;
+        const finishFromText = extractFinishToken(textLower);
+        const finish = finishFromText ?? conv.inventoryContext?.finish ?? null;
       if (model || yearFromText || colorFromText || finishFromText) {
         conv.inventoryContext = {
           model: model ?? conv.inventoryContext?.model,
@@ -10482,8 +10495,18 @@ if (authToken && signature) {
         const hasIdentifiers = !!conv.lead?.vehicle?.stockId || !!conv.lead?.vehicle?.vin || !!color;
         let matches = await findInventoryMatches({ year: year ?? null, model });
         if (color) {
-          const c = color.toLowerCase();
-          matches = matches.filter(i => (i.color ?? "").toLowerCase().includes(c));
+          const leadColor = String(color);
+          const leadTrim = finish;
+          matches = matches.filter(i => {
+            const itemColor = i.color ?? "";
+            if (colorMatchesExact(itemColor, leadColor, leadTrim) || colorMatchesAlias(itemColor, leadColor, leadTrim)) {
+              return true;
+            }
+            const itemNorm = normalizeColorBase(itemColor, !!leadTrim);
+            const leadNorm = normalizeColorBase(leadColor, !!leadTrim);
+            if (!itemNorm || !leadNorm) return false;
+            return itemNorm.includes(leadNorm) || leadNorm.includes(itemNorm);
+          });
         }
         const holds = await listInventoryHolds();
         const solds = await listInventorySolds();
@@ -10631,6 +10654,29 @@ if (authToken && signature) {
           const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<Response>\\n  <Message>\\n    <Body>${escapeXml(
             reply
           )}</Body>${mediaTag}\\n  </Message>\\n</Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+        if (matches.length === 0 && color && !hasIdentifiers) {
+          const watchCondition = inferWatchCondition(
+            model ?? undefined,
+            year ? Number(year) : undefined,
+            conv
+          );
+          const watchExactLabel = watchCondition === "new" ? "exact year/color" : "exact year";
+          const reply = year
+            ? `I’m not seeing a ${year} ${model}${color ? ` in ${color}` : ""} in stock right now. Want me to keep an eye out for the ${watchExactLabel}?`
+            : `I’m not seeing a ${model}${color ? ` in ${color}` : ""} in stock right now. Want me to keep an eye out for the ${watchExactLabel}?`;
+          setDialogState(conv, "inventory_watch_prompted");
+          const systemMode = webhookMode;
+          if (systemMode === "suggest") {
+            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+            return res.status(200).type("text/xml").send(twiml);
+          }
+          appendOutbound(conv, event.to, event.from, reply, "twilio");
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+            reply
+          )}</Message>\n</Response>`;
           return res.status(200).type("text/xml").send(twiml);
         }
         if (matches.length === 0 && !hasIdentifiers) {
