@@ -2962,6 +2962,13 @@ function buildHistory(conv: any, limit = 20) {
     .map((m: any) => ({ direction: m.direction, body: m.body }));
 }
 
+function getRecentMessagesText(conv: any, limit = 12): string {
+  return getNonVoiceMessages(conv)
+    .slice(-limit)
+    .map((m: any) => String(m.body ?? ""))
+    .join(" ");
+}
+
 function getDialogState(conv: any): DialogStateName {
   return conv?.dialogState?.name ?? "none";
 }
@@ -10353,6 +10360,14 @@ if (authToken && signature) {
           conv.compareContext?.models?.length && Array.isArray(conv.compareContext.models)
             ? conv.compareContext.models
             : findMentionedModels(lastOutboundText);
+        if (contextModels.length < 2) {
+          const historyText = getRecentMessagesText(conv, 12);
+          const historyModels = findMentionedModels(historyText);
+          if (historyModels.length >= 2) {
+            contextModels.length = 0;
+            contextModels.push(historyModels[0], historyModels[1]);
+          }
+        }
         const contextYear =
           conv.compareContext?.year ??
           extractYearSingle(lastOutboundText) ??
