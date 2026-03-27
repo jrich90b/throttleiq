@@ -1233,6 +1233,10 @@ async function applyPostCallSummaryActions(opts: {
   const llmTestRideIntent = intentAccepted && intentParse?.intent === "test_ride";
   const llmAvailability = llmAvailabilityIntent ? intentParse?.availability ?? null : null;
 
+  if (llmTestRideIntent && !isTestRideDialogState(getDialogState(conv))) {
+    setDialogState(conv, "test_ride_init");
+  }
+
   const callback = llmCallbackRequested
     ? {
         label: intentParse?.callback?.timeText
@@ -1713,6 +1717,7 @@ function mapDialogStateToCadenceTag(name: DialogStateName): string | null {
   if (name.startsWith("pricing_")) return "pricing";
   if (name.startsWith("payments_")) return "payments";
   if (name.startsWith("inventory_")) return "inventory";
+  if (name.startsWith("test_ride_")) return "scheduling";
   if (name.startsWith("schedule_") || name === "clarify_schedule") return "scheduling";
   return null;
 }
@@ -1725,6 +1730,7 @@ function mapDialogStateToIntent(name: DialogStateName): LastIntentName | null {
   if (name.startsWith("pricing_")) return "pricing";
   if (name.startsWith("payments_")) return "payments";
   if (name.startsWith("inventory_")) return "inventory";
+  if (name.startsWith("test_ride_")) return "scheduling";
   if (name.startsWith("schedule_") || name === "clarify_schedule") return "scheduling";
   if (name.startsWith("callback_")) return "callback";
   if (name.startsWith("service_")) return "service";
@@ -2917,8 +2923,13 @@ function isScheduleDialogState(name: DialogStateName): boolean {
     name === "clarify_schedule" ||
     name === "schedule_request" ||
     name === "schedule_offer_sent" ||
-    name === "schedule_booked"
+    name === "schedule_booked" ||
+    name.startsWith("test_ride_")
   );
+}
+
+function isTestRideDialogState(name: DialogStateName): boolean {
+  return name.startsWith("test_ride_");
 }
 
 function isTradeDialogState(name: DialogStateName): boolean {
@@ -7994,7 +8005,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   reply = stripNonAdfThanks(reply, event.provider);
   reply = stripCallTimingQuestions(reply);
   if (isSlotOfferMessage(reply)) {
-    setDialogState(conv, "schedule_offer_sent");
+    const appointmentType = String(result.requestedAppointmentType ?? "inventory_visit");
+    if (appointmentType === "test_ride") {
+      setDialogState(conv, "test_ride_offer_sent");
+    } else {
+      setDialogState(conv, "schedule_offer_sent");
+    }
   }
   if (result.suggestedSlots && result.suggestedSlots.length > 0) {
     setLastSuggestedSlots(conv, result.suggestedSlots);
@@ -9135,7 +9151,11 @@ if (authToken && signature) {
       conv.appointment.acknowledged = true;
       conv.appointment.reschedulePending = false;
       onAppointmentBooked(conv);
-      setDialogState(conv, "schedule_booked");
+      if (appointmentType === "test_ride") {
+        setDialogState(conv, "test_ride_booked");
+      } else {
+        setDialogState(conv, "schedule_booked");
+      }
 
       // Build confirmation message (SMS)
       const dealerName =
@@ -9448,6 +9468,9 @@ if (authToken && signature) {
       schedulingSignalsBase.hasDayOnlyAvailability || llmHasDayOnlyAvailability,
     hasDayOnlyRequest: schedulingSignalsBase.hasDayOnlyRequest || llmHasDayOnlyRequest
   };
+  if (llmTestRideIntent && schedulingAllowed && !isTestRideDialogState(getDialogState(conv))) {
+    setDialogState(conv, "test_ride_init");
+  }
   if (schedulingSignalsBase.softVisit) {
     schedulingSignals.explicit = false;
     schedulingSignals.hasDayTime = false;
@@ -9518,6 +9541,9 @@ if (authToken && signature) {
       reply = "Just to confirm — are you asking about availability on a bike?";
     }
     if (reply) {
+      if (intentParse?.intent === "test_ride") {
+        setDialogState(conv, "test_ride_init");
+      }
       const systemMode = webhookMode;
       if (systemMode === "suggest") {
         appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -9847,6 +9873,14 @@ if (authToken && signature) {
     const dayRequest = extractDayRequest(textLower);
     const wantsToday = /\btoday\b/.test(textLower);
     const wantsTomorrow = /\btomorrow\b/.test(textLower);
+    const stateName = getDialogState(conv);
+    const tradeContext =
+      (stateName && stateName.startsWith("trade_")) ||
+      conv.classification?.bucket === "trade_in_sell" ||
+      conv.classification?.cta === "sell_my_bike" ||
+      conv.classification?.cta === "trade_in" ||
+      conv.lastIntent?.name === "trade";
+    const rideContext = /\b(test ride|ride it in|ride in)\b/i.test(textLower);
     let targetParts: { year: number; month: number; day: number } | null = null;
     let dayLabel = "";
     if (dayRequest) {
@@ -9906,13 +9940,21 @@ if (authToken && signature) {
       const lineB = rough
         ? `${dayLabel} here looks ${forecast.snow ? "rough" : "cold"} — about ${tempText}.`
         : `${dayLabel} here looks around ${tempText}.`;
-      const pickupA = rough
+      const tradeAltA = rough
         ? ` If it stays ${forecast.snow ? "cold or snowy" : "cold"}, we can pick it up for a trade evaluation instead.`
         : "";
-      const pickupB = rough
+      const tradeAltB = rough
         ? " If the weather’s rough, we can pick it up for a trade evaluation instead of having you ride it in."
         : "";
-      reply = pickVariantByKey(conv.leadKey ?? event.from, [lineA + pickupA, lineB + pickupB]);
+      const rideAltA = rough
+        ? ` If it stays ${forecast.snow ? "cold or snowy" : "cold"}, we can plan the test ride for a better day.`
+        : "";
+      const rideAltB = rough
+        ? " If the weather’s rough, we can plan the test ride for a better day."
+        : "";
+      const extraA = tradeContext ? tradeAltA : rideContext ? rideAltA : "";
+      const extraB = tradeContext ? tradeAltB : rideContext ? rideAltB : "";
+      reply = pickVariantByKey(conv.leadKey ?? event.from, [lineA + extraA, lineB + extraB]);
     }
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
@@ -10978,7 +11020,11 @@ if (authToken && signature) {
             conv.appointment.matchedSlot = chosen;
             conv.appointment.reschedulePending = false;
             onAppointmentBooked(conv);
-            setDialogState(conv, "schedule_booked");
+            if (appointmentType === "test_ride") {
+              setDialogState(conv, "test_ride_booked");
+            } else {
+              setDialogState(conv, "schedule_booked");
+            }
 
             if (conv.scheduler) {
               conv.scheduler.lastSuggestedSlots = [];
@@ -11024,7 +11070,11 @@ if (authToken && signature) {
           let reply = `I have ${bestSlots[0].startLocal} or ${bestSlots[1].startLocal} — do any of these times work?`;
           reply = applySlotOfferPolicy(conv, reply, lastOutboundTextOffer);
           if (isSlotOfferMessage(reply)) {
-            setDialogState(conv, "schedule_offer_sent");
+            if (llmTestRideIntent) {
+              setDialogState(conv, "test_ride_offer_sent");
+            } else {
+              setDialogState(conv, "schedule_offer_sent");
+            }
           }
           const systemMode = webhookMode;
           if (systemMode === "suggest") {
@@ -11198,6 +11248,18 @@ if (authToken && signature) {
       else if (sellOption === "either") setDialogState(conv, "trade_either");
       else setDialogState(conv, "trade_init");
     }
+  }
+  if (result.intent === "TEST_RIDE" && !isScheduleDialogState(dialogState)) {
+    if (!isTestRideDialogState(dialogState)) {
+      setDialogState(conv, "test_ride_init");
+    }
+  }
+  if (
+    !isTestRideDialogState(dialogState) &&
+    /test ride/i.test(draftText) &&
+    /(what day|what time|what time works|reserve|set up|schedule)/i.test(draftText)
+  ) {
+    setDialogState(conv, "test_ride_offer_sent");
   }
   if (canUpdatePricingState) {
     if (result.handoff?.required) {
@@ -11376,9 +11438,14 @@ if (authToken && signature) {
         result.suggestedSlots = [...preferred, ...rest];
       }
     }
+    const requestedAppointmentType = String(result.requestedAppointmentType ?? "inventory_visit");
     console.log("[scheduler] persist suggestedSlots", result.suggestedSlots.length);
     setLastSuggestedSlots(conv, result.suggestedSlots);
-    setDialogState(conv, "schedule_offer_sent");
+    if (requestedAppointmentType === "test_ride") {
+      setDialogState(conv, "test_ride_offer_sent");
+    } else {
+      setDialogState(conv, "schedule_offer_sent");
+    }
     console.log(
       "[scheduler] persisted lastSuggestedSlots",
       result.suggestedSlots.length,
@@ -11400,7 +11467,11 @@ if (authToken && signature) {
   }
   if (result.requestedTime) {
     setRequestedTime(conv, { day: result.requestedTime.dayOfWeek, timeText: event.body });
-    setDialogState(conv, "schedule_request");
+    if (result.requestedAppointmentType === "test_ride") {
+      setDialogState(conv, "test_ride_init");
+    } else {
+      setDialogState(conv, "schedule_request");
+    }
   }
 
   if (schedulingAllowed && !didConfirm && result.requestedTime) {
@@ -11732,7 +11803,12 @@ if (authToken && signature) {
         let reply = `${prefix ? `${prefix} ` : ""}I have ${bestSlots[0].startLocal} or ${bestSlots[1].startLocal} — do any of these times work?`;
         reply = applySlotOfferPolicy(conv, reply, lastOutboundTextOffer);
         if (isSlotOfferMessage(reply)) {
-          setDialogState(conv, "schedule_offer_sent");
+          const requestedAppointmentType = String(result.requestedAppointmentType ?? "inventory_visit");
+          if (requestedAppointmentType === "test_ride") {
+            setDialogState(conv, "test_ride_offer_sent");
+          } else {
+            setDialogState(conv, "schedule_offer_sent");
+          }
         }
         const systemMode = webhookMode;
         if (systemMode === "suggest") {
@@ -11822,7 +11898,12 @@ if (authToken && signature) {
   reply = applySoftSchedulePolicy(conv, reply, String(event.body ?? ""));
   reply = stripSchedulingLanguageIfNotAsked(reply, String(event.body ?? ""));
   if (isSlotOfferMessage(reply)) {
-    setDialogState(conv, "schedule_offer_sent");
+    const requestedAppointmentType = String(result.requestedAppointmentType ?? "inventory_visit");
+    if (requestedAppointmentType === "test_ride") {
+      setDialogState(conv, "test_ride_offer_sent");
+    } else {
+      setDialogState(conv, "schedule_offer_sent");
+    }
   }
   const effectiveWebhookMode = webhookMode;
   const hadOutbound = conv.messages.some(m => m.direction === "out");
