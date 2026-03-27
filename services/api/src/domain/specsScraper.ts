@@ -191,8 +191,9 @@ function collectSpecsFromJsonNode(node: any, out: Record<string, string>, depth 
     return;
   }
   if (typeof node !== "object") return;
-  if (node.specs) {
-    const specsNode = node.specs;
+  const specContainers = [node.specs, node.specifications].filter(Boolean);
+  for (const container of specContainers) {
+    const specsNode = container as any;
     if (Array.isArray(specsNode)) {
       for (const item of specsNode) collectSpecsFromJsonNode(item, out, depth + 1);
     } else if (typeof specsNode === "object") {
@@ -236,6 +237,16 @@ function collectSpecsFromJsonNode(node: any, out: Record<string, string>, depth 
       : null;
   if (label && value) {
     out[label] = value;
+  } else if (label && valueCandidate && typeof valueCandidate === "object") {
+    const derived =
+      (valueCandidate as any).value ??
+      (valueCandidate as any).displayValue ??
+      (valueCandidate as any).text ??
+      (valueCandidate as any).label ??
+      null;
+    if (typeof derived === "string" || typeof derived === "number" || typeof derived === "boolean") {
+      out[label] = String(derived);
+    }
   }
   for (const val of Object.values(node)) {
     collectSpecsFromJsonNode(val, out, depth + 1);
