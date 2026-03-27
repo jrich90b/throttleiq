@@ -7436,7 +7436,7 @@ app.get("/contacts", (_req, res) => {
   const contacts = listContacts().map(c => {
     const convId = c.conversationId ?? c.leadKey;
     const conv = convId ? getConversation(convId) : null;
-    const archived = !!(conv?.status === "closed" || conv?.closedAt);
+    const archived = !!(conv?.closedReason && /archive/i.test(conv.closedReason));
     const suppressed = c.phone ? isSuppressed(c.phone) : c.leadKey ? isSuppressed(c.leadKey) : false;
     const status = suppressed ? "suppressed" : archived ? "archived" : "active";
     const lastAdf = conv?.messages

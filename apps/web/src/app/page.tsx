@@ -2455,9 +2455,12 @@ export default function Home() {
   });
   }, [contacts, contactQuery]);
 
+  const isArchivedConversation = (c: ConversationListItem) =>
+    !!(c.closedReason && /archive/i.test(c.closedReason));
+
   const visibleConversations = useMemo(() => {
     return conversations.filter(c =>
-      view === "inbox" ? !(c.status === "closed" || c.closedAt) : c.status === "closed" || c.closedAt
+      view === "inbox" ? !isArchivedConversation(c) : isArchivedConversation(c)
     );
   }, [conversations, view]);
 
@@ -4238,7 +4241,7 @@ export default function Home() {
                 <div className="text-xs text-[var(--palette-graphite)]">
                   {view === "inbox"
                     ? `Open: ${filteredConversations.length}`
-                    : `Closed: ${filteredConversations.length}`}
+                    : `Archived: ${filteredConversations.length}`}
                 </div>
                 <button
                   className="px-3 py-2 text-xs font-semibold border border-[var(--accent)] text-[var(--accent)] rounded hover:bg-[var(--surface-2)]"
