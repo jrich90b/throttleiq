@@ -307,6 +307,87 @@ function extractFromJsonScripts(html: string): Record<string, string> {
   return specs;
 }
 
+function extractFromHarleyNextData(html: string): Record<string, string> {
+  const specs: Record<string, string> = {};
+  const match = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i);
+  if (!match?.[1]) return specs;
+  let data: any;
+  try {
+    data = JSON.parse(match[1]);
+  } catch {
+    return specs;
+  }
+  const specOptions =
+    data?.props?.pageProps?.initialState?.bikeProductDetails?.specOptionsCollection?.items ??
+    data?.props?.pageProps?.initialState?.bikeProductDetails?.specOptionsCollection ??
+    null;
+  const options = Array.isArray(specOptions) ? specOptions : specOptions?.items;
+  if (!Array.isArray(options)) return specs;
+
+  const coerceValue = (val: any): string | null => {
+    if (typeof val === "string" || typeof val === "number" || typeof val === "boolean") return String(val);
+    if (Array.isArray(val)) {
+      const parts = val
+        .map(v =>
+          typeof v === "string" || typeof v === "number" || typeof v === "boolean"
+            ? String(v)
+            : v?.value ?? v?.displayValue ?? v?.text ?? v?.label ?? v?.name ?? null
+        )
+        .filter(Boolean)
+        .map(v => String(v));
+      return parts.length ? parts.join(", ") : null;
+    }
+    if (val && typeof val === "object") {
+      const derived = val.value ?? val.displayValue ?? val.text ?? val.label ?? val.name ?? null;
+      if (derived !== null && derived !== undefined) return String(derived);
+    }
+    return null;
+  };
+
+  const collectSpecItems = (items: any) => {
+    if (!Array.isArray(items)) return;
+    for (const item of items) {
+      if (!item || typeof item !== "object") continue;
+      const label =
+        item.specName ??
+        item.label ??
+        item.name ??
+        item.title ??
+        item.specLabel ??
+        item.key ??
+        item.specKey ??
+        null;
+      const value =
+        coerceValue(item.specValue ?? item.value ?? item.displayValue ?? item.text ?? item.specValues ?? item.values);
+      if (label && value) {
+        specs[String(label)] = value;
+      }
+      if (item.specItemsCollection?.items) collectSpecItems(item.specItemsCollection.items);
+      if (item.specItems?.items) collectSpecItems(item.specItems.items);
+      if (item.specItems) collectSpecItems(item.specItems);
+      if (item.items) collectSpecItems(item.items);
+    }
+  };
+
+  const collectSpecGroups = (collection: any) => {
+    const items = collection?.items ?? collection;
+    if (!Array.isArray(items)) return;
+    for (const group of items) {
+      if (!group || typeof group !== "object") continue;
+      if (group.specGroupsCollection) collectSpecGroups(group.specGroupsCollection);
+      collectSpecItems(group.specItemsCollection?.items ?? group.specItems?.items ?? group.specItems ?? group.items);
+    }
+  };
+
+  for (const option of options) {
+    if (!option || typeof option !== "object") continue;
+    collectSpecGroups(option.specGroupsCollection ?? option.specGroupCollection ?? option.specGroups);
+    if (Object.keys(specs).length >= 3) break;
+  }
+
+  return specs;
+}
+
 function filterSpecMap(specs: Record<string, string>): Record<string, string> {
   const filtered: Record<string, string> = {};
   const invalidKey = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|hours?|open|closed)\b/i;
@@ -328,6 +409,7 @@ function parseSpecsFromHtml(html: string): Record<string, string> {
 
   Object.assign(specs, extractFromJsonLd(html));
   Object.assign(specs, extractFromJsonScripts(html));
+  Object.assign(specs, extractFromHarleyNextData(html));
 
   const specSection =
     html.match(/<h\d[^>]*>\s*(Specifications|Specs?)\s*<\/h\d>[\s\S]*?(<table[\s\S]*?<\/table>)/i)?.[2] ??
