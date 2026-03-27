@@ -93,13 +93,16 @@ function slugifyModel(model: string): string {
     .replace(/^-|-$/g, "");
 }
 
-function resolveHarleyUrl(model: string): string | null {
+function resolveHarleyUrl(model: string, year?: string | null): string | null {
   const cleaned = cleanModelForHarleyUrl(model);
   const map = loadHarleyUrlMap();
   const key = cleaned.toLowerCase().replace(/\s+/g, " ").trim();
   if (map[key]) return map[key];
   const slug = slugifyModel(cleaned);
   if (!slug) return null;
+  if (year && /^\d{4}$/.test(String(year))) {
+    return `https://www.harley-davidson.com/us/en/motorcycles/${year}/${slug}.html`;
+  }
   return `https://www.harley-davidson.com/us/en/motorcycles/${slug}.html`;
 }
 
@@ -188,6 +191,20 @@ function collectSpecsFromJsonNode(node: any, out: Record<string, string>, depth 
     return;
   }
   if (typeof node !== "object") return;
+  if (node.specs) {
+    const specsNode = node.specs;
+    if (Array.isArray(specsNode)) {
+      for (const item of specsNode) collectSpecsFromJsonNode(item, out, depth + 1);
+    } else if (typeof specsNode === "object") {
+      for (const [k, v] of Object.entries(specsNode)) {
+        if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
+          out[k] = String(v);
+        } else {
+          collectSpecsFromJsonNode(v, out, depth + 1);
+        }
+      }
+    }
+  }
   const label =
     typeof node.label === "string"
       ? node.label
@@ -199,19 +216,24 @@ function collectSpecsFromJsonNode(node: any, out: Record<string, string>, depth 
             ? node.specName
             : typeof node.spec === "string"
               ? node.spec
-              : null;
+              : typeof node.key === "string"
+                ? node.key
+                : typeof node.specKey === "string"
+                  ? node.specKey
+                  : null;
+  const valueCandidate =
+    node.value ??
+    node.text ??
+    node.displayValue ??
+    node.specValue ??
+    node.detail ??
+    null;
   const value =
-    typeof node.value === "string"
-      ? node.value
-      : typeof node.text === "string"
-        ? node.text
-        : typeof node.displayValue === "string"
-          ? node.displayValue
-          : typeof node.specValue === "string"
-            ? node.specValue
-            : typeof node.detail === "string"
-              ? node.detail
-              : null;
+    typeof valueCandidate === "string" ||
+    typeof valueCandidate === "number" ||
+    typeof valueCandidate === "boolean"
+      ? String(valueCandidate)
+      : null;
   if (label && value) {
     out[label] = value;
   }
@@ -311,7 +333,7 @@ export async function getModelSpecs(opts: {
     }
   }
 
-  const harleyUrl = resolveHarleyUrl(model);
+  const harleyUrl = resolveHarleyUrl(model, year);
   if (harleyUrl) {
     const html = await fetchHtmlSmart(harleyUrl, "specs-scraper");
     if (html) {
