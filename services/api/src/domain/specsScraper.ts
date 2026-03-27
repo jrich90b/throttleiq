@@ -19,10 +19,23 @@ const DEFAULT_HARLEY_URLS: Record<string, string> = {
   "street bob": "https://www.harley-davidson.com/us/en/motorcycles/street-bob.html?color=m44",
   "road glide": "https://www.harley-davidson.com/us/en/motorcycles/road-glide.html"
 };
+const HARLEY_SPECS_ONLY = (process.env.HARLEY_SPECS_ONLY ?? "true").toLowerCase() === "true";
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+function cleanModelForHarleyUrl(model: string): string {
+  return model
+    .replace(/harley-davidson/gi, " ")
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/\s*[•\u2022]\s*.*$/g, " ")
+    .replace(/\s+[-–—]\s+.*$/g, " ")
+    .replace(/\s+\/\s+.*$/g, " ")
+    .replace(/\s+in\s+[^,]+$/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function cacheKey(model: string, year?: string | null): string {
-  return `${String(year ?? "").trim()}|${model.trim().toLowerCase()}`;
+  return `${String(year ?? "").trim()}|${cleanModelForHarleyUrl(model).toLowerCase()}`;
 }
 
 function loadCache(): SpecsCache {
@@ -81,10 +94,11 @@ function slugifyModel(model: string): string {
 }
 
 function resolveHarleyUrl(model: string): string | null {
+  const cleaned = cleanModelForHarleyUrl(model);
   const map = loadHarleyUrlMap();
-  const key = model.toLowerCase().replace(/\s+/g, " ").trim();
+  const key = cleaned.toLowerCase().replace(/\s+/g, " ").trim();
   if (map[key]) return map[key];
-  const slug = slugifyModel(model);
+  const slug = slugifyModel(cleaned);
   if (!slug) return null;
   return `https://www.harley-davidson.com/us/en/motorcycles/${slug}.html`;
 }
@@ -167,14 +181,73 @@ function extractFromJsonLd(html: string): Record<string, string> {
   return specs;
 }
 
+function collectSpecsFromJsonNode(node: any, out: Record<string, string>, depth = 0) {
+  if (!node || depth > 8) return;
+  if (Array.isArray(node)) {
+    for (const item of node) collectSpecsFromJsonNode(item, out, depth + 1);
+    return;
+  }
+  if (typeof node !== "object") return;
+  const label =
+    typeof node.label === "string"
+      ? node.label
+      : typeof node.name === "string"
+        ? node.name
+        : typeof node.title === "string"
+          ? node.title
+          : typeof node.specName === "string"
+            ? node.specName
+            : typeof node.spec === "string"
+              ? node.spec
+              : null;
+  const value =
+    typeof node.value === "string"
+      ? node.value
+      : typeof node.text === "string"
+        ? node.text
+        : typeof node.displayValue === "string"
+          ? node.displayValue
+          : typeof node.specValue === "string"
+            ? node.specValue
+            : typeof node.detail === "string"
+              ? node.detail
+              : null;
+  if (label && value) {
+    out[label] = value;
+  }
+  for (const val of Object.values(node)) {
+    collectSpecsFromJsonNode(val, out, depth + 1);
+  }
+}
+
+function extractFromJsonScripts(html: string): Record<string, string> {
+  const specs: Record<string, string> = {};
+  const nextData = [...html.matchAll(/<script[^>]*id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/gi)];
+  const genericJson = [...html.matchAll(/<script[^>]*type="application\/json"[^>]*>([\s\S]*?)<\/script>/gi)];
+  const candidates = [...nextData, ...genericJson];
+  for (const match of candidates) {
+    const raw = match[1];
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw.trim());
+      collectSpecsFromJsonNode(parsed, specs, 0);
+    } catch {
+      // ignore
+    }
+  }
+  return specs;
+}
+
 function filterSpecMap(specs: Record<string, string>): Record<string, string> {
   const filtered: Record<string, string> = {};
   const invalidKey = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|hours?|open|closed)\b/i;
-  const invalidValue = /\b(open|closed|\d{1,2}:\d{2}\s*(am|pm)|am|pm)\b/i;
+  const invalidValueDays = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
+  const invalidValueTimes = /\b\d{1,2}:\d{2}\s*(am|pm)?\b/i;
+  const invalidValueStatus = /\b(open|closed)\b/i;
   for (const [key, value] of Object.entries(specs)) {
     if (!key || !value) continue;
     if (invalidKey.test(key)) continue;
-    if (invalidValue.test(value) && invalidKey.test(key)) continue;
+    if (invalidValueDays.test(value) || invalidValueTimes.test(value) || invalidValueStatus.test(value)) continue;
     filtered[key] = value;
   }
   return filtered;
@@ -185,6 +258,7 @@ function parseSpecsFromHtml(html: string): Record<string, string> {
   if (!html) return specs;
 
   Object.assign(specs, extractFromJsonLd(html));
+  Object.assign(specs, extractFromJsonScripts(html));
 
   const specSection =
     html.match(/<h\d[^>]*>\s*(Specifications|Specs?)\s*<\/h\d>[\s\S]*?(<table[\s\S]*?<\/table>)/i)?.[2] ??
@@ -248,6 +322,10 @@ export async function getModelSpecs(opts: {
         return payload;
       }
     }
+  }
+
+  if (HARLEY_SPECS_ONLY) {
+    return null;
   }
 
   const items = await getInventoryFeed();
