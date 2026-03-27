@@ -784,10 +784,11 @@ export default function Home() {
       fetch("/api/contacts", { cache: "no-store" }),
       fetch("/api/models-by-year", { cache: "no-store" })
     ]);
-    const [t, q, sup] = await Promise.all([
+    const [t, q, sup, googleResp] = await Promise.all([
       fetch("/api/todos", { cache: "no-store" }),
       fetch("/api/questions", { cache: "no-store" }),
-      fetch("/api/suppressions", { cache: "no-store" })
+      fetch("/api/suppressions", { cache: "no-store" }),
+      fetch("/api/google/status", { cache: "no-store" })
     ]);
 
     const settings = await s.json();
@@ -797,6 +798,7 @@ export default function Home() {
     const todosResp = await t.json();
     const questionsResp = await q.json();
     const suppressionsResp = await sup.json();
+    const googleJson = await googleResp.json().catch(() => null);
 
     setMode((settings?.mode as SystemMode) ?? "suggest");
     setConversations(
@@ -808,6 +810,11 @@ export default function Home() {
     setTodos((todosResp?.todos as TodoItem[]) ?? []);
     setQuestions((questionsResp?.questions as QuestionItem[]) ?? []);
     setSuppressions((suppressionsResp?.suppressions as SuppressionItem[]) ?? []);
+    if (googleResp.ok && googleJson?.ok && typeof googleJson.connected === "boolean") {
+      setGoogleStatus({ connected: googleJson.connected, reason: googleJson.reason, error: googleJson.error });
+    } else {
+      setGoogleStatus(null);
+    }
 
     if (modelsJson?.ok && modelsJson?.modelsByYear) {
       setModelsByYear(modelsJson.modelsByYear as Record<string, string[]>);
@@ -2310,6 +2317,10 @@ export default function Home() {
       return text.includes("tlp log failed") || text.includes("crm");
     });
   }, [questions]);
+  const hasNotifications = useMemo(() => {
+    const googleAlert = googleStatus ? !googleStatus.connected : false;
+    return googleAlert || crmAlerts.length > 0;
+  }, [googleStatus, crmAlerts.length]);
   const watchItems = useMemo(() => {
     return conversations.flatMap(conv => {
       const watches =
@@ -3973,11 +3984,14 @@ export default function Home() {
           <div className="text-xs text-white/60">{loading ? "…" : ""}</div>
           <div className="relative">
             <button
-              className="w-10 h-10 rounded flex items-center justify-center border border-white/20 hover:bg-white/5"
+              className="w-10 h-10 rounded flex items-center justify-center border border-white/20 hover:bg-white/5 relative"
               title="Settings"
               onClick={() => setSettingsOpen(v => !v)}
             >
               ⚙️
+              {hasNotifications ? (
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-600 border border-white" />
+              ) : null}
             </button>
             {settingsOpen ? (
               <div className="absolute bottom-12 left-12 w-56 bg-white border rounded-lg shadow-lg p-2 z-50">
