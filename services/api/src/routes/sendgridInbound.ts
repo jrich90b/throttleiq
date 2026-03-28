@@ -1071,7 +1071,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     inferredCta === "prequalify" ||
     /coa|credit application|apply for credit|finance application|prequal/i.test(leadSourceLower);
   if (isCreditLead) {
-    addTodo(conv, "approval", event.body ?? "Credit application", event.providerMessageId);
+    if (!creditTodoCreated) {
+      addTodo(conv, "approval", event.body ?? "Credit application", event.providerMessageId);
+    }
     creditTodoCreated = true;
     setFollowUpMode(conv, "manual_handoff", "credit_app");
     stopFollowUpCadence(conv, "manual_handoff");
@@ -1166,7 +1168,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   };
   if (isServiceLead) {
     let ack =
-      "Got it — I’ve received your service request. I’ll have our service department reach out shortly.";
+      "Thanks — I’ve received your service request. I’ll have our service department reach out shortly.";
     ack = await applyInitialAdfPrefix(ack);
     ack = withInitialPhoto(ack);
     ack = withInitialAvailabilityLine(ack);
@@ -1175,6 +1177,30 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     setFollowUpMode(conv, "manual_handoff", "service_request");
     stopFollowUpCadence(conv, "manual_handoff");
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
+    maybeAddInitialCallTodo();
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      draft: ack
+    });
+  }
+
+  if (isCreditLead && isInitialAdf) {
+    let ack =
+      "Thanks — I received your credit application. I’ll have our finance team reach out shortly.";
+    ack = await applyInitialAdfPrefix(ack);
+    addTodo(conv, "approval", event.body ?? "Credit application", event.providerMessageId);
+    setFollowUpMode(conv, "manual_handoff", "credit_app");
+    stopFollowUpCadence(conv, "manual_handoff");
+    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai");
     maybeAddInitialCallTodo();
     return res.status(200).json({
       ok: true,
@@ -1304,7 +1330,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   );
   if (isUsed && isPendingComplaint) {
     let ack =
-      "Thanks for the heads-up — I’ll check the sale‑pending status and follow up soon.";
+      "Thanks — I’ll check the sale‑pending status and follow up soon.";
     ack = await applyInitialAdfPrefix(ack);
     ack = withInitialPhoto(ack);
     ack = withInitialAvailabilityLine(ack);
@@ -1352,7 +1378,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     let emailDraft = "";
     if (blockPurchase) {
       ack =
-        `You are looking to sell your ${sellLabel}. ` +
+        `Thanks — I got your note about selling your ${sellLabel}. ` +
         `This is ${agentName} at ${dealerName}. ` +
         "Just a heads‑up: we’re not purchasing used bikes outright at the moment. " +
         "If you’re open to a trade‑in, I’m happy to help.";
@@ -1361,7 +1387,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         firstName || normalizeDisplayCase(conv.lead?.name) || "there";
       const name = rawName.split(" ")[0] || "there";
       emailDraft =
-        `Hi ${name},\n\nYou are looking to sell your ${sellLabel}. ` +
+        `Hi ${name},\n\nThanks for reaching out about selling your ${sellLabel}. ` +
         `This is ${agentName} at ${dealerName}. ` +
         "Just a heads‑up: we’re not purchasing used bikes outright at the moment. " +
         "If you’re open to a trade‑in, I’m happy to help.\n\nThanks,";
@@ -1369,7 +1395,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       stopFollowUpCadence(conv, "not_buying_used");
     } else {
       ack =
-        `You are looking to sell your ${sellLabel}. ` +
+        `Thanks — I got your note about selling your ${sellLabel}. ` +
         `This is ${agentName} at ${dealerName}. ` +
         "We can do a quick in‑person appraisal and give you a firm offer. " +
         "If you’re open to stopping by, what day and time works best?";
@@ -1382,7 +1408,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         firstName || normalizeDisplayCase(conv.lead?.name) || "there";
       const name = rawName.split(" ")[0] || "there";
       emailDraft =
-        `Hi ${name},\n\nYou are looking to sell your ${sellLabel}. ` +
+        `Hi ${name},\n\nThanks for reaching out about selling your ${sellLabel}. ` +
         `This is ${agentName} at ${dealerName}. ` +
         "We can do a quick in‑person appraisal and give you a firm offer. " +
         `If you’d like to stop in, ${bookingLine}\n\nThanks,`;
@@ -1441,7 +1467,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const agentName = profile?.agentName ?? "Brooke";
     const firstName = normalizeDisplayCase(conv.lead?.firstName);
     const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
-    let ack = `${greeting}thanks for reaching out. This is ${agentName} at ${dealerName}. I got your inquiry and I’ll make sure the team follows up soon.`;
+    let ack = `${greeting}Thanks — I got your inquiry. This is ${agentName} at ${dealerName}. I’ll make sure the team follows up soon.`;
     ack = await applyInitialAdfPrefix(ack);
     ack = withInitialPhoto(ack);
     ack = withInitialAvailabilityLine(ack);
@@ -1473,7 +1499,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const firstName = normalizeDisplayCase(conv.lead?.firstName);
     const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
     let ack =
-      `${greeting}thanks for your H‑D Meta promo offer request. ` +
+      `${greeting}Thanks — I got your H‑D Meta promo offer request. ` +
       `This is ${agentName} at ${dealerName}. ` +
       `I can help with pricing — which model are you interested in, and any trim or color?`;
     ack = await applyInitialAdfPrefix(ack);
@@ -1800,9 +1826,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (isInitialAdf && inquiryDayPart) {
     const dayPhrase = `${inquiryDayPart.dayLabel} ${inquiryDayPart.dayPart}`;
     if (initialAvailability === "in_stock") {
-      draft = `Thanks for checking — yes, it’s still available. If you want to come by ${dayPhrase}, what time works best?`;
+      draft = `Thanks — yes, it’s still available. If you want to come by ${dayPhrase}, what time works best?`;
     } else if (initialAvailability === "not_found") {
-      draft = `I’m not seeing that in stock right now, but I can double‑check. If you still want to come by ${dayPhrase}, what time works best?`;
+      draft = `Thanks — I’m not seeing that in stock right now, but I can double‑check. If you still want to come by ${dayPhrase}, what time works best?`;
     } else {
       draft = `If you want to come by ${dayPhrase}, what time works best?`;
     }
@@ -1814,7 +1840,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     );
     const modelClause = modelLabel ? ` on the ${modelLabel}` : "";
     draft =
-      `I saw you’re interested in a test ride${modelClause}. ` +
+      `Thanks — I saw you’re interested in a test ride${modelClause}. ` +
       "We’re not scheduling test rides right now, but I’m happy to help with pricing or set one up when we reopen. " +
       "If you want to stop by to check it out, just let me know.";
   }
@@ -1839,9 +1865,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const isRequestDetails = /request details/i.test(leadSourceLower);
     const questionTail = isRequestDetails ? " Any specific questions about the bike?" : "";
     if (initialAvailability === "in_stock") {
-      draft = `Thanks for your inquiry. I saw you wanted to learn more about the ${bikeLabel}. Want to stop in and check out the bike?${questionTail}`;
+      draft = `Thanks — I saw you wanted to learn more about the ${bikeLabel}. Want to stop in and check out the bike?${questionTail}`;
     } else if (!hasIdentifiers) {
-      draft = `I saw you wanted to learn more about the ${bikeLabel}.${isRequestDetails ? " Any specific questions about the bike?" : ""} I’m here to help.`;
+      draft = `Thanks — I saw you wanted to learn more about the ${bikeLabel}.${isRequestDetails ? " Any specific questions about the bike?" : ""} I’m here to help.`;
       suppressAvailabilityAppend = true;
     }
   }
