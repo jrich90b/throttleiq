@@ -723,6 +723,53 @@ function resolveModelFromText(
   return sorted.find(m => t.includes(m.toLowerCase())) ?? null;
 }
 
+function normalizeModelMatchText(text?: string | null): string {
+  return String(text ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function resolveModelsFromText(
+  text: string | null | undefined,
+  models: string[]
+): string[] {
+  const t = normalizeModelMatchText(text);
+  if (!t || !models.length) return [];
+  const sorted = [...models].sort((a, b) => b.length - a.length);
+  const matches: string[] = [];
+  for (const model of sorted) {
+    const key = normalizeModelMatchText(model);
+    if (!key) continue;
+    if (t.includes(key)) matches.push(model);
+  }
+  return Array.from(new Set(matches));
+}
+
+function extractMonthlyBudget(text?: string | null): number | null {
+  if (!text) return null;
+  const t = String(text);
+  const capped = t.match(/\b(?:no more than|max(?:imum)?|under|<=?)\s*\$?\s*([0-9][0-9,]{1,6})\b/i);
+  if (capped?.[1]) return Number(capped[1].replace(/,/g, ""));
+  const dollar = t.match(/\$\s*([0-9][0-9,]{1,6})\b/);
+  if (dollar && /\b(month|monthly|mo)\b/i.test(t)) {
+    return Number(dollar[1].replace(/,/g, ""));
+  }
+  return null;
+}
+
+function isUsedCondition(condition?: string | null, year?: string | null): boolean {
+  const cond = String(condition ?? "").toLowerCase();
+  if (/(pre|used|pre-owned|preowned|owned)/.test(cond)) return true;
+  const yearNum = year ? Number(year) : null;
+  if (!cond && yearNum && Number.isFinite(yearNum)) {
+    const nowYear = new Date().getFullYear();
+    return yearNum <= nowYear - 2;
+  }
+  return false;
+}
+
 function resolveModelFromHistory(
   history: { direction: "in" | "out"; body: string }[] | undefined,
   models: string[]
@@ -1353,6 +1400,79 @@ export async function orchestrateInbound(
       shouldRespond: true,
       draft
     });
+  }
+
+  const monthlyBudget = extractMonthlyBudget(event.body);
+  const wantsPreownedBudget =
+    !!monthlyBudget &&
+    /\b(pre[-\s]?owned|preowned|used|pre[-\s]?owned realm)\b/i.test(event.body) &&
+    /\binsurance\b/i.test(event.body);
+  if (wantsPreownedBudget) {
+    try {
+      const items = await getInventoryFeed();
+      const models = Array.from(new Set(items.map(i => i.model).filter(Boolean))) as string[];
+      const mentionedModels = resolveModelsFromText(event.body, models);
+      const priceCap = 10000;
+      const holds = await listInventoryHolds();
+      const solds = await listInventorySolds();
+      const matches = items.filter(i => {
+        if (!i.model || !i.price || i.price > priceCap) return false;
+        if (!isUsedCondition(i.condition, i.year)) return false;
+        if (mentionedModels.length) {
+          const modelKey = normalizeModelMatchText(i.model);
+          const hasMatch = mentionedModels.some(m => normalizeModelMatchText(m) === modelKey);
+          if (!hasMatch) return false;
+        }
+        const holdKey = normalizeInventoryHoldKey(i.stockId, i.vin);
+        const soldKey = normalizeInventorySoldKey(i.stockId, i.vin);
+        if (holdKey && holds?.[holdKey]) return false;
+        if (soldKey && solds?.[soldKey]) return false;
+        return true;
+      });
+      const sorted = matches.sort((a, b) => (a.price ?? 0) - (b.price ?? 0)).slice(0, 4);
+      if (!sorted.length) {
+        const modelNote = mentionedModels.length
+          ? ` in ${mentionedModels.map(normalizeModelLabel).join(", ")}`
+          : "";
+        return finalize({
+          intent: "PRICING",
+          stage: "ENGAGED",
+          shouldRespond: true,
+          draft:
+            `I don’t see any pre‑owned options under $10k${modelNote} right now. ` +
+            `If you’re open to a higher budget or different models, tell me what you want to focus on.`
+        });
+      }
+      const nf = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+      const list = sorted
+        .map(item => {
+          const yearLabel = item.year ? `${item.year} ` : "";
+          const modelLabel = normalizeModelLabel(item.model);
+          const priceLabel = item.price ? nf.format(item.price) : "";
+          const stockLabel = item.stockId ? ` (Stock ${item.stockId})` : "";
+          return `${yearLabel}${modelLabel} — ${priceLabel}${stockLabel}`;
+        })
+        .join("; ");
+      const budgetLine = monthlyBudget
+        ? `Based on your ~$${monthlyBudget}/mo target (incl. insurance), I’m focusing on pre‑owned under $10k.`
+        : "I’m focusing on pre‑owned under $10k.";
+      return finalize({
+        intent: "PRICING",
+        stage: "ENGAGED",
+        shouldRespond: true,
+        draft:
+          `${budgetLine} Here are a few options we have now: ${list}. ` +
+          `If you want to widen the budget or swap models, just say the word.`
+      });
+    } catch {
+      return finalize({
+        intent: "PRICING",
+        stage: "ENGAGED",
+        shouldRespond: true,
+        draft:
+          "I can pull pre‑owned options under $10k and send a few picks. Which models should I focus on?"
+      });
+    }
   }
 
   if (wantsAvailability && multiIntentCount === 1) {
