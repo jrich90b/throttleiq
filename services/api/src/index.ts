@@ -8223,6 +8223,47 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return res.json({ ok: true, conversation: conv, draft: reply });
   }
 
+  const isServiceLead =
+    conv.classification?.bucket === "service" || conv.classification?.cta === "service_request";
+  if (isServiceLead) {
+    const t = String(event.body ?? "").toLowerCase();
+    const complimentRegex =
+      /\b(love|like|awesome|amazing|great|cool|nice|sweet|beautiful|killer|badass|sick|clean)\b/.test(t) ||
+      /\b(looks great|looks amazing|looks awesome|sounds great)\b/.test(t) ||
+      /\b(v&h|short shots?)\b/.test(t) ||
+      (/\b(wheels?|exhaust|pipes?|paint|color|trim|bars?|seat)\b/.test(t) &&
+        /\b(love|like|awesome|amazing|great|cool|nice|sweet|beautiful|killer|badass|sick|clean)\b/.test(t));
+    const complimentLLM =
+      (await classifyComplimentWithLLM({
+        text: event.body ?? "",
+        history: buildHistory(conv, 6)
+      })) ?? false;
+    if (complimentRegex || complimentLLM) {
+      const reply = "Totally — glad you like it.";
+      if (channel === "email") {
+        conv.emailDraft = reply;
+        saveConversation(conv);
+        return res.json({ ok: true, conversation: conv, draft: reply });
+      }
+      discardPendingDrafts(conv);
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      saveConversation(conv);
+      return res.json({ ok: true, conversation: conv, draft: reply });
+    }
+    if (/\b(thanks|thank you|thanks again|thx|ty|appreciate)\b/.test(t)) {
+      const reply = "You're welcome!";
+      if (channel === "email") {
+        conv.emailDraft = reply;
+        saveConversation(conv);
+        return res.json({ ok: true, conversation: conv, draft: reply });
+      }
+      discardPendingDrafts(conv);
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      saveConversation(conv);
+      return res.json({ ok: true, conversation: conv, draft: reply });
+    }
+  }
+
   const result = await orchestrateInbound(event, history, {
     appointment: conv.appointment,
     followUp: conv.followUp,
