@@ -1912,10 +1912,21 @@ export async function orchestrateInbound(
         const modelUnknown = !modelCandidate || isUnknownModel(modelCandidate);
         const modelLabel = modelCandidate ?? "that model";
         const stockLabel = lead.vehicle?.stockId ?? stockId;
+        const msrpColors = await getMsrpColorNames();
+        const colorMention = extractColorMention(event.body, msrpColors);
+        const modelMentionedInText = !!modelFromText;
+        if (!modelMentionedInText && colorMention) {
+          const leadName = lead?.firstName?.trim() || "there";
+          const question = `Which ${yearLabel}model are you interested in (the ${colorMention} color)?`;
+          return finalize({
+            intent,
+            stage: "ENGAGED",
+            shouldRespond: true,
+            draft: `Hi ${leadName} — I can help with pricing. ${question}${financeLine ? ` ${financeLine}` : ""}`.trim()
+          });
+        }
         if (modelUnknown) {
           const leadName = lead?.firstName?.trim() || "there";
-          const msrpColors = await getMsrpColorNames();
-          const colorMention = extractColorMention(event.body, msrpColors);
           const colorNote = colorMention ? ` (the ${colorMention} color)` : "";
           const question = `Which ${yearLabel}model are you interested in${colorNote}?`;
           return finalize({
