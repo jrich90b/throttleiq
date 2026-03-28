@@ -428,7 +428,6 @@ async function requestStructuredJson(args: {
     const resp = await client.responses.parse({
       model: args.model,
       input: args.prompt,
-      temperature: 0,
       max_output_tokens: args.maxOutputTokens ?? 220,
       text: {
         format: {
@@ -468,7 +467,6 @@ async function requestStructuredJson(args: {
     const resp = await client.responses.create({
       model: args.model,
       input: args.prompt,
-      temperature: 0,
       max_output_tokens: args.maxOutputTokens ?? 220
     });
     const raw = resp.output_text?.trim() ?? "";
@@ -506,7 +504,11 @@ export async function parseBookingIntentWithLLM(args: {
   if (!useLLM) return null;
 
   const debug = process.env.LLM_BOOKING_PARSER_DEBUG === "1";
-  const model = process.env.OPENAI_BOOKING_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const primaryModel =
+    process.env.OPENAI_BOOKING_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_BOOKING_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
   const text = String(args.text ?? "").trim();
   if (!text) return null;
 
@@ -537,15 +539,22 @@ export async function parseBookingIntentWithLLM(args: {
     `Message: ${text}`
   ].join("\n");
 
-  const parsed = await requestStructuredJson({
-    model,
-    prompt,
-    schemaName: "booking_intent_parser",
-    schema: BOOKING_PARSER_JSON_SCHEMA,
-    maxOutputTokens: 220,
-    debugTag: "llm-booking-parser",
-    debug
-  });
+  const runParse = async (model: string): Promise<any | null> => {
+    return requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "booking_intent_parser",
+      schema: BOOKING_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 220,
+      debugTag: "llm-booking-parser",
+      debug
+    });
+  };
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
   if (!parsed) return null;
 
   const intentRaw = String(parsed.intent ?? "").toLowerCase();
