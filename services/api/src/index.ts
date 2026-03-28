@@ -10852,18 +10852,29 @@ if (authToken && signature) {
     const wantsEverything = /\b(all (the )?details|everything|all (the )?info|all specs?|full details|everything on the page)\b/i.test(
       textLower
     );
+    const finishPreferenceOnly =
+      specsFocus === "accessories" &&
+      /\b(black(?:ed)?\s*(?:out|trim|finish)?|chrome\s*(?:trim|finish)?|black\s*trim|black\s*finish|chrome\s*trim|chrome\s*finish)\b/i.test(
+        textLower
+      ) &&
+      !specsFormatChoice &&
+      !wantsEverything &&
+      !/\b(specs?|spec sheet|highlights?|details|info|information)\b/i.test(textLower);
     if (!isCompare && hasBaseModel) {
-      conv.specsContext = {
-        model: baseModelForLabel ? String(baseModelForLabel) : undefined,
-        year: baseYearForLabel ? String(baseYearForLabel) : null,
-        format: specsFormatChoice ?? conv.specsContext?.format ?? null,
-        updatedAt: nowIso()
-      };
+      if (!finishPreferenceOnly) {
+        conv.specsContext = {
+          model: baseModelForLabel ? String(baseModelForLabel) : undefined,
+          year: baseYearForLabel ? String(baseYearForLabel) : null,
+          format: specsFormatChoice ?? conv.specsContext?.format ?? null,
+          updatedAt: nowIso()
+        };
+      }
       const wantsSpecsNow =
-        wantsEverything ||
-        !!specsFormatChoice ||
-        !!specsFocus ||
-        /\b(specs?|spec sheet|highlights?|details|info|information)\b/i.test(textLower);
+        !finishPreferenceOnly &&
+        (wantsEverything ||
+          !!specsFormatChoice ||
+          !!specsFocus ||
+          /\b(specs?|spec sheet|highlights?|details|info|information)\b/i.test(textLower));
       if (wantsSpecsNow) {
         setDialogState(conv, "specs_single_answered");
         const wantsHighlights =

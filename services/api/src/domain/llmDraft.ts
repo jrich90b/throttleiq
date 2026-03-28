@@ -60,6 +60,17 @@ function sanitizeSmsDraftNoEmail(draft: string, allowEmail: boolean): string {
   return out;
 }
 
+function sanitizePhotoAsk(draft: string): string {
+  if (!draft) return draft;
+  let out = draft;
+  // Remove "exterior, cockpit, and close-ups" style photo triage requests.
+  out = out.replace(
+    /[^.?!]*\bexterior\b[^.?!]*\bcockpit\b[^.?!]*\bclose[-\s]?ups?\b[^.?!]*(?:[.?!]|$)/gi,
+    "I can send photos if you'd like."
+  );
+  return out;
+}
+
 export async function classifySchedulingIntent(input: string): Promise<boolean> {
   const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
   if (!useLLM) return false;
@@ -1103,5 +1114,6 @@ ${ctx.history.map(h => `${h.direction.toUpperCase()}: ${h.body}`).join("\n\n")}
   if (ctx.channel === "sms") {
     draft = sanitizeSmsDraftNoEmail(draft, userAskedForEmail(ctx));
   }
+  draft = sanitizePhotoAsk(draft);
   return draft;
 }
