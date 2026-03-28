@@ -794,10 +794,12 @@ export async function orchestrateInbound(
 ): Promise<OrchestratorResult> {
   await loadSystemPrompt("orchestrator");
 
+  let flowDebug: OrchestratorResult["debugFlow"] | null = null;
   const finalize = (result: OrchestratorResult): OrchestratorResult => {
     const out: OrchestratorResult = {
       ...result,
-      suggestedSlots: result.suggestedSlots ?? []
+      suggestedSlots: result.suggestedSlots ?? [],
+      debugFlow: result.debugFlow ?? flowDebug ?? undefined
     };
     console.log("[orchestrateInbound] return", {
       provider: event.provider,
@@ -1170,6 +1172,28 @@ export async function orchestrateInbound(
     !managerRequest &&
     !approvalStatus &&
     !callbackRequest;
+  flowDebug = {
+    at: new Date().toISOString(),
+    ambiguousFlow,
+    intent,
+    signals: {
+      pricingIntent,
+      financeRequest,
+      hoursRequest,
+      managerRequest,
+      approvalStatus,
+      callbackRequest,
+      wantsAvailability,
+      wantsScheduling,
+      wantsPayments,
+      wantsTrade,
+      multiIntentCount
+    }
+  };
+  if (process.env.LLM_DEBUG_FLOW === "1") {
+    // eslint-disable-next-line no-console
+    console.log("[llm-flow]", { leadKey: event.from, ...flowDebug });
+  }
 
   const pricingTermsOnly = /(price|pricing|msrp|cost|how much|what's the price|what is the price|out the door|\botd\b|total price)/i.test(
     String(event.body ?? "")

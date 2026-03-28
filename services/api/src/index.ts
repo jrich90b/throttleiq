@@ -730,7 +730,7 @@ app.post("/debug/inbound/process", express.json(), async (req, res) => {
       weather: weatherStatus ?? null
     });
 
-    if (result?.draft && result.shouldRespond) {
+  if (result?.draft && result.shouldRespond) {
       appendOutbound(conv, event.to, event.from, result.draft, "draft_ai");
       if (result.pricingAttempted) incrementPricingAttempt(conv);
       if (result.paymentsAnswered) setDialogState(conv, "payments_answered");
@@ -744,9 +744,18 @@ app.post("/debug/inbound/process", express.json(), async (req, res) => {
       if (result.memorySummary) {
         setMemorySummary(conv, result.memorySummary, conv.messages.length);
       }
-      if (result.pickupUpdate) {
-        conv.pickup = { ...(conv.pickup ?? {}), ...result.pickupUpdate, updatedAt: nowIso() };
-      }
+    if (result.pickupUpdate) {
+      conv.pickup = { ...(conv.pickup ?? {}), ...result.pickupUpdate, updatedAt: nowIso() };
+    }
+  }
+  if (result?.debugFlow) {
+    conv.lastDecision = result.debugFlow;
+  }
+  if (result?.debugFlow) {
+    conv.lastDecision = result.debugFlow;
+  }
+    if (result?.debugFlow) {
+      conv.lastDecision = result.debugFlow;
     }
 
     res.json({ ok: true, conversationId: conv.id, draft: result?.draft ?? null });

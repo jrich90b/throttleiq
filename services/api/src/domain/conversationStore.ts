@@ -387,6 +387,32 @@ export type Conversation = {
   contactPreference?: "call_only";
   voiceContext?: VoiceContext;
   memorySummary?: { text: string; updatedAt: string; messageCount: number };
+  lastDecision?: {
+    at: string;
+    ambiguousFlow: boolean;
+    intent:
+      | "AVAILABILITY"
+      | "PRICING"
+      | "FINANCING"
+      | "TRADE_IN"
+      | "TEST_RIDE"
+      | "SPECS"
+      | "GENERAL"
+      | "UNSURE";
+    signals: {
+      pricingIntent: boolean;
+      financeRequest: boolean;
+      hoursRequest: boolean;
+      managerRequest: boolean;
+      approvalStatus: boolean;
+      callbackRequest: boolean;
+      wantsAvailability: boolean;
+      wantsScheduling: boolean;
+      wantsPayments: boolean;
+      wantsTrade: boolean;
+      multiIntentCount: number;
+    };
+  };
   lastIntent?: {
     name:
       | "trade"

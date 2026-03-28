@@ -35,6 +35,24 @@ export type OrchestratorResult = {
   stage: LeadStage;
   shouldRespond: boolean;
   draft: string;
+  debugFlow?: {
+    at: string;
+    ambiguousFlow: boolean;
+    intent: LeadIntent;
+    signals: {
+      pricingIntent: boolean;
+      financeRequest: boolean;
+      hoursRequest: boolean;
+      managerRequest: boolean;
+      approvalStatus: boolean;
+      callbackRequest: boolean;
+      wantsAvailability: boolean;
+      wantsScheduling: boolean;
+      wantsPayments: boolean;
+      wantsTrade: boolean;
+      multiIntentCount: number;
+    };
+  };
   smallTalk?: boolean;
   handoff?: { required: boolean; reason: "pricing" | "payments" | "approval" | "manager" | "other"; ack: string };
   autoClose?: { reason: "international" | "corporate" | "other" };
