@@ -1161,6 +1161,15 @@ export async function orchestrateInbound(
     intent === "TRADE_IN" ||
     /(trade[-\s]?in|trade appraisal|trade value|value my trade)/i.test(event.body);
   const multiIntentCount = [wantsAvailability, wantsScheduling, wantsPayments, wantsTrade].filter(Boolean).length;
+  const ambiguousFlow =
+    intent === "GENERAL" &&
+    multiIntentCount === 0 &&
+    !pricingIntent &&
+    !financeRequest &&
+    !hoursRequest &&
+    !managerRequest &&
+    !approvalStatus &&
+    !callbackRequest;
 
   const pricingTermsOnly = /(price|pricing|msrp|cost|how much|what's the price|what is the price|out the door|\botd\b|total price)/i.test(
     String(event.body ?? "")
@@ -2362,11 +2371,11 @@ export async function orchestrateInbound(
         handoff,
         callbackRequest: callbackRequested,
         voiceSummary: ctx?.voiceSummary ?? null,
-        memorySummary: ctx?.memorySummary ?? null
+        memorySummary: ambiguousFlow ? ctx?.memorySummary ?? null : null
       });
 
       let memorySummary: string | null = null;
-      if (ctx?.memorySummaryShouldUpdate) {
+      if (ambiguousFlow && ctx?.memorySummaryShouldUpdate) {
         memorySummary = await summarizeConversationMemoryWithLLM({
           existingSummary: ctx?.memorySummary ?? null,
           lead: ctx?.lead ?? null,
