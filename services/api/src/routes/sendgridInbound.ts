@@ -507,6 +507,46 @@ function stripHtml(input?: string): string | undefined {
   return cleaned || undefined;
 }
 
+function looksLikeMime(raw?: string | null): boolean {
+  if (!raw) return false;
+  return /(received:|arc-|dkim-|mime-version:|content-type:|message-id:)/i.test(raw);
+}
+
+function extractPlainTextFromMime(raw?: string | null): string | null {
+  if (!raw) return null;
+  const boundaryMatch =
+    raw.match(/boundary="([^"]+)"/i) || raw.match(/boundary=([^\s;]+)/i);
+  const boundary = boundaryMatch?.[1];
+  if (!boundary) return null;
+  const parts = raw.split(`--${boundary}`);
+  for (const part of parts) {
+    if (!/content-type:\s*text\/plain/i.test(part)) continue;
+    const headersEnd = part.indexOf("\n\n");
+    const bodyStart = headersEnd >= 0 ? headersEnd + 2 : part.indexOf("\r\n\r\n") + 4;
+    const bodyRaw = bodyStart > 0 ? part.slice(bodyStart) : part;
+    const decoded = /quoted-printable/i.test(part)
+      ? decodeQuotedPrintable(bodyRaw)
+      : bodyRaw;
+    const cleaned = decoded.replace(/\r\n/g, "\n").trim();
+    if (cleaned) return cleaned;
+  }
+  return null;
+}
+
+function cleanInboundEmailText(
+  textBody?: string,
+  htmlBody?: string,
+  emailBody?: string
+): string {
+  const plain = textBody?.trim();
+  if (plain && !looksLikeMime(plain)) return plain;
+  const mimeCandidate = emailBody || textBody || "";
+  const extracted = extractPlainTextFromMime(mimeCandidate);
+  if (extracted) return extracted;
+  const htmlText = stripHtml(htmlBody) ?? stripHtml(emailBody);
+  return htmlText?.trim() || plain || "";
+}
+
 function isCallOnlyText(input?: string | null): boolean {
   if (!input) return false;
   return /\b(call only|phone only|call me only|no text|do not text|don't text|text me not)\b/i.test(
@@ -722,9 +762,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         ? extractLeadKeyFromTaggedEmail(envelope?.to[0])
         : extractLeadKeyFromTaggedEmail(envelope?.to));
     const subject = typeof req.body?.subject === "string" ? req.body.subject.trim() : "";
-    const plain = textBody?.trim();
-    const htmlText = stripHtml(htmlBody) ?? stripHtml(emailBody);
-    const bodyText = plain || htmlText || "";
+    const bodyText = cleanInboundEmailText(textBody, htmlBody, emailBody);
     const body = [subject ? `Subject: ${subject}` : null, bodyText]
       .filter(Boolean)
       .join("\n\n")
