@@ -8131,7 +8131,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     receivedAt: inbound.at ?? new Date().toISOString()
   };
 
-  const history = buildHistory(conv, 20);
+  const history = buildHistory(conv, 60);
   const memorySummary = conv.memorySummary?.text ?? null;
   const memorySummaryShouldUpdate = shouldUpdateMemorySummary(conv);
   const dealerProfile = await getDealerProfile();
