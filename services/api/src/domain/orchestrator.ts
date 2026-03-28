@@ -289,6 +289,13 @@ function detectPaymentPressure(text: string): boolean {
   );
 }
 
+function detectDownPaymentQuestion(text: string): boolean {
+  const t = text.toLowerCase();
+  return /(how much|what|what would|what do|do i need|need).*(down payment|downpayment|down|deposit)/.test(
+    t
+  );
+}
+
 function detectFinanceRequest(text: string): boolean {
   const t = text.toLowerCase();
   return /(credit app|credit application|apply for credit|finance application|prequal|pre-qual|prequalify|financing|finance)\b/.test(
@@ -1484,6 +1491,9 @@ export async function orchestrateInbound(
       const numericYear = yearForRange ? Number(yearForRange) : null;
       const paymentFollowUp = detectPaymentFollowUp(event.body, history ?? []);
       const paymentQuestion = detectPaymentPressure(event.body) || paymentFollowUp;
+      const downQuestionOnly =
+        detectDownPaymentQuestion(event.body) &&
+        !/(payment|monthly|apr|term|rate|interest)/i.test(event.body);
       const preferredTerm = extractPreferredTermMonths(event.body) ?? 60;
       const downInfo = parseDownPayment(event.body);
       const downPayment = downInfo?.amount;
@@ -1512,6 +1522,17 @@ export async function orchestrateInbound(
               ? { min: msrpLookup.exact, max: msrpLookup.exact }
               : msrpLookup?.rangeForTrim ?? msrpLookup?.rangeForColor ?? msrpLookup?.range ?? null;
 
+      if (downQuestionOnly) {
+        const financeLine = buildFinanceAppLine(dealerProfile);
+        const draft = `Down payment depends on the finance application. ${financeLine}`;
+        return finalize({
+          intent,
+          stage: "ENGAGED",
+          shouldRespond: true,
+          draft,
+          paymentsAnswered: true
+        });
+      }
       if (paymentQuestion && paymentRange) {
         let draft = buildMonthlyPaymentLine({
           priceMin: paymentRange.min,
