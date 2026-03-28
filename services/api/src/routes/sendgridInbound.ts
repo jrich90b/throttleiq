@@ -1119,7 +1119,6 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     let body = String(text ?? "").trim();
     if (body.toLowerCase().startsWith(prefixLower)) return body;
     body = body.replace(/^hi\s+[^—]+—\s*/i, "");
-    body = body.replace(/^thanks for[^.]*\.\s*/i, "");
     body = body.replace(/^i (just )?saw[^.]*\.\s*/i, "");
     const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const agentEsc = esc(agentName);
@@ -1866,7 +1865,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const questionTail = isRequestDetails ? " Any specific questions about the bike?" : "";
     if (initialAvailability === "in_stock") {
       draft =
-        `About the ${bikeLabel} — thanks for your inquiry. ` +
+        `Thanks for your inquiry about the ${bikeLabel}. ` +
         `If you’d like to stop in and check it out, just say the word.${questionTail ? " Any specific questions I can answer?" : ""}`;
     } else if (!hasIdentifiers) {
       draft = `Thanks — I saw you wanted to learn more about the ${bikeLabel}.${isRequestDetails ? " Any specific questions about the bike?" : ""} I’m here to help.`;
