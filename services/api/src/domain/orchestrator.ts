@@ -3,6 +3,7 @@ import { loadSystemPrompt } from "./loadPrompt.js";
 import type { InboundMessageEvent, OrchestratorResult } from "./types.js";
 import {
   classifySmallTalkWithLLM,
+  parseDialogActWithLLM,
   generateDraftWithLLM,
   summarizeConversationMemoryWithLLM
 } from "./llmDraft.js";
@@ -51,7 +52,7 @@ function hasStrongIntentSignal(text: string): boolean {
   return (
     /(trade|trade[-\s]?in|value my trade|trade value|trade price)/.test(t) ||
     /(stock|vin|available|availability|still there|in stock)/.test(t) ||
-    /(price|pricing|tax|fees|total|otd|out the door|payment|monthly|finance|credit|apr|down|term|budget|deal|rebate|incentive)/.test(t) ||
+    /(price|pricing|tax|fees|total|otd|out the door|payment|monthly|finance|credit|apr|down|term|budget|\bdeal(?:s)?\b|rebate|incentive)/.test(t) ||
     /(test ride|ride it|demo|ride up|take a ride|check it out|look at (it|the)|see (it|the)|come (in|by|up|down)|stop by|swing by|visit|drive (up|down))/i.test(t) ||
     /(call me|give me a call|call back|callback|please call)/.test(t) ||
     /(appointment|schedule|book|set up|come in|stop in|visit)/.test(t) ||
@@ -178,6 +179,45 @@ function pickSmallTalkReply(seed: string): string {
     hash = (hash + raw.charCodeAt(i)) % pool.length;
   }
   return pool[hash];
+}
+
+function buildDialogActReply(args: {
+  act: "trust_concern" | "frustration" | "objection" | "preference" | "clarification" | "none";
+  topic: "used_inventory" | "new_inventory" | "pricing" | "trade" | "scheduling" | "service" | "general";
+  nextAction: "reassure_then_clarify" | "empathize_then_offer_help" | "ask_one_clarifier" | "normal_flow";
+  askFocus?: "model" | "budget" | "timing" | "condition" | "other" | null;
+  lead?: LeadProfile | null;
+}): string | null {
+  const modelLabel = normalizeModelLabel(args.lead?.vehicle?.model ?? args.lead?.vehicle?.description);
+  const yearLabel = args.lead?.vehicle?.year ? `${args.lead?.vehicle?.year} ` : "";
+  const usedLabel = modelLabel === "that bike" ? "used bike" : `used ${yearLabel}${modelLabel}`.trim();
+  const clarifier =
+    args.askFocus === "model"
+      ? "Are you set on that model or open to similar options?"
+      : args.askFocus === "budget"
+        ? "What budget range would you like me to target?"
+        : args.askFocus === "timing"
+          ? "Are you shopping now or a bit later?"
+          : args.askFocus === "condition"
+            ? "Are you set on pre-owned, or open to new as well?"
+            : "What matters most so I can narrow this down for you?";
+
+  if (args.topic === "used_inventory" && (args.act === "trust_concern" || args.nextAction === "reassure_then_clarify")) {
+    return (
+      "Totally get it — buying through a dealer usually gives a lot more peace of mind than private listings. " +
+      `I can help you find a ${usedLabel}. ${clarifier}`
+    );
+  }
+  if (args.nextAction === "empathize_then_offer_help") {
+    return `I get that — that can definitely be frustrating. I can help with that. ${clarifier}`;
+  }
+  if (args.nextAction === "ask_one_clarifier") {
+    return clarifier;
+  }
+  if (args.act === "frustration" || args.act === "objection" || args.act === "preference" || args.act === "clarification") {
+    return `Got it. ${clarifier}`;
+  }
+  return null;
 }
 
 function detectManagerRequest(text: string): boolean {
@@ -554,7 +594,22 @@ function detectPaymentFollowUp(text: string, history: { direction: "in" | "out";
 function detectPricingOrPayment(text: string, intent?: OrchestratorResult["intent"]): boolean {
   if (intent === "PRICING" || intent === "FINANCING") return true;
   const t = text.toLowerCase();
-  return /(price|deal|discount|lowest|\botd\b|out the door|payment|monthly|down|apr|term)/.test(t);
+  return /(price|\bdeal(?:s)?\b|discount|lowest|\botd\b|out the door|payment|monthly|down|apr|term)/.test(t);
+}
+
+function isUsedDealerTrustStatement(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  const mentionsUsed = /\b(used|pre[-\s]?owned)\b/.test(t);
+  const trustLanguage =
+    /\b(bummer|peace of mind|sketchy|facebook|fb marketplace|craigslist|through a dealer|from a dealer|prefer a dealer)\b/.test(
+      t
+    );
+  const explicitAsk =
+    /\?/.test(t) ||
+    /\b(price|payment|otd|out the door|quote|available|availability|in stock|still there|call|schedule|book|appointment|test ride|trade|finance|apr)\b/.test(
+      t
+    );
+  return mentionsUsed && trustLanguage && !explicitAsk;
 }
 
 function detectCorporateIntent(text: string): boolean {
@@ -1101,6 +1156,78 @@ export async function orchestrateInbound(
   const pricingIntent =
     detectPricingOrPayment(event.body, intent) ||
     /request a quote|raq/i.test(ctx?.leadSource ?? "");
+
+  if (isUsedDealerTrustStatement(event.body)) {
+    const model = normalizeModelLabel(
+      ctx?.lead?.vehicle?.model ?? ctx?.lead?.vehicle?.description
+    );
+    const yearLabel = ctx?.lead?.vehicle?.year ? `${ctx.lead.vehicle.year} ` : "";
+    const modelLine = model ? `${yearLabel}${model}`.trim() : "that model";
+    return finalize({
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft:
+        `Totally get it — buying through a dealer usually gives a lot more peace of mind than Facebook. ` +
+        `I can keep an eye out for a used ${modelLine} and send over options as soon as we get one. ` +
+        "Are you set on that model or open to similar ones?"
+    });
+  }
+
+  const dialogActParserEligible =
+    useLLM &&
+    process.env.LLM_DIALOG_ACT_PARSER_ENABLED === "1" &&
+    event.provider === "twilio";
+  const dialogActParse =
+    dialogActParserEligible &&
+    intent === "GENERAL" &&
+    !pricingIntent &&
+    !depositRequest &&
+    !hoursRequest &&
+    !managerRequest &&
+    !approvalStatus &&
+    !callbackRequest
+      ? await parseDialogActWithLLM({
+          text: event.body,
+          history,
+          lead: ctx?.lead ?? undefined
+        })
+      : null;
+  const dialogActConfidence =
+    typeof dialogActParse?.confidence === "number" ? dialogActParse.confidence : 0;
+  const dialogActConfidenceMin = Number(process.env.LLM_DIALOG_ACT_CONFIDENCE_MIN ?? 0.75);
+  const dialogActAccepted =
+    !!dialogActParse &&
+    dialogActParse.act !== "none" &&
+    !dialogActParse.explicitRequest &&
+    dialogActConfidence >= dialogActConfidenceMin;
+  if (process.env.DEBUG_DIALOG_ACT === "1" && dialogActParse) {
+    console.log("[llm-dialog-act]", {
+      act: dialogActParse.act,
+      topic: dialogActParse.topic,
+      explicitRequest: dialogActParse.explicitRequest,
+      nextAction: dialogActParse.nextAction,
+      askFocus: dialogActParse.askFocus,
+      confidence: dialogActParse.confidence
+    });
+  }
+  if (dialogActAccepted) {
+    const dialogActDraft = buildDialogActReply({
+      act: dialogActParse.act,
+      topic: dialogActParse.topic,
+      nextAction: dialogActParse.nextAction,
+      askFocus: dialogActParse.askFocus,
+      lead: ctx?.lead ?? null
+    });
+    if (dialogActDraft) {
+      return finalize({
+        intent: "GENERAL",
+        stage: "ENGAGED",
+        shouldRespond: true,
+        draft: dialogActDraft
+      });
+    }
+  }
 
   if (depositRequest) {
     const dealerProfile = await getDealerProfile();

@@ -326,6 +326,15 @@ export type IntentParse = {
   confidence?: number;
 };
 
+export type DialogActParse = {
+  act: "trust_concern" | "frustration" | "objection" | "preference" | "clarification" | "none";
+  topic: "used_inventory" | "new_inventory" | "pricing" | "trade" | "scheduling" | "service" | "general";
+  explicitRequest: boolean;
+  nextAction: "reassure_then_clarify" | "empathize_then_offer_help" | "ask_one_clarifier" | "normal_flow";
+  askFocus?: "model" | "budget" | "timing" | "condition" | "other" | null;
+  confidence?: number;
+};
+
 function safeParseJson(text: string): any | null {
   const raw = String(text ?? "").trim();
   if (!raw) return null;
@@ -447,6 +456,32 @@ const INTENT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
         time_text: { type: "string" },
         phone: { type: "string" }
       }
+    },
+    confidence: { type: "number" }
+  }
+};
+
+const DIALOG_ACT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["act", "topic", "explicit_request", "next_action", "ask_focus", "confidence"],
+  properties: {
+    act: {
+      type: "string",
+      enum: ["trust_concern", "frustration", "objection", "preference", "clarification", "none"]
+    },
+    topic: {
+      type: "string",
+      enum: ["used_inventory", "new_inventory", "pricing", "trade", "scheduling", "service", "general"]
+    },
+    explicit_request: { type: "boolean" },
+    next_action: {
+      type: "string",
+      enum: ["reassure_then_clarify", "empathize_then_offer_help", "ask_one_clarifier", "normal_flow"]
+    },
+    ask_focus: {
+      type: "string",
+      enum: ["model", "budget", "timing", "condition", "other", "none"]
     },
     confidence: { type: "number" }
   }
@@ -798,6 +833,123 @@ export async function parseIntentWithLLM(args: {
     explicitRequest,
     availability,
     callback,
+    confidence
+  };
+}
+
+export async function parseDialogActWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<DialogActParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_DIALOG_ACT_PARSER_ENABLED === "1" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_DIALOG_ACT_PARSER_DEBUG === "1";
+  const primaryModel = process.env.OPENAI_DIALOG_ACT_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_DIALOG_ACT_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-4).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const prompt = [
+    "You are a dialog-act classifier for dealership inbound messages.",
+    "Return only JSON that matches the provided schema.",
+    "",
+    "Guidelines:",
+    "- explicit_request=true only when the customer directly asks for an action or asks a question needing a concrete answer.",
+    "- trust_concern covers safety/credibility concerns (e.g., private-party is sketchy, wants dealer peace of mind).",
+    "- frustration covers disappointment or annoyance without a direct ask.",
+    "- objection covers pushback/resistance (price pressure, skepticism, refusal) without a direct ask.",
+    "- preference covers non-question preferences (used vs new, color/style, financing preference).",
+    "- clarification covers uncertain/ambiguous statements asking for understanding but not a concrete inventory/pricing/scheduling ask.",
+    "- If message contains a direct inventory/pricing/scheduling/trade/service request, set explicit_request=true and next_action=normal_flow.",
+    "- ask_focus should point to the single best follow-up clarifier for no-request statements.",
+    "- confidence is a number from 0 to 1.",
+    "",
+    `Known lead info: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null,
+      condition: lead?.vehicle?.condition ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> => {
+    return requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "dialog_act_parser",
+      schema: DIALOG_ACT_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 180,
+      debugTag: "llm-dialog-act-parser",
+      debug
+    });
+  };
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const actRaw = String(parsed.act ?? "").toLowerCase();
+  const act: DialogActParse["act"] =
+    actRaw === "trust_concern" ||
+    actRaw === "frustration" ||
+    actRaw === "objection" ||
+    actRaw === "preference" ||
+    actRaw === "clarification"
+      ? actRaw
+      : "none";
+
+  const topicRaw = String(parsed.topic ?? "").toLowerCase();
+  const topic: DialogActParse["topic"] =
+    topicRaw === "used_inventory" ||
+    topicRaw === "new_inventory" ||
+    topicRaw === "pricing" ||
+    topicRaw === "trade" ||
+    topicRaw === "scheduling" ||
+    topicRaw === "service"
+      ? topicRaw
+      : "general";
+
+  const nextActionRaw = String(parsed.next_action ?? "").toLowerCase();
+  const nextAction: DialogActParse["nextAction"] =
+    nextActionRaw === "reassure_then_clarify" ||
+    nextActionRaw === "empathize_then_offer_help" ||
+    nextActionRaw === "ask_one_clarifier"
+      ? nextActionRaw
+      : "normal_flow";
+
+  const askFocusRaw = String(parsed.ask_focus ?? "").toLowerCase();
+  const askFocus: DialogActParse["askFocus"] =
+    askFocusRaw === "model" ||
+    askFocusRaw === "budget" ||
+    askFocusRaw === "timing" ||
+    askFocusRaw === "condition" ||
+    askFocusRaw === "other"
+      ? askFocusRaw
+      : null;
+
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    act,
+    topic,
+    explicitRequest: !!parsed.explicit_request,
+    nextAction,
+    askFocus,
     confidence
   };
 }

@@ -1,0 +1,117 @@
+[
+  {
+    "id": "trust_used_1",
+    "text": "Awe bummer! I was hoping to find a used one through a dealer for peace of mind, Facebook is sketchy.",
+    "expected": {
+      "act": "trust_concern",
+      "topic": "used_inventory",
+      "explicit_request": false,
+      "next_action": "reassure_then_clarify"
+    }
+  },
+  {
+    "id": "trust_used_2",
+    "text": "I really only want pre-owned from a dealership, private sellers make me nervous.",
+    "expected": {
+      "act": "trust_concern",
+      "topic": "used_inventory",
+      "explicit_request": false,
+      "next_action": "reassure_then_clarify"
+    }
+  },
+  {
+    "id": "frustration_1",
+    "text": "This is frustrating, every used one I ask about is already sold.",
+    "expected": {
+      "act": "frustration",
+      "topic_any": ["used_inventory", "general"],
+      "explicit_request": false,
+      "next_action_any": ["empathize_then_offer_help", "ask_one_clarifier"]
+    }
+  },
+  {
+    "id": "preference_1",
+    "text": "I prefer used over new, just not from Facebook.",
+    "expected": {
+      "act_any": ["preference", "trust_concern"],
+      "topic": "used_inventory",
+      "explicit_request": false,
+      "next_action_any": ["ask_one_clarifier", "reassure_then_clarify"]
+    }
+  },
+  {
+    "id": "objection_1",
+    "text": "I am not putting any money down today.",
+    "expected": {
+      "act": "objection",
+      "topic_any": ["pricing", "general"],
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "clarification_1",
+    "text": "Not sure what makes the most sense here.",
+    "expected": {
+      "act_any": ["clarification", "preference"],
+      "topic": "general",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "direct_ask_inventory_1",
+    "text": "Do you have any used Iron 883s in stock right now?",
+    "expected": {
+      "act_any": ["preference", "none"],
+      "topic": "used_inventory",
+      "explicit_request": true,
+      "next_action": "normal_flow"
+    }
+  },
+  {
+    "id": "direct_ask_pricing_1",
+    "text": "What is your lowest out-the-door price?",
+    "expected": {
+      "act_any": ["objection", "none"],
+      "topic": "pricing",
+      "explicit_request": true,
+      "next_action": "normal_flow"
+    }
+  },
+  {
+    "id": "direct_ask_schedule_1",
+    "text": "Can I come by Friday around 4?",
+    "expected": {
+      "act_any": ["preference", "none"],
+      "topic": "scheduling",
+      "explicit_request": true,
+      "next_action": "normal_flow"
+    }
+  },
+  {
+    "id": "small_ack_1",
+    "text": "Got it, thanks",
+    "expected": {
+      "act": "none",
+      "topic": "general",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "trade_preference_1",
+    "text": "I might trade in my bike but I am still deciding.",
+    "expected": {
+      "act_any": ["preference", "clarification"],
+      "topic": "trade",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "service_preference_1",
+    "text": "I only trust dealer service, independents burned me before.",
+    "expected": {
+      "act_any": ["trust_concern", "preference"],
+      "topic_any": ["service", "general"],
+      "explicit_request": false
+    }
+  }
+]
