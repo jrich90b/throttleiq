@@ -572,6 +572,7 @@ export default function Home() {
   const [emailAttachments, setEmailAttachments] = useState<
     { name: string; type: string; size: number; content: string }[]
   >([]);
+  const [emailAttachmentsBusy, setEmailAttachmentsBusy] = useState(false);
   const [regenBusy, setRegenBusy] = useState(false);
   const [closeReason, setCloseReason] = useState("sold");
   const [soldById, setSoldById] = useState("");
@@ -2793,7 +2794,7 @@ export default function Home() {
     manualTakeover?: boolean;
     attachments?: { name: string; type: string; size: number; content: string }[];
     forceEmail?: boolean;
-  }) {
+  }): Promise<boolean> {
     if (!selectedConv) return;
     const resp = await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/send`, {
       method: "POST",
@@ -2826,10 +2827,14 @@ export default function Home() {
         if (ok) {
           await doSend({ ...payload, forceEmail: true });
         }
-        return;
+        return false;
       }
       window.alert(data?.error ?? "Send failed");
-      return;
+      return false;
+    }
+    if (messageFilter === "email") {
+      setEmailAttachments([]);
+      setEmailAttachmentsBusy(false);
     }
     setSendBody("");
     if (data?.conversation) {
@@ -2863,12 +2868,17 @@ export default function Home() {
       await loadConversation(selectedConv.id);
     }
     await load();
+    return true;
   }
 
   async function send() {
     if (!selectedConv) return;
     if (messageFilter === "calls") return;
     if (messageFilter === "sms" && selectedConv.contactPreference === "call_only") {
+      return;
+    }
+    if (messageFilter === "email" && emailAttachmentsBusy) {
+      window.alert("Attachments are still processing. Please wait a moment.");
       return;
     }
     const useEmailDraft = messageFilter === "email" && !!emailDraft;
@@ -2902,11 +2912,11 @@ export default function Home() {
         ? { body, draftId, manualTakeover, attachments }
         : { body, manualTakeover, attachments }
     );
-    if (messageFilter === "email") setEmailAttachments([]);
   }
 
   async function handleEmailAttachments(files: FileList | null) {
     if (!files || files.length === 0) return;
+    setEmailAttachmentsBusy(true);
     const maxPerFile = 7 * 1024 * 1024;
     const maxTotal = 15 * 1024 * 1024;
     const currentTotal = emailAttachments.reduce((sum, f) => sum + (f.size || 0), 0);
@@ -2946,6 +2956,7 @@ export default function Home() {
     if (next.length) {
       setEmailAttachments(prev => [...prev, ...next]);
     }
+    setEmailAttachmentsBusy(false);
   }
 
   function removeEmailAttachment(index: number) {
@@ -8682,6 +8693,9 @@ export default function Home() {
                       </div>
                     ))}
                   </div>
+                ) : null}
+                {emailAttachmentsBusy ? (
+                  <div className="text-xs text-gray-500">Adding attachments…</div>
                 ) : null}
                 <div>
                   <label className="inline-flex items-center gap-2 text-xs border rounded px-3 py-2 cursor-pointer hover:bg-gray-50">
