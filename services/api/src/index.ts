@@ -10988,6 +10988,19 @@ if (authToken && signature) {
   if (watchIntent) {
     if (getDialogState(conv) === "inventory_watch_active" && conv.inventoryWatch) {
       const watch = conv.inventoryWatch;
+      const inboundModel = await resolveWatchModelFromText(
+        textLower,
+        conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null
+      );
+      const watchModel = watch.model ?? null;
+      const modelDifferent =
+        !!inboundModel &&
+        !!watchModel &&
+        normalizeModelText(inboundModel) !== normalizeModelText(watchModel);
+      const availabilityAskedHere = availabilityExplicit || inventoryCountQuestion;
+      if (modelDifferent || availabilityAskedHere) {
+        // Customer is asking about a different model or availability; handle below.
+      } else {
       const watchCondition =
         normalizeWatchCondition(watch.condition) ??
         inferWatchCondition(watch.model, watch.year, conv);
@@ -11016,6 +11029,7 @@ if (authToken && signature) {
         reply
       )}</Message>\n</Response>`;
       return res.status(200).type("text/xml").send(twiml);
+      }
     }
 
     const nowIso = new Date().toISOString();
