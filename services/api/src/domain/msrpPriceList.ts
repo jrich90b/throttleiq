@@ -52,6 +52,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_PATH = resolve(__dirname, "../../data/price_list_msrp_2026.json");
 
 let cache: { items: MsrpEntry[]; loadedAt: number } | null = null;
+let colorCache: { items: string[]; loadedAt: number } | null = null;
 const CACHE_TTL_MS = 10 * 60 * 1000;
 
 function normalizeToken(input: string | null | undefined): string {
@@ -91,6 +92,29 @@ async function loadMsrpList(): Promise<MsrpEntry[]> {
   const items = Array.isArray(parsed) ? (parsed as MsrpEntry[]) : [];
   cache = { items, loadedAt: now };
   return items;
+}
+
+export async function getMsrpColorNames(): Promise<string[]> {
+  const now = Date.now();
+  if (colorCache && now - colorCache.loadedAt < CACHE_TTL_MS) return colorCache.items;
+  const items = await loadMsrpList();
+  const seen = new Map<string, string>();
+  for (const entry of items) {
+    const baseName = entry.base_option_name ? String(entry.base_option_name).trim() : "";
+    if (baseName) {
+      const key = normalizeToken(baseName);
+      if (key && !seen.has(key)) seen.set(key, baseName);
+    }
+    for (const color of entry.colors ?? []) {
+      const name = color?.name ? String(color.name).trim() : "";
+      if (!name) continue;
+      const key = normalizeToken(name);
+      if (key && !seen.has(key)) seen.set(key, name);
+    }
+  }
+  const list = [...seen.values()].filter(Boolean);
+  colorCache = { items: list, loadedAt: now };
+  return list;
 }
 
 function matchModel(items: MsrpEntry[], model?: string | null): MsrpEntry | null {
