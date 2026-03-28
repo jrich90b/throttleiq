@@ -1066,7 +1066,10 @@ export async function orchestrateInbound(
     /(trade[-\s]?in|trade appraisal|trade value|value my trade)/i.test(event.body);
   const multiIntentCount = [wantsAvailability, wantsScheduling, wantsPayments, wantsTrade].filter(Boolean).length;
 
-  if (financeRequest && !detectPricingOrPayment(event.body, intent) && !wantsPayments) {
+  const pricingTermsOnly = /(price|pricing|msrp|cost|how much|what's the price|what is the price|out the door|\botd\b|total price)/i.test(
+    String(event.body ?? "")
+  );
+  if (financeRequest && !pricingTermsOnly && !wantsPayments) {
     const dealerProfile = await getDealerProfile();
     const draft = buildFinanceAppLine(dealerProfile);
     return finalize({
