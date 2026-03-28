@@ -10665,7 +10665,12 @@ if (authToken && signature) {
       conv.compareContext = undefined;
     }
   }
-  const infoOnlyRequest = isInfoOnlyRequest(textLower) || isCompare;
+  const skipInfoOnly =
+    finishPreferenceOnlyRaw &&
+    (!!conv.inventoryContext?.model ||
+      !!conv.lead?.vehicle?.model ||
+      !!conv.lead?.vehicle?.description);
+  const infoOnlyRequest = (isInfoOnlyRequest(textLower) || isCompare) && !skipInfoOnly;
   if (event.provider === "twilio" && infoOnlyRequest && !availabilityExplicit) {
     if (isCompare) {
       const wantsEverythingCompare = /\b(all (the )?details|everything|all (the )?info|all specs?|full details|everything on the page)\b/i.test(
