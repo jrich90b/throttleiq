@@ -58,21 +58,40 @@ function stripQuotedReply(input?: string | null): string {
   if (!input) return "";
   const lines = input.replace(/\r\n/g, "\n").split("\n");
   const out: string[] = [];
+  let inHeaderBlock = false;
+  const joined = lines.join(" ");
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) {
-      out.push("");
+      if (inHeaderBlock) {
+        inHeaderBlock = false;
+      } else {
+        out.push("");
+      }
       continue;
     }
     if (/^>/.test(trimmed)) break;
     if (/^on .+wrote:$/i.test(trimmed)) break;
     if (/^-----original message-----/i.test(trimmed)) break;
-    if (/^(subject|received|arc-|dkim-|mime-version|content-type|message-id|from|to):/i.test(trimmed)) {
+    if (/^(subject|received|arc-|dkim-|mime-version|content-type|content-transfer-encoding|message-id|from|to|cc|date):/i.test(trimmed)) {
+      inHeaderBlock = true;
       continue;
     }
+    if (inHeaderBlock && /^\s/.test(line)) continue;
+    if (inHeaderBlock) inHeaderBlock = false;
     out.push(line);
   }
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function fixMojibake(input?: string | null): string {
+  if (!input) return "";
+  if (!/[ÃÂâ€™â€œâ€�â€“â€”â€¦]/.test(input)) return input;
+  try {
+    return Buffer.from(input, "latin1").toString("utf8");
+  } catch {
+    return input;
+  }
 }
 
 function stripHtml(input?: string): string | undefined {
@@ -85,12 +104,12 @@ function stripHtml(input?: string): string | undefined {
 
 function cleanInboundEmailText(textBody?: string, htmlBody?: string, emailBody?: string): string {
   const plain = textBody?.trim();
-  if (plain && !looksLikeMime(plain)) return stripQuotedReply(plain);
+  if (plain && !looksLikeMime(plain)) return fixMojibake(stripQuotedReply(plain));
   const mimeCandidate = emailBody || textBody || "";
   const extracted = extractPlainTextFromMime(mimeCandidate);
-  if (extracted) return stripQuotedReply(extracted);
+  if (extracted) return fixMojibake(stripQuotedReply(extracted));
   const htmlText = stripHtml(htmlBody) ?? stripHtml(emailBody);
-  return stripQuotedReply(htmlText?.trim() || plain || "");
+  return fixMojibake(stripQuotedReply(htmlText?.trim() || plain || ""));
 }
 
 async function main() {
