@@ -1865,7 +1865,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const isRequestDetails = /request details/i.test(leadSourceLower);
     const questionTail = isRequestDetails ? " Any specific questions about the bike?" : "";
     if (initialAvailability === "in_stock") {
-      draft = `Thanks — I saw you wanted to learn more about the ${bikeLabel}. Want to stop in and check out the bike?${questionTail}`;
+      draft =
+        `I saw you wanted to learn more about the ${bikeLabel}. ` +
+        `If you’d like to stop in and check it out, just say the word.${questionTail ? " Any specific questions I can answer?" : ""}`;
     } else if (!hasIdentifiers) {
       draft = `Thanks — I saw you wanted to learn more about the ${bikeLabel}.${isRequestDetails ? " Any specific questions about the bike?" : ""} I’m here to help.`;
       suppressAvailabilityAppend = true;
