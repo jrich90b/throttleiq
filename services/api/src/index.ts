@@ -13,6 +13,7 @@ import {
   classifySchedulingIntent,
   classifyCadenceContextWithLLM,
   classifyEmpathyNeedWithLLM,
+  classifyComplimentWithLLM,
   summarizeSalespersonNoteWithLLM,
   parseBookingIntentWithLLM,
   parseIntentWithLLM,
@@ -8588,6 +8589,41 @@ if (authToken && signature) {
   const isServiceLead =
     conv.classification?.bucket === "service" || conv.classification?.cta === "service_request";
   if (isServiceLead) {
+    const t = String(event.body ?? "").toLowerCase();
+    const complimentRegex =
+      /\b(love|like|awesome|amazing|great|cool|nice|sweet|beautiful|killer|badass|sick|clean)\b/.test(t) ||
+      /\b(looks great|looks amazing|looks awesome|sounds great)\b/.test(t) ||
+      /\b(wheels?|exhaust|pipes?|paint|color|trim|bars?|seat)\b/.test(t) && /\b(love|like)\b/.test(t);
+    const complimentLLM =
+      (await classifyComplimentWithLLM({ text: event.body ?? "", history })) ?? false;
+    if (complimentRegex || complimentLLM) {
+      const reply = "Totally — glad you like it.";
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    if (/\b(thanks|thank you|thanks again|thx|ty|appreciate)\b/.test(t)) {
+      const reply = "You're welcome!";
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
     if (getDialogState(conv) === "none") {
       setDialogState(conv, "service_request");
     }
