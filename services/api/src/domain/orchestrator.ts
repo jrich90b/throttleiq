@@ -1444,25 +1444,30 @@ export async function orchestrateInbound(
         });
       }
       const nf = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+      const channelIsEmail = event.channel === "email";
       const list = sorted
         .map(item => {
           const yearLabel = item.year ? `${item.year} ` : "";
           const modelLabel = normalizeModelLabel(item.model);
           const priceLabel = item.price ? nf.format(item.price) : "";
           const stockLabel = item.stockId ? ` (Stock ${item.stockId})` : "";
-          return `${yearLabel}${modelLabel} — ${priceLabel}${stockLabel}`;
+          const base = `${yearLabel}${modelLabel} — ${priceLabel}${stockLabel}`;
+          const photo = channelIsEmail ? item.images?.[0] : null;
+          return photo ? `${base}\nPhoto: ${photo}` : base;
         })
-        .join("; ");
+        .join(channelIsEmail ? "\n\n" : "; ");
       const budgetLine = monthlyBudget
         ? `Based on your ~$${monthlyBudget}/mo target (incl. insurance), I’m focusing on pre‑owned under $10k.`
         : "I’m focusing on pre‑owned under $10k.";
+      const firstName = (ctx?.lead?.firstName ?? "").trim() || "there";
+      const greeting = channelIsEmail ? `Hey ${normalizeDisplayCase(firstName)},\n\n` : "";
       return finalize({
         intent: "PRICING",
         stage: "ENGAGED",
         shouldRespond: true,
         draft:
-          `${budgetLine} Here are a few options we have now: ${list}. ` +
-          `If you want to widen the budget or swap models, just say the word.`
+          `${greeting}${budgetLine} Here are a few options we have now:\n\n${list}` +
+          `\n\nIf you want to widen the budget or swap models, just say the word.`
       });
     } catch {
       return finalize({
