@@ -8595,7 +8595,10 @@ if (authToken && signature) {
       /\b(looks great|looks amazing|looks awesome|sounds great)\b/.test(t) ||
       /\b(wheels?|exhaust|pipes?|paint|color|trim|bars?|seat)\b/.test(t) && /\b(love|like)\b/.test(t);
     const complimentLLM =
-      (await classifyComplimentWithLLM({ text: event.body ?? "", history })) ?? false;
+      (await classifyComplimentWithLLM({
+        text: event.body ?? "",
+        history: buildHistory(conv, 6)
+      })) ?? false;
     if (complimentRegex || complimentLLM) {
       const reply = "Totally — glad you like it.";
       const systemMode = webhookMode;
