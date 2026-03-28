@@ -1183,9 +1183,13 @@ export async function orchestrateInbound(
     try {
       const cfg = await getSchedulerConfig();
       const hoursLine = formatBusinessHours(cfg.businessHours);
+      const requestedDay = inferRequestedDay(event.body);
       const wantsVisit =
         hasSchedulingIntent(event.body) ||
-        /(stop in|come in|come by|stop by|swing by|try to stop|try to come|head in|head over)/i.test(event.body);
+        /(stop in|come in|come by|stop by|swing by|try to stop|try to come|head in|head over|make it in|make it|what about)/i.test(
+          event.body
+        ) ||
+        !!requestedDay;
       const salesLead =
         !!ctx?.lead?.vehicle?.model ||
         !!ctx?.lead?.vehicle?.description ||
@@ -1196,6 +1200,15 @@ export async function orchestrateInbound(
       const todayHours = cfg.businessHours?.[todayKey];
       const closeToday = todayHours?.close ?? null;
       const hoursTodayLine = closeToday ? `We're open until ${closeToday} today.` : null;
+      const requestedDayKey = requestedDay ?? null;
+      const requestedDayLabel = requestedDayKey
+        ? requestedDayKey.replace(/^\w/, c => c.toUpperCase())
+        : null;
+      const requestedHours = requestedDayKey ? cfg.businessHours?.[requestedDayKey] : null;
+      const requestedHoursLine =
+        requestedDayLabel && requestedHours?.open && requestedHours?.close
+          ? `We're open ${requestedDayLabel} ${formatHoursRange(requestedHours.open, requestedHours.close)}.`
+          : null;
       if (hoursLine) {
         if (wantsVisit && salesLead) {
           try {
@@ -1203,11 +1216,10 @@ export async function orchestrateInbound(
             const durationMinutes =
               cfg.appointmentTypes?.[appointmentType]?.durationMinutes ?? 60;
             const now = new Date();
-            const requestedDay = inferRequestedDay(event.body);
             let candidatesByDay = generateCandidateSlots(cfg, now, durationMinutes, 7);
-            if (requestedDay) {
+            if (requestedDayKey) {
               candidatesByDay = candidatesByDay.filter(
-                d => dayKey(d.dayStart, tz) === requestedDay
+                d => dayKey(d.dayStart, tz) === requestedDayKey
               );
             }
 
@@ -1244,7 +1256,8 @@ export async function orchestrateInbound(
               a && b
                 ? `If you want to come by, a time can be reserved — ${a} or ${b}. Which works?`
                 : "If you want to come by, what time works best?";
-            const hoursText = hoursTodayLine ?? `Our hours this week are ${hoursLine}.`;
+            const hoursText =
+              requestedHoursLine ?? hoursTodayLine ?? `Our hours this week are ${hoursLine}.`;
             return finalize({
               intent,
               stage: "ENGAGED",
@@ -1252,7 +1265,8 @@ export async function orchestrateInbound(
               draft: `${hoursText} ${scheduleLine}`
             });
           } catch {
-            const hoursText = hoursTodayLine ?? `Our hours this week are ${hoursLine}.`;
+            const hoursText =
+              requestedHoursLine ?? hoursTodayLine ?? `Our hours this week are ${hoursLine}.`;
             return finalize({
               intent,
               stage: "ENGAGED",
@@ -1265,7 +1279,7 @@ export async function orchestrateInbound(
           intent,
           stage: "ENGAGED",
           shouldRespond: true,
-          draft: hoursTodayLine ?? `Our hours this week are ${hoursLine}.`
+          draft: requestedHoursLine ?? hoursTodayLine ?? `Our hours this week are ${hoursLine}.`
         });
       }
     } catch {}
