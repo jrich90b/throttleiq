@@ -465,7 +465,7 @@ function decodeQuotedPrintable(input: string): string {
 
 function fixMojibake(input?: string | null): string {
   if (!input) return "";
-  if (!/[ÃÂâ€™â€œâ€�â€“â€”â€¦]/.test(input)) return input;
+  if (!/[ÃÂâ\u0080-\u009f]/.test(input)) return input;
   try {
     return Buffer.from(input, "latin1").toString("utf8");
   } catch {
@@ -519,7 +519,7 @@ function stripHtml(input?: string): string | undefined {
 
 function looksLikeMime(raw?: string | null): boolean {
   if (!raw) return false;
-  return /(received:|arc-|dkim-|mime-version:|content-type:|message-id:)/i.test(raw);
+  return /(received:|arc-|dkim-|mime-version:|content-type:|content-transfer-encoding:|message-id:)/i.test(raw);
 }
 
 function extractPlainTextFromMime(raw?: string | null): string | null {
@@ -575,7 +575,11 @@ function stripQuotedReply(input?: string | null): string {
     if (inHeaderBlock) inHeaderBlock = false;
     out.push(line);
   }
-  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return out
+    .join("\n")
+    .replace(/^(subject|received|arc-|dkim-|mime-version|content-type|content-transfer-encoding|message-id|from|to|cc|date):.*$/gim, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function cleanInboundEmailText(
@@ -584,7 +588,10 @@ function cleanInboundEmailText(
   emailBody?: string
 ): string {
   const plain = textBody?.trim();
-  if (plain && !looksLikeMime(plain)) return fixMojibake(stripQuotedReply(plain));
+  if (plain && !looksLikeMime(plain)) {
+    const decodedPlain = /=[A-Fa-f0-9]{2}/.test(plain) ? decodeQuotedPrintable(plain) : plain;
+    return fixMojibake(stripQuotedReply(decodedPlain));
+  }
   const mimeCandidate = emailBody || textBody || "";
   const extracted = extractPlainTextFromMime(mimeCandidate);
   if (extracted) return fixMojibake(stripQuotedReply(extracted));
