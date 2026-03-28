@@ -7938,9 +7938,10 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
     const dealerName = dealerProfile?.dealerName ?? "Dealership";
     const subject = String(req.body?.subject ?? `Message from ${dealerName}`).trim();
-    const rawAttachments = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
+    const rawAttachments: { content?: string; filename?: string; type?: string }[] =
+      Array.isArray(req.body?.attachments) ? req.body.attachments : [];
     const attachments = rawAttachments
-      .map((att: any) => ({
+      .map(att => ({
         content: String(att?.content ?? "").trim(),
         filename: String(att?.filename ?? "").trim() || "attachment",
         type: att?.type ? String(att.type) : undefined
