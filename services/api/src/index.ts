@@ -10608,7 +10608,15 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
+  const finishPreferenceOnlyRaw =
+    /\b(black(?:ed)?\s*(?:out|trim|finish)?|chrome\s*(?:trim|finish)?|black\s*trim|black\s*finish|chrome\s*trim|chrome\s*finish)\b/i.test(
+      textLower
+    ) &&
+    !/\b(specs?|spec sheet|highlights?|details|info|information|engine|performance|horsepower|torque|displacement|tech|electronics|infotainment|audio|screen|display|safety|dimensions|weight|seat height|fuel capacity|wheelbase|rake|trail|accessories)\b/i.test(
+      textLower
+    );
   const specsSignal =
+    !finishPreferenceOnlyRaw &&
     /\b(specs?|spec sheet|features|highlights|details|info|information|engine|performance|horsepower|torque|displacement|tech|electronics|infotainment|audio|screen|display|safety|dimensions|weight|seat height|fuel capacity|wheelbase|rake|trail|accessories|trim)\b/i.test(
       textLower
     );
@@ -10853,10 +10861,8 @@ if (authToken && signature) {
       textLower
     );
     const finishPreferenceOnly =
+      finishPreferenceOnlyRaw &&
       specsFocus === "accessories" &&
-      /\b(black(?:ed)?\s*(?:out|trim|finish)?|chrome\s*(?:trim|finish)?|black\s*trim|black\s*finish|chrome\s*trim|chrome\s*finish)\b/i.test(
-        textLower
-      ) &&
       !specsFormatChoice &&
       !wantsEverything &&
       !/\b(specs?|spec sheet|highlights?|details|info|information)\b/i.test(textLower);
