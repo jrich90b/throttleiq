@@ -1796,6 +1796,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const dealerProfile = await getDealerProfile();
   const testRideInSeason = isTestRideSeason(dealerProfile, new Date());
   let draft = result.shouldRespond ? result.draft : "Thanks — I’ll follow up shortly.";
+  let suppressAvailabilityAppend = false;
   if (isInitialAdf && inquiryDayPart) {
     const dayPhrase = `${inquiryDayPart.dayLabel} ${inquiryDayPart.dayPart}`;
     if (initialAvailability === "in_stock") {
@@ -1816,6 +1817,31 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       `I saw you’re interested in a test ride${modelClause}. ` +
       "We’re not scheduling test rides right now, but I’m happy to help with pricing or set one up when we reopen. " +
       "If you want to stop by to check it out, just let me know.";
+  }
+  const isPurchaseIntentLead =
+    isInitialAdf &&
+    !isServiceLead &&
+    !isSellLead &&
+    !isCreditLead &&
+    !isWalkInLead &&
+    inferredBucket !== "trade_in_sell" &&
+    inferredBucket !== "finance_prequal" &&
+    inferredBucket !== "service" &&
+    inferredBucket !== "test_ride";
+  if (isPurchaseIntentLead) {
+    const modelLabel = normalizeVehicleModel(
+      conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "",
+      conv.lead?.vehicle?.make ?? null
+    );
+    const yearLabel = conv.lead?.vehicle?.year ? `${conv.lead?.vehicle?.year} ` : "";
+    const bikeLabel = modelLabel ? `${yearLabel}${modelLabel}`.trim() : "the bike";
+    const hasIdentifiers = !!conv.lead?.vehicle?.stockId || !!conv.lead?.vehicle?.vin;
+    if (initialAvailability === "in_stock") {
+      draft = `I saw you wanted to learn more about the ${bikeLabel}. Want to stop in and check out the bike?`;
+    } else if (!hasIdentifiers) {
+      draft = `I saw you wanted to learn more about the ${bikeLabel}. I’m here to help.`;
+      suppressAvailabilityAppend = true;
+    }
   }
   if (
     inferredBucket === "test_ride" &&
@@ -1864,7 +1890,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   draft = await applyInitialAdfPrefix(draft);
   draft = withInitialPhoto(draft);
-  draft = withInitialAvailabilityLine(draft);
+  if (!suppressAvailabilityAppend) {
+    draft = withInitialAvailabilityLine(draft);
+  }
 
   const systemMode = getSystemMode();
   const emailTo = lead.email?.trim();
