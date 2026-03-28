@@ -9,7 +9,7 @@ import {
 import { resolveInventoryUrlByStock } from "./inventoryUrlResolver.js";
 import { checkInventorySalePendingByUrl, type InventoryStatus } from "./inventoryChecker.js";
 import { findInventoryMatches, findInventoryPrice, findPriceRange, hasInventoryForModelYear } from "./inventoryFeed.js";
-import { findMsrpPricing } from "./msrpPriceList.js";
+import { findMsrpPricing, getMsrpColorNames } from "./msrpPriceList.js";
 import { getInventoryNote } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
 import { isModelInRecentYears } from "./modelsByYear.js";
@@ -371,6 +371,25 @@ function buildFinanceAppLine(profile: Awaited<ReturnType<typeof getDealerProfile
     return `For financing, you can submit the credit app online here: ${url}, or stop in and we’ll do it together.`;
   }
   return "For financing, you can submit a credit app online or stop in and we’ll do it together.";
+}
+
+function extractColorMention(text?: string | null, knownColors?: string[]): string | null {
+  const t = String(text ?? "").toLowerCase();
+  if (!t) return null;
+  if (Array.isArray(knownColors) && knownColors.length) {
+    const sorted = [...knownColors].sort((a, b) => b.length - a.length);
+    for (const color of sorted) {
+      const key = String(color ?? "").trim();
+      if (!key) continue;
+      if (t.includes(key.toLowerCase())) return key;
+    }
+  }
+  const colorMatch = t.match(
+    /\b(black|white|gray|grey|silver|red|blue|green|yellow|orange|purple|maroon|gold|brown|tan|cream|ivory|pink|magenta|aqua|teal|olive)\b/
+  );
+  if (!colorMatch) return null;
+  const word = colorMatch[1];
+  return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
 function looksLikePaymentEstimateMessage(text: string): boolean {
@@ -1888,8 +1907,24 @@ export async function orchestrateInbound(
         const financeLine = financeRequest ? buildFinanceAppLine(dealerProfile) : "";
         const nf = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
         const yearLabel = lead.vehicle?.year ? `${lead.vehicle.year} ` : "";
-        const modelLabel = lead.vehicle?.model ?? "that model";
+        const modelFromText = deriveModelFromDescription(event.body ?? "") ?? null;
+        const modelCandidate = lead.vehicle?.model ?? modelFromText ?? null;
+        const modelUnknown = !modelCandidate || isUnknownModel(modelCandidate);
+        const modelLabel = modelCandidate ?? "that model";
         const stockLabel = lead.vehicle?.stockId ?? stockId;
+        if (modelUnknown) {
+          const leadName = lead?.firstName?.trim() || "there";
+          const msrpColors = await getMsrpColorNames();
+          const colorMention = extractColorMention(event.body, msrpColors);
+          const colorNote = colorMention ? ` (the ${colorMention} color)` : "";
+          const question = `Which ${yearLabel}model are you interested in${colorNote}?`;
+          return finalize({
+            intent,
+            stage: "ENGAGED",
+            shouldRespond: true,
+            draft: `Hi ${leadName} — I can help with pricing. ${question}${financeLine ? ` ${financeLine}` : ""}`.trim()
+          });
+        }
         let priceLine = "";
         if (listPrice) {
           if (stockLabel) {
