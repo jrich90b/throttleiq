@@ -8,7 +8,15 @@ import {
 } from "./llmDraft.js";
 import { resolveInventoryUrlByStock } from "./inventoryUrlResolver.js";
 import { checkInventorySalePendingByUrl, type InventoryStatus } from "./inventoryChecker.js";
-import { findInventoryMatches, findInventoryPrice, findPriceRange, hasInventoryForModelYear } from "./inventoryFeed.js";
+import {
+  findInventoryMatches,
+  findInventoryPrice,
+  findPriceRange,
+  getInventoryFeed,
+  hasInventoryForModelYear
+} from "./inventoryFeed.js";
+import { listInventoryHolds, normalizeInventoryHoldKey } from "./inventoryHolds.js";
+import { listInventorySolds, normalizeInventorySoldKey } from "./inventorySolds.js";
 import { findMsrpPricing, getMsrpColorNames } from "./msrpPriceList.js";
 import { getInventoryNote } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
@@ -676,6 +684,29 @@ function deriveYearFromText(text?: string | null): string | null {
   if (!text) return null;
   const m = text.match(/\b(20\d{2})\b/);
   return m?.[1] ?? null;
+}
+
+function resolveModelFromText(
+  text: string | null | undefined,
+  models: string[]
+): string | null {
+  const t = String(text ?? "").toLowerCase();
+  if (!t || !models.length) return null;
+  const sorted = [...models].sort((a, b) => b.length - a.length);
+  return sorted.find(m => t.includes(m.toLowerCase())) ?? null;
+}
+
+function resolveModelFromHistory(
+  history: { direction: "in" | "out"; body: string }[] | undefined,
+  models: string[]
+): string | null {
+  if (!history?.length || !models.length) return null;
+  const ordered = [...history].reverse();
+  for (const msg of ordered) {
+    const match = resolveModelFromText(msg.body, models);
+    if (match) return match;
+  }
+  return null;
 }
 
 function inferRequestedDay(text: string): string | null {
@@ -1547,11 +1578,87 @@ export async function orchestrateInbound(
   let stockId: string | null = null;
   const vin = ctx?.lead?.vehicle?.vin ?? null;
   const availabilityAskedStock = /(available|availability|still there|in stock)/i.test(event.body);
+  const inventoryCountQuestion =
+    /\b(only one|just one|is that all|any others|how many|how many do you have|only one you have)\b/i.test(
+      event.body
+    );
 
   // Stock IDs on your site are commonly like C1-26, T11-26, etc.
   // Keep this permissive; tune later if needed.
   const stockMatch = event.body.match(/\b[A-Z0-9]{1,5}-\d{1,4}\b/i);
   if (stockMatch?.[0]) stockId = stockMatch[0].toUpperCase();
+
+  if (inventoryCountQuestion) {
+    try {
+      const items = await getInventoryFeed();
+      const models = Array.from(new Set(items.map(i => i.model).filter(Boolean))) as string[];
+      const lastOutbound = [...(history ?? [])].reverse().find(h => h.direction === "out")?.body ?? "";
+      const model =
+        resolveModelFromText(event.body, models) ||
+        resolveModelFromText(lastOutbound, models) ||
+        resolveModelFromHistory(history, models) ||
+        ctx?.lead?.vehicle?.model ||
+        deriveModelFromDescription(ctx?.lead?.vehicle?.description ?? null) ||
+        null;
+      if (!model) {
+        return finalize({
+          intent: "AVAILABILITY",
+          stage: "ENGAGED",
+          shouldRespond: true,
+          draft: "Which model are you asking about?"
+        });
+      }
+      const year =
+        deriveYearFromText(event.body) ??
+        deriveYearFromText(lastOutbound) ??
+        ctx?.lead?.vehicle?.year ??
+        null;
+      const msrpColors = await getMsrpColorNames();
+      const color =
+        extractColorMention(event.body, msrpColors) ||
+        extractColorMention(lastOutbound, msrpColors) ||
+        findRecentInboundColor(history, msrpColors) ||
+        ctx?.lead?.vehicle?.color ||
+        null;
+      let matches = await findInventoryMatches({ year: year ?? null, model });
+      if (color) {
+        const colorLower = color.toLowerCase();
+        matches = matches.filter(m => (m.color ?? "").toLowerCase().includes(colorLower));
+      }
+      const holds = await listInventoryHolds();
+      const solds = await listInventorySolds();
+      const availableMatches = matches.filter(m => {
+        const holdKey = normalizeInventoryHoldKey(m.stockId, m.vin);
+        const soldKey = normalizeInventorySoldKey(m.stockId, m.vin);
+        if (holdKey && holds?.[holdKey]) return false;
+        if (soldKey && solds?.[soldKey]) return false;
+        return true;
+      });
+      const count = availableMatches.length;
+      const yearLabel = year ? `${year} ` : "";
+      const modelLabel = normalizeModelLabel(model);
+      const colorLabel = color ? ` in ${color}` : "";
+      const reply =
+        count <= 0
+          ? `I’m not seeing ${yearLabel}${modelLabel}${colorLabel} in stock right now.`
+          : count === 1
+            ? `That’s the only ${yearLabel}${modelLabel}${colorLabel} we have in stock right now.`
+            : `We have ${count} ${yearLabel}${modelLabel}${colorLabel} units in stock right now.`;
+      return finalize({
+        intent: "AVAILABILITY",
+        stage: "ENGAGED",
+        shouldRespond: true,
+        draft: reply
+      });
+    } catch {
+      return finalize({
+        intent: "AVAILABILITY",
+        stage: "ENGAGED",
+        shouldRespond: true,
+        draft: "Let me check and get you a count."
+      });
+    }
+  }
 
   const normalizeLeadCondition = (raw?: string | null): "new" | "used" | null => {
     const t = String(raw ?? "").toLowerCase();
