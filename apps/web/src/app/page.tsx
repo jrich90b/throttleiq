@@ -2812,6 +2812,10 @@ export default function Home() {
       })
     });
     const data = await resp.json().catch(() => null);
+    if (!resp.ok) {
+      window.alert(data?.error ?? "Send failed");
+      return;
+    }
     setSendBody("");
     if (data?.conversation) {
       const conv = data.conversation;
@@ -2883,9 +2887,7 @@ export default function Home() {
         ? { body, draftId, manualTakeover, attachments }
         : { body, manualTakeover, attachments }
     );
-    if (messageFilter === "email") {
-      setEmailAttachments([]);
-    }
+    if (messageFilter === "email") setEmailAttachments([]);
   }
 
   async function handleEmailAttachments(files: FileList | null) {
@@ -8729,8 +8731,16 @@ export default function Home() {
                       onClick={async () => {
                         const note = editNote.trim();
                         const payload = pendingSend.draftId
-                          ? { ...pendingSend, editNote: note }
-                          : { body: pendingSend.body, editNote: note };
+                          ? {
+                              ...pendingSend,
+                              editNote: note,
+                              attachments: messageFilter === "email" ? emailAttachments : undefined
+                            }
+                          : {
+                              body: pendingSend.body,
+                              editNote: note,
+                              attachments: messageFilter === "email" ? emailAttachments : undefined
+                            };
                         setEditPromptOpen(false);
                         setPendingSend(null);
                         await doSend(payload);
@@ -8742,8 +8752,14 @@ export default function Home() {
                       className="px-3 py-2 border rounded text-sm text-gray-600"
                       onClick={async () => {
                         const payload = pendingSend.draftId
-                          ? pendingSend
-                          : { body: pendingSend.body };
+                          ? {
+                              ...pendingSend,
+                              attachments: messageFilter === "email" ? emailAttachments : undefined
+                            }
+                          : {
+                              body: pendingSend.body,
+                              attachments: messageFilter === "email" ? emailAttachments : undefined
+                            };
                         setEditPromptOpen(false);
                         setPendingSend(null);
                         await doSend(payload);
