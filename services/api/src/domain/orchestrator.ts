@@ -288,6 +288,66 @@ function detectFinanceRequest(text: string): boolean {
   );
 }
 
+function detectPendingIntents(text: string): Set<
+  "PRICING" | "PAYMENTS" | "FINANCING" | "AVAILABILITY" | "SCHEDULING" | "TRADE"
+> {
+  const t = String(text ?? "");
+  const intents = new Set<
+    "PRICING" | "PAYMENTS" | "FINANCING" | "AVAILABILITY" | "SCHEDULING" | "TRADE"
+  >();
+  if (detectPaymentPressure(t) || detectPaymentFollowUp(t, [])) intents.add("PAYMENTS");
+  if (detectFinanceRequest(t)) intents.add("FINANCING");
+  if (/(price|pricing|msrp|cost|how much|what's the price|what is the price|out the door|\botd\b|tax|fees|deal|rebate|incentive)/i.test(t)) {
+    intents.add("PRICING");
+  }
+  if (/(available|availability|still there|in stock|do you have|have any)/i.test(t)) intents.add("AVAILABILITY");
+  if (hasSchedulingIntent(t) || extractDayName(t) || extractDayPart(t) || /\b\d{1,2}(:\d{2})?\s*(am|pm)\b/i.test(t)) {
+    intents.add("SCHEDULING");
+  }
+  if (/(trade[-\s]?in|trade appraisal|trade value|value my trade)/i.test(t)) intents.add("TRADE");
+  return intents;
+}
+
+function mergePendingInboundText(
+  currentText: string,
+  history: { direction: "in" | "out"; body: string }[]
+): string {
+  const latest = String(currentText ?? "").trim();
+  if (!latest) return currentText;
+  if (isSmallTalkCandidate(latest)) return currentText;
+  const items = Array.isArray(history) ? history : [];
+  if (items.length < 2) return currentText;
+  const lastOutIdx = (() => {
+    let idx = -1;
+    for (let i = items.length - 1; i >= 0; i -= 1) {
+      if (items[i]?.direction === "out") {
+        idx = i;
+        break;
+      }
+    }
+    return idx;
+  })();
+  const inboundSince = items.slice(lastOutIdx + 1).filter(m => m.direction === "in" && m.body);
+  if (inboundSince.length <= 1) return currentText;
+  const latestIntents = detectPendingIntents(latest);
+  let merged = latest;
+  let added = 0;
+  for (let i = inboundSince.length - 2; i >= 0; i -= 1) {
+    const body = String(inboundSince[i]?.body ?? "").trim();
+    if (!body) continue;
+    if (/web lead\s*\(adf\)/i.test(body)) continue;
+    if (isSmallTalkCandidate(body)) continue;
+    const intents = detectPendingIntents(body);
+    const addsNew = [...intents].some(intent => !latestIntents.has(intent));
+    if (!addsNew && latestIntents.size > 0) continue;
+    merged = `${body} ${merged}`.trim();
+    intents.forEach(intent => latestIntents.add(intent));
+    added += 1;
+    if (added >= 2) break;
+  }
+  return merged;
+}
+
 function extractPreferredTermMonths(text: string): number | null {
   const t = text.toLowerCase();
   const termMatch = t.match(/\b(60|72|84)\s*(month|mo|mos|months|term)?\b/);
@@ -368,9 +428,9 @@ function buildMonthlyPaymentLine(opts: {
 function buildFinanceAppLine(profile: Awaited<ReturnType<typeof getDealerProfile>> | null): string {
   const url = String(profile?.creditAppUrl ?? "").trim();
   if (url) {
-    return `For financing, you can submit the credit app online here: ${url}, or stop in and we’ll do it together.`;
+    return `For financing, you can submit the credit app online here: ${url}. If you’d rather do it in person, we can handle it at the dealership.`;
   }
-  return "For financing, you can submit a credit app online or stop in and we’ll do it together.";
+  return "For financing, you can submit a credit app online. If you’d rather do it in person, we can handle it at the dealership.";
 }
 
 function extractColorMention(text?: string | null, knownColors?: string[]): string | null {
@@ -724,6 +784,11 @@ export async function orchestrateInbound(
       shouldRespond: true,
       draft: "Got it — I won’t message you again."
     });
+  }
+
+  const mergedBody = mergePendingInboundText(String(event.body ?? ""), history ?? []);
+  if (mergedBody && mergedBody !== event.body) {
+    event.body = mergedBody;
   }
 
   const canSmallTalk =
