@@ -675,12 +675,17 @@ export function appendOutbound(
   providerMessageId?: string,
   mediaUrls?: string[]
 ) {
+  const lastInbound = [...(conv.messages || [])]
+    .reverse()
+    .find(m => m.direction === "in" && m.body);
+  const inboundText = lastInbound?.body ?? "";
+  const normalizedBody = normalizeGotItLeadIn(body, inboundText, provider);
   conv.messages.push({
     id: makeId("msg"),
     direction: "out",
     from,
     to,
-    body,
+    body: normalizedBody,
     mediaUrls: mediaUrls && mediaUrls.length ? mediaUrls : undefined,
     at: nowIso(),
     provider,
@@ -688,6 +693,29 @@ export function appendOutbound(
   });
   conv.updatedAt = nowIso();
   scheduleSave();
+}
+
+function pickLeadInVariant(text: string): string {
+  const t = String(text ?? "").toLowerCase();
+  if (/(thanks|thank you|thanks again|thx|ty|appreciate)/.test(t)) return "You're welcome.";
+  if (/(sorry|apologize|apologies|my bad)/.test(t)) return "No worries.";
+  if (/(i left|already left|left a deposit|just letting you know|update)/.test(t)) return "Thanks for the update.";
+  if (/(can you|could you|would you|do you|is it possible)/.test(t)) return "Sure.";
+  if (/(i want|i'd like|i would like|looking to|want to)/.test(t)) return "Absolutely.";
+  if (/[?]/.test(t)) return "Happy to.";
+  return "Sounds good.";
+}
+
+function normalizeGotItLeadIn(body: string, inboundText: string, provider: MessageProvider): string {
+  if (!body) return body;
+  if (!(provider === "twilio" || provider === "draft_ai")) return body;
+  const trimmed = body.trim();
+  const match = trimmed.match(/^got it(?:\s*[—–-]|\.|,|!|:)?\s*/i);
+  if (!match) return body;
+  const rest = trimmed.slice(match[0].length);
+  const leadIn = pickLeadInVariant(inboundText);
+  if (!rest) return leadIn;
+  return `${leadIn} ${rest}`.trim();
 }
 
 export function finalizeDraftAsSent(

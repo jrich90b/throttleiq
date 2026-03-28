@@ -310,6 +310,15 @@ function detectDepositRequest(text: string): boolean {
   );
 }
 
+function pickDepositLeadIn(text: string): string {
+  const t = text.toLowerCase();
+  if (/(thanks|thank you|appreciate)/.test(t)) return "You're welcome.";
+  if (/(i left|already left|left a deposit)/.test(t)) return "Thanks for the update.";
+  if (/(can you|could you|would you)/.test(t)) return "Sure.";
+  if (/(i want|i'd like|i would like|looking to|want to)/.test(t)) return "Absolutely.";
+  return "Sounds good.";
+}
+
 function detectPendingIntents(text: string): Set<
   "PRICING" | "PAYMENTS" | "FINANCING" | "AVAILABILITY" | "SCHEDULING" | "TRADE"
 > {
@@ -1048,12 +1057,14 @@ export async function orchestrateInbound(
     const agentName = dealerProfile?.agentName ?? "Brooke";
     const firstName = ctx?.lead?.firstName?.trim() || "";
     const greeting = firstName ? `Hi ${firstName} — ` : "";
-    const bikeLabel = formatModelLabel(
-      ctx?.lead?.vehicle?.year ?? null,
-      ctx?.lead?.vehicle?.model ?? ctx?.lead?.vehicle?.description ?? null
+    const leadIn = pickDepositLeadIn(event.body);
+    const modelLabel = normalizeModelLabel(
+      ctx?.lead?.vehicle?.model ?? ctx?.lead?.vehicle?.description
     );
+    const yearLabel = ctx?.lead?.vehicle?.year ? `${ctx.lead.vehicle.year} ` : "";
+    const bikeLabel = modelLabel ? `${yearLabel}${modelLabel}`.trim() : null;
     const unitLine = bikeLabel ? ` for the ${bikeLabel}` : "";
-    const draft = `${greeting}Got it — to leave a deposit${unitLine}, you can either stop by or I can have someone from ${dealerName} call you and take it by phone. Which do you prefer?`;
+    const draft = `${greeting}${leadIn} To leave a deposit${unitLine}, you can either stop by or I can have someone from ${dealerName} call you and take it by phone. Which do you prefer?`;
     return finalize({
       intent: "GENERAL",
       stage: "ENGAGED",
