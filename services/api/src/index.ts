@@ -8188,6 +8188,30 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return res.json({ ok: true, conversation: conv, draft: reply });
   }
 
+  if (isServiceRecordsRequest(event.body)) {
+    const hasServiceTodo = listOpenTodos().some(
+      t => t.convId === conv.id && t.reason === "service"
+    );
+    if (!hasServiceTodo) {
+      addTodo(conv, "service", `Service records request: ${event.body}`, event.providerMessageId);
+    }
+    setDialogState(conv, "service_handoff");
+    setFollowUpMode(conv, "manual_handoff", "service_records");
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    const reply =
+      "Thanks for the details — I’ll have the team check service records (battery/tires) and follow up. I’ll also keep an eye on availability for early May.";
+    if (channel === "email") {
+      conv.emailDraft = reply;
+      saveConversation(conv);
+      return res.json({ ok: true, conversation: conv, draft: reply });
+    }
+    discardPendingDrafts(conv);
+    appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+    saveConversation(conv);
+    return res.json({ ok: true, conversation: conv, draft: reply });
+  }
+
   const result = await orchestrateInbound(event, history, {
     appointment: conv.appointment,
     followUp: conv.followUp,
