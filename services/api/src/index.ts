@@ -7938,6 +7938,14 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
     const dealerName = dealerProfile?.dealerName ?? "Dealership";
     const subject = String(req.body?.subject ?? `Message from ${dealerName}`).trim();
+    const rawAttachments = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
+    const attachments = rawAttachments
+      .map((att: any) => ({
+        content: String(att?.content ?? "").trim(),
+        filename: String(att?.filename ?? "").trim() || "attachment",
+        type: att?.type ? String(att.type) : undefined
+      }))
+      .filter(att => att.content.length > 0);
     const signed =
       signature
         ? `${body}\n\n${signature}${dealerProfile?.logoUrl ? `\n\n${dealerProfile.logoUrl}` : ""}`
@@ -7953,7 +7961,8 @@ app.post("/conversations/:id/send", async (req, res) => {
         subject,
         text: signed,
         from: emailFrom,
-        replyTo
+        replyTo,
+        ...(attachments.length ? { attachments } : {})
       });
       // Clear stored email draft so the UI doesn't keep pre-filling after send.
       delete conv.emailDraft;

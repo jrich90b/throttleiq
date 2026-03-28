@@ -5,6 +5,12 @@ type SendEmailInput = {
   html?: string;
   from: string;
   replyTo?: string;
+  attachments?: Array<{
+    content: string;
+    filename: string;
+    type?: string;
+    disposition?: "attachment" | "inline";
+  }>;
 };
 
 function toHtml(text: string) {
@@ -45,7 +51,17 @@ export async function sendEmail(input: SendEmailInput) {
     content: [
       { type: "text/plain", value: input.text },
       { type: "text/html", value: input.html ?? toHtml(input.text) }
-    ]
+    ],
+    ...(input.attachments && input.attachments.length
+      ? {
+          attachments: input.attachments.map(att => ({
+            content: att.content,
+            filename: att.filename,
+            type: att.type ?? "application/octet-stream",
+            disposition: att.disposition ?? "attachment"
+          }))
+        }
+      : {})
   };
 
   const resp = await fetch("https://api.sendgrid.com/v3/mail/send", {

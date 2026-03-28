@@ -569,6 +569,9 @@ export default function Home() {
   const [editPromptOpen, setEditPromptOpen] = useState(false);
   const [editNote, setEditNote] = useState("");
   const [pendingSend, setPendingSend] = useState<{ body: string; draftId?: string } | null>(null);
+  const [emailAttachments, setEmailAttachments] = useState<
+    { name: string; type: string; size: number; content: string }[]
+  >([]);
   const [regenBusy, setRegenBusy] = useState(false);
   const [closeReason, setCloseReason] = useState("sold");
   const [soldById, setSoldById] = useState("");
@@ -2708,6 +2711,16 @@ export default function Home() {
     setLastDraftId(null);
   }, [selectedConv?.id, pendingDraft?.id, messageFilter, emailDraft]);
 
+  useEffect(() => {
+    if (messageFilter !== "email") {
+      if (emailAttachments.length) setEmailAttachments([]);
+      return;
+    }
+    if (selectedConv?.id) {
+      if (emailAttachments.length) setEmailAttachments([]);
+    }
+  }, [messageFilter, selectedConv?.id]);
+
   async function markTodoDone(todo: TodoItem, resolution = "resume") {
     await fetch("/api/todos", {
       method: "POST",
@@ -2773,7 +2786,13 @@ export default function Home() {
     }
   }
 
-  async function doSend(payload: { body: string; draftId?: string; editNote?: string; manualTakeover?: boolean }) {
+  async function doSend(payload: {
+    body: string;
+    draftId?: string;
+    editNote?: string;
+    manualTakeover?: boolean;
+    attachments?: { name: string; type: string; size: number; content: string }[];
+  }) {
     if (!selectedConv) return;
     const resp = await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/send`, {
       method: "POST",
@@ -2781,7 +2800,15 @@ export default function Home() {
       body: JSON.stringify({
         ...payload,
         manualTakeover: payload.manualTakeover ?? !payload.draftId,
-        channel: messageFilter
+        channel: messageFilter,
+        attachments:
+          messageFilter === "email"
+            ? (payload.attachments || []).map(att => ({
+                content: att.content,
+                filename: att.name,
+                type: att.type
+              }))
+            : undefined
       })
     });
     const data = await resp.json().catch(() => null);
@@ -2850,7 +2877,62 @@ export default function Home() {
       return;
     }
     const manualTakeover = messageFilter === "email" ? !emailDraft : !draftId;
-    await doSend(draftId ? { body, draftId, manualTakeover } : { body, manualTakeover });
+    const attachments = messageFilter === "email" ? emailAttachments : undefined;
+    await doSend(
+      draftId
+        ? { body, draftId, manualTakeover, attachments }
+        : { body, manualTakeover, attachments }
+    );
+    if (messageFilter === "email") {
+      setEmailAttachments([]);
+    }
+  }
+
+  async function handleEmailAttachments(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    const maxPerFile = 7 * 1024 * 1024;
+    const maxTotal = 15 * 1024 * 1024;
+    const currentTotal = emailAttachments.reduce((sum, f) => sum + (f.size || 0), 0);
+    const selected = Array.from(files);
+    const next: { name: string; type: string; size: number; content: string }[] = [];
+    let runningTotal = currentTotal;
+
+    for (const file of selected) {
+      if (file.size > maxPerFile) {
+        window.alert(`"${file.name}" is too large (max 7MB per file).`);
+        continue;
+      }
+      if (runningTotal + file.size > maxTotal) {
+        window.alert("Total attachments exceed 15MB.");
+        break;
+      }
+      const content = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error("read failed"));
+        reader.onload = () => {
+          const result = String(reader.result ?? "");
+          const base64 = result.includes(",") ? result.split(",")[1] : result;
+          resolve(base64);
+        };
+        reader.readAsDataURL(file);
+      }).catch(() => "");
+      if (!content) continue;
+      next.push({
+        name: file.name,
+        type: file.type || "application/octet-stream",
+        size: file.size,
+        content
+      });
+      runningTotal += file.size;
+    }
+
+    if (next.length) {
+      setEmailAttachments(prev => [...prev, ...next]);
+    }
+  }
+
+  function removeEmailAttachment(index: number) {
+    setEmailAttachments(prev => prev.filter((_, i) => i !== index));
   }
 
   async function regenerateDraft() {
@@ -8562,6 +8644,41 @@ export default function Home() {
                 ) : null}
               </div>
             </div>
+
+            {messageFilter === "email" ? (
+              <div className="mt-2 flex flex-col gap-2">
+                {emailAttachments.length ? (
+                  <div className="flex flex-wrap gap-2">
+                    {emailAttachments.map((att, idx) => (
+                      <div
+                        key={`${att.name}-${idx}`}
+                        className="flex items-center gap-2 border rounded px-2 py-1 text-xs"
+                      >
+                        <span className="truncate max-w-[220px]">{att.name}</span>
+                        <button
+                          type="button"
+                          className="text-gray-500 hover:text-gray-800"
+                          onClick={() => removeEmailAttachment(idx)}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                <div>
+                  <label className="inline-flex items-center gap-2 text-xs border rounded px-3 py-2 cursor-pointer hover:bg-gray-50">
+                    Attach file
+                    <input
+                      type="file"
+                      multiple
+                      className="hidden"
+                      onChange={e => handleEmailAttachments(e.target.files)}
+                    />
+                  </label>
+                </div>
+              </div>
+            ) : null}
 
             {editPromptOpen && pendingSend ? (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
