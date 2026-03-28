@@ -42,6 +42,30 @@ function parsePrice(raw?: string): number | null {
   return n;
 }
 
+function extractPrice(item: Record<string, any>): number | null {
+  const candidates = [
+    text(item?.price),
+    text(item?.list),
+    text(item?.listprice),
+    text(item?.list_price),
+    text(item?.msrp),
+    text(item?.msrpprice),
+    text(item?.saleprice),
+    text(item?.sale_price),
+    text(item?.internetprice),
+    text(item?.internet_price),
+    text(item?.specialprice),
+    text(item?.special_price),
+    text(item?.ourprice),
+    text(item?.askingprice)
+  ];
+  for (const raw of candidates) {
+    const parsed = parsePrice(raw);
+    if (parsed != null) return parsed;
+  }
+  return null;
+}
+
 function parseFeed(xml: string): InventoryFeedItem[] {
   const parser = new XMLParser({ ignoreAttributes: false });
   const doc = parser.parse(xml);
@@ -55,7 +79,7 @@ function parseFeed(xml: string): InventoryFeedItem[] {
     color: extractColor(it),
     condition: text(it?.condition),
     url: text(it?.url),
-    price: parsePrice(text(it?.price)),
+    price: extractPrice(it),
     images: extractImageUrls(it)
   }));
 }
