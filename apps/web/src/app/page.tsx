@@ -2795,7 +2795,7 @@ export default function Home() {
     attachments?: { name: string; type: string; size: number; content: string }[];
     forceEmail?: boolean;
   }): Promise<boolean> {
-    if (!selectedConv) return;
+    if (!selectedConv) return false;
     const resp = await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
