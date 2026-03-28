@@ -435,7 +435,7 @@ function findRecentInboundColor(
 ): string | null {
   if (!history?.length) return null;
   const inbound = [...history].reverse().filter(h => h.direction === "in");
-  for (const msg of inbound.slice(0, 6)) {
+  for (const msg of inbound.slice(0, 20)) {
     const color = extractColorMention(msg.body, knownColors);
     if (color) return color;
   }

@@ -8234,7 +8234,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   discardPendingDrafts(conv);
   appendOutbound(conv, event.to, event.from, reply, "draft_ai");
   saveConversation(conv);
-  return res.json({ ok: true, conversation: conv });
+  return res.json({ ok: true, conversation: conv, draft: reply });
 });
 
 app.post("/conversations/:id/call", async (req, res) => {
