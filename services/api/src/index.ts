@@ -8223,8 +8223,14 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return res.json({ ok: true, conversation: conv, draft: reply });
   }
 
+  const dialogState = getDialogState(conv);
   const isServiceLead =
-    conv.classification?.bucket === "service" || conv.classification?.cta === "service_request";
+    conv.classification?.bucket === "service" ||
+    conv.classification?.cta === "service_request" ||
+    dialogState === "service_request" ||
+    dialogState === "service_handoff" ||
+    (conv.followUp?.mode === "manual_handoff" &&
+      /service/.test(String(conv.followUp?.reason ?? "")));
   if (isServiceLead) {
     const t = String(event.body ?? "").toLowerCase();
     const complimentRegex =
@@ -8627,8 +8633,14 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
+  const dialogState = getDialogState(conv);
   const isServiceLead =
-    conv.classification?.bucket === "service" || conv.classification?.cta === "service_request";
+    conv.classification?.bucket === "service" ||
+    conv.classification?.cta === "service_request" ||
+    dialogState === "service_request" ||
+    dialogState === "service_handoff" ||
+    (conv.followUp?.mode === "manual_handoff" &&
+      /service/.test(String(conv.followUp?.reason ?? "")));
   if (isServiceLead) {
     const t = String(event.body ?? "").toLowerCase();
     const complimentRegex =
