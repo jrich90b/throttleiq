@@ -628,6 +628,7 @@ export default function Home() {
     logoUrl: "",
     bookingUrl: "",
     bookingToken: "",
+    creditAppUrl: "",
     phone: "",
     website: "",
     addressLine1: "",
@@ -1692,6 +1693,7 @@ export default function Home() {
           logoUrl: profile.logoUrl ?? "",
           bookingUrl: profile.bookingUrl ?? "",
           bookingToken: profile.bookingToken ?? "",
+          creditAppUrl: profile.creditAppUrl ?? "",
           phone: profile.phone ?? "",
           website: profile.website ?? "",
           addressLine1: profile.address?.line1 ?? "",
@@ -3195,19 +3197,20 @@ export default function Home() {
     setSettingsError(null);
     try {
       const hours = dealerHours ?? {};
-      const payload = {
-        dealerName: dealerProfileForm.dealerName.trim(),
-        agentName: dealerProfileForm.agentName.trim(),
-        crmProvider: dealerProfileForm.crmProvider.trim(),
-        websiteProvider: dealerProfileForm.websiteProvider.trim(),
-        fromEmail: dealerProfileForm.fromEmail.trim(),
-        replyToEmail: dealerProfileForm.replyToEmail.trim(),
-        emailSignature: dealerProfileForm.emailSignature,
-        logoUrl: dealerProfileForm.logoUrl.trim(),
-        bookingUrl: dealerProfileForm.bookingUrl.trim(),
-        bookingToken: dealerProfileForm.bookingToken.trim(),
-        phone: dealerProfileForm.phone.trim(),
-        website: dealerProfileForm.website.trim(),
+        const payload = {
+          dealerName: dealerProfileForm.dealerName.trim(),
+          agentName: dealerProfileForm.agentName.trim(),
+          crmProvider: dealerProfileForm.crmProvider.trim(),
+          websiteProvider: dealerProfileForm.websiteProvider.trim(),
+          fromEmail: dealerProfileForm.fromEmail.trim(),
+          replyToEmail: dealerProfileForm.replyToEmail.trim(),
+          emailSignature: dealerProfileForm.emailSignature,
+          logoUrl: dealerProfileForm.logoUrl.trim(),
+          bookingUrl: dealerProfileForm.bookingUrl.trim(),
+          bookingToken: dealerProfileForm.bookingToken.trim(),
+          creditAppUrl: dealerProfileForm.creditAppUrl.trim(),
+          phone: dealerProfileForm.phone.trim(),
+          website: dealerProfileForm.website.trim(),
         address: {
           line1: dealerProfileForm.addressLine1.trim(),
           city: dealerProfileForm.city.trim(),
@@ -5675,6 +5678,12 @@ export default function Home() {
                     placeholder="Booking link (for email follow-ups)"
                     value={dealerProfileForm.bookingUrl}
                     onChange={e => setDealerProfileForm({ ...dealerProfileForm, bookingUrl: e.target.value })}
+                  />
+                  <input
+                    className="border rounded px-3 py-2 text-sm"
+                    placeholder="Credit app URL (financing)"
+                    value={dealerProfileForm.creditAppUrl}
+                    onChange={e => setDealerProfileForm({ ...dealerProfileForm, creditAppUrl: e.target.value })}
                   />
                   <input
                     className="border rounded px-3 py-2 text-sm"

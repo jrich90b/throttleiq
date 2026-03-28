@@ -281,6 +281,13 @@ function detectPaymentPressure(text: string): boolean {
   );
 }
 
+function detectFinanceRequest(text: string): boolean {
+  const t = text.toLowerCase();
+  return /(credit app|credit application|apply for credit|finance application|prequal|pre-qual|prequalify|financing|finance)\b/.test(
+    t
+  );
+}
+
 function extractPreferredTermMonths(text: string): number | null {
   const t = text.toLowerCase();
   const termMatch = t.match(/\b(60|72|84)\s*(month|mo|mos|months|term)?\b/);
@@ -356,6 +363,14 @@ function buildMonthlyPaymentLine(opts: {
     `you’re around ${payLow}–${payHigh}/mo at ${opts.termMonths} months depending on credit, ` +
     `before taxes and fees, depending on your APR.`
   );
+}
+
+function buildFinanceAppLine(profile: Awaited<ReturnType<typeof getDealerProfile>> | null): string {
+  const url = String(profile?.creditAppUrl ?? "").trim();
+  if (url) {
+    return `For financing, you can submit the credit app online here: ${url}, or stop in and we’ll do it together.`;
+  }
+  return "For financing, you can submit a credit app online or stop in and we’ll do it together.";
 }
 
 function looksLikePaymentEstimateMessage(text: string): boolean {
@@ -970,17 +985,28 @@ export async function orchestrateInbound(
   const dayName = extractDayName(event.body);
   const dayPart = extractDayPart(event.body);
   const timeMatch = String(event.body ?? "").match(/\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b/i);
+  const financeRequest = detectFinanceRequest(event.body);
   const availabilityAskedMulti = /(available|availability|still there|in stock|do you have|have any)/i.test(event.body);
   const wantsAvailability = availabilityAskedMulti || intent === "AVAILABILITY";
   const wantsScheduling = hasSchedulingIntent(event.body) || !!dayName || !!dayPart || !!timeMatch;
   const wantsPayments =
-    detectPricingOrPayment(event.body, intent) ||
     detectPaymentPressure(event.body) ||
     detectPaymentFollowUp(event.body, history ?? []);
   const wantsTrade =
     intent === "TRADE_IN" ||
     /(trade[-\s]?in|trade appraisal|trade value|value my trade)/i.test(event.body);
   const multiIntentCount = [wantsAvailability, wantsScheduling, wantsPayments, wantsTrade].filter(Boolean).length;
+
+  if (financeRequest && !detectPricingOrPayment(event.body, intent) && !wantsPayments) {
+    const dealerProfile = await getDealerProfile();
+    const draft = buildFinanceAppLine(dealerProfile);
+    return finalize({
+      intent: "FINANCING",
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft
+    });
+  }
 
   if (multiIntentCount >= 2) {
     const leadVehicle = ctx?.lead?.vehicle ?? {};
@@ -1139,6 +1165,7 @@ export async function orchestrateInbound(
       const dealerProfile = await getDealerProfile();
       const agentName = dealerProfile?.agentName ?? "Brooke";
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+      const financeLine = financeRequest ? buildFinanceAppLine(dealerProfile) : "";
       const yearForRange =
         leadForPrice?.vehicle?.year ??
         deriveYearFromText(leadForPrice?.vehicle?.description ?? null) ??
@@ -1272,7 +1299,8 @@ export async function orchestrateInbound(
           const draft =
             `Hi ${firstName} — thanks for your interest in the ${yearLabel}${modelLabel}. ` +
             `This is ${agentName} at ${dealerName}. ${priceLine} ${disclaimer}` +
-            (timelineNote ? ` ${timelineNote}` : "");
+            (timelineNote ? ` ${timelineNote}` : "") +
+            (financeLine ? ` ${financeLine}` : "");
           return finalize({
             intent,
             stage: "ENGAGED",
@@ -1317,7 +1345,8 @@ export async function orchestrateInbound(
               `but we do have ${fallbackLabel} units available. ${priceLine} ` +
               `${fallbackNote ? `Right now there's ${fallbackNote} available. ` : ""}` +
               `If you want, I can send photos or details.` +
-              (timelineNote ? ` ${timelineNote}` : "");
+              (timelineNote ? ` ${timelineNote}` : "") +
+              (financeLine ? ` ${financeLine}` : "");
           return finalize({
               intent,
               stage: "ENGAGED",
@@ -1333,7 +1362,8 @@ export async function orchestrateInbound(
           const draft =
             `Hi ${firstName} — this is ${agentName} at ${dealerName}. ` +
             `Thanks for your Facebook quote request. I’d love to help with pricing. Which ${yearLabel}model are you interested in?` +
-            (timelineNote ? ` ${timelineNote}` : "");
+            (timelineNote ? ` ${timelineNote}` : "") +
+            (financeLine ? ` ${financeLine}` : "");
           return finalize({
             intent,
             stage: "ENGAGED",
@@ -1352,7 +1382,8 @@ export async function orchestrateInbound(
         const ack =
           `Hi ${firstName} — ${thankLine}This is ${agentName} at ${dealerName}. ` +
           "I’ll have a manager pull the exact pricing and follow up shortly." +
-          (timelineNote ? ` ${timelineNote}` : "");
+          (timelineNote ? ` ${timelineNote}` : "") +
+          (financeLine ? ` ${financeLine}` : "");
         return finalize({
           intent,
           stage: "ENGAGED",
