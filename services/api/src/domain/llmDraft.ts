@@ -68,6 +68,15 @@ function sanitizePhotoAsk(draft: string): string {
     /[^.?!]*\bexterior\b[^.?!]*\bcockpit\b[^.?!]*\bclose[-\s]?ups?\b[^.?!]*(?:[.?!]|$)/gi,
     "I can send photos if you'd like."
   );
+  // Remove any photo triage that includes cockpit/close-ups.
+  out = out.replace(
+    /[^.?!]*\b(photos?|pics?|shots?)\b[^.?!]*\b(cockpit|close[-\s]?ups?|exterior)\b[^.?!]*(?:[.?!]|$)/gi,
+    "I can send photos if you'd like."
+  );
+  out = out.replace(
+    /[^.?!]*\b(cockpit|close[-\s]?ups?)\b[^.?!]*\b(photos?|pics?|shots?)\b[^.?!]*(?:[.?!]|$)/gi,
+    "I can send photos if you'd like."
+  );
   return out;
 }
 
