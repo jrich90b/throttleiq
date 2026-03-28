@@ -7920,7 +7920,8 @@ app.post("/conversations/:id/send", async (req, res) => {
   };
 
   if (wantsEmail) {
-    if (!emailOptInOk) {
+    const forceEmail = req.body?.forceEmail === true;
+    if (!emailOptInOk && !forceEmail) {
       return res.status(400).json({
         ok: false,
         error: "email opt-in not present for this lead",

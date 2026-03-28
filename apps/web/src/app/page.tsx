@@ -2792,6 +2792,7 @@ export default function Home() {
     editNote?: string;
     manualTakeover?: boolean;
     attachments?: { name: string; type: string; size: number; content: string }[];
+    forceEmail?: boolean;
   }) {
     if (!selectedConv) return;
     const resp = await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/send`, {
@@ -2801,6 +2802,7 @@ export default function Home() {
         ...payload,
         manualTakeover: payload.manualTakeover ?? !payload.draftId,
         channel: messageFilter,
+        forceEmail: payload.forceEmail === true,
         attachments:
           messageFilter === "email"
             ? (payload.attachments || []).map(att => ({
@@ -2813,6 +2815,19 @@ export default function Home() {
     });
     const data = await resp.json().catch(() => null);
     if (!resp.ok) {
+      if (
+        messageFilter === "email" &&
+        data?.error === "email opt-in not present for this lead" &&
+        !payload.forceEmail
+      ) {
+        const ok = window.confirm(
+          "Email opt-in is missing for this lead. Send anyway?"
+        );
+        if (ok) {
+          await doSend({ ...payload, forceEmail: true });
+        }
+        return;
+      }
       window.alert(data?.error ?? "Send failed");
       return;
     }
