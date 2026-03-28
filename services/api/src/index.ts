@@ -8593,7 +8593,9 @@ if (authToken && signature) {
     const complimentRegex =
       /\b(love|like|awesome|amazing|great|cool|nice|sweet|beautiful|killer|badass|sick|clean)\b/.test(t) ||
       /\b(looks great|looks amazing|looks awesome|sounds great)\b/.test(t) ||
-      /\b(wheels?|exhaust|pipes?|paint|color|trim|bars?|seat)\b/.test(t) && /\b(love|like)\b/.test(t);
+      /\b(v&h|short shots?)\b/.test(t) ||
+      (/\b(wheels?|exhaust|pipes?|paint|color|trim|bars?|seat)\b/.test(t) &&
+        /\b(love|like|awesome|amazing|great|cool|nice|sweet|beautiful|killer|badass|sick|clean)\b/.test(t));
     const complimentLLM =
       (await classifyComplimentWithLLM({
         text: event.body ?? "",
