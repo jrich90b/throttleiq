@@ -8223,12 +8223,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return res.json({ ok: true, conversation: conv, draft: reply });
   }
 
-  const dialogState = getDialogState(conv);
+  const serviceDialogState = getDialogState(conv);
   const isServiceLead =
     conv.classification?.bucket === "service" ||
     conv.classification?.cta === "service_request" ||
-    dialogState === "service_request" ||
-    dialogState === "service_handoff" ||
+    serviceDialogState === "service_request" ||
+    serviceDialogState === "service_handoff" ||
     (conv.followUp?.mode === "manual_handoff" &&
       /service/.test(String(conv.followUp?.reason ?? "")));
   if (isServiceLead) {
@@ -12238,11 +12238,11 @@ if (authToken && signature) {
       setDialogState(conv, "schedule_request");
     }
   }
-  const dialogState = getDialogState(conv);
+  const flowDialogState = getDialogState(conv);
   const draftText = String(result.draft ?? "");
   if (
     !conv.appointment?.bookedEventId &&
-    !isScheduleDialogState(dialogState) &&
+    !isScheduleDialogState(flowDialogState) &&
     /(what time works best|what day and time works best|what time were you thinking|reserve that time)/i.test(
       draftText
     )
@@ -12250,19 +12250,19 @@ if (authToken && signature) {
     setDialogState(conv, "schedule_request");
   }
   if (
-    !isTradeDialogState(dialogState) &&
+    !isTradeDialogState(flowDialogState) &&
     /(still available|in stock right now|not seeing .* in stock|checking availability)/i.test(draftText)
   ) {
     setDialogState(conv, "inventory_answered");
   }
   const canUpdatePricingState =
-    !isScheduleDialogState(dialogState) &&
-    !isTradeDialogState(dialogState) &&
-    !isServiceDialogState(dialogState) &&
-    dialogState !== "callback_requested" &&
-    dialogState !== "callback_handoff" &&
-    dialogState !== "call_only";
-  if (result.intent === "TRADE_IN" && !isScheduleDialogState(dialogState)) {
+    !isScheduleDialogState(flowDialogState) &&
+    !isTradeDialogState(flowDialogState) &&
+    !isServiceDialogState(flowDialogState) &&
+    flowDialogState !== "callback_requested" &&
+    flowDialogState !== "callback_handoff" &&
+    flowDialogState !== "call_only";
+  if (result.intent === "TRADE_IN" && !isScheduleDialogState(flowDialogState)) {
     if (!isTradeDialogState(dialogState)) {
       const sellOption = conv.lead?.sellOption;
       if (sellOption === "cash") setDialogState(conv, "trade_cash");
