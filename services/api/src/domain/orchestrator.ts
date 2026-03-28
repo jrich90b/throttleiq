@@ -1457,8 +1457,8 @@ export async function orchestrateInbound(
         })
         .join(channelIsEmail ? "\n\n" : "; ");
       const budgetLine = monthlyBudget
-        ? `Based on your ~$${monthlyBudget}/mo target (incl. insurance), I’m focusing on pre‑owned under $10k.`
-        : "I’m focusing on pre‑owned under $10k.";
+        ? `Thanks for the detail. To stay around ~$${monthlyBudget}/mo (incl. insurance), I’m keeping it to pre‑owned under $10k.`
+        : "Thanks for the detail. I’m keeping it to pre‑owned under $10k.";
       const firstName = (ctx?.lead?.firstName ?? "").trim() || "there";
       const greeting = channelIsEmail ? `Hey ${normalizeModelLabel(firstName)},\n\n` : "";
       return finalize({
