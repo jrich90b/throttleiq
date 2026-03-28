@@ -4289,6 +4289,14 @@ function isVideoRequest(text: string): boolean {
   return /\b(video|walkaround|walk around|walk-through|walkthrough|clip)\b/.test(t);
 }
 
+function isServiceRecordsRequest(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  return (
+    /(service records?|service history|maintenance records?|maintenance history)/.test(t) ||
+    /\b(battery|tires?|tire age)\b/.test(t)
+  );
+}
+
 function parseOfferSlotsFromReply(reply: string): { startLocal: string; endLocal: string }[] {
   const text = String(reply ?? "");
   const marker = " — do any of these times work?";
@@ -8504,6 +8512,32 @@ if (authToken && signature) {
     const reply =
       "Got it — I’ll have a salesperson send a walkaround video by text shortly.";
     addTodo(conv, "other", `Video request: ${event.body}`, event.providerMessageId);
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+
+  if (isServiceRecordsRequest(event.body)) {
+    const hasServiceTodo = listOpenTodos().some(
+      t => t.convId === conv.id && t.reason === "service"
+    );
+    if (!hasServiceTodo) {
+      addTodo(conv, "service", `Service records request: ${event.body}`, event.providerMessageId);
+    }
+    setDialogState(conv, "service_handoff");
+    setFollowUpMode(conv, "manual_handoff", "service_records");
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    const reply =
+      "Thanks for the details — I’ll have the team check service records (battery/tires) and follow up. I’ll also keep an eye on availability for early May.";
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
