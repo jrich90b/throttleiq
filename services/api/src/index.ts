@@ -10979,6 +10979,10 @@ if (authToken && signature) {
     availabilityExplicit ||
     getHarleyModelLexicon().some(m => textLower.includes(m.toLowerCase())) ||
     (!!conv.inventoryContext?.model && textLower.includes(conv.inventoryContext.model.toLowerCase())) ||
+    (!!conv.inventoryContext?.model &&
+      /\b(\d{4}|blue|black|white|red|green|gray|grey|silver|chrome|trim|finish|color|standard|special|st)\b/i.test(
+        textLower
+      )) ||
     (!!conv.lead?.vehicle?.model && textLower.includes(conv.lead.vehicle.model.toLowerCase())) ||
     (!!conv.lead?.vehicle?.model &&
       /\b(\d{4}|blue|black|white|red|green|gray|grey|silver|chrome|trim|color|standard|special|st)\b/i.test(
