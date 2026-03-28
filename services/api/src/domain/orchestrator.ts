@@ -443,9 +443,9 @@ function buildMonthlyPaymentLine(opts: {
 function buildFinanceAppLine(profile: Awaited<ReturnType<typeof getDealerProfile>> | null): string {
   const url = String(profile?.creditAppUrl ?? "").trim();
   if (url) {
-    return `For financing, you can submit the credit app online here: ${url}. If you’d rather do it in person, we can handle it at the dealership.`;
+    return `If you want to get started, you can submit the credit app online here: ${url}. Or you can stop by the dealership and get it done in person.`;
   }
-  return "For financing, you can submit a credit app online. If you’d rather do it in person, we can handle it at the dealership.";
+  return "If you want to get started, you can submit a credit app online. Or you can stop by the dealership and get it done in person.";
 }
 
 function extractColorMention(text?: string | null, knownColors?: string[]): string | null {
