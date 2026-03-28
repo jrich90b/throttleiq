@@ -450,9 +450,9 @@ function buildMonthlyPaymentLine(opts: {
       : "";
 
   return (
-    `Good question. Ballpark, on about ${priceLabel}, ${downLabel}` +
-    `you’re around ${payLow}–${payHigh}/mo at ${opts.termMonths} months depending on credit, ` +
-    `before taxes and fees, depending on your APR.`
+    `Ballpark, on about ${priceLabel}, ${downLabel}` +
+    `you’re around ${payLow}–${payHigh}/mo at ${opts.termMonths} months ` +
+    `before taxes and fees, based on your APR.`
   );
 }
 
