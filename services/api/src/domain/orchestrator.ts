@@ -303,6 +303,13 @@ function detectFinanceRequest(text: string): boolean {
   );
 }
 
+function detectDepositRequest(text: string): boolean {
+  const t = text.toLowerCase();
+  return /\b(leave|put|place|make)\b.*\b(deposit|hold)\b|\bdeposit\b.*\b(bike|unit|it)\b/.test(
+    t
+  );
+}
+
 function detectPendingIntents(text: string): Set<
   "PRICING" | "PAYMENTS" | "FINANCING" | "AVAILABILITY" | "SCHEDULING" | "TRADE"
 > {
@@ -1029,10 +1036,31 @@ export async function orchestrateInbound(
     typeof ctx?.callbackRequestedOverride === "boolean"
       ? ctx.callbackRequestedOverride
       : detectCallbackRequest(event.body);
+  const depositRequest = detectDepositRequest(event.body);
   const hoursRequest = detectHoursRequest(event.body);
   const pricingIntent =
     detectPricingOrPayment(event.body, intent) ||
     /request a quote|raq/i.test(ctx?.leadSource ?? "");
+
+  if (depositRequest) {
+    const dealerProfile = await getDealerProfile();
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const firstName = ctx?.lead?.firstName?.trim() || "";
+    const greeting = firstName ? `Hi ${firstName} — ` : "";
+    const bikeLabel = formatModelLabel(
+      ctx?.lead?.vehicle?.year ?? null,
+      ctx?.lead?.vehicle?.model ?? ctx?.lead?.vehicle?.description ?? null
+    );
+    const unitLine = bikeLabel ? ` for the ${bikeLabel}` : "";
+    const draft = `${greeting}Got it — to leave a deposit${unitLine}, you can either stop by or I can have someone from ${dealerName} call you and take it by phone. Which do you prefer?`;
+    return finalize({
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft
+    });
+  }
 
   const noTradeMentioned =
     /(no trade|no trade[-\s]?in|no tradein|don't have a trade|dont have a trade|without a trade)/i.test(
