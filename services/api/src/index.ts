@@ -10556,6 +10556,28 @@ if (authToken && signature) {
       return key ? !holds?.[key] && !solds?.[key] : true;
     });
     const count = availableMatches.length;
+    const sentMediaUrls = new Set<string>();
+    for (const msg of conv.messages ?? []) {
+      if (msg.direction !== "out") continue;
+      if (!Array.isArray(msg.mediaUrls)) continue;
+      for (const url of msg.mediaUrls) {
+        if (typeof url === "string" && url) sentMediaUrls.add(url);
+      }
+    }
+    const hasSentPhoto = sentMediaUrls.size > 0;
+    const remainingWithImages = availableMatches.filter(item =>
+      Array.isArray(item.images) &&
+      item.images.length &&
+      !item.images.some((u: string) => sentMediaUrls.has(u))
+    );
+    const photoRequestedLocal = /\b(photo|picture|pic|image|images)\b/i.test(textLower);
+    const extraMediaUrls =
+      count > 1 && (photoRequestedLocal || hasSentPhoto)
+        ? remainingWithImages
+            .slice(0, 2)
+            .map(item => item.images?.find((u: string) => /^https?:\/\//i.test(u)) ?? null)
+            .filter((u: string | null): u is string => !!u)
+        : [];
     const yearText = year ? `${year} ` : "";
     const modelLabel = normalizeDisplayCase(model);
     const colorLabel = color ? ` in ${formatColorLabel(color)}` : "";
@@ -10567,16 +10589,22 @@ if (authToken && signature) {
     } else {
       reply = `We have ${count} ${yearText}${modelLabel}${colorLabel} units in stock right now.`;
     }
+    if (extraMediaUrls.length) {
+      reply += ` Here ${extraMediaUrls.length === 1 ? "is" : "are"} photo${extraMediaUrls.length === 1 ? "" : "s"} of the other ${extraMediaUrls.length === 1 ? "one" : "two"}.`;
+    }
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai", undefined, extraMediaUrls.length ? extraMediaUrls : undefined);
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    appendOutbound(conv, event.to, event.from, reply, "twilio", undefined, extraMediaUrls.length ? extraMediaUrls : undefined);
+    const mediaTags = extraMediaUrls.length
+      ? extraMediaUrls.map(u => `\n    <Media>${escapeXml(u)}</Media>`).join("")
+      : "";
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
       reply
-    )}</Message>\n</Response>`;
+    )}${mediaTags}\n  </Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
 
