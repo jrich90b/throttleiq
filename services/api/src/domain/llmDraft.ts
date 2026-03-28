@@ -342,6 +342,152 @@ function safeParseJson(text: string): any | null {
   return null;
 }
 
+function cleanOptionalString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const cleaned = value.trim();
+  return cleaned || null;
+}
+
+const BOOKING_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent", "explicit_request", "requested", "reference", "normalized_text", "confidence"],
+  properties: {
+    intent: {
+      type: "string",
+      enum: ["schedule", "reschedule", "cancel", "availability", "question", "none"]
+    },
+    explicit_request: { type: "boolean" },
+    requested: {
+      type: "object",
+      additionalProperties: false,
+      required: ["day", "time_text", "time_window"],
+      properties: {
+        day: { type: "string" },
+        time_text: { type: "string" },
+        time_window: { type: "string", enum: ["exact", "range", "unknown"] }
+      }
+    },
+    reference: { type: "string", enum: ["last_suggested", "last_appointment", "none"] },
+    normalized_text: { type: "string" },
+    confidence: { type: "number" }
+  }
+};
+
+const INTENT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent", "explicit_request", "availability", "callback", "confidence"],
+  properties: {
+    intent: {
+      type: "string",
+      enum: ["callback", "test_ride", "availability", "none"]
+    },
+    explicit_request: { type: "boolean" },
+    availability: {
+      type: "object",
+      additionalProperties: false,
+      required: ["model", "year", "color", "stock_id", "condition"],
+      properties: {
+        model: { type: "string" },
+        year: { type: "string" },
+        color: { type: "string" },
+        stock_id: { type: "string" },
+        condition: { type: "string", enum: ["new", "used", "unknown"] }
+      }
+    },
+    callback: {
+      type: "object",
+      additionalProperties: false,
+      required: ["requested", "time_text", "phone"],
+      properties: {
+        requested: { type: "boolean" },
+        time_text: { type: "string" },
+        phone: { type: "string" }
+      }
+    },
+    confidence: { type: "number" }
+  }
+};
+
+async function requestStructuredJson(args: {
+  model: string;
+  prompt: string;
+  schemaName: string;
+  schema: { [key: string]: unknown };
+  maxOutputTokens?: number;
+  debugTag?: string;
+  debug?: boolean;
+}): Promise<any | null> {
+  const parseObject = (raw: string): any | null => {
+    const parsed = safeParseJson(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  };
+
+  try {
+    const resp = await client.responses.create({
+      model: args.model,
+      input: args.prompt,
+      temperature: 0,
+      max_output_tokens: args.maxOutputTokens ?? 220,
+      text: {
+        format: {
+          type: "json_schema",
+          name: args.schemaName,
+          schema: args.schema,
+          strict: true
+        }
+      }
+    });
+    const raw = resp.output_text?.trim() ?? "";
+    const parsed = parseObject(raw);
+    if (parsed) return parsed;
+    if (args.debug) {
+      console.warn(`[${args.debugTag ?? "llm-json-parser"}] structured parse failed`, {
+        model: args.model,
+        raw
+      });
+    }
+  } catch (error) {
+    if (args.debug) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[${args.debugTag ?? "llm-json-parser"}] structured request failed`, {
+        model: args.model,
+        error: message
+      });
+    }
+  }
+
+  // Compatibility fallback for models/configs that reject strict structured outputs.
+  try {
+    const resp = await client.responses.create({
+      model: args.model,
+      input: args.prompt,
+      temperature: 0,
+      max_output_tokens: args.maxOutputTokens ?? 220
+    });
+    const raw = resp.output_text?.trim() ?? "";
+    const parsed = parseObject(raw);
+    if (parsed) return parsed;
+    if (args.debug) {
+      console.warn(`[${args.debugTag ?? "llm-json-parser"}] fallback parse failed`, {
+        model: args.model,
+        raw
+      });
+    }
+  } catch (error) {
+    if (args.debug) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[${args.debugTag ?? "llm-json-parser"}] fallback request failed`, {
+        model: args.model,
+        error: message
+      });
+    }
+  }
+
+  return null;
+}
+
 export async function parseBookingIntentWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
@@ -354,6 +500,7 @@ export async function parseBookingIntentWithLLM(args: {
     !!process.env.OPENAI_API_KEY;
   if (!useLLM) return null;
 
+  const debug = process.env.LLM_BOOKING_PARSER_DEBUG === "1";
   const model = process.env.OPENAI_BOOKING_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
   const text = String(args.text ?? "").trim();
   if (!text) return null;
@@ -367,24 +514,17 @@ export async function parseBookingIntentWithLLM(args: {
   const apptStatus = args.appointment?.status ?? "none";
 
   const prompt = [
-    "You are a scheduling parser for dealership SMS. Return ONLY valid JSON.",
-    "Do not include extra text. Do not invent dates. Use day-of-week or today/tomorrow.",
-    "",
-    "JSON SCHEMA:",
-    "{",
-    '  "intent": "schedule|reschedule|cancel|availability|question|none",',
-    '  "explicit_request": true|false,',
-    '  "requested": { "day": "monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow|this week|next week|weekend|this weekend", "time_text": "4pm", "time_window": "exact|range|unknown" },',
-    '  "reference": "last_suggested|last_appointment|none",',
-    '  "normalized_text": "friday at 4 pm",',
-    '  "confidence": 0.0',
-    "}",
+    "You are a scheduling parser for dealership SMS.",
+    "Return only JSON that matches the provided schema.",
+    "Do not invent dates.",
     "",
     "Guidelines:",
     "- explicit_request is true only if the customer is asking to schedule/stop in/reschedule/cancel.",
-    "- If the customer gives a day without a time, set requested.day and leave time_text empty.",
+    "- If the customer gives a day without a time, set requested.day and set time_text to an empty string.",
     "- If the customer references a prior offer (e.g., 'that time', 'earlier', 'later'), set reference to last_suggested.",
     "- normalized_text should be a compact day/time phrase when possible; otherwise empty string.",
+    "- Use empty strings for unknown requested.day and requested.time_text.",
+    "- confidence is a number from 0 to 1.",
     "",
     `Appointment status: ${apptStatus}`,
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
@@ -392,58 +532,54 @@ export async function parseBookingIntentWithLLM(args: {
     `Message: ${text}`
   ].join("\n");
 
-  try {
-    const resp = await client.responses.create({
-      model,
-      input: prompt,
-      temperature: 0,
-      max_output_tokens: 220
-    });
-    const raw = resp.output_text?.trim() ?? "";
-    const parsed = safeParseJson(raw);
-    if (!parsed || typeof parsed !== "object") return null;
+  const parsed = await requestStructuredJson({
+    model,
+    prompt,
+    schemaName: "booking_intent_parser",
+    schema: BOOKING_PARSER_JSON_SCHEMA,
+    maxOutputTokens: 220,
+    debugTag: "llm-booking-parser",
+    debug
+  });
+  if (!parsed) return null;
 
-    const intentRaw = String(parsed.intent ?? "").toLowerCase();
-    const intent: BookingParse["intent"] =
-      intentRaw === "schedule" ||
-      intentRaw === "reschedule" ||
-      intentRaw === "cancel" ||
-      intentRaw === "availability" ||
-      intentRaw === "question"
-        ? intentRaw
-        : "none";
-    const explicitRequest = !!parsed.explicit_request;
-    const requested = parsed.requested && typeof parsed.requested === "object" ? parsed.requested : null;
-    const day = typeof requested?.day === "string" ? requested.day.trim() : null;
-    const timeText = typeof requested?.time_text === "string" ? requested.time_text.trim() : null;
-    const timeWindowRaw = typeof requested?.time_window === "string" ? requested.time_window : "unknown";
-    const timeWindow: "exact" | "range" | "unknown" =
-      timeWindowRaw === "exact" || timeWindowRaw === "range" ? timeWindowRaw : "unknown";
-    const referenceRaw = typeof parsed.reference === "string" ? parsed.reference : "none";
-    const reference: BookingParse["reference"] =
-      referenceRaw === "last_suggested" || referenceRaw === "last_appointment" ? referenceRaw : "none";
-    const normalizedTextRaw =
-      typeof parsed.normalized_text === "string" ? parsed.normalized_text.trim() : "";
-    let normalizedText = normalizedTextRaw;
-    if (!normalizedText && day) {
-      normalizedText = timeText ? `${day} at ${timeText}` : day;
-    }
-    const confidence =
-      typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
-        ? Math.max(0, Math.min(1, parsed.confidence))
-        : undefined;
-
-    return {
-      intent,
-      explicitRequest,
-      requested: { day, timeText, timeWindow },
-      reference,
-      normalizedText: normalizedText || null,
-      confidence
-    };
-  } catch {
-    return null;
+  const intentRaw = String(parsed.intent ?? "").toLowerCase();
+  const intent: BookingParse["intent"] =
+    intentRaw === "schedule" ||
+    intentRaw === "reschedule" ||
+    intentRaw === "cancel" ||
+    intentRaw === "availability" ||
+    intentRaw === "question"
+      ? intentRaw
+      : "none";
+  const explicitRequest = !!parsed.explicit_request;
+  const requested = parsed.requested && typeof parsed.requested === "object" ? parsed.requested : null;
+  const day = cleanOptionalString(requested?.day);
+  const timeText = cleanOptionalString(requested?.time_text);
+  const timeWindowRaw = typeof requested?.time_window === "string" ? requested.time_window : "unknown";
+  const timeWindow: "exact" | "range" | "unknown" =
+    timeWindowRaw === "exact" || timeWindowRaw === "range" ? timeWindowRaw : "unknown";
+  const referenceRaw = typeof parsed.reference === "string" ? parsed.reference : "none";
+  const reference: BookingParse["reference"] =
+    referenceRaw === "last_suggested" || referenceRaw === "last_appointment" ? referenceRaw : "none";
+  const normalizedTextRaw = cleanOptionalString(parsed.normalized_text) ?? "";
+  let normalizedText = normalizedTextRaw;
+  if (!normalizedText && day) {
+    normalizedText = timeText ? `${day} at ${timeText}` : day;
   }
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    intent,
+    explicitRequest,
+    requested: { day, timeText, timeWindow },
+    reference,
+    normalizedText: normalizedText || null,
+    confidence
+  };
 }
 
 export async function parseIntentWithLLM(args: {
@@ -469,27 +605,9 @@ export async function parseIntentWithLLM(args: {
   const lead = args.lead ?? {};
 
   const prompt = [
-    "You are a parser for dealership SMS. Return ONLY valid JSON.",
-    "Do not include extra text. Do not invent details.",
-    "",
-    "JSON SCHEMA:",
-    "{",
-    '  \"intent\": \"callback|test_ride|availability|none\",',
-    '  \"explicit_request\": true|false,',
-    '  \"availability\": {',
-    '    \"model\": \"Road Glide\",',
-    '    \"year\": \"2025\",',
-    '    \"color\": \"purple\",',
-    '    \"stock_id\": \"U123-456\",',
-    '    \"condition\": \"new|used|unknown\"',
-    "  },",
-    '  \"callback\": {',
-    '    \"requested\": true|false,',
-    '    \"time_text\": \"after 5\",',
-    '    \"phone\": \"+15551234567\"',
-    "  },",
-    '  \"confidence\": 0.0',
-    "}",
+    "You are a parser for dealership SMS.",
+    "Return only JSON that matches the provided schema.",
+    "Do not invent details.",
     "",
     "Guidelines:",
     "- explicit_request is true only if the customer is asking for a call back, test ride, or availability.",
@@ -497,6 +615,9 @@ export async function parseIntentWithLLM(args: {
     "- intent=test_ride if they ask to test ride or demo the bike.",
     "- intent=callback if they ask for a call or ask you to call them.",
     "- If no clear request, intent=none and explicit_request=false.",
+    "- Use empty strings for unknown availability fields (model/year/color/stock_id).",
+    "- Use callback.requested=false and empty strings for callback.time_text/callback.phone when unknown.",
+    "- confidence is a number from 0 to 1.",
     "",
     `Known lead info: ${JSON.stringify({
       model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
@@ -509,29 +630,15 @@ export async function parseIntentWithLLM(args: {
   ].join("\n");
 
   const runParse = async (model: string): Promise<any | null> => {
-    try {
-      const resp = await client.responses.create({
-        model,
-        input: prompt,
-        temperature: 0,
-        max_output_tokens: 220
-      });
-      const raw = resp.output_text?.trim() ?? "";
-      const parsed = safeParseJson(raw);
-      if (!parsed || typeof parsed !== "object") {
-        if (debug) {
-          console.warn("[llm-intent-parser] parse failed", { model, raw });
-        }
-        return null;
-      }
-      return parsed;
-    } catch (error) {
-      if (debug) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error("[llm-intent-parser] request failed", { model, error: message });
-      }
-      return null;
-    }
+    return requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "intent_parser",
+      schema: INTENT_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 220,
+      debugTag: "llm-intent-parser",
+      debug
+    });
   };
 
   const parsedPrimary = await runParse(primaryModel);
@@ -552,10 +659,10 @@ export async function parseIntentWithLLM(args: {
     : null;
   const availability = availabilityRaw
     ? {
-        model: typeof availabilityRaw.model === "string" ? availabilityRaw.model.trim() : null,
-        year: typeof availabilityRaw.year === "string" ? availabilityRaw.year.trim() : null,
-        color: typeof availabilityRaw.color === "string" ? availabilityRaw.color.trim() : null,
-        stockId: typeof availabilityRaw.stock_id === "string" ? availabilityRaw.stock_id.trim() : null,
+        model: cleanOptionalString(availabilityRaw.model),
+        year: cleanOptionalString(availabilityRaw.year),
+        color: cleanOptionalString(availabilityRaw.color),
+        stockId: cleanOptionalString(availabilityRaw.stock_id),
         condition:
           availabilityRaw.condition === "new" || availabilityRaw.condition === "used"
             ? availabilityRaw.condition
@@ -567,8 +674,8 @@ export async function parseIntentWithLLM(args: {
   const callback = callbackRaw
     ? {
         requested: typeof callbackRaw.requested === "boolean" ? callbackRaw.requested : undefined,
-        timeText: typeof callbackRaw.time_text === "string" ? callbackRaw.time_text.trim() : null,
-        phone: typeof callbackRaw.phone === "string" ? callbackRaw.phone.trim() : null
+        timeText: cleanOptionalString(callbackRaw.time_text),
+        phone: cleanOptionalString(callbackRaw.phone)
       }
     : undefined;
 

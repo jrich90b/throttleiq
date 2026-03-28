@@ -1,0 +1,275 @@
+[
+  {
+    "id": "schedule_exact_1",
+    "text": "Friday at 4 works for me.",
+    "expected": {
+      "intent": "schedule",
+      "explicit_request": true,
+      "requested": {
+        "day": "friday",
+        "time_text": "4",
+        "time_window": "exact"
+      },
+      "normalized_contains": "friday"
+    }
+  },
+  {
+    "id": "schedule_day_only_1",
+    "text": "Can we do Saturday?",
+    "expected": {
+      "intent": "schedule",
+      "explicit_request": true,
+      "requested": {
+        "day": "saturday",
+        "time_window": "unknown"
+      },
+      "normalized_contains": "saturday"
+    }
+  },
+  {
+    "id": "availability_next_week_1",
+    "text": "Any openings next week?",
+    "expected": {
+      "intent": "availability",
+      "explicit_request": true,
+      "requested": {
+        "day": "next week",
+        "time_window": "unknown"
+      },
+      "normalized_contains": "next week"
+    }
+  },
+  {
+    "id": "reschedule_tomorrow_1",
+    "text": "Can we reschedule for tomorrow morning?",
+    "expected": {
+      "intent": "reschedule",
+      "explicit_request": true,
+      "requested": {
+        "day": "tomorrow",
+        "time_text": "morning",
+        "time_window": "range"
+      }
+    }
+  },
+  {
+    "id": "cancel_today_1",
+    "text": "I need to cancel my appointment for today.",
+    "expected": {
+      "intent": "cancel",
+      "explicit_request": true,
+      "requested": {
+        "day": "today",
+        "time_window": "unknown"
+      }
+    }
+  },
+  {
+    "id": "question_duration_1",
+    "text": "How long does a test ride appointment usually take?",
+    "expected": {
+      "intent": "question",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "none_ack_1",
+    "text": "Thanks, I'll confirm later.",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "reference_that_time_1",
+    "history": [
+      {
+        "direction": "out",
+        "body": "I have Friday at 4:00 PM or Saturday at 11:00 AM open."
+      }
+    ],
+    "lastSuggestedSlots": [
+      {
+        "startLocal": "2026-04-03T16:00:00-04:00"
+      },
+      {
+        "startLocal": "2026-04-04T11:00:00-04:00"
+      }
+    ],
+    "text": "That earlier time works.",
+    "expected": {
+      "intent": "schedule",
+      "intent_any": [
+        "schedule",
+        "reschedule"
+      ],
+      "explicit_request": true,
+      "reference": "last_suggested"
+    }
+  },
+  {
+    "id": "reference_later_1",
+    "history": [
+      {
+        "direction": "out",
+        "body": "I can do Tuesday at 2 or 4."
+      }
+    ],
+    "lastSuggestedSlots": [
+      {
+        "startLocal": "2026-04-07T14:00:00-04:00"
+      },
+      {
+        "startLocal": "2026-04-07T16:00:00-04:00"
+      }
+    ],
+    "text": "Can we do later than that?",
+    "expected": {
+      "intent": "reschedule",
+      "intent_any": [
+        "reschedule",
+        "schedule"
+      ],
+      "explicit_request": true,
+      "reference": "last_suggested"
+    }
+  },
+  {
+    "id": "availability_friday_times_1",
+    "text": "What times are open on Friday?",
+    "expected": {
+      "intent": "availability",
+      "explicit_request": true,
+      "requested": {
+        "day": "friday",
+        "time_window": "unknown"
+      },
+      "normalized_contains": "friday"
+    }
+  },
+  {
+    "id": "schedule_weekend_noon_1",
+    "text": "Let's book this weekend around noon.",
+    "expected": {
+      "intent": "schedule",
+      "explicit_request": true,
+      "requested": {
+        "day": "this weekend",
+        "time_text": "noon",
+        "time_window": "range"
+      }
+    }
+  },
+  {
+    "id": "cancel_generic_1",
+    "history": [
+      {
+        "direction": "out",
+        "body": "I have you down for Monday at 10:30 AM."
+      }
+    ],
+    "appointment": {
+      "status": "proposed"
+    },
+    "text": "Please cancel it.",
+    "expected": {
+      "intent": "cancel",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "availability_sunday_1",
+    "text": "Are you open Sunday?",
+    "expected": {
+      "intent": "availability",
+      "intent_any": [
+        "availability",
+        "question"
+      ],
+      "explicit_request": true,
+      "requested": {
+        "day": "sunday",
+        "time_window": "unknown"
+      }
+    }
+  },
+  {
+    "id": "none_pricing_1",
+    "text": "What's the out-the-door price?",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "reschedule_specific_1",
+    "history": [
+      {
+        "direction": "out",
+        "body": "I can hold Monday at 1 PM if that helps."
+      }
+    ],
+    "appointment": {
+      "status": "scheduled"
+    },
+    "text": "Move my appointment to Tuesday at 3 pm.",
+    "expected": {
+      "intent": "reschedule",
+      "explicit_request": true,
+      "requested": {
+        "day": "tuesday",
+        "time_text": "3",
+        "time_window": "exact"
+      },
+      "reference": "last_appointment"
+    }
+  },
+  {
+    "id": "availability_tomorrow_after5_1",
+    "text": "Any time tomorrow after 5?",
+    "expected": {
+      "intent": "availability",
+      "explicit_request": true,
+      "requested": {
+        "day": "tomorrow",
+        "time_text": "after 5",
+        "time_window": "range"
+      }
+    }
+  },
+  {
+    "id": "none_ok_1",
+    "text": "ok",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "reference_later_that_day_1",
+    "history": [
+      {
+        "direction": "out",
+        "body": "I can do Thursday at 2 PM or 5 PM."
+      }
+    ],
+    "lastSuggestedSlots": [
+      {
+        "startLocal": "2026-04-09T14:00:00-04:00"
+      },
+      {
+        "startLocal": "2026-04-09T17:00:00-04:00"
+      }
+    ],
+    "text": "Later that day works better.",
+    "expected": {
+      "intent": "schedule",
+      "intent_any": [
+        "schedule",
+        "reschedule"
+      ],
+      "explicit_request": true,
+      "reference": "last_suggested"
+    }
+  }
+]
