@@ -425,7 +425,7 @@ async function requestStructuredJson(args: {
   };
 
   try {
-    const resp = await client.responses.create({
+    const resp = await client.responses.parse({
       model: args.model,
       input: args.prompt,
       temperature: 0,
@@ -439,13 +439,18 @@ async function requestStructuredJson(args: {
         }
       }
     });
+    const parsedFromApi = (resp as any)?.output_parsed;
+    if (parsedFromApi && typeof parsedFromApi === "object") {
+      return parsedFromApi;
+    }
     const raw = resp.output_text?.trim() ?? "";
     const parsed = parseObject(raw);
     if (parsed) return parsed;
     if (args.debug) {
       console.warn(`[${args.debugTag ?? "llm-json-parser"}] structured parse failed`, {
         model: args.model,
-        raw
+        raw,
+        hasOutputParsed: !!parsedFromApi
       });
     }
   } catch (error) {
@@ -611,9 +616,10 @@ export async function parseIntentWithLLM(args: {
     "",
     "Guidelines:",
     "- explicit_request is true only if the customer is asking for a call back, test ride, or availability.",
-    "- intent=availability if they ask if a bike is available/in stock/still there.",
+    "- intent=availability only for inventory availability (bike in stock/still there/sold?).",
     "- intent=test_ride if they ask to test ride or demo the bike.",
     "- intent=callback if they ask for a call or ask you to call them.",
+    "- If message is about appointment/schedule availability (day/time/openings), intent=none and explicit_request=false.",
     "- If no clear request, intent=none and explicit_request=false.",
     "- Use empty strings for unknown availability fields (model/year/color/stock_id).",
     "- Use callback.requested=false and empty strings for callback.time_text/callback.phone when unknown.",
