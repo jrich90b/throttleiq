@@ -187,6 +187,39 @@ export async function classifyEmpathyNeedWithLLM(args: {
   }
 }
 
+export async function classifyComplimentWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<boolean | null> {
+  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+  const history = (args.history ?? []).slice(-2).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "You are a classifier for dealership SMS.",
+    "Question: Is this message a compliment or positive remark about the bike or its features (e.g., love the wheels, nice exhaust, looks great)?",
+    "Answer with only YES or NO.",
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+  try {
+    const resp = await client.responses.create({
+      model,
+      input: prompt,
+      temperature: 0,
+      max_output_tokens: 20
+    });
+    const out = resp.output_text?.trim().toLowerCase() ?? "";
+    if (!out) return null;
+    return out.startsWith("y");
+  } catch {
+    return null;
+  }
+}
+
 export async function classifyCadenceContextWithLLM(args: {
   history: { direction: "in" | "out"; body: string }[];
 }): Promise<string | null> {
