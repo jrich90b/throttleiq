@@ -1836,10 +1836,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const yearLabel = conv.lead?.vehicle?.year ? `${conv.lead?.vehicle?.year} ` : "";
     const bikeLabel = modelLabel ? `${yearLabel}${modelLabel}`.trim() : "the bike";
     const hasIdentifiers = !!conv.lead?.vehicle?.stockId || !!conv.lead?.vehicle?.vin;
+    const isRequestDetails = /request details/i.test(leadSourceLower);
+    const questionTail = isRequestDetails ? " Any specific questions about the bike?" : "";
     if (initialAvailability === "in_stock") {
-      draft = `I saw you wanted to learn more about the ${bikeLabel}. Want to stop in and check out the bike?`;
+      draft = `Thanks for your inquiry. I saw you wanted to learn more about the ${bikeLabel}. Want to stop in and check out the bike?${questionTail}`;
     } else if (!hasIdentifiers) {
-      draft = `I saw you wanted to learn more about the ${bikeLabel}. I’m here to help.`;
+      draft = `I saw you wanted to learn more about the ${bikeLabel}.${isRequestDetails ? " Any specific questions about the bike?" : ""} I’m here to help.`;
       suppressAvailabilityAppend = true;
     }
   }
