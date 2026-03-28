@@ -1176,6 +1176,78 @@ export async function orchestrateInbound(
     });
   }
 
+  if (wantsAvailability && multiIntentCount === 1) {
+    try {
+      const items = await getInventoryFeed();
+      const models = Array.from(new Set(items.map(i => i.model).filter(Boolean))) as string[];
+      const lastOutbound = [...(history ?? [])].reverse().find(h => h.direction === "out")?.body ?? "";
+      const model =
+        resolveModelFromText(event.body, models) ||
+        resolveModelFromText(lastOutbound, models) ||
+        resolveModelFromHistory(history, models) ||
+        ctx?.lead?.vehicle?.model ||
+        deriveModelFromDescription(ctx?.lead?.vehicle?.description ?? null) ||
+        null;
+      if (!model) {
+        return finalize({
+          intent: "AVAILABILITY",
+          stage: "ENGAGED",
+          shouldRespond: true,
+          draft: "Which model are you asking about?"
+        });
+      }
+      const year =
+        deriveYearFromText(event.body) ??
+        deriveYearFromText(lastOutbound) ??
+        ctx?.lead?.vehicle?.year ??
+        null;
+      const msrpColors = await getMsrpColorNames();
+      const color =
+        extractColorMention(event.body, msrpColors) ||
+        extractColorMention(lastOutbound, msrpColors) ||
+        findRecentInboundColor(history, msrpColors) ||
+        ctx?.lead?.vehicle?.color ||
+        null;
+      let matches = await findInventoryMatches({ year: year ?? null, model });
+      if (color) {
+        const colorLower = color.toLowerCase();
+        matches = matches.filter(m => (m.color ?? "").toLowerCase().includes(colorLower));
+      }
+      const holds = await listInventoryHolds();
+      const solds = await listInventorySolds();
+      const availableMatches = matches.filter(m => {
+        const holdKey = normalizeInventoryHoldKey(m.stockId, m.vin);
+        const soldKey = normalizeInventorySoldKey(m.stockId, m.vin);
+        if (holdKey && holds?.[holdKey]) return false;
+        if (soldKey && solds?.[soldKey]) return false;
+        return true;
+      });
+      const count = availableMatches.length;
+      const yearLabel = year ? `${year} ` : "";
+      const modelLabel = normalizeModelLabel(model);
+      const colorLabel = color ? ` in ${color}` : "";
+      const reply =
+        count <= 0
+          ? `I’m not seeing any ${yearLabel}${modelLabel}${colorLabel} in stock right now.`
+          : count === 1
+            ? `We do have 1 ${yearLabel}${modelLabel}${colorLabel} in stock. Want photos or details?`
+            : `We have ${count} ${yearLabel}${modelLabel}${colorLabel} in stock. Want photos or details on a specific one?`;
+      return finalize({
+        intent: "AVAILABILITY",
+        stage: "ENGAGED",
+        shouldRespond: true,
+        draft: reply
+      });
+    } catch {
+      return finalize({
+        intent: "AVAILABILITY",
+        stage: "ENGAGED",
+        shouldRespond: true,
+        draft: "Let me check inventory and get you an update."
+      });
+    }
+  }
+
   if (multiIntentCount >= 2) {
     const leadVehicle = ctx?.lead?.vehicle ?? {};
     const modelRaw =
