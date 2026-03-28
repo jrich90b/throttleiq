@@ -10642,6 +10642,11 @@ if (authToken && signature) {
     textLower
   );
   const mentionedModelsEarly = findMentionedModels(textLower);
+  const hasModelContext =
+    getHarleyModelLexicon().some(m => textLower.includes(m.toLowerCase())) ||
+    !!conv.inventoryContext?.model ||
+    !!conv.lead?.vehicle?.model ||
+    !!conv.lead?.vehicle?.description;
   const lastOutboundInfoPrompt = /quick highlights list for|spec sheet or a quick highlights list for/i.test(
     lastOutboundText
   );
@@ -10671,6 +10676,20 @@ if (authToken && signature) {
       !!conv.lead?.vehicle?.model ||
       !!conv.lead?.vehicle?.description);
   const infoOnlyRequest = (isInfoOnlyRequest(textLower) || isCompare) && !skipInfoOnly;
+  if (event.provider === "twilio" && finishPreferenceOnlyRaw && !hasModelContext) {
+    const reply = "Got it — which model and year are you looking for?";
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (event.provider === "twilio" && infoOnlyRequest && !availabilityExplicit) {
     if (isCompare) {
       const wantsEverythingCompare = /\b(all (the )?details|everything|all (the )?info|all specs?|full details|everything on the page)\b/i.test(
