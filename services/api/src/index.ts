@@ -9451,6 +9451,10 @@ if (authToken && signature) {
     lastOutbound?.body &&
     /(on hold|hold with deposit|deposit|sale pending|pending|sold|already sold)/i.test(lastOutbound.body);
   const textLower = inboundLower;
+  const inventoryCountQuestion =
+    /\b(only one|just one|is that all|any others|how many|how many do you have|only one you have)\b/i.test(
+      textLower
+    );
   const schedulingSignalsBase = detectSchedulingSignals(event.body);
   const leadSourceText = String(conv.lead?.source ?? "").toLowerCase();
   const isTradeLead =
@@ -10399,7 +10403,7 @@ if (authToken && signature) {
     }
   }
 
-  if (event.provider === "twilio" && conv.inventoryWatchPending) {
+  if (event.provider === "twilio" && conv.inventoryWatchPending && !inventoryCountQuestion) {
     const cfg = await getSchedulerConfig();
     const tz = cfg.timezone || "America/New_York";
     const explicitRequested = parseRequestedDayTime(String(event.body ?? ""), tz);
@@ -10505,6 +10509,75 @@ if (authToken && signature) {
         return res.status(200).type("text/xml").send(twiml);
       }
     }
+  }
+
+  if (event.provider === "twilio" && inventoryCountQuestion) {
+    const model =
+      conv.inventoryContext?.model ??
+      conv.lead?.vehicle?.model ??
+      conv.lead?.vehicle?.description ??
+      null;
+    if (!model) {
+      const reply = "Which model are you asking about?";
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    const year = conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null;
+    const color = conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null;
+    const finish = extractTrimToken(conv.inventoryContext?.finish ?? null);
+    let matches = await findInventoryMatches({ year: year ?? null, model });
+    if (color) {
+      const leadColor = String(color);
+      const leadTrim: "chrome" | "black" | null = finish;
+      matches = matches.filter(i => {
+        const itemColor = i.color ?? "";
+        if (colorMatchesExact(itemColor, leadColor, leadTrim) || colorMatchesAlias(itemColor, leadColor, leadTrim)) {
+          return true;
+        }
+        const itemNorm = normalizeColorBase(itemColor, !!leadTrim);
+        const leadNorm = normalizeColorBase(leadColor, !!leadTrim);
+        if (!itemNorm || !leadNorm) return false;
+        return itemNorm.includes(leadNorm) || leadNorm.includes(itemNorm);
+      });
+    }
+    const holds = await listInventoryHolds();
+    const solds = await listInventorySolds();
+    const availableMatches = matches.filter(m => {
+      const key = normalizeInventoryHoldKey(m.stockId, m.vin);
+      return key ? !holds?.[key] && !solds?.[key] : true;
+    });
+    const count = availableMatches.length;
+    const yearText = year ? `${year} ` : "";
+    const modelLabel = normalizeDisplayCase(model);
+    const colorLabel = color ? ` in ${formatColorLabel(color)}` : "";
+    let reply = "";
+    if (count <= 0) {
+      reply = `I’m not seeing ${yearText}${modelLabel}${colorLabel} in stock right now.`;
+    } else if (count === 1) {
+      reply = `That’s the only ${yearText}${modelLabel}${colorLabel} we have in stock right now.`;
+    } else {
+      reply = `We have ${count} ${yearText}${modelLabel}${colorLabel} units in stock right now.`;
+    }
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
   }
 
   const specsSignal =
