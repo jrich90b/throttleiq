@@ -392,6 +392,19 @@ function extractColorMention(text?: string | null, knownColors?: string[]): stri
   return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
+function findRecentInboundColor(
+  history: { direction: "in" | "out"; body: string }[] | undefined,
+  knownColors: string[]
+): string | null {
+  if (!history?.length) return null;
+  const inbound = [...history].reverse().filter(h => h.direction === "in");
+  for (const msg of inbound.slice(0, 6)) {
+    const color = extractColorMention(msg.body, knownColors);
+    if (color) return color;
+  }
+  return null;
+}
+
 function looksLikePaymentEstimateMessage(text: string): boolean {
   const t = text.toLowerCase();
   return /(ballpark|\/mo|per month|monthly|payments?)/.test(t);
@@ -1913,7 +1926,8 @@ export async function orchestrateInbound(
         const modelLabel = modelCandidate ?? "that model";
         const stockLabel = lead.vehicle?.stockId ?? stockId;
         const msrpColors = await getMsrpColorNames();
-        const colorMention = extractColorMention(event.body, msrpColors);
+        const colorMention =
+          extractColorMention(event.body, msrpColors) || findRecentInboundColor(history, msrpColors);
         const modelMentionedInText = !!modelFromText;
         if (!modelMentionedInText && colorMention) {
           const leadName = lead?.firstName?.trim() || "there";
