@@ -1027,8 +1027,13 @@ export async function orchestrateInbound(
     detectPricingOrPayment(event.body, intent) ||
     /request a quote|raq/i.test(ctx?.leadSource ?? "");
 
+  const noTradeMentioned =
+    /(no trade|no trade[-\s]?in|no tradein|don't have a trade|dont have a trade|without a trade)/i.test(
+      event.body
+    );
   if (
     intent === "TRADE_IN" &&
+    !noTradeMentioned &&
     /(trade[-\s]?in|trade in|trade appraisal|value my trade|trade value|trade price|trade[-\s]?in price)/i.test(
       event.body
     ) &&
