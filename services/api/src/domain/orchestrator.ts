@@ -1884,6 +1884,8 @@ export async function orchestrateInbound(
       }
 
       if (pricingIntent && (listPrice || priceRange)) {
+        const dealerProfile = await getDealerProfile();
+        const financeLine = financeRequest ? buildFinanceAppLine(dealerProfile) : "";
         const nf = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
         const yearLabel = lead.vehicle?.year ? `${lead.vehicle.year} ` : "";
         const modelLabel = lead.vehicle?.model ?? "that model";
@@ -1912,7 +1914,7 @@ export async function orchestrateInbound(
         const schedule = suggestedSlots.length >= 2
           ? `I can set up a time to stop in and go over options. I have ${suggestedSlots[0].startLocal} or ${suggestedSlots[1].startLocal} — do any of these times work?`
           : "I can set up a time to stop in and go over options. What day and time works for you?";
-        const qualifier = "Do you have a trade?";
+        const qualifier = financeRequest ? "" : "Do you have a trade?";
         const isFirstOutbound = !history.some(h => h.direction === "out");
         const leadName = lead?.firstName?.trim() || "there";
         const thankLabel = normalizeModelLabel(lead.vehicle?.model ?? lead.vehicle?.description);
@@ -1926,7 +1928,7 @@ export async function orchestrateInbound(
           intent,
           stage: "ENGAGED",
           shouldRespond: true,
-          draft: `${greeting}${priceLine} ${disclaimer}\n\n${schedule} ${qualifier}`.trim(),
+          draft: `${greeting}${priceLine} ${disclaimer}${financeLine ? ` ${financeLine}` : ""}\n\n${schedule} ${qualifier}`.trim(),
           suggestedSlots
         });
       }
