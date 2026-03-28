@@ -383,6 +383,43 @@ function extractColorMention(text?: string | null, knownColors?: string[]): stri
       if (!key) continue;
       if (t.includes(key.toLowerCase())) return key;
     }
+    const words = t.replace(/[^a-z0-9]+/g, " ").split(/\s+/).filter(Boolean);
+    const maxDistance = 1;
+    const distance = (a: string, b: string): number => {
+      if (a === b) return 0;
+      if (!a || !b) return Math.max(a.length, b.length);
+      if (Math.abs(a.length - b.length) > maxDistance) return maxDistance + 1;
+      const dp: number[] = [];
+      for (let j = 0; j <= b.length; j++) dp[j] = j;
+      for (let i = 1; i <= a.length; i++) {
+        let prev = dp[0];
+        dp[0] = i;
+        let minRow = dp[0];
+        for (let j = 1; j <= b.length; j++) {
+          const tmp = dp[j];
+          const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+          dp[j] = Math.min(dp[j] + 1, dp[j - 1] + 1, prev + cost);
+          prev = tmp;
+          if (dp[j] < minRow) minRow = dp[j];
+        }
+        if (minRow > maxDistance) return maxDistance + 1;
+      }
+      return dp[b.length];
+    };
+    for (const color of sorted) {
+      const key = String(color ?? "").trim();
+      if (!key) continue;
+      const tokens = key.toLowerCase().replace(/[^a-z0-9]+/g, " ").split(/\s+/).filter(Boolean);
+      if (!tokens.length) continue;
+      const matched = tokens.every(token =>
+        words.some(w => {
+          if (w === token) return true;
+          if (token.length < 4 || w.length < 4) return false;
+          return distance(w, token) <= maxDistance;
+        })
+      );
+      if (matched) return key;
+    }
   }
   const colorMatch = t.match(
     /\b(black|white|gray|grey|silver|red|blue|green|yellow|orange|purple|maroon|gold|brown|tan|cream|ivory|pink|magenta|aqua|teal|olive)\b/
