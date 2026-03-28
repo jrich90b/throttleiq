@@ -680,6 +680,16 @@ export function appendOutbound(
     .find(m => m.direction === "in" && m.body);
   const inboundText = lastInbound?.body ?? "";
   const normalizedBody = normalizeGotItLeadIn(body, inboundText, provider);
+  // If this is an email-thread draft, store it as an email draft instead of a SMS draft.
+  if (
+    provider === "draft_ai" &&
+    (String(from ?? "").includes("@") || String(to ?? "").includes("@"))
+  ) {
+    conv.emailDraft = normalizedBody;
+    conv.updatedAt = nowIso();
+    scheduleSave();
+    return;
+  }
   conv.messages.push({
     id: makeId("msg"),
     direction: "out",
