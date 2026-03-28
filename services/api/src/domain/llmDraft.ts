@@ -348,6 +348,48 @@ function cleanOptionalString(value: unknown): string | null {
   return cleaned || null;
 }
 
+function extractDayToken(text: string): string | null {
+  const source = String(text ?? "");
+  const match = source.match(
+    /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week|this weekend|weekend)\b/i
+  );
+  return match?.[0] ? match[0].toLowerCase() : null;
+}
+
+function extractTimePhrase(text: string): string | null {
+  const source = String(text ?? "").trim();
+  if (!source) return null;
+
+  const exact =
+    source.match(/\b\d{1,2}:\d{2}\s*(?:am|pm)?\b/i)?.[0] ??
+    source.match(/\b\d{1,2}\s*(?:am|pm)\b/i)?.[0] ??
+    null;
+  if (exact) return exact;
+
+  const relative = source.match(/\b(?:after|before|around|by)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/i)?.[0] ?? null;
+  if (relative) return relative;
+
+  const broad = source.match(/\b(morning|afternoon|evening|tonight|noon|night)\b/i)?.[0] ?? null;
+  if (broad) return broad;
+
+  return null;
+}
+
+function inferTimeWindow(value: string | null): "exact" | "range" | "unknown" {
+  const v = String(value ?? "").trim().toLowerCase();
+  if (!v) return "unknown";
+  if (
+    /\b(morning|afternoon|evening|tonight|noon|night)\b/.test(v) ||
+    /\b(after|before|around|between)\b/.test(v)
+  ) {
+    return "range";
+  }
+  if (/\b\d{1,2}:\d{2}\s*(am|pm)?\b/.test(v) || /\b\d{1,2}\s*(am|pm)\b/.test(v)) {
+    return "exact";
+  }
+  return "unknown";
+}
+
 const BOOKING_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
@@ -558,7 +600,7 @@ export async function parseBookingIntentWithLLM(args: {
   if (!parsed) return null;
 
   const intentRaw = String(parsed.intent ?? "").toLowerCase();
-  const intent: BookingParse["intent"] =
+  let intent: BookingParse["intent"] =
     intentRaw === "schedule" ||
     intentRaw === "reschedule" ||
     intentRaw === "cancel" ||
@@ -566,21 +608,73 @@ export async function parseBookingIntentWithLLM(args: {
     intentRaw === "question"
       ? intentRaw
       : "none";
-  const explicitRequest = !!parsed.explicit_request;
+  const messageText = String(args.text ?? "");
+  const messageLower = messageText.toLowerCase();
+  if (
+    intent === "question" &&
+    /\b(price|pricing|otd|out[-\s]?the[-\s]?door|payment|payments|monthly|apr|finance|financing)\b/i.test(
+      messageText
+    )
+  ) {
+    intent = "none";
+  }
+
+  let explicitRequest = !!parsed.explicit_request;
+  if (
+    !explicitRequest &&
+    (intent === "schedule" || intent === "reschedule" || intent === "cancel" || intent === "availability")
+  ) {
+    const hasRequestCue =
+      /\b(schedule|book|appointment|appt|reschedule|cancel|availability|available|openings?|what times|any time|move my appointment|are you open)\b/i.test(
+        messageText
+      ) || /\?$/.test(messageText.trim());
+    if (hasRequestCue) explicitRequest = true;
+  }
+
   const requested = parsed.requested && typeof parsed.requested === "object" ? parsed.requested : null;
-  const day = cleanOptionalString(requested?.day);
-  const timeText = cleanOptionalString(requested?.time_text);
+  let day = cleanOptionalString(requested?.day);
+  let timeText = cleanOptionalString(requested?.time_text);
   const timeWindowRaw = typeof requested?.time_window === "string" ? requested.time_window : "unknown";
-  const timeWindow: "exact" | "range" | "unknown" =
+  let timeWindow: "exact" | "range" | "unknown" =
     timeWindowRaw === "exact" || timeWindowRaw === "range" ? timeWindowRaw : "unknown";
   const referenceRaw = typeof parsed.reference === "string" ? parsed.reference : "none";
-  const reference: BookingParse["reference"] =
+  let reference: BookingParse["reference"] =
     referenceRaw === "last_suggested" || referenceRaw === "last_appointment" ? referenceRaw : "none";
   const normalizedTextRaw = cleanOptionalString(parsed.normalized_text) ?? "";
   let normalizedText = normalizedTextRaw;
   if (!normalizedText && day) {
     normalizedText = timeText ? `${day} at ${timeText}` : day;
   }
+
+  if (!day) {
+    day = extractDayToken(normalizedText || messageText);
+  }
+  if (!timeText) {
+    timeText = extractTimePhrase(normalizedText || messageText);
+  }
+  if (timeWindow === "unknown") {
+    const inferred = inferTimeWindow(timeText);
+    if (inferred !== "unknown") {
+      timeWindow = inferred;
+    } else if (/\b(any time|openings?|available|availability)\b/i.test(messageLower)) {
+      timeWindow = "range";
+    }
+  }
+  if (
+    reference === "none" &&
+    intent === "reschedule" &&
+    String(args.appointment?.status ?? "none").toLowerCase() !== "none"
+  ) {
+    reference = "last_appointment";
+  }
+  if (
+    reference === "none" &&
+    (args.lastSuggestedSlots?.length ?? 0) > 0 &&
+    /\b(that|this|earlier|later|same time|that time|that one)\b/i.test(messageLower)
+  ) {
+    reference = "last_suggested";
+  }
+
   const confidence =
     typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
       ? Math.max(0, Math.min(1, parsed.confidence))
