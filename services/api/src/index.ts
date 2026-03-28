@@ -8093,7 +8093,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const channel =
     req.body?.channel === "email" ? "email" : req.body?.channel === "sms" ? "sms" : "sms";
   const inboundMessages = [...(conv.messages ?? [])].reverse().filter(m => m.direction === "in");
+  const lastDraft = [...(conv.messages ?? [])].reverse().find(m => m.provider === "draft_ai" && m.body);
+  const draftTime = lastDraft?.at ? new Date(lastDraft.at).getTime() : null;
+  const isBeforeDraft = (m: any) => {
+    if (!draftTime) return true;
+    if (!m?.at) return true;
+    const t = new Date(m.at).getTime();
+    return Number.isFinite(t) ? t <= draftTime : true;
+  };
   const inbound =
+    inboundMessages.find(m => m.provider !== "sendgrid_adf" && m.body && isBeforeDraft(m)) ??
+    inboundMessages.find(m => m.body && isBeforeDraft(m)) ??
     inboundMessages.find(m => m.provider !== "sendgrid_adf" && m.body) ??
     inboundMessages.find(m => m.body);
   if (!inbound?.body) {
@@ -10491,6 +10501,7 @@ if (authToken && signature) {
     /\b(specs?|spec sheet|features|highlights|details|info|information|engine|performance|horsepower|torque|displacement|tech|electronics|infotainment|audio|screen|display|safety|dimensions|weight|seat height|fuel capacity|wheelbase|rake|trail|accessories|trim)\b/i.test(
       textLower
     );
+  const photoRequested = /\b(photo|picture|pic|image|images)\b/i.test(textLower);
   const availabilityExplicit =
     /(in[-\s]?stock|available|availability|do you have|have .* in[-\s]?stock|any .* in[-\s]?stock|do you carry|carry any)/i.test(
       textLower
@@ -11224,6 +11235,45 @@ if (authToken && signature) {
         if (availableMatches.length > 0) {
         const pick = pickClosestInventoryItem(availableMatches, year ?? null, color ?? null);
         const picked = pick?.item ?? null;
+        if (photoRequested && picked) {
+          const pickedYear = picked.year ? `${picked.year} ` : "";
+          const pickedModel = picked.model ?? model ?? "that model";
+          const pickedColor = formatColorLabel(picked.color ?? null);
+          const label = `${pickedYear}${pickedModel}`.trim();
+          const reply =
+            year || model
+              ? `Yes — here’s a photo of the ${year ? `${year} ` : ""}${model ?? pickedModel}${color ? ` in ${color}` : pickedColor ? ` in ${pickedColor}` : ""} we have in stock.`
+              : `Yes — here’s a photo of the ${pickedColor ? `${pickedColor} ` : ""}${label} we have in stock.`;
+          setDialogState(conv, "inventory_answered");
+          const systemMode = webhookMode;
+          if (systemMode === "suggest") {
+            appendOutbound(
+              conv,
+              event.to,
+              event.from,
+              reply,
+              "draft_ai",
+              undefined,
+              picked.images?.[0] ? [picked.images[0]] : undefined
+            );
+            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+            return res.status(200).type("text/xml").send(twiml);
+          }
+          appendOutbound(
+            conv,
+            event.to,
+            event.from,
+            reply,
+            "twilio",
+            undefined,
+            picked.images?.[0] ? [picked.images[0]] : undefined
+          );
+          const mediaTag = picked.images?.[0] ? `\n    <Media>${escapeXml(picked.images[0])}</Media>` : "";
+          const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<Response>\\n  <Message>\\n    <Body>${escapeXml(
+            reply
+          )}</Body>${mediaTag}\\n  </Message>\\n</Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
         if (!year && (color || finishFromText) && picked) {
           const pickedYear = picked.year ? `${picked.year} ` : "";
           const pickedModel = picked.model ?? model ?? "that model";
