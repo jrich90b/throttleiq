@@ -11519,10 +11519,14 @@ if (authToken && signature) {
         setDialogState(conv, "inventory_answered");
         const imageUrl =
           availableMatches.find(m => Array.isArray(m.images) && m.images.length)?.images?.[0] ?? null;
+        const finishLabel = finishFromText ? ` with ${finishFromText} finish` : "";
+        const colorLabel = color ? ` in ${color}` : "";
         const reply =
           year
-            ? `Yes — we do have ${year} ${model}${color ? ` in ${color}` : ""} in stock. Would you like to stop by to take a look?`
-              : `Yes — we do have ${model} in stock. Any specific year, trim, or color you’re after?`;
+            ? `Yes — we do have ${year} ${model}${colorLabel}${finishLabel} in stock. Would you like to stop by to take a look?`
+            : color || finishFromText
+              ? `Yes — we do have ${model}${colorLabel}${finishLabel} in stock. What year are you after?`
+              : `Yes — we do have ${model} in stock. Any specific year or color you’re after?`;
           const systemMode = webhookMode;
           if (systemMode === "suggest") {
             appendOutbound(
