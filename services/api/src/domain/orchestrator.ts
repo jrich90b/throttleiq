@@ -1457,17 +1457,25 @@ export async function orchestrateInbound(
         })
         .join(channelIsEmail ? "\n\n" : "; ");
       const budgetLine = monthlyBudget
-        ? `Thanks for the detail. To stay around ~$${monthlyBudget}/mo (incl. insurance), I’m keeping it to pre‑owned under $10k.`
-        : "Thanks for the detail. I’m keeping it to pre‑owned under $10k.";
+        ? `Thanks for the detail. To stay around ~$${monthlyBudget}/mo (incl. insurance), you’d probably be looking at something $10k and under.`
+        : "Thanks for the detail. You’d probably be looking at something $10k and under.";
       const firstName = (ctx?.lead?.firstName ?? "").trim() || "there";
       const greeting = channelIsEmail ? `Hey ${normalizeModelLabel(firstName)},\n\n` : "";
+      const dealerProfile = await getDealerProfile();
+      const inventoryLink = String(
+        dealerProfile?.usedInventoryUrl ??
+          dealerProfile?.preownedInventoryUrl ??
+          ""
+      ).trim();
+      const extrasLine = inventoryLink
+        ? `We do have a few others under $10k. Here’s our pre‑owned inventory link if you want to browse:\n${inventoryLink}`
+        : "We do have a few others under $10k if you want me to pull more.";
       return finalize({
         intent: "PRICING",
         stage: "ENGAGED",
         shouldRespond: true,
         draft:
-          `${greeting}${budgetLine} Here are a few options we have now:\n\n${list}` +
-          `\n\nIf you want to widen the budget or swap models, just say the word.`
+          `${greeting}${budgetLine} We currently have:\n\n${list}\n\n${extrasLine}`
       });
     } catch {
       return finalize({
