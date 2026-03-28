@@ -11243,17 +11243,40 @@ if (authToken && signature) {
         }
 
         if (availableMatches.length > 0) {
-        const pick = pickClosestInventoryItem(availableMatches, year ?? null, color ?? null);
+        const leadStockId = conv.lead?.vehicle?.stockId ?? null;
+        const leadVin = conv.lead?.vehicle?.vin ?? null;
+        const exactMatch = leadStockId || leadVin
+          ? availableMatches.find(m =>
+              (leadStockId && m.stockId === leadStockId) || (leadVin && m.vin === leadVin)
+            )
+          : null;
+        const pick = exactMatch ? { item: exactMatch } : pickClosestInventoryItem(availableMatches, year ?? null, color ?? null);
         const picked = pick?.item ?? null;
         if (photoRequested && picked) {
           const pickedYear = picked.year ? `${picked.year} ` : "";
           const pickedModel = picked.model ?? model ?? "that model";
           const pickedColor = formatColorLabel(picked.color ?? null);
           const label = `${pickedYear}${pickedModel}`.trim();
-          const reply =
-            year || model
-              ? `Yes — here’s a photo of the ${year ? `${year} ` : ""}${model ?? pickedModel}${color ? ` in ${color}` : pickedColor ? ` in ${pickedColor}` : ""} we have in stock.`
-              : `Yes — here’s a photo of the ${pickedColor ? `${pickedColor} ` : ""}${label} we have in stock.`;
+          const explicitColor = !!colorFromText;
+          const colorMismatch =
+            explicitColor &&
+            !!pickedColor &&
+            !colorMatchesExact(pickedColor, String(color), finish) &&
+            !colorMatchesAlias(pickedColor, String(color), finish);
+          const colorNote = explicitColor
+            ? color
+              ? ` in ${color}`
+              : pickedColor
+                ? ` in ${pickedColor}`
+                : ""
+            : exactMatch && pickedColor
+              ? ` in ${pickedColor}`
+              : "";
+          const reply = colorMismatch
+            ? `I don’t see ${color} in stock right now, but I can send photos of the ${label}${pickedColor ? ` in ${pickedColor}` : ""} we do have. Want those?`
+            : year || model
+              ? `Yes — here’s a photo of the ${year ? `${year} ` : ""}${model ?? pickedModel}${colorNote} we have in stock.`
+              : `Yes — here’s a photo of the ${colorNote ? colorNote.replace(/^ in /, "") + " " : ""}${label} we have in stock.`;
           setDialogState(conv, "inventory_answered");
           const systemMode = webhookMode;
           if (systemMode === "suggest") {
