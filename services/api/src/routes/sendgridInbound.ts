@@ -518,11 +518,15 @@ function extractPlainTextFromMime(raw?: string | null): string | null {
     raw.match(/boundary="([^"]+)"/i) || raw.match(/boundary=([^\s;]+)/i);
   const boundary = boundaryMatch?.[1];
   if (!boundary) return null;
-  const parts = raw.split(`--${boundary}`);
+  const parts = raw.split(new RegExp(`\\r?\\n--${boundary}`));
   for (const part of parts) {
     if (!/content-type:\s*text\/plain/i.test(part)) continue;
-    const headersEnd = part.indexOf("\n\n");
-    const bodyStart = headersEnd >= 0 ? headersEnd + 2 : part.indexOf("\r\n\r\n") + 4;
+    let bodyStart = part.indexOf("\r\n\r\n");
+    if (bodyStart >= 0) bodyStart += 4;
+    else {
+      bodyStart = part.indexOf("\n\n");
+      if (bodyStart >= 0) bodyStart += 2;
+    }
     const bodyRaw = bodyStart > 0 ? part.slice(bodyStart) : part;
     const decoded = /quoted-printable/i.test(part)
       ? decodeQuotedPrintable(bodyRaw)
@@ -533,18 +537,37 @@ function extractPlainTextFromMime(raw?: string | null): string | null {
   return null;
 }
 
+function stripQuotedReply(input?: string | null): string {
+  if (!input) return "";
+  const lines = input.replace(/\r\n/g, "\n").split("\n");
+  const out: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      out.push("");
+      continue;
+    }
+    if (/^>/.test(trimmed)) break;
+    if (/^on .+wrote:$/i.test(trimmed)) break;
+    if (/^-----original message-----/i.test(trimmed)) break;
+    if (/^from:\s.+/i.test(trimmed) && /sent:\s.+/i.test(lines.join(" "))) break;
+    out.push(line);
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function cleanInboundEmailText(
   textBody?: string,
   htmlBody?: string,
   emailBody?: string
 ): string {
   const plain = textBody?.trim();
-  if (plain && !looksLikeMime(plain)) return plain;
+  if (plain && !looksLikeMime(plain)) return stripQuotedReply(plain);
   const mimeCandidate = emailBody || textBody || "";
   const extracted = extractPlainTextFromMime(mimeCandidate);
-  if (extracted) return extracted;
+  if (extracted) return stripQuotedReply(extracted);
   const htmlText = stripHtml(htmlBody) ?? stripHtml(emailBody);
-  return htmlText?.trim() || plain || "";
+  return stripQuotedReply(htmlText?.trim() || plain || "");
 }
 
 function isCallOnlyText(input?: string | null): boolean {
@@ -763,10 +786,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         : extractLeadKeyFromTaggedEmail(envelope?.to));
     const subject = typeof req.body?.subject === "string" ? req.body.subject.trim() : "";
     const bodyText = cleanInboundEmailText(textBody, htmlBody, emailBody);
-    const body = [subject ? `Subject: ${subject}` : null, bodyText]
-      .filter(Boolean)
-      .join("\n\n")
-      .trim();
+    const body = bodyText?.trim() || subject || "";
 
     if (!fromEmail) {
       console.warn("[sendgrid inbound] No ADF found and no from email", {
