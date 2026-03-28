@@ -1460,7 +1460,7 @@ export async function orchestrateInbound(
         ? `Based on your ~$${monthlyBudget}/mo target (incl. insurance), I’m focusing on pre‑owned under $10k.`
         : "I’m focusing on pre‑owned under $10k.";
       const firstName = (ctx?.lead?.firstName ?? "").trim() || "there";
-      const greeting = channelIsEmail ? `Hey ${normalizeDisplayCase(firstName)},\n\n` : "";
+      const greeting = channelIsEmail ? `Hey ${normalizeModelLabel(firstName)},\n\n` : "";
       return finalize({
         intent: "PRICING",
         stage: "ENGAGED",
