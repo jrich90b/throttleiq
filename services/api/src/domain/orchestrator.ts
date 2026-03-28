@@ -29,6 +29,7 @@ import {
   generateCandidateSlots,
   expandBusyBlocks,
   pickSlotsForSalesperson,
+  formatSlotLocal,
   localPartsToUtcDate
 } from "./schedulerEngine.js";
 
@@ -1182,12 +1183,87 @@ export async function orchestrateInbound(
     try {
       const cfg = await getSchedulerConfig();
       const hoursLine = formatBusinessHours(cfg.businessHours);
+      const wantsVisit =
+        hasSchedulingIntent(event.body) ||
+        /(stop in|come in|come by|stop by|swing by|try to stop|try to come|head in|head over)/i.test(event.body);
+      const salesLead =
+        !!ctx?.lead?.vehicle?.model ||
+        !!ctx?.lead?.vehicle?.description ||
+        !!ctx?.lead?.vehicle?.stockId ||
+        !!ctx?.lead?.vehicle?.vin;
+      const tz = cfg.timezone ?? "America/New_York";
+      const todayKey = dayKey(new Date(), tz);
+      const todayHours = cfg.businessHours?.[todayKey];
+      const closeToday = todayHours?.close ?? null;
+      const hoursTodayLine = closeToday ? `We're open until ${closeToday} today.` : null;
       if (hoursLine) {
+        if (wantsVisit && salesLead) {
+          try {
+            const appointmentType = inferAppointmentType(event.body);
+            const durationMinutes =
+              cfg.appointmentTypes?.[appointmentType]?.durationMinutes ?? 60;
+            const now = new Date();
+            const requestedDay = inferRequestedDay(event.body);
+            let candidatesByDay = generateCandidateSlots(cfg, now, durationMinutes, 7);
+            if (requestedDay) {
+              candidatesByDay = candidatesByDay.filter(d => d.dayKey === requestedDay);
+            }
+
+            const preferredSalespeople = getPreferredSalespeople(cfg);
+            const salespeople = cfg.salespeople ?? [];
+            const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
+            const cal = await getAuthedCalendarClient();
+            let suggested: any[] = [];
+            for (const salespersonId of preferredSalespeople) {
+              const sp = salespeople.find(s => s.id === salespersonId);
+              if (!sp) continue;
+              const fb = await queryFreeBusy(
+                cal,
+                [sp.calendarId],
+                now.toISOString(),
+                new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+                cfg.timezone
+              );
+              const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any;
+              const expanded = expandBusyBlocks(busy, gapMinutes);
+              suggested = pickSlotsForSalesperson(
+                cfg,
+                sp.id,
+                sp.calendarId,
+                candidatesByDay,
+                expanded,
+                2
+              );
+              if (suggested.length >= 2) break;
+            }
+            const a = suggested[0]?.start ? formatSlotLocal(suggested[0].start, tz) : null;
+            const b = suggested[1]?.start ? formatSlotLocal(suggested[1].start, tz) : null;
+            const scheduleLine =
+              a && b
+                ? `If you want to come by, a time can be reserved — ${a} or ${b}. Which works?`
+                : "If you want to come by, what time works best?";
+            const hoursText = hoursTodayLine ?? `Our hours this week are ${hoursLine}.`;
+            return finalize({
+              intent,
+              stage: "ENGAGED",
+              shouldRespond: true,
+              draft: `${hoursText} ${scheduleLine}`
+            });
+          } catch {
+            const hoursText = hoursTodayLine ?? `Our hours this week are ${hoursLine}.`;
+            return finalize({
+              intent,
+              stage: "ENGAGED",
+              shouldRespond: true,
+              draft: `${hoursText} If you want to come by, what time works best?`
+            });
+          }
+        }
         return finalize({
           intent,
           stage: "ENGAGED",
           shouldRespond: true,
-          draft: `Our hours this week are ${hoursLine}.`
+          draft: hoursTodayLine ?? `Our hours this week are ${hoursLine}.`
         });
       }
     } catch {}
