@@ -46,6 +46,7 @@ import { getDealerProfile } from "../domain/dealerProfile.js";
 import { getInventoryNote } from "../domain/inventoryNotes.js";
 import { getInventoryFeed, hasInventoryForModelYear, findInventoryMatches } from "../domain/inventoryFeed.js";
 import { resolveInventoryUrlByStock } from "../domain/inventoryUrlResolver.js";
+import { getAllModels } from "../domain/modelsByYear.js";
 
 function base64UrlDecode(input: string): string | null {
   try {
@@ -126,6 +127,127 @@ function normalizeModelForMatch(modelRaw: string, makeRaw?: string | null): stri
 function isGenericLeadModel(modelText: string): boolean {
   const t = modelText.trim().toLowerCase();
   return !t || /^(other|full line|full lineup|null)$/.test(t);
+}
+
+const MODEL_NOISE_TOKENS = new Set([
+  "a",
+  "an",
+  "the",
+  "and",
+  "or",
+  "for",
+  "with",
+  "on",
+  "in",
+  "about",
+  "all",
+  "pricing",
+  "price",
+  "details",
+  "detail",
+  "request",
+  "quote",
+  "interested",
+  "looking",
+  "like",
+  "want",
+  "would",
+  "please",
+  "just",
+  "bike",
+  "motorcycle",
+  "color",
+  "trim",
+  "black",
+  "white",
+  "gray",
+  "grey",
+  "blue",
+  "red",
+  "orange"
+]);
+
+let knownModelByKeyCache: Map<string, string> | null = null;
+
+function tokenizeModelWords(input?: string | null): string[] {
+  if (!input) return [];
+  return String(input)
+    .toLowerCase()
+    .replace(/\bharley[-\s]?davidson\b/g, " ")
+    .replace(/\bh[-\s]?d\b/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(/\s+/)
+    .map(tok => tok.trim())
+    .filter(Boolean)
+    .filter(tok => !MODEL_NOISE_TOKENS.has(tok));
+}
+
+function canonicalModelKeyFromTokens(tokens: string[]): string {
+  if (!tokens.length) return "";
+  const uniq = Array.from(new Set(tokens.map(t => t.trim()).filter(Boolean)));
+  if (!uniq.length) return "";
+  return uniq.sort((a, b) => a.localeCompare(b)).join(" ");
+}
+
+function canonicalModelKey(input?: string | null): string {
+  return canonicalModelKeyFromTokens(tokenizeModelWords(input));
+}
+
+function getKnownModelByKey(): Map<string, string> {
+  if (knownModelByKeyCache) return knownModelByKeyCache;
+  const byKey = new Map<string, string>();
+  for (const rawModel of getAllModels()) {
+    const clean = normalizeVehicleModel(rawModel, null) ?? normalizeDisplayCase(rawModel);
+    if (!clean || isGenericLeadModel(clean)) continue;
+    const key = canonicalModelKey(clean);
+    if (!key) continue;
+    const current = byKey.get(key);
+    if (!current || clean.length > current.length) {
+      byKey.set(key, clean);
+    }
+  }
+  knownModelByKeyCache = byKey;
+  return byKey;
+}
+
+function extractInquiryModelMentions(inquiry?: string | null): Array<{ key: string; label: string; index: number; len: number }> {
+  const tokens = tokenizeModelWords(inquiry);
+  if (!tokens.length) return [];
+  const modelsByKey = getKnownModelByKey();
+  if (!modelsByKey.size) return [];
+  const mentions = new Map<string, { key: string; label: string; index: number; len: number }>();
+  const maxNgram = Math.min(5, tokens.length);
+  for (let i = 0; i < tokens.length; i += 1) {
+    for (let len = 1; len <= maxNgram && i + len <= tokens.length; len += 1) {
+      const key = canonicalModelKeyFromTokens(tokens.slice(i, i + len));
+      if (!key) continue;
+      const label = modelsByKey.get(key);
+      if (!label) continue;
+      const current = mentions.get(key);
+      if (!current || len > current.len || (len === current.len && i < current.index)) {
+        mentions.set(key, { key, label, index: i, len });
+      }
+    }
+  }
+  return Array.from(mentions.values()).sort((a, b) => b.len - a.len || a.index - b.index);
+}
+
+function detectInitialAdfModelMismatch(args: {
+  leadModel?: string | null;
+  leadMake?: string | null;
+  inquiry?: string | null;
+}): { leadModel: string; inquiryModel: string } | null {
+  const leadModelNormalized =
+    normalizeVehicleModel(args.leadModel ?? "", args.leadMake ?? null) ??
+    normalizeDisplayCase(args.leadModel ?? "");
+  if (!leadModelNormalized || isGenericLeadModel(leadModelNormalized)) return null;
+  const leadKey = canonicalModelKey(leadModelNormalized);
+  if (!leadKey) return null;
+  const mentions = extractInquiryModelMentions(args.inquiry);
+  if (!mentions.length) return null;
+  const mismatch = mentions.find(m => m.key !== leadKey);
+  if (!mismatch) return null;
+  return { leadModel: leadModelNormalized, inquiryModel: mismatch.label };
 }
 
 function extractDayPartRequest(text: string): { dayLabel: string; dayPart: string } | null {
@@ -980,6 +1102,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     purchaseTimeframeMonthsStart: timeframeInfo?.start,
     purchaseTimeframeMonthsEnd: timeframeInfo?.end,
     hasMotoLicense: lead.hasMotoLicense,
+    emailOptIn: lead.emailOptIn,
+    smsOptIn: lead.smsOptIn,
+    phoneOptIn: lead.phoneOptIn,
     sellOption: lead.sellOption,
     vehicle: {
       stockId: lead.stockId,
@@ -1607,6 +1732,38 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       intent: "GENERAL",
       stage: "ENGAGED",
       draft: ack
+    });
+  }
+
+  const modelMismatch = isInitialAdf
+    ? detectInitialAdfModelMismatch({
+        leadModel: conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null,
+        leadMake: conv.lead?.vehicle?.make ?? null,
+        inquiry: lead.inquiry ?? inquiryRaw
+      })
+    : null;
+  if (modelMismatch) {
+    let ack =
+      `Thanks for the details. I want to make sure I quote the right bike: ` +
+      `I saw ${modelMismatch.leadModel} on the lead and ${modelMismatch.inquiryModel} in your message. ` +
+      "Which one would you like pricing on?";
+    ack = await applyInitialAdfPrefix(ack);
+    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai");
+    maybeAddInitialCallTodo();
+    conv.emailDraft = ack;
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      draft: ack,
+      modelMismatch
     });
   }
 
