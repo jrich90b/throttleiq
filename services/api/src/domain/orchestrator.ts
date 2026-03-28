@@ -1206,7 +1206,9 @@ export async function orchestrateInbound(
             const requestedDay = inferRequestedDay(event.body);
             let candidatesByDay = generateCandidateSlots(cfg, now, durationMinutes, 7);
             if (requestedDay) {
-              candidatesByDay = candidatesByDay.filter(d => d.dayKey === requestedDay);
+              candidatesByDay = candidatesByDay.filter(
+                d => dayKey(d.dayStart, tz) === requestedDay
+              );
             }
 
             const preferredSalespeople = getPreferredSalespeople(cfg);
