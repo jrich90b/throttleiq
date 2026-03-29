@@ -462,10 +462,17 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
     if (!Number.isFinite(y) || y < watch.yearMin || y > watch.yearMax) return false;
   }
   if (watch.color) {
-    const keepTrim = !!watch.trim || /\b(trim|finish)\b/i.test(String(watch.color));
-    const itemColor = normalizeColorBase(String(item.color ?? ""), keepTrim);
-    const watchColor = normalizeColorBase(String(watch.color), keepTrim);
-    if (!itemColor || !watchColor || !itemColor.includes(watchColor)) return false;
+    const watchColorRaw = String(watch.color ?? "");
+    const itemColorRaw = String(item.color ?? "");
+    const leadTrim = watch.trim ? extractTrimToken(String(watch.trim)) : extractTrimToken(watchColorRaw);
+    const keepTrim = !!watch.trim || /\b(trim|finish)\b/i.test(watchColorRaw);
+    const itemColor = normalizeColorBase(itemColorRaw, keepTrim);
+    const watchColor = normalizeColorBase(watchColorRaw, keepTrim);
+    const directIncludes = !!itemColor && !!watchColor && itemColor.includes(watchColor);
+    const normalizedMatch =
+      colorMatchesExact(itemColorRaw, watchColorRaw, leadTrim) ||
+      colorMatchesAlias(itemColorRaw, watchColorRaw, leadTrim);
+    if (!directIncludes && !normalizedMatch) return false;
   }
   return true;
 }
@@ -11379,15 +11386,17 @@ if (authToken && signature) {
       );
       let pref = parseInventoryWatchPreference(String(event.body ?? ""), pending);
       if (pref.action === "ignore" && pending.model && (isAffirmative(event.body) || watchConfirmIntent)) {
+        const watchColor = sanitizeColorPhrase(pending.color);
         const watch: InventoryWatch = {
           model: pending.model,
           year: pending.year,
-          color: undefined,
+          color: watchColor,
           exactness: "model_only",
           status: "active",
           createdAt: new Date().toISOString()
         };
-        if (watch.year) watch.exactness = "year_model";
+        if (watch.year && watch.color) watch.exactness = "exact";
+        else if (watch.year) watch.exactness = "year_model";
         pref = { action: "set", watch };
       }
       if (pref.action === "clarify") {
@@ -12138,15 +12147,17 @@ if (authToken && signature) {
       };
       let pref = parseInventoryWatchPreference(String(event.body ?? ""), pending);
       if (pref.action === "ignore" && pending.model && (isAffirmative(event.body) || watchIntentText)) {
+        const watchColor = sanitizeColorPhrase(pending.color);
         const watch: InventoryWatch = {
           model: pending.model,
           year: pending.year,
-          color: undefined,
+          color: watchColor,
           exactness: "model_only",
           status: "active",
           createdAt: new Date().toISOString()
         };
-        if (watch.year) watch.exactness = "year_model";
+        if (watch.year && watch.color) watch.exactness = "exact";
+        else if (watch.year) watch.exactness = "year_model";
         pref = { action: "set", watch };
       }
       if (pref.action === "set" && pref.watch) {
