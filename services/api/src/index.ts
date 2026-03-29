@@ -4567,6 +4567,19 @@ function stripCallTimingQuestions(reply: string): string {
   return filtered.length ? filtered.join(" ").trim() : reply;
 }
 
+function stripAgentCallFollowupWhenCustomerWillCall(reply: string, inboundText: string): string {
+  if (!isCustomerWillCallText(inboundText)) return reply;
+  const text = String(reply ?? "");
+  if (!text.trim()) return reply;
+  const sentences = text.split(/(?<=[.!?])\s+/);
+  const dropPattern =
+    /\b(i(?:'|’)ll have|i will have|someone from .* will call|someone will call|we(?:'|’)ll call|we will call|call you (today|tomorrow|shortly)|reach out (today|tomorrow|shortly)|sales team will call)\b/i;
+  const filtered = sentences.filter(s => !dropPattern.test(s));
+  const cleaned = filtered.join(" ").replace(/\s{2,}/g, " ").trim();
+  if (cleaned) return cleaned;
+  return "Sounds good — thanks for the update. When you’re ready, call us or text me and we can line up the appraisal.";
+}
+
 function applyServicePolicy(conv: any, reply: string, lastOutboundText: string): string {
   const state = getDialogState(conv);
   const isService =
@@ -9005,6 +9018,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     lead: conv.lead ?? null,
     pricingAttempts: getPricingAttempts(conv),
     allowSchedulingOffer: isExplicitScheduleIntent(event.body),
+    callbackRequestedOverride: detectCallbackText(event.body ?? ""),
     voiceSummary: getActiveVoiceContext(conv)?.summary ?? null,
     memorySummary,
     memorySummaryShouldUpdate,
@@ -9041,6 +9055,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   reply = stripNonAdfThanks(reply, provider);
   reply = stripNonAdfThanks(reply, event.provider);
   reply = stripCallTimingQuestions(reply);
+  reply = stripAgentCallFollowupWhenCustomerWillCall(reply, String(event.body ?? ""));
   if (isSlotOfferMessage(reply)) {
     const appointmentType = String(result.requestedAppointmentType ?? "inventory_visit");
     if (appointmentType === "test_ride") {
@@ -13414,7 +13429,7 @@ if (authToken && signature) {
     pricingAttempts: getPricingAttempts(conv),
     allowSchedulingOffer: schedulingExplicit && schedulingAllowed && !paymentOrPricingNoSchedule,
     schedulingText: schedulingTextForOrchestrator,
-    callbackRequestedOverride: callbackRequestedOverride ? true : undefined,
+    callbackRequestedOverride,
     appointmentTypeOverride,
     voiceSummary: getActiveVoiceContext(conv)?.summary ?? null,
     memorySummary,
@@ -14177,6 +14192,7 @@ if (authToken && signature) {
   reply = applyServicePolicy(conv, reply, lastOutboundTextFinal);
   reply = applySoftSchedulePolicy(conv, reply, String(event.body ?? ""));
   reply = stripSchedulingLanguageIfNotAsked(reply, String(event.body ?? ""));
+  reply = stripAgentCallFollowupWhenCustomerWillCall(reply, String(event.body ?? ""));
   await seedInventoryWatchPendingFromReply(conv, event, reply);
   if (isSlotOfferMessage(reply)) {
     const requestedAppointmentType = String(result.requestedAppointmentType ?? "inventory_visit");

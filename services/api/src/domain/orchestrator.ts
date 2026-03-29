@@ -245,8 +245,16 @@ function detectApprovalStatus(text: string): boolean {
 
 function detectCallbackRequest(text: string): boolean {
   const t = text.toLowerCase();
+  const customerWillCall =
+    /\b(i(?:'|’)ll|i will)\s+call\b/.test(t) ||
+    /\bcall for (an )?appointment\b/.test(t) ||
+    /\bcall (to )?(set|schedule) (an )?appointment\b/.test(t) ||
+    /\bcheck my schedule\b/.test(t) ||
+    /\blet you know when i(?:'|’)m coming in\b/.test(t) ||
+    /\blet you know when i am coming in\b/.test(t);
+  if (customerWillCall) return false;
   const hasCallback =
-    /(call me|call him|call her|give me a call|give (him|her) a call|reach me|reach him|reach her|contact me|can you call|can you have|please call|have .* call|tell .* i will call|i will call)/.test(
+    /(call me|call him|call her|give me a call|give (him|her) a call|reach me|reach him|reach her|contact me|can you call|can you have|please call|have .* call)/.test(
       t
     );
   const hasTimeframe =
