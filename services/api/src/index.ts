@@ -3954,6 +3954,134 @@ function isPaymentText(text: string): boolean {
   );
 }
 
+function extractMonthlyBudgetLimit(text: string): number | null {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return null;
+  const monthHint = /\b(month|monthly|per month|a month|\/\s*mo)\b/i.test(t);
+  if (!monthHint) return null;
+  const capped = t.match(/\b(?:under|below|less than|no more than|max(?:imum)?|around|about|~)\s*\$?\s*([0-9][0-9,]{1,6})\b/i);
+  if (capped?.[1]) {
+    const n = Number(capped[1].replace(/,/g, ""));
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  const explicit = t.match(/\$?\s*([0-9][0-9,]{1,6})\s*(?:\/\s*mo|\/\s*month|per month|a month|monthly)\b/i);
+  if (explicit?.[1]) {
+    const n = Number(explicit[1].replace(/,/g, ""));
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return null;
+}
+
+function extractPaymentTermMonths(text: string): number | null {
+  const t = String(text ?? "").toLowerCase();
+  const termMatch = t.match(/\b(60|72|84)\s*(month|mo|mos|months|term)?\b/);
+  if (!termMatch?.[1]) return null;
+  const months = Number(termMatch[1]);
+  return Number.isFinite(months) && months > 0 ? months : null;
+}
+
+function parseDownPaymentForBudget(text: string): { amount: number; assumedThousands: boolean } | null {
+  const t = String(text ?? "").toLowerCase();
+  const match = t.match(
+    /(?:\$\s*)?(\d{1,3}(?:,\d{3})+|\d+)\s*(k|grand)?\s*(?:down|down payment|deposit|dp|put down)/
+  );
+  if (!match?.[1]) return null;
+  const rawNum = Number(String(match[1]).replace(/,/g, ""));
+  if (!Number.isFinite(rawNum) || rawNum <= 0) return null;
+  const hasK = !!match[2];
+  const hasDollar = t.includes("$");
+  let amount = rawNum;
+  let assumedThousands = false;
+  if (hasK) {
+    amount = rawNum * 1000;
+  } else if (!hasDollar && rawNum <= 99) {
+    amount = rawNum * 1000;
+    assumedThousands = true;
+  }
+  return { amount, assumedThousands };
+}
+
+function normalizeTaxRate(raw: unknown): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 0.08;
+  if (n >= 1) return n / 100;
+  return n;
+}
+
+function isUsedInventoryConditionForBudget(condition?: string | null, year?: string | null): boolean {
+  const cond = String(condition ?? "").toLowerCase();
+  if (/(pre|used|pre-owned|preowned|owned)/.test(cond)) return true;
+  const yearNum = Number(String(year ?? ""));
+  if (Number.isFinite(yearNum) && yearNum > 0) {
+    const nowYear = new Date().getFullYear();
+    return yearNum <= nowYear - 2;
+  }
+  return false;
+}
+
+function isTouringModelName(model?: string | null): boolean {
+  return /\b(touring|bagger|road glide|street glide|road king|electra glide|ultra|tri glide|freewheeler)\b/i.test(
+    String(model ?? "")
+  );
+}
+
+function isTouringRequestText(text: string): boolean {
+  return /\b(touring|bagger|road glide|street glide|road king|electra glide|ultra|tri glide|freewheeler)\b/i.test(
+    String(text ?? "")
+  );
+}
+
+function calcMonthlyPayment(principal: number, apr: number, months: number): number {
+  const rate = apr / 12;
+  if (rate <= 0) return principal / months;
+  const pow = Math.pow(1 + rate, months);
+  return (principal * rate * pow) / (pow - 1);
+}
+
+function estimateMonthlyPaymentFromPrice(opts: {
+  price: number;
+  isUsed: boolean;
+  termMonths: number;
+  taxRate: number;
+  downPayment?: number;
+}): number | null {
+  const price = Number(opts.price);
+  if (!Number.isFinite(price) || price <= 0) return null;
+  const termMonths = Number(opts.termMonths);
+  if (!Number.isFinite(termMonths) || termMonths <= 0) return null;
+  const fee = opts.isUsed ? 300 : 1200;
+  const taxRate = Number.isFinite(opts.taxRate) ? opts.taxRate : 0.08;
+  const down = Number.isFinite(opts.downPayment) ? Number(opts.downPayment) : 0;
+  const financed = Math.max(0, (price + fee) * (1 + taxRate) - Math.max(0, down));
+  const apr = opts.isUsed ? 0.1 : 0.085;
+  return calcMonthlyPayment(financed, apr, termMonths);
+}
+
+function estimateInventoryItemMonthlyPayment(
+  item: any,
+  opts: { termMonths: number; taxRate: number; downPayment?: number }
+): number | null {
+  const price = Number(item?.price ?? NaN);
+  if (!Number.isFinite(price) || price <= 0) return null;
+  return estimateMonthlyPaymentFromPrice({
+    price,
+    isUsed: isUsedInventoryConditionForBudget(item?.condition, item?.year),
+    termMonths: opts.termMonths,
+    taxRate: opts.taxRate,
+    downPayment: opts.downPayment
+  });
+}
+
+function formatBudgetInventoryOption(item: any): string {
+  const nf = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+  const year = item?.year ? `${item.year} ` : "";
+  const model = normalizeDisplayCase(String(item?.model ?? "").trim()) || "bike";
+  const price = Number(item?.price ?? NaN);
+  const priceLabel = Number.isFinite(price) && price > 0 ? ` ${nf.format(price)}` : "";
+  const stockLabel = item?.stockId ? ` (Stock ${item.stockId})` : "";
+  return `${year}${model}${priceLabel}${stockLabel}`.trim();
+}
+
 function detectsModelQuestion(text: string): boolean {
   return /\b(which|what)\b.*\bmodel\b/i.test(String(text ?? ""));
 }
@@ -11613,6 +11741,22 @@ if (authToken && signature) {
       const models = Array.from(new Set(items.map(i => i.model).filter(Boolean))) as string[];
       models.sort((a, b) => b.length - a.length);
       const modelFromText = models.find(m => textLower.includes(m.toLowerCase())) ?? null;
+      const monthlyBudget = extractMonthlyBudgetLimit(event.body);
+      const hasMonthlyBudgetTarget = monthlyBudget != null;
+      const paymentTermMonths = extractPaymentTermMonths(event.body) ?? 72;
+      const downPaymentInfo = hasMonthlyBudgetTarget ? parseDownPaymentForBudget(event.body) : null;
+      const downPayment = downPaymentInfo?.amount ?? 0;
+      let paymentTaxRate = 0.08;
+      if (hasMonthlyBudgetTarget) {
+        try {
+          const dealerProfile = await getDealerProfile();
+          paymentTaxRate = normalizeTaxRate((dealerProfile as any)?.taxRate);
+        } catch {
+          paymentTaxRate = 0.08;
+        }
+      }
+      const touringRequested = hasMonthlyBudgetTarget && isTouringRequestText(event.body);
+      const modelExplicitInInbound = !!(llmAvailability?.model || modelFromText);
       const model =
         llmAvailability?.model ??
         modelFromText ??
@@ -11676,6 +11820,20 @@ if (authToken && signature) {
           const key = normalizeInventorySoldKey(m.stockId, m.vin);
           return key ? !!solds?.[key] : false;
         });
+        const budgetMatchedEntries = hasMonthlyBudgetTarget
+          ? availableMatches
+              .map(item => ({
+                item,
+                monthly: estimateInventoryItemMonthlyPayment(item, {
+                  termMonths: paymentTermMonths,
+                  taxRate: paymentTaxRate,
+                  downPayment
+                })
+              }))
+              .filter(entry => entry.monthly != null && (entry.monthly as number) <= (monthlyBudget as number))
+              .sort((a, b) => (a.monthly as number) - (b.monthly as number))
+          : [];
+        const responseMatches = hasMonthlyBudgetTarget ? budgetMatchedEntries.map(entry => entry.item) : availableMatches;
 
         if (matches.length === 0 && (leadSold || leadHold)) {
           const label =
@@ -11733,16 +11891,85 @@ if (authToken && signature) {
           return res.status(200).type("text/xml").send(twiml);
         }
 
-        if (availableMatches.length > 0) {
+        if (hasMonthlyBudgetTarget && availableMatches.length > 0 && responseMatches.length === 0) {
+          let alternativePool = items.filter(i => {
+            const holdKey = normalizeInventoryHoldKey(i.stockId, i.vin);
+            const soldKey = normalizeInventorySoldKey(i.stockId, i.vin);
+            if (holdKey && holds?.[holdKey]) return false;
+            if (soldKey && solds?.[soldKey]) return false;
+            return true;
+          });
+          if (touringRequested) {
+            alternativePool = alternativePool.filter(i => isTouringModelName(i.model));
+          }
+          if (modelExplicitInInbound && model) {
+            const modelKey = normalizeModelText(model);
+            alternativePool = alternativePool.filter(i => normalizeModelText(i.model ?? "") === modelKey);
+          }
+          const alternativeBudgetEntries = alternativePool
+            .map(item => ({
+              item,
+              monthly: estimateInventoryItemMonthlyPayment(item, {
+                termMonths: paymentTermMonths,
+                taxRate: paymentTaxRate,
+                downPayment
+              })
+            }))
+            .filter(entry => entry.monthly != null && (entry.monthly as number) <= (monthlyBudget as number))
+            .sort((a, b) => (a.monthly as number) - (b.monthly as number));
+          const budgetLabel = `$${Number(monthlyBudget).toLocaleString("en-US")}/mo`;
+          const scopeLabel =
+            modelExplicitInInbound && model
+              ? normalizeDisplayCase(String(model))
+              : touringRequested
+                ? "touring bikes"
+                : "inventory";
+          const reply = alternativeBudgetEntries.length
+            ? (() => {
+                const top = alternativeBudgetEntries.slice(0, 3);
+                const list = top.map(entry => formatBudgetInventoryOption(entry.item)).join("; ");
+                return modelExplicitInInbound && model
+                  ? `I do have ${scopeLabel} in stock, but they typically run over ${budgetLabel} on a ${paymentTermMonths}-month estimate. Closest in your budget: ${list}. Want me to pull more in that range?`
+                  : `Closest in-stock options around ${budgetLabel} on a ${paymentTermMonths}-month estimate: ${list}. Want me to pull more in that range?`;
+              })()
+            : `I’m not seeing ${scopeLabel} in stock that would typically land under ${budgetLabel} on a ${paymentTermMonths}-month estimate. If you share term or down payment, I can tighten the match.`;
+          const systemMode = webhookMode;
+          if (systemMode === "suggest") {
+            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+            const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response></Response>`;
+            return res.status(200).type("text/xml").send(twiml);
+          }
+          appendOutbound(conv, event.to, event.from, reply, "twilio");
+          const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
+            reply
+          )}</Message>\n</Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+
+        if (responseMatches.length > 0) {
         const leadStockId = conv.lead?.vehicle?.stockId ?? null;
         const leadVin = conv.lead?.vehicle?.vin ?? null;
         const exactMatch = leadStockId || leadVin
-          ? availableMatches.find(m =>
+          ? responseMatches.find(m =>
               (leadStockId && m.stockId === leadStockId) || (leadVin && m.vin === leadVin)
             )
           : null;
-        const pick = exactMatch ? { item: exactMatch } : pickClosestInventoryItem(availableMatches, year ?? null, color ?? null);
+        const pick = exactMatch ? { item: exactMatch } : pickClosestInventoryItem(responseMatches, year ?? null, color ?? null);
         const picked = pick?.item ?? null;
+        const pickedMonthlyEstimate =
+          hasMonthlyBudgetTarget && picked
+            ? estimateInventoryItemMonthlyPayment(picked, {
+                termMonths: paymentTermMonths,
+                taxRate: paymentTaxRate,
+                downPayment
+              })
+            : null;
+        const pickedMonthlyRounded =
+          pickedMonthlyEstimate != null ? Math.round((pickedMonthlyEstimate as number) / 10) * 10 : null;
+        const pickedPaymentHint =
+          pickedMonthlyRounded != null
+            ? ` It should land around $${pickedMonthlyRounded.toLocaleString("en-US")}/mo on a ${paymentTermMonths}-month estimate (before taxes/fees, depending on APR).`
+            : "";
         if (photoRequested && picked) {
           const pickedYear = picked.year ? `${picked.year} ` : "";
           const pickedModel = picked.model ?? model ?? "that model";
@@ -11802,7 +12029,9 @@ if (authToken && signature) {
           const pickedYear = picked.year ? `${picked.year} ` : "";
           const pickedModel = picked.model ?? model ?? "that model";
           const pickedColor = formatColorLabel(picked.color ?? null);
-          const reply = `Yes — we do have a ${pickedYear}${pickedModel}${pickedColor ? ` in ${pickedColor}` : ""} in stock. Want details or to stop by?`;
+          const reply = hasMonthlyBudgetTarget
+            ? `Yes — we do have a ${pickedYear}${pickedModel}${pickedColor ? ` in ${pickedColor}` : ""} in stock.${pickedPaymentHint} Want another option around that payment range?`
+            : `Yes — we do have a ${pickedYear}${pickedModel}${pickedColor ? ` in ${pickedColor}` : ""} in stock. Want details or to stop by?`;
           setDialogState(conv, "inventory_answered");
           const systemMode = webhookMode;
           if (systemMode === "suggest") {
@@ -11840,11 +12069,12 @@ if (authToken && signature) {
         if (color) conv.lead.vehicle.color = color;
         setDialogState(conv, "inventory_answered");
         const imageUrl =
-          availableMatches.find(m => Array.isArray(m.images) && m.images.length)?.images?.[0] ?? null;
+          responseMatches.find(m => Array.isArray(m.images) && m.images.length)?.images?.[0] ?? null;
         const finishLabel = finishFromText ? ` with ${finishFromText} finish` : "";
         const colorLabel = color ? ` in ${color}` : "";
-        const reply =
-          year
+        const reply = hasMonthlyBudgetTarget
+          ? `Yes — we do have ${formatBudgetInventoryOption(picked ?? { year, model, color })} in stock.${pickedPaymentHint} Want another option around that payment range?`
+          : year
             ? `Yes — we do have ${year} ${model}${colorLabel}${finishLabel} in stock. Would you like to stop by to take a look?`
             : color || finishFromText
               ? `Yes — we do have ${model}${colorLabel}${finishLabel} in stock. What year are you after?`
