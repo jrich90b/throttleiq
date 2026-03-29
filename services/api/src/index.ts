@@ -9552,8 +9552,8 @@ if (authToken && signature) {
     event.body ?? ""
   );
   if (deferIndefinitely) {
-    stopFollowUpCadence(conv, "customer_deferred");
-    setFollowUpMode(conv, "paused_indefinite", "customer_deferred");
+    closeConversation(conv, "customer_deferred");
+    stopRelatedCadences(conv, "customer_deferred", { close: true });
     const reply = "Sounds good — I’ll be here when you’re ready.";
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
