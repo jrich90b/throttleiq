@@ -8612,6 +8612,7 @@ export default function Home() {
                   return isSms;
                 })
                 .map(m => {
+                  const isDraftMessage = m.direction === "out" && m.provider === "draft_ai";
                   const isPending = pendingDraft?.id === m.id;
                   const providerLabel =
                     m.provider === "voice_call"
@@ -8646,7 +8647,8 @@ export default function Home() {
                       <div className="text-xs text-gray-500">
                         {m.direction.toUpperCase()} • {providerLabel} •{" "}
                         {new Date(m.at).toLocaleString()}
-                        {isPending ? " • DRAFT (not sent)" : ""}
+                        {isDraftMessage ? " • DRAFT (not sent)" : ""}
+                        {!isDraftMessage && isPending ? " • DRAFT (not sent)" : ""}
                       </div>
                       <div
                         className={`inline-block mt-1 px-3 py-2 rounded-2xl border max-w-[85%] whitespace-pre-wrap text-base font-medium ${

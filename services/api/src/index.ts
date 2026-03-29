@@ -4194,7 +4194,9 @@ function applySoftSchedulePolicy(conv: any, reply: string, inboundText: string):
 }
 
 function isPricingText(text: string): boolean {
-  return /(price|otd|out the door|payment|monthly|down|apr|term|finance|credit|quote)/i.test(String(text ?? ""));
+  return /(price|otd|out the door|payment|monthly|down|apr|term|finance|credit|quote|lowest|best price|how low|low can (you|they) go)/i.test(
+    String(text ?? "")
+  );
 }
 
 function isPaymentText(text: string): boolean {
@@ -5361,6 +5363,21 @@ async function processDueFollowUps() {
         if (until && now < until) setBlockUntil(until);
       }
       const lastDraft = getLastOutbound(conv, ["draft_ai"]);
+      const lastSent = getLastOutbound(conv, ["twilio", "human", "sendgrid"]);
+      if (lastDraft?.at) {
+        const draftAt = new Date(lastDraft.at);
+        const draftMs = draftAt.getTime();
+        const sentMs = lastSent?.at ? new Date(lastSent.at).getTime() : null;
+        const inboundMs = lastInbound?.at ? new Date(lastInbound.at).getTime() : null;
+        const unsentDraft =
+          Number.isFinite(draftMs) &&
+          (sentMs == null || !Number.isFinite(sentMs) || draftMs > sentMs);
+        const noInboundAfterDraft =
+          inboundMs == null || !Number.isFinite(inboundMs) || inboundMs <= draftMs;
+        if (unsentDraft && noInboundAfterDraft) {
+          setBlockUntil(new Date(Date.now() + 24 * 60 * 60 * 1000));
+        }
+      }
       if (lastDraft?.at) {
         const draftAt = new Date(lastDraft.at);
         // Avoid stacking multiple follow-up drafts within a day.
