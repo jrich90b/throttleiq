@@ -4653,6 +4653,7 @@ function extractTwoToneColorPhrase(text: string): string | null {
 function extractColorToken(text: string): string | null {
   const t = text
     .toLowerCase()
+    .replace(/['’"]/g, " ")
     .replace(/[\/&]+/g, " and ")
     .replace(/\s+/g, " ")
     .trim();
