@@ -11972,20 +11972,20 @@ if (authToken && signature) {
       }
       const touringRequested = hasMonthlyBudgetTarget && isTouringRequestText(event.body);
       const modelExplicitInInbound = !!(llmAvailability?.model || modelFromText);
+      const explicitModelFromInbound = llmAvailability?.model ?? modelFromText ?? null;
       const model =
-        llmAvailability?.model ??
-        modelFromText ??
+        explicitModelFromInbound ??
         conv.inventoryContext?.model ??
         conv.lead?.vehicle?.model ??
         conv.lead?.vehicle?.description ??
         null;
       const modelChanged =
-        modelFromText &&
+        explicitModelFromInbound &&
         priorModel &&
-        normalizeModelText(modelFromText) !== normalizeModelText(priorModel);
+        normalizeModelText(explicitModelFromInbound) !== normalizeModelText(priorModel);
       const year = yearFromText ?? (!modelChanged ? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null : null);
       const colorFromText = llmAvailability?.color ?? extractColorToken(textLower) ?? null;
-      const color = colorFromText ?? conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null;
+      const color = colorFromText ?? (!modelChanged ? conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null : null);
       const finishFromText = extractFinishToken(textLower);
       const finish = extractTrimToken(finishFromText ?? conv.inventoryContext?.finish ?? null);
       const downPaymentQuestion = isDownPaymentQuestion(event.body ?? "");
@@ -11996,7 +11996,7 @@ if (authToken && signature) {
       const hasSpecificUnitBudgetAnchor =
         referencesSpecificInventoryUnit(event.body ?? "") ||
         !!colorFromText ||
-        !!conv.inventoryContext?.color ||
+        (!modelChanged && !!conv.inventoryContext?.color) ||
         !!conv.lead?.vehicle?.stockId ||
         !!conv.lead?.vehicle?.vin;
       const broadBudgetScopeRequest =
@@ -12017,8 +12017,8 @@ if (authToken && signature) {
         conv.inventoryContext = {
           model: model ?? conv.inventoryContext?.model,
           year: modelChanged && !yearFromText ? undefined : year ?? conv.inventoryContext?.year,
-          color: colorFromText ?? conv.inventoryContext?.color,
-          finish: finishFromText ?? conv.inventoryContext?.finish,
+          color: modelChanged ? (colorFromText ?? undefined) : (colorFromText ?? conv.inventoryContext?.color),
+          finish: modelChanged ? (finishFromText ?? undefined) : (finishFromText ?? conv.inventoryContext?.finish),
           updatedAt: nowIso()
         };
       }

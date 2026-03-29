@@ -1688,10 +1688,13 @@ export async function orchestrateInbound(
       const items = await getInventoryFeed();
       const models = Array.from(new Set(items.map(i => i.model).filter(Boolean))) as string[];
       const lastOutbound = [...(history ?? [])].reverse().find(h => h.direction === "out")?.body ?? "";
+      const modelFromInbound = resolveModelFromText(event.body, models);
+      const modelFromLastOutbound = resolveModelFromText(lastOutbound, models);
+      const modelFromHistory = resolveModelFromHistory(history, models);
       const model =
-        resolveModelFromText(event.body, models) ||
-        resolveModelFromText(lastOutbound, models) ||
-        resolveModelFromHistory(history, models) ||
+        modelFromInbound ||
+        modelFromLastOutbound ||
+        modelFromHistory ||
         ctx?.lead?.vehicle?.model ||
         deriveModelFromDescription(ctx?.lead?.vehicle?.description ?? null) ||
         null;
@@ -1703,18 +1706,22 @@ export async function orchestrateInbound(
           draft: "Which model are you asking about?"
         });
       }
+      const yearFromInbound = deriveYearFromText(event.body);
       const year =
-        deriveYearFromText(event.body) ??
-        deriveYearFromText(lastOutbound) ??
-        ctx?.lead?.vehicle?.year ??
-        null;
+        yearFromInbound ??
+        (modelFromInbound
+          ? null
+          : deriveYearFromText(lastOutbound) ?? ctx?.lead?.vehicle?.year ?? null);
       const msrpColors = await getMsrpColorNames();
+      const colorFromInbound = extractColorMention(event.body, msrpColors);
       const color =
-        extractColorMention(event.body, msrpColors) ||
-        extractColorMention(lastOutbound, msrpColors) ||
-        findRecentInboundColor(history, msrpColors) ||
-        ctx?.lead?.vehicle?.color ||
-        null;
+        colorFromInbound ||
+        (modelFromInbound
+          ? null
+          : extractColorMention(lastOutbound, msrpColors) ||
+            findRecentInboundColor(history, msrpColors) ||
+            ctx?.lead?.vehicle?.color ||
+            null);
       let matches = await findInventoryMatches({ year: year ?? null, model });
       if (color) {
         const colorLower = color.toLowerCase();
@@ -2241,10 +2248,13 @@ export async function orchestrateInbound(
       const items = await getInventoryFeed();
       const models = Array.from(new Set(items.map(i => i.model).filter(Boolean))) as string[];
       const lastOutbound = [...(history ?? [])].reverse().find(h => h.direction === "out")?.body ?? "";
+      const modelFromInbound = resolveModelFromText(event.body, models);
+      const modelFromLastOutbound = resolveModelFromText(lastOutbound, models);
+      const modelFromHistory = resolveModelFromHistory(history, models);
       const model =
-        resolveModelFromText(event.body, models) ||
-        resolveModelFromText(lastOutbound, models) ||
-        resolveModelFromHistory(history, models) ||
+        modelFromInbound ||
+        modelFromLastOutbound ||
+        modelFromHistory ||
         ctx?.lead?.vehicle?.model ||
         deriveModelFromDescription(ctx?.lead?.vehicle?.description ?? null) ||
         null;
@@ -2256,18 +2266,22 @@ export async function orchestrateInbound(
           draft: "Which model are you asking about?"
         });
       }
+      const yearFromInbound = deriveYearFromText(event.body);
       const year =
-        deriveYearFromText(event.body) ??
-        deriveYearFromText(lastOutbound) ??
-        ctx?.lead?.vehicle?.year ??
-        null;
+        yearFromInbound ??
+        (modelFromInbound
+          ? null
+          : deriveYearFromText(lastOutbound) ?? ctx?.lead?.vehicle?.year ?? null);
       const msrpColors = await getMsrpColorNames();
+      const colorFromInbound = extractColorMention(event.body, msrpColors);
       const color =
-        extractColorMention(event.body, msrpColors) ||
-        extractColorMention(lastOutbound, msrpColors) ||
-        findRecentInboundColor(history, msrpColors) ||
-        ctx?.lead?.vehicle?.color ||
-        null;
+        colorFromInbound ||
+        (modelFromInbound
+          ? null
+          : extractColorMention(lastOutbound, msrpColors) ||
+            findRecentInboundColor(history, msrpColors) ||
+            ctx?.lead?.vehicle?.color ||
+            null);
       let matches = await findInventoryMatches({ year: year ?? null, model });
       if (color) {
         const colorLower = color.toLowerCase();
