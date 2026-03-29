@@ -4579,6 +4579,38 @@ function parseSellOptionFromText(text: string): "cash" | "trade" | "either" | nu
   return null;
 }
 
+function extractTradeYearCorrection(
+  text: string,
+  baselineYear?: string | number | null
+): string | null {
+  const t = String(text ?? "").toLowerCase();
+  if (!t) return null;
+
+  const baseline = baselineYear != null ? String(baselineYear) : null;
+  const direct = t.match(/\b(it'?s|it is|its)\s+(?:a\s+)?(19\d{2}|20\d{2})\b/i)?.[2] ?? null;
+  if (direct && (!baseline || direct !== baseline)) {
+    return direct;
+  }
+
+  const years = Array.from(t.matchAll(/\b(19\d{2}|20\d{2})\b/g)).map(m => m[1]);
+  if (!years.length) return null;
+
+  const notYear = t.match(/\bnot\s+(?:a\s+)?(19\d{2}|20\d{2})\b/i)?.[1] ?? null;
+  if (notYear) {
+    const candidate = years.find(y => y !== notYear);
+    if (candidate) return candidate;
+  }
+
+  const correctionCue = /\b(actually|correction|meant|wrong year)\b/.test(t);
+  if (!correctionCue) return null;
+
+  if (baseline) {
+    const candidate = years.find(y => y !== baseline);
+    if (candidate) return candidate;
+  }
+  return years[0] ?? null;
+}
+
 function normalizeModelName(s: string): string {
   return s.toLowerCase().replace(/\s+/g, " ").trim();
 }
@@ -11656,6 +11688,67 @@ if (authToken && signature) {
     /(in[-\s]?stock|available|availability|do you have|have .* in[-\s]?stock|any .* in[-\s]?stock|do you carry|carry any)/i.test(
       textLower
     ) && !specsSignal;
+  const tradeYearCorrection =
+    isTradeLead && !availabilityExplicit && !llmAvailabilityIntent
+      ? extractTradeYearCorrection(
+          textLower,
+          conv.lead?.tradeVehicle?.year ?? conv.lead?.vehicle?.year ?? null
+        )
+      : null;
+  const tradeFollowupMessage =
+    isTradeLead &&
+    !availabilityExplicit &&
+    !llmAvailabilityIntent &&
+    !isPricingText(event.body ?? "") &&
+    (tradeYearCorrection ||
+      /\b(inspection|appraisal|bring (it|the bike) (in|by)|coming in|come in|stop in|call for (an )?appointment|call (to )?(set|schedule) (an )?appointment|check my schedule|i(?:'|’)ll call|i will call|let you know when i(?:'|’)m coming in|let you know when i am coming in)\b/i.test(
+        textLower
+      ));
+  if (event.provider === "twilio" && tradeFollowupMessage) {
+    if (conv.lead) {
+      conv.lead.vehicle = conv.lead.vehicle ?? {};
+      conv.lead.tradeVehicle = {
+        ...(conv.lead.tradeVehicle ?? {}),
+        model: conv.lead.tradeVehicle?.model ?? conv.lead.vehicle?.model,
+        description: conv.lead.tradeVehicle?.description ?? conv.lead.vehicle?.description
+      };
+      if (tradeYearCorrection) {
+        conv.lead.vehicle.year = tradeYearCorrection;
+        conv.lead.tradeVehicle.year = tradeYearCorrection;
+      }
+    }
+    if (!isTradeDialogState(getDialogState(conv))) {
+      setDialogState(conv, "trade_init");
+    }
+    const tradeModel =
+      conv.lead?.tradeVehicle?.model ??
+      conv.lead?.tradeVehicle?.description ??
+      conv.lead?.vehicle?.model ??
+      conv.lead?.vehicle?.description ??
+      null;
+    const tradeYear =
+      tradeYearCorrection ?? conv.lead?.tradeVehicle?.year ?? conv.lead?.vehicle?.year ?? null;
+    const tradeLabel = tradeModel
+      ? formatModelLabel(tradeYear, tradeModel)
+      : tradeYear
+        ? `${tradeYear} bike`
+        : "your bike";
+    const correctionLine = tradeYearCorrection
+      ? `Thanks for clarifying — I updated it to ${tradeLabel}. `
+      : "";
+    const reply = `${correctionLine}Sounds good. When you’re ready, call us or text me a day and time, and I can line up the appraisal.`;
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   const compareRequest = isCompareRequest(textLower);
   const compareContext = /compare|spec sheet|highlights comparison|highlights list/i.test(
     lastOutboundText
@@ -12032,17 +12125,18 @@ if (authToken && signature) {
   const inventoryQuestion =
     llmAvailabilityIntent ||
     availabilityExplicit ||
-    getHarleyModelLexicon().some(m => textLower.includes(m.toLowerCase())) ||
-    (!!conv.inventoryContext?.model && textLower.includes(conv.inventoryContext.model.toLowerCase())) ||
-    (!!conv.inventoryContext?.model &&
-      /\b(\d{4}|blue|black|white|red|green|gray|grey|silver|chrome|trim|finish|color|standard|special|st|new|used|pre[-\s]?owned|preowned)\b/i.test(
-        textLower
-      )) ||
-    (!!conv.lead?.vehicle?.model && textLower.includes(conv.lead.vehicle.model.toLowerCase())) ||
-    (!!conv.lead?.vehicle?.model &&
-      /\b(\d{4}|blue|black|white|red|green|gray|grey|silver|chrome|trim|color|standard|special|st|new|used|pre[-\s]?owned|preowned)\b/i.test(
-        textLower
-      ));
+    (!isTradeLead &&
+      (getHarleyModelLexicon().some(m => textLower.includes(m.toLowerCase())) ||
+        (!!conv.inventoryContext?.model && textLower.includes(conv.inventoryContext.model.toLowerCase())) ||
+        (!!conv.inventoryContext?.model &&
+          /\b(\d{4}|blue|black|white|red|green|gray|grey|silver|chrome|trim|finish|color|standard|special|st|new|used|pre[-\s]?owned|preowned)\b/i.test(
+            textLower
+          )) ||
+        (!!conv.lead?.vehicle?.model && textLower.includes(conv.lead.vehicle.model.toLowerCase())) ||
+        (!!conv.lead?.vehicle?.model &&
+          /\b(\d{4}|blue|black|white|red|green|gray|grey|silver|chrome|trim|color|standard|special|st|new|used|pre[-\s]?owned|preowned)\b/i.test(
+            textLower
+          ))));
   const watchPrompted = /\b(keep an eye|keep me posted|watch for|watch\b)\b/i.test(
     lastOutboundText
   );
