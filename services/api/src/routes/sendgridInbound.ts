@@ -320,7 +320,10 @@ async function pickLeadInventoryMedia(conv: any): Promise<LeadInventoryMediaPick
       else if (itemModelNorm.includes(modelNorm) || modelNorm.includes(itemModelNorm)) score += 3;
       else continue;
 
-      if (yearText && String(item.year ?? "").trim() === yearText) score += 1;
+      if (yearText) {
+        if (String(item.year ?? "").trim() !== yearText) continue;
+        score += 1;
+      }
       if (makeNorm) {
         const itemMakeNorm = normalizeModelToken(item.make ?? "");
         if (itemMakeNorm && (itemMakeNorm.includes(makeNorm) || makeNorm.includes(itemMakeNorm))) {
