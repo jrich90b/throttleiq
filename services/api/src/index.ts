@@ -7966,9 +7966,10 @@ app.post("/conversations/:id/send", async (req, res) => {
         replyTo,
         ...(attachments.length ? { attachments } : {})
       });
-      const fin = finalizeDraftAsSent(conv, draftId, signed, "sendgrid");
+      const outboundProvider = manualTakeover && !draftId ? "human" : "sendgrid";
+      const fin = finalizeDraftAsSent(conv, draftId, signed, outboundProvider);
       if (!fin.usedDraft) {
-        appendOutbound(conv, emailFrom, emailTo!, signed, "sendgrid");
+        appendOutbound(conv, emailFrom, emailTo!, signed, outboundProvider);
       }
       // Clear stored email draft so the UI doesn't keep pre-filling after send.
       delete conv.emailDraft;

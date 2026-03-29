@@ -737,6 +737,17 @@ function buildHumanEmailReplyTodoSummary(body?: string | null): string {
   return `Customer replied by email. Follow up directly.\n${snippet}`;
 }
 
+function isReplyToSalespersonEmailThread(conv: any): boolean {
+  const msgs = Array.isArray(conv?.messages) ? conv.messages : [];
+  const lastOutbound = [...msgs].reverse().find(m => m?.direction === "out");
+  if (!lastOutbound) return false;
+  const from = String(lastOutbound.from ?? "");
+  const to = String(lastOutbound.to ?? "");
+  const looksLikeEmail = from.includes("@") || to.includes("@");
+  if (!looksLikeEmail) return false;
+  return lastOutbound.provider === "human";
+}
+
 function getLeadIdentifiers(conv: any, fromEmail?: string) {
   const email =
     (conv?.lead?.email ?? fromEmail ?? (conv?.leadKey?.includes?.("@") ? conv.leadKey : ""))
@@ -1015,7 +1026,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       });
     }
 
-    if (conv.mode === "human") {
+    if (conv.mode === "human" || isReplyToSalespersonEmailThread(conv)) {
       addTodo(
         conv,
         "note",
@@ -1033,7 +1044,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         leadKey,
         lead: conv.lead,
         channel: "email",
-        note: "human_mode_todo_created"
+        note:
+          conv.mode === "human"
+            ? "human_mode_todo_created"
+            : "salesperson_thread_todo_created"
       });
     }
 
