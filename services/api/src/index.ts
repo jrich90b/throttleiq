@@ -437,11 +437,35 @@ function formatRequestedConditionLabel(condition?: "new" | "used"): string {
   return condition ? `${condition} ` : "";
 }
 
+function is883ModelToken(model: string): boolean {
+  const t = normalizeModelText(model);
+  return /\b883\b/.test(t) || /\bxl\s*883\b/.test(t);
+}
+
+function isSportsterFamilyAlias(model: string): boolean {
+  const t = normalizeModelText(model);
+  if (!t) return false;
+  return (
+    /\bsportster\b/.test(t) ||
+    is883ModelToken(t) ||
+    /\biron 883\b/.test(t) ||
+    /\b883 roadster\b/.test(t) ||
+    /\broadster 883\b/.test(t)
+  );
+}
+
 function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
   if (!item?.model || !watch?.model) return false;
   const itemModel = normalizeModelName(String(item.model));
   const watchModel = normalizeModelName(String(watch.model));
-  if (!itemModel.includes(watchModel) && !watchModel.includes(itemModel)) return false;
+  const directMatch = itemModel.includes(watchModel) || watchModel.includes(itemModel);
+  const watchHas883 = is883ModelToken(watchModel);
+  const familyMatch = (() => {
+    if (!isSportsterFamilyAlias(watchModel)) return false;
+    if (watchHas883) return is883ModelToken(itemModel);
+    return isSportsterFamilyAlias(itemModel);
+  })();
+  if (!directMatch && !familyMatch) return false;
   if (watch.trim) {
     const trimToken = normalizeModelName(String(watch.trim));
     if (trimToken && !itemModel.includes(trimToken)) return false;
@@ -5008,6 +5032,10 @@ async function resolveWatchModelFromText(
   fallbackModel?: string | null
 ): Promise<string | null> {
   const fallback = String(fallbackModel ?? "").trim();
+  const normalized = normalizeModelText(textLower);
+  if (/\bsportster\b/.test(normalized) && is883ModelToken(normalized)) {
+    return "Sportster 883";
+  }
   try {
     const items = await getInventoryFeed();
     const inventoryModels = Array.from(new Set(items.map(i => i.model).filter(Boolean))) as string[];
