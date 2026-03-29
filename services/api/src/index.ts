@@ -12573,16 +12573,24 @@ if (authToken && signature) {
           responseMatches.find(m => Array.isArray(m.images) && m.images.length)?.images?.[0] ?? null;
         const finishLabel = finishFromText ? ` with ${finishFromText} finish` : "";
         const colorLabel = color ? ` in ${color}` : "";
+        const asksConditionOnly =
+          /\b(new|used|pre[-\s]?owned|preowned)\b/i.test(textLower) &&
+          (/\bor\b/i.test(textLower) || /\b(is it|that|this)\b/i.test(textLower)) &&
+          !/\b(price|payment|monthly|otd|apr|down|trade|schedule|appointment|test ride)\b/i.test(textLower);
+        const conditionAnswer =
+          condition === "used" ? "It’s used." : condition === "new" ? "It’s new." : "";
         const paintTrimPrompt = "Are you looking for any paint or trim specifically (chrome vs blacked-out)?";
         const reply = hasMonthlyBudgetTarget
           ? `Yes — we do have ${formatBudgetInventoryOption(picked ?? { year, model, color })} in stock.${pickedPaymentHint} Want another option around that payment range?`
           : otherInventoryRequest
             ? `Yes — we do have another ${formatBudgetInventoryOption(picked ?? { year, model, color })} in stock. ${paintTrimPrompt}`
+          : asksConditionOnly && conditionAnswer
+            ? `${conditionAnswer} We do have a ${conditionLabel}${model} in stock. Any specific year or color you’re after?`
           : year
-            ? `Yes — we do have ${conditionLabel}${year} ${model}${colorLabel}${finishLabel} in stock. Would you like to stop by to take a look?`
+            ? `Yes — we do have a ${conditionLabel}${year} ${model}${colorLabel}${finishLabel} in stock. Would you like to stop by to take a look?`
             : color || finishFromText
-              ? `Yes — we do have ${conditionLabel}${model}${colorLabel}${finishLabel} in stock. What year are you after?`
-              : `Yes — we do have ${conditionLabel}${model} in stock. Any specific year or color you’re after?`;
+              ? `Yes — we do have a ${conditionLabel}${model}${colorLabel}${finishLabel} in stock. What year are you after?`
+              : `Yes — we do have a ${conditionLabel}${model} in stock. Any specific year or color you’re after?`;
           const systemMode = webhookMode;
           if (systemMode === "suggest") {
             appendOutbound(
