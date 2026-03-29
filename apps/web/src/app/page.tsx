@@ -1464,6 +1464,22 @@ export default function Home() {
     return Array.from(out).sort((a, b) => a.localeCompare(b));
   }
 
+  function getWatchModelChoices(item: WatchFormItem): string[] {
+    const optionSet = new Map<string, string>();
+    const modelOptions = getModelsForYearValue(item.year, item.make);
+    modelOptions.forEach(model => {
+      const key = model.trim().toLowerCase();
+      if (key && !optionSet.has(key)) optionSet.set(key, model);
+    });
+    const selectedModels = getItemModels(item);
+    selectedModels.forEach(model => {
+      const trimmed = model.trim();
+      const key = trimmed.toLowerCase();
+      if (key && !optionSet.has(key)) optionSet.set(key, trimmed);
+    });
+    return Array.from(optionSet.values()).sort((a, b) => a.localeCompare(b));
+  }
+
   const watchMakeOptions = useMemo(() => {
     const set = new Set<string>();
     if (Object.keys(modelsByYear).length) set.add("Harley-Davidson");
@@ -7699,7 +7715,7 @@ export default function Home() {
                     {cadenceWatchEnabled ? (
                       <div className="mt-3 space-y-3">
                         {cadenceWatchItems.map((item, idx) => {
-                          const modelOptions = getModelsForYearValue(item.year, item.make);
+                          const modelOptions = getWatchModelChoices(item);
                           const groupModels = getItemModels(item);
 
                           const makeOptionsLower = new Set(watchMakeOptions.map(o => o.toLowerCase()));
@@ -8968,7 +8984,7 @@ export default function Home() {
             <div className="text-sm font-semibold">Edit vehicle watch</div>
             <div className="mt-3 space-y-3">
               {watchEditItems.map((item, idx) => {
-                const modelOptions = getModelsForYearValue(item.year, item.make);
+                const modelOptions = getWatchModelChoices(item);
                 const groupModels = getItemModels(item);
 
                 const makeOptionsLower = new Set(watchMakeOptions.map(o => o.toLowerCase()));
