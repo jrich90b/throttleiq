@@ -944,6 +944,41 @@ function isUsedCondition(condition?: string | null, year?: string | null): boole
   return false;
 }
 
+function normalizeRequestedInventoryCondition(raw?: string | null): "new" | "used" | null {
+  const t = String(raw ?? "").toLowerCase().trim();
+  if (!t) return null;
+  if (/(pre|used|pre-owned|preowned|owned)/.test(t)) return "used";
+  if (/\bnew\b/.test(t)) return "new";
+  return null;
+}
+
+function detectRequestedInventoryConditionFromText(text?: string | null): "new" | "used" | null {
+  return normalizeRequestedInventoryCondition(text);
+}
+
+function inferInventoryItemCondition(item: any): "new" | "used" | null {
+  const explicit = normalizeRequestedInventoryCondition(item?.condition);
+  if (explicit) return explicit;
+  const yearNum = Number(String(item?.year ?? ""));
+  if (Number.isFinite(yearNum) && yearNum > 0) {
+    const nowYear = new Date().getFullYear();
+    return yearNum <= nowYear - 2 ? "used" : "new";
+  }
+  return null;
+}
+
+function inventoryItemMatchesRequestedCondition(
+  item: any,
+  requestedCondition: "new" | "used" | null
+): boolean {
+  if (!requestedCondition) return true;
+  return inferInventoryItemCondition(item) === requestedCondition;
+}
+
+function formatRequestedConditionPrefix(condition: "new" | "used" | null): string {
+  return condition ? `${condition} ` : "";
+}
+
 function resolveModelFromHistory(
   history: { direction: "in" | "out"; body: string }[] | undefined,
   models: string[]
@@ -1772,7 +1807,16 @@ export async function orchestrateInbound(
             findRecentInboundColor(history, msrpColors) ||
             ctx?.lead?.vehicle?.color ||
             null);
+      const conditionFromInbound = detectRequestedInventoryConditionFromText(event.body);
+      const conditionFromContext = modelFromInbound
+        ? null
+        : detectRequestedInventoryConditionFromText(lastOutbound) ||
+          normalizeRequestedInventoryCondition(ctx?.lead?.vehicle?.condition ?? null);
+      const requestedCondition = conditionFromInbound || conditionFromContext;
       let matches = await findInventoryMatches({ year: year ?? null, model });
+      if (requestedCondition) {
+        matches = matches.filter(m => inventoryItemMatchesRequestedCondition(m, requestedCondition));
+      }
       if (color) {
         const colorLower = color.toLowerCase();
         matches = matches.filter(m => (m.color ?? "").toLowerCase().includes(colorLower));
@@ -1787,15 +1831,16 @@ export async function orchestrateInbound(
         return true;
       });
       const count = availableMatches.length;
+      const conditionPrefix = formatRequestedConditionPrefix(requestedCondition);
       const yearLabel = year ? `${year} ` : "";
       const modelLabel = normalizeModelLabel(model);
       const colorLabel = color ? ` in ${color}` : "";
       const reply =
         count <= 0
-          ? `I’m not seeing any ${yearLabel}${modelLabel}${colorLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}`
+          ? `I’m not seeing any ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}`
           : count === 1
-            ? `We do have 1 ${yearLabel}${modelLabel}${colorLabel} in stock. Want photos or details?`
-            : `We have ${count} ${yearLabel}${modelLabel}${colorLabel} in stock. Want photos or details on a specific one?`;
+            ? `We do have 1 ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} in stock. Want photos or details?`
+            : `We have ${count} ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} in stock. Want photos or details on a specific one?`;
       return finalize({
         intent: "AVAILABILITY",
         stage: "ENGAGED",
@@ -1832,12 +1877,18 @@ export async function orchestrateInbound(
 
     let availabilityLine = "";
     if (wantsAvailability) {
+      const requestedCondition =
+        detectRequestedInventoryConditionFromText(event.body) ||
+        normalizeRequestedInventoryCondition(leadVehicle?.condition ?? null);
+      const conditionPrefix = formatRequestedConditionPrefix(requestedCondition);
       let availabilityState: "available" | "unavailable" | "unknown" = "unknown";
       try {
         if (stockId || vin) {
           const feedMatch = await findInventoryPrice({ stockId, vin, year: yearRaw, model: modelRaw });
           if (feedMatch?.item) {
-            availabilityState = "available";
+            availabilityState = inventoryItemMatchesRequestedCondition(feedMatch.item, requestedCondition)
+              ? "available"
+              : "unavailable";
           } else if (stockId) {
             const resolved = await resolveInventoryUrlByStock(stockId);
             if (resolved.ok) {
@@ -1846,7 +1897,9 @@ export async function orchestrateInbound(
             }
           }
         } else if (modelRaw) {
-          const matches = await findInventoryMatches({ year: yearRaw, model: modelRaw });
+          const matches = (await findInventoryMatches({ year: yearRaw, model: modelRaw })).filter(m =>
+            inventoryItemMatchesRequestedCondition(m, requestedCondition)
+          );
           availabilityState = matches.length ? "available" : "unavailable";
         }
       } catch {
@@ -1854,14 +1907,14 @@ export async function orchestrateInbound(
       }
 
       if (availabilityState === "available") {
-        availabilityLine = `The ${bikeLabel} is still available.`;
+        availabilityLine = `The ${conditionPrefix}${bikeLabel} is still available.`;
       } else if (availabilityState === "unavailable") {
         availabilityLine = modelKnown
-          ? `I’m not seeing a ${bikeLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}`
+          ? `I’m not seeing a ${conditionPrefix}${bikeLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}`
           : `I’m not seeing that bike in stock right now. ${buildOutOfStockHumanOptionsLine()}`;
       } else {
         availabilityLine = modelKnown
-          ? `I’m checking availability on the ${bikeLabel} and will update you shortly.`
+          ? `I’m checking availability on the ${conditionPrefix}${bikeLabel} and will update you shortly.`
           : "I’m checking availability and will update you shortly.";
       }
     }
@@ -2333,7 +2386,16 @@ export async function orchestrateInbound(
             findRecentInboundColor(history, msrpColors) ||
             ctx?.lead?.vehicle?.color ||
             null);
+      const conditionFromInbound = detectRequestedInventoryConditionFromText(event.body);
+      const conditionFromContext = modelFromInbound
+        ? null
+        : detectRequestedInventoryConditionFromText(lastOutbound) ||
+          normalizeRequestedInventoryCondition(ctx?.lead?.vehicle?.condition ?? null);
+      const requestedCondition = conditionFromInbound || conditionFromContext;
       let matches = await findInventoryMatches({ year: year ?? null, model });
+      if (requestedCondition) {
+        matches = matches.filter(m => inventoryItemMatchesRequestedCondition(m, requestedCondition));
+      }
       if (color) {
         const colorLower = color.toLowerCase();
         matches = matches.filter(m => (m.color ?? "").toLowerCase().includes(colorLower));
@@ -2348,15 +2410,16 @@ export async function orchestrateInbound(
         return true;
       });
       const count = availableMatches.length;
+      const conditionPrefix = formatRequestedConditionPrefix(requestedCondition);
       const yearLabel = year ? `${year} ` : "";
       const modelLabel = normalizeModelLabel(model);
       const colorLabel = color ? ` in ${color}` : "";
       const reply =
         count <= 0
-          ? `I’m not seeing ${yearLabel}${modelLabel}${colorLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}`
+          ? `I’m not seeing ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}`
           : count === 1
-            ? `That’s the only ${yearLabel}${modelLabel}${colorLabel} we have in stock right now.`
-            : `We have ${count} ${yearLabel}${modelLabel}${colorLabel} units in stock right now.`;
+            ? `That’s the only ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} we have in stock right now.`
+            : `We have ${count} ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} units in stock right now.`;
       return finalize({
         intent: "AVAILABILITY",
         stage: "ENGAGED",

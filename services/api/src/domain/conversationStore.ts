@@ -355,6 +355,7 @@ export type Conversation = {
   inventoryContext?: {
     model?: string;
     year?: string;
+    condition?: string;
     color?: string;
     finish?: string;
     updatedAt?: string;
