@@ -4078,6 +4078,17 @@ function isDownPaymentQuestion(text: string): boolean {
   );
 }
 
+function isExplicitAvailabilityQuestion(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\b(do you have|do u have|you have any|have any|any .* in[-\s]?stock|in[-\s]?stock|availability|available|how many do you have|how many in stock|any others)\b/.test(
+      t
+    ) ||
+    /\bwhat do you have\b/.test(t)
+  );
+}
+
 function referencesSpecificInventoryUnit(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
@@ -11159,6 +11170,15 @@ if (authToken && signature) {
       )}</Message>\n</Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
+  }
+
+  if (
+    event.provider === "twilio" &&
+    conv.inventoryWatchPending &&
+    (llmAvailabilityIntent || isExplicitAvailabilityQuestion(textLower))
+  ) {
+    // Customer asked a fresh availability question; don't force pending watch clarification.
+    conv.inventoryWatchPending = undefined;
   }
 
   if (event.provider === "twilio" && conv.inventoryWatchPending && !inventoryCountQuestion) {
