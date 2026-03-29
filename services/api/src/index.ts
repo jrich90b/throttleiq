@@ -4613,7 +4613,10 @@ const INVENTORY_COLOR_PHRASES = [
   "vivid black",
   "matte black metallic",
   "billiard gray",
-  "billiard red",
+  "billiard red"
+].sort((a, b) => b.length - a.length);
+
+const BASIC_COLOR_WORDS = [
   "black",
   "white",
   "red",
@@ -4628,7 +4631,24 @@ const INVENTORY_COLOR_PHRASES = [
   "tan",
   "chrome",
   "purple"
-].sort((a, b) => b.length - a.length);
+];
+
+function extractTwoToneColorPhrase(text: string): string | null {
+  const cleaned = text
+    .replace(
+      /^(what about|about|i m looking for|im looking for|i am looking for|looking for|i m after|im after|i am after|after|i want|want|i need|need|do you have|you have|have)\s+(an|a|the)?\s*/i,
+      ""
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+  const pattern =
+    /\b([a-z][a-z0-9\s-]{2,40}?\s+and\s+(?:black|white|red|blue|gray|grey|silver|green|orange|yellow|brown|tan|chrome|purple))\b(?:\s+(?:one|bike|model|option|version|trim))?/i;
+  const m = cleaned.match(pattern);
+  if (!m?.[1]) return null;
+  const phrase = m[1].replace(/\s+/g, " ").trim();
+  if (BASIC_COLOR_WORDS.includes(phrase)) return null;
+  return phrase;
+}
 
 function extractColorToken(text: string): string | null {
   const t = text
@@ -4638,8 +4658,12 @@ function extractColorToken(text: string): string | null {
     .trim();
   const direct = INVENTORY_COLOR_PHRASES.find(c => t.includes(c));
   if (direct) return direct;
-  if (/\bolive\s+steel\b/.test(t) && /\bblack\b/.test(t)) return "olive steel and black";
-  return null;
+  const twoTone = extractTwoToneColorPhrase(t);
+  if (twoTone) return twoTone;
+  for (const color of BASIC_COLOR_WORDS) {
+    if (new RegExp(`\\b${color}\\b`, "i").test(t)) return color;
+  }
+  return /\bolive\s+steel\b/.test(t) && /\bblack\b/.test(t) ? "olive steel and black" : null;
 }
 
 function extractFinishToken(text: string): "chrome" | "black" | null {
