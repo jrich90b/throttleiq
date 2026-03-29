@@ -7921,6 +7921,7 @@ app.post("/conversations/:id/send", async (req, res) => {
 
   if (wantsEmail) {
     const forceEmail = req.body?.forceEmail === true;
+    const skipEmailSignature = req.body?.skipEmailSignature === true;
     if (!emailOptInOk && !forceEmail) {
       return res.status(400).json({
         ok: false,
@@ -7953,7 +7954,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       }))
       .filter(att => att.content.length > 0);
     const signed =
-      signature
+      !skipEmailSignature && signature
         ? `${body}\n\n${signature}${dealerProfile?.logoUrl ? `\n\n${dealerProfile.logoUrl}` : ""}`
         : body;
     const hadOutbound = conv.messages.some(m => m.direction === "out");
