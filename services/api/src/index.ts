@@ -4007,6 +4007,21 @@ function rewriteTradeVoiceToTeam(text: string): string {
   return out;
 }
 
+function stripDuplicateTradeAppraisalMention(reply: string, lastOutboundText: string): string {
+  const current = String(reply ?? "").trim();
+  if (!current) return reply;
+  const previous = String(lastOutboundText ?? "");
+  const appraisalMention =
+    /\b(quick\s+in[-\s]?person appraisal|in[-\s]?person appraisal|trade appraisal|line up the appraisal|set up a trade appraisal)\b/i;
+  if (!appraisalMention.test(current) || !appraisalMention.test(previous)) {
+    return reply;
+  }
+  const sentences = current.split(/(?<=[.!?])\s+/);
+  const filtered = sentences.filter(s => !appraisalMention.test(s));
+  const cleaned = filtered.join(" ").replace(/\s{2,}/g, " ").trim();
+  return cleaned || "Sounds good — thanks for confirming.";
+}
+
 function applyTradePolicy(
   conv: any,
   reply: string,
@@ -4070,6 +4085,7 @@ function applyTradePolicy(
       out = `${out} ${callLine}`.trim();
     }
   }
+  out = stripDuplicateTradeAppraisalMention(out, lastOutboundText);
   return rewriteTradeVoiceToTeam(out);
 }
 
