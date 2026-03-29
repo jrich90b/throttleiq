@@ -4440,10 +4440,24 @@ function isCallOnlyText(text: string): boolean {
   );
 }
 
+function isCustomerWillCallText(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t) return false;
+  return (
+    /\b(i(?:'|’)ll|i will)\s+call\b/.test(t) ||
+    /\bcall for (an )?appointment\b/.test(t) ||
+    /\bcall (to )?(set|schedule) (an )?appointment\b/.test(t) ||
+    /\bcheck my schedule\b/.test(t) ||
+    /\blet you know when i(?:'|’)m coming in\b/.test(t) ||
+    /\blet you know when i am coming in\b/.test(t)
+  );
+}
+
 function detectCallbackText(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
+  if (isCustomerWillCallText(t)) return false;
   const hasCallback =
-    /(call me|call him|call her|give me a call|give (him|her) a call|reach me|reach him|reach her|contact me|can you call|can you have|please call|have .* call|tell .* i will call|i will call)/.test(
+    /(call me|call him|call her|give me a call|give (him|her) a call|reach me|reach him|reach her|contact me|can you call|can you have|please call|have .* call)/.test(
       t
     );
   const hasTimeframe =
@@ -10532,7 +10546,9 @@ if (authToken && signature) {
   const intentLow =
     !!intentParse?.explicitRequest && intentConfidence > 0 && intentConfidence < intentConfidenceMin;
   const llmCallbackRequested = intentAccepted && intentParse?.intent === "callback";
-  const callbackRequestedOverride = llmCallbackRequested || detectCallbackText(event.body ?? "");
+  const customerWillCallIntent = isCustomerWillCallText(event.body ?? "");
+  const callbackRequestedOverride =
+    !customerWillCallIntent && (llmCallbackRequested || detectCallbackText(event.body ?? ""));
   const llmAvailabilityIntent = intentAccepted && intentParse?.intent === "availability";
   const llmTestRideIntent = intentAccepted && intentParse?.intent === "test_ride";
   const llmAvailability = llmAvailabilityIntent ? intentParse?.availability ?? null : null;
