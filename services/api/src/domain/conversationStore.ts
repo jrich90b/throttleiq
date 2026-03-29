@@ -147,6 +147,8 @@ export type TodoTask = {
   id: string;
   convId: string;
   leadKey: string;
+  ownerId?: string;
+  ownerName?: string;
   reason: "pricing" | "payments" | "approval" | "manager" | "service" | "call" | "note" | "other";
   summary: string;
   createdAt: string;
@@ -1708,8 +1710,13 @@ export function addTodo(
   conv: Conversation,
   reason: TodoTask["reason"],
   summary: string,
-  sourceMessageId?: string
+  sourceMessageId?: string,
+  owner?: { id?: string | null; name?: string | null }
 ): TodoTask {
+  const ownerIdRaw = String(owner?.id ?? conv?.leadOwner?.id ?? "").trim();
+  const ownerNameRaw = String(owner?.name ?? conv?.leadOwner?.name ?? "").trim();
+  const ownerId = ownerIdRaw || undefined;
+  const ownerName = ownerNameRaw || undefined;
   const existing = todos.find(t => t.convId === conv.id && t.status === "open");
   if (existing) {
     const priorities: Record<TodoTask["reason"], number> = {
@@ -1737,6 +1744,8 @@ export function addTodo(
       }
     }
     if (sourceMessageId) existing.sourceMessageId = sourceMessageId;
+    if (ownerId) existing.ownerId = ownerId;
+    if (ownerName) existing.ownerName = ownerName;
     conv.updatedAt = nowIso();
     scheduleSave();
     return existing;
@@ -1745,6 +1754,8 @@ export function addTodo(
     id: makeId("todo"),
     convId: conv.id,
     leadKey: conv.leadKey,
+    ownerId,
+    ownerName,
     reason,
     summary,
     sourceMessageId,

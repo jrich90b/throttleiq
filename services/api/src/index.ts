@@ -7491,7 +7491,10 @@ app.delete("/conversations/:id", (req, res) => {
   return res.json({ ok: true });
 });
 
-app.get("/todos", requirePermission("canAccessTodos"), (_req, res) => {
+app.get("/todos", requirePermission("canAccessTodos"), (req, res) => {
+  const user = (req as any).user ?? null;
+  const isManager = user?.role === "manager";
+  const requesterId = String(user?.id ?? "").trim();
   const extractNameFromSummary = (summary?: string | null) => {
     const text = String(summary ?? "");
     const match =
@@ -7503,18 +7506,26 @@ app.get("/todos", requirePermission("canAccessTodos"), (_req, res) => {
     const cleaned = raw.replace(/\s{2,}/g, " ").trim();
     return cleaned || null;
   };
-  const todos = listOpenTodos().map(t => {
-    const conv = getConversation(t.convId);
-    const leadNameRaw = conv?.lead?.name?.trim() ?? "";
-    const firstName = conv?.lead?.firstName ?? "";
-    const lastName = conv?.lead?.lastName ?? "";
-    const leadName =
-      leadNameRaw ||
-      [firstName, lastName].filter(Boolean).join(" ").trim() ||
-      extractNameFromSummary(t.summary) ||
-      null;
-    return { ...t, leadName };
-  });
+  const todos = listOpenTodos()
+    .filter(t => {
+      if (isManager) return true;
+      if (!requesterId) return false;
+      if (t.ownerId) return t.ownerId === requesterId;
+      const conv = getConversation(t.convId);
+      return conv?.leadOwner?.id === requesterId;
+    })
+    .map(t => {
+      const conv = getConversation(t.convId);
+      const leadNameRaw = conv?.lead?.name?.trim() ?? "";
+      const firstName = conv?.lead?.firstName ?? "";
+      const lastName = conv?.lead?.lastName ?? "";
+      const leadName =
+        leadNameRaw ||
+        [firstName, lastName].filter(Boolean).join(" ").trim() ||
+        extractNameFromSummary(t.summary) ||
+        null;
+      return { ...t, leadName };
+    });
   res.json({ ok: true, todos });
 });
 
@@ -7533,13 +7544,38 @@ app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
   const reason = allowedReasons.includes(reasonRaw as any)
     ? (reasonRaw as any)
     : "other";
-  const task = addTodo(conv, reason, summary);
+  const user = (req as any).user ?? null;
+  const ownerId = user?.role === "manager" ? "" : String(user?.id ?? "").trim();
+  const ownerName = String(user?.name ?? user?.email ?? "").trim();
+  const task = addTodo(
+    conv,
+    reason,
+    summary,
+    undefined,
+    ownerId ? { id: ownerId, name: ownerName || undefined } : undefined
+  );
   saveConversation(conv);
   return res.json({ ok: true, todo: task, conversation: conv });
 });
 
 app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), (req, res) => {
   const { convId, todoId } = req.params;
+  const user = (req as any).user ?? null;
+  const existingTask = listOpenTodos().find(t => t.id === todoId && t.convId === convId);
+  if (existingTask && user?.role !== "manager") {
+    const requesterId = String(user?.id ?? "").trim();
+    const ownerId = String(existingTask.ownerId ?? "").trim();
+    if (ownerId && ownerId !== requesterId) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
+    if (!ownerId) {
+      const convForOwner = getConversation(convId);
+      const fallbackOwner = String(convForOwner?.leadOwner?.id ?? "").trim();
+      if (fallbackOwner && fallbackOwner !== requesterId) {
+        return res.status(403).json({ ok: false, error: "forbidden" });
+      }
+    }
+  }
   const task = markTodoDone(convId, todoId);
   const conv = getConversation(convId);
   if (conv) {
@@ -7821,6 +7857,21 @@ app.post("/conversations/:id/send", async (req, res) => {
     draftCandidate && draftCandidate.provider === "draft_ai" ? draftCandidate : null;
   const draftTextForLog = draft?.body ?? null;
   const mediaUrls = draft?.mediaUrls && draft.mediaUrls.length ? draft.mediaUrls : undefined;
+  const actorUserId = String(user?.id ?? "").trim();
+  const actorUserName = String(user?.name ?? user?.email ?? "").trim();
+  const claimLeadOwnerFromActor = () => {
+    if (!actorUserId) return;
+    const existingOwner = conv.leadOwner;
+    const assignedAt =
+      existingOwner?.id === actorUserId
+        ? existingOwner?.assignedAt ?? new Date().toISOString()
+        : new Date().toISOString();
+    conv.leadOwner = {
+      id: actorUserId,
+      name: actorUserName || existingOwner?.name || undefined,
+      assignedAt
+    };
+  };
 
   let schedulerTimezone = "America/New_York";
   try {
@@ -7983,7 +8034,10 @@ app.post("/conversations/:id/send", async (req, res) => {
       if (!hasOpenNonCallTodo()) {
         pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
       }
-      if (manualTakeover && !draftId) setConversationMode(conv.id, "human");
+      if (manualTakeover && !draftId) {
+        claimLeadOwnerFromActor();
+        setConversationMode(conv.id, "human");
+      }
       markAppointmentAcknowledged(conv);
       await logRow(null);
       await maybeLogTlp();
@@ -8008,7 +8062,10 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hasOpenNonCallTodo()) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
     }
-    if (manualTakeover && !draftId) setConversationMode(conv.id, "human");
+    if (manualTakeover && !draftId) {
+      claimLeadOwnerFromActor();
+      setConversationMode(conv.id, "human");
+    }
     markAppointmentAcknowledged(conv);
     await logRow(null);
     await maybeLogTlp();
@@ -8036,7 +8093,10 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hasOpenNonCallTodo()) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
     }
-    if (manualTakeover && !draftId) setConversationMode(conv.id, "human");
+    if (manualTakeover && !draftId) {
+      claimLeadOwnerFromActor();
+      setConversationMode(conv.id, "human");
+    }
     markAppointmentAcknowledged(conv);
     await logRow(null);
     await maybeLogTlp();
@@ -8069,7 +8129,10 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hasOpenNonCallTodo()) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
     }
-    if (manualTakeover && !draftId) setConversationMode(conv.id, "human");
+    if (manualTakeover && !draftId) {
+      claimLeadOwnerFromActor();
+      setConversationMode(conv.id, "human");
+    }
     markAppointmentAcknowledged(conv);
     await logRow(msg.sid);
     await maybeLogTlp();
@@ -8094,7 +8157,10 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hasOpenNonCallTodo()) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
     }
-    if (manualTakeover && !draftId) setConversationMode(conv.id, "human");
+    if (manualTakeover && !draftId) {
+      claimLeadOwnerFromActor();
+      setConversationMode(conv.id, "human");
+    }
     markAppointmentAcknowledged(conv);
     await logRow(null);
 
