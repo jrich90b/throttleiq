@@ -4175,7 +4175,8 @@ function isComplimentOnlyText(text: string): boolean {
     /\b(price|payment|monthly|otd|apr|term|down|available|availability|in stock|stock|schedule|book|appointment|test ride|trade|finance|credit|call|phone|email|address|hours|open|close|where|when)\b/.test(
       t
     );
-  return !explicitAsk;
+  const watchIntent = isWatchConfirmationIntentText(t);
+  return !explicitAsk && !watchIntent;
 }
 
 function buildComplimentReply(): string {
@@ -4214,11 +4215,11 @@ async function seedInventoryWatchPendingFromReply(
   );
   if (!model) return;
   const year = extractYearSingle(inboundText.toLowerCase());
-  const color = extractColorToken(inboundText.toLowerCase());
+  const color = sanitizeColorPhrase(extractColorToken(inboundText.toLowerCase()));
   conv.inventoryWatchPending = {
     model,
     year: year ?? undefined,
-    color: color ?? undefined,
+    color,
     askedAt: nowIso()
   };
   setDialogState(conv, "inventory_watch_prompted");
@@ -4650,6 +4651,22 @@ function extractTwoToneColorPhrase(text: string): string | null {
   return phrase;
 }
 
+function sanitizeColorPhrase(text: string | null | undefined): string | undefined {
+  const cleaned = String(text ?? "")
+    .toLowerCase()
+    .replace(/['’"]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(
+      /^(what about|about|i m looking for|im looking for|i am looking for|looking for|m looking for|i m after|im after|i am after|after|i want|want|i need|need|do you have|you have|have)\s+(an|a|the)?\s*/i,
+      ""
+    )
+    .replace(/^[,.:;\-]+|[,.:;\-]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned || undefined;
+}
+
 function extractColorToken(text: string): string | null {
   const t = text
     .toLowerCase()
@@ -4742,7 +4759,7 @@ function parseInventoryWatchPreference(
   const exact = /(exact|only|same color|same colour|only that|just that|same year)/.test(t);
 
   const finish = extractFinishToken(t);
-  const baseColor = anyColor ? undefined : extractColorToken(t) ?? pending.color;
+  const baseColor = anyColor ? undefined : sanitizeColorPhrase(extractColorToken(t) ?? pending.color);
   const color = finish
     ? baseColor
       ? `${baseColor} ${finish} trim`
@@ -4797,7 +4814,8 @@ function buildInventoryWatchConfirmation(watch: InventoryWatch): string {
     : watch.yearMin && watch.yearMax
       ? `${watch.yearMin}-${watch.yearMax} `
       : "";
-  const colorText = watch.color ? ` in ${watch.color}` : "";
+  const cleanColor = sanitizeColorPhrase(watch.color) ?? watch.color;
+  const colorText = cleanColor ? ` in ${cleanColor}` : "";
   return `Got it — I’ll keep an eye out for ${yearText}${watch.model}${colorText} and text you as soon as one comes in.`;
 }
 
@@ -11328,7 +11346,7 @@ if (authToken && signature) {
           if (yearFromText) pending.year = yearFromText;
         }
         if (!pending.color) {
-          const colorFromText = extractColorToken(textLower);
+          const colorFromText = sanitizeColorPhrase(extractColorToken(textLower));
           if (colorFromText) pending.color = colorFromText;
         }
       }
@@ -11424,8 +11442,9 @@ if (authToken && signature) {
       !!priorModel &&
       normalizeModelText(modelFromText) !== normalizeModelText(priorModel);
     const yearFromText = llmAvailability?.year ?? (extractYearSingle(textLower)?.toString() ?? null);
-    const colorFromParser = extractColorToken(textLower);
-    const colorFromText = pickMostSpecificColor(llmAvailability?.color ?? null, colorFromParser);
+    const colorFromParser = sanitizeColorPhrase(extractColorToken(textLower));
+    const colorFromLlm = sanitizeColorPhrase(llmAvailability?.color ?? null);
+    const colorFromText = pickMostSpecificColor(colorFromLlm, colorFromParser);
     const finishFromText = extractFinishToken(textLower);
     const llmConditionRaw =
       llmAvailability?.condition && llmAvailability.condition !== "unknown"
@@ -11449,11 +11468,12 @@ if (authToken && signature) {
       (!modelChanged && !resetContextForCondition
         ? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null
         : null);
-    const color =
+    const colorCandidate =
       colorFromText ??
       (!modelChanged && !resetContextForCondition
         ? conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null
         : null);
+    const color = sanitizeColorPhrase(colorCandidate) ?? null;
     const finish = extractTrimToken(
       finishFromText ??
         (!modelChanged && !resetContextForCondition ? conv.inventoryContext?.finish ?? null : null)
@@ -12039,7 +12059,8 @@ if (authToken && signature) {
           ? `${watch.yearMin}-${watch.yearMax} `
           : "";
       const modelText = watch.model ?? "that model";
-      const colorText = watch.color ? ` in ${watch.color}` : "";
+      const watchColor = sanitizeColorPhrase(watch.color) ?? watch.color;
+      const colorText = watchColor ? ` in ${watchColor}` : "";
       const reply = `I’ve already got a watch set for ${yearText}${modelText}${colorText}. If you want me to update it, just tell me the ${updateHint}.`;
       const systemMode = webhookMode;
       if (systemMode === "suggest") {
@@ -12083,7 +12104,7 @@ if (authToken && signature) {
     const pending: InventoryWatchPending = {
       model: resolvedModel,
       year: extractYearSingle(textLower) ?? leadYear,
-      color: extractColorToken(textLower) ?? leadVehicle.color ?? undefined,
+      color: sanitizeColorPhrase(extractColorToken(textLower) ?? leadVehicle.color ?? undefined),
       askedAt: nowIso
     };
     let pref = parseInventoryWatchPreference(String(event.body ?? ""), pending);
@@ -12246,7 +12267,8 @@ if (authToken && signature) {
           ? `${watch.yearMin}-${watch.yearMax} `
           : "";
       const modelText = watch.model ?? "that model";
-      const colorText = watch.color ? ` in ${watch.color}` : "";
+      const watchColor = sanitizeColorPhrase(watch.color) ?? watch.color;
+      const colorText = watchColor ? ` in ${watchColor}` : "";
       const reply = `I’ve already got a watch set for ${yearText}${modelText}${colorText}. If you want me to update it, just tell me the ${updateHint}.`;
       const systemMode = webhookMode;
       if (systemMode === "suggest") {
@@ -12302,8 +12324,9 @@ if (authToken && signature) {
         explicitModelFromInbound &&
         priorModel &&
         normalizeModelText(explicitModelFromInbound) !== normalizeModelText(priorModel);
-      const colorFromParser = extractColorToken(textLower);
-      const colorFromText = pickMostSpecificColor(llmAvailability?.color ?? null, colorFromParser);
+      const colorFromParser = sanitizeColorPhrase(extractColorToken(textLower));
+      const colorFromLlm = sanitizeColorPhrase(llmAvailability?.color ?? null);
+      const colorFromText = pickMostSpecificColor(colorFromLlm, colorFromParser);
       const finishFromText = extractFinishToken(textLower);
       const llmConditionRaw =
         llmAvailability?.condition && llmAvailability.condition !== "unknown"
@@ -12327,11 +12350,12 @@ if (authToken && signature) {
         (!modelChanged && !resetContextForCondition
           ? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null
           : null);
-      const color =
+      const colorCandidate =
         colorFromText ??
         (!modelChanged && !resetContextForCondition
           ? conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null
           : null);
+      const color = sanitizeColorPhrase(colorCandidate) ?? null;
       const finish = extractTrimToken(
         finishFromText ??
           (!modelChanged && !resetContextForCondition ? conv.inventoryContext?.finish ?? null : null)
@@ -12845,6 +12869,12 @@ if (authToken && signature) {
             conv
           );
           const watchExactLabel = watchCondition === "new" ? "exact year/color" : "exact year";
+          conv.inventoryWatchPending = {
+            model: model ?? undefined,
+            year: year ? Number(year) : undefined,
+            color: sanitizeColorPhrase(color),
+            askedAt: new Date().toISOString()
+          };
           const reply = year
             ? `I’m not seeing a ${conditionLabel}${year} ${model}${color ? ` in ${color}` : ""} in stock right now. ${buildOutOfStockHumanOptionsLine()} Want me to keep an eye out for the ${watchExactLabel}?`
             : `I’m not seeing a ${conditionLabel}${model}${color ? ` in ${color}` : ""} in stock right now. ${buildOutOfStockHumanOptionsLine()} Want me to keep an eye out for the ${watchExactLabel}?`;
@@ -12928,9 +12958,9 @@ if (authToken && signature) {
         const isGenericModel = /full line|other/i.test(model ?? "");
         if (!isGenericModel) {
           conv.inventoryWatchPending = {
-            model,
+            model: model ?? undefined,
             year: year ? Number(year) : undefined,
-            color: color ?? undefined,
+            color: sanitizeColorPhrase(color),
             askedAt: new Date().toISOString()
           };
           setDialogState(conv, "inventory_watch_prompted");
