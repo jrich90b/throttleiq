@@ -728,6 +728,15 @@ function isCallOnlyText(input?: string | null): boolean {
   );
 }
 
+function buildHumanEmailReplyTodoSummary(body?: string | null): string {
+  const text = String(body ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "Customer replied by email. Follow up directly.";
+  const snippet = text.length > 240 ? `${text.slice(0, 237).trimEnd()}...` : text;
+  return `Customer replied by email. Follow up directly.\n${snippet}`;
+}
+
 function getLeadIdentifiers(conv: any, fromEmail?: string) {
   const email =
     (conv?.lead?.email ?? fromEmail ?? (conv?.leadKey?.includes?.("@") ? conv.leadKey : ""))
@@ -1003,6 +1012,28 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         lead: conv.lead,
         channel: "email",
         note: "call_only_no_email_draft"
+      });
+    }
+
+    if (conv.mode === "human") {
+      addTodo(
+        conv,
+        "note",
+        buildHumanEmailReplyTodoSummary(event.body),
+        event.providerMessageId
+      );
+      setFollowUpMode(conv, "manual_handoff", "human_email_reply");
+      stopFollowUpCadence(conv, "manual_handoff");
+      delete conv.emailDraft;
+      saveConversation(conv);
+      await flushConversationStore();
+      return res.status(200).json({
+        ok: true,
+        parsed: true,
+        leadKey,
+        lead: conv.lead,
+        channel: "email",
+        note: "human_mode_todo_created"
       });
     }
 

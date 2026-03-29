@@ -7944,7 +7944,10 @@ app.post("/conversations/:id/send", async (req, res) => {
       Array.isArray(req.body?.attachments) ? req.body.attachments : [];
     const attachments = rawAttachments
       .map(att => ({
-        content: String(att?.content ?? "").trim(),
+        content: String(att?.content ?? "")
+          .trim()
+          .replace(/^data:[^,]+,/i, "")
+          .replace(/\s+/g, ""),
         filename: String(att?.filename ?? "").trim() || "attachment",
         type: att?.type ? String(att.type) : undefined
       }))
@@ -7954,10 +7957,6 @@ app.post("/conversations/:id/send", async (req, res) => {
         ? `${body}\n\n${signature}${dealerProfile?.logoUrl ? `\n\n${dealerProfile.logoUrl}` : ""}`
         : body;
     const hadOutbound = conv.messages.some(m => m.direction === "out");
-    const fin = finalizeDraftAsSent(conv, draftId, signed, "sendgrid");
-    if (!fin.usedDraft) {
-      appendOutbound(conv, emailFrom, emailTo!, signed, "sendgrid");
-    }
     try {
       await sendEmail({
         to: emailTo!,
@@ -7967,6 +7966,10 @@ app.post("/conversations/:id/send", async (req, res) => {
         replyTo,
         ...(attachments.length ? { attachments } : {})
       });
+      const fin = finalizeDraftAsSent(conv, draftId, signed, "sendgrid");
+      if (!fin.usedDraft) {
+        appendOutbound(conv, emailFrom, emailTo!, signed, "sendgrid");
+      }
       // Clear stored email draft so the UI doesn't keep pre-filling after send.
       delete conv.emailDraft;
       saveConversation(conv);
@@ -7978,7 +7981,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       if (!hasOpenNonCallTodo()) {
         pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
       }
-      if (manualTakeover && !fin.usedDraft) setConversationMode(conv.id, "human");
+      if (manualTakeover && !draftId) setConversationMode(conv.id, "human");
       markAppointmentAcknowledged(conv);
       await logRow(null);
       await maybeLogTlp();
@@ -8003,7 +8006,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hasOpenNonCallTodo()) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
     }
-    if (manualTakeover && !fin.usedDraft) setConversationMode(conv.id, "human");
+    if (manualTakeover && !draftId) setConversationMode(conv.id, "human");
     markAppointmentAcknowledged(conv);
     await logRow(null);
     await maybeLogTlp();
@@ -8031,7 +8034,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hasOpenNonCallTodo()) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
     }
-    if (manualTakeover && !fin.usedDraft) setConversationMode(conv.id, "human");
+    if (manualTakeover && !draftId) setConversationMode(conv.id, "human");
     markAppointmentAcknowledged(conv);
     await logRow(null);
     await maybeLogTlp();
@@ -8064,7 +8067,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hasOpenNonCallTodo()) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
     }
-    if (manualTakeover && !fin.usedDraft) setConversationMode(conv.id, "human");
+    if (manualTakeover && !draftId) setConversationMode(conv.id, "human");
     markAppointmentAcknowledged(conv);
     await logRow(msg.sid);
     await maybeLogTlp();
@@ -8089,7 +8092,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!hasOpenNonCallTodo()) {
       pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
     }
-    if (manualTakeover && !fin.usedDraft) setConversationMode(conv.id, "human");
+    if (manualTakeover && !draftId) setConversationMode(conv.id, "human");
     markAppointmentAcknowledged(conv);
     await logRow(null);
 
