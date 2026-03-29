@@ -632,6 +632,7 @@ export default function Home() {
   >([]);
   const [emailAttachmentsBusy, setEmailAttachmentsBusy] = useState(false);
   const [regenBusy, setRegenBusy] = useState(false);
+  const [clearDraftBusy, setClearDraftBusy] = useState(false);
   const [closeReason, setCloseReason] = useState("sold");
   const [soldById, setSoldById] = useState("");
   const [listActionsOpenId, setListActionsOpenId] = useState<string | null>(null);
@@ -2276,6 +2277,11 @@ export default function Home() {
   const emailDraft = useMemo(() => {
     return (selectedConv as any)?.emailDraft ?? null;
   }, [selectedConv]);
+  const hasClearableDraft = useMemo(() => {
+    if (messageFilter === "email") return !!emailDraft;
+    if (messageFilter === "sms") return !!pendingDraft;
+    return false;
+  }, [messageFilter, emailDraft, pendingDraft?.id]);
   const appointmentSalespersonName = useMemo(() => {
     const id = selectedConv?.appointment?.bookedSalespersonId ?? "";
     if (!id) return "";
@@ -3100,6 +3106,43 @@ export default function Home() {
       window.alert("Regenerate failed");
     } finally {
       setRegenBusy(false);
+    }
+  }
+
+  async function clearDraft() {
+    if (!selectedConv) return;
+    if (messageFilter === "calls") return;
+    if (!hasClearableDraft) return;
+    setClearDraftBusy(true);
+    try {
+      const resp = await fetch(
+        `/api/conversations/${encodeURIComponent(selectedConv.id)}/draft/clear`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clearEmailDraft: messageFilter === "email" })
+        }
+      );
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) {
+        window.alert(data?.error ?? "Failed to clear draft");
+        return;
+      }
+      setLastDraftId(null);
+      if (messageFilter === "sms" && sendBodySource === "draft") {
+        setSendBody("");
+        setSendBodySource("system");
+      }
+      if (messageFilter === "email" && !emailManualMode) {
+        setSendBody("");
+        setSendBodySource("system");
+      }
+      await loadConversation(selectedConv.id);
+      await load();
+    } catch {
+      window.alert("Failed to clear draft");
+    } finally {
+      setClearDraftBusy(false);
     }
   }
 
@@ -8801,6 +8844,15 @@ export default function Home() {
                     disabled={regenBusy}
                   >
                     Regenerate
+                  </button>
+                ) : null}
+                {hasClearableDraft ? (
+                  <button
+                    className={`px-4 py-2 border rounded text-xs ${clearDraftBusy ? "opacity-50 cursor-not-allowed" : ""}`}
+                    onClick={clearDraft}
+                    disabled={clearDraftBusy}
+                  >
+                    Clear Draft
                   </button>
                 ) : null}
               </div>

@@ -8909,6 +8909,20 @@ app.post("/conversations/:id/send", async (req, res) => {
   }
 });
 
+app.post("/conversations/:id/draft/clear", async (req, res) => {
+  const conv = getConversation(req.params.id);
+  if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+
+  const clearEmailDraft = req.body?.clearEmailDraft !== false;
+  discardPendingDrafts(conv, "manual_clear");
+  if (clearEmailDraft) {
+    delete conv.emailDraft;
+  }
+  saveConversation(conv);
+  await flushConversationStore();
+  return res.json({ ok: true, conversation: conv });
+});
+
 app.post("/conversations/:id/regenerate", async (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
