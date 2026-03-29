@@ -327,7 +327,7 @@ function detectExactNumberPressure(text: string): boolean {
 function detectPaymentPressure(text: string): boolean {
   const t = text.toLowerCase();
   return (
-    /(monthly payment|payments?\b|what.*payment|payment.*(month|monthly)|how much.*(payment|monthly)|how much down|\bapr\b|term)/.test(
+    /(monthly payment|payments?\b|what.*payment|payment.*(month|monthly)|how much.*(payment|monthly)|how much down|\$\s*\d+[,\d]*\s*(\/\s*mo|\/\s*month|per month|a month|monthly)|\bapr\b|term)/.test(
       t
     )
   );
@@ -456,6 +456,27 @@ function calcMonthlyPayment(principal: number, apr: number, months: number): num
   if (rate <= 0) return principal / months;
   const pow = Math.pow(1 + rate, months);
   return (principal * rate * pow) / (pow - 1);
+}
+
+function calcAffordablePrincipal(monthlyPayment: number, apr: number, months: number): number {
+  const rate = apr / 12;
+  if (rate <= 0) return monthlyPayment * months;
+  const pow = Math.pow(1 + rate, months);
+  return monthlyPayment * ((pow - 1) / (rate * pow));
+}
+
+function estimateDownNeededForTargetPayment(opts: {
+  targetMonthly: number;
+  price: number;
+  isUsed: boolean;
+  termMonths: number;
+  taxRate: number;
+}): number {
+  const fee = opts.isUsed ? 300 : 1200;
+  const aprConservative = opts.isUsed ? 0.09 : 0.08;
+  const total = (opts.price + fee) * (1 + opts.taxRate);
+  const affordablePrincipal = calcAffordablePrincipal(opts.targetMonthly, aprConservative, opts.termMonths);
+  return Math.max(0, total - Math.max(0, affordablePrincipal));
 }
 
 function buildMonthlyPaymentLine(opts: {
@@ -1891,9 +1912,12 @@ export async function orchestrateInbound(
       const numericYear = yearForRange ? Number(yearForRange) : null;
       const paymentFollowUp = detectPaymentFollowUp(event.body, history ?? []);
       const paymentQuestion = detectPaymentPressure(event.body) || paymentFollowUp;
+      const targetMonthly = extractMonthlyBudget(event.body);
       const downQuestionOnly =
         detectDownPaymentQuestion(event.body) &&
-        !/(payment|monthly|apr|term|rate|interest)/i.test(event.body);
+        !/(payment|monthly|month|\/\s*mo|\/\s*month|per month|a month|apr|term|rate|interest|\$\s*\d+)/i.test(
+          event.body
+        );
       const preferredTerm = extractPreferredTermMonths(event.body) ?? 60;
       const downInfo = parseDownPayment(event.body);
       const downPayment = downInfo?.amount;
@@ -1921,6 +1945,58 @@ export async function orchestrateInbound(
             : msrpLookup?.exact != null
               ? { min: msrpLookup.exact, max: msrpLookup.exact }
               : msrpLookup?.rangeForTrim ?? msrpLookup?.rangeForColor ?? msrpLookup?.range ?? null;
+
+      if (detectDownPaymentQuestion(event.body) && targetMonthly != null) {
+        const nf = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+        const financeLine = buildFinanceAppLine(dealerProfile);
+        if (paymentRange) {
+          const downLowRaw = estimateDownNeededForTargetPayment({
+            targetMonthly,
+            price: paymentRange.min,
+            isUsed,
+            termMonths: preferredTerm,
+            taxRate
+          });
+          const downHighRaw = estimateDownNeededForTargetPayment({
+            targetMonthly,
+            price: paymentRange.max,
+            isUsed,
+            termMonths: preferredTerm,
+            taxRate
+          });
+          const round100 = (v: number) => Math.round(v / 100) * 100;
+          const downLow = round100(Math.min(downLowRaw, downHighRaw));
+          const downHigh = round100(Math.max(downLowRaw, downHighRaw));
+          const targetLabel = nf.format(targetMonthly);
+          const downLabel = downLow === downHigh ? nf.format(downLow) : `${nf.format(downLow)}–${nf.format(downHigh)}`;
+          const termProvided = extractPreferredTermMonths(event.body) != null;
+          const termFollow = termProvided ? "" : " If you want, I can also run it at 72 or 84 months.";
+          const draft =
+            `To target about ${targetLabel}/mo at ${preferredTerm} months, you'd likely need roughly ${downLabel} down, ` +
+            `depending on exact bike, taxes/fees, and APR.${termFollow} ${financeLine}`;
+          return finalize({
+            intent,
+            stage: "ENGAGED",
+            shouldRespond: true,
+            draft,
+            pricingAttempted,
+            paymentsAnswered: true
+          });
+        }
+        const targetLabel = nf.format(targetMonthly);
+        const modelHint = modelUnknown
+          ? "If you share model/year (or stock #), I can run the down-payment target more accurately."
+          : "I can tighten it as soon as I confirm the exact bike price.";
+        const draft = `I can estimate what down payment gets you near ${targetLabel}/mo, but I need the exact bike price first. ${modelHint} ${financeLine}`;
+        return finalize({
+          intent,
+          stage: "ENGAGED",
+          shouldRespond: true,
+          draft,
+          pricingAttempted,
+          paymentsAnswered: true
+        });
+      }
 
       if (downQuestionOnly) {
         const financeLine = buildFinanceAppLine(dealerProfile);
