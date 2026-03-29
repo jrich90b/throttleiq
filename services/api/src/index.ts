@@ -4683,6 +4683,17 @@ function buildInventoryWatchConfirmation(watch: InventoryWatch): string {
   return `Got it — I’ll keep an eye out for ${yearText}${watch.model}${colorText} and text you as soon as one comes in.`;
 }
 
+function isWatchConfirmationIntentText(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  const intent =
+    /\b(let me know|keep me posted|keep an eye out|watch for|notify me|text me|call me)\b/.test(t);
+  const trigger =
+    /\b(if|when|whenever|once|as soon as)\b/.test(t) ||
+    /\b(comes in|available|in stock|get one|get any|find one|one comes in)\b/.test(t);
+  return intent && trigger;
+}
+
 async function resolveWatchModelFromText(
   textLower: string,
   fallbackModel?: string | null
@@ -11201,7 +11212,8 @@ if (authToken && signature) {
         pendingCondition
       );
       let pref = parseInventoryWatchPreference(String(event.body ?? ""), pending);
-      if (pref.action === "ignore" && pending.model && isAffirmative(event.body)) {
+      const watchConfirmIntent = isWatchConfirmationIntentText(String(event.body ?? ""));
+      if (pref.action === "ignore" && pending.model && (isAffirmative(event.body) || watchConfirmIntent)) {
         const watch: InventoryWatch = {
           model: pending.model,
           year: pending.year,
@@ -11947,6 +11959,18 @@ if (authToken && signature) {
       askedAt: nowIso
     };
     let pref = parseInventoryWatchPreference(String(event.body ?? ""), pending);
+    if (pref.action === "ignore" && pending.model && (isAffirmative(event.body) || watchIntentText)) {
+      const watch: InventoryWatch = {
+        model: pending.model,
+        year: pending.year,
+        color: undefined,
+        exactness: "model_only",
+        status: "active",
+        createdAt: new Date().toISOString()
+      };
+      if (watch.year) watch.exactness = "year_model";
+      pref = { action: "set", watch };
+    }
     if (pref.action === "set" && pref.watch) {
       if (!pref.watch.make && leadVehicle.make) pref.watch.make = leadVehicle.make;
       if (!pref.watch.trim && leadVehicle.trim) pref.watch.trim = leadVehicle.trim;
