@@ -9914,6 +9914,10 @@ if (authToken && signature) {
     /\b(only one|just one|is that all|any others|how many|how many do you have|only one you have)\b/i.test(
       textLower
     );
+  const otherInventoryRequest =
+    /\b(any|what|do you have|got)\s+(other|another|different|more)\b/i.test(textLower) ||
+    (/\b(other|another|different|else|more)\b/i.test(textLower) &&
+      /\b(in[-\s]?stock|available|options?|units?|bikes?|models?)\b/i.test(textLower));
   const schedulingSignalsBase = detectSchedulingSignals(event.body);
   const paymentOrPricingNoSchedule =
     isPricingText(event.body ?? "") &&
@@ -11021,7 +11025,14 @@ if (authToken && signature) {
       const key = normalizeInventoryHoldKey(m.stockId, m.vin);
       return key ? !holds?.[key] && !solds?.[key] : true;
     });
-    const count = availableMatches.length;
+    const leadStockId = conv.lead?.vehicle?.stockId ?? null;
+    const leadVin = conv.lead?.vehicle?.vin ?? null;
+    const availableMatchesForCount = otherInventoryRequest
+      ? availableMatches.filter(
+          m => !((leadStockId && m.stockId === leadStockId) || (leadVin && m.vin === leadVin))
+        )
+      : availableMatches;
+    const count = availableMatchesForCount.length;
     const sentMediaUrls = new Set<string>();
     for (const msg of conv.messages ?? []) {
       if (msg.direction !== "out") continue;
@@ -11031,7 +11042,7 @@ if (authToken && signature) {
       }
     }
     const hasSentPhoto = sentMediaUrls.size > 0;
-    const remainingWithImages = availableMatches.filter(item =>
+    const remainingWithImages = availableMatchesForCount.filter(item =>
       Array.isArray(item.images) &&
       item.images.length &&
       !item.images.some((u: string) => sentMediaUrls.has(u))
@@ -11047,16 +11058,27 @@ if (authToken && signature) {
     const yearText = year ? `${year} ` : "";
     const modelLabel = normalizeDisplayCase(model);
     const colorLabel = color ? ` in ${formatColorLabel(color)}` : "";
+    const paintTrimPrompt = "Are you looking for any paint or trim specifically (chrome vs blacked-out)?";
     let reply = "";
-    if (count <= 0) {
-      reply = `I’m not seeing ${yearText}${modelLabel}${colorLabel} in stock right now.`;
-    } else if (count === 1) {
-      reply = `That’s the only ${yearText}${modelLabel}${colorLabel} we have in stock right now.`;
+    if (otherInventoryRequest) {
+      if (count <= 0) {
+        reply = `Right now that’s the only ${yearText}${modelLabel}${colorLabel} we have in stock. ${paintTrimPrompt}`;
+      } else if (count === 1) {
+        reply = `Yes — we have one other ${yearText}${modelLabel}${colorLabel} in stock. ${paintTrimPrompt}`;
+      } else {
+        reply = `Yes — we have ${count} other ${yearText}${modelLabel}${colorLabel} units in stock. ${paintTrimPrompt}`;
+      }
     } else {
-      reply = `We have ${count} ${yearText}${modelLabel}${colorLabel} units in stock right now.`;
+      if (count <= 0) {
+        reply = `I’m not seeing ${yearText}${modelLabel}${colorLabel} in stock right now.`;
+      } else if (count === 1) {
+        reply = `That’s the only ${yearText}${modelLabel}${colorLabel} we have in stock right now.`;
+      } else {
+        reply = `We have ${count} ${yearText}${modelLabel}${colorLabel} units in stock right now.`;
+      }
     }
     if (extraMediaUrls.length) {
-      reply += ` Here ${extraMediaUrls.length === 1 ? "is" : "are"} photo${extraMediaUrls.length === 1 ? "" : "s"} of the other ${extraMediaUrls.length === 1 ? "one" : "two"}.`;
+      reply += ` Here ${extraMediaUrls.length === 1 ? "is" : "are"} photo${extraMediaUrls.length === 1 ? "" : "s"}.`;
     }
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
@@ -11956,12 +11978,33 @@ if (authToken && signature) {
         if (responseMatches.length > 0) {
         const leadStockId = conv.lead?.vehicle?.stockId ?? null;
         const leadVin = conv.lead?.vehicle?.vin ?? null;
-        const exactMatch = leadStockId || leadVin
+        const responseMatchesExcludingLead = otherInventoryRequest
+          ? responseMatches.filter(
+              m => !((leadStockId && m.stockId === leadStockId) || (leadVin && m.vin === leadVin))
+            )
+          : responseMatches;
+        if (otherInventoryRequest && responseMatchesExcludingLead.length === 0) {
+          const paintTrimPrompt = "Are you looking for any paint or trim specifically (chrome vs blacked-out)?";
+          const reply = `Right now that’s the only ${year ? `${year} ` : ""}${model}${color ? ` in ${color}` : ""} we have in stock. ${paintTrimPrompt}`;
+          const systemMode = webhookMode;
+          if (systemMode === "suggest") {
+            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+            return res.status(200).type("text/xml").send(twiml);
+          }
+          appendOutbound(conv, event.to, event.from, reply, "twilio");
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+            reply
+          )}</Message>\n</Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+        const exactMatch = !otherInventoryRequest && (leadStockId || leadVin)
           ? responseMatches.find(m =>
               (leadStockId && m.stockId === leadStockId) || (leadVin && m.vin === leadVin)
             )
           : null;
-        const pick = exactMatch ? { item: exactMatch } : pickClosestInventoryItem(responseMatches, year ?? null, color ?? null);
+        const selectionPool = responseMatchesExcludingLead.length ? responseMatchesExcludingLead : responseMatches;
+        const pick = exactMatch ? { item: exactMatch } : pickClosestInventoryItem(selectionPool, year ?? null, color ?? null);
         const picked = pick?.item ?? null;
         const pickedMonthlyEstimate =
           hasMonthlyBudgetTarget && picked
@@ -12036,9 +12079,12 @@ if (authToken && signature) {
           const pickedYear = picked.year ? `${picked.year} ` : "";
           const pickedModel = picked.model ?? model ?? "that model";
           const pickedColor = formatColorLabel(picked.color ?? null);
+          const paintTrimPrompt = "Are you looking for any paint or trim specifically (chrome vs blacked-out)?";
           const reply = hasMonthlyBudgetTarget
             ? `Yes — we do have a ${pickedYear}${pickedModel}${pickedColor ? ` in ${pickedColor}` : ""} in stock.${pickedPaymentHint} Want another option around that payment range?`
-            : `Yes — we do have a ${pickedYear}${pickedModel}${pickedColor ? ` in ${pickedColor}` : ""} in stock. Want details or to stop by?`;
+            : otherInventoryRequest
+              ? `Yes — we do have another ${pickedYear}${pickedModel}${pickedColor ? ` in ${pickedColor}` : ""} in stock. ${paintTrimPrompt}`
+              : `Yes — we do have a ${pickedYear}${pickedModel}${pickedColor ? ` in ${pickedColor}` : ""} in stock. Want details or to stop by?`;
           setDialogState(conv, "inventory_answered");
           const systemMode = webhookMode;
           if (systemMode === "suggest") {
@@ -12079,8 +12125,11 @@ if (authToken && signature) {
           responseMatches.find(m => Array.isArray(m.images) && m.images.length)?.images?.[0] ?? null;
         const finishLabel = finishFromText ? ` with ${finishFromText} finish` : "";
         const colorLabel = color ? ` in ${color}` : "";
+        const paintTrimPrompt = "Are you looking for any paint or trim specifically (chrome vs blacked-out)?";
         const reply = hasMonthlyBudgetTarget
           ? `Yes — we do have ${formatBudgetInventoryOption(picked ?? { year, model, color })} in stock.${pickedPaymentHint} Want another option around that payment range?`
+          : otherInventoryRequest
+            ? `Yes — we do have another ${formatBudgetInventoryOption(picked ?? { year, model, color })} in stock. ${paintTrimPrompt}`
           : year
             ? `Yes — we do have ${year} ${model}${colorLabel}${finishLabel} in stock. Would you like to stop by to take a look?`
             : color || finishFromText
