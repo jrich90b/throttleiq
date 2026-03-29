@@ -2206,28 +2206,58 @@ function extractSpecsFocus(text: string): "engine" | "features" | "dimensions" |
   return null;
 }
 
+function normalizeSpecValue(value: string): string {
+  return String(value ?? "")
+    .replace(/\u00ae/g, "")
+    .replace(/®/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/\s*\/\s*/g, " / ")
+    .replace(/\s*@\s*/g, " @ ")
+    .trim();
+}
+
+function formatRpmValue(value: string): string {
+  const normalized = normalizeSpecValue(value);
+  const digitsOnly = normalized.replace(/[^\d]/g, "");
+  const asNumber = Number(digitsOnly);
+  if (Number.isFinite(asNumber) && asNumber >= 500 && asNumber <= 15000) {
+    return `${asNumber.toLocaleString("en-US")} rpm`;
+  }
+  return normalized;
+}
+
 function formatSpecPhrase(key: string, value: string): string {
   const lk = key.toLowerCase();
-  if (lk.includes("horsepower")) return `${value} horsepower`;
-  if (lk.includes("torque")) return `${value} of torque`;
-  if (lk.includes("displacement")) return `displacement ${value}`;
-  if (lk.includes("fuel capacity")) return `fuel capacity ${value}`;
-  if (lk.includes("seat height")) return `seat height ${value}`;
-  if (lk.includes("wheelbase")) return `wheelbase ${value}`;
-  if (lk.includes("weight")) return `weight ${value}`;
-  if (lk.includes("rake")) return `rake ${value}`;
-  if (lk.includes("trail")) return `trail ${value}`;
-  if (lk.includes("length")) return `length ${value}`;
-  if (lk.includes("width")) return `width ${value}`;
-  if (lk.includes("height")) return `height ${value}`;
-  if (lk.includes("transmission")) return `transmission ${value}`;
-  if (lk.includes("engine")) {
-    return /engine|motor/i.test(value) ? value : `a ${value} engine`;
+  const v = normalizeSpecValue(value);
+  if (!v) return "";
+  if (lk.includes("horsepower")) {
+    if (/^\d{3,5}$/.test(v)) return `horsepower peak at ${formatRpmValue(v)}`;
+    if (/\bhp\b|\bkw\b/i.test(v)) return `${v} output`;
+    return `${v} horsepower`;
   }
-  if (lk.includes("infotainment")) return `infotainment system ${value}`;
-  if (lk.includes("screen") || lk.includes("display")) return `${value} screen`;
-  if (lk.includes("speaker")) return `speakers ${value}`;
-  return `${key.toLowerCase()} ${value}`;
+  if (lk.includes("torque")) {
+    if (/\bj1349\b/i.test(v)) return "";
+    if (lk.includes("rpm") || /^\d{3,5}$/.test(v)) return `torque peak at ${formatRpmValue(v)}`;
+    return /\b(ft|lb|nm)\b/i.test(v) ? `${v} torque` : `torque ${v}`;
+  }
+  if (lk.includes("displacement")) return `${v} displacement`;
+  if (lk.includes("fuel capacity")) return `fuel capacity ${v}`;
+  if (lk.includes("seat height")) return `seat height ${v}`;
+  if (lk.includes("wheelbase")) return `wheelbase ${v}`;
+  if (lk.includes("weight")) return `weight ${v}`;
+  if (lk.includes("rake")) return `rake ${v}`;
+  if (lk.includes("trail")) return `trail ${v}`;
+  if (lk.includes("length")) return `length ${v}`;
+  if (lk.includes("width")) return `width ${v}`;
+  if (lk.includes("height")) return `height ${v}`;
+  if (lk.includes("transmission")) return `transmission ${v}`;
+  if (lk.includes("engine")) {
+    return /engine|motor/i.test(v) ? v : `${v} engine`;
+  }
+  if (lk.includes("infotainment")) return `infotainment system ${v}`;
+  if (lk.includes("screen") || lk.includes("display")) return `${v} screen`;
+  if (lk.includes("speaker")) return `speakers ${v}`;
+  return `${key.toLowerCase()} ${v}`;
 }
 
 function joinNatural(parts: string[]): string {
@@ -2256,6 +2286,49 @@ function formatSpecsSentence(
   return `${intro} ${joinNatural(phrases)}.`;
 }
 
+function findSpecEntry(
+  specs: Record<string, string>,
+  matcher: (keyLower: string, value: string) => boolean
+): [string, string] | null {
+  for (const [key, raw] of Object.entries(specs)) {
+    const value = normalizeSpecValue(raw);
+    if (!value) continue;
+    if (matcher(key.toLowerCase(), value)) return [key, value];
+  }
+  return null;
+}
+
+function buildEngineSpecsSummary(label: string, specs: Record<string, string>, maxItems: number): string | null {
+  const lead = label === "the bike" ? "the bike" : `the ${label}`;
+  const engine = findSpecEntry(specs, (k, v) => /(engine|motor)/.test(k) && !/\bj1349\b/i.test(v));
+  const displacement = findSpecEntry(specs, k => /displacement/.test(k));
+  const torque = findSpecEntry(
+    specs,
+    (k, v) => /torque/.test(k) && !/rpm/.test(k) && /\b(ft|lb|nm)\b/i.test(v) && !/\bj1349\b/i.test(v)
+  );
+  const torqueRpm = findSpecEntry(
+    specs,
+    (k, v) => (/torque/.test(k) && /rpm/.test(k)) || (/torque/.test(k) && /^\d{3,5}$/.test(v))
+  );
+  const horsepower = findSpecEntry(specs, k => /horsepower/.test(k));
+
+  const parts: string[] = [];
+  if (engine) parts.push(formatSpecPhrase(engine[0], engine[1]));
+  if (displacement) parts.push(formatSpecPhrase(displacement[0], displacement[1]));
+  if (torque) {
+    const torqueBase = formatSpecPhrase(torque[0], torque[1]);
+    const torqueAt = torqueRpm ? formatRpmValue(torqueRpm[1]) : "";
+    parts.push(torqueAt ? `${torqueBase} @ ${torqueAt}` : torqueBase);
+  } else if (torqueRpm) {
+    parts.push(formatSpecPhrase(torqueRpm[0], torqueRpm[1]));
+  }
+  if (horsepower) parts.push(formatSpecPhrase(horsepower[0], horsepower[1]));
+
+  const cleaned = parts.filter(Boolean).slice(0, Math.max(1, maxItems));
+  if (!cleaned.length) return null;
+  return `Quick engine details on ${lead}: ${joinNatural(cleaned)}.`;
+}
+
 function buildFocusedSpecsSummary(
   label: string,
   specs: Record<string, string>,
@@ -2263,6 +2336,10 @@ function buildFocusedSpecsSummary(
   maxItems: number
 ): string {
   if (!focus) return buildSpecsSummary(label, specs, maxItems);
+  if (focus === "engine") {
+    const engineSummary = buildEngineSpecsSummary(label, specs, maxItems);
+    if (engineSummary) return engineSummary;
+  }
   const focusKeys: Record<string, string[]> = {
     engine: ["engine", "displacement", "horsepower", "torque", "performance"],
     features: [
@@ -3952,6 +4029,26 @@ function isPaymentText(text: string): boolean {
   return /(monthly payment|what would it be a month|what would it be per month|how much down|\bapr\b|term)/i.test(
     String(text ?? "")
   );
+}
+
+function isComplimentOnlyText(text: string): boolean {
+  const t = String(text ?? "").toLowerCase().trim();
+  if (!t) return false;
+  const compliment =
+    /\b(love|like|awesome|amazing|great|cool|nice|sweet|beautiful|killer|badass|sick|clean|gorgeous)\b/.test(t) ||
+    /\b(looks?\s+(great|awesome|amazing|sweet|clean|sick|good)|sweet looking)\b/.test(t) ||
+    /\b(v&h|short shots?)\b/.test(t);
+  if (!compliment) return false;
+  const explicitAsk =
+    /\?/.test(t) ||
+    /\b(price|payment|monthly|otd|apr|term|down|available|availability|in stock|stock|schedule|book|appointment|test ride|trade|finance|credit|call|phone|email|address|hours|open|close|where|when)\b/.test(
+      t
+    );
+  return !explicitAsk;
+}
+
+function buildComplimentReply(): string {
+  return "Glad you like it — I can send more photos or a quick walkaround video. Anything specific you want to see?";
 }
 
 function extractMonthlyBudgetLimit(text: string): number | null {
@@ -8474,6 +8571,19 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return res.json({ ok: true, conversation: conv, draft: reply });
   }
 
+  if (isComplimentOnlyText(event.body)) {
+    const reply = buildComplimentReply();
+    if (channel === "email") {
+      conv.emailDraft = reply;
+      saveConversation(conv);
+      return res.json({ ok: true, conversation: conv, draft: reply });
+    }
+    discardPendingDrafts(conv);
+    appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+    saveConversation(conv);
+    return res.json({ ok: true, conversation: conv, draft: reply });
+  }
+
   const serviceDialogState = getDialogState(conv);
   const isServiceLead =
     conv.classification?.bucket === "service" ||
@@ -8871,6 +8981,21 @@ if (authToken && signature) {
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
     const reply =
       "Thanks for the details — I’ll have the team check service records (battery/tires) and follow up. I’ll also keep an eye on availability for early May.";
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+
+  if (isComplimentOnlyText(event.body)) {
+    const reply = buildComplimentReply();
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");

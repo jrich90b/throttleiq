@@ -594,25 +594,53 @@ export function buildSpecsSummary(
   specs: Record<string, string>,
   maxItems: number
 ): string {
+  const normalizeSpecValue = (value: string): string => {
+    return String(value ?? "")
+      .replace(/\u00ae/g, "")
+      .replace(/®/g, "")
+      .replace(/\s+/g, " ")
+      .replace(/\s*\/\s*/g, " / ")
+      .replace(/\s*@\s*/g, " @ ")
+      .trim();
+  };
+  const formatRpmValue = (value: string): string => {
+    const normalized = normalizeSpecValue(value);
+    const digitsOnly = normalized.replace(/[^\d]/g, "");
+    const asNumber = Number(digitsOnly);
+    if (Number.isFinite(asNumber) && asNumber >= 500 && asNumber <= 15000) {
+      return `${asNumber.toLocaleString("en-US")} rpm`;
+    }
+    return normalized;
+  };
   const formatSpecPhrase = (key: string, value: string): string => {
     const lk = key.toLowerCase();
-    if (lk.includes("horsepower")) return `${value} horsepower`;
-    if (lk.includes("torque")) return `${value} of torque`;
-    if (lk.includes("displacement")) return `displacement ${value}`;
-    if (lk.includes("fuel capacity")) return `fuel capacity ${value}`;
-    if (lk.includes("seat height")) return `seat height ${value}`;
-    if (lk.includes("wheelbase")) return `wheelbase ${value}`;
-    if (lk.includes("weight")) return `weight ${value}`;
-    if (lk.includes("rake")) return `rake ${value}`;
-    if (lk.includes("trail")) return `trail ${value}`;
-    if (lk.includes("length")) return `length ${value}`;
-    if (lk.includes("width")) return `width ${value}`;
-    if (lk.includes("height")) return `height ${value}`;
-    if (lk.includes("transmission")) return `transmission ${value}`;
-    if (lk.includes("engine")) {
-      return /engine|motor/i.test(value) ? value : `a ${value} engine`;
+    const v = normalizeSpecValue(value);
+    if (!v) return "";
+    if (lk.includes("horsepower")) {
+      if (/^\d{3,5}$/.test(v)) return `horsepower peak at ${formatRpmValue(v)}`;
+      if (/\bhp\b|\bkw\b/i.test(v)) return `${v} output`;
+      return `${v} horsepower`;
     }
-    return `${key.toLowerCase()} ${value}`;
+    if (lk.includes("torque")) {
+      if (/\bj1349\b/i.test(v)) return "";
+      if (lk.includes("rpm") || /^\d{3,5}$/.test(v)) return `torque peak at ${formatRpmValue(v)}`;
+      return /\b(ft|lb|nm)\b/i.test(v) ? `${v} torque` : `torque ${v}`;
+    }
+    if (lk.includes("displacement")) return `${v} displacement`;
+    if (lk.includes("fuel capacity")) return `fuel capacity ${v}`;
+    if (lk.includes("seat height")) return `seat height ${v}`;
+    if (lk.includes("wheelbase")) return `wheelbase ${v}`;
+    if (lk.includes("weight")) return `weight ${v}`;
+    if (lk.includes("rake")) return `rake ${v}`;
+    if (lk.includes("trail")) return `trail ${v}`;
+    if (lk.includes("length")) return `length ${v}`;
+    if (lk.includes("width")) return `width ${v}`;
+    if (lk.includes("height")) return `height ${v}`;
+    if (lk.includes("transmission")) return `transmission ${v}`;
+    if (lk.includes("engine")) {
+      return /engine|motor/i.test(v) ? v : `${v} engine`;
+    }
+    return `${key.toLowerCase()} ${v}`;
   };
   const joinNatural = (parts: string[]): string => {
     if (parts.length === 1) return parts[0];
@@ -645,7 +673,8 @@ export function buildSpecsSummary(
     entries.push(...fallback);
   }
   const lead = label === "the bike" ? "the bike" : `the ${label}`;
-  const formatted = joinNatural(entries.map(([k, v]) => formatSpecPhrase(k, v)));
+  const phrases = entries.map(([k, v]) => formatSpecPhrase(k, v)).filter(Boolean);
+  const formatted = joinNatural(phrases.length ? phrases : Object.entries(specs).slice(0, maxItems).map(([k, v]) => `${k}: ${normalizeSpecValue(v)}`));
   return `Quick specs on ${lead}: ${formatted}.`;
 }
 
