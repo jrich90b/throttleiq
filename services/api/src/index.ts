@@ -2019,12 +2019,72 @@ function normalizeColorBase(s: string, keepTrim = false): string {
   const base = normalizeColor(s);
   if (keepTrim) return base;
   return base
+    .replace(/\b(and|with)\b/g, " ")
     .replace(/\b(chrome|black)\s+trim\b/g, "")
     .replace(/\b(trim|finish)\b/g, "")
     .replace(/\bblack\s+finish\b/g, "black")
     .replace(/\bchrome\s+finish\b/g, "chrome")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+const COLOR_TOKEN_STOP_WORDS = new Set([
+  "and",
+  "with",
+  "w",
+  "metallic",
+  "pearl",
+  "denim",
+  "sunglo",
+  "custom",
+  "colour",
+  "color",
+  "cast",
+  "wheel",
+  "wheels",
+  "solo",
+  "two",
+  "tone",
+  "pinstripe",
+  "vivid"
+]);
+
+function extractColorTokens(s: string | undefined | null, keepTrim = false): string[] {
+  if (!s) return [];
+  const normalized = normalizeColorBase(s, keepTrim);
+  if (!normalized) return [];
+  return normalized
+    .split(" ")
+    .map(tok => tok.trim())
+    .filter(tok => !!tok && !COLOR_TOKEN_STOP_WORDS.has(tok));
+}
+
+function hasStrongColorTokenMatch(
+  itemColor: string | undefined,
+  leadColor: string | undefined,
+  leadTrim: "black" | "chrome" | null
+): boolean {
+  if (!itemColor || !leadColor) return false;
+  const leadTokens = extractColorTokens(leadColor, !!leadTrim);
+  if (leadTokens.length < 2) return false;
+  const itemTokens = new Set(extractColorTokens(itemColor, !!leadTrim));
+  if (itemTokens.size === 0) return false;
+  return leadTokens.every(tok => itemTokens.has(tok));
+}
+
+function pickMostSpecificColor(primary: string | null | undefined, secondary: string | null | undefined): string | null {
+  const a = String(primary ?? "").trim();
+  const b = String(secondary ?? "").trim();
+  if (!a && !b) return null;
+  if (!a) return b;
+  if (!b) return a;
+  const aNorm = normalizeColorBase(a);
+  const bNorm = normalizeColorBase(b);
+  if (aNorm === bNorm) return a.length >= b.length ? a : b;
+  const aTokens = extractColorTokens(a).length;
+  const bTokens = extractColorTokens(b).length;
+  if (aTokens !== bTokens) return aTokens > bTokens ? a : b;
+  return a.length >= b.length ? a : b;
 }
 
 function extractTrimToken(s: string | undefined | null): "black" | "chrome" | null {
@@ -2064,12 +2124,15 @@ function colorMatchesAlias(
   const lead = normalizeColorBase(leadColor, !!leadTrim);
   if (!item || !lead) return false;
   const aliases = COLOR_ALIASES[lead];
-  if (!aliases || aliases.length === 0) return false;
   if (leadTrim) {
     const itemTrim = extractTrimToken(itemColor);
     if (itemTrim !== leadTrim) return false;
   }
-  return aliases.some(a => item.includes(normalizeColorBase(a, !!leadTrim)));
+  if (aliases && aliases.length > 0) {
+    const hasAliasMatch = aliases.some(a => item.includes(normalizeColorBase(a, !!leadTrim)));
+    if (hasAliasMatch) return true;
+  }
+  return hasStrongColorTokenMatch(itemColor, leadColor, leadTrim);
 }
 
 function getLastInboundBody(conv: any): string | null {
@@ -4534,30 +4597,49 @@ function extractYearSingle(text: string): number | null {
   return Number.isFinite(year) ? year : null;
 }
 
+const INVENTORY_COLOR_PHRASES = [
+  "olive steel metallic and vivid black black trim",
+  "olive steel metallic and vivid black chrome trim",
+  "olive steel metallic and vivid black",
+  "olive steel and black",
+  "olive steel black",
+  "midnight ember chrome trim",
+  "midnight ember",
+  "gunship gray",
+  "inferno gray",
+  "dark billiard gray",
+  "purple abyss denim",
+  "purple abyss",
+  "vivid black",
+  "matte black metallic",
+  "billiard gray",
+  "billiard red",
+  "black",
+  "white",
+  "red",
+  "blue",
+  "gray",
+  "grey",
+  "silver",
+  "green",
+  "orange",
+  "yellow",
+  "brown",
+  "tan",
+  "chrome",
+  "purple"
+].sort((a, b) => b.length - a.length);
+
 function extractColorToken(text: string): string | null {
-  const t = text.toLowerCase();
-  const colors = [
-    "purple abyss denim",
-    "purple abyss",
-    "purple",
-    "vivid black",
-    "black",
-    "white",
-    "red",
-    "blue",
-    "gray",
-    "grey",
-    "silver",
-    "green",
-    "orange",
-    "yellow",
-    "brown",
-    "tan",
-    "chrome",
-    "gunship gray",
-    "midnight ember"
-  ];
-  return colors.find(c => t.includes(c)) ?? null;
+  const t = text
+    .toLowerCase()
+    .replace(/[\/&]+/g, " and ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const direct = INVENTORY_COLOR_PHRASES.find(c => t.includes(c));
+  if (direct) return direct;
+  if (/\bolive\s+steel\b/.test(t) && /\bblack\b/.test(t)) return "olive steel and black";
+  return null;
 }
 
 function extractFinishToken(text: string): "chrome" | "black" | null {
@@ -11317,7 +11399,8 @@ if (authToken && signature) {
       !!priorModel &&
       normalizeModelText(modelFromText) !== normalizeModelText(priorModel);
     const yearFromText = llmAvailability?.year ?? (extractYearSingle(textLower)?.toString() ?? null);
-    const colorFromText = llmAvailability?.color ?? extractColorToken(textLower) ?? null;
+    const colorFromParser = extractColorToken(textLower);
+    const colorFromText = pickMostSpecificColor(llmAvailability?.color ?? null, colorFromParser);
     const finishFromText = extractFinishToken(textLower);
     const llmConditionRaw =
       llmAvailability?.condition && llmAvailability.condition !== "unknown"
@@ -12194,7 +12277,8 @@ if (authToken && signature) {
         explicitModelFromInbound &&
         priorModel &&
         normalizeModelText(explicitModelFromInbound) !== normalizeModelText(priorModel);
-      const colorFromText = llmAvailability?.color ?? extractColorToken(textLower) ?? null;
+      const colorFromParser = extractColorToken(textLower);
+      const colorFromText = pickMostSpecificColor(llmAvailability?.color ?? null, colorFromParser);
       const finishFromText = extractFinishToken(textLower);
       const llmConditionRaw =
         llmAvailability?.condition && llmAvailability.condition !== "unknown"
