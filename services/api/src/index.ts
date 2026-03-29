@@ -4835,7 +4835,9 @@ function isWatchConfirmationIntentText(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
   const intent =
-    /\b(let me know|keep me posted|keep an eye out|watch for|notify me|text me|call me)\b/.test(t);
+    /\b(let me know|keep me posted|keep an eye out|watch for|notify me|text me|call me|shoot me a text|shot me a text)\b/.test(
+      t
+    );
   const trigger =
     /\b(if|when|whenever|once|as soon as)\b/.test(t) ||
     /\b(comes in|available|in stock|get one|get any|find one|one comes in)\b/.test(t);
@@ -11312,7 +11314,8 @@ if (authToken && signature) {
   if (
     event.provider === "twilio" &&
     conv.inventoryWatchPending &&
-    (llmAvailabilityIntent || isExplicitAvailabilityQuestion(textLower))
+    isExplicitAvailabilityQuestion(textLower) &&
+    !isWatchConfirmationIntentText(String(event.body ?? ""))
   ) {
     // Customer asked a fresh availability question; don't force pending watch clarification.
     conv.inventoryWatchPending = undefined;
@@ -12035,7 +12038,7 @@ if (authToken && signature) {
     lastOutboundText
   );
   const watchIntentText =
-    /\b(keep (an )?eye( out)?|keep me posted|watch for|watch\b|notify me|text me|call me|reach out|let me know)\b/i.test(
+    /\b(keep (an )?eye( out)?|keep me posted|watch for|watch\b|notify me|text me|call me|reach out|let me know|shoot me a text|shot me a text)\b/i.test(
       textLower
     ) &&
     (/\b(if|when|whenever|once|as soon as)\b/.test(textLower) ||
