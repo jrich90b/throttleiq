@@ -4083,6 +4083,67 @@ function buildOutOfStockHumanOptionsLine(): string {
   return "If you'd like, you can stop by and we can go over availability and pricing, or I can text you as soon as one comes in.";
 }
 
+function isOutOfStockWatchInviteReply(reply: string): boolean {
+  const t = String(reply ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  const outOfStock =
+    /\b(not seeing|sold|on hold)\b/.test(t) &&
+    /\b(in stock|available)\b/.test(t);
+  const watchInvite =
+    /\b(keep an eye out|watch for|text you as soon as one comes in|text you when one lands)\b/.test(
+      t
+    );
+  return outOfStock && watchInvite;
+}
+
+async function seedInventoryWatchPendingFromReply(
+  conv: any,
+  event: InboundMessageEvent,
+  reply: string
+): Promise<void> {
+  if (event.provider !== "twilio") return;
+  if (!isOutOfStockWatchInviteReply(reply)) return;
+  if (conv.inventoryWatchPending || conv.inventoryWatch || (conv.inventoryWatches?.length ?? 0) > 0) return;
+  const inboundText = String(event.body ?? "");
+  const model = await resolveWatchModelFromText(
+    inboundText.toLowerCase(),
+    conv.inventoryContext?.model ?? conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null
+  );
+  if (!model) return;
+  const year = extractYearSingle(inboundText.toLowerCase());
+  const color = extractColorToken(inboundText.toLowerCase());
+  conv.inventoryWatchPending = {
+    model,
+    year: year ?? undefined,
+    color: color ?? undefined,
+    askedAt: nowIso()
+  };
+  setDialogState(conv, "inventory_watch_prompted");
+}
+
+async function buildColorFinishFollowUpPrompt(
+  conv: any,
+  model?: string | null,
+  year?: string | null,
+  color?: string | null
+): Promise<string> {
+  if (color) return "";
+  const modelText = String(model ?? "").trim();
+  if (!modelText) return "Are you after a certain color?";
+  const leadCondition = normalizeWatchCondition(conv.lead?.vehicle?.condition);
+  const yearNum = Number(String(year ?? ""));
+  const parsedYear = Number.isFinite(yearNum) ? yearNum : undefined;
+  const currentYear = new Date().getFullYear();
+  const assumeNew = !leadCondition && !!parsedYear && parsedYear === currentYear;
+  const modelRecent = isModelInRecentYears(modelText, currentYear, 1);
+  const condition = leadCondition ?? (assumeNew ? "new" : modelRecent ? undefined : "used");
+  if (condition !== "new") return "Are you after a certain color?";
+  const finishEligible = await shouldAskFinishPreference(modelText, parsedYear, condition);
+  return finishEligible
+    ? "Are you after a certain color or finish (chrome vs blacked-out)?"
+    : "Are you after a certain color?";
+}
+
 function extractMonthlyBudgetLimit(text: string): number | null {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return null;
@@ -8751,6 +8812,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (result.memorySummary) {
     setMemorySummary(conv, result.memorySummary, conv.messages.length);
   }
+  await seedInventoryWatchPendingFromReply(conv, event, reply);
 
   if (channel === "email") {
     conv.emailDraft = reply;
@@ -11245,6 +11307,8 @@ if (authToken && signature) {
     const modelLabel = normalizeDisplayCase(model);
     const colorLabel = color ? ` in ${formatColorLabel(color)}` : "";
     const paintTrimPrompt = "Are you looking for any paint or trim specifically (chrome vs blacked-out)?";
+    const noStockColorFinishPrompt =
+      count <= 0 ? await buildColorFinishFollowUpPrompt(conv, model, year, color) : "";
     let reply = "";
     if (otherInventoryRequest) {
       if (count <= 0) {
@@ -11256,7 +11320,9 @@ if (authToken && signature) {
       }
     } else {
       if (count <= 0) {
-        reply = `I’m not seeing ${yearText}${modelLabel}${colorLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}`;
+        reply = `I’m not seeing ${yearText}${modelLabel}${colorLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}${
+          noStockColorFinishPrompt ? ` ${noStockColorFinishPrompt}` : ""
+        }`;
       } else if (count === 1) {
         reply = `That’s the only ${yearText}${modelLabel}${colorLabel} we have in stock right now.`;
       } else {
@@ -12554,11 +12620,12 @@ if (authToken && signature) {
           };
           setDialogState(conv, "inventory_watch_prompted");
         }
+        const colorFinishPrompt = await buildColorFinishFollowUpPrompt(conv, model, year, color);
         const reply =
           `I’m not seeing ${year ? `${year} ` : ""}${model}${color ? ` in ${color}` : ""} in stock right now. ` +
           (isGenericModel
             ? "I’ll have someone verify and follow up shortly."
-            : `${buildOutOfStockHumanOptionsLine()} Want me to keep an eye out and text you when one lands?`);
+            : `${buildOutOfStockHumanOptionsLine()}${colorFinishPrompt ? ` ${colorFinishPrompt}` : ""} Want me to keep an eye out and text you when one lands?`);
         const systemMode = webhookMode;
         if (systemMode === "suggest") {
           appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -13607,6 +13674,7 @@ if (authToken && signature) {
   reply = applyServicePolicy(conv, reply, lastOutboundTextFinal);
   reply = applySoftSchedulePolicy(conv, reply, String(event.body ?? ""));
   reply = stripSchedulingLanguageIfNotAsked(reply, String(event.body ?? ""));
+  await seedInventoryWatchPendingFromReply(conv, event, reply);
   if (isSlotOfferMessage(reply)) {
     const requestedAppointmentType = String(result.requestedAppointmentType ?? "inventory_visit");
     if (requestedAppointmentType === "test_ride") {
