@@ -3978,8 +3978,17 @@ function stripSchedulingLanguageIfNotAsked(reply: string, inboundText: string): 
   const schedulePhrase =
     /\b(schedule|appointment|appt|book|reserve|calendar|set (up )?a time|come in|stop in|stop by|visit|which works best|do any of these times work|what day|what time)\b/i;
   if (!schedulePhrase.test(reply)) return reply;
+  const financeReplyContext =
+    /\b(credit app|credit application|finance application|apply for credit|prequal|pre-qual|financing|finance)\b/i.test(
+      reply
+    );
+  const financeInPersonLine = /\b(stop by|come by|in person|dealership)\b/i;
   const sentences = reply.split(/(?<=[.!?])\s+/);
-  const kept = sentences.filter(s => !schedulePhrase.test(s));
+  const kept = sentences.filter(s => {
+    if (!schedulePhrase.test(s)) return true;
+    if (financeReplyContext && financeInPersonLine.test(s)) return true;
+    return false;
+  });
   const trimmed = kept.join(" ").trim();
   if (trimmed) return trimmed;
   // If every sentence is scheduling language, use a clean fallback instead of partial regex surgery.
