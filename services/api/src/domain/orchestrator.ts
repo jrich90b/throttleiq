@@ -342,8 +342,14 @@ function detectDownPaymentQuestion(text: string): boolean {
 
 function detectFinanceRequest(text: string): boolean {
   const t = text.toLowerCase();
-  return /(credit app|credit application|apply for credit|finance application|prequal|pre-qual|prequalify|financing|finance)\b/.test(
-    t
+  return (
+    /(credit app|credit application|apply for credit|finance application|prequal|pre-qual|prequalify|financing|finance)\b/.test(
+      t
+    ) ||
+    (/\b(how|where|can i)\b.*\bapply\b/.test(t) &&
+      !/\b(job|career|careers|hiring|position|positions|opening|openings|employment|resume|cv|recruit|recruiter|hr)\b/.test(
+        t
+      ))
   );
 }
 
@@ -612,6 +618,29 @@ function detectPaymentFollowUp(text: string, history: { direction: "in" | "out";
   return hasTerm || hasDown;
 }
 
+function detectFinanceApplyFollowUp(
+  text: string,
+  history: { direction: "in" | "out"; body: string }[]
+): boolean {
+  const t = String(text ?? "").toLowerCase();
+  const applyAsk = /\b(apply|application)\b/.test(t);
+  if (!applyAsk) return false;
+  if (
+    /\b(job|career|careers|hiring|position|positions|opening|openings|employment|resume|cv|recruit|recruiter|hr)\b/.test(
+      t
+    )
+  ) {
+    return false;
+  }
+  if (/\b(credit|finance|financing|loan|apr|payment|monthly|down)\b/.test(t)) return true;
+  const recentOutbound = [...(history ?? [])].reverse().filter(h => h.direction === "out").slice(0, 2);
+  return recentOutbound.some(msg =>
+    /\b(credit app|finance application|prequal|pre-qual|monthly|\/\s*mo|down payment|ballpark|apr|term)\b/i.test(
+      String(msg.body ?? "")
+    )
+  );
+}
+
 function detectPricingOrPayment(text: string, intent?: OrchestratorResult["intent"]): boolean {
   if (intent === "PRICING" || intent === "FINANCING") return true;
   const t = text.toLowerCase();
@@ -638,10 +667,16 @@ function detectCorporateIntent(text: string): boolean {
   const tokens = t.split(/[^a-z0-9]+/).filter(Boolean);
   const hasToken = (w: string) => tokens.includes(w);
   const hasAnyToken = (list: string[]) => list.some(hasToken);
+  const applyOrApplication = /\b(apply|application)\b/.test(t);
+  const employmentContext =
+    /\b(job|career|careers|hiring|position|positions|opening|openings|opportunity|opportunities|employment|resume|cv|recruit|recruiter|internship|internships)\b/.test(
+      t
+    ) || (hasToken("human") && hasToken("resources")) || hasToken("hr");
   const employmentIntent =
-    /\b(employment|career|careers|job opening|job openings|open position|open positions|hiring|apply|application|recruit|recruiter|resume|cv)\b/.test(
+    /\b(employment|career|careers|job opening|job openings|open position|open positions|hiring|recruit|recruiter|resume|cv|internship|internships)\b/.test(
       t
     ) ||
+    (applyOrApplication && employmentContext) ||
     (hasToken("job") && /\b(hiring|apply|application|opening|position|opportunity|opportunities|career|careers)\b/.test(t));
   return (
     /(harley[-\s]?davidson corporate|harley corporate|corporate office|headquarters|\bhq\b)/.test(t) ||
@@ -659,6 +694,7 @@ if (process.env.DEBUG_INTENT_TESTS === "1") {
   const cases: Array<[string, boolean]> = [
     ["blue with chrome trim", false],
     ["wow beautiful paint job", false],
+    ["how do i apply?", false],
     ["need HR contact", true],
     ["press inquiry", true],
     ["career opportunities", true],
@@ -1499,7 +1535,8 @@ export async function orchestrateInbound(
   const dayName = extractDayName(event.body);
   const dayPart = extractDayPart(event.body);
   const timeMatch = String(event.body ?? "").match(/\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b/i);
-  const financeRequest = detectFinanceRequest(event.body);
+  const financeRequest =
+    detectFinanceRequest(event.body) || detectFinanceApplyFollowUp(event.body, history ?? []);
   const availabilityAskedMulti = /(available|availability|still there|in stock|do you have|have any)/i.test(event.body);
   const wantsAvailability = availabilityAskedMulti || intent === "AVAILABILITY";
   const wantsScheduling = hasSchedulingIntent(event.body) || !!dayName || !!dayPart || !!timeMatch;
