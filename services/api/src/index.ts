@@ -4022,6 +4022,24 @@ function stripDuplicateTradeAppraisalMention(reply: string, lastOutboundText: st
   return cleaned || "Sounds good — thanks for confirming.";
 }
 
+function hasPriorTradeAppraisalMention(conv: any): boolean {
+  const appraisalMention =
+    /\b(quick\s+in[-\s]?person appraisal|in[-\s]?person appraisal|trade appraisal|line up the appraisal|set up a trade appraisal)\b/i;
+  return (conv?.messages ?? []).some(
+    (m: any) => m?.direction === "out" && appraisalMention.test(String(m?.body ?? ""))
+  );
+}
+
+function stripTradeReaskSentences(reply: string): string {
+  const text = String(reply ?? "").trim();
+  if (!text) return text;
+  const sentences = text.split(/(?<=[.!?])\s+/);
+  const dropPattern =
+    /\b(quick\s+in[-\s]?person appraisal|in[-\s]?person appraisal|trade appraisal|appraisal\b|bring (the|your|it)|evaluate (it|your|the)|any lien|lien|payoff|what(?:'| i)?s the mileage|how many miles|mileage(?: on| of)?|cash offer|trade credit|trade into)\b/i;
+  const filtered = sentences.filter(s => !dropPattern.test(s));
+  return filtered.join(" ").replace(/\s{2,}/g, " ").trim();
+}
+
 function applyTradePolicy(
   conv: any,
   reply: string,
@@ -4083,6 +4101,15 @@ function applyTradePolicy(
     const callLine = "We’ll have someone call you today to go over a rough idea.";
     if (!/call you today|reach out today|give you a call today/i.test(out)) {
       out = `${out} ${callLine}`.trim();
+    }
+  }
+  const watchIntent = isWatchConfirmationIntentText(lastInboundText);
+  if (watchIntent && hasPriorTradeAppraisalMention(conv)) {
+    out = stripTradeReaskSentences(out);
+    if (!out) {
+      out = conv.inventoryWatch
+        ? buildInventoryWatchConfirmation(conv.inventoryWatch)
+        : "Sounds good — I’ll keep an eye out and text you as soon as one comes in.";
     }
   }
   out = stripDuplicateTradeAppraisalMention(out, lastOutboundText);
@@ -4967,7 +4994,7 @@ function isWatchConfirmationIntentText(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
   const intent =
-    /\b(let me know|keep me posted|keep an eye out|watch for|notify me|text me|call me|shoot me(?: a)? text|shot me(?: a)? text)\b/.test(
+    /\b(let me know|keep me posted|keep an eye out|watch for|notify me|text me|call me|shoot me(?: a)? text|shot me(?: a)? text|send (?:it|one|them)?\s*my way|send (?:it|one|them)?\s*over)\b/.test(
       t
     );
   const trigger =
@@ -12266,12 +12293,7 @@ if (authToken && signature) {
   const watchPrompted = /\b(keep an eye|keep me posted|watch for|watch\b)\b/i.test(
     lastOutboundText
   );
-  const watchIntentText =
-    /\b(keep (an )?eye( out)?|keep me posted|watch for|watch\b|notify me|text me|call me|reach out|let me know|shoot me(?: a)? text|shot me(?: a)? text)\b/i.test(
-      textLower
-    ) &&
-    (/\b(if|when|whenever|once|as soon as)\b/.test(textLower) ||
-      /\b(comes in|available|in stock|get one|get any|find one|similar)\b/.test(textLower));
+  const watchIntentText = isWatchConfirmationIntentText(String(event.body ?? ""));
   const watchIntent =
     event.provider === "twilio" &&
     !conv.inventoryWatchPending &&
