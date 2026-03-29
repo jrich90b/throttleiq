@@ -3494,6 +3494,11 @@ function detectSoftVisitIntent(text: string): boolean {
   const hasTime = /\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b/i.test(t);
   if (hasTime) return false;
   if (isExplicitScheduleIntent(t)) return false;
+  const hardConstraint =
+    /\b(can'?t|cannot|can not|won'?t|unable|not able|have to work|working|stuck at work|something came up)\b/i;
+  const rescheduleLike =
+    /\b(make it|make it in|come in|stop in|stop by|visit|today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week)\b/i;
+  if (hardConstraint.test(t) && rescheduleLike.test(t)) return false;
   const visitVerb =
     /\b(come|stop|swing|drop|head|drive|ride|make it|make it in|get there|come up|come down|stop by|come by|come in)\b/i;
   if (!visitVerb.test(t)) return false;
@@ -3521,6 +3526,33 @@ function detectSchedulingSignals(text: string) {
     hasDayToken && /\b(availability|available|openings|open|time|times)\b/i.test(t);
   const hasDayOnlyRequest = !softVisit && hasDayToken && (explicit || hasDayPart) && !hasDayTime;
   return { explicit, hasDayTime: softVisit ? false : hasDayTime, hasDayOnlyAvailability, hasDayOnlyRequest, softVisit };
+}
+
+function detectScheduleConflictWithoutAlternative(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  if (isExplicitScheduleIntent(t)) return false;
+  const hardConflict =
+    /\b(can'?t|cannot|can not|won'?t|unable|not able|have to work|working|stuck at work|something came up)\b/i.test(
+      t
+    );
+  if (!hardConflict) return false;
+  const dayTokens = Array.from(
+    new Set(
+      (t.match(
+        /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week|this weekend|weekend)\b/g
+      ) ?? []) as string[]
+    )
+  );
+  if (dayTokens.length >= 2) return false;
+  const hasAlternativeCue =
+    /\b(instead|how about|what about|i can do|i could do|works for me|available)\b/i.test(t);
+  if (hasAlternativeCue) return false;
+  const hasScheduleContext =
+    /\b(make it|make it in|come in|stop in|stop by|visit|today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week)\b/i.test(
+      t
+    );
+  return hasScheduleContext;
 }
 
 function isDecisionDeferral(text: string): boolean {
@@ -3727,6 +3759,19 @@ function isSlotOfferMessage(text: string): boolean {
   return /\b(do any of these times work|which works best)\b/i.test(String(text ?? ""));
 }
 
+function hasScheduleOfferContext(lastOutboundText: string, dialogState: DialogStateName): boolean {
+  if (isScheduleDialogState(dialogState)) return true;
+  const text = String(lastOutboundText ?? "");
+  if (!text.trim()) return false;
+  return (
+    isSlotOfferMessage(text) ||
+    draftHasSpecificTimes(text) ||
+    /\b(what day and time works|what day works|what time works|what time on|set up a time|stop in|come in|schedule|appointment|book)\b/i.test(
+      text
+    )
+  );
+}
+
 function applySlotOfferPolicy(conv: any, reply: string, lastOutboundText: string): string {
   if (getDialogState(conv) !== "schedule_offer_sent") return reply;
   if (!isSlotOfferMessage(reply)) return reply;
@@ -3860,7 +3905,13 @@ function stripSchedulingLanguageIfNotAsked(reply: string, inboundText: string): 
   const kept = sentences.filter(s => !schedulePhrase.test(s));
   const trimmed = kept.join(" ").trim();
   if (trimmed) return trimmed;
-  return reply.replace(schedulePhrase, "").replace(/\s{2,}/g, " ").trim();
+  // If every sentence is scheduling language, use a clean fallback instead of partial regex surgery.
+  const inbound = String(inboundText ?? "").trim();
+  if (!inbound) return "";
+  if (detectSoftVisitIntent(inbound)) {
+    return "Sounds good — just give me a heads-up when you want to stop in.";
+  }
+  return "Got it — I’m here if you need anything.";
 }
 
 function stripSchedulingPromptFromFollowUp(message: string): string {
@@ -9512,6 +9563,27 @@ if (authToken && signature) {
       console.log("[reschedule] failed:", e?.message ?? e);
     }
     }
+  }
+
+  const lastOutboundBeforeConflict = getLastNonVoiceOutbound(conv)?.body ?? "";
+  const scheduleConflictNoBooking =
+    !conv.appointment?.bookedEventId &&
+    detectScheduleConflictWithoutAlternative(event.body) &&
+    hasScheduleOfferContext(lastOutboundBeforeConflict, getDialogState(conv));
+  if (scheduleConflictNoBooking) {
+    const reply = "No problem — what day and time works better for you?";
+    setDialogState(conv, "schedule_request");
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
   }
 
   // Reschedule flow: if they pick one of our suggested slots, update the existing event
