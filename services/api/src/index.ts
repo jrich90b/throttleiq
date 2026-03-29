@@ -4649,7 +4649,7 @@ const BASIC_COLOR_WORDS = [
 function extractTwoToneColorPhrase(text: string): string | null {
   const cleaned = text
     .replace(
-      /^(what about|about|i m looking for|im looking for|i am looking for|looking for|i m after|im after|i am after|after|i want|want|i need|need|do you have|you have|have)\s+(an|a|the)?\s*/i,
+      /^(what about|about|i m looking for|im looking for|i am looking for|looking for|i m after|im after|i am after|after|i want|want|i need|need|so you have|so do you have|do you have|you have|have)\s+(an|a|the)?\s*/i,
       ""
     )
     .replace(/\s+/g, " ")
@@ -4670,7 +4670,7 @@ function sanitizeColorPhrase(text: string | null | undefined): string | undefine
     .replace(/\s+/g, " ")
     .trim()
     .replace(
-      /^(what about|about|i m looking for|im looking for|i am looking for|looking for|m looking for|i m after|im after|i am after|after|i want|want|i need|need|do you have|you have|have)\s+(an|a|the)?\s*/i,
+      /^(what about|about|i m looking for|im looking for|i am looking for|looking for|m looking for|i m after|im after|i am after|after|i want|want|i need|need|so you have|so do you have|do you have|you have|have)\s+(an|a|the)?\s*/i,
       ""
     )
     .replace(/^[,.:;\-]+|[,.:;\-]+$/g, "")
@@ -4835,7 +4835,7 @@ function isWatchConfirmationIntentText(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
   const intent =
-    /\b(let me know|keep me posted|keep an eye out|watch for|notify me|text me|call me|shoot me a text|shot me a text)\b/.test(
+    /\b(let me know|keep me posted|keep an eye out|watch for|notify me|text me|call me|shoot me(?: a)? text|shot me(?: a)? text)\b/.test(
       t
     );
   const trigger =
@@ -12038,7 +12038,7 @@ if (authToken && signature) {
     lastOutboundText
   );
   const watchIntentText =
-    /\b(keep (an )?eye( out)?|keep me posted|watch for|watch\b|notify me|text me|call me|reach out|let me know|shoot me a text|shot me a text)\b/i.test(
+    /\b(keep (an )?eye( out)?|keep me posted|watch for|watch\b|notify me|text me|call me|reach out|let me know|shoot me(?: a)? text|shot me(?: a)? text)\b/i.test(
       textLower
     ) &&
     (/\b(if|when|whenever|once|as soon as)\b/.test(textLower) ||
