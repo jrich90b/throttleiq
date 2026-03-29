@@ -11980,17 +11980,26 @@ if (authToken && signature) {
         /\b(what do you have|what.*in stock|show me|options?|inventory|other|another|different)\b/i.test(
           textLower
         );
+      const hasSpecificUnitBudgetAnchor =
+        referencesSpecificInventoryUnit(event.body ?? "") ||
+        !!colorFromText ||
+        !!conv.inventoryContext?.color ||
+        !!conv.lead?.vehicle?.stockId ||
+        !!conv.lead?.vehicle?.vin;
+      const broadBudgetScopeRequest =
+        otherInventoryRequest ||
+        inventoryCountQuestion ||
+        broadInventoryBudgetAsk;
       const specificUnitBudgetQuestion =
         hasMonthlyBudgetTarget &&
         downPaymentQuestion &&
-        !otherInventoryRequest &&
-        !inventoryCountQuestion &&
-        !broadInventoryBudgetAsk &&
-        (referencesSpecificInventoryUnit(event.body ?? "") ||
-          !!colorFromText ||
-          !!conv.inventoryContext?.color ||
-          !!conv.lead?.vehicle?.stockId ||
-          !!conv.lead?.vehicle?.vin);
+        !broadBudgetScopeRequest &&
+        hasSpecificUnitBudgetAnchor;
+      const ambiguousBudgetScopeQuestion =
+        hasMonthlyBudgetTarget &&
+        downPaymentQuestion &&
+        !broadBudgetScopeRequest &&
+        !hasSpecificUnitBudgetAnchor;
       if (model || yearFromText || colorFromText || finishFromText) {
         conv.inventoryContext = {
           model: model ?? conv.inventoryContext?.model,
@@ -12034,6 +12043,26 @@ if (authToken && signature) {
           const key = normalizeInventoryHoldKey(m.stockId, m.vin);
           return key ? !holds?.[key] && !solds?.[key] : true;
         });
+        if (ambiguousBudgetScopeQuestion && availableMatches.length > 1) {
+          const bikeLabel = `${year ? `${year} ` : ""}${normalizeDisplayCase(String(model))}${
+            color ? ` in ${formatColorLabel(color)}` : ""
+          }`.trim();
+          const reply = `Quick clarify so I quote this right: are you asking on the ${bikeLabel} specifically, or across all in-stock options around that payment?`;
+          const systemMode = webhookMode;
+          if (systemMode === "suggest") {
+            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+            return res.status(200).type("text/xml").send(twiml);
+          }
+          appendOutbound(conv, event.to, event.from, reply, "twilio");
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+            reply
+          )}</Message>\n</Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+        const resolvedSpecificUnitBudgetQuestion =
+          specificUnitBudgetQuestion ||
+          (ambiguousBudgetScopeQuestion && availableMatches.length === 1);
         const hasSoldMatch = matches.some(m => {
           const key = normalizeInventorySoldKey(m.stockId, m.vin);
           return key ? !!solds?.[key] : false;
@@ -12110,7 +12139,7 @@ if (authToken && signature) {
         }
 
         if (hasMonthlyBudgetTarget && availableMatches.length > 0 && responseMatches.length === 0) {
-          if (specificUnitBudgetQuestion) {
+          if (resolvedSpecificUnitBudgetQuestion) {
             const leadStockId = conv.lead?.vehicle?.stockId ?? null;
             const leadVin = conv.lead?.vehicle?.vin ?? null;
             const exactMatch = leadStockId || leadVin
