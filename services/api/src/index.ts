@@ -4031,6 +4031,25 @@ function isPaymentText(text: string): boolean {
   );
 }
 
+function isDownPaymentQuestion(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\b(how much|what(?:'s| is)|amount)\b[^?]*\b(down|down payment|put down|deposit|dp)\b/.test(t) ||
+    /\b(down payment|put down|deposit|dp)\b/.test(t)
+  );
+}
+
+function referencesSpecificInventoryUnit(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\b(this|that|the)\s+(one|bike|unit)\b/.test(t) ||
+    /\b(it|this|that)\b/.test(t) ||
+    /\b(on|for)\s+(?:the\s+)?[a-z]+\s+one\b/.test(t)
+  );
+}
+
 function isComplimentOnlyText(text: string): boolean {
   const t = String(text ?? "").toLowerCase().trim();
   if (!t) return false;
@@ -4135,6 +4154,13 @@ function calcMonthlyPayment(principal: number, apr: number, months: number): num
   return (principal * rate * pow) / (pow - 1);
 }
 
+function calcPrincipalFromMonthlyPayment(monthly: number, apr: number, months: number): number {
+  const rate = apr / 12;
+  if (rate <= 0) return monthly * months;
+  const pow = Math.pow(1 + rate, months);
+  return monthly * ((pow - 1) / (rate * pow));
+}
+
 function estimateMonthlyPaymentFromPrice(opts: {
   price: number;
   isUsed: boolean;
@@ -4167,6 +4193,28 @@ function estimateInventoryItemMonthlyPayment(
     taxRate: opts.taxRate,
     downPayment: opts.downPayment
   });
+}
+
+function estimateRequiredDownPaymentForTarget(opts: {
+  price: number;
+  isUsed: boolean;
+  termMonths: number;
+  taxRate: number;
+  targetMonthly: number;
+}): number | null {
+  const price = Number(opts.price);
+  const termMonths = Number(opts.termMonths);
+  const targetMonthly = Number(opts.targetMonthly);
+  if (!Number.isFinite(price) || price <= 0) return null;
+  if (!Number.isFinite(termMonths) || termMonths <= 0) return null;
+  if (!Number.isFinite(targetMonthly) || targetMonthly <= 0) return null;
+  const fee = opts.isUsed ? 300 : 1200;
+  const taxRate = Number.isFinite(opts.taxRate) ? opts.taxRate : 0.08;
+  const apr = opts.isUsed ? 0.1 : 0.085;
+  const totalWithFees = (price + fee) * (1 + taxRate);
+  const maxPrincipal = calcPrincipalFromMonthlyPayment(targetMonthly, apr, termMonths);
+  if (!Number.isFinite(maxPrincipal)) return null;
+  return Math.max(0, totalWithFees - maxPrincipal);
 }
 
 function formatBudgetInventoryOption(item: any): string {
@@ -11923,10 +11971,26 @@ if (authToken && signature) {
         priorModel &&
         normalizeModelText(modelFromText) !== normalizeModelText(priorModel);
       const year = yearFromText ?? (!modelChanged ? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null : null);
-        const colorFromText = llmAvailability?.color ?? extractColorToken(textLower) ?? null;
-        const color = colorFromText ?? conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null;
-        const finishFromText = extractFinishToken(textLower);
-        const finish = extractTrimToken(finishFromText ?? conv.inventoryContext?.finish ?? null);
+      const colorFromText = llmAvailability?.color ?? extractColorToken(textLower) ?? null;
+      const color = colorFromText ?? conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null;
+      const finishFromText = extractFinishToken(textLower);
+      const finish = extractTrimToken(finishFromText ?? conv.inventoryContext?.finish ?? null);
+      const downPaymentQuestion = isDownPaymentQuestion(event.body ?? "");
+      const broadInventoryBudgetAsk =
+        /\b(what do you have|what.*in stock|show me|options?|inventory|other|another|different)\b/i.test(
+          textLower
+        );
+      const specificUnitBudgetQuestion =
+        hasMonthlyBudgetTarget &&
+        downPaymentQuestion &&
+        !otherInventoryRequest &&
+        !inventoryCountQuestion &&
+        !broadInventoryBudgetAsk &&
+        (referencesSpecificInventoryUnit(event.body ?? "") ||
+          !!colorFromText ||
+          !!conv.inventoryContext?.color ||
+          !!conv.lead?.vehicle?.stockId ||
+          !!conv.lead?.vehicle?.vin);
       if (model || yearFromText || colorFromText || finishFromText) {
         conv.inventoryContext = {
           model: model ?? conv.inventoryContext?.model,
@@ -12046,6 +12110,64 @@ if (authToken && signature) {
         }
 
         if (hasMonthlyBudgetTarget && availableMatches.length > 0 && responseMatches.length === 0) {
+          if (specificUnitBudgetQuestion) {
+            const leadStockId = conv.lead?.vehicle?.stockId ?? null;
+            const leadVin = conv.lead?.vehicle?.vin ?? null;
+            const exactMatch = leadStockId || leadVin
+              ? availableMatches.find(
+                  m => (leadStockId && m.stockId === leadStockId) || (leadVin && m.vin === leadVin)
+                )
+              : null;
+            const pickedSpecific =
+              exactMatch ??
+              pickClosestInventoryItem(availableMatches, year ?? null, color ?? null)?.item ??
+              availableMatches[0] ??
+              null;
+            const targetMonthly = Number(monthlyBudget);
+            const budgetLabel = `$${Math.round(targetMonthly).toLocaleString("en-US")}/mo`;
+            if (pickedSpecific) {
+              const pickedLabel = formatBudgetInventoryOption(pickedSpecific);
+              const requiredDown = estimateRequiredDownPaymentForTarget({
+                price: Number(pickedSpecific?.price ?? NaN),
+                isUsed: isUsedInventoryConditionForBudget(pickedSpecific?.condition, pickedSpecific?.year),
+                termMonths: paymentTermMonths,
+                taxRate: paymentTaxRate,
+                targetMonthly
+              });
+              const noDownMonthly = estimateInventoryItemMonthlyPayment(pickedSpecific, {
+                termMonths: paymentTermMonths,
+                taxRate: paymentTaxRate,
+                downPayment: 0
+              });
+              const noDownMonthlyRounded =
+                noDownMonthly != null ? Math.round((noDownMonthly as number) / 10) * 10 : null;
+              let reply = "";
+              if (requiredDown == null) {
+                reply = `For ${pickedLabel}, I can run that payment target for you. Do you want 60, 72, or 84 months?`;
+              } else if (requiredDown <= 0) {
+                reply = `On ${pickedLabel}, you should already be around ${budgetLabel} or lower on a ${paymentTermMonths}-month estimate with little to no money down (before taxes/fees and final APR). Want me to run 60/72/84 so you can compare?`;
+              } else {
+                const roundedDown = Math.max(0, Math.round(requiredDown / 100) * 100);
+                const noDownLine =
+                  noDownMonthlyRounded != null
+                    ? ` With $0 down it’s roughly $${noDownMonthlyRounded.toLocaleString("en-US")}/mo.`
+                    : "";
+                reply = `On ${pickedLabel}, to get near ${budgetLabel} on a ${paymentTermMonths}-month estimate, you’d be around $${roundedDown.toLocaleString("en-US")} down (before taxes/fees and final lender approval).${noDownLine} Want me to also run it at 84 months?`;
+              }
+              const systemMode = webhookMode;
+              if (systemMode === "suggest") {
+                appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+                const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response></Response>`;
+                return res.status(200).type("text/xml").send(twiml);
+              }
+              appendOutbound(conv, event.to, event.from, reply, "twilio");
+              const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
+                reply
+              )}</Message>\n</Response>`;
+              return res.status(200).type("text/xml").send(twiml);
+            }
+          }
+
           let alternativePool = items.filter(i => {
             const holdKey = normalizeInventoryHoldKey(i.stockId, i.vin);
             const soldKey = normalizeInventorySoldKey(i.stockId, i.vin);
@@ -12131,6 +12253,15 @@ if (authToken && signature) {
         const selectionPool = responseMatchesExcludingLead.length ? responseMatchesExcludingLead : responseMatches;
         const pick = exactMatch ? { item: exactMatch } : pickClosestInventoryItem(selectionPool, year ?? null, color ?? null);
         const picked = pick?.item ?? null;
+        if (picked) {
+          conv.inventoryContext = {
+            model: picked.model ?? model ?? conv.inventoryContext?.model,
+            year: picked.year ?? year ?? conv.inventoryContext?.year,
+            color: picked.color ?? color ?? conv.inventoryContext?.color,
+            finish: conv.inventoryContext?.finish,
+            updatedAt: nowIso()
+          };
+        }
         const pickedMonthlyEstimate =
           hasMonthlyBudgetTarget && picked
             ? estimateInventoryItemMonthlyPayment(picked, {
