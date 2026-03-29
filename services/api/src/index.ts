@@ -4006,10 +4006,16 @@ function stripSchedulingLanguageIfNotAsked(reply: string, inboundText: string): 
       reply
     );
   const financeInPersonLine = /\b(stop by|come by|in person|dealership)\b/i;
+  const outOfStockContext =
+    /\b(not seeing|sold|on hold)\b/.test(reply) &&
+    /\b(in stock|available)\b/.test(reply);
+  const inventoryWatchInviteLine =
+    /\b(text you as soon as one comes in|text you when one lands|keep an eye out|watch for)\b/i;
   const sentences = reply.split(/(?<=[.!?])\s+/);
   const kept = sentences.filter(s => {
     if (!schedulePhrase.test(s)) return true;
     if (financeReplyContext && financeInPersonLine.test(s)) return true;
+    if (outOfStockContext && inventoryWatchInviteLine.test(s)) return true;
     return false;
   });
   const trimmed = kept.join(" ").trim();
