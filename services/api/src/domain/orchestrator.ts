@@ -552,6 +552,17 @@ function buildOutOfStockHumanOptionsLine(): string {
   return "If you'd like, you can stop by and we can go over availability and pricing, or I can text you as soon as one comes in.";
 }
 
+function buildOutOfStockPreferencePrompt(args: {
+  requestedCondition: "new" | "used" | null;
+  color?: string | null;
+}): string {
+  if (args.color) return "";
+  if (args.requestedCondition === "new") {
+    return "Are you after a certain color or finish (chrome vs blacked-out)?";
+  }
+  return "Are you after a certain color?";
+}
+
 function extractColorMention(text?: string | null, knownColors?: string[]): string | null {
   const t = String(text ?? "").toLowerCase();
   if (!t) return null;
@@ -1835,9 +1846,13 @@ export async function orchestrateInbound(
       const yearLabel = year ? `${year} ` : "";
       const modelLabel = normalizeModelLabel(model);
       const colorLabel = color ? ` in ${color}` : "";
+      const preferencePrompt = buildOutOfStockPreferencePrompt({
+        requestedCondition,
+        color
+      });
       const reply =
         count <= 0
-          ? `I’m not seeing any ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}`
+          ? `I’m not seeing any ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}${preferencePrompt ? ` ${preferencePrompt}` : ""}`
           : count === 1
             ? `We do have 1 ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} in stock. Want photos or details?`
             : `We have ${count} ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} in stock. Want photos or details on a specific one?`;
@@ -1881,6 +1896,10 @@ export async function orchestrateInbound(
         detectRequestedInventoryConditionFromText(event.body) ||
         normalizeRequestedInventoryCondition(leadVehicle?.condition ?? null);
       const conditionPrefix = formatRequestedConditionPrefix(requestedCondition);
+      const preferencePrompt = buildOutOfStockPreferencePrompt({
+        requestedCondition,
+        color: leadVehicle?.color ?? null
+      });
       let availabilityState: "available" | "unavailable" | "unknown" = "unknown";
       try {
         if (stockId || vin) {
@@ -1910,7 +1929,7 @@ export async function orchestrateInbound(
         availabilityLine = `The ${conditionPrefix}${bikeLabel} is still available.`;
       } else if (availabilityState === "unavailable") {
         availabilityLine = modelKnown
-          ? `I’m not seeing a ${conditionPrefix}${bikeLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}`
+          ? `I’m not seeing a ${conditionPrefix}${bikeLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}${preferencePrompt ? ` ${preferencePrompt}` : ""}`
           : `I’m not seeing that bike in stock right now. ${buildOutOfStockHumanOptionsLine()}`;
       } else {
         availabilityLine = modelKnown
@@ -2414,9 +2433,13 @@ export async function orchestrateInbound(
       const yearLabel = year ? `${year} ` : "";
       const modelLabel = normalizeModelLabel(model);
       const colorLabel = color ? ` in ${color}` : "";
+      const preferencePrompt = buildOutOfStockPreferencePrompt({
+        requestedCondition,
+        color
+      });
       const reply =
         count <= 0
-          ? `I’m not seeing ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}`
+          ? `I’m not seeing ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}${preferencePrompt ? ` ${preferencePrompt}` : ""}`
           : count === 1
             ? `That’s the only ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} we have in stock right now.`
             : `We have ${count} ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} units in stock right now.`;
