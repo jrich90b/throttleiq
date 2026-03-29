@@ -3959,6 +3959,19 @@ function stripTradeIntroSentence(text: string): string {
     .trim();
 }
 
+function rewriteTradeVoiceToTeam(text: string): string {
+  let out = String(text ?? "");
+  if (!out) return out;
+  out = out.replace(/\bI can\b/g, "We can");
+  out = out.replace(/\bI(?:'|’)ll\b/g, "We’ll");
+  out = out.replace(/\bI will\b/g, "We will");
+  out = out.replace(/\bI(?:'|’)m\b/g, "We’re");
+  out = out.replace(/\bI am\b/g, "We are");
+  out = out.replace(/\blet me know\b/gi, "let us know");
+  out = out.replace(/\btext me\b/gi, "text us");
+  return out;
+}
+
 function applyTradePolicy(
   conv: any,
   reply: string,
@@ -3981,7 +3994,7 @@ function applyTradePolicy(
       const a = suggestedSlots[0]?.startLocal ?? "";
       const b = suggestedSlots[1]?.startLocal ?? "";
       if (a && b) {
-        out = `I can set up a trade appraisal. I have ${a} or ${b} — do any of these times work?`;
+        out = `We can set up a trade appraisal. We have ${a} or ${b} — do any of these times work?`;
       }
     }
   }
@@ -4001,9 +4014,9 @@ function applyTradePolicy(
     if (state === "trade_cash") {
       out = "Whenever you’re ready, just reach out and we can take a look in person.";
     } else if (state === "trade_trade") {
-      out = "If you have a model in mind, let me know — I can also set a time to stop in.";
+      out = "If you have a model in mind, let us know — we can also set a time to stop in.";
     } else if (state === "trade_either") {
-      out = "I can do either — just let me know which direction you prefer.";
+      out = "We can do either — just let us know which direction you prefer.";
     }
   }
   const phoneNumbersIntent = detectPhoneNumbersIntent(lastInboundText);
@@ -4017,12 +4030,12 @@ function applyTradePolicy(
     if (filtered.length) {
       out = filtered.join(" ").trim();
     }
-    const callLine = "I'll have someone call you today to go over a rough idea.";
+    const callLine = "We’ll have someone call you today to go over a rough idea.";
     if (!/call you today|reach out today|give you a call today/i.test(out)) {
       out = `${out} ${callLine}`.trim();
     }
   }
-  return out;
+  return rewriteTradeVoiceToTeam(out);
 }
 
 function detectPhoneNumbersIntent(text: string): boolean {
@@ -4577,7 +4590,7 @@ function stripAgentCallFollowupWhenCustomerWillCall(reply: string, inboundText: 
   const filtered = sentences.filter(s => !dropPattern.test(s));
   const cleaned = filtered.join(" ").replace(/\s{2,}/g, " ").trim();
   if (cleaned) return cleaned;
-  return "Sounds good — thanks for the update. When you’re ready, call us or text me and we can line up the appraisal.";
+  return "Sounds good — thanks for the update. When you’re ready, call us or text us and we can line up the appraisal.";
 }
 
 function applyServicePolicy(conv: any, reply: string, lastOutboundText: string): string {
@@ -11767,7 +11780,7 @@ if (authToken && signature) {
     const correctionLine = tradeYearCorrection
       ? `Thanks for clarifying — I updated it to ${tradeLabel}. `
       : "";
-    const reply = `${correctionLine}Sounds good. When you’re ready, call us or text me a day and time, and I can line up the appraisal.`;
+    const reply = `${correctionLine}Sounds good. When you’re ready, call us or text us a day and time, and we can line up the appraisal.`;
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
