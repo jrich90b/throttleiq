@@ -9915,6 +9915,12 @@ if (authToken && signature) {
       textLower
     );
   const schedulingSignalsBase = detectSchedulingSignals(event.body);
+  const paymentOrPricingNoSchedule =
+    isPricingText(event.body ?? "") &&
+    !schedulingSignalsBase.explicit &&
+    !schedulingSignalsBase.hasDayTime &&
+    !schedulingSignalsBase.hasDayOnlyAvailability &&
+    !schedulingSignalsBase.hasDayOnlyRequest;
   const leadSourceText = String(conv.lead?.source ?? "").toLowerCase();
   const isTradeLead =
     /sell my bike/.test(leadSourceText) ||
@@ -9984,11 +9990,12 @@ if (authToken && signature) {
     !!process.env.OPENAI_API_KEY &&
     schedulingAllowed;
   const bookingParserHint =
-    !!conv.scheduler?.lastSuggestedSlots?.length ||
-    draftHasSpecificTimes(lastOutboundText) ||
-    /\b(schedule|book|appt|appointment|stop in|stop by|come in|visit|time|times|available|availability|today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(
-      textLower
-    );
+    !paymentOrPricingNoSchedule &&
+    (!!conv.scheduler?.lastSuggestedSlots?.length ||
+      draftHasSpecificTimes(lastOutboundText) ||
+      /\b(schedule|book|appt|appointment|stop in|stop by|come in|visit|time|times|available|availability|today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(
+        textLower
+      ));
   const bookingParse =
     bookingParserEligible && bookingParserHint && !shortAck
       ? await parseBookingIntentWithLLM({
@@ -12313,6 +12320,7 @@ if (authToken && signature) {
       }
     }
     const schedulingIntent =
+      !paymentOrPricingNoSchedule &&
       schedulingExplicit &&
       (ctxSuggestsScheduling || llmSuggestsScheduling || schedulingSignals.hasDayTime);
     if (schedulingIntent) {
@@ -12528,7 +12536,7 @@ if (authToken && signature) {
     cta: conv.classification?.cta ?? null,
     lead: conv.lead ?? null,
     pricingAttempts: getPricingAttempts(conv),
-    allowSchedulingOffer: schedulingExplicit && schedulingAllowed,
+    allowSchedulingOffer: schedulingExplicit && schedulingAllowed && !paymentOrPricingNoSchedule,
     schedulingText: schedulingTextForOrchestrator,
     callbackRequestedOverride: callbackRequestedOverride ? true : undefined,
     appointmentTypeOverride,
