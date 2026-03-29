@@ -6,6 +6,10 @@ const BOOKING_LINK_RE =
   /(Book here|You can choose a time here|You can book an appointment here):\s*(https?:\/\/[^\s<]+)/i;
 const BOOKING_LABEL_ONLY_RE =
   /\b(Book here|You can choose a time here|You can book an appointment here)\b/i;
+const INBOUND_EMAIL_HEADER_RE =
+  /^(from|to|cc|bcc|subject|date|sent|reply-to|message-id|mime-version|content-type|content-transfer-encoding|received|arc-|dkim-signature|authentication-results):/i;
+const INBOUND_EMAIL_BREAK_RE =
+  /^(>+|on .+wrote:|-{2,}\s*original message\s*-{2,}|_{5,})/i;
 
 function renderBookingLinkLine(line: string) {
   const match = line.match(BOOKING_LINK_RE);
@@ -38,6 +42,49 @@ function renderMessageBody(text?: string | null) {
       {idx < lines.length - 1 ? <br /> : null}
     </span>
   ));
+}
+
+function hasInboundEmailNoise(text: string) {
+  return (
+    /(^|\n)\s*(from|to|cc|bcc|subject|date|sent|reply-to):\s+/i.test(text) ||
+    /(^|\n)\s*(mime-version|content-type|content-transfer-encoding|received|dkim-signature|arc-|authentication-results):/i.test(
+      text
+    ) ||
+    /(^|\n)\s*>/.test(text) ||
+    /(^|\n)\s*on .+wrote:\s*$/i.test(text) ||
+    /-{2,}\s*original message\s*-{2,}/i.test(text)
+  );
+}
+
+function cleanInboundEmailForDisplay(text?: string | null) {
+  if (!text) return "";
+  const normalized = String(text).replace(/\r\n/g, "\n").trim();
+  if (!normalized || !hasInboundEmailNoise(normalized)) return normalized;
+
+  const lines = normalized.split("\n");
+  const out: string[] = [];
+  let inHeaderBlock = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (!inHeaderBlock && out.length && out[out.length - 1] !== "") out.push("");
+      inHeaderBlock = false;
+      continue;
+    }
+    if (INBOUND_EMAIL_BREAK_RE.test(trimmed)) break;
+    if (INBOUND_EMAIL_HEADER_RE.test(trimmed)) {
+      inHeaderBlock = true;
+      continue;
+    }
+    if (inHeaderBlock && /^\s/.test(line)) continue;
+    if (inHeaderBlock) inHeaderBlock = false;
+    if (/^-{5,}$/.test(trimmed)) continue;
+    out.push(line);
+  }
+
+  const cleaned = out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return cleaned || normalized;
 }
 
 function maskBookingLink(text?: string | null) {
@@ -565,6 +612,7 @@ export default function Home() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [sendBody, setSendBody] = useState("");
   const [sendBodySource, setSendBodySource] = useState<"draft" | "user" | "system">("system");
+  const [emailManualMode, setEmailManualMode] = useState(false);
   const [lastDraftId, setLastDraftId] = useState<string | null>(null);
   const [editPromptOpen, setEditPromptOpen] = useState(false);
   const [editNote, setEditNote] = useState("");
@@ -2390,12 +2438,12 @@ export default function Home() {
     if (sendBodySource === "user") return sendBody;
     if (messageFilter === "calls") return "";
     if (messageFilter === "email") {
-      if (emailDraft) return maskBookingLink(emailDraft);
+      if (!emailManualMode && emailDraft) return maskBookingLink(emailDraft);
       return sendBody;
     }
     if (pendingDraft?.body) return pendingDraft.body;
     return sendBody;
-  }, [sendBodySource, sendBody, pendingDraft?.body, messageFilter, emailDraft]);
+  }, [sendBodySource, sendBody, pendingDraft?.body, messageFilter, emailDraft, emailManualMode]);
 
   useEffect(() => {
     const el = sendBoxRef.current;
@@ -2657,6 +2705,14 @@ export default function Home() {
   }
 
   useEffect(() => {
+    if (messageFilter !== "email") {
+      setEmailManualMode(false);
+      return;
+    }
+    setEmailManualMode(false);
+  }, [selectedConv?.id, messageFilter]);
+
+  useEffect(() => {
     if (messageFilter === "calls") {
       setSendBody("");
       setSendBodySource("system");
@@ -2792,6 +2848,7 @@ export default function Home() {
     draftId?: string;
     editNote?: string;
     manualTakeover?: boolean;
+    skipEmailSignature?: boolean;
     attachments?: { name: string; type: string; size: number; content: string }[];
     forceEmail?: boolean;
   }): Promise<boolean> {
@@ -2802,6 +2859,7 @@ export default function Home() {
       body: JSON.stringify({
         ...payload,
         manualTakeover: payload.manualTakeover ?? !payload.draftId,
+        skipEmailSignature: payload.skipEmailSignature === true,
         channel: messageFilter,
         forceEmail: payload.forceEmail === true,
         attachments:
@@ -2825,7 +2883,7 @@ export default function Home() {
           "Email opt-in is missing for this lead. Send anyway?"
         );
         if (ok) {
-          await doSend({ ...payload, forceEmail: true });
+          return await doSend({ ...payload, forceEmail: true });
         }
         return false;
       }
@@ -2833,8 +2891,14 @@ export default function Home() {
       return false;
     }
     if (messageFilter === "email") {
+      const attachmentCount = payload.attachments?.length ?? 0;
       setEmailAttachments([]);
       setEmailAttachmentsBusy(false);
+      setSaveToast(
+        attachmentCount > 0
+          ? `Email sent with ${attachmentCount} attachment${attachmentCount === 1 ? "" : "s"}.`
+          : "Email sent."
+      );
     }
     setSendBody("");
     if (data?.conversation) {
@@ -2881,7 +2945,7 @@ export default function Home() {
       window.alert("Attachments are still processing. Please wait a moment.");
       return;
     }
-    const useEmailDraft = messageFilter === "email" && !!emailDraft;
+    const useEmailDraft = messageFilter === "email" && !!emailDraft && !emailManualMode;
     const effectiveDraft = messageFilter === "email" ? null : pendingDraft;
     const bodySource =
       sendBodySource === "user"
@@ -2905,12 +2969,13 @@ export default function Home() {
       setEditPromptOpen(true);
       return;
     }
-    const manualTakeover = messageFilter === "email" ? !emailDraft : !draftId;
+    const manualTakeover = messageFilter === "email" ? emailManualMode : !draftId;
     const attachments = messageFilter === "email" ? emailAttachments : undefined;
+    const isManualEmail = messageFilter === "email" && emailManualMode;
     await doSend(
       draftId
-        ? { body, draftId, manualTakeover, attachments }
-        : { body, manualTakeover, attachments }
+        ? { body, draftId, manualTakeover, attachments, skipEmailSignature: isManualEmail }
+        : { body, manualTakeover: isManualEmail ? true : manualTakeover, attachments, skipEmailSignature: isManualEmail }
     );
   }
 
@@ -2983,6 +3048,7 @@ export default function Home() {
         return;
       }
       if (data?.conversation) {
+        if (messageFilter === "email") setEmailManualMode(false);
         const conv = data.conversation;
         setSelectedConv(conv);
         setConversations(prev =>
@@ -8545,6 +8611,10 @@ export default function Home() {
                     if (next?.provider === "voice_summary") return next.body ?? null;
                     return null;
                   })();
+                  const messageBody =
+                    m.direction === "in" && m.provider === "sendgrid"
+                      ? cleanInboundEmailForDisplay(m.body)
+                      : m.body;
                   return (
                     <div key={m.id} className={`text-sm ${m.direction === "in" || isSummary ? "" : "text-right"}`}>
                       <div className="text-xs text-gray-500">
@@ -8561,7 +8631,7 @@ export default function Home() {
                               : "bg-blue-600 text-white border-blue-600"
                         }`}
                       >
-                        {renderMessageBody(m.body)}
+                        {renderMessageBody(messageBody)}
                       </div>
                       {m.provider === "voice_transcript" ? (
                         <div className="mt-2 text-xs text-gray-600">
@@ -8643,6 +8713,8 @@ export default function Home() {
                 placeholder={
                   messageFilter === "calls"
                     ? "Calls view only."
+                    : messageFilter === "email" && emailManualMode
+                      ? "Write a new email…"
                     : pendingDraft
                       ? "Edit draft then Send…"
                       : "Type a message…"
@@ -8652,15 +8724,48 @@ export default function Home() {
               <div className="flex flex-col gap-2">
                 <button
                   className={`px-4 py-2 border rounded ${
-                    messageFilter === "calls" || (messageFilter === "sms" && selectedConv.contactPreference === "call_only")
+                    messageFilter === "calls" ||
+                    (messageFilter === "sms" && selectedConv.contactPreference === "call_only") ||
+                    (messageFilter === "email" && emailAttachmentsBusy)
                       ? "opacity-50 cursor-not-allowed"
                       : ""
                   }`}
                   onClick={send}
-                  disabled={messageFilter === "calls" || (messageFilter === "sms" && selectedConv.contactPreference === "call_only")}
+                  disabled={
+                    messageFilter === "calls" ||
+                    (messageFilter === "sms" && selectedConv.contactPreference === "call_only") ||
+                    (messageFilter === "email" && emailAttachmentsBusy)
+                  }
                 >
                   Send
                 </button>
+                {messageFilter === "email" ? (
+                  emailManualMode ? (
+                    <button
+                      className="px-4 py-2 border rounded text-xs"
+                      onClick={() => {
+                        setEmailManualMode(false);
+                        if (emailDraft) {
+                          setSendBody(emailDraft);
+                          setSendBodySource("draft");
+                        }
+                      }}
+                    >
+                      Use AI Draft
+                    </button>
+                  ) : (
+                    <button
+                      className="px-4 py-2 border rounded text-xs"
+                      onClick={() => {
+                        setEmailManualMode(true);
+                        setSendBody("");
+                        setSendBodySource("user");
+                      }}
+                    >
+                      Draft New Email
+                    </button>
+                  )
+                ) : null}
                 {mode === "suggest" && selectedConv.mode !== "human" ? (
                   <button
                     className={`px-4 py-2 border rounded text-xs ${regenBusy ? "opacity-50 cursor-not-allowed" : ""}`}
