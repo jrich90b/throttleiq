@@ -11279,31 +11279,63 @@ if (authToken && signature) {
       !!priorModel &&
       normalizeModelText(modelFromText) !== normalizeModelText(priorModel);
     const yearFromText = llmAvailability?.year ?? (extractYearSingle(textLower)?.toString() ?? null);
-    const year = yearFromText ?? (!modelChanged ? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null : null);
     const colorFromText = llmAvailability?.color ?? extractColorToken(textLower) ?? null;
-    const color =
-      colorFromText ?? (!modelChanged ? conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null : null);
     const finishFromText = extractFinishToken(textLower);
-    const finish = extractTrimToken(
-      finishFromText ?? (!modelChanged ? conv.inventoryContext?.finish ?? null : null)
-    );
     const llmConditionRaw =
       llmAvailability?.condition && llmAvailability.condition !== "unknown"
         ? llmAvailability.condition
         : null;
     const conditionFromText = normalizeWatchCondition(textLower);
     const conditionFromLlm = normalizeWatchCondition(llmConditionRaw);
-    const conditionFromContext = !modelChanged
+    const explicitCondition = conditionFromLlm ?? conditionFromText;
+    const priorCondition = !modelChanged
       ? normalizeWatchCondition(conv.inventoryContext?.condition ?? conv.lead?.vehicle?.condition ?? null)
       : undefined;
+    const conditionSearchRequest = /\b(looking for|want|need|after|open to)\b[^.?!]*\b(new|used|pre[-\s]?owned|preowned)\b/i.test(
+      textLower
+    );
+    const resetContextForCondition =
+      !modelChanged &&
+      !!explicitCondition &&
+      ((!!priorCondition && explicitCondition !== priorCondition) || conditionSearchRequest);
+    const year =
+      yearFromText ??
+      (!modelChanged && !resetContextForCondition
+        ? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null
+        : null);
+    const color =
+      colorFromText ??
+      (!modelChanged && !resetContextForCondition
+        ? conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null
+        : null);
+    const finish = extractTrimToken(
+      finishFromText ??
+        (!modelChanged && !resetContextForCondition ? conv.inventoryContext?.finish ?? null : null)
+    );
+    const conditionFromContext =
+      !modelChanged && !resetContextForCondition
+        ? normalizeWatchCondition(conv.inventoryContext?.condition ?? conv.lead?.vehicle?.condition ?? null)
+        : undefined;
     const condition = conditionFromLlm ?? conditionFromText ?? conditionFromContext;
     if (model || yearFromText || colorFromText || finishFromText || condition) {
       conv.inventoryContext = {
         model: model ?? conv.inventoryContext?.model,
-        year: modelChanged && !yearFromText ? undefined : year ?? conv.inventoryContext?.year,
-        condition: modelChanged ? (conditionFromLlm ?? conditionFromText) : (condition ?? conv.inventoryContext?.condition),
-        color: modelChanged ? (colorFromText ?? undefined) : (colorFromText ?? conv.inventoryContext?.color),
-        finish: modelChanged ? (finishFromText ?? undefined) : (finishFromText ?? conv.inventoryContext?.finish),
+        year:
+          (modelChanged || resetContextForCondition) && !yearFromText
+            ? undefined
+            : year ?? conv.inventoryContext?.year,
+        condition:
+          modelChanged || resetContextForCondition
+            ? (explicitCondition ?? undefined)
+            : (condition ?? conv.inventoryContext?.condition),
+        color:
+          modelChanged || resetContextForCondition
+            ? (colorFromText ?? undefined)
+            : (colorFromText ?? conv.inventoryContext?.color),
+        finish:
+          modelChanged || resetContextForCondition
+            ? (finishFromText ?? undefined)
+            : (finishFromText ?? conv.inventoryContext?.finish),
         updatedAt: nowIso()
       };
     }
@@ -12112,20 +12144,43 @@ if (authToken && signature) {
         explicitModelFromInbound &&
         priorModel &&
         normalizeModelText(explicitModelFromInbound) !== normalizeModelText(priorModel);
-      const year = yearFromText ?? (!modelChanged ? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null : null);
       const colorFromText = llmAvailability?.color ?? extractColorToken(textLower) ?? null;
-      const color = colorFromText ?? (!modelChanged ? conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null : null);
       const finishFromText = extractFinishToken(textLower);
-      const finish = extractTrimToken(finishFromText ?? (!modelChanged ? conv.inventoryContext?.finish ?? null : null));
       const llmConditionRaw =
         llmAvailability?.condition && llmAvailability.condition !== "unknown"
           ? llmAvailability.condition
           : null;
       const conditionFromText = normalizeWatchCondition(textLower);
       const conditionFromLlm = normalizeWatchCondition(llmConditionRaw);
-      const conditionFromContext = !modelChanged
+      const explicitCondition = conditionFromLlm ?? conditionFromText;
+      const priorCondition = !modelChanged
         ? normalizeWatchCondition(conv.inventoryContext?.condition ?? conv.lead?.vehicle?.condition ?? null)
         : undefined;
+      const conditionSearchRequest = /\b(looking for|want|need|after|open to)\b[^.?!]*\b(new|used|pre[-\s]?owned|preowned)\b/i.test(
+        textLower
+      );
+      const resetContextForCondition =
+        !modelChanged &&
+        !!explicitCondition &&
+        ((!!priorCondition && explicitCondition !== priorCondition) || conditionSearchRequest);
+      const year =
+        yearFromText ??
+        (!modelChanged && !resetContextForCondition
+          ? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null
+          : null);
+      const color =
+        colorFromText ??
+        (!modelChanged && !resetContextForCondition
+          ? conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null
+          : null);
+      const finish = extractTrimToken(
+        finishFromText ??
+          (!modelChanged && !resetContextForCondition ? conv.inventoryContext?.finish ?? null : null)
+      );
+      const conditionFromContext =
+        !modelChanged && !resetContextForCondition
+          ? normalizeWatchCondition(conv.inventoryContext?.condition ?? conv.lead?.vehicle?.condition ?? null)
+          : undefined;
       const condition = conditionFromLlm ?? conditionFromText ?? conditionFromContext;
       const downPaymentQuestion = isDownPaymentQuestion(event.body ?? "");
       const broadInventoryBudgetAsk =
@@ -12155,10 +12210,22 @@ if (authToken && signature) {
       if (model || yearFromText || colorFromText || finishFromText || condition) {
         conv.inventoryContext = {
           model: model ?? conv.inventoryContext?.model,
-          year: modelChanged && !yearFromText ? undefined : year ?? conv.inventoryContext?.year,
-          condition: modelChanged ? (conditionFromLlm ?? conditionFromText) : (condition ?? conv.inventoryContext?.condition),
-          color: modelChanged ? (colorFromText ?? undefined) : (colorFromText ?? conv.inventoryContext?.color),
-          finish: modelChanged ? (finishFromText ?? undefined) : (finishFromText ?? conv.inventoryContext?.finish),
+          year:
+            (modelChanged || resetContextForCondition) && !yearFromText
+              ? undefined
+              : year ?? conv.inventoryContext?.year,
+          condition:
+            modelChanged || resetContextForCondition
+              ? (explicitCondition ?? undefined)
+              : (condition ?? conv.inventoryContext?.condition),
+          color:
+            modelChanged || resetContextForCondition
+              ? (colorFromText ?? undefined)
+              : (colorFromText ?? conv.inventoryContext?.color),
+          finish:
+            modelChanged || resetContextForCondition
+              ? (finishFromText ?? undefined)
+              : (finishFromText ?? conv.inventoryContext?.finish),
           updatedAt: nowIso()
         };
       }
