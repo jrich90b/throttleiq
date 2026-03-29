@@ -1378,8 +1378,24 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const prefixLower = prefix.toLowerCase();
     let body = String(text ?? "").trim();
     if (body.toLowerCase().startsWith(prefixLower)) return body;
+    const leadSourceLower = String(conv.lead?.source ?? "").toLowerCase();
+    const isMetaLead = /meta/.test(leadSourceLower);
+    const modelLabel = formatModelLabel(
+      conv?.lead?.vehicle?.year ?? null,
+      conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description ?? null
+    );
     body = body.replace(/^hi\s+[^—]+—\s*/i, "");
     body = body.replace(/^i (just )?saw[^.]*\.\s*/i, "");
+    if (isMetaLead) {
+      body = body.replace(/^thanks\s*[-—]\s*i saw you wanted to learn more about[^.]*\.\s*/i, "");
+      body = body.replace(/^thanks\s*[-—]\s*/i, "");
+      if (!/\bmeta\b/i.test(body)) {
+        const metaLine = modelLabel
+          ? `I saw your Meta inquiry come over for the ${modelLabel}.`
+          : "I saw your Meta inquiry come over.";
+        body = `${metaLine} ${body}`.trim();
+      }
+    }
     const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const agentEsc = esc(agentName);
     const dealerEsc = esc(dealerName);
