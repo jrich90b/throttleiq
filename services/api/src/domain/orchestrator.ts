@@ -21,7 +21,7 @@ import { listInventorySolds, normalizeInventorySoldKey } from "./inventorySolds.
 import { findMsrpPricing, getMsrpColorNames } from "./msrpPriceList.js";
 import { getInventoryNote } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
-import { isModelInRecentYears } from "./modelsByYear.js";
+import { getAllModels, isModelInRecentYears } from "./modelsByYear.js";
 import type { LeadProfile } from "./conversationStore.js";
 import { parsePreferredDateTime, parseRequestedDayTime } from "./conversationStore.js";
 import { getSchedulerConfig, dayKey, getPreferredSalespeople } from "./schedulerConfig.js";
@@ -843,6 +843,45 @@ function resolveModelFromText(
   if (!t || !models.length) return null;
   const sorted = [...models].sort((a, b) => b.length - a.length);
   return sorted.find(m => t.includes(m.toLowerCase())) ?? null;
+}
+
+const DEFAULT_MODEL_FALLBACK = [
+  "CVO Road Glide ST",
+  "CVO Street Glide ST",
+  "Road Glide ST",
+  "Street Glide ST",
+  "Road Glide",
+  "Street Glide",
+  "Road King",
+  "Pan America",
+  "Pan America Special",
+  "Pan America ST",
+  "Sportster S",
+  "Nightster S",
+  "Nightster",
+  "Low Rider ST",
+  "Low Rider S",
+  "Fat Boy",
+  "Heritage Classic",
+  "Breakout",
+  "Street Bob",
+  "Softail Standard",
+  "Electra Glide",
+  "Ultra Limited",
+  "Tri Glide",
+  "Freewheeler",
+  "Iron 883",
+  "Forty-Eight",
+  "Fat Bob",
+  "Softail"
+];
+
+function getModelCandidates(inventoryModels: string[]): string[] {
+  const allModels = getAllModels();
+  const merged = [...inventoryModels, ...allModels, ...DEFAULT_MODEL_FALLBACK]
+    .map(m => String(m ?? "").trim())
+    .filter(Boolean);
+  return Array.from(new Set(merged));
 }
 
 function normalizeModelMatchText(text?: string | null): string {
@@ -1687,10 +1726,11 @@ export async function orchestrateInbound(
     try {
       const items = await getInventoryFeed();
       const models = Array.from(new Set(items.map(i => i.model).filter(Boolean))) as string[];
+      const modelCandidates = getModelCandidates(models);
       const lastOutbound = [...(history ?? [])].reverse().find(h => h.direction === "out")?.body ?? "";
-      const modelFromInbound = resolveModelFromText(event.body, models);
-      const modelFromLastOutbound = resolveModelFromText(lastOutbound, models);
-      const modelFromHistory = resolveModelFromHistory(history, models);
+      const modelFromInbound = resolveModelFromText(event.body, modelCandidates);
+      const modelFromLastOutbound = resolveModelFromText(lastOutbound, modelCandidates);
+      const modelFromHistory = resolveModelFromHistory(history, modelCandidates);
       const model =
         modelFromInbound ||
         modelFromLastOutbound ||
@@ -2247,10 +2287,11 @@ export async function orchestrateInbound(
     try {
       const items = await getInventoryFeed();
       const models = Array.from(new Set(items.map(i => i.model).filter(Boolean))) as string[];
+      const modelCandidates = getModelCandidates(models);
       const lastOutbound = [...(history ?? [])].reverse().find(h => h.direction === "out")?.body ?? "";
-      const modelFromInbound = resolveModelFromText(event.body, models);
-      const modelFromLastOutbound = resolveModelFromText(lastOutbound, models);
-      const modelFromHistory = resolveModelFromHistory(history, models);
+      const modelFromInbound = resolveModelFromText(event.body, modelCandidates);
+      const modelFromLastOutbound = resolveModelFromText(lastOutbound, modelCandidates);
+      const modelFromHistory = resolveModelFromHistory(history, modelCandidates);
       const model =
         modelFromInbound ||
         modelFromLastOutbound ||

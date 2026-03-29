@@ -11955,7 +11955,10 @@ if (authToken && signature) {
       const items = await getInventoryFeed();
       const models = Array.from(new Set(items.map(i => i.model).filter(Boolean))) as string[];
       models.sort((a, b) => b.length - a.length);
-      const modelFromText = models.find(m => textLower.includes(m.toLowerCase())) ?? null;
+      const modelFromText =
+        models.find(m => textLower.includes(m.toLowerCase())) ??
+        findMentionedModel(textLower) ??
+        null;
       const monthlyBudget = extractMonthlyBudgetLimit(event.body);
       const hasMonthlyBudgetTarget = monthlyBudget != null;
       const paymentTermMonths = extractPaymentTermMonths(event.body) ?? 72;
