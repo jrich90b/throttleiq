@@ -617,10 +617,15 @@ function detectCorporateIntent(text: string): boolean {
   const tokens = t.split(/[^a-z0-9]+/).filter(Boolean);
   const hasToken = (w: string) => tokens.includes(w);
   const hasAnyToken = (list: string[]) => list.some(hasToken);
+  const employmentIntent =
+    /\b(employment|career|careers|job opening|job openings|open position|open positions|hiring|apply|application|recruit|recruiter|resume|cv)\b/.test(
+      t
+    ) ||
+    (hasToken("job") && /\b(hiring|apply|application|opening|position|opportunity|opportunities|career|careers)\b/.test(t));
   return (
     /(harley[-\s]?davidson corporate|harley corporate|corporate office|headquarters|\bhq\b)/.test(t) ||
     /(customer service|complaint|feedback|warranty|recall|vin lookup|information on.*vin|vin information)/.test(t) ||
-    hasAnyToken(["employment", "job", "career"]) ||
+    employmentIntent ||
     (hasToken("human") && hasToken("resources")) ||
     hasToken("hr") ||
     hasToken("media") ||
@@ -632,6 +637,7 @@ function detectCorporateIntent(text: string): boolean {
 if (process.env.DEBUG_INTENT_TESTS === "1") {
   const cases: Array<[string, boolean]> = [
     ["blue with chrome trim", false],
+    ["wow beautiful paint job", false],
     ["need HR contact", true],
     ["press inquiry", true],
     ["career opportunities", true],
