@@ -317,7 +317,6 @@ async function pickLeadInventoryMedia(conv: any): Promise<LeadInventoryMediaPick
 
       let score = 0;
       if (itemModelNorm === modelNorm) score += 4;
-      else if (itemModelNorm.includes(modelNorm) || modelNorm.includes(itemModelNorm)) score += 3;
       else continue;
 
       if (yearText) {
