@@ -36,7 +36,7 @@ import {
 
 function simpleIntent(body: string): OrchestratorResult["intent"] {
   const t = body.toLowerCase();
-  if (/(trade|trade-in|trade in|trade appraisal|value my trade|trade value|trade price)/.test(t)) {
+  if (detectTradeRequest(t)) {
     return "TRADE_IN";
   }
   if (/(stock|vin|available|availability|still there)/.test(t)) return "AVAILABILITY";
@@ -47,10 +47,23 @@ function simpleIntent(body: string): OrchestratorResult["intent"] {
   return "GENERAL";
 }
 
+function detectTradeRequest(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\b(trade[-\s]?in|trade in|trading in|trade appraisal|trade value|value my trade|trade price|trade quote|trade offer)\b/.test(
+      t
+    ) ||
+    /\bon trade\b/.test(t) ||
+    /\b(what|how much)\b.*\b(on|for)\s+trade\b/.test(t) ||
+    /\bwhat would you give me\b.*\b(on|for)\s+trade\b/.test(t)
+  );
+}
+
 function hasStrongIntentSignal(text: string): boolean {
   const t = text.toLowerCase();
   return (
-    /(trade|trade[-\s]?in|value my trade|trade value|trade price)/.test(t) ||
+    detectTradeRequest(t) ||
     /(stock|vin|available|availability|still there|in stock)/.test(t) ||
     /(price|pricing|tax|fees|total|otd|out the door|payment|monthly|finance|credit|apr|down|term|budget|\bdeal(?:s)?\b|rebate|incentive)/.test(t) ||
     /(test ride|ride it|demo|ride up|take a ride|check it out|look at (it|the)|see (it|the)|come (in|by|up|down)|stop by|swing by|visit|drive (up|down))/i.test(t) ||
@@ -241,7 +254,7 @@ function detectCallbackRequest(text: string): boolean {
       t
     );
   const hasPhone = /\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/.test(t);
-  const hasTrade = /(trade[-\s]?in|trade in|trading in)/.test(t);
+  const hasTrade = detectTradeRequest(t);
   return hasCallback || (hasTimeframe && (hasPhone || hasTrade));
 }
 
@@ -385,7 +398,7 @@ function detectPendingIntents(text: string): Set<
   if (hasSchedulingIntent(t) || extractDayName(t) || extractDayPart(t) || /\b\d{1,2}(:\d{2})?\s*(am|pm)\b/i.test(t)) {
     intents.add("SCHEDULING");
   }
-  if (/(trade[-\s]?in|trade appraisal|trade value|value my trade)/i.test(t)) intents.add("TRADE");
+  if (detectTradeRequest(t)) intents.add("TRADE");
   return intents;
 }
 
@@ -806,7 +819,7 @@ function inferAppointmentType(
 ): "inventory_visit" | "test_ride" | "trade_appraisal" | "finance_discussion" {
   const t = text.toLowerCase();
   if (/(test ride|demo ride)/.test(t)) return "test_ride";
-  if (/(trade appraisal|appraisal|value my trade|trade in)/.test(t)) return "trade_appraisal";
+  if (detectTradeRequest(t) || /\bappraisal\b/.test(t)) return "trade_appraisal";
   if (/(finance|credit|prequal|hdfs|payment)/.test(t)) return "finance_discussion";
   return "inventory_visit";
 }
@@ -1362,12 +1375,10 @@ export async function orchestrateInbound(
       event.body
     );
   if (
-    intent === "TRADE_IN" &&
+    (intent === "TRADE_IN" || detectTradeRequest(event.body)) &&
     !noTradeMentioned &&
-    /(trade[-\s]?in|trade in|trade appraisal|value my trade|trade value|trade price|trade[-\s]?in price)/i.test(
-      event.body
-    ) &&
-    /(how|what|price|value|appraisal|bring|see it|pickup|pick up)/i.test(event.body)
+    detectTradeRequest(event.body) &&
+    /(how|what|price|value|appraisal|bring|see it|pickup|pick up|give me|give)/i.test(event.body)
   ) {
     const trade = ctx?.lead?.tradeVehicle ?? {};
     const tradeYear = trade?.year ? `${trade.year} ` : "";
@@ -1580,15 +1591,14 @@ export async function orchestrateInbound(
   const timeMatch = String(event.body ?? "").match(/\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b/i);
   const financeRequest =
     detectFinanceRequest(event.body) || detectFinanceApplyFollowUp(event.body, history ?? []);
+  const explicitTradeRequest = detectTradeRequest(event.body);
   const availabilityAskedMulti = /(available|availability|still there|in stock|do you have|have any)/i.test(event.body);
-  const wantsAvailability = availabilityAskedMulti || intent === "AVAILABILITY";
+  const wantsAvailability = (availabilityAskedMulti || intent === "AVAILABILITY") && !explicitTradeRequest;
   const wantsScheduling = hasSchedulingIntent(event.body) || !!dayName || !!dayPart || !!timeMatch;
   const wantsPayments =
     detectPaymentPressure(event.body) ||
     detectPaymentFollowUp(event.body, history ?? []);
-  const wantsTrade =
-    intent === "TRADE_IN" ||
-    /(trade[-\s]?in|trade appraisal|trade value|value my trade)/i.test(event.body);
+  const wantsTrade = intent === "TRADE_IN" || explicitTradeRequest;
   const multiIntentCount = [wantsAvailability, wantsScheduling, wantsPayments, wantsTrade].filter(Boolean).length;
   const ambiguousFlow =
     intent === "GENERAL" &&
