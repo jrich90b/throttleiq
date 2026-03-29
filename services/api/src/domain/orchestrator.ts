@@ -535,6 +535,10 @@ function buildFinanceAppLine(profile: Awaited<ReturnType<typeof getDealerProfile
   return "If you want to get started, you can submit a credit app online. Or you can stop by the dealership and get it done in person.";
 }
 
+function buildOutOfStockHumanOptionsLine(): string {
+  return "If you'd like, you can stop by and we can go over availability and pricing, or I can text you as soon as one comes in.";
+}
+
 function extractColorMention(text?: string | null, knownColors?: string[]): string | null {
   const t = String(text ?? "").toLowerCase();
   if (!t) return null;
@@ -1731,7 +1735,7 @@ export async function orchestrateInbound(
       const colorLabel = color ? ` in ${color}` : "";
       const reply =
         count <= 0
-          ? `I’m not seeing any ${yearLabel}${modelLabel}${colorLabel} in stock right now.`
+          ? `I’m not seeing any ${yearLabel}${modelLabel}${colorLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}`
           : count === 1
             ? `We do have 1 ${yearLabel}${modelLabel}${colorLabel} in stock. Want photos or details?`
             : `We have ${count} ${yearLabel}${modelLabel}${colorLabel} in stock. Want photos or details on a specific one?`;
@@ -1796,8 +1800,8 @@ export async function orchestrateInbound(
         availabilityLine = `The ${bikeLabel} is still available.`;
       } else if (availabilityState === "unavailable") {
         availabilityLine = modelKnown
-          ? `I’m not seeing a ${bikeLabel} in stock right now.`
-          : "I’m not seeing that bike in stock right now.";
+          ? `I’m not seeing a ${bikeLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}`
+          : `I’m not seeing that bike in stock right now. ${buildOutOfStockHumanOptionsLine()}`;
       } else {
         availabilityLine = modelKnown
           ? `I’m checking availability on the ${bikeLabel} and will update you shortly.`
@@ -2284,7 +2288,7 @@ export async function orchestrateInbound(
       const colorLabel = color ? ` in ${color}` : "";
       const reply =
         count <= 0
-          ? `I’m not seeing ${yearLabel}${modelLabel}${colorLabel} in stock right now.`
+          ? `I’m not seeing ${yearLabel}${modelLabel}${colorLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}`
           : count === 1
             ? `That’s the only ${yearLabel}${modelLabel}${colorLabel} we have in stock right now.`
             : `We have ${count} ${yearLabel}${modelLabel}${colorLabel} units in stock right now.`;

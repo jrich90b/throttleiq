@@ -4079,6 +4079,10 @@ function buildComplimentReply(): string {
   return "Glad you like it — I can send more photos or a quick walkaround video. Anything specific you want to see?";
 }
 
+function buildOutOfStockHumanOptionsLine(): string {
+  return "If you'd like, you can stop by and we can go over availability and pricing, or I can text you as soon as one comes in.";
+}
+
 function extractMonthlyBudgetLimit(text: string): number | null {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return null;
@@ -11252,7 +11256,7 @@ if (authToken && signature) {
       }
     } else {
       if (count <= 0) {
-        reply = `I’m not seeing ${yearText}${modelLabel}${colorLabel} in stock right now.`;
+        reply = `I’m not seeing ${yearText}${modelLabel}${colorLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}`;
       } else if (count === 1) {
         reply = `That’s the only ${yearText}${modelLabel}${colorLabel} we have in stock right now.`;
       } else {
@@ -12458,8 +12462,8 @@ if (authToken && signature) {
           );
           const watchExactLabel = watchCondition === "new" ? "exact year/color" : "exact year";
           const reply = year
-            ? `I’m not seeing a ${year} ${model}${color ? ` in ${color}` : ""} in stock right now. Want me to keep an eye out for the ${watchExactLabel}?`
-            : `I’m not seeing a ${model}${color ? ` in ${color}` : ""} in stock right now. Want me to keep an eye out for the ${watchExactLabel}?`;
+            ? `I’m not seeing a ${year} ${model}${color ? ` in ${color}` : ""} in stock right now. ${buildOutOfStockHumanOptionsLine()} Want me to keep an eye out for the ${watchExactLabel}?`
+            : `I’m not seeing a ${model}${color ? ` in ${color}` : ""} in stock right now. ${buildOutOfStockHumanOptionsLine()} Want me to keep an eye out for the ${watchExactLabel}?`;
           setDialogState(conv, "inventory_watch_prompted");
           const systemMode = webhookMode;
           if (systemMode === "suggest") {
@@ -12547,55 +12551,11 @@ if (authToken && signature) {
           };
           setDialogState(conv, "inventory_watch_prompted");
         }
-        const leadCondition = normalizeWatchCondition(conv.lead?.vehicle?.condition);
-        const leadYearNum = Number(String(year ?? ""));
-        const currentYear = new Date().getFullYear();
-        const assumeNew = !leadCondition && Number.isFinite(leadYearNum) && leadYearNum === currentYear;
-        const modelRecent = model ? isModelInRecentYears(model, currentYear, 1) : false;
-        const conditionLabel =
-          leadCondition ?? (assumeNew ? "new" : modelRecent ? undefined : "used");
-        const yearLabel = year ? `${year}${conditionLabel ? `/${conditionLabel}` : ""}` : null;
-        const needsYear = !yearFromText;
-        const allowColorFinish = conditionLabel === "new";
-        const finishEligible = allowColorFinish
-          ? await shouldAskFinishPreference(model ?? undefined, year ? Number(year) : undefined, conditionLabel)
-          : false;
-        const needsColor = allowColorFinish && !colorFromText;
-        const needsFinish = allowColorFinish && finishEligible && !finishFromText;
-        let clarify = "";
-        if (!isGenericModel) {
-          if (needsYear && !allowColorFinish) {
-            clarify = yearLabel
-              ? `Are you looking for ${yearLabel}, or a year range?`
-              : "Any specific year or year range you're after?";
-          } else if (needsYear && needsColor && needsFinish) {
-            clarify = yearLabel
-              ? `Are you looking for ${yearLabel}, and any color or finish preference (chrome vs blacked-out)?`
-              : "Any specific year, color, or finish preference (chrome vs blacked-out)?";
-          } else if (needsYear && needsFinish) {
-            clarify = yearLabel
-              ? `Are you looking for ${yearLabel}, and do you have a finish preference (chrome vs blacked-out)?`
-              : "Any specific year you're after, and do you have a finish preference (chrome vs blacked-out)?";
-          } else if (needsYear && needsColor) {
-            clarify = yearLabel
-              ? `Are you looking for ${yearLabel}, and any color preference?`
-              : "Any specific year or color you're after?";
-          } else if (needsFinish && needsColor) {
-            clarify = "Any color or finish preference (chrome vs blacked-out)?";
-          } else if (needsFinish) {
-            clarify = "Do you have a finish preference (chrome vs blacked-out)?";
-          } else if (needsColor) {
-            clarify = "Any specific color you're after?";
-          } else if (needsYear) {
-            clarify = yearLabel ? `Are you looking for ${yearLabel}?` : "Any specific year you're after?";
-          }
-        }
-        const watchPrompt = buildWatchPreferencePrompt(conditionLabel, finishEligible);
         const reply =
           `I’m not seeing ${year ? `${year} ` : ""}${model}${color ? ` in ${color}` : ""} in stock right now. ` +
           (isGenericModel
             ? "I’ll have someone verify and follow up shortly."
-            : clarify || watchPrompt);
+            : `${buildOutOfStockHumanOptionsLine()} Want me to keep an eye out and text you when one lands?`);
         const systemMode = webhookMode;
         if (systemMode === "suggest") {
           appendOutbound(conv, event.to, event.from, reply, "draft_ai");
