@@ -179,11 +179,21 @@ function getCadenceAlert(cadence?: {
   nextDueAt?: string | null;
 }) {
   if (!cadence || cadence.status !== "active") return null;
-  const sendAtRaw = cadence.nextDueAt ?? cadence.pausedUntil ?? null;
+  const nowMs = Date.now();
+  if (cadence.pausedUntil) {
+    const pausedAt = new Date(cadence.pausedUntil);
+    if (!Number.isNaN(pausedAt.getTime())) {
+      const msUntilPause = pausedAt.getTime() - nowMs;
+      if (msUntilPause > 0) {
+        return { sendAt: pausedAt, msUntil: msUntilPause };
+      }
+    }
+  }
+  const sendAtRaw = cadence.nextDueAt ?? null;
   if (!sendAtRaw) return null;
   const sendAt = new Date(sendAtRaw);
   if (Number.isNaN(sendAt.getTime())) return null;
-  const msUntil = sendAt.getTime() - Date.now();
+  const msUntil = sendAt.getTime() - nowMs;
   if (msUntil <= 0) return null;
   return { sendAt, msUntil };
 }

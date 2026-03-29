@@ -1372,6 +1372,15 @@ export function pauseFollowUpCadence(conv: Conversation, untilIso: string, reaso
   if (!conv.followUpCadence || conv.followUpCadence.status !== "active") return;
   conv.followUpCadence.pausedUntil = untilIso;
   conv.followUpCadence.pauseReason = reason ?? "manual_outbound";
+  const until = new Date(untilIso);
+  if (!Number.isNaN(until.getTime())) {
+    const current = conv.followUpCadence.nextDueAt
+      ? new Date(conv.followUpCadence.nextDueAt)
+      : null;
+    if (!current || Number.isNaN(current.getTime()) || current.getTime() < until.getTime()) {
+      conv.followUpCadence.nextDueAt = until.toISOString();
+    }
+  }
   conv.updatedAt = nowIso();
   scheduleSave();
 }

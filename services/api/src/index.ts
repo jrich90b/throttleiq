@@ -3530,6 +3530,41 @@ function isClarificationReply(text: string): boolean {
   return /^(what\??|huh\??|sorry\??|pardon\??|come again\??|not sure|confused)\s*$/.test(t);
 }
 
+function parseRelativeDurationCount(raw: string | null | undefined): number | null {
+  if (!raw) return null;
+  const t = String(raw).trim().toLowerCase();
+  const direct = Number(t);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const wordMap: Record<string, number> = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
+    couple: 2
+  };
+  return wordMap[t] ?? null;
+}
+
+function parseRelativeDaysOrWeeks(text: string): { count: number; unit: "days" | "weeks" } | null {
+  const t = String(text ?? "").toLowerCase();
+  if (!t) return null;
+  const m = t.match(
+    /\b(?:in|for|about|around)\s+(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|couple)\s+(day|days|week|weeks|wk|wks)\b/
+  );
+  if (!m) return null;
+  const count = parseRelativeDurationCount(m[1]);
+  if (!count) return null;
+  const unitRaw = m[2];
+  const unit: "days" | "weeks" = /wk|week/.test(unitRaw) ? "weeks" : "days";
+  return { count, unit };
+}
+
 function parseFutureTimeframe(text: string, base: Date): { label: string; until?: Date } | null {
   const t = text.toLowerCase();
 
@@ -3543,20 +3578,20 @@ function parseFutureTimeframe(text: string, base: Date): { label: string; until?
     return { label: "next season", until: d };
   }
 
-  const inDays = t.match(/\bin\s+(\d{1,2})\s+days?\b/);
-  if (inDays) {
-    const days = Number(inDays[1]);
-    if (!Number.isNaN(days)) {
-      return { label: `in ${days} days`, until: new Date(base.getTime() + days * 24 * 60 * 60 * 1000) };
+  const relative = parseRelativeDaysOrWeeks(t);
+  if (relative) {
+    if (relative.unit === "days") {
+      const days = relative.count;
+      return {
+        label: `in ${days} day${days === 1 ? "" : "s"}`,
+        until: new Date(base.getTime() + days * 24 * 60 * 60 * 1000)
+      };
     }
-  }
-
-  const inWeeks = t.match(/\bin\s+(\d{1,2})\s+weeks?\b/);
-  if (inWeeks) {
-    const weeks = Number(inWeeks[1]);
-    if (!Number.isNaN(weeks)) {
-      return { label: `in ${weeks} weeks`, until: new Date(base.getTime() + weeks * 7 * 24 * 60 * 60 * 1000) };
-    }
+    const weeks = relative.count;
+    return {
+      label: `in ${weeks} week${weeks === 1 ? "" : "s"}`,
+      until: new Date(base.getTime() + weeks * 7 * 24 * 60 * 60 * 1000)
+    };
   }
 
   if (/\bnext week\b/.test(t)) {
@@ -5171,11 +5206,11 @@ async function processDueFollowUps() {
       return { indefinite: true };
     }
 
-    const inDays = t.match(/\bin\s+(\d{1,2})\s+days?\b/);
-    if (inDays) return { until: new Date(base.getTime() + Number(inDays[1]) * 24 * 60 * 60 * 1000) };
-
-    const inWeeks = t.match(/\bin\s+(\d{1,2})\s+weeks?\b/);
-    if (inWeeks) return { until: new Date(base.getTime() + Number(inWeeks[1]) * 7 * 24 * 60 * 60 * 1000) };
+    const relative = parseRelativeDaysOrWeeks(t);
+    if (relative) {
+      const days = relative.unit === "weeks" ? relative.count * 7 : relative.count;
+      return { until: new Date(base.getTime() + days * 24 * 60 * 60 * 1000) };
+    }
 
     if (/\bnext week\b/.test(t)) {
       return { until: new Date(base.getTime() + 7 * 24 * 60 * 60 * 1000) };
