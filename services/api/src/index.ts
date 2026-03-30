@@ -5094,6 +5094,10 @@ function extractYearSingle(text: string): number | null {
 }
 
 const INVENTORY_COLOR_PHRASES = [
+  "blood orange and vivid black black trim",
+  "blood orange and vivid black chrome trim",
+  "blood orange and black",
+  "blood orange",
   "olive steel metallic and vivid black black trim",
   "olive steel metallic and vivid black chrome trim",
   "olive steel metallic and vivid black",
@@ -5173,7 +5177,18 @@ function extractColorToken(text: string): string | null {
   if (direct) return direct;
   const twoTone = extractTwoToneColorPhrase(t);
   if (twoTone) return twoTone;
+  const hasTrimContext =
+    /\b(black(?:ed)?\s*(?:out|trim|finish)|chrome\s*(?:trim|finish)|black\s+trim|chrome\s+trim)\b/i.test(
+      t
+    );
+  if (hasTrimContext) {
+    const nonTrimColor = BASIC_COLOR_WORDS.find(
+      color => color !== "black" && color !== "chrome" && new RegExp(`\\b${color}\\b`, "i").test(t)
+    );
+    if (nonTrimColor) return nonTrimColor;
+  }
   for (const color of BASIC_COLOR_WORDS) {
+    if (hasTrimContext && (color === "black" || color === "chrome")) continue;
     if (new RegExp(`\\b${color}\\b`, "i").test(t)) return color;
   }
   return /\bolive\s+steel\b/.test(t) && /\bblack\b/.test(t) ? "olive steel and black" : null;
