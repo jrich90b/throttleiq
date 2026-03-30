@@ -1,9 +1,16 @@
 import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 
 type Catalog = {
   aliases?: Record<string, string[]>;
   families?: Record<string, string[]>;
+};
+
+type SessionRow = {
+  token?: string;
+  userId?: string;
+  expiresAt?: string;
 };
 
 type Json = Record<string, any>;
@@ -18,15 +25,76 @@ const CATALOG_PATH = String(
   process.env.MODEL_CODES_BY_FAMILY_PATH ??
     path.resolve(process.cwd(), "services/api/src/domain/model_codes_by_family.json")
 );
+const AUTH_TOKEN_ENV = String(process.env.AUTH_TOKEN ?? process.env.X_AUTH_TOKEN ?? "").trim();
 
 function endpoint(route: string): string {
   const p = route.startsWith("/") ? route : `/${route}`;
   return `${BASE_URL}${API_PREFIX}${p}`;
 }
 
-async function requestJson(route: string, init?: RequestInit): Promise<{ ok: boolean; status: number; json: Json; text: string }> {
+function isNotExpired(iso: string | undefined): boolean {
+  if (!iso) return true;
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return true;
+  return t > Date.now();
+}
+
+function candidateSessionPaths(): string[] {
+  const dataDir = String(process.env.DATA_DIR ?? "").trim();
+  const explicit = String(process.env.SESSIONS_PATH ?? "").trim();
+  return Array.from(
+    new Set(
+      [
+        explicit,
+        dataDir ? path.join(dataDir, "sessions.json") : "",
+        path.resolve(process.cwd(), "services/api/data/sessions.json"),
+        path.resolve(process.cwd(), "data/sessions.json"),
+        "/home/ubuntu/throttleiq-runtime/data/sessions.json"
+      ].filter(Boolean)
+    )
+  );
+}
+
+async function loadAuthToken(): Promise<string> {
+  if (AUTH_TOKEN_ENV) return AUTH_TOKEN_ENV;
+  for (const p of candidateSessionPaths()) {
+    try {
+      if (!existsSync(p)) continue;
+      const raw = await readFile(p, "utf8");
+      const parsed = JSON.parse(raw) as { sessions?: SessionRow[] };
+      const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
+      const valid = sessions.find(s => s?.token && isNotExpired(s.expiresAt));
+      if (valid?.token) return String(valid.token);
+    } catch {
+      // try next path
+    }
+  }
+  throw new Error(
+    "No auth token found. Set AUTH_TOKEN=<token> or provide readable sessions.json " +
+      "(DATA_DIR/sessions.json or /home/ubuntu/throttleiq-runtime/data/sessions.json)."
+  );
+}
+
+function mergeHeaders(base: HeadersInit | undefined, extra: Record<string, string>): HeadersInit {
+  const out: Record<string, string> = {};
+  if (base && !Array.isArray(base)) {
+    for (const [k, v] of Object.entries(base as Record<string, string>)) out[k] = v;
+  }
+  for (const [k, v] of Object.entries(extra)) out[k] = v;
+  return out;
+}
+
+async function requestJson(
+  route: string,
+  authToken: string,
+  init?: RequestInit
+): Promise<{ ok: boolean; status: number; json: Json; text: string }> {
   const url = endpoint(route);
-  const res = await fetch(url, init);
+  const headers = mergeHeaders(init?.headers, {
+    "x-auth-token": authToken,
+    Authorization: `Bearer ${authToken}`
+  });
+  const res = await fetch(url, { ...(init ?? {}), headers });
   const text = await res.text();
   let json: Json = {};
   try {
@@ -56,8 +124,8 @@ async function loadCatalog(): Promise<{ aliases: string[]; families: string[]; a
   return { aliases, families, all };
 }
 
-async function preflight(): Promise<void> {
-  const inv = await requestJson("/inventory");
+async function preflight(authToken: string): Promise<void> {
+  const inv = await requestJson("/inventory", authToken);
   if (!inv.ok) {
     throw new Error(
       `Preflight failed: GET ${endpoint("/inventory")} => ${inv.status}\n` +
@@ -65,7 +133,7 @@ async function preflight(): Promise<void> {
         `Hint: set API_PREFIX=/api if you are calling through the web domain.`
     );
   }
-  const compose = await requestJson("/conversations/compose", {
+  const compose = await requestJson("/conversations/compose", authToken, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ phone: TEST_PHONE, firstName: "Watch", lastName: "Catalog" })
@@ -79,7 +147,8 @@ async function preflight(): Promise<void> {
 }
 
 async function run(): Promise<void> {
-  await preflight();
+  const authToken = await loadAuthToken();
+  await preflight(authToken);
   const catalog = await loadCatalog();
   const names = MAX_ITEMS > 0 ? catalog.all.slice(0, MAX_ITEMS) : catalog.all;
   const convId = encodeURIComponent(TEST_PHONE);
@@ -89,7 +158,7 @@ async function run(): Promise<void> {
 
   for (const model of names) {
     idx += 1;
-    const clear = await requestJson(`/conversations/${convId}/watch`, { method: "DELETE" });
+    const clear = await requestJson(`/conversations/${convId}/watch`, authToken, { method: "DELETE" });
     if (!clear.ok) {
       failures.push({
         model,
@@ -100,7 +169,7 @@ async function run(): Promise<void> {
       continue;
     }
 
-    const set = await requestJson(`/conversations/${convId}/watch`, {
+    const set = await requestJson(`/conversations/${convId}/watch`, authToken, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ items: [{ model }] })
@@ -115,7 +184,7 @@ async function run(): Promise<void> {
       continue;
     }
 
-    const get = await requestJson(`/conversations/${convId}`);
+    const get = await requestJson(`/conversations/${convId}`, authToken);
     if (!get.ok) {
       failures.push({
         model,
@@ -159,4 +228,3 @@ run().catch(err => {
   console.error("[watch-catalog-eval] failed:", err instanceof Error ? err.message : err);
   process.exit(1);
 });
-
