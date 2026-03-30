@@ -167,6 +167,23 @@ const MODEL_NOISE_TOKENS = new Set([
   "orange"
 ]);
 
+const MODEL_VARIANT_TOKENS = new Set([
+  "cvo",
+  "st",
+  "special",
+  "limited",
+  "classic",
+  "anniversary",
+  "anv",
+  "se",
+  "trim",
+  "chrome",
+  "black",
+  "blacked",
+  "blackedout",
+  "edition"
+]);
+
 let knownModelByKeyCache: Map<string, string> | null = null;
 
 function tokenizeModelWords(input?: string | null): string[] {
@@ -191,6 +208,50 @@ function canonicalModelKeyFromTokens(tokens: string[]): string {
 
 function canonicalModelKey(input?: string | null): string {
   return canonicalModelKeyFromTokens(tokenizeModelWords(input));
+}
+
+function normalizeModelBaseTokens(input?: string | null): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const tok of tokenizeModelWords(input)) {
+    if (!tok) continue;
+    if (/^\d+$/.test(tok)) continue;
+    if (MODEL_VARIANT_TOKENS.has(tok)) continue;
+    if (seen.has(tok)) continue;
+    seen.add(tok);
+    out.push(tok);
+  }
+  return out;
+}
+
+function modelsLikelySameFamilyForAdfMismatch(
+  leadModel?: string | null,
+  inquiryModel?: string | null
+): boolean {
+  const leadKey = canonicalModelKey(leadModel);
+  const inquiryKey = canonicalModelKey(inquiryModel);
+  if (leadKey && inquiryKey && leadKey === inquiryKey) return true;
+
+  const leadBase = normalizeModelBaseTokens(leadModel);
+  const inquiryBase = normalizeModelBaseTokens(inquiryModel);
+  if (!leadBase.length || !inquiryBase.length) return false;
+
+  const leadSet = new Set(leadBase);
+  const inquirySet = new Set(inquiryBase);
+  const leadInInquiry = leadBase.every(tok => inquirySet.has(tok));
+  const inquiryInLead = inquiryBase.every(tok => leadSet.has(tok));
+
+  if (leadInInquiry && inquiryInLead) return true;
+
+  const shorterLen = Math.min(leadBase.length, inquiryBase.length);
+  if (shorterLen >= 2 && (leadInInquiry || inquiryInLead)) return true;
+
+  if (shorterLen === 1 && (leadInInquiry || inquiryInLead)) {
+    const token = leadBase.length === 1 ? leadBase[0] : inquiryBase[0];
+    if (token.length >= 7) return true;
+  }
+
+  return false;
 }
 
 function getKnownModelByKey(): Map<string, string> {
@@ -245,7 +306,9 @@ function detectInitialAdfModelMismatch(args: {
   if (!leadKey) return null;
   const mentions = extractInquiryModelMentions(args.inquiry);
   if (!mentions.length) return null;
-  const mismatch = mentions.find(m => m.key !== leadKey);
+  const mismatch = mentions.find(
+    m => m.key !== leadKey && !modelsLikelySameFamilyForAdfMismatch(leadModelNormalized, m.label)
+  );
   if (!mismatch) return null;
   return { leadModel: leadModelNormalized, inquiryModel: mismatch.label };
 }
