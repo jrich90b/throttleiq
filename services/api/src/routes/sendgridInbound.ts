@@ -2290,7 +2290,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const bikeLabel = modelLabel ? `${yearLabel}${modelLabel}`.trim() : "the bike";
     draft =
       `Thanks for your question on the ${bikeLabel}. ` +
-      "I can help with a payment estimate. If you share your target monthly budget and term (60/72/84 months), I can ballpark options.";
+      "I can help with a payment estimate. What monthly payment feels comfortable for you, about how much down, and were you thinking 60, 72, or 84 months?";
   }
   if (
     inferredBucket === "test_ride" &&
