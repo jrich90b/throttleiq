@@ -1115,6 +1115,19 @@ function slotMatchesInboundRelaxed(slot: any, inbound: string): boolean {
   return false;
 }
 
+function allowRelaxedSlotMatch(inbound: string): boolean {
+  const raw = String(inbound ?? "").trim();
+  if (!raw) return false;
+  // Common short selections after slot offers.
+  if (/^(first|second|earlier|later)\.?$/i.test(raw)) return true;
+  if (/^\d{1,2}(?::\d{2})?\s*(am|pm)?\.?$/i.test(raw)) return true;
+
+  const t = normalizeText(raw);
+  return /\b(works|that works|sounds good|perfect|yes|yep|yeah|book|schedule|appointment|confirm|confirmed|reschedule|move (it|me)|set (it|me)|lets do|let s do|see you)\b/.test(
+    t
+  );
+}
+
 function extractTimeOnly(text: string): { hour12: number; minute: number } | null {
   const t = normalizeText(text);
   if (/\bnoon\b/.test(t)) return { hour12: 12, minute: 0 };
@@ -1165,13 +1178,18 @@ export function confirmAppointmentIfMatchesSuggested(
 
   const match = slots.find(s => slotMatchesInbound(s, inboundText));
   if (!match) {
+    if (!allowRelaxedSlotMatch(inboundText)) {
+      console.log("[appt-match] inbound (no relaxed intent):", inboundText);
+      console.log("[appt-match] suggested:", (slots || []).map(s => s.startLocal ?? s.start));
+      return false;
+    }
     const relaxed = slots.filter(s => slotMatchesInboundRelaxed(s, inboundText));
     if (relaxed.length === 1) {
       const single = relaxed[0];
       console.log("[appt-match] matched (relaxed):", single.startLocal ?? single.start);
       conv.appointment = conv.appointment ?? { status: "none", updatedAt: nowIso() };
       conv.appointment.status = "confirmed";
-      conv.appointment.whenText = inboundText.trim();
+      conv.appointment.whenText = String(single.startLocal ?? single.start ?? "").trim();
       conv.appointment.whenIso = single.start;
       conv.appointment.confirmedBy = "customer";
       conv.appointment.updatedAt = nowIso();
@@ -1191,7 +1209,7 @@ export function confirmAppointmentIfMatchesSuggested(
         console.log("[appt-match] matched (time-only):", single.startLocal ?? single.start);
         conv.appointment = conv.appointment ?? { status: "none", updatedAt: nowIso() };
         conv.appointment.status = "confirmed";
-        conv.appointment.whenText = inboundText.trim();
+        conv.appointment.whenText = String(single.startLocal ?? single.start ?? "").trim();
         conv.appointment.whenIso = single.start;
         conv.appointment.confirmedBy = "customer";
         conv.appointment.updatedAt = nowIso();
@@ -1213,7 +1231,7 @@ export function confirmAppointmentIfMatchesSuggested(
 
   conv.appointment = conv.appointment ?? { status: "none", updatedAt: nowIso() };
   conv.appointment.status = "confirmed";
-  conv.appointment.whenText = inboundText.trim();
+  conv.appointment.whenText = String(match.startLocal ?? match.start ?? "").trim();
   conv.appointment.whenIso = match.start;
   conv.appointment.confirmedBy = "customer";
   conv.appointment.updatedAt = nowIso();

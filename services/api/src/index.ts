@@ -7999,6 +7999,58 @@ app.patch("/calendar/events/:calendarId/:eventId", requirePermission("canEditApp
       status: status === "cancelled" ? "cancelled" : undefined,
       colorId
     });
+    const nowIso = new Date().toISOString();
+    let conversationUpdated = false;
+    const salespersonByCalendarId = new Map(
+      (cfg.salespeople ?? [])
+        .filter(sp => sp?.calendarId)
+        .map(sp => [sp.calendarId, sp] as const)
+    );
+    for (const conv of getAllConversations()) {
+      const appt = conv?.appointment;
+      if (!appt) continue;
+      const currentEventId = String(appt.bookedEventId ?? "").trim();
+      if (!currentEventId || currentEventId !== eventId) continue;
+
+      if (status === "cancelled" || status === "no_show") {
+        appt.status = "none";
+        appt.whenText = undefined;
+        appt.whenIso = null;
+        appt.confirmedBy = undefined;
+        appt.bookedEventId = null;
+        appt.bookedEventLink = null;
+        appt.bookedSalespersonId = null;
+        appt.bookedSalespersonName = null;
+        appt.bookedCalendarId = null;
+        appt.matchedSlot = undefined;
+        appt.reschedulePending = status === "cancelled";
+      } else {
+        if (startIso) {
+          appt.status = "confirmed";
+          appt.whenIso = startIso;
+          appt.whenText = formatSlotLocal(startIso, tz);
+        }
+        if (updated?.id) appt.bookedEventId = updated.id;
+        if (updated?.htmlLink) appt.bookedEventLink = updated.htmlLink;
+        if (targetCalendarId) {
+          appt.bookedCalendarId = targetCalendarId;
+          const sp = salespersonByCalendarId.get(targetCalendarId);
+          if (sp?.id) {
+            appt.bookedSalespersonId = sp.id;
+            appt.bookedSalespersonName = sp.name ?? appt.bookedSalespersonName ?? null;
+          }
+        }
+        appt.reschedulePending = false;
+      }
+
+      appt.updatedAt = nowIso;
+      conv.updatedAt = nowIso;
+      saveConversation(conv);
+      conversationUpdated = true;
+    }
+    if (conversationUpdated) {
+      await flushConversationStore();
+    }
     res.json({ ok: true, event: updated });
   } catch (err: any) {
     console.log("[calendar edit] error", err?.message ?? err);

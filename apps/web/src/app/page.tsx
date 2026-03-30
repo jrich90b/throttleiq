@@ -2406,21 +2406,26 @@ export default function Home() {
   }, [selectedConv?.appointment?.bookedSalespersonId, salespeopleList, usersList]);
   const headerAppointment = useMemo(() => {
     const appt = selectedConv?.appointment;
-    if (!appt?.whenText) return null;
+    if (!appt) return null;
     const status = String(appt.status ?? "").trim().toLowerCase();
-    if (status && status !== "confirmed") return null;
+    if (status !== "confirmed") return null;
     const whenIso = String(appt.whenIso ?? "").trim();
-    if (whenIso) {
-      const when = new Date(whenIso);
-      if (!Number.isNaN(when.getTime()) && when.getTime() < Date.now()) return null;
-    }
+    if (!whenIso) return null;
+    const when = new Date(whenIso);
+    if (Number.isNaN(when.getTime()) || when.getTime() < Date.now()) return null;
+    const whenText = when.toLocaleString("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit"
+    });
     return {
-      whenText: appt.whenText,
+      whenText,
       bookedEventLink: appt.bookedEventLink ?? null
     };
   }, [
     selectedConv?.appointment?.status,
-    selectedConv?.appointment?.whenText,
     selectedConv?.appointment?.whenIso,
     selectedConv?.appointment?.bookedEventLink
   ]);
