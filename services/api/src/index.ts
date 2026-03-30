@@ -4651,7 +4651,11 @@ async function seedInventoryWatchPendingFromReply(
   );
   if (!model) return;
   const year = extractYearSingle(inboundText.toLowerCase());
-  const color = sanitizeColorPhrase(extractColorToken(inboundText.toLowerCase()));
+  const finish = extractFinishToken(inboundText.toLowerCase());
+  const color = combineWatchColorAndFinish(
+    extractColorToken(inboundText.toLowerCase()),
+    finish
+  );
   conv.inventoryWatchPending = {
     model,
     year: year ?? undefined,
@@ -5241,6 +5245,19 @@ function extractFinishToken(text: string): "chrome" | "black" | null {
   return null;
 }
 
+function combineWatchColorAndFinish(
+  color: string | null | undefined,
+  finish: "chrome" | "black" | null
+): string | undefined {
+  const baseColor = sanitizeColorPhrase(color);
+  if (!finish) return baseColor;
+  if (baseColor) {
+    if (new RegExp(`\\b${finish}\\s+trim\\b`, "i").test(baseColor)) return baseColor;
+    return `${baseColor} ${finish} trim`;
+  }
+  return `${finish} trim`;
+}
+
 function inferWatchCondition(
   model: string | undefined,
   year: number | undefined,
@@ -5310,11 +5327,7 @@ function parseInventoryWatchPreference(
 
   const finish = extractFinishToken(t);
   const baseColor = anyColor ? undefined : sanitizeColorPhrase(extractColorToken(t) ?? pending.color);
-  const color = finish
-    ? baseColor
-      ? `${baseColor} ${finish} trim`
-      : `${finish} trim`
-    : baseColor;
+  const color = combineWatchColorAndFinish(baseColor, finish);
   const range = extractYearRange(t);
   let yearMin: number | undefined;
   let yearMax: number | undefined;
@@ -10992,7 +11005,10 @@ if (authToken && signature) {
       const pending: InventoryWatchPending = {
         model: resolvedModel,
         year: extractYearSingle(textLower) ?? leadYear,
-        color: sanitizeColorPhrase(extractColorToken(textLower) ?? leadVehicle.color ?? undefined),
+        color: combineWatchColorAndFinish(
+          extractColorToken(textLower) ?? leadVehicle.color ?? undefined,
+          extractFinishToken(textLower)
+        ),
         askedAt: nowIso
       };
       let pref = parseInventoryWatchPreference(String(event.body ?? ""), pending);
@@ -12064,7 +12080,10 @@ if (authToken && signature) {
             if (yearFromText) pending.year = yearFromText;
           }
           if (!pending.color) {
-            const colorFromText = sanitizeColorPhrase(extractColorToken(textLower));
+            const colorFromText = combineWatchColorAndFinish(
+              extractColorToken(textLower),
+              extractFinishToken(textLower)
+            );
             if (colorFromText) pending.color = colorFromText;
           }
         }
@@ -12894,7 +12913,10 @@ if (authToken && signature) {
       const pending: InventoryWatchPending = {
         model: resolvedModel,
         year: extractYearSingle(textLower) ?? leadYear,
-        color: sanitizeColorPhrase(extractColorToken(textLower) ?? leadVehicle.color ?? undefined),
+        color: combineWatchColorAndFinish(
+          extractColorToken(textLower) ?? leadVehicle.color ?? undefined,
+          extractFinishToken(textLower)
+        ),
         askedAt: nowIso
       };
       let pref = parseInventoryWatchPreference(String(event.body ?? ""), pending);
@@ -13683,7 +13705,7 @@ if (authToken && signature) {
           conv.inventoryWatchPending = {
             model: model ?? undefined,
             year: year ? Number(year) : undefined,
-            color: sanitizeColorPhrase(color),
+            color: combineWatchColorAndFinish(color, finishFromText),
             askedAt: new Date().toISOString()
           };
           const reply = year
@@ -13771,7 +13793,7 @@ if (authToken && signature) {
           conv.inventoryWatchPending = {
             model: model ?? undefined,
             year: year ? Number(year) : undefined,
-            color: sanitizeColorPhrase(color),
+            color: combineWatchColorAndFinish(color, finishFromText),
             askedAt: new Date().toISOString()
           };
           setDialogState(conv, "inventory_watch_prompted");
