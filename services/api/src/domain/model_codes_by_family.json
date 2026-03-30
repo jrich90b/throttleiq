@@ -552,8 +552,15 @@
     "hydra-glide revival": [
       "FLI"
     ],
+    "iron": [
+      "XL883N",
+      "XL1200NS"
+    ],
     "iron 883": [
       "XL883N"
+    ],
+    "iron 1200": [
+      "XL1200NS"
     ],
     "livewire": [
       "ELW"

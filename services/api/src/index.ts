@@ -5264,6 +5264,10 @@ async function resolveWatchModelFromText(
 ): Promise<string | null> {
   const fallback = String(fallbackModel ?? "").trim();
   const normalized = normalizeModelText(textLower);
+  if (/\biron\b/.test(normalized)) {
+    if (is883ModelToken(normalized)) return "Sportster 883";
+    return "Iron";
+  }
   if (/\bsportster\b/.test(normalized) && is883ModelToken(normalized)) {
     return "Sportster 883";
   }
