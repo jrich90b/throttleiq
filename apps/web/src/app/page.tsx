@@ -1512,10 +1512,13 @@ export default function Home() {
     return selected.some(model => {
       const tokens = modelTokens(model);
       if (!tokens.length) return false;
-      // Family+displacement alias support: "Sportster 883" should check
-      // coded variants that still contain both tokens.
-      if (tokens.includes("sportster") && tokens.includes("883")) {
-        return optionTokenSet.has("sportster") && optionTokenSet.has("883");
+      // Family/displacement alias support:
+      // - "Sportster" checks Sportster variants
+      // - "Sportster 883" checks Sportster+883 variants
+      if (tokens.includes("sportster")) {
+        if (!optionTokenSet.has("sportster")) return false;
+        if (tokens.includes("883")) return optionTokenSet.has("883");
+        return true;
       }
       return false;
     });
