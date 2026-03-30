@@ -3135,6 +3135,37 @@ function isOptOut(text: string): boolean {
   );
 }
 
+function isWatchAlertStopIntent(text: string): boolean {
+  const t = String(text ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[’]/g, "'");
+  if (!t) return false;
+
+  const hasStopAction =
+    /\b(stop|cancel|remove|delete|turn off|pause|disable|end|no more|don't|dont|do not)\b/.test(t);
+  if (!hasStopAction) return false;
+
+  const hasWatchContext =
+    /\b(watch(?:es)?|watchlist|inventory|availability|alert(?:s)?|update(?:s)?|notification(?:s)?)\b/.test(
+      t
+    ) ||
+    /\b(keep an eye out|notify me|text me)\b/.test(t) ||
+    /\b(comes in|in stock|available|one lands)\b/.test(t);
+  if (!hasWatchContext) return false;
+
+  return (
+    /\b(stop|cancel|remove|delete|turn off|pause|disable|end)\b[\s\w-]{0,24}\b(watch(?:es)?|watchlist|inventory alerts?|availability alerts?|alerts?|updates?|notifications?)\b/.test(
+      t
+    ) ||
+    /\bno more\b[\s\w-]{0,20}\b(watch(?:es)?|alerts?|updates?|notifications?)\b/.test(t) ||
+    /\b(don't|dont|do not)\b[\s\w-]{0,24}\b(keep an eye out|notify me|watch for)\b/.test(t) ||
+    /\b(stop|don't|dont|do not)\b[\s\w-]{0,20}\btext(?:ing)? me\b[\s\w-]{0,24}\b(if|when)\b[\s\w-]{0,20}\b(comes in|in stock|available|lands)\b/.test(
+      t
+    )
+  );
+}
+
 function isNotInterested(text: string): boolean {
   const t = text.trim().toLowerCase();
   return /not interested|no longer interested|no thanks|no thank you|already bought|already purchased|bought elsewhere|purchased elsewhere|found one|got one|no longer shopping|not looking/.test(
@@ -3198,6 +3229,44 @@ function ensureAppointmentOutcomeToken(appt: any): string {
   appt.staffNotify = appt.staffNotify ?? {};
   appt.staffNotify.outcomeToken = token;
   return token;
+}
+
+async function clearInventoryWatchState(conv: any, reason = "inventory_watch_clear"): Promise<void> {
+  const nowIso = new Date().toISOString();
+  const cfg = await getSchedulerConfig();
+  const tz = cfg.timezone || "America/New_York";
+
+  conv.inventoryWatch = undefined;
+  conv.inventoryWatches = undefined;
+  conv.inventoryWatchPending = undefined;
+  if (conv.followUp?.mode === "holding_inventory") {
+    setFollowUpMode(conv, "active", reason);
+  }
+  if (conv.followUpCadence) {
+    if (conv.followUpCadence.status === "stopped") {
+      conv.followUpCadence.status = "active";
+      conv.followUpCadence.stopReason = undefined;
+    }
+    conv.followUpCadence.pausedUntil = undefined;
+    conv.followUpCadence.pauseReason = undefined;
+    if (!conv.followUpCadence.nextDueAt) {
+      const idx = Math.min(
+        conv.followUpCadence.stepIndex ?? 0,
+        FOLLOW_UP_DAY_OFFSETS.length - 1
+      );
+      conv.followUpCadence.nextDueAt = computeFollowUpDueAt(
+        conv.followUpCadence.anchorAt ?? nowIso,
+        FOLLOW_UP_DAY_OFFSETS[idx],
+        tz
+      );
+    }
+  } else {
+    startFollowUpCadence(conv, nowIso, tz);
+  }
+  if (getDialogState(conv) === "inventory_watch_active") {
+    setDialogState(conv, "inventory_init");
+  }
+  conv.updatedAt = nowIso;
 }
 
 function escapeHtml(input: string): string {
@@ -8475,39 +8544,7 @@ app.delete("/conversations/:id/watch", async (req, res) => {
   try {
     const conv = getConversation(req.params.id);
     if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
-    const nowIso = new Date().toISOString();
-    const cfg = await getSchedulerConfig();
-    const tz = cfg.timezone || "America/New_York";
-
-    conv.inventoryWatch = undefined;
-    conv.inventoryWatches = undefined;
-    conv.inventoryWatchPending = undefined;
-    if (conv.followUp?.mode === "holding_inventory") {
-      setFollowUpMode(conv, "active", "inventory_watch_clear");
-    }
-    if (conv.followUpCadence) {
-      if (conv.followUpCadence.status === "stopped") {
-        conv.followUpCadence.status = "active";
-        conv.followUpCadence.stopReason = undefined;
-      }
-      conv.followUpCadence.pausedUntil = undefined;
-      conv.followUpCadence.pauseReason = undefined;
-      if (!conv.followUpCadence.nextDueAt) {
-        const idx = Math.min(
-          conv.followUpCadence.stepIndex ?? 0,
-          FOLLOW_UP_DAY_OFFSETS.length - 1
-        );
-        conv.followUpCadence.nextDueAt = computeFollowUpDueAt(
-          conv.followUpCadence.anchorAt ?? nowIso,
-          FOLLOW_UP_DAY_OFFSETS[idx],
-          tz
-        );
-      }
-    } else {
-      startFollowUpCadence(conv, nowIso, tz);
-    }
-
-    conv.updatedAt = nowIso;
+    await clearInventoryWatchState(conv);
     saveConversation(conv);
     await flushConversationStore();
     return res.json({ ok: true, conversation: conv });
@@ -9702,6 +9739,25 @@ if (authToken && signature) {
     closeConversation(conv, "not_interested");
     stopRelatedCadences(conv, "not_interested", { close: true });
     const reply = "Totally understand - I won't bug you. If anything changes, just let me know.";
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+  if (
+    isWatchAlertStopIntent(event.body) &&
+    (conv.inventoryWatchPending || conv.inventoryWatch || (conv.inventoryWatches?.length ?? 0) > 0)
+  ) {
+    await clearInventoryWatchState(conv, "inventory_watch_optout");
+    const reply =
+      "Got it — we’ll stop inventory watch alerts. If you want alerts again later, just tell me.";
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
