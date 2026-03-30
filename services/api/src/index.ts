@@ -617,6 +617,15 @@ function modelsShareCatalogCodes(modelA: string | null | undefined, modelB: stri
   return false;
 }
 
+function getCatalogModelNameCandidates(): string[] {
+  const lookup = loadModelCodesByFamilyLookup();
+  if (!lookup) return [];
+  const keys = [...lookup.aliases.keys(), ...lookup.families.keys()]
+    .map(k => String(k ?? "").trim())
+    .filter(Boolean);
+  return Array.from(new Set(keys.map(k => normalizeDisplayCase(k))));
+}
+
 function is883ModelToken(model: string): boolean {
   const t = normalizeModelText(model);
   return /\b883\b/.test(t) || /\bxl\s*883\b/.test(t);
@@ -5225,9 +5234,10 @@ async function resolveWatchModelFromText(
     const rangeModels = range ? getModelsForYearRange(range.min, range.max) : [];
     const yearModels = !range && singleYear ? getModelsForYear(singleYear) : [];
     const allModels = !range && !singleYear ? getAllModels() : [];
+    const catalogModelNames = getCatalogModelNameCandidates();
     const models = Array.from(
       new Set(
-        [...inventoryModels, ...rangeModels, ...yearModels, ...allModels]
+        [...inventoryModels, ...rangeModels, ...yearModels, ...allModels, ...catalogModelNames]
           .filter(Boolean)
           .map(m => String(m))
       )

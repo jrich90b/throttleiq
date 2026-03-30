@@ -538,6 +538,11 @@
       "FLHC",
       "FLHCS"
     ],
+    "heritage": [
+      "FLHC",
+      "FLHCS",
+      "FLSTC"
+    ],
     "heritage softail classic": [
       "FLSTC"
     ],
@@ -1370,6 +1375,40 @@
       "FLTRXSTSE",
       "FLHXSTSE",
       "FLHXLSE"
+    ],
+    "touring": [
+      "FLHX",
+      "FLHXL",
+      "FLHXS",
+      "FLHXST",
+      "FLTRX",
+      "FLTRXL",
+      "FLTRK",
+      "FLTRXS",
+      "FLTRXST",
+      "FLTRU",
+      "FLHTCU",
+      "FLHTK",
+      "FLHTKL",
+      "FLHR",
+      "FLHRXS"
+    ],
+    "touring bike": [
+      "FLHX",
+      "FLHXL",
+      "FLHXS",
+      "FLHXST",
+      "FLTRX",
+      "FLTRXL",
+      "FLTRK",
+      "FLTRXS",
+      "FLTRXST",
+      "FLTRU",
+      "FLHTCU",
+      "FLHTK",
+      "FLHTKL",
+      "FLHR",
+      "FLHRXS"
     ],
     "street glide limited": [
       "FLHXL"
