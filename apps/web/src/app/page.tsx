@@ -2404,6 +2404,26 @@ export default function Home() {
       ""
     );
   }, [selectedConv?.appointment?.bookedSalespersonId, salespeopleList, usersList]);
+  const headerAppointment = useMemo(() => {
+    const appt = selectedConv?.appointment;
+    if (!appt?.whenText) return null;
+    const status = String(appt.status ?? "").trim().toLowerCase();
+    if (status && status !== "confirmed") return null;
+    const whenIso = String(appt.whenIso ?? "").trim();
+    if (whenIso) {
+      const when = new Date(whenIso);
+      if (!Number.isNaN(when.getTime()) && when.getTime() < Date.now()) return null;
+    }
+    return {
+      whenText: appt.whenText,
+      bookedEventLink: appt.bookedEventLink ?? null
+    };
+  }, [
+    selectedConv?.appointment?.status,
+    selectedConv?.appointment?.whenText,
+    selectedConv?.appointment?.whenIso,
+    selectedConv?.appointment?.bookedEventLink
+  ]);
   const soldByOptions = useMemo(() => {
     const fromScheduler = (salespeopleList ?? []).map(sp => {
       const name = sp.name || "";
@@ -7512,17 +7532,17 @@ export default function Home() {
                 {selectedConv.lead?.leadRef ? (
                   <div className="text-xs text-gray-500 mt-1">Lead Ref: {selectedConv.lead.leadRef}</div>
                 ) : null}
-                {selectedConv.appointment?.whenText ? (
+                {headerAppointment ? (
                   <div className="text-xs text-gray-600 mt-1">
-                    Appointment: {selectedConv.appointment.whenText}
+                    Appointment: {headerAppointment.whenText}
                     {appointmentSalespersonName ? ` • ${appointmentSalespersonName}` : ""}
-                    {selectedConv.appointment.bookedEventLink ? (
+                    {headerAppointment.bookedEventLink ? (
                       <>
                         {" "}
                         •{" "}
                         <a
                           className="underline"
-                          href={selectedConv.appointment.bookedEventLink}
+                          href={headerAppointment.bookedEventLink}
                           target="_blank"
                           rel="noreferrer"
                         >
