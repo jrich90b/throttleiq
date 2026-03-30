@@ -1275,10 +1275,13 @@ export async function orchestrateInbound(
     const dealerProfile = await getDealerProfile();
     const agentName = dealerProfile?.agentName ?? "Brooke";
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const draft =
-      `Hi ${leadFirst} — thanks for your interest in the ${yearLabel}${modelLabel}. ` +
-      `This is ${agentName} at ${dealerName}. We received your online credit application. ` +
-      "I’ll have our business manager reach out to go over your options.";
+    const bikeLabel = `${yearLabel}${modelLabel}`.trim() || "the bike";
+    const draft = hasPriorOutbound
+      ? `Perfect, thanks ${leadFirst} — we just saw your online credit app come through for ${bikeLabel}. ` +
+        "Our business manager will review it and reach out shortly to go over options."
+      : `Hi ${leadFirst} — thanks for your interest in the ${bikeLabel}. ` +
+        `This is ${agentName} at ${dealerName}. We received your online credit application. ` +
+        "I’ll have our business manager reach out to go over your options.";
     return finalize({
       intent: "FINANCING",
       stage: "ENGAGED",
