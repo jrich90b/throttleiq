@@ -10113,7 +10113,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const t = new Date(m.at).getTime();
     return Number.isFinite(t) ? t <= draftTime : true;
   };
+  const latestInboundBeforeDraft =
+    inboundMessages.find(m => m.body && isBeforeDraft(m)) ??
+    inboundMessages.find(m => m.body);
+  const latestInboundBodyLower = String(latestInboundBeforeDraft?.body ?? "").toLowerCase();
+  const latestInboundIsCreditAdf =
+    latestInboundBeforeDraft?.provider === "sendgrid_adf" &&
+    /source:\s*hdfs\s*coa\s*online|credit application|finance application|apply for credit|prequal|coa/.test(
+      latestInboundBodyLower
+    );
   const inbound =
+    (latestInboundIsCreditAdf ? latestInboundBeforeDraft : null) ??
     inboundMessages.find(m => m.provider !== "sendgrid_adf" && m.body && isBeforeDraft(m)) ??
     inboundMessages.find(m => m.body && isBeforeDraft(m)) ??
     inboundMessages.find(m => m.provider !== "sendgrid_adf" && m.body) ??
@@ -10150,6 +10160,35 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const weatherStatus = await getDealerWeatherStatus(dealerProfile);
 
   const usersForMentions = await listUsers();
+  if (latestInboundIsCreditAdf) {
+    const firstName = normalizeDisplayCase(conv.lead?.firstName);
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const hasPriorOutbound = Array.isArray(conv.messages) && conv.messages.some(m => m.direction === "out");
+    const reply = hasPriorOutbound
+      ? firstName
+        ? `Thanks ${firstName} — we just received your online credit application. Our finance team will reach out shortly to go over options.`
+        : "Thanks — we just received your online credit application. Our finance team will reach out shortly to go over options."
+      : `${firstName ? `Hi ${firstName} — ` : "Hi — "}This is ${agentName} at ${dealerName}. Thanks — I received your credit application. I’ll have our finance team reach out shortly.`;
+    const hasApprovalTodo = listOpenTodos().some(
+      t => t.convId === conv.id && t.reason === "approval" && t.status === "open"
+    );
+    if (!hasApprovalTodo) {
+      addTodo(conv, "approval", event.body ?? "Credit application", event.providerMessageId);
+    }
+    setFollowUpMode(conv, "manual_handoff", "credit_app");
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    if (channel === "email") {
+      conv.emailDraft = reply;
+      saveConversation(conv);
+      return res.json({ ok: true, conversation: conv, draft: reply });
+    }
+    discardPendingDrafts(conv);
+    appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+    saveConversation(conv);
+    return res.json({ ok: true, conversation: conv, draft: reply });
+  }
   let mentionedUser = findMentionedUser(event.body ?? "", usersForMentions);
   if (!mentionedUser && inboundReferencesOtherPerson(event.body ?? "")) {
     mentionedUser = findUserFromRecentOutbound(conv, usersForMentions);
