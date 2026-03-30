@@ -2123,15 +2123,18 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           }
 
           const profile = await getDealerProfile();
-          const dealerName = profile?.dealerName ?? "American Harley-Davidson";
-          const agentName = profile?.agentName ?? "Brooke";
-          const addressLine = profile?.address
-            ? `${profile.address.line1 ?? ""}${profile.address.city ? `, ${profile.address.city}` : ""}${
-                profile.address.state ? `, ${profile.address.state}` : ""
-              }${profile.address.zip ? ` ${profile.address.zip}` : ""}`.replace(/^\s*,\s*/,"").trim()
-            : "1149 Erie Ave., North Tonawanda, NY 14120";
+          const dealerName = String(profile?.dealerName ?? "").trim() || "American Harley-Davidson";
+          const agentName = String(profile?.agentName ?? "").trim() || "Brooke";
+          const addrLine1 = String(profile?.address?.line1 ?? "").trim();
+          const addrCity = String(profile?.address?.city ?? "").trim();
+          const addrState = String(profile?.address?.state ?? "").trim();
+          const addrZip = String(profile?.address?.zip ?? "").trim();
+          const cityState = [addrCity, addrState].filter(Boolean).join(", ");
+          const addressLine =
+            [addrLine1, cityState, addrZip].filter(Boolean).join(" ").trim() ||
+            "1149 Erie Ave., North Tonawanda, NY 14120";
           const when = formatSlotLocal(exact.start, cfg.timezone);
-          const repName = sp.name ? ` with ${sp.name}` : "";
+          const repName = String(sp.name ?? "").trim() ? ` with ${String(sp.name).trim()}` : "";
           const firstNameGreeting = conv.lead?.firstName ?? "";
           const rawModel = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "";
           const model = /full line/i.test(rawModel) ? "" : rawModel;
