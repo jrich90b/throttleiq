@@ -1,13 +1,12 @@
-import { NextResponse } from "next/server";
-import { apiFetch } from "../../../lib/apiFetch";
+import { NextRequest, NextResponse } from "next/server";
+import { apiFetch } from "../../../../lib/apiFetch";
 
 export async function GET() {
   const base = process.env.API_BASE_URL;
   if (!base) {
     return NextResponse.json({ ok: false, error: "API_BASE_URL not set" }, { status: 500 });
   }
-
-  const r = await apiFetch(`${base}/contacts`, { cache: "no-store" });
+  const r = await apiFetch(`${base}/contacts/lists`, { cache: "no-store" });
   const text = await r.text();
   try {
     const data = JSON.parse(text);
@@ -20,13 +19,13 @@ export async function GET() {
   }
 }
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   const base = process.env.API_BASE_URL;
   if (!base) {
     return NextResponse.json({ ok: false, error: "API_BASE_URL not set" }, { status: 500 });
   }
   const body = await req.text();
-  const r = await apiFetch(`${base}/contacts`, {
+  const r = await apiFetch(`${base}/contacts/lists`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body

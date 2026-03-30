@@ -19,7 +19,12 @@ export type ContactEntry = {
   stockId?: string;
   vin?: string;
   year?: string;
+  make?: string;
   vehicle?: string;
+  model?: string;
+  trim?: string;
+  color?: string;
+  condition?: string;
   inquiry?: string;
   lastAdfAt?: string;
   lastInboundAt?: string;
@@ -155,7 +160,12 @@ export function upsertContact(input: Partial<ContactEntry>): ContactEntry {
     stockId: input.stockId,
     vin: input.vin,
     year: input.year,
+    make: input.make,
     vehicle: input.vehicle,
+    model: input.model,
+    trim: input.trim,
+    color: input.color,
+    condition: input.condition,
     inquiry: input.inquiry,
     lastAdfAt: input.lastAdfAt,
     createdAt: now,
@@ -194,6 +204,14 @@ export function updateContact(
     leadSourceId: patch.leadSourceId ?? existing.leadSourceId,
     leadRef: patch.leadRef ?? existing.leadRef,
     vehicleDescription: patch.vehicleDescription ?? existing.vehicleDescription,
+    year: patch.year ?? existing.year,
+    make: patch.make ?? existing.make,
+    vehicle: patch.vehicle ?? existing.vehicle,
+    model: patch.model ?? existing.model,
+    trim: patch.trim ?? existing.trim,
+    color: patch.color ?? existing.color,
+    condition: patch.condition ?? existing.condition,
+    inquiry: patch.inquiry ?? existing.inquiry,
     updatedAt: now
   };
   contacts.set(next.id, next);

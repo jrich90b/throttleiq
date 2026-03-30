@@ -1304,7 +1304,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     stockId: lead.stockId,
     vin: lead.vin,
     year: lead.year,
+    make,
     vehicle: model ?? meta.model,
+    model: model ?? meta.model,
+    trim: lead.vehicleTrim,
+    color: lead.vehicleColor,
+    condition: conv.lead?.vehicle?.condition ?? parsedCondition ?? undefined,
     inquiry: lead.inquiry,
     lastAdfAt: new Date().toISOString()
   });

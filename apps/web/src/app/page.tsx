@@ -173,6 +173,88 @@ function formatWatchDate(iso?: string) {
   return d.toLocaleString();
 }
 
+function parseCsvRows(raw: string): string[][] {
+  const rows: string[][] = [];
+  let current = "";
+  let row: string[] = [];
+  let inQuotes = false;
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i];
+    const next = raw[i + 1];
+    if (ch === "\"") {
+      if (inQuotes && next === "\"") {
+        current += "\"";
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === "," && !inQuotes) {
+      row.push(current.trim());
+      current = "";
+      continue;
+    }
+    if ((ch === "\n" || ch === "\r") && !inQuotes) {
+      if (ch === "\r" && next === "\n") i += 1;
+      row.push(current.trim());
+      current = "";
+      if (row.some(cell => cell.length > 0)) rows.push(row);
+      row = [];
+      continue;
+    }
+    current += ch;
+  }
+  if (current.length > 0 || row.length > 0) {
+    row.push(current.trim());
+    if (row.some(cell => cell.length > 0)) rows.push(row);
+  }
+  return rows;
+}
+
+function parseContactCsv(raw: string): Array<{
+  firstName?: string;
+  lastName?: string;
+  name?: string;
+  phone?: string;
+  email?: string;
+}> {
+  const rows = parseCsvRows(raw);
+  if (!rows.length) return [];
+  const header = rows[0].map(h => h.toLowerCase().trim());
+  const col = (keys: string[]) =>
+    header.findIndex(h => keys.some(k => h === k || h.includes(k)));
+  const iFirst = col(["first name", "firstname", "first"]);
+  const iLast = col(["last name", "lastname", "last"]);
+  const iName = col(["full name", "name"]);
+  const iPhone = col(["phone", "mobile", "cell"]);
+  const iEmail = col(["email", "e-mail"]);
+  const out: Array<{
+    firstName?: string;
+    lastName?: string;
+    name?: string;
+    phone?: string;
+    email?: string;
+  }> = [];
+  for (let r = 1; r < rows.length; r += 1) {
+    const cells = rows[r];
+    const firstName = iFirst >= 0 ? cells[iFirst]?.trim() : "";
+    const lastName = iLast >= 0 ? cells[iLast]?.trim() : "";
+    const name = iName >= 0 ? cells[iName]?.trim() : "";
+    const phone = iPhone >= 0 ? cells[iPhone]?.trim() : "";
+    const email = iEmail >= 0 ? cells[iEmail]?.trim() : "";
+    if (!phone && !email) continue;
+    out.push({
+      firstName: firstName || undefined,
+      lastName: lastName || undefined,
+      name: name || undefined,
+      phone: phone || undefined,
+      email: email || undefined
+    });
+  }
+  return out;
+}
+
 function getCadenceAlert(cadence?: {
   status?: string;
   pausedUntil?: string | null;
@@ -519,10 +601,32 @@ type ContactItem = {
   stockId?: string;
   vin?: string;
   year?: string;
+  make?: string;
   vehicle?: string;
+  model?: string;
+  trim?: string;
+  color?: string;
+  condition?: string;
   inquiry?: string;
   updatedAt?: string;
   status?: "active" | "archived" | "suppressed";
+};
+
+type ContactListItem = {
+  id: string;
+  name: string;
+  source?: "manual" | "csv" | "filter";
+  contactIds?: string[];
+  contactCount?: number;
+  filter?: {
+    condition?: string;
+    year?: string;
+    make?: string;
+    model?: string;
+  };
+  createdAt?: string;
+  updatedAt?: string;
+  lastImportAt?: string;
 };
 
 export default function Home() {
@@ -629,6 +733,27 @@ export default function Home() {
     phone: ""
   });
   const [contactQuery, setContactQuery] = useState("");
+  const [contactLists, setContactLists] = useState<ContactListItem[]>([]);
+  const [selectedContactListId, setSelectedContactListId] = useState("all");
+  const [newContactListName, setNewContactListName] = useState("");
+  const [contactListFilterForm, setContactListFilterForm] = useState({
+    condition: "",
+    year: "",
+    make: "",
+    model: ""
+  });
+  const [importListName, setImportListName] = useState("");
+  const [importBusy, setImportBusy] = useState(false);
+  const [broadcastBody, setBroadcastBody] = useState("");
+  const [broadcastBusy, setBroadcastBusy] = useState(false);
+  const [broadcastResult, setBroadcastResult] = useState<string | null>(null);
+  const [newContactOpen, setNewContactOpen] = useState(false);
+  const [newContactForm, setNewContactForm] = useState({
+    firstName: "",
+    lastName: "",
+    phone: "",
+    email: ""
+  });
   const [detailLoading, setDetailLoading] = useState(false);
   const [sendBody, setSendBody] = useState("");
   const [sendBodySource, setSendBodySource] = useState<"draft" | "user" | "system">("system");
@@ -807,6 +932,7 @@ export default function Home() {
   const [callBusy, setCallBusy] = useState(false);
   const [callMethod, setCallMethod] = useState<"cell" | "extension">("cell");
   const [callPickerOpen, setCallPickerOpen] = useState(false);
+  const groupCsvInputRef = useRef<HTMLInputElement | null>(null);
   const calendarColumnRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const calendarEventsRef = useRef<any[]>([]);
   const calendarGridRef = useRef<HTMLDivElement | null>(null);
@@ -852,10 +978,11 @@ export default function Home() {
     setNeedsBootstrap(false);
     setAuthUser(authJson?.user ?? null);
 
-    const [s, c, contactsResp, modelsResp] = await Promise.all([
+    const [s, c, contactsResp, contactListsResp, modelsResp] = await Promise.all([
       fetch("/api/settings", { cache: "no-store" }),
       fetch("/api/conversations", { cache: "no-store" }),
       fetch("/api/contacts", { cache: "no-store" }),
+      fetch("/api/contacts/lists", { cache: "no-store" }),
       fetch("/api/models-by-year", { cache: "no-store" })
     ]);
     const [t, q, sup, googleResp] = await Promise.all([
@@ -868,6 +995,7 @@ export default function Home() {
     const settings = await s.json();
     const convs = await c.json();
     const contactsJson = await contactsResp.json();
+    const contactListsJson = await contactListsResp.json().catch(() => null);
     const modelsJson = await modelsResp.json().catch(() => null);
     const todosResp = await t.json();
     const questionsResp = await q.json();
@@ -894,6 +1022,7 @@ export default function Home() {
       setModelsByYear(modelsJson.modelsByYear as Record<string, string[]>);
     }
     setContacts((contactsJson?.contacts as ContactItem[]) ?? []);
+    setContactLists((contactListsJson?.lists as ContactListItem[]) ?? []);
     setLoading(false);
     setAuthLoading(false);
   }
@@ -2226,6 +2355,30 @@ export default function Home() {
     });
   }, [selectedContact?.id]);
 
+  const selectedContactList = useMemo(
+    () => contactLists.find(l => l.id === selectedContactListId) ?? null,
+    [contactLists, selectedContactListId]
+  );
+
+  useEffect(() => {
+    const list = contactLists.find(l => l.id === selectedContactListId) ?? null;
+    setContactListFilterForm({
+      condition: list?.filter?.condition ?? "",
+      year: list?.filter?.year ?? "",
+      make: list?.filter?.make ?? "",
+      model: list?.filter?.model ?? ""
+    });
+  }, [selectedContactListId, contactLists]);
+
+  useEffect(() => {
+    if (selectedContactListId === "all") return;
+    if (!selectedContact) return;
+    const idSet = new Set((selectedContactList?.contactIds ?? []).map(v => String(v)));
+    if (!idSet.has(String(selectedContact.id))) {
+      setSelectedContact(null);
+    }
+  }, [selectedContactListId, selectedContact?.id, selectedContactList?.contactIds?.join("|")]);
+
   const isManager = authUser?.role === "manager";
   const isConversationSection =
     section === "inbox" ||
@@ -2653,8 +2806,16 @@ export default function Home() {
 
   const filteredContacts = useMemo(() => {
     const q = contactQuery.trim().toLowerCase();
-    if (!q) return contacts;
-    return contacts.filter(c => {
+    let rows = contacts;
+    if (selectedContactListId !== "all" && selectedContactList?.contactIds?.length) {
+      const idSet = new Set((selectedContactList.contactIds ?? []).map(v => String(v)));
+      rows = rows.filter(c => idSet.has(String(c.id)));
+    } else if (selectedContactListId !== "all") {
+      rows = [];
+    }
+
+    if (!q) return rows;
+    return rows.filter(c => {
       const haystack = [
         c.name,
         c.firstName,
@@ -2665,6 +2826,11 @@ export default function Home() {
         c.leadRef,
         c.vehicleDescription,
         c.vehicle,
+        c.model,
+        c.make,
+        c.trim,
+        c.color,
+        c.condition,
         c.stockId,
         c.vin,
         c.year,
@@ -2675,9 +2841,9 @@ export default function Home() {
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
-    return haystack.includes(q);
-  });
-  }, [contacts, contactQuery]);
+      return haystack.includes(q);
+    });
+  }, [contacts, contactQuery, selectedContactListId, selectedContactList]);
 
   const isArchivedConversation = (c: ConversationListItem) =>
     !!(c.closedReason && /archive/i.test(c.closedReason));
@@ -3572,6 +3738,137 @@ export default function Home() {
     await fetch(`/api/contacts/${encodeURIComponent(selectedContact.id)}`, { method: "DELETE" });
     setContacts(prev => prev.filter(c => c.id !== selectedContact.id));
     setSelectedContact(null);
+  }
+
+  async function createContactGroup() {
+    const name = newContactListName.trim();
+    if (!name) return;
+    const resp = await fetch("/api/contacts/lists", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, source: "manual" })
+    });
+    const payload = await resp.json().catch(() => null);
+    if (!resp.ok || !payload?.ok) return;
+    setNewContactListName("");
+    setContactLists(prev => [payload.list as ContactListItem, ...prev]);
+    setSelectedContactListId(payload.list.id);
+  }
+
+  async function saveGroupFilter() {
+    if (selectedContactListId === "all") return;
+    const body = {
+      filter: {
+        condition: contactListFilterForm.condition.trim(),
+        year: contactListFilterForm.year.trim(),
+        make: contactListFilterForm.make.trim(),
+        model: contactListFilterForm.model.trim()
+      }
+    };
+    const resp = await fetch(`/api/contacts/lists/${encodeURIComponent(selectedContactListId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const payload = await resp.json().catch(() => null);
+    if (!resp.ok || !payload?.ok) return;
+    await load();
+  }
+
+  async function deleteGroup() {
+    if (selectedContactListId === "all") return;
+    const ok = window.confirm("Delete this group?");
+    if (!ok) return;
+    await fetch(`/api/contacts/lists/${encodeURIComponent(selectedContactListId)}`, {
+      method: "DELETE"
+    });
+    setSelectedContactListId("all");
+    await load();
+  }
+
+  async function createNewContact() {
+    const body = {
+      firstName: newContactForm.firstName.trim(),
+      lastName: newContactForm.lastName.trim(),
+      phone: newContactForm.phone.trim(),
+      email: newContactForm.email.trim()
+    };
+    if (!body.phone && !body.email) return;
+    const resp = await fetch("/api/contacts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const payload = await resp.json().catch(() => null);
+    if (!resp.ok || !payload?.ok) return;
+    setNewContactOpen(false);
+    setNewContactForm({ firstName: "", lastName: "", phone: "", email: "" });
+    await load();
+    if (payload?.contact?.id) {
+      setSelectedContact(payload.contact as ContactItem);
+    }
+  }
+
+  async function importContactsCsv(file: File) {
+    setImportBusy(true);
+    try {
+      const raw = await file.text();
+      const rows = parseContactCsv(raw);
+      if (!rows.length) {
+        setBroadcastResult("No valid rows found. Include at least phone or email columns.");
+        return;
+      }
+      const listName = importListName.trim() || file.name.replace(/\.csv$/i, "");
+      const resp = await fetch("/api/contacts/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rows, listName })
+      });
+      const payload = await resp.json().catch(() => null);
+      if (!resp.ok || !payload?.ok) {
+        setBroadcastResult(payload?.error ?? "CSV import failed");
+        return;
+      }
+      setImportListName("");
+      setBroadcastResult(`Imported ${payload.imported ?? 0} contacts.`);
+      await load();
+      if (payload?.list?.id) {
+        setSelectedContactListId(payload.list.id);
+      }
+    } finally {
+      setImportBusy(false);
+    }
+  }
+
+  async function sendBroadcastToSelectedGroup() {
+    if (selectedContactListId === "all") {
+      setBroadcastResult("Select a group first.");
+      return;
+    }
+    const message = broadcastBody.trim();
+    if (!message) return;
+    setBroadcastBusy(true);
+    setBroadcastResult(null);
+    try {
+      const resp = await fetch("/api/contacts/broadcast", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          listId: selectedContactListId,
+          message
+        })
+      });
+      const payload = await resp.json().catch(() => null);
+      if (!resp.ok || !payload?.ok) {
+        setBroadcastResult(payload?.error ?? "Broadcast failed");
+        return;
+      }
+      setBroadcastResult(
+        `Sent ${payload.sent}/${payload.attempted}. Skipped ${payload.skipped}, failed ${payload.failed}.`
+      );
+    } finally {
+      setBroadcastBusy(false);
+    }
   }
 
 
@@ -5056,65 +5353,195 @@ export default function Home() {
         ) : null}
 
         {section === "contacts" ? (
-          <>
-            <div className="mt-3">
-              <input
-                className="w-full border rounded px-3 py-2 text-sm"
-                placeholder="Filter contacts (name, phone, stock, VIN, ref...)"
-                value={contactQuery}
-                onChange={e => setContactQuery(e.target.value)}
-              />
-              {contactQuery ? (
+          <div className="mt-3 grid grid-cols-1 lg:grid-cols-[220px_minmax(0,1fr)] gap-3">
+            <div className="border rounded-lg p-3 bg-gray-50">
+              <div className="text-sm font-semibold text-gray-700 mb-2">Groups</div>
+              <div className="space-y-1 max-h-[360px] overflow-y-auto pr-1">
                 <button
-                  className="mt-2 text-xs text-gray-600 hover:text-gray-900"
-                  onClick={() => setContactQuery("")}
+                  className={`w-full text-left px-2 py-1.5 rounded text-sm ${
+                    selectedContactListId === "all" ? "bg-white border border-gray-300" : "hover:bg-white"
+                  }`}
+                  onClick={() => setSelectedContactListId("all")}
                 >
-                  Clear filter
+                  All Contacts
                 </button>
-              ) : null}
-            </div>
-            <div className="mt-3 border rounded-lg divide-y">
-            {filteredContacts.map(c => (
-              <div key={c.id} className="p-4 flex items-start justify-between gap-4">
-                <div>
-                  <div className="text-sm font-medium flex items-center gap-2">
-                    <span>
-                      {c.name || [c.firstName, c.lastName].filter(Boolean).join(" ") || c.phone || c.email || "Unknown"}
-                    </span>
-                    <span className="text-[10px] px-2 py-0.5 rounded border">
-                      {c.status ?? "active"}
-                    </span>
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    {c.phone ? `Phone: ${c.phone}` : null}
-                    {c.phone && c.email ? " • " : null}
-                    {c.email ? `Email: ${c.email}` : null}
-                  </div>
-                  {c.vehicleDescription ? (
-                    <div className="text-xs text-gray-500 mt-1">{c.vehicleDescription}</div>
-                  ) : null}
-                  <div className="text-xs text-gray-500 mt-1">
-                    {c.leadSource ? `Source: ${c.leadSource}` : "Source: unknown"}
-                    {c.leadRef ? ` • Ref: ${c.leadRef}` : ""}
-                  </div>
-                </div>
-                <div className="flex flex-col items-end gap-2">
+                {contactLists.map(list => (
                   <button
-                    className="px-3 py-2 border rounded text-sm"
-                    onClick={() => {
-                      setSelectedContact(c);
-                    }}
+                    key={list.id}
+                    className={`w-full text-left px-2 py-1.5 rounded text-sm ${
+                      selectedContactListId === list.id ? "bg-white border border-gray-300" : "hover:bg-white"
+                    }`}
+                    onClick={() => setSelectedContactListId(list.id)}
                   >
-                    Open
+                    <div className="truncate">{list.name}</div>
+                    <div className="text-[11px] text-gray-500">{list.contactCount ?? 0} contacts</div>
+                  </button>
+                ))}
+              </div>
+              <div className="mt-3 border-t pt-3 space-y-2">
+                <input
+                  className="w-full border rounded px-2 py-1.5 text-xs"
+                  placeholder="New group name"
+                  value={newContactListName}
+                  onChange={e => setNewContactListName(e.target.value)}
+                />
+                <button className="w-full border rounded px-2 py-1.5 text-sm" onClick={createContactGroup}>
+                  + New Group
+                </button>
+                {selectedContactListId !== "all" ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-2">
+                      <select
+                        className="border rounded px-2 py-1.5 text-xs"
+                        value={contactListFilterForm.condition}
+                        onChange={e =>
+                          setContactListFilterForm(prev => ({ ...prev, condition: e.target.value }))
+                        }
+                      >
+                        <option value="">Any condition</option>
+                        <option value="new">New</option>
+                        <option value="used">Used</option>
+                      </select>
+                      <input
+                        className="border rounded px-2 py-1.5 text-xs"
+                        placeholder="Year"
+                        value={contactListFilterForm.year}
+                        onChange={e => setContactListFilterForm(prev => ({ ...prev, year: e.target.value }))}
+                      />
+                      <input
+                        className="border rounded px-2 py-1.5 text-xs"
+                        placeholder="Make"
+                        value={contactListFilterForm.make}
+                        onChange={e => setContactListFilterForm(prev => ({ ...prev, make: e.target.value }))}
+                      />
+                      <input
+                        className="border rounded px-2 py-1.5 text-xs"
+                        placeholder="Model"
+                        value={contactListFilterForm.model}
+                        onChange={e => setContactListFilterForm(prev => ({ ...prev, model: e.target.value }))}
+                      />
+                    </div>
+                    <button className="w-full border rounded px-2 py-1.5 text-xs" onClick={saveGroupFilter}>
+                      Save Group Filter
+                    </button>
+                    <button className="w-full border rounded px-2 py-1.5 text-xs text-red-600" onClick={deleteGroup}>
+                      Delete Group
+                    </button>
+                  </>
+                ) : null}
+                <input
+                  className="w-full border rounded px-2 py-1.5 text-xs"
+                  placeholder="CSV import list name"
+                  value={importListName}
+                  onChange={e => setImportListName(e.target.value)}
+                />
+                <label className="w-full border rounded px-2 py-1.5 text-xs cursor-pointer block text-center">
+                  {importBusy ? "Importing…" : "Upload CSV"}
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    className="hidden"
+                    disabled={importBusy}
+                    onChange={async e => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      await importContactsCsv(file);
+                      e.currentTarget.value = "";
+                    }}
+                  />
+                </label>
+                <textarea
+                  className="w-full border rounded px-2 py-1.5 text-xs"
+                  rows={3}
+                  placeholder="Broadcast message to selected group"
+                  value={broadcastBody}
+                  onChange={e => setBroadcastBody(e.target.value)}
+                />
+                <button
+                  className="w-full border rounded px-2 py-1.5 text-sm"
+                  disabled={broadcastBusy}
+                  onClick={sendBroadcastToSelectedGroup}
+                >
+                  {broadcastBusy ? "Sending…" : "Send Broadcast"}
+                </button>
+                {broadcastResult ? <div className="text-[11px] text-gray-600">{broadcastResult}</div> : null}
+              </div>
+            </div>
+
+            <div className="border rounded-lg overflow-hidden">
+              <div className="p-3 border-b bg-gray-50 space-y-2">
+                <div className="flex items-center gap-2">
+                  <input
+                    className="flex-1 border rounded px-3 py-2 text-sm"
+                    placeholder="Search all contacts"
+                    value={contactQuery}
+                    onChange={e => setContactQuery(e.target.value)}
+                  />
+                  <button
+                    className="border rounded px-3 py-2 text-sm"
+                    onClick={() => setNewContactOpen(v => !v)}
+                  >
+                    + New Contact
                   </button>
                 </div>
+                {newContactOpen ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      className="border rounded px-2 py-1.5 text-xs"
+                      placeholder="First name"
+                      value={newContactForm.firstName}
+                      onChange={e => setNewContactForm(prev => ({ ...prev, firstName: e.target.value }))}
+                    />
+                    <input
+                      className="border rounded px-2 py-1.5 text-xs"
+                      placeholder="Last name"
+                      value={newContactForm.lastName}
+                      onChange={e => setNewContactForm(prev => ({ ...prev, lastName: e.target.value }))}
+                    />
+                    <input
+                      className="border rounded px-2 py-1.5 text-xs"
+                      placeholder="Phone"
+                      value={newContactForm.phone}
+                      onChange={e => setNewContactForm(prev => ({ ...prev, phone: e.target.value }))}
+                    />
+                    <input
+                      className="border rounded px-2 py-1.5 text-xs"
+                      placeholder="Email"
+                      value={newContactForm.email}
+                      onChange={e => setNewContactForm(prev => ({ ...prev, email: e.target.value }))}
+                    />
+                    <button className="col-span-2 border rounded px-2 py-1.5 text-xs" onClick={createNewContact}>
+                      Save Contact
+                    </button>
+                  </div>
+                ) : null}
               </div>
-            ))}
-            {!loading && filteredContacts.length === 0 && (
-              <div className="p-4 text-sm text-gray-600">No contacts match this filter.</div>
-            )}
+              <div className="max-h-[560px] overflow-y-auto divide-y">
+                {filteredContacts.map(c => (
+                  <button
+                    key={c.id}
+                    className={`w-full text-left px-4 py-3 hover:bg-blue-50 ${
+                      selectedContact?.id === c.id ? "bg-blue-100" : ""
+                    }`}
+                    onClick={() => setSelectedContact(c)}
+                  >
+                    <div className="text-sm font-medium">
+                      {c.name || [c.firstName, c.lastName].filter(Boolean).join(" ") || c.phone || c.email || "Unknown"}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-0.5">
+                      {c.phone || c.email || "No phone/email"}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1 truncate">
+                      {[c.year, c.make, c.model ?? c.vehicle, c.trim].filter(Boolean).join(" ")}
+                    </div>
+                  </button>
+                ))}
+                {!loading && filteredContacts.length === 0 ? (
+                  <div className="p-4 text-sm text-gray-600">No contacts in this view.</div>
+                ) : null}
+              </div>
+            </div>
           </div>
-          </>
         ) : null}
 
         {todoResolveOpen && todoResolveTarget ? (
@@ -7458,7 +7885,61 @@ export default function Home() {
 
             </div>
           ) : (
-            <div className="text-gray-500">Select a contact to view details.</div>
+            selectedContactListId !== "all" ? (
+              <div className="border rounded-lg p-6 max-w-4xl">
+                <div className="text-5xl leading-none text-gray-300 mb-4">+</div>
+                <div className="text-4xl font-semibold text-gray-800">Groups are much better with contacts.</div>
+                <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-8 text-sm">
+                  <div>
+                    <button
+                      className="text-blue-600 font-semibold hover:underline"
+                      onClick={() => groupCsvInputRef.current?.click()}
+                    >
+                      Upload a CSV file
+                    </button>
+                    <div className="text-gray-500 mt-1">containing the contacts you’d like to add</div>
+                  </div>
+                  <div>
+                    <div className="font-semibold text-gray-800">Drag and Drop</div>
+                    <div className="text-gray-500 mt-1">from All Contacts or any other group</div>
+                  </div>
+                  <div>
+                    <div className="font-semibold text-gray-800">Sync with Integration</div>
+                    <div className="text-gray-500 mt-1">
+                      multiply the power of your existing dynamic lists
+                    </div>
+                  </div>
+                  <div>
+                    <div className="font-semibold text-gray-800">Multi-Select</div>
+                    <ul className="mt-1 text-gray-500 list-disc pl-5 space-y-1">
+                      <li>Open the menu next to the search field</li>
+                      <li>Select the contacts you’d like to add</li>
+                      <li>Choose Add to Another Group</li>
+                    </ul>
+                  </div>
+                </div>
+                <div className="mt-10 pt-6 border-t text-sm text-gray-500">
+                  Have you changed your mind?{" "}
+                  <button className="text-blue-600 hover:underline" onClick={deleteGroup}>
+                    delete this group
+                  </button>
+                </div>
+                <input
+                  ref={groupCsvInputRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  onChange={async e => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    await importContactsCsv(file);
+                    e.currentTarget.value = "";
+                  }}
+                />
+              </div>
+            ) : (
+              <div className="text-gray-500">Select a contact to view details.</div>
+            )
           )
         ) : !canViewConversation ? (
           <div className="text-gray-500">Select “Inbox” to view a conversation.</div>

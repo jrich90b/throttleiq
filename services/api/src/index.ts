@@ -157,7 +157,15 @@ import {
   removeSuppression
 } from "./domain/suppressionStore.js";
 import { tlpLogCustomerContact, tlpMarkDealershipVisitDelivered } from "./connectors/crm/tlpPlaywright.js";
-import { listContacts, updateContact, deleteContact } from "./domain/contactsStore.js";
+import { listContacts, upsertContact, updateContact, deleteContact } from "./domain/contactsStore.js";
+import {
+  listContactLists,
+  getContactList,
+  createContactList,
+  updateContactList,
+  addContactsToList,
+  deleteContactList
+} from "./domain/contactListsStore.js";
 import { isLikelyVoicemailTranscript, maybeMarkEngagedFromCall } from "./domain/engagement.js";
 
 import { getSystemMode, setSystemMode, type SystemMode } from "./domain/settingsStore.js";
@@ -9301,15 +9309,27 @@ app.get("/suppressions", requirePermission("canAccessSuppressions"), (_req, res)
   res.json({ ok: true, suppressions: listSuppressions() });
 });
 
-app.get("/contacts", (_req, res) => {
-  function extractInquiry(body?: string): string | undefined {
-    if (!body) return undefined;
-    const idx = body.toLowerCase().lastIndexOf("inquiry:");
-    if (idx === -1) return undefined;
-    return body.slice(idx + "inquiry:".length).trim() || undefined;
-  }
+function extractInquiryFromAdf(body?: string): string | undefined {
+  if (!body) return undefined;
+  const idx = body.toLowerCase().lastIndexOf("inquiry:");
+  if (idx === -1) return undefined;
+  return body.slice(idx + "inquiry:".length).trim() || undefined;
+}
 
-  const contacts = listContacts().map(c => {
+function normalizeContactText(value?: string | null): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function normalizeContactCondition(value?: string | null): string {
+  const t = normalizeContactText(value);
+  if (!t) return "";
+  if (/(pre|used|pre-owned|preowned|owned)/.test(t)) return "used";
+  if (/new/.test(t)) return "new";
+  return t;
+}
+
+function buildContactsView() {
+  return listContacts().map(c => {
     const convId = c.conversationId ?? c.leadKey;
     const conv = convId ? getConversation(convId) : null;
     const archived = !!(conv?.closedReason && /archive/i.test(conv.closedReason));
@@ -9319,20 +9339,269 @@ app.get("/contacts", (_req, res) => {
       ?.slice()
       .reverse()
       .find(m => m.direction === "in" && m.provider === "sendgrid_adf");
-    const inquiry = extractInquiry(lastAdf?.body);
+    const inquiry = extractInquiryFromAdf(lastAdf?.body);
+    const stockId = c.stockId ?? conv?.lead?.vehicle?.stockId;
+    const condition =
+      c.condition ??
+      conv?.lead?.vehicle?.condition ??
+      (stockId ? (/^u/i.test(stockId) ? "used" : "new") : undefined);
     return {
       ...c,
-      stockId: c.stockId ?? conv?.lead?.vehicle?.stockId,
+      stockId,
       vin: c.vin ?? conv?.lead?.vehicle?.vin,
       year: c.year ?? conv?.lead?.vehicle?.year,
+      make: c.make ?? conv?.lead?.vehicle?.make,
       vehicle: c.vehicle ?? conv?.lead?.vehicle?.model,
+      model: c.model ?? c.vehicle ?? conv?.lead?.vehicle?.model,
+      trim: c.trim ?? conv?.lead?.vehicle?.trim,
+      color: c.color ?? conv?.lead?.vehicle?.color,
+      condition,
       vehicleDescription:
         c.vehicleDescription ?? conv?.lead?.vehicle?.description ?? conv?.lead?.vehicle?.model,
       inquiry: c.inquiry ?? inquiry,
       status
     };
   });
+}
+
+function contactMatchesListFilter(
+  contact: any,
+  filter?: { condition?: string; year?: string; make?: string; model?: string } | null
+): boolean {
+  if (!filter) return true;
+  const condition = normalizeContactCondition(filter.condition);
+  const year = normalizeContactText(filter.year);
+  const make = normalizeContactText(filter.make);
+  const model = normalizeContactText(filter.model);
+
+  if (condition) {
+    const rowCondition = normalizeContactCondition(contact.condition);
+    if (condition === "used" && rowCondition !== "used") return false;
+    if (condition === "new" && rowCondition !== "new") return false;
+    if (!["new", "used"].includes(condition) && rowCondition !== condition) return false;
+  }
+  if (year) {
+    const rowYear = normalizeContactText(contact.year);
+    if (rowYear !== year) return false;
+  }
+  if (make) {
+    const rowMake = normalizeContactText(contact.make);
+    if (!rowMake.includes(make)) return false;
+  }
+  if (model) {
+    const rowModel = normalizeContactText(contact.model ?? contact.vehicle);
+    if (!rowModel.includes(model)) return false;
+  }
+  return true;
+}
+
+function resolveContactIdsForList(list: any, contacts: any[]): string[] {
+  const byId = new Set(contacts.map(c => String(c.id)));
+  const explicitIds = Array.isArray(list?.contactIds)
+    ? list.contactIds.map((v: any) => String(v ?? "").trim()).filter(Boolean)
+    : [];
+  const filteredIds =
+    list?.filter
+      ? contacts.filter(c => contactMatchesListFilter(c, list.filter)).map(c => String(c.id))
+      : [];
+  return Array.from(
+    new Set([...explicitIds, ...filteredIds].filter(id => byId.has(id)))
+  );
+}
+
+app.get("/contacts", (_req, res) => {
+  const contacts = buildContactsView();
   res.json({ ok: true, contacts });
+});
+
+app.post("/contacts", (req, res) => {
+  const firstName = String(req.body?.firstName ?? "").trim() || undefined;
+  const lastName = String(req.body?.lastName ?? "").trim() || undefined;
+  const name =
+    String(req.body?.name ?? "").trim() ||
+    [firstName, lastName].filter(Boolean).join(" ").trim() ||
+    undefined;
+  const phoneRaw = String(req.body?.phone ?? "").trim();
+  const email = String(req.body?.email ?? "").trim() || undefined;
+  const phone = phoneRaw ? normalizePhone(phoneRaw) : undefined;
+  if (!phone && !email) {
+    return res.status(400).json({ ok: false, error: "Phone or email required" });
+  }
+  const leadKey = phone || email;
+  const contact = upsertContact({
+    leadKey,
+    conversationId: leadKey,
+    firstName,
+    lastName,
+    name,
+    phone,
+    email
+  });
+  return res.json({ ok: true, contact });
+});
+
+app.get("/contacts/lists", (_req, res) => {
+  const contacts = buildContactsView();
+  const lists = listContactLists().map(list => {
+    const contactIds = resolveContactIdsForList(list, contacts);
+    return {
+      ...list,
+      contactIds,
+      contactCount: contactIds.length
+    };
+  });
+  res.json({ ok: true, lists });
+});
+
+app.post("/contacts/lists", requireManager, (req, res) => {
+  const name = String(req.body?.name ?? "").trim();
+  if (!name) return res.status(400).json({ ok: false, error: "Missing name" });
+  const created = createContactList({
+    name,
+    source: req.body?.source,
+    contactIds: Array.isArray(req.body?.contactIds) ? req.body.contactIds : [],
+    filter: req.body?.filter ?? undefined
+  });
+  return res.json({ ok: true, list: created });
+});
+
+app.patch("/contacts/lists/:id", requireManager, (req, res) => {
+  const patched = updateContactList(req.params.id, {
+    name: req.body?.name,
+    source: req.body?.source,
+    contactIds: Array.isArray(req.body?.contactIds) ? req.body.contactIds : undefined,
+    filter: req.body?.filter,
+    lastImportAt: req.body?.lastImportAt
+  });
+  if (!patched) return res.status(404).json({ ok: false, error: "Not found" });
+  return res.json({ ok: true, list: patched });
+});
+
+app.delete("/contacts/lists/:id", requireManager, (req, res) => {
+  const ok = deleteContactList(req.params.id);
+  if (!ok) return res.status(404).json({ ok: false, error: "Not found" });
+  return res.json({ ok: true });
+});
+
+app.post("/contacts/import", requireManager, (req, res) => {
+  const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+  if (!rows.length) return res.status(400).json({ ok: false, error: "Missing rows" });
+
+  const importedIds: string[] = [];
+  for (const row of rows) {
+    const firstName = String(row?.firstName ?? "").trim() || undefined;
+    const lastName = String(row?.lastName ?? "").trim() || undefined;
+    const name = String(row?.name ?? "").trim() || [firstName, lastName].filter(Boolean).join(" ").trim() || undefined;
+    const phone = String(row?.phone ?? "").trim() || undefined;
+    const email = String(row?.email ?? "").trim() || undefined;
+    if (!phone && !email) continue;
+    const leadKey = phone ? normalizePhone(phone) : email;
+    const contact = upsertContact({
+      leadKey,
+      conversationId: leadKey,
+      firstName,
+      lastName,
+      name,
+      phone,
+      email
+    });
+    importedIds.push(contact.id);
+  }
+
+  const uniqImported = Array.from(new Set(importedIds));
+  let list: any = null;
+  const listId = String(req.body?.listId ?? "").trim();
+  const listName = String(req.body?.listName ?? "").trim();
+  if (listId) {
+    list = addContactsToList(listId, uniqImported);
+  } else if (listName) {
+    list = createContactList({
+      name: listName,
+      source: "csv",
+      contactIds: uniqImported
+    });
+  }
+
+  return res.json({
+    ok: true,
+    imported: uniqImported.length,
+    list
+  });
+});
+
+app.post("/contacts/broadcast", requireManager, async (req, res) => {
+  const listId = String(req.body?.listId ?? "").trim();
+  const message = String(req.body?.message ?? "").trim();
+  if (!listId) return res.status(400).json({ ok: false, error: "Missing listId" });
+  if (!message) return res.status(400).json({ ok: false, error: "Missing message" });
+
+  const list = getContactList(listId);
+  if (!list) return res.status(404).json({ ok: false, error: "List not found" });
+
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const fromRaw = String(process.env.TWILIO_FROM_NUMBER ?? "").trim();
+  const from = normalizePhone(fromRaw);
+  if (!accountSid || !authToken || !from || !from.startsWith("+")) {
+    return res.status(500).json({ ok: false, error: "Twilio not configured" });
+  }
+
+  const contacts = buildContactsView();
+  const recipientIds = resolveContactIdsForList(list, contacts);
+  const recipients = contacts.filter(c => recipientIds.includes(String(c.id)));
+  const twilioClient = twilio(accountSid, authToken);
+
+  const sent: Array<{ id: string; phone: string; sid?: string }> = [];
+  const skipped: Array<{ id: string; reason: string }> = [];
+  const failed: Array<{ id: string; error: string }> = [];
+
+  for (const contact of recipients) {
+    const phone = normalizePhone(String(contact.phone ?? "").trim());
+    if (!phone || !phone.startsWith("+")) {
+      skipped.push({ id: String(contact.id), reason: "missing_phone" });
+      continue;
+    }
+    if (isSuppressed(phone)) {
+      skipped.push({ id: String(contact.id), reason: "suppressed" });
+      continue;
+    }
+    try {
+      const out = await twilioClient.messages.create({
+        from,
+        to: phone,
+        body: message
+      });
+      const leadKey = String(contact.leadKey ?? contact.conversationId ?? phone);
+      const conv = upsertConversationByLeadKey(leadKey, "suggest");
+      updateConversationContact(conv, {
+        firstName: contact.firstName,
+        lastName: contact.lastName,
+        name: contact.name,
+        phone,
+        email: contact.email
+      });
+      appendOutbound(conv, from, phone, message, "twilio", out.sid ?? undefined);
+      conv.updatedAt = new Date().toISOString();
+      saveConversation(conv);
+      sent.push({ id: String(contact.id), phone, sid: out.sid });
+    } catch (err: any) {
+      failed.push({ id: String(contact.id), error: err?.message ?? "send_failed" });
+    }
+  }
+
+  if (sent.length) {
+    await flushConversationStore();
+  }
+
+  return res.json({
+    ok: true,
+    listId,
+    attempted: recipients.length,
+    sent: sent.length,
+    skipped: skipped.length,
+    failed: failed.length,
+    details: { sent, skipped, failed }
+  });
 });
 
 app.patch("/contacts/:id", (req, res) => {
