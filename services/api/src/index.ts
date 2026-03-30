@@ -9418,9 +9418,9 @@ app.post("/conversations/:id/send", async (req, res) => {
         .map(m => m.id)
     );
     discardPendingDrafts(conv, "manual_send");
-    for (const m of conv.messages) {
-      if (!pendingDraftIds.has(m.id)) continue;
-      m.mediaUrls = undefined;
+    if (pendingDraftIds.size > 0) {
+      conv.messages = conv.messages.filter(m => !pendingDraftIds.has(m.id));
+      conv.updatedAt = new Date().toISOString();
     }
     if (opts?.clearEmailDraft) {
       delete conv.emailDraft;
