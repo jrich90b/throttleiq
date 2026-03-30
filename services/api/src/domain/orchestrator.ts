@@ -2199,14 +2199,25 @@ export async function orchestrateInbound(
         });
         const termProvided = extractPreferredTermMonths(event.body) != null;
         const downProvided = downPayment != null || downPaymentAssumed;
-        if (!termProvided || !downProvided) {
-          const parts: string[] = [];
-          if (!termProvided) parts.push("60, 72, or 84 months");
-          if (!downProvided) parts.push("about how much down");
-          const follow =
-            parts.length === 2
-              ? "Were you thinking 60, 72, or 84 months, and about how much down?"
-              : `Were you thinking ${parts[0]}?`;
+        const monthlyProvided = targetMonthly != null;
+        if (!monthlyProvided || !termProvided || !downProvided) {
+          let follow = "";
+          if (!monthlyProvided && !termProvided && !downProvided) {
+            follow =
+              "What monthly payment feels comfortable for you, about how much down, and were you thinking 60, 72, or 84 months?";
+          } else if (!monthlyProvided && !termProvided) {
+            follow = "What monthly payment feels comfortable for you, and were you thinking 60, 72, or 84 months?";
+          } else if (!monthlyProvided && !downProvided) {
+            follow = "What monthly payment feels comfortable for you, and about how much down were you thinking?";
+          } else if (!termProvided && !downProvided) {
+            follow = "Were you thinking 60, 72, or 84 months, and about how much down?";
+          } else if (!monthlyProvided) {
+            follow = "What monthly payment feels comfortable for you?";
+          } else if (!termProvided) {
+            follow = "Were you thinking 60, 72, or 84 months?";
+          } else if (!downProvided) {
+            follow = "About how much down were you thinking?";
+          }
           draft = `${draft} ${follow}`;
         }
         return finalize({
