@@ -2845,6 +2845,24 @@ export default function Home() {
     });
   }, [contacts, contactQuery, selectedContactListId, selectedContactList]);
 
+  const filteredContactIdsKey = useMemo(
+    () => filteredContacts.map(c => c.id).join("|"),
+    [filteredContacts]
+  );
+
+  useEffect(() => {
+    if (section !== "contacts") return;
+    if (!filteredContacts.length) {
+      if (selectedContact) setSelectedContact(null);
+      return;
+    }
+    const exists =
+      selectedContact && filteredContacts.some(c => String(c.id) === String(selectedContact.id));
+    if (!exists) {
+      setSelectedContact(filteredContacts[0]);
+    }
+  }, [section, filteredContactIdsKey, selectedContact?.id]);
+
   const isArchivedConversation = (c: ConversationListItem) =>
     !!(c.closedReason && /archive/i.test(c.closedReason));
 
@@ -4752,7 +4770,9 @@ export default function Home() {
       </aside>
 
       <section
-        className={`w-full md:w-96 border-r border-[var(--border)] bg-[var(--surface)] p-4 overflow-y-auto shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${section === "calendar" ? "hidden" : ""} ${isConversationSection && mobilePanel === "detail" ? "hidden md:block" : ""}`}
+        className={`w-full ${
+          section === "contacts" ? "md:w-[620px]" : "md:w-96"
+        } border-r border-[var(--border)] bg-[var(--surface)] p-4 overflow-y-auto shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${section === "calendar" ? "hidden" : ""} ${isConversationSection && mobilePanel === "detail" ? "hidden md:block" : ""}`}
       >
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -4761,24 +4781,26 @@ export default function Home() {
               {getSectionSubTitle()}
             </p>
           </div>
-          <div className="border border-[var(--border)] rounded-lg p-2 bg-[var(--surface-2)]">
-            <div className="text-[10px] text-[var(--palette-graphite)]">System Mode</div>
-            <div className="mt-1 flex gap-1">
-                <button
-                  className={`px-2 py-1 border border-[var(--border)] rounded text-xs cursor-pointer ${mode === "suggest" ? "font-semibold bg-[var(--accent)] text-white border-[var(--accent)]" : "hover:bg-white"}`}
-                onClick={() => updateMode("suggest")}
-              >
-                Suggest
-              </button>
-                <button
-                  className={`px-2 py-1 border border-[var(--border)] rounded text-xs cursor-pointer ${mode === "autopilot" ? "font-semibold bg-[var(--accent)] text-white border-[var(--accent)]" : "hover:bg-white"}`}
-                onClick={() => updateMode("autopilot")}
-                title="Autopilot will auto-reply on inbound SMS"
-              >
-                AI
-              </button>
+          {section !== "contacts" ? (
+            <div className="border border-[var(--border)] rounded-lg p-2 bg-[var(--surface-2)]">
+              <div className="text-[10px] text-[var(--palette-graphite)]">System Mode</div>
+              <div className="mt-1 flex gap-1">
+                  <button
+                    className={`px-2 py-1 border border-[var(--border)] rounded text-xs cursor-pointer ${mode === "suggest" ? "font-semibold bg-[var(--accent)] text-white border-[var(--accent)]" : "hover:bg-white"}`}
+                  onClick={() => updateMode("suggest")}
+                >
+                  Suggest
+                </button>
+                  <button
+                    className={`px-2 py-1 border border-[var(--border)] rounded text-xs cursor-pointer ${mode === "autopilot" ? "font-semibold bg-[var(--accent)] text-white border-[var(--accent)]" : "hover:bg-white"}`}
+                  onClick={() => updateMode("autopilot")}
+                  title="Autopilot will auto-reply on inbound SMS"
+                >
+                  AI
+                </button>
+              </div>
             </div>
-          </div>
+          ) : null}
         </div>
 
         {section === "inventory" ? (
@@ -5353,13 +5375,15 @@ export default function Home() {
         ) : null}
 
         {section === "contacts" ? (
-          <div className="mt-3 grid grid-cols-1 lg:grid-cols-[220px_minmax(0,1fr)] gap-3">
-            <div className="border rounded-lg p-3 bg-gray-50">
-              <div className="text-sm font-semibold text-gray-700 mb-2">Groups</div>
-              <div className="space-y-1 max-h-[360px] overflow-y-auto pr-1">
+          <div className="mt-4 border rounded-lg overflow-hidden bg-white grid grid-cols-[230px_minmax(0,1fr)] min-h-[620px]">
+            <div className="border-r p-3 flex flex-col">
+              <div className="text-sm font-semibold text-gray-700">Groups</div>
+              <div className="mt-2 space-y-1 flex-1 overflow-y-auto pr-1">
                 <button
-                  className={`w-full text-left px-2 py-1.5 rounded text-sm ${
-                    selectedContactListId === "all" ? "bg-white border border-gray-300" : "hover:bg-white"
+                  className={`w-full text-left px-3 py-2 rounded text-sm border ${
+                    selectedContactListId === "all"
+                      ? "bg-blue-600 text-white border-blue-600"
+                      : "bg-white hover:bg-gray-50 border-gray-200"
                   }`}
                   onClick={() => setSelectedContactListId("all")}
                 >
@@ -5368,19 +5392,20 @@ export default function Home() {
                 {contactLists.map(list => (
                   <button
                     key={list.id}
-                    className={`w-full text-left px-2 py-1.5 rounded text-sm ${
-                      selectedContactListId === list.id ? "bg-white border border-gray-300" : "hover:bg-white"
+                    className={`w-full text-left px-3 py-2 rounded text-sm border ${
+                      selectedContactListId === list.id
+                        ? "bg-blue-600 text-white border-blue-600"
+                        : "bg-white hover:bg-gray-50 border-gray-200"
                     }`}
                     onClick={() => setSelectedContactListId(list.id)}
                   >
                     <div className="truncate">{list.name}</div>
-                    <div className="text-[11px] text-gray-500">{list.contactCount ?? 0} contacts</div>
                   </button>
                 ))}
               </div>
-              <div className="mt-3 border-t pt-3 space-y-2">
+              <div className="border-t pt-3 mt-3 space-y-2">
                 <input
-                  className="w-full border rounded px-2 py-1.5 text-xs"
+                  className="w-full border rounded px-2 py-1.5 text-sm"
                   placeholder="New group name"
                   value={newContactListName}
                   onChange={e => setNewContactListName(e.target.value)}
@@ -5388,135 +5413,19 @@ export default function Home() {
                 <button className="w-full border rounded px-2 py-1.5 text-sm" onClick={createContactGroup}>
                   + New Group
                 </button>
-                {selectedContactListId !== "all" ? (
-                  <>
-                    <div className="grid grid-cols-2 gap-2">
-                      <select
-                        className="border rounded px-2 py-1.5 text-xs"
-                        value={contactListFilterForm.condition}
-                        onChange={e =>
-                          setContactListFilterForm(prev => ({ ...prev, condition: e.target.value }))
-                        }
-                      >
-                        <option value="">Any condition</option>
-                        <option value="new">New</option>
-                        <option value="used">Used</option>
-                      </select>
-                      <input
-                        className="border rounded px-2 py-1.5 text-xs"
-                        placeholder="Year"
-                        value={contactListFilterForm.year}
-                        onChange={e => setContactListFilterForm(prev => ({ ...prev, year: e.target.value }))}
-                      />
-                      <input
-                        className="border rounded px-2 py-1.5 text-xs"
-                        placeholder="Make"
-                        value={contactListFilterForm.make}
-                        onChange={e => setContactListFilterForm(prev => ({ ...prev, make: e.target.value }))}
-                      />
-                      <input
-                        className="border rounded px-2 py-1.5 text-xs"
-                        placeholder="Model"
-                        value={contactListFilterForm.model}
-                        onChange={e => setContactListFilterForm(prev => ({ ...prev, model: e.target.value }))}
-                      />
-                    </div>
-                    <button className="w-full border rounded px-2 py-1.5 text-xs" onClick={saveGroupFilter}>
-                      Save Group Filter
-                    </button>
-                    <button className="w-full border rounded px-2 py-1.5 text-xs text-red-600" onClick={deleteGroup}>
-                      Delete Group
-                    </button>
-                  </>
-                ) : null}
-                <input
-                  className="w-full border rounded px-2 py-1.5 text-xs"
-                  placeholder="CSV import list name"
-                  value={importListName}
-                  onChange={e => setImportListName(e.target.value)}
-                />
-                <label className="w-full border rounded px-2 py-1.5 text-xs cursor-pointer block text-center">
-                  {importBusy ? "Importing…" : "Upload CSV"}
-                  <input
-                    type="file"
-                    accept=".csv,text/csv"
-                    className="hidden"
-                    disabled={importBusy}
-                    onChange={async e => {
-                      const file = e.target.files?.[0];
-                      if (!file) return;
-                      await importContactsCsv(file);
-                      e.currentTarget.value = "";
-                    }}
-                  />
-                </label>
-                <textarea
-                  className="w-full border rounded px-2 py-1.5 text-xs"
-                  rows={3}
-                  placeholder="Broadcast message to selected group"
-                  value={broadcastBody}
-                  onChange={e => setBroadcastBody(e.target.value)}
-                />
-                <button
-                  className="w-full border rounded px-2 py-1.5 text-sm"
-                  disabled={broadcastBusy}
-                  onClick={sendBroadcastToSelectedGroup}
-                >
-                  {broadcastBusy ? "Sending…" : "Send Broadcast"}
-                </button>
-                {broadcastResult ? <div className="text-[11px] text-gray-600">{broadcastResult}</div> : null}
               </div>
             </div>
 
-            <div className="border rounded-lg overflow-hidden">
-              <div className="p-3 border-b bg-gray-50 space-y-2">
-                <div className="flex items-center gap-2">
-                  <input
-                    className="flex-1 border rounded px-3 py-2 text-sm"
-                    placeholder="Search all contacts"
-                    value={contactQuery}
-                    onChange={e => setContactQuery(e.target.value)}
-                  />
-                  <button
-                    className="border rounded px-3 py-2 text-sm"
-                    onClick={() => setNewContactOpen(v => !v)}
-                  >
-                    + New Contact
-                  </button>
-                </div>
-                {newContactOpen ? (
-                  <div className="grid grid-cols-2 gap-2">
-                    <input
-                      className="border rounded px-2 py-1.5 text-xs"
-                      placeholder="First name"
-                      value={newContactForm.firstName}
-                      onChange={e => setNewContactForm(prev => ({ ...prev, firstName: e.target.value }))}
-                    />
-                    <input
-                      className="border rounded px-2 py-1.5 text-xs"
-                      placeholder="Last name"
-                      value={newContactForm.lastName}
-                      onChange={e => setNewContactForm(prev => ({ ...prev, lastName: e.target.value }))}
-                    />
-                    <input
-                      className="border rounded px-2 py-1.5 text-xs"
-                      placeholder="Phone"
-                      value={newContactForm.phone}
-                      onChange={e => setNewContactForm(prev => ({ ...prev, phone: e.target.value }))}
-                    />
-                    <input
-                      className="border rounded px-2 py-1.5 text-xs"
-                      placeholder="Email"
-                      value={newContactForm.email}
-                      onChange={e => setNewContactForm(prev => ({ ...prev, email: e.target.value }))}
-                    />
-                    <button className="col-span-2 border rounded px-2 py-1.5 text-xs" onClick={createNewContact}>
-                      Save Contact
-                    </button>
-                  </div>
-                ) : null}
+            <div className="flex flex-col">
+              <div className="p-3 border-b bg-gray-50">
+                <input
+                  className="w-full border rounded px-3 py-2 text-sm"
+                  placeholder="Search all contacts"
+                  value={contactQuery}
+                  onChange={e => setContactQuery(e.target.value)}
+                />
               </div>
-              <div className="max-h-[560px] overflow-y-auto divide-y">
+              <div className="flex-1 overflow-y-auto divide-y">
                 {filteredContacts.map(c => (
                   <button
                     key={c.id}
@@ -5537,8 +5446,58 @@ export default function Home() {
                   </button>
                 ))}
                 {!loading && filteredContacts.length === 0 ? (
-                  <div className="p-4 text-sm text-gray-600">No contacts in this view.</div>
+                  <div className="p-4 text-sm text-gray-600">No contacts in this group.</div>
                 ) : null}
+              </div>
+              <div className="p-3 border-t bg-gray-50">
+                {!newContactOpen ? (
+                  <button
+                    className="w-full border rounded px-3 py-2 text-sm"
+                    onClick={() => setNewContactOpen(true)}
+                  >
+                    + New Contact
+                  </button>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        className="border rounded px-2 py-1.5 text-xs"
+                        placeholder="First name"
+                        value={newContactForm.firstName}
+                        onChange={e => setNewContactForm(prev => ({ ...prev, firstName: e.target.value }))}
+                      />
+                      <input
+                        className="border rounded px-2 py-1.5 text-xs"
+                        placeholder="Last name"
+                        value={newContactForm.lastName}
+                        onChange={e => setNewContactForm(prev => ({ ...prev, lastName: e.target.value }))}
+                      />
+                      <input
+                        className="border rounded px-2 py-1.5 text-xs"
+                        placeholder="Phone"
+                        value={newContactForm.phone}
+                        onChange={e => setNewContactForm(prev => ({ ...prev, phone: e.target.value }))}
+                      />
+                      <input
+                        className="border rounded px-2 py-1.5 text-xs"
+                        placeholder="Email"
+                        value={newContactForm.email}
+                        onChange={e => setNewContactForm(prev => ({ ...prev, email: e.target.value }))}
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <button className="flex-1 border rounded px-2 py-1.5 text-xs" onClick={createNewContact}>
+                        Save Contact
+                      </button>
+                      <button
+                        className="flex-1 border rounded px-2 py-1.5 text-xs"
+                        onClick={() => setNewContactOpen(false)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -7746,19 +7705,14 @@ export default function Home() {
           </div>
         ) : section === "contacts" ? (
           selectedContact ? (
-            <div className="border rounded-lg p-4 space-y-3 max-w-2xl">
-              <div className="flex items-start justify-between gap-4">
-                <div className="text-lg font-semibold flex items-center gap-2">
-                  <span>
-                    {selectedContact.name ||
-                      [selectedContact.firstName, selectedContact.lastName].filter(Boolean).join(" ") ||
-                      selectedContact.phone ||
-                      selectedContact.email ||
-                      "Unknown"}
-                  </span>
-                  <span className="text-xs px-2 py-1 rounded border">
-                    {selectedContact.status ?? "active"}
-                  </span>
+            <div className="max-w-5xl space-y-5">
+              <div className="flex items-center justify-between border-b pb-3">
+                <div className="text-4xl font-medium text-gray-900">
+                  {selectedContact.name ||
+                    [selectedContact.firstName, selectedContact.lastName].filter(Boolean).join(" ") ||
+                    selectedContact.phone ||
+                    selectedContact.email ||
+                    "Unknown"}
                 </div>
                 <div className="flex items-center gap-2">
                   {selectedContact.conversationId || selectedContact.leadKey ? (
@@ -7775,13 +7729,6 @@ export default function Home() {
                     </button>
                   ) : null}
                   <button
-                    className="px-2 py-1 border rounded text-xs"
-                    onClick={() => setContactEdit(v => !v)}
-                    title={contactEdit ? "Cancel edit" : "Edit contact"}
-                  >
-                    ✏️
-                  </button>
-                  <button
                     className="px-2 py-1 border rounded text-xs text-red-600 border-red-200 hover:bg-red-50"
                     onClick={deleteContact}
                     title="Delete contact"
@@ -7791,98 +7738,117 @@ export default function Home() {
                 </div>
               </div>
 
-              {selectedContact.vehicleDescription ? (
-                <div className="text-sm text-gray-600">{selectedContact.vehicleDescription}</div>
-              ) : null}
-
-              {contactEdit ? (
-                <div className="grid grid-cols-2 gap-3">
-                  <input
-                    className="border rounded px-3 py-2 text-sm"
-                    placeholder="First name"
-                    value={contactForm.firstName}
-                    onChange={e => setContactForm({ ...contactForm, firstName: e.target.value })}
-                  />
-                  <input
-                    className="border rounded px-3 py-2 text-sm"
-                    placeholder="Last name"
-                    value={contactForm.lastName}
-                    onChange={e => setContactForm({ ...contactForm, lastName: e.target.value })}
-                  />
-                  <input
-                    className="border rounded px-3 py-2 text-sm"
-                    placeholder="Display name"
-                    value={contactForm.name}
-                    onChange={e => setContactForm({ ...contactForm, name: e.target.value })}
-                  />
-                  <input
-                    className="border rounded px-3 py-2 text-sm"
-                    placeholder="Phone"
-                    value={contactForm.phone}
-                    onChange={e => setContactForm({ ...contactForm, phone: e.target.value })}
-                  />
-                  <input
-                    className="border rounded px-3 py-2 text-sm col-span-2"
-                    placeholder="Email"
-                    value={contactForm.email}
-                    onChange={e => setContactForm({ ...contactForm, email: e.target.value })}
-                  />
-                  <div className="col-span-2">
-                    <button className="px-3 py-2 border rounded text-sm" onClick={saveContact}>
-                      Save
-                    </button>
+              <div className="border rounded-lg p-4">
+                <div className="text-2xl font-semibold text-gray-800 mb-3">Contact Information</div>
+                {contactEdit ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    <input
+                      className="border rounded px-3 py-2 text-sm"
+                      placeholder="First name"
+                      value={contactForm.firstName}
+                      onChange={e => setContactForm({ ...contactForm, firstName: e.target.value })}
+                    />
+                    <input
+                      className="border rounded px-3 py-2 text-sm"
+                      placeholder="Last name"
+                      value={contactForm.lastName}
+                      onChange={e => setContactForm({ ...contactForm, lastName: e.target.value })}
+                    />
+                    <input
+                      className="border rounded px-3 py-2 text-sm"
+                      placeholder="Display name"
+                      value={contactForm.name}
+                      onChange={e => setContactForm({ ...contactForm, name: e.target.value })}
+                    />
+                    <input
+                      className="border rounded px-3 py-2 text-sm"
+                      placeholder="Phone"
+                      value={contactForm.phone}
+                      onChange={e => setContactForm({ ...contactForm, phone: e.target.value })}
+                    />
+                    <input
+                      className="border rounded px-3 py-2 text-sm col-span-2"
+                      placeholder="Email"
+                      value={contactForm.email}
+                      onChange={e => setContactForm({ ...contactForm, email: e.target.value })}
+                    />
+                    <div className="col-span-2 flex gap-2">
+                      <button className="px-3 py-2 border rounded text-sm" onClick={saveContact}>
+                        Save
+                      </button>
+                      <button
+                        className="px-3 py-2 border rounded text-sm"
+                        onClick={() => setContactEdit(false)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <>
-                  <div className="text-sm">
-                    {selectedContact.phone ? `Phone: ${selectedContact.phone}` : "Phone: —"}
-                  </div>
-                  <div className="text-sm">
-                    {selectedContact.email ? `Email: ${selectedContact.email}` : "Email: —"}
-                  </div>
-                  {selectedContact.leadSource ||
-                  selectedContact.leadRef ||
-                  selectedContact.vehicleDescription ||
-                  selectedContact.stockId ||
-                  selectedContact.vin ||
-                  selectedContact.year ||
-                  selectedContact.inquiry ? (
-                    <div className="mt-3 border rounded-lg p-3 text-sm bg-gray-50">
-                      <div className="font-medium text-gray-800">WEB LEAD (ADF)</div>
-                      <div className="mt-2 space-y-1 text-gray-700">
-                        <div>
-                          Source: {selectedContact.leadSource ?? "unknown"}
+                ) : (
+                  <>
+                    <div className="divide-y border rounded">
+                      <div className="px-4 py-3 flex items-center justify-between">
+                        <div className="text-gray-500">Mobile Phone</div>
+                        <div className="font-medium">{selectedContact.phone ?? "—"}</div>
+                      </div>
+                      <div className="px-4 py-3 flex items-center justify-between gap-3">
+                        <div className="text-gray-500">Text Marketing Opt-in</div>
+                        <div className="flex items-center gap-3">
+                          <span className="px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-700">
+                            {selectedContact.status === "suppressed" ? "Not Opted In" : "Unknown"}
+                          </span>
+                          <button className="px-3 py-1 border rounded text-sm">Request</button>
                         </div>
-                        {selectedContact.leadRef ? <div>Ref: {selectedContact.leadRef}</div> : null}
-                        <div>
-                          Name:{" "}
-                          {selectedContact.name ||
-                            [selectedContact.firstName, selectedContact.lastName].filter(Boolean).join(" ") ||
-                            "Unknown"}
+                      </div>
+                      <div className="px-4 py-3 flex items-center justify-between gap-3">
+                        <div className="text-gray-500">Outbound Messages</div>
+                        <div className="flex items-center gap-2 text-xs">
+                          <span
+                            className={`px-2 py-0.5 rounded-full ${
+                              selectedContact.status === "suppressed"
+                                ? "bg-gray-200 text-gray-700"
+                                : "bg-green-100 text-green-700"
+                            }`}
+                          >
+                            {selectedContact.status === "suppressed" ? "Text Blocked" : "Text Allowed"}
+                          </span>
+                          <span
+                            className={`px-2 py-0.5 rounded-full ${
+                              selectedContact.email
+                                ? "bg-green-100 text-green-700"
+                                : "bg-gray-200 text-gray-700"
+                            }`}
+                          >
+                            {selectedContact.email ? "Email Allowed" : "Email Missing"}
+                          </span>
                         </div>
-                        <div>Email: {selectedContact.email ?? "—"}</div>
-                        <div>Phone: {selectedContact.phone ?? "—"}</div>
-                        {selectedContact.stockId ? <div>Stock: {selectedContact.stockId}</div> : null}
-                        {selectedContact.vin ? <div>VIN: {selectedContact.vin}</div> : null}
-                        {selectedContact.year ? <div>Year: {selectedContact.year}</div> : null}
-                        {selectedContact.vehicleDescription || selectedContact.vehicle ? (
-                          <div>
-                            Vehicle: {selectedContact.vehicleDescription ?? selectedContact.vehicle}
-                          </div>
-                        ) : null}
-                        {selectedContact.inquiry ? (
-                          <div className="pt-2">
-                            <div className="text-gray-600">Inquiry:</div>
-                            <div className="whitespace-pre-wrap">{selectedContact.inquiry}</div>
-                          </div>
-                        ) : null}
                       </div>
                     </div>
-                  ) : null}
-                </>
-              )}
+                    <div className="mt-3 text-right">
+                      <button className="text-sm text-blue-600 hover:underline" onClick={() => setContactEdit(true)}>
+                        Edit
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
 
+              <div className="border rounded-lg p-4">
+                <div className="text-2xl font-semibold text-gray-800 mb-3">Notes</div>
+                <button className="w-full border rounded px-3 py-2 text-left text-blue-600">+ Add Notes</button>
+              </div>
+
+              <div className="border rounded-lg p-4">
+                <div className="text-2xl font-semibold text-gray-800 mb-3">Scheduled Messages</div>
+                <button className="w-full border rounded px-3 py-2 text-left text-blue-600">
+                  + Schedule a Message
+                </button>
+              </div>
+
+              <div className="border rounded-lg p-4">
+                <div className="text-2xl font-semibold text-gray-800 mb-3">Files</div>
+                <button className="w-full border rounded px-3 py-2 text-left text-blue-600">+ Add a File</button>
+              </div>
             </div>
           ) : (
             selectedContactListId !== "all" ? (
