@@ -13342,17 +13342,26 @@ if (authToken && signature) {
         const conditionAnswer =
           condition === "used" ? "It’s used." : condition === "new" ? "It’s new." : "";
         const paintTrimPrompt = "Are you looking for any paint or trim specifically (chrome vs blacked-out)?";
+        const anyYearRequested =
+          /\b(any year|no year preference|open to other years|either year|any model year)\b/i.test(
+            textLower
+          );
+        const followUpPreferencePrompt = anyYearRequested
+          ? condition === "new"
+            ? "Any specific color or finish you’re after (chrome vs blacked-out)?"
+            : "Any specific color you’re after?"
+          : "Any specific year or color you’re after?";
         const reply = hasMonthlyBudgetTarget
           ? `Yes — we do have ${formatBudgetInventoryOption(picked ?? { year, model, color })} in stock.${pickedPaymentHint} Want another option around that payment range?`
           : otherInventoryRequest
             ? `Yes — we do have another ${formatBudgetInventoryOption(picked ?? { year, model, color })} in stock. ${paintTrimPrompt}`
           : asksConditionOnly && conditionAnswer
-            ? `${conditionAnswer} We do have a ${conditionLabel}${model} in stock. Any specific year or color you’re after?`
+            ? `${conditionAnswer} We do have a ${conditionLabel}${model} in stock. ${followUpPreferencePrompt}`
           : year
             ? `Yes — we do have a ${conditionLabel}${year} ${model}${colorLabel}${finishLabel} in stock. Would you like to stop by to take a look?`
-            : color || finishFromText
+          : color || finishFromText
               ? `Yes — we do have a ${conditionLabel}${model}${colorLabel}${finishLabel} in stock. What year are you after?`
-              : `Yes — we do have a ${conditionLabel}${model} in stock. Any specific year or color you’re after?`;
+              : `Yes — we do have a ${conditionLabel}${model} in stock. ${followUpPreferencePrompt}`;
           const systemMode = webhookMode;
           if (systemMode === "suggest") {
             appendOutbound(
