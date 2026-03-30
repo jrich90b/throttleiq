@@ -4596,7 +4596,7 @@ function isPricingText(text: string): boolean {
 }
 
 function isPaymentText(text: string): boolean {
-  return /(monthly payment|what would it be a month|what would it be per month|how much down|\bapr\b|term)/i.test(
+  return /(monthly payment|what would it be a month|what would it be per month|how much down|money down|put (?:any )?money down|no money down|zero down|\$0 down|\bapr\b|term)/i.test(
     String(text ?? "")
   );
 }
@@ -4617,8 +4617,12 @@ function isDownPaymentQuestion(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
   return (
-    /\b(how much|what(?:'s| is)|amount)\b[^?]*\b(down|down payment|put down|deposit|dp)\b/.test(t) ||
-    /\b(down payment|put down|deposit|dp)\b/.test(t)
+    /\b(how much|what(?:'s| is)|amount|do i have to|will i have to|can i)\b[^?]*\b(down|down payment|put down|put money down|money down|deposit|dp|zero down|\$0 down)\b/.test(
+      t
+    ) ||
+    /\b(down payment|put down|put money down|money down|deposit|dp|zero down|\$0 down|no money down)\b/.test(
+      t
+    )
   );
 }
 
@@ -5169,7 +5173,12 @@ function isDirectUserMention(text: string, user: any): boolean {
 
 function inboundReferencesOtherPerson(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
-  return /\b(he|him|she|her)\b/.test(t) || /\b(call|reach|talk to|speak to|tell)\s+(him|her)\b/.test(t);
+  return (
+    /\b(call|reach|talk to|speak to|tell|let|ask|have)\s+(him|her)\b/.test(t) ||
+    /\b(let|tell)\s+(him|her)\s+know\b/.test(t) ||
+    /\b(can|could|would|should)\s+(he|she)\s+(call|text|reach out|follow up)\b/.test(t) ||
+    /\b(him|her)\s+(call|text|reach out|follow up)\b/.test(t)
+  );
 }
 
 function findUserFromRecentOutbound(conv: any, users: Array<any>): any | null {

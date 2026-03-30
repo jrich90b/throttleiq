@@ -348,7 +348,7 @@ function detectExactNumberPressure(text: string): boolean {
 function detectPaymentPressure(text: string): boolean {
   const t = text.toLowerCase();
   return (
-    /(monthly payment|payments?\b|what.*payment|payment.*(month|monthly)|how much.*(payment|monthly)|how much down|\$\s*\d+[,\d]*\s*(\/\s*mo|\/\s*month|per month|a month|monthly)|\bapr\b|term)/.test(
+    /(monthly payment|payments?\b|what.*payment|payment.*(month|monthly)|how much.*(payment|monthly)|how much down|money down|put (?:any )?money down|no money down|zero down|\$0 down|\$\s*\d+[,\d]*\s*(\/\s*mo|\/\s*month|per month|a month|monthly)|\bapr\b|term)/.test(
       t
     )
   );
@@ -356,8 +356,11 @@ function detectPaymentPressure(text: string): boolean {
 
 function detectDownPaymentQuestion(text: string): boolean {
   const t = text.toLowerCase();
-  return /(how much|what|what would|what do|do i need|need).*(down payment|downpayment|down|deposit)/.test(
-    t
+  return (
+    /(how much|what|what would|what do|do i need|need|do i have to|will i have to|can i).*(down payment|downpayment|money down|put (?:any )?money down|down|deposit|zero down|\$0 down)/.test(
+      t
+    ) ||
+    /\b(no money down|zero down|\$0 down)\b/.test(t)
   );
 }
 
@@ -365,6 +368,9 @@ function detectFinanceRequest(text: string): boolean {
   const t = text.toLowerCase();
   return (
     /(credit app|credit application|apply for credit|finance application|prequal|pre-qual|prequalify|financing|finance)\b/.test(
+      t
+    ) ||
+    /\b(co[-\s]?sign(?:er)?|cosign(?:er)?|pay stubs?|proof of unemployment|income verification)\b/.test(
       t
     ) ||
     (/\b(how|where|can i)\b.*\bapply\b/.test(t) &&
@@ -1670,6 +1676,11 @@ export async function orchestrateInbound(
   const wantsPayments =
     detectPaymentPressure(event.body) ||
     detectPaymentFollowUp(event.body, history ?? []);
+  const recentInboundAskedDown = [...(history ?? [])]
+    .reverse()
+    .filter(msg => msg.direction === "in" && String(msg.body ?? "").trim().length > 0)
+    .slice(0, 6)
+    .some(msg => detectDownPaymentQuestion(String(msg.body ?? "")));
   const wantsTrade = intent === "TRADE_IN" || explicitTradeRequest;
   const multiIntentCount = [wantsAvailability, wantsScheduling, wantsPayments, wantsTrade].filter(Boolean).length;
   const ambiguousFlow =
@@ -1709,7 +1720,15 @@ export async function orchestrateInbound(
   );
   if (financeRequest && !pricingTermsOnly && !wantsPayments) {
     const dealerProfile = await getDealerProfile();
-    const draft = buildFinanceAppLine(dealerProfile);
+    const hasCoSignerDetails = /\b(co[-\s]?sign(?:er)?|cosign(?:er)?)\b/i.test(
+      String(event.body ?? "")
+    );
+    let draft = recentInboundAskedDown
+      ? buildZeroDownQualificationLine(dealerProfile)
+      : buildFinanceAppLine(dealerProfile);
+    if (hasCoSignerDetails) {
+      draft = `A co-signer can definitely help with approval strength. ${draft}`;
+    }
     return finalize({
       intent: "FINANCING",
       stage: "ENGAGED",
