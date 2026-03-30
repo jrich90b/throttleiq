@@ -699,6 +699,29 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
       colorMatchesAlias(itemColorRaw, watchColorRaw, leadTrim);
     if (!directIncludes && !normalizedMatch) return false;
   }
+  const itemPrice = Number(item?.price ?? NaN);
+  const minPrice = Number(watch.minPrice ?? NaN);
+  const maxPrice = Number(watch.maxPrice ?? NaN);
+  const hasMinPrice = Number.isFinite(minPrice) && minPrice > 0;
+  const hasMaxPrice = Number.isFinite(maxPrice) && maxPrice > 0;
+  if (hasMinPrice || hasMaxPrice) {
+    if (!Number.isFinite(itemPrice) || itemPrice <= 0) return false;
+    if (hasMinPrice && itemPrice < minPrice) return false;
+    if (hasMaxPrice && itemPrice > maxPrice) return false;
+  }
+  const monthlyBudget = Number(watch.monthlyBudget ?? NaN);
+  if (Number.isFinite(monthlyBudget) && monthlyBudget > 0) {
+    const termMonthsRaw = Number(watch.termMonths ?? NaN);
+    const termMonths = Number.isFinite(termMonthsRaw) && termMonthsRaw > 0 ? termMonthsRaw : 72;
+    const downPaymentRaw = Number(watch.downPayment ?? NaN);
+    const downPayment = Number.isFinite(downPaymentRaw) && downPaymentRaw > 0 ? downPaymentRaw : 0;
+    const estimatedMonthly = estimateInventoryItemMonthlyPayment(item, {
+      termMonths,
+      taxRate: 0.08,
+      downPayment
+    });
+    if (estimatedMonthly == null || estimatedMonthly > monthlyBudget) return false;
+  }
   return true;
 }
 
@@ -4667,10 +4690,16 @@ async function seedInventoryWatchPendingFromReply(
     extractColorToken(inboundText.toLowerCase()),
     finish
   );
+  const budget = extractWatchBudgetPreference(inboundText);
   conv.inventoryWatchPending = {
     model,
     year: year ?? undefined,
     color,
+    minPrice: budget.minPrice,
+    maxPrice: budget.maxPrice,
+    monthlyBudget: budget.monthlyBudget,
+    termMonths: budget.termMonths,
+    downPayment: budget.downPayment,
     askedAt: nowIso()
   };
   setDialogState(conv, "inventory_watch_prompted");
@@ -4744,6 +4773,105 @@ function parseDownPaymentForBudget(text: string): { amount: number; assumedThous
     assumedThousands = true;
   }
   return { amount, assumedThousands };
+}
+
+function parsePriceTokenForWatch(raw: string): number | null {
+  const token = String(raw ?? "").trim().toLowerCase();
+  if (!token) return null;
+  const match = token.match(/^\$?\s*(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\s*(k|grand)?\s*$/i);
+  if (!match?.[1]) return null;
+  let value = Number(String(match[1]).replace(/,/g, ""));
+  if (!Number.isFinite(value) || value <= 0) return null;
+  const hasDollar = token.includes("$");
+  const hasK = !!match[2];
+  if (hasK) value *= 1000;
+  // Prevent year-like values (e.g. 2024) from being interpreted as price caps.
+  if (!hasDollar && !hasK && value >= 1900 && value <= 2099) return null;
+  // Price-watch parsing is for realistic vehicle pricing; require explicit currency/k
+  // or a value that already looks like a full dollar amount.
+  if (!hasDollar && !hasK && value < 1000) return null;
+  return Math.round(value);
+}
+
+function parseBudgetMoneyInput(raw: unknown): number | undefined {
+  const text = String(raw ?? "").trim();
+  if (!text) return undefined;
+  const strict = parsePriceTokenForWatch(text);
+  if (strict != null) return strict;
+  const n = Number(text.replace(/[$,\s]/g, ""));
+  if (Number.isFinite(n) && n > 0) return Math.round(n);
+  const k = text.match(/^(\d+(?:\.\d+)?)\s*(k|grand)$/i);
+  if (k?.[1]) {
+    const v = Number(k[1]);
+    if (Number.isFinite(v) && v > 0) return Math.round(v * 1000);
+  }
+  return undefined;
+}
+
+function extractWatchPricePreference(text: string): { minPrice?: number; maxPrice?: number } {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return {};
+  let minPrice: number | undefined;
+  let maxPrice: number | undefined;
+
+  const range = t.match(
+    /\b(?:between|from)?\s*(\$?\s*\d{1,3}(?:,\d{3})*|\$?\s*\d+(?:\.\d+)?\s*(?:k|grand)?)\s*(?:-|–|to)\s*(\$?\s*\d{1,3}(?:,\d{3})*|\$?\s*\d+(?:\.\d+)?\s*(?:k|grand)?)\b/i
+  );
+  if (range?.[1] && range?.[2]) {
+    const a = parsePriceTokenForWatch(range[1]);
+    const b = parsePriceTokenForWatch(range[2]);
+    if (a != null && b != null) {
+      minPrice = Math.min(a, b);
+      maxPrice = Math.max(a, b);
+    }
+  }
+
+  const cap = t.match(
+    /\b(?:under|below|less than|no more than|max(?:imum)?|up to)\s*(\$?\s*\d{1,3}(?:,\d{3})*|\$?\s*\d+(?:\.\d+)?\s*(?:k|grand)?)\b/i
+  );
+  if (cap?.[1]) {
+    const parsed = parsePriceTokenForWatch(cap[1]);
+    if (parsed != null) maxPrice = parsed;
+  }
+
+  const floor = t.match(
+    /\b(?:over|above|at least|more than|min(?:imum)?|from)\s*(\$?\s*\d{1,3}(?:,\d{3})*|\$?\s*\d+(?:\.\d+)?\s*(?:k|grand)?)\b/i
+  );
+  if (floor?.[1]) {
+    const parsed = parsePriceTokenForWatch(floor[1]);
+    if (parsed != null) minPrice = parsed;
+  }
+
+  if (minPrice != null && maxPrice != null && minPrice > maxPrice) {
+    const swap = minPrice;
+    minPrice = maxPrice;
+    maxPrice = swap;
+  }
+  return {
+    minPrice: Number.isFinite(minPrice as number) ? minPrice : undefined,
+    maxPrice: Number.isFinite(maxPrice as number) ? maxPrice : undefined
+  };
+}
+
+function extractWatchBudgetPreference(text: string): {
+  minPrice?: number;
+  maxPrice?: number;
+  monthlyBudget?: number;
+  termMonths?: number;
+  downPayment?: number;
+} {
+  const pricePref = extractWatchPricePreference(text);
+  const monthlyBudget = extractMonthlyBudgetLimit(text) ?? undefined;
+  const termMonths = extractPaymentTermMonths(text) ?? undefined;
+  const down = parseDownPaymentForBudget(text);
+  const downPayment = down?.amount ?? undefined;
+  return {
+    minPrice: pricePref.minPrice,
+    maxPrice: pricePref.maxPrice,
+    monthlyBudget,
+    termMonths,
+    downPayment
+  };
 }
 
 function normalizeTaxRate(raw: unknown): number {
@@ -5332,7 +5460,7 @@ function buildWatchUpdateHint(condition?: string | null, finishEligible?: boolea
 
 function parseInventoryWatchPreference(
   text: string,
-  pending: { model?: string; year?: number; color?: string }
+  pending: InventoryWatchPending
 ): { action: "set" | "clarify" | "ignore"; watch?: InventoryWatch } {
   const t = text.toLowerCase();
   if (!pending.model) return { action: "ignore" };
@@ -5358,6 +5486,7 @@ function parseInventoryWatchPreference(
   const finish = extractFinishToken(t);
   const baseColor = anyColor ? undefined : sanitizeColorPhrase(extractColorToken(t) ?? pending.color);
   const color = combineWatchColorAndFinish(baseColor, finish);
+  const budgetFromText = extractWatchBudgetPreference(text);
   const range = extractYearRange(t);
   let yearMin: number | undefined;
   let yearMax: number | undefined;
@@ -5383,10 +5512,26 @@ function parseInventoryWatchPreference(
     year,
     yearMin,
     yearMax,
+    minPrice: budgetFromText.minPrice ?? pending.minPrice,
+    maxPrice: budgetFromText.maxPrice ?? pending.maxPrice,
+    monthlyBudget: budgetFromText.monthlyBudget ?? pending.monthlyBudget,
+    termMonths: budgetFromText.termMonths ?? pending.termMonths,
+    downPayment: budgetFromText.downPayment ?? pending.downPayment,
     exactness: "model_only",
     status: "active",
     createdAt: new Date().toISOString()
   };
+  if (
+    watch.minPrice != null &&
+    watch.maxPrice != null &&
+    Number.isFinite(watch.minPrice) &&
+    Number.isFinite(watch.maxPrice) &&
+    watch.minPrice > watch.maxPrice
+  ) {
+    const swap = watch.minPrice;
+    watch.minPrice = watch.maxPrice;
+    watch.maxPrice = swap;
+  }
 
   if (watch.yearMin && watch.yearMax) watch.exactness = "model_range";
   else if (watch.year && watch.color) watch.exactness = "exact";
@@ -5401,6 +5546,41 @@ function parseInventoryWatchPreference(
   return { action: "set", watch };
 }
 
+function buildWatchBudgetText(watch: InventoryWatch): string {
+  const nf = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0
+  });
+  const minPrice = Number(watch.minPrice ?? NaN);
+  const maxPrice = Number(watch.maxPrice ?? NaN);
+  const hasMin = Number.isFinite(minPrice) && minPrice > 0;
+  const hasMax = Number.isFinite(maxPrice) && maxPrice > 0;
+  const monthlyBudget = Number(watch.monthlyBudget ?? NaN);
+  const hasMonthly = Number.isFinite(monthlyBudget) && monthlyBudget > 0;
+  const termMonthsRaw = Number(watch.termMonths ?? NaN);
+  const termMonths = Number.isFinite(termMonthsRaw) && termMonthsRaw > 0 ? termMonthsRaw : undefined;
+  const downPaymentRaw = Number(watch.downPayment ?? NaN);
+  const downPayment = Number.isFinite(downPaymentRaw) && downPaymentRaw > 0 ? downPaymentRaw : undefined;
+
+  const parts: string[] = [];
+  if (hasMin && hasMax) {
+    parts.push(`between ${nf.format(minPrice)} and ${nf.format(maxPrice)}`);
+  } else if (hasMax) {
+    parts.push(`up to ${nf.format(maxPrice)}`);
+  } else if (hasMin) {
+    parts.push(`from ${nf.format(minPrice)}`);
+  }
+  if (hasMonthly) {
+    let paymentPart = `around ${nf.format(monthlyBudget)}/mo`;
+    if (termMonths) paymentPart += ` at ${termMonths} months`;
+    if (downPayment) paymentPart += ` with about ${nf.format(downPayment)} down`;
+    parts.push(paymentPart);
+  }
+  if (!parts.length) return "";
+  return ` ${parts.join(" and ")}`;
+}
+
 function buildInventoryWatchConfirmation(watch: InventoryWatch): string {
   const yearText = watch.year
     ? `${watch.year} `
@@ -5409,7 +5589,8 @@ function buildInventoryWatchConfirmation(watch: InventoryWatch): string {
       : "";
   const cleanColor = sanitizeColorPhrase(watch.color) ?? watch.color;
   const colorText = cleanColor ? ` in ${cleanColor}` : "";
-  return `Got it — I’ll keep an eye out for ${yearText}${watch.model}${colorText} and text you as soon as one comes in.`;
+  const budgetText = buildWatchBudgetText(watch);
+  return `Got it — I’ll keep an eye out for ${yearText}${watch.model}${colorText}${budgetText} and text you as soon as one comes in.`;
 }
 
 function isWatchConfirmationIntentText(text: string): boolean {
@@ -8589,6 +8770,12 @@ app.post("/conversations/:id/watch", async (req, res) => {
       return {};
     };
 
+    const parseTermMonthsInput = (raw?: unknown): number | undefined => {
+      const n = Number(String(raw ?? "").trim());
+      if (!Number.isFinite(n) || n <= 0) return undefined;
+      return Math.round(n);
+    };
+
     const watchList: InventoryWatch[] = items
       .map((item: any) => {
         const model = String(item?.model ?? "").trim();
@@ -8599,6 +8786,23 @@ app.post("/conversations/:id/watch", async (req, res) => {
           Number(String(item?.yearMax ?? "").trim()) || undefined;
         const parsedYear = parseYearInput(item?.year);
         const year = parsedYear.year;
+        const budgetSeed = extractWatchBudgetPreference(
+          [
+            item?.priceRange,
+            item?.budget,
+            item?.priceBudget,
+            item?.monthlyBudget != null ? `${item?.monthlyBudget} monthly` : "",
+            item?.termMonths != null ? `${item?.termMonths} months` : "",
+            item?.downPayment != null ? `${item?.downPayment} down` : ""
+          ]
+            .filter(v => String(v ?? "").trim().length > 0)
+            .join(" ")
+        );
+        const minPrice = parseBudgetMoneyInput(item?.minPrice) ?? budgetSeed.minPrice;
+        const maxPrice = parseBudgetMoneyInput(item?.maxPrice) ?? budgetSeed.maxPrice;
+        const monthlyBudget = parseBudgetMoneyInput(item?.monthlyBudget) ?? budgetSeed.monthlyBudget;
+        const termMonths = parseTermMonthsInput(item?.termMonths) ?? budgetSeed.termMonths;
+        const downPayment = parseBudgetMoneyInput(item?.downPayment) ?? budgetSeed.downPayment;
         const watch: InventoryWatch = {
           model,
           year,
@@ -8608,11 +8812,27 @@ app.post("/conversations/:id/watch", async (req, res) => {
           trim: String(item?.trim ?? "").trim() || undefined,
           color: String(item?.color ?? "").trim() || undefined,
           condition: normalizeInputCondition(item?.condition),
+          minPrice,
+          maxPrice,
+          monthlyBudget,
+          termMonths,
+          downPayment,
           note: note || undefined,
           exactness: "model_only",
           status: "active",
           createdAt: nowIso
         };
+        if (
+          watch.minPrice != null &&
+          watch.maxPrice != null &&
+          Number.isFinite(watch.minPrice) &&
+          Number.isFinite(watch.maxPrice) &&
+          watch.minPrice > watch.maxPrice
+        ) {
+          const swap = watch.minPrice;
+          watch.minPrice = watch.maxPrice;
+          watch.maxPrice = swap;
+        }
         if (watch.yearMin && watch.yearMax) watch.exactness = "model_range";
         else if (watch.year && watch.color) watch.exactness = "exact";
         else if (watch.year) watch.exactness = "year_model";
@@ -11017,7 +11237,15 @@ if (authToken && signature) {
       leadVehicle.model ?? leadVehicle.description ?? null
     );
     if (!resolvedModel) {
-      conv.inventoryWatchPending = { askedAt: nowIso };
+      const budgetSeed = extractWatchBudgetPreference(String(event.body ?? ""));
+      conv.inventoryWatchPending = {
+        minPrice: budgetSeed.minPrice,
+        maxPrice: budgetSeed.maxPrice,
+        monthlyBudget: budgetSeed.monthlyBudget,
+        termMonths: budgetSeed.termMonths,
+        downPayment: budgetSeed.downPayment,
+        askedAt: nowIso
+      };
       setDialogState(conv, "inventory_watch_prompted");
       watchHandledEarly = true;
       if (!earlyWatchAsSideEffectOnly) {
@@ -11035,6 +11263,7 @@ if (authToken && signature) {
         return res.status(200).type("text/xml").send(twiml);
       }
     } else {
+      const budgetSeed = extractWatchBudgetPreference(String(event.body ?? ""));
       const pending: InventoryWatchPending = {
         model: resolvedModel,
         year: extractYearSingle(textLower) ?? leadYear,
@@ -11042,6 +11271,11 @@ if (authToken && signature) {
           extractColorToken(textLower) ?? leadVehicle.color ?? undefined,
           extractFinishToken(textLower)
         ),
+        minPrice: budgetSeed.minPrice,
+        maxPrice: budgetSeed.maxPrice,
+        monthlyBudget: budgetSeed.monthlyBudget,
+        termMonths: budgetSeed.termMonths,
+        downPayment: budgetSeed.downPayment,
         askedAt: nowIso
       };
       let pref = parseInventoryWatchPreference(String(event.body ?? ""), pending);
@@ -11051,6 +11285,11 @@ if (authToken && signature) {
           model: pending.model,
           year: pending.year,
           color: watchColor,
+          minPrice: pending.minPrice,
+          maxPrice: pending.maxPrice,
+          monthlyBudget: pending.monthlyBudget,
+          termMonths: pending.termMonths,
+          downPayment: pending.downPayment,
           exactness: "model_only",
           status: "active",
           createdAt: new Date().toISOString()
@@ -12119,6 +12358,14 @@ if (authToken && signature) {
             );
             if (colorFromText) pending.color = colorFromText;
           }
+          const budgetSeed = extractWatchBudgetPreference(String(event.body ?? ""));
+          if (pending.minPrice == null && budgetSeed.minPrice != null) pending.minPrice = budgetSeed.minPrice;
+          if (pending.maxPrice == null && budgetSeed.maxPrice != null) pending.maxPrice = budgetSeed.maxPrice;
+          if (pending.monthlyBudget == null && budgetSeed.monthlyBudget != null) {
+            pending.monthlyBudget = budgetSeed.monthlyBudget;
+          }
+          if (pending.termMonths == null && budgetSeed.termMonths != null) pending.termMonths = budgetSeed.termMonths;
+          if (pending.downPayment == null && budgetSeed.downPayment != null) pending.downPayment = budgetSeed.downPayment;
         }
       }
       const pendingCondition = inferWatchCondition(pending.model, pending.year, conv);
@@ -12134,6 +12381,11 @@ if (authToken && signature) {
           model: pending.model,
           year: pending.year,
           color: watchColor,
+          minPrice: pending.minPrice,
+          maxPrice: pending.maxPrice,
+          monthlyBudget: pending.monthlyBudget,
+          termMonths: pending.termMonths,
+          downPayment: pending.downPayment,
           exactness: "model_only",
           status: "active",
           createdAt: new Date().toISOString()
@@ -12926,7 +13178,15 @@ if (authToken && signature) {
     if (!resolvedModel) {
       if (!watchAsSideEffectOnly) {
         const reply = "Got it — which model should I watch for?";
-        conv.inventoryWatchPending = { askedAt: nowIso };
+        const budgetSeed = extractWatchBudgetPreference(String(event.body ?? ""));
+        conv.inventoryWatchPending = {
+          minPrice: budgetSeed.minPrice,
+          maxPrice: budgetSeed.maxPrice,
+          monthlyBudget: budgetSeed.monthlyBudget,
+          termMonths: budgetSeed.termMonths,
+          downPayment: budgetSeed.downPayment,
+          askedAt: nowIso
+        };
         setDialogState(conv, "inventory_watch_prompted");
         const systemMode = webhookMode;
         if (systemMode === "suggest") {
@@ -12943,6 +13203,7 @@ if (authToken && signature) {
     }
 
     if (resolvedModel) {
+      const budgetSeed = extractWatchBudgetPreference(String(event.body ?? ""));
       const pending: InventoryWatchPending = {
         model: resolvedModel,
         year: extractYearSingle(textLower) ?? leadYear,
@@ -12950,6 +13211,11 @@ if (authToken && signature) {
           extractColorToken(textLower) ?? leadVehicle.color ?? undefined,
           extractFinishToken(textLower)
         ),
+        minPrice: budgetSeed.minPrice,
+        maxPrice: budgetSeed.maxPrice,
+        monthlyBudget: budgetSeed.monthlyBudget,
+        termMonths: budgetSeed.termMonths,
+        downPayment: budgetSeed.downPayment,
         askedAt: nowIso
       };
       let pref = parseInventoryWatchPreference(String(event.body ?? ""), pending);
@@ -12959,6 +13225,11 @@ if (authToken && signature) {
           model: pending.model,
           year: pending.year,
           color: watchColor,
+          minPrice: pending.minPrice,
+          maxPrice: pending.maxPrice,
+          monthlyBudget: pending.monthlyBudget,
+          termMonths: pending.termMonths,
+          downPayment: pending.downPayment,
           exactness: "model_only",
           status: "active",
           createdAt: new Date().toISOString()
@@ -13742,10 +14013,16 @@ if (authToken && signature) {
             conv
           );
           const watchExactLabel = watchCondition === "new" ? "exact year/color" : "exact year";
+          const watchBudgetSeed = extractWatchBudgetPreference(String(event.body ?? ""));
           conv.inventoryWatchPending = {
             model: model ?? undefined,
             year: year ? Number(year) : undefined,
             color: combineWatchColorAndFinish(color, finishFromText),
+            minPrice: watchBudgetSeed.minPrice,
+            maxPrice: watchBudgetSeed.maxPrice,
+            monthlyBudget: watchBudgetSeed.monthlyBudget,
+            termMonths: watchBudgetSeed.termMonths,
+            downPayment: watchBudgetSeed.downPayment,
             askedAt: new Date().toISOString()
           };
           const reply = year
@@ -13830,10 +14107,16 @@ if (authToken && signature) {
         );
         const isGenericModel = /full line|other/i.test(model ?? "");
         if (!isGenericModel) {
+          const watchBudgetSeed = extractWatchBudgetPreference(String(event.body ?? ""));
           conv.inventoryWatchPending = {
             model: model ?? undefined,
             year: year ? Number(year) : undefined,
             color: combineWatchColorAndFinish(color, finishFromText),
+            minPrice: watchBudgetSeed.minPrice,
+            maxPrice: watchBudgetSeed.maxPrice,
+            monthlyBudget: watchBudgetSeed.monthlyBudget,
+            termMonths: watchBudgetSeed.termMonths,
+            downPayment: watchBudgetSeed.downPayment,
             askedAt: new Date().toISOString()
           };
           setDialogState(conv, "inventory_watch_prompted");

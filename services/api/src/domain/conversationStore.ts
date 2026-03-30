@@ -271,6 +271,11 @@ export type InventoryWatch = {
   condition?: string;
   color?: string;
   trim?: string;
+  minPrice?: number;
+  maxPrice?: number;
+  monthlyBudget?: number;
+  termMonths?: number;
+  downPayment?: number;
   note?: string;
   exactness?: "exact" | "year_model" | "model_range" | "model_only";
   status?: "active" | "paused";
@@ -283,6 +288,11 @@ export type InventoryWatchPending = {
   model?: string;
   year?: number;
   color?: string;
+  minPrice?: number;
+  maxPrice?: number;
+  monthlyBudget?: number;
+  termMonths?: number;
+  downPayment?: number;
   askedAt: string;
 };
 
