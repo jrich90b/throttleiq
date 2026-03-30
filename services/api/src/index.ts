@@ -3754,19 +3754,41 @@ function getPreferredSalespeopleForConv(
   conv: any
 ): string[] {
   const base = getPreferredSalespeople(cfg);
+  const salespeople = cfg.salespeople ?? [];
+  let ordered = [...base];
+
+  const prependUnique = (id: string | null | undefined) => {
+    const clean = String(id ?? "").trim();
+    if (!clean) return;
+    ordered = [clean, ...ordered.filter(existing => existing !== clean)];
+  };
+
   const prefId = conv?.scheduler?.preferredSalespersonId ?? null;
-  if (prefId && base.includes(prefId)) {
-    return [prefId, ...base.filter(id => id !== prefId)];
+  if (prefId) {
+    prependUnique(prefId);
   }
-  if (prefId && !base.includes(prefId)) {
-    return [prefId, ...base];
-  }
+
   const prefName = conv?.scheduler?.preferredSalespersonName ?? "";
   const byName = prefName ? resolveSalespersonByName(cfg, prefName) : null;
   if (byName) {
-    return [byName.id, ...base.filter(id => id !== byName.id)];
+    prependUnique(byName.id);
   }
-  return base;
+
+  // Lead owner should be first choice when we can resolve to a salesperson.
+  const ownerId = String(conv?.leadOwner?.id ?? "").trim();
+  if (ownerId) {
+    const byOwnerId = salespeople.find(sp => sp.id === ownerId);
+    if (byOwnerId?.id) {
+      prependUnique(byOwnerId.id);
+    }
+  }
+  const ownerName = String(conv?.leadOwner?.name ?? "").trim();
+  const byOwnerName = ownerName ? resolveSalespersonByName(cfg, ownerName) : null;
+  if (byOwnerName) {
+    prependUnique(byOwnerName.id);
+  }
+
+  return ordered;
 }
 
 function getLastNonVoiceOutbound(conv: any) {
