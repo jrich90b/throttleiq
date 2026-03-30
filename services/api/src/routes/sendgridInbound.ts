@@ -919,6 +919,18 @@ function buildLongTermMessage(timeframe?: string, hasLicense?: boolean) {
   return `Hi, this is Brooke at American Harley-Davidson. You mentioned a ${tf} timeline. I’m happy to help when you’re ready. Just reach out when the time is right.`;
 }
 
+function isPricingPaymentInquiry(text?: string | null): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t) return false;
+  return (
+    /\b(payment|payments|monthly|per month|apr|rate|interest|down payment|downpayment|put down|how much down|budget)\b/.test(
+      t
+    ) ||
+    /\b(finance|financing|quote|price|pricing|out the door|\botd\b)\b/.test(t) ||
+    /\/\s*mo\b|\/\s*month\b/.test(t)
+  );
+}
+
 export async function handleSendgridInbound(req: Request, res: Response) {
   console.log("[sendgrid inbound] meta:", {
     contentType: req.header("content-type"),
@@ -1237,6 +1249,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const rule = resolveLeadRule(leadSource, leadSourceId);
   const inquiryRaw = lead.inquiry ?? "";
   const inquiryText = String(inquiryRaw).toLowerCase();
+  const pricingInquiryIntent = isPricingPaymentInquiry(inquiryText);
   const inquiryDayPart = extractDayPartRequest(inquiryRaw);
   const serviceVinRequest =
     /registration\s+or\s+vin\s+number/i.test(lead.comment ?? "") ||
@@ -1288,6 +1301,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     inferredBucket = "trade_in_sell";
     inferredCta = "value_my_trade";
   }
+  if (
+    pricingInquiryIntent &&
+    inferredBucket !== "trade_in_sell" &&
+    inferredBucket !== "service" &&
+    inferredBucket !== "test_ride"
+  ) {
+    inferredCta = "request_a_quote";
+  }
   const channel = resolveChannel({
     leadSource,
     sourceId: leadSourceId,
@@ -1314,6 +1335,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (!conv.dialogState?.name || conv.dialogState.name === "none") {
     if (inferredBucket === "inventory_interest") {
       conv.dialogState = { name: "inventory_init", updatedAt: new Date().toISOString() };
+    } else if (pricingInquiryIntent) {
+      conv.dialogState = { name: "pricing_init", updatedAt: new Date().toISOString() };
     } else if (inferredBucket === "trade_in_sell" || inferredCta === "sell_my_bike") {
       conv.dialogState = { name: "trade_init", updatedAt: new Date().toISOString() };
     } else if (inferredBucket === "service" || inferredCta === "service_request") {
@@ -2229,6 +2252,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     !isSellLead &&
     !isCreditLead &&
     !isWalkInLead &&
+    !pricingInquiryIntent &&
     inferredBucket !== "trade_in_sell" &&
     inferredBucket !== "finance_prequal" &&
     inferredBucket !== "service" &&
@@ -2251,6 +2275,22 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       draft = `Thanks — I saw you wanted to learn more about the ${bikeLabel}.${isRequestDetails ? " Any specific questions about the bike?" : ""} I’m here to help.`;
       suppressAvailabilityAppend = true;
     }
+  }
+  if (
+    isInitialAdf &&
+    pricingInquiryIntent &&
+    typeof draft === "string" &&
+    !/\b(payment|monthly|apr|down|budget|finance|credit app|term)\b/i.test(draft)
+  ) {
+    const modelLabel = normalizeVehicleModel(
+      conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "",
+      conv.lead?.vehicle?.make ?? null
+    );
+    const yearLabel = conv.lead?.vehicle?.year ? `${conv.lead?.vehicle?.year} ` : "";
+    const bikeLabel = modelLabel ? `${yearLabel}${modelLabel}`.trim() : "the bike";
+    draft =
+      `Thanks for your question on the ${bikeLabel}. ` +
+      "I can help with a payment estimate. If you share your target monthly budget and term (60/72/84 months), I can ballpark options.";
   }
   if (
     inferredBucket === "test_ride" &&
