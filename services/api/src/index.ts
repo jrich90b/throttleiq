@@ -329,6 +329,17 @@ function getEmailConfig(profile: any) {
   return { from, replyTo, signature };
 }
 
+function appendFallbackEmailSignoff(body: string, dealerProfile: any): string {
+  const text = String(body ?? "").trim();
+  if (!text) return text;
+  const agent = String(dealerProfile?.agentName ?? "").trim() || "Sales Team";
+  const dealer = String(dealerProfile?.dealerName ?? "").trim() || "American Harley-Davidson";
+  if (/\n\s*(best|thanks|thank you|regards|sincerely)\s*,?\s*$/i.test(text)) {
+    return `${text}\n${agent}\n${dealer}`;
+  }
+  return `${text}\n\nBest,\n${agent}\n${dealer}`;
+}
+
 function base64UrlEncode(input: string): string {
   return Buffer.from(input)
     .toString("base64")
@@ -6129,7 +6140,10 @@ async function processDueFollowUps() {
     let emailMessage: string | null = null;
     if (useEmail) {
       if (cadence.kind === "long_term") {
-        emailMessage = `Hi ${name},\n\n${message}\n\n${bookingLine}\n\nThanks,`;
+        const longTermBody = String(message ?? "")
+          .replace(/^\s*hi\s+[^—\n-]+[—-]\s*/i, "")
+          .trim();
+        emailMessage = `Hi ${name},\n\n${longTermBody || message}\n\n${bookingLine}\n\nThanks,`;
       } else if (isTradeNoInterest) {
         const tradeBookingLine = bookingUrl
           ? `You can book an appointment here: ${bookingUrl}`
@@ -6188,7 +6202,7 @@ async function processDueFollowUps() {
         const signed =
           signature
             ? `${body}\n\n${signature}${dealerProfile?.logoUrl ? `\n\n${dealerProfile.logoUrl}` : ""}`
-            : body;
+            : appendFallbackEmailSignoff(body, dealerProfile);
         await sendEmail({
           to: emailTo!,
           subject,

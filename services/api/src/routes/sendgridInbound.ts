@@ -561,6 +561,17 @@ function buildInitialEmailDraft(
 
   return `Hi ${name},\n\n${thanks} ${intro} ${help} ${noteLine} ${buildLine} ${visit}\n\n${bookingLine}\n\n${extra}`.replace(/\s+\n/g, "\n").trim();
 }
+
+function appendFallbackEmailSignoff(body: string, profile: any): string {
+  const text = String(body ?? "").trim();
+  if (!text) return text;
+  const agent = String(profile?.agentName ?? "").trim() || "Sales Team";
+  const dealer = String(profile?.dealerName ?? "").trim() || "American Harley-Davidson";
+  if (/\n\s*(best|thanks|thank you|regards|sincerely)\s*,?\s*$/i.test(text)) {
+    return `${text}\n${agent}\n${dealer}`;
+  }
+  return `${text}\n\nBest,\n${agent}\n${dealer}`;
+}
 import { getSystemMode } from "../domain/settingsStore.js";
 import { sendEmail } from "../domain/emailSender.js";
 import { upsertContact } from "../domain/contactsStore.js";
@@ -1727,7 +1738,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           const signed =
             signature
               ? `${emailDraft}\n\n${signature}${profile?.logoUrl ? `\n\n${profile.logoUrl}` : ""}`
-              : emailDraft;
+              : appendFallbackEmailSignoff(emailDraft, profile);
           await sendEmail({
             to: emailTo!,
             subject,
@@ -2310,7 +2321,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         const signed =
           signature
             ? `${draft}\n\n${signature}${dealerProfile?.logoUrl ? `\n\n${dealerProfile.logoUrl}` : ""}`
-            : draft;
+            : appendFallbackEmailSignoff(draft, dealerProfile);
         await sendEmail({
           to: emailTo!,
           subject,
