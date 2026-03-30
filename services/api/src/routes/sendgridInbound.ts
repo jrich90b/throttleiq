@@ -486,6 +486,29 @@ function isTestRideSeason(profile: any, now: Date): boolean {
   return months.includes(current);
 }
 
+function parsePreferredDateOnly(value: string | null | undefined): Date | null {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  const m = raw.match(/^(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?$/);
+  if (!m) return null;
+  const month = Number(m[1]);
+  const day = Number(m[2]);
+  let year = m[3] ? Number(m[3]) : new Date().getUTCFullYear();
+  if (m[3] && m[3].length === 2) year = 2000 + year;
+  if (
+    !Number.isFinite(month) ||
+    !Number.isFinite(day) ||
+    !Number.isFinite(year) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31
+  ) {
+    return null;
+  }
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0));
+}
+
 function buildInitialEmailDraft(
   conv: any,
   dealerProfile: any,
@@ -1968,7 +1991,24 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       const cal = await getAuthedCalendarClient();
       const now = new Date();
       const timeMin = new Date(now).toISOString();
-      const timeMax = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString();
+      const requestedDaysOut =
+        result.requestedTime
+          ? Math.ceil(
+              (Date.UTC(
+                result.requestedTime.year,
+                result.requestedTime.month - 1,
+                result.requestedTime.day,
+                result.requestedTime.hour24,
+                result.requestedTime.minute
+              ) - now.getTime()) /
+                (24 * 60 * 60 * 1000)
+            )
+          : null;
+      const schedulingSearchDays = Math.max(
+        14,
+        Math.min(90, requestedDaysOut != null ? requestedDaysOut + 3 : 14)
+      );
+      const timeMax = new Date(now.getTime() + schedulingSearchDays * 24 * 60 * 60 * 1000).toISOString();
 
       for (const salespersonId of preferredSalespeople) {
         const sp = salespeople.find((p: any) => p.id === salespersonId);
@@ -1989,7 +2029,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         if (!exact) {
           const requested = result.requestedTime!;
           const requestedStartUtc = localPartsToUtcDate(cfg.timezone, requested);
-          const candidatesByDay = generateCandidateSlots(cfg, now, durationMinutes, 14);
+          const candidatesByDay = generateCandidateSlots(
+            cfg,
+            now,
+            durationMinutes,
+            schedulingSearchDays
+          );
           const matchesSameDay = (d: Date) => {
             const fmt = new Intl.DateTimeFormat("en-US", {
               timeZone: cfg.timezone,
@@ -2126,7 +2171,21 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
 
   const dealerProfile = await getDealerProfile();
-  const testRideInSeason = isTestRideSeason(dealerProfile, new Date());
+  const requestedRideDate =
+    result.requestedTime
+      ? new Date(
+          Date.UTC(
+            result.requestedTime.year,
+            result.requestedTime.month - 1,
+            result.requestedTime.day,
+            12,
+            0,
+            0,
+            0
+          )
+        )
+      : parsePreferredDateOnly(conv.lead?.preferredDate);
+  const testRideInSeason = isTestRideSeason(dealerProfile, requestedRideDate ?? new Date());
   let draft = result.shouldRespond ? result.draft : "Thanks — I’ll follow up shortly.";
   let suppressAvailabilityAppend = false;
   if (isInitialAdf && inquiryDayPart) {
