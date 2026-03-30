@@ -1509,8 +1509,13 @@ export default function Home() {
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [modelsByYear, inventoryItems, watchEditItems, cadenceWatchItems]);
 
-  function openWatchEdit(convId: string) {
-    const conv = conversations.find(c => c.id === convId || c.leadKey === convId);
+  async function openWatchEdit(convId: string) {
+    setWatchEditError(null);
+    const convFromDetail =
+      (selectedConv?.id === convId || selectedConv?.leadKey === convId
+        ? selectedConv
+        : await fetchConversationDetail(convId)) ?? null;
+    const conv = convFromDetail ?? conversations.find(c => c.id === convId || c.leadKey === convId) ?? null;
     if (!conv) return;
     const watches =
       conv.inventoryWatches && conv.inventoryWatches.length
@@ -1519,12 +1524,11 @@ export default function Home() {
           ? [conv.inventoryWatch]
           : [];
     setWatchEditConvId(conv.id);
-    setWatchEditItems(groupWatchesToFormItems(watches));
-    const note =
-      watches.find(w => String(w?.note ?? "").trim())?.note ??
-      "";
+    setWatchEditItems(
+      watches.length ? groupWatchesToFormItems(watches) : seedWatchItemsFromConv(conv as ConversationDetail)
+    );
+    const note = watches.find(w => String(w?.note ?? "").trim())?.note ?? "";
     setWatchEditNote(note);
-    setWatchEditError(null);
     setWatchEditOpen(true);
   }
 
