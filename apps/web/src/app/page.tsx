@@ -4320,7 +4320,7 @@ export default function Home() {
               ) : null}
             </button>
             {settingsOpen ? (
-              <div className="absolute bottom-12 left-12 w-56 bg-white border rounded-lg shadow-lg p-2 z-50">
+              <div className="absolute bottom-12 left-12 w-56 bg-white border border-gray-200 rounded-lg shadow-lg p-2 z-50 text-gray-900">
                 <div className="text-xs font-semibold text-gray-600 px-2 py-1">Settings</div>
                 {isManager ? (
                   <>
