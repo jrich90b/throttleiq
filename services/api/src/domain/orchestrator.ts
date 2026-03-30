@@ -1984,6 +1984,7 @@ export async function orchestrateInbound(
         const taxRateRaw = Number((dealerProfile as any)?.taxRate ?? 8);
         const taxRate = Number.isFinite(taxRateRaw) ? (taxRateRaw > 1 ? taxRateRaw / 100 : taxRateRaw) : 0.08;
         const preferredTerm = extractPreferredTermMonths(event.body) ?? 60;
+        const targetMonthly = extractMonthlyBudget(event.body);
         const downInfo = parseDownPayment(event.body);
         const downPayment = downInfo?.amount;
         const downPaymentAssumed = downInfo?.assumedThousands ?? false;
@@ -1998,6 +1999,29 @@ export async function orchestrateInbound(
             downPayment,
             downPaymentAssumed
           });
+          const termProvided = extractPreferredTermMonths(event.body) != null;
+          const downProvided = downPayment != null || downPaymentAssumed;
+          const monthlyProvided = targetMonthly != null;
+          if (!monthlyProvided || !termProvided || !downProvided) {
+            let follow = "";
+            if (!monthlyProvided && !termProvided && !downProvided) {
+              follow =
+                "What monthly payment feels comfortable for you, about how much down, and were you thinking 60, 72, or 84 months?";
+            } else if (!monthlyProvided && !termProvided) {
+              follow = "What monthly payment feels comfortable for you, and were you thinking 60, 72, or 84 months?";
+            } else if (!monthlyProvided && !downProvided) {
+              follow = "What monthly payment feels comfortable for you, and about how much down were you thinking?";
+            } else if (!termProvided && !downProvided) {
+              follow = "Were you thinking 60, 72, or 84 months, and about how much down?";
+            } else if (!monthlyProvided) {
+              follow = "What monthly payment feels comfortable for you?";
+            } else if (!termProvided) {
+              follow = "Were you thinking 60, 72, or 84 months?";
+            } else if (!downProvided) {
+              follow = "About how much down were you thinking?";
+            }
+            paymentsLine = `${paymentsLine} ${follow}`.trim();
+          }
         } else {
           paymentsLine = "I can ballpark payments once I confirm the exact price.";
         }
