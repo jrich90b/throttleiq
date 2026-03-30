@@ -9293,6 +9293,12 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (conv.followUpCadence.kind === "post_sale") return;
     advanceFollowUpCadence(conv, schedulerTimezone);
   };
+  const finalizeManualSendDraftState = (opts?: { clearEmailDraft?: boolean }) => {
+    discardPendingDrafts(conv, "manual_send");
+    if (opts?.clearEmailDraft) {
+      delete conv.emailDraft;
+    }
+  };
   const hasOpenNonCallTodo = () =>
     listOpenTodos().some(t => t.convId === conv.id && t.reason !== "call");
 
@@ -9425,8 +9431,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       if (!fin.usedDraft) {
         appendOutbound(conv, emailFrom, emailTo!, signed, outboundProvider);
       }
-      // Clear stored email draft so the UI doesn't keep pre-filling after send.
-      delete conv.emailDraft;
+      finalizeManualSendDraftState({ clearEmailDraft: true });
       saveConversation(conv);
       await flushConversationStore();
       if (!hadOutbound) {
@@ -9457,6 +9462,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!fin.usedDraft) {
       appendOutbound(conv, "salesperson", conv.leadKey, body, "human", undefined, mediaUrls);
     }
+    finalizeManualSendDraftState();
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
     }
@@ -9488,6 +9494,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!fin.usedDraft) {
       appendOutbound(conv, "salesperson", to, body, "human", undefined, mediaUrls);
     }
+    finalizeManualSendDraftState();
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
     }
@@ -9524,6 +9531,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!fin.usedDraft) {
       appendOutbound(conv, from, to, body, "twilio", msg.sid, mediaUrls);
     }
+    finalizeManualSendDraftState();
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
     }
@@ -9552,6 +9560,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!fin.usedDraft) {
       appendOutbound(conv, "salesperson", to, body, "human", undefined, mediaUrls);
     }
+    finalizeManualSendDraftState();
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
     }
