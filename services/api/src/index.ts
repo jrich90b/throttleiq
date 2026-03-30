@@ -4776,6 +4776,25 @@ function isTouringRequestText(text: string): boolean {
   );
 }
 
+function isTrailerOrTowRequestText(text?: string | null): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t) return false;
+  return /\b(trailer|cargo|utility|enclosed|hauler|tow(?:ing)?|tow[-\s]?dolly|dolly)\b/.test(t);
+}
+
+function isLikelyMotorcycleInventoryItem(item: any): boolean {
+  const model = String(item?.model ?? "").toLowerCase();
+  const stock = String(item?.stockId ?? "").toLowerCase();
+  const vin = String(item?.vin ?? "").toUpperCase();
+
+  if (!model && !stock && !vin) return false;
+  if (isTrailerOrTowRequestText(model)) return false;
+  if (/\btwin cruiser\b/.test(model)) return false;
+  if (/^tr\d/.test(stock) && !/\b(tri glide|trike)\b/.test(model)) return false;
+  if (/^(2TR|4YH|5KT|1UY|53W|7H3|7M3|1Z9)/.test(vin)) return false;
+  return true;
+}
+
 function calcMonthlyPayment(principal: number, apr: number, months: number): number {
   const rate = apr / 12;
   if (rate <= 0) return principal / months;
@@ -13451,6 +13470,13 @@ if (authToken && signature) {
             if (soldKey && solds?.[soldKey]) return false;
             return true;
           });
+          const trailerRequested =
+            isTrailerOrTowRequestText(event.body) ||
+            isTrailerOrTowRequestText(model) ||
+            isTrailerOrTowRequestText(conv.lead?.vehicle?.description);
+          if (!trailerRequested) {
+            alternativePool = alternativePool.filter(i => isLikelyMotorcycleInventoryItem(i));
+          }
           if (touringRequested) {
             alternativePool = alternativePool.filter(i => isTouringModelName(i.model));
           }
