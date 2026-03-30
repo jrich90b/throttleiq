@@ -4434,6 +4434,27 @@ function applySoftSchedulePolicy(conv: any, reply: string, inboundText: string):
   return `${out} ${softLine}`.trim();
 }
 
+function stripYearPreferenceIfAnyYearSpecified(reply: string, inboundText: string): string {
+  const inbound = String(inboundText ?? "").toLowerCase();
+  const anyYearSpecified =
+    /\b(any year|no year preference|open to other years|either year|any model year)\b/.test(inbound);
+  if (!anyYearSpecified) return reply;
+  const original = String(reply ?? "");
+  if (!original.trim()) return original;
+  const prefersFinishPrompt = /\b(chrome|blacked[-\s]?out|finish)\b/i.test(original);
+  const replacement = prefersFinishPrompt
+    ? "Any specific color or finish you’re after (chrome vs blacked-out)?"
+    : "Any specific color you’re after?";
+  const patterns: RegExp[] = [
+    /\bAny color or year preference\??/gi,
+    /\bAny (?:specific )?year or color(?: you(?:'|’)re after| preference)?\??/gi,
+    /\bWhat year are you after\??/gi
+  ];
+  const rewritten = patterns.reduce((text, pattern) => text.replace(pattern, replacement), original);
+  if (rewritten === original) return reply;
+  return rewritten.replace(/\s{2,}/g, " ").trim();
+}
+
 function isPricingText(text: string): boolean {
   return /(price|otd|out the door|payment|monthly|down|apr|term|finance|credit|quote|lowest|best price|how low|low can (you|they) go)/i.test(
     String(text ?? "")
@@ -9393,6 +9414,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   reply = applyCallbackPolicy(conv, reply, lastOutboundTextFinal);
   reply = applyServicePolicy(conv, reply, lastOutboundTextFinal);
   reply = applySoftSchedulePolicy(conv, reply, String(event.body ?? ""));
+  reply = stripYearPreferenceIfAnyYearSpecified(reply, String(event.body ?? ""));
   reply = stripSchedulingLanguageIfNotAsked(reply, String(event.body ?? ""));
   reply = stripNonAdfThanks(reply, event.provider);
   reply = stripCallTimingQuestions(reply);
@@ -13360,7 +13382,9 @@ if (authToken && signature) {
           : year
             ? `Yes — we do have a ${conditionLabel}${year} ${model}${colorLabel}${finishLabel} in stock. Would you like to stop by to take a look?`
           : color || finishFromText
-              ? `Yes — we do have a ${conditionLabel}${model}${colorLabel}${finishLabel} in stock. What year are you after?`
+              ? anyYearRequested
+                ? `Yes — we do have a ${conditionLabel}${model}${colorLabel}${finishLabel} in stock. Would you like details or to stop by?`
+                : `Yes — we do have a ${conditionLabel}${model}${colorLabel}${finishLabel} in stock. What year are you after?`
               : `Yes — we do have a ${conditionLabel}${model} in stock. ${followUpPreferencePrompt}`;
           const systemMode = webhookMode;
           if (systemMode === "suggest") {
@@ -14539,6 +14563,7 @@ if (authToken && signature) {
   reply = applyCallbackPolicy(conv, reply, lastOutboundTextFinal);
   reply = applyServicePolicy(conv, reply, lastOutboundTextFinal);
   reply = applySoftSchedulePolicy(conv, reply, String(event.body ?? ""));
+  reply = stripYearPreferenceIfAnyYearSpecified(reply, String(event.body ?? ""));
   reply = stripSchedulingLanguageIfNotAsked(reply, String(event.body ?? ""));
   reply = stripAgentCallFollowupWhenCustomerWillCall(reply, String(event.body ?? ""));
   await seedInventoryWatchPendingFromReply(conv, event, reply);
