@@ -731,6 +731,15 @@ async function processInventoryWatchlist(targetConvId?: string) {
   try {
     const items = await getInventoryFeed();
     if (!items.length) return;
+    const holds = await listInventoryHolds();
+    const solds = await listInventorySolds();
+    const isWatchCandidateAvailable = (item: any): boolean => {
+      const holdKey = normalizeInventoryHoldKey(item?.stockId, item?.vin);
+      if (holdKey && holds?.[holdKey]) return false;
+      const soldKey = normalizeInventorySoldKey(item?.stockId, item?.vin);
+      if (soldKey && solds?.[soldKey]) return false;
+      return true;
+    };
     const cfg = await getSchedulerConfig();
     const tz = cfg.timezone || "America/New_York";
     const snapshot = await loadInventorySnapshot();
@@ -772,7 +781,9 @@ async function processInventoryWatchlist(targetConvId?: string) {
         }
         // For brand-new watches (never notified), allow matching against current
         // in-stock inventory. Otherwise only match newly-arrived units.
-        const candidateItems = watch.lastNotifiedAt ? newItems : items;
+        const candidateItems = (watch.lastNotifiedAt ? newItems : items).filter(i =>
+          isWatchCandidateAvailable(i)
+        );
         if (!candidateItems.length) continue;
         const match = candidateItems.find(i => inventoryItemMatchesWatch(i, watch));
         if (!match) continue;
