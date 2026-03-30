@@ -4261,12 +4261,24 @@ function applyTradePolicy(
   suggestedSlots?: Array<{ startLocal?: string | null }>
 ): string {
   const state = getDialogState(conv);
-  if (!state.startsWith("trade_")) return reply;
+  const lastInboundText = String(getLastInboundBody(conv) ?? "");
+  const watchIntent = isWatchConfirmationIntentText(lastInboundText);
+  if (!state.startsWith("trade_")) {
+    if (watchIntent && hasPriorTradeAppraisalMention(conv)) {
+      let stripped = stripTradeReaskSentences(reply);
+      if (!stripped) {
+        stripped = conv.inventoryWatch
+          ? buildInventoryWatchConfirmation(conv.inventoryWatch)
+          : "Sounds good — I’ll keep an eye out and text you as soon as one comes in.";
+      }
+      return rewriteTradeVoiceToTeam(stripped);
+    }
+    return reply;
+  }
   let out = reply;
   if (state !== "trade_init") {
     out = stripTradeIntroSentence(out);
   }
-  const lastInboundText = String(getLastInboundBody(conv) ?? "");
   const askedToSchedule =
     /(schedule|appointment|set (up )?a time|come (in|by)|stop (in|by)|what time|what day|when can i come|can i come|stop by)/i.test(
       lastInboundText
@@ -4317,7 +4329,6 @@ function applyTradePolicy(
       out = `${out} ${callLine}`.trim();
     }
   }
-  const watchIntent = isWatchConfirmationIntentText(lastInboundText);
   if (watchIntent && hasPriorTradeAppraisalMention(conv)) {
     out = stripTradeReaskSentences(out);
     if (!out) {
