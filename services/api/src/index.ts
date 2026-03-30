@@ -6092,6 +6092,14 @@ async function processDueFollowUps() {
       const lastInbound = getLastInbound(conv);
       if (lastInbound?.body && lastInbound?.at) {
         const inboundAt = new Date(lastInbound.at);
+        if (!Number.isNaN(inboundAt.getTime())) {
+          const msSinceInbound = now.getTime() - inboundAt.getTime();
+          // Guard against cadence/inbound race conditions: if a customer message
+          // just arrived, do not fire a scheduled follow-up in that same window.
+          if (msSinceInbound >= 0 && msSinceInbound < 15 * 60 * 1000) {
+            setBlockUntil(new Date(inboundAt.getTime() + 15 * 60 * 1000));
+          }
+        }
         const { until, indefinite } = parsePauseUntil(lastInbound.body, inboundAt);
         if (indefinite) continue;
         if (until && now < until) setBlockUntil(until);
