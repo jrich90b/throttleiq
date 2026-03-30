@@ -1483,6 +1483,7 @@ function parseDayToken(t: string): string | null {
 
 function parseExactTime(text: string): { hour24: number; minute: number; timeText: string } | null {
   const t = text.toLowerCase();
+  const trimmed = t.trim();
   if (/(around|approx|approximately|ish)\b/.test(t)) return null;
   if (/\bnoon\b/.test(t)) return { hour24: 12, minute: 0, timeText: "noon" };
 
@@ -1499,11 +1500,35 @@ function parseExactTime(text: string): { hour24: number; minute: number; timeTex
     timeText = m[0];
   } else {
     const m2 = t.match(/\b(\d{1,2})\s*(am|pm)\b/);
-    if (!m2) return null;
-    hourRaw = Number(m2[1]);
-    minute = 0;
-    meridiem = m2[2];
-    timeText = m2[0];
+    if (m2) {
+      hourRaw = Number(m2[1]);
+      minute = 0;
+      meridiem = m2[2];
+      timeText = m2[0];
+    } else {
+      // Compact forms like "430", "0430", "430pm", or "at 430".
+      const compact =
+        trimmed.match(/^(\d{3,4})\s*(am|pm)?$/) ??
+        t.match(/\b(?:at|for|by)\s*(\d{3,4})\s*(am|pm)?\b/);
+      if (compact) {
+        const digits = compact[1];
+        const split = digits.length === 3 ? 1 : 2;
+        hourRaw = Number(digits.slice(0, split));
+        minute = Number(digits.slice(split));
+        meridiem = compact[2];
+        timeText = compact[0];
+      } else {
+        // Bare-hour forms like "4" or "at 4".
+        const bare =
+          trimmed.match(/^(\d{1,2})\s*(am|pm)?$/) ??
+          t.match(/\b(?:at|for|by)\s*(\d{1,2})\s*(am|pm)?\b/);
+        if (!bare) return null;
+        hourRaw = Number(bare[1]);
+        minute = 0;
+        meridiem = bare[2];
+        timeText = bare[0];
+      }
+    }
   }
   if (minute < 0 || minute > 59) return null;
   if (hourRaw < 0 || hourRaw > 23) return null;
