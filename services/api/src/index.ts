@@ -1514,7 +1514,7 @@ async function applyPostCallSummaryActions(opts: {
   const notInStockCue =
     /\b(don'?t|do not|not)\s+(currently\s+)?(have|see|show|carry|stock)\b.*\b(in stock|available)\b|\bnot available\b|\bsold out\b|\bno\s+.*\bin stock\b/i;
   const notifyCue =
-    /\b(let (you|me) know|keep (you|me) posted|keep an eye out|watch for|call (you|me) if|text (you|me) if)\b.*\b(comes in|available|get one|get it|in stock|find one)\b/i;
+    /\b(let (you|me) know|keep (you|me) posted|keep an eye out|watch for|call (you|me) if|text (you|me) if|send(?:ing)? (?:it|one|them)?\s*my way|send(?:ing)? (?:it|one|them)?\s*over)\b.*\b(comes in|available|get one|get it|in stock|find one)\b/i;
   if (
     watchCue.test(lowerSummary) ||
     watchCue.test(lowerTranscript) ||
@@ -5208,7 +5208,7 @@ function isWatchConfirmationIntentText(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
   const intent =
-    /\b(let me know|keep me posted|keep an eye out|watch for|notify me|text me|call me|shoot me(?: a)? text|shot me(?: a)? text|send (?:it|one|them)?\s*my way|send (?:it|one|them)?\s*over)\b/.test(
+    /\b(let me know|keep me posted|keep an eye out|watch for|notify me|text me|call me|shoot me(?: a)? (?:text|message|one)|shot me(?: a)? (?:text|message|one)|send(?:ing)? (?:it|one|them)?\s*my way|send(?:ing)? (?:it|one|them)?\s*over)\b/.test(
       t
     );
   const trigger =
@@ -5225,6 +5225,9 @@ async function resolveWatchModelFromText(
   const normalized = normalizeModelText(textLower);
   if (/\bsportster\b/.test(normalized) && is883ModelToken(normalized)) {
     return "Sportster 883";
+  }
+  if (/\b(any|all)\s+sportsters?\b/.test(normalized) || /\bany\s+year\s+sportsters?\b/.test(normalized)) {
+    return "Sportster";
   }
   try {
     const items = await getInventoryFeed();
