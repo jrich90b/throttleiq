@@ -7,6 +7,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import crypto from "node:crypto";
+import { fileURLToPath } from "node:url";
 import OpenAI from "openai";
 import { orchestrateInbound } from "./domain/orchestrator.js";
 import {
@@ -437,6 +438,185 @@ function formatRequestedConditionLabel(condition?: "new" | "used"): string {
   return condition ? `${condition} ` : "";
 }
 
+type ModelCodesByFamilyCatalog = {
+  families?: Record<string, string[]>;
+  aliases?: Record<string, string[]>;
+};
+
+type ModelCodesByFamilyLookup = {
+  aliases: Map<string, Set<string>>;
+  families: Map<string, Set<string>>;
+  aliasKeysByLength: string[];
+  familyKeysByLength: string[];
+  allCodes: Set<string>;
+};
+
+let modelCodesByFamilyLookupCache: ModelCodesByFamilyLookup | null = null;
+
+function normalizeCatalogModelKey(value: string | null | undefined): string {
+  return normalizeModelText(value);
+}
+
+function normalizeModelCode(value: string | null | undefined): string {
+  return String(value ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9_-]+/g, "")
+    .trim();
+}
+
+function toCodeSet(values: string[] | undefined): Set<string> {
+  const out = new Set<string>();
+  for (const raw of values ?? []) {
+    const code = normalizeModelCode(raw);
+    if (code) out.add(code);
+  }
+  return out;
+}
+
+function modelKeyContains(haystack: string, needle: string): boolean {
+  if (!haystack || !needle) return false;
+  const hay = ` ${haystack.trim()} `;
+  const ndl = ` ${needle.trim()} `;
+  return hay.includes(ndl);
+}
+
+function resolveModelCodesCatalogPaths(): string[] {
+  const envPath = String(process.env.MODEL_CODES_BY_FAMILY_PATH ?? "").trim();
+  const byCwdSrc = path.resolve(process.cwd(), "src/domain/model_codes_by_family.json");
+  const byCwdRepo = path.resolve(process.cwd(), "services/api/src/domain/model_codes_by_family.json");
+  const byModuleSrc = fileURLToPath(
+    new URL("../src/domain/model_codes_by_family.json", import.meta.url)
+  );
+  const byModuleSibling = fileURLToPath(
+    new URL("./domain/model_codes_by_family.json", import.meta.url)
+  );
+  const deduped = Array.from(
+    new Set([envPath, byCwdSrc, byCwdRepo, byModuleSrc, byModuleSibling].filter(Boolean))
+  );
+  return deduped;
+}
+
+function loadModelCodesByFamilyLookup(): ModelCodesByFamilyLookup | null {
+  if (modelCodesByFamilyLookupCache) return modelCodesByFamilyLookupCache;
+  let parsed: ModelCodesByFamilyCatalog | null = null;
+  for (const p of resolveModelCodesCatalogPaths()) {
+    try {
+      const raw = fs.readFileSync(p, "utf8");
+      const json = JSON.parse(raw) as ModelCodesByFamilyCatalog;
+      if (!json || (typeof json !== "object" && !Array.isArray(json))) continue;
+      parsed = json;
+      break;
+    } catch {
+      // try next location
+    }
+  }
+  if (!parsed) return null;
+
+  const aliases = new Map<string, Set<string>>();
+  for (const [rawKey, rawCodes] of Object.entries(parsed.aliases ?? {})) {
+    if (!Array.isArray(rawCodes)) continue;
+    const key = normalizeCatalogModelKey(rawKey);
+    if (!key) continue;
+    const codes = toCodeSet(rawCodes);
+    if (!codes.size) continue;
+    aliases.set(key, codes);
+  }
+
+  const families = new Map<string, Set<string>>();
+  for (const [rawKey, rawCodes] of Object.entries(parsed.families ?? {})) {
+    if (!Array.isArray(rawCodes)) continue;
+    const key = normalizeCatalogModelKey(rawKey);
+    if (!key) continue;
+    const codes = toCodeSet(rawCodes);
+    if (!codes.size) continue;
+    families.set(key, codes);
+  }
+
+  modelCodesByFamilyLookupCache = {
+    aliases,
+    families,
+    aliasKeysByLength: [...aliases.keys()].sort((a, b) => b.length - a.length),
+    familyKeysByLength: [...families.keys()].sort((a, b) => b.length - a.length),
+    allCodes: new Set<string>(
+      [...aliases.values(), ...families.values()].flatMap(set => Array.from(set))
+    )
+  };
+  return modelCodesByFamilyLookupCache;
+}
+
+function extractCatalogCodeHints(
+  modelText: string | null | undefined,
+  lookup: ModelCodesByFamilyLookup
+): Set<string> {
+  const hints = new Set<string>();
+  const raw = String(modelText ?? "");
+  if (!raw.trim()) return hints;
+  const tokens = raw.toUpperCase().match(/[A-Z0-9_-]{3,}/g) ?? [];
+  for (const token of tokens) {
+    const code = normalizeModelCode(token);
+    if (!code) continue;
+    if (lookup.allCodes.has(code)) {
+      hints.add(code);
+      continue;
+    }
+    const noUnderscore = code.replace(/_/g, "");
+    if (noUnderscore && lookup.allCodes.has(noUnderscore)) {
+      hints.add(noUnderscore);
+    }
+  }
+  return hints;
+}
+
+function inferModelCodesForText(modelText: string | null | undefined): Set<string> {
+  const lookup = loadModelCodesByFamilyLookup();
+  const modelKey = normalizeCatalogModelKey(modelText);
+  if (!lookup || !modelKey) return new Set<string>();
+
+  const resolved = new Set<string>();
+  const addCodes = (codes?: Set<string>) => {
+    if (!codes) return;
+    for (const code of codes) resolved.add(code);
+  };
+  const codeHints = extractCatalogCodeHints(modelText, lookup);
+  addCodes(codeHints);
+
+  const exactAliasCodes = lookup.aliases.get(modelKey);
+  const exactFamilyCodes = lookup.families.get(modelKey);
+  addCodes(exactAliasCodes);
+  addCodes(exactFamilyCodes);
+
+  // Keep exact aliases/families precise. Only expand via contains-match when there is no exact hit.
+  if (!exactAliasCodes && !exactFamilyCodes) {
+    for (const aliasKey of lookup.aliasKeysByLength) {
+      if (!modelKeyContains(modelKey, aliasKey)) continue;
+      addCodes(lookup.aliases.get(aliasKey));
+    }
+    for (const familyKey of lookup.familyKeysByLength) {
+      if (!modelKeyContains(modelKey, familyKey)) continue;
+      addCodes(lookup.families.get(familyKey));
+    }
+  }
+
+  const numericTokens = Array.from(modelKey.matchAll(/\b\d{3,4}\b/g))
+    .map(m => m[0])
+    .filter(Boolean);
+  if (numericTokens.length && resolved.size) {
+    const filtered = [...resolved].filter(code => numericTokens.some(token => code.includes(token)));
+    if (filtered.length) return new Set(filtered);
+  }
+  return resolved;
+}
+
+function modelsShareCatalogCodes(modelA: string | null | undefined, modelB: string | null | undefined): boolean {
+  const aCodes = inferModelCodesForText(modelA);
+  const bCodes = inferModelCodesForText(modelB);
+  if (!aCodes.size || !bCodes.size) return false;
+  for (const code of aCodes) {
+    if (bCodes.has(code)) return true;
+  }
+  return false;
+}
+
 function is883ModelToken(model: string): boolean {
   const t = normalizeModelText(model);
   return /\b883\b/.test(t) || /\bxl\s*883\b/.test(t);
@@ -459,13 +639,14 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
   const itemModel = normalizeModelName(String(item.model));
   const watchModel = normalizeModelName(String(watch.model));
   const directMatch = itemModel.includes(watchModel) || watchModel.includes(itemModel);
+  const catalogCodeMatch = modelsShareCatalogCodes(itemModel, watchModel);
   const watchHas883 = is883ModelToken(watchModel);
   const familyMatch = (() => {
     if (!isSportsterFamilyAlias(watchModel)) return false;
     if (watchHas883) return is883ModelToken(itemModel);
     return isSportsterFamilyAlias(itemModel);
   })();
-  if (!directMatch && !familyMatch) return false;
+  if (!directMatch && !familyMatch && !catalogCodeMatch) return false;
   if (watch.trim) {
     const trimToken = normalizeModelName(String(watch.trim));
     if (trimToken && !itemModel.includes(trimToken)) return false;
