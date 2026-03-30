@@ -10832,6 +10832,129 @@ if (authToken && signature) {
     conv.classification?.cta === "sell_my_bike" ||
     conv.classification?.bucket === "trade_in_sell";
   const isSellMyBikeLead = /sell my bike/.test(leadSourceText) || conv.classification?.cta === "sell_my_bike";
+  let watchHandledEarly = false;
+  const earlyWatchIntentText = isWatchConfirmationIntentText(String(event.body ?? ""));
+  const earlyWatchPrompted = /\b(keep an eye|keep me posted|watch for|watch\b)\b/i.test(
+    lastOutboundText
+  );
+  const earlyPromptedWatchAffirm =
+    earlyWatchPrompted &&
+    isAffirmative(event.body) &&
+    !schedulingSignalsBase.hasDayTime &&
+    !schedulingSignalsBase.hasDayOnlyAvailability &&
+    !schedulingSignalsBase.hasDayOnlyRequest &&
+    !schedulingSignalsBase.explicit;
+  const earlyWatchIntent =
+    event.provider === "twilio" &&
+    !conv.inventoryWatchPending &&
+    (earlyWatchIntentText || earlyPromptedWatchAffirm);
+  const earlyWatchAsSideEffectOnly =
+    earlyWatchIntent && hasPrimaryIntentBeyondWatch(String(event.body ?? ""));
+  if (earlyWatchIntent) {
+    const nowIso = new Date().toISOString();
+    const leadVehicle = conv.lead?.vehicle ?? {};
+    const leadYearNum = Number(leadVehicle.year ?? "");
+    const leadYear = Number.isFinite(leadYearNum) ? leadYearNum : undefined;
+    const resolvedModel = await resolveWatchModelFromText(
+      textLower,
+      leadVehicle.model ?? leadVehicle.description ?? null
+    );
+    if (!resolvedModel) {
+      conv.inventoryWatchPending = { askedAt: nowIso };
+      setDialogState(conv, "inventory_watch_prompted");
+      watchHandledEarly = true;
+      if (!earlyWatchAsSideEffectOnly) {
+        const reply = "Got it — which model should I watch for?";
+        const systemMode = webhookMode;
+        if (systemMode === "suggest") {
+          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+        appendOutbound(conv, event.to, event.from, reply, "twilio");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+          reply
+        )}</Message>\n</Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+    } else {
+      const pending: InventoryWatchPending = {
+        model: resolvedModel,
+        year: extractYearSingle(textLower) ?? leadYear,
+        color: sanitizeColorPhrase(extractColorToken(textLower) ?? leadVehicle.color ?? undefined),
+        askedAt: nowIso
+      };
+      let pref = parseInventoryWatchPreference(String(event.body ?? ""), pending);
+      if (pref.action === "ignore" && pending.model && (isAffirmative(event.body) || earlyWatchIntentText)) {
+        const watchColor = sanitizeColorPhrase(pending.color);
+        const watch: InventoryWatch = {
+          model: pending.model,
+          year: pending.year,
+          color: watchColor,
+          exactness: "model_only",
+          status: "active",
+          createdAt: new Date().toISOString()
+        };
+        if (watch.year && watch.color) watch.exactness = "exact";
+        else if (watch.year) watch.exactness = "year_model";
+        pref = { action: "set", watch };
+      }
+      if (pref.action === "set" && pref.watch) {
+        if (!pref.watch.make && leadVehicle.make) pref.watch.make = leadVehicle.make;
+        if (!pref.watch.trim && leadVehicle.trim) pref.watch.trim = leadVehicle.trim;
+        const conditionFromText = normalizeWatchCondition(textLower);
+        if (!pref.watch.condition && conditionFromText) pref.watch.condition = conditionFromText;
+        if (!pref.watch.condition && leadVehicle.condition) {
+          pref.watch.condition = normalizeWatchCondition(leadVehicle.condition);
+        }
+        conv.inventoryWatch = pref.watch;
+        conv.inventoryWatches = [pref.watch];
+        conv.inventoryWatchPending = undefined;
+        setDialogState(conv, "inventory_watch_active");
+        setFollowUpMode(conv, "holding_inventory", "inventory_watch");
+        stopFollowUpCadence(conv, "inventory_watch");
+        watchHandledEarly = true;
+        if (!earlyWatchAsSideEffectOnly) {
+          const reply = buildInventoryWatchConfirmation(pref.watch);
+          const systemMode = webhookMode;
+          if (systemMode === "suggest") {
+            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+            return res.status(200).type("text/xml").send(twiml);
+          }
+          appendOutbound(conv, event.to, event.from, reply, "twilio");
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+            reply
+          )}</Message>\n</Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+      } else {
+        conv.inventoryWatchPending = pending;
+        setDialogState(conv, "inventory_watch_prompted");
+        watchHandledEarly = true;
+        if (!earlyWatchAsSideEffectOnly) {
+          const pendingCondition = inferWatchCondition(pending.model, pending.year, conv);
+          const finishEligible = await shouldAskFinishPreference(
+            pending.model,
+            pending.year,
+            pendingCondition
+          );
+          const reply = buildWatchPreferencePrompt(pendingCondition, finishEligible);
+          const systemMode = webhookMode;
+          if (systemMode === "suggest") {
+            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+            return res.status(200).type("text/xml").send(twiml);
+          }
+          appendOutbound(conv, event.to, event.from, reply, "twilio");
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+            reply
+          )}</Message>\n</Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+      }
+    }
+  }
   if (event.provider === "twilio" && isTradeLead) {
     const townMention = extractTownFromMessage(event.body ?? "");
     if (townMention && !conv.pickup?.town) {
@@ -12576,6 +12699,7 @@ if (authToken && signature) {
   const watchIntent =
     event.provider === "twilio" &&
     !conv.inventoryWatchPending &&
+    !watchHandledEarly &&
     (watchIntentText || promptedWatchAffirm);
   const watchAsSideEffectOnly = watchIntent && hasPrimaryIntentBeyondWatch(String(event.body ?? ""));
   if (watchIntent) {
