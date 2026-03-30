@@ -691,7 +691,7 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
   return true;
 }
 
-async function processInventoryWatchlist() {
+async function processInventoryWatchlist(targetConvId?: string) {
   if (inventoryWatchRunning) return;
   inventoryWatchRunning = true;
   try {
@@ -705,11 +705,12 @@ async function processInventoryWatchlist() {
       const key = inventoryKey(i);
       return key && !prevKeys.has(key);
     });
+    const newItemKeys = new Set(newItems.map(i => inventoryKey(i)).filter(Boolean));
     await saveInventorySnapshot(items);
-    if (!newItems.length) return;
 
     const nowIso = new Date().toISOString();
-    const convs = getAllConversations();
+    const targetConv = targetConvId ? getConversation(targetConvId) : null;
+    const convs = targetConvId ? (targetConv ? [targetConv] : []) : getAllConversations();
     for (const conv of convs) {
       const watches =
         conv.inventoryWatches?.length
@@ -735,7 +736,11 @@ async function processInventoryWatchlist() {
         ) {
           continue;
         }
-        const match = newItems.find(i => inventoryItemMatchesWatch(i, watch));
+        // For brand-new watches (never notified), allow matching against current
+        // in-stock inventory. Otherwise only match newly-arrived units.
+        const candidateItems = watch.lastNotifiedAt ? newItems : items;
+        if (!candidateItems.length) continue;
+        const match = candidateItems.find(i => inventoryItemMatchesWatch(i, watch));
         if (!match) continue;
         matchedWatch = watch;
         matchedItem = match;
@@ -750,7 +755,11 @@ async function processInventoryWatchlist() {
       const color = matchedItem.color ?? matchedWatch.color;
       const name = [year, make, model, trim].filter(Boolean).join(" ");
       const colorText = color ? ` in ${color}` : "";
-      const reply = `Good news — we just got ${name}${colorText} in stock. Want details or a time to check it out?`;
+      const matchedKey = inventoryKey(matchedItem);
+      const isNewArrival = matchedKey ? newItemKeys.has(matchedKey) : false;
+      const reply = isNewArrival
+        ? `Good news — we just got ${name}${colorText} in stock. Want details or a time to check it out?`
+        : `Good news — we have ${name}${colorText} in stock right now. Want details or a time to check it out?`;
       const imageUrl =
         Array.isArray(matchedItem.images) && matchedItem.images.length
           ? matchedItem.images[0]
@@ -8354,6 +8363,9 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
       cadenceAckResult = await sendCadenceAck(cadenceAck);
     }
 
+    if (shouldApplyWatch) {
+      await processInventoryWatchlist(conv.id);
+    }
     saveConversation(conv);
     await flushConversationStore();
     return res.json({ ok: true, conversation: conv, notice: cadenceNotice, cadenceAck: cadenceAckResult });
@@ -8445,6 +8457,7 @@ app.post("/conversations/:id/watch", async (req, res) => {
     stopFollowUpCadence(conv, "inventory_watch");
     setDialogState(conv, "inventory_watch_active");
     conv.updatedAt = nowIso;
+    await processInventoryWatchlist(conv.id);
     saveConversation(conv);
     await flushConversationStore();
     return res.json({ ok: true, conversation: conv });
