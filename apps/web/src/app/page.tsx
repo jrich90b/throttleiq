@@ -4359,7 +4359,16 @@ export default function Home() {
             </button>
             {settingsOpen ? (
               <div className="absolute bottom-12 left-12 w-56 bg-white border border-gray-200 rounded-lg shadow-lg p-2 z-50 text-gray-900">
-                <div className="text-xs font-semibold text-gray-600 px-2 py-1">Settings</div>
+                <div className="flex items-center justify-between px-2 py-1">
+                  <div className="text-xs font-semibold text-gray-600">Settings</div>
+                  <button
+                    className="text-xs px-1.5 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50"
+                    onClick={() => setSettingsOpen(false)}
+                    aria-label="Close settings menu"
+                  >
+                    X
+                  </button>
+                </div>
                 {isManager ? (
                   <>
                     <button
@@ -5132,6 +5141,16 @@ export default function Home() {
 
         {section === "settings" && authUser?.role === "manager" ? (
           <div className="mt-3 border rounded-lg divide-y">
+            <div className="px-4 py-3 flex items-center justify-between bg-gray-50">
+              <div className="text-sm font-semibold text-gray-700">Settings</div>
+              <button
+                className="px-2 py-1 border rounded text-xs text-gray-700 hover:bg-white"
+                onClick={() => goToSection("inbox")}
+                aria-label="Close settings"
+              >
+                X
+              </button>
+            </div>
             <button
               className={`w-full text-left px-4 py-3 hover:bg-gray-50 ${
                 settingsTab === "dealer" ? "bg-gray-50 font-medium" : ""
