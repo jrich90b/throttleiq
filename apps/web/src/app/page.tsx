@@ -1503,22 +1503,60 @@ export default function Home() {
     return normalizeModelMatchText(value).split(" ").filter(Boolean);
   }
 
+  function hasTokenFragment(tokens: string[], fragment: string): boolean {
+    const needle = String(fragment ?? "").toLowerCase();
+    if (!needle) return false;
+    return tokens.some(token => token.includes(needle));
+  }
+
+  function isSportster1250Variant(tokens: string[]): boolean {
+    const hasSportster = tokens.includes("sportster");
+    const has1250 = hasTokenFragment(tokens, "1250") || tokens.some(token => /^rh1250/.test(token));
+    const hasSportsterS = hasSportster && tokens.includes("s");
+    return has1250 || hasSportsterS;
+  }
+
   function isWatchModelOptionChecked(groupModels: string[], option: string): boolean {
     const normalizedOption = normalizeModelMatchText(option);
     if (!normalizedOption) return false;
     const selected = groupModels.map(normalizeModelMatchText).filter(Boolean);
     if (selected.includes(normalizedOption)) return true;
-    const optionTokenSet = new Set(modelTokens(option));
+    const optionTokens = modelTokens(option);
+    const optionHasSportster = optionTokens.includes("sportster");
+    const optionHas883 = hasTokenFragment(optionTokens, "883");
+    const optionIsSportster1250 = isSportster1250Variant(optionTokens);
     return selected.some(model => {
       const tokens = modelTokens(model);
       if (!tokens.length) return false;
-      // Family/displacement alias support:
-      // - "Sportster" checks Sportster variants
-      // - "Sportster 883" checks Sportster+883 variants
-      if (tokens.includes("sportster")) {
-        if (!optionTokenSet.has("sportster")) return false;
-        if (tokens.includes("883")) return optionTokenSet.has("883");
-        return true;
+      const selectedHasSportster = tokens.includes("sportster");
+      const selectedHas883 = hasTokenFragment(tokens, "883");
+      const selectedIsSportster1250 = isSportster1250Variant(tokens);
+      const selectedWantsSportsterS =
+        selectedHasSportster && !selectedHas883 && selectedIsSportster1250;
+      const selectedDisplacements = Array.from(
+        new Set(tokens.flatMap(token => token.match(/\d{3,4}/g) ?? []))
+      );
+
+      // "883" watch includes both explicit Sportster 883 and 883-coded labels.
+      if (selectedHas883) {
+        return optionHas883;
+      }
+
+      // "Sportster S"/1250 watch should stay in that lane only.
+      if (selectedWantsSportsterS) {
+        return optionIsSportster1250;
+      }
+
+      // "Sportster 1200" (or any specific displacement) should only match that displacement.
+      if (selectedHasSportster && selectedDisplacements.length) {
+        return selectedDisplacements.some(d => hasTokenFragment(optionTokens, d));
+      }
+
+      // Generic "Sportster" watch should include Sportster family + 883-only labels,
+      // while excluding Sportster S / RH1250 unless explicitly requested.
+      if (selectedHasSportster) {
+        if (optionIsSportster1250) return false;
+        return optionHasSportster || optionHas883;
       }
       return false;
     });
