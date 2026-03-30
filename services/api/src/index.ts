@@ -1330,6 +1330,7 @@ function getRelatedConversations(conv: any, event?: { from?: string }) {
 function pauseRelatedCadencesOnInbound(conv: any, event?: { from?: string }) {
   const pauseUntil = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
   for (const other of getRelatedConversations(conv, event)) {
+    if (other?.followUpCadence?.kind === "post_sale") continue;
     pauseFollowUpCadence(other, pauseUntil, "cross_channel_inbound");
   }
 }
@@ -6063,7 +6064,9 @@ async function processDueFollowUps() {
     const isPostSale = cadence.kind === "post_sale";
     if (isPostSale) {
       const current = new Date(cadence.nextDueAt);
-      if (Number.isNaN(current.getTime()) || current.getTime() <= now.getTime()) {
+      // Post-sale cadence should send when due. Only recompute if nextDueAt is invalid.
+      // Recomputing when already due pushes the send into the future and skips delivery.
+      if (Number.isNaN(current.getTime())) {
         const step = Math.min(cadence.stepIndex ?? 0, POST_SALE_DAY_OFFSETS.length - 1);
         cadence.nextDueAt = computePostSaleDueAt(cadence.anchorAt ?? nowIso(), POST_SALE_DAY_OFFSETS[step], cfg.timezone);
         saveConversation(conv);
@@ -6081,7 +6084,8 @@ async function processDueFollowUps() {
       stopFollowUpCadence(conv, "closed");
       continue;
     }
-    if (todoConvIds.has(conv.id)) continue;
+    // Post-sale cadence should not be blocked by legacy open sales todos.
+    if (!isPostSale && todoConvIds.has(conv.id)) continue;
     let blockUntilMs: number | null = null;
     const setBlockUntil = (d?: Date | null) => {
       if (!d || Number.isNaN(d.getTime())) return;
@@ -9441,6 +9445,16 @@ app.post("/conversations/:id/send", async (req, res) => {
   };
   const hasOpenNonCallTodo = () =>
     listOpenTodos().some(t => t.convId === conv.id && t.reason !== "call");
+  const pauseCadenceAfterManualOutbound = () => {
+    if (conv.followUpCadence?.kind === "post_sale") return;
+    if (!hasOpenNonCallTodo()) {
+      pauseFollowUpCadence(
+        conv,
+        new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        "manual_outbound"
+      );
+    }
+  };
 
   // Normalize destination number from conversation leadKey
   const rawTo = String(conv.leadKey ?? "").trim();
@@ -9578,9 +9592,7 @@ app.post("/conversations/:id/send", async (req, res) => {
         await maybeStartCadence(conv, new Date().toISOString());
       }
       applyManualCadenceAdvance(hadOutbound);
-      if (!hasOpenNonCallTodo()) {
-        pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
-      }
+      pauseCadenceAfterManualOutbound();
       if (manualTakeover && !draftId) {
         claimLeadOwnerFromActor();
         setConversationMode(conv.id, "human");
@@ -9607,9 +9619,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       await maybeStartCadence(conv, new Date().toISOString());
     }
     applyManualCadenceAdvance(hadOutbound);
-    if (!hasOpenNonCallTodo()) {
-      pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
-    }
+    pauseCadenceAfterManualOutbound();
     if (manualTakeover && !draftId) {
       claimLeadOwnerFromActor();
       setConversationMode(conv.id, "human");
@@ -9639,9 +9649,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       await maybeStartCadence(conv, new Date().toISOString());
     }
     applyManualCadenceAdvance(hadOutbound);
-    if (!hasOpenNonCallTodo()) {
-      pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
-    }
+    pauseCadenceAfterManualOutbound();
     if (manualTakeover && !draftId) {
       claimLeadOwnerFromActor();
       setConversationMode(conv.id, "human");
@@ -9676,9 +9684,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       await maybeStartCadence(conv, new Date().toISOString());
     }
     applyManualCadenceAdvance(hadOutbound);
-    if (!hasOpenNonCallTodo()) {
-      pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
-    }
+    pauseCadenceAfterManualOutbound();
     if (manualTakeover && !draftId) {
       claimLeadOwnerFromActor();
       setConversationMode(conv.id, "human");
@@ -9705,9 +9711,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       await maybeStartCadence(conv, new Date().toISOString());
     }
     applyManualCadenceAdvance(hadOutbound);
-    if (!hasOpenNonCallTodo()) {
-      pauseFollowUpCadence(conv, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), "manual_outbound");
-    }
+    pauseCadenceAfterManualOutbound();
     if (manualTakeover && !draftId) {
       claimLeadOwnerFromActor();
       setConversationMode(conv.id, "human");
