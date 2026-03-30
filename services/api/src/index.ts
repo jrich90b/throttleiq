@@ -4701,7 +4701,7 @@ async function seedInventoryWatchPendingFromReply(
     extractColorToken(inboundText.toLowerCase()),
     finish
   );
-  const budget = extractWatchBudgetPreference(inboundText);
+  const budget = resolveWatchBudgetPreferenceForConversation(conv, inboundText);
   conv.inventoryWatchPending = {
     model,
     year: year ?? undefined,
@@ -8516,6 +8516,20 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
           if (!model) return null;
           const yearNum = Number(String(item?.year ?? "").trim());
           const year = Number.isFinite(yearNum) && yearNum > 1900 ? yearNum : undefined;
+          const budgetSeed = extractWatchBudgetPreference(
+            [
+              item?.priceRange,
+              item?.budget,
+              item?.priceBudget,
+              item?.monthlyBudget != null ? `${item?.monthlyBudget} monthly` : "",
+              item?.termMonths != null ? `${item?.termMonths} months` : "",
+              item?.downPayment != null ? `${item?.downPayment} down` : ""
+            ]
+              .filter(v => String(v ?? "").trim().length > 0)
+              .join(" ")
+          );
+          const minPrice = parseBudgetMoneyInput(item?.minPrice) ?? budgetSeed.minPrice;
+          const maxPrice = parseBudgetMoneyInput(item?.maxPrice) ?? budgetSeed.maxPrice;
           const watch: InventoryWatch = {
             model,
             year,
@@ -8523,11 +8537,24 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
             trim: String(item?.trim ?? "").trim() || undefined,
             color: String(item?.color ?? "").trim() || undefined,
             condition: normalizeInputCondition(item?.condition),
+            minPrice,
+            maxPrice,
             note: watchNote || undefined,
             exactness: "model_only",
             status: "active",
             createdAt
           };
+          if (
+            watch.minPrice != null &&
+            watch.maxPrice != null &&
+            Number.isFinite(watch.minPrice) &&
+            Number.isFinite(watch.maxPrice) &&
+            watch.minPrice > watch.maxPrice
+          ) {
+            const swap = watch.minPrice;
+            watch.minPrice = watch.maxPrice;
+            watch.maxPrice = swap;
+          }
           if (watch.year && watch.color) watch.exactness = "exact";
           else if (watch.year) watch.exactness = "year_model";
           return watch;
@@ -11349,7 +11376,7 @@ if (authToken && signature) {
       leadVehicle.model ?? leadVehicle.description ?? null
     );
     if (!resolvedModel) {
-      const budgetSeed = extractWatchBudgetPreference(String(event.body ?? ""));
+      const budgetSeed = resolveWatchBudgetPreferenceForConversation(conv, String(event.body ?? ""));
       conv.inventoryWatchPending = {
         minPrice: budgetSeed.minPrice,
         maxPrice: budgetSeed.maxPrice,
@@ -11375,7 +11402,7 @@ if (authToken && signature) {
         return res.status(200).type("text/xml").send(twiml);
       }
     } else {
-      const budgetSeed = extractWatchBudgetPreference(String(event.body ?? ""));
+      const budgetSeed = resolveWatchBudgetPreferenceForConversation(conv, String(event.body ?? ""));
       const pending: InventoryWatchPending = {
         model: resolvedModel,
         year: extractYearSingle(textLower) ?? leadYear,
@@ -12470,7 +12497,7 @@ if (authToken && signature) {
             );
             if (colorFromText) pending.color = colorFromText;
           }
-          const budgetSeed = extractWatchBudgetPreference(String(event.body ?? ""));
+          const budgetSeed = resolveWatchBudgetPreferenceForConversation(conv, String(event.body ?? ""));
           if (pending.minPrice == null && budgetSeed.minPrice != null) pending.minPrice = budgetSeed.minPrice;
           if (pending.maxPrice == null && budgetSeed.maxPrice != null) pending.maxPrice = budgetSeed.maxPrice;
           if (pending.monthlyBudget == null && budgetSeed.monthlyBudget != null) {
@@ -13290,7 +13317,7 @@ if (authToken && signature) {
     if (!resolvedModel) {
       if (!watchAsSideEffectOnly) {
         const reply = "Got it — which model should I watch for?";
-        const budgetSeed = extractWatchBudgetPreference(String(event.body ?? ""));
+        const budgetSeed = resolveWatchBudgetPreferenceForConversation(conv, String(event.body ?? ""));
         conv.inventoryWatchPending = {
           minPrice: budgetSeed.minPrice,
           maxPrice: budgetSeed.maxPrice,
@@ -13315,7 +13342,7 @@ if (authToken && signature) {
     }
 
     if (resolvedModel) {
-      const budgetSeed = extractWatchBudgetPreference(String(event.body ?? ""));
+      const budgetSeed = resolveWatchBudgetPreferenceForConversation(conv, String(event.body ?? ""));
       const pending: InventoryWatchPending = {
         model: resolvedModel,
         year: extractYearSingle(textLower) ?? leadYear,
@@ -14125,7 +14152,10 @@ if (authToken && signature) {
             conv
           );
           const watchExactLabel = watchCondition === "new" ? "exact year/color" : "exact year";
-          const watchBudgetSeed = extractWatchBudgetPreference(String(event.body ?? ""));
+          const watchBudgetSeed = resolveWatchBudgetPreferenceForConversation(
+            conv,
+            String(event.body ?? "")
+          );
           conv.inventoryWatchPending = {
             model: model ?? undefined,
             year: year ? Number(year) : undefined,
@@ -14219,7 +14249,10 @@ if (authToken && signature) {
         );
         const isGenericModel = /full line|other/i.test(model ?? "");
         if (!isGenericModel) {
-          const watchBudgetSeed = extractWatchBudgetPreference(String(event.body ?? ""));
+          const watchBudgetSeed = resolveWatchBudgetPreferenceForConversation(
+            conv,
+            String(event.body ?? "")
+          );
           conv.inventoryWatchPending = {
             model: model ?? undefined,
             year: year ? Number(year) : undefined,

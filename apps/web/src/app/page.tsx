@@ -263,6 +263,8 @@ type ConversationListItem = {
     make?: string;
     trim?: string;
     color?: string;
+    minPrice?: number;
+    maxPrice?: number;
     condition?: string;
     note?: string;
     status?: string;
@@ -277,6 +279,8 @@ type ConversationListItem = {
     make?: string;
     trim?: string;
     color?: string;
+    minPrice?: number;
+    maxPrice?: number;
     condition?: string;
     note?: string;
     status?: string;
@@ -365,6 +369,8 @@ type ConversationDetail = {
     make?: string;
     trim?: string;
     color?: string;
+    minPrice?: number;
+    maxPrice?: number;
     condition?: string;
     note?: string;
     status?: string;
@@ -379,6 +385,8 @@ type ConversationDetail = {
     make?: string;
     trim?: string;
     color?: string;
+    minPrice?: number;
+    maxPrice?: number;
     condition?: string;
     note?: string;
     status?: string;
@@ -469,6 +477,8 @@ type WatchFormItem = {
   customModel?: string;
   trim: string;
   color: string;
+  minPrice: string;
+  maxPrice: string;
 };
 
 function todoActionLabel(todo: TodoItem): string {
@@ -997,7 +1007,9 @@ export default function Home() {
         model: vehicle?.model ?? vehicle?.description ?? "",
         models: vehicle?.model || vehicle?.description ? [String(vehicle?.model ?? vehicle?.description)] : [],
         trim: vehicle?.trim ?? "",
-        color: vehicle?.color ?? ""
+        color: vehicle?.color ?? "",
+        minPrice: "",
+        maxPrice: ""
       }
     ];
   }
@@ -1336,7 +1348,17 @@ export default function Home() {
 
   function addWatchItem() {
     setCadenceWatchItems(prev => {
-      const base = prev[0] ?? { condition: "", year: "", make: "", model: "", trim: "", color: "" };
+      const base =
+        prev[0] ?? {
+          condition: "",
+          year: "",
+          make: "",
+          model: "",
+          trim: "",
+          color: "",
+          minPrice: "",
+          maxPrice: ""
+        };
       return [...prev, { ...base, model: "", models: [], customModel: "" }];
     });
   }
@@ -1351,7 +1373,17 @@ export default function Home() {
 
   function addWatchEditItem() {
     setWatchEditItems(prev => {
-      const base = prev[0] ?? { condition: "", year: "", make: "", model: "", trim: "", color: "" };
+      const base =
+        prev[0] ?? {
+          condition: "",
+          year: "",
+          make: "",
+          model: "",
+          trim: "",
+          color: "",
+          minPrice: "",
+          maxPrice: ""
+        };
       return [...prev, { ...base, model: "", models: [], customModel: "" }];
     });
   }
@@ -1376,7 +1408,9 @@ export default function Home() {
       models: model ? [model] : [],
       customModel: "",
       trim: watch?.trim ?? "",
-      color: watch?.color ?? ""
+      color: watch?.color ?? "",
+      minPrice: watch?.minPrice != null ? String(watch.minPrice) : "",
+      maxPrice: watch?.maxPrice != null ? String(watch.maxPrice) : ""
     };
   }
 
@@ -1394,7 +1428,9 @@ export default function Home() {
         base.year ?? "",
         base.make ?? "",
         base.trim ?? "",
-        base.color ?? ""
+        base.color ?? "",
+        base.minPrice ?? "",
+        base.maxPrice ?? ""
       ]
         .map(v => String(v).toLowerCase())
         .join("|");
@@ -1427,7 +1463,9 @@ export default function Home() {
           make: item.make,
           model,
           trim: item.trim,
-          color: item.color
+          color: item.color,
+          minPrice: item.minPrice,
+          maxPrice: item.maxPrice
         });
       });
     });
@@ -8003,6 +8041,24 @@ export default function Home() {
                                   onChange={e => updateWatchItem(idx, { color: e.target.value })}
                                 />
                               </div>
+                              <div>
+                                <div className="text-xs text-gray-500 mb-1">Min Price (optional)</div>
+                                <input
+                                  className="border rounded px-2 py-2 text-sm w-full"
+                                  placeholder="$4,000"
+                                  value={item.minPrice}
+                                  onChange={e => updateWatchItem(idx, { minPrice: e.target.value })}
+                                />
+                              </div>
+                              <div>
+                                <div className="text-xs text-gray-500 mb-1">Max Price (optional)</div>
+                                <input
+                                  className="border rounded px-2 py-2 text-sm w-full"
+                                  placeholder="$5,000"
+                                  value={item.maxPrice}
+                                  onChange={e => updateWatchItem(idx, { maxPrice: e.target.value })}
+                                />
+                              </div>
                             </div>
                             {cadenceWatchItems.length > 1 ? (
                               <div className="mt-2 text-right">
@@ -9279,6 +9335,24 @@ export default function Home() {
                         placeholder="Vivid Black"
                         value={item.color}
                         onChange={e => updateWatchEditItem(idx, { color: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">Min Price (optional)</div>
+                      <input
+                        className="border rounded px-2 py-2 text-sm w-full"
+                        placeholder="$4,000"
+                        value={item.minPrice}
+                        onChange={e => updateWatchEditItem(idx, { minPrice: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">Max Price (optional)</div>
+                      <input
+                        className="border rounded px-2 py-2 text-sm w-full"
+                        placeholder="$5,000"
+                        value={item.maxPrice}
+                        onChange={e => updateWatchEditItem(idx, { maxPrice: e.target.value })}
                       />
                     </div>
                   </div>
