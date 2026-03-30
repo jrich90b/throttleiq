@@ -1592,10 +1592,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     });
   }
 
-  if (isCreditLead && isInitialAdf) {
-    let ack =
-      "Thanks — I received your credit application. I’ll have our finance team reach out shortly.";
-    ack = await applyInitialAdfPrefix(ack);
+  if (isCreditLead) {
+    const firstName = normalizeDisplayCase(conv.lead?.firstName);
+    let ack = isInitialAdf
+      ? "Thanks — I received your credit application. I’ll have our finance team reach out shortly."
+      : firstName
+        ? `Thanks ${firstName} — we just received your online credit application. Our finance team will reach out shortly to go over options.`
+        : "Thanks — we just received your online credit application. Our finance team will reach out shortly to go over options.";
+    if (isInitialAdf) {
+      ack = await applyInitialAdfPrefix(ack);
+    }
     addTodo(conv, "approval", event.body ?? "Credit application", event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "credit_app");
     stopFollowUpCadence(conv, "manual_handoff");
