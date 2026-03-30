@@ -173,6 +173,40 @@ function formatWatchDate(iso?: string) {
   return d.toLocaleString();
 }
 
+function formatMotorcycleOfInterest(contact?: {
+  vehicleDescription?: string;
+  year?: string;
+  make?: string;
+  model?: string;
+  vehicle?: string;
+  trim?: string;
+  color?: string;
+  stockId?: string;
+  vin?: string;
+} | null): string {
+  if (!contact) return "—";
+  const freeText = String(contact.vehicleDescription ?? "").trim();
+  if (freeText) return freeText;
+  const model = String(contact.model ?? contact.vehicle ?? "").trim();
+  const base = [contact.year, contact.make, model, contact.trim].filter(Boolean).join(" ").trim();
+  if (base && contact.color) return `${base} (${contact.color})`;
+  if (base) return base;
+  if (contact.stockId) return `Stock ${contact.stockId}`;
+  if (contact.vin) return `VIN ${contact.vin}`;
+  return "—";
+}
+
+function formatContactDate(iso?: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric"
+  });
+}
+
 function parseCsvRows(raw: string): string[][] {
   const rows: string[][] = [];
   let current = "";
@@ -608,6 +642,8 @@ type ContactItem = {
   color?: string;
   condition?: string;
   inquiry?: string;
+  lastAdfAt?: string;
+  lastInboundAt?: string;
   updatedAt?: string;
   status?: "active" | "archived" | "suppressed";
 };
@@ -7790,6 +7826,19 @@ export default function Home() {
                       <div className="px-4 py-3 flex items-center justify-between">
                         <div className="text-gray-500">Mobile Phone</div>
                         <div className="font-medium">{selectedContact.phone ?? "—"}</div>
+                      </div>
+                      <div className="px-4 py-3 flex items-center justify-between gap-3">
+                        <div className="text-gray-500">Motorcycle of Interest</div>
+                        <div className="font-medium text-right">
+                          {formatMotorcycleOfInterest(selectedContact)}
+                          <span className="ml-2 text-xs font-normal text-gray-500">
+                            {formatContactDate(
+                              selectedContact.lastAdfAt ??
+                                selectedContact.lastInboundAt ??
+                                selectedContact.updatedAt
+                            ) || "—"}
+                          </span>
+                        </div>
                       </div>
                       <div className="px-4 py-3 flex items-center justify-between gap-3">
                         <div className="text-gray-500">Text Marketing Opt-in</div>
