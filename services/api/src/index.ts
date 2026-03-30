@@ -5963,7 +5963,11 @@ async function processDueFollowUps() {
 
   const parsePauseUntil = (text: string, base: Date): { until?: Date; indefinite?: boolean } => {
     const t = text.toLowerCase();
-    if (/(i('| )?ll let you know|i will let you know|i'll reach out|i will reach out|i'll get back to you|i will get back to you)/.test(t)) {
+    if (
+      /((i|we)('| )?ll let you know|(i|we) will let you know|(i|we)('| )?ll reach out|(i|we) will reach out|(i|we)('| )?ll get back to you|(i|we) will get back to you)/.test(
+        t
+      )
+    ) {
       return { indefinite: true };
     }
 
@@ -10394,7 +10398,7 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
-  const deferIndefinitely = /i('| )?ll let you know|i will let you know|i('| )?ll get back to you|i will get back to you|reach out when i can/i.test(
+  const deferIndefinitely = /(i|we)('| )?ll let you know|(i|we) will let you know|(i|we)('| )?ll get back to you|(i|we) will get back to you|reach out when i can/i.test(
     event.body ?? ""
   );
   if (deferIndefinitely) {
@@ -12145,9 +12149,13 @@ if (authToken && signature) {
   const locationQuestion = /(where are you|what location|what address|address|located|location)\b/i.test(
     textLower
   );
-  const weatherQuestion = /\b(weather|forecast|temperature|temp|snow|cold|rain|nicest day|nice day|best day)\b/i.test(
-    textLower
-  );
+  const weatherQuestion =
+    /\b(nicest day|nice day|best day)\b/i.test(textLower) ||
+    /\b(what(?:'s| is)|how(?:'s| is)|is it|will it|can i|can we|should i|should we)\b[^.!?]*\b(weather|forecast|temperature|temp|snow|cold|rain)\b/i.test(
+      textLower
+    ) ||
+    /\b(weather|forecast|temperature|temp)\b[^.!?]*\?/i.test(textLower) ||
+    /\b(is it|will it)\b[^.!?]*\b(rain|snow|cold)\b/i.test(textLower);
   const bestDayQuestion = /\b(nicest day|nice day|best day)\b/i.test(textLower);
   const mentionsNextWeek = /\bnext week\b/i.test(textLower);
   if (event.provider === "twilio" && weatherQuestion) {
