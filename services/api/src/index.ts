@@ -5166,6 +5166,44 @@ function sanitizeColorPhrase(text: string | null | undefined): string | undefine
   return cleaned || undefined;
 }
 
+function extractColorFromTrimContext(text: string): string | null {
+  const trimScoped =
+    text.match(
+      /\b([a-z][a-z0-9\s-]{2,70}?)\s+(?:and\s+)?(?:black(?:ed)?(?:\s|-)?out|black(?:\s|-)?out|black\s+trim|black\s+finish|chrome\s+trim|chrome\s+finish|chrome)\b/i
+    )?.[1] ?? null;
+  if (!trimScoped) return null;
+
+  let candidate = sanitizeColorPhrase(trimScoped);
+  if (!candidate) return null;
+  candidate = candidate
+    .replace(/^(new|used|pre[-\s]?owned)\s+/i, "")
+    .replace(/^(an|a|the)\s+/i, "")
+    .replace(/^\d{4}\s+/, "")
+    .replace(/\b(with|w|in)\b\s*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!candidate) return null;
+
+  const mentionedModel = findMentionedModel(text);
+  if (mentionedModel) {
+    const modelPattern = normalizeModelText(mentionedModel).replace(/\s+/g, "\\s+");
+    if (modelPattern) {
+      candidate = candidate
+        .replace(new RegExp(`\\b${modelPattern}\\b`, "i"), " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/\b(with|w|in)\b\s*$/i, "")
+        .trim();
+    }
+    const modelNorm = normalizeModelText(mentionedModel);
+    const candidateNorm = normalizeModelText(candidate);
+    if (!candidateNorm || candidateNorm === modelNorm) return null;
+  }
+
+  if (!candidate || candidate === "black" || candidate === "chrome") return null;
+  return candidate;
+}
+
 function extractColorToken(text: string): string | null {
   const t = text
     .toLowerCase()
@@ -5178,10 +5216,12 @@ function extractColorToken(text: string): string | null {
   const twoTone = extractTwoToneColorPhrase(t);
   if (twoTone) return twoTone;
   const hasTrimContext =
-    /\b(black(?:ed)?\s*(?:out|trim|finish)|chrome\s*(?:trim|finish)|black\s+trim|chrome\s+trim)\b/i.test(
+    /\b(black(?:ed)?(?:\s|-)?out|black(?:\s|-)?out|black\s+trim|black\s+finish|chrome\s*(?:trim|finish)|chrome\s+trim)\b/i.test(
       t
     );
   if (hasTrimContext) {
+    const trimScopedColor = extractColorFromTrimContext(t);
+    if (trimScopedColor) return trimScopedColor;
     const nonTrimColor = BASIC_COLOR_WORDS.find(
       color => color !== "black" && color !== "chrome" && new RegExp(`\\b${color}\\b`, "i").test(t)
     );
