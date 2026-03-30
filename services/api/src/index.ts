@@ -4885,6 +4885,87 @@ function extractWatchBudgetPreference(text: string): {
   };
 }
 
+function hasAnyWatchBudgetPreference(pref?: {
+  minPrice?: number;
+  maxPrice?: number;
+  monthlyBudget?: number;
+  termMonths?: number;
+  downPayment?: number;
+} | null): boolean {
+  if (!pref) return false;
+  return (
+    pref.minPrice != null ||
+    pref.maxPrice != null ||
+    pref.monthlyBudget != null ||
+    pref.termMonths != null ||
+    pref.downPayment != null
+  );
+}
+
+function mergeWatchBudgetPreference(
+  primary: {
+    minPrice?: number;
+    maxPrice?: number;
+    monthlyBudget?: number;
+    termMonths?: number;
+    downPayment?: number;
+  },
+  fallback: {
+    minPrice?: number;
+    maxPrice?: number;
+    monthlyBudget?: number;
+    termMonths?: number;
+    downPayment?: number;
+  }
+): {
+  minPrice?: number;
+  maxPrice?: number;
+  monthlyBudget?: number;
+  termMonths?: number;
+  downPayment?: number;
+} {
+  return {
+    minPrice: primary.minPrice ?? fallback.minPrice,
+    maxPrice: primary.maxPrice ?? fallback.maxPrice,
+    monthlyBudget: primary.monthlyBudget ?? fallback.monthlyBudget,
+    termMonths: primary.termMonths ?? fallback.termMonths,
+    downPayment: primary.downPayment ?? fallback.downPayment
+  };
+}
+
+function findRecentInboundWatchBudgetPreference(conv: any): {
+  minPrice?: number;
+  maxPrice?: number;
+  monthlyBudget?: number;
+  termMonths?: number;
+  downPayment?: number;
+} {
+  const msgs = Array.isArray(conv?.messages) ? conv.messages : [];
+  for (let i = msgs.length - 1; i >= 0; i -= 1) {
+    const m = msgs[i];
+    if (!m || m.direction !== "in") continue;
+    const parsed = extractWatchBudgetPreference(String(m.body ?? ""));
+    if (!hasAnyWatchBudgetPreference(parsed)) continue;
+    return parsed;
+  }
+  return {};
+}
+
+function resolveWatchBudgetPreferenceForConversation(
+  conv: any,
+  text: string
+): {
+  minPrice?: number;
+  maxPrice?: number;
+  monthlyBudget?: number;
+  termMonths?: number;
+  downPayment?: number;
+} {
+  const fromText = extractWatchBudgetPreference(text);
+  const recent = findRecentInboundWatchBudgetPreference(conv);
+  return mergeWatchBudgetPreference(fromText, recent);
+}
+
 function normalizeTaxRate(raw: unknown): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 0) return 0.08;
@@ -9294,7 +9375,18 @@ app.post("/conversations/:id/send", async (req, res) => {
     advanceFollowUpCadence(conv, schedulerTimezone);
   };
   const finalizeManualSendDraftState = (opts?: { clearEmailDraft?: boolean }) => {
+    const pendingDraftIds = new Set(
+      conv.messages
+        .filter(
+          m => m.direction === "out" && m.provider === "draft_ai" && m.draftStatus !== "stale"
+        )
+        .map(m => m.id)
+    );
     discardPendingDrafts(conv, "manual_send");
+    for (const m of conv.messages) {
+      if (!pendingDraftIds.has(m.id)) continue;
+      m.mediaUrls = undefined;
+    }
     if (opts?.clearEmailDraft) {
       delete conv.emailDraft;
     }
