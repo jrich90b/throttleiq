@@ -1491,6 +1491,36 @@ export default function Home() {
     return Array.from(optionSet.values()).sort((a, b) => a.localeCompare(b));
   }
 
+  function normalizeModelMatchText(value: string): string {
+    return String(value ?? "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function modelTokens(value: string): string[] {
+    return normalizeModelMatchText(value).split(" ").filter(Boolean);
+  }
+
+  function isWatchModelOptionChecked(groupModels: string[], option: string): boolean {
+    const normalizedOption = normalizeModelMatchText(option);
+    if (!normalizedOption) return false;
+    const selected = groupModels.map(normalizeModelMatchText).filter(Boolean);
+    if (selected.includes(normalizedOption)) return true;
+    const optionTokenSet = new Set(modelTokens(option));
+    return selected.some(model => {
+      const tokens = modelTokens(model);
+      if (!tokens.length) return false;
+      // Family+displacement alias support: "Sportster 883" should check
+      // coded variants that still contain both tokens.
+      if (tokens.includes("sportster") && tokens.includes("883")) {
+        return optionTokenSet.has("sportster") && optionTokenSet.has("883");
+      }
+      return false;
+    });
+  }
+
   const watchMakeOptions = useMemo(() => {
     const set = new Set<string>();
     if (Object.keys(modelsByYear).length) set.add("Harley-Davidson");
@@ -7856,9 +7886,7 @@ export default function Home() {
                                 {modelOptions.length ? (
                                   <div className="border rounded p-2 max-h-40 overflow-auto">
                                     {modelOptions.map(option => {
-                                      const checked = groupModels
-                                        .map(m => m.toLowerCase())
-                                        .includes(option.toLowerCase());
+                                      const checked = isWatchModelOptionChecked(groupModels, option);
                                       return (
                                         <label
                                           key={`${option}-multi`}
@@ -9136,9 +9164,7 @@ export default function Home() {
                       {modelOptions.length ? (
                         <div className="border rounded p-2 max-h-40 overflow-auto">
                           {modelOptions.map(option => {
-                            const checked = groupModels
-                              .map(m => m.toLowerCase())
-                              .includes(option.toLowerCase());
+                            const checked = isWatchModelOptionChecked(groupModels, option);
                             return (
                               <label
                                 key={`${option}-edit-multi`}
