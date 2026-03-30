@@ -2675,7 +2675,6 @@ export async function orchestrateInbound(
           const durationMinutes = appointmentTypes[appointmentType]?.durationMinutes ?? 60;
 
           const now = new Date();
-          const candidatesByDay = generateCandidateSlots(cfg, now, durationMinutes, 14);
           const preferredDate = ctx?.lead?.preferredDate;
           const preferredTime = ctx?.lead?.preferredTime;
           const requestedSeed =
@@ -2703,6 +2702,29 @@ export async function orchestrateInbound(
             d.setDate(d.getDate() + (requestedDay === "tomorrow" ? 1 : 0));
             requestedDayKey = dayKey(d, cfg.timezone);
           }
+          const requestedDaysOut =
+            requestedTime
+              ? Math.ceil(
+                  (Date.UTC(
+                    requestedTime.year,
+                    requestedTime.month - 1,
+                    requestedTime.day,
+                    requestedTime.hour24,
+                    requestedTime.minute
+                  ) - now.getTime()) /
+                    (24 * 60 * 60 * 1000)
+                )
+              : null;
+          const schedulingSearchDays = Math.max(
+            14,
+            Math.min(90, requestedDaysOut != null ? requestedDaysOut + 3 : 14)
+          );
+          const candidatesByDay = generateCandidateSlots(
+            cfg,
+            now,
+            durationMinutes,
+            schedulingSearchDays
+          );
           const requestedDayHours = requestedDayKey ? cfg.businessHours?.[requestedDayKey] : undefined;
           requestedDayClosed =
             !!requestedDayKey && (!requestedDayHours || !requestedDayHours.open || !requestedDayHours.close);
@@ -2759,7 +2781,9 @@ export async function orchestrateInbound(
             if (!sp) continue;
 
             const timeMin = new Date(now).toISOString();
-            const timeMax = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString();
+            const timeMax = new Date(
+              now.getTime() + schedulingSearchDays * 24 * 60 * 60 * 1000
+            ).toISOString();
 
             let busy: any[] = [];
             if (cal) {
