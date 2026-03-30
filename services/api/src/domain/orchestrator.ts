@@ -556,6 +556,24 @@ function buildFinanceAppLine(profile: Awaited<ReturnType<typeof getDealerProfile
   return "If you want to get started, you can submit a credit app online. Or you can stop by the dealership and get it done in person.";
 }
 
+function buildZeroDownQualificationLine(
+  profile: Awaited<ReturnType<typeof getDealerProfile>> | null
+): string {
+  const url = String(profile?.creditAppUrl ?? "").trim();
+  if (url) {
+    return (
+      `There are $0 down options available up front for some buyers, but it's application-dependent and based on lender approval. ` +
+      `The quickest way to see your exact terms is to submit the credit app here: ${url}. ` +
+      "If you'd rather do it in person, stop by the dealership and we can run it with you."
+    );
+  }
+  return (
+    "There are $0 down options available up front for some buyers, but it's application-dependent and based on lender approval. " +
+    "The quickest way to see your exact terms is to submit a credit app online. " +
+    "If you'd rather do it in person, stop by the dealership and we can run it with you."
+  );
+}
+
 function buildOutOfStockHumanOptionsLine(): string {
   return "If you'd like, you can stop by and we can go over availability and pricing, or I can text you as soon as one comes in.";
 }
@@ -2201,8 +2219,7 @@ export async function orchestrateInbound(
       }
 
       if (downQuestionOnly) {
-        const financeLine = buildFinanceAppLine(dealerProfile);
-        const draft = `Down payment depends on the finance application. ${financeLine}`;
+        const draft = buildZeroDownQualificationLine(dealerProfile);
         return finalize({
           intent,
           stage: "ENGAGED",
