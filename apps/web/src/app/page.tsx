@@ -4874,77 +4874,78 @@ export default function Home() {
                 <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-600 border border-white" />
               ) : null}
             </button>
-            {settingsOpen ? (
-              <div className="absolute bottom-12 left-12 w-56 bg-white border border-gray-200 rounded-lg shadow-lg p-2 z-[80] text-gray-900">
-                <div className="flex items-center justify-between px-2 py-1">
-                  <div className="text-xs font-semibold text-gray-600">Settings</div>
-                  <button
-                    className="text-xs px-1.5 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50"
-                    onClick={() => setSettingsOpen(false)}
-                    aria-label="Close settings menu"
-                  >
-                    X
-                  </button>
-                </div>
-                {isManager ? (
-                  <>
-                    <button
-                      className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
-                      onClick={() => {
-                        setSettingsTab("dealer");
-                        goToSection("settings");
-                        setSettingsOpen(false);
-                      }}
-                    >
-                      Dealer Profile
-                    </button>
-                    <button
-                      className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
-                      onClick={() => {
-                        setSettingsTab("users");
-                        goToSection("settings");
-                        setSettingsOpen(false);
-                      }}
-                    >
-                      Users
-                    </button>
-                    <button
-                      className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
-                      onClick={() => {
-                        setSettingsTab("scheduler");
-                        goToSection("settings");
-                        setSettingsOpen(false);
-                      }}
-                    >
-                      Scheduling
-                    </button>
-                    <button
-                      className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
-                      onClick={() => {
-                        setSettingsTab("notifications");
-                        goToSection("settings");
-                        setSettingsOpen(false);
-                      }}
-                    >
-                      Notifications
-                    </button>
-                  </>
-                ) : null}
-                <button
-                  className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm text-red-600"
-                  onClick={async () => {
-                    await fetch("/api/auth/logout", { method: "POST" });
-                    setSettingsOpen(false);
-                    setAuthUser(null);
-                  }}
-                >
-                  Sign out
-                </button>
-              </div>
-            ) : null}
           </div>
         </div>
       </aside>
+
+      {settingsOpen ? (
+        <div className="fixed left-[4.5rem] bottom-4 w-56 bg-white border border-gray-200 rounded-lg shadow-lg p-2 z-[120] text-gray-900">
+          <div className="flex items-center justify-between px-2 py-1">
+            <div className="text-xs font-semibold text-gray-600">Settings</div>
+            <button
+              className="text-xs px-1.5 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50"
+              onClick={() => setSettingsOpen(false)}
+              aria-label="Close settings menu"
+            >
+              X
+            </button>
+          </div>
+          {isManager ? (
+            <>
+              <button
+                className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
+                onClick={() => {
+                  setSettingsTab("dealer");
+                  goToSection("settings");
+                  setSettingsOpen(false);
+                }}
+              >
+                Dealer Profile
+              </button>
+              <button
+                className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
+                onClick={() => {
+                  setSettingsTab("users");
+                  goToSection("settings");
+                  setSettingsOpen(false);
+                }}
+              >
+                Users
+              </button>
+              <button
+                className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
+                onClick={() => {
+                  setSettingsTab("scheduler");
+                  goToSection("settings");
+                  setSettingsOpen(false);
+                }}
+              >
+                Scheduling
+              </button>
+              <button
+                className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
+                onClick={() => {
+                  setSettingsTab("notifications");
+                  goToSection("settings");
+                  setSettingsOpen(false);
+                }}
+              >
+                Notifications
+              </button>
+            </>
+          ) : null}
+          <button
+            className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm text-red-600"
+            onClick={async () => {
+              await fetch("/api/auth/logout", { method: "POST" });
+              setSettingsOpen(false);
+              setAuthUser(null);
+            }}
+          >
+            Sign out
+          </button>
+        </div>
+      ) : null}
 
       <section
         className={`w-full ${
