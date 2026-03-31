@@ -1085,6 +1085,16 @@ function recentOutboundRequestedInsuranceDocs(
   );
 }
 
+function recentOutboundRequestedBinder(
+  history: { direction: "in" | "out"; body: string }[]
+): boolean {
+  const recentOut = [...(history ?? [])]
+    .reverse()
+    .filter(m => m.direction === "out" && String(m.body ?? "").trim().length > 0)
+    .slice(0, 8);
+  return recentOut.some(m => /\bbinder\b/i.test(String(m.body ?? "")));
+}
+
 function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
   return aStart < bEnd && bStart < aEnd;
 }
@@ -1165,12 +1175,15 @@ export async function orchestrateInbound(
     hasInboundMedia &&
     (inboundMentionsInsuranceDocs(event.body) || recentOutboundRequestedInsuranceDocs(history ?? []))
   ) {
+    const binderRequested = recentOutboundRequestedBinder(history ?? []);
+    const binderProvidedNow = /\bbinder\b/i.test(String(event.body ?? ""));
     return finalize({
       intent: "FINANCING",
       stage: "ENGAGED",
       shouldRespond: true,
-      draft:
-        "Perfect, thank you — we got your insurance document. We’ll send the e-sign documents shortly."
+      draft: binderRequested && !binderProvidedNow
+        ? "Perfect, thank you — we got the insurance card. Once you send the binder, we’ll send the e-sign documents right away."
+        : "Perfect, thank you — we got your insurance document. We’ll send the e-sign documents shortly."
     });
   }
 
