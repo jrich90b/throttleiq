@@ -922,6 +922,7 @@ export default function Home() {
     bookingUrl: "",
     bookingToken: "",
     creditAppUrl: "",
+    lienHolderResponse: "",
     phone: "",
     website: "",
     addressLine1: "",
@@ -2110,6 +2111,11 @@ export default function Home() {
           bookingUrl: profile.bookingUrl ?? "",
           bookingToken: profile.bookingToken ?? "",
           creditAppUrl: profile.creditAppUrl ?? "",
+          lienHolderResponse:
+            profile?.policies?.lienHolderResponse ??
+            profile?.policies?.lienHolderText ??
+            profile?.lienHolderResponse ??
+            "",
           phone: profile.phone ?? "",
           website: profile.website ?? "",
           addressLine1: profile.address?.line1 ?? "",
@@ -4094,20 +4100,31 @@ export default function Home() {
     setSettingsError(null);
     try {
       const hours = dealerHours ?? {};
-        const payload = {
-          dealerName: dealerProfileForm.dealerName.trim(),
-          agentName: dealerProfileForm.agentName.trim(),
-          crmProvider: dealerProfileForm.crmProvider.trim(),
-          websiteProvider: dealerProfileForm.websiteProvider.trim(),
-          fromEmail: dealerProfileForm.fromEmail.trim(),
-          replyToEmail: dealerProfileForm.replyToEmail.trim(),
-          emailSignature: dealerProfileForm.emailSignature,
-          logoUrl: dealerProfileForm.logoUrl.trim(),
-          bookingUrl: dealerProfileForm.bookingUrl.trim(),
-          bookingToken: dealerProfileForm.bookingToken.trim(),
-          creditAppUrl: dealerProfileForm.creditAppUrl.trim(),
-          phone: dealerProfileForm.phone.trim(),
-          website: dealerProfileForm.website.trim(),
+      const existingPolicies =
+        dealerProfile &&
+        typeof dealerProfile === "object" &&
+        dealerProfile.policies &&
+        typeof dealerProfile.policies === "object"
+          ? dealerProfile.policies
+          : {};
+      const payload = {
+        dealerName: dealerProfileForm.dealerName.trim(),
+        agentName: dealerProfileForm.agentName.trim(),
+        crmProvider: dealerProfileForm.crmProvider.trim(),
+        websiteProvider: dealerProfileForm.websiteProvider.trim(),
+        fromEmail: dealerProfileForm.fromEmail.trim(),
+        replyToEmail: dealerProfileForm.replyToEmail.trim(),
+        emailSignature: dealerProfileForm.emailSignature,
+        logoUrl: dealerProfileForm.logoUrl.trim(),
+        bookingUrl: dealerProfileForm.bookingUrl.trim(),
+        bookingToken: dealerProfileForm.bookingToken.trim(),
+        creditAppUrl: dealerProfileForm.creditAppUrl.trim(),
+        policies: {
+          ...existingPolicies,
+          lienHolderResponse: dealerProfileForm.lienHolderResponse.trim()
+        },
+        phone: dealerProfileForm.phone.trim(),
+        website: dealerProfileForm.website.trim(),
         address: {
           line1: dealerProfileForm.addressLine1.trim(),
           city: dealerProfileForm.city.trim(),
@@ -6877,6 +6894,14 @@ export default function Home() {
                     placeholder="Credit app URL (financing)"
                     value={dealerProfileForm.creditAppUrl}
                     onChange={e => setDealerProfileForm({ ...dealerProfileForm, creditAppUrl: e.target.value })}
+                  />
+                  <textarea
+                    className="border rounded px-3 py-2 text-sm col-span-2 min-h-[80px]"
+                    placeholder="Lien holder / payoff response (used when customer asks for lien holder details)"
+                    value={dealerProfileForm.lienHolderResponse}
+                    onChange={e =>
+                      setDealerProfileForm({ ...dealerProfileForm, lienHolderResponse: e.target.value })
+                    }
                   />
                   <input
                     className="border rounded px-3 py-2 text-sm"
