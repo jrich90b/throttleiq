@@ -4767,7 +4767,7 @@ export default function Home() {
         )}
       </div>
       <div className="flex-1 flex md:flex-row flex-col min-h-0">
-      <aside className={`fixed inset-y-0 left-0 md:relative md:inset-auto z-50 w-16 md:h-screen border-r border-[var(--palette-graphite)] bg-[var(--palette-graphite)] text-white flex flex-col items-center py-3 cursor-pointer overflow-hidden transform transition-transform duration-200 ${mobileNavOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"} md:flex`}>
+      <aside className={`fixed inset-y-0 left-0 md:relative md:inset-auto z-50 w-16 md:h-screen border-r border-[var(--palette-graphite)] bg-[var(--palette-graphite)] text-white flex flex-col items-center py-3 cursor-pointer overflow-x-visible overflow-y-hidden transform transition-transform duration-200 ${mobileNavOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"} md:flex`}>
         <div className="text-lg font-semibold shrink-0">TI</div>
         <div className="mt-3 flex-1 min-h-0 w-full overflow-y-auto flex flex-col items-center gap-4 px-2 pb-3">
         <button
@@ -4875,7 +4875,7 @@ export default function Home() {
               ) : null}
             </button>
             {settingsOpen ? (
-              <div className="absolute bottom-12 left-12 w-56 bg-white border border-gray-200 rounded-lg shadow-lg p-2 z-50 text-gray-900">
+              <div className="absolute bottom-12 left-12 w-56 bg-white border border-gray-200 rounded-lg shadow-lg p-2 z-[80] text-gray-900">
                 <div className="flex items-center justify-between px-2 py-1">
                   <div className="text-xs font-semibold text-gray-600">Settings</div>
                   <button
