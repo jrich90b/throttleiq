@@ -3388,6 +3388,66 @@ function inferExtensionFromMedia(contentType: string | null, sourceUrl: string):
   return "bin";
 }
 
+function inferExtensionFromBytes(buf: Buffer): string | null {
+  if (!buf || buf.length < 4) return null;
+  // JPEG SOI
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "jpg";
+  // PNG
+  if (
+    buf.length >= 8 &&
+    buf[0] === 0x89 &&
+    buf[1] === 0x50 &&
+    buf[2] === 0x4e &&
+    buf[3] === 0x47 &&
+    buf[4] === 0x0d &&
+    buf[5] === 0x0a &&
+    buf[6] === 0x1a &&
+    buf[7] === 0x0a
+  ) {
+    return "png";
+  }
+  // GIF87a/GIF89a
+  if (
+    buf.length >= 6 &&
+    buf[0] === 0x47 &&
+    buf[1] === 0x49 &&
+    buf[2] === 0x46 &&
+    buf[3] === 0x38
+  ) {
+    return "gif";
+  }
+  // WEBP: RIFF....WEBP
+  if (
+    buf.length >= 12 &&
+    buf[0] === 0x52 &&
+    buf[1] === 0x49 &&
+    buf[2] === 0x46 &&
+    buf[3] === 0x46 &&
+    buf[8] === 0x57 &&
+    buf[9] === 0x45 &&
+    buf[10] === 0x42 &&
+    buf[11] === 0x50
+  ) {
+    return "webp";
+  }
+  // HEIC/HEIF container brands
+  if (
+    buf.length >= 12 &&
+    buf[4] === 0x66 &&
+    buf[5] === 0x74 &&
+    buf[6] === 0x79 &&
+    buf[7] === 0x70
+  ) {
+    const brand = buf.subarray(8, 12).toString("ascii").toLowerCase();
+    if (brand.startsWith("hei") || brand.startsWith("mif1") || brand.startsWith("hev")) {
+      return "heic";
+    }
+  }
+  // PDF
+  if (buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46) return "pdf";
+  return null;
+}
+
 type TwilioInboundMediaItem = {
   url: string;
   contentType?: string;
@@ -3432,11 +3492,14 @@ async function materializeInboundTwilioMedia(
         saved.push(source);
         continue;
       }
-      const ext = inferExtensionFromMedia(declaredType ?? resp.headers.get("content-type"), source);
+      const buf = Buffer.from(await resp.arrayBuffer());
+      let ext = inferExtensionFromMedia(declaredType ?? resp.headers.get("content-type"), source);
+      if (ext === "bin") {
+        ext = inferExtensionFromBytes(buf) ?? ext;
+      }
       const fileName = `${i}.${ext}`;
       const abs = path.join(folderAbs, fileName);
       const rel = `${folderRel.replace(/\\/g, "/")}/${fileName}`;
-      const buf = Buffer.from(await resp.arrayBuffer());
       await fs.promises.writeFile(abs, buf);
       const cleanBase = String(publicAssetBase ?? "").replace(/\/+$/, "");
       saved.push(cleanBase ? `${cleanBase}/${rel}` : `/${rel}`);

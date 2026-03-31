@@ -111,6 +111,22 @@ function injectBookingUrl(body: string, url: string) {
   return `${body}\n\nYou can book an appointment here: ${url}`;
 }
 
+function getMediaUrlInfo(url: string): { isImage: boolean; isPdf: boolean; fileName: string } {
+  const fallback = { isImage: false, isPdf: false, fileName: "attachment" };
+  if (!url) return fallback;
+  try {
+    const parsed = new URL(url, "https://local");
+    const pathName = parsed.pathname || "";
+    const fileName = decodeURIComponent(pathName.split("/").pop() || "attachment");
+    const ext = (fileName.split(".").pop() || "").toLowerCase();
+    const isImage = ["jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp", "svg"].includes(ext);
+    const isPdf = ext === "pdf";
+    return { isImage, isPdf, fileName };
+  } catch {
+    return fallback;
+  }
+}
+
 const CADENCE_ALERT_WINDOW_HOURS = 24;
 
 const CALENDAR_COLORS = [
@@ -9783,15 +9799,32 @@ export default function Home() {
                         <div
                           className={`mt-2 flex flex-wrap gap-2 ${m.direction === "in" ? "" : "justify-end"}`}
                         >
-                          {m.mediaUrls.map(url => (
-                            <img
-                              key={url}
-                              src={url}
-                              alt="MMS attachment"
-                              className="max-w-[240px] rounded border"
-                              loading="lazy"
-                            />
-                          ))}
+                          {m.mediaUrls.map(url => {
+                            const media = getMediaUrlInfo(url);
+                            if (media.isImage) {
+                              return (
+                                <img
+                                  key={url}
+                                  src={url}
+                                  alt="MMS image attachment"
+                                  className="max-w-[240px] rounded border"
+                                  loading="lazy"
+                                />
+                              );
+                            }
+                            return (
+                              <a
+                                key={url}
+                                href={url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-xs rounded border px-2 py-1 bg-white hover:bg-gray-50 text-blue-700 underline"
+                                title={media.fileName}
+                              >
+                                {media.isPdf ? "Open PDF attachment" : "Open attachment"}
+                              </a>
+                            );
+                          })}
                         </div>
                       ) : null}
                     </div>
