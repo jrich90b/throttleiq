@@ -4258,6 +4258,48 @@ function normalizeOutboundText(text: string): string {
   return String(text ?? "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+function getOutboundMessagesByProvider(conv: any, providers?: string[]): any[] {
+  const allow = providers?.length ? new Set(providers) : null;
+  return (conv?.messages ?? [])
+    .filter(
+      (m: any) =>
+        m?.direction === "out" &&
+        String(m?.body ?? "").trim() &&
+        (!allow || allow.has(String(m.provider ?? "")))
+    )
+    .sort((a: any, b: any) => new Date(a.at ?? 0).getTime() - new Date(b.at ?? 0).getTime());
+}
+
+function selectNonRepeatingCadenceMessage(
+  conv: any,
+  candidate: string,
+  fallbackOptions: string[] = [],
+  providers: string[] = ["twilio", "draft_ai", "human", "sendgrid"]
+): string {
+  const normalizedCandidate = normalizeOutboundText(candidate);
+  if (!normalizedCandidate) return candidate;
+  const outbounds = getOutboundMessagesByProvider(conv, providers);
+  if (!outbounds.length) return candidate;
+  const lastNorm = normalizeOutboundText(outbounds[outbounds.length - 1]?.body ?? "");
+  if (!lastNorm || normalizedCandidate !== lastNorm) return candidate;
+
+  const used = new Set(
+    outbounds
+      .map((m: any) => normalizeOutboundText(m.body))
+      .filter(Boolean)
+  );
+  for (const option of fallbackOptions) {
+    const normalizedOption = normalizeOutboundText(option);
+    if (!normalizedOption || normalizedOption === lastNorm) continue;
+    if (!used.has(normalizedOption)) return option.trim();
+  }
+  for (const option of fallbackOptions) {
+    const normalizedOption = normalizeOutboundText(option);
+    if (normalizedOption && normalizedOption !== lastNorm) return option.trim();
+  }
+  return `${candidate.trim()} If timing changed, just let me know.`.trim();
+}
+
 function hasIntro(conv: any, dealerName?: string, agentName?: string): boolean {
   const dealer = dealerName?.toLowerCase();
   const agent = agentName?.toLowerCase();
@@ -6265,6 +6307,7 @@ async function processDueFollowUps() {
       (contextTag && ENGAGED_FOLLOW_UP_VARIANTS_WITH_SLOTS[contextTag]) ||
       ENGAGED_FOLLOW_UP_VARIANTS_WITH_SLOTS.general;
     let message = FOLLOW_UP_MESSAGES[cadence.stepIndex] ?? FOLLOW_UP_MESSAGES[FOLLOW_UP_MESSAGES.length - 1];
+    let cadenceNoRepeatFallbacks: string[] = [];
     let mediaUrls: string[] | undefined;
     if (isPostSale) {
       const repName = resolvePostSaleSender(conv);
@@ -6290,6 +6333,11 @@ async function processDueFollowUps() {
         message =
           "Just checking in on your trade‑in estimate. What model are you interested in? I can set up a trade appraisal. What day and time works for you?";
       }
+      cadenceNoRepeatFallbacks = [
+        "Quick follow-up on your trade estimate — if you want, I can line up a quick appraisal time.",
+        "No rush on your trade estimate — if you'd like, I can help you set a quick appraisal.",
+        "If timing changed, that's fine — I can still help with your trade estimate whenever you're ready."
+      ];
     } else if (isSellMyBikeLead) {
       const weatherStatus = await getDealerWeatherStatus(dealerProfile);
       let pickupEligible = conv.pickup?.eligible === true;
@@ -6324,18 +6372,45 @@ async function processDueFollowUps() {
       const template = SELL_FOLLOW_UP_MESSAGES[Math.min(cadence.stepIndex, SELL_FOLLOW_UP_MESSAGES.length - 1)];
       if (weatherStatus?.bad) {
         if (!pickupKnown) {
-          message = `Just checking in — if you want us to pick up ${
-            sellBikeLabel ?? "your bike"
-          } for a trade evaluation, let me know where you’re located.`;
+          const pickupNeedTown = [
+            `Just checking in — if you want us to pick up ${sellBikeLabel ?? "your bike"} for a trade evaluation, let me know where you’re located.`,
+            `Quick follow-up — if pickup is easier, send me your town and I can check range for ${sellBikeLabel ?? "your bike"}.`,
+            `Whenever you're ready, share your location and I can confirm pickup options for ${sellBikeLabel ?? "your bike"}.`
+          ];
+          message = pickVariantNoRepeat(
+            cadence,
+            pickupNeedTown,
+            `${conv.leadKey}|sell|pickup_need_town`,
+            "sell:pickup:need_town"
+          );
+          cadenceNoRepeatFallbacks = pickupNeedTown;
           conv.pickup = { ...(conv.pickup ?? {}), stage: "need_town", updatedAt: nowIso() };
         } else if (pickupEligible) {
-          message = `Just checking in — if the weather’s rough, we can pick up ${
-            sellBikeLabel ?? "your bike"
-          } for a trade evaluation. If you’d rather stop in, what day and time works for you?`;
+          const pickupWeather = [
+            `Just checking in — if the weather’s rough, we can pick up ${sellBikeLabel ?? "your bike"} for a trade evaluation. If you’d rather stop in, what day and time works for you?`,
+            `If weather is getting in the way, we can pick up ${sellBikeLabel ?? "your bike"} for appraisal. If not, I can still set a quick in-person time.`,
+            `If it's easier with the weather, we can do pickup for ${sellBikeLabel ?? "your bike"} and keep it simple.`
+          ];
+          message = pickVariantNoRepeat(
+            cadence,
+            pickupWeather,
+            `${conv.leadKey}|sell|pickup_weather`,
+            "sell:pickup:weather"
+          );
+          cadenceNoRepeatFallbacks = pickupWeather;
         } else {
-          message = `Just checking in — if you'd like a quick in‑person appraisal on ${
-            sellBikeLabel ?? "your bike"
-          }, what day and time works for you?`;
+          const inPersonWeather = [
+            `Just checking in — if you'd like a quick in-person appraisal on ${sellBikeLabel ?? "your bike"}, what day and time works for you?`,
+            `Quick follow-up — if you want to move ahead on ${sellBikeLabel ?? "your bike"}, I can line up a quick in-person appraisal time.`,
+            `No rush — whenever you're ready, I can set a quick in-person appraisal for ${sellBikeLabel ?? "your bike"}.`
+          ];
+          message = pickVariantNoRepeat(
+            cadence,
+            inPersonWeather,
+            `${conv.leadKey}|sell|in_person_weather`,
+            "sell:in_person:weather"
+          );
+          cadenceNoRepeatFallbacks = inPersonWeather;
         }
       } else if (cadence.stepIndex === 0) {
         const day2 = await buildDay2Options(cfg);
@@ -6363,6 +6438,13 @@ async function processDueFollowUps() {
         }
       } else {
         message = template.replace("{bike}", sellBikeLabel ?? "your bike");
+      }
+      if (!cadenceNoRepeatFallbacks.length) {
+        cadenceNoRepeatFallbacks = [
+          `Quick follow-up on ${sellBikeLabel ?? "your bike"} — I can line up a quick appraisal whenever you're ready.`,
+          `No pressure on ${sellBikeLabel ?? "your bike"} — if you want to move forward, I can set a time that works for you.`,
+          `If timing changed on ${sellBikeLabel ?? "your bike"}, just tell me what day works and I can help.`
+        ];
       }
     } else if (cadence.stepIndex === 0) {
       const day2 = await buildDay2Options(cfg);
@@ -6472,6 +6554,22 @@ async function processDueFollowUps() {
         }
       }
     }
+    const genericCadenceNoRepeatFallbacks = isPostSale
+      ? [
+          "Quick follow-up — if you need anything, just let me know.",
+          "Checking in again — I'm here anytime you need help.",
+          "No rush — if anything comes up, just reach out."
+        ]
+      : [
+          "Quick follow-up — I'm here if you want to revisit this.",
+          "No rush — whenever you're ready, I can help with next steps.",
+          "If timing changed, just let me know and I can adjust."
+        ];
+    message = selectNonRepeatingCadenceMessage(
+      conv,
+      message,
+      cadenceNoRepeatFallbacks.length ? cadenceNoRepeatFallbacks : genericCadenceNoRepeatFallbacks
+    );
 
     const emailTo = conv.lead?.email;
     const useEmail =
