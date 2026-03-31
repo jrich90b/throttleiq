@@ -207,6 +207,22 @@ function formatContactDate(iso?: string): string {
   });
 }
 
+function splitContactName(raw?: string | null): { firstName: string; lastName: string } {
+  const parts = String(raw ?? "").trim().split(/\s+/).filter(Boolean);
+  return {
+    firstName: parts[0] ?? "",
+    lastName: parts.slice(1).join(" ")
+  };
+}
+
+function isLikelyPhoneLeadKey(value?: string | null): boolean {
+  const t = String(value ?? "").trim();
+  if (!t) return false;
+  if (t.includes("@")) return false;
+  const digits = t.replace(/\D/g, "");
+  return digits.length >= 10;
+}
+
 function parseCsvRows(raw: string): string[][] {
   const rows: string[][] = [];
   let current = "";
@@ -809,6 +825,14 @@ export default function Home() {
   const [listActionsOpenId, setListActionsOpenId] = useState<string | null>(null);
   const [todoInlineOpenId, setTodoInlineOpenId] = useState<string | null>(null);
   const [todoInlineText, setTodoInlineText] = useState("");
+  const [contactInlineOpenId, setContactInlineOpenId] = useState<string | null>(null);
+  const [contactInlineSaving, setContactInlineSaving] = useState(false);
+  const [contactInlineForm, setContactInlineForm] = useState({
+    firstName: "",
+    lastName: "",
+    phone: "",
+    email: ""
+  });
   const sendBoxRef = useRef<HTMLTextAreaElement | null>(null);
   const streamRef = useRef<EventSource | null>(null);
   const lastStreamRefreshRef = useRef(0);
@@ -2829,6 +2853,9 @@ export default function Home() {
     if (!listActionsOpenId) {
       setTodoInlineOpenId(null);
       setTodoInlineText("");
+      setContactInlineOpenId(null);
+      setContactInlineSaving(false);
+      setContactInlineForm({ firstName: "", lastName: "", phone: "", email: "" });
     }
   }, [listActionsOpenId]);
 
@@ -3721,6 +3748,66 @@ export default function Home() {
     setTodoInlineText("");
     setListActionsOpenId(null);
     await load();
+  }
+
+  function openInlineContactFromConversation(c: ConversationListItem) {
+    const selectedLead = selectedConv?.id === c.id ? selectedConv.lead : null;
+    const name = splitContactName(c.leadName ?? selectedLead?.name ?? "");
+    const leadKey = String(c.leadKey ?? "").trim();
+    const phone = String(selectedLead?.phone ?? "").trim() || (isLikelyPhoneLeadKey(leadKey) ? leadKey : "");
+    const email =
+      String(selectedLead?.email ?? "").trim() || (leadKey.includes("@") ? leadKey : "");
+    setContactInlineForm({
+      firstName: String(selectedLead?.firstName ?? "").trim() || name.firstName,
+      lastName: String(selectedLead?.lastName ?? "").trim() || name.lastName,
+      phone,
+      email
+    });
+    setTodoInlineOpenId(null);
+    setTodoInlineText("");
+    setContactInlineOpenId(c.id);
+  }
+
+  async function submitInlineContact(c: ConversationListItem) {
+    const body = {
+      firstName: contactInlineForm.firstName.trim(),
+      lastName: contactInlineForm.lastName.trim(),
+      phone: contactInlineForm.phone.trim(),
+      email: contactInlineForm.email.trim()
+    };
+    if (!body.phone && !body.email) {
+      window.alert("Please enter at least phone or email.");
+      return;
+    }
+    setContactInlineSaving(true);
+    try {
+      const resp = await fetch("/api/contacts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...body,
+          name: [body.firstName, body.lastName].filter(Boolean).join(" ").trim() || undefined,
+          leadKey: c.leadKey,
+          conversationId: c.id
+        })
+      });
+      const payload = await resp.json().catch(() => null);
+      if (!resp.ok || !payload?.ok) {
+        window.alert(payload?.error ?? "Failed to create contact");
+        return;
+      }
+      setContactInlineOpenId(null);
+      setContactInlineForm({ firstName: "", lastName: "", phone: "", email: "" });
+      setListActionsOpenId(null);
+      setSaveToast("Contact saved");
+      setTimeout(() => setSaveToast(null), 2000);
+      await load();
+      if (payload?.contact?.id) {
+        setSelectedContact(payload.contact as ContactItem);
+      }
+    } finally {
+      setContactInlineSaving(false);
+    }
   }
 
   async function setHumanMode(next: "human" | "suggest") {
@@ -5145,7 +5232,9 @@ export default function Home() {
                           </button>
                               {listActionsOpenId === c.id ? (
                                 <div
-                                  className="absolute right-0 mt-2 w-40 border rounded bg-white shadow z-10"
+                                  className={`absolute right-0 mt-2 border rounded bg-white shadow z-10 ${
+                                    todoInlineOpenId === c.id || contactInlineOpenId === c.id ? "w-64" : "w-40"
+                                  }`}
                                   data-actions-menu
                                   onClick={e => e.stopPropagation()}
                                   onMouseDown={e => e.stopPropagation()}
@@ -5182,28 +5271,114 @@ export default function Home() {
                                         </button>
                                       </div>
                                     </div>
+                                  ) : contactInlineOpenId === c.id ? (
+                                    <div className="p-2">
+                                      <div className="text-[11px] text-gray-500 mb-1">New contact</div>
+                                      <div className="grid grid-cols-2 gap-2">
+                                        <input
+                                          className="border rounded px-2 py-1 text-xs"
+                                          value={contactInlineForm.firstName}
+                                          onChange={e =>
+                                            setContactInlineForm(prev => ({
+                                              ...prev,
+                                              firstName: e.target.value
+                                            }))
+                                          }
+                                          placeholder="First name"
+                                        />
+                                        <input
+                                          className="border rounded px-2 py-1 text-xs"
+                                          value={contactInlineForm.lastName}
+                                          onChange={e =>
+                                            setContactInlineForm(prev => ({
+                                              ...prev,
+                                              lastName: e.target.value
+                                            }))
+                                          }
+                                          placeholder="Last name"
+                                        />
+                                      </div>
+                                      <input
+                                        className="w-full border rounded px-2 py-1 text-xs mt-2"
+                                        value={contactInlineForm.phone}
+                                        onChange={e =>
+                                          setContactInlineForm(prev => ({
+                                            ...prev,
+                                            phone: e.target.value
+                                          }))
+                                        }
+                                        placeholder="Phone"
+                                      />
+                                      <input
+                                        className="w-full border rounded px-2 py-1 text-xs mt-2"
+                                        value={contactInlineForm.email}
+                                        onChange={e =>
+                                          setContactInlineForm(prev => ({
+                                            ...prev,
+                                            email: e.target.value
+                                          }))
+                                        }
+                                        placeholder="Email"
+                                      />
+                                      <div className="mt-2 flex justify-end gap-2">
+                                        <button
+                                          className="px-2 py-1 border rounded text-xs"
+                                          onClick={() => {
+                                            setContactInlineOpenId(null);
+                                            setContactInlineForm({
+                                              firstName: "",
+                                              lastName: "",
+                                              phone: "",
+                                              email: ""
+                                            });
+                                          }}
+                                        >
+                                          Cancel
+                                        </button>
+                                        <button
+                                          className="px-2 py-1 border rounded text-xs"
+                                          disabled={contactInlineSaving}
+                                          onClick={() => {
+                                            void submitInlineContact(c);
+                                          }}
+                                        >
+                                          {contactInlineSaving ? "Saving..." : "Save"}
+                                        </button>
+                                      </div>
+                                    </div>
                                   ) : (
-                                    <button
-                                      className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
-                                      onClick={() => {
-                                        setTodoInlineOpenId(c.id);
-                                        setTodoInlineText("");
-                                      }}
-                                    >
-                                      Create to-do
-                                    </button>
+                                    <>
+                                      <button
+                                        className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
+                                        onClick={() => {
+                                          setContactInlineOpenId(null);
+                                          setTodoInlineOpenId(c.id);
+                                          setTodoInlineText("");
+                                        }}
+                                      >
+                                        Create to-do
+                                      </button>
+                                      <button
+                                        className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
+                                        onClick={() => {
+                                          openInlineContactFromConversation(c);
+                                        }}
+                                      >
+                                        Add new contact
+                                      </button>
+                                    </>
                                   )}
                                   <button
                                     className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
                                     onClick={() => {
                                       setListActionsOpenId(null);
                                       void deleteConvFromList(c.id);
-                                }}
-                              >
-                                Delete
-                              </button>
-                            </div>
-                          ) : null}
+                                    }}
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              ) : null}
                         </div>
                       </div>
                     ))}
