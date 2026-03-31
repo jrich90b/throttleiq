@@ -4721,8 +4721,9 @@ export default function Home() {
         )}
       </div>
       <div className="flex-1 flex md:flex-row flex-col min-h-0">
-      <aside className={`fixed md:relative z-50 w-16 h-screen border-r border-[var(--palette-graphite)] bg-[var(--palette-graphite)] text-white flex flex-col items-center py-4 gap-4 cursor-pointer transform transition-transform duration-200 ${mobileNavOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"} md:flex`}>
-        <div className="text-lg font-semibold">TI</div>
+      <aside className={`fixed md:relative z-50 w-16 h-screen border-r border-[var(--palette-graphite)] bg-[var(--palette-graphite)] text-white flex flex-col items-center py-3 cursor-pointer overflow-hidden transform transition-transform duration-200 ${mobileNavOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"} md:flex`}>
+        <div className="text-lg font-semibold shrink-0">TI</div>
+        <div className="mt-3 flex-1 min-h-0 w-full overflow-y-auto flex flex-col items-center gap-4 px-2 pb-3">
         <button
           className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "inbox" ? "bg-white/10" : "hover:bg-white/5"}`}
           title="Inbox"
@@ -4807,7 +4808,8 @@ export default function Home() {
             </span>
           ) : null}
         </button>
-        <div className="mt-auto flex flex-col items-center gap-3">
+        </div>
+        <div className="shrink-0 flex flex-col items-center gap-3 pb-[calc(env(safe-area-inset-bottom,0px)+0.25rem)]">
           <div className="text-xs text-white/60">{loading ? "…" : ""}</div>
           <div className="relative">
             <button
