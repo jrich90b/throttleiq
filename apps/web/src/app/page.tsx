@@ -2446,6 +2446,7 @@ export default function Home() {
   }, [selectedContactListId, selectedContact?.id, selectedContactList?.contactIds?.join("|")]);
 
   const isManager = authUser?.role === "manager";
+  const isServiceUser = authUser?.role === "service";
   const isConversationSection =
     section === "inbox" ||
     section === "todos" ||
@@ -2501,6 +2502,14 @@ export default function Home() {
     setMobilePanel("list");
   }, [section]);
 
+  useEffect(() => {
+    if (!isServiceUser) return;
+    if (section !== "inbox" && section !== "todos") {
+      setSection("inbox");
+      setMobilePanel("list");
+    }
+  }, [isServiceUser, section]);
+
   function openConversation(id: string) {
     setSelectedId(id);
     setMobilePanel("detail");
@@ -2518,9 +2527,10 @@ export default function Home() {
       | "settings"
       | "calendar"
   ) {
-    setSection(next);
+    const target = isServiceUser && next !== "inbox" && next !== "todos" ? "inbox" : next;
+    setSection(target);
     setMobileNavOpen(false);
-    if (next === "calendar" || next === "settings" || next === "inventory" || next === "suppressions") {
+    if (target === "calendar" || target === "settings" || target === "inventory" || target === "suppressions") {
       setMobilePanel("detail");
     } else {
       setMobilePanel("list");
@@ -4772,7 +4782,7 @@ export default function Home() {
         >
           📥
         </button>
-        {(authUser?.role === "manager" || authUser?.role === "salesperson" || authUser?.permissions?.canAccessTodos) ? (
+        {(authUser?.role === "manager" || authUser?.role === "salesperson" || authUser?.role === "service" || authUser?.permissions?.canAccessTodos) ? (
           <button
             className={`relative w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "todos" ? "bg-white/10" : "hover:bg-white/5"}`}
             title="To-Dos"
@@ -4786,14 +4796,16 @@ export default function Home() {
             ) : null}
           </button>
         ) : null}
-        <button
-          className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "contacts" ? "bg-white/10" : "hover:bg-white/5"}`}
-          title="Contacts"
-          onClick={() => goToSection("contacts")}
-        >
-          👥
-        </button>
-        {(authUser?.role === "manager" || authUser?.permissions?.canAccessSuppressions) ? (
+        {!isServiceUser ? (
+          <button
+            className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "contacts" ? "bg-white/10" : "hover:bg-white/5"}`}
+            title="Contacts"
+            onClick={() => goToSection("contacts")}
+          >
+            👥
+          </button>
+        ) : null}
+        {!isServiceUser && (authUser?.role === "manager" || authUser?.permissions?.canAccessSuppressions) ? (
           <button
             className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "suppressions" ? "bg-white/10" : "hover:bg-white/5"}`}
             title="Suppressions"
@@ -4802,7 +4814,7 @@ export default function Home() {
             ⛔
           </button>
         ) : null}
-        {(authUser?.role === "manager" || authUser?.permissions?.canEditAppointments) ? (
+        {!isServiceUser && (authUser?.role === "manager" || authUser?.permissions?.canEditAppointments) ? (
           <button
             className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "calendar" ? "bg-white/10" : "hover:bg-white/5"}`}
             title="Calendar"
@@ -4811,14 +4823,16 @@ export default function Home() {
             📅
           </button>
         ) : null}
-        <button
-          className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "inventory" ? "bg-white/10" : "hover:bg-white/5"}`}
-          title="Inventory"
-          onClick={() => goToSection("inventory")}
-        >
-          📦
-        </button>
-        {(authUser?.role === "manager" || authUser?.role === "salesperson") ? (
+        {!isServiceUser ? (
+          <button
+            className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "inventory" ? "bg-white/10" : "hover:bg-white/5"}`}
+            title="Inventory"
+            onClick={() => goToSection("inventory")}
+          >
+            📦
+          </button>
+        ) : null}
+        {!isServiceUser && (authUser?.role === "manager" || authUser?.role === "salesperson") ? (
         <button
           className={`relative w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "watches" ? "bg-white/10" : "hover:bg-white/5"}`}
           title="Watches"
@@ -4832,18 +4846,20 @@ export default function Home() {
           ) : null}
         </button>
         ) : null}
-        <button
-          className={`relative w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "questions" ? "bg-white/10" : "hover:bg-white/5"}`}
-          title="Questions"
-          onClick={() => goToSection("questions")}
-        >
-          🔔
-          {questions.length > 0 ? (
-            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-semibold flex items-center justify-center border border-white">
-              {questions.length > 99 ? "99+" : questions.length}
-            </span>
-          ) : null}
-        </button>
+        {!isServiceUser ? (
+          <button
+            className={`relative w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "questions" ? "bg-white/10" : "hover:bg-white/5"}`}
+            title="Questions"
+            onClick={() => goToSection("questions")}
+          >
+            🔔
+            {questions.length > 0 ? (
+              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-semibold flex items-center justify-center border border-white">
+                {questions.length > 99 ? "99+" : questions.length}
+              </span>
+            ) : null}
+          </button>
+        ) : null}
         </div>
         <div className="shrink-0 sticky bottom-0 w-full flex flex-col items-center gap-2 pt-3 border-t border-white/10 bg-[var(--palette-graphite)] pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]">
           <div className="text-xs text-white/60">{loading ? "…" : ""}</div>
@@ -5438,7 +5454,7 @@ export default function Home() {
         ) : null}
 
         {section === "todos" &&
-        (authUser?.role === "manager" || authUser?.role === "salesperson" || authUser?.permissions?.canAccessTodos) ? (
+        (authUser?.role === "manager" || authUser?.role === "salesperson" || authUser?.role === "service" || authUser?.permissions?.canAccessTodos) ? (
           <div className="mt-3 border rounded-lg divide-y">
             {todos.map(t => {
               const isCallTodo = (t.reason ?? "").toLowerCase() === "call";
@@ -7170,6 +7186,7 @@ export default function Home() {
                                   >
                                     <option value="salesperson">Salesperson</option>
                                     <option value="manager">Manager</option>
+                                    <option value="service">Service</option>
                                   </select>
                                   {user.role === "manager" ? (
                                     <label className="col-span-2 flex items-center gap-2 text-xs">
@@ -7457,6 +7474,7 @@ export default function Home() {
                             >
                               <option value="salesperson">Salesperson</option>
                               <option value="manager">Manager</option>
+                              <option value="service">Service</option>
                             </select>
                             {userForm.role === "manager" ? (
                               <label className="col-span-2 flex items-center gap-2 text-xs">

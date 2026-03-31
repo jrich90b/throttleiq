@@ -300,6 +300,47 @@ function requirePermission(key: "canEditAppointments" | "canToggleHumanOverride"
   };
 }
 
+function isServiceConversation(conv: any): boolean {
+  if (!conv) return false;
+  const bucket = String(conv?.classification?.bucket ?? "").toLowerCase();
+  const cta = String(conv?.classification?.cta ?? "").toLowerCase();
+  if (bucket === "service" || cta === "service_request") return true;
+  const dialogState = String(getDialogState(conv) ?? "").toLowerCase();
+  if (dialogState === "service_request" || dialogState === "service_handoff" || dialogState.startsWith("service_")) {
+    return true;
+  }
+  const followUpReason = String(conv?.followUp?.reason ?? "").toLowerCase();
+  if (followUpReason.includes("service")) return true;
+  if (listOpenTodos().some(t => t.convId === conv.id && t.reason === "service")) return true;
+  return false;
+}
+
+function canUserAccessConversation(user: any, conv: any): boolean {
+  if (AUTH_DISABLED || !user) return true;
+  const role = String(user?.role ?? "").toLowerCase();
+  if (role === "manager") return true;
+  const serviceConversation = isServiceConversation(conv);
+  if (role === "service") return serviceConversation;
+  if (role === "salesperson") return !serviceConversation;
+  return true;
+}
+
+app.use((req, res, next) => {
+  if (AUTH_DISABLED) return next();
+  const user = (req as any).user ?? null;
+  if (!user) return next();
+  const match = req.path.match(/^\/conversations\/([^/]+)/);
+  if (!match) return next();
+  if (match[1] === "compose") return next();
+  const convId = decodeURIComponent(match[1]);
+  const conv = getConversation(convId);
+  if (!conv) return next();
+  if (!canUserAccessConversation(user, conv)) {
+    return res.status(403).json({ ok: false, error: "forbidden" });
+  }
+  return next();
+});
+
 async function syncSchedulerSalespeopleFromUsers() {
   const cfg = await getSchedulerConfig();
   const users = await listUsers();
@@ -1166,7 +1207,10 @@ app.post("/users", async (req, res) => {
   }
   const email = String(req.body?.email ?? "").trim();
   const password = String(req.body?.password ?? "");
-  const role = (String(req.body?.role ?? "salesperson") as "manager" | "salesperson") ?? "salesperson";
+  const roleRaw = String(req.body?.role ?? "salesperson").trim();
+  const role = (["manager", "salesperson", "service"].includes(roleRaw)
+    ? roleRaw
+    : "salesperson") as "manager" | "salesperson" | "service";
   const firstName = String(req.body?.firstName ?? "").trim();
   const lastName = String(req.body?.lastName ?? "").trim();
   const nameRaw = String(req.body?.name ?? "").trim();
@@ -1218,10 +1262,15 @@ app.put("/users/:id", requireManager, async (req, res) => {
   const id = String(req.params.id ?? "").trim();
   if (!id) return res.status(400).json({ ok: false, error: "Missing id" });
   try {
+    const roleRaw =
+      req.body?.role == null ? undefined : String(req.body.role).trim();
+    const role = roleRaw && ["manager", "salesperson", "service"].includes(roleRaw)
+      ? (roleRaw as "manager" | "salesperson" | "service")
+      : undefined;
     const user = await updateUser(id, {
       email: req.body?.email,
       password: req.body?.password,
-      role: req.body?.role,
+      role,
       name: req.body?.name,
       firstName: req.body?.firstName,
       lastName: req.body?.lastName,
@@ -8385,8 +8434,10 @@ app.post("/inventory/status", (req, res) => {
 });
 
 // Inbox endpoints
-app.get("/conversations", (_req, res) => {
-  res.json({ ok: true, systemMode: getSystemMode(), conversations: listConversations() });
+app.get("/conversations", (req, res) => {
+  const user = (req as any).user ?? null;
+  const conversations = listConversations().filter(conv => canUserAccessConversation(user, conv));
+  res.json({ ok: true, systemMode: getSystemMode(), conversations });
 });
 
 app.post("/conversations/compose", (req, res) => {
@@ -8433,6 +8484,10 @@ app.post("/conversations/compose", (req, res) => {
 app.get("/conversations/:id", async (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+  const user = (req as any).user ?? null;
+  if (!canUserAccessConversation(user, conv)) {
+    return res.status(403).json({ ok: false, error: "forbidden" });
+  }
   const emailDraft = conv.emailDraft ?? null;
   const leadSource = conv.lead?.source ?? null;
   const walkIn = inferWalkIn(conv) ? true : null;
@@ -9234,6 +9289,7 @@ app.delete("/conversations/:id", (req, res) => {
 app.get("/todos", requirePermission("canAccessTodos"), (req, res) => {
   const user = (req as any).user ?? null;
   const isManager = user?.role === "manager";
+  const isServiceUser = user?.role === "service";
   const requesterId = String(user?.id ?? "").trim();
   const extractNameFromSummary = (summary?: string | null) => {
     const text = String(summary ?? "");
@@ -9249,9 +9305,12 @@ app.get("/todos", requirePermission("canAccessTodos"), (req, res) => {
   const todos = listOpenTodos()
     .filter(t => {
       if (isManager) return true;
+      const conv = getConversation(t.convId);
+      const isServiceTodo = t.reason === "service" || isServiceConversation(conv);
+      if (isServiceUser) return isServiceTodo;
+      if (isServiceTodo) return false;
       if (!requesterId) return false;
       if (t.ownerId) return t.ownerId === requesterId;
-      const conv = getConversation(t.convId);
       return conv?.leadOwner?.id === requesterId;
     })
     .map(t => {
@@ -9278,13 +9337,16 @@ app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
   }
   const conv = getConversation(convId);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+  const user = (req as any).user ?? null;
+  if (!canUserAccessConversation(user, conv)) {
+    return res.status(403).json({ ok: false, error: "forbidden" });
+  }
   const allowedReasons: Array<
     "pricing" | "payments" | "approval" | "manager" | "service" | "call" | "note" | "other"
   > = ["pricing", "payments", "approval", "manager", "service", "call", "note", "other"];
   const reason = allowedReasons.includes(reasonRaw as any)
     ? (reasonRaw as any)
     : "other";
-  const user = (req as any).user ?? null;
   const ownerId = user?.role === "manager" ? "" : String(user?.id ?? "").trim();
   const ownerName = String(user?.name ?? user?.email ?? "").trim();
   const task = addTodo(
@@ -9301,18 +9363,26 @@ app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
 app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), (req, res) => {
   const { convId, todoId } = req.params;
   const user = (req as any).user ?? null;
+  const convForAccess = getConversation(convId);
+  if (convForAccess && !canUserAccessConversation(user, convForAccess)) {
+    return res.status(403).json({ ok: false, error: "forbidden" });
+  }
   const existingTask = listOpenTodos().find(t => t.id === todoId && t.convId === convId);
   if (existingTask && user?.role !== "manager") {
-    const requesterId = String(user?.id ?? "").trim();
-    const ownerId = String(existingTask.ownerId ?? "").trim();
-    if (ownerId && ownerId !== requesterId) {
-      return res.status(403).json({ ok: false, error: "forbidden" });
-    }
-    if (!ownerId) {
-      const convForOwner = getConversation(convId);
-      const fallbackOwner = String(convForOwner?.leadOwner?.id ?? "").trim();
-      if (fallbackOwner && fallbackOwner !== requesterId) {
+    const serviceTask =
+      existingTask.reason === "service" || isServiceConversation(convForAccess ?? getConversation(convId));
+    if (!(user?.role === "service" && serviceTask)) {
+      const requesterId = String(user?.id ?? "").trim();
+      const ownerId = String(existingTask.ownerId ?? "").trim();
+      if (ownerId && ownerId !== requesterId) {
         return res.status(403).json({ ok: false, error: "forbidden" });
+      }
+      if (!ownerId) {
+        const convForOwner = getConversation(convId);
+        const fallbackOwner = String(convForOwner?.leadOwner?.id ?? "").trim();
+        if (fallbackOwner && fallbackOwner !== requesterId) {
+          return res.status(403).json({ ok: false, error: "forbidden" });
+        }
       }
     }
   }

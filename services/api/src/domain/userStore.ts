@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { randomUUID, pbkdf2Sync, randomBytes, timingSafeEqual } from "node:crypto";
 import { dataPath } from "./dataDir.js";
 
-export type UserRole = "manager" | "salesperson";
+export type UserRole = "manager" | "salesperson" | "service";
 
 export type UserPermissions = {
   canEditAppointments: boolean;
@@ -11,6 +11,35 @@ export type UserPermissions = {
   canAccessTodos: boolean;
   canAccessSuppressions: boolean;
 };
+
+function basePermissions(): UserPermissions {
+  return {
+    canEditAppointments: false,
+    canToggleHumanOverride: false,
+    canAccessTodos: false,
+    canAccessSuppressions: false
+  };
+}
+
+function defaultPermissionsForRole(role: UserRole): UserPermissions {
+  if (role === "manager") {
+    return {
+      canEditAppointments: true,
+      canToggleHumanOverride: true,
+      canAccessTodos: true,
+      canAccessSuppressions: true
+    };
+  }
+  if (role === "service") {
+    return {
+      canEditAppointments: false,
+      canToggleHumanOverride: false,
+      canAccessTodos: true,
+      canAccessSuppressions: false
+    };
+  }
+  return basePermissions();
+}
 
 export type UserRecord = {
   id: string;
@@ -106,18 +135,24 @@ export async function createUser(input: {
     throw new Error("Email already exists");
   }
   const now = new Date().toISOString();
-  const basePerms: UserPermissions = {
-    canEditAppointments: false,
-    canToggleHumanOverride: false,
-    canAccessTodos: false,
-    canAccessSuppressions: false
-  };
+  const roleDefaults = defaultPermissionsForRole(input.role);
   const perms: UserPermissions =
     input.role === "manager"
-      ? { ...basePerms, canEditAppointments: true, canToggleHumanOverride: true, canAccessTodos: true, canAccessSuppressions: true }
-      : { ...basePerms, ...(input.permissions ?? {}) };
+      ? roleDefaults
+      : input.role === "service"
+        ? {
+            ...roleDefaults,
+            ...(input.permissions ?? {}),
+            canEditAppointments: false,
+            canToggleHumanOverride: false,
+            canAccessSuppressions: false,
+            canAccessTodos: true
+          }
+        : { ...roleDefaults, ...(input.permissions ?? {}) };
   const includeInSchedule =
-    typeof input.includeInSchedule === "boolean"
+    input.role === "service"
+      ? false
+      : typeof input.includeInSchedule === "boolean"
       ? input.includeInSchedule
       : input.role === "salesperson";
   const user: UserRecord = {
@@ -165,19 +200,26 @@ export async function updateUser(
       throw new Error("Email already exists");
     }
   }
-  const basePerms: UserPermissions = {
-    canEditAppointments: false,
-    canToggleHumanOverride: false,
-    canAccessTodos: false,
-    canAccessSuppressions: false
-  };
   const nextRole = patch.role ?? existing.role;
+  const roleDefaults = defaultPermissionsForRole(nextRole);
   const nextPerms: UserPermissions =
     nextRole === "manager"
-      ? { ...basePerms, canEditAppointments: true, canToggleHumanOverride: true, canAccessTodos: true, canAccessSuppressions: true }
-      : { ...basePerms, ...(existing.permissions ?? basePerms), ...(patch.permissions ?? {}) };
+      ? roleDefaults
+      : nextRole === "service"
+        ? {
+            ...roleDefaults,
+            ...(existing.permissions ?? roleDefaults),
+            ...(patch.permissions ?? {}),
+            canEditAppointments: false,
+            canToggleHumanOverride: false,
+            canAccessSuppressions: false,
+            canAccessTodos: true
+          }
+        : { ...roleDefaults, ...(existing.permissions ?? roleDefaults), ...(patch.permissions ?? {}) };
   const includeInSchedule =
-    typeof patch.includeInSchedule === "boolean"
+    nextRole === "service"
+      ? false
+      : typeof patch.includeInSchedule === "boolean"
       ? patch.includeInSchedule
       : existing.includeInSchedule ?? (nextRole === "salesperson");
   const updated: UserRecord = {
