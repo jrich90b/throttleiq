@@ -4720,6 +4720,107 @@ function stripTradeReaskSentences(reply: string): string {
   return filtered.join(" ").replace(/\s{2,}/g, " ").trim();
 }
 
+function isLienHolderInfoRequestText(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  const hasLienTerm = /\b(lien|lein|lender|payoff)\b/.test(t);
+  const hasInfoTerm = /\b(address|info|information|details|name)\b/.test(t);
+  if (!hasLienTerm || !hasInfoTerm) return false;
+  const hasRequestCue =
+    /\b(do you have|what(?:'| i)?s|can you|could you|send|text|share|give me|need|get)\b/.test(t) ||
+    /\?/.test(t) ||
+    /\b(didn'?t|don'?t|dont|do not)\b.{0,30}\b(have|know)\b/.test(t);
+  if (!hasRequestCue) return false;
+  const hasProvideCue =
+    /\b(here(?:'| i)?s|attached|i have|sending|sent|this is)\b/.test(t) &&
+    !/\?$/.test(t.trim());
+  return !hasProvideCue;
+}
+
+function stringifyPolicyField(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value.trim();
+}
+
+function formatLienHolderDirectoryEntry(entry: any): string | null {
+  if (!entry || typeof entry !== "object") return null;
+  const name = stringifyPolicyField(entry.name || entry.lender || entry.bank);
+  const address = stringifyPolicyField(entry.address);
+  const note = stringifyPolicyField(entry.note);
+  const linesRaw = Array.isArray(entry.addressLines) ? entry.addressLines : [];
+  const addressLines = linesRaw
+    .map((v: unknown) => stringifyPolicyField(v))
+    .filter(Boolean);
+  const parts = [name, address, ...addressLines, note].filter(Boolean);
+  if (!parts.length) return null;
+  return parts.join("\n");
+}
+
+function resolveConfiguredLienHolderReply(profile: any): { text?: string; ambiguous?: boolean } {
+  const policies = profile?.policies ?? {};
+  const directText =
+    stringifyPolicyField(policies?.lienHolderResponse) ||
+    stringifyPolicyField(policies?.lienHolderText) ||
+    stringifyPolicyField(policies?.payoffAddressResponse) ||
+    stringifyPolicyField(policies?.lienHolder?.response) ||
+    stringifyPolicyField(profile?.lienHolderResponse);
+  if (directText) {
+    return { text: directText };
+  }
+
+  const fromPolicies = Array.isArray(policies?.lienHolders) ? policies.lienHolders : [];
+  const fromProfile = Array.isArray(profile?.lienHolders) ? profile.lienHolders : [];
+  const entries = (fromPolicies.length ? fromPolicies : fromProfile)
+    .map((entry: any) => formatLienHolderDirectoryEntry(entry))
+    .filter((v: string | null): v is string => !!v);
+  if (!entries.length) return {};
+  if (entries.length === 1) return { text: entries[0] };
+  return { ambiguous: true };
+}
+
+function buildLienHolderFallbackReply(profile: any): string {
+  const configured = resolveConfiguredLienHolderReply(profile);
+  if (configured.text) {
+    return `Absolutely — here’s the lien holder/payoff info we have:\n${configured.text}`;
+  }
+  return "Good question — lien/payoff details can vary by lender. We’ll have our finance team confirm the exact lien holder name and payoff address and text you shortly.";
+}
+
+function hasOpenLienHolderInfoTodo(conv: any): boolean {
+  return listOpenTodos().some(t => {
+    if (t.convId !== conv.id || t.status !== "open") return false;
+    const summary = String(t.summary ?? "").toLowerCase();
+    return /\b(lien|lein|lender|payoff)\b/.test(summary);
+  });
+}
+
+function maybeEscalateLienHolderInfoRequest(
+  conv: any,
+  event: InboundMessageEvent,
+  profile: any,
+  opts?: { createTodo?: boolean; setManualHandoff?: boolean }
+): string | null {
+  if (!isLienHolderInfoRequestText(String(event.body ?? ""))) return null;
+  const configured = resolveConfiguredLienHolderReply(profile);
+  const shouldEscalate = !configured.text || configured.ambiguous;
+  if (shouldEscalate && opts?.createTodo) {
+    if (!hasOpenLienHolderInfoTodo(conv)) {
+      addTodo(
+        conv,
+        "manager",
+        `Customer asked for lien holder/payoff details: ${String(event.body ?? "").trim() || "Lien holder info request"}`,
+        event.providerMessageId
+      );
+    }
+    if (opts?.setManualHandoff) {
+      setFollowUpMode(conv, "manual_handoff", "lien_holder_info");
+      stopFollowUpCadence(conv, "manual_handoff");
+      stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    }
+  }
+  return buildLienHolderFallbackReply(profile);
+}
+
 function applyTradePolicy(
   conv: any,
   reply: string,
@@ -10864,6 +10965,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   reply = stripNonAdfThanks(reply, event.provider);
   reply = stripCallTimingQuestions(reply);
   reply = stripAgentCallFollowupWhenCustomerWillCall(reply, String(event.body ?? ""));
+  const lienHolderFallback = maybeEscalateLienHolderInfoRequest(conv, event, dealerProfile, {
+    createTodo: false,
+    setManualHandoff: false
+  });
+  if (lienHolderFallback) {
+    reply = lienHolderFallback;
+  }
   if (isSlotOfferMessage(reply)) {
     const appointmentType = String(result.requestedAppointmentType ?? "inventory_visit");
     if (appointmentType === "test_ride") {
@@ -11244,6 +11352,27 @@ if (authToken && signature) {
       reply
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
+  }
+
+  if (isLienHolderInfoRequestText(event.body ?? "")) {
+    const dealerProfileForLien = await getDealerProfile();
+    const reply = maybeEscalateLienHolderInfoRequest(conv, event, dealerProfileForLien, {
+      createTodo: true,
+      setManualHandoff: true
+    });
+    if (reply) {
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
   }
 
   if (isComplimentOnlyText(event.body)) {
@@ -16289,6 +16418,13 @@ if (authToken && signature) {
   reply = stripYearPreferenceIfAnyYearSpecified(reply, String(event.body ?? ""));
   reply = stripSchedulingLanguageIfNotAsked(reply, String(event.body ?? ""));
   reply = stripAgentCallFollowupWhenCustomerWillCall(reply, String(event.body ?? ""));
+  const lienHolderFallback = maybeEscalateLienHolderInfoRequest(conv, event, dealerProfile, {
+    createTodo: true,
+    setManualHandoff: true
+  });
+  if (lienHolderFallback) {
+    reply = lienHolderFallback;
+  }
   await seedInventoryWatchPendingFromReply(conv, event, reply);
   if (isSlotOfferMessage(reply)) {
     const requestedAppointmentType = String(result.requestedAppointmentType ?? "inventory_visit");
