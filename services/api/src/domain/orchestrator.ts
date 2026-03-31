@@ -774,16 +774,9 @@ function isNonUsPhone(from?: string): boolean {
   return raw.startsWith("+") && !raw.startsWith("+1");
 }
 
-function detectInternationalBuyer(text: string, from?: string): boolean {
-  const t = text.toLowerCase();
-  const country =
-    /(canada|uk|united kingdom|england|ireland|australia|new zealand|germany|france|mexico|brazil|india|china|philippines|nigeria|south africa|uae|dubai|saudi|kuwait|qatar|singapore|malaysia|thailand|indonesia|italy|spain|sweden|norway|denmark|netherlands|switzerland|poland|ukraine|russia|pakistan|bangladesh|vietnam|peru|chile|argentina|colombia|venezuela)/.test(
-      t
-    );
-  const intlPhrases = /(outside the united states|outside the us|international|overseas|export|ship abroad|ship overseas)/.test(t);
-  const purchaseIntent =
-    /(buy|purchase|order|quote|price|availability|ship|export|deliver|send to|sell)/.test(t);
-  return (isNonUsPhone(from) && purchaseIntent) || ((country || intlPhrases) && purchaseIntent);
+function detectInternationalBuyer(_text: string, from?: string): boolean {
+  // Strictly phone-based international detection to avoid false positives from message wording.
+  return isNonUsPhone(from);
 }
 
 function hasSchedulingIntent(text: string): boolean {
