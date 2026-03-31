@@ -22,7 +22,7 @@ import { findMsrpPricing, getMsrpColorNames } from "./msrpPriceList.js";
 import { getInventoryNote } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
 import { getAllModels, isModelInRecentYears } from "./modelsByYear.js";
-import type { LeadProfile } from "./conversationStore.js";
+import type { FinanceDocsState, LeadProfile } from "./conversationStore.js";
 import { parsePreferredDateTime, parseRequestedDayTime } from "./conversationStore.js";
 import { getSchedulerConfig, dayKey, getPreferredSalespeople } from "./schedulerConfig.js";
 import { getAuthedCalendarClient, queryFreeBusy } from "./googleCalendar.js";
@@ -1095,6 +1095,44 @@ function recentOutboundRequestedBinder(
   return recentOut.some(m => /\bbinder\b/i.test(String(m.body ?? "")));
 }
 
+function resolveFinanceDocPendingState(args: {
+  state?: FinanceDocsState | null;
+  history: { direction: "in" | "out"; body: string }[];
+  inboundBody: string;
+}): {
+  insuranceRequested: boolean;
+  binderRequested: boolean;
+  insuranceReceived: boolean;
+  binderReceived: boolean;
+  pendingInsurance: boolean;
+  pendingBinder: boolean;
+} {
+  const mentionsInsurance = /\b(insurance|insurance card|id card|proof of insurance)\b/i.test(
+    args.inboundBody
+  );
+  const mentionsBinder = /\bbinder\b/i.test(args.inboundBody);
+
+  const insuranceRequested = !!(
+    args.state?.insuranceRequested || recentOutboundRequestedInsuranceDocs(args.history)
+  );
+  const binderRequested = !!(args.state?.binderRequested || recentOutboundRequestedBinder(args.history));
+
+  const insuranceReceived = !!(args.state?.insuranceReceived || (mentionsInsurance && insuranceRequested));
+  const binderReceived = !!(args.state?.binderReceived || (mentionsBinder && binderRequested));
+
+  const pendingInsurance = insuranceRequested && !insuranceReceived;
+  const pendingBinder = binderRequested && !binderReceived;
+
+  return {
+    insuranceRequested,
+    binderRequested,
+    insuranceReceived,
+    binderReceived,
+    pendingInsurance,
+    pendingBinder
+  };
+}
+
 function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
   return aStart < bEnd && bStart < aEnd;
 }
@@ -1132,6 +1170,7 @@ export async function orchestrateInbound(
     memorySummaryShouldUpdate?: boolean;
     inventoryWatch?: any;
     inventoryWatches?: any;
+    financeDocs?: FinanceDocsState | null;
     hold?: any;
     sale?: any;
     pickup?: any;
@@ -1173,17 +1212,34 @@ export async function orchestrateInbound(
   const hasInboundMedia = Array.isArray(event.mediaUrls) && event.mediaUrls.length > 0;
   if (
     hasInboundMedia &&
-    (inboundMentionsInsuranceDocs(event.body) || recentOutboundRequestedInsuranceDocs(history ?? []))
+    (inboundMentionsInsuranceDocs(event.body) ||
+      recentOutboundRequestedInsuranceDocs(history ?? []) ||
+      !!ctx?.financeDocs?.insuranceRequested ||
+      !!ctx?.financeDocs?.binderRequested)
   ) {
-    const binderRequested = recentOutboundRequestedBinder(history ?? []);
-    const binderProvidedNow = /\bbinder\b/i.test(String(event.body ?? ""));
+    const docs = resolveFinanceDocPendingState({
+      state: ctx?.financeDocs ?? null,
+      history: history ?? [],
+      inboundBody: String(event.body ?? "")
+    });
+    let draft = "Perfect, thank you — we got your insurance document. We’ll send the e-sign documents shortly.";
+    if (docs.pendingInsurance && docs.pendingBinder) {
+      draft =
+        "Perfect, thank you — we got your document. Once you send the insurance card and binder, we’ll send the e-sign documents right away.";
+    } else if (docs.pendingBinder) {
+      draft =
+        "Perfect, thank you — we got the insurance card. Once you send the binder, we’ll send the e-sign documents right away.";
+    } else if (docs.pendingInsurance) {
+      draft =
+        "Perfect, thank you — we got the binder. Once you send the insurance card, we’ll send the e-sign documents right away.";
+    } else if (docs.insuranceRequested || docs.binderRequested) {
+      draft = "Perfect, thank you — we got your documents. We’ll send the e-sign documents shortly.";
+    }
     return finalize({
       intent: "FINANCING",
       stage: "ENGAGED",
       shouldRespond: true,
-      draft: binderRequested && !binderProvidedNow
-        ? "Perfect, thank you — we got the insurance card. Once you send the binder, we’ll send the e-sign documents right away."
-        : "Perfect, thank you — we got your insurance document. We’ll send the e-sign documents shortly."
+      draft
     });
   }
 

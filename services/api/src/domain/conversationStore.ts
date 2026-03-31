@@ -306,6 +306,20 @@ export type InventoryWatchPending = {
   askedAt: string;
 };
 
+export type FinanceDocsState = {
+  status: "none" | "pending" | "complete";
+  requestedAt?: string;
+  updatedAt: string;
+  insuranceRequested?: boolean;
+  insuranceReceived?: boolean;
+  insuranceReceivedAt?: string;
+  binderRequested?: boolean;
+  binderReceived?: boolean;
+  binderReceivedAt?: string;
+  completedAt?: string;
+  lastInboundMessageId?: string;
+};
+
 export type Message = {
   id: string;
   direction: "in" | "out";
@@ -406,6 +420,7 @@ export type Conversation = {
     eligible?: boolean;
     updatedAt?: string;
   };
+  financeDocs?: FinanceDocsState;
   emailDraft?: string;
   contactPreference?: "call_only";
   voiceContext?: VoiceContext;
@@ -501,6 +516,157 @@ function nowIso() {
 
 function makeId(prefix: string) {
   return `${prefix}_${Math.random().toString(16).slice(2)}_${Date.now()}`;
+}
+
+function detectFinanceDocRequestSignals(body: string): {
+  insuranceRequested: boolean;
+  binderRequested: boolean;
+} {
+  const t = String(body ?? "").toLowerCase();
+  if (!t.trim()) return { insuranceRequested: false, binderRequested: false };
+  const actionCue =
+    /\b(send|text|photo|upload|attach|add|provide|share|submit|once you add|when you add|when you send|when you text)\b/.test(
+      t
+    ) || /\be-?sign\b/.test(t);
+  const insuranceRequested =
+    /\b(insurance card|id card|proof of insurance)\b/.test(t) ||
+    (/\binsurance\b/.test(t) && actionCue);
+  const binderRequested = /\bbinder\b/.test(t) && (actionCue || /\binsurance\b/.test(t));
+  return { insuranceRequested, binderRequested };
+}
+
+function detectFinanceDocMentionSignals(body: string): {
+  insuranceMentioned: boolean;
+  binderMentioned: boolean;
+} {
+  const t = String(body ?? "").toLowerCase();
+  return {
+    insuranceMentioned: /\b(insurance|insurance card|id card|proof of insurance)\b/.test(t),
+    binderMentioned: /\bbinder\b/.test(t)
+  };
+}
+
+function ensureFinanceDocsState(conv: Conversation): FinanceDocsState {
+  if (!conv.financeDocs) {
+    conv.financeDocs = {
+      status: "none",
+      updatedAt: nowIso()
+    };
+  }
+  return conv.financeDocs;
+}
+
+function recomputeFinanceDocsState(state: FinanceDocsState): void {
+  const pendingInsurance = !!state.insuranceRequested && !state.insuranceReceived;
+  const pendingBinder = !!state.binderRequested && !state.binderReceived;
+  if (!state.insuranceRequested && !state.binderRequested) {
+    state.status = "none";
+    state.completedAt = undefined;
+    return;
+  }
+  if (pendingInsurance || pendingBinder) {
+    state.status = "pending";
+    state.completedAt = undefined;
+    return;
+  }
+  state.status = "complete";
+  state.completedAt = state.completedAt ?? nowIso();
+}
+
+function trackFinanceDocsRequestFromOutbound(conv: Conversation, body: string): void {
+  const signal = detectFinanceDocRequestSignals(body);
+  if (!signal.insuranceRequested && !signal.binderRequested) return;
+  const state = ensureFinanceDocsState(conv);
+  const now = nowIso();
+  if (signal.insuranceRequested) {
+    state.insuranceRequested = true;
+    state.requestedAt = state.requestedAt ?? now;
+  }
+  if (signal.binderRequested) {
+    state.binderRequested = true;
+    state.requestedAt = state.requestedAt ?? now;
+  }
+  state.updatedAt = now;
+  recomputeFinanceDocsState(state);
+}
+
+function inferRequestedFinanceDocsFromRecentOutbound(conv: Conversation): {
+  insuranceRequested: boolean;
+  binderRequested: boolean;
+} {
+  const recentOut = [...(conv.messages ?? [])]
+    .reverse()
+    .filter(
+      m =>
+        m.direction === "out" &&
+        (m.provider === "twilio" || m.provider === "human" || m.provider === "sendgrid")
+    )
+    .slice(0, 10);
+  let insuranceRequested = false;
+  let binderRequested = false;
+  for (const m of recentOut) {
+    const signal = detectFinanceDocRequestSignals(String(m.body ?? ""));
+    if (signal.insuranceRequested) insuranceRequested = true;
+    if (signal.binderRequested) binderRequested = true;
+  }
+  return { insuranceRequested, binderRequested };
+}
+
+function trackFinanceDocsReceiptFromInbound(conv: Conversation, evt: InboundMessageEvent): void {
+  const hasMedia = Array.isArray(evt.mediaUrls) && evt.mediaUrls.length > 0;
+  if (!hasMedia) return;
+  const mentions = detectFinanceDocMentionSignals(evt.body);
+  const inferredRequest = inferRequestedFinanceDocsFromRecentOutbound(conv);
+  const hasTrackedRequest = !!(
+    conv.financeDocs?.insuranceRequested || conv.financeDocs?.binderRequested
+  );
+  const hasInferredRequest = inferredRequest.insuranceRequested || inferredRequest.binderRequested;
+  if (!hasTrackedRequest && !hasInferredRequest && !mentions.insuranceMentioned && !mentions.binderMentioned) {
+    return;
+  }
+  const state = ensureFinanceDocsState(conv);
+  let changed = false;
+  const now = nowIso();
+
+  if (inferredRequest.insuranceRequested && !state.insuranceRequested) {
+    state.insuranceRequested = true;
+    state.requestedAt = state.requestedAt ?? now;
+    changed = true;
+  }
+  if (inferredRequest.binderRequested && !state.binderRequested) {
+    state.binderRequested = true;
+    state.requestedAt = state.requestedAt ?? now;
+    changed = true;
+  }
+
+  if (mentions.insuranceMentioned && !state.insuranceReceived) {
+    state.insuranceReceived = true;
+    state.insuranceReceivedAt = now;
+    changed = true;
+  }
+  if (mentions.binderMentioned && !state.binderReceived) {
+    state.binderReceived = true;
+    state.binderReceivedAt = now;
+    changed = true;
+  }
+
+  if (!mentions.insuranceMentioned && !mentions.binderMentioned) {
+    if (state.insuranceRequested && !state.insuranceReceived) {
+      state.insuranceReceived = true;
+      state.insuranceReceivedAt = now;
+      changed = true;
+    } else if (state.binderRequested && !state.binderReceived) {
+      state.binderReceived = true;
+      state.binderReceivedAt = now;
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    state.lastInboundMessageId = evt.providerMessageId ?? state.lastInboundMessageId;
+    state.updatedAt = now;
+    recomputeFinanceDocsState(state);
+  }
 }
 
 /**
@@ -685,6 +851,7 @@ export function appendInbound(conv: Conversation, evt: InboundMessageEvent) {
     provider: evt.provider as MessageProvider,
     providerMessageId: evt.providerMessageId
   });
+  trackFinanceDocsReceiptFromInbound(conv, evt);
   maybeMarkEngagedFromInbound(conv, evt);
   conv.updatedAt = nowIso();
   scheduleSave();
@@ -725,6 +892,9 @@ export function appendOutbound(
     provider,
     providerMessageId
   });
+  if (provider === "twilio" || provider === "human" || provider === "sendgrid") {
+    trackFinanceDocsRequestFromOutbound(conv, normalizedBody);
+  }
   conv.updatedAt = nowIso();
   scheduleSave();
 }
@@ -775,6 +945,10 @@ export function finalizeDraftAsSent(
   msg.providerMessageId = providerMessageId;
   msg.at = new Date().toISOString();
   msg.draftStatus = undefined;
+
+  if (provider === "twilio" || provider === "human" || provider === "sendgrid") {
+    trackFinanceDocsRequestFromOutbound(conv, finalBody);
+  }
 
   conv.updatedAt = new Date().toISOString();
   scheduleSave();
