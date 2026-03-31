@@ -10634,6 +10634,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     from: inbound.from ?? conv.leadKey,
     to: inbound.to ?? "dealership",
     body: String(inbound.body ?? ""),
+    mediaUrls:
+      Array.isArray((inbound as any).mediaUrls) && (inbound as any).mediaUrls.length
+        ? ((inbound as any).mediaUrls as string[])
+        : undefined,
     providerMessageId: inbound.providerMessageId ?? `regen_${Date.now()}`,
     receivedAt: inbound.at ?? new Date().toISOString()
   };
