@@ -223,8 +223,8 @@ app.post(
     return res.status(200).send("ok");
   }
 );
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+app.use(express.json({ limit: "30mb" }));
+app.use(express.urlencoded({ extended: false, limit: "30mb" }));
 
 const AUTH_DISABLED = (process.env.AUTH_DISABLED ?? "false").toLowerCase() === "true";
 

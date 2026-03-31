@@ -23,6 +23,14 @@ export async function POST(
     body
   });
 
-  const data = await r.json();
-  return NextResponse.json(data, { status: r.status });
+  const text = await r.text();
+  try {
+    const data = JSON.parse(text);
+    return NextResponse.json(data, { status: r.status });
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: "Upstream not JSON", status: r.status, body: text.slice(0, 200) },
+      { status: 502 }
+    );
+  }
 }
