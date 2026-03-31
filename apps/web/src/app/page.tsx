@@ -4721,7 +4721,7 @@ export default function Home() {
         )}
       </div>
       <div className="flex-1 flex md:flex-row flex-col min-h-0">
-      <aside className={`fixed md:relative z-50 w-16 h-[100dvh] md:h-screen border-r border-[var(--palette-graphite)] bg-[var(--palette-graphite)] text-white flex flex-col items-center py-3 cursor-pointer overflow-hidden transform transition-transform duration-200 ${mobileNavOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"} md:flex`}>
+      <aside className={`fixed inset-y-0 left-0 md:relative md:inset-auto z-50 w-16 md:h-screen border-r border-[var(--palette-graphite)] bg-[var(--palette-graphite)] text-white flex flex-col items-center py-3 cursor-pointer overflow-hidden transform transition-transform duration-200 ${mobileNavOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"} md:flex`}>
         <div className="text-lg font-semibold shrink-0">TI</div>
         <div className="mt-3 flex-1 min-h-0 w-full overflow-y-auto flex flex-col items-center gap-4 px-2 pb-3">
         <button
@@ -4809,11 +4809,11 @@ export default function Home() {
           ) : null}
         </button>
         </div>
-        <div className="shrink-0 sticky bottom-0 w-full flex flex-col items-center gap-2 pt-2 border-t border-white/10 bg-[var(--palette-graphite)] pb-[calc(env(safe-area-inset-bottom,0px)+0.5rem)]">
+        <div className="shrink-0 sticky bottom-0 w-full flex flex-col items-center gap-2 pt-3 border-t border-white/10 bg-[var(--palette-graphite)] pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]">
           <div className="text-xs text-white/60">{loading ? "…" : ""}</div>
           <div className="relative">
             <button
-              className="w-10 h-10 rounded flex items-center justify-center border border-white/20 hover:bg-white/5 relative"
+              className="w-11 h-11 md:w-10 md:h-10 rounded flex items-center justify-center border border-white/20 hover:bg-white/5 relative"
               title="Settings"
               onClick={() => setSettingsOpen(v => !v)}
             >
