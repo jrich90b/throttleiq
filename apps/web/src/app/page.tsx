@@ -620,6 +620,12 @@ function todoActionLabel(todo: TodoItem): string {
   if (/(^|\\b)call(\\b|$)/.test(reason)) return "Call customer.";
   if (/(call only|phone only|no text|do not text)/.test(text)) return "Call customer (call-only).";
   if (/(credit|prequal|finance)/.test(text)) return "Business manager follow-up (credit app).";
+  if (
+    reason === "service" ||
+    /(service|inspection|oil change|3[- ]hole|maintenance|repair|service department)/.test(text)
+  ) {
+    return "Service department follow-up and scheduling.";
+  }
   if (/(trade|appraisal|trade[- ]in)/.test(text)) return "Discuss trade appraisal and next steps.";
   if (/(inventory|verify|check stock|not seeing|live feed)/.test(text)) return "Verify inventory and follow up.";
   if (/(video|walkaround|photos)/.test(text)) return "Send a walkaround video or photos.";
