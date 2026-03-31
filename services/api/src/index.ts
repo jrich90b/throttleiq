@@ -10272,6 +10272,9 @@ app.post("/conversations/:id/draft/clear", async (req, res) => {
 app.post("/conversations/:id/regenerate", async (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+  if (getSystemMode() !== "suggest") {
+    return res.status(400).json({ ok: false, error: "regenerate_requires_suggest_mode" });
+  }
   if (conv.mode === "human") {
     return res.status(400).json({ ok: false, error: "human_override" });
   }
