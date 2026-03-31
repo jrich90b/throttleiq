@@ -8657,8 +8657,9 @@ export default function Home() {
             ) : null}
 
             {holdModalOpen ? (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-                <div className="w-full max-w-2xl rounded-lg bg-white shadow-lg border p-4">
+              <div className="fixed inset-0 z-50 bg-black/40 overflow-y-auto">
+                <div className="min-h-full flex items-start sm:items-center justify-center p-2 sm:p-4">
+                <div className="w-full max-w-2xl max-h-[94vh] overflow-y-auto rounded-lg bg-white shadow-lg border p-3 sm:p-4">
                   <div className="text-sm font-semibold">Mark unit on hold</div>
                   <div className="text-xs text-gray-600 mt-1">
                     {holdModalConv?.lead?.name ||
@@ -8729,14 +8730,24 @@ export default function Home() {
                           return (
                             <button
                               key={key || label}
-                              className={`relative group w-full text-left px-3 py-2 border-b last:border-b-0 hover:bg-gray-50 ${
+                              className={`w-full text-left px-3 py-2 border-b last:border-b-0 hover:bg-gray-50 ${
                                 isSelected ? "bg-blue-50" : ""
                               }`}
                               onClick={() => setHoldSelection(it)}
                               type="button"
                             >
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="text-sm">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="flex items-start gap-3 min-w-0">
+                                  {preview ? (
+                                    <div className="shrink-0 w-16 h-12 sm:w-20 sm:h-14 rounded border border-gray-200 bg-gray-50 overflow-hidden">
+                                      <img
+                                        src={preview}
+                                        alt={`${label || it.model || "Unit"} preview`}
+                                        className="w-full h-full object-contain"
+                                      />
+                                    </div>
+                                  ) : null}
+                                  <div className="text-sm min-w-0">
                                   <div className="font-medium">
                                     {label || it.model || it.stockId || it.vin}
                                     {color}
@@ -8747,21 +8758,13 @@ export default function Home() {
                                     {it.vin ? `VIN ${it.vin}` : ""}
                                   </div>
                                 </div>
+                                </div>
                                 {it.hold ? (
                                   <span className="text-[11px] px-2 py-0.5 rounded-full border bg-red-100 text-red-700 border-red-200">
                                     Held
                                   </span>
                                 ) : null}
                               </div>
-                              {preview ? (
-                                <div className="absolute right-2 top-2 hidden group-hover:block z-50 pointer-events-none">
-                                  <img
-                                    src={preview}
-                                    alt={`${label || it.model || "Unit"} preview`}
-                                    className="w-28 h-20 object-cover rounded border border-gray-200 shadow"
-                                  />
-                                </div>
-                              ) : null}
                             </button>
                           );
                         })
@@ -8819,12 +8822,14 @@ export default function Home() {
                     </div>
                   </div>
                 </div>
+                </div>
               </div>
             ) : null}
 
             {soldModalOpen ? (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-                <div className="w-full max-w-2xl rounded-lg bg-white shadow-lg border p-4">
+              <div className="fixed inset-0 z-50 bg-black/40 overflow-y-auto">
+                <div className="min-h-full flex items-start sm:items-center justify-center p-2 sm:p-4">
+                <div className="w-full max-w-2xl max-h-[94vh] overflow-y-auto rounded-lg bg-white shadow-lg border p-3 sm:p-4">
                   <div className="text-sm font-semibold">Mark unit sold</div>
                   <div className="text-xs text-gray-600 mt-1">
                     {soldModalConv?.lead?.name ||
@@ -8893,14 +8898,24 @@ export default function Home() {
                           return (
                             <button
                               key={key || label}
-                              className={`relative group w-full text-left px-3 py-2 border-b last:border-b-0 hover:bg-gray-50 ${
+                              className={`w-full text-left px-3 py-2 border-b last:border-b-0 hover:bg-gray-50 ${
                                 isSelected ? "bg-blue-50" : ""
                               }`}
                               onClick={() => setSoldSelection(it)}
                               type="button"
                             >
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="text-sm">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="flex items-start gap-3 min-w-0">
+                                  {preview ? (
+                                    <div className="shrink-0 w-16 h-12 sm:w-20 sm:h-14 rounded border border-gray-200 bg-gray-50 overflow-hidden">
+                                      <img
+                                        src={preview}
+                                        alt={`${label || it.model || "Unit"} preview`}
+                                        className="w-full h-full object-contain"
+                                      />
+                                    </div>
+                                  ) : null}
+                                  <div className="text-sm min-w-0">
                                   <div className="font-medium">
                                     {label || it.model || it.stockId || it.vin}
                                     {color}
@@ -8910,6 +8925,7 @@ export default function Home() {
                                     {it.stockId && it.vin ? " • " : ""}
                                     {it.vin ? `VIN ${it.vin}` : ""}
                                   </div>
+                                </div>
                                 </div>
                                 <div className="flex items-center gap-2">
                                   {it.hold ? (
@@ -8924,15 +8940,6 @@ export default function Home() {
                                   ) : null}
                                 </div>
                               </div>
-                              {preview ? (
-                                <div className="absolute right-2 top-2 hidden group-hover:block z-50 pointer-events-none">
-                                  <img
-                                    src={preview}
-                                    alt={`${label || it.model || "Unit"} preview`}
-                                    className="w-28 h-20 object-cover rounded border border-gray-200 shadow"
-                                  />
-                                </div>
-                              ) : null}
                             </button>
                           );
                         })
@@ -9043,6 +9050,7 @@ export default function Home() {
                       </button>
                     </div>
                   </div>
+                </div>
                 </div>
               </div>
             ) : null}
