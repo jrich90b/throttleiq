@@ -320,6 +320,16 @@ export type FinanceDocsState = {
   lastInboundMessageId?: string;
 };
 
+export type TradePayoffState = {
+  status: "unknown" | "no_lien" | "has_lien";
+  lienQuestionAskedAt?: string;
+  lastAnsweredAt?: string;
+  lienHolderNeeded?: boolean;
+  lienHolderProvided?: boolean;
+  lienHolderProvidedAt?: string;
+  updatedAt: string;
+};
+
 export type Message = {
   id: string;
   direction: "in" | "out";
@@ -421,6 +431,7 @@ export type Conversation = {
     updatedAt?: string;
   };
   financeDocs?: FinanceDocsState;
+  tradePayoff?: TradePayoffState;
   emailDraft?: string;
   contactPreference?: "call_only";
   voiceContext?: VoiceContext;
@@ -546,6 +557,48 @@ function detectFinanceDocMentionSignals(body: string): {
   };
 }
 
+function detectLienNoPayoffStatement(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  return (
+    /\b(no lien|no payoff|no pay off|don't have (a )?lien|dont have (a )?lien|without (a )?lien|no loan)\b/.test(
+      t
+    ) ||
+    /\b(i own (it|the bike)|own and have the title|have the title|title in hand)\b/.test(t)
+  );
+}
+
+function detectLienHasPayoffStatement(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (detectLienNoPayoffStatement(t)) return false;
+  return /\b(lien|payoff|loan on it|still owe|lender|finance company|bank note)\b/.test(t);
+}
+
+function detectNeedsLienHolderInfo(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  return (
+    /\b(didn'?t|do not|don't|dont|not)\b.{0,30}\blien holder\b.{0,25}\b(info|address)\b/.test(t) ||
+    /\b(need|have|get)\b.{0,25}\blien holder\b.{0,20}\b(address|info)\b/.test(t) ||
+    /\blien holder'?s?\s+address\b/.test(t) ||
+    /\bpayoff address\b/.test(t)
+  );
+}
+
+function detectAgentAskedLienPayoff(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  return /\b(do you have|any)\b.{0,25}\b(lien|payoff)\b/.test(t);
+}
+
+function detectAgentProvidedLienHolderInfo(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  const hasHolderTerm =
+    /\b(lien holder|lender|payoff)\b/.test(t) || /\b(bank|credit union|savings bank)\b/.test(t);
+  const hasAddressPattern =
+    /\b(p\.?\s*o\.?\s*box|suite|ste\.?|street|st\.|avenue|ave\.?|road|rd\.|boulevard|blvd|drive|dr\.|lane|ln\.|court|ct\.|way|circle|cir|hwy|highway)\b/.test(
+      t
+    ) || /\b,\s*[a-z]{2}\s+\d{5}(?:-\d{4})?\b/.test(t);
+  return hasHolderTerm && hasAddressPattern;
+}
+
 function ensureFinanceDocsState(conv: Conversation): FinanceDocsState {
   if (!conv.financeDocs) {
     conv.financeDocs = {
@@ -554,6 +607,16 @@ function ensureFinanceDocsState(conv: Conversation): FinanceDocsState {
     };
   }
   return conv.financeDocs;
+}
+
+function ensureTradePayoffState(conv: Conversation): TradePayoffState {
+  if (!conv.tradePayoff) {
+    conv.tradePayoff = {
+      status: "unknown",
+      updatedAt: nowIso()
+    };
+  }
+  return conv.tradePayoff;
 }
 
 function recomputeFinanceDocsState(state: FinanceDocsState): void {
@@ -571,6 +634,15 @@ function recomputeFinanceDocsState(state: FinanceDocsState): void {
   }
   state.status = "complete";
   state.completedAt = state.completedAt ?? nowIso();
+}
+
+function normalizeTradePayoffState(state: TradePayoffState): void {
+  if (state.status === "no_lien") {
+    state.lienHolderNeeded = false;
+  }
+  if (state.status === "has_lien" && state.lienHolderProvided) {
+    state.lienHolderNeeded = false;
+  }
 }
 
 function trackFinanceDocsRequestFromOutbound(conv: Conversation, body: string): void {
@@ -667,6 +739,57 @@ function trackFinanceDocsReceiptFromInbound(conv: Conversation, evt: InboundMess
     state.updatedAt = now;
     recomputeFinanceDocsState(state);
   }
+}
+
+function trackTradePayoffFromInbound(conv: Conversation, evt: InboundMessageEvent): void {
+  const body = String(evt.body ?? "");
+  if (!body.trim()) return;
+  const noLien = detectLienNoPayoffStatement(body);
+  const hasLien = detectLienHasPayoffStatement(body);
+  const needsHolder = detectNeedsLienHolderInfo(body);
+  if (!noLien && !hasLien && !needsHolder) return;
+
+  const state = ensureTradePayoffState(conv);
+  const now = nowIso();
+  if (noLien) {
+    state.status = "no_lien";
+    state.lastAnsweredAt = now;
+    state.lienHolderNeeded = false;
+  } else if (hasLien) {
+    state.status = "has_lien";
+    state.lastAnsweredAt = now;
+  }
+  if (needsHolder) {
+    state.status = "has_lien";
+    state.lienHolderNeeded = true;
+  }
+  normalizeTradePayoffState(state);
+  state.updatedAt = now;
+}
+
+function trackTradePayoffFromOutbound(conv: Conversation, body: string): void {
+  const text = String(body ?? "");
+  if (!text.trim()) return;
+  const asked = detectAgentAskedLienPayoff(text);
+  const providedHolder = detectAgentProvidedLienHolderInfo(text);
+  if (!asked && !providedHolder) return;
+
+  const state = ensureTradePayoffState(conv);
+  const now = nowIso();
+  if (asked) {
+    state.lienQuestionAskedAt = now;
+    if (state.status !== "no_lien" && state.status !== "has_lien") {
+      state.status = "unknown";
+    }
+  }
+  if (providedHolder) {
+    state.status = "has_lien";
+    state.lienHolderProvided = true;
+    state.lienHolderProvidedAt = now;
+    state.lienHolderNeeded = false;
+  }
+  normalizeTradePayoffState(state);
+  state.updatedAt = now;
 }
 
 /**
@@ -852,6 +975,7 @@ export function appendInbound(conv: Conversation, evt: InboundMessageEvent) {
     providerMessageId: evt.providerMessageId
   });
   trackFinanceDocsReceiptFromInbound(conv, evt);
+  trackTradePayoffFromInbound(conv, evt);
   maybeMarkEngagedFromInbound(conv, evt);
   conv.updatedAt = nowIso();
   scheduleSave();
@@ -894,6 +1018,7 @@ export function appendOutbound(
   });
   if (provider === "twilio" || provider === "human" || provider === "sendgrid") {
     trackFinanceDocsRequestFromOutbound(conv, normalizedBody);
+    trackTradePayoffFromOutbound(conv, normalizedBody);
   }
   conv.updatedAt = nowIso();
   scheduleSave();
@@ -948,6 +1073,7 @@ export function finalizeDraftAsSent(
 
   if (provider === "twilio" || provider === "human" || provider === "sendgrid") {
     trackFinanceDocsRequestFromOutbound(conv, finalBody);
+    trackTradePayoffFromOutbound(conv, finalBody);
   }
 
   conv.updatedAt = new Date().toISOString();
@@ -1085,6 +1211,7 @@ export function listConversations() {
         hold: c.hold ?? null,
         inventoryWatch: c.inventoryWatch ?? null,
         inventoryWatches: c.inventoryWatches ?? null,
+        tradePayoff: c.tradePayoff ?? null,
         leadOwner: c.leadOwner ?? null,
         scheduler: c.scheduler
           ? {

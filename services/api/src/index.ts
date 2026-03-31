@@ -1139,6 +1139,7 @@ app.post("/debug/inbound/process", express.json(), async (req, res) => {
       inventoryWatch: conv.inventoryWatch ?? null,
       inventoryWatches: conv.inventoryWatches ?? null,
       financeDocs: conv.financeDocs ?? null,
+      tradePayoff: conv.tradePayoff ?? null,
       hold: conv.hold ?? null,
       sale: conv.sale ?? null,
       pickup: conv.pickup ?? null,
@@ -4761,8 +4762,25 @@ function applyTradePolicy(
     /\b(are you looking for (a )?(straight )?cash offer|cash offer|trade credit|trading toward another bike)\b/i;
   if (cashTradeQuestion.test(out)) {
     if (state === "trade_cash") {
-      out =
-        "Got it — for a straight cash offer, we’ll need an in‑person appraisal. Do you have any lien or payoff on the bike?";
+      const payoffStatus = String(conv?.tradePayoff?.status ?? "unknown");
+      const hasMileage = Number.isFinite(Number(conv?.lead?.tradeVehicle?.mileage ?? NaN));
+      if (payoffStatus === "no_lien") {
+        out = hasMileage
+          ? "Got it — thanks for confirming there’s no lien or payoff."
+          : "Got it — thanks for confirming there’s no lien or payoff. What’s the mileage?";
+      } else if (payoffStatus === "has_lien") {
+        if (conv?.tradePayoff?.lienHolderNeeded && !conv?.tradePayoff?.lienHolderProvided) {
+          out =
+            "Got it — thanks. If you have the lien holder name and payoff details, send them over and we can keep this moving.";
+        } else {
+          out = hasMileage
+            ? "Got it — thanks for the lien/payoff details."
+            : "Got it — thanks for the lien/payoff details. What’s the mileage?";
+        }
+      } else {
+        out =
+          "Got it — for a straight cash offer, we’ll need an in‑person appraisal. Do you have any lien or payoff on the bike?";
+      }
     } else if (state === "trade_trade") {
       out = "Great — what model are you hoping to trade into?";
     } else if (state === "trade_either") {
@@ -10812,6 +10830,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     inventoryWatch: conv.inventoryWatch ?? null,
     inventoryWatches: conv.inventoryWatches ?? null,
     financeDocs: conv.financeDocs ?? null,
+    tradePayoff: conv.tradePayoff ?? null,
     hold: conv.hold ?? null,
     sale: conv.sale ?? null,
     pickup: conv.pickup ?? null,
@@ -15511,6 +15530,7 @@ if (authToken && signature) {
     inventoryWatch: conv.inventoryWatch ?? null,
     inventoryWatches: conv.inventoryWatches ?? null,
     financeDocs: conv.financeDocs ?? null,
+    tradePayoff: conv.tradePayoff ?? null,
     hold: conv.hold ?? null,
     sale: conv.sale ?? null,
     pickup: conv.pickup ?? null,

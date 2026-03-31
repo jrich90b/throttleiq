@@ -22,7 +22,7 @@ import { findMsrpPricing, getMsrpColorNames } from "./msrpPriceList.js";
 import { getInventoryNote } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
 import { getAllModels, isModelInRecentYears } from "./modelsByYear.js";
-import type { FinanceDocsState, LeadProfile } from "./conversationStore.js";
+import type { FinanceDocsState, LeadProfile, TradePayoffState } from "./conversationStore.js";
 import { parsePreferredDateTime, parseRequestedDayTime } from "./conversationStore.js";
 import { getSchedulerConfig, dayKey, getPreferredSalespeople } from "./schedulerConfig.js";
 import { getAuthedCalendarClient, queryFreeBusy } from "./googleCalendar.js";
@@ -1171,6 +1171,7 @@ export async function orchestrateInbound(
     inventoryWatch?: any;
     inventoryWatches?: any;
     financeDocs?: FinanceDocsState | null;
+    tradePayoff?: TradePayoffState | null;
     hold?: any;
     sale?: any;
     pickup?: any;
