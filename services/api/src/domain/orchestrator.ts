@@ -1068,6 +1068,23 @@ function stripRescheduleOffers(text: string): string {
     .trim();
 }
 
+function inboundMentionsInsuranceDocs(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  return /\b(insurance|binder|id card|insurance card|proof of insurance)\b/.test(t);
+}
+
+function recentOutboundRequestedInsuranceDocs(
+  history: { direction: "in" | "out"; body: string }[]
+): boolean {
+  const recentOut = [...(history ?? [])]
+    .reverse()
+    .filter(m => m.direction === "out" && String(m.body ?? "").trim().length > 0)
+    .slice(0, 8);
+  return recentOut.some(m =>
+    /\b(insurance|binder|proof of insurance|e-?sign|documents?)\b/i.test(String(m.body ?? ""))
+  );
+}
+
 function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
   return aStart < bEnd && bStart < aEnd;
 }
@@ -1141,6 +1158,20 @@ export async function orchestrateInbound(
   const mergedBody = mergePendingInboundText(String(event.body ?? ""), history ?? []);
   if (mergedBody && mergedBody !== event.body) {
     event.body = mergedBody;
+  }
+
+  const hasInboundMedia = Array.isArray(event.mediaUrls) && event.mediaUrls.length > 0;
+  if (
+    hasInboundMedia &&
+    (inboundMentionsInsuranceDocs(event.body) || recentOutboundRequestedInsuranceDocs(history ?? []))
+  ) {
+    return finalize({
+      intent: "FINANCING",
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft:
+        "Perfect, thank you — we got your insurance document. We’ll send the e-sign documents shortly."
+    });
   }
 
   const canSmallTalk =
