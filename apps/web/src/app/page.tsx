@@ -627,6 +627,18 @@ function todoActionLabel(todo: TodoItem): string {
   ) {
     return "Service department follow-up and scheduling.";
   }
+  if (
+    reason === "parts" ||
+    /(parts? department|parts? counter|part number|oem parts?|aftermarket parts?|order.*part|need.*part)/.test(text)
+  ) {
+    return "Parts department follow-up.";
+  }
+  if (
+    reason === "apparel" ||
+    /(apparel|merch|merchandise|clothing|jacket|hoodie|t-?shirt|helmet|gloves?|boots?|riding gear)/.test(text)
+  ) {
+    return "Apparel department follow-up.";
+  }
   if (/(trade|appraisal|trade[- ]in)/.test(text)) return "Discuss trade appraisal and next steps.";
   if (/(inventory|verify|check stock|not seeing|live feed)/.test(text)) return "Verify inventory and follow up.";
   if (/(video|walkaround|photos)/.test(text)) return "Send a walkaround video or photos.";
@@ -2447,7 +2459,8 @@ export default function Home() {
   }, [selectedContactListId, selectedContact?.id, selectedContactList?.contactIds?.join("|")]);
 
   const isManager = authUser?.role === "manager";
-  const isServiceUser = authUser?.role === "service";
+  const isDepartmentUser =
+    authUser?.role === "service" || authUser?.role === "parts" || authUser?.role === "apparel";
   const isConversationSection =
     section === "inbox" ||
     section === "todos" ||
@@ -2504,12 +2517,12 @@ export default function Home() {
   }, [section]);
 
   useEffect(() => {
-    if (!isServiceUser) return;
+    if (!isDepartmentUser) return;
     if (section !== "inbox" && section !== "todos") {
       setSection("inbox");
       setMobilePanel("list");
     }
-  }, [isServiceUser, section]);
+  }, [isDepartmentUser, section]);
 
   function openConversation(id: string) {
     setSelectedId(id);
@@ -2528,7 +2541,7 @@ export default function Home() {
       | "settings"
       | "calendar"
   ) {
-    const target = isServiceUser && next !== "inbox" && next !== "todos" ? "inbox" : next;
+    const target = isDepartmentUser && next !== "inbox" && next !== "todos" ? "inbox" : next;
     setSection(target);
     setMobileNavOpen(false);
     if (target === "calendar" || target === "settings" || target === "inventory" || target === "suppressions") {
@@ -4783,7 +4796,7 @@ export default function Home() {
         >
           📥
         </button>
-        {(authUser?.role === "manager" || authUser?.role === "salesperson" || authUser?.role === "service" || authUser?.permissions?.canAccessTodos) ? (
+        {(authUser?.role === "manager" || authUser?.role === "salesperson" || isDepartmentUser || authUser?.permissions?.canAccessTodos) ? (
           <button
             className={`relative w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "todos" ? "bg-white/10" : "hover:bg-white/5"}`}
             title="To-Dos"
@@ -4797,7 +4810,7 @@ export default function Home() {
             ) : null}
           </button>
         ) : null}
-        {!isServiceUser ? (
+        {!isDepartmentUser ? (
           <button
             className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "contacts" ? "bg-white/10" : "hover:bg-white/5"}`}
             title="Contacts"
@@ -4806,7 +4819,7 @@ export default function Home() {
             👥
           </button>
         ) : null}
-        {!isServiceUser && (authUser?.role === "manager" || authUser?.permissions?.canAccessSuppressions) ? (
+        {!isDepartmentUser && (authUser?.role === "manager" || authUser?.permissions?.canAccessSuppressions) ? (
           <button
             className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "suppressions" ? "bg-white/10" : "hover:bg-white/5"}`}
             title="Suppressions"
@@ -4815,7 +4828,7 @@ export default function Home() {
             ⛔
           </button>
         ) : null}
-        {!isServiceUser && (authUser?.role === "manager" || authUser?.permissions?.canEditAppointments) ? (
+        {!isDepartmentUser && (authUser?.role === "manager" || authUser?.permissions?.canEditAppointments) ? (
           <button
             className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "calendar" ? "bg-white/10" : "hover:bg-white/5"}`}
             title="Calendar"
@@ -4824,7 +4837,7 @@ export default function Home() {
             📅
           </button>
         ) : null}
-        {!isServiceUser ? (
+        {!isDepartmentUser ? (
           <button
             className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "inventory" ? "bg-white/10" : "hover:bg-white/5"}`}
             title="Inventory"
@@ -4833,7 +4846,7 @@ export default function Home() {
             📦
           </button>
         ) : null}
-        {!isServiceUser && (authUser?.role === "manager" || authUser?.role === "salesperson") ? (
+        {!isDepartmentUser && (authUser?.role === "manager" || authUser?.role === "salesperson") ? (
         <button
           className={`relative w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "watches" ? "bg-white/10" : "hover:bg-white/5"}`}
           title="Watches"
@@ -4847,7 +4860,7 @@ export default function Home() {
           ) : null}
         </button>
         ) : null}
-        {!isServiceUser ? (
+        {!isDepartmentUser ? (
           <button
             className={`relative w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "questions" ? "bg-white/10" : "hover:bg-white/5"}`}
             title="Questions"
@@ -5467,7 +5480,7 @@ export default function Home() {
         ) : null}
 
         {section === "todos" &&
-        (authUser?.role === "manager" || authUser?.role === "salesperson" || authUser?.role === "service" || authUser?.permissions?.canAccessTodos) ? (
+        (authUser?.role === "manager" || authUser?.role === "salesperson" || isDepartmentUser || authUser?.permissions?.canAccessTodos) ? (
           <div className="mt-3 border rounded-lg divide-y">
             {todos.map(t => {
               const isCallTodo = (t.reason ?? "").toLowerCase() === "call";
@@ -7200,6 +7213,8 @@ export default function Home() {
                                     <option value="salesperson">Salesperson</option>
                                     <option value="manager">Manager</option>
                                     <option value="service">Service</option>
+                                    <option value="parts">Parts</option>
+                                    <option value="apparel">Apparel</option>
                                   </select>
                                   {user.role === "manager" ? (
                                     <label className="col-span-2 flex items-center gap-2 text-xs">
@@ -7488,6 +7503,8 @@ export default function Home() {
                               <option value="salesperson">Salesperson</option>
                               <option value="manager">Manager</option>
                               <option value="service">Service</option>
+                              <option value="parts">Parts</option>
+                              <option value="apparel">Apparel</option>
                             </select>
                             {userForm.role === "manager" ? (
                               <label className="col-span-2 flex items-center gap-2 text-xs">

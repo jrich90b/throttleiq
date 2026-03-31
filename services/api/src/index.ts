@@ -300,28 +300,94 @@ function requirePermission(key: "canEditAppointments" | "canToggleHumanOverride"
   };
 }
 
-function isServiceConversation(conv: any): boolean {
-  if (!conv) return false;
+type DepartmentRole = "service" | "parts" | "apparel";
+
+const SERVICE_DEPARTMENT_RE =
+  /\b(service|inspection|oil change|3[- ]hole|maintenance|repair|service department|service writer|warranty work|state inspection)\b/i;
+const PARTS_DEPARTMENT_RE =
+  /\b(parts? department|parts? counter|parts? desk|order (a )?part|need (a )?part|part number|oem parts?|aftermarket parts?|parts? for my|do you (have|carry|stock)\b.{0,28}\bparts?)\b/i;
+const APPAREL_DEPARTMENT_RE =
+  /\b(apparel|merch|merchandise|clothing|jacket|hoodie|t-?shirt|tee shirt|helmet|gloves?|boots?|riding gear|gear)\b/i;
+
+function inferDepartmentFromText(text: string): DepartmentRole | null {
+  const t = String(text ?? "").trim();
+  if (!t) return null;
+  if (SERVICE_DEPARTMENT_RE.test(t)) return "service";
+  if (PARTS_DEPARTMENT_RE.test(t)) return "parts";
+  if (APPAREL_DEPARTMENT_RE.test(t)) return "apparel";
+  return null;
+}
+
+function departmentFromReasonText(reasonText: string): DepartmentRole | null {
+  const t = String(reasonText ?? "").toLowerCase();
+  if (!t) return null;
+  if (/\bservice\b/.test(t)) return "service";
+  if (/\bparts?\b/.test(t)) return "parts";
+  if (/\bapparel\b/.test(t)) return "apparel";
+  return null;
+}
+
+function getConversationDepartment(conv: any): DepartmentRole | null {
+  if (!conv) return null;
   const bucket = String(conv?.classification?.bucket ?? "").toLowerCase();
   const cta = String(conv?.classification?.cta ?? "").toLowerCase();
-  if (bucket === "service" || cta === "service_request") return true;
+  if (bucket === "service" || cta === "service_request") return "service";
+  if (bucket === "parts" || cta === "parts_request" || cta === "parts_inquiry") return "parts";
+  if (bucket === "apparel" || cta === "apparel_request" || cta === "apparel_inquiry") return "apparel";
+
   const dialogState = String(getDialogState(conv) ?? "").toLowerCase();
   if (dialogState === "service_request" || dialogState === "service_handoff" || dialogState.startsWith("service_")) {
-    return true;
+    return "service";
   }
+  if (dialogState.startsWith("parts_")) return "parts";
+  if (dialogState.startsWith("apparel_")) return "apparel";
+
   const followUpReason = String(conv?.followUp?.reason ?? "").toLowerCase();
-  if (followUpReason.includes("service")) return true;
-  if (listOpenTodos().some(t => t.convId === conv.id && t.reason === "service")) return true;
-  return false;
+  const fromFollowUp = departmentFromReasonText(followUpReason);
+  if (fromFollowUp) return fromFollowUp;
+
+  const openTodos = listOpenTodos().filter(t => t.convId === conv.id);
+  for (const todo of openTodos) {
+    const todoReason = departmentFromReasonText(todo.reason);
+    if (todoReason) return todoReason;
+    const summaryDept = inferDepartmentFromText(String(todo.summary ?? ""));
+    if (summaryDept) return summaryDept;
+  }
+
+  const leadText = [conv?.lead?.source, conv?.lead?.inquiry, conv?.lead?.notes, conv?.lead?.summary]
+    .map(v => String(v ?? "").trim())
+    .filter(Boolean)
+    .join(" ");
+  const inboundText = (conv?.messages ?? [])
+    .filter((m: any) => m?.direction === "in")
+    .slice(-10)
+    .map((m: any) => String(m?.body ?? "").trim())
+    .filter(Boolean)
+    .join(" ");
+  return inferDepartmentFromText(`${leadText} ${inboundText}`);
+}
+
+function isServiceConversation(conv: any): boolean {
+  return getConversationDepartment(conv) === "service";
+}
+
+function inferTodoDepartment(todo: any, conv: any): DepartmentRole | null {
+  const reason = departmentFromReasonText(String(todo?.reason ?? ""));
+  if (reason) return reason;
+  const convDepartment = getConversationDepartment(conv);
+  if (convDepartment) return convDepartment;
+  return inferDepartmentFromText(String(todo?.summary ?? ""));
 }
 
 function canUserAccessConversation(user: any, conv: any): boolean {
   if (AUTH_DISABLED || !user) return true;
   const role = String(user?.role ?? "").toLowerCase();
   if (role === "manager") return true;
-  const serviceConversation = isServiceConversation(conv);
-  if (role === "service") return serviceConversation;
-  if (role === "salesperson") return !serviceConversation;
+  const dept = getConversationDepartment(conv);
+  if (role === "service" || role === "parts" || role === "apparel") {
+    return dept === role;
+  }
+  if (role === "salesperson") return !dept;
   return true;
 }
 
@@ -1208,9 +1274,9 @@ app.post("/users", async (req, res) => {
   const email = String(req.body?.email ?? "").trim();
   const password = String(req.body?.password ?? "");
   const roleRaw = String(req.body?.role ?? "salesperson").trim();
-  const role = (["manager", "salesperson", "service"].includes(roleRaw)
+  const role = (["manager", "salesperson", "service", "parts", "apparel"].includes(roleRaw)
     ? roleRaw
-    : "salesperson") as "manager" | "salesperson" | "service";
+    : "salesperson") as "manager" | "salesperson" | "service" | "parts" | "apparel";
   const firstName = String(req.body?.firstName ?? "").trim();
   const lastName = String(req.body?.lastName ?? "").trim();
   const nameRaw = String(req.body?.name ?? "").trim();
@@ -1264,8 +1330,8 @@ app.put("/users/:id", requireManager, async (req, res) => {
   try {
     const roleRaw =
       req.body?.role == null ? undefined : String(req.body.role).trim();
-    const role = roleRaw && ["manager", "salesperson", "service"].includes(roleRaw)
-      ? (roleRaw as "manager" | "salesperson" | "service")
+    const role = roleRaw && ["manager", "salesperson", "service", "parts", "apparel"].includes(roleRaw)
+      ? (roleRaw as "manager" | "salesperson" | "service" | "parts" | "apparel")
       : undefined;
     const user = await updateUser(id, {
       email: req.body?.email,
@@ -9289,7 +9355,10 @@ app.delete("/conversations/:id", (req, res) => {
 app.get("/todos", requirePermission("canAccessTodos"), (req, res) => {
   const user = (req as any).user ?? null;
   const isManager = user?.role === "manager";
-  const isServiceUser = user?.role === "service";
+  const departmentRole =
+    user?.role === "service" || user?.role === "parts" || user?.role === "apparel"
+      ? (user.role as DepartmentRole)
+      : null;
   const requesterId = String(user?.id ?? "").trim();
   const extractNameFromSummary = (summary?: string | null) => {
     const text = String(summary ?? "");
@@ -9306,9 +9375,9 @@ app.get("/todos", requirePermission("canAccessTodos"), (req, res) => {
     .filter(t => {
       if (isManager) return true;
       const conv = getConversation(t.convId);
-      const isServiceTodo = t.reason === "service" || isServiceConversation(conv);
-      if (isServiceUser) return isServiceTodo;
-      if (isServiceTodo) return false;
+      const todoDepartment = inferTodoDepartment(t, conv);
+      if (departmentRole) return todoDepartment === departmentRole;
+      if (todoDepartment) return false;
       if (!requesterId) return false;
       if (t.ownerId) return t.ownerId === requesterId;
       return conv?.leadOwner?.id === requesterId;
@@ -9342,8 +9411,17 @@ app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
     return res.status(403).json({ ok: false, error: "forbidden" });
   }
   const allowedReasons: Array<
-    "pricing" | "payments" | "approval" | "manager" | "service" | "call" | "note" | "other"
-  > = ["pricing", "payments", "approval", "manager", "service", "call", "note", "other"];
+    | "pricing"
+    | "payments"
+    | "approval"
+    | "manager"
+    | "service"
+    | "parts"
+    | "apparel"
+    | "call"
+    | "note"
+    | "other"
+  > = ["pricing", "payments", "approval", "manager", "service", "parts", "apparel", "call", "note", "other"];
   const reason = allowedReasons.includes(reasonRaw as any)
     ? (reasonRaw as any)
     : "other";
@@ -9369,9 +9447,12 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), (re
   }
   const existingTask = listOpenTodos().find(t => t.id === todoId && t.convId === convId);
   if (existingTask && user?.role !== "manager") {
-    const serviceTask =
-      existingTask.reason === "service" || isServiceConversation(convForAccess ?? getConversation(convId));
-    if (!(user?.role === "service" && serviceTask)) {
+    const taskDepartment = inferTodoDepartment(existingTask, convForAccess ?? getConversation(convId));
+    if (taskDepartment) {
+      if (String(user?.role ?? "").toLowerCase() !== taskDepartment) {
+        return res.status(403).json({ ok: false, error: "forbidden" });
+      }
+    } else {
       const requesterId = String(user?.id ?? "").trim();
       const ownerId = String(existingTask.ownerId ?? "").trim();
       if (ownerId && ownerId !== requesterId) {

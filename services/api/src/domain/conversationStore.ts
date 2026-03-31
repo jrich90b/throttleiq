@@ -149,7 +149,17 @@ export type TodoTask = {
   leadKey: string;
   ownerId?: string;
   ownerName?: string;
-  reason: "pricing" | "payments" | "approval" | "manager" | "service" | "call" | "note" | "other";
+  reason:
+    | "pricing"
+    | "payments"
+    | "approval"
+    | "manager"
+    | "service"
+    | "parts"
+    | "apparel"
+    | "call"
+    | "note"
+    | "other";
   summary: string;
   createdAt: string;
   sourceMessageId?: string;
@@ -1785,6 +1795,8 @@ export function addTodo(
     const priorities: Record<TodoTask["reason"], number> = {
       call: 7,
       service: 6,
+      parts: 6,
+      apparel: 6,
       payments: 5,
       pricing: 4,
       manager: 3,

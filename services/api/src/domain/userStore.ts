@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { randomUUID, pbkdf2Sync, randomBytes, timingSafeEqual } from "node:crypto";
 import { dataPath } from "./dataDir.js";
 
-export type UserRole = "manager" | "salesperson" | "service";
+export type UserRole = "manager" | "salesperson" | "service" | "parts" | "apparel";
 
 export type UserPermissions = {
   canEditAppointments: boolean;
@@ -30,7 +30,7 @@ function defaultPermissionsForRole(role: UserRole): UserPermissions {
       canAccessSuppressions: true
     };
   }
-  if (role === "service") {
+  if (role === "service" || role === "parts" || role === "apparel") {
     return {
       canEditAppointments: false,
       canToggleHumanOverride: false,
@@ -139,7 +139,7 @@ export async function createUser(input: {
   const perms: UserPermissions =
     input.role === "manager"
       ? roleDefaults
-      : input.role === "service"
+      : input.role === "service" || input.role === "parts" || input.role === "apparel"
         ? {
             ...roleDefaults,
             ...(input.permissions ?? {}),
@@ -150,7 +150,7 @@ export async function createUser(input: {
           }
         : { ...roleDefaults, ...(input.permissions ?? {}) };
   const includeInSchedule =
-    input.role === "service"
+    input.role === "service" || input.role === "parts" || input.role === "apparel"
       ? false
       : typeof input.includeInSchedule === "boolean"
       ? input.includeInSchedule
@@ -205,7 +205,7 @@ export async function updateUser(
   const nextPerms: UserPermissions =
     nextRole === "manager"
       ? roleDefaults
-      : nextRole === "service"
+      : nextRole === "service" || nextRole === "parts" || nextRole === "apparel"
         ? {
             ...roleDefaults,
             ...(existing.permissions ?? roleDefaults),
@@ -217,7 +217,7 @@ export async function updateUser(
           }
         : { ...roleDefaults, ...(existing.permissions ?? roleDefaults), ...(patch.permissions ?? {}) };
   const includeInSchedule =
-    nextRole === "service"
+    nextRole === "service" || nextRole === "parts" || nextRole === "apparel"
       ? false
       : typeof patch.includeInSchedule === "boolean"
       ? patch.includeInSchedule
