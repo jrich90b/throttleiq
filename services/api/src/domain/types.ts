@@ -26,6 +26,7 @@ export type InboundMessageEvent = {
   from: string;
   to: string;
   body: string;
+  mediaUrls?: string[];
   providerMessageId?: string;
   receivedAt: string;
 };

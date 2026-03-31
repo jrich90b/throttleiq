@@ -680,6 +680,7 @@ export function appendInbound(conv: Conversation, evt: InboundMessageEvent) {
     from: evt.from,
     to: evt.to,
     body: evt.body,
+    mediaUrls: evt.mediaUrls && evt.mediaUrls.length ? evt.mediaUrls : undefined,
     at: evt.receivedAt,
     provider: evt.provider as MessageProvider,
     providerMessageId: evt.providerMessageId

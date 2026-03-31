@@ -10866,12 +10866,21 @@ if (authToken && signature) {
   if (!ok) return res.status(403).json({ ok: false, error: "Invalid Twilio signature" });
 }
 
-  const { From, To, Body, MessageSid, SmsSid } = req.body ?? {};
+  const { From, To, Body, MessageSid, SmsSid, NumMedia } = req.body ?? {};
 
   const fromRaw = String(From ?? "").trim();
   const toRaw = String(To ?? "").trim();
   const from = normalizePhone(fromRaw);
   const to = normalizePhone(toRaw);
+
+  const mediaCount = Number.parseInt(String(NumMedia ?? "0"), 10);
+  const mediaUrls: string[] = [];
+  if (Number.isFinite(mediaCount) && mediaCount > 0) {
+    for (let i = 0; i < mediaCount; i += 1) {
+      const rawUrl = String((req.body as any)?.[`MediaUrl${i}`] ?? "").trim();
+      if (rawUrl) mediaUrls.push(rawUrl);
+    }
+  }
 
   const event: InboundMessageEvent = {
     channel: "sms",
@@ -10879,6 +10888,7 @@ if (authToken && signature) {
     from,
     to,
     body: String(Body ?? ""),
+    mediaUrls: mediaUrls.length ? mediaUrls : undefined,
     providerMessageId: String(MessageSid ?? SmsSid ?? ""),
     receivedAt: new Date().toISOString()
   };
