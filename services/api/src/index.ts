@@ -3363,6 +3363,91 @@ function normalizePhone(raw: string): string {
   return trimmed;
 }
 
+function inferExtensionFromMedia(contentType: string | null, sourceUrl: string): string {
+  const ct = String(contentType ?? "").toLowerCase();
+  if (ct.includes("jpeg")) return "jpg";
+  if (ct.includes("png")) return "png";
+  if (ct.includes("gif")) return "gif";
+  if (ct.includes("webp")) return "webp";
+  if (ct.includes("heic")) return "heic";
+  if (ct.includes("heif")) return "heif";
+  if (ct.includes("bmp")) return "bmp";
+  if (ct.includes("svg")) return "svg";
+  if (ct.includes("pdf")) return "pdf";
+  if (ct.includes("mp4")) return "mp4";
+  if (ct.includes("quicktime")) return "mov";
+  if (ct.includes("mpeg")) return "mpeg";
+  if (ct.includes("audio")) return "mp3";
+  try {
+    const p = new URL(sourceUrl).pathname;
+    const ext = path.extname(p).replace(".", "").toLowerCase();
+    if (ext) return ext;
+  } catch {
+    // ignore
+  }
+  return "bin";
+}
+
+type TwilioInboundMediaItem = {
+  url: string;
+  contentType?: string;
+};
+
+async function materializeInboundTwilioMedia(
+  mediaItems: TwilioInboundMediaItem[],
+  providerMessageId: string,
+  publicAssetBase: string
+): Promise<string[]> {
+  if (!Array.isArray(mediaItems) || mediaItems.length === 0) return [];
+  const safeMsgId = String(providerMessageId || `mms_${Date.now()}`)
+    .replace(/[^a-zA-Z0-9._-]/g, "_")
+    .slice(0, 80);
+  if (!safeMsgId) return mediaItems.map(m => m.url);
+  const folderRel = path.join("uploads", "mms", safeMsgId);
+  const folderAbs = path.resolve(getDataDir(), folderRel);
+  await fs.promises.mkdir(folderAbs, { recursive: true });
+
+  const accountSid = String(process.env.TWILIO_ACCOUNT_SID ?? "").trim();
+  const authToken = String(process.env.TWILIO_AUTH_TOKEN ?? "").trim();
+  const authHeader =
+    accountSid && authToken
+      ? `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString("base64")}`
+      : "";
+
+  const saved: string[] = [];
+  for (let i = 0; i < mediaItems.length; i += 1) {
+    const source = String(mediaItems[i]?.url ?? "").trim();
+    const declaredType = String(mediaItems[i]?.contentType ?? "").trim() || null;
+    if (!source) continue;
+    let resp: Response | null = null;
+    try {
+      if (authHeader) {
+        resp = await fetch(source, { headers: { Authorization: authHeader } });
+      }
+      if (!resp || !resp.ok) {
+        resp = await fetch(source);
+      }
+      if (!resp.ok) {
+        console.warn("[twilio mms] media fetch failed", { source, status: resp.status });
+        saved.push(source);
+        continue;
+      }
+      const ext = inferExtensionFromMedia(declaredType ?? resp.headers.get("content-type"), source);
+      const fileName = `${i}.${ext}`;
+      const abs = path.join(folderAbs, fileName);
+      const rel = `${folderRel.replace(/\\/g, "/")}/${fileName}`;
+      const buf = Buffer.from(await resp.arrayBuffer());
+      await fs.promises.writeFile(abs, buf);
+      const cleanBase = String(publicAssetBase ?? "").replace(/\/+$/, "");
+      saved.push(cleanBase ? `${cleanBase}/${rel}` : `/${rel}`);
+    } catch (err: any) {
+      console.warn("[twilio mms] materialize failed", { source, err: err?.message ?? err });
+      saved.push(source);
+    }
+  }
+  return saved.length ? saved : mediaItems.map(m => m.url);
+}
+
 function buildStaffOutcomeLink(token: string): string | null {
   const base = process.env.PUBLIC_BASE_URL?.replace(/\/+$/, "");
   if (!base) return null;
@@ -10874,23 +10959,47 @@ if (authToken && signature) {
   const to = normalizePhone(toRaw);
 
   const mediaUrls: string[] = [];
+  const mediaItems: Array<{ idx: number; url: string; contentType?: string }> = [];
   const bodyAny = (req.body ?? {}) as Record<string, unknown>;
   const mediaCount = Number.parseInt(String(NumMedia ?? "0"), 10);
   if (Number.isFinite(mediaCount) && mediaCount > 0) {
     for (let i = 0; i < mediaCount; i += 1) {
       const rawUrl = String(bodyAny[`MediaUrl${i}`] ?? "").trim();
-      if (rawUrl) mediaUrls.push(rawUrl);
+      const rawType = String(bodyAny[`MediaContentType${i}`] ?? "").trim();
+      if (rawUrl) {
+        mediaUrls.push(rawUrl);
+        mediaItems.push({ idx: i, url: rawUrl, contentType: rawType || undefined });
+      }
     }
   }
   // Fallback: parse any MediaUrlN keys even if NumMedia is missing/incorrect.
   if (!mediaUrls.length) {
-    const pairs = Object.entries(bodyAny)
+    const urlPairs = Object.entries(bodyAny)
       .filter(([k, v]) => /^MediaUrl\d+$/i.test(k) && String(v ?? "").trim().length > 0)
       .map(([k, v]) => ({ idx: Number.parseInt(k.replace(/[^0-9]/g, ""), 10), url: String(v).trim() }))
       .filter(x => Number.isFinite(x.idx) && !!x.url)
       .sort((a, b) => a.idx - b.idx);
-    for (const p of pairs) mediaUrls.push(p.url);
+    const typeMap = new Map<number, string>();
+    for (const [k, v] of Object.entries(bodyAny)) {
+      if (!/^MediaContentType\d+$/i.test(k)) continue;
+      const idx = Number.parseInt(k.replace(/[^0-9]/g, ""), 10);
+      const t = String(v ?? "").trim();
+      if (Number.isFinite(idx) && t) typeMap.set(idx, t);
+    }
+    for (const p of urlPairs) {
+      mediaUrls.push(p.url);
+      mediaItems.push({ idx: p.idx, url: p.url, contentType: typeMap.get(p.idx) });
+    }
   }
+  const providerMessageId = String(MessageSid ?? SmsSid ?? "").trim();
+  const mediaUrlsForConversation =
+    mediaUrls.length > 0
+      ? await materializeInboundTwilioMedia(
+          mediaItems.length ? mediaItems : mediaUrls.map((u, idx) => ({ idx, url: u })),
+          providerMessageId || `mms_${Date.now()}`,
+          publicBase || `${req.protocol}://${req.get("host")}`
+        )
+      : undefined;
 
   const event: InboundMessageEvent = {
     channel: "sms",
@@ -10898,8 +11007,8 @@ if (authToken && signature) {
     from,
     to,
     body: String(Body ?? ""),
-    mediaUrls: mediaUrls.length ? mediaUrls : undefined,
-    providerMessageId: String(MessageSid ?? SmsSid ?? ""),
+    mediaUrls: mediaUrlsForConversation && mediaUrlsForConversation.length ? mediaUrlsForConversation : undefined,
+    providerMessageId,
     receivedAt: new Date().toISOString()
   };
 
