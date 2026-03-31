@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 const BOOKING_LINK_RE =
   /(Book here|You can choose a time here|You can book an appointment here):\s*(https?:\/\/[^\s<]+)/i;
@@ -4878,82 +4879,85 @@ export default function Home() {
         </div>
       </aside>
 
-      {settingsOpen ? (
-        <div
-          className="fixed inset-0 z-[200]"
-          onClick={() => setSettingsOpen(false)}
-        >
-          <div
-            className="absolute left-[4.5rem] bottom-4 w-56 bg-white border border-gray-200 rounded-lg shadow-lg p-2 text-gray-900"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between px-2 py-1">
-              <div className="text-xs font-semibold text-gray-600">Settings</div>
-              <button
-                className="text-xs px-1.5 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50"
-                onClick={() => setSettingsOpen(false)}
-                aria-label="Close settings menu"
-              >
-                X
-              </button>
-            </div>
-            {isManager ? (
-              <>
-                <button
-                  className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
-                  onClick={() => {
-                    setSettingsTab("dealer");
-                    goToSection("settings");
-                    setSettingsOpen(false);
-                  }}
-                >
-                  Dealer Profile
-                </button>
-                <button
-                  className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
-                  onClick={() => {
-                    setSettingsTab("users");
-                    goToSection("settings");
-                    setSettingsOpen(false);
-                  }}
-                >
-                  Users
-                </button>
-                <button
-                  className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
-                  onClick={() => {
-                    setSettingsTab("scheduler");
-                    goToSection("settings");
-                    setSettingsOpen(false);
-                  }}
-                >
-                  Scheduling
-                </button>
-                <button
-                  className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
-                  onClick={() => {
-                    setSettingsTab("notifications");
-                    goToSection("settings");
-                    setSettingsOpen(false);
-                  }}
-                >
-                  Notifications
-                </button>
-              </>
-            ) : null}
-            <button
-              className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm text-red-600"
-              onClick={async () => {
-                await fetch("/api/auth/logout", { method: "POST" });
-                setSettingsOpen(false);
-                setAuthUser(null);
-              }}
+      {settingsOpen && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[9999]"
+              onClick={() => setSettingsOpen(false)}
             >
-              Sign out
-            </button>
-          </div>
-        </div>
-      ) : null}
+              <div
+                className="absolute left-[4.5rem] bottom-4 w-56 bg-white border border-gray-200 rounded-lg shadow-lg p-2 text-gray-900"
+                onClick={e => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between px-2 py-1">
+                  <div className="text-xs font-semibold text-gray-600">Settings</div>
+                  <button
+                    className="text-xs px-1.5 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50"
+                    onClick={() => setSettingsOpen(false)}
+                    aria-label="Close settings menu"
+                  >
+                    X
+                  </button>
+                </div>
+                {isManager ? (
+                  <>
+                    <button
+                      className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
+                      onClick={() => {
+                        setSettingsTab("dealer");
+                        goToSection("settings");
+                        setSettingsOpen(false);
+                      }}
+                    >
+                      Dealer Profile
+                    </button>
+                    <button
+                      className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
+                      onClick={() => {
+                        setSettingsTab("users");
+                        goToSection("settings");
+                        setSettingsOpen(false);
+                      }}
+                    >
+                      Users
+                    </button>
+                    <button
+                      className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
+                      onClick={() => {
+                        setSettingsTab("scheduler");
+                        goToSection("settings");
+                        setSettingsOpen(false);
+                      }}
+                    >
+                      Scheduling
+                    </button>
+                    <button
+                      className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
+                      onClick={() => {
+                        setSettingsTab("notifications");
+                        goToSection("settings");
+                        setSettingsOpen(false);
+                      }}
+                    >
+                      Notifications
+                    </button>
+                  </>
+                ) : null}
+                <button
+                  className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm text-red-600"
+                  onClick={async () => {
+                    await fetch("/api/auth/logout", { method: "POST" });
+                    setSettingsOpen(false);
+                    setAuthUser(null);
+                  }}
+                >
+                  Sign out
+                </button>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
 
       <section
         className={`w-full ${
