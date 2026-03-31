@@ -10873,13 +10873,23 @@ if (authToken && signature) {
   const from = normalizePhone(fromRaw);
   const to = normalizePhone(toRaw);
 
-  const mediaCount = Number.parseInt(String(NumMedia ?? "0"), 10);
   const mediaUrls: string[] = [];
+  const bodyAny = (req.body ?? {}) as Record<string, unknown>;
+  const mediaCount = Number.parseInt(String(NumMedia ?? "0"), 10);
   if (Number.isFinite(mediaCount) && mediaCount > 0) {
     for (let i = 0; i < mediaCount; i += 1) {
-      const rawUrl = String((req.body as any)?.[`MediaUrl${i}`] ?? "").trim();
+      const rawUrl = String(bodyAny[`MediaUrl${i}`] ?? "").trim();
       if (rawUrl) mediaUrls.push(rawUrl);
     }
+  }
+  // Fallback: parse any MediaUrlN keys even if NumMedia is missing/incorrect.
+  if (!mediaUrls.length) {
+    const pairs = Object.entries(bodyAny)
+      .filter(([k, v]) => /^MediaUrl\d+$/i.test(k) && String(v ?? "").trim().length > 0)
+      .map(([k, v]) => ({ idx: Number.parseInt(k.replace(/[^0-9]/g, ""), 10), url: String(v).trim() }))
+      .filter(x => Number.isFinite(x.idx) && !!x.url)
+      .sort((a, b) => a.idx - b.idx);
+    for (const p of pairs) mediaUrls.push(p.url);
   }
 
   const event: InboundMessageEvent = {
