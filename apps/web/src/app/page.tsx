@@ -3077,6 +3077,36 @@ export default function Home() {
     if (ev?.source) parts.push(`Source: ${ev.source}`);
     return parts.join(" • ");
   };
+  const getEventTimeRangeLabel = (ev: any, tz: string) => {
+    const start = ev?.start ? new Date(ev.start) : null;
+    const end = ev?.end ? new Date(ev.end) : null;
+    if (!start || !end || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return "";
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false
+    }).formatToParts(start);
+    const startHour = Number(parts.find(p => p.type === "hour")?.value ?? "0");
+    const startMinute = Number(parts.find(p => p.type === "minute")?.value ?? "0");
+    const endParts = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false
+    }).formatToParts(end);
+    const endHour = Number(endParts.find(p => p.type === "hour")?.value ?? "0");
+    const endMinute = Number(endParts.find(p => p.type === "minute")?.value ?? "0");
+    const startLabel = formatTimeLabel(
+      `${String(startHour).padStart(2, "0")}:${String(startMinute).padStart(2, "0")}`,
+      tz
+    );
+    const endLabel = formatTimeLabel(
+      `${String(endHour).padStart(2, "0")}:${String(endMinute).padStart(2, "0")}`,
+      tz
+    );
+    return `${startLabel}-${endLabel}`;
+  };
 
   useEffect(() => {
     if (appointmentTypeToAdd === "custom") return;
@@ -5859,7 +5889,7 @@ export default function Home() {
       >
         {section === "calendar" ? (
           <div className="flex flex-col h-full">
-            <div className="flex items-center justify-between gap-4">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 md:gap-4">
               <div className="flex items-center gap-2">
                 <button
                   className={`px-3 py-2 border rounded text-sm ${calendarView === "day" ? "font-semibold bg-gray-100" : ""}`}
@@ -5874,8 +5904,8 @@ export default function Home() {
                   Week
                 </button>
               </div>
-              <div className="flex items-center gap-2">
-                <div className="text-sm text-gray-600">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="text-sm text-gray-600 w-full md:w-auto">
                   {calendarDate.toLocaleDateString("en-US", {
                     weekday: "short",
                     month: "short",
@@ -5911,7 +5941,7 @@ export default function Home() {
                 </button>
                 <input
                   type="date"
-                  className="border rounded px-2 py-1 text-sm"
+                  className="border rounded px-2 py-1 text-sm w-full md:w-auto"
                   value={calendarDate.toISOString().slice(0, 10)}
                   onChange={e => {
                     const next = new Date(calendarDate);
@@ -5923,7 +5953,7 @@ export default function Home() {
                   }}
                 />
               </div>
-              <div className="relative">
+              <div className="relative self-start md:self-auto">
                 <button
                   className="px-3 py-2 border rounded text-sm"
                   onClick={() => setCalendarFilterOpen(v => !v)}
@@ -5931,7 +5961,7 @@ export default function Home() {
                   Filter calendars
                 </button>
                 {calendarFilterOpen ? (
-                  <div className="absolute right-0 mt-2 w-64 bg-white border rounded-lg shadow-lg p-3 z-50">
+                  <div className="absolute right-0 mt-2 w-[min(20rem,calc(100vw-2rem))] md:w-64 bg-white border rounded-lg shadow-lg p-3 z-50">
                     <div className="text-xs font-semibold text-gray-600 mb-2">Show calendars</div>
                     <div className="space-y-2 max-h-64 overflow-y-auto">
                       {calendarUsers.map((u: any) => (
@@ -6052,163 +6082,208 @@ export default function Home() {
                   dayStart.setHours(0, 0, 0, 0);
 
                   return (
-                    <div className="border rounded-lg overflow-hidden">
-                      <div className="grid" style={{ gridTemplateColumns: `80px repeat(${salespeople.length || 1}, minmax(180px, 1fr))` }}>
-                        <div className="bg-gray-50 border-r p-2 text-xs text-gray-500">Time</div>
-                        {salespeople.map((sp: any) => (
-                          <div key={sp.id} className="bg-gray-50 border-r p-2 text-sm font-medium">
-                            {sp.name}
-                          </div>
-                        ))}
-                      </div>
-                      <div className="grid" style={{ gridTemplateColumns: `80px repeat(${salespeople.length || 1}, minmax(180px, 1fr))` }}>
-                        <div className="border-r">
-                          {slots.map(label => (
-                            <div key={label} className="border-b px-2 text-xs text-gray-500 flex items-start" style={{ height: rowHeight }}>
-                              {label}
-                            </div>
-                          ))}
-                        </div>
+                    <div className="space-y-3">
+                      <div className="md:hidden space-y-3">
+                        {salespeople.length === 0 ? (
+                          <div className="border rounded-lg p-3 text-sm text-gray-500">No calendars selected.</div>
+                        ) : null}
                         {salespeople.map((sp: any, idx: number) => {
-                          const events = eventsBySp[idx] ?? calendarEvents.filter(e => e.salespersonId === sp.id);
-                          const columnHeight = (totalMinutes / 60) * rowHeight;
+                          const events = (eventsBySp[idx] ?? calendarEvents.filter(e => e.salespersonId === sp.id))
+                            .slice()
+                            .sort((a: any, b: any) => {
+                              const aAt = a?.start ? new Date(a.start).getTime() : 0;
+                              const bAt = b?.start ? new Date(b.start).getTime() : 0;
+                              return aAt - bAt;
+                            });
                           return (
-                            <div
-                              key={sp.id}
-                              className="relative border-r"
-                              style={{
-                                height: columnHeight,
-                                backgroundImage: `repeating-linear-gradient(to bottom, transparent, transparent ${rowHeight - 1}px, rgba(0,0,0,0.14) ${rowHeight}px)`
-                              }}
-                              ref={el => {
-                                calendarColumnRefs.current[sp.id] = el;
-                              }}
-                              onClick={e => {
-                                if (Date.now() < dragGuardRef.current.blockUntil) return;
-                                if (dragStateRef.current.mode) return;
-                                if (e.target instanceof HTMLElement && e.target.closest("[data-cal-event]")) return;
-                                const rect = calendarColumnRefs.current[sp.id]?.getBoundingClientRect();
-                                if (!rect) return;
-                                const y = e.clientY - rect.top;
-                                const minutesFromTop = Math.max(0, Math.min(totalMinutes, (y / rect.height) * totalMinutes));
-                                const snap = 30;
-                                const startMin = Math.round((openWindow + minutesFromTop) / snap) * snap;
-                                const duration = 60;
-                                let endMin = startMin + duration;
-                                if (endMin > closeWindow) {
-                                  endMin = closeWindow;
-                                }
-                                const toHHMM = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
-                                const day = calendarDate.toLocaleDateString("en-CA", { timeZone: tz });
-                                setCalendarEdit({
-                                  calendarId: sp.calendarId,
-                                  salespersonId: sp.id,
-                                  _dragStart: startMin,
-                                  _dragEnd: endMin
-                                });
-                              }}
-                              onMouseMove={e => {
-                                const state = dragStateRef.current;
-                                if (!state.mode || !state.event || state.event.salespersonId !== sp.id) return;
-                                applyDragAt(e.clientY);
-                              }}
-                            >
-                              {events.map((ev: any) => {
-                                const start = ev.start ? new Date(ev.start) : null;
-                                const end = ev.end ? new Date(ev.end) : null;
-                                if (!start || !end) return null;
-                                const startMin = getTzMinutes(start);
-                                const endMin = getTzMinutes(end);
-                                const draggedStart = typeof ev._dragStart === "number" ? ev._dragStart : startMin;
-                                const draggedEnd = typeof ev._dragEnd === "number" ? ev._dragEnd : endMin;
-                                const renderStart = Math.max(draggedStart, openWindow);
-                                const renderEnd = Math.min(draggedEnd, closeWindow);
-                                if (renderEnd <= renderStart) return null;
-                                const top = ((renderStart - openWindow) / totalMinutes) * 100;
-                                const height = Math.max(((renderEnd - renderStart) / totalMinutes) * 100, 5);
-                                const minToLabel = (m: number) => {
-                                  const h = Math.floor(m / 60);
-                                  const mm = m % 60;
-                                  return formatTimeLabel(`${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`, tz);
-                                };
-                                const timeLabel = `${minToLabel(renderStart)}–${minToLabel(renderEnd)}`;
-                                const detail = getEventDetails(ev);
-                                const eventStyle = getEventStyle(ev);
-                                return (
-                                  <div
-                                    key={ev.id}
-                                    data-cal-event
-                                    className={`absolute left-2 right-2 border rounded px-2 py-1 text-xs overflow-hidden cursor-pointer ${
-                                      ev.readOnly ? "bg-gray-100 text-gray-700 border-gray-200" : ""
-                                    }`}
-                                    style={{ top: `${top}%`, height: `${height}%`, ...(eventStyle ?? {}) }}
-                                    title={detail || ev.summary}
-                                    onMouseDown={e => {
-                                      e.stopPropagation();
-                                      if (ev.readOnly) return;
-                                      if (e.button !== 0) return;
-                                      dragStateRef.current = {
-                                        mode: "move",
-                                        event: ev,
-                                        startY: e.clientY,
-                                        origStartMin: startMin,
-                                        origEndMin: endMin,
-                                        openWindow,
-                                        closeWindow
-                                      };
-                                    }}
-                                  >
-                                    <div className="flex items-start justify-between gap-2">
-                                      <div className="min-w-0">
-                                        <div className="font-medium truncate">{getEventTitle(ev)}</div>
-                                        <div className="text-[10px] opacity-80 mt-1">{timeLabel}</div>
-                                        {detail ? (
-                                          <div className="text-[10px] opacity-70 mt-1 truncate">
-                                            {detail}
-                                          </div>
-                                        ) : null}
-                                      </div>
-                                      {ev.readOnly ? null : (
-                                        <button
-                                          className="text-[10px] px-1.5 py-0.5 rounded border border-blue-300 bg-white/70 hover:bg-white"
-                                          onMouseDown={e => {
-                                            e.stopPropagation();
-                                            e.preventDefault();
-                                          }}
-                                          onClick={e => {
-                                            e.stopPropagation();
-                                            if (Date.now() < dragGuardRef.current.blockUntil) return;
-                                            setCalendarEdit({ ...ev, calendarId: ev.calendarId });
-                                          }}
-                                        >
-                                          Edit
-                                        </button>
-                                      )}
-                                    </div>
-                                    {ev.readOnly ? null : (
-                                      <div
-                                        className="absolute left-0 right-0 bottom-0 h-2 cursor-ns-resize bg-blue-200/60"
-                                        onMouseDown={e => {
-                                          e.stopPropagation();
-                                          if (e.button !== 0) return;
-                                          dragStateRef.current = {
-                                            mode: "resize",
-                                            event: ev,
-                                            startY: e.clientY,
-                                            origStartMin: startMin,
-                                            origEndMin: endMin,
-                                            openWindow,
-                                            closeWindow
-                                          };
-                                        }}
-                                      />
-                                    )}
-                                  </div>
-                                );
-                              })}
+                            <div key={`mobile-${sp.id}`} className="border rounded-lg p-3 space-y-2">
+                              <div className="text-sm font-semibold">{sp.name}</div>
+                              {events.length === 0 ? (
+                                <div className="text-xs text-gray-400">No events</div>
+                              ) : (
+                                events.map((ev: any) => {
+                                  const detail = getEventDetails(ev);
+                                  const eventStyle = getEventStyle(ev);
+                                  const timeLabel = getEventTimeRangeLabel(ev, tz);
+                                  return (
+                                    <button
+                                      key={ev.id}
+                                      className={`w-full text-left text-xs border rounded px-2.5 py-2 ${
+                                        ev.readOnly ? "bg-gray-100 text-gray-700 border-gray-200" : ""
+                                      }`}
+                                      style={eventStyle}
+                                      onClick={() => {
+                                        if (ev.readOnly) return;
+                                        setCalendarEdit({ ...ev, calendarId: ev.calendarId });
+                                      }}
+                                    >
+                                      <div className="font-medium">{getEventTitle(ev)}</div>
+                                      {timeLabel ? <div className="mt-1 opacity-80">{timeLabel}</div> : null}
+                                      {detail ? <div className="mt-1 opacity-70 line-clamp-2">{detail}</div> : null}
+                                    </button>
+                                  );
+                                })
+                              )}
                             </div>
                           );
                         })}
+                      </div>
+                      <div className="hidden md:block border rounded-lg overflow-hidden">
+                        <div className="grid" style={{ gridTemplateColumns: `80px repeat(${salespeople.length || 1}, minmax(180px, 1fr))` }}>
+                          <div className="bg-gray-50 border-r p-2 text-xs text-gray-500">Time</div>
+                          {salespeople.map((sp: any) => (
+                            <div key={sp.id} className="bg-gray-50 border-r p-2 text-sm font-medium">
+                              {sp.name}
+                            </div>
+                          ))}
+                        </div>
+                        <div className="grid" style={{ gridTemplateColumns: `80px repeat(${salespeople.length || 1}, minmax(180px, 1fr))` }}>
+                          <div className="border-r">
+                            {slots.map(label => (
+                              <div key={label} className="border-b px-2 text-xs text-gray-500 flex items-start" style={{ height: rowHeight }}>
+                                {label}
+                              </div>
+                            ))}
+                          </div>
+                          {salespeople.map((sp: any, idx: number) => {
+                            const events = eventsBySp[idx] ?? calendarEvents.filter(e => e.salespersonId === sp.id);
+                            const columnHeight = (totalMinutes / 60) * rowHeight;
+                            return (
+                              <div
+                                key={sp.id}
+                                className="relative border-r"
+                                style={{
+                                  height: columnHeight,
+                                  backgroundImage: `repeating-linear-gradient(to bottom, transparent, transparent ${rowHeight - 1}px, rgba(0,0,0,0.14) ${rowHeight}px)`
+                                }}
+                                ref={el => {
+                                  calendarColumnRefs.current[sp.id] = el;
+                                }}
+                                onClick={e => {
+                                  if (Date.now() < dragGuardRef.current.blockUntil) return;
+                                  if (dragStateRef.current.mode) return;
+                                  if (e.target instanceof HTMLElement && e.target.closest("[data-cal-event]")) return;
+                                  const rect = calendarColumnRefs.current[sp.id]?.getBoundingClientRect();
+                                  if (!rect) return;
+                                  const y = e.clientY - rect.top;
+                                  const minutesFromTop = Math.max(0, Math.min(totalMinutes, (y / rect.height) * totalMinutes));
+                                  const snap = 30;
+                                  const startMin = Math.round((openWindow + minutesFromTop) / snap) * snap;
+                                  const duration = 60;
+                                  let endMin = startMin + duration;
+                                  if (endMin > closeWindow) {
+                                    endMin = closeWindow;
+                                  }
+                                  setCalendarEdit({
+                                    calendarId: sp.calendarId,
+                                    salespersonId: sp.id,
+                                    _dragStart: startMin,
+                                    _dragEnd: endMin
+                                  });
+                                }}
+                                onMouseMove={e => {
+                                  const state = dragStateRef.current;
+                                  if (!state.mode || !state.event || state.event.salespersonId !== sp.id) return;
+                                  applyDragAt(e.clientY);
+                                }}
+                              >
+                                {events.map((ev: any) => {
+                                  const start = ev.start ? new Date(ev.start) : null;
+                                  const end = ev.end ? new Date(ev.end) : null;
+                                  if (!start || !end) return null;
+                                  const startMin = getTzMinutes(start);
+                                  const endMin = getTzMinutes(end);
+                                  const draggedStart = typeof ev._dragStart === "number" ? ev._dragStart : startMin;
+                                  const draggedEnd = typeof ev._dragEnd === "number" ? ev._dragEnd : endMin;
+                                  const renderStart = Math.max(draggedStart, openWindow);
+                                  const renderEnd = Math.min(draggedEnd, closeWindow);
+                                  if (renderEnd <= renderStart) return null;
+                                  const top = ((renderStart - openWindow) / totalMinutes) * 100;
+                                  const height = Math.max(((renderEnd - renderStart) / totalMinutes) * 100, 5);
+                                  const minToLabel = (m: number) => {
+                                    const h = Math.floor(m / 60);
+                                    const mm = m % 60;
+                                    return formatTimeLabel(`${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`, tz);
+                                  };
+                                  const timeLabel = `${minToLabel(renderStart)}–${minToLabel(renderEnd)}`;
+                                  const detail = getEventDetails(ev);
+                                  const eventStyle = getEventStyle(ev);
+                                  return (
+                                    <div
+                                      key={ev.id}
+                                      data-cal-event
+                                      className={`absolute left-2 right-2 border rounded px-2 py-1 text-xs overflow-hidden cursor-pointer ${
+                                        ev.readOnly ? "bg-gray-100 text-gray-700 border-gray-200" : ""
+                                      }`}
+                                      style={{ top: `${top}%`, height: `${height}%`, ...(eventStyle ?? {}) }}
+                                      title={detail || ev.summary}
+                                      onMouseDown={e => {
+                                        e.stopPropagation();
+                                        if (ev.readOnly) return;
+                                        if (e.button !== 0) return;
+                                        dragStateRef.current = {
+                                          mode: "move",
+                                          event: ev,
+                                          startY: e.clientY,
+                                          origStartMin: startMin,
+                                          origEndMin: endMin,
+                                          openWindow,
+                                          closeWindow
+                                        };
+                                      }}
+                                    >
+                                      <div className="flex items-start justify-between gap-2">
+                                        <div className="min-w-0">
+                                          <div className="font-medium truncate">{getEventTitle(ev)}</div>
+                                          <div className="text-[10px] opacity-80 mt-1">{timeLabel}</div>
+                                          {detail ? (
+                                            <div className="text-[10px] opacity-70 mt-1 truncate">
+                                              {detail}
+                                            </div>
+                                          ) : null}
+                                        </div>
+                                        {ev.readOnly ? null : (
+                                          <button
+                                            className="text-[10px] px-1.5 py-0.5 rounded border border-blue-300 bg-white/70 hover:bg-white"
+                                            onMouseDown={e => {
+                                              e.stopPropagation();
+                                              e.preventDefault();
+                                            }}
+                                            onClick={e => {
+                                              e.stopPropagation();
+                                              if (Date.now() < dragGuardRef.current.blockUntil) return;
+                                              setCalendarEdit({ ...ev, calendarId: ev.calendarId });
+                                            }}
+                                          >
+                                            Edit
+                                          </button>
+                                        )}
+                                      </div>
+                                      {ev.readOnly ? null : (
+                                        <div
+                                          className="absolute left-0 right-0 bottom-0 h-2 cursor-ns-resize bg-blue-200/60"
+                                          onMouseDown={e => {
+                                            e.stopPropagation();
+                                            if (e.button !== 0) return;
+                                            dragStateRef.current = {
+                                              mode: "resize",
+                                              event: ev,
+                                              startY: e.clientY,
+                                              origStartMin: startMin,
+                                              origEndMin: endMin,
+                                              openWindow,
+                                              closeWindow
+                                            };
+                                          }}
+                                        />
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
                     </div>
                   );
@@ -6233,47 +6308,100 @@ export default function Home() {
                             {closed ? " • Closed" : ""}
                           </div>
                           {!closed ? (
-                            <div className="grid mt-2" style={{ gridTemplateColumns: `repeat(${salespeople.length || 1}, minmax(180px, 1fr))` }}>
-                              {salespeople.map((sp: any) => {
-                                const events = calendarEvents.filter((e: any) => {
-                                  if (e.salespersonId !== sp.id) return false;
-                                  if (!e.start) return false;
-                                  const ed = new Date(e.start);
+                            <>
+                              <div className="md:hidden mt-2 space-y-2">
+                                {salespeople.map((sp: any) => {
+                                  const events = calendarEvents
+                                    .filter((e: any) => {
+                                      if (e.salespersonId !== sp.id) return false;
+                                      if (!e.start) return false;
+                                      const ed = new Date(e.start);
+                                      return (
+                                        ed.getFullYear() === d.getFullYear() &&
+                                        ed.getMonth() === d.getMonth() &&
+                                        ed.getDate() === d.getDate()
+                                      );
+                                    })
+                                    .sort((a: any, b: any) => {
+                                      const aAt = a?.start ? new Date(a.start).getTime() : 0;
+                                      const bAt = b?.start ? new Date(b.start).getTime() : 0;
+                                      return aAt - bAt;
+                                    });
                                   return (
-                                    ed.getFullYear() === d.getFullYear() &&
-                                    ed.getMonth() === d.getMonth() &&
-                                    ed.getDate() === d.getDate()
-                                  );
-                                });
-                                return (
-                                  <div key={`${sp.id}-${d.toISOString()}`} className="px-2">
-                                    <div className="text-xs text-gray-500 mb-1">{sp.name}</div>
-                                    <div className="space-y-1">
-                                      {events.length === 0 ? (
-                                        <div className="text-xs text-gray-400">No events</div>
-                                      ) : (
-                                        events.map((ev: any) => (
-                                          <div
-                                            key={ev.id}
-                                            className={`text-xs border rounded px-2 py-1 cursor-pointer ${
-                                              ev.readOnly ? "bg-gray-100 text-gray-700 border-gray-200" : ""
-                                            }`}
-                                            style={getEventStyle(ev)}
-                                            title={getEventDetails(ev) || ev.summary}
-                                            onClick={() => {
-                                              if (ev.readOnly) return;
-                                              setCalendarEdit({ ...ev, calendarId: ev.calendarId });
-                                            }}
-                                          >
-                                            {getEventTitle(ev)}
-                                          </div>
-                                        ))
-                                      )}
+                                    <div key={`mobile-week-${sp.id}-${d.toISOString()}`} className="border rounded p-2">
+                                      <div className="text-xs text-gray-500 mb-1">{sp.name}</div>
+                                      <div className="space-y-1">
+                                        {events.length === 0 ? (
+                                          <div className="text-xs text-gray-400">No events</div>
+                                        ) : (
+                                          events.map((ev: any) => (
+                                            <div
+                                              key={ev.id}
+                                              className={`text-xs border rounded px-2 py-1.5 ${
+                                                ev.readOnly ? "bg-gray-100 text-gray-700 border-gray-200" : ""
+                                              }`}
+                                              style={getEventStyle(ev)}
+                                              title={getEventDetails(ev) || ev.summary}
+                                              onClick={() => {
+                                                if (ev.readOnly) return;
+                                                setCalendarEdit({ ...ev, calendarId: ev.calendarId });
+                                              }}
+                                            >
+                                              <div className="font-medium">{getEventTitle(ev)}</div>
+                                              <div className="opacity-80 mt-0.5">{getEventTimeRangeLabel(ev, tz)}</div>
+                                            </div>
+                                          ))
+                                        )}
+                                      </div>
                                     </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
+                                  );
+                                })}
+                              </div>
+                              <div
+                                className="hidden md:grid mt-2"
+                                style={{ gridTemplateColumns: `repeat(${salespeople.length || 1}, minmax(180px, 1fr))` }}
+                              >
+                                {salespeople.map((sp: any) => {
+                                  const events = calendarEvents.filter((e: any) => {
+                                    if (e.salespersonId !== sp.id) return false;
+                                    if (!e.start) return false;
+                                    const ed = new Date(e.start);
+                                    return (
+                                      ed.getFullYear() === d.getFullYear() &&
+                                      ed.getMonth() === d.getMonth() &&
+                                      ed.getDate() === d.getDate()
+                                    );
+                                  });
+                                  return (
+                                    <div key={`${sp.id}-${d.toISOString()}`} className="px-2">
+                                      <div className="text-xs text-gray-500 mb-1">{sp.name}</div>
+                                      <div className="space-y-1">
+                                        {events.length === 0 ? (
+                                          <div className="text-xs text-gray-400">No events</div>
+                                        ) : (
+                                          events.map((ev: any) => (
+                                            <div
+                                              key={ev.id}
+                                              className={`text-xs border rounded px-2 py-1 cursor-pointer ${
+                                                ev.readOnly ? "bg-gray-100 text-gray-700 border-gray-200" : ""
+                                              }`}
+                                              style={getEventStyle(ev)}
+                                              title={getEventDetails(ev) || ev.summary}
+                                              onClick={() => {
+                                                if (ev.readOnly) return;
+                                                setCalendarEdit({ ...ev, calendarId: ev.calendarId });
+                                              }}
+                                            >
+                                              {getEventTitle(ev)}
+                                            </div>
+                                          ))
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </>
                           ) : null}
                         </div>
                       );
@@ -6284,16 +6412,16 @@ export default function Home() {
               )}
             </div>
             {calendarEdit ? (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-                <div className="bg-white w-full max-w-xl rounded-lg shadow-lg p-4 space-y-4">
+            <div className="fixed inset-0 z-50 flex items-start md:items-center justify-center bg-black/30 p-3 overflow-y-auto">
+                <div className="bg-white w-full max-w-xl rounded-lg shadow-lg p-4 space-y-4 max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
                   <div className="flex items-center justify-between">
                     <div className="text-lg font-semibold">Edit appointment</div>
                     <button className="px-2 py-1 border rounded text-sm" onClick={() => setCalendarEdit(null)}>
                       Close
                     </button>
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="col-span-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="sm:col-span-2">
                       <div className="text-xs text-gray-500 mb-1">Calendar owner</div>
                       <select
                         className="border rounded px-3 py-2 text-sm w-full"
@@ -6309,7 +6437,7 @@ export default function Home() {
                       </select>
                     </div>
                     <input
-                      className="border rounded px-3 py-2 text-sm col-span-2"
+                      className="border rounded px-3 py-2 text-sm sm:col-span-2"
                       placeholder="Title"
                       value={calendarEditForm.summary}
                       onChange={e => setCalendarEditForm({ ...calendarEditForm, summary: e.target.value })}
@@ -6339,7 +6467,7 @@ export default function Home() {
                       onChange={e => setCalendarEditForm({ ...calendarEditForm, endTime: e.target.value })}
                     />
                     <select
-                      className="border rounded px-3 py-2 text-sm col-span-2"
+                      className="border rounded px-3 py-2 text-sm sm:col-span-2"
                       value={calendarEditForm.status}
                       onChange={e => setCalendarEditForm({ ...calendarEditForm, status: e.target.value })}
                     >
@@ -6347,7 +6475,7 @@ export default function Home() {
                       <option value="cancelled">Cancelled</option>
                       <option value="no_show">No show</option>
                     </select>
-                    <div className="col-span-2">
+                    <div className="sm:col-span-2">
                       <div className="text-xs text-gray-500 mb-1">Color</div>
                       <div className="flex flex-wrap gap-2">
                         <button
@@ -6370,14 +6498,14 @@ export default function Home() {
                       </div>
                     </div>
                     <textarea
-                      className="border rounded px-3 py-2 text-sm col-span-2"
+                      className="border rounded px-3 py-2 text-sm sm:col-span-2"
                       placeholder="Reason (optional)"
                       rows={3}
                       value={calendarEditForm.reason}
                       onChange={e => setCalendarEditForm({ ...calendarEditForm, reason: e.target.value })}
                     />
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-col sm:flex-row gap-2">
                     <button className="px-3 py-2 border rounded text-sm" onClick={saveCalendarEdit}>
                       Save
                     </button>
