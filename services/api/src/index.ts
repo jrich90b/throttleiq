@@ -1444,6 +1444,11 @@ function buildBookingUrlForLead(baseUrl: string | undefined | null, conv: any): 
   if (!raw) return null;
   try {
     const url = new URL(raw);
+    const proto = String(url.protocol ?? "").toLowerCase();
+    if (proto !== "http:" && proto !== "https:") return null;
+    const pathLower = String(url.pathname ?? "").toLowerCase();
+    if (/\/(?:api\/)?auth\/me\/?$/.test(pathLower)) return null;
+    if (/^\/api\//.test(pathLower)) return null;
     const type = inferAppointmentTypeFromConv(conv);
     const firstName = conv?.lead?.firstName ?? "";
     const lastName = conv?.lead?.lastName ?? "";
@@ -1458,7 +1463,7 @@ function buildBookingUrlForLead(baseUrl: string | undefined | null, conv: any): 
     if (leadKey) url.searchParams.set("leadKey", leadKey);
     return url.toString();
   } catch {
-    return raw;
+    return null;
   }
 }
 
@@ -8230,7 +8235,27 @@ app.post("/dealer-profile/logo", requireManager, upload.single("file"), async (r
 
 app.put("/dealer-profile", requireManager, async (req, res) => {
   console.log("[dealer-profile] save start");
-  const saved = await saveDealerProfile(req.body ?? {});
+  const incoming = { ...(req.body ?? {}) } as Record<string, any>;
+  const bookingUrlRaw = String(incoming.bookingUrl ?? "").trim();
+  if (bookingUrlRaw) {
+    try {
+      const u = new URL(bookingUrlRaw);
+      const proto = String(u.protocol ?? "").toLowerCase();
+      const pathLower = String(u.pathname ?? "").toLowerCase();
+      const invalid =
+        (proto !== "http:" && proto !== "https:") ||
+        /\/(?:api\/)?auth\/me\/?$/.test(pathLower) ||
+        /^\/api\//.test(pathLower);
+      if (invalid) {
+        delete incoming.bookingUrl;
+      } else {
+        incoming.bookingUrl = u.toString();
+      }
+    } catch {
+      delete incoming.bookingUrl;
+    }
+  }
+  const saved = await saveDealerProfile(incoming);
   console.log("[dealer-profile] save done");
   res.json({ ok: true, profile: saved });
 });
@@ -9328,6 +9353,75 @@ function normalizeContactCondition(value?: string | null): string {
   return t;
 }
 
+function findConversationForContact(input: {
+  conversationId?: string;
+  leadKey?: string;
+  phone?: string;
+  email?: string;
+}): any | null {
+  const phone = input.phone ? normalizePhone(String(input.phone)) : "";
+  const email = normalizeContactText(input.email);
+  const candidates = Array.from(
+    new Set(
+      [input.conversationId, input.leadKey, phone, email]
+        .map(v => String(v ?? "").trim())
+        .filter(Boolean)
+    )
+  );
+  for (const key of candidates) {
+    const conv = getConversation(key);
+    if (conv) return conv;
+  }
+  const all = listConversations() as any[];
+  return (
+    all.find(conv => {
+      const leadPhone = normalizePhone(String(conv?.lead?.phone ?? ""));
+      const leadEmail = normalizeContactText(conv?.lead?.email);
+      const leadKey = String(conv?.leadKey ?? "").trim();
+      if (phone && (leadPhone === phone || leadKey === phone)) return true;
+      if (email && (leadEmail === email || leadKey === email)) return true;
+      return false;
+    }) ?? null
+  );
+}
+
+function syncContactIntoConversation(contact: {
+  id?: string;
+  leadKey?: string;
+  conversationId?: string;
+  phone?: string;
+  email?: string;
+  firstName?: string;
+  lastName?: string;
+  name?: string;
+}): any {
+  const conv = findConversationForContact(contact);
+  if (!conv) return contact;
+  updateConversationContact(conv, {
+    phone: contact.phone,
+    email: contact.email,
+    firstName: contact.firstName,
+    lastName: contact.lastName,
+    name: contact.name
+  });
+  saveConversation(conv);
+  const contactId = String(contact.id ?? "").trim();
+  if (
+    contactId &&
+    (String(contact.conversationId ?? "") !== String(conv.id ?? "") ||
+      String(contact.leadKey ?? "") !== String(conv.leadKey ?? ""))
+  ) {
+    const patched = updateContact(contactId, {
+      conversationId: conv.id,
+      leadKey: conv.leadKey
+    });
+    if (patched) {
+      return patched;
+    }
+  }
+  return contact;
+}
+
 function buildContactsView() {
   return listContacts().map(c => {
     const convId = c.conversationId ?? c.leadKey;
@@ -9428,7 +9522,7 @@ app.post("/contacts", (req, res) => {
     return res.status(400).json({ ok: false, error: "Phone or email required" });
   }
   const leadKey = phone || email;
-  const contact = upsertContact({
+  let contact = upsertContact({
     leadKey,
     conversationId: leadKey,
     firstName,
@@ -9437,6 +9531,7 @@ app.post("/contacts", (req, res) => {
     phone,
     email
   });
+  contact = syncContactIntoConversation(contact);
   return res.json({ ok: true, contact });
 });
 
@@ -9496,7 +9591,7 @@ app.post("/contacts/import", requireManager, (req, res) => {
     const email = String(row?.email ?? "").trim() || undefined;
     if (!phone && !email) continue;
     const leadKey = phone ? normalizePhone(phone) : email;
-    const contact = upsertContact({
+    let contact = upsertContact({
       leadKey,
       conversationId: leadKey,
       firstName,
@@ -9505,6 +9600,7 @@ app.post("/contacts/import", requireManager, (req, res) => {
       phone,
       email
     });
+    contact = syncContactIntoConversation(contact);
     importedIds.push(contact.id);
   }
 
@@ -9605,20 +9701,9 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
 });
 
 app.patch("/contacts/:id", (req, res) => {
-  const updated = updateContact(req.params.id, req.body ?? {});
+  let updated = updateContact(req.params.id, req.body ?? {});
   if (!updated) return res.status(404).json({ ok: false, error: "Not found" });
-  const convId = updated.conversationId ?? updated.leadKey ?? "";
-  const conv = convId ? getConversation(convId) : null;
-  if (conv) {
-    updateConversationContact(conv, {
-      phone: updated.phone,
-      email: updated.email,
-      firstName: updated.firstName,
-      lastName: updated.lastName,
-      name: updated.name
-    });
-    saveConversation(conv);
-  }
+  updated = syncContactIntoConversation(updated);
   res.json({ ok: true, contact: updated });
 });
 
