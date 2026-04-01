@@ -1852,6 +1852,23 @@ const FOLLOW_UP_MESSAGES = [
   "Still thinking it over {name}? If you want to stop in{labelClause}, tell me a good day and I’ll take care of the rest."
 ];
 
+type WalkInCommentFollowUpCtx = {
+  name: string;
+  agent: string;
+  dealerName: string;
+  comment: string;
+  label: string;
+};
+
+const buildWalkInCommentFollowUp = ({
+  name,
+  agent,
+  dealerName,
+  comment,
+  label
+}: WalkInCommentFollowUpCtx) =>
+  `Hi ${name} — this is ${agent} at ${dealerName}. You mentioned "${comment}". I’ll reach back when the weather looks better and we can talk about ${label}.`;
+
 const FOLLOW_UP_VARIANTS_WITH_SLOTS: string[] = [
   "Hi {name}, it’s {agent} again. Just wanted to see if you caught my last message{labelClause}. If you want to stop by, I have {a} or {b} open. Which works best?{extraLine}",
   "Hi {name} — {agent} again. Any thoughts on{label}? If stopping in helps, I have {a} or {b} open. Which works better?{extraLine}",
@@ -6751,6 +6768,16 @@ async function processDueFollowUps() {
       modelYear,
       trade: tradeName
     };
+    const walkInComment = String(conv.lead?.walkInComment ?? "").trim();
+    const walkInCommentLabel = labelWithThe.trim() || "the bike";
+    const canUseWalkInComment =
+      !isPostSale &&
+      cadence.stepIndex === 0 &&
+      !conv.lead?.walkInCommentUsedAt &&
+      !!walkInComment &&
+      cadence.kind !== "long_term" &&
+      !isTradeNoInterest &&
+      !isSellMyBikeLead;
     if (!isPostSale && !isTradeNoInterest && !isSellMyBikeLead && conv.engagement?.at && cadence.kind !== "engaged") {
       cadence.kind = "engaged";
     }
@@ -6983,6 +7010,20 @@ async function processDueFollowUps() {
       const late = await buildLateFollowUp(conv, cadence.stepIndex, dealerProfile);
       message = late.body;
       mediaUrls = late.mediaUrls;
+    }
+    if (canUseWalkInComment) {
+      message = buildWalkInCommentFollowUp({
+        name: firstName,
+        agent: agentName,
+        dealerName,
+        comment: walkInComment,
+        label: walkInCommentLabel
+      });
+      const commentUsedAt = nowIso();
+      conv.lead = conv.lead ?? {};
+      conv.lead.walkInCommentUsedAt = commentUsedAt;
+      conv.updatedAt = commentUsedAt;
+      saveConversation(conv);
     }
     if (
       !isPostSale &&

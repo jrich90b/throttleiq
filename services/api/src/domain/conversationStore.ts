@@ -246,6 +246,8 @@ export type LeadProfile = {
   sellOptionUpdatedAt?: string;
   sourceId?: number;
   walkIn?: boolean;
+  walkInComment?: string;
+  walkInCommentUsedAt?: string;
   vehicle?: {
     stockId?: string;
     vin?: string;

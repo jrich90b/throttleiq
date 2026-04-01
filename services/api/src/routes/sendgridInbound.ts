@@ -1689,6 +1689,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         }
       } catch {}
     }
+    if (!conv.lead) {
+      conv.lead = {};
+    }
+    if (walkInCleanedComment) {
+      conv.lead.walkInComment = walkInCleanedComment;
+      conv.lead.walkInCommentUsedAt = undefined;
+      conv.updatedAt = new Date().toISOString();
+      saveConversation(conv);
+    }
     let tail = "I’ll keep an eye out and let you know if one comes in.";
     if (modelLabel) {
       const usedLabel = wantsUsed ? `used ${rangeLabel}${modelLabel}` : `${rangeLabel}${modelLabel}`;
