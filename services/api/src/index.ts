@@ -6504,11 +6504,11 @@ function extractWeatherFollowUpWindow(comment: string, now: Date, timeZone: stri
   const t = String(comment ?? "").toLowerCase().trim();
   if (!t) return null;
   const hasWeatherCue =
-    /\b(weather|nice day|warmer|warm up|when it warms|when weather improves|weather looks better|better weather)\b/.test(
+    /\b(weather|forecast|nice day|warmer|warm up|when it warms|when weather improves|weather looks better|better weather|once it warms)\b/.test(
       t
     );
   const hasTimingCue =
-    /\b(next week|this week|this weekend|next weekend|end of next week|later next week|friday|saturday|sunday|monday|tuesday|wednesday|thursday|tomorrow)\b/.test(
+    /\b(next week|this week|this weekend|next weekend|end of next week|later next week|friday|saturday|sunday|monday|tuesday|wednesday|thursday|tomorrow|month|early|mid|late|between|week of|by|after|jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\b/.test(
       t
     );
   if (!hasWeatherCue || !hasTimingCue) return null;
@@ -6517,12 +6517,199 @@ function extractWeatherFollowUpWindow(comment: string, now: Date, timeZone: stri
   if (/\b(one|1)\s+day\s+before\b/.test(t)) leadDaysPreferred = 1;
   if (/\b(two|2|couple)\s+days?\s+before\b/.test(t)) leadDaysPreferred = 2;
   if (/\ba day or two\b|\b1 or 2 days\b/.test(t)) leadDaysPreferred = 2;
+  if (/\b(day before|night before)\b/.test(t)) leadDaysPreferred = 1;
 
   const todayParts = zonedDateParts(now, timeZone);
   const todayYmd = ymd(todayParts);
   const mondayOffset = todayParts.weekday === 0 ? -6 : 1 - todayParts.weekday;
   const mondayThisWeek = addDaysYmd(todayYmd, mondayOffset);
   const mondayNextWeek = addDaysYmd(mondayThisWeek, 7);
+  const monthByName: Record<string, number> = {
+    january: 1,
+    jan: 1,
+    february: 2,
+    feb: 2,
+    march: 3,
+    mar: 3,
+    april: 4,
+    apr: 4,
+    may: 5,
+    june: 6,
+    jun: 6,
+    july: 7,
+    jul: 7,
+    august: 8,
+    aug: 8,
+    september: 9,
+    sept: 9,
+    sep: 9,
+    october: 10,
+    oct: 10,
+    november: 11,
+    nov: 11,
+    december: 12,
+    dec: 12
+  };
+  const weekdayIndexByName: Record<string, number> = {
+    sunday: 0,
+    sun: 0,
+    monday: 1,
+    mon: 1,
+    tuesday: 2,
+    tue: 2,
+    tues: 2,
+    wednesday: 3,
+    wed: 3,
+    thursday: 4,
+    thu: 4,
+    thur: 4,
+    thurs: 4,
+    friday: 5,
+    fri: 5,
+    saturday: 6,
+    sat: 6
+  };
+
+  const monthStartEnd = (year: number, month: number) => {
+    const start = `${year}-${String(month).padStart(2, "0")}-01`;
+    const endDate = new Date(Date.UTC(year, month, 0));
+    const end = `${year}-${String(month).padStart(2, "0")}-${String(endDate.getUTCDate()).padStart(2, "0")}`;
+    return { start, end };
+  };
+
+  const parseMonthDay = (monthToken: string, dayRaw: string): string | null => {
+    const month = monthByName[monthToken];
+    if (!month) return null;
+    const day = Number(dayRaw);
+    if (!Number.isFinite(day) || day < 1 || day > 31) return null;
+    let year = todayParts.year;
+    const candidate = new Date(Date.UTC(year, month - 1, day));
+    const todayDate = new Date(Date.UTC(todayParts.year, todayParts.month - 1, todayParts.day));
+    if (candidate.getTime() < todayDate.getTime()) year += 1;
+    return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  };
+
+  const nextWeekdayFrom = (baseYmd: string, targetDow: number, includeToday = false) => {
+    const [y, m, d] = baseYmd.split("-").map(Number);
+    const base = new Date(Date.UTC(y, m - 1, d));
+    const baseDow = base.getUTCDay();
+    let delta = (targetDow - baseDow + 7) % 7;
+    if (!includeToday && delta === 0) delta = 7;
+    return addDaysYmd(baseYmd, delta);
+  };
+
+  const nthWeekOfMonthWindow = (year: number, month: number, nth: number) => {
+    const first = `${year}-${String(month).padStart(2, "0")}-01`;
+    const firstDow = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
+    const mondayOffsetFromFirst = (8 - firstDow) % 7;
+    const firstMonday = addDaysYmd(first, mondayOffsetFromFirst);
+    const start = addDaysYmd(firstMonday, (Math.max(1, nth) - 1) * 7);
+    return { startDate: start, endDate: addDaysYmd(start, 6), leadDaysPreferred };
+  };
+
+  const betweenMonthDays = t.match(
+    /\bbetween\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?\s+(?:and|to|-)\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?\b/
+  );
+  if (betweenMonthDays) {
+    const start = parseMonthDay(betweenMonthDays[1], betweenMonthDays[2]);
+    const end = parseMonthDay(betweenMonthDays[3], betweenMonthDays[4]);
+    if (start && end) {
+      return start <= end
+        ? { startDate: start, endDate: end, leadDaysPreferred }
+        : { startDate: end, endDate: start, leadDaysPreferred };
+    }
+  }
+
+  const betweenSameMonth = t.match(
+    /\bbetween\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?\s+(?:and|to|-)\s+(\d{1,2})(?:st|nd|rd|th)?\b/
+  );
+  if (betweenSameMonth) {
+    const start = parseMonthDay(betweenSameMonth[1], betweenSameMonth[2]);
+    const end = parseMonthDay(betweenSameMonth[1], betweenSameMonth[3]);
+    if (start && end) {
+      return start <= end
+        ? { startDate: start, endDate: end, leadDaysPreferred }
+        : { startDate: end, endDate: start, leadDaysPreferred };
+    }
+  }
+
+  const monthDayPoint = t.match(
+    /\b(?:on|around|about|near|by|after)?\s*(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?\b/
+  );
+  if (monthDayPoint) {
+    const anchor = parseMonthDay(monthDayPoint[1], monthDayPoint[2]);
+    if (anchor) {
+      if (/\bafter\b/.test(t)) return { startDate: anchor, endDate: addDaysYmd(anchor, 7), leadDaysPreferred };
+      if (/\bby\b/.test(t)) return { startDate: addDaysYmd(anchor, -7), endDate: anchor, leadDaysPreferred };
+      return { startDate: addDaysYmd(anchor, -2), endDate: addDaysYmd(anchor, 2), leadDaysPreferred };
+    }
+  }
+
+  const weekOfMonthDay = t.match(
+    /\bweek of\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?\b/
+  );
+  if (weekOfMonthDay) {
+    const anchor = parseMonthDay(weekOfMonthDay[1], weekOfMonthDay[2]);
+    if (anchor) return { startDate: anchor, endDate: addDaysYmd(anchor, 6), leadDaysPreferred };
+  }
+
+  const ordinalWeekOfMonth = t.match(
+    /\b(first|1st|second|2nd|third|3rd|fourth|4th)\s+week(?:\s+of)?\s+(?:this|next)?\s*(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|month)\b/
+  );
+  if (ordinalWeekOfMonth) {
+    const ordMap: Record<string, number> = { first: 1, "1st": 1, second: 2, "2nd": 2, third: 3, "3rd": 3, fourth: 4, "4th": 4 };
+    const nth = ordMap[ordinalWeekOfMonth[1]] ?? 1;
+    const mTok = ordinalWeekOfMonth[2];
+    const month =
+      mTok === "month"
+        ? todayParts.month + (/\bnext month\b/.test(t) ? 1 : 0)
+        : (monthByName[mTok] ?? todayParts.month);
+    const normalizedMonth = month > 12 ? month - 12 : month;
+    const year = month > 12 ? todayParts.year + 1 : todayParts.year;
+    return nthWeekOfMonthWindow(year, normalizedMonth, nth);
+  }
+
+  const earlyMidLateMonth = t.match(/\b(early|mid|middle|late|end of)\s+(next month|this month|month)\b/);
+  if (earlyMidLateMonth) {
+    const phase = earlyMidLateMonth[1];
+    const monthShift = /next month/.test(earlyMidLateMonth[2]) ? 1 : 0;
+    const monthRaw = todayParts.month + monthShift;
+    const month = monthRaw > 12 ? monthRaw - 12 : monthRaw;
+    const year = monthRaw > 12 ? todayParts.year + 1 : todayParts.year;
+    const { start, end } = monthStartEnd(year, month);
+    if (phase === "early") return { startDate: start, endDate: addDaysYmd(start, 9), leadDaysPreferred };
+    if (phase === "mid" || phase === "middle")
+      return { startDate: addDaysYmd(start, 10), endDate: addDaysYmd(start, 20), leadDaysPreferred };
+    if (phase === "late") return { startDate: addDaysYmd(start, 21), endDate: end, leadDaysPreferred };
+    return { startDate: addDaysYmd(start, 24), endDate: end, leadDaysPreferred };
+  }
+
+  const explicitMonthWindow = t.match(
+    /\b(?:in|during|for)\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/
+  );
+  if (explicitMonthWindow) {
+    const month = monthByName[explicitMonthWindow[1]];
+    if (month) {
+      let year = todayParts.year;
+      if (month < todayParts.month) year += 1;
+      const { start, end } = monthStartEnd(year, month);
+      if (/\bearly\b/.test(t)) return { startDate: start, endDate: addDaysYmd(start, 9), leadDaysPreferred };
+      if (/\b(mid|middle)\b/.test(t))
+        return { startDate: addDaysYmd(start, 10), endDate: addDaysYmd(start, 20), leadDaysPreferred };
+      if (/\blate|end of\b/.test(t)) return { startDate: addDaysYmd(start, 21), endDate: end, leadDaysPreferred };
+      return { startDate: start, endDate: end, leadDaysPreferred };
+    }
+  }
+
+  const weekdayMention = t.match(/\b(this|next)?\s*(monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun)\b/);
+  if (weekdayMention) {
+    const targetDow = weekdayIndexByName[weekdayMention[2]];
+    if (targetDow != null) {
+      const base = /\bnext\b/.test(weekdayMention[1] ?? "") ? addDaysYmd(todayYmd, 7) : todayYmd;
+      const day = nextWeekdayFrom(base, targetDow, /\bthis\b/.test(weekdayMention[1] ?? ""));
+      return { startDate: day, endDate: day, leadDaysPreferred };
+    }
+  }
 
   if (/\b(end of next week|late next week|later next week)\b/.test(t)) {
     return {
@@ -6560,6 +6747,21 @@ function extractWeatherFollowUpWindow(comment: string, now: Date, timeZone: stri
       startDate: addDaysYmd(mondayThisWeek, 3),
       endDate: addDaysYmd(mondayThisWeek, 6),
       leadDaysPreferred
+    };
+  }
+  if (/\bthis week\b/.test(t)) {
+    return {
+      startDate: todayYmd,
+      endDate: addDaysYmd(mondayThisWeek, 6),
+      leadDaysPreferred
+    };
+  }
+  if (/\btomorrow\b/.test(t)) {
+    const tomorrow = addDaysYmd(todayYmd, 1);
+    return {
+      startDate: tomorrow,
+      endDate: tomorrow,
+      leadDaysPreferred: 1
     };
   }
   return null;
