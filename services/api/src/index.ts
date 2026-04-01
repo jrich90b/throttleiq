@@ -11119,6 +11119,22 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
 
   const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
   const agentName = dealerProfile?.agentName ?? "Brooke";
+  const firstName = normalizeDisplayCase(conv.lead?.firstName);
+  const hasSentOutbound = (conv.messages ?? []).some(
+    m =>
+      m.direction === "out" &&
+      (m.provider === "twilio" || m.provider === "human" || m.provider === "sendgrid")
+  );
+  const enforceInitialAdfPrefixForRegen = (text: string): string => {
+    const body = String(text ?? "").trim();
+    if (!body) return body;
+    const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
+    const prefix = `${greeting}This is ${agentName} at ${dealerName}.`;
+    if (body.toLowerCase().startsWith(prefix.toLowerCase())) {
+      return body;
+    }
+    return `${prefix} ${body}`.trim();
+  };
   const lastOutboundTextFinal = getLastNonVoiceOutbound(conv)?.body ?? "";
   let reply = ensureUniqueDraft(result.draft, conv, dealerName, agentName);
   reply = applySlotOfferPolicy(conv, reply, lastOutboundTextFinal);
@@ -11150,6 +11166,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   });
   if (lienHolderFallback) {
     reply = lienHolderFallback;
+  }
+  if (event.provider === "sendgrid_adf" && !hasSentOutbound) {
+    reply = enforceInitialAdfPrefixForRegen(reply);
   }
   if (isSlotOfferMessage(reply)) {
     const appointmentType = String(result.requestedAppointmentType ?? "inventory_visit");
