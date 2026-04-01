@@ -727,6 +727,86 @@ function extractYearRangeFromText(text?: string | null): { min: number; max: num
   return null;
 }
 
+function parsePriceToken(raw?: string | null): number | null {
+  if (!raw) return null;
+  const t = String(raw).toLowerCase().replace(/[$,\s]/g, "");
+  const m = t.match(/^(\d+(?:\.\d+)?)(k)?$/);
+  if (!m) return null;
+  const base = Number(m[1]);
+  if (!Number.isFinite(base)) return null;
+  return Math.round((m[2] ? base * 1000 : base));
+}
+
+function extractPriceRangeFromText(text?: string | null): { minPrice?: number; maxPrice?: number } | null {
+  if (!text) return null;
+  const t = String(text).toLowerCase();
+
+  const between = t.match(
+    /\b(?:between|from)\s*\$?\s*(\d+(?:[.,]\d+)?\s*k?)\s*(?:and|to|-)\s*\$?\s*(\d+(?:[.,]\d+)?\s*k?)\b/
+  );
+  if (between) {
+    const a = parsePriceToken(between[1].replace(",", ""));
+    const b = parsePriceToken(between[2].replace(",", ""));
+    if (a && b) {
+      return { minPrice: Math.min(a, b), maxPrice: Math.max(a, b) };
+    }
+  }
+
+  const under = t.match(/\b(?:under|below|up to|max(?:imum)?|no more than)\s*\$?\s*(\d+(?:[.,]\d+)?\s*k?)\b/);
+  if (under) {
+    const p = parsePriceToken(under[1].replace(",", ""));
+    if (p) return { maxPrice: p };
+  }
+
+  const over = t.match(/\b(?:over|above|at least|min(?:imum)?|starting at)\s*\$?\s*(\d+(?:[.,]\d+)?\s*k?)\b/);
+  if (over) {
+    const p = parsePriceToken(over[1].replace(",", ""));
+    if (p) return { minPrice: p };
+  }
+
+  const dollar = t.match(/\$\s*(\d{2,3}(?:,\d{3})+|\d{4,6})\b/);
+  if (dollar) {
+    const p = parsePriceToken(dollar[1].replace(",", ""));
+    if (p) return { maxPrice: p };
+  }
+  return null;
+}
+
+function extractTrimFromText(text?: string | null): string | undefined {
+  if (!text) return undefined;
+  const t = String(text).toLowerCase();
+  const m = t.match(/\b(cvo|st|special|limited|ultra|anniversary|standard|blacked[-\s]?out|chrome)\b/);
+  if (!m) return undefined;
+  const raw = m[1].replace(/\s+/g, " ").trim();
+  if (raw === "blackedout" || raw === "blacked-out") return "blacked-out";
+  return raw;
+}
+
+function extractColorFromText(text?: string | null): string | undefined {
+  if (!text) return undefined;
+  const t = String(text).toLowerCase();
+  const colorTokens = [
+    "black",
+    "white",
+    "red",
+    "blue",
+    "green",
+    "gray",
+    "grey",
+    "silver",
+    "orange",
+    "yellow",
+    "brown",
+    "tan"
+  ];
+  for (const color of colorTokens) {
+    if (new RegExp(`\\b${color}\\b`, "i").test(t)) return color === "grey" ? "gray" : color;
+  }
+  const m = t.match(/\bcolor\s*(?:is|:)?\s*([a-z]+)\b/);
+  if (m?.[1]) return m[1];
+  return undefined;
+}
+
 function extractEmailAddress(input?: string): string | undefined {
   if (!input) return undefined;
   const m = String(input)
@@ -1686,6 +1766,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       /\bnew\b/.test(commentLower) ||
       (/looking for|interested in|want/.test(commentLower) && !wantsUsed);
     const yearRange = extractYearRangeFromText(lead.comment ?? lead.inquiry ?? "");
+    const priceRange = extractPriceRangeFromText(lead.comment ?? lead.inquiry ?? "");
+    const desiredColor = extractColorFromText(lead.comment ?? lead.inquiry ?? "");
+    const desiredTrim = extractTrimFromText(lead.comment ?? lead.inquiry ?? "");
     const rangeLabel = yearRange ? `${yearRange.min}-${yearRange.max} ` : "";
     let hasUsedMatch = false;
     let hasNewMatch = false;
@@ -1826,6 +1909,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         condition: "used",
         yearMin: yearRange?.min,
         yearMax: yearRange?.max,
+        color: desiredColor,
+        trim: desiredTrim,
+        minPrice: priceRange?.minPrice,
+        maxPrice: priceRange?.maxPrice,
         exactness: "model_only",
         status: "active",
         createdAt: new Date().toISOString(),
@@ -1852,6 +1939,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         condition: "new",
         yearMin: yearRange?.min,
         yearMax: yearRange?.max,
+        color: desiredColor,
+        trim: desiredTrim,
+        minPrice: priceRange?.minPrice,
+        maxPrice: priceRange?.maxPrice,
         exactness: "model_only",
         status: "active",
         createdAt: new Date().toISOString(),
