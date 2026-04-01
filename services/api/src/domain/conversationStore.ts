@@ -316,6 +316,9 @@ export type FinanceDocsState = {
   binderRequested?: boolean;
   binderReceived?: boolean;
   binderReceivedAt?: string;
+  licenseRequested?: boolean;
+  licenseReceived?: boolean;
+  licenseReceivedAt?: string;
   completedAt?: string;
   lastInboundMessageId?: string;
 };
@@ -532,9 +535,10 @@ function makeId(prefix: string) {
 function detectFinanceDocRequestSignals(body: string): {
   insuranceRequested: boolean;
   binderRequested: boolean;
+  licenseRequested: boolean;
 } {
   const t = String(body ?? "").toLowerCase();
-  if (!t.trim()) return { insuranceRequested: false, binderRequested: false };
+  if (!t.trim()) return { insuranceRequested: false, binderRequested: false, licenseRequested: false };
   const actionCue =
     /\b(send|text|photo|upload|attach|add|provide|share|submit|once you add|when you add|when you send|when you text)\b/.test(
       t
@@ -543,17 +547,24 @@ function detectFinanceDocRequestSignals(body: string): {
     /\b(insurance card|id card|proof of insurance)\b/.test(t) ||
     (/\binsurance\b/.test(t) && actionCue);
   const binderRequested = /\bbinder\b/.test(t) && (actionCue || /\binsurance\b/.test(t));
-  return { insuranceRequested, binderRequested };
+  const licenseRequested =
+    /\b(driver'?s?\s*licen[cs]e|drivers?\s*license|driver license|d\.?\s*l\.?)\b/.test(t) &&
+    actionCue;
+  return { insuranceRequested, binderRequested, licenseRequested };
 }
 
 function detectFinanceDocMentionSignals(body: string): {
   insuranceMentioned: boolean;
   binderMentioned: boolean;
+  licenseMentioned: boolean;
 } {
   const t = String(body ?? "").toLowerCase();
   return {
     insuranceMentioned: /\b(insurance|insurance card|id card|proof of insurance)\b/.test(t),
-    binderMentioned: /\bbinder\b/.test(t)
+    binderMentioned: /\bbinder\b/.test(t),
+    licenseMentioned: /\b(driver'?s?\s*licen[cs]e|drivers?\s*license|driver license|d\.?\s*l\.?)\b/.test(
+      t
+    )
   };
 }
 
@@ -622,12 +633,13 @@ function ensureTradePayoffState(conv: Conversation): TradePayoffState {
 function recomputeFinanceDocsState(state: FinanceDocsState): void {
   const pendingInsurance = !!state.insuranceRequested && !state.insuranceReceived;
   const pendingBinder = !!state.binderRequested && !state.binderReceived;
-  if (!state.insuranceRequested && !state.binderRequested) {
+  const pendingLicense = !!state.licenseRequested && !state.licenseReceived;
+  if (!state.insuranceRequested && !state.binderRequested && !state.licenseRequested) {
     state.status = "none";
     state.completedAt = undefined;
     return;
   }
-  if (pendingInsurance || pendingBinder) {
+  if (pendingInsurance || pendingBinder || pendingLicense) {
     state.status = "pending";
     state.completedAt = undefined;
     return;
@@ -647,7 +659,7 @@ function normalizeTradePayoffState(state: TradePayoffState): void {
 
 function trackFinanceDocsRequestFromOutbound(conv: Conversation, body: string): void {
   const signal = detectFinanceDocRequestSignals(body);
-  if (!signal.insuranceRequested && !signal.binderRequested) return;
+  if (!signal.insuranceRequested && !signal.binderRequested && !signal.licenseRequested) return;
   const state = ensureFinanceDocsState(conv);
   const now = nowIso();
   if (signal.insuranceRequested) {
@@ -658,6 +670,10 @@ function trackFinanceDocsRequestFromOutbound(conv: Conversation, body: string): 
     state.binderRequested = true;
     state.requestedAt = state.requestedAt ?? now;
   }
+  if (signal.licenseRequested) {
+    state.licenseRequested = true;
+    state.requestedAt = state.requestedAt ?? now;
+  }
   state.updatedAt = now;
   recomputeFinanceDocsState(state);
 }
@@ -665,6 +681,7 @@ function trackFinanceDocsRequestFromOutbound(conv: Conversation, body: string): 
 function inferRequestedFinanceDocsFromRecentOutbound(conv: Conversation): {
   insuranceRequested: boolean;
   binderRequested: boolean;
+  licenseRequested: boolean;
 } {
   const recentOut = [...(conv.messages ?? [])]
     .reverse()
@@ -676,12 +693,14 @@ function inferRequestedFinanceDocsFromRecentOutbound(conv: Conversation): {
     .slice(0, 10);
   let insuranceRequested = false;
   let binderRequested = false;
+  let licenseRequested = false;
   for (const m of recentOut) {
     const signal = detectFinanceDocRequestSignals(String(m.body ?? ""));
     if (signal.insuranceRequested) insuranceRequested = true;
     if (signal.binderRequested) binderRequested = true;
+    if (signal.licenseRequested) licenseRequested = true;
   }
-  return { insuranceRequested, binderRequested };
+  return { insuranceRequested, binderRequested, licenseRequested };
 }
 
 function trackFinanceDocsReceiptFromInbound(conv: Conversation, evt: InboundMessageEvent): void {
@@ -690,10 +709,21 @@ function trackFinanceDocsReceiptFromInbound(conv: Conversation, evt: InboundMess
   const mentions = detectFinanceDocMentionSignals(evt.body);
   const inferredRequest = inferRequestedFinanceDocsFromRecentOutbound(conv);
   const hasTrackedRequest = !!(
-    conv.financeDocs?.insuranceRequested || conv.financeDocs?.binderRequested
+    conv.financeDocs?.insuranceRequested ||
+    conv.financeDocs?.binderRequested ||
+    conv.financeDocs?.licenseRequested
   );
-  const hasInferredRequest = inferredRequest.insuranceRequested || inferredRequest.binderRequested;
-  if (!hasTrackedRequest && !hasInferredRequest && !mentions.insuranceMentioned && !mentions.binderMentioned) {
+  const hasInferredRequest =
+    inferredRequest.insuranceRequested ||
+    inferredRequest.binderRequested ||
+    inferredRequest.licenseRequested;
+  if (
+    !hasTrackedRequest &&
+    !hasInferredRequest &&
+    !mentions.insuranceMentioned &&
+    !mentions.binderMentioned &&
+    !mentions.licenseMentioned
+  ) {
     return;
   }
   const state = ensureFinanceDocsState(conv);
@@ -710,6 +740,11 @@ function trackFinanceDocsReceiptFromInbound(conv: Conversation, evt: InboundMess
     state.requestedAt = state.requestedAt ?? now;
     changed = true;
   }
+  if (inferredRequest.licenseRequested && !state.licenseRequested) {
+    state.licenseRequested = true;
+    state.requestedAt = state.requestedAt ?? now;
+    changed = true;
+  }
 
   if (mentions.insuranceMentioned && !state.insuranceReceived) {
     state.insuranceReceived = true;
@@ -721,8 +756,13 @@ function trackFinanceDocsReceiptFromInbound(conv: Conversation, evt: InboundMess
     state.binderReceivedAt = now;
     changed = true;
   }
+  if (mentions.licenseMentioned && !state.licenseReceived) {
+    state.licenseReceived = true;
+    state.licenseReceivedAt = now;
+    changed = true;
+  }
 
-  if (!mentions.insuranceMentioned && !mentions.binderMentioned) {
+  if (!mentions.insuranceMentioned && !mentions.binderMentioned && !mentions.licenseMentioned) {
     if (state.insuranceRequested && !state.insuranceReceived) {
       state.insuranceReceived = true;
       state.insuranceReceivedAt = now;
@@ -730,6 +770,10 @@ function trackFinanceDocsReceiptFromInbound(conv: Conversation, evt: InboundMess
     } else if (state.binderRequested && !state.binderReceived) {
       state.binderReceived = true;
       state.binderReceivedAt = now;
+      changed = true;
+    } else if (state.licenseRequested && !state.licenseReceived) {
+      state.licenseReceived = true;
+      state.licenseReceivedAt = now;
       changed = true;
     }
   }

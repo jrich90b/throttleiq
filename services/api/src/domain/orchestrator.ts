@@ -1070,7 +1070,9 @@ function stripRescheduleOffers(text: string): string {
 
 function inboundMentionsInsuranceDocs(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
-  return /\b(insurance|binder|id card|insurance card|proof of insurance)\b/.test(t);
+  return /\b(insurance|binder|id card|insurance card|proof of insurance|driver'?s?\s*licen[cs]e|drivers?\s*license|driver license|d\.?\s*l\.?)\b/.test(
+    t
+  );
 }
 
 function recentOutboundRequestedInsuranceDocs(
@@ -1081,7 +1083,9 @@ function recentOutboundRequestedInsuranceDocs(
     .filter(m => m.direction === "out" && String(m.body ?? "").trim().length > 0)
     .slice(0, 8);
   return recentOut.some(m =>
-    /\b(insurance|binder|proof of insurance|e-?sign|documents?)\b/i.test(String(m.body ?? ""))
+    /\b(insurance|binder|proof of insurance|driver'?s?\s*licen[cs]e|drivers?\s*license|driver license|d\.?\s*l\.?|e-?sign|documents?)\b/i.test(
+      String(m.body ?? "")
+    )
   );
 }
 
@@ -1095,6 +1099,20 @@ function recentOutboundRequestedBinder(
   return recentOut.some(m => /\bbinder\b/i.test(String(m.body ?? "")));
 }
 
+function recentOutboundRequestedLicense(
+  history: { direction: "in" | "out"; body: string }[]
+): boolean {
+  const recentOut = [...(history ?? [])]
+    .reverse()
+    .filter(m => m.direction === "out" && String(m.body ?? "").trim().length > 0)
+    .slice(0, 8);
+  return recentOut.some(m =>
+    /\b(driver'?s?\s*licen[cs]e|drivers?\s*license|driver license|d\.?\s*l\.?)\b/i.test(
+      String(m.body ?? "")
+    )
+  );
+}
+
 function resolveFinanceDocPendingState(args: {
   state?: FinanceDocsState | null;
   history: { direction: "in" | "out"; body: string }[];
@@ -1102,34 +1120,48 @@ function resolveFinanceDocPendingState(args: {
 }): {
   insuranceRequested: boolean;
   binderRequested: boolean;
+  licenseRequested: boolean;
   insuranceReceived: boolean;
   binderReceived: boolean;
+  licenseReceived: boolean;
   pendingInsurance: boolean;
   pendingBinder: boolean;
+  pendingLicense: boolean;
 } {
   const mentionsInsurance = /\b(insurance|insurance card|id card|proof of insurance)\b/i.test(
     args.inboundBody
   );
   const mentionsBinder = /\bbinder\b/i.test(args.inboundBody);
+  const mentionsLicense = /\b(driver'?s?\s*licen[cs]e|drivers?\s*license|driver license|d\.?\s*l\.?)\b/i.test(
+    args.inboundBody
+  );
 
   const insuranceRequested = !!(
     args.state?.insuranceRequested || recentOutboundRequestedInsuranceDocs(args.history)
   );
   const binderRequested = !!(args.state?.binderRequested || recentOutboundRequestedBinder(args.history));
+  const licenseRequested = !!(
+    args.state?.licenseRequested || recentOutboundRequestedLicense(args.history)
+  );
 
   const insuranceReceived = !!(args.state?.insuranceReceived || (mentionsInsurance && insuranceRequested));
   const binderReceived = !!(args.state?.binderReceived || (mentionsBinder && binderRequested));
+  const licenseReceived = !!(args.state?.licenseReceived || (mentionsLicense && licenseRequested));
 
   const pendingInsurance = insuranceRequested && !insuranceReceived;
   const pendingBinder = binderRequested && !binderReceived;
+  const pendingLicense = licenseRequested && !licenseReceived;
 
   return {
     insuranceRequested,
     binderRequested,
+    licenseRequested,
     insuranceReceived,
     binderReceived,
+    licenseReceived,
     pendingInsurance,
-    pendingBinder
+    pendingBinder,
+    pendingLicense
   };
 }
 
@@ -1216,24 +1248,29 @@ export async function orchestrateInbound(
     (inboundMentionsInsuranceDocs(event.body) ||
       recentOutboundRequestedInsuranceDocs(history ?? []) ||
       !!ctx?.financeDocs?.insuranceRequested ||
-      !!ctx?.financeDocs?.binderRequested)
+      !!ctx?.financeDocs?.binderRequested ||
+      !!ctx?.financeDocs?.licenseRequested)
   ) {
     const docs = resolveFinanceDocPendingState({
       state: ctx?.financeDocs ?? null,
       history: history ?? [],
       inboundBody: String(event.body ?? "")
     });
+    const pendingLabels: string[] = [];
+    if (docs.pendingInsurance) pendingLabels.push("insurance card");
+    if (docs.pendingBinder) pendingLabels.push("binder");
+    if (docs.pendingLicense) pendingLabels.push("driver's license");
+    const formatLabelList = (items: string[]) => {
+      if (items.length === 0) return "";
+      if (items.length === 1) return items[0];
+      if (items.length === 2) return `${items[0]} and ${items[1]}`;
+      return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+    };
     let draft = "Perfect, thank you — we got your insurance document. We’ll send the e-sign documents shortly.";
-    if (docs.pendingInsurance && docs.pendingBinder) {
-      draft =
-        "Perfect, thank you — we got your document. Once you send the insurance card and binder, we’ll send the e-sign documents right away.";
-    } else if (docs.pendingBinder) {
-      draft =
-        "Perfect, thank you — we got the insurance card. Once you send the binder, we’ll send the e-sign documents right away.";
-    } else if (docs.pendingInsurance) {
-      draft =
-        "Perfect, thank you — we got the binder. Once you send the insurance card, we’ll send the e-sign documents right away.";
-    } else if (docs.insuranceRequested || docs.binderRequested) {
+    if (pendingLabels.length > 0) {
+      const pendingText = formatLabelList(pendingLabels);
+      draft = `Perfect, thank you — we got your document. Once you send the ${pendingText}, we’ll send the e-sign documents right away.`;
+    } else if (docs.insuranceRequested || docs.binderRequested || docs.licenseRequested) {
       draft = "Perfect, thank you — we got your documents. We’ll send the e-sign documents shortly.";
     }
     return finalize({
