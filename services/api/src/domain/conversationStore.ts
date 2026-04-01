@@ -1117,7 +1117,9 @@ export function discardPendingDrafts(conv: Conversation, reason?: string) {
   for (let i = 0; i < conv.messages.length; i++) {
     const m = conv.messages[i];
     if (m.direction !== "out") continue;
-    if (m.provider === "human" || m.provider === "twilio") lastSentIdx = i;
+    if (m.provider === "human" || m.provider === "twilio" || m.provider === "sendgrid") {
+      lastSentIdx = i;
+    }
   }
   for (let i = lastSentIdx + 1; i < conv.messages.length; i++) {
     const m = conv.messages[i];
@@ -1142,7 +1144,9 @@ export function getLatestPendingDraft(conv: Conversation): Message | null {
     if (m.direction !== "out") continue;
 
     if (m.provider === "draft_ai" && m.draftStatus !== "stale") lastDraftIdx = i;
-    if (m.provider === "human" || m.provider === "twilio") lastSentIdx = i;
+    if (m.provider === "human" || m.provider === "twilio" || m.provider === "sendgrid") {
+      lastSentIdx = i;
+    }
   }
 
   if (lastDraftIdx > lastSentIdx) return conv.messages[lastDraftIdx] ?? null;

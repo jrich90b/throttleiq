@@ -3587,7 +3587,10 @@ export default function Home() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ clearEmailDraft: messageFilter === "email" })
+          body: JSON.stringify({
+            clearEmailDraft: messageFilter === "email",
+            clearSmsDraft: messageFilter !== "email"
+          })
         }
       );
       const data = await resp.json().catch(() => null);

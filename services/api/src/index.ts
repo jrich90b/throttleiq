@@ -10429,18 +10429,20 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (conv.followUpCadence.kind === "post_sale") return;
     advanceFollowUpCadence(conv, schedulerTimezone);
   };
-  const finalizeManualSendDraftState = (opts?: { clearEmailDraft?: boolean }) => {
-    const pendingDraftIds = new Set(
-      conv.messages
-        .filter(
-          m => m.direction === "out" && m.provider === "draft_ai" && m.draftStatus !== "stale"
-        )
-        .map(m => m.id)
-    );
-    discardPendingDrafts(conv, "manual_send");
-    if (pendingDraftIds.size > 0) {
-      conv.messages = conv.messages.filter(m => !pendingDraftIds.has(m.id));
-      conv.updatedAt = new Date().toISOString();
+  const finalizeManualSendDraftState = (opts?: { clearEmailDraft?: boolean; preserveSmsDrafts?: boolean }) => {
+    if (!opts?.preserveSmsDrafts) {
+      const pendingDraftIds = new Set(
+        conv.messages
+          .filter(
+            m => m.direction === "out" && m.provider === "draft_ai" && m.draftStatus !== "stale"
+          )
+          .map(m => m.id)
+      );
+      discardPendingDrafts(conv, "manual_send");
+      if (pendingDraftIds.size > 0) {
+        conv.messages = conv.messages.filter(m => !pendingDraftIds.has(m.id));
+        conv.updatedAt = new Date().toISOString();
+      }
     }
     if (opts?.clearEmailDraft) {
       delete conv.emailDraft;
@@ -10588,7 +10590,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       if (!fin.usedDraft) {
         appendOutbound(conv, emailFrom, emailTo!, signed, outboundProvider);
       }
-      finalizeManualSendDraftState({ clearEmailDraft: true });
+      finalizeManualSendDraftState({ clearEmailDraft: true, preserveSmsDrafts: true });
       saveConversation(conv);
       await flushConversationStore();
       if (!hadOutbound) {
@@ -10736,8 +10738,11 @@ app.post("/conversations/:id/draft/clear", async (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
 
-  const clearEmailDraft = req.body?.clearEmailDraft !== false;
-  discardPendingDrafts(conv, "manual_clear");
+  const clearEmailDraft = req.body?.clearEmailDraft === true;
+  const clearSmsDraft = req.body?.clearSmsDraft !== false;
+  if (clearSmsDraft) {
+    discardPendingDrafts(conv, "manual_clear");
+  }
   if (clearEmailDraft) {
     delete conv.emailDraft;
   }
