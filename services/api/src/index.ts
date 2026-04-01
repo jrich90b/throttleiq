@@ -18,10 +18,12 @@ import {
   summarizeSalespersonNoteWithLLM,
   parseBookingIntentWithLLM,
   parseIntentWithLLM,
+  parseUnifiedSemanticSlotsWithLLM,
   parseSemanticSlotsWithLLM,
   parseTradePayoffWithLLM,
   summarizeVoiceTranscriptWithLLM
 } from "./domain/llmDraft.js";
+import type { SemanticSlotParse, TradePayoffParse } from "./domain/llmDraft.js";
 import type { InboundMessageEvent } from "./domain/types.js";
 import { sendgridInboundMiddleware, handleSendgridInbound } from "./routes/sendgridInbound.js";
 import { resolveInventoryUrlByStock } from "./domain/inventoryUrlResolver.js";
@@ -10822,6 +10824,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const memorySummary = conv.memorySummary?.text ?? null;
   const memorySummaryShouldUpdate = shouldUpdateMemorySummary(conv);
   const regenShortAck = isShortAckText(event.body) || isEmojiOnlyText(event.body);
+  const regenUnifiedSlotRouterEnabled = process.env.LLM_UNIFIED_SLOT_ROUTER_ENABLED === "1";
+  const regenUnifiedSlotCompareLogEnabled = process.env.LLM_UNIFIED_SLOT_COMPARE_LOG === "1";
   const regenTradePayoffParserEligible =
     event.provider === "twilio" &&
     process.env.LLM_ENABLED === "1" &&
@@ -10834,15 +10838,77 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     /\b(address|info|information|details)\b/i.test(regenTextLower) ||
     isTradeDialogState(getDialogState(conv)) ||
     !!conv.tradePayoff;
-  const regenTradePayoffParse =
-    regenTradePayoffParserEligible && regenTradePayoffParserHint
-      ? await parseTradePayoffWithLLM({
+  const regenUnifiedSlotParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_UNIFIED_SLOT_PARSER_ENABLED === "1" &&
+    !!process.env.OPENAI_API_KEY &&
+    !regenShortAck;
+  const regenUnifiedSlotParse =
+    regenUnifiedSlotRouterEnabled && regenUnifiedSlotParserEligible && regenTradePayoffParserHint
+      ? await parseUnifiedSemanticSlotsWithLLM({
           text: event.body,
           history,
           lead: conv.lead,
-          tradePayoff: conv.tradePayoff
+          inventoryWatch: conv.inventoryWatch,
+          inventoryWatchPending: conv.inventoryWatchPending,
+          tradePayoff: conv.tradePayoff,
+          dialogState: getDialogState(conv)
         })
       : null;
+  const regenUnifiedTradeParse: TradePayoffParse | null =
+    regenUnifiedSlotParse && regenTradePayoffParserHint
+      ? {
+          payoffStatus: regenUnifiedSlotParse.payoffStatus,
+          needsLienHolderInfo: regenUnifiedSlotParse.needsLienHolderInfo,
+          providesLienHolderInfo: regenUnifiedSlotParse.providesLienHolderInfo,
+          confidence:
+            typeof regenUnifiedSlotParse.payoffConfidence === "number"
+              ? regenUnifiedSlotParse.payoffConfidence
+              : regenUnifiedSlotParse.confidence
+        }
+      : null;
+  let regenTradePayoffParse: TradePayoffParse | null = regenUnifiedSlotRouterEnabled
+    ? regenUnifiedTradeParse
+    : null;
+  if (!regenTradePayoffParse && regenTradePayoffParserEligible && regenTradePayoffParserHint) {
+    regenTradePayoffParse = await parseTradePayoffWithLLM({
+      text: event.body,
+      history,
+      lead: conv.lead,
+      tradePayoff: conv.tradePayoff
+    });
+    if (regenUnifiedSlotRouterEnabled && process.env.DEBUG_UNIFIED_SLOT_PARSER === "1") {
+      console.log("[llm-unified-slot-parse] regen trade fallback to legacy parser");
+    }
+  }
+  if (regenUnifiedSlotRouterEnabled && regenUnifiedSlotCompareLogEnabled && regenTradePayoffParserHint) {
+    const legacyRegenTradeShadow =
+      regenTradePayoffParserEligible &&
+      (!regenTradePayoffParse || regenTradePayoffParse === regenUnifiedTradeParse)
+        ? await parseTradePayoffWithLLM({
+            text: event.body,
+            history,
+            lead: conv.lead,
+            tradePayoff: conv.tradePayoff
+          })
+        : null;
+    if (legacyRegenTradeShadow) {
+      const mismatch =
+        legacyRegenTradeShadow.payoffStatus !== (regenUnifiedTradeParse?.payoffStatus ?? "unknown") ||
+        legacyRegenTradeShadow.needsLienHolderInfo !==
+          !!(regenUnifiedTradeParse?.needsLienHolderInfo ?? false) ||
+        legacyRegenTradeShadow.providesLienHolderInfo !==
+          !!(regenUnifiedTradeParse?.providesLienHolderInfo ?? false);
+      if (mismatch) {
+        console.log("[llm-unified-slot-compare] regen trade mismatch", {
+          text: event.body,
+          unified: regenUnifiedTradeParse,
+          legacy: legacyRegenTradeShadow
+        });
+      }
+    }
+  }
   const regenTradePayoffConfidence =
     typeof regenTradePayoffParse?.confidence === "number" ? regenTradePayoffParse.confidence : 0;
   const regenTradePayoffConfidenceMin = Number(process.env.LLM_TRADE_PAYOFF_CONFIDENCE_MIN ?? 0.72);
@@ -11385,6 +11451,8 @@ if (authToken && signature) {
   const semanticInboundText = String(event.body ?? "");
   const semanticTextLower = semanticInboundText.toLowerCase();
   const semanticShortAck = isShortAckText(semanticInboundText) || isEmojiOnlyText(semanticInboundText);
+  const unifiedSlotRouterEnabled = process.env.LLM_UNIFIED_SLOT_ROUTER_ENABLED === "1";
+  const unifiedSlotCompareLogEnabled = process.env.LLM_UNIFIED_SLOT_COMPARE_LOG === "1";
   const semanticSlotParserEligible =
     event.provider === "twilio" &&
     process.env.LLM_ENABLED === "1" &&
@@ -11403,17 +11471,95 @@ if (authToken && signature) {
     ) ||
     !!conv.inventoryWatch ||
     !!conv.inventoryWatchPending;
-  const semanticSlotParse =
-    semanticSlotParserEligible && semanticSlotParserHint
-      ? await parseSemanticSlotsWithLLM({
+  const semanticTradeHint =
+    /\b(lien|lein|payoff|lender|loan|title|owe|owe on it|bank)\b/i.test(semanticTextLower) ||
+    /\b(address|info|information|details)\b/i.test(semanticTextLower) ||
+    isTradeDialogState(getDialogState(conv)) ||
+    !!conv.tradePayoff;
+  const unifiedSlotParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_UNIFIED_SLOT_PARSER_ENABLED === "1" &&
+    !!process.env.OPENAI_API_KEY &&
+    !semanticShortAck;
+  const unifiedSlotParserHint = semanticSlotParserHint || semanticTradeHint;
+  const unifiedSemanticSlotParse =
+    unifiedSlotRouterEnabled && unifiedSlotParserEligible && unifiedSlotParserHint
+      ? await parseUnifiedSemanticSlotsWithLLM({
           text: semanticInboundText,
           history: buildHistory(conv, 12),
           lead: conv.lead,
           inventoryWatch: conv.inventoryWatch,
           inventoryWatchPending: conv.inventoryWatchPending,
+          tradePayoff: conv.tradePayoff,
           dialogState: getDialogState(conv)
         })
       : null;
+  if (process.env.DEBUG_UNIFIED_SLOT_PARSER === "1" && unifiedSemanticSlotParse) {
+    console.log("[llm-unified-slot-parse]", unifiedSemanticSlotParse);
+  }
+  const unifiedSemanticOnlyParse: SemanticSlotParse | null = unifiedSemanticSlotParse
+    ? {
+        watchAction: unifiedSemanticSlotParse.watchAction,
+        watch: unifiedSemanticSlotParse.watch,
+        departmentIntent: unifiedSemanticSlotParse.departmentIntent,
+        confidence:
+          typeof unifiedSemanticSlotParse.watchConfidence === "number"
+            ? unifiedSemanticSlotParse.watchConfidence
+            : unifiedSemanticSlotParse.confidence
+      }
+    : null;
+  let semanticSlotParse: SemanticSlotParse | null =
+    unifiedSlotRouterEnabled && semanticSlotParserHint && unifiedSemanticOnlyParse
+      ? unifiedSemanticOnlyParse
+      : null;
+  if (!semanticSlotParse && semanticSlotParserEligible && semanticSlotParserHint) {
+    semanticSlotParse = await parseSemanticSlotsWithLLM({
+      text: semanticInboundText,
+      history: buildHistory(conv, 12),
+      lead: conv.lead,
+      inventoryWatch: conv.inventoryWatch,
+      inventoryWatchPending: conv.inventoryWatchPending,
+      dialogState: getDialogState(conv)
+    });
+    if (unifiedSlotRouterEnabled && process.env.DEBUG_UNIFIED_SLOT_PARSER === "1") {
+      console.log("[llm-unified-slot-parse] semantic fallback to legacy parser");
+    }
+  }
+  if (unifiedSlotRouterEnabled && unifiedSlotCompareLogEnabled && semanticSlotParserHint) {
+    const legacySemanticShadow =
+      semanticSlotParserEligible && (!semanticSlotParse || semanticSlotParse === unifiedSemanticOnlyParse)
+        ? await parseSemanticSlotsWithLLM({
+            text: semanticInboundText,
+            history: buildHistory(conv, 12),
+            lead: conv.lead,
+            inventoryWatch: conv.inventoryWatch,
+            inventoryWatchPending: conv.inventoryWatchPending,
+            dialogState: getDialogState(conv)
+          })
+        : null;
+    if (legacySemanticShadow) {
+      const mismatch =
+        legacySemanticShadow.watchAction !== (unifiedSemanticOnlyParse?.watchAction ?? "none") ||
+        legacySemanticShadow.departmentIntent !==
+          (unifiedSemanticOnlyParse?.departmentIntent ?? "none") ||
+        String(legacySemanticShadow.watch?.model ?? "").toLowerCase() !==
+          String(unifiedSemanticOnlyParse?.watch?.model ?? "").toLowerCase() ||
+        String(legacySemanticShadow.watch?.year ?? "").toLowerCase() !==
+          String(unifiedSemanticOnlyParse?.watch?.year ?? "").toLowerCase() ||
+        String(legacySemanticShadow.watch?.color ?? "").toLowerCase() !==
+          String(unifiedSemanticOnlyParse?.watch?.color ?? "").toLowerCase() ||
+        String(legacySemanticShadow.watch?.condition ?? "unknown").toLowerCase() !==
+          String(unifiedSemanticOnlyParse?.watch?.condition ?? "unknown").toLowerCase();
+      if (mismatch) {
+        console.log("[llm-unified-slot-compare] semantic mismatch", {
+          text: semanticInboundText,
+          unified: unifiedSemanticOnlyParse,
+          legacy: legacySemanticShadow
+        });
+      }
+    }
+  }
   if (process.env.DEBUG_SEMANTIC_SLOT_PARSER === "1" && semanticSlotParse) {
     console.log("[llm-semantic-slot-parse]", semanticSlotParse);
   }
@@ -12897,15 +13043,58 @@ if (authToken && signature) {
     /\b(address|info|information|details)\b/i.test(textLower) ||
     isTradeLead ||
     !!conv.tradePayoff;
-  const tradePayoffParse =
-    tradePayoffParserEligible && tradePayoffParserHint
-      ? await parseTradePayoffWithLLM({
-          text: event.body,
-          history: recentHistory,
-          lead: conv.lead,
-          tradePayoff: conv.tradePayoff
-        })
+  const unifiedTradeParse: TradePayoffParse | null =
+    unifiedSemanticSlotParse && tradePayoffParserHint
+      ? {
+          payoffStatus: unifiedSemanticSlotParse.payoffStatus,
+          needsLienHolderInfo: unifiedSemanticSlotParse.needsLienHolderInfo,
+          providesLienHolderInfo: unifiedSemanticSlotParse.providesLienHolderInfo,
+          confidence:
+            typeof unifiedSemanticSlotParse.payoffConfidence === "number"
+              ? unifiedSemanticSlotParse.payoffConfidence
+              : unifiedSemanticSlotParse.confidence
+        }
       : null;
+  let tradePayoffParse: TradePayoffParse | null = unifiedSlotRouterEnabled
+    ? unifiedTradeParse
+    : null;
+  if (!tradePayoffParse && tradePayoffParserEligible && tradePayoffParserHint) {
+    tradePayoffParse = await parseTradePayoffWithLLM({
+      text: event.body,
+      history: recentHistory,
+      lead: conv.lead,
+      tradePayoff: conv.tradePayoff
+    });
+    if (unifiedSlotRouterEnabled && process.env.DEBUG_UNIFIED_SLOT_PARSER === "1") {
+      console.log("[llm-unified-slot-parse] trade fallback to legacy parser");
+    }
+  }
+  if (unifiedSlotRouterEnabled && unifiedSlotCompareLogEnabled && tradePayoffParserHint) {
+    const legacyTradeShadow =
+      tradePayoffParserEligible && (!tradePayoffParse || tradePayoffParse === unifiedTradeParse)
+        ? await parseTradePayoffWithLLM({
+            text: event.body,
+            history: recentHistory,
+            lead: conv.lead,
+            tradePayoff: conv.tradePayoff
+          })
+        : null;
+    if (legacyTradeShadow) {
+      const mismatch =
+        legacyTradeShadow.payoffStatus !== (unifiedTradeParse?.payoffStatus ?? "unknown") ||
+        legacyTradeShadow.needsLienHolderInfo !==
+          !!(unifiedTradeParse?.needsLienHolderInfo ?? false) ||
+        legacyTradeShadow.providesLienHolderInfo !==
+          !!(unifiedTradeParse?.providesLienHolderInfo ?? false);
+      if (mismatch) {
+        console.log("[llm-unified-slot-compare] trade mismatch", {
+          text: event.body,
+          unified: unifiedTradeParse,
+          legacy: legacyTradeShadow
+        });
+      }
+    }
+  }
   if (process.env.DEBUG_TRADE_PAYOFF_PARSER === "1" && tradePayoffParse) {
     console.log("[llm-trade-payoff-parse]", {
       payoffStatus: tradePayoffParse.payoffStatus,

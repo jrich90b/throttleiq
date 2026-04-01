@@ -354,6 +354,23 @@ export type SemanticSlotParse = {
   confidence?: number;
 };
 
+export type UnifiedSemanticSlotParse = {
+  watchAction: "set_watch" | "stop_watch" | "none";
+  watch?: {
+    model?: string | null;
+    year?: string | null;
+    color?: string | null;
+    condition?: "new" | "used" | "any" | "unknown" | null;
+  };
+  departmentIntent: "service" | "parts" | "apparel" | "none";
+  payoffStatus: "unknown" | "no_lien" | "has_lien";
+  needsLienHolderInfo: boolean;
+  providesLienHolderInfo: boolean;
+  watchConfidence?: number;
+  payoffConfidence?: number;
+  confidence?: number;
+};
+
 function safeParseJson(text: string): any | null {
   const raw = String(text ?? "").trim();
   if (!raw) return null;
@@ -1024,7 +1041,8 @@ export async function parseTradePayoffWithLLM(args: {
 }): Promise<TradePayoffParse | null> {
   const useLLM =
     process.env.LLM_ENABLED === "1" &&
-    process.env.LLM_TRADE_PAYOFF_PARSER_ENABLED === "1" &&
+    (process.env.LLM_TRADE_PAYOFF_PARSER_ENABLED === "1" ||
+      process.env.LLM_UNIFIED_SLOT_PARSER_ENABLED === "1") &&
     !!process.env.OPENAI_API_KEY;
   if (!useLLM) return null;
 
@@ -1144,6 +1162,69 @@ export async function parseTradePayoffWithLLM(args: {
   };
 }
 
+export async function parseUnifiedSemanticSlotsWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+  inventoryWatch?: Conversation["inventoryWatch"];
+  inventoryWatchPending?: Conversation["inventoryWatchPending"];
+  tradePayoff?: Conversation["tradePayoff"];
+  dialogState?: string;
+}): Promise<UnifiedSemanticSlotParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_UNIFIED_SLOT_PARSER_ENABLED === "1" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const [semantic, trade] = await Promise.all([
+    parseSemanticSlotsWithLLM({
+      text: args.text,
+      history: args.history,
+      lead: args.lead,
+      inventoryWatch: args.inventoryWatch,
+      inventoryWatchPending: args.inventoryWatchPending,
+      dialogState: args.dialogState
+    }),
+    parseTradePayoffWithLLM({
+      text: args.text,
+      history: args.history,
+      lead: args.lead,
+      tradePayoff: args.tradePayoff
+    })
+  ]);
+  if (!semantic && !trade) return null;
+
+  const watchConfidence =
+    typeof semantic?.confidence === "number" && Number.isFinite(semantic.confidence)
+      ? Math.max(0, Math.min(1, semantic.confidence))
+      : undefined;
+  const payoffConfidence =
+    typeof trade?.confidence === "number" && Number.isFinite(trade.confidence)
+      ? Math.max(0, Math.min(1, trade.confidence))
+      : undefined;
+  const confidence =
+    typeof watchConfidence === "number" && typeof payoffConfidence === "number"
+      ? Math.min(watchConfidence, payoffConfidence)
+      : typeof watchConfidence === "number"
+        ? watchConfidence
+        : typeof payoffConfidence === "number"
+          ? payoffConfidence
+          : undefined;
+
+  return {
+    watchAction: semantic?.watchAction ?? "none",
+    watch: semantic?.watch,
+    departmentIntent: semantic?.departmentIntent ?? "none",
+    payoffStatus: trade?.payoffStatus ?? "unknown",
+    needsLienHolderInfo: !!trade?.needsLienHolderInfo,
+    providesLienHolderInfo: !!trade?.providesLienHolderInfo,
+    watchConfidence,
+    payoffConfidence,
+    confidence
+  };
+}
+
 export async function parseSemanticSlotsWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
@@ -1154,7 +1235,8 @@ export async function parseSemanticSlotsWithLLM(args: {
 }): Promise<SemanticSlotParse | null> {
   const useLLM =
     process.env.LLM_ENABLED === "1" &&
-    process.env.LLM_SEMANTIC_SLOT_PARSER_ENABLED === "1" &&
+    (process.env.LLM_SEMANTIC_SLOT_PARSER_ENABLED === "1" ||
+      process.env.LLM_UNIFIED_SLOT_PARSER_ENABLED === "1") &&
     !!process.env.OPENAI_API_KEY;
   if (!useLLM) return null;
 
