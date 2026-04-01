@@ -1675,17 +1675,31 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       meta.model ??
       "";
     const modelLabel = normalizeVehicleModel(String(modelRaw ?? ""), conv.lead?.vehicle?.make ?? null);
+    const hasWatchIntent =
+      /\b(keep an eye out|watch for|let me know when|notify me when|if you get|when you get|reach out when)\b/.test(
+        commentLower
+      );
     const wantsUsed =
       conv.lead?.vehicle?.condition === "used" ||
       /pre[-\s]?owned|used/.test(commentLower);
+    const wantsNew =
+      /\bnew\b/.test(commentLower) ||
+      (/looking for|interested in|want/.test(commentLower) && !wantsUsed);
     const yearRange = extractYearRangeFromText(lead.comment ?? lead.inquiry ?? "");
     const rangeLabel = yearRange ? `${yearRange.min}-${yearRange.max} ` : "";
     let hasUsedMatch = false;
+    let hasNewMatch = false;
     if (modelLabel) {
       try {
         const matches = await findInventoryMatches({ year: null, model: modelLabel });
         if (matches.length) {
           hasUsedMatch = matches.some(m => String(m.condition ?? "").toLowerCase().includes("used"));
+          hasNewMatch = matches.some(
+            m =>
+              !String(m.condition ?? "")
+                .toLowerCase()
+                .includes("used")
+          );
         }
       } catch {}
     }
@@ -1743,14 +1757,34 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       tail = "I’ll check back next week and we can line up your test ride.";
     }
     if (modelLabel) {
-      const usedLabel = wantsUsed ? `used ${rangeLabel}${modelLabel}` : `${rangeLabel}${modelLabel}`;
-      tail = hasUsedMatch
-        ? `We do have a ${usedLabel} in stock right now — want me to send details?`
-        : `I’ll keep an eye out for a ${usedLabel} and let you know if one comes in.`;
+      if (wantsUsed) {
+        const usedLabel = `used ${rangeLabel}${modelLabel}`;
+        tail = hasUsedMatch
+          ? `We do have a ${usedLabel} in stock right now — want me to send details?`
+          : `I’ll keep an eye out for a ${usedLabel} and let you know if one comes in.`;
+      } else if (wantsNew && hasWatchIntent) {
+        const newLabel = `new ${rangeLabel}${modelLabel}`;
+        tail = hasNewMatch
+          ? `We do have a ${newLabel} in stock right now — want me to send details?`
+          : `I’ll keep an eye out for a ${newLabel} and let you know when one comes in.`;
+      } else {
+        const label = `${rangeLabel}${modelLabel}`;
+        tail = `I’ll keep an eye out for a ${label} and let you know if one comes in.`;
+      }
       if (/(test ride|demo ride)/i.test(walkInCleanedComment) && /weather/i.test(walkInCleanedComment)) {
-        tail = `I’ll reach back when the weather looks better and we can line up your test ride on ${usedLabel}.`;
+        const rideLabel = wantsUsed
+          ? `used ${rangeLabel}${modelLabel}`
+          : wantsNew
+            ? `new ${rangeLabel}${modelLabel}`
+            : `${rangeLabel}${modelLabel}`;
+        tail = `I’ll reach back when the weather looks better and we can line up your test ride on ${rideLabel}.`;
       } else if (/(test ride|demo ride)/i.test(walkInCleanedComment) && /(next week|check back|reach out|follow up)/i.test(walkInCleanedComment)) {
-        tail = `I’ll check back next week and we can line up your test ride on ${usedLabel}.`;
+        const rideLabel = wantsUsed
+          ? `used ${rangeLabel}${modelLabel}`
+          : wantsNew
+            ? `new ${rangeLabel}${modelLabel}`
+            : `${rangeLabel}${modelLabel}`;
+        tail = `I’ll check back next week and we can line up your test ride on ${rideLabel}.`;
       }
     }
     const hasDirectedTestRidePlan = /line up your test ride|reach back when the weather looks better|check back next week/i.test(
@@ -1781,7 +1815,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       tail +
       (addendum ? ` ${addendum}` : "");
 
-    if (modelLabel && wantsUsed && !hasUsedMatch && !(hasDepositSignal || hasSoldSignal || hasCreditCosignerSignal)) {
+    if (
+      modelLabel &&
+      wantsUsed &&
+      !hasUsedMatch &&
+      !(hasDepositSignal || hasSoldSignal || hasCreditCosignerSignal)
+    ) {
       const watch: InventoryWatch = {
         model: modelLabel,
         condition: "used",
@@ -1791,6 +1830,32 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         status: "active",
         createdAt: new Date().toISOString(),
         note: "walk_in"
+      };
+      if (watch.yearMin && watch.yearMax) {
+        watch.exactness = "model_range";
+      }
+      conv.inventoryWatch = watch;
+      conv.inventoryWatches = [watch];
+      conv.inventoryWatchPending = undefined;
+      conv.dialogState = { name: "inventory_watch_active", updatedAt: new Date().toISOString() };
+      setFollowUpMode(conv, "holding_inventory", "inventory_watch");
+      stopFollowUpCadence(conv, "inventory_watch");
+    } else if (
+      modelLabel &&
+      wantsNew &&
+      hasWatchIntent &&
+      !hasNewMatch &&
+      !(hasDepositSignal || hasSoldSignal || hasCreditCosignerSignal)
+    ) {
+      const watch: InventoryWatch = {
+        model: modelLabel,
+        condition: "new",
+        yearMin: yearRange?.min,
+        yearMax: yearRange?.max,
+        exactness: "model_only",
+        status: "active",
+        createdAt: new Date().toISOString(),
+        note: "walk_in_new"
       };
       if (watch.yearMin && watch.yearMax) {
         watch.exactness = "model_range";
