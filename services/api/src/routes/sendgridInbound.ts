@@ -1654,7 +1654,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     });
   }
 
-  const walkInRawComment = String(lead.comment ?? "");
+  const walkInRawComment = String(lead.comment ?? lead.inquiry ?? "");
   const walkInCleanedComment = walkInRawComment.replace(/<br\s*\/?>/gi, " ").replace(/\s+/g, " ").trim();
   const commentLower = walkInCleanedComment.toLowerCase();
   const emailLower = (lead.email ?? "").toLowerCase();
