@@ -1766,6 +1766,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
 
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
+    const shouldStartWalkInCadence =
+      !conv.followUpCadence?.status &&
+      !conv.appointment?.bookedEventId &&
+      conv.followUp?.mode !== "holding_inventory" &&
+      conv.followUp?.mode !== "manual_handoff" &&
+      conv.followUp?.mode !== "paused_indefinite";
+    if (shouldStartWalkInCadence) {
+      const cfg = await getSchedulerConfig();
+      startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
+    }
     return res.status(200).json({
       ok: true,
       parsed: true,
