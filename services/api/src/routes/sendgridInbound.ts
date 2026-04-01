@@ -448,6 +448,11 @@ function buildBookingUrlForLead(baseUrl: string | undefined | null, conv: any): 
   if (!raw) return null;
   try {
     const url = new URL(raw);
+    const proto = String(url.protocol ?? "").toLowerCase();
+    if (proto !== "http:" && proto !== "https:") return null;
+    const pathLower = String(url.pathname ?? "").toLowerCase();
+    if (/\/(?:api\/)?auth\/me\/?$/.test(pathLower)) return null;
+    if (/^\/api\//.test(pathLower)) return null;
     const type = inferAppointmentTypeFromConv(conv);
     const firstName = conv?.lead?.firstName ?? "";
     const lastName = conv?.lead?.lastName ?? "";
@@ -462,7 +467,7 @@ function buildBookingUrlForLead(baseUrl: string | undefined | null, conv: any): 
     if (leadKey) url.searchParams.set("leadKey", leadKey);
     return url.toString();
   } catch {
-    return raw;
+    return null;
   }
 }
 
@@ -1913,7 +1918,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
     maybeAddInitialCallTodo();
-    conv.emailDraft = ack;
+    const emailGreeting = firstName ? `Hi ${firstName},` : "Hi,";
+    conv.emailDraft = [
+      emailGreeting,
+      "",
+      "Thanks for your H-D Meta promo offer request.",
+      `This is ${agentName} at ${dealerName}.`,
+      "I can help with pricing and availability.",
+      "Which model are you interested in, and do you have a preferred trim or color?"
+    ].join("\n");
     return res.status(200).json({
       ok: true,
       parsed: true,
