@@ -1043,10 +1043,54 @@ export async function parseTradePayoffWithLLM(args: {
   if (!parsed) return null;
 
   const payoffRaw = String(parsed.payoff_status ?? "").toLowerCase();
-  const payoffStatus: TradePayoffParse["payoffStatus"] =
+  let payoffStatus: TradePayoffParse["payoffStatus"] =
     payoffRaw === "no_lien" || payoffRaw === "has_lien" ? payoffRaw : "unknown";
-  const needsLienHolderInfo = !!parsed.needs_lien_holder_info;
-  const providesLienHolderInfo = !!parsed.provides_lien_holder_info;
+  let needsLienHolderInfo = !!parsed.needs_lien_holder_info;
+  let providesLienHolderInfo = !!parsed.provides_lien_holder_info;
+  const textLower = text.toLowerCase();
+
+  // Deterministic normalization on top of LLM output to reduce brittle phrasing misses.
+  const explicitNoLien =
+    /\b(no lien|no payoff|no loan|paid off|paid it off|own it|have (the )?title|title in hand)\b/i.test(
+      textLower
+    );
+  const explicitHasLien =
+    /\b(still owe|owe on it|have a lien|has a lien|lien on it|payoff|lender|loan|financed|finance|bank)\b/i.test(
+      textLower
+    );
+  const asksLienHolderInfo =
+    /\b(lien|lein|lender|payoff)\b/i.test(textLower) &&
+    /\b(address|info|information|details|name)\b/i.test(textLower) &&
+    /[?]|\b(do you have|can you|need|what(?:'s| is)|send|provide)\b/i.test(textLower);
+  const providesLienHolderInfoStrong =
+    /\b(lien holder|lender|bank)\s*(is|:)\b/i.test(textLower) ||
+    /\bp\.?\s*o\.?\s*box\b/i.test(textLower) ||
+    /\b\d{5}(?:-\d{4})?\b/.test(textLower) ||
+    /\b\d{1,5}\s+[a-z0-9'.-]+\s+(st|street|ave|avenue|rd|road|blvd|boulevard|dr|drive|ln|lane|ct|court|way)\b/i.test(
+      textLower
+    );
+
+  if (explicitNoLien) {
+    payoffStatus = "no_lien";
+    needsLienHolderInfo = false;
+    providesLienHolderInfo = false;
+  } else {
+    if (explicitHasLien || needsLienHolderInfo || providesLienHolderInfo || asksLienHolderInfo) {
+      payoffStatus = "has_lien";
+    }
+    if (asksLienHolderInfo && !providesLienHolderInfoStrong) {
+      needsLienHolderInfo = true;
+      providesLienHolderInfo = false;
+    }
+    if (providesLienHolderInfo && !providesLienHolderInfoStrong) {
+      providesLienHolderInfo = false;
+    }
+    if (providesLienHolderInfo) {
+      needsLienHolderInfo = false;
+      payoffStatus = "has_lien";
+    }
+  }
+
   const confidence =
     typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
       ? Math.max(0, Math.min(1, parsed.confidence))
