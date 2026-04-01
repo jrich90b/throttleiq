@@ -18,6 +18,7 @@ import {
   summarizeSalespersonNoteWithLLM,
   parseBookingIntentWithLLM,
   parseIntentWithLLM,
+  parseTradePayoffWithLLM,
   summarizeVoiceTranscriptWithLLM
 } from "./domain/llmDraft.js";
 import type { InboundMessageEvent } from "./domain/types.js";
@@ -4742,6 +4743,22 @@ function stringifyPolicyField(value: unknown): string {
   return value.trim();
 }
 
+function isEmojiOnlyText(text: string): boolean {
+  const t = String(text ?? "").trim();
+  return t.length > 0 && /^[\p{Extended_Pictographic}\s]+$/u.test(t);
+}
+
+function isShortAckText(text: string): boolean {
+  const t = String(text ?? "").trim().toLowerCase();
+  if (!t) return false;
+  if (isEmojiOnlyText(t)) return true;
+  if (t.length > 60) return false;
+  if (/[?]/.test(t)) return false;
+  return /\b(thanks|thank you|thanks again|thx|ty|appreciate|got it|sounds good|sounds great|will do|ok|okay|k|kk|cool|perfect|great|all good|no problem|you bet|yep|yup|sure)\b/.test(
+    t
+  );
+}
+
 function formatLienHolderDirectoryEntry(entry: any): string | null {
   if (!entry || typeof entry !== "object") return null;
   const name = stringifyPolicyField(entry.name || entry.lender || entry.bank);
@@ -4794,13 +4811,51 @@ function hasOpenLienHolderInfoTodo(conv: any): boolean {
   });
 }
 
+function applyTradePayoffParseToConversation(
+  conv: any,
+  parse: {
+    payoffStatus?: "unknown" | "no_lien" | "has_lien";
+    needsLienHolderInfo?: boolean;
+    providesLienHolderInfo?: boolean;
+  } | null
+): void {
+  if (!conv || !parse) return;
+  const now = nowIso();
+  const state = conv.tradePayoff ?? { status: "unknown", updatedAt: now };
+  if (parse.payoffStatus === "no_lien") {
+    state.status = "no_lien";
+    state.lastAnsweredAt = now;
+    state.lienHolderNeeded = false;
+  } else if (parse.payoffStatus === "has_lien") {
+    state.status = "has_lien";
+    state.lastAnsweredAt = now;
+  }
+  if (parse.needsLienHolderInfo) {
+    state.status = "has_lien";
+    state.lienHolderNeeded = true;
+  }
+  if (parse.providesLienHolderInfo) {
+    state.status = "has_lien";
+    state.lienHolderProvided = true;
+    state.lienHolderProvidedAt = now;
+    state.lienHolderNeeded = false;
+  }
+  if (state.status === "no_lien") {
+    state.lienHolderNeeded = false;
+    state.lienHolderProvided = false;
+    state.lienHolderProvidedAt = undefined;
+  }
+  state.updatedAt = now;
+  conv.tradePayoff = state;
+}
+
 function maybeEscalateLienHolderInfoRequest(
   conv: any,
   event: InboundMessageEvent,
   profile: any,
-  opts?: { createTodo?: boolean; setManualHandoff?: boolean }
+  opts?: { createTodo?: boolean; setManualHandoff?: boolean; triggered?: boolean }
 ): string | null {
-  if (!isLienHolderInfoRequestText(String(event.body ?? ""))) return null;
+  if (!opts?.triggered && !isLienHolderInfoRequestText(String(event.body ?? ""))) return null;
   const configured = resolveConfiguredLienHolderReply(profile);
   const shouldEscalate = !configured.text || configured.ambiguous;
   if (shouldEscalate && opts?.createTodo) {
@@ -10765,6 +10820,43 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const history = buildHistory(conv, 60);
   const memorySummary = conv.memorySummary?.text ?? null;
   const memorySummaryShouldUpdate = shouldUpdateMemorySummary(conv);
+  const regenShortAck = isShortAckText(event.body) || isEmojiOnlyText(event.body);
+  const regenTradePayoffParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_TRADE_PAYOFF_PARSER_ENABLED === "1" &&
+    !!process.env.OPENAI_API_KEY &&
+    !regenShortAck;
+  const regenTextLower = String(event.body ?? "").toLowerCase();
+  const regenTradePayoffParserHint =
+    /\b(lien|lein|payoff|lender|loan|title|owe|owe on it|bank)\b/i.test(regenTextLower) ||
+    /\b(address|info|information|details)\b/i.test(regenTextLower) ||
+    isTradeDialogState(getDialogState(conv)) ||
+    !!conv.tradePayoff;
+  const regenTradePayoffParse =
+    regenTradePayoffParserEligible && regenTradePayoffParserHint
+      ? await parseTradePayoffWithLLM({
+          text: event.body,
+          history,
+          lead: conv.lead,
+          tradePayoff: conv.tradePayoff
+        })
+      : null;
+  const regenTradePayoffConfidence =
+    typeof regenTradePayoffParse?.confidence === "number" ? regenTradePayoffParse.confidence : 0;
+  const regenTradePayoffConfidenceMin = Number(process.env.LLM_TRADE_PAYOFF_CONFIDENCE_MIN ?? 0.72);
+  const regenTradePayoffAccepted =
+    !!regenTradePayoffParse &&
+    regenTradePayoffConfidence >= regenTradePayoffConfidenceMin &&
+    (regenTradePayoffParse.payoffStatus !== "unknown" ||
+      regenTradePayoffParse.needsLienHolderInfo ||
+      regenTradePayoffParse.providesLienHolderInfo);
+  if (regenTradePayoffAccepted) {
+    applyTradePayoffParseToConversation(conv, regenTradePayoffParse);
+  }
+  const regenNeedsLienHolderInfo = !!(
+    regenTradePayoffAccepted && regenTradePayoffParse?.needsLienHolderInfo
+  );
   const dealerProfile = await getDealerProfile();
   const weatherStatus = await getDealerWeatherStatus(dealerProfile);
 
@@ -10965,6 +11057,14 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   reply = stripNonAdfThanks(reply, event.provider);
   reply = stripCallTimingQuestions(reply);
   reply = stripAgentCallFollowupWhenCustomerWillCall(reply, String(event.body ?? ""));
+  if (regenNeedsLienHolderInfo) {
+    reply =
+      maybeEscalateLienHolderInfoRequest(conv, event, dealerProfile, {
+        createTodo: false,
+        setManualHandoff: false,
+        triggered: true
+      }) ?? buildLienHolderFallbackReply(dealerProfile);
+  }
   const lienHolderFallback = maybeEscalateLienHolderInfoRequest(conv, event, dealerProfile, {
     createTodo: false,
     setManualHandoff: false
@@ -12394,18 +12494,7 @@ if (authToken && signature) {
     );
   const inboundText = String(event.body ?? "").trim();
   const inboundLower = inboundText.toLowerCase();
-  const emojiOnly =
-    inboundText.length > 0 && /^[\p{Extended_Pictographic}\s]+$/u.test(inboundText);
-  const isShortAckText = (text: string): boolean => {
-    const t = text.trim().toLowerCase();
-    if (!t) return false;
-    if (/^[\p{Extended_Pictographic}\s]+$/u.test(t)) return true;
-    if (t.length > 60) return false;
-    if (/[?]/.test(t)) return false;
-    return /\b(thanks|thank you|thanks again|thx|ty|appreciate|got it|sounds good|sounds great|will do|ok|okay|k|kk|cool|perfect|great|all good|no problem|you bet|yep|yup|sure)\b/.test(
-      t
-    );
-  };
+  const emojiOnly = isEmojiOnlyText(inboundText);
   const pickShortAckReply = (text: string): string => {
     const t = text.toLowerCase();
     if (/\b(thanks|thank you|thanks again|thx|ty|appreciate)\b/.test(t)) return "You're welcome!";
@@ -12699,6 +12788,47 @@ if (authToken && signature) {
       callback: intentParse.callback
     });
   }
+  const tradePayoffParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_TRADE_PAYOFF_PARSER_ENABLED === "1" &&
+    !!process.env.OPENAI_API_KEY &&
+    !shortAck;
+  const tradePayoffParserHint =
+    /\b(lien|lein|payoff|lender|loan|title|owe|owe on it|bank)\b/i.test(textLower) ||
+    /\b(address|info|information|details)\b/i.test(textLower) ||
+    isTradeLead ||
+    !!conv.tradePayoff;
+  const tradePayoffParse =
+    tradePayoffParserEligible && tradePayoffParserHint
+      ? await parseTradePayoffWithLLM({
+          text: event.body,
+          history: recentHistory,
+          lead: conv.lead,
+          tradePayoff: conv.tradePayoff
+        })
+      : null;
+  if (process.env.DEBUG_TRADE_PAYOFF_PARSER === "1" && tradePayoffParse) {
+    console.log("[llm-trade-payoff-parse]", {
+      payoffStatus: tradePayoffParse.payoffStatus,
+      needsLienHolderInfo: tradePayoffParse.needsLienHolderInfo,
+      providesLienHolderInfo: tradePayoffParse.providesLienHolderInfo,
+      confidence: tradePayoffParse.confidence
+    });
+  }
+  const tradePayoffConfidence =
+    typeof tradePayoffParse?.confidence === "number" ? tradePayoffParse.confidence : 0;
+  const tradePayoffConfidenceMin = Number(process.env.LLM_TRADE_PAYOFF_CONFIDENCE_MIN ?? 0.72);
+  const tradePayoffAccepted =
+    !!tradePayoffParse &&
+    tradePayoffConfidence >= tradePayoffConfidenceMin &&
+    (tradePayoffParse.payoffStatus !== "unknown" ||
+      tradePayoffParse.needsLienHolderInfo ||
+      tradePayoffParse.providesLienHolderInfo);
+  if (tradePayoffAccepted) {
+    applyTradePayoffParseToConversation(conv, tradePayoffParse);
+  }
+  const llmNeedsLienHolderInfo = !!(tradePayoffAccepted && tradePayoffParse?.needsLienHolderInfo);
   const intentConfidence =
     typeof intentParse?.confidence === "number" ? intentParse.confidence : 0;
   const intentConfidenceMin = Number(process.env.LLM_INTENT_CONFIDENCE_MIN ?? 0.75);
@@ -12720,6 +12850,26 @@ if (authToken && signature) {
     if (!mentionedUser && inboundReferencesOtherPerson(event.body ?? "")) {
       mentionedUser = findUserFromRecentOutbound(conv, usersForMentions);
     }
+  }
+  if (event.provider === "twilio" && llmNeedsLienHolderInfo) {
+    const dealerProfile = await getDealerProfile();
+    const reply =
+      maybeEscalateLienHolderInfoRequest(conv, event, dealerProfile, {
+        createTodo: true,
+        setManualHandoff: true,
+        triggered: true
+      }) ?? buildLienHolderFallbackReply(dealerProfile);
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
   }
   if (event.provider === "twilio" && mentionedUser) {
     const firstName =

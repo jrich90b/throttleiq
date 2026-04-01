@@ -335,6 +335,13 @@ export type DialogActParse = {
   confidence?: number;
 };
 
+export type TradePayoffParse = {
+  payoffStatus: "unknown" | "no_lien" | "has_lien";
+  needsLienHolderInfo: boolean;
+  providesLienHolderInfo: boolean;
+  confidence?: number;
+};
+
 function safeParseJson(text: string): any | null {
   const raw = String(text ?? "").trim();
   if (!raw) return null;
@@ -483,6 +490,21 @@ const DIALOG_ACT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
       type: "string",
       enum: ["model", "budget", "timing", "condition", "other", "none"]
     },
+    confidence: { type: "number" }
+  }
+};
+
+const TRADE_PAYOFF_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["payoff_status", "needs_lien_holder_info", "provides_lien_holder_info", "confidence"],
+  properties: {
+    payoff_status: {
+      type: "string",
+      enum: ["unknown", "no_lien", "has_lien"]
+    },
+    needs_lien_holder_info: { type: "boolean" },
+    provides_lien_holder_info: { type: "boolean" },
     confidence: { type: "number" }
   }
 };
@@ -950,6 +972,90 @@ export async function parseDialogActWithLLM(args: {
     explicitRequest: !!parsed.explicit_request,
     nextAction,
     askFocus,
+    confidence
+  };
+}
+
+export async function parseTradePayoffWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+  tradePayoff?: Conversation["tradePayoff"];
+}): Promise<TradePayoffParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_TRADE_PAYOFF_PARSER_ENABLED === "1" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_TRADE_PAYOFF_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_TRADE_PAYOFF_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_TRADE_PAYOFF_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const existing = args.tradePayoff ?? null;
+  const prompt = [
+    "You are a parser for dealership trade-in lien/payoff messages.",
+    "Return only JSON that matches the provided schema.",
+    "",
+    "Interpret the customer's latest message for trade payoff state.",
+    "Guidelines:",
+    "- payoff_status=no_lien when customer says they own it, have title, no lien/payoff/loan.",
+    "- payoff_status=has_lien when customer indicates they still owe, have a lien/payoff/lender/bank loan.",
+    "- payoff_status=unknown when neither is clearly stated.",
+    "- needs_lien_holder_info=true when customer asks for lien holder/payoff address/info/details/name.",
+    "- provides_lien_holder_info=true when customer provides lender/lien holder/payoff details.",
+    "- Spelling mistakes are common (e.g., lein).",
+    "- If message is unrelated to liens/payoff, return unknown/false/false with lower confidence.",
+    "- confidence is 0..1.",
+    "",
+    `Known lead info: ${JSON.stringify({
+      vehicle: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      tradeVehicle: lead?.tradeVehicle?.model ?? null
+    })}`,
+    `Existing trade payoff state: ${JSON.stringify(existing ?? {})}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> => {
+    return requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "trade_payoff_parser",
+      schema: TRADE_PAYOFF_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 160,
+      debugTag: "llm-trade-payoff-parser",
+      debug
+    });
+  };
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const payoffRaw = String(parsed.payoff_status ?? "").toLowerCase();
+  const payoffStatus: TradePayoffParse["payoffStatus"] =
+    payoffRaw === "no_lien" || payoffRaw === "has_lien" ? payoffRaw : "unknown";
+  const needsLienHolderInfo = !!parsed.needs_lien_holder_info;
+  const providesLienHolderInfo = !!parsed.provides_lien_holder_info;
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    payoffStatus,
+    needsLienHolderInfo,
+    providesLienHolderInfo,
     confidence
   };
 }

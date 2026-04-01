@@ -1,0 +1,47 @@
+[
+  {
+    "id": "no_lien_title_in_hand",
+    "text": "No lien no payoff. I own it and have the title.",
+    "expected": {
+      "payoff_status": "no_lien",
+      "needs_lien_holder_info": false,
+      "provides_lien_holder_info": false
+    }
+  },
+  {
+    "id": "has_lien_still_owe",
+    "text": "I still owe on it through Eaglemark.",
+    "expected": {
+      "payoff_status": "has_lien",
+      "needs_lien_holder_info": false,
+      "provides_lien_holder_info": false
+    }
+  },
+  {
+    "id": "needs_lien_holder_address",
+    "text": "I didn't have the lien holder info. Do you have the lien holder's address?",
+    "expected": {
+      "payoff_status": "has_lien",
+      "needs_lien_holder_info": true,
+      "provides_lien_holder_info": false
+    }
+  },
+  {
+    "id": "provides_lien_holder_details",
+    "text": "Lien holder is Eaglemark Savings Bank, PO Box 277940 Sacramento CA 95827.",
+    "expected": {
+      "payoff_status": "has_lien",
+      "needs_lien_holder_info": false,
+      "provides_lien_holder_info": true
+    }
+  },
+  {
+    "id": "unrelated_message",
+    "text": "I can come by Friday afternoon to look at it.",
+    "expected": {
+      "payoff_status": "unknown",
+      "needs_lien_holder_info": false,
+      "provides_lien_holder_info": false
+    }
+  }
+]
