@@ -1699,25 +1699,35 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       saveConversation(conv);
     }
     let tail = "I’ll keep an eye out and let you know if one comes in.";
+    if (/(test ride|demo ride)/i.test(walkInCleanedComment) && /weather/i.test(walkInCleanedComment)) {
+      tail = "I’ll reach back when the weather looks better and we can line up your test ride.";
+    } else if (/(test ride|demo ride)/i.test(walkInCleanedComment) && /(next week|check back|reach out|follow up)/i.test(walkInCleanedComment)) {
+      tail = "I’ll check back next week and we can line up your test ride.";
+    }
     if (modelLabel) {
       const usedLabel = wantsUsed ? `used ${rangeLabel}${modelLabel}` : `${rangeLabel}${modelLabel}`;
       tail = hasUsedMatch
         ? `We do have a ${usedLabel} in stock right now — want me to send details?`
         : `I’ll keep an eye out for a ${usedLabel} and let you know if one comes in.`;
+      if (/(test ride|demo ride)/i.test(walkInCleanedComment) && /weather/i.test(walkInCleanedComment)) {
+        tail = `I’ll reach back when the weather looks better and we can line up your test ride on ${usedLabel}.`;
+      } else if (/(test ride|demo ride)/i.test(walkInCleanedComment) && /(next week|check back|reach out|follow up)/i.test(walkInCleanedComment)) {
+        tail = `I’ll check back next week and we can line up your test ride on ${usedLabel}.`;
+      }
     }
     const buildWalkInAddendum = () => {
-      if (!cleanedComment) return "";
-      const followUpHint = /(follow\s*up|check\s*back|reach\s*out).{0,40}\b(next\s+week|next\s+month|this\s+week|this\s+month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.exec(cleanedComment);
+      if (!walkInCleanedComment) return "";
+      const followUpHint = /(follow\s*up|check\s*back|reach\s*out).{0,40}\b(next\s+week|next\s+month|this\s+week|this\s+month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.exec(walkInCleanedComment);
       if (followUpHint?.[2]) {
-        return `If you want me to check back ${followUpHint[2].toLowerCase()}, just say the word.`;
+        return `I’ll plan to follow up ${followUpHint[2].toLowerCase()}.`;
       }
-      if (/(thinking it over|think it over|sleep on it|not ready|no rush|not ready yet|just looking)/i.test(cleanedComment)) {
+      if (/(thinking it over|think it over|sleep on it|not ready|no rush|not ready yet|just looking)/i.test(walkInCleanedComment)) {
         return "No rush — I’m here whenever you’re ready.";
       }
-      if (/(order|factory order|place an order|put an order)/i.test(cleanedComment)) {
+      if (/(order|factory order|place an order|put an order)/i.test(walkInCleanedComment)) {
         return "If you decide to place an order, I can help with next steps.";
       }
-      if (/(test ride|demo ride)/i.test(cleanedComment)) {
+      if (/(test ride|demo ride)/i.test(walkInCleanedComment)) {
         return "If you want a test ride, just let me know.";
       }
       return "";
