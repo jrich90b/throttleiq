@@ -1715,6 +1715,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         tail = `I’ll check back next week and we can line up your test ride on ${usedLabel}.`;
       }
     }
+    const hasDirectedTestRidePlan = /line up your test ride|reach back when the weather looks better|check back next week/i.test(
+      tail
+    );
     const buildWalkInAddendum = () => {
       if (!walkInCleanedComment) return "";
       const followUpHint = /(follow\s*up|check\s*back|reach\s*out).{0,40}\b(next\s+week|next\s+month|this\s+week|this\s+month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.exec(walkInCleanedComment);
@@ -1728,6 +1731,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         return "If you decide to place an order, I can help with next steps.";
       }
       if (/(test ride|demo ride)/i.test(walkInCleanedComment)) {
+        if (hasDirectedTestRidePlan) return "";
         return "If you want a test ride, just let me know.";
       }
       return "";
