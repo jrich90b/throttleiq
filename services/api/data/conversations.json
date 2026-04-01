@@ -1,0 +1,1300 @@
+{
+  "version": 1,
+  "savedAt": "2026-03-23T16:09:02.528Z",
+  "conversations": [
+    {
+      "id": "+17165551234",
+      "leadKey": "+17165551234",
+      "mode": "human",
+      "createdAt": "2026-02-22T14:55:02.903Z",
+      "updatedAt": "2026-02-23T11:27:20.465Z",
+      "messages": [
+        {
+          "id": "msg_fbc25edf668c3_1771772102903",
+          "direction": "in",
+          "from": "alex.rider@example.com",
+          "to": "dealership",
+          "body": "WEB LEAD (ADF)\nSource: Room58 - Request details\nRef: TEST999\nName: Alex Rider\nEmail: alex.rider@example.com\nPhone: 7165551234\nStock: T99-26\nVIN: 1HD1TESTVIN999999\nYear: 2026\nVehicle: HARLEY-DAVIDSON Street Glide\n\nInquiry:\nis this available?",
+          "at": "2026-02-22T14:55:02.903Z",
+          "provider": "sendgrid_adf",
+          "providerMessageId": ""
+        },
+        {
+          "id": "msg_c3b8864da527b8_1771772103250",
+          "direction": "out",
+          "from": "dealership",
+          "to": "7165551234",
+          "body": "Hi, this is Brooke at American Harley-Davidson. Thanks for checking — I’m going to have a manager verify availability and follow up shortly.",
+          "at": "2026-02-23T11:27:18.708Z",
+          "provider": "twilio",
+          "providerMessageId": "SMa03521591a7bdf8918b81610bf53594a"
+        },
+        {
+          "id": "msg_16661c8ab27508_1771846040465",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17165551234",
+          "body": "Hi, this is Brooke at American Harley-Davidson. Thanks for checking — I’m going to have a manager verify availability and follow up shortly.",
+          "at": "2026-02-23T11:27:20.465Z",
+          "provider": "twilio",
+          "providerMessageId": "SM5fbafcfc8037d0ebc5d53759a7157fc8"
+        }
+      ],
+      "lead": {
+        "leadRef": "TEST999",
+        "source": "Room58 - Request details",
+        "firstName": "Alex",
+        "lastName": "Rider",
+        "email": "alex.rider@example.com",
+        "phone": "7165551234",
+        "vehicle": {
+          "stockId": "T99-26",
+          "vin": "1HD1TESTVIN999999",
+          "year": "2026",
+          "model": "Street Glide",
+          "description": "HARLEY-DAVIDSON Street Glide",
+          "condition": "new"
+        }
+      },
+      "classification": {
+        "bucket": "inventory_interest",
+        "cta": "check_availability",
+        "channel": "sms",
+        "ruleName": "default"
+      },
+      "followUp": {
+        "mode": "manual_handoff",
+        "reason": "handoff:other",
+        "updatedAt": "2026-02-22T14:55:03.249Z"
+      }
+    },
+    {
+      "id": "+15551230001",
+      "leadKey": "+15551230001",
+      "mode": "suggest",
+      "createdAt": "2026-02-23T11:44:32.988Z",
+      "updatedAt": "2026-02-23T11:44:32.991Z",
+      "messages": [
+        {
+          "id": "msg_d7852c1f801388_1771847072988",
+          "direction": "in",
+          "from": "+15551230001",
+          "to": "+15551230002",
+          "body": "I need to contact Harley-Davidson corporate about a complaint",
+          "at": "2026-02-23T11:44:32.986Z",
+          "provider": "twilio",
+          "providerMessageId": "SMCORP1"
+        },
+        {
+          "id": "msg_8355ef90ae13e8_1771847072991",
+          "direction": "out",
+          "from": "+15551230002",
+          "to": "+15551230001",
+          "body": "Hi, this is Brooke at American Harley-Davidson. We’re a dealership, not Harley‑Davidson corporate. For corporate assistance, please call 800‑258‑2464.",
+          "at": "2026-02-23T11:44:32.991Z",
+          "provider": "twilio"
+        }
+      ],
+      "status": "closed",
+      "closedAt": "2026-02-23T11:44:32.991Z",
+      "closedReason": "corporate"
+    },
+    {
+      "id": "+447700900123",
+      "leadKey": "+447700900123",
+      "mode": "suggest",
+      "createdAt": "2026-02-23T11:44:52.713Z",
+      "updatedAt": "2026-02-23T11:44:52.715Z",
+      "messages": [
+        {
+          "id": "msg_a7cb25e637984_1771847092713",
+          "direction": "in",
+          "from": "+447700900123",
+          "to": "+15551230002",
+          "body": "I want to buy and ship this bike to the UK",
+          "at": "2026-02-23T11:44:52.713Z",
+          "provider": "twilio",
+          "providerMessageId": "SMINTL1"
+        },
+        {
+          "id": "msg_99527d7b994ad_1771847092715",
+          "direction": "out",
+          "from": "+15551230002",
+          "to": "+447700900123",
+          "body": "Hi, this is Brooke at American Harley-Davidson. Thanks for reaching out — due to our dealer agreement, we can only sell to customers within the United States.",
+          "at": "2026-02-23T11:44:52.715Z",
+          "provider": "twilio"
+        }
+      ],
+      "status": "closed",
+      "closedAt": "2026-02-23T11:44:52.715Z",
+      "closedReason": "international"
+    },
+    {
+      "id": "+15551239999",
+      "leadKey": "+15551239999",
+      "mode": "human",
+      "createdAt": "2026-02-25T16:10:43.351Z",
+      "updatedAt": "2026-03-23T16:09:02.276Z",
+      "messages": [
+        {
+          "id": "msg_5d1c70af1258b8_1772035843351",
+          "direction": "in",
+          "from": "+15551239999",
+          "to": "+15551230002",
+          "body": "Can I come in this week?",
+          "at": "2026-02-25T16:10:43.349Z",
+          "provider": "twilio",
+          "providerMessageId": "SMTEST_Q1"
+        },
+        {
+          "id": "msg_ddabce1ee7a9d_1772035865995",
+          "direction": "out",
+          "from": "+15551230002",
+          "to": "+15551239999",
+          "body": "I can get you scheduled to come in. I have Wed, Feb 25, 3:30 PM or Thu, Feb 26, 9:30 AM — which works best?",
+          "at": "2026-02-25T16:11:05.995Z",
+          "provider": "draft_ai",
+          "draftStatus": "stale"
+        },
+        {
+          "id": "msg_21de9cf1a453f_1772035940521",
+          "direction": "in",
+          "from": "+15551239999",
+          "to": "+15551230002",
+          "body": "Can I come in this week?",
+          "at": "2026-02-25T16:12:20.521Z",
+          "provider": "twilio",
+          "providerMessageId": "SMTEST_Q1"
+        },
+        {
+          "id": "msg_d9d2e1e3e6f7c8_1772035951728",
+          "direction": "out",
+          "from": "+15551230002",
+          "to": "+15551239999",
+          "body": "I can get you scheduled to come in. I have Wed, Feb 25, 3:30 PM or Thu, Feb 26, 9:30 AM — which works best?",
+          "at": "2026-02-25T16:12:48.026Z",
+          "provider": "human"
+        },
+        {
+          "id": "msg_e011e5bfdb6c_1772123528594",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+15551239999",
+          "body": "Just checking in - still want to come by to look at it? I have Fri, Feb 27, 9:30 AM or Fri, Feb 27, 11:30 AM if that helps.",
+          "at": "2026-02-26T16:32:08.594Z",
+          "provider": "draft_ai",
+          "draftStatus": "stale"
+        },
+        {
+          "id": "msg_98ca8f7a4565d_1772130292709",
+          "direction": "in",
+          "from": "+15551239999",
+          "to": "+15551230002",
+          "body": "Can I come in this time Friday to see C1-26?",
+          "at": "2026-02-26T18:24:52.709Z",
+          "provider": "twilio",
+          "providerMessageId": "SMTEST_FRIDAY_2"
+        },
+        {
+          "id": "msg_30d5bc067f5388_1772130313814",
+          "direction": "out",
+          "from": "+15551230002",
+          "to": "+15551239999",
+          "body": "I have Fri, Feb 27, 11:30 AM or Fri, Feb 27, 3:30 PM — which works best?",
+          "at": "2026-02-26T18:25:13.814Z",
+          "provider": "draft_ai",
+          "draftStatus": "stale"
+        },
+        {
+          "id": "msg_cd38dc725f1f48_1772131065595",
+          "direction": "in",
+          "from": "+15551239999",
+          "to": "+15551230002",
+          "body": "Can I come in this time Friday to see C1-26?",
+          "at": "2026-02-26T18:37:45.593Z",
+          "provider": "twilio",
+          "providerMessageId": "SMTEST_FRIDAY_3"
+        },
+        {
+          "id": "msg_f96b352e559be8_1772131085579",
+          "direction": "out",
+          "from": "+15551230002",
+          "to": "+15551239999",
+          "body": "I have Fri, Feb 27, 3:30 PM or Fri, Mar 6, 9:30 AM — which works best?",
+          "at": "2026-02-26T18:38:05.579Z",
+          "provider": "draft_ai",
+          "draftStatus": "stale"
+        },
+        {
+          "id": "msg_b60b3ea01eadc8_1772131420678",
+          "direction": "in",
+          "from": "+15551239999",
+          "to": "+15551230002",
+          "body": "Can I come in this time Friday to see C1-26?",
+          "at": "2026-02-26T18:43:40.675Z",
+          "provider": "twilio",
+          "providerMessageId": "SMTEST_FRIDAY_4"
+        },
+        {
+          "id": "msg_d9b660dd6c7e68_1772131436180",
+          "direction": "out",
+          "from": "+15551230002",
+          "to": "+15551239999",
+          "body": "I have Fri, Mar 6, 9:30 AM or Fri, Mar 6, 11:30 AM — which works best?",
+          "at": "2026-02-26T18:43:56.180Z",
+          "provider": "draft_ai",
+          "draftStatus": "stale"
+        },
+        {
+          "id": "msg_b5d7aa61a7aca_1772134735835",
+          "direction": "in",
+          "from": "+15551239999",
+          "to": "+15551230002",
+          "body": "Can I come in this time Friday to see C1-26?",
+          "at": "2026-02-26T19:38:55.829Z",
+          "provider": "twilio",
+          "providerMessageId": "SMTEST_FRIDAY_5"
+        },
+        {
+          "id": "msg_c2a81a65e601c_1772134736607",
+          "direction": "out",
+          "from": "+15551230002",
+          "to": "+15551239999",
+          "body": "I'm booked up for Friday. Is there another day that works for you?",
+          "at": "2026-02-26T19:38:56.607Z",
+          "provider": "draft_ai",
+          "draftStatus": "stale"
+        },
+        {
+          "id": "msg_4a3e16fe2b9b28_1772135065512",
+          "direction": "in",
+          "from": "+15551239999",
+          "to": "+15551230002",
+          "body": "Can I come in this time Friday to see C1-26?",
+          "at": "2026-02-26T19:44:25.510Z",
+          "provider": "twilio",
+          "providerMessageId": "SMTEST_FRIDAY_5"
+        },
+        {
+          "id": "msg_b0d75cd41035e_1772135066106",
+          "direction": "out",
+          "from": "+15551230002",
+          "to": "+15551239999",
+          "body": "I'm booked up for Friday. Is there another day that works for you?",
+          "at": "2026-02-26T19:44:26.106Z",
+          "provider": "draft_ai",
+          "draftStatus": "stale"
+        },
+        {
+          "id": "msg_83488f065bc69_1772135612866",
+          "direction": "in",
+          "from": "+15551239999",
+          "to": "+15551230002",
+          "body": "Can I come in this time Friday to see C1-26?",
+          "at": "2026-02-26T19:53:32.865Z",
+          "provider": "twilio",
+          "providerMessageId": "SMTEST_FRIDAY_6"
+        },
+        {
+          "id": "msg_0b9a5071f34d28_1772135627429",
+          "direction": "out",
+          "from": "+15551230002",
+          "to": "+15551239999",
+          "body": "I have Fri, Feb 27, 3:30 PM or Fri, Feb 27, 11:30 AM — which works best?",
+          "at": "2026-02-26T19:53:47.429Z",
+          "provider": "draft_ai",
+          "draftStatus": "stale"
+        },
+        {
+          "id": "msg_5fa637a8e1632_1772137600345",
+          "direction": "in",
+          "from": "+15551239999",
+          "to": "+15551230002",
+          "body": "Can I come in this time Friday to see C1-26?",
+          "at": "2026-02-26T20:26:40.339Z",
+          "provider": "twilio",
+          "providerMessageId": "SMTEST_FRIDAY_7"
+        },
+        {
+          "id": "msg_55e9970044edc_1772137616030",
+          "direction": "out",
+          "from": "+15551230002",
+          "to": "+15551239999",
+          "body": "I have Fri, Feb 27, 11:30 AM or Fri, Feb 27, 3:30 PM — which works best?",
+          "at": "2026-02-26T20:26:56.030Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_be87be52be051_1772210715587",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+15551239999",
+          "body": "If you'd like a quick walkaround video first, I can send one. If you'd rather come by, what day works best for you?",
+          "at": "2026-02-27T16:45:15.587Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_ee4ec1cc3d788_1772381998929",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+15551239999",
+          "body": "If you still want to see it, what day/time is best on your end?",
+          "at": "2026-03-01T16:19:58.956Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_b75267fbcaa3d_1772557519605",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+15551239999",
+          "body": "Quick question — are you comparing a few bikes, or is this one at the top of your list?",
+          "at": "2026-03-03T17:05:19.605Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_ab5b5b672d47e_1772884751663",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+15551239999",
+          "body": "Still interested? I can set a time - what day/time should I reserve?",
+          "at": "2026-03-07T11:59:11.663Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_9b0331876e8078_1773160288484",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+15551239999",
+          "body": "If you're still shopping, what day/time is easiest for you?",
+          "at": "2026-03-10T16:31:28.484Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_0c689d39a0a48_1773505347163",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+15551239999",
+          "body": "No rush - if you want to see it, what day/time should I put down?",
+          "at": "2026-03-14T16:22:27.164Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_7d1f2068b9f6a_1773764181508",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+15551239999",
+          "body": "Want to set a visit? What day and time works for you?",
+          "at": "2026-03-17T16:16:21.508Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_8992a19b3f5ca8_1774282142240",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+15551239999",
+          "body": "If you’d like to come by, I can set something up. What day works for you?",
+          "at": "2026-03-23T16:09:02.240Z",
+          "provider": "draft_ai"
+        }
+      ],
+      "scheduler": {
+        "lastSuggestedSlots": [
+          {
+            "salespersonId": "0ba7c600-9549-4b56-8480-a0117f9fd855",
+            "salespersonName": "Giovanni",
+            "calendarId": "c069c211f636ea9e57e1411fce6f119cac059a0b9155ab97557c9a975d90d69c@group.calendar.google.com",
+            "start": "2026-02-27T16:30:00.000Z",
+            "end": "2026-02-27T17:30:00.000Z",
+            "startLocal": "Fri, Feb 27, 11:30 AM",
+            "endLocal": "Fri, Feb 27, 12:30 PM",
+            "appointmentType": "inventory_visit"
+          },
+          {
+            "salespersonId": "0ba7c600-9549-4b56-8480-a0117f9fd855",
+            "salespersonName": "Giovanni",
+            "calendarId": "c069c211f636ea9e57e1411fce6f119cac059a0b9155ab97557c9a975d90d69c@group.calendar.google.com",
+            "start": "2026-02-27T20:30:00.000Z",
+            "end": "2026-02-27T21:30:00.000Z",
+            "startLocal": "Fri, Feb 27, 3:30 PM",
+            "endLocal": "Fri, Feb 27, 4:30 PM",
+            "appointmentType": "inventory_visit"
+          }
+        ],
+        "updatedAt": "2026-02-26T20:26:56.030Z"
+      },
+      "followUpCadence": {
+        "status": "active",
+        "anchorAt": "2026-02-25T16:11:05.995Z",
+        "nextDueAt": "2026-03-26T15:09:00.000Z",
+        "stepIndex": 9,
+        "lastSentAt": "2026-03-23T16:09:02.240Z",
+        "lastSentStep": 8
+      }
+    },
+    {
+      "id": "+15551239998",
+      "leadKey": "+15551239998",
+      "mode": "suggest",
+      "createdAt": "2026-02-26T18:04:29.722Z",
+      "updatedAt": "2026-02-26T18:24:29.755Z",
+      "messages": [
+        {
+          "id": "msg_9d2616b4d56208_1772129069722",
+          "direction": "in",
+          "from": "+15551239998",
+          "to": "+15551230002",
+          "body": "I want to come in this time tomorrow to see C1-26",
+          "at": "2026-02-26T18:04:29.718Z",
+          "provider": "twilio",
+          "providerMessageId": "SMTEST_TOMORROW_1"
+        },
+        {
+          "id": "msg_de19594884014_1772129086883",
+          "direction": "out",
+          "from": "+15551230002",
+          "to": "+15551239998",
+          "body": "Perfect — you’re booked for Fri, Feb 27, 1:04 PM with Giovanni. American Harley-Davidson is at 1149 Erie Ave., North Tonawanda, NY 14120.",
+          "at": "2026-02-26T18:04:46.883Z",
+          "provider": "twilio",
+          "providerMessageId": "a0eqnf1tjlfkcspsh96kpekt2s"
+        },
+        {
+          "id": "msg_89802c48745eb8_1772130268267",
+          "direction": "in",
+          "from": "+15551239998",
+          "to": "+15551230002",
+          "body": "I want to come in this time tomorrow to see C1-26",
+          "at": "2026-02-26T18:24:28.265Z",
+          "provider": "twilio",
+          "providerMessageId": "SMTEST_TOMORROW_2"
+        },
+        {
+          "id": "msg_50fa1d46693e88_1772130269755",
+          "direction": "out",
+          "from": "+15551230002",
+          "to": "+15551239998",
+          "body": "Perfect — you’re booked for Fri, Feb 27, 1:30 PM with Giovanni. American Harley-Davidson is at 1149 Erie Ave., North Tonawanda, NY 14120.",
+          "at": "2026-02-26T18:24:29.755Z",
+          "provider": "twilio",
+          "providerMessageId": "a0eqnf1tjlfkcspsh96kpekt2s"
+        }
+      ],
+      "scheduler": {
+        "lastSuggestedSlots": [],
+        "updatedAt": "2026-02-26T18:04:46.883Z",
+        "requested": {
+          "day": "friday",
+          "timeText": "I want to come in this time tomorrow to see C1-26",
+          "requestedAt": "2026-02-26T18:04:45.857Z"
+        }
+      },
+      "appointment": {
+        "status": "confirmed",
+        "updatedAt": "2026-02-26T18:24:29.755Z",
+        "whenText": "Fri, Feb 27, 1:30 PM",
+        "whenIso": "2026-02-27T18:30:00.000Z",
+        "confirmedBy": "customer",
+        "acknowledged": true,
+        "bookedEventId": "a0eqnf1tjlfkcspsh96kpekt2s",
+        "bookedEventLink": "https://www.google.com/calendar/event?eid=YTBlcW5mMXRqbGZrY3Nwc2g5NmtwZWt0MnMgYzA2OWMyMTFmNjM2ZWE5ZTU3ZTE0MTFmY2U2ZjExOWNhYzA1OWEwYjkxNTVhYjk3NTU3YzlhOTc1ZDkwZDY5Y0Bn",
+        "bookedSalespersonId": "0ba7c600-9549-4b56-8480-a0117f9fd855",
+        "reschedulePending": false,
+        "attendanceQuestionedAt": "2026-03-07T12:34:38.675Z"
+      }
+    },
+    {
+      "id": "+15551239901",
+      "leadKey": "+15551239901",
+      "mode": "suggest",
+      "createdAt": "2026-02-28T20:23:48.372Z",
+      "updatedAt": "2026-02-28T20:25:36.143Z",
+      "messages": [
+        {
+          "id": "msg_f748ac986c9808_1772310228372",
+          "direction": "in",
+          "from": "+15551239901",
+          "to": "+15551230002",
+          "body": "What's the price on T22-25?",
+          "at": "2026-02-28T20:23:48.367Z",
+          "provider": "twilio",
+          "providerMessageId": "SMTEST_PRICE_0"
+        },
+        {
+          "id": "msg_373ed8a2e27768_1772310230276",
+          "direction": "out",
+          "from": "+15551230002",
+          "to": "+15551239901",
+          "body": "Got it — I’ll have a manager pull the exact pricing and follow up shortly. What’s the best time to reach you today?",
+          "at": "2026-02-28T20:23:50.276Z",
+          "provider": "twilio"
+        },
+        {
+          "id": "msg_788f05bd6de5_1772310336141",
+          "direction": "in",
+          "from": "+15551239901",
+          "to": "+15551230002",
+          "body": "What's the price on T33-25?",
+          "at": "2026-02-28T20:25:36.141Z",
+          "provider": "twilio",
+          "providerMessageId": "SMTEST_PRICE_0"
+        },
+        {
+          "id": "msg_7b3a5d953fcb88_1772310336143",
+          "direction": "out",
+          "from": "+15551230002",
+          "to": "+15551239901",
+          "body": "Got it — I’ll have a manager pull the exact pricing and follow up shortly. What’s the best time to reach you today?",
+          "at": "2026-02-28T20:25:36.143Z",
+          "provider": "twilio"
+        }
+      ],
+      "followUp": {
+        "mode": "manual_handoff",
+        "reason": "handoff:pricing",
+        "updatedAt": "2026-02-28T20:25:36.143Z"
+      },
+      "objections": {
+        "pricing": {
+          "attempts": 0,
+          "escalated": true,
+          "lastAt": "2026-02-28T20:25:36.143Z"
+        }
+      }
+    },
+    {
+      "id": "+15551239902",
+      "leadKey": "+15551239902",
+      "mode": "suggest",
+      "createdAt": "2026-02-28T20:41:56.190Z",
+      "updatedAt": "2026-02-28T20:46:27.187Z",
+      "messages": [
+        {
+          "id": "msg_c531d51f487f38_1772311316190",
+          "direction": "in",
+          "from": "+15551239902",
+          "to": "+15551230002",
+          "body": "What's the price on T33-25?",
+          "at": "2026-02-28T20:41:56.190Z",
+          "provider": "twilio",
+          "providerMessageId": "SMTEST_T33_25"
+        },
+        {
+          "id": "msg_f657694a938758_1772311316192",
+          "direction": "out",
+          "from": "+15551230002",
+          "to": "+15551239902",
+          "body": "Got it — I’ll have a manager pull the exact pricing and follow up shortly. What’s the best time to reach you today?",
+          "at": "2026-02-28T20:41:56.192Z",
+          "provider": "twilio"
+        },
+        {
+          "id": "msg_b9a898d4854a78_1772311527842",
+          "direction": "in",
+          "from": "+15551239902",
+          "to": "+15551230002",
+          "body": "What's the price on T33-25?",
+          "at": "2026-02-28T20:45:27.840Z",
+          "provider": "twilio",
+          "providerMessageId": "SMTEST_T33_25_B"
+        },
+        {
+          "id": "msg_4e02d73d425ad8_1772311587187",
+          "direction": "out",
+          "from": "+15551230002",
+          "to": "+15551239902",
+          "body": "The listed price on T33-25 is $30,199. Final out-the-door numbers depend on tax, fees, any trade and financing, so I can’t give an exact OTD price by text.\n\nI could get you scheduled to meet with our sales team to go over final pricing—would you like that? Do you have a trade? —Brooke",
+          "at": "2026-02-28T20:46:27.187Z",
+          "provider": "draft_ai"
+        }
+      ],
+      "followUp": {
+        "mode": "manual_handoff",
+        "reason": "handoff:pricing",
+        "updatedAt": "2026-02-28T20:41:56.192Z"
+      },
+      "objections": {
+        "pricing": {
+          "attempts": 1,
+          "escalated": true,
+          "lastAt": "2026-02-28T20:46:27.186Z"
+        }
+      }
+    },
+    {
+      "id": "+17164710451",
+      "leadKey": "+17164710451",
+      "mode": "suggest",
+      "createdAt": "2026-02-28T21:13:39.384Z",
+      "updatedAt": "2026-02-28T21:13:42.449Z",
+      "messages": [
+        {
+          "id": "msg_f1a803f2fe401_1772313219385",
+          "direction": "in",
+          "from": "jbrivera35@hotmail.com",
+          "to": "dealership",
+          "body": "WEB LEAD (ADF)\nSource: Room58 - Request details\nRef: 10718\nName: joe rivera\nEmail: jbrivera35@hotmail.com\nPhone: 7164710451\nStock: T22-25\nVIN: 1HD1KH716SB620692\nYear: 2025\nVehicle: HARLEY-DAVIDSON Road Glide\n\nInquiry:\nwhat modifications have been done and what is the asking price",
+          "at": "2026-02-28T21:13:39.385Z",
+          "provider": "sendgrid_adf",
+          "providerMessageId": ""
+        },
+        {
+          "id": "msg_7f146aa54a9d98_1772313222449",
+          "direction": "out",
+          "from": "dealership",
+          "to": "7164710451",
+          "body": "Got it — I’ll have a manager pull the exact pricing and follow up shortly. What’s the best time to reach you today?",
+          "at": "2026-02-28T21:13:42.449Z",
+          "provider": "draft_ai"
+        }
+      ],
+      "lead": {
+        "leadRef": "10718",
+        "source": "Room58 - Request details",
+        "firstName": "joe",
+        "lastName": "rivera",
+        "email": "jbrivera35@hotmail.com",
+        "phone": "7164710451",
+        "vehicle": {
+          "stockId": "T22-25",
+          "vin": "1HD1KH716SB620692",
+          "year": "2025",
+          "description": "HARLEY-DAVIDSON Road Glide",
+          "condition": "new"
+        }
+      },
+      "classification": {
+        "bucket": "inventory_interest",
+        "cta": "check_availability",
+        "channel": "sms",
+        "ruleName": "default"
+      },
+      "followUp": {
+        "mode": "manual_handoff",
+        "reason": "handoff:pricing",
+        "updatedAt": "2026-02-28T21:13:42.449Z"
+      },
+      "objections": {
+        "pricing": {
+          "attempts": 0,
+          "escalated": true,
+          "lastAt": "2026-02-28T21:13:42.449Z"
+        }
+      }
+    },
+    {
+      "id": "+17166221746",
+      "leadKey": "+17166221746",
+      "mode": "suggest",
+      "createdAt": "2026-02-28T21:16:45.207Z",
+      "updatedAt": "2026-03-20T15:47:10.718Z",
+      "messages": [
+        {
+          "id": "msg_8c4689c007384_1772313405207",
+          "direction": "in",
+          "from": "elfjr2@gmail.com",
+          "to": "dealership",
+          "body": "WEB LEAD (ADF)\nSource: Facebook - RAQ\nRef: 10711\nName: Ed Forster\nEmail: elfjr2@gmail.com\nPhone: 7166221746\nYear: 2026\nVehicle: HARLEY-DAVIDSON Road Glide 3\n\nInquiry:\n",
+          "at": "2026-02-28T21:16:45.207Z",
+          "provider": "sendgrid_adf",
+          "providerMessageId": ""
+        },
+        {
+          "id": "msg_539ccbcd10734_1772313422842",
+          "direction": "out",
+          "from": "dealership",
+          "to": "7166221746",
+          "body": "Hi, this is Brooke at American Harley-Davidson. I can get you scheduled to come in. I have Tue, Mar 3, 9:30 AM or Tue, Mar 3, 11:30 AM — which works best?",
+          "at": "2026-02-28T21:17:02.842Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_5cc7705bd86e3_1772392241590",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17166221746",
+          "body": "Just checking in - still want to come by to look at it? I have Tue, Mar 3, 9:30 AM or Tue, Mar 3, 11:30 AM if that helps.",
+          "at": "2026-03-01T19:10:41.590Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_a8bd703199a9f8_1772474181654",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17166221746",
+          "body": "If you'd like a quick walkaround video first, I can send one. If you'd rather come by, what day works best for you?",
+          "at": "2026-03-02T17:56:21.667Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_28bfde09faf288_1772641736427",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17166221746",
+          "body": "If you still want to see it, what day/time is best on your end?",
+          "at": "2026-03-04T16:28:56.427Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_9f95998a8b0f3_1772884751705",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17166221746",
+          "body": "Quick question — are you comparing a few bikes, or is this one at the top of your list?",
+          "at": "2026-03-07T11:59:11.705Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_f2c8c4811f6d6_1773075770886",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17166221746",
+          "body": "Still interested? I can set a time - what day/time should I reserve?",
+          "at": "2026-03-09T17:02:50.887Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_ac304d8946233_1773413036303",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17166221746",
+          "body": "If you're still shopping, what day/time is easiest for you?",
+          "at": "2026-03-13T14:43:56.303Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_ebb9d8f742e1d_1773763881504",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17166221746",
+          "body": "No rush. If you want to see it, what day and time should I hold?",
+          "at": "2026-03-17T16:11:21.504Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_e052c8cf3ad908_1774021630673",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17166221746",
+          "body": "Want to set a visit? What day and time works for you?",
+          "at": "2026-03-20T15:47:10.673Z",
+          "provider": "draft_ai"
+        }
+      ],
+      "lead": {
+        "leadRef": "10711",
+        "source": "Facebook - RAQ",
+        "firstName": "Ed",
+        "lastName": "Forster",
+        "email": "elfjr2@gmail.com",
+        "phone": "7166221746",
+        "purchaseTimeframe": "Unsure",
+        "vehicle": {
+          "stockId": "",
+          "vin": "",
+          "year": "2026",
+          "description": "HARLEY-DAVIDSON Road Glide 3",
+          "condition": "new_model_interest"
+        }
+      },
+      "classification": {
+        "bucket": "inventory_interest",
+        "cta": "check_availability",
+        "channel": "sms",
+        "ruleName": "facebook_raq"
+      },
+      "followUpCadence": {
+        "status": "active",
+        "anchorAt": "2026-02-28T21:17:02.842Z",
+        "nextDueAt": "2026-03-26T15:54:00.000Z",
+        "stepIndex": 8,
+        "kind": "standard",
+        "lastSentAt": "2026-03-20T15:47:10.675Z",
+        "lastSentStep": 7
+      },
+      "scheduler": {
+        "lastSuggestedSlots": [
+          {
+            "salespersonId": "0ba7c600-9549-4b56-8480-a0117f9fd855",
+            "calendarId": "c069c211f636ea9e57e1411fce6f119cac059a0b9155ab97557c9a975d90d69c@group.calendar.google.com",
+            "start": "2026-03-03T14:30:00.000Z",
+            "end": "2026-03-03T15:30:00.000Z",
+            "startLocal": "Tue, Mar 3, 9:30 AM",
+            "endLocal": "Tue, Mar 3, 10:30 AM",
+            "appointmentType": "inventory_visit",
+            "salespersonName": "Giovanni"
+          },
+          {
+            "salespersonId": "0ba7c600-9549-4b56-8480-a0117f9fd855",
+            "calendarId": "c069c211f636ea9e57e1411fce6f119cac059a0b9155ab97557c9a975d90d69c@group.calendar.google.com",
+            "start": "2026-03-03T16:30:00.000Z",
+            "end": "2026-03-03T17:30:00.000Z",
+            "startLocal": "Tue, Mar 3, 11:30 AM",
+            "endLocal": "Tue, Mar 3, 12:30 PM",
+            "appointmentType": "inventory_visit",
+            "salespersonName": "Giovanni"
+          }
+        ],
+        "updatedAt": "2026-03-01T19:10:41.590Z"
+      }
+    },
+    {
+      "id": "+17165361658",
+      "leadKey": "+17165361658",
+      "mode": "suggest",
+      "createdAt": "2026-02-28T21:43:46.140Z",
+      "updatedAt": "2026-03-20T14:47:09.765Z",
+      "messages": [
+        {
+          "id": "msg_5c569a209b4748_1772315026143",
+          "direction": "in",
+          "from": "frostyhd59@yahoo.com",
+          "to": "dealership",
+          "body": "WEB LEAD (ADF)\nSource: Facebook - RAQ\nRef: 10705\nName: Douglas Frost\nEmail: frostyhd59@yahoo.com\nPhone: 7165361658\nYear: 2026\nVehicle: HARLEY-DAVIDSON Road Glide\n\nInquiry:\n",
+          "at": "2026-02-28T21:43:46.143Z",
+          "provider": "sendgrid_adf",
+          "providerMessageId": ""
+        },
+        {
+          "id": "msg_bd62feb64a584_1772315027805",
+          "direction": "out",
+          "from": "dealership",
+          "to": "7165361658",
+          "body": "The listed price for  is $28,749. Final numbers depend on tax, fees, any trade, and financing.\n\nI could get you scheduled to meet with our sales team. I have Tue, Mar 3, 9:30 AM or Tue, Mar 3, 11:30 AM — which works best? Do you have a trade?",
+          "at": "2026-02-28T21:43:47.805Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_9a258f9d66035_1772392241791",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17165361658",
+          "body": "Just checking in - still want to come by to look at it? I have Tue, Mar 3, 9:30 AM or Tue, Mar 3, 11:30 AM if that helps.",
+          "at": "2026-03-01T19:10:41.791Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_ca454e0b7ce7c8_1772474181913",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17165361658",
+          "body": "If you'd like a quick walkaround video first, I can send one. If you'd rather come by, what day works best for you?",
+          "at": "2026-03-02T17:56:21.913Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_c645047dde2a5_1772641736468",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17165361658",
+          "body": "If you still want to see it, what day/time is best on your end?",
+          "at": "2026-03-04T16:28:56.468Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_59dbdc46044f18_1772884751705",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17165361658",
+          "body": "Quick question — are you comparing a few bikes, or is this one at the top of your list?",
+          "at": "2026-03-07T11:59:11.705Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_4803704b55821_1773069055776",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17165361658",
+          "body": "Still interested? I can set a time - what day/time should I reserve?",
+          "at": "2026-03-09T15:10:55.776Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_9fadabcb02045_1773419877753",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17165361658",
+          "body": "If you're still shopping, what day/time is easiest for you?",
+          "at": "2026-03-13T16:37:57.753Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_8b84df1cbf8228_1773759884938",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17165361658",
+          "body": "No rush. If you want to see it, what day and time should I hold?",
+          "at": "2026-03-17T15:04:44.938Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_70674a066b176_1774018029708",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17165361658",
+          "body": "Want to set a visit? What day and time works for you?",
+          "at": "2026-03-20T14:47:09.709Z",
+          "provider": "draft_ai"
+        }
+      ],
+      "lead": {
+        "leadRef": "10705",
+        "source": "Facebook - RAQ",
+        "firstName": "Douglas",
+        "lastName": "Frost",
+        "email": "frostyhd59@yahoo.com",
+        "phone": "7165361658",
+        "purchaseTimeframe": "Unsure",
+        "vehicle": {
+          "stockId": "",
+          "vin": "",
+          "year": "2026",
+          "description": "HARLEY-DAVIDSON Road Glide",
+          "condition": "new_model_interest"
+        }
+      },
+      "classification": {
+        "bucket": "inventory_interest",
+        "cta": "check_availability",
+        "channel": "sms",
+        "ruleName": "facebook_raq"
+      },
+      "followUpCadence": {
+        "status": "active",
+        "anchorAt": "2026-02-28T21:43:47.805Z",
+        "nextDueAt": "2026-03-26T15:42:00.000Z",
+        "stepIndex": 8,
+        "kind": "standard",
+        "lastSentAt": "2026-03-20T14:47:09.710Z",
+        "lastSentStep": 7
+      },
+      "scheduler": {
+        "lastSuggestedSlots": [
+          {
+            "salespersonId": "0ba7c600-9549-4b56-8480-a0117f9fd855",
+            "calendarId": "c069c211f636ea9e57e1411fce6f119cac059a0b9155ab97557c9a975d90d69c@group.calendar.google.com",
+            "start": "2026-03-03T14:30:00.000Z",
+            "end": "2026-03-03T15:30:00.000Z",
+            "startLocal": "Tue, Mar 3, 9:30 AM",
+            "endLocal": "Tue, Mar 3, 10:30 AM",
+            "appointmentType": "inventory_visit",
+            "salespersonName": "Giovanni"
+          },
+          {
+            "salespersonId": "0ba7c600-9549-4b56-8480-a0117f9fd855",
+            "calendarId": "c069c211f636ea9e57e1411fce6f119cac059a0b9155ab97557c9a975d90d69c@group.calendar.google.com",
+            "start": "2026-03-03T16:30:00.000Z",
+            "end": "2026-03-03T17:30:00.000Z",
+            "startLocal": "Tue, Mar 3, 11:30 AM",
+            "endLocal": "Tue, Mar 3, 12:30 PM",
+            "appointmentType": "inventory_visit",
+            "salespersonName": "Giovanni"
+          }
+        ],
+        "updatedAt": "2026-03-01T19:10:41.791Z"
+      }
+    },
+    {
+      "id": "+17165557777",
+      "leadKey": "+17165557777",
+      "mode": "suggest",
+      "createdAt": "2026-03-01T20:19:26.891Z",
+      "updatedAt": "2026-03-21T15:00:21.388Z",
+      "messages": [
+        {
+          "id": "msg_5c333a7e67196_1772396366891",
+          "direction": "in",
+          "from": "streetglide.test@example.com",
+          "to": "dealership",
+          "body": "WEB LEAD (ADF)\nSource: Facebook - RAQ\nRef: TEST_STREETGLIDE_2026\nName: Test Streetglide\nEmail: streetglide.test@example.com\nPhone: 7165557777\nYear: 2026\nVehicle: HARLEY-DAVIDSON Street Glide\n\nInquiry:\nwhat is the price on a 2026 street glide?",
+          "at": "2026-03-01T20:19:26.891Z",
+          "provider": "sendgrid_adf",
+          "providerMessageId": ""
+        },
+        {
+          "id": "msg_638cc26909cea_1772396367866",
+          "direction": "out",
+          "from": "dealership",
+          "to": "7165557777",
+          "body": "Listed prices for 2026 Street Glide units we have in stock range from $28,399 to $30,199, depending on color/trim/options. Final numbers depend on tax, fees, any trade, and financing.\n\nI could get you scheduled to meet with our sales team. I have Tue, Mar 3, 9:30 AM or Tue, Mar 3, 11:30 AM — which works best? Do you have a trade?",
+          "at": "2026-03-01T20:19:27.866Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_ed3f7fc4d103c_1772475990978",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17165557777",
+          "body": "Just checking in - still want to come by to look at it? I have Tue, Mar 3, 9:30 AM or Tue, Mar 3, 11:30 AM if that helps.",
+          "at": "2026-03-02T18:26:30.978Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_730f4e40ae3b08_1772558239623",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17165557777",
+          "body": "If you'd like a quick walkaround video first, I can send one. If you'd rather come by, what day works best for you?",
+          "at": "2026-03-03T17:17:19.623Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_e6ed19be99e02_1772727520346",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17165557777",
+          "body": "If you still want to see it, what day/time is best on your end?",
+          "at": "2026-03-05T16:18:40.346Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_9a25c2ded9b848_1772904047772",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17165557777",
+          "body": "Quick question — are you comparing a few bikes, or is this one at the top of your list?",
+          "at": "2026-03-07T17:20:47.772Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_775164579d01d8_1773155712431",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17165557777",
+          "body": "Still interested? I can set a time - what day/time should I reserve?",
+          "at": "2026-03-10T15:15:12.431Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_87fff3149f944_1773500600583",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17165557777",
+          "body": "If you're still shopping, what day/time is easiest for you?",
+          "at": "2026-03-14T15:03:20.583Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_ebdb3dbe78c28_1773847701016",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17165557777",
+          "body": "No rush. If you want to see it, what day and time should I hold?",
+          "at": "2026-03-18T15:28:21.016Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_d79b92403ce798_1774105221343",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17165557777",
+          "body": "Want me to hold a time for you? If so, which day is best?",
+          "at": "2026-03-21T15:00:21.343Z",
+          "provider": "draft_ai"
+        }
+      ],
+      "lead": {
+        "leadRef": "TEST_STREETGLIDE_2026",
+        "source": "Facebook - RAQ",
+        "firstName": "Test",
+        "lastName": "Streetglide",
+        "email": "streetglide.test@example.com",
+        "phone": "7165557777",
+        "purchaseTimeframe": "Unsure",
+        "vehicle": {
+          "stockId": "",
+          "vin": "",
+          "year": "2026",
+          "model": "Street Glide",
+          "description": "HARLEY-DAVIDSON Street Glide",
+          "condition": "new_model_interest"
+        }
+      },
+      "classification": {
+        "bucket": "inventory_interest",
+        "cta": "check_availability",
+        "channel": "sms",
+        "ruleName": "facebook_raq"
+      },
+      "followUpCadence": {
+        "status": "active",
+        "anchorAt": "2026-03-01T20:19:27.866Z",
+        "nextDueAt": "2026-03-27T16:21:00.000Z",
+        "stepIndex": 8,
+        "kind": "standard",
+        "lastSentAt": "2026-03-21T15:00:21.344Z",
+        "lastSentStep": 7
+      },
+      "scheduler": {
+        "lastSuggestedSlots": [
+          {
+            "salespersonId": "0ba7c600-9549-4b56-8480-a0117f9fd855",
+            "calendarId": "c069c211f636ea9e57e1411fce6f119cac059a0b9155ab97557c9a975d90d69c@group.calendar.google.com",
+            "start": "2026-03-03T14:30:00.000Z",
+            "end": "2026-03-03T15:30:00.000Z",
+            "startLocal": "Tue, Mar 3, 9:30 AM",
+            "endLocal": "Tue, Mar 3, 10:30 AM",
+            "appointmentType": "inventory_visit",
+            "salespersonName": "Giovanni"
+          },
+          {
+            "salespersonId": "0ba7c600-9549-4b56-8480-a0117f9fd855",
+            "calendarId": "c069c211f636ea9e57e1411fce6f119cac059a0b9155ab97557c9a975d90d69c@group.calendar.google.com",
+            "start": "2026-03-03T16:30:00.000Z",
+            "end": "2026-03-03T17:30:00.000Z",
+            "startLocal": "Tue, Mar 3, 11:30 AM",
+            "endLocal": "Tue, Mar 3, 12:30 PM",
+            "appointmentType": "inventory_visit",
+            "salespersonName": "Giovanni"
+          }
+        ],
+        "updatedAt": "2026-03-02T18:26:30.978Z"
+      }
+    },
+    {
+      "id": "+17165559000",
+      "leadKey": "+17165559000",
+      "mode": "suggest",
+      "status": "open",
+      "createdAt": "2026-03-02T20:12:17.324Z",
+      "updatedAt": "2026-03-04T20:12:58.111Z",
+      "messages": [
+        {
+          "id": "msg_470d4fb2ac3e08_1772482351845",
+          "direction": "in",
+          "from": "7165559000",
+          "to": "dealership",
+          "body": "What do I need to bring for a test ride?",
+          "at": "2026-03-02T20:12:31.844Z",
+          "provider": "debug",
+          "providerMessageId": "dbg_73czfghp"
+        },
+        {
+          "id": "msg_871fdc1b74337_1772482367834",
+          "direction": "out",
+          "from": "dealership",
+          "to": "7165559000",
+          "body": "Hi Joe, this is Brooke at American Harley-Davidson.\n\nFor a test ride please bring your motorcycle endorsement, a DOT helmet, eyewear, long pants, a long-sleeve shirt, and over-the-ankle boots.\n\nAnything else I can help with before you come in?",
+          "at": "2026-03-02T20:12:47.834Z",
+          "provider": "draft_ai"
+        },
+        {
+          "id": "msg_5492fbc7efe9b_1772655178111",
+          "direction": "out",
+          "from": "+17164032516",
+          "to": "+17165559000",
+          "body": "Reminder: you’re scheduled for Thu, Mar 5, 3:12 PM. Please reply YES to confirm or NO to reschedule.",
+          "at": "2026-03-04T20:12:58.111Z",
+          "provider": "draft_ai"
+        }
+      ],
+      "lead": {
+        "firstName": "Joe",
+        "phone": "7165559000"
+      },
+      "appointment": {
+        "status": "confirmed",
+        "whenText": "Wed Mar 5, 10:00 AM",
+        "whenIso": "2026-03-05T20:12:17.324Z",
+        "confirmedBy": "customer",
+        "bookedEventId": "evt_test",
+        "acknowledged": true,
+        "updatedAt": "2026-03-02T20:12:17.324Z",
+        "confirmation": {
+          "sentAt": "2026-03-04T20:12:58.110Z",
+          "status": "pending"
+        },
+        "attendanceQuestionedAt": "2026-03-07T12:34:38.675Z"
+      }
+    }
+  ],
+  "todos": [
+    {
+      "id": "todo_1ea839fcf3ed68_1771772103249",
+      "convId": "7165551234",
+      "leadKey": "7165551234",
+      "reason": "other",
+      "summary": "WEB LEAD (ADF)\nSource: Room58 - Request details\nRef: TEST999\nName: Alex Rider\nEmail: alex.rider@example.com\nPhone: 7165551234\nStock: T99-26\nVIN: 1HD1TESTVIN999999\nYear: 2026\nVehicle: HARLEY-DAVIDSON Street Glide\n\nInquiry:\nis this available?",
+      "sourceMessageId": "",
+      "createdAt": "2026-02-22T14:55:03.249Z",
+      "status": "open"
+    },
+    {
+      "id": "todo_91077c8dda3b4_1772310230276",
+      "convId": "+15551239901",
+      "leadKey": "+15551239901",
+      "reason": "pricing",
+      "summary": "What's the price on T22-25?",
+      "sourceMessageId": "SMTEST_PRICE_0",
+      "createdAt": "2026-02-28T20:23:50.276Z",
+      "status": "open"
+    },
+    {
+      "id": "todo_c92ae50d363fa8_1772310336143",
+      "convId": "+15551239901",
+      "leadKey": "+15551239901",
+      "reason": "pricing",
+      "summary": "What's the price on T33-25?",
+      "sourceMessageId": "SMTEST_PRICE_0",
+      "createdAt": "2026-02-28T20:25:36.143Z",
+      "status": "open"
+    },
+    {
+      "id": "todo_962f5650355f2_1772311316192",
+      "convId": "+15551239902",
+      "leadKey": "+15551239902",
+      "reason": "pricing",
+      "summary": "What's the price on T33-25?",
+      "sourceMessageId": "SMTEST_T33_25",
+      "createdAt": "2026-02-28T20:41:56.192Z",
+      "status": "open"
+    },
+    {
+      "id": "todo_dc19317792a4a8_1772313222449",
+      "convId": "7164710451",
+      "leadKey": "7164710451",
+      "reason": "pricing",
+      "summary": "WEB LEAD (ADF)\nSource: Room58 - Request details\nRef: 10718\nName: joe rivera\nEmail: jbrivera35@hotmail.com\nPhone: 7164710451\nStock: T22-25\nVIN: 1HD1KH716SB620692\nYear: 2025\nVehicle: HARLEY-DAVIDSON Road Glide\n\nInquiry:\nwhat modifications have been done and what is the asking price",
+      "sourceMessageId": "",
+      "createdAt": "2026-02-28T21:13:42.449Z",
+      "status": "open"
+    },
+    {
+      "id": "todo_0de2cef3bdc1d_1774105221344",
+      "convId": "+17165557777",
+      "leadKey": "+17165557777",
+      "reason": "call",
+      "summary": "Call customer (follow-up).",
+      "createdAt": "2026-03-21T15:00:21.344Z",
+      "status": "open"
+    },
+    {
+      "id": "todo_a39601b066e7d_1774282142240",
+      "convId": "+15551239999",
+      "leadKey": "+15551239999",
+      "reason": "call",
+      "summary": "Call customer (follow-up).",
+      "createdAt": "2026-03-23T16:09:02.240Z",
+      "status": "open"
+    }
+  ],
+  "questions": [
+    {
+      "id": "q_eda66a31791108_1772886878697",
+      "convId": "+15551239998",
+      "leadKey": "+15551239998",
+      "text": "Did the customer show for the Fri, Feb 27, 1:30 PM appointment?",
+      "createdAt": "2026-03-07T12:34:38.697Z",
+      "status": "done",
+      "doneAt": "2026-03-07T12:37:23.088Z"
+    },
+    {
+      "id": "q_fbf4419b3e9a1_1772886878697",
+      "convId": "7165559000",
+      "leadKey": "7165559000",
+      "text": "Did the customer show for the Thu, Mar 5, 3:12 PM appointment?",
+      "createdAt": "2026-03-07T12:34:38.697Z",
+      "status": "open"
+    }
+  ]
+}

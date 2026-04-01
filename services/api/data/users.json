@@ -1,0 +1,33 @@
+{
+  "users": [
+    {
+      "id": "95e86615-1e33-49b9-adb2-69f557d98a65",
+      "email": "joeh@americanharley-davidson.com",
+      "name": "Joe Hartrich",
+      "role": "manager",
+      "passwordHash": "pbkdf2$100000$18097db5bafc555085bdd71e81d8cecd$03361b57c647971dfa3ef171d660511c79ff3b314e1d5031b1ae57fa32391f77",
+      "createdAt": "2026-02-23T22:30:52.316Z",
+      "updatedAt": "2026-02-23T22:30:52.316Z"
+    },
+    {
+      "id": "0ba7c600-9549-4b56-8480-a0117f9fd855",
+      "email": "gio@americanharley-davidson.com",
+      "name": "Giovanni",
+      "role": "salesperson",
+      "calendarId": "c069c211f636ea9e57e1411fce6f119cac059a0b9155ab97557c9a975d90d69c@group.calendar.google.com",
+      "passwordHash": "pbkdf2$100000$3cfc1f6f737e0b0bd2b5afbf8e6674ed$1d924b80a65246067e0e41907176373e3823ed6f40889f4b1dcad09d83e3faf1",
+      "createdAt": "2026-02-23T23:25:12.308Z",
+      "updatedAt": "2026-02-23T23:25:12.308Z"
+    },
+    {
+      "id": "479f56d0-ecd0-4136-acd5-77a964968aa5",
+      "email": "scott@americanharley-davidson.com",
+      "name": "Scott Hartrich",
+      "role": "salesperson",
+      "calendarId": "b299c3a9c1ba7d87871f9121abded507369bf38b3e25ab2ba0b21b736d32b8d3@group.calendar.google.com",
+      "passwordHash": "pbkdf2$100000$3d27bfccbe886f190b5488cd268517a7$8b176608bad7b0f374f45b65c6ee78dd2ca183e0e576c9c6d434733b450f15f2",
+      "createdAt": "2026-02-24T01:07:53.257Z",
+      "updatedAt": "2026-02-24T01:07:53.257Z"
+    }
+  ]
+}

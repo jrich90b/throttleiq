@@ -1,0 +1,76 @@
+{
+  "dealerName": "American Harley-Davidson",
+  "agentName": "Brooke",
+  "phone": "(716) 692-7200",
+  "website": "https://americanharley-davidson.com",
+  "address": {
+    "line1": "1149 Erie Ave.",
+    "city": "North Tonawanda",
+    "state": "NY",
+    "zip": "14120"
+  },
+  "hours": {
+    "sales": {
+      "monday": {
+        "open": "09:00",
+        "close": "18:00"
+      },
+      "tuesday": {
+        "open": "09:00",
+        "close": "18:00"
+      },
+      "wednesday": {
+        "open": "09:00",
+        "close": "18:00"
+      },
+      "thursday": {
+        "open": "09:00",
+        "close": "18:00"
+      },
+      "friday": {
+        "open": "09:00",
+        "close": "18:00"
+      },
+      "saturday": {
+        "open": "09:00",
+        "close": "16:00"
+      },
+      "sunday": {
+        "open": null,
+        "close": null
+      }
+    },
+    "tuesday": {
+      "open": "09:00",
+      "close": "18:00"
+    },
+    "wednesday": {
+      "open": "09:00",
+      "close": "18:00"
+    },
+    "thursday": {
+      "open": "09:00",
+      "close": "18:00"
+    },
+    "friday": {
+      "open": "09:00",
+      "close": "18:00"
+    },
+    "saturday": {
+      "open": "09:00",
+      "close": "15:00"
+    }
+  },
+  "followUp": {
+    "testRideEnabled": true,
+    "testRideMonths": [
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ]
+  }
+}

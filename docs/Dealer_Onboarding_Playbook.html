@@ -1,0 +1,95 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Dealer Onboarding Playbook</title>
+<style>
+  :root { --text:#111827; --muted:#6b7280; --border:#e5e7eb; --accent:#1d4ed8; }
+  body { font-family: "Helvetica Neue", Arial, sans-serif; color: var(--text); margin: 32px; }
+  h1 { font-size: 26px; margin: 0 0 12px; color: var(--accent); }
+  h2 { font-size: 18px; margin: 18px 0 8px; color: #111827; }
+  p { font-size: 12.5px; line-height: 1.55; margin: 6px 0; }
+  ol, ul { margin: 6px 0 10px 18px; padding: 0; }
+  li { font-size: 12.5px; line-height: 1.55; margin: 4px 0; }
+  code { background: #f3f4f6; padding: 2px 4px; border-radius: 4px; font-family: Menlo, Consolas, monospace; font-size: 11.5px; }
+  pre { background: #111827; color: #f9fafb; padding: 12px; border-radius: 6px; font-size: 11px; line-height: 1.4; overflow-wrap: break-word; white-space: pre-wrap; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+  strong { font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>Dealer Onboarding Playbook (Detailed)</h1>
+<h2>Dealer Onboarding Playbook (Detailed)</h2><h2>Purpose</h2><p>This playbook walks a non‑technical operator through setting up a new dealer instance of ThrottleIQ end‑to‑end. It covers every per‑dealer variable you need to set, how to set it, and how to validate it.</p><h2>What Changes Per Dealer</h2><ol><li>Twilio credentials and phone number.</li><li>SendGrid API key and sender authentication.</li><li>Google OAuth credentials and calendar IDs.</li><li>Dealer profile fields (name, agent, phone, website, email signature, logo).</li><li>Inventory feed URLs.</li><li>CRM provider credentials and CRM lead source overlays.</li><li>Lead source rules and website provider selection.</li><li>Data directory path (if you separate instances).</li></ol><hr /><h2>Step 0: Gather the Required Accounts and Access</h2><ol><li>Server access (SSH key) for the dealer instance.</li><li>Domain and DNS access (or ability to request DNS changes from the website provider).</li><li>Twilio account with a phone number for SMS.</li><li>SendGrid account and API key.</li><li>Google Cloud project with OAuth credentials.</li><li>CRM credentials (for Playwright automation, if enabled).</li><li>Dealer inventory feed URL.</li></ol><hr /><h2>Step 1: Provision the Server</h2><ol><li>SSH into the server.</li><li>Confirm Node, npm, and PM2 are installed.</li><li>If missing, install Node 20 and PM2.</li></ol><p>Commands:</p><pre><code>node -v
+npm -v
+pm2 -v
+</code></pre><hr /><h2>Step 2: Clone and Install the Repo</h2><ol><li>Clone or update the repo.</li><li>Install dependencies.</li></ol><p>Commands:</p><pre><code>cd /home/ubuntu
+if [ ! -d throttleiq ]; then
+  git clone https://github.com/jrich90b/throttleiq.git
+fi
+cd /home/ubuntu/throttleiq
+npm install
+</code></pre><hr /><h2>Step 3: Create Runtime Data Directory</h2><p>ThrottleIQ uses a runtime data directory that must be writable by the API.</p><p>Commands:</p><pre><code>sudo mkdir -p /home/ubuntu/throttleiq-runtime/data
+sudo mkdir -p /home/ubuntu/throttleiq-runtime/data/lead_sources
+sudo mkdir -p /home/ubuntu/throttleiq-runtime/data/uploads
+sudo chown -R ubuntu:ubuntu /home/ubuntu/throttleiq-runtime
+</code></pre><hr /><h2>Step 4: Seed Lead Source Catalogs</h2><p>The base catalog is <code>hdmc.json</code>. Optional overlays: <code>tlp.json</code>, <code>room58.json</code>, etc.</p><p>Commands:</p><pre><code>cp -v /home/ubuntu/throttleiq/services/api/data/lead_sources/hdmc.json \
+  /home/ubuntu/throttleiq-runtime/data/lead_sources/hdmc.json
+
+# Optional overlay examples
+cp -v /home/ubuntu/throttleiq/services/api/data/lead_sources/tlp.json \
+  /home/ubuntu/throttleiq-runtime/data/lead_sources/tlp.json || true
+cp -v /home/ubuntu/throttleiq/services/api/data/lead_sources/room58.json \
+  /home/ubuntu/throttleiq-runtime/data/lead_sources/room58.json || true
+</code></pre><hr /><h2>Step 5: Create the API .env File</h2><p>The API needs a <code>.env</code> file. Use this template and fill in values.</p><p>File: <code>services/api/.env</code></p><pre><code>DATA_DIR=/home/ubuntu/throttleiq-runtime/data
+SCHEDULER_CONFIG_PATH=/home/ubuntu/throttleiq-runtime/data/scheduler_config.json
+
+TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TWILIO_AUTH_TOKEN=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TWILIO_FROM_NUMBER=+1XXXXXXXXXX
+
+SENDGRID_API_KEY=SG.xxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+OPENAI_MODEL=gpt-5-mini
+LLM_ENABLED=1
+
+GOOGLE_CLIENT_ID=xxxxxxxx.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=xxxxxxxx
+GOOGLE_REDIRECT_URI=https://api.&lt;dealer-domain&gt;/integrations/google/callback
+
+INVENTORY_XML_URL=https://&lt;dealer-site&gt;/inventory/xml?location=XXX
+INVENTORY_LIST_URLS=https://&lt;dealer-site&gt;/new-inventory?... (optional)
+INVENTORY_MAX_PAGES=15
+
+CRM_PROVIDER=tlp
+TLP_BASE_URL=https://tlpcrm.com
+TLP_USERNAME=...
+TLP_PASSWORD=...
+TLP_HEADLESS=true
+</code></pre><hr /><h2>Step 6: Load .env into PM2</h2><p>PM2 does not automatically read <code>.env</code>. You must inject the vars into the PM2 process.</p><p>Commands:</p><pre><code>cd /home/ubuntu/throttleiq/services/api
+
+eval "$(
+python3 - &lt;&lt;'PY'
+import shlex
+path="/home/ubuntu/throttleiq/services/api/.env"
+for line in open(path):
+    line=line.strip()
+    if not line or line.startswith("#") or "=" not in line: continue
+    k,v=line.split("=",1)
+    print(f"export {k}={shlex.quote(v)}")
+PY
+)"
+
+pm2 restart /home/ubuntu/throttleiq/ecosystem.config.cjs --update-env
+
+PID=$(pm2 pid throttleiq-api)
+tr '\0' '\n' &lt; /proc/$PID/environ | egrep "TWILIO_|SENDGRID|OPENAI_|GOOGLE_|CRM_PROVIDER|DATA_DIR"
+</code></pre><hr /><h2>Step 7: Configure Twilio</h2><ol><li>Buy a Twilio number.</li><li>Set webhook to:</li></ol><p>   <code>https://api.&lt;dealer-domain&gt;/webhooks/twilio</code></p><ol><li>Validate inbound:</li></ol><p>Commands:</p><pre><code>pm2 logs throttleiq-api --lines 200 | grep -i twilio
+</code></pre><hr /><h2>Step 8: Configure SendGrid</h2><p>You must authenticate sending.</p><h2>Option A: Domain Authentication (best)</h2><ol><li>SendGrid → Settings → Sender Authentication</li><li>Authenticate domain or subdomain</li><li>Ask website provider to add DNS records</li><li>Wait for “verified”</li></ol><h2>Option B: Single Sender Verification (fast)</h2><ol><li>SendGrid → Verify an Address</li><li>Verify <code>sales@dealer.com</code></li></ol><h2>Set dealer profile email fields</h2><ul><li>From Email</li><li>Reply‑To Email</li><li>Email Signature</li></ul><hr /><h2>Step 9: Configure Google Calendar</h2><ol><li>Create a Google Cloud OAuth app</li><li>Set redirect URI to:</li></ol><p>   <code>https://api.&lt;dealer-domain&gt;/integrations/google/callback</code></p><ol><li>Connect in UI (Settings → Scheduling)</li></ol><h2>Validate</h2><pre><code>pm2 logs throttleiq-api --lines 200 | grep -i gcal
+</code></pre><hr /><h2>Step 10: Configure Scheduler</h2><p>Set in UI:</p><ol><li>Salespeople + calendar IDs</li><li>Business hours</li><li>Appointment types</li></ol><p>Validate:</p><pre><code>TOKEN=...  # from sessions.json
+curl -s -H "x-auth-token: $TOKEN" http://localhost:3001/scheduler-config
+</code></pre><hr /><h2>Step 11: Configure Dealer Profile</h2><p>In UI Settings → Dealer Profile:</p><ol><li>Dealer name</li><li>Agent name</li><li>Phone and website</li><li>Email signature and logo</li><li>CRM Provider</li><li>Website Provider</li><li>Follow‑up test ride months</li></ol><hr /><h2>Step 12: Inventory Feeds</h2><p>Set <code>INVENTORY_XML_URL</code> or <code>INVENTORY_LIST_URLS</code>.</p><p>Validate with:</p><pre><code>curl -s http://localhost:3001/debug/inventory-price?stock=YOUR_STOCK
+</code></pre><hr /><h2>Step 13: CRM Playwright (if enabled)</h2><p>Set CRM credentials and test logging.</p><p>Validate:</p><pre><code>pm2 logs throttleiq-api --lines 200 | grep -i "TLP log"
+</code></pre><hr /><h2>Step 14: Validation Checklist</h2><ol><li>ADF inbound lead shows in UI.</li><li>Twilio inbound SMS shows in UI.</li><li>Twilio outbound sends.</li><li>SendGrid outbound sends.</li><li>Calendar suggestions appear.</li><li>Appointment booking works.</li><li>Lead source classification matches source.</li><li>Follow‑up cadence behaves per lead type.</li></ol><hr /><h2>Troubleshooting Quick Hits</h2><ol><li>No SMS: verify Twilio webhook and env.</li><li>No email: verify SendGrid key and sender authentication.</li><li>No calendar times: verify scheduler config + Google tokens.</li><li>Lead not showing: verify DATA_DIR path and conversation store.</li><li>Wrong lead classification: check catalog overlay in runtime.</li></ol><hr /><h2>Security and Maintenance</h2><ol><li>Rotate keys regularly.</li><li>Restrict SSH access.</li><li>Backup <code>/home/ubuntu/throttleiq-runtime/data</code>.</li><li>Keep SendGrid and Twilio logs.</li></ol><hr /><h2>Scaling Notes</h2><ol><li>Prefer domain authentication per dealer.</li><li>Use website‑provider subdomain if root DNS not editable.</li><li>Store dealer‑specific lead source overlays in runtime.</li><li>Keep per‑dealer inventory feeds.</li></ol>
+</body>
+</html>
