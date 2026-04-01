@@ -1248,13 +1248,22 @@ export async function parseSemanticSlotsWithLLM(args: {
     /\b(let me know|keep me posted|keep an eye out|watch for|notify me|text me|shoot me (a )?text|send (one|it) my way)\b/.test(
       textLower
     ) && /\b(if|when|once|as soon as)\b/.test(textLower);
-  const hasWatchStopCue =
+  const hasWatchStopAction =
     /\b(stop|cancel|remove|delete|turn off|pause|disable|end|no more|don't|dont|do not)\b/.test(
       textLower
-    ) &&
-    /\b(watch|alerts?|updates?|notifications?|inventory|availability)\b/.test(textLower);
+    );
+  const hasWatchStopContext =
+    /\b(watch|alerts?|updates?|notifications?|inventory|availability)\b/.test(textLower) ||
+    /\b(keep(?:ing)? an eye out|watch for|notify me|text me)\b/.test(textLower) ||
+    /\b(if|when|once|as soon as)\b[\s\w-]{0,28}\b(comes in|in stock|available|lands)\b/.test(
+      textLower
+    );
+  const hasWatchStopCue = hasWatchStopAction && hasWatchStopContext;
   if (watchAction === "set_watch" && !hasWatchSetCue && !watch && !pending) {
     watchAction = "none";
+  }
+  if (watchAction === "none" && hasWatchStopCue) {
+    watchAction = "stop_watch";
   }
   if (watchAction === "stop_watch" && !hasWatchStopCue && !watch && !pending) {
     watchAction = "none";
