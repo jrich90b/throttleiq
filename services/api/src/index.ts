@@ -139,6 +139,7 @@ import {
   mergeConversationLead,
   setConversationMode,
   setContactPreference,
+  registerScheduleInviteSent,
   updateConversationContact,
   setCrmLastLoggedAt,
   setVoiceContext,
@@ -1483,6 +1484,8 @@ async function resetFollowUpCadenceOnInbound(conv: any, inboundText: string) {
   cadence.lastSentStep = undefined;
   cadence.pausedUntil = undefined;
   cadence.pauseReason = undefined;
+  cadence.scheduleInviteCount = 0;
+  cadence.scheduleMuted = false;
 }
 
 async function suppressRelatedPhones(
@@ -2291,6 +2294,20 @@ const EMAIL_FOLLOW_UP_MESSAGES: Array<(ctx: EmailFollowUpCtx) => string> = [
     `Hi ${name},\n\nShould I hold a time for you to see ${label}? ${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
     `Hi ${name},\n\nStill interested in taking a look at ${label}? ${bookingLine}\n\nThanks,`
+];
+
+const SCHEDULE_INVITE_THRESHOLD = 3;
+
+const FRESH_INFO_FOLLOW_UPS = [
+  "Hi {name} — just circling back with a quick payment estimate for{labelClause}. Want me to keep an eye on similar inventory or hold this for you?",
+  "Hi {name} — I can text you a payment breakdown or financing detail for{labelClause}. Want me to keep watching similar bikes while you decide?",
+  "Hi {name} — want me to keep tabs on{labelClause}? I can send a quick financing detail or payment estimate and watch for similar inventory if that helps."
+];
+
+const SOFT_EXIT_FOLLOW_UPS = [
+  "Hi {name} — totally understand if now isn’t the time. I’ll text you when something similar lands or if anything changes. Want me to keep an eye on this kind of bike?",
+  "Hi {name} — no rush. I can text as soon as a similar bike or price pops up. Want me to keep watching for you?",
+  "Hi {name} — sounds like you want to wait. I’ll keep an eye on{labelClause} and text if something similar clears the floor. Want me to keep you posted?"
 ];
 
 function isUnknownInterestVehicle(conv: any): boolean {
@@ -6978,11 +6995,32 @@ async function processDueFollowUps() {
     }
 
     const allowProactiveSchedule = shouldAllowProactiveScheduleAsk(conv, now);
-    if (conv.scheduleSoft && !allowProactiveSchedule) {
-      message = stripSchedulingPromptFromFollowUp(message);
-    }
-    if (allowProactiveSchedule && conv.scheduleSoft && draftHasSchedulingPrompt(message)) {
-      conv.scheduleSoft.lastAskAt = nowIso();
+    if (conv.followUpCadence?.scheduleMuted) {
+      const baseCtx = {
+        name: firstName,
+        agent: agentName,
+        labelClause,
+        model: modelName,
+        extraLine,
+        trade: tradeName,
+        modelYear,
+        label: labelWithThe
+      };
+      const pool = (conv.followUpCadence.scheduleInviteCount ?? 0) < SCHEDULE_INVITE_THRESHOLD
+        ? FRESH_INFO_FOLLOW_UPS
+        : SOFT_EXIT_FOLLOW_UPS;
+      const messageIdx = (conv.followUpCadence.scheduleInviteCount ?? 0) % pool.length;
+      message = renderFollowUpTemplate(pool[messageIdx], baseCtx);
+    } else {
+      if (conv.scheduleSoft && !allowProactiveSchedule) {
+        message = stripSchedulingPromptFromFollowUp(message);
+      }
+      if (allowProactiveSchedule && conv.scheduleSoft && draftHasSchedulingPrompt(message)) {
+        conv.scheduleSoft.lastAskAt = nowIso();
+      }
+      if (draftHasSchedulingPrompt(message)) {
+        registerScheduleInviteSent(conv);
+      }
     }
 
     if (!isPostSale && cadence.kind !== "long_term") {

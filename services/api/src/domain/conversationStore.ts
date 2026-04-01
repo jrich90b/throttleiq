@@ -131,6 +131,8 @@ export type FollowUpCadence = {
   contextTag?: string;
   contextTagUpdatedAt?: string;
   usedVariants?: Record<string, string[]>;
+  scheduleInviteCount?: number;
+  scheduleMuted?: boolean;
 };
 
 export type PricingObjectionState = {
@@ -1707,7 +1709,9 @@ export function startFollowUpCadence(conv: Conversation, anchorAtIso: string, ti
     anchorAt: anchorAtIso,
     nextDueAt,
     stepIndex: 0,
-    kind: "standard"
+    kind: "standard",
+    scheduleInviteCount: 0,
+    scheduleMuted: false
   };
   conv.updatedAt = nowIso();
   scheduleSave();
@@ -1721,7 +1725,9 @@ export function startPostSaleCadence(conv: Conversation, anchorAtIso: string, ti
     anchorAt: anchorAtIso,
     nextDueAt,
     stepIndex: 0,
-    kind: "post_sale"
+    kind: "post_sale",
+    scheduleInviteCount: 0,
+    scheduleMuted: false
   };
   conv.updatedAt = nowIso();
   scheduleSave();
@@ -1739,7 +1745,9 @@ export function scheduleLongTermFollowUp(
     nextDueAt: dueAtIso,
     stepIndex: 0,
     kind: "long_term",
-    deferredMessage: message
+    deferredMessage: message,
+    scheduleInviteCount: 0,
+    scheduleMuted: false
   };
   conv.updatedAt = nowIso();
   scheduleSave();
@@ -1768,6 +1776,24 @@ export function pauseFollowUpCadence(conv: Conversation, untilIso: string, reaso
     if (!current || Number.isNaN(current.getTime()) || current.getTime() < until.getTime()) {
       conv.followUpCadence.nextDueAt = until.toISOString();
     }
+  }
+  conv.updatedAt = nowIso();
+  scheduleSave();
+}
+
+export function resetScheduleInviteCounter(conv: Conversation) {
+  if (!conv.followUpCadence) return;
+  conv.followUpCadence.scheduleInviteCount = 0;
+  conv.followUpCadence.scheduleMuted = false;
+  conv.updatedAt = nowIso();
+  scheduleSave();
+}
+
+export function registerScheduleInviteSent(conv: Conversation, threshold = 3) {
+  if (!conv.followUpCadence) return;
+  conv.followUpCadence.scheduleInviteCount = (conv.followUpCadence.scheduleInviteCount ?? 0) + 1;
+  if ((conv.followUpCadence.scheduleInviteCount ?? 0) >= threshold) {
+    conv.followUpCadence.scheduleMuted = true;
   }
   conv.updatedAt = nowIso();
   scheduleSave();
