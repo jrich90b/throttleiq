@@ -10824,6 +10824,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     providerMessageId: inbound.providerMessageId ?? `regen_${Date.now()}`,
     receivedAt: inbound.at ?? new Date().toISOString()
   };
+  const appendSmsRegeneratedDraft = (text: string) => {
+    const from = String(event.to ?? "dealership").trim() || "dealership";
+    const leadKey = String(conv.leadKey ?? "").trim();
+    const to = leadKey || String(event.from ?? "").trim();
+    appendOutbound(conv, from, to, text, "draft_ai");
+  };
 
   const history = buildHistory(conv, 60);
   const memorySummary = conv.memorySummary?.text ?? null;
@@ -10958,11 +10964,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       return res.json({ ok: true, conversation: conv, draft: reply });
     }
     discardPendingDrafts(conv);
-    appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+    appendSmsRegeneratedDraft(reply);
     saveConversation(conv);
     return res.json({ ok: true, conversation: conv, draft: reply });
   }
-  let mentionedUser = findMentionedUser(event.body ?? "", usersForMentions);
+  let mentionedUser =
+    event.provider === "sendgrid_adf" ? null : findMentionedUser(event.body ?? "", usersForMentions);
   if (!mentionedUser && inboundReferencesOtherPerson(event.body ?? "")) {
     mentionedUser = findUserFromRecentOutbound(conv, usersForMentions);
   }
@@ -10990,7 +10997,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       : `I'll let ${firstName} know.`;
     const reply = `${intro}${empathyNeeded ? "I'm really sorry to hear that. " : "Got it — "}${handoff}`;
     discardPendingDrafts(conv);
-    appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+    appendSmsRegeneratedDraft(reply);
     saveConversation(conv);
     return res.json({ ok: true, conversation: conv, draft: reply });
   }
@@ -11014,7 +11021,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       return res.json({ ok: true, conversation: conv, draft: reply });
     }
     discardPendingDrafts(conv);
-    appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+    appendSmsRegeneratedDraft(reply);
     saveConversation(conv);
     return res.json({ ok: true, conversation: conv, draft: reply });
   }
@@ -11027,7 +11034,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       return res.json({ ok: true, conversation: conv, draft: reply });
     }
     discardPendingDrafts(conv);
-    appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+    appendSmsRegeneratedDraft(reply);
     saveConversation(conv);
     return res.json({ ok: true, conversation: conv, draft: reply });
   }
@@ -11061,7 +11068,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         return res.json({ ok: true, conversation: conv, draft: reply });
       }
       discardPendingDrafts(conv);
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      appendSmsRegeneratedDraft(reply);
       saveConversation(conv);
       return res.json({ ok: true, conversation: conv, draft: reply });
     }
@@ -11073,7 +11080,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         return res.json({ ok: true, conversation: conv, draft: reply });
       }
       discardPendingDrafts(conv);
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      appendSmsRegeneratedDraft(reply);
       saveConversation(conv);
       return res.json({ ok: true, conversation: conv, draft: reply });
     }
@@ -11177,7 +11184,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
 
   discardPendingDrafts(conv);
-  appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+  appendSmsRegeneratedDraft(reply);
   saveConversation(conv);
   return res.json({
     ok: true,
