@@ -6815,7 +6815,7 @@ async function processDueFollowUps() {
         if (!pickupKnown) {
           const pickupNeedTown = [
             `Just checking in — if you want us to pick up ${sellBikeLabel ?? "your bike"} for a trade evaluation, let me know where you’re located.`,
-            `Quick follow-up — if pickup is easier, send me your town and I can check range for ${sellBikeLabel ?? "your bike"}.`,
+            `Quick follow-up — if pickup is easier, send me your town and I can see if we can arrange a pickup for ${sellBikeLabel ?? "your bike"}.`,
             `Whenever you're ready, share your location and I can confirm pickup options for ${sellBikeLabel ?? "your bike"}.`
           ];
           message = pickVariantNoRepeat(
