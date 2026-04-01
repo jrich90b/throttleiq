@@ -82,9 +82,9 @@ function isEmojiOnly(text: string): boolean {
 
 function extractDayPart(text: string): string | null {
   const t = String(text ?? "").toLowerCase();
-  const m = t.match(/\b(morning|afternoon|evening|tonight)\b/);
+  const m = t.match(/\b(morning|afternoon|evening|tonight|tonite)\b/);
   if (!m) return null;
-  return m[1] === "tonight" ? "evening" : m[1];
+  return m[1] === "tonight" || m[1] === "tonite" ? "evening" : m[1];
 }
 
 function extractDayName(text: string): string | null {
@@ -1037,7 +1037,7 @@ function inferRequestedDay(text: string): string | null {
   if (/(wed|wednesday)/.test(t)) return "wednesday";
   if (/(thu|thursday)/.test(t)) return "thursday";
   if (/(fri|friday)/.test(t)) return "friday";
-  if (/(today)/.test(t)) return "today";
+  if (/(today|tonight|tonite)/.test(t)) return "today";
   if (/(tomorrow)/.test(t)) return "tomorrow";
   return null;
 }

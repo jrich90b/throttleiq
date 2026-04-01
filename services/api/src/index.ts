@@ -4328,16 +4328,16 @@ function isExplicitScheduleIntent(text: string): boolean {
 
 function extractDayPart(text: string): string | null {
   const t = String(text ?? "").toLowerCase();
-  const m = t.match(/\b(morning|afternoon|evening|tonight)\b/);
+  const m = t.match(/\b(morning|afternoon|evening|tonight|tonite)\b/);
   if (!m) return null;
-  return m[1] === "tonight" ? "evening" : m[1];
+  return m[1] === "tonight" || m[1] === "tonite" ? "evening" : m[1];
 }
 
 const SOFT_SCHEDULE_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
 
 function detectSoftVisitIntent(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
-  const hasDayPart = /\b(morning|afternoon|evening|tonight)\b/i.test(t);
+  const hasDayPart = /\b(morning|afternoon|evening|tonight|tonite)\b/i.test(t);
   const hasTime = /\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b/i.test(t);
   if (hasTime) return false;
   if (isExplicitScheduleIntent(t)) return false;
@@ -4363,7 +4363,7 @@ function detectSchedulingSignals(text: string) {
     /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week|this weekend|weekend|next month)\b/i.test(
       t
     );
-  const hasDayPart = /\b(morning|afternoon|evening|tonight)\b/i.test(t);
+  const hasDayPart = /\b(morning|afternoon|evening|tonight|tonite)\b/i.test(t);
   const hasTimeWord = /\b(\d{1,2}):(\d{2})\s*(am|pm)?\b/i.test(t);
   const hasAtHour = /\b(?:at|for|around|by)\s*(\d{1,2})(?::\d{2})?\b(?!\s*\/)/i.test(t);
   const hasDayTime = hasDayToken && (hasTimeWord || hasAtHour);
@@ -13388,7 +13388,18 @@ if (authToken && signature) {
     const cfg = await getSchedulerConfig();
     const dealerProfile = await getDealerProfile();
     const country = dealerProfile?.address?.country ?? null;
-    const dayRequest = extractDayRequest(textLower);
+    const directDayRequest = extractDayRequest(textLower);
+    const wantsToday = /\btoday\b/.test(textLower);
+    const wantsTomorrow = /\btomorrow\b/.test(textLower);
+    const wantsTonight = /\b(tonight|tonite)\b/.test(textLower);
+    let dayRequest = directDayRequest;
+    if (!dayRequest && (wantsToday || wantsTonight)) {
+      dayRequest = dayKey(new Date(), cfg.timezone);
+    } else if (!dayRequest && wantsTomorrow) {
+      const nextDay = new Date();
+      nextDay.setDate(nextDay.getDate() + 1);
+      dayRequest = dayKey(nextDay, cfg.timezone);
+    }
     const hoursLine = formatBusinessHoursForReply(cfg.businessHours, country);
     let reply = "Our hours vary by day. What day are you thinking?";
     if (dayRequest) {
@@ -13396,10 +13407,20 @@ if (authToken && signature) {
       if (dayHours?.open && dayHours?.close) {
         const open = formatTime12h(dayHours.open);
         const close = formatTime12h(dayHours.close);
-        const dayLabel = dayRequest.replace(/^\w/, c => c.toUpperCase());
+        const dayLabel =
+          wantsTonight || wantsToday
+            ? "today"
+            : wantsTomorrow
+              ? "tomorrow"
+              : dayRequest.replace(/^\w/, c => c.toUpperCase());
         reply = `Our hours on ${dayLabel} are ${open}–${close}.`;
       } else {
-        const dayLabel = dayRequest.replace(/^\w/, c => c.toUpperCase());
+        const dayLabel =
+          wantsTonight || wantsToday
+            ? "today"
+            : wantsTomorrow
+              ? "tomorrow"
+              : dayRequest.replace(/^\w/, c => c.toUpperCase());
         reply = `We’re closed on ${dayLabel}.`;
       }
     } else if (hoursLine) {
