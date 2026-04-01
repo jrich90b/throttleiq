@@ -1698,7 +1698,45 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       conv.updatedAt = new Date().toISOString();
       saveConversation(conv);
     }
+    const hasDepositSignal =
+      /\b(left|put|placed|took|received)\s+(a\s+)?deposit\b/.test(commentLower) ||
+      /\bdeposit\s+(left|taken|received|put|placed)\b/.test(commentLower);
+    const hasSoldSignal = /\b(sold|delivered|picked up)\b/.test(commentLower);
+    const hasCreditCosignerSignal =
+      (/\b(credit app|credit application|finance app|finance application|ran credit)\b/.test(commentLower) &&
+        /\b(co[-\s]?signer|cosigner)\b/.test(commentLower)) ||
+      /\bneeds?\s+(a\s+)?co[-\s]?signer\b/.test(commentLower);
+    const hasCompletedTestRideSignal =
+      /\b(took|completed|did|finished)\s+(a\s+)?(test ride|demo ride)\b/.test(commentLower) ||
+      /\b(test ride|demo ride)\s+(completed|done)\b/.test(commentLower);
+
+    if (hasCreditCosignerSignal) {
+      conv.dialogState = { name: "payments_handoff", updatedAt: new Date().toISOString() };
+      addTodo(conv, "approval", event.body ?? walkInCleanedComment, event.providerMessageId);
+      setFollowUpMode(conv, "manual_handoff", "credit_app_cosigner");
+      stopFollowUpCadence(conv, "manual_handoff");
+    }
+    if (hasDepositSignal || hasSoldSignal) {
+      conv.dialogState = { name: "schedule_booked", updatedAt: new Date().toISOString() };
+      addTodo(conv, "other", event.body ?? walkInCleanedComment, event.providerMessageId);
+      setFollowUpMode(conv, "manual_handoff", hasSoldSignal ? "sold_walkin_note" : "deposit_walkin_note");
+      stopFollowUpCadence(conv, "manual_handoff");
+      if (hasSoldSignal) {
+        closeConversation(conv, "sold_walkin_note");
+      }
+    } else if (hasCompletedTestRideSignal) {
+      conv.dialogState = { name: "test_ride_booked", updatedAt: new Date().toISOString() };
+    }
     let tail = "I’ll keep an eye out and let you know if one comes in.";
+    if (hasCreditCosignerSignal) {
+      tail = "I saw the credit app note and I’ll have our finance team follow up about the co-signer.";
+    } else if (hasDepositSignal || hasSoldSignal) {
+      tail = hasSoldSignal
+        ? "Thanks again — we’ll take it from here and follow up if anything is needed."
+        : "Thanks for the deposit note — we’ll follow up with next steps.";
+    } else if (hasCompletedTestRideSignal) {
+      tail = "Thanks for taking the test ride — I’ll follow up with next steps.";
+    }
     if (/(test ride|demo ride)/i.test(walkInCleanedComment) && /weather/i.test(walkInCleanedComment)) {
       tail = "I’ll reach back when the weather looks better and we can line up your test ride.";
     } else if (/(test ride|demo ride)/i.test(walkInCleanedComment) && /(next week|check back|reach out|follow up)/i.test(walkInCleanedComment)) {
@@ -1743,7 +1781,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       tail +
       (addendum ? ` ${addendum}` : "");
 
-    if (modelLabel && wantsUsed && !hasUsedMatch) {
+    if (modelLabel && wantsUsed && !hasUsedMatch && !(hasDepositSignal || hasSoldSignal || hasCreditCosignerSignal)) {
       const watch: InventoryWatch = {
         model: modelLabel,
         condition: "used",
@@ -1771,7 +1809,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       !conv.appointment?.bookedEventId &&
       conv.followUp?.mode !== "holding_inventory" &&
       conv.followUp?.mode !== "manual_handoff" &&
-      conv.followUp?.mode !== "paused_indefinite";
+      conv.followUp?.mode !== "paused_indefinite" &&
+      !hasDepositSignal &&
+      !hasSoldSignal &&
+      !hasCreditCosignerSignal;
     if (shouldStartWalkInCadence) {
       const cfg = await getSchedulerConfig();
       startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
