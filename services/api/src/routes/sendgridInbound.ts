@@ -1229,6 +1229,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   });
   const meta = extractLeadMeta(adfXml);
   const leadSource = meta.leadSource?.trim() || undefined;
+  const leadSourceLower = (leadSource ?? "").toLowerCase();
   const vendorContactName = meta.vendorContactName?.trim() || "";
   const leadSourceId = lead.leadSourceId ?? undefined;
   const timeframeInfo = parseTimeframeMonths(lead.purchaseTimeframe);
@@ -1237,11 +1238,20 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     lead.vehicleModel ?? meta.model ?? lead.vehicleDescription ?? undefined,
     make ?? null
   );
+  const isMarketplaceRelaySource =
+    leadSourceLower.includes("autodealers.digital") ||
+    leadSourceLower.includes("autodealersdigital.com") ||
+    leadSourceLower.includes("facebook marketplace");
+  const leadPhone = lead.phone?.trim() || undefined;
+  const leadEmail = lead.email?.trim() || undefined;
+  const leadEmailForConversation = isMarketplaceRelaySource ? undefined : leadEmail;
+  const relayOnlyMarketplaceLead = isMarketplaceRelaySource && !leadPhone;
 
   // Choose a stable conversation key
   const leadKey =
-    (lead.phone && lead.phone.trim()) ||
-    (lead.email && lead.email.trim()) ||
+    leadPhone ||
+    leadEmailForConversation ||
+    (isMarketplaceRelaySource && leadRef ? `adf_ref_${leadRef}` : "") ||
     `unknown_${Date.now()}`;
 
   const conv = upsertConversationByLeadKey(leadKey, "suggest");
@@ -1253,8 +1263,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     lastName: lead.lastName,
     preferredDate: lead.preferredDate,
     preferredTime: lead.preferredTime,
-    email: lead.email,
-    phone: lead.phone,
+    email: leadEmailForConversation,
+    phone: leadPhone,
     street: lead.street,
     city: lead.city,
     region: lead.region,
@@ -1303,8 +1313,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     firstName: lead.firstName,
     lastName: lead.lastName,
     name: [lead.firstName, lead.lastName].filter(Boolean).join(" ").trim() || undefined,
-    email: lead.email,
-    phone: lead.phone,
+    email: leadEmailForConversation,
+    phone: leadPhone,
     vehicleDescription: lead.vehicleDescription ?? meta.model,
     stockId: lead.stockId,
     vin: lead.vin,
@@ -1330,7 +1340,6 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const hasStockIntent =
     !!lead.stockId || !!lead.vin || inquiryText.includes("available");
 
-  const leadSourceLower = (leadSource ?? "").toLowerCase();
   let inferredBucket = rule.bucket;
   let inferredCta = rule.cta;
   if (!leadSource || rule.ruleName === "default") {
@@ -1444,7 +1453,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const event: InboundMessageEvent = {
     channel: "email",
     provider: "sendgrid_adf",
-    from: lead.email || lead.phone || "unknown_sender",
+    from: leadEmailForConversation || leadPhone || leadKey || "unknown_sender",
     to: "dealership",
     body: inboundBody,
     providerMessageId: String(req.body?.MessageID ?? req.body?.message_id ?? ""),
@@ -1472,6 +1481,19 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   discardPendingDrafts(conv, "new_inbound");
   confirmAppointmentIfMatchesSuggested(conv, event.body, event.providerMessageId);
   updateHoldingFromInbound(conv, event.body);
+
+  if (relayOnlyMarketplaceLead) {
+    if (conv.followUp?.reason !== "marketplace_relay") {
+      addTodo(
+        conv,
+        "other",
+        "Marketplace relay lead: reply in the marketplace inbox (no direct SMS/email channel on this lead).",
+        event.providerMessageId
+      );
+    }
+    setFollowUpMode(conv, "manual_handoff", "marketplace_relay");
+    stopFollowUpCadence(conv, "manual_handoff");
+  }
 
   if (callOnlyRequested) {
     setContactPreference(conv, "call_only");
@@ -2486,6 +2508,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const shouldStartCadence =
     !conv.followUpCadence?.status &&
     !conv.appointment?.bookedEventId &&
+    conv.followUp?.mode !== "manual_handoff" &&
+    conv.followUp?.mode !== "paused_indefinite" &&
     conv.classification?.bucket !== "finance_prequal" &&
     conv.classification?.bucket !== "service" &&
     conv.classification?.bucket !== "event_promo" &&
