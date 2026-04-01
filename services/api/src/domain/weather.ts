@@ -165,7 +165,7 @@ export async function getDealerDailyForecasts(
     `https://api.open-meteo.com/v1/forecast?latitude=${coords.lat}` +
     `&longitude=${coords.lon}` +
     `&daily=temperature_2m_max,temperature_2m_min,snowfall_sum` +
-    `&forecast_days=7&temperature_unit=fahrenheit&timezone=auto`;
+    `&forecast_days=14&temperature_unit=fahrenheit&timezone=auto`;
   try {
     const resp = await fetch(url);
     if (!resp.ok) return null;

@@ -6455,6 +6455,155 @@ async function buildDay2Options(
   return null;
 }
 
+type WeatherFollowUpWindow = {
+  startDate: string;
+  endDate: string;
+  leadDaysPreferred: number;
+};
+
+function zonedDateParts(
+  date: Date,
+  timeZone: string
+): { year: number; month: number; day: number; weekday: number } {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short"
+  });
+  const parts = fmt.formatToParts(date);
+  const map: Record<string, string> = {};
+  for (const p of parts) {
+    if (p.type !== "literal") map[p.type] = p.value;
+  }
+  const weekdayRaw = String(map.weekday ?? "").toLowerCase().slice(0, 3);
+  const weekdayMap: Record<string, number> = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day),
+    weekday: weekdayMap[weekdayRaw] ?? date.getUTCDay()
+  };
+}
+
+function ymd(parts: { year: number; month: number; day: number }) {
+  return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+function addDaysYmd(dateYmd: string, days: number) {
+  const [y, m, d] = dateYmd.split("-").map(Number);
+  const base = new Date(Date.UTC(y, m - 1, d));
+  base.setUTCDate(base.getUTCDate() + days);
+  return `${base.getUTCFullYear()}-${String(base.getUTCMonth() + 1).padStart(2, "0")}-${String(
+    base.getUTCDate()
+  ).padStart(2, "0")}`;
+}
+
+function extractWeatherFollowUpWindow(comment: string, now: Date, timeZone: string): WeatherFollowUpWindow | null {
+  const t = String(comment ?? "").toLowerCase().trim();
+  if (!t) return null;
+  const hasWeatherCue =
+    /\b(weather|nice day|warmer|warm up|when it warms|when weather improves|weather looks better|better weather)\b/.test(
+      t
+    );
+  const hasTimingCue =
+    /\b(next week|this week|this weekend|next weekend|end of next week|later next week|friday|saturday|sunday|monday|tuesday|wednesday|thursday|tomorrow)\b/.test(
+      t
+    );
+  if (!hasWeatherCue || !hasTimingCue) return null;
+
+  let leadDaysPreferred = 2;
+  if (/\b(one|1)\s+day\s+before\b/.test(t)) leadDaysPreferred = 1;
+  if (/\b(two|2|couple)\s+days?\s+before\b/.test(t)) leadDaysPreferred = 2;
+  if (/\ba day or two\b|\b1 or 2 days\b/.test(t)) leadDaysPreferred = 2;
+
+  const todayParts = zonedDateParts(now, timeZone);
+  const todayYmd = ymd(todayParts);
+  const mondayOffset = todayParts.weekday === 0 ? -6 : 1 - todayParts.weekday;
+  const mondayThisWeek = addDaysYmd(todayYmd, mondayOffset);
+  const mondayNextWeek = addDaysYmd(mondayThisWeek, 7);
+
+  if (/\b(end of next week|late next week|later next week)\b/.test(t)) {
+    return {
+      startDate: addDaysYmd(mondayNextWeek, 3),
+      endDate: addDaysYmd(mondayNextWeek, 6),
+      leadDaysPreferred
+    };
+  }
+  if (/\bnext week\b/.test(t)) {
+    return {
+      startDate: mondayNextWeek,
+      endDate: addDaysYmd(mondayNextWeek, 6),
+      leadDaysPreferred
+    };
+  }
+  if (/\bthis weekend\b/.test(t) || /\bnext weekend\b/.test(t)) {
+    const saturdayOffset = (6 - todayParts.weekday + 7) % 7;
+    if (/\bthis weekend\b/.test(t)) {
+      const thisSat = addDaysYmd(todayYmd, saturdayOffset);
+      return {
+        startDate: thisSat,
+        endDate: addDaysYmd(thisSat, 1),
+        leadDaysPreferred
+      };
+    }
+    const nextSat = addDaysYmd(todayYmd, saturdayOffset === 0 ? 7 : saturdayOffset);
+    return {
+      startDate: nextSat,
+      endDate: addDaysYmd(nextSat, 1),
+      leadDaysPreferred
+    };
+  }
+  if (/\bend of this week\b/.test(t)) {
+    return {
+      startDate: addDaysYmd(mondayThisWeek, 3),
+      endDate: addDaysYmd(mondayThisWeek, 6),
+      leadDaysPreferred
+    };
+  }
+  return null;
+}
+
+function pickBestForecastDateInWindow(
+  forecasts: DailyForecast[],
+  window: WeatherFollowUpWindow,
+  coldThresholdF: number
+): string | null {
+  const inWindow = forecasts.filter(f => f.date >= window.startDate && f.date <= window.endDate);
+  if (!inWindow.length) return null;
+
+  const nice = inWindow
+    .filter(f => !f.snow && Number(f.maxTempF ?? f.minTempF ?? Number.NEGATIVE_INFINITY) >= coldThresholdF)
+    .sort((a, b) => Number(b.maxTempF ?? b.minTempF ?? -999) - Number(a.maxTempF ?? a.minTempF ?? -999));
+  if (nice.length) return nice[0].date;
+
+  const dry = inWindow
+    .filter(f => !f.snow)
+    .sort((a, b) => Number(b.maxTempF ?? b.minTempF ?? -999) - Number(a.maxTempF ?? a.minTempF ?? -999));
+  if (dry.length) return dry[0].date;
+
+  const warmest = [...inWindow].sort(
+    (a, b) => Number(b.maxTempF ?? b.minTempF ?? -999) - Number(a.maxTempF ?? a.minTempF ?? -999)
+  );
+  return warmest[0]?.date ?? null;
+}
+
+function computeWeatherWindowFollowUpDueAt(
+  targetDateYmd: string,
+  leadDaysPreferred: number,
+  now: Date,
+  timeZone: string
+): string | null {
+  const todayYmd = ymd(zonedDateParts(now, timeZone));
+  const twoDaysOut = addDaysYmd(targetDateYmd, -Math.max(1, leadDaysPreferred));
+  const oneDayOut = addDaysYmd(targetDateYmd, -1);
+  const outreachYmd = twoDaysOut > todayYmd ? twoDaysOut : oneDayOut > todayYmd ? oneDayOut : null;
+  if (!outreachYmd) return null;
+  const [year, month, day] = outreachYmd.split("-").map(Number);
+  return localPartsToUtcDate(timeZone, { year, month, day, hour24: 10, minute: 45 }).toISOString();
+}
+
 async function processDueFollowUps() {
   const cfg = await getSchedulerConfig();
   if (cfg.enabled === false) return;
@@ -6699,6 +6848,32 @@ async function processDueFollowUps() {
       if (blockUntilMs != null && blockUntilMs > now.getTime()) {
         bumpCadenceNextDueAt(conv, new Date(blockUntilMs));
         continue;
+      }
+    }
+    if (!isPostSale && cadence.stepIndex === 0 && !conv.lead?.walkInCommentUsedAt) {
+      const walkInComment = String(conv.lead?.walkInComment ?? "").trim();
+      const weatherWindow = extractWeatherFollowUpWindow(walkInComment, now, cfg.timezone);
+      if (weatherWindow) {
+        const dailyForecasts = await getDealerDailyForecasts(dealerProfile);
+        const weatherCfg = getWeatherConfig(dealerProfile);
+        const coldThresholdF = Number(weatherCfg.coldThresholdF ?? 50);
+        if (dailyForecasts?.length) {
+          const targetDate = pickBestForecastDateInWindow(dailyForecasts, weatherWindow, coldThresholdF);
+          if (targetDate) {
+            const dueAt = computeWeatherWindowFollowUpDueAt(
+              targetDate,
+              weatherWindow.leadDaysPreferred,
+              now,
+              cfg.timezone
+            );
+            if (dueAt) {
+              const dueAtDate = new Date(dueAt);
+              if (!Number.isNaN(dueAtDate.getTime()) && dueAtDate.getTime() > now.getTime() + 5 * 60 * 1000) {
+                cadence.nextDueAt = dueAt;
+              }
+            }
+          }
+        }
       }
     }
     if (new Date(cadence.nextDueAt) > now) continue;
