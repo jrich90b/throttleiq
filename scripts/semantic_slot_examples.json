@@ -1,0 +1,94 @@
+[
+  {
+    "id": "watch_set_basic",
+    "text": "Text me if any Iron 883 comes in.",
+    "expected": {
+      "watch_action": "set_watch",
+      "department_intent": "none",
+      "watch_model_contains": "883"
+    }
+  },
+  {
+    "id": "watch_set_paraphrase",
+    "text": "If one lands, shoot me a text please.",
+    "history": [
+      {
+        "direction": "out",
+        "body": "I’m not seeing a Road Glide in that color right now. Want me to keep an eye out and text you if one comes in?"
+      }
+    ],
+    "expected": {
+      "watch_action": "set_watch",
+      "department_intent": "none",
+      "watch_model_contains": "road glide"
+    }
+  },
+  {
+    "id": "watch_stop_basic",
+    "text": "No more inventory alerts please.",
+    "expected": {
+      "watch_action": "stop_watch",
+      "department_intent": "none"
+    }
+  },
+  {
+    "id": "watch_stop_paraphrase",
+    "text": "You can stop keeping an eye out for me now.",
+    "expected": {
+      "watch_action": "stop_watch",
+      "department_intent": "none"
+    }
+  },
+  {
+    "id": "service_department",
+    "text": "Can I schedule a 3 hole oil change and NY inspection Friday?",
+    "expected": {
+      "watch_action": "none",
+      "department_intent": "service"
+    }
+  },
+  {
+    "id": "parts_department",
+    "text": "Need a part number for my 2018 Street Glide and want to order OEM parts.",
+    "expected": {
+      "watch_action": "none",
+      "department_intent": "parts"
+    }
+  },
+  {
+    "id": "apparel_department",
+    "text": "Do you carry riding jackets and gloves in XL?",
+    "expected": {
+      "watch_action": "none",
+      "department_intent": "apparel"
+    }
+  },
+  {
+    "id": "neutral_inventory_question",
+    "text": "Do you have a 2026 Road Glide in stock?",
+    "expected": {
+      "watch_action": "none",
+      "department_intent": "none"
+    }
+  },
+  {
+    "id": "watch_set_with_constraints",
+    "text": "Keep me posted if a used Low Rider ST in black comes in.",
+    "expected": {
+      "watch_action": "set_watch",
+      "department_intent": "none",
+      "watch_model_contains": "low rider st",
+      "watch_color_contains": "black",
+      "watch_condition": "used"
+    }
+  },
+  {
+    "id": "watch_set_any_year",
+    "text": "Let me know if any year Sportster 883 comes in.",
+    "expected": {
+      "watch_action": "set_watch",
+      "department_intent": "none",
+      "watch_model_contains": "883"
+    }
+  }
+]

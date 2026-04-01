@@ -18,6 +18,7 @@ import {
   summarizeSalespersonNoteWithLLM,
   parseBookingIntentWithLLM,
   parseIntentWithLLM,
+  parseSemanticSlotsWithLLM,
   parseTradePayoffWithLLM,
   summarizeVoiceTranscriptWithLLM
 } from "./domain/llmDraft.js";
@@ -11380,8 +11381,67 @@ if (authToken && signature) {
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
+
+  const semanticInboundText = String(event.body ?? "");
+  const semanticTextLower = semanticInboundText.toLowerCase();
+  const semanticShortAck = isShortAckText(semanticInboundText) || isEmojiOnlyText(semanticInboundText);
+  const semanticSlotParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_SEMANTIC_SLOT_PARSER_ENABLED === "1" &&
+    !!process.env.OPENAI_API_KEY &&
+    !semanticShortAck;
+  const semanticSlotParserHint =
+    /\b(let me know|keep me posted|keep an eye out|watch for|notify me|text me|shoot me (a )?text|if you get one|when you get one|as soon as one comes in)\b/i.test(
+      semanticTextLower
+    ) ||
+    /\b(stop|cancel|remove|delete|turn off|pause|disable|no more|don['’]?t|do not)\b/i.test(
+      semanticTextLower
+    ) ||
+    /\b(service|inspection|oil change|maintenance|repair|warranty|parts?|part number|apparel|merch|clothing|jacket|helmet|gloves|boots)\b/i.test(
+      semanticTextLower
+    ) ||
+    !!conv.inventoryWatch ||
+    !!conv.inventoryWatchPending;
+  const semanticSlotParse =
+    semanticSlotParserEligible && semanticSlotParserHint
+      ? await parseSemanticSlotsWithLLM({
+          text: semanticInboundText,
+          history: buildHistory(conv, 12),
+          lead: conv.lead,
+          inventoryWatch: conv.inventoryWatch,
+          inventoryWatchPending: conv.inventoryWatchPending,
+          dialogState: getDialogState(conv)
+        })
+      : null;
+  if (process.env.DEBUG_SEMANTIC_SLOT_PARSER === "1" && semanticSlotParse) {
+    console.log("[llm-semantic-slot-parse]", semanticSlotParse);
+  }
+  const semanticSlotConfidence =
+    typeof semanticSlotParse?.confidence === "number" ? semanticSlotParse.confidence : 0;
+  const semanticSlotConfidenceMin = Number(process.env.LLM_SEMANTIC_SLOT_CONFIDENCE_MIN ?? 0.76);
+  const semanticSlotAccepted =
+    !!semanticSlotParse &&
+    semanticSlotConfidence >= semanticSlotConfidenceMin &&
+    (semanticSlotParse.watchAction !== "none" ||
+      semanticSlotParse.departmentIntent !== "none" ||
+      !!semanticSlotParse.watch?.model ||
+      !!semanticSlotParse.watch?.year ||
+      !!semanticSlotParse.watch?.color ||
+      (!!semanticSlotParse.watch?.condition && semanticSlotParse.watch.condition !== "unknown"));
+  const semanticWatchAction =
+    semanticSlotAccepted && semanticSlotParse ? semanticSlotParse.watchAction : "none";
+  const semanticWatch =
+    semanticSlotAccepted && semanticSlotParse?.watch ? semanticSlotParse.watch : null;
+  const semanticDepartmentIntent =
+    semanticSlotAccepted &&
+    semanticSlotParse &&
+    semanticSlotParse.departmentIntent !== "none"
+      ? semanticSlotParse.departmentIntent
+      : null;
+
   if (
-    isWatchAlertStopIntent(event.body) &&
+    (isWatchAlertStopIntent(event.body) || semanticWatchAction === "stop_watch") &&
     (conv.inventoryWatchPending || conv.inventoryWatch || (conv.inventoryWatches?.length ?? 0) > 0)
   ) {
     await clearInventoryWatchState(conv, "inventory_watch_optout");
@@ -11491,9 +11551,47 @@ if (authToken && signature) {
   }
 
   const dialogState = getDialogState(conv);
+  const inboundDepartmentIntent = inferDepartmentFromText(event.body ?? "") ?? semanticDepartmentIntent;
+  if (inboundDepartmentIntent === "parts" || inboundDepartmentIntent === "apparel") {
+    conv.classification = {
+      ...(conv.classification ?? {}),
+      bucket: inboundDepartmentIntent,
+      cta: `${inboundDepartmentIntent}_request`
+    };
+    const hasDepartmentTodo = listOpenTodos().some(
+      t => t.convId === conv.id && t.reason === inboundDepartmentIntent
+    );
+    if (!hasDepartmentTodo) {
+      addTodo(
+        conv,
+        inboundDepartmentIntent,
+        event.body ?? `${inboundDepartmentIntent} request`,
+        event.providerMessageId
+      );
+    }
+    setFollowUpMode(conv, "manual_handoff", `${inboundDepartmentIntent}_request`);
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    const reply =
+      inboundDepartmentIntent === "parts"
+        ? "Got it — I’ll have our parts department reach out shortly."
+        : "Got it — I’ll have our apparel team reach out shortly.";
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   const isServiceLead =
     conv.classification?.bucket === "service" ||
     conv.classification?.cta === "service_request" ||
+    inboundDepartmentIntent === "service" ||
     dialogState === "service_request" ||
     dialogState === "service_handoff" ||
     (conv.followUp?.mode === "manual_handoff" &&
@@ -14498,7 +14596,7 @@ if (authToken && signature) {
     event.provider === "twilio" &&
     !conv.inventoryWatchPending &&
     !watchHandledEarly &&
-    (watchIntentText || promptedWatchAffirm);
+    (watchIntentText || promptedWatchAffirm || semanticWatchAction === "set_watch");
   const watchAsSideEffectOnly = watchIntent && hasPrimaryIntentBeyondWatch(String(event.body ?? ""));
   if (watchIntent) {
     if (getDialogState(conv) === "inventory_watch_active" && conv.inventoryWatch) {
@@ -14554,9 +14652,12 @@ if (authToken && signature) {
     const leadVehicle = conv.lead?.vehicle ?? {};
     const leadYearNum = Number(leadVehicle.year ?? "");
     const leadYear = Number.isFinite(leadYearNum) ? leadYearNum : undefined;
+    const semanticWatchYearNum = Number(semanticWatch?.year ?? NaN);
+    const semanticWatchYear = Number.isFinite(semanticWatchYearNum) ? semanticWatchYearNum : undefined;
+    const semanticWatchColor = sanitizeColorPhrase(semanticWatch?.color ?? undefined);
     const resolvedModel = await resolveWatchModelFromText(
       textLower,
-      leadVehicle.model ?? leadVehicle.description ?? null
+      semanticWatch?.model ?? leadVehicle.model ?? leadVehicle.description ?? null
     );
     if (!resolvedModel) {
       if (!watchAsSideEffectOnly) {
@@ -14589,9 +14690,9 @@ if (authToken && signature) {
       const budgetSeed = resolveWatchBudgetPreferenceForConversation(conv, String(event.body ?? ""));
       const pending: InventoryWatchPending = {
         model: resolvedModel,
-        year: extractYearSingle(textLower) ?? leadYear,
+        year: extractYearSingle(textLower) ?? semanticWatchYear ?? leadYear,
         color: combineWatchColorAndFinish(
-          extractColorToken(textLower) ?? leadVehicle.color ?? undefined,
+          extractColorToken(textLower) ?? semanticWatchColor ?? leadVehicle.color ?? undefined,
           extractFinishToken(textLower)
         ),
         minPrice: budgetSeed.minPrice,
@@ -14626,6 +14727,14 @@ if (authToken && signature) {
         if (!pref.watch.trim && leadVehicle.trim) pref.watch.trim = leadVehicle.trim;
         const conditionFromText = normalizeWatchCondition(textLower);
         if (!pref.watch.condition && conditionFromText) pref.watch.condition = conditionFromText;
+        if (
+          !pref.watch.condition &&
+          semanticWatch?.condition &&
+          semanticWatch.condition !== "unknown" &&
+          semanticWatch.condition !== "any"
+        ) {
+          pref.watch.condition = semanticWatch.condition;
+        }
         if (!pref.watch.condition && leadVehicle.condition) {
           pref.watch.condition = normalizeWatchCondition(leadVehicle.condition);
         }

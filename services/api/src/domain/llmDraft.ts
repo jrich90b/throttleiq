@@ -342,6 +342,18 @@ export type TradePayoffParse = {
   confidence?: number;
 };
 
+export type SemanticSlotParse = {
+  watchAction: "set_watch" | "stop_watch" | "none";
+  watch?: {
+    model?: string | null;
+    year?: string | null;
+    color?: string | null;
+    condition?: "new" | "used" | "any" | "unknown" | null;
+  };
+  departmentIntent: "service" | "parts" | "apparel" | "none";
+  confidence?: number;
+};
+
 function safeParseJson(text: string): any | null {
   const raw = String(text ?? "").trim();
   if (!raw) return null;
@@ -505,6 +517,34 @@ const TRADE_PAYOFF_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     },
     needs_lien_holder_info: { type: "boolean" },
     provides_lien_holder_info: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const SEMANTIC_SLOT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["watch_action", "watch", "department_intent", "confidence"],
+  properties: {
+    watch_action: {
+      type: "string",
+      enum: ["set_watch", "stop_watch", "none"]
+    },
+    watch: {
+      type: "object",
+      additionalProperties: false,
+      required: ["model", "year", "color", "condition"],
+      properties: {
+        model: { type: "string" },
+        year: { type: "string" },
+        color: { type: "string" },
+        condition: { type: "string", enum: ["new", "used", "any", "unknown"] }
+      }
+    },
+    department_intent: {
+      type: "string",
+      enum: ["service", "parts", "apparel", "none"]
+    },
     confidence: { type: "number" }
   }
 };
@@ -1100,6 +1140,156 @@ export async function parseTradePayoffWithLLM(args: {
     payoffStatus,
     needsLienHolderInfo,
     providesLienHolderInfo,
+    confidence
+  };
+}
+
+export async function parseSemanticSlotsWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+  inventoryWatch?: Conversation["inventoryWatch"];
+  inventoryWatchPending?: Conversation["inventoryWatchPending"];
+  dialogState?: string;
+}): Promise<SemanticSlotParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_SEMANTIC_SLOT_PARSER_ENABLED === "1" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_SEMANTIC_SLOT_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_SEMANTIC_SLOT_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_SEMANTIC_SLOT_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const watch = args.inventoryWatch ?? null;
+  const pending = args.inventoryWatchPending ?? null;
+  const dialogState = String(args.dialogState ?? "").trim();
+  const prompt = [
+    "You are a semantic slot parser for dealership SMS.",
+    "Return only JSON that matches the provided schema.",
+    "",
+    "Extract only these slots:",
+    "- watch_action: set_watch / stop_watch / none",
+    "- watch: model/year/color/condition if explicitly present",
+    "- department_intent: service / parts / apparel / none",
+    "",
+    "Rules:",
+    "- watch_action=set_watch only when the customer asks to be notified/updated if inventory comes in or becomes available.",
+    "- watch_action=stop_watch only when customer asks to stop those watch alerts/updates (not global STOP opt-out unless watch context is explicit).",
+    "- watch_action=none for general inventory questions without watch request.",
+    "- department_intent=service/parts/apparel only when customer explicitly requests that department/category help.",
+    "- Use department_intent=none for general sales messages.",
+    "- watch.model should be normalized human model text when possible; else empty string.",
+    "- watch.year should be empty string unless explicitly provided.",
+    "- watch.color should be empty string unless explicitly provided.",
+    "- watch.condition should be one of new/used/any/unknown.",
+    "- confidence is 0..1.",
+    "",
+    `Lead vehicle: ${JSON.stringify({
+      year: lead?.vehicle?.year ?? null,
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      color: lead?.vehicle?.color ?? null,
+      condition: lead?.vehicle?.condition ?? null
+    })}`,
+    `Existing watch: ${JSON.stringify(watch ?? {})}`,
+    `Pending watch: ${JSON.stringify(pending ?? {})}`,
+    `Dialog state: ${dialogState || "none"}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> => {
+    return requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "semantic_slot_parser",
+      schema: SEMANTIC_SLOT_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 200,
+      debugTag: "llm-semantic-slot-parser",
+      debug
+    });
+  };
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const textLower = text.toLowerCase();
+  const watchActionRaw = String(parsed.watch_action ?? "").toLowerCase();
+  let watchAction: SemanticSlotParse["watchAction"] =
+    watchActionRaw === "set_watch" || watchActionRaw === "stop_watch" ? watchActionRaw : "none";
+
+  const deptRaw = String(parsed.department_intent ?? "").toLowerCase();
+  let departmentIntent: SemanticSlotParse["departmentIntent"] =
+    deptRaw === "service" || deptRaw === "parts" || deptRaw === "apparel" ? deptRaw : "none";
+
+  const watchObj = parsed.watch && typeof parsed.watch === "object" ? parsed.watch : {};
+  const model = cleanOptionalString(watchObj.model);
+  const year = cleanOptionalString(watchObj.year);
+  const color = cleanOptionalString(watchObj.color);
+  const conditionRaw = String(watchObj.condition ?? "").toLowerCase();
+  const condition: NonNullable<SemanticSlotParse["watch"]>["condition"] =
+    conditionRaw === "new" || conditionRaw === "used" || conditionRaw === "any"
+      ? conditionRaw
+      : "unknown";
+
+  // Guard against risky false positives.
+  const hasWatchSetCue =
+    /\b(let me know|keep me posted|keep an eye out|watch for|notify me|text me|shoot me (a )?text|send (one|it) my way)\b/.test(
+      textLower
+    ) && /\b(if|when|once|as soon as)\b/.test(textLower);
+  const hasWatchStopCue =
+    /\b(stop|cancel|remove|delete|turn off|pause|disable|end|no more|don't|dont|do not)\b/.test(
+      textLower
+    ) &&
+    /\b(watch|alerts?|updates?|notifications?|inventory|availability)\b/.test(textLower);
+  if (watchAction === "set_watch" && !hasWatchSetCue && !watch && !pending) {
+    watchAction = "none";
+  }
+  if (watchAction === "stop_watch" && !hasWatchStopCue && !watch && !pending) {
+    watchAction = "none";
+  }
+
+  const hasServiceCue =
+    /\b(service|inspection|oil change|maintenance|repair|service department|service writer|warranty)\b/.test(
+      textLower
+    );
+  const hasPartsCue =
+    /\b(parts? department|parts? counter|parts? desk|order (a )?part|need (a )?part|part number|oem parts?|aftermarket parts?)\b/.test(
+      textLower
+    );
+  const hasApparelCue =
+    /\b(apparel|merch|merchandise|clothing|jacket|hoodie|t-?shirt|helmet|gloves?|boots?|riding gear|gear)\b/.test(
+      textLower
+    );
+  if (departmentIntent === "service" && !hasServiceCue) departmentIntent = "none";
+  if (departmentIntent === "parts" && !hasPartsCue) departmentIntent = "none";
+  if (departmentIntent === "apparel" && !hasApparelCue) departmentIntent = "none";
+
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    watchAction,
+    watch: {
+      model,
+      year,
+      color,
+      condition
+    },
+    departmentIntent,
     confidence
   };
 }
