@@ -120,6 +120,8 @@ When changing responses:
   - `cd ~/throttleiq`
   - `git status -sb`
   - `git add <files>`
+  - If adding a Next.js route with `[id]` or other brackets, quote the path:
+    - `git add "apps/web/src/app/api/conversations/[id]/watch/route.ts"`
   - `git commit -m "..." `
   - `git push`
 - Instance (pull/build/restart API):

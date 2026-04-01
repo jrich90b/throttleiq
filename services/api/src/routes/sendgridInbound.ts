@@ -1329,11 +1329,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     lastAdfAt: new Date().toISOString()
   });
 
-  const rule = resolveLeadRule(leadSource, leadSourceId);
+  const rawComment = String(lead.comment ?? "");
+  const cleanedComment = rawComment.replace(/<br\s*\/?/gi, " ").replace(/\s+/g, " ").trim();
   const inquiryRaw = lead.inquiry ?? "";
-  const inquiryText = String(inquiryRaw).toLowerCase();
+  const combinedInquiry = [cleanedComment, inquiryRaw].filter(Boolean).join(" ").trim();
+  const effectiveInquiry = combinedInquiry || inquiryRaw;
+  lead.inquiry = effectiveInquiry;
+  const rule = resolveLeadRule(leadSource, leadSourceId);
+  const inquiryText = String(effectiveInquiry).toLowerCase();
   const pricingInquiryIntent = isPricingPaymentInquiry(inquiryText);
-  const inquiryDayPart = extractDayPartRequest(inquiryRaw);
+  const inquiryDayPart = extractDayPartRequest(effectiveInquiry);
   const serviceVinRequest =
     /registration\s+or\s+vin\s+number/i.test(lead.comment ?? "") ||
     /registration\s+or\s+vin\s+number/i.test(lead.inquiry ?? "");
@@ -1649,9 +1654,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     });
   }
 
-  const rawComment = String(lead.comment ?? "");
-  const cleanedComment = rawComment.replace(/<br\s*\/?>/gi, " ").replace(/\s+/g, " ").trim();
-  const commentLower = cleanedComment.toLowerCase();
+  const walkInRawComment = String(lead.comment ?? "");
+  const walkInCleanedComment = walkInRawComment.replace(/<br\s*\/?>/gi, " ").replace(/\s+/g, " ").trim();
+  const commentLower = walkInCleanedComment.toLowerCase();
   const emailLower = (lead.email ?? "").toLowerCase();
   const isWalkInLead = isInitialAdf && /traffic log pro/i.test(leadSourceLower);
   if (isWalkInLead) {
