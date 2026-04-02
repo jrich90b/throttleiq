@@ -15558,8 +15558,7 @@ if (authToken && signature) {
     const hasDayTime = schedulingSignals.hasDayTime;
     const hasDayOnlyAvailability = schedulingSignals.hasDayOnlyAvailability;
     const watchConfirmIntent = isWatchConfirmationIntentText(String(event.body ?? ""));
-    const watchAsSideEffectOnly =
-      watchConfirmIntent && hasPrimaryIntentBeyondWatch(String(event.body ?? ""));
+    const watchAsSideEffectOnly = hasPrimaryIntentBeyondWatch(String(event.body ?? ""));
     // If the customer explicitly asks for a day/time, let scheduling handle it.
     // But when the text is an explicit watch-confirmation intent, do not let
     // scheduling classification block watch resolution.
@@ -16376,7 +16375,10 @@ if (authToken && signature) {
     event.provider === "twilio" &&
     !conv.inventoryWatchPending &&
     !watchHandledEarly &&
-    (watchIntentText || promptedWatchAffirm || semanticWatchAction === "set_watch" || !!inventoryEntityModelHint);
+    (watchIntentText ||
+      promptedWatchAffirm ||
+      semanticWatchAction === "set_watch" ||
+      (!!inventoryEntityModelHint && !hasPrimaryIntentBeyondWatch(String(event.body ?? ""))));
   const watchAsSideEffectOnly = watchIntent && hasPrimaryIntentBeyondWatch(String(event.body ?? ""));
   if (watchIntent) {
     if (getDialogState(conv) === "inventory_watch_active" && conv.inventoryWatch) {
