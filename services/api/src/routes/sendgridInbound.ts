@@ -2215,8 +2215,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   const isRoom58RequestDetails = /room58/i.test(leadSourceLower) && /request details/i.test(leadSourceLower);
   const inquiryTextRaw = String(lead.inquiry ?? inquiryRaw ?? "").trim();
-  const isShortPriceOnlyInquiry = /^(price|pricing|price\?|what(?:'s| is)? the price\??|how much\??)$/i.test(
-    inquiryTextRaw
+  const embeddedInquiry =
+    inquiryTextRaw.match(/\byour inquiry\s*:\s*([^>]+)/i)?.[1]?.trim() ??
+    inquiryTextRaw.match(/\binquiry\s*:\s*([^>]+)/i)?.[1]?.trim() ??
+    "";
+  const inquiryCandidates = [inquiryTextRaw, embeddedInquiry].filter(Boolean);
+  const isShortPriceOnlyInquiry = inquiryCandidates.some(text =>
+    /^(price|pricing|price\?|what(?:'s| is)? the price\??|how much\??)$/i.test(String(text).trim())
   );
   const hasInventoryIdentifiers = !!conv.lead?.vehicle?.stockId || !!conv.lead?.vehicle?.vin;
   if (isInitialAdf && isRoom58RequestDetails && isShortPriceOnlyInquiry && hasInventoryIdentifiers) {
