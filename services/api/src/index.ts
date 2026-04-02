@@ -806,8 +806,17 @@ function isStreetGlide3Variant(model: string | null | undefined): boolean {
 function canonicalizeWatchModelLabel(model: string | null | undefined): string {
   const raw = String(model ?? "").trim();
   if (!raw) return "";
+  const t = normalizeModelName(raw);
   if (isRoadGlide3Variant(raw)) return "Road Glide 3";
   if (isStreetGlide3Variant(raw)) return "Street Glide 3 Limited";
+  if (/\bflhtcutg\b/.test(t) || /\btri glide(?:\s+ultra)?\b/.test(t)) return "Tri Glide Ultra";
+  if (/\bflhxxx\b/.test(t) || /\bstreet glide trike\b/.test(t)) return "Street Glide Trike";
+  if (/\bra1250st\b/.test(t) || /\bpan america(?:\s+1250)?\s+st\b/.test(t)) return "Pan America 1250 ST";
+  if (/\bra1250s\b/.test(t) || /\bpan america(?:\s+1250)?\s+special\b/.test(t)) return "Pan America Special";
+  if (/\bra1250l\b/.test(t) || /\bpan america(?:\s+1250)?\s+l(?:imited)?\b/.test(t)) return "Pan America 1250 L";
+  if (/\brh1250s\b/.test(t) || /\bsportster\s+s\b/.test(t)) return "Sportster S";
+  if (/\brh975s\b/.test(t) || /\bnightster\s+special\b/.test(t)) return "Nightster Special";
+  if (/\brh975\b/.test(t) || /\bnightster\b/.test(t)) return "Nightster";
   return raw;
 }
 

@@ -1071,6 +1071,33 @@ function normalizeVehicleModel(raw?: string | null, make?: string | null): strin
   if (/\bfltrt\b/.test(normalized) || /\broad glide\s*(?:3|iii)\b/.test(normalized)) {
     return "Road Glide 3";
   }
+  if (/\bflhlt(?:se)?\b/.test(normalized) || /\bstreet glide\s*(?:3|iii)\b/.test(normalized)) {
+    return "Street Glide 3 Limited";
+  }
+  if (/\bflhtcutg\b/.test(normalized) || /\btri glide(?:\s+ultra)?\b/.test(normalized)) {
+    return "Tri Glide Ultra";
+  }
+  if (/\bflhxxx\b/.test(normalized) || /\bstreet glide trike\b/.test(normalized)) {
+    return "Street Glide Trike";
+  }
+  if (/\bra1250st\b/.test(normalized) || /\bpan america(?:\s+1250)?\s+st\b/.test(normalized)) {
+    return "Pan America 1250 ST";
+  }
+  if (/\bra1250s\b/.test(normalized) || /\bpan america(?:\s+1250)?\s+special\b/.test(normalized)) {
+    return "Pan America Special";
+  }
+  if (/\bra1250l\b/.test(normalized) || /\bpan america(?:\s+1250)?\s+l(?:imited)?\b/.test(normalized)) {
+    return "Pan America 1250 L";
+  }
+  if (/\brh1250s\b/.test(normalized) || /\bsportster\s+s\b/.test(normalized)) {
+    return "Sportster S";
+  }
+  if (/\brh975s\b/.test(normalized) || /\bnightster\s+special\b/.test(normalized)) {
+    return "Nightster Special";
+  }
+  if (/\brh975\b/.test(normalized) || /\bnightster\b/.test(normalized)) {
+    return "Nightster";
+  }
   return model || undefined;
 }
 
