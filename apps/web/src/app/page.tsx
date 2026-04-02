@@ -3988,6 +3988,38 @@ export default function Home() {
     await load();
   }
 
+  async function reassignLeadDepartment(conv: ConversationListItem) {
+    const raw = window
+      .prompt("Reassign lead to department: service, parts, or apparel", "service")
+      ?.trim()
+      .toLowerCase();
+    if (!raw) return;
+    if (!["service", "parts", "apparel"].includes(raw)) {
+      window.alert("Please enter one of: service, parts, apparel.");
+      return;
+    }
+    const summary =
+      window.prompt(
+        "Optional note for department to-do:",
+        `Manual reassignment to ${raw} department`
+      ) ?? "";
+    const resp = await fetch(`/api/conversations/${encodeURIComponent(conv.id)}/department`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ department: raw, summary: summary.trim() || undefined })
+    });
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok || data?.ok === false) {
+      window.alert(data?.error ?? "Failed to reassign lead");
+      return;
+    }
+    setListActionsOpenId(null);
+    if (selectedId === conv.id) {
+      await loadConversation(conv.id);
+    }
+    await load();
+  }
+
   async function submitTodoInline(convId: string) {
     const summary = todoInlineText.trim();
     if (!summary) {
@@ -5661,6 +5693,16 @@ export default function Home() {
                                       >
                                         Add new contact
                                       </button>
+                                      {(authUser?.role === "manager" || authUser?.permissions?.canAccessTodos) ? (
+                                        <button
+                                          className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
+                                          onClick={() => {
+                                            void reassignLeadDepartment(c);
+                                          }}
+                                        >
+                                          Reassign lead
+                                        </button>
+                                      ) : null}
                                     </>
                                   )}
                                   <button
