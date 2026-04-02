@@ -5318,6 +5318,32 @@ function resolveCustomerDispositionDecision(
   return parseCustomerDispositionFallback(text);
 }
 
+function isLogisticsProgressUpdateText(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  const hasProgress =
+    /\b(receive|received|get it|got it|arrives?|arrival|once i (?:get|receive)|as soon as i (?:get|receive))\b/.test(
+      t
+    ) ||
+    /\b(dmv|registration|register|title|plate|paperwork)\b/.test(t);
+  const hasDeferredFollowUp = /\b(let you know|get back to you|reach out)\b/.test(t);
+  return hasProgress && hasDeferredFollowUp;
+}
+
+function shouldSuppressCustomerDispositionCloseout(conv: any, text: string): boolean {
+  if (isLogisticsProgressUpdateText(text)) return true;
+  const soldContext =
+    conv?.closedReason === "sold" ||
+    !!conv?.sale?.soldAt ||
+    conv?.followUp?.mode === "post_sale";
+  if (!soldContext) return false;
+  const t = String(text ?? "").toLowerCase();
+  return (
+    /\b(let you know|get back to you|reach out)\b/.test(t) &&
+    /\b(dmv|registration|register|title|plate|paperwork|receive|received)\b/.test(t)
+  );
+}
+
 function applyCustomerDispositionCloseout(conv: any, decision: CustomerDispositionDecision) {
   stopFollowUpCadence(conv, decision.reason);
   setFollowUpMode(conv, "paused_indefinite", decision.reason);
@@ -11970,7 +11996,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     event.body,
     regenCustomerDispositionParse
   );
-  if (regenDispositionDecision) {
+  if (regenDispositionDecision && !shouldSuppressCustomerDispositionCloseout(conv, event.body ?? "")) {
     applyCustomerDispositionCloseout(conv, regenDispositionDecision);
     const regenReply = ensureUniqueDispositionReply(buildCustomerDispositionReply(event.body), conv);
     if (channel === "email") {
@@ -12648,7 +12674,7 @@ if (authToken && signature) {
     semanticInboundText,
     customerDispositionParse
   );
-  if (dispositionDecision) {
+  if (dispositionDecision && !shouldSuppressCustomerDispositionCloseout(conv, semanticInboundText)) {
     applyCustomerDispositionCloseout(conv, dispositionDecision);
     const reply = ensureUniqueDispositionReply(buildCustomerDispositionReply(semanticInboundText), conv);
     const mode = webhookMode;
