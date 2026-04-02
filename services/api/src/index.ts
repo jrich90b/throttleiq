@@ -7004,6 +7004,25 @@ async function processDueFollowUps() {
 
   for (const conv of convs) {
     let cadence = conv.followUpCadence;
+    const soldLead = conv.closedReason === "sold" || !!conv.sale?.soldAt;
+    if (
+      soldLead &&
+      (!cadence || cadence.kind !== "post_sale" || (cadence.status === "stopped" && cadence.stopReason === "appointment_booked"))
+    ) {
+      const anchor = conv.sale?.soldAt ?? conv.closedAt ?? cadence?.anchorAt ?? nowIso();
+      conv.followUpCadence = {
+        status: "active",
+        anchorAt: anchor,
+        nextDueAt: computePostSaleDueAt(anchor, POST_SALE_DAY_OFFSETS[0], cfg.timezone),
+        stepIndex: 0,
+        kind: "post_sale",
+        scheduleInviteCount: 0,
+        scheduleMuted: false
+      };
+      conv.updatedAt = nowIso();
+      saveConversation(conv);
+      cadence = conv.followUpCadence;
+    }
     if (
       cadence?.kind === "post_sale" &&
       cadence.status === "stopped" &&
