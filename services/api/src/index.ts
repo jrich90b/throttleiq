@@ -19,12 +19,18 @@ import {
   parseBookingIntentWithLLM,
   parseIntentWithLLM,
   parseCustomerDispositionWithLLM,
+  parseJourneyIntentWithLLM,
   parseUnifiedSemanticSlotsWithLLM,
   parseSemanticSlotsWithLLM,
   parseTradePayoffWithLLM,
   summarizeVoiceTranscriptWithLLM
 } from "./domain/llmDraft.js";
-import type { CustomerDispositionParse, SemanticSlotParse, TradePayoffParse } from "./domain/llmDraft.js";
+import type {
+  CustomerDispositionParse,
+  JourneyIntentParse,
+  SemanticSlotParse,
+  TradePayoffParse
+} from "./domain/llmDraft.js";
 import type { InboundMessageEvent } from "./domain/types.js";
 import { sendgridInboundMiddleware, handleSendgridInbound } from "./routes/sendgridInbound.js";
 import { resolveInventoryUrlByStock } from "./domain/inventoryUrlResolver.js";
@@ -105,6 +111,7 @@ import { sendEmail } from "./domain/emailSender.js";
 
 import {
   upsertConversationByLeadKey,
+  createConversationForLeadKey,
   appendInbound,
   appendOutbound,
   listConversations,
@@ -122,6 +129,7 @@ import {
   scheduleLongTermFollowUp,
   advanceFollowUpCadence,
   getAllConversations,
+  findConversationsByLeadKey,
   finalizeDraftAsSent,
   discardPendingDrafts,
   addTodo,
@@ -1123,7 +1131,7 @@ app.post("/debug/inbound/process", express.json(), async (req, res) => {
       receivedAt: new Date().toISOString()
     };
 
-    const conv = upsertConversationByLeadKey(event.from, "suggest");
+    const conv = await resolveInboundConversationForSms(event);
     appendInbound(conv, event);
     const history = buildHistory(conv, 20);
     const memorySummary = conv.memorySummary?.text ?? null;
@@ -1456,6 +1464,57 @@ function getRelatedConversations(conv: any, event?: { from?: string }) {
     const phoneMatch = phone && ids.phone && ids.phone === phone;
     return !!(emailMatch || phoneMatch);
   });
+}
+
+function isStickyClosedJourney(conv: Conversation | null | undefined): boolean {
+  if (!conv) return false;
+  const closedReason = String(conv.closedReason ?? "").toLowerCase();
+  return (
+    conv.status === "closed" &&
+    (closedReason === "sold" ||
+      /\bhold\b/.test(closedReason) ||
+      !!conv.sale?.soldAt ||
+      !!conv.hold?.key ||
+      conv.followUpCadence?.kind === "post_sale")
+  );
+}
+
+function shouldStartNewSalesJourney(parse: JourneyIntentParse | null): boolean {
+  if (!parse) return false;
+  if (parse.journeyIntent !== "sale_trade") return false;
+  if (!parse.explicitRequest) return false;
+  const confidence = typeof parse.confidence === "number" ? parse.confidence : 0;
+  return confidence >= 0.68;
+}
+
+async function resolveInboundConversationForSms(event: InboundMessageEvent): Promise<Conversation> {
+  const existing = findConversationsByLeadKey(event.from);
+  if (!existing.length) return upsertConversationByLeadKey(event.from, "suggest");
+  const latest = existing[0];
+  if (!isStickyClosedJourney(latest)) return latest;
+
+  const parse = await parseJourneyIntentWithLLM({
+    text: String(event.body ?? ""),
+    history: buildHistory(latest, 12),
+    lead: latest.lead
+  });
+
+  if (!shouldStartNewSalesJourney(parse)) return latest;
+
+  const created = createConversationForLeadKey(event.from, latest.mode ?? "suggest");
+  created.leadOwner = latest.leadOwner ? { ...latest.leadOwner } : undefined;
+  if (latest.lead) {
+    created.lead = {
+      ...latest.lead,
+      walkInComment: undefined,
+      walkInCommentUsedAt: undefined
+    };
+  }
+  created.status = "open";
+  created.closedAt = undefined;
+  created.closedReason = undefined;
+  saveConversation(created);
+  return created;
 }
 
 function pauseRelatedCadencesOnInbound(conv: any, event?: { from?: string }) {
@@ -12113,7 +12172,7 @@ if (authToken && signature) {
 
   console.log("[twilio inbound]", event);
 
-  const conv = upsertConversationByLeadKey(event.from, "suggest");
+  const conv = await resolveInboundConversationForSms(event);
   appendInbound(conv, event);
   pauseRelatedCadencesOnInbound(conv, event);
   if (getDialogState(conv) === "none" && conv.classification?.bucket === "inventory_interest") {

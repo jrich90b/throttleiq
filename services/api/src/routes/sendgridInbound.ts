@@ -4,6 +4,7 @@ import { XMLParser } from "fast-xml-parser";
 import { extractAdfXmlFromEmail, parseAdfXml } from "../domain/adfParser.js";
 import {
   upsertConversationByLeadKey,
+  createConversationForLeadKey,
   appendInbound,
   appendOutbound,
   mergeConversationLead,
@@ -14,6 +15,7 @@ import {
   scheduleLongTermFollowUp,
   discardPendingDrafts,
   getAllConversations,
+  findConversationsByLeadKey,
   getPricingAttempts,
   incrementPricingAttempt,
   addTodo,
@@ -32,6 +34,7 @@ import {
 import type { InventoryWatch } from "../domain/conversationStore.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { resolveChannel, resolveLeadRule } from "../domain/leadSourceRules.js";
+import { parseJourneyIntentWithLLM } from "../domain/llmDraft.js";
 import type { InboundMessageEvent } from "../domain/types.js";
 import { getSchedulerConfig, getPreferredSalespeople } from "../domain/schedulerConfig.js";
 import { getAuthedCalendarClient, insertEvent, queryFreeBusy } from "../domain/googleCalendar.js";
@@ -108,6 +111,28 @@ function normalizeDisplayCase(raw?: string | null): string {
   const letters = trimmed.replace(/[^A-Za-z]/g, "");
   if (!letters) return trimmed;
   return letters === letters.toUpperCase() ? toTitleCase(trimmed) : trimmed;
+}
+
+function isStickyClosedJourney(conv: any): boolean {
+  const closedReason = String(conv?.closedReason ?? "").toLowerCase();
+  return (
+    conv?.status === "closed" &&
+    (closedReason === "sold" ||
+      /\bhold\b/.test(closedReason) ||
+      !!conv?.sale?.soldAt ||
+      !!conv?.hold?.key ||
+      conv?.followUpCadence?.kind === "post_sale")
+  );
+}
+
+function isStrictSalesTradeBucket(bucket?: string | null): boolean {
+  const normalized = String(bucket ?? "").trim().toLowerCase();
+  return (
+    normalized === "inventory_interest" ||
+    normalized === "trade_in_sell" ||
+    normalized === "test_ride" ||
+    normalized === "finance_prequal"
+  );
 }
 
 function normalizeModelForMatch(modelRaw: string, makeRaw?: string | null): string {
@@ -1326,6 +1351,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const leadEmail = lead.email?.trim() || undefined;
   const leadEmailForConversation = isMarketplaceRelaySource ? undefined : leadEmail;
   const relayOnlyMarketplaceLead = isMarketplaceRelaySource && !leadPhone;
+  const rule = resolveLeadRule(leadSource, leadSourceId);
+  const journeyText = [lead.comment, lead.inquiry].filter(Boolean).join(" ").trim();
 
   // Choose a stable conversation key
   const leadKey =
@@ -1334,7 +1361,29 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     (isMarketplaceRelaySource && leadRef ? `adf_ref_${leadRef}` : "") ||
     `unknown_${Date.now()}`;
 
-  const conv = upsertConversationByLeadKey(leadKey, "suggest");
+  const existingByLead = findConversationsByLeadKey(leadKey);
+  const latestByLead = existingByLead[0];
+  let conv =
+    latestByLead ??
+    upsertConversationByLeadKey(leadKey, "suggest");
+  if (latestByLead && isStickyClosedJourney(latestByLead)) {
+    const parsedJourney = await parseJourneyIntentWithLLM({
+      text: journeyText,
+      history: (latestByLead.messages ?? [])
+        .slice(-12)
+        .map(m => ({ direction: m.direction, body: m.body })),
+      lead: latestByLead.lead
+    });
+    const explicitSalesReengagement =
+      parsedJourney?.journeyIntent === "sale_trade" &&
+      parsedJourney?.explicitRequest === true &&
+      Number(parsedJourney?.confidence ?? 0) >= 0.68;
+    const strictSalesTrade = isStrictSalesTradeBucket(rule.bucket) || explicitSalesReengagement;
+    if (strictSalesTrade) {
+      conv = createConversationForLeadKey(leadKey, latestByLead.mode ?? "suggest");
+      conv.leadOwner = latestByLead.leadOwner ? { ...latestByLead.leadOwner } : undefined;
+    }
+  }
   mergeConversationLead(conv, {
     leadRef,
     source: leadSource,
@@ -1415,7 +1464,6 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const combinedInquiry = [cleanedComment, inquiryRaw].filter(Boolean).join(" ").trim();
   const effectiveInquiry = combinedInquiry || inquiryRaw;
   lead.inquiry = effectiveInquiry;
-  const rule = resolveLeadRule(leadSource, leadSourceId);
   const inquiryText = String(effectiveInquiry).toLowerCase();
   const pricingInquiryIntent = isPricingPaymentInquiry(inquiryText);
   const inquiryDayPart = extractDayPartRequest(effectiveInquiry);

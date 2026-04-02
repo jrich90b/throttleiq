@@ -356,7 +356,7 @@ export type Message = {
 };
 
 export type Conversation = {
-  id: string; // leadKey (phone/email) for now
+  id: string;
   leadKey: string;
   mode: ConversationMode;
   status?: "open" | "closed";
@@ -497,6 +497,43 @@ export type Conversation = {
 };
 
 const conversations = new Map<string, Conversation>();
+const leadKeyIndex = new Map<string, string[]>();
+
+function indexConversationByLeadKey(conv: Conversation): void {
+  const leadKey = normalizeLeadKey(conv.leadKey || "");
+  if (!leadKey) return;
+  conv.leadKey = leadKey;
+  const existing = leadKeyIndex.get(leadKey) ?? [];
+  if (!existing.includes(conv.id)) {
+    existing.push(conv.id);
+    leadKeyIndex.set(leadKey, existing);
+  }
+}
+
+function removeConversationFromLeadIndex(conv: Conversation): void {
+  const leadKey = normalizeLeadKey(conv.leadKey || "");
+  if (!leadKey) return;
+  const ids = leadKeyIndex.get(leadKey);
+  if (!ids?.length) return;
+  const filtered = ids.filter(id => id !== conv.id);
+  if (filtered.length) {
+    leadKeyIndex.set(leadKey, filtered);
+  } else {
+    leadKeyIndex.delete(leadKey);
+  }
+}
+
+function buildConversationId(baseLeadKey: string): string {
+  const base = normalizeLeadKey(baseLeadKey) || `lead_${Date.now()}`;
+  if (!conversations.has(base)) return base;
+  let attempt = 2;
+  let candidate = `${base}::${attempt}`;
+  while (conversations.has(candidate)) {
+    attempt += 1;
+    candidate = `${base}::${attempt}`;
+  }
+  return candidate;
+}
 
 // Normalize lead keys at the store level to prevent split threads across channels/phone formats.
 export function normalizeLeadKey(raw: string): string {
@@ -876,12 +913,16 @@ async function loadFromDisk() {
 
     const list = parsed?.conversations ?? [];
     conversations.clear();
+    leadKeyIndex.clear();
     for (const c of list) {
-      const key = normalizeLeadKey(c?.leadKey || c?.id || "");
-      if (!key) continue;
-      c.id = key;
-      c.leadKey = key;
-      conversations.set(key, c);
+      const leadKey = normalizeLeadKey(c?.leadKey || c?.id || "");
+      if (!leadKey) continue;
+      c.leadKey = leadKey;
+      const preferredId = String(c?.id ?? "").trim() || leadKey;
+      const id = conversations.has(preferredId) ? buildConversationId(leadKey) : preferredId;
+      c.id = id;
+      conversations.set(id, c);
+      indexConversationByLeadKey(c);
     }
     todos.length = 0;
     if (parsed?.todos?.length) todos.push(...parsed.todos);
@@ -944,11 +985,18 @@ export function getConversationStorePath(): string {
 
 // Ensure conversation is present in the in-memory store before flush.
 export function saveConversation(conv: Conversation): void {
-  const key = normalizeLeadKey(conv.leadKey || conv.id || "");
-  if (!key) return;
-  conv.id = key;
-  conv.leadKey = key;
-  conversations.set(key, conv);
+  const leadKey = normalizeLeadKey(conv.leadKey || "");
+  if (!leadKey) return;
+  conv.leadKey = leadKey;
+  if (!conv.id) {
+    conv.id = buildConversationId(leadKey);
+  }
+  const prev = conversations.get(conv.id);
+  if (prev && prev !== conv && normalizeLeadKey(prev.leadKey || "") !== leadKey) {
+    removeConversationFromLeadIndex(prev);
+  }
+  conversations.set(conv.id, conv);
+  indexConversationByLeadKey(conv);
   scheduleSave();
 }
 
@@ -967,12 +1015,12 @@ export function upsertConversationByLeadKey(
   leadKey: string,
   defaultMode: ConversationMode = "suggest"
 ): Conversation {
-  const key = normalizeLeadKey(leadKey);
-  const existing = conversations.get(key);
+  const key = normalizeLeadKey(leadKey) || `unknown_${Date.now()}`;
+  const existing = getLatestConversationByLeadKey(key);
   if (existing) return existing;
 
   const created: Conversation = {
-    id: key,
+    id: buildConversationId(key),
     leadKey: key,
     mode: defaultMode,
     createdAt: nowIso(),
@@ -981,14 +1029,34 @@ export function upsertConversationByLeadKey(
     scheduler: { updatedAt: nowIso(), lastSuggestedSlots: [] }
   };
 
-  conversations.set(key, created);
+  conversations.set(created.id, created);
+  indexConversationByLeadKey(created);
+  scheduleSave();
+  return created;
+}
+
+export function createConversationForLeadKey(
+  leadKey: string,
+  defaultMode: ConversationMode = "suggest"
+): Conversation {
+  const key = normalizeLeadKey(leadKey) || `unknown_${Date.now()}`;
+  const created: Conversation = {
+    id: buildConversationId(key),
+    leadKey: key,
+    mode: defaultMode,
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+    messages: [],
+    scheduler: { updatedAt: nowIso(), lastSuggestedSlots: [] }
+  };
+  conversations.set(created.id, created);
+  indexConversationByLeadKey(created);
   scheduleSave();
   return created;
 }
 
 export function setConversationMode(id: string, mode: ConversationMode): Conversation | null {
-  const key = normalizeLeadKey(id);
-  const conv = conversations.get(key);
+  const conv = getConversation(id);
   if (!conv) return null;
   conv.mode = mode;
   conv.updatedAt = nowIso();
@@ -1299,16 +1367,28 @@ export function getAllConversations(): Conversation[] {
   return Array.from(conversations.values());
 }
 
+export function findConversationsByLeadKey(leadKey: string): Conversation[] {
+  const key = normalizeLeadKey(leadKey);
+  if (!key) return [];
+  const ids = leadKeyIndex.get(key) ?? [];
+  return ids
+    .map(id => conversations.get(id))
+    .filter((conv): conv is Conversation => !!conv)
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+}
+
+export function getLatestConversationByLeadKey(leadKey: string): Conversation | null {
+  const matches = findConversationsByLeadKey(leadKey);
+  return matches[0] ?? null;
+}
+
 export function getConversation(id: string): Conversation | null {
-  const key = normalizeLeadKey(id);
-  const direct = conversations.get(key);
+  const raw = String(id ?? "").trim();
+  if (!raw) return null;
+  const direct = conversations.get(raw);
   if (direct) return direct;
-  for (const conv of conversations.values()) {
-    if (conv.id === id || conv.leadKey === id) return conv;
-    const convKey = normalizeLeadKey(conv.leadKey || conv.id || "");
-    if (convKey && convKey === key) return conv;
-  }
-  return null;
+  const key = normalizeLeadKey(raw);
+  return getLatestConversationByLeadKey(key);
 }
 
 export function updateConversationContact(
@@ -1321,7 +1401,7 @@ export function updateConversationContact(
     name?: string;
   }
 ): void {
-  const prevKey = normalizeLeadKey(conv.leadKey || conv.id || "");
+  const prevKey = normalizeLeadKey(conv.leadKey || "");
   const nextKey = patch.phone ? normalizeLeadKey(patch.phone) : "";
   const lead = (conv.lead = conv.lead ?? {});
 
@@ -1338,10 +1418,9 @@ export function updateConversationContact(
   }
 
   if (nextKey && nextKey !== prevKey) {
-    conversations.delete(prevKey);
+    removeConversationFromLeadIndex(conv);
     conv.leadKey = nextKey;
-    conv.id = nextKey;
-    conversations.set(nextKey, conv);
+    indexConversationByLeadKey(conv);
   }
   conv.updatedAt = nowIso();
   scheduleSave();
@@ -2356,16 +2435,18 @@ export function getActiveVoiceContext(conv: Conversation): VoiceContext | null {
 }
 
 export function deleteConversation(convId: string): boolean {
-  const key = normalizeLeadKey(convId);
-  const existed = conversations.delete(key);
+  const conv = getConversation(convId);
+  if (!conv) return false;
+  const existed = conversations.delete(conv.id);
   if (!existed) return false;
+  removeConversationFromLeadIndex(conv);
   for (let i = todos.length - 1; i >= 0; i -= 1) {
-    if (todos[i]?.convId === key) {
+    if (todos[i]?.convId === conv.id) {
       todos.splice(i, 1);
     }
   }
   for (let i = questions.length - 1; i >= 0; i -= 1) {
-    if (questions[i]?.convId === key) {
+    if (questions[i]?.convId === conv.id) {
       questions.splice(i, 1);
     }
   }

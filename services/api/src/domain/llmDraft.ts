@@ -355,6 +355,12 @@ export type TradePayoffParse = {
   confidence?: number;
 };
 
+export type JourneyIntentParse = {
+  journeyIntent: "sale_trade" | "service_support" | "marketing_event" | "none";
+  explicitRequest: boolean;
+  confidence?: number;
+};
+
 export type SemanticSlotParse = {
   watchAction: "set_watch" | "stop_watch" | "none";
   watch?: {
@@ -569,6 +575,20 @@ const TRADE_PAYOFF_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     },
     needs_lien_holder_info: { type: "boolean" },
     provides_lien_holder_info: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const JOURNEY_INTENT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["journey_intent", "explicit_request", "confidence"],
+  properties: {
+    journey_intent: {
+      type: "string",
+      enum: ["sale_trade", "service_support", "marketing_event", "none"]
+    },
+    explicit_request: { type: "boolean" },
     confidence: { type: "number" }
   }
 };
@@ -1285,6 +1305,91 @@ export async function parseTradePayoffWithLLM(args: {
     payoffStatus,
     needsLienHolderInfo,
     providesLienHolderInfo,
+    confidence
+  };
+}
+
+export async function parseJourneyIntentWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<JourneyIntentParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_JOURNEY_INTENT_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_JOURNEY_INTENT_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_JOURNEY_INTENT_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_JOURNEY_INTENT_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const prompt = [
+    "You are a parser for inbound dealership customer messages.",
+    "Return only JSON that matches the provided schema.",
+    "",
+    "Classify the message intent at the journey level:",
+    "- sale_trade: customer is explicitly shopping again, wants to buy, asks for trade/appraisal value, asks about availability/pricing/test ride for purchase.",
+    "- service_support: customer asks for service/repair/parts/help with current unit ownership.",
+    "- marketing_event: customer references event RSVP/sweepstakes/challenge/promo participation.",
+    "- none: everything else, including courtesy acknowledgements.",
+    "",
+    "Rules:",
+    "- Use sale_trade only for clear sales or trade-in intent.",
+    "- If uncertain between sale_trade and anything else, choose none.",
+    "- explicit_request=true only when the customer clearly asks for action.",
+    "- confidence is 0..1.",
+    "",
+    `Known lead info: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null,
+      source: lead?.source ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> => {
+    return requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "journey_intent_parser",
+      schema: JOURNEY_INTENT_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 160,
+      debugTag: "llm-journey-intent-parser",
+      debug
+    });
+  };
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const intentRaw = String(parsed.journey_intent ?? "").toLowerCase();
+  const journeyIntent: JourneyIntentParse["journeyIntent"] =
+    intentRaw === "sale_trade" ||
+    intentRaw === "service_support" ||
+    intentRaw === "marketing_event"
+      ? intentRaw
+      : "none";
+  const explicitRequest = !!parsed.explicit_request;
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    journeyIntent,
+    explicitRequest,
     confidence
   };
 }
