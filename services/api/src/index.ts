@@ -12502,22 +12502,25 @@ if (authToken && signature) {
     /\b(service|inspection|oil change|maintenance|repair|warranty|headlight|tail ?light|turn signal|led|light bulb|bulb|install|replace|swap|upgrade|parts?|part number|apparel|merch|clothing|jacket|helmet|gloves|boots)\b/i.test(
       semanticTextLower
     ) ||
+    /\b(call only|phone only|call me only|no text|do not text|don't text|text me not)\b/i.test(
+      semanticTextLower
+    ) ||
+    /\b(video|walkaround|walk around|walk-through|walkthrough|clip|photo|photos|pic|pics|images?)\b/i.test(
+      semanticTextLower
+    ) ||
+    /(service records?|service history|maintenance records?|maintenance history)/i.test(
+      semanticTextLower
+    ) ||
     !!conv.inventoryWatch ||
     !!conv.inventoryWatchPending;
-  const semanticTradeHint =
-    /\b(lien|lein|payoff|lender|loan|title|owe|owe on it|bank)\b/i.test(semanticTextLower) ||
-    /\b(address|info|information|details)\b/i.test(semanticTextLower) ||
-    isTradeDialogState(getDialogState(conv)) ||
-    !!conv.tradePayoff;
   const unifiedSlotParserEligible =
     event.provider === "twilio" &&
     process.env.LLM_ENABLED === "1" &&
     process.env.LLM_UNIFIED_SLOT_PARSER_ENABLED === "1" &&
     !!process.env.OPENAI_API_KEY &&
     !semanticShortAck;
-  const unifiedSlotParserHint = semanticSlotParserHint || semanticTradeHint;
   const unifiedSemanticSlotParse =
-    unifiedSlotRouterEnabled && unifiedSlotParserEligible && unifiedSlotParserHint
+    unifiedSlotRouterEnabled && unifiedSlotParserEligible
       ? await parseUnifiedSemanticSlotsWithLLM({
           text: semanticInboundText,
           history: buildHistory(conv, 12),
@@ -12536,6 +12539,9 @@ if (authToken && signature) {
         watchAction: unifiedSemanticSlotParse.watchAction,
         watch: unifiedSemanticSlotParse.watch,
         departmentIntent: unifiedSemanticSlotParse.departmentIntent,
+        contactPreferenceIntent: unifiedSemanticSlotParse.contactPreferenceIntent,
+        mediaIntent: unifiedSemanticSlotParse.mediaIntent,
+        serviceRecordsIntent: unifiedSemanticSlotParse.serviceRecordsIntent,
         confidence:
           typeof unifiedSemanticSlotParse.watchConfidence === "number"
             ? unifiedSemanticSlotParse.watchConfidence
@@ -12543,10 +12549,10 @@ if (authToken && signature) {
       }
     : null;
   let semanticSlotParse: SemanticSlotParse | null =
-    unifiedSlotRouterEnabled && semanticSlotParserHint && unifiedSemanticOnlyParse
+    unifiedSlotRouterEnabled && unifiedSemanticOnlyParse
       ? unifiedSemanticOnlyParse
       : null;
-  if (!semanticSlotParse && semanticSlotParserEligible && semanticSlotParserHint) {
+  if (!semanticSlotParse && semanticSlotParserEligible) {
     semanticSlotParse = await parseSemanticSlotsWithLLM({
       text: semanticInboundText,
       history: buildHistory(conv, 12),
@@ -12618,6 +12624,22 @@ if (authToken && signature) {
     semanticSlotParse.departmentIntent !== "none"
       ? semanticSlotParse.departmentIntent
       : null;
+  const semanticRoutingConfidence =
+    typeof semanticSlotParse?.confidence === "number" ? semanticSlotParse.confidence : 0;
+  const semanticRoutingConfidenceMin = Number(process.env.LLM_SEMANTIC_ROUTING_CONFIDENCE_MIN ?? 0.72);
+  const semanticRoutingAccepted = !!semanticSlotParse && semanticRoutingConfidence >= semanticRoutingConfidenceMin;
+  const semanticCallOnlyIntent =
+    semanticRoutingAccepted && semanticSlotParse?.contactPreferenceIntent === "call_only";
+  const semanticVideoIntent =
+    semanticRoutingAccepted &&
+    (semanticSlotParse?.mediaIntent === "video" || semanticSlotParse?.mediaIntent === "either");
+  const semanticServiceRecordsIntent =
+    semanticRoutingAccepted && !!semanticSlotParse?.serviceRecordsIntent;
+  const callOnlyRequested = semanticCallOnlyIntent || isCallOnlyText(event.body);
+  const serviceRecordsRequested =
+    semanticServiceRecordsIntent || isServiceRecordsRequest(event.body);
+  const videoRequested =
+    (semanticVideoIntent || isVideoRequest(event.body)) && !serviceRecordsRequested;
 
   if (
     (isWatchAlertStopIntent(event.body) || semanticWatchAction === "stop_watch") &&
@@ -12645,12 +12667,8 @@ if (authToken && signature) {
     process.env.LLM_CUSTOMER_DISPOSITION_PARSER_ENABLED !== "0" &&
     !!process.env.OPENAI_API_KEY &&
     !semanticShortAck;
-  const customerDispositionParserHint =
-    /\b(sell (it|my bike|my motorcycle|my ride)|on my own|myself|keep (it|my bike|my motorcycle|my ride)|hold off|pass for now|not ready|let you know|get back to you|maybe later|can(?:not|'t)\s+afford|too (expensive|high)|out of (my )?budget|can't do that right now|not in the budget)\b/i.test(
-      semanticTextLower
-    );
   const customerDispositionParse =
-    customerDispositionParserEligible && customerDispositionParserHint
+    customerDispositionParserEligible
       ? await parseCustomerDispositionWithLLM({
           text: semanticInboundText,
           history: buildHistory(conv, 8),
@@ -12689,7 +12707,7 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
-  if (isCallOnlyText(event.body)) {
+  if (callOnlyRequested) {
     setContactPreference(conv, "call_only");
     setDialogState(conv, "call_only");
     addTodo(conv, "other", event.body ?? "Call only requested", event.providerMessageId);
@@ -12700,7 +12718,7 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
-  if (isVideoRequest(event.body)) {
+  if (videoRequested) {
     const reply =
       "Got it — I’ll have a salesperson send a walkaround video by text shortly.";
     addTodo(conv, "other", `Video request: ${event.body}`, event.providerMessageId);
@@ -12717,7 +12735,7 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
-  if (isServiceRecordsRequest(event.body)) {
+  if (serviceRecordsRequested) {
     const hasServiceTodo = listOpenTodos().some(
       t => t.convId === conv.id && t.reason === "service"
     );
@@ -12881,26 +12899,6 @@ if (authToken && signature) {
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
     const reply =
       "We’ve received your service request and will have the service department reach out.";
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
-  }
-
-  const deferIndefinitely = /(i|we)('| )?ll let you know|(i|we) will let you know|(i|we)('| )?ll get back to you|(i|we) will get back to you|reach out when i can/i.test(
-    event.body ?? ""
-  );
-  if (deferIndefinitely) {
-    closeConversation(conv, "customer_deferred");
-    stopRelatedCadences(conv, "customer_deferred", { close: true });
-    const reply = buildFriendlyReachOutClose(false);
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -14110,12 +14108,8 @@ if (authToken && signature) {
     process.env.LLM_ENABLED === "1" &&
     process.env.LLM_INTENT_PARSER_ENABLED === "1" &&
     !!process.env.OPENAI_API_KEY;
-  const intentParserHint =
-    /\b(call|phone|callback|call me|give me a call|reach me|test ride|demo|demo ride|ride it|take .* ride|available|availability|in stock|still there)\b/i.test(
-      textLower
-    );
   const intentParse =
-    intentParserEligible && intentParserHint && !shortAck
+    intentParserEligible && !shortAck
       ? await parseIntentWithLLM({
           text: event.body,
           history: recentHistory,

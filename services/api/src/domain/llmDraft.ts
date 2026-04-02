@@ -370,6 +370,9 @@ export type SemanticSlotParse = {
     condition?: "new" | "used" | "any" | "unknown" | null;
   };
   departmentIntent: "service" | "parts" | "apparel" | "none";
+  contactPreferenceIntent?: "call_only" | "none";
+  mediaIntent?: "video" | "photos" | "either" | "none";
+  serviceRecordsIntent?: boolean;
   confidence?: number;
 };
 
@@ -382,6 +385,9 @@ export type UnifiedSemanticSlotParse = {
     condition?: "new" | "used" | "any" | "unknown" | null;
   };
   departmentIntent: "service" | "parts" | "apparel" | "none";
+  contactPreferenceIntent?: "call_only" | "none";
+  mediaIntent?: "video" | "photos" | "either" | "none";
+  serviceRecordsIntent?: boolean;
   payoffStatus: "unknown" | "no_lien" | "has_lien";
   needsLienHolderInfo: boolean;
   providesLienHolderInfo: boolean;
@@ -596,7 +602,15 @@ const JOURNEY_INTENT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
 const SEMANTIC_SLOT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
-  required: ["watch_action", "watch", "department_intent", "confidence"],
+  required: [
+    "watch_action",
+    "watch",
+    "department_intent",
+    "contact_preference_intent",
+    "media_intent",
+    "service_records_intent",
+    "confidence"
+  ],
   properties: {
     watch_action: {
       type: "string",
@@ -616,6 +630,17 @@ const SEMANTIC_SLOT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     department_intent: {
       type: "string",
       enum: ["service", "parts", "apparel", "none"]
+    },
+    contact_preference_intent: {
+      type: "string",
+      enum: ["call_only", "none"]
+    },
+    media_intent: {
+      type: "string",
+      enum: ["video", "photos", "either", "none"]
+    },
+    service_records_intent: {
+      type: "boolean"
     },
     confidence: { type: "number" }
   }
@@ -1448,6 +1473,9 @@ export async function parseUnifiedSemanticSlotsWithLLM(args: {
     watchAction: semantic?.watchAction ?? "none",
     watch: semantic?.watch,
     departmentIntent: semantic?.departmentIntent ?? "none",
+    contactPreferenceIntent: semantic?.contactPreferenceIntent ?? "none",
+    mediaIntent: semantic?.mediaIntent ?? "none",
+    serviceRecordsIntent: !!semantic?.serviceRecordsIntent,
     payoffStatus: trade?.payoffStatus ?? "unknown",
     needsLienHolderInfo: !!trade?.needsLienHolderInfo,
     providesLienHolderInfo: !!trade?.providesLienHolderInfo,
@@ -1494,6 +1522,9 @@ export async function parseSemanticSlotsWithLLM(args: {
     "- watch_action: set_watch / stop_watch / none",
     "- watch: model/year/color/condition if explicitly present",
     "- department_intent: service / parts / apparel / none",
+    "- contact_preference_intent: call_only / none",
+    "- media_intent: video / photos / either / none",
+    "- service_records_intent: true/false",
     "",
     "Rules:",
     "- watch_action=set_watch only when the customer asks to be notified/updated if inventory comes in or becomes available.",
@@ -1502,6 +1533,9 @@ export async function parseSemanticSlotsWithLLM(args: {
     "- department_intent=service/parts/apparel only when customer explicitly requests that department/category help.",
     "- department_intent=service for install/repair price questions like headlight bulb to LED, light replacement, wiring/fitment labor.",
     "- Use department_intent=none for general sales messages.",
+    "- contact_preference_intent=call_only only when customer explicitly asks for calls only / no texts.",
+    "- media_intent=video/photos/either only when the customer explicitly asks for media (walkaround, pics, photos, video).",
+    "- service_records_intent=true only when customer explicitly asks for service/maintenance records/history, battery/tires condition history, or similar records-check request.",
     "- watch.model should be normalized human model text when possible; else empty string.",
     "- watch.year should be empty string unless explicitly provided.",
     "- watch.color should be empty string unless explicitly provided.",
@@ -1547,6 +1581,13 @@ export async function parseSemanticSlotsWithLLM(args: {
   const deptRaw = String(parsed.department_intent ?? "").toLowerCase();
   let departmentIntent: SemanticSlotParse["departmentIntent"] =
     deptRaw === "service" || deptRaw === "parts" || deptRaw === "apparel" ? deptRaw : "none";
+  const contactPrefRaw = String(parsed.contact_preference_intent ?? "").toLowerCase();
+  let contactPreferenceIntent: SemanticSlotParse["contactPreferenceIntent"] =
+    contactPrefRaw === "call_only" ? "call_only" : "none";
+  const mediaRaw = String(parsed.media_intent ?? "").toLowerCase();
+  let mediaIntent: SemanticSlotParse["mediaIntent"] =
+    mediaRaw === "video" || mediaRaw === "photos" || mediaRaw === "either" ? mediaRaw : "none";
+  let serviceRecordsIntent = !!parsed.service_records_intent;
 
   const watchObj = parsed.watch && typeof parsed.watch === "object" ? parsed.watch : {};
   const model = cleanOptionalString(watchObj.model);
@@ -1599,6 +1640,24 @@ export async function parseSemanticSlotsWithLLM(args: {
   if (departmentIntent === "service" && !hasServiceCue) departmentIntent = "none";
   if (departmentIntent === "parts" && !hasPartsCue) departmentIntent = "none";
   if (departmentIntent === "apparel" && !hasApparelCue) departmentIntent = "none";
+  const hasCallOnlyCue =
+    /\b(call only|phone only|call me only|no text|do not text|don't text|text me not)\b/.test(textLower);
+  if (contactPreferenceIntent === "call_only" && !hasCallOnlyCue) {
+    contactPreferenceIntent = "none";
+  }
+  const hasVideoCue =
+    /\b(video|walkaround|walk around|walk-through|walkthrough|clip)\b/.test(textLower);
+  const hasPhotoCue = /\b(photo|photos|pic|pics|images?)\b/.test(textLower);
+  const hasMediaCue = hasVideoCue || hasPhotoCue;
+  if (mediaIntent === "video" && !hasVideoCue) mediaIntent = "none";
+  if (mediaIntent === "photos" && !hasPhotoCue) mediaIntent = "none";
+  if (mediaIntent === "either" && !hasMediaCue) mediaIntent = "none";
+  const hasServiceRecordsCue =
+    /(service records?|service history|maintenance records?|maintenance history)/.test(textLower) ||
+    /\b(battery|tires?|tire age)\b/.test(textLower);
+  if (serviceRecordsIntent && !hasServiceRecordsCue) {
+    serviceRecordsIntent = false;
+  }
 
   const confidence =
     typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
@@ -1614,6 +1673,9 @@ export async function parseSemanticSlotsWithLLM(args: {
       condition
     },
     departmentIntent,
+    contactPreferenceIntent,
+    mediaIntent,
+    serviceRecordsIntent,
     confidence
   };
 }
