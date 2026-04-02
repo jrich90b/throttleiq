@@ -18,7 +18,8 @@
     "intent:add": "npx tsx scripts/intent_parser_add.ts",
     "trade_payoff:eval": "LLM_ENABLED=1 LLM_TRADE_PAYOFF_PARSER_ENABLED=1 npx tsx scripts/trade_payoff_eval.ts",
     "watch_catalog_eval": "LLM_ENABLED=1 npx tsx scripts/watch_catalog_eval.ts",
-    "finance_docs_eval": "LLM_ENABLED=1 npx tsx scripts/finance_docs_eval.ts"
+    "finance_docs_eval": "LLM_ENABLED=1 npx tsx scripts/finance_docs_eval.ts",
+    "adf_policy:eval": "npx tsx scripts/adf_policy_eval.ts"
   },
   "devDependencies": {
     "concurrently": "^9.0.0",

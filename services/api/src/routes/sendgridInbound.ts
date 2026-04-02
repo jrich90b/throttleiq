@@ -34,7 +34,11 @@ import {
 import type { InventoryWatch } from "../domain/conversationStore.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { resolveChannel, resolveLeadRule } from "../domain/leadSourceRules.js";
-import { parseJourneyIntentWithLLM } from "../domain/llmDraft.js";
+import {
+  parseDialogActWithLLM,
+  parseIntentWithLLM,
+  parseJourneyIntentWithLLM
+} from "../domain/llmDraft.js";
 import type { InboundMessageEvent } from "../domain/types.js";
 import { getSchedulerConfig, getPreferredSalespeople } from "../domain/schedulerConfig.js";
 import { getAuthedCalendarClient, insertEvent, queryFreeBusy } from "../domain/googleCalendar.js";
@@ -50,6 +54,7 @@ import { getInventoryNote } from "../domain/inventoryNotes.js";
 import { getInventoryFeed, hasInventoryForModelYear, findInventoryMatches } from "../domain/inventoryFeed.js";
 import { resolveInventoryUrlByStock } from "../domain/inventoryUrlResolver.js";
 import { getAllModels } from "../domain/modelsByYear.js";
+import { shouldRouteRoom58PriceHandoff } from "../domain/adfPolicy.js";
 
 function base64UrlDecode(input: string): string | null {
   try {
@@ -1471,13 +1476,38 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const effectiveInquiry = combinedInquiry || inquiryRaw;
   lead.inquiry = effectiveInquiry;
   const inquiryText = String(effectiveInquiry).toLowerCase();
-  const pricingInquiryIntent = isPricingPaymentInquiry(inquiryText);
+  const adfHistory = (conv.messages ?? [])
+    .slice(-6)
+    .map(m => ({ direction: m.direction as "in" | "out", body: String(m.body ?? "") }));
+  const llmDialogAct = await parseDialogActWithLLM({
+    text: effectiveInquiry,
+    history: adfHistory,
+    lead: conv.lead
+  });
+  const llmIntent = await parseIntentWithLLM({
+    text: effectiveInquiry,
+    history: adfHistory,
+    lead: conv.lead
+  });
+  const dialogActConfidenceMin = Number(process.env.LLM_DIALOG_ACT_CONFIDENCE_MIN ?? 0.68);
+  const intentConfidenceMin = Number(process.env.LLM_INTENT_CONFIDENCE_MIN ?? 0.75);
+  const pricingInquiryIntentFromParser =
+    !!llmDialogAct &&
+    llmDialogAct.topic === "pricing" &&
+    llmDialogAct.explicitRequest === true &&
+    Number(llmDialogAct.confidence ?? 0) >= dialogActConfidenceMin;
+  const pricingInquiryIntent = pricingInquiryIntentFromParser || isPricingPaymentInquiry(inquiryText);
+  const availabilityIntentFromParser =
+    !!llmIntent &&
+    llmIntent.intent === "availability" &&
+    llmIntent.explicitRequest === true &&
+    Number(llmIntent.confidence ?? 0) >= intentConfidenceMin;
   const inquiryDayPart = extractDayPartRequest(effectiveInquiry);
   const serviceVinRequest =
     /registration\s+or\s+vin\s+number/i.test(lead.comment ?? "") ||
     /registration\s+or\s+vin\s+number/i.test(lead.inquiry ?? "");
   const hasStockIntent =
-    !!lead.stockId || !!lead.vin || inquiryText.includes("available");
+    !!lead.stockId || !!lead.vin || inquiryText.includes("available") || availabilityIntentFromParser;
 
   let inferredBucket = rule.bucket;
   let inferredCta = rule.cta;
@@ -1809,7 +1839,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       meta.model ??
       "";
     const modelLabel = normalizeVehicleModel(String(modelRaw ?? ""), conv.lead?.vehicle?.make ?? null);
+    const hasWatchIntentFromParser =
+      !!llmIntent &&
+      llmIntent.intent === "availability" &&
+      llmIntent.explicitRequest === true &&
+      Number(llmIntent.confidence ?? 0) >= intentConfidenceMin;
     const hasWatchIntent =
+      hasWatchIntentFromParser ||
       /\b(keep an eye out|watch for|let me know when|notify me when|if you get|when you get|reach out when)\b/.test(
         commentLower
       );
@@ -2213,18 +2249,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     });
   }
 
-  const isRoom58RequestDetails = /room58/i.test(leadSourceLower) && /request details/i.test(leadSourceLower);
   const inquiryTextRaw = String(lead.inquiry ?? inquiryRaw ?? "").trim();
-  const embeddedInquiry =
-    inquiryTextRaw.match(/\byour inquiry\s*:\s*([^>]+)/i)?.[1]?.trim() ??
-    inquiryTextRaw.match(/\binquiry\s*:\s*([^>]+)/i)?.[1]?.trim() ??
-    "";
-  const inquiryCandidates = [inquiryTextRaw, embeddedInquiry].filter(Boolean);
-  const isShortPriceOnlyInquiry = inquiryCandidates.some(text =>
-    /^(price|pricing|price\?|what(?:'s| is)? the price\??|how much\??)$/i.test(String(text).trim())
-  );
   const hasInventoryIdentifiers = !!conv.lead?.vehicle?.stockId || !!conv.lead?.vehicle?.vin;
-  if (isInitialAdf && isRoom58RequestDetails && isShortPriceOnlyInquiry && hasInventoryIdentifiers) {
+  const routeRoom58PriceHandoff = shouldRouteRoom58PriceHandoff({
+    isInitialAdf,
+    leadSourceLower,
+    inquiryRaw: inquiryTextRaw,
+    hasInventoryIdentifiers,
+    pricingInquiryIntent
+  });
+  if (routeRoom58PriceHandoff) {
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
     const agentName = profile?.agentName ?? "Brooke";

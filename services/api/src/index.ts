@@ -12098,6 +12098,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       m.direction === "out" &&
       (m.provider === "twilio" || m.provider === "human" || m.provider === "sendgrid")
   );
+  const regenIsWalkInLead =
+    inferWalkIn(conv) || /traffic log pro/i.test(String(conv.lead?.source ?? ""));
   const enforceInitialAdfPrefixForRegen = (text: string): string => {
     const body = String(text ?? "").trim();
     if (!body) return body;
@@ -12141,7 +12143,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     reply = lienHolderFallback;
   }
   if (event.provider === "sendgrid_adf" && !hasSentOutbound) {
-    reply = enforceInitialAdfPrefixForRegen(reply);
+    if (!regenIsWalkInLead) {
+      reply = enforceInitialAdfPrefixForRegen(reply);
+    }
   }
   if (isSlotOfferMessage(reply)) {
     const appointmentType = String(result.requestedAppointmentType ?? "inventory_visit");
