@@ -216,6 +216,9 @@ export type DialogStateName =
   | "call_only"
   | "followup_paused"
   | "followup_resumed"
+  | "customer_stepping_back"
+  | "customer_sell_on_own"
+  | "customer_keep_current_bike"
   | "schedule_request"
   | "schedule_offer_sent"
   | "schedule_booked";

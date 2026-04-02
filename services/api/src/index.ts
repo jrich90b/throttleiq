@@ -10191,6 +10191,7 @@ app.delete("/conversations/:id", (req, res) => {
 app.get("/todos", requirePermission("canAccessTodos"), (req, res) => {
   const user = (req as any).user ?? null;
   const isManager = user?.role === "manager";
+  const isSalesperson = user?.role === "salesperson";
   const departmentRole =
     user?.role === "service" || user?.role === "parts" || user?.role === "apparel"
       ? (user.role as DepartmentRole)
@@ -10213,6 +10214,7 @@ app.get("/todos", requirePermission("canAccessTodos"), (req, res) => {
       const conv = getConversation(t.convId);
       const todoDepartment = inferTodoDepartment(t, conv);
       if (departmentRole) return todoDepartment === departmentRole;
+      if (isSalesperson) return !todoDepartment;
       if (todoDepartment) return false;
       if (!requesterId) return false;
       if (t.ownerId) return t.ownerId === requesterId;
@@ -10289,6 +10291,9 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), (re
         return res.status(403).json({ ok: false, error: "forbidden" });
       }
     } else {
+      if (user?.role === "salesperson") {
+        // Sales todos (no department routing) are shared across all salespeople.
+      } else {
       const requesterId = String(user?.id ?? "").trim();
       const ownerId = String(existingTask.ownerId ?? "").trim();
       if (ownerId && ownerId !== requesterId) {
@@ -10300,6 +10305,7 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), (re
         if (fallbackOwner && fallbackOwner !== requesterId) {
           return res.status(403).json({ ok: false, error: "forbidden" });
         }
+      }
       }
     }
   }
@@ -14115,6 +14121,56 @@ if (authToken && signature) {
     /\b(not ready|not (yet|right now)|not in the market|not looking to buy|not looking for|just browsing|just looking|window shopping|not ready to purchase|not ready to buy)\b/i.test(
       textLower
     );
+  const sellOnOwnSignal =
+    /\b(sell (it|my bike|my motorcycle|my ride) (on my own|myself)|sell (my bike|my motorcycle|my ride) myself)\b/i.test(
+      textLower
+    );
+  const keepCurrentBikeSignal =
+    /\b(keep (it|my bike|my motorcycle|my ride)|going to keep (it|my bike|my motorcycle|my ride)|gonna keep (it|my bike|my motorcycle|my ride))\b/i.test(
+      textLower
+    );
+  const steppingBackFromDeal =
+    sellOnOwnSignal ||
+    keepCurrentBikeSignal ||
+    /\b(hold off for now|pass for now)\b/i.test(textLower);
+  if (event.provider === "twilio" && steppingBackFromDeal) {
+    const dispositionReason = sellOnOwnSignal
+      ? "customer_sell_on_own"
+      : keepCurrentBikeSignal
+        ? "customer_keep_current_bike"
+        : "customer_stepping_back";
+    const dispositionState: DialogStateName = sellOnOwnSignal
+      ? "customer_sell_on_own"
+      : keepCurrentBikeSignal
+        ? "customer_keep_current_bike"
+        : "customer_stepping_back";
+    stopFollowUpCadence(conv, dispositionReason);
+    setFollowUpMode(conv, "paused_indefinite", dispositionReason);
+    setDialogState(conv, dispositionState);
+    closeConversation(conv, dispositionReason);
+    stopRelatedCadences(conv, dispositionReason, { close: true });
+    const hasBikeCompliment =
+      /\b(beautiful|nice|great|awesome|amazing|love|like|clean|killer|badass|sweet)\b/i.test(textLower) &&
+      /\b(bike|street glide|road glide|harley|motorcycle|ride)\b/i.test(textLower);
+    const dealerProfile = await getDealerProfile();
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const replyRaw = hasBikeCompliment
+      ? "Totally understand, and thank you for saying that about the bike. If anything changes, just reach out."
+      : "Totally understand. If anything changes, just reach out.";
+    const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (event.provider === "twilio" && notReadyToBuy) {
     const futureFromNotReady = parseFutureTimeframe(String(event.body ?? ""), new Date());
     if (!futureFromNotReady) {
