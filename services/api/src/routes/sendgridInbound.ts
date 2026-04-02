@@ -768,6 +768,12 @@ function extractSingleYearFromText(text?: string | null): number | undefined {
   return year;
 }
 
+function isoDaysFromNow(days: number): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + Math.max(1, Math.round(days)));
+  return d.toISOString();
+}
+
 function parsePriceToken(raw?: string | null): number | null {
   if (!raw) return null;
   const t = String(raw).toLowerCase().replace(/[$,\s]/g, "");
@@ -1960,6 +1966,34 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const hasCompletedTestRideSignal =
       /\b(took|completed|did|finished)\s+(a\s+)?(test ride|demo ride)\b/.test(commentLower) ||
       /\b(test ride|demo ride)\s+(completed|done)\b/.test(commentLower);
+    const hasDecisionPendingSignal =
+      /\b(thinking it over|think it over|sleep on it|not ready|not ready yet|will let (you|us) know|get back to (you|us)|reach back out)\b/.test(
+        commentLower
+      );
+    const hasOutsideFinancingPendingSignal =
+      /\b(credit union|cu financing|bank loan|bank financing|outside financing|waiting on (the )?(bank|credit union)|waiting on approval)\b/.test(
+        commentLower
+      );
+    const hasDownPaymentPendingSignal =
+      /\b(waiting for down payment|saving up for down payment|save up for down payment|don'?t have enough down|need more down|down payment)\b/.test(
+        commentLower
+      );
+    const hasTradeEquityPendingSignal =
+      /\b(sell my bike first|sell it first|trade value|waiting on trade value|upside down|negative equity|payoff)\b/.test(
+        commentLower
+      );
+    const hasTimingDeferWindowSignal =
+      /\b(after winter|next month|after tax return|after taxes|after bonus|later this year|next season)\b/.test(
+        commentLower
+      );
+    const hasHouseholdApprovalPendingSignal =
+      /\b(talk to (my )?(wife|husband|spouse|partner)|wife needs to approve|husband needs to approve|spouse decision|partner decision)\b/.test(
+        commentLower
+      );
+    const hasDocsOrInsurancePendingSignal =
+      /\b(waiting on insurance|insurance quote|need (the )?title|need docs|paperwork first|registration first|dmv first)\b/.test(
+        commentLower
+      );
 
     if (hasCreditCosignerSignal) {
       conv.dialogState = { name: "payments_handoff", updatedAt: new Date().toISOString() };
@@ -1978,6 +2012,32 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     } else if (hasCompletedTestRideSignal) {
       conv.dialogState = { name: "test_ride_booked", updatedAt: new Date().toISOString() };
     }
+    let walkInDelayReason: string | null = null;
+    let walkInDelayDays: number | null = null;
+    if (!(hasDepositSignal || hasSoldSignal || hasCreditCosignerSignal)) {
+      if (hasOutsideFinancingPendingSignal) {
+        walkInDelayReason = "outside_financing_pending";
+        walkInDelayDays = 5;
+      } else if (hasDownPaymentPendingSignal) {
+        walkInDelayReason = "down_payment_pending";
+        walkInDelayDays = 21;
+      } else if (hasTradeEquityPendingSignal) {
+        walkInDelayReason = "trade_equity_pending";
+        walkInDelayDays = 7;
+      } else if (hasTimingDeferWindowSignal) {
+        walkInDelayReason = "timing_defer_window";
+        walkInDelayDays = 14;
+      } else if (hasHouseholdApprovalPendingSignal) {
+        walkInDelayReason = "household_approval_pending";
+        walkInDelayDays = 4;
+      } else if (hasDocsOrInsurancePendingSignal) {
+        walkInDelayReason = "docs_or_insurance_pending";
+        walkInDelayDays = 5;
+      } else if (hasDecisionPendingSignal) {
+        walkInDelayReason = "decision_pending";
+        walkInDelayDays = 5;
+      }
+    }
     let tail = "I’ll keep an eye out and let you know if one comes in.";
     if (hasCreditCosignerSignal) {
       tail = "I saw the credit app note and I’ll have our finance team follow up about the co-signer.";
@@ -1987,6 +2047,20 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         : "Thanks for the deposit note — we’ll follow up with next steps.";
     } else if (hasCompletedTestRideSignal) {
       tail = "Thanks for taking the test ride — I’ll follow up with next steps.";
+    } else if (walkInDelayReason === "outside_financing_pending") {
+      tail = "Sounds good — once you hear back from your credit union, text me and I’ll help with next steps.";
+    } else if (walkInDelayReason === "down_payment_pending") {
+      tail = "Got it — keep me posted as you save for down payment and I can run options when you’re ready.";
+    } else if (walkInDelayReason === "trade_equity_pending") {
+      tail = "Understood — once you have your trade/payoff numbers, send them over and I’ll tighten your options.";
+    } else if (walkInDelayReason === "timing_defer_window") {
+      tail = "Sounds good — I’ll circle back around your timing window and keep this easy.";
+    } else if (walkInDelayReason === "household_approval_pending") {
+      tail = "No problem — talk it over and text me when you want to move forward.";
+    } else if (walkInDelayReason === "docs_or_insurance_pending") {
+      tail = "Makes sense — once docs/insurance are lined up, I can help you finish this out.";
+    } else if (walkInDelayReason === "decision_pending") {
+      tail = "No rush — think it over and I’m here when you’re ready.";
     }
     if (/(test ride|demo ride)/i.test(walkInCleanedComment) && /weather/i.test(walkInCleanedComment)) {
       tail = "I’ll reach back when the weather looks better and we can line up your test ride.";
@@ -2120,6 +2194,17 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
 
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
+    if (walkInDelayReason && walkInDelayDays && !hasCreditCosignerSignal && !(hasDepositSignal || hasSoldSignal)) {
+      const cfg = await getSchedulerConfig();
+      if (!conv.followUpCadence?.status) {
+        startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
+      }
+      pauseFollowUpCadence(conv, isoDaysFromNow(walkInDelayDays), walkInDelayReason);
+      setFollowUpMode(conv, "active", walkInDelayReason);
+      if (walkInDelayReason === "trade_equity_pending") {
+        addTodo(conv, "payments", event.body ?? walkInCleanedComment, event.providerMessageId);
+      }
+    }
     const shouldStartWalkInCadence =
       !conv.followUpCadence?.status &&
       !conv.appointment?.bookedEventId &&
