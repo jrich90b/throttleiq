@@ -11171,9 +11171,9 @@ app.post("/conversations/:id/media", upload.single("file"), async (req, res) => 
   if (!isImage && !isVideo) {
     return res.status(400).json({ ok: false, error: "only image/video files are allowed" });
   }
-  const maxBytes = 15 * 1024 * 1024;
+  const maxBytes = 30 * 1024 * 1024;
   if (Number(req.file.size ?? 0) > maxBytes) {
-    return res.status(400).json({ ok: false, error: "file too large (max 15MB)" });
+    return res.status(400).json({ ok: false, error: "file too large (max 30MB)" });
   }
 
   const extFromOriginal = path.extname(req.file.originalname || "").toLowerCase();
@@ -11203,12 +11203,17 @@ app.post("/conversations/:id/media", upload.single("file"), async (req, res) => 
   const url = publicBase
     ? `${publicBase.replace(/\/$/, "")}/uploads/messages/${fileName}`
     : `/uploads/messages/${fileName}`;
+  const mmsEligibleMaxBytes = 5 * 1024 * 1024;
+  const sizeBytes = Number(req.file.size ?? 0);
+  const mmsEligible = sizeBytes > 0 && sizeBytes <= mmsEligibleMaxBytes;
+
   return res.json({
     ok: true,
     url,
     name: req.file.originalname || fileName,
     type: mime || "application/octet-stream",
-    size: Number(req.file.size ?? 0)
+    size: sizeBytes,
+    mmsEligible
   });
 });
 

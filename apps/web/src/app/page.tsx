@@ -861,7 +861,7 @@ export default function Home() {
     { body: string; draftId?: string; mediaUrls?: string[] } | null
   >(null);
   const [smsAttachments, setSmsAttachments] = useState<
-    { name: string; type: string; size: number; url: string }[]
+    { name: string; type: string; size: number; url: string; mode: "mms" | "link" }[]
   >([]);
   const [smsAttachmentsBusy, setSmsAttachmentsBusy] = useState(false);
   const [emailAttachments, setEmailAttachments] = useState<
@@ -3572,15 +3572,29 @@ export default function Home() {
         body = injectBookingUrl(body, bookingUrl);
       }
     }
-    const smsMediaUrls = messageFilter === "sms" ? smsAttachments.map(att => att.url) : [];
-    if (!body && !(messageFilter === "sms" && smsMediaUrls.length > 0)) return;
+    const smsMmsMediaUrls =
+      messageFilter === "sms"
+        ? smsAttachments.filter(att => att.mode === "mms").map(att => att.url)
+        : [];
+    const smsLinkAttachments =
+      messageFilter === "sms" ? smsAttachments.filter(att => att.mode === "link") : [];
+    const smsLinkSuffix =
+      messageFilter === "sms" && smsLinkAttachments.length
+        ? `\n\n${smsLinkAttachments
+            .map(att => `${att.name || "Media"}: ${att.url}`)
+            .join("\n")}`
+        : "";
+    if (smsLinkSuffix) {
+      body = `${body}${smsLinkSuffix}`.trim();
+    }
+    if (!body && !(messageFilter === "sms" && smsMmsMediaUrls.length > 0)) return;
     const draftId = effectiveDraft?.id;
     const edited = !!effectiveDraft && effectiveDraft.body.trim() !== body.trim();
     if (edited) {
       setPendingSend({
         body,
         draftId,
-        mediaUrls: messageFilter === "sms" ? smsMediaUrls : undefined
+        mediaUrls: messageFilter === "sms" ? smsMmsMediaUrls : undefined
       });
       setEditNote("");
       setEditPromptOpen(true);
@@ -3596,14 +3610,14 @@ export default function Home() {
             draftId,
             manualTakeover,
             attachments,
-            mediaUrls: messageFilter === "sms" ? smsMediaUrls : undefined,
+            mediaUrls: messageFilter === "sms" ? smsMmsMediaUrls : undefined,
             skipEmailSignature: isManualEmail
           }
         : {
             body,
             manualTakeover: isManualEmail ? true : manualTakeover,
             attachments,
-            mediaUrls: messageFilter === "sms" ? smsMediaUrls : undefined,
+            mediaUrls: messageFilter === "sms" ? smsMmsMediaUrls : undefined,
             skipEmailSignature: isManualEmail
           }
     );
@@ -3690,7 +3704,8 @@ export default function Home() {
         name: String(payload.name ?? file.name),
         type: String((payload.type ?? file.type) || "application/octet-stream"),
         size: Number(payload.size ?? file.size ?? 0),
-        url: String(payload.url)
+        url: String(payload.url),
+        mode: payload.mmsEligible === false ? ("link" as const) : ("mms" as const)
       };
       setSmsAttachments(prev => [...prev, nextAttachment]);
     }
@@ -10354,7 +10369,10 @@ export default function Home() {
                         key={`${att.url}-${idx}`}
                         className="flex items-center gap-2 border rounded px-2 py-1 text-xs"
                       >
-                        <span className="truncate max-w-[220px]">{att.name}</span>
+                        <span className="truncate max-w-[220px]">
+                          {att.name}
+                          {att.mode === "link" ? " (link)" : ""}
+                        </span>
                         <button
                           type="button"
                           className="text-gray-500 hover:text-gray-800"
@@ -10368,6 +10386,11 @@ export default function Home() {
                 ) : null}
                 {smsAttachmentsBusy ? (
                   <div className="text-xs text-gray-500">Uploading media…</div>
+                ) : null}
+                {smsAttachments.some(att => att.mode === "link") ? (
+                  <div className="text-xs text-gray-500">
+                    Large files will be sent as links automatically.
+                  </div>
                 ) : null}
                 <div>
                   <label className="inline-flex items-center gap-2 text-xs border rounded px-3 py-2 cursor-pointer hover:bg-gray-50">
