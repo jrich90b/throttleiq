@@ -2959,8 +2959,9 @@ export default function Home() {
       rows = [];
     }
 
-    if (!q) return rows;
-    return rows.filter(c => {
+    const searched = !q
+      ? rows
+      : rows.filter(c => {
       const haystack = [
         c.name,
         c.firstName,
@@ -2987,6 +2988,18 @@ export default function Home() {
         .join(" ")
         .toLowerCase();
       return haystack.includes(q);
+      });
+
+    return [...searched].sort((a, b) => {
+      const aLast = String(a.lastName ?? "").trim();
+      const bLast = String(b.lastName ?? "").trim();
+      const aFirst = String(a.firstName ?? "").trim();
+      const bFirst = String(b.firstName ?? "").trim();
+      const aName = String(a.name ?? "").trim();
+      const bName = String(b.name ?? "").trim();
+      const aKey = [aLast, aFirst, aName].filter(Boolean).join(" ").toLowerCase();
+      const bKey = [bLast, bFirst, bName].filter(Boolean).join(" ").toLowerCase();
+      return aKey.localeCompare(bKey, undefined, { sensitivity: "base", numeric: true });
     });
   }, [contacts, contactQuery, selectedContactListId, selectedContactList]);
 

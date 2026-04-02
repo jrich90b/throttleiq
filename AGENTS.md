@@ -136,6 +136,16 @@ When changing responses:
 ## Ops Note
 - On the Ubuntu instance, `rg` may not be installed. Use `grep` for on‑box searches.
 
+## Data Path Safety (Do Not Wipe Dealer Profile)
+- **Source of truth for instance data is runtime storage**, not repo data files.
+- API env on Lightsail should use:
+  - `DATA_DIR=/home/ubuntu/throttleiq-runtime/data`
+  - `DEALER_PROFILE_PATH=/home/ubuntu/throttleiq-runtime/data/dealer_profile.json`
+- Never treat `services/api/data/dealer_profile.json` as persistent production state. It can be changed by `git pull`.
+- Do not run destructive edits against dealer profile paths unless explicitly requested.
+- Before troubleshooting missing profile fields, verify active env from PM2:
+  - `PID=$(pm2 pid throttleiq-api); tr '\0' '\n' < /proc/$PID/environ | grep -E '^(DATA_DIR|DEALER_PROFILE_PATH)='`
+
 ## Intent Parser Eval (Local)
 - Run eval:
   - `export OPENAI_API_KEY="sk-..."`
@@ -158,7 +168,7 @@ When changing responses:
   - `git pull`
   - `cd services/api`
   - `NODE_OPTIONS="--max-old-space-size=4096" npm run build`
-  - `pm2 restart /home/ubuntu/throttleiq/ecosystem.config.cjs --update-env`
+  - `pm2 restart throttleiq-api --update-env`
 - If web app changed:
   - `cd ~/throttleiq/apps/web`
   - `npm run build`
