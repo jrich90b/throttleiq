@@ -9463,6 +9463,56 @@ app.post("/conversations/:id/mode", requirePermission("canToggleHumanOverride"),
   return res.json({ ok: true, conversation: conv });
 });
 
+app.post("/conversations/:id/department", requirePermission("canAccessTodos"), (req, res) => {
+  const conv = getConversation(req.params.id);
+  if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+  const user = (req as any).user ?? null;
+  if (!canUserAccessConversation(user, conv)) {
+    return res.status(403).json({ ok: false, error: "forbidden" });
+  }
+
+  const department = String(req.body?.department ?? "")
+    .trim()
+    .toLowerCase() as DepartmentRole;
+  if (!["service", "parts", "apparel"].includes(department)) {
+    return res.status(400).json({ ok: false, error: "Invalid department" });
+  }
+
+  const summaryRaw = String(req.body?.summary ?? "").trim();
+  const summary = summaryRaw || `${department} request`;
+
+  const ownerIdRaw = String(req.body?.ownerId ?? "").trim();
+  const ownerNameRaw = String(req.body?.ownerName ?? "").trim();
+  if ((ownerIdRaw || ownerNameRaw) && user?.role !== "manager") {
+    return res.status(403).json({ ok: false, error: "manager required to assign owner" });
+  }
+  const owner =
+    ownerIdRaw || ownerNameRaw ? { id: ownerIdRaw || undefined, name: ownerNameRaw || undefined } : undefined;
+
+  conv.classification = {
+    ...(conv.classification ?? {}),
+    bucket: department,
+    cta: `${department}_request`
+  };
+  if (department === "service") {
+    if (getDialogState(conv) === "none") {
+      setDialogState(conv, "service_request");
+    }
+    setDialogState(conv, "service_handoff");
+  }
+
+  const hasDepartmentTodo = listOpenTodos().some(t => t.convId === conv.id && t.reason === department);
+  if (!hasDepartmentTodo) {
+    addTodo(conv, department, summary, undefined, owner);
+  }
+
+  setFollowUpMode(conv, "manual_handoff", `${department}_request`);
+  stopFollowUpCadence(conv, "manual_handoff");
+  stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+  saveConversation(conv);
+  return res.json({ ok: true, conversation: conv });
+});
+
 app.post("/conversations/:id/contact-preference", (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
