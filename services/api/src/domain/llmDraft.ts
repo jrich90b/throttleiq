@@ -361,6 +361,15 @@ export type ResponseControlParse = {
   confidence?: number;
 };
 
+export type PricingPaymentsIntentParse = {
+  intent: "pricing" | "payments" | "none";
+  explicitRequest: boolean;
+  asksMonthlyTarget: boolean;
+  asksDownPayment: boolean;
+  asksAprOrTerm: boolean;
+  confidence?: number;
+};
+
 export type InventoryEntityParse = {
   model?: string | null;
   year?: number | null;
@@ -372,6 +381,27 @@ export type InventoryEntityParse = {
   maxPrice?: number | null;
   monthlyBudget?: number | null;
   downPayment?: number | null;
+  confidence?: number;
+};
+
+export type WalkInOutcomeParse = {
+  state:
+    | "none"
+    | "deposit_left"
+    | "sold_delivered"
+    | "cosigner_required"
+    | "test_ride_completed"
+    | "decision_pending"
+    | "outside_financing_pending"
+    | "down_payment_pending"
+    | "trade_equity_pending"
+    | "timing_defer_window"
+    | "household_approval_pending"
+    | "docs_or_insurance_pending";
+  explicitState: boolean;
+  testRideRequested: boolean;
+  weatherSensitive: boolean;
+  followUpWindowText?: string | null;
   confidence?: number;
 };
 
@@ -506,6 +536,43 @@ const BOOKING_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   }
 };
 
+const WALK_IN_OUTCOME_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "state",
+    "explicit_state",
+    "test_ride_requested",
+    "weather_sensitive",
+    "follow_up_window_text",
+    "confidence"
+  ],
+  properties: {
+    state: {
+      type: "string",
+      enum: [
+        "none",
+        "deposit_left",
+        "sold_delivered",
+        "cosigner_required",
+        "test_ride_completed",
+        "decision_pending",
+        "outside_financing_pending",
+        "down_payment_pending",
+        "trade_equity_pending",
+        "timing_defer_window",
+        "household_approval_pending",
+        "docs_or_insurance_pending"
+      ]
+    },
+    explicit_state: { type: "boolean" },
+    test_ride_requested: { type: "boolean" },
+    weather_sensitive: { type: "boolean" },
+    follow_up_window_text: { type: "string" },
+    confidence: { type: "number" }
+  }
+};
+
 const INTENT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
@@ -615,6 +682,30 @@ const RESPONSE_CONTROL_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
       enum: ["opt_out", "not_interested", "schedule_request", "compliment_only", "none"]
     },
     explicit_request: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const PRICING_PAYMENTS_INTENT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "intent",
+    "explicit_request",
+    "asks_monthly_target",
+    "asks_down_payment",
+    "asks_apr_or_term",
+    "confidence"
+  ],
+  properties: {
+    intent: {
+      type: "string",
+      enum: ["pricing", "payments", "none"]
+    },
+    explicit_request: { type: "boolean" },
+    asks_monthly_target: { type: "boolean" },
+    asks_down_payment: { type: "boolean" },
+    asks_apr_or_term: { type: "boolean" },
     confidence: { type: "number" }
   }
 };
@@ -1489,6 +1580,87 @@ export async function parseResponseControlWithLLM(args: {
   };
 }
 
+export async function parsePricingPaymentsIntentWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<PricingPaymentsIntentParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_PRICING_PAYMENTS_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_PRICING_PAYMENTS_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_PRICING_PAYMENTS_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_PRICING_PAYMENTS_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const prompt = [
+    "You parse dealership inbound intent for pricing/payments routing.",
+    "Return only JSON matching the schema.",
+    "",
+    "Choose one intent:",
+    "- payments: monthly payment target, down payment, APR, term, finance structure questions.",
+    "- pricing: total price/OTD/quote/rebate/discount questions not centered on monthly structure.",
+    "- none: no clear pricing or payment ask.",
+    "",
+    "Rules:",
+    "- If user asks 'how much down', '$300/month', 'monthly', 'APR', or term => payments.",
+    "- Do not classify scheduling/appointment messages as pricing/payments.",
+    "- If mixed but payment structure is present, prefer payments.",
+    "- explicit_request=true only when they clearly ask a question or request numbers.",
+    "- confidence is 0..1.",
+    "",
+    `Known lead info: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "pricing_payments_intent_parser",
+      schema: PRICING_PAYMENTS_INTENT_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 170,
+      debugTag: "llm-pricing-payments-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const intentRaw = String(parsed.intent ?? "").toLowerCase();
+  const intent: PricingPaymentsIntentParse["intent"] =
+    intentRaw === "pricing" || intentRaw === "payments" ? intentRaw : "none";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    intent,
+    explicitRequest: !!parsed.explicit_request,
+    asksMonthlyTarget: !!parsed.asks_monthly_target,
+    asksDownPayment: !!parsed.asks_down_payment,
+    asksAprOrTerm: !!parsed.asks_apr_or_term,
+    confidence
+  };
+}
+
 export async function parseJourneyIntentWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
@@ -1570,6 +1742,114 @@ export async function parseJourneyIntentWithLLM(args: {
   return {
     journeyIntent,
     explicitRequest,
+    confidence
+  };
+}
+
+export async function parseWalkInOutcomeWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<WalkInOutcomeParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_WALKIN_OUTCOME_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_WALKIN_OUTCOME_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_WALKIN_OUTCOME_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_WALKIN_OUTCOME_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const prompt = [
+    "You parse walk-in salesperson comments from dealership ADF leads.",
+    "Return only JSON that matches the schema.",
+    "",
+    "Choose exactly one primary state:",
+    "- deposit_left: left/placed/took deposit.",
+    "- sold_delivered: sold, delivered, or picked up.",
+    "- cosigner_required: needs co-signer / credit app waiting for co-signer.",
+    "- test_ride_completed: customer already took/completed test ride.",
+    "- decision_pending: thinking it over / not ready / will let us know.",
+    "- outside_financing_pending: waiting on credit union or bank financing.",
+    "- down_payment_pending: saving/waiting for down payment.",
+    "- trade_equity_pending: needs to sell bike first / waiting trade value / upside down.",
+    "- timing_defer_window: defer with broad window (after winter/next month/after taxes/bonus).",
+    "- household_approval_pending: needs spouse/partner approval.",
+    "- docs_or_insurance_pending: waiting on title/docs/registration/insurance quote/DMV.",
+    "- none: no clear state.",
+    "",
+    "Additional fields:",
+    "- explicit_state=true only when state is clearly stated.",
+    "- test_ride_requested=true when they want to schedule/line up a test ride (even if not immediate).",
+    "- weather_sensitive=true when timing depends on weather being nicer/warmer.",
+    "- follow_up_window_text: short raw window phrase like 'next week' or 'after winter'; empty string if none.",
+    "- confidence is 0..1.",
+    "",
+    "Rules:",
+    "- If both sold/delivered and another pending state appear, prefer sold_delivered.",
+    "- If deposit and pending state both appear, prefer deposit_left.",
+    "- If uncertain, return state=none, explicit_state=false, low confidence.",
+    "",
+    `Known lead info: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null,
+      source: lead?.source ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Comment: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "walkin_outcome_parser",
+      schema: WALK_IN_OUTCOME_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 220,
+      debugTag: "llm-walkin-outcome-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const stateRaw = String(parsed.state ?? "").toLowerCase();
+  const state: WalkInOutcomeParse["state"] =
+    stateRaw === "deposit_left" ||
+    stateRaw === "sold_delivered" ||
+    stateRaw === "cosigner_required" ||
+    stateRaw === "test_ride_completed" ||
+    stateRaw === "decision_pending" ||
+    stateRaw === "outside_financing_pending" ||
+    stateRaw === "down_payment_pending" ||
+    stateRaw === "trade_equity_pending" ||
+    stateRaw === "timing_defer_window" ||
+    stateRaw === "household_approval_pending" ||
+    stateRaw === "docs_or_insurance_pending"
+      ? stateRaw
+      : "none";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    state,
+    explicitState: !!parsed.explicit_state,
+    testRideRequested: !!parsed.test_ride_requested,
+    weatherSensitive: !!parsed.weather_sensitive,
+    followUpWindowText: cleanOptionalString(parsed.follow_up_window_text),
     confidence
   };
 }

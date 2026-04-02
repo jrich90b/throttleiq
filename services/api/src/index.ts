@@ -19,6 +19,7 @@ import {
   parseBookingIntentWithLLM,
   parseInventoryEntitiesWithLLM,
   parseIntentWithLLM,
+  parsePricingPaymentsIntentWithLLM,
   parseDialogActWithLLM,
   parseCustomerDispositionWithLLM,
   parseResponseControlWithLLM,
@@ -4602,6 +4603,62 @@ function normalizeOutboundText(text: string): string {
   return String(text ?? "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+function normalizeOutboundTarget(target: string): string {
+  const raw = String(target ?? "").trim().toLowerCase();
+  if (!raw) return "";
+  if (raw.includes("@")) return raw;
+  const digits = raw.replace(/\D/g, "");
+  return digits || raw;
+}
+
+function normalizeOutboundMediaForDedup(mediaUrls?: string[]): string {
+  if (!Array.isArray(mediaUrls) || mediaUrls.length === 0) return "";
+  return mediaUrls
+    .map(u => String(u ?? "").trim().toLowerCase())
+    .filter(Boolean)
+    .sort()
+    .join("|");
+}
+
+function isRecentDuplicateOutbound(
+  conv: any,
+  to: string,
+  body: string,
+  opts?: { providers?: string[]; windowMs?: number; mediaUrls?: string[]; nowMs?: number }
+): boolean {
+  const bodyNorm = normalizeOutboundText(body);
+  const toNorm = normalizeOutboundTarget(to);
+  if (!bodyNorm || !toNorm) return false;
+  const messages = Array.isArray(conv?.messages) ? conv.messages : [];
+  if (!messages.length) return false;
+  const providers = opts?.providers?.length
+    ? new Set(opts.providers.map(p => String(p ?? "").trim()))
+    : null;
+  const windowMs = Number(opts?.windowMs ?? 90 * 1000);
+  const nowMs = Number(opts?.nowMs ?? Date.now());
+  const candidateMedia = normalizeOutboundMediaForDedup(opts?.mediaUrls);
+
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m?.direction !== "out") continue;
+    if (m?.draftStatus === "stale") continue;
+    const provider = String(m?.provider ?? "").trim();
+    if (providers && !providers.has(provider)) continue;
+    if (normalizeOutboundTarget(String(m?.to ?? "")) !== toNorm) continue;
+    if (normalizeOutboundText(String(m?.body ?? "")) !== bodyNorm) continue;
+    if (candidateMedia) {
+      const msgMedia = normalizeOutboundMediaForDedup(
+        Array.isArray(m?.mediaUrls) ? (m.mediaUrls as string[]) : undefined
+      );
+      if (msgMedia !== candidateMedia) continue;
+    }
+    const atMs = Date.parse(String(m?.at ?? ""));
+    if (!Number.isFinite(atMs)) continue;
+    if (nowMs - atMs <= windowMs) return true;
+  }
+  return false;
+}
+
 function getOutboundMessagesByProvider(conv: any, providers?: string[]): any[] {
   const allow = providers?.length ? new Set(providers) : null;
   return (conv?.messages ?? [])
@@ -7831,6 +7888,16 @@ async function processDueFollowUps() {
     if (systemMode === "suggest") {
       const draftTo = useEmail ? emailTo! : to;
       const draftMessage = useEmail && emailMessage ? emailMessage : message;
+      if (
+        isRecentDuplicateOutbound(conv, draftTo, draftMessage, {
+          providers: ["draft_ai"],
+          windowMs: 2 * 60 * 1000,
+          mediaUrls
+        })
+      ) {
+        console.log("[followup] duplicate draft suppressed", { convId: conv.id, to: draftTo });
+        continue;
+      }
       appendOutbound(conv, from ?? "salesperson", draftTo, draftMessage, "draft_ai", undefined, mediaUrls);
       maybeAddCallTodoForFollowUp();
       advanceFollowUpCadence(conv, cfg.timezone);
@@ -7840,6 +7907,16 @@ async function processDueFollowUps() {
     if (useEmail) {
       if (!emailFrom) {
         const fallbackMessage = emailMessage ?? message;
+        if (
+          isRecentDuplicateOutbound(conv, emailTo!, fallbackMessage, {
+            providers: ["human", "sendgrid", "draft_ai"],
+            windowMs: 2 * 60 * 1000,
+            mediaUrls
+          })
+        ) {
+          console.log("[followup] duplicate email fallback suppressed", { convId: conv.id, to: emailTo });
+          continue;
+        }
         appendOutbound(conv, "salesperson", emailTo!, fallbackMessage, "human", undefined, mediaUrls);
         maybeAddCallTodoForFollowUp();
       } else {
@@ -7847,6 +7924,16 @@ async function processDueFollowUps() {
         const dealerName = dealerProfile?.dealerName ?? "Dealership";
         const subject = `Follow-up from ${dealerName}`;
         const body = emailMessage ?? message;
+        if (
+          isRecentDuplicateOutbound(conv, emailTo!, body, {
+            providers: ["sendgrid", "human"],
+            windowMs: 2 * 60 * 1000,
+            mediaUrls
+          })
+        ) {
+          console.log("[followup] duplicate email suppressed", { convId: conv.id, to: emailTo });
+          continue;
+        }
         const signed =
           signature
             ? `${body}\n\n${signature}${dealerProfile?.logoUrl ? `\n\n${dealerProfile.logoUrl}` : ""}`
@@ -7872,6 +7959,16 @@ async function processDueFollowUps() {
     }
 
     if (!from || !accountSid || !authToken || !to.startsWith("+")) {
+      if (
+        isRecentDuplicateOutbound(conv, to, message, {
+          providers: ["human", "twilio", "draft_ai"],
+          windowMs: 2 * 60 * 1000,
+          mediaUrls
+        })
+      ) {
+        console.log("[followup] duplicate sms fallback suppressed", { convId: conv.id, to });
+        continue;
+      }
       appendOutbound(conv, "salesperson", to, message, "human", undefined, mediaUrls);
       maybeAddCallTodoForFollowUp();
       advanceFollowUpCadence(conv, cfg.timezone);
@@ -7879,6 +7976,16 @@ async function processDueFollowUps() {
     }
 
     try {
+      if (
+        isRecentDuplicateOutbound(conv, to, message, {
+          providers: ["twilio", "human"],
+          windowMs: 2 * 60 * 1000,
+          mediaUrls
+        })
+      ) {
+        console.log("[followup] duplicate sms suppressed", { convId: conv.id, to });
+        continue;
+      }
       const client = twilio(accountSid, authToken);
       const msg = await client.messages.create({
         from,
@@ -7920,23 +8027,66 @@ async function processAppointmentConfirmations() {
     const authToken = process.env.TWILIO_AUTH_TOKEN;
     const toNumber = normalizePhone(conv.leadKey);
 
-    appt.confirmation = {
-      sentAt: new Date().toISOString(),
-      status: "pending"
-    };
-
     if (systemMode === "suggest") {
+      if (
+        isRecentDuplicateOutbound(conv, toNumber, message, {
+          providers: ["draft_ai", "twilio", "human"],
+          windowMs: 10 * 60 * 1000
+        })
+      ) {
+        appt.confirmation = {
+          sentAt: new Date().toISOString(),
+          status: "pending"
+        };
+        continue;
+      }
+      appt.confirmation = {
+        sentAt: new Date().toISOString(),
+        status: "pending"
+      };
       appendOutbound(conv, from ?? "salesperson", toNumber, message, "draft_ai");
     } else if (from && accountSid && authToken && toNumber.startsWith("+")) {
       try {
+        if (
+          isRecentDuplicateOutbound(conv, toNumber, message, {
+            providers: ["twilio", "human", "draft_ai"],
+            windowMs: 10 * 60 * 1000
+          })
+        ) {
+          appt.confirmation = {
+            sentAt: new Date().toISOString(),
+            status: "pending"
+          };
+          continue;
+        }
         const client = twilio(accountSid, authToken);
         const msg = await client.messages.create({ from, to: toNumber, body: message });
+        appt.confirmation = {
+          sentAt: new Date().toISOString(),
+          status: "pending"
+        };
         appendOutbound(conv, from, toNumber, message, "twilio", msg.sid);
       } catch (e: any) {
         console.log("[appt-confirm] send failed:", e?.message ?? e);
         continue;
       }
     } else {
+      if (
+        isRecentDuplicateOutbound(conv, toNumber, message, {
+          providers: ["human", "twilio", "draft_ai"],
+          windowMs: 10 * 60 * 1000
+        })
+      ) {
+        appt.confirmation = {
+          sentAt: new Date().toISOString(),
+          status: "pending"
+        };
+        continue;
+      }
+      appt.confirmation = {
+        sentAt: new Date().toISOString(),
+        status: "pending"
+      };
       appendOutbound(conv, "salesperson", toNumber, message, "human");
     }
   }
@@ -10095,6 +10245,14 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
       const authToken = process.env.TWILIO_AUTH_TOKEN;
       const from = process.env.TWILIO_FROM_NUMBER;
       const toNumber = normalizePhone(conv.lead?.phone ?? conv.leadKey ?? "");
+      if (
+        isRecentDuplicateOutbound(conv, toNumber, message, {
+          providers: ["twilio", "human", "draft_ai"],
+          windowMs: 10 * 60 * 1000
+        })
+      ) {
+        return { sent: false, reason: "duplicate_suppressed" };
+      }
       if (conv.contactPreference === "call_only") {
         return { sent: false, reason: "call_only" };
       }
@@ -11393,6 +11551,17 @@ app.post("/conversations/:id/send", async (req, res) => {
         : digits.length > 10
           ? `+${digits}`
           : rawTo;
+  const isManualDuplicateOutbound = (
+    toTarget: string,
+    text: string,
+    providers: string[],
+    windowMs = 2 * 60 * 1000
+  ) =>
+    isRecentDuplicateOutbound(conv, toTarget, text, {
+      providers,
+      windowMs,
+      mediaUrls
+    });
 
   const logRow = async (twilioSid: string | null) => {
     try {
@@ -11484,6 +11653,14 @@ app.post("/conversations/:id/send", async (req, res) => {
       !skipEmailSignature && signature
         ? `${body}\n\n${signature}${dealerProfile?.logoUrl ? `\n\n${dealerProfile.logoUrl}` : ""}`
         : body;
+    if (isManualDuplicateOutbound(emailTo!, signed, ["sendgrid", "human", "draft_ai"])) {
+      return res.json({
+        ok: true,
+        sent: false,
+        duplicateSuppressed: true,
+        conversation: conv
+      });
+    }
     const hadOutbound = conv.messages.some(m => m.direction === "out");
     try {
       await sendEmail({
@@ -11523,6 +11700,14 @@ app.post("/conversations/:id/send", async (req, res) => {
 
   if (!to.startsWith("+")) {
     // Not a phone number; still log as human note so it isn't lost
+    if (isManualDuplicateOutbound(conv.leadKey, body, ["human", "draft_ai", "twilio"])) {
+      return res.status(400).json({
+        ok: false,
+        error: "leadKey is not a valid phone number for SMS send",
+        duplicateSuppressed: true,
+        conversation: conv
+      });
+    }
     const hadOutbound = conv.messages.some(m => m.direction === "out");
     const fin = finalizeDraftAsSent(conv, draftId, body, "human");
     if (!fin.usedDraft) {
@@ -11553,6 +11738,14 @@ app.post("/conversations/:id/send", async (req, res) => {
   const from = process.env.TWILIO_FROM_NUMBER;
 
   if (!accountSid || !authToken || !from) {
+    if (isManualDuplicateOutbound(to, body, ["human", "draft_ai", "twilio"])) {
+      return res.status(500).json({
+        ok: false,
+        error: "Twilio credentials not configured (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_FROM_NUMBER)",
+        duplicateSuppressed: true,
+        conversation: conv
+      });
+    }
     const hadOutbound = conv.messages.some(m => m.direction === "out");
     const fin = finalizeDraftAsSent(conv, draftId, body, "human");
     if (!fin.usedDraft) {
@@ -11579,6 +11772,14 @@ app.post("/conversations/:id/send", async (req, res) => {
   }
 
   try {
+    if (isManualDuplicateOutbound(to, body, ["twilio", "human", "draft_ai"])) {
+      return res.json({
+        ok: true,
+        sent: false,
+        duplicateSuppressed: true,
+        conversation: conv
+      });
+    }
     const client = twilio(accountSid, authToken);
     const msg = await client.messages.create({
       from,
@@ -14262,13 +14463,45 @@ if (authToken && signature) {
     !!dialogActParse?.explicitRequest &&
     dialogActParse.topic !== "general" &&
     dialogActConfidence >= dialogActConfidenceMin;
-  const llmPricingIntent = dialogActAccepted && dialogActParse?.topic === "pricing";
+  const pricingPaymentsParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_PRICING_PAYMENTS_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    !shortAck;
+  const pricingPaymentsParse = pricingPaymentsParserEligible
+    ? await parsePricingPaymentsIntentWithLLM({
+        text: event.body,
+        history: recentHistory,
+        lead: conv.lead
+      })
+    : null;
+  if (process.env.DEBUG_PRICING_PAYMENTS_PARSER === "1" && pricingPaymentsParse) {
+    console.log("[llm-pricing-payments-parse]", pricingPaymentsParse);
+  }
+  const pricingPaymentsConfidence =
+    typeof pricingPaymentsParse?.confidence === "number" ? pricingPaymentsParse.confidence : 0;
+  const pricingPaymentsConfidenceMin = Number(process.env.LLM_PRICING_PAYMENTS_CONFIDENCE_MIN ?? 0.74);
+  const pricingPaymentsAccepted =
+    !!pricingPaymentsParse?.explicitRequest &&
+    pricingPaymentsConfidence >= pricingPaymentsConfidenceMin &&
+    pricingPaymentsParse.intent !== "none";
+  const llmPaymentsIntent = pricingPaymentsAccepted && pricingPaymentsParse?.intent === "payments";
+  const llmPricingIntent =
+    (dialogActAccepted && dialogActParse?.topic === "pricing") ||
+    (pricingPaymentsAccepted && pricingPaymentsParse?.intent === "pricing");
+  const llmPricingOrPaymentsIntent = llmPricingIntent || llmPaymentsIntent;
   const llmSchedulingIntent = dialogActAccepted && dialogActParse?.topic === "scheduling";
-  const pricingSignal = llmPricingIntent || isPricingText(event.body ?? "");
+  const pricingSignal =
+    llmPricingOrPaymentsIntent ||
+    isPricingText(event.body ?? "") ||
+    isPaymentText(event.body ?? "");
+  const scheduleFromDialogAct = llmSchedulingIntent && !llmPricingOrPaymentsIntent;
   const explicitScheduleSignal =
-    llmExplicitScheduleIntent || llmSchedulingIntent || isExplicitScheduleIntent(event.body);
+    llmExplicitScheduleIntent || scheduleFromDialogAct || isExplicitScheduleIntent(event.body);
   paymentOrPricingNoSchedule =
     pricingSignal &&
+    !llmExplicitScheduleIntent &&
     !schedulingSignalsBase.explicit &&
     !schedulingSignalsBase.hasDayTime &&
     !schedulingSignalsBase.hasDayOnlyAvailability &&
@@ -14497,7 +14730,7 @@ if (authToken && signature) {
     explicit:
       schedulingSignalsBase.explicit ||
       bookingIntentAccepted ||
-      llmSchedulingIntent ||
+      scheduleFromDialogAct ||
       llmExplicitScheduleIntent ||
       !!llmTestRideIntent,
     hasDayTime: schedulingSignalsBase.hasDayTime || llmHasDayTime,
@@ -14597,6 +14830,8 @@ if (authToken && signature) {
   if (
     event.provider === "twilio" &&
     schedulingAllowed &&
+    !paymentOrPricingNoSchedule &&
+    !llmPricingOrPaymentsIntent &&
     bookingIntentLow &&
     !schedulingSignalsBase.hasDayTime &&
     !schedulingSignalsBase.hasDayOnlyRequest &&

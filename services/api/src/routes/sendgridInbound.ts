@@ -40,7 +40,8 @@ import {
   parseInventoryEntitiesWithLLM,
   parseIntentWithLLM,
   parseResponseControlWithLLM,
-  parseJourneyIntentWithLLM
+  parseJourneyIntentWithLLM,
+  parseWalkInOutcomeWithLLM
 } from "../domain/llmDraft.js";
 import type { InboundMessageEvent } from "../domain/types.js";
 import { getSchedulerConfig, getPreferredSalespeople } from "../domain/schedulerConfig.js";
@@ -1555,6 +1556,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     history: adfHistory,
     lead: conv.lead
   });
+  const llmWalkInOutcome = await parseWalkInOutcomeWithLLM({
+    text: effectiveInquiry,
+    history: adfHistory,
+    lead: conv.lead
+  });
   const dialogActConfidenceMin = Number(process.env.LLM_DIALOG_ACT_CONFIDENCE_MIN ?? 0.68);
   const intentConfidenceMin = Number(process.env.LLM_INTENT_CONFIDENCE_MIN ?? 0.75);
   const pricingInquiryIntentFromParser =
@@ -2047,45 +2053,76 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       conv.updatedAt = new Date().toISOString();
       saveConversation(conv);
     }
+    const walkInOutcomeConfidence =
+      typeof llmWalkInOutcome?.confidence === "number" ? llmWalkInOutcome.confidence : 0;
+    const walkInOutcomeConfidenceMin = Number(process.env.LLM_WALKIN_OUTCOME_CONFIDENCE_MIN ?? 0.72);
+    const walkInOutcomeAccepted =
+      !!llmWalkInOutcome &&
+      walkInOutcomeConfidence >= walkInOutcomeConfidenceMin &&
+      llmWalkInOutcome.explicitState;
+    const walkInState = walkInOutcomeAccepted ? llmWalkInOutcome?.state ?? "none" : "none";
+
     const hasDepositSignal =
-      /\b(left|put|placed|took|received)\s+(a\s+)?deposit\b/.test(commentLower) ||
-      /\bdeposit\s+(left|taken|received|put|placed)\b/.test(commentLower);
-    const hasSoldSignal = /\b(sold|delivered|picked up)\b/.test(commentLower);
+      walkInState === "deposit_left" ||
+      (!walkInOutcomeAccepted &&
+        (/\b(left|put|placed|took|received)\s+(a\s+)?deposit\b/.test(commentLower) ||
+          /\bdeposit\s+(left|taken|received|put|placed)\b/.test(commentLower)));
+    const hasSoldSignal =
+      walkInState === "sold_delivered" ||
+      (!walkInOutcomeAccepted && /\b(sold|delivered|picked up)\b/.test(commentLower));
     const hasCreditCosignerSignal =
-      (/\b(credit app|credit application|finance app|finance application|ran credit)\b/.test(commentLower) &&
-        /\b(co[-\s]?signer|cosigner)\b/.test(commentLower)) ||
-      /\bneeds?\s+(a\s+)?co[-\s]?signer\b/.test(commentLower);
+      walkInState === "cosigner_required" ||
+      (!walkInOutcomeAccepted &&
+        ((/\b(credit app|credit application|finance app|finance application|ran credit)\b/.test(commentLower) &&
+          /\b(co[-\s]?signer|cosigner)\b/.test(commentLower)) ||
+          /\bneeds?\s+(a\s+)?co[-\s]?signer\b/.test(commentLower)));
     const hasCompletedTestRideSignal =
-      /\b(took|completed|did|finished)\s+(a\s+)?(test ride|demo ride)\b/.test(commentLower) ||
-      /\b(test ride|demo ride)\s+(completed|done)\b/.test(commentLower);
+      walkInState === "test_ride_completed" ||
+      (!walkInOutcomeAccepted &&
+        (/\b(took|completed|did|finished)\s+(a\s+)?(test ride|demo ride)\b/.test(commentLower) ||
+          /\b(test ride|demo ride)\s+(completed|done)\b/.test(commentLower)));
     const hasDecisionPendingSignal =
-      /\b(thinking it over|think it over|sleep on it|not ready|not ready yet|will let (you|us) know|get back to (you|us)|reach back out)\b/.test(
-        commentLower
-      );
+      walkInState === "decision_pending" ||
+      (!walkInOutcomeAccepted &&
+        /\b(thinking it over|think it over|sleep on it|not ready|not ready yet|will let (you|us) know|get back to (you|us)|reach back out)\b/.test(
+          commentLower
+        ));
     const hasOutsideFinancingPendingSignal =
-      /\b(credit union|cu financing|bank loan|bank financing|outside financing|waiting on (the )?(bank|credit union)|waiting on approval)\b/.test(
-        commentLower
-      );
+      walkInState === "outside_financing_pending" ||
+      (!walkInOutcomeAccepted &&
+        /\b(credit union|cu financing|bank loan|bank financing|outside financing|waiting on (the )?(bank|credit union)|waiting on approval)\b/.test(
+          commentLower
+        ));
     const hasDownPaymentPendingSignal =
-      /\b(waiting for down payment|saving up for down payment|save up for down payment|don'?t have enough down|need more down|down payment)\b/.test(
-        commentLower
-      );
+      walkInState === "down_payment_pending" ||
+      (!walkInOutcomeAccepted &&
+        /\b(waiting for down payment|saving up for down payment|save up for down payment|don'?t have enough down|need more down|down payment)\b/.test(
+          commentLower
+        ));
     const hasTradeEquityPendingSignal =
-      /\b(sell my bike first|sell it first|trade value|waiting on trade value|upside down|negative equity|payoff)\b/.test(
-        commentLower
-      );
+      walkInState === "trade_equity_pending" ||
+      (!walkInOutcomeAccepted &&
+        /\b(sell my bike first|sell it first|trade value|waiting on trade value|upside down|negative equity|payoff)\b/.test(
+          commentLower
+        ));
     const hasTimingDeferWindowSignal =
-      /\b(after winter|next month|after tax return|after taxes|after bonus|later this year|next season)\b/.test(
-        commentLower
-      );
+      walkInState === "timing_defer_window" ||
+      (!walkInOutcomeAccepted &&
+        /\b(after winter|next month|after tax return|after taxes|after bonus|later this year|next season)\b/.test(
+          commentLower
+        ));
     const hasHouseholdApprovalPendingSignal =
-      /\b(talk to (my )?(wife|husband|spouse|partner)|wife needs to approve|husband needs to approve|spouse decision|partner decision)\b/.test(
-        commentLower
-      );
+      walkInState === "household_approval_pending" ||
+      (!walkInOutcomeAccepted &&
+        /\b(talk to (my )?(wife|husband|spouse|partner)|wife needs to approve|husband needs to approve|spouse decision|partner decision)\b/.test(
+          commentLower
+        ));
     const hasDocsOrInsurancePendingSignal =
-      /\b(waiting on insurance|insurance quote|need (the )?title|need docs|paperwork first|registration first|dmv first)\b/.test(
-        commentLower
-      );
+      walkInState === "docs_or_insurance_pending" ||
+      (!walkInOutcomeAccepted &&
+        /\b(waiting on insurance|insurance quote|need (the )?title|need docs|paperwork first|registration first|dmv first)\b/.test(
+          commentLower
+        ));
 
     if (hasCreditCosignerSignal) {
       conv.dialogState = { name: "payments_handoff", updatedAt: new Date().toISOString() };
@@ -2154,9 +2191,20 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     } else if (walkInDelayReason === "decision_pending") {
       tail = "No rush — think it over and I’m here when you’re ready.";
     }
-    if (/(test ride|demo ride)/i.test(walkInCleanedComment) && /weather/i.test(walkInCleanedComment)) {
+    const walkInTestRideRequested =
+      (walkInOutcomeAccepted && !!llmWalkInOutcome?.testRideRequested) ||
+      /(test ride|demo ride)/i.test(walkInCleanedComment);
+    const walkInWeatherSensitive =
+      (walkInOutcomeAccepted && !!llmWalkInOutcome?.weatherSensitive) ||
+      /weather/i.test(walkInCleanedComment);
+    const walkInFollowUpWindowHint = String(llmWalkInOutcome?.followUpWindowText ?? "").trim();
+    const walkInHasNextWeekWindow =
+      (walkInOutcomeAccepted && /next week/i.test(walkInFollowUpWindowHint)) ||
+      /(next week|check back|reach out|follow up)/i.test(walkInCleanedComment);
+
+    if (walkInTestRideRequested && walkInWeatherSensitive) {
       tail = "I’ll reach back when the weather looks better and we can line up your test ride.";
-    } else if (/(test ride|demo ride)/i.test(walkInCleanedComment) && /(next week|check back|reach out|follow up)/i.test(walkInCleanedComment)) {
+    } else if (walkInTestRideRequested && walkInHasNextWeekWindow) {
       tail = "I’ll check back next week and we can line up your test ride.";
     }
     if (modelLabel) {
@@ -2174,14 +2222,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         const label = `${rangeLabel}${modelLabel}`;
         tail = `I’ll keep an eye out for a ${label} and let you know if one comes in.`;
       }
-      if (/(test ride|demo ride)/i.test(walkInCleanedComment) && /weather/i.test(walkInCleanedComment)) {
+      if (walkInTestRideRequested && walkInWeatherSensitive) {
         const rideLabel = wantsUsed
           ? `used ${rangeLabel}${modelLabel}`
           : wantsNew
             ? `new ${rangeLabel}${modelLabel}`
             : `${rangeLabel}${modelLabel}`;
         tail = `I’ll reach back when the weather looks better and we can line up your test ride on ${rideLabel}.`;
-      } else if (/(test ride|demo ride)/i.test(walkInCleanedComment) && /(next week|check back|reach out|follow up)/i.test(walkInCleanedComment)) {
+      } else if (walkInTestRideRequested && walkInHasNextWeekWindow) {
         const rideLabel = wantsUsed
           ? `used ${rangeLabel}${modelLabel}`
           : wantsNew
@@ -2196,8 +2244,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const buildWalkInAddendum = () => {
       if (!walkInCleanedComment) return "";
       const followUpHint = /(follow\s*up|check\s*back|reach\s*out).{0,40}\b(next\s+week|next\s+month|this\s+week|this\s+month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.exec(walkInCleanedComment);
-      if (followUpHint?.[2]) {
-        return `I’ll plan to follow up ${followUpHint[2].toLowerCase()}.`;
+      const parserWindow = walkInOutcomeAccepted ? walkInFollowUpWindowHint : "";
+      const followUpWindow = parserWindow || (followUpHint?.[2] ?? "");
+      if (followUpWindow) {
+        return `I’ll plan to follow up ${followUpWindow.toLowerCase()}.`;
       }
       if (/(thinking it over|think it over|sleep on it|not ready|no rush|not ready yet|just looking)/i.test(walkInCleanedComment)) {
         return "No rush — I’m here whenever you’re ready.";
@@ -2205,7 +2255,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       if (/(order|factory order|place an order|put an order)/i.test(walkInCleanedComment)) {
         return "If you decide to place an order, I can help with next steps.";
       }
-      if (/(test ride|demo ride)/i.test(walkInCleanedComment)) {
+      if (walkInTestRideRequested) {
         if (hasDirectedTestRidePlan) return "";
         return "If you want a test ride, just let me know.";
       }
