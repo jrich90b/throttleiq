@@ -783,10 +783,44 @@ function isSportsterFamilyAlias(model: string): boolean {
   );
 }
 
+function isRoadGlide3Variant(model: string | null | undefined): boolean {
+  const t = normalizeModelName(String(model ?? ""));
+  if (!t) return false;
+  return (
+    /\bfltrt\b/.test(t) ||
+    /\broad glide\s*(3|iii)\b/.test(t) ||
+    /\broad glide trike\b/.test(t)
+  );
+}
+
+function isStreetGlide3Variant(model: string | null | undefined): boolean {
+  const t = normalizeModelName(String(model ?? ""));
+  if (!t) return false;
+  return (
+    /\bflhlt\b/.test(t) ||
+    /\bstreet glide\s*(3|iii)\b/.test(t) ||
+    /\bstreet glide trike\b/.test(t)
+  );
+}
+
+function canonicalizeWatchModelLabel(model: string | null | undefined): string {
+  const raw = String(model ?? "").trim();
+  if (!raw) return "";
+  if (isRoadGlide3Variant(raw)) return "Road Glide 3";
+  if (isStreetGlide3Variant(raw)) return "Street Glide 3 Limited";
+  return raw;
+}
+
 function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
   if (!item?.model || !watch?.model) return false;
   const itemModel = normalizeModelName(String(item.model));
   const watchModel = normalizeModelName(String(watch.model));
+  const watchIsRoadGlide3 = isRoadGlide3Variant(watchModel);
+  const itemIsRoadGlide3 = isRoadGlide3Variant(itemModel);
+  if (watchIsRoadGlide3 && !itemIsRoadGlide3) return false;
+  const watchIsStreetGlide3 = isStreetGlide3Variant(watchModel);
+  const itemIsStreetGlide3 = isStreetGlide3Variant(itemModel);
+  if (watchIsStreetGlide3 && !itemIsStreetGlide3) return false;
   const directMatch = itemModel.includes(watchModel) || watchModel.includes(itemModel);
   const catalogCodeMatch = modelsShareCatalogCodes(itemModel, watchModel);
   const watchHas883 = is883ModelToken(watchModel);
@@ -10335,7 +10369,7 @@ app.post("/conversations/:id/watch", async (req, res) => {
 
     const watchList: InventoryWatch[] = items
       .map((item: any) => {
-        const model = String(item?.model ?? "").trim();
+        const model = canonicalizeWatchModelLabel(item?.model);
         if (!model) return null;
         const yearMin =
           Number(String(item?.yearMin ?? "").trim()) || undefined;
