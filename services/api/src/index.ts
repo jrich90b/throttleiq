@@ -5213,8 +5213,12 @@ function isComplimentOnlyText(text: string): boolean {
     /\b(price|payment|monthly|otd|apr|term|down|available|availability|in stock|stock|schedule|book|appointment|test ride|trade|finance|credit|call|phone|email|address|hours|open|close|where|when)\b/.test(
       t
     );
+  const steppingBackSignal =
+    /\b(sell (it|my bike|my motorcycle|my ride) (on my own|myself)|sell (my bike|my motorcycle|my ride) myself|keep (it|my bike|my motorcycle|my ride)|going to keep (it|my bike|my motorcycle|my ride)|gonna keep (it|my bike|my motorcycle|my ride)|hold off for now|pass for now|not ready)\b/.test(
+      t
+    );
   const watchIntent = isWatchConfirmationIntentText(t);
-  return !explicitAsk && !watchIntent;
+  return !explicitAsk && !watchIntent && !steppingBackSignal;
 }
 
 function buildComplimentReply(): string {
