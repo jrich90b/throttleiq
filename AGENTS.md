@@ -1,9 +1,33 @@
 # LLM vs Deterministic Guardrails (Throttleiq)
 
-This project uses a **hybrid** approach:
+This project uses a **hybrid** approach with a **parser-first requirement for new customer states**:
 
 - **Deterministic** for high‑risk, consistency‑critical, or compliance‑sensitive flows.
 - **LLM (guard‑railed)** for open‑ended inbound replies and nuanced follow‑ups.
+
+## Parser-First Rule (New States)
+When adding a new customer state/disposition, do **not** start with standalone regex routing.
+
+Required order:
+1) Add a typed parser schema in `services/api/src/domain/llmDraft.ts`.
+2) Add a typed parse result and parser function with confidence output.
+3) Add a shared state transition helper in `services/api/src/index.ts`.
+4) Apply that helper in **both**:
+   - live inbound (`/webhooks/twilio`)
+   - regenerate (`/conversations/:id/regenerate`)
+5) Keep regex only as fallback when parser is disabled/low-confidence.
+6) Add eval fixtures for new state phrases before deployment.
+
+Current parser-first disposition states:
+- `customer_sell_on_own`
+- `customer_keep_current_bike`
+- `customer_stepping_back`
+
+Current parser artifacts:
+- Schema: `customer_disposition_parser`
+- Parser: `parseCustomerDispositionWithLLM(...)`
+- Confidence gate: `LLM_CUSTOMER_DISPOSITION_CONFIDENCE_MIN` (default 0.74)
+- Enable flag: `LLM_CUSTOMER_DISPOSITION_PARSER_ENABLED` (default on unless `0`)
 
 ## Deterministic (Must‑Keep)
 These must remain deterministic to avoid brittle or risky LLM behavior:
@@ -59,6 +83,7 @@ We gate LLM intent/booking parsing by confidence and ask a clarification when lo
 Env vars:
 - `LLM_INTENT_CONFIDENCE_MIN` (default 0.75)
 - `LLM_BOOKING_CONFIDENCE_MIN` (default 0.70)
+- `LLM_CUSTOMER_DISPOSITION_CONFIDENCE_MIN` (default 0.74)
 
 ## Appointment Offer Rules (Source of Truth)
 - Use suggested slots only if customer asked to schedule.
@@ -72,6 +97,7 @@ Dialog state is tracked in `conv.dialogState` to avoid repeats and guide flow:
 - Trade‑in: `trade_init`, `trade_cash`, `trade_trade`, `trade_either`
 - Pricing/Payments: `pricing_init`, `pricing_need_model`, `pricing_answered`, `pricing_handoff`, `payments_handoff`
 - Callback/Call‑Only: `callback_requested`, `callback_handoff`, `call_only`
+- Disposition: `customer_sell_on_own`, `customer_keep_current_bike`, `customer_stepping_back`
 
 Initial state is set in `services/api/src/routes/sendgridInbound.ts`. Updates occur in `services/api/src/index.ts`.
 
@@ -97,12 +123,15 @@ When changing responses:
 2) Follow‑up cadence remains deterministic.
 3) LLM rules remain strict (no repeated intros, no premature booking).
 4) Hand‑off reasons must not ask for scheduling.
+5) New state/disposition logic is parser-first (schema + shared handler + regen parity + eval), not regex-only.
 
 ## Key Files
 - `services/api/src/routes/sendgridInbound.ts` — ADF handling, deterministic responses, handoffs.
 - `services/api/src/index.ts` — follow‑up cadence + email cadence.
 - `services/api/src/domain/orchestrator.ts` — routing + LLM gating + scheduling logic.
 - `services/api/src/domain/llmDraft.ts` — LLM prompt + strict rules.
+- `services/api/src/domain/tone.ts` — centralized tone normalization for outbound sales language.
+- `scripts/*_eval.ts` + `scripts/*_examples.json` — parser evals and regression fixtures.
 
 ## Ops Note
 - On the Ubuntu instance, `rg` may not be installed. Use `grep` for on‑box searches.

@@ -4,6 +4,7 @@ import type { InboundMessageEvent } from "./types.js";
 import { maybeMarkEngagedFromInbound } from "./engagement.js";
 import { fileURLToPath } from "node:url";
 import { dataPath } from "./dataDir.js";
+import { normalizeSalesTone } from "./tone.js";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
 
 export type ConversationMode = "autopilot" | "suggest" | "human";
@@ -1046,12 +1047,16 @@ export function appendOutbound(
     .find(m => m.direction === "in" && m.body);
   const inboundText = lastInbound?.body ?? "";
   const normalizedBody = normalizeGotItLeadIn(body, inboundText, provider);
+  const tonedBody =
+    provider === "draft_ai" || provider === "twilio" || provider === "sendgrid"
+      ? normalizeSalesTone(normalizedBody)
+      : normalizedBody;
   // If this is an email-thread draft, store it as an email draft instead of a SMS draft.
   if (
     provider === "draft_ai" &&
     (String(from ?? "").includes("@") || String(to ?? "").includes("@"))
   ) {
-    conv.emailDraft = normalizedBody;
+    conv.emailDraft = tonedBody;
     conv.updatedAt = nowIso();
     scheduleSave();
     return;
@@ -1061,15 +1066,15 @@ export function appendOutbound(
     direction: "out",
     from,
     to,
-    body: normalizedBody,
+    body: tonedBody,
     mediaUrls: mediaUrls && mediaUrls.length ? mediaUrls : undefined,
     at: nowIso(),
     provider,
     providerMessageId
   });
   if (provider === "twilio" || provider === "human" || provider === "sendgrid") {
-    trackFinanceDocsRequestFromOutbound(conv, normalizedBody);
-    trackTradePayoffFromOutbound(conv, normalizedBody);
+    trackFinanceDocsRequestFromOutbound(conv, tonedBody);
+    trackTradePayoffFromOutbound(conv, tonedBody);
   }
   conv.updatedAt = nowIso();
   scheduleSave();
@@ -1113,18 +1118,19 @@ export function finalizeDraftAsSent(
   if (msg.draftStatus === "stale") return { usedDraft: false };
 
   const original = msg.body;
-  if (original.trim() !== finalBody.trim()) {
+  const tonedFinalBody = normalizeSalesTone(finalBody);
+  if (original.trim() !== tonedFinalBody.trim()) {
     msg.originalDraftBody = original;
   }
-  msg.body = finalBody;
+  msg.body = tonedFinalBody;
   msg.provider = provider;
   msg.providerMessageId = providerMessageId;
   msg.at = new Date().toISOString();
   msg.draftStatus = undefined;
 
   if (provider === "twilio" || provider === "human" || provider === "sendgrid") {
-    trackFinanceDocsRequestFromOutbound(conv, finalBody);
-    trackTradePayoffFromOutbound(conv, finalBody);
+    trackFinanceDocsRequestFromOutbound(conv, tonedFinalBody);
+    trackTradePayoffFromOutbound(conv, tonedFinalBody);
   }
 
   conv.updatedAt = new Date().toISOString();
