@@ -877,6 +877,12 @@ export default function Home() {
     phone: "",
     email: ""
   });
+  const [reassignInlineOpenId, setReassignInlineOpenId] = useState<string | null>(null);
+  const [reassignInlineDepartment, setReassignInlineDepartment] = useState<"service" | "parts" | "apparel">(
+    "service"
+  );
+  const [reassignInlineSummary, setReassignInlineSummary] = useState("");
+  const [reassignInlineSaving, setReassignInlineSaving] = useState(false);
   const sendBoxRef = useRef<HTMLTextAreaElement | null>(null);
   const streamRef = useRef<EventSource | null>(null);
   const lastStreamRefreshRef = useRef(0);
@@ -2949,6 +2955,10 @@ export default function Home() {
       setContactInlineOpenId(null);
       setContactInlineSaving(false);
       setContactInlineForm({ firstName: "", lastName: "", phone: "", email: "" });
+      setReassignInlineOpenId(null);
+      setReassignInlineDepartment("service");
+      setReassignInlineSummary("");
+      setReassignInlineSaving(false);
     }
   }, [listActionsOpenId]);
 
@@ -3988,31 +3998,34 @@ export default function Home() {
     await load();
   }
 
-  async function reassignLeadDepartment(conv: ConversationListItem) {
-    const raw = window
-      .prompt("Reassign lead to department: service, parts, or apparel", "service")
-      ?.trim()
-      .toLowerCase();
-    if (!raw) return;
-    if (!["service", "parts", "apparel"].includes(raw)) {
-      window.alert("Please enter one of: service, parts, apparel.");
-      return;
-    }
-    const summary =
-      window.prompt(
-        "Optional note for department to-do:",
-        `Manual reassignment to ${raw} department`
-      ) ?? "";
+  function openReassignLeadInline(convId: string) {
+    setTodoInlineOpenId(null);
+    setTodoInlineText("");
+    setContactInlineOpenId(null);
+    setReassignInlineDepartment("service");
+    setReassignInlineSummary("");
+    setReassignInlineOpenId(convId);
+  }
+
+  async function reassignLeadDepartmentInline(conv: ConversationListItem) {
+    const summary = reassignInlineSummary.trim();
+    setReassignInlineSaving(true);
     const resp = await fetch(`/api/conversations/${encodeURIComponent(conv.id)}/department`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ department: raw, summary: summary.trim() || undefined })
+      body: JSON.stringify({
+        department: reassignInlineDepartment,
+        summary: summary || `Manual reassignment to ${reassignInlineDepartment} department`
+      })
     });
     const data = await resp.json().catch(() => null);
+    setReassignInlineSaving(false);
     if (!resp.ok || data?.ok === false) {
       window.alert(data?.error ?? "Failed to reassign lead");
       return;
     }
+    setReassignInlineOpenId(null);
+    setReassignInlineSummary("");
     setListActionsOpenId(null);
     if (selectedId === conv.id) {
       await loadConversation(conv.id);
@@ -5560,7 +5573,7 @@ export default function Home() {
                               {listActionsOpenId === c.id ? (
                                 <div
                                   className={`absolute right-0 mt-2 border rounded bg-white shadow z-10 ${
-                                    todoInlineOpenId === c.id || contactInlineOpenId === c.id ? "w-64" : "w-40"
+                                    todoInlineOpenId === c.id || contactInlineOpenId === c.id || reassignInlineOpenId === c.id ? "w-64" : "w-40"
                                   }`}
                                   data-actions-menu
                                   onClick={e => e.stopPropagation()}
@@ -5673,6 +5686,50 @@ export default function Home() {
                                         </button>
                                       </div>
                                     </div>
+                                  ) : reassignInlineOpenId === c.id ? (
+                                    <div className="p-2">
+                                      <div className="text-[11px] text-gray-500 mb-1">Reassign lead</div>
+                                      <select
+                                        className="w-full border rounded px-2 py-1 text-xs"
+                                        value={reassignInlineDepartment}
+                                        onChange={e =>
+                                          setReassignInlineDepartment(
+                                            e.target.value as "service" | "parts" | "apparel"
+                                          )
+                                        }
+                                      >
+                                        <option value="service">Service</option>
+                                        <option value="parts">Parts</option>
+                                        <option value="apparel">Apparel</option>
+                                      </select>
+                                      <textarea
+                                        className="w-full border rounded px-2 py-1 text-xs mt-2"
+                                        rows={3}
+                                        value={reassignInlineSummary}
+                                        onChange={e => setReassignInlineSummary(e.target.value)}
+                                        placeholder="Optional note for department"
+                                      />
+                                      <div className="mt-2 flex justify-end gap-2">
+                                        <button
+                                          className="px-2 py-1 border rounded text-xs"
+                                          onClick={() => {
+                                            setReassignInlineOpenId(null);
+                                            setReassignInlineSummary("");
+                                          }}
+                                        >
+                                          Cancel
+                                        </button>
+                                        <button
+                                          className="px-2 py-1 border rounded text-xs"
+                                          disabled={reassignInlineSaving}
+                                          onClick={() => {
+                                            void reassignLeadDepartmentInline(c);
+                                          }}
+                                        >
+                                          {reassignInlineSaving ? "Saving..." : "Save"}
+                                        </button>
+                                      </div>
+                                    </div>
                                   ) : (
                                     <>
                                       <button
@@ -5697,7 +5754,7 @@ export default function Home() {
                                         <button
                                           className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
                                           onClick={() => {
-                                            void reassignLeadDepartment(c);
+                                            openReassignLeadInline(c.id);
                                           }}
                                         >
                                           Reassign lead
