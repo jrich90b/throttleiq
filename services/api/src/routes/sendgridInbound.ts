@@ -1050,6 +1050,12 @@ function normalizeVehicleModel(raw?: string | null, make?: string | null): strin
   }
   model = model.replace(/\bharley[-\s]?davidson\b/gi, "").replace(/\bh[-\s]?d\b/gi, "").trim();
   model = model.replace(/^[\s\-–—:,]+|[\s\-–—:,]+$/g, "").trim();
+  const normalized = model.toLowerCase();
+  // Collapse known Harley code/name aliases to one canonical label so watch matching
+  // and UI state do not split equivalent models into separate entries.
+  if (/\bfltrt\b/.test(normalized) || /\broad glide\s*(?:3|iii)\b/.test(normalized)) {
+    return "Road Glide 3";
+  }
   return model || undefined;
 }
 
@@ -2190,6 +2196,51 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     addTodo(conv, "other", event.body, event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "room58_standard");
     stopFollowUpCadence(conv, "manual_handoff");
+    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
+    maybeAddInitialCallTodo();
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      draft: ack
+    });
+  }
+
+  const isRoom58RequestDetails = /room58/i.test(leadSourceLower) && /request details/i.test(leadSourceLower);
+  const inquiryTextRaw = String(lead.inquiry ?? inquiryRaw ?? "").trim();
+  const isShortPriceOnlyInquiry = /^(price|pricing|price\?|what(?:'s| is)? the price\??|how much\??)$/i.test(
+    inquiryTextRaw
+  );
+  const hasInventoryIdentifiers = !!conv.lead?.vehicle?.stockId || !!conv.lead?.vehicle?.vin;
+  if (isInitialAdf && isRoom58RequestDetails && isShortPriceOnlyInquiry && hasInventoryIdentifiers) {
+    const profile = await getDealerProfile();
+    const dealerName = profile?.dealerName ?? "American Harley-Davidson";
+    const agentName = profile?.agentName ?? "Brooke";
+    const firstName = normalizeDisplayCase(conv.lead?.firstName);
+    const modelLabel = normalizeVehicleModel(
+      conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "",
+      conv.lead?.vehicle?.make ?? null
+    );
+    const yearLabel = conv.lead?.vehicle?.year ? `${conv.lead?.vehicle?.year} ` : "";
+    const bikeLabel = modelLabel ? `${yearLabel}${modelLabel}`.trim() : "that bike";
+    const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
+    let ack =
+      `${greeting}This is ${agentName} at ${dealerName}. ` +
+      `Thanks for asking about pricing on the ${bikeLabel}. ` +
+      "I’ll have our team confirm the current price and send it over shortly.";
+    ack = await applyInitialAdfPrefix(ack);
+    ack = withInitialPhoto(ack);
+    addTodo(conv, "pricing", event.body, event.providerMessageId);
+    setFollowUpMode(conv, "manual_handoff", "room58_price_confirm");
+    stopFollowUpCadence(conv, "manual_handoff");
+    markPricingEscalated(conv);
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
     maybeAddInitialCallTodo();
     return res.status(200).json({
