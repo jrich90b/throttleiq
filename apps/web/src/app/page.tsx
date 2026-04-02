@@ -34,12 +34,45 @@ function renderBookingLinkLine(line: string) {
   );
 }
 
+function renderLinkifiedLine(line: string) {
+  const urlRe = /(https?:\/\/[^\s<]+)/gi;
+  const parts: Array<string | { url: string }> = [];
+  let lastIdx = 0;
+  let match: RegExpExecArray | null;
+  while ((match = urlRe.exec(line)) !== null) {
+    const idx = match.index;
+    const url = match[0];
+    if (idx > lastIdx) {
+      parts.push(line.slice(lastIdx, idx));
+    }
+    parts.push({ url });
+    lastIdx = idx + url.length;
+  }
+  if (lastIdx < line.length) {
+    parts.push(line.slice(lastIdx));
+  }
+  if (!parts.length) return line;
+  return (
+    <>
+      {parts.map((part, i) =>
+        typeof part === "string" ? (
+          <span key={i}>{part}</span>
+        ) : (
+          <a key={i} className="underline break-all" href={part.url} target="_blank" rel="noreferrer">
+            {part.url}
+          </a>
+        )
+      )}
+    </>
+  );
+}
+
 function renderMessageBody(text?: string | null) {
   if (!text) return null;
   const lines = text.split("\n");
   return lines.map((line, idx) => (
     <span key={idx}>
-      {renderBookingLinkLine(line)}
+      {renderLinkifiedLine(line)}
       {idx < lines.length - 1 ? <br /> : null}
     </span>
   ));
@@ -10182,7 +10215,7 @@ export default function Home() {
                         {!isDraftMessage && isPending ? " • DRAFT (not sent)" : ""}
                       </div>
                       <div
-                        className={`inline-block mt-1 px-3 py-2 rounded-2xl border max-w-[85%] whitespace-pre-wrap text-base font-medium ${
+                        className={`inline-block mt-1 px-3 py-2 rounded-2xl border max-w-[85%] whitespace-pre-wrap break-words text-base font-medium ${
                           isSummary
                             ? "bg-gray-50 text-gray-800 border-gray-200"
                             : m.direction === "in"
