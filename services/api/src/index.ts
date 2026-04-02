@@ -10572,6 +10572,14 @@ app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
     undefined,
     ownerId ? { id: ownerId, name: ownerName || undefined } : undefined
   );
+  if (!task) {
+    return res.status(200).json({
+      ok: true,
+      skipped: true,
+      reason: "sold_lead_only_allows_call_todo",
+      conversation: conv
+    });
+  }
   saveConversation(conv);
   return res.json({ ok: true, todo: task, conversation: conv });
 });

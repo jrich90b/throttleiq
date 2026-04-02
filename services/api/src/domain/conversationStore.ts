@@ -2261,7 +2261,14 @@ export function addTodo(
   summary: string,
   sourceMessageId?: string,
   owner?: { id?: string | null; name?: string | null }
-): TodoTask {
+): TodoTask | null {
+  const soldContext =
+    conv?.closedReason === "sold" ||
+    !!conv?.sale?.soldAt ||
+    conv?.followUpCadence?.kind === "post_sale";
+  if (soldContext && reason !== "call") {
+    return null;
+  }
   const ownerIdRaw = String(owner?.id ?? conv?.leadOwner?.id ?? "").trim();
   const ownerNameRaw = String(owner?.name ?? conv?.leadOwner?.name ?? "").trim();
   const ownerId = ownerIdRaw || undefined;
