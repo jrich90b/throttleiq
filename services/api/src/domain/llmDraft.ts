@@ -355,6 +355,12 @@ export type TradePayoffParse = {
   confidence?: number;
 };
 
+export type ResponseControlParse = {
+  intent: "opt_out" | "not_interested" | "schedule_request" | "compliment_only" | "none";
+  explicitRequest: boolean;
+  confidence?: number;
+};
+
 export type JourneyIntentParse = {
   journeyIntent: "sale_trade" | "service_support" | "marketing_event" | "none";
   explicitRequest: boolean;
@@ -581,6 +587,20 @@ const TRADE_PAYOFF_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     },
     needs_lien_holder_info: { type: "boolean" },
     provides_lien_holder_info: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const RESPONSE_CONTROL_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent", "explicit_request", "confidence"],
+  properties: {
+    intent: {
+      type: "string",
+      enum: ["opt_out", "not_interested", "schedule_request", "compliment_only", "none"]
+    },
+    explicit_request: { type: "boolean" },
     confidence: { type: "number" }
   }
 };
@@ -1330,6 +1350,96 @@ export async function parseTradePayoffWithLLM(args: {
     payoffStatus,
     needsLienHolderInfo,
     providesLienHolderInfo,
+    confidence
+  };
+}
+
+export async function parseResponseControlWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<ResponseControlParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_RESPONSE_CONTROL_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_RESPONSE_CONTROL_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_RESPONSE_CONTROL_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_RESPONSE_CONTROL_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+
+  const prompt = [
+    "You are a strict control-intent parser for dealership inbound SMS.",
+    "Return only JSON that matches the provided schema.",
+    "",
+    "Classify message intent as one of:",
+    "- opt_out: customer requests no texts/messages or asks to stop/cancel/end messages.",
+    "- not_interested: customer clearly declines buying/follow-up for now.",
+    "- schedule_request: customer explicitly asks to book/schedule/pick a day/time.",
+    "- compliment_only: customer only compliments the bike/team without request/action.",
+    "- none: anything else.",
+    "",
+    "Rules:",
+    "- Choose only one intent.",
+    "- If customer says STOP/unsubscribe/no more texts => opt_out.",
+    "- If customer says not interested / pass / no thanks / not moving forward => not_interested.",
+    "- schedule_request only for explicit scheduling intent (appointment/time/day availability).",
+    "- compliment_only only if no other request/intent is present.",
+    "- If uncertain, intent=none and explicit_request=false.",
+    "- confidence is 0..1.",
+    "",
+    `Known lead info: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> => {
+    return requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "response_control_parser",
+      schema: RESPONSE_CONTROL_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 140,
+      debugTag: "llm-response-control-parser",
+      debug
+    });
+  };
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const intentRaw = String(parsed.intent ?? "").toLowerCase();
+  const intent: ResponseControlParse["intent"] =
+    intentRaw === "opt_out" ||
+    intentRaw === "not_interested" ||
+    intentRaw === "schedule_request" ||
+    intentRaw === "compliment_only"
+      ? intentRaw
+      : "none";
+  const explicitRequest = !!parsed.explicit_request;
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    intent,
+    explicitRequest,
     confidence
   };
 }

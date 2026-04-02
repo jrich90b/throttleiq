@@ -39,6 +39,17 @@ export function isDispositionParserAccepted(parsed: {
   return !!parsed?.explicitDisposition && parsed?.disposition !== "none" && confidence >= confidenceMin;
 }
 
+export function isResponseControlParserAccepted(parsed: {
+  explicitRequest?: boolean;
+  intent?: string | null;
+  confidence?: number;
+} | null): boolean {
+  const confidenceMin = Number(process.env.LLM_RESPONSE_CONTROL_CONFIDENCE_MIN ?? 0.75);
+  const confidence =
+    typeof parsed?.confidence === "number" && Number.isFinite(parsed.confidence) ? parsed.confidence : 0;
+  return !!parsed?.explicitRequest && parsed?.intent !== "none" && confidence >= confidenceMin;
+}
+
 export function canApplyDispositionCloseout(args: {
   conv: any;
   text: string;

@@ -19,6 +19,7 @@ import {
   parseBookingIntentWithLLM,
   parseIntentWithLLM,
   parseCustomerDispositionWithLLM,
+  parseResponseControlWithLLM,
   parseJourneyIntentWithLLM,
   parseUnifiedSemanticSlotsWithLLM,
   parseSemanticSlotsWithLLM,
@@ -110,7 +111,8 @@ import {
 import { sendEmail } from "./domain/emailSender.js";
 import {
   canApplyDispositionCloseout,
-  isDispositionParserAccepted
+  isDispositionParserAccepted,
+  isResponseControlParserAccepted
 } from "./domain/transitionSafety.js";
 
 import {
@@ -12413,16 +12415,37 @@ if (authToken && signature) {
   const conv = await resolveInboundConversationForSms(event);
   appendInbound(conv, event);
   pauseRelatedCadencesOnInbound(conv, event);
+  const responseControlParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_RESPONSE_CONTROL_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  const responseControlParse = responseControlParserEligible
+    ? await parseResponseControlWithLLM({
+        text: event.body ?? "",
+        history: buildHistory(conv, 8),
+        lead: conv.lead
+      })
+    : null;
+  if (process.env.DEBUG_RESPONSE_CONTROL_PARSER === "1" && responseControlParse) {
+    console.log("[llm-response-control-parse]", responseControlParse);
+  }
+  const responseControlAccepted = isResponseControlParserAccepted(responseControlParse);
+  const llmOptOut = responseControlAccepted && responseControlParse?.intent === "opt_out";
+  const llmNotInterested = responseControlAccepted && responseControlParse?.intent === "not_interested";
+  const llmComplimentOnly = responseControlAccepted && responseControlParse?.intent === "compliment_only";
+  const llmExplicitScheduleIntent =
+    responseControlAccepted && responseControlParse?.intent === "schedule_request";
   if (getDialogState(conv) === "none" && conv.classification?.bucket === "inventory_interest") {
     setDialogState(conv, "inventory_init");
   }
   let didConfirm = false;
   if (conv.contactPreference === "call_only") {
-    if (isOptOut(event.body)) {
+    if (llmOptOut || isOptOut(event.body)) {
       await suppressRelatedPhones(conv, event, "sms_stop", "twilio");
       stopFollowUpCadence(conv, "opt_out");
       stopRelatedCadences(conv, "opt_out");
-    } else if (isNotInterested(event.body)) {
+    } else if (llmNotInterested || isNotInterested(event.body)) {
       stopFollowUpCadence(conv, "not_interested");
       closeConversation(conv, "not_interested");
       stopRelatedCadences(conv, "not_interested", { close: true });
@@ -12446,7 +12469,7 @@ if (authToken && signature) {
     discardPendingDrafts(conv, "new_inbound");
   }
   await resetFollowUpCadenceOnInbound(conv, event.body ?? "");
-  if (isOptOut(event.body)) {
+  if (llmOptOut || isOptOut(event.body)) {
     await suppressRelatedPhones(conv, event, "sms_stop", "twilio");
     stopFollowUpCadence(conv, "opt_out");
     stopRelatedCadences(conv, "opt_out");
@@ -12463,7 +12486,7 @@ if (authToken && signature) {
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
-  if (isNotInterested(event.body)) {
+  if (llmNotInterested || isNotInterested(event.body)) {
     stopFollowUpCadence(conv, "not_interested");
     closeConversation(conv, "not_interested");
     stopRelatedCadences(conv, "not_interested", { close: true });
@@ -12782,7 +12805,7 @@ if (authToken && signature) {
     }
   }
 
-  if (isComplimentOnlyText(event.body)) {
+  if (llmComplimentOnly || isComplimentOnlyText(event.body)) {
     const reply = buildComplimentReply();
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
@@ -13356,7 +13379,11 @@ if (authToken && signature) {
       }
     }
     const rescheduleIntent =
-      reschedulePending || reschedulePhrase || !!requestedReschedule || isExplicitScheduleIntent(event.body);
+      reschedulePending ||
+      reschedulePhrase ||
+      !!requestedReschedule ||
+      llmExplicitScheduleIntent ||
+      isExplicitScheduleIntent(event.body);
     if (!rescheduleIntent) {
       // fall through
     } else {

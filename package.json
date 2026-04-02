@@ -20,7 +20,8 @@
     "watch_catalog_eval": "LLM_ENABLED=1 npx tsx scripts/watch_catalog_eval.ts",
     "finance_docs_eval": "LLM_ENABLED=1 npx tsx scripts/finance_docs_eval.ts",
     "adf_policy:eval": "npx tsx scripts/adf_policy_eval.ts",
-    "disposition_transition:eval": "npx tsx scripts/disposition_transition_eval.ts"
+    "disposition_transition:eval": "npx tsx scripts/disposition_transition_eval.ts",
+    "response_control:eval": "npx tsx scripts/response_control_eval.ts"
   },
   "devDependencies": {
     "concurrently": "^9.0.0",
