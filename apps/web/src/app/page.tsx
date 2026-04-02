@@ -3677,11 +3677,11 @@ export default function Home() {
     if (!files || files.length === 0) return;
     setSmsAttachmentsBusy(true);
     const selected = Array.from(files);
-    const maxPerFile = 15 * 1024 * 1024;
+    const maxPerFile = 30 * 1024 * 1024;
 
     for (const file of selected) {
       if (file.size > maxPerFile) {
-        window.alert(`"${file.name}" is too large (max 15MB).`);
+        window.alert(`"${file.name}" is too large (max 30MB).`);
         continue;
       }
       if (!(file.type.startsWith("image/") || file.type.startsWith("video/"))) {
