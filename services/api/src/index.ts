@@ -5200,6 +5200,29 @@ function referencesSpecificInventoryUnit(text: string): boolean {
   );
 }
 
+function hasSellOnOwnSignal(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  return /\b(sell (it|my bike|my motorcycle|my ride) (on my own|myself)|sell (my bike|my motorcycle|my ride) myself)\b/i.test(
+    t
+  );
+}
+
+function hasKeepCurrentBikeSignal(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  return /\b(keep (it|my bike|my motorcycle|my ride)|going to keep (it|my bike|my motorcycle|my ride)|gonna keep (it|my bike|my motorcycle|my ride)|just keep (it|my bike|my motorcycle|my ride))\b/i.test(
+    t
+  );
+}
+
+function isSteppingBackDispositionText(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  return (
+    hasSellOnOwnSignal(t) ||
+    hasKeepCurrentBikeSignal(t) ||
+    /\b(hold off for now|pass for now)\b/i.test(t)
+  );
+}
+
 function isComplimentOnlyText(text: string): boolean {
   const t = String(text ?? "").toLowerCase().trim();
   if (!t) return false;
@@ -5213,10 +5236,7 @@ function isComplimentOnlyText(text: string): boolean {
     /\b(price|payment|monthly|otd|apr|term|down|available|availability|in stock|stock|schedule|book|appointment|test ride|trade|finance|credit|call|phone|email|address|hours|open|close|where|when)\b/.test(
       t
     );
-  const steppingBackSignal =
-    /\b(sell (it|my bike|my motorcycle|my ride) (on my own|myself)|sell (my bike|my motorcycle|my ride) myself|keep (it|my bike|my motorcycle|my ride)|going to keep (it|my bike|my motorcycle|my ride)|gonna keep (it|my bike|my motorcycle|my ride)|hold off for now|pass for now|not ready)\b/.test(
-      t
-    );
+  const steppingBackSignal = isSteppingBackDispositionText(t) || /\bnot ready\b/.test(t);
   const watchIntent = isWatchConfirmationIntentText(t);
   return !explicitAsk && !watchIntent && !steppingBackSignal;
 }
@@ -14125,18 +14145,10 @@ if (authToken && signature) {
     /\b(not ready|not (yet|right now)|not in the market|not looking to buy|not looking for|just browsing|just looking|window shopping|not ready to purchase|not ready to buy)\b/i.test(
       textLower
     );
-  const sellOnOwnSignal =
-    /\b(sell (it|my bike|my motorcycle|my ride) (on my own|myself)|sell (my bike|my motorcycle|my ride) myself)\b/i.test(
-      textLower
-    );
-  const keepCurrentBikeSignal =
-    /\b(keep (it|my bike|my motorcycle|my ride)|going to keep (it|my bike|my motorcycle|my ride)|gonna keep (it|my bike|my motorcycle|my ride))\b/i.test(
-      textLower
-    );
+  const sellOnOwnSignal = hasSellOnOwnSignal(textLower);
+  const keepCurrentBikeSignal = hasKeepCurrentBikeSignal(textLower);
   const steppingBackFromDeal =
-    sellOnOwnSignal ||
-    keepCurrentBikeSignal ||
-    /\b(hold off for now|pass for now)\b/i.test(textLower);
+    sellOnOwnSignal || keepCurrentBikeSignal || isSteppingBackDispositionText(textLower);
   if (event.provider === "twilio" && steppingBackFromDeal) {
     const dispositionReason = sellOnOwnSignal
       ? "customer_sell_on_own"
@@ -14954,6 +14966,7 @@ if (authToken && signature) {
     isTradeLead &&
     !availabilityExplicit &&
     !llmAvailabilityIntent &&
+    !isSteppingBackDispositionText(textLower) &&
     !isPricingText(event.body ?? "") &&
     (tradeYearCorrection ||
       /\b(inspection|appraisal|bring (it|the bike) (in|by)|coming in|come in|stop in|call for (an )?appointment|call (to )?(set|schedule) (an )?appointment|check my schedule|i(?:'|’)ll call|i will call|let you know when i(?:'|’)m coming in|let you know when i am coming in)\b/i.test(
