@@ -37,6 +37,7 @@ import { resolveChannel, resolveLeadRule } from "../domain/leadSourceRules.js";
 import {
   parseDialogActWithLLM,
   parseIntentWithLLM,
+  parseResponseControlWithLLM,
   parseJourneyIntentWithLLM
 } from "../domain/llmDraft.js";
 import type { InboundMessageEvent } from "../domain/types.js";
@@ -55,6 +56,7 @@ import { getInventoryFeed, hasInventoryForModelYear, findInventoryMatches } from
 import { resolveInventoryUrlByStock } from "../domain/inventoryUrlResolver.js";
 import { getAllModels } from "../domain/modelsByYear.js";
 import { shouldRouteRoom58PriceHandoff } from "../domain/adfPolicy.js";
+import { isResponseControlParserAccepted } from "../domain/transitionSafety.js";
 import { listUsers } from "../domain/userStore.js";
 
 function base64UrlDecode(input: string): string | null {
@@ -1533,6 +1535,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     history: adfHistory,
     lead: conv.lead
   });
+  const llmResponseControl = await parseResponseControlWithLLM({
+    text: effectiveInquiry,
+    history: adfHistory,
+    lead: conv.lead
+  });
   const dialogActConfidenceMin = Number(process.env.LLM_DIALOG_ACT_CONFIDENCE_MIN ?? 0.68);
   const intentConfidenceMin = Number(process.env.LLM_INTENT_CONFIDENCE_MIN ?? 0.75);
   const pricingInquiryIntentFromParser =
@@ -1546,6 +1553,19 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     llmIntent.intent === "availability" &&
     llmIntent.explicitRequest === true &&
     Number(llmIntent.confidence ?? 0) >= intentConfidenceMin;
+  const responseControlAccepted = isResponseControlParserAccepted(llmResponseControl);
+  const scheduleIntentFromParser =
+    responseControlAccepted && llmResponseControl?.intent === "schedule_request";
+  const serviceIntentFromParser =
+    !!llmDialogAct &&
+    llmDialogAct.topic === "service" &&
+    llmDialogAct.explicitRequest === true &&
+    Number(llmDialogAct.confidence ?? 0) >= dialogActConfidenceMin;
+  const tradeIntentFromParser =
+    !!llmDialogAct &&
+    llmDialogAct.topic === "trade" &&
+    llmDialogAct.explicitRequest === true &&
+    Number(llmDialogAct.confidence ?? 0) >= dialogActConfidenceMin;
   const inquiryDayPart = extractDayPartRequest(effectiveInquiry);
   const serviceVinRequest =
     /registration\s+or\s+vin\s+number/i.test(lead.comment ?? "") ||
@@ -1559,24 +1579,38 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     if (hasStockIntent) {
       inferredBucket = "inventory_interest";
       inferredCta = "check_availability";
-    } else if (inquiryText.includes("test ride") || inquiryText.includes("demo")) {
+    } else if (
+      inquiryText.includes("test ride") ||
+      inquiryText.includes("demo") ||
+      (!!llmIntent &&
+        llmIntent.intent === "test_ride" &&
+        llmIntent.explicitRequest === true &&
+        Number(llmIntent.confidence ?? 0) >= intentConfidenceMin)
+    ) {
       inferredBucket = "test_ride";
       inferredCta = "schedule_test_ride";
     } else if (
+      scheduleIntentFromParser ||
       inquiryText.includes("prequal") ||
       inquiryText.includes("credit") ||
       inquiryText.includes("finance")
     ) {
-      inferredBucket = "finance_prequal";
-      inferredCta = inquiryText.includes("prequal") ? "prequalify" : "prequalify";
+      if (scheduleIntentFromParser) {
+        inferredBucket = "test_ride";
+        inferredCta = "schedule_test_ride";
+      } else {
+        inferredBucket = "finance_prequal";
+        inferredCta = inquiryText.includes("prequal") ? "prequalify" : "prequalify";
+      }
     } else if (
+      tradeIntentFromParser ||
       inquiryText.includes("value my trade") ||
       inquiryText.includes("trade") ||
       inquiryText.includes("sell")
     ) {
       inferredBucket = "trade_in_sell";
       inferredCta = inquiryText.includes("sell") ? "sell_my_bike" : "value_my_trade";
-    } else if (inquiryText.includes("service") || serviceVinRequest) {
+    } else if (serviceIntentFromParser || inquiryText.includes("service") || serviceVinRequest) {
       inferredBucket = "service";
       inferredCta = "service_request";
     } else {

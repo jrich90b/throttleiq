@@ -15596,6 +15596,11 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
   const compareRequest = isCompareRequest(textLower);
+  const llmInventoryInfoIntent =
+    dialogActAccepted &&
+    (dialogActParse?.topic === "new_inventory" || dialogActParse?.topic === "used_inventory");
+  const llmCompareHint =
+    llmInventoryInfoIntent && /\b(compare|comparison|vs\.?|versus)\b/i.test(String(event.body ?? ""));
   const compareContext = /compare|spec sheet|highlights comparison|highlights list/i.test(
     lastOutboundText
   );
@@ -15611,7 +15616,7 @@ if (authToken && signature) {
   const lastOutboundInfoPrompt = /quick highlights list for|spec sheet or a quick highlights list for/i.test(
     lastOutboundText
   );
-  let isCompare = compareRequest || compareContext;
+  let isCompare = llmCompareHint || compareRequest || compareContext;
   if (explicitNoCompare) {
     isCompare = false;
     conv.compareContext = undefined;
@@ -15636,7 +15641,8 @@ if (authToken && signature) {
     (!!conv.inventoryContext?.model ||
       !!conv.lead?.vehicle?.model ||
       !!conv.lead?.vehicle?.description);
-  const infoOnlyRequest = (isInfoOnlyRequest(textLower) || isCompare) && !skipInfoOnly;
+  const infoOnlyRequest =
+    (llmInventoryInfoIntent || isInfoOnlyRequest(textLower) || isCompare) && !skipInfoOnly;
   if (event.provider === "twilio" && finishPreferenceOnlyRaw && !hasModelContext) {
     const reply = "Got it — which model and year are you looking for?";
     const systemMode = webhookMode;
