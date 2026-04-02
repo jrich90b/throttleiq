@@ -1902,6 +1902,7 @@ export function closeConversation(conv: Conversation, reason?: string) {
   conv.status = "closed";
   conv.closedAt = nowIso();
   conv.closedReason = reason;
+  markOpenTodosDoneForConversation(conv.id);
   if (conv.followUpCadence?.status) {
     conv.followUpCadence.status = "stopped";
     conv.followUpCadence.stopReason = reason ?? "closed";
@@ -2375,6 +2376,19 @@ export function markTodoDone(convId: string, todoId: string): TodoTask | null {
   task.doneAt = nowIso();
   scheduleSave();
   return task;
+}
+
+export function markOpenTodosDoneForConversation(convId: string): number {
+  let count = 0;
+  const doneAt = nowIso();
+  for (const task of todos) {
+    if (task.convId !== convId || task.status !== "open") continue;
+    task.status = "done";
+    task.doneAt = doneAt;
+    count += 1;
+  }
+  if (count > 0) scheduleSave();
+  return count;
 }
 
 export function setCrmLastLoggedAt(conv: Conversation, iso: string) {

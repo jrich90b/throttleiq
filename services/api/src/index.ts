@@ -143,6 +143,7 @@ import {
   listOpenQuestions,
   markQuestionDone,
   markTodoDone,
+  markOpenTodosDoneForConversation,
   deleteConversation,
   setFollowUpMode,
   incrementPricingAttempt,
@@ -3771,6 +3772,7 @@ async function applyOutcomeSold(
   conv.status = "closed";
   conv.closedAt = nowIso;
   conv.closedReason = "sold";
+  markOpenTodosDoneForConversation(conv.id);
   const soldEntry = {
     id: soldKey,
     stockId: unit.stockId,
@@ -9749,6 +9751,7 @@ app.post("/conversations/:id/close", async (req, res) => {
     conv.status = "closed";
     conv.closedAt = nowIso;
     conv.closedReason = "sold";
+    markOpenTodosDoneForConversation(conv.id);
     if (soldKey) {
       const soldEntry = {
         id: soldKey,
