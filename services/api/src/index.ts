@@ -18,6 +18,7 @@ import {
   summarizeSalespersonNoteWithLLM,
   parseBookingIntentWithLLM,
   parseIntentWithLLM,
+  parseDialogActWithLLM,
   parseCustomerDispositionWithLLM,
   parseResponseControlWithLLM,
   parseJourneyIntentWithLLM,
@@ -13882,12 +13883,6 @@ if (authToken && signature) {
     (/\b(other|another|different|else|more)\b/i.test(textLower) &&
       /\b(in[-\s]?stock|available|options?|units?|bikes?|models?)\b/i.test(textLower));
   const schedulingSignalsBase = detectSchedulingSignals(event.body);
-  const paymentOrPricingNoSchedule =
-    isPricingText(event.body ?? "") &&
-    !schedulingSignalsBase.explicit &&
-    !schedulingSignalsBase.hasDayTime &&
-    !schedulingSignalsBase.hasDayOnlyAvailability &&
-    !schedulingSignalsBase.hasDayOnlyRequest;
   const leadSourceText = String(conv.lead?.source ?? "").toLowerCase();
   const isTradeLead =
     /sell my bike/.test(leadSourceText) ||
@@ -14085,14 +14080,6 @@ if (authToken && signature) {
       setDialogState(conv, "trade_init");
     }
   }
-  if (
-    getDialogState(conv) === "none" &&
-    !isScheduleDialogState(getDialogState(conv)) &&
-    !isTradeDialogState(getDialogState(conv)) &&
-    isPricingText(event.body ?? "")
-  ) {
-    setDialogState(conv, "pricing_init");
-  }
   const shortAck = isShortAckText(inboundText) || emojiOnly;
   const recentHistory = buildHistory(conv, 6);
   const bookingParserEligible =
@@ -14101,6 +14088,12 @@ if (authToken && signature) {
     process.env.LLM_BOOKING_PARSER_ENABLED === "1" &&
     !!process.env.OPENAI_API_KEY &&
     schedulingAllowed;
+  let paymentOrPricingNoSchedule =
+    isPricingText(event.body ?? "") &&
+    !schedulingSignalsBase.explicit &&
+    !schedulingSignalsBase.hasDayTime &&
+    !schedulingSignalsBase.hasDayOnlyAvailability &&
+    !schedulingSignalsBase.hasDayOnlyRequest;
   const bookingParserHint =
     !paymentOrPricingNoSchedule &&
     (!!conv.scheduler?.lastSuggestedSlots?.length ||
@@ -14151,6 +14144,48 @@ if (authToken && signature) {
       availability: intentParse.availability,
       callback: intentParse.callback
     });
+  }
+  const dialogActParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_DIALOG_ACT_PARSER_ENABLED === "1" &&
+    !!process.env.OPENAI_API_KEY &&
+    !shortAck;
+  const dialogActParse = dialogActParserEligible
+    ? await parseDialogActWithLLM({
+        text: event.body,
+        history: recentHistory,
+        lead: conv.lead
+      })
+    : null;
+  if (process.env.DEBUG_DIALOG_ACT_PARSER === "1" && dialogActParse) {
+    console.log("[llm-dialog-act-parse]", dialogActParse);
+  }
+  const dialogActConfidence =
+    typeof dialogActParse?.confidence === "number" ? dialogActParse.confidence : 0;
+  const dialogActConfidenceMin = Number(process.env.LLM_DIALOG_ACT_CONFIDENCE_MIN ?? 0.72);
+  const dialogActAccepted =
+    !!dialogActParse?.explicitRequest &&
+    dialogActParse.topic !== "general" &&
+    dialogActConfidence >= dialogActConfidenceMin;
+  const llmPricingIntent = dialogActAccepted && dialogActParse?.topic === "pricing";
+  const llmSchedulingIntent = dialogActAccepted && dialogActParse?.topic === "scheduling";
+  const pricingSignal = llmPricingIntent || isPricingText(event.body ?? "");
+  const explicitScheduleSignal =
+    llmExplicitScheduleIntent || llmSchedulingIntent || isExplicitScheduleIntent(event.body);
+  paymentOrPricingNoSchedule =
+    pricingSignal &&
+    !schedulingSignalsBase.explicit &&
+    !schedulingSignalsBase.hasDayTime &&
+    !schedulingSignalsBase.hasDayOnlyAvailability &&
+    !schedulingSignalsBase.hasDayOnlyRequest;
+  if (
+    getDialogState(conv) === "none" &&
+    !isScheduleDialogState(getDialogState(conv)) &&
+    !isTradeDialogState(getDialogState(conv)) &&
+    pricingSignal
+  ) {
+    setDialogState(conv, "pricing_init");
   }
   const tradePayoffParserEligible =
     event.provider === "twilio" &&
@@ -14368,6 +14403,8 @@ if (authToken && signature) {
     explicit:
       schedulingSignalsBase.explicit ||
       bookingIntentAccepted ||
+      llmSchedulingIntent ||
+      llmExplicitScheduleIntent ||
       !!llmTestRideIntent,
     hasDayTime: schedulingSignalsBase.hasDayTime || llmHasDayTime,
     hasDayOnlyAvailability:
@@ -15469,7 +15506,7 @@ if (authToken && signature) {
     !availabilityExplicit &&
     !llmAvailabilityIntent &&
     !isSteppingBackDispositionText(textLower) &&
-    !isPricingText(event.body ?? "") &&
+    !pricingSignal &&
     (tradeYearCorrection ||
       /\b(inspection|appraisal|bring (it|the bike) (in|by)|coming in|come in|stop in|call for (an )?appointment|call (to )?(set|schedule) (an )?appointment|check my schedule|i(?:'|’)ll call|i will call|let you know when i(?:'|’)m coming in|let you know when i am coming in)\b/i.test(
         textLower
@@ -17204,7 +17241,7 @@ if (authToken && signature) {
     cta: conv.classification?.cta ?? null,
     lead: conv.lead ?? null,
     pricingAttempts: getPricingAttempts(conv),
-    allowSchedulingOffer: schedulingExplicit && schedulingAllowed && !paymentOrPricingNoSchedule,
+    allowSchedulingOffer: (schedulingExplicit || explicitScheduleSignal) && schedulingAllowed && !paymentOrPricingNoSchedule,
     schedulingText: schedulingTextForOrchestrator,
     callbackRequestedOverride,
     appointmentTypeOverride,
@@ -17346,7 +17383,7 @@ if (authToken && signature) {
       setDialogState(conv, "pricing_need_model");
     } else if (detectsPricingAnswer(result.draft ?? "")) {
       setDialogState(conv, "pricing_answered");
-    } else if (isPricingText(event.body ?? "") && dialogState === "none") {
+    } else if (pricingSignal && dialogState === "none") {
       setDialogState(conv, "pricing_init");
     }
   }
