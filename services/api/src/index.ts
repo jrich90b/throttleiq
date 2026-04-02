@@ -11099,6 +11099,58 @@ app.post("/crm/tlp/log-contact", async (req, res) => {
   }
 });
 
+app.post("/conversations/:id/media", upload.single("file"), async (req, res) => {
+  const conv = getConversation(req.params.id);
+  if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+  if (!req.file) return res.status(400).json({ ok: false, error: "missing file" });
+
+  const mime = String(req.file.mimetype ?? "").toLowerCase();
+  const isImage = mime.startsWith("image/");
+  const isVideo = mime.startsWith("video/");
+  if (!isImage && !isVideo) {
+    return res.status(400).json({ ok: false, error: "only image/video files are allowed" });
+  }
+  const maxBytes = 15 * 1024 * 1024;
+  if (Number(req.file.size ?? 0) > maxBytes) {
+    return res.status(400).json({ ok: false, error: "file too large (max 15MB)" });
+  }
+
+  const extFromOriginal = path.extname(req.file.originalname || "").toLowerCase();
+  const extFromMime =
+    mime === "image/jpeg"
+      ? ".jpg"
+      : mime === "image/png"
+        ? ".png"
+        : mime === "image/webp"
+          ? ".webp"
+          : mime === "image/gif"
+            ? ".gif"
+            : mime === "video/mp4"
+              ? ".mp4"
+              : mime === "video/quicktime"
+                ? ".mov"
+                : "";
+  const ext = extFromOriginal || extFromMime || (isVideo ? ".mp4" : ".jpg");
+  const safeConv = String(conv.id ?? "conv").replace(/[^a-z0-9_-]/gi, "_").slice(0, 48) || "conv";
+  const fileName = `${safeConv}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
+  const dir = path.resolve(getDataDir(), "uploads", "messages");
+  await fs.promises.mkdir(dir, { recursive: true });
+  const dest = path.join(dir, fileName);
+  await fs.promises.writeFile(dest, req.file.buffer);
+
+  const publicBase = process.env.PUBLIC_BASE_URL ?? "";
+  const url = publicBase
+    ? `${publicBase.replace(/\/$/, "")}/uploads/messages/${fileName}`
+    : `/uploads/messages/${fileName}`;
+  return res.json({
+    ok: true,
+    url,
+    name: req.file.originalname || fileName,
+    type: mime || "application/octet-stream",
+    size: Number(req.file.size ?? 0)
+  });
+});
+
 // ✅ Control-panel "send" (still log-only for now)
 app.post("/conversations/:id/send", async (req, res) => {
   const conv = getConversation(req.params.id);
@@ -11106,7 +11158,6 @@ app.post("/conversations/:id/send", async (req, res) => {
 
   const user = (req as any).user ?? null;
   const body = String(req.body?.body ?? "").trim();
-  if (!body) return res.status(400).json({ ok: false, error: "Missing body" });
 
   const draftId = req.body?.draftId ? String(req.body.draftId) : undefined;
   const manualTakeover = req.body?.manualTakeover === true;
@@ -11119,7 +11170,19 @@ app.post("/conversations/:id/send", async (req, res) => {
   const draft =
     draftCandidate && draftCandidate.provider === "draft_ai" ? draftCandidate : null;
   const draftTextForLog = draft?.body ?? null;
-  const mediaUrls = draft?.mediaUrls && draft.mediaUrls.length ? draft.mediaUrls : undefined;
+  const requestMediaUrls = Array.isArray(req.body?.mediaUrls)
+    ? req.body.mediaUrls
+        .map((u: unknown) => String(u ?? "").trim())
+        .filter((u: string) => /^https?:\/\//i.test(u))
+    : [];
+  const mediaUrls = requestMediaUrls.length
+    ? requestMediaUrls
+    : draft?.mediaUrls && draft.mediaUrls.length
+      ? draft.mediaUrls
+      : undefined;
+  if (!body && !(mediaUrls && mediaUrls.length)) {
+    return res.status(400).json({ ok: false, error: "Missing body or media" });
+  }
   const actorUserId = String(user?.id ?? "").trim();
   const actorUserName = String(user?.name ?? user?.email ?? "").trim();
   const claimLeadOwnerFromActor = () => {

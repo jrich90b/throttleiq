@@ -857,7 +857,13 @@ export default function Home() {
   const [lastDraftId, setLastDraftId] = useState<string | null>(null);
   const [editPromptOpen, setEditPromptOpen] = useState(false);
   const [editNote, setEditNote] = useState("");
-  const [pendingSend, setPendingSend] = useState<{ body: string; draftId?: string } | null>(null);
+  const [pendingSend, setPendingSend] = useState<
+    { body: string; draftId?: string; mediaUrls?: string[] } | null
+  >(null);
+  const [smsAttachments, setSmsAttachments] = useState<
+    { name: string; type: string; size: number; url: string }[]
+  >([]);
+  const [smsAttachmentsBusy, setSmsAttachmentsBusy] = useState(false);
   const [emailAttachments, setEmailAttachments] = useState<
     { name: string; type: string; size: number; content: string }[]
   >([]);
@@ -3334,10 +3340,14 @@ export default function Home() {
   useEffect(() => {
     if (messageFilter !== "email") {
       if (emailAttachments.length) setEmailAttachments([]);
-      return;
-    }
-    if (selectedConv?.id) {
+    } else if (selectedConv?.id) {
       if (emailAttachments.length) setEmailAttachments([]);
+    }
+
+    if (messageFilter !== "sms") {
+      if (smsAttachments.length) setSmsAttachments([]);
+    } else if (selectedConv?.id) {
+      if (smsAttachments.length) setSmsAttachments([]);
     }
   }, [messageFilter, selectedConv?.id]);
 
@@ -3413,6 +3423,7 @@ export default function Home() {
     manualTakeover?: boolean;
     skipEmailSignature?: boolean;
     attachments?: { name: string; type: string; size: number; content: string }[];
+    mediaUrls?: string[];
     forceEmail?: boolean;
   }): Promise<boolean> {
     if (!selectedConv) return false;
@@ -3432,7 +3443,8 @@ export default function Home() {
                 filename: att.name,
                 type: att.type
               }))
-            : undefined
+            : undefined,
+        mediaUrls: messageFilter === "sms" ? payload.mediaUrls ?? [] : undefined
       })
     });
     const data = await resp.json().catch(() => null);
@@ -3462,6 +3474,13 @@ export default function Home() {
           ? `Email sent with ${attachmentCount} attachment${attachmentCount === 1 ? "" : "s"}.`
           : "Email sent."
       );
+    } else if (messageFilter === "sms") {
+      const mediaCount = payload.mediaUrls?.length ?? 0;
+      setSmsAttachments([]);
+      setSmsAttachmentsBusy(false);
+      if (mediaCount > 0) {
+        setSaveToast(`SMS sent with ${mediaCount} attachment${mediaCount === 1 ? "" : "s"}.`);
+      }
     }
     setSendBody("");
     setSendBodySource("system");
@@ -3534,6 +3553,10 @@ export default function Home() {
       window.alert("Attachments are still processing. Please wait a moment.");
       return;
     }
+    if (messageFilter === "sms" && smsAttachmentsBusy) {
+      window.alert("Media is still uploading. Please wait a moment.");
+      return;
+    }
     const useEmailDraft = messageFilter === "email" && !!emailDraft && !emailManualMode;
     const effectiveDraft = messageFilter === "email" ? null : pendingDraft;
     const bodySource =
@@ -3549,11 +3572,16 @@ export default function Home() {
         body = injectBookingUrl(body, bookingUrl);
       }
     }
-    if (!body) return;
+    const smsMediaUrls = messageFilter === "sms" ? smsAttachments.map(att => att.url) : [];
+    if (!body && !(messageFilter === "sms" && smsMediaUrls.length > 0)) return;
     const draftId = effectiveDraft?.id;
     const edited = !!effectiveDraft && effectiveDraft.body.trim() !== body.trim();
     if (edited) {
-      setPendingSend({ body, draftId });
+      setPendingSend({
+        body,
+        draftId,
+        mediaUrls: messageFilter === "sms" ? smsMediaUrls : undefined
+      });
       setEditNote("");
       setEditPromptOpen(true);
       return;
@@ -3563,8 +3591,21 @@ export default function Home() {
     const isManualEmail = messageFilter === "email" && emailManualMode;
     await doSend(
       draftId
-        ? { body, draftId, manualTakeover, attachments, skipEmailSignature: isManualEmail }
-        : { body, manualTakeover: isManualEmail ? true : manualTakeover, attachments, skipEmailSignature: isManualEmail }
+        ? {
+            body,
+            draftId,
+            manualTakeover,
+            attachments,
+            mediaUrls: messageFilter === "sms" ? smsMediaUrls : undefined,
+            skipEmailSignature: isManualEmail
+          }
+        : {
+            body,
+            manualTakeover: isManualEmail ? true : manualTakeover,
+            attachments,
+            mediaUrls: messageFilter === "sms" ? smsMediaUrls : undefined,
+            skipEmailSignature: isManualEmail
+          }
     );
   }
 
@@ -3615,6 +3656,50 @@ export default function Home() {
 
   function removeEmailAttachment(index: number) {
     setEmailAttachments(prev => prev.filter((_, i) => i !== index));
+  }
+
+  async function handleSmsAttachments(files: FileList | null) {
+    if (!selectedConv) return;
+    if (!files || files.length === 0) return;
+    setSmsAttachmentsBusy(true);
+    const selected = Array.from(files);
+    const maxPerFile = 15 * 1024 * 1024;
+
+    for (const file of selected) {
+      if (file.size > maxPerFile) {
+        window.alert(`"${file.name}" is too large (max 15MB).`);
+        continue;
+      }
+      if (!(file.type.startsWith("image/") || file.type.startsWith("video/"))) {
+        window.alert(`"${file.name}" must be an image or video file.`);
+        continue;
+      }
+
+      const fd = new FormData();
+      fd.append("file", file);
+      const resp = await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/media`, {
+        method: "POST",
+        body: fd
+      });
+      const payload = await resp.json().catch(() => null);
+      if (!resp.ok || !payload?.url) {
+        window.alert(payload?.error ?? `Failed to upload "${file.name}".`);
+        continue;
+      }
+      const nextAttachment = {
+        name: String(payload.name ?? file.name),
+        type: String((payload.type ?? file.type) || "application/octet-stream"),
+        size: Number(payload.size ?? file.size ?? 0),
+        url: String(payload.url)
+      };
+      setSmsAttachments(prev => [...prev, nextAttachment]);
+    }
+
+    setSmsAttachmentsBusy(false);
+  }
+
+  function removeSmsAttachment(index: number) {
+    setSmsAttachments(prev => prev.filter((_, i) => i !== index));
   }
 
   async function regenerateDraft() {
@@ -10197,6 +10282,7 @@ export default function Home() {
                   className={`px-4 py-2 border rounded ${
                     messageFilter === "calls" ||
                     (messageFilter === "sms" && selectedConv.contactPreference === "call_only") ||
+                    (messageFilter === "sms" && smsAttachmentsBusy) ||
                     (messageFilter === "email" && emailAttachmentsBusy)
                       ? "opacity-50 cursor-not-allowed"
                       : ""
@@ -10205,6 +10291,7 @@ export default function Home() {
                   disabled={
                     messageFilter === "calls" ||
                     (messageFilter === "sms" && selectedConv.contactPreference === "call_only") ||
+                    (messageFilter === "sms" && smsAttachmentsBusy) ||
                     (messageFilter === "email" && emailAttachmentsBusy)
                   }
                 >
@@ -10257,6 +10344,45 @@ export default function Home() {
                 ) : null}
               </div>
             </div>
+
+            {messageFilter === "sms" ? (
+              <div className="mt-2 flex flex-col gap-2">
+                {smsAttachments.length ? (
+                  <div className="flex flex-wrap gap-2">
+                    {smsAttachments.map((att, idx) => (
+                      <div
+                        key={`${att.url}-${idx}`}
+                        className="flex items-center gap-2 border rounded px-2 py-1 text-xs"
+                      >
+                        <span className="truncate max-w-[220px]">{att.name}</span>
+                        <button
+                          type="button"
+                          className="text-gray-500 hover:text-gray-800"
+                          onClick={() => removeSmsAttachment(idx)}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {smsAttachmentsBusy ? (
+                  <div className="text-xs text-gray-500">Uploading media…</div>
+                ) : null}
+                <div>
+                  <label className="inline-flex items-center gap-2 text-xs border rounded px-3 py-2 cursor-pointer hover:bg-gray-50">
+                    Attach media
+                    <input
+                      type="file"
+                      multiple
+                      accept="image/*,video/*"
+                      className="hidden"
+                      onChange={e => handleSmsAttachments(e.target.files)}
+                    />
+                  </label>
+                </div>
+              </div>
+            ) : null}
 
             {messageFilter === "email" ? (
               <div className="mt-2 flex flex-col gap-2">
@@ -10348,12 +10474,14 @@ export default function Home() {
                           ? {
                               ...pendingSend,
                               editNote: note,
-                              attachments: messageFilter === "email" ? emailAttachments : undefined
+                              attachments: messageFilter === "email" ? emailAttachments : undefined,
+                              mediaUrls: messageFilter === "sms" ? pendingSend.mediaUrls : undefined
                             }
                           : {
                               body: pendingSend.body,
                               editNote: note,
-                              attachments: messageFilter === "email" ? emailAttachments : undefined
+                              attachments: messageFilter === "email" ? emailAttachments : undefined,
+                              mediaUrls: messageFilter === "sms" ? pendingSend.mediaUrls : undefined
                             };
                         setEditPromptOpen(false);
                         setPendingSend(null);
@@ -10368,11 +10496,13 @@ export default function Home() {
                         const payload = pendingSend.draftId
                           ? {
                               ...pendingSend,
-                              attachments: messageFilter === "email" ? emailAttachments : undefined
+                              attachments: messageFilter === "email" ? emailAttachments : undefined,
+                              mediaUrls: messageFilter === "sms" ? pendingSend.mediaUrls : undefined
                             }
                           : {
                               body: pendingSend.body,
-                              attachments: messageFilter === "email" ? emailAttachments : undefined
+                              attachments: messageFilter === "email" ? emailAttachments : undefined,
+                              mediaUrls: messageFilter === "sms" ? pendingSend.mediaUrls : undefined
                             };
                         setEditPromptOpen(false);
                         setPendingSend(null);
