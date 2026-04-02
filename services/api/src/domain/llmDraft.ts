@@ -335,6 +335,19 @@ export type DialogActParse = {
   confidence?: number;
 };
 
+export type CustomerDispositionParse = {
+  disposition:
+    | "none"
+    | "sell_on_own"
+    | "keep_current_bike"
+    | "stepping_back"
+    | "defer_no_window"
+    | "defer_with_window";
+  explicitDisposition: boolean;
+  timeframeText?: string | null;
+  confidence?: number;
+};
+
 export type TradePayoffParse = {
   payoffStatus: "unknown" | "no_lien" | "has_lien";
   needsLienHolderInfo: boolean;
@@ -519,6 +532,28 @@ const DIALOG_ACT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
       type: "string",
       enum: ["model", "budget", "timing", "condition", "other", "none"]
     },
+    confidence: { type: "number" }
+  }
+};
+
+const CUSTOMER_DISPOSITION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["disposition", "explicit_disposition", "timeframe_text", "confidence"],
+  properties: {
+    disposition: {
+      type: "string",
+      enum: [
+        "none",
+        "sell_on_own",
+        "keep_current_bike",
+        "stepping_back",
+        "defer_no_window",
+        "defer_with_window"
+      ]
+    },
+    explicit_disposition: { type: "boolean" },
+    timeframe_text: { type: "string" },
     confidence: { type: "number" }
   }
 };
@@ -1029,6 +1064,97 @@ export async function parseDialogActWithLLM(args: {
     explicitRequest: !!parsed.explicit_request,
     nextAction,
     askFocus,
+    confidence
+  };
+}
+
+export async function parseCustomerDispositionWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<CustomerDispositionParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_CUSTOMER_DISPOSITION_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_CUSTOMER_DISPOSITION_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_CUSTOMER_DISPOSITION_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_CUSTOMER_DISPOSITION_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+
+  const prompt = [
+    "You are a parser for dealership customer disposition in inbound SMS.",
+    "Return only JSON that matches the provided schema.",
+    "",
+    "Disposition rules:",
+    "- sell_on_own: customer says they will sell their bike on their own / themselves.",
+    "- keep_current_bike: customer says they are going to keep their current bike.",
+    "- stepping_back: customer indicates they are passing or holding off now without specific sell/keep wording.",
+    "- defer_no_window: customer defers with no concrete timeframe (e.g., 'not ready', 'maybe later').",
+    "- defer_with_window: customer defers and gives a concrete timeframe (e.g., next month/spring).",
+    "- none: no clear disposition intent.",
+    "",
+    "Important:",
+    "- If message contains compliments plus a disposition, disposition still applies.",
+    "- explicit_disposition=true only when disposition is clearly expressed.",
+    "- timeframe_text should contain the raw timeframe phrase when disposition is defer_with_window; otherwise empty string.",
+    "- confidence is 0..1.",
+    "",
+    `Known lead info: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> => {
+    return requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "customer_disposition_parser",
+      schema: CUSTOMER_DISPOSITION_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 180,
+      debugTag: "llm-customer-disposition-parser",
+      debug
+    });
+  };
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const dispositionRaw = String(parsed.disposition ?? "").toLowerCase();
+  const disposition: CustomerDispositionParse["disposition"] =
+    dispositionRaw === "sell_on_own" ||
+    dispositionRaw === "keep_current_bike" ||
+    dispositionRaw === "stepping_back" ||
+    dispositionRaw === "defer_no_window" ||
+    dispositionRaw === "defer_with_window"
+      ? dispositionRaw
+      : "none";
+  const explicitDisposition = !!parsed.explicit_disposition;
+  const timeframeText = cleanOptionalString(parsed.timeframe_text);
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    disposition,
+    explicitDisposition,
+    timeframeText,
     confidence
   };
 }

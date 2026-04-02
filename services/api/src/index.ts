@@ -18,12 +18,13 @@ import {
   summarizeSalespersonNoteWithLLM,
   parseBookingIntentWithLLM,
   parseIntentWithLLM,
+  parseCustomerDispositionWithLLM,
   parseUnifiedSemanticSlotsWithLLM,
   parseSemanticSlotsWithLLM,
   parseTradePayoffWithLLM,
   summarizeVoiceTranscriptWithLLM
 } from "./domain/llmDraft.js";
-import type { SemanticSlotParse, TradePayoffParse } from "./domain/llmDraft.js";
+import type { CustomerDispositionParse, SemanticSlotParse, TradePayoffParse } from "./domain/llmDraft.js";
 import type { InboundMessageEvent } from "./domain/types.js";
 import { sendgridInboundMiddleware, handleSendgridInbound } from "./routes/sendgridInbound.js";
 import { resolveInventoryUrlByStock } from "./domain/inventoryUrlResolver.js";
@@ -5198,6 +5199,72 @@ function referencesSpecificInventoryUnit(text: string): boolean {
     /\b(it|this|that)\b/.test(t) ||
     /\b(on|for)\s+(?:the\s+)?[a-z]+\s+one\b/.test(t)
   );
+}
+
+type CustomerDispositionDecision = {
+  reason: "customer_sell_on_own" | "customer_keep_current_bike" | "customer_stepping_back";
+  state: "customer_sell_on_own" | "customer_keep_current_bike" | "customer_stepping_back";
+};
+
+function parseCustomerDispositionFallback(text: string): CustomerDispositionDecision | null {
+  const lower = String(text ?? "").toLowerCase();
+  if (hasSellOnOwnSignal(lower)) {
+    return { reason: "customer_sell_on_own", state: "customer_sell_on_own" };
+  }
+  if (hasKeepCurrentBikeSignal(lower)) {
+    return { reason: "customer_keep_current_bike", state: "customer_keep_current_bike" };
+  }
+  if (/\b(hold off for now|pass for now)\b/i.test(lower)) {
+    return { reason: "customer_stepping_back", state: "customer_stepping_back" };
+  }
+  return null;
+}
+
+function resolveCustomerDispositionDecision(
+  text: string,
+  parsed: CustomerDispositionParse | null
+): CustomerDispositionDecision | null {
+  const confidenceMin = Number(process.env.LLM_CUSTOMER_DISPOSITION_CONFIDENCE_MIN ?? 0.74);
+  const parsedConfidence =
+    typeof parsed?.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? parsed.confidence
+      : 0;
+  const parsedAccepted =
+    !!parsed &&
+    parsed.explicitDisposition &&
+    parsed.disposition !== "none" &&
+    parsedConfidence >= confidenceMin;
+  if (parsedAccepted) {
+    if (parsed.disposition === "sell_on_own") {
+      return { reason: "customer_sell_on_own", state: "customer_sell_on_own" };
+    }
+    if (parsed.disposition === "keep_current_bike") {
+      return { reason: "customer_keep_current_bike", state: "customer_keep_current_bike" };
+    }
+    if (parsed.disposition === "stepping_back") {
+      return { reason: "customer_stepping_back", state: "customer_stepping_back" };
+    }
+  }
+  // Fallback for parser-disabled/low-confidence cases.
+  return parseCustomerDispositionFallback(text);
+}
+
+function applyCustomerDispositionCloseout(conv: any, decision: CustomerDispositionDecision) {
+  stopFollowUpCadence(conv, decision.reason);
+  setFollowUpMode(conv, "paused_indefinite", decision.reason);
+  setDialogState(conv, decision.state as DialogStateName);
+  closeConversation(conv, decision.reason);
+  stopRelatedCadences(conv, decision.reason, { close: true });
+}
+
+function buildCustomerDispositionReply(text: string): string {
+  const textLower = String(text ?? "").toLowerCase();
+  const hasBikeCompliment =
+    /\b(beautiful|nice|great|awesome|amazing|love|like|clean|killer|badass|sweet)\b/i.test(textLower) &&
+    /\b(bike|street glide|road glide|harley|motorcycle|ride)\b/i.test(textLower);
+  return hasBikeCompliment
+    ? "Totally understand, and thank you for saying that about the bike. If anything changes, just reach out."
+    : "Totally understand. If anything changes, just reach out.";
 }
 
 function hasSellOnOwnSignal(text: string): boolean {
@@ -11542,6 +11609,50 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return res.json({ ok: true, conversation: conv, draft: reply });
   }
 
+  const regenCustomerDispositionParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_CUSTOMER_DISPOSITION_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    !regenShortAck;
+  const regenCustomerDispositionParserHint =
+    /\b(sell (it|my bike|my motorcycle|my ride)|on my own|myself|keep (it|my bike|my motorcycle|my ride)|hold off|pass for now|not ready|let you know|get back to you|maybe later)\b/i.test(
+      regenTextLower
+    );
+  const regenCustomerDispositionParse =
+    regenCustomerDispositionParserEligible && regenCustomerDispositionParserHint
+      ? await parseCustomerDispositionWithLLM({
+          text: event.body,
+          history,
+          lead: conv.lead
+        })
+      : null;
+  if (process.env.DEBUG_CUSTOMER_DISPOSITION_PARSER === "1" && regenCustomerDispositionParse) {
+    console.log("[llm-customer-disposition-parse] regen", regenCustomerDispositionParse);
+  }
+  const regenDispositionDecision = resolveCustomerDispositionDecision(
+    event.body,
+    regenCustomerDispositionParse
+  );
+  if (regenDispositionDecision) {
+    applyCustomerDispositionCloseout(conv, regenDispositionDecision);
+    const regenReply = ensureUniqueDraft(
+      buildCustomerDispositionReply(event.body),
+      conv,
+      dealerProfile?.dealerName ?? "American Harley-Davidson",
+      dealerProfile?.agentName ?? "Brooke"
+    );
+    if (channel === "email") {
+      conv.emailDraft = regenReply;
+      saveConversation(conv);
+      return res.json({ ok: true, conversation: conv, draft: regenReply });
+    }
+    discardPendingDrafts(conv);
+    appendSmsRegeneratedDraft(regenReply);
+    saveConversation(conv);
+    return res.json({ ok: true, conversation: conv, draft: regenReply });
+  }
+
   if (isServiceRecordsRequest(event.body)) {
     const hasServiceTodo = listOpenTodos().some(
       t => t.convId === conv.id && t.reason === "service"
@@ -12166,6 +12277,55 @@ if (authToken && signature) {
       "Got it — we’ll stop inventory watch alerts. If you want alerts again later, just tell me.";
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+
+  const customerDispositionParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_CUSTOMER_DISPOSITION_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    !semanticShortAck;
+  const customerDispositionParserHint =
+    /\b(sell (it|my bike|my motorcycle|my ride)|on my own|myself|keep (it|my bike|my motorcycle|my ride)|hold off|pass for now|not ready|let you know|get back to you|maybe later)\b/i.test(
+      semanticTextLower
+    );
+  const customerDispositionParse =
+    customerDispositionParserEligible && customerDispositionParserHint
+      ? await parseCustomerDispositionWithLLM({
+          text: semanticInboundText,
+          history: buildHistory(conv, 8),
+          lead: conv.lead
+        })
+      : null;
+  if (process.env.DEBUG_CUSTOMER_DISPOSITION_PARSER === "1" && customerDispositionParse) {
+    console.log("[llm-customer-disposition-parse]", customerDispositionParse);
+  }
+  const dispositionDecision = resolveCustomerDispositionDecision(
+    semanticInboundText,
+    customerDispositionParse
+  );
+  if (dispositionDecision) {
+    applyCustomerDispositionCloseout(conv, dispositionDecision);
+    const dealerProfile = await getDealerProfile();
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const reply = ensureUniqueDraft(
+      buildCustomerDispositionReply(semanticInboundText),
+      conv,
+      dealerName,
+      agentName
+    );
+    const mode = webhookMode;
+    if (mode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
@@ -14145,48 +14305,6 @@ if (authToken && signature) {
     /\b(not ready|not (yet|right now)|not in the market|not looking to buy|not looking for|just browsing|just looking|window shopping|not ready to purchase|not ready to buy)\b/i.test(
       textLower
     );
-  const sellOnOwnSignal = hasSellOnOwnSignal(textLower);
-  const keepCurrentBikeSignal = hasKeepCurrentBikeSignal(textLower);
-  const steppingBackFromDeal =
-    sellOnOwnSignal || keepCurrentBikeSignal || isSteppingBackDispositionText(textLower);
-  if (event.provider === "twilio" && steppingBackFromDeal) {
-    const dispositionReason = sellOnOwnSignal
-      ? "customer_sell_on_own"
-      : keepCurrentBikeSignal
-        ? "customer_keep_current_bike"
-        : "customer_stepping_back";
-    const dispositionState: DialogStateName = sellOnOwnSignal
-      ? "customer_sell_on_own"
-      : keepCurrentBikeSignal
-        ? "customer_keep_current_bike"
-        : "customer_stepping_back";
-    stopFollowUpCadence(conv, dispositionReason);
-    setFollowUpMode(conv, "paused_indefinite", dispositionReason);
-    setDialogState(conv, dispositionState);
-    closeConversation(conv, dispositionReason);
-    stopRelatedCadences(conv, dispositionReason, { close: true });
-    const hasBikeCompliment =
-      /\b(beautiful|nice|great|awesome|amazing|love|like|clean|killer|badass|sweet)\b/i.test(textLower) &&
-      /\b(bike|street glide|road glide|harley|motorcycle|ride)\b/i.test(textLower);
-    const dealerProfile = await getDealerProfile();
-    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = dealerProfile?.agentName ?? "Brooke";
-    const replyRaw = hasBikeCompliment
-      ? "Totally understand, and thank you for saying that about the bike. If anything changes, just reach out."
-      : "Totally understand. If anything changes, just reach out.";
-    const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
-  }
   if (event.provider === "twilio" && notReadyToBuy) {
     const futureFromNotReady = parseFutureTimeframe(String(event.body ?? ""), new Date());
     if (!futureFromNotReady) {
