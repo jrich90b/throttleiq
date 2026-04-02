@@ -11976,6 +11976,24 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (process.env.DEBUG_CUSTOMER_DISPOSITION_PARSER === "1" && regenCustomerDispositionParse) {
     console.log("[llm-customer-disposition-parse] regen", regenCustomerDispositionParse);
   }
+  const regenResponseControlParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_RESPONSE_CONTROL_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    !regenShortAck;
+  const regenResponseControlParse = regenResponseControlParserEligible
+    ? await parseResponseControlWithLLM({
+        text: event.body ?? "",
+        history,
+        lead: conv.lead
+      })
+    : null;
+  const regenResponseControlAccepted = isResponseControlParserAccepted(regenResponseControlParse);
+  const regenLlmComplimentOnly =
+    regenResponseControlAccepted && regenResponseControlParse?.intent === "compliment_only";
+  const regenLlmExplicitScheduleIntent =
+    regenResponseControlAccepted && regenResponseControlParse?.intent === "schedule_request";
   const regenDispositionDecision = resolveCustomerDispositionDecision(
     event.body,
     regenCustomerDispositionParse
@@ -12027,7 +12045,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return res.json({ ok: true, conversation: conv, draft: reply });
   }
 
-  if (isComplimentOnlyText(event.body)) {
+  if (regenLlmComplimentOnly || isComplimentOnlyText(event.body)) {
     const reply = buildComplimentReply();
     if (channel === "email") {
       conv.emailDraft = reply;
@@ -12095,7 +12113,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     cta: conv.classification?.cta ?? null,
     lead: conv.lead ?? null,
     pricingAttempts: getPricingAttempts(conv),
-    allowSchedulingOffer: isExplicitScheduleIntent(event.body),
+    allowSchedulingOffer: regenLlmExplicitScheduleIntent || isExplicitScheduleIntent(event.body),
     callbackRequestedOverride: detectCallbackText(event.body ?? ""),
     voiceSummary: getActiveVoiceContext(conv)?.summary ?? null,
     memorySummary,
@@ -13892,6 +13910,7 @@ if (authToken && signature) {
   const isSellMyBikeLead = /sell my bike/.test(leadSourceText) || conv.classification?.cta === "sell_my_bike";
   let watchHandledEarly = false;
   const earlyWatchIntentText = isWatchConfirmationIntentText(String(event.body ?? ""));
+  const earlyWatchIntentLLM = semanticWatchAction === "set_watch";
   const earlyWatchPrompted = /\b(keep an eye|keep me posted|watch for|watch\b)\b/i.test(
     lastOutboundText
   );
@@ -13905,7 +13924,7 @@ if (authToken && signature) {
   const earlyWatchIntent =
     event.provider === "twilio" &&
     !conv.inventoryWatchPending &&
-    (earlyWatchIntentText || earlyPromptedWatchAffirm);
+    (earlyWatchIntentLLM || earlyWatchIntentText || earlyPromptedWatchAffirm);
   const earlyWatchAsSideEffectOnly =
     earlyWatchIntent && hasPrimaryIntentBeyondWatch(String(event.body ?? ""));
   if (earlyWatchIntent) {
@@ -13913,9 +13932,15 @@ if (authToken && signature) {
     const leadVehicle = conv.lead?.vehicle ?? {};
     const leadYearNum = Number(leadVehicle.year ?? "");
     const leadYear = Number.isFinite(leadYearNum) ? leadYearNum : undefined;
+    const llmWatchYear = Number(String(semanticWatch?.year ?? ""));
+    const llmWatchColor = sanitizeColorPhrase(semanticWatch?.color ?? undefined);
+    const llmWatchModel = String(semanticWatch?.model ?? "").trim();
+    const llmWatchModelResolved = llmWatchModel
+      ? await resolveWatchModelFromText(llmWatchModel.toLowerCase(), llmWatchModel)
+      : null;
     const resolvedModel = await resolveWatchModelFromText(
       textLower,
-      leadVehicle.model ?? leadVehicle.description ?? null
+      llmWatchModelResolved || leadVehicle.model || leadVehicle.description || null
     );
     if (!resolvedModel) {
       const budgetSeed = resolveWatchBudgetPreferenceForConversation(conv, String(event.body ?? ""));
@@ -13947,9 +13972,9 @@ if (authToken && signature) {
       const budgetSeed = resolveWatchBudgetPreferenceForConversation(conv, String(event.body ?? ""));
       const pending: InventoryWatchPending = {
         model: resolvedModel,
-        year: extractYearSingle(textLower) ?? leadYear,
+        year: Number.isFinite(llmWatchYear) && llmWatchYear > 0 ? llmWatchYear : extractYearSingle(textLower) ?? leadYear,
         color: combineWatchColorAndFinish(
-          extractColorToken(textLower) ?? leadVehicle.color ?? undefined,
+          llmWatchColor ?? extractColorToken(textLower) ?? leadVehicle.color ?? undefined,
           extractFinishToken(textLower)
         ),
         minPrice: budgetSeed.minPrice,
@@ -13960,7 +13985,11 @@ if (authToken && signature) {
         askedAt: nowIso
       };
       let pref = parseInventoryWatchPreference(String(event.body ?? ""), pending);
-      if (pref.action === "ignore" && pending.model && (isAffirmative(event.body) || earlyWatchIntentText)) {
+      if (
+        pref.action === "ignore" &&
+        pending.model &&
+        (isAffirmative(event.body) || earlyWatchIntentText || earlyWatchIntentLLM)
+      ) {
         const watchColor = sanitizeColorPhrase(pending.color);
         const watch: InventoryWatch = {
           model: pending.model,
@@ -15489,11 +15518,18 @@ if (authToken && signature) {
     /\b(specs?|spec sheet|features|highlights|details|info|information|engine|performance|horsepower|torque|displacement|tech|electronics|infotainment|audio|screen|display|safety|dimensions|weight|seat height|fuel capacity|wheelbase|rake|trail|accessories|trim)\b/i.test(
       textLower
     );
-  const photoRequested = /\b(photo|picture|pic|image|images)\b/i.test(textLower);
+  const llmMediaIntent =
+    semanticRoutingAccepted && semanticSlotParse?.mediaIntent ? semanticSlotParse.mediaIntent : "none";
+  const photoRequested =
+    llmMediaIntent === "photos" ||
+    llmMediaIntent === "either" ||
+    /\b(photo|picture|pic|image|images)\b/i.test(textLower);
   const availabilityExplicit =
-    /(in[-\s]?stock|available|availability|do you have|have .* in[-\s]?stock|any .* in[-\s]?stock|do you carry|carry any)/i.test(
-      textLower
-    ) && !specsSignal;
+    (llmAvailabilityIntent ||
+      /(in[-\s]?stock|available|availability|do you have|have .* in[-\s]?stock|any .* in[-\s]?stock|do you carry|carry any)/i.test(
+        textLower
+      )) &&
+    !specsSignal;
   const tradeYearCorrection =
     isTradeLead && !availabilityExplicit && !llmAvailabilityIntent
       ? extractTradeYearCorrection(
@@ -15508,6 +15544,9 @@ if (authToken && signature) {
     !isSteppingBackDispositionText(textLower) &&
     !pricingSignal &&
     (tradeYearCorrection ||
+      llmExplicitScheduleIntent ||
+      (bookingIntentAccepted &&
+        (bookingParse?.intent === "schedule" || bookingParse?.intent === "reschedule")) ||
       /\b(inspection|appraisal|bring (it|the bike) (in|by)|coming in|come in|stop in|call for (an )?appointment|call (to )?(set|schedule) (an )?appointment|check my schedule|i(?:'|’)ll call|i will call|let you know when i(?:'|’)m coming in|let you know when i am coming in)\b/i.test(
         textLower
       ));
