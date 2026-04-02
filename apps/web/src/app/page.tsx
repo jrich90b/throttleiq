@@ -3711,17 +3711,34 @@ export default function Home() {
   </style>
 </head>
 <body>
+  <div class="no-print" style="margin-bottom: 12px;">
+    <button onclick="window.print()" style="padding:6px 10px;border:1px solid #ccc;border-radius:6px;background:#fff;cursor:pointer;">
+      Print
+    </button>
+  </div>
   <h1>${escapeHtml(label)} Conversation</h1>
   <p class="sub">${escapeHtml(leadName)}${selectedConv.lead?.phone ? ` • ${escapeHtml(selectedConv.lead.phone)}` : ""}</p>
   ${rows || "<p>No messages in this view.</p>"}
-  <script>window.onload = function () { window.print(); };</script>
 </body>
 </html>`;
-    const printWindow = window.open("", "_blank", "noopener,noreferrer");
+    const printWindow = window.open("", "_blank");
     if (!printWindow) return;
     printWindow.document.open();
     printWindow.document.write(html);
     printWindow.document.close();
+    try {
+      printWindow.focus();
+      const triggerPrint = () => {
+        try {
+          printWindow.print();
+        } catch {}
+      };
+      if (printWindow.document.readyState === "complete") {
+        setTimeout(triggerPrint, 150);
+      } else {
+        printWindow.onload = () => setTimeout(triggerPrint, 150);
+      }
+    } catch {}
   }
 
   async function startCall(
