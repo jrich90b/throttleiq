@@ -757,6 +757,16 @@ function extractYearRangeFromText(text?: string | null): { min: number; max: num
   return null;
 }
 
+function extractSingleYearFromText(text?: string | null): number | undefined {
+  if (!text) return undefined;
+  const t = String(text).toLowerCase();
+  const m = t.match(/\b(20\d{2})\b/);
+  if (!m) return undefined;
+  const year = Number(m[1]);
+  if (!Number.isFinite(year)) return undefined;
+  return year;
+}
+
 function parsePriceToken(raw?: string | null): number | null {
   if (!raw) return null;
   const t = String(raw).toLowerCase().replace(/[$,\s]/g, "");
@@ -1856,6 +1866,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       /\bnew\b/.test(commentLower) ||
       (/looking for|interested in|want/.test(commentLower) && !wantsUsed);
     const yearRange = extractYearRangeFromText(lead.comment ?? lead.inquiry ?? "");
+    const singleYear = !yearRange ? extractSingleYearFromText(lead.comment ?? lead.inquiry ?? "") : undefined;
     const priceRange = extractPriceRangeFromText(lead.comment ?? lead.inquiry ?? "");
     const desiredColor = extractColorFromText(lead.comment ?? lead.inquiry ?? "");
     const desiredTrim = extractTrimFromText(lead.comment ?? lead.inquiry ?? "");
@@ -1997,6 +2008,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       const watch: InventoryWatch = {
         model: modelLabel,
         condition: "used",
+        year: singleYear,
         yearMin: yearRange?.min,
         yearMax: yearRange?.max,
         color: desiredColor,
@@ -2010,6 +2022,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       };
       if (watch.yearMin && watch.yearMax) {
         watch.exactness = "model_range";
+      } else if (watch.year) {
+        watch.exactness = "year_model";
       }
       conv.inventoryWatch = watch;
       conv.inventoryWatches = [watch];
@@ -2027,6 +2041,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       const watch: InventoryWatch = {
         model: modelLabel,
         condition: "new",
+        year: singleYear,
         yearMin: yearRange?.min,
         yearMax: yearRange?.max,
         color: desiredColor,
@@ -2040,6 +2055,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       };
       if (watch.yearMin && watch.yearMax) {
         watch.exactness = "model_range";
+      } else if (watch.year) {
+        watch.exactness = "year_model";
       }
       conv.inventoryWatch = watch;
       conv.inventoryWatches = [watch];
