@@ -1105,6 +1105,7 @@ export async function parseCustomerDispositionWithLLM(args: {
     "",
     "Important:",
     "- If message contains compliments plus a disposition, disposition still applies.",
+    "- If customer says price/payment is too high or they can't afford it right now, treat as defer_no_window unless they provide a clear timeframe.",
     "- explicit_disposition=true only when disposition is clearly expressed.",
     "- timeframe_text should contain the raw timeframe phrase when disposition is defer_with_window; otherwise empty string.",
     "- confidence is 0..1.",

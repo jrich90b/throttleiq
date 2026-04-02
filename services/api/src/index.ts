@@ -5152,6 +5152,13 @@ function parseCustomerDispositionFallback(text: string): CustomerDispositionDeci
   if (hasKeepCurrentBikeSignal(lower)) {
     return { reason: "customer_keep_current_bike", state: "customer_keep_current_bike" };
   }
+  if (
+    /\b(can(?:not|'t)\s+afford|too (expensive|high)|out of (my )?budget|can't do that right now|cannot do that right now|not in the budget|payments? (are|is) too high)\b/i.test(
+      lower
+    )
+  ) {
+    return { reason: "customer_stepping_back", state: "customer_stepping_back" };
+  }
   if (/\b(hold off for now|pass for now)\b/i.test(lower)) {
     return { reason: "customer_stepping_back", state: "customer_stepping_back" };
   }
@@ -5180,6 +5187,9 @@ function resolveCustomerDispositionDecision(
       return { reason: "customer_keep_current_bike", state: "customer_keep_current_bike" };
     }
     if (parsed.disposition === "stepping_back") {
+      return { reason: "customer_stepping_back", state: "customer_stepping_back" };
+    }
+    if (parsed.disposition === "defer_no_window") {
       return { reason: "customer_stepping_back", state: "customer_stepping_back" };
     }
   }
@@ -11646,7 +11656,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     !!process.env.OPENAI_API_KEY &&
     !regenShortAck;
   const regenCustomerDispositionParserHint =
-    /\b(sell (it|my bike|my motorcycle|my ride)|on my own|myself|keep (it|my bike|my motorcycle|my ride)|hold off|pass for now|not ready|let you know|get back to you|maybe later)\b/i.test(
+    /\b(sell (it|my bike|my motorcycle|my ride)|on my own|myself|keep (it|my bike|my motorcycle|my ride)|hold off|pass for now|not ready|let you know|get back to you|maybe later|can(?:not|'t)\s+afford|too (expensive|high)|out of (my )?budget|can't do that right now|not in the budget)\b/i.test(
       regenTextLower
     );
   const regenCustomerDispositionParse =
@@ -12325,7 +12335,7 @@ if (authToken && signature) {
     !!process.env.OPENAI_API_KEY &&
     !semanticShortAck;
   const customerDispositionParserHint =
-    /\b(sell (it|my bike|my motorcycle|my ride)|on my own|myself|keep (it|my bike|my motorcycle|my ride)|hold off|pass for now|not ready|let you know|get back to you|maybe later)\b/i.test(
+    /\b(sell (it|my bike|my motorcycle|my ride)|on my own|myself|keep (it|my bike|my motorcycle|my ride)|hold off|pass for now|not ready|let you know|get back to you|maybe later|can(?:not|'t)\s+afford|too (expensive|high)|out of (my )?budget|can't do that right now|not in the budget)\b/i.test(
       semanticTextLower
     );
   const customerDispositionParse =
