@@ -13575,12 +13575,6 @@ if (authToken && signature) {
   const inboundText = String(event.body ?? "").trim();
   const inboundLower = inboundText.toLowerCase();
   const emojiOnly = isEmojiOnlyText(inboundText);
-  const pickShortAckReply = (text: string): string => {
-    const t = text.toLowerCase();
-    if (/\b(thanks|thank you|thanks again|thx|ty|appreciate)\b/.test(t)) return "You're welcome!";
-    return "Sounds good.";
-  };
-  const lastOutboundAck = isShortAckText(lastOutboundText);
   const outboundHoldNotice =
     lastOutbound?.body &&
     /(on hold|hold with deposit|deposit|sale pending|pending|sold|already sold)/i.test(lastOutbound.body);
@@ -15830,22 +15824,7 @@ if (authToken && signature) {
     }
   }
   if (event.provider === "twilio" && schedulingBlocked && shortAck) {
-    const suppressShortAckReply = shortAck && (emojiOnly || lastOutboundAck);
-    if (suppressShortAckReply) {
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    const ack = pickShortAckReply(inboundText);
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, ack, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, ack, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      ack
-    )}</Message>\n</Response>`;
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
   if (
@@ -15856,22 +15835,7 @@ if (authToken && signature) {
     !conv.scheduler?.pendingSlot &&
     !conv.appointment?.reschedulePending
   ) {
-    const suppressShortAckReply = shortAck && (emojiOnly || lastOutboundAck);
-    if (suppressShortAckReply) {
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    const reply = pickShortAckReply(inboundText);
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
 
