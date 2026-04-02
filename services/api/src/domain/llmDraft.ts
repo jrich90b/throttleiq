@@ -361,6 +361,20 @@ export type ResponseControlParse = {
   confidence?: number;
 };
 
+export type InventoryEntityParse = {
+  model?: string | null;
+  year?: number | null;
+  yearMin?: number | null;
+  yearMax?: number | null;
+  color?: string | null;
+  trim?: string | null;
+  minPrice?: number | null;
+  maxPrice?: number | null;
+  monthlyBudget?: number | null;
+  downPayment?: number | null;
+  confidence?: number;
+};
+
 export type JourneyIntentParse = {
   journeyIntent: "sale_trade" | "service_support" | "marketing_event" | "none";
   explicitRequest: boolean;
@@ -601,6 +615,37 @@ const RESPONSE_CONTROL_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
       enum: ["opt_out", "not_interested", "schedule_request", "compliment_only", "none"]
     },
     explicit_request: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const INVENTORY_ENTITY_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "model",
+    "year",
+    "year_min",
+    "year_max",
+    "color",
+    "trim",
+    "min_price",
+    "max_price",
+    "monthly_budget",
+    "down_payment",
+    "confidence"
+  ],
+  properties: {
+    model: { type: "string" },
+    year: { type: "integer" },
+    year_min: { type: "integer" },
+    year_max: { type: "integer" },
+    color: { type: "string" },
+    trim: { type: "string" },
+    min_price: { type: "number" },
+    max_price: { type: "number" },
+    monthly_budget: { type: "number" },
+    down_payment: { type: "number" },
     confidence: { type: "number" }
   }
 };
@@ -1525,6 +1570,99 @@ export async function parseJourneyIntentWithLLM(args: {
   return {
     journeyIntent,
     explicitRequest,
+    confidence
+  };
+}
+
+export async function parseInventoryEntitiesWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<InventoryEntityParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_INVENTORY_ENTITY_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_INVENTORY_ENTITY_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_INVENTORY_ENTITY_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_INVENTORY_ENTITY_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const prompt = [
+    "You extract structured motorcycle shopping entities from dealership inbound text.",
+    "Return only JSON matching the schema.",
+    "",
+    "Entity rules:",
+    "- model: explicit model mention only; else empty string.",
+    "- year: single explicit model year if present; else 0.",
+    "- year_min/year_max: explicit range if present (e.g. 2021-2023); else 0/0.",
+    "- color: explicit color request only; else empty string.",
+    "- trim: explicit trim/style/finish token only; else empty string.",
+    "- min_price/max_price: explicit numeric price range only; else 0.",
+    "- monthly_budget/down_payment: explicit numeric monthly/down values only; else 0.",
+    "- Do not infer values not in the message.",
+    "- confidence is 0..1.",
+    "",
+    `Known lead: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "inventory_entity_parser",
+      schema: INVENTORY_ENTITY_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 220,
+      debugTag: "llm-inventory-entity-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const toNum = (v: unknown): number | null => {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return n;
+  };
+  const toYear = (v: unknown): number | null => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return null;
+    const yr = Math.trunc(n);
+    return yr >= 1900 && yr <= 2100 ? yr : null;
+  };
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    model: cleanOptionalString(parsed.model),
+    year: toYear(parsed.year),
+    yearMin: toYear(parsed.year_min),
+    yearMax: toYear(parsed.year_max),
+    color: cleanOptionalString(parsed.color),
+    trim: cleanOptionalString(parsed.trim),
+    minPrice: toNum(parsed.min_price),
+    maxPrice: toNum(parsed.max_price),
+    monthlyBudget: toNum(parsed.monthly_budget),
+    downPayment: toNum(parsed.down_payment),
     confidence
   };
 }

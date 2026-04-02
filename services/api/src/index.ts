@@ -17,6 +17,7 @@ import {
   classifyComplimentWithLLM,
   summarizeSalespersonNoteWithLLM,
   parseBookingIntentWithLLM,
+  parseInventoryEntitiesWithLLM,
   parseIntentWithLLM,
   parseDialogActWithLLM,
   parseCustomerDispositionWithLLM,
@@ -13908,6 +13909,50 @@ if (authToken && signature) {
     conv.classification?.cta === "sell_my_bike" ||
     conv.classification?.bucket === "trade_in_sell";
   const isSellMyBikeLead = /sell my bike/.test(leadSourceText) || conv.classification?.cta === "sell_my_bike";
+  const inventoryEntityParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_INVENTORY_ENTITY_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    !emojiOnly &&
+    !isShortAckText(inboundText);
+  const inventoryEntityParse = inventoryEntityParserEligible
+    ? await parseInventoryEntitiesWithLLM({
+        text: event.body ?? "",
+        history: buildHistory(conv, 8),
+        lead: conv.lead
+      })
+    : null;
+  if (process.env.DEBUG_INVENTORY_ENTITY_PARSER === "1" && inventoryEntityParse) {
+    console.log("[llm-inventory-entity-parse]", inventoryEntityParse);
+  }
+  const inventoryEntityConfidence =
+    typeof inventoryEntityParse?.confidence === "number" ? inventoryEntityParse.confidence : 0;
+  const inventoryEntityConfidenceMin = Number(process.env.LLM_INVENTORY_ENTITY_CONFIDENCE_MIN ?? 0.68);
+  const inventoryEntityAccepted = !!inventoryEntityParse && inventoryEntityConfidence >= inventoryEntityConfidenceMin;
+  const inventoryEntityModelHint =
+    inventoryEntityAccepted && inventoryEntityParse?.model ? inventoryEntityParse.model : null;
+  const inventoryEntityYearHint =
+    inventoryEntityAccepted && inventoryEntityParse?.year ? inventoryEntityParse.year : null;
+  const inventoryEntityColorHint =
+    inventoryEntityAccepted && inventoryEntityParse?.color ? inventoryEntityParse.color : null;
+  const applyEntityBudgetSeed = (seed: {
+    minPrice?: number;
+    maxPrice?: number;
+    monthlyBudget?: number;
+    termMonths?: number;
+    downPayment?: number;
+  }) => ({
+    ...seed,
+    minPrice: inventoryEntityAccepted ? (inventoryEntityParse?.minPrice ?? seed.minPrice) : seed.minPrice,
+    maxPrice: inventoryEntityAccepted ? (inventoryEntityParse?.maxPrice ?? seed.maxPrice) : seed.maxPrice,
+    monthlyBudget: inventoryEntityAccepted
+      ? (inventoryEntityParse?.monthlyBudget ?? seed.monthlyBudget)
+      : seed.monthlyBudget,
+    downPayment: inventoryEntityAccepted
+      ? (inventoryEntityParse?.downPayment ?? seed.downPayment)
+      : seed.downPayment
+  });
   let watchHandledEarly = false;
   const earlyWatchIntentText = isWatchConfirmationIntentText(String(event.body ?? ""));
   const earlyWatchIntentLLM = semanticWatchAction === "set_watch";
@@ -13940,10 +13985,12 @@ if (authToken && signature) {
       : null;
     const resolvedModel = await resolveWatchModelFromText(
       textLower,
-      llmWatchModelResolved || leadVehicle.model || leadVehicle.description || null
+      llmWatchModelResolved || inventoryEntityModelHint || leadVehicle.model || leadVehicle.description || null
     );
     if (!resolvedModel) {
-      const budgetSeed = resolveWatchBudgetPreferenceForConversation(conv, String(event.body ?? ""));
+      const budgetSeed = applyEntityBudgetSeed(
+        resolveWatchBudgetPreferenceForConversation(conv, String(event.body ?? ""))
+      );
       conv.inventoryWatchPending = {
         minPrice: budgetSeed.minPrice,
         maxPrice: budgetSeed.maxPrice,
@@ -13969,12 +14016,21 @@ if (authToken && signature) {
         return res.status(200).type("text/xml").send(twiml);
       }
     } else {
-      const budgetSeed = resolveWatchBudgetPreferenceForConversation(conv, String(event.body ?? ""));
+      const budgetSeed = applyEntityBudgetSeed(
+        resolveWatchBudgetPreferenceForConversation(conv, String(event.body ?? ""))
+      );
       const pending: InventoryWatchPending = {
         model: resolvedModel,
-        year: Number.isFinite(llmWatchYear) && llmWatchYear > 0 ? llmWatchYear : extractYearSingle(textLower) ?? leadYear,
+        year:
+          Number.isFinite(llmWatchYear) && llmWatchYear > 0
+            ? llmWatchYear
+            : inventoryEntityYearHint ?? extractYearSingle(textLower) ?? leadYear,
         color: combineWatchColorAndFinish(
-          llmWatchColor ?? extractColorToken(textLower) ?? leadVehicle.color ?? undefined,
+          llmWatchColor ??
+            inventoryEntityColorHint ??
+            extractColorToken(textLower) ??
+            leadVehicle.color ??
+            undefined,
           extractFinishToken(textLower)
         ),
         minPrice: budgetSeed.minPrice,
@@ -16004,7 +16060,7 @@ if (authToken && signature) {
     event.provider === "twilio" &&
     !conv.inventoryWatchPending &&
     !watchHandledEarly &&
-    (watchIntentText || promptedWatchAffirm || semanticWatchAction === "set_watch");
+    (watchIntentText || promptedWatchAffirm || semanticWatchAction === "set_watch" || !!inventoryEntityModelHint);
   const watchAsSideEffectOnly = watchIntent && hasPrimaryIntentBeyondWatch(String(event.body ?? ""));
   if (watchIntent) {
     if (getDialogState(conv) === "inventory_watch_active" && conv.inventoryWatch) {
@@ -16065,12 +16121,18 @@ if (authToken && signature) {
     const semanticWatchColor = sanitizeColorPhrase(semanticWatch?.color ?? undefined);
     const resolvedModel = await resolveWatchModelFromText(
       textLower,
-      semanticWatch?.model ?? leadVehicle.model ?? leadVehicle.description ?? null
+      semanticWatch?.model ??
+        inventoryEntityModelHint ??
+        leadVehicle.model ??
+        leadVehicle.description ??
+        null
     );
     if (!resolvedModel) {
       if (!watchAsSideEffectOnly) {
         const reply = "Got it — which model should I watch for?";
-        const budgetSeed = resolveWatchBudgetPreferenceForConversation(conv, String(event.body ?? ""));
+        const budgetSeed = applyEntityBudgetSeed(
+          resolveWatchBudgetPreferenceForConversation(conv, String(event.body ?? ""))
+        );
         conv.inventoryWatchPending = {
           minPrice: budgetSeed.minPrice,
           maxPrice: budgetSeed.maxPrice,
@@ -16095,12 +16157,18 @@ if (authToken && signature) {
     }
 
     if (resolvedModel) {
-      const budgetSeed = resolveWatchBudgetPreferenceForConversation(conv, String(event.body ?? ""));
+      const budgetSeed = applyEntityBudgetSeed(
+        resolveWatchBudgetPreferenceForConversation(conv, String(event.body ?? ""))
+      );
       const pending: InventoryWatchPending = {
         model: resolvedModel,
-        year: extractYearSingle(textLower) ?? semanticWatchYear ?? leadYear,
+        year: inventoryEntityYearHint ?? extractYearSingle(textLower) ?? semanticWatchYear ?? leadYear,
         color: combineWatchColorAndFinish(
-          extractColorToken(textLower) ?? semanticWatchColor ?? leadVehicle.color ?? undefined,
+          inventoryEntityColorHint ??
+            extractColorToken(textLower) ??
+            semanticWatchColor ??
+            leadVehicle.color ??
+            undefined,
           extractFinishToken(textLower)
         ),
         minPrice: budgetSeed.minPrice,
@@ -16111,7 +16179,11 @@ if (authToken && signature) {
         askedAt: nowIso
       };
       let pref = parseInventoryWatchPreference(String(event.body ?? ""), pending);
-      if (pref.action === "ignore" && pending.model && (isAffirmative(event.body) || watchIntentText)) {
+      if (
+        pref.action === "ignore" &&
+        pending.model &&
+        (isAffirmative(event.body) || watchIntentText || !!inventoryEntityModelHint)
+      ) {
         const watchColor = sanitizeColorPhrase(pending.color);
         const watch: InventoryWatch = {
           model: pending.model,
@@ -17076,7 +17148,10 @@ if (authToken && signature) {
     if (schedulingIntent) {
       try {
         const cfg = await getSchedulerConfig();
-        const requested = parseRequestedDayTime(String(event.body ?? ""), cfg.timezone);
+        const requested = parseRequestedDayTime(
+          bookingParseText || String(event.body ?? ""),
+          cfg.timezone
+        );
         if (requested) {
           console.log("[deterministic-offer] skip explicit day/time request");
           // Let orchestrator/exact-booking handle explicit day+time requests.
@@ -17312,7 +17387,7 @@ if (authToken && signature) {
     try {
       const cfg = await getSchedulerConfig();
       const tz = cfg.timezone || "America/New_York";
-      const parsed = parseRequestedDayTime(String(event.body ?? ""), tz);
+      const parsed = parseRequestedDayTime(bookingParseText || String(event.body ?? ""), tz);
       if (parsed) {
         result.requestedTime = parsed;
       }
@@ -17358,7 +17433,7 @@ if (authToken && signature) {
       try {
         const cfg = await getSchedulerConfig();
         const tz = cfg.timezone || "America/New_York";
-        requested = parseRequestedDayTime(String(event.body ?? ""), tz);
+        requested = parseRequestedDayTime(bookingParseText || String(event.body ?? ""), tz);
       } catch {}
     }
     if (requested) {
@@ -17489,7 +17564,7 @@ if (authToken && signature) {
         try {
           const cfg = await getSchedulerConfig();
           const tz = cfg.timezone || "America/New_York";
-          requested = parseRequestedDayTime(String(event.body ?? ""), tz);
+          requested = parseRequestedDayTime(bookingParseText || String(event.body ?? ""), tz);
         } catch {}
       }
       if (requested) {

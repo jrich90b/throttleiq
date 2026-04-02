@@ -36,6 +36,7 @@ import { orchestrateInbound } from "../domain/orchestrator.js";
 import { resolveChannel, resolveLeadRule } from "../domain/leadSourceRules.js";
 import {
   parseDialogActWithLLM,
+  parseInventoryEntitiesWithLLM,
   parseIntentWithLLM,
   parseResponseControlWithLLM,
   parseJourneyIntentWithLLM
@@ -1535,6 +1536,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     history: adfHistory,
     lead: conv.lead
   });
+  const llmInventoryEntities = await parseInventoryEntitiesWithLLM({
+    text: effectiveInquiry,
+    history: adfHistory,
+    lead: conv.lead
+  });
   const llmResponseControl = await parseResponseControlWithLLM({
     text: effectiveInquiry,
     history: adfHistory,
@@ -1548,6 +1554,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     llmDialogAct.explicitRequest === true &&
     Number(llmDialogAct.confidence ?? 0) >= dialogActConfidenceMin;
   const pricingInquiryIntent = pricingInquiryIntentFromParser || isPricingPaymentInquiry(inquiryText);
+  const inventoryEntityConfidence =
+    typeof llmInventoryEntities?.confidence === "number" ? llmInventoryEntities.confidence : 0;
+  const inventoryEntityConfidenceMin = Number(process.env.LLM_INVENTORY_ENTITY_CONFIDENCE_MIN ?? 0.68);
+  const inventoryEntityAccepted = !!llmInventoryEntities && inventoryEntityConfidence >= inventoryEntityConfidenceMin;
   const availabilityIntentFromParser =
     !!llmIntent &&
     llmIntent.intent === "availability" &&
@@ -1941,7 +1951,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       conv.lead?.vehicle?.description ??
       meta.model ??
       "";
-    const modelLabel = normalizeVehicleModel(String(modelRaw ?? ""), conv.lead?.vehicle?.make ?? null);
+    const parserModel =
+      inventoryEntityAccepted && llmInventoryEntities?.model
+        ? normalizeVehicleModel(llmInventoryEntities.model, conv.lead?.vehicle?.make ?? null)
+        : undefined;
+    const modelLabel =
+      normalizeVehicleModel(String(modelRaw ?? ""), conv.lead?.vehicle?.make ?? null) ||
+      parserModel;
     const hasWatchIntentFromParser =
       !!llmIntent &&
       llmIntent.intent === "availability" &&
@@ -1958,11 +1974,36 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const wantsNew =
       /\bnew\b/.test(commentLower) ||
       (/looking for|interested in|want/.test(commentLower) && !wantsUsed);
-    const yearRange = extractYearRangeFromText(lead.comment ?? lead.inquiry ?? "");
-    const singleYear = !yearRange ? extractSingleYearFromText(lead.comment ?? lead.inquiry ?? "") : undefined;
-    const priceRange = extractPriceRangeFromText(lead.comment ?? lead.inquiry ?? "");
-    const desiredColor = extractColorFromText(lead.comment ?? lead.inquiry ?? "");
-    const desiredTrim = extractTrimFromText(lead.comment ?? lead.inquiry ?? "");
+    const parserYearRange =
+      inventoryEntityAccepted &&
+      llmInventoryEntities?.yearMin &&
+      llmInventoryEntities?.yearMax
+        ? {
+            min: Math.min(llmInventoryEntities.yearMin, llmInventoryEntities.yearMax),
+            max: Math.max(llmInventoryEntities.yearMin, llmInventoryEntities.yearMax)
+          }
+        : null;
+    const yearRange = parserYearRange ?? extractYearRangeFromText(lead.comment ?? lead.inquiry ?? "");
+    const singleYear =
+      !yearRange
+        ? (inventoryEntityAccepted ? (llmInventoryEntities?.year ?? undefined) : undefined) ??
+          extractSingleYearFromText(lead.comment ?? lead.inquiry ?? "")
+        : undefined;
+    const regexPriceRange = extractPriceRangeFromText(lead.comment ?? lead.inquiry ?? "");
+    const priceRange =
+      inventoryEntityAccepted &&
+      (llmInventoryEntities?.minPrice || llmInventoryEntities?.maxPrice)
+        ? {
+            minPrice: llmInventoryEntities?.minPrice ?? undefined,
+            maxPrice: llmInventoryEntities?.maxPrice ?? undefined
+          }
+        : regexPriceRange;
+    const desiredColor =
+      (inventoryEntityAccepted ? llmInventoryEntities?.color ?? undefined : undefined) ??
+      extractColorFromText(lead.comment ?? lead.inquiry ?? "");
+    const desiredTrim =
+      (inventoryEntityAccepted ? llmInventoryEntities?.trim ?? undefined : undefined) ??
+      extractTrimFromText(lead.comment ?? lead.inquiry ?? "");
     const rangeLabel = yearRange ? `${yearRange.min}-${yearRange.max} ` : "";
     let hasUsedMatch = false;
     let hasNewMatch = false;
