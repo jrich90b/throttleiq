@@ -5342,6 +5342,52 @@ function buildComplimentReply(): string {
   return "Glad you like it — I can send more photos or a quick walkaround video. Anything specific you want to see?";
 }
 
+function buildMediaAffirmativeReply(
+  lastOutboundText: string,
+  inboundText: string,
+  bikeLabel: string
+): string | null {
+  const prior = String(lastOutboundText ?? "");
+  const inbound = String(inboundText ?? "").trim();
+  if (!prior || !inbound) return null;
+
+  const mediaOfferPromptedByLastOutbound =
+    /\b(want|would you like|prefer)\b[\s\S]{0,80}\b(photo|photos|pic|pics|video|walkaround)\b/i.test(
+      prior
+    ) ||
+    /\b(i can send|can send)\b[\s\S]{0,80}\b(photo|photos|pic|pics|video|walkaround)\b/i.test(prior);
+  if (!mediaOfferPromptedByLastOutbound) return null;
+
+  const inboundSimpleAffirmative =
+    /^(yes|yep|yeah|ya|sure|ok|okay|sounds good|please|yes please|do it|send it|send them|both)\b/i.test(
+      inbound
+    ) || /\b(yes please|please do|send (it|them)|both)\b/i.test(inbound);
+  if (!inboundSimpleAffirmative) return null;
+
+  const inboundMediaPreferencePhoto = /\b(photo|photos|pic|pics|picture|pictures|images?)\b/i.test(inbound);
+  const inboundMediaPreferenceVideo = /\b(video|walkaround|walk around|walkthrough|walk-through|clip)\b/i.test(
+    inbound
+  );
+  const inboundHasOtherPrimaryIntent =
+    /\b(price|pricing|payment|monthly|apr|term|trade|appraisal|finance|schedule|appointment|test ride|available|availability|in stock|service records?|records?|mileage)\b/i.test(
+      inbound
+    );
+  if (inboundHasOtherPrimaryIntent) return null;
+
+  const lastAskedPhoto = /\b(photo|photos|pic|pics|picture|pictures|images?)\b/i.test(prior);
+  const lastAskedVideo = /\b(video|walkaround|walk around|walkthrough|walk-through|clip)\b/i.test(prior);
+  const sendPhotos =
+    inboundMediaPreferencePhoto || (!inboundMediaPreferenceVideo && lastAskedPhoto && !lastAskedVideo);
+  const sendVideo = inboundMediaPreferenceVideo || (!inboundMediaPreferencePhoto && lastAskedVideo);
+  if (sendPhotos && sendVideo) {
+    return `Okay — I’ll have one of the guys send photos and a quick walkaround video of ${bikeLabel} over to you.`;
+  }
+  if (sendPhotos) {
+    return `Okay — I’ll have one of the guys send photos of ${bikeLabel} over to you.`;
+  }
+  return `Okay — I’ll have one of the guys send a quick walkaround video of ${bikeLabel} over to you.`;
+}
+
 function buildOutOfStockHumanOptionsLine(): string {
   return "If you'd like, you can stop by and we can go over availability and pricing, or I can text you as soon as one comes in.";
 }
@@ -11726,6 +11772,36 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const dealerProfile = await getDealerProfile();
   const weatherStatus = await getDealerWeatherStatus(dealerProfile);
 
+  if (event.provider === "twilio") {
+    const inboundAtMs = new Date(event.receivedAt).getTime();
+    const lastOutboundBeforeInbound = [...(conv.messages ?? [])]
+      .filter(m => m.direction === "out" && m.body)
+      .filter(m => {
+        if (!Number.isFinite(inboundAtMs)) return true;
+        const atMs = new Date(m.at ?? "").getTime();
+        return !Number.isFinite(atMs) || atMs <= inboundAtMs;
+      })
+      .slice(-1)[0];
+    const lastOutboundForMedia = String(lastOutboundBeforeInbound?.body ?? "");
+    const bike =
+      formatModelLabel(
+        conv.lead?.vehicle?.year ? String(conv.lead?.vehicle?.year) : null,
+        conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null
+      ) || "the bike";
+    const mediaAffirmReply = buildMediaAffirmativeReply(lastOutboundForMedia, event.body, bike);
+    if (mediaAffirmReply) {
+      if (channel === "email") {
+        conv.emailDraft = mediaAffirmReply;
+        saveConversation(conv);
+        return res.json({ ok: true, conversation: conv, draft: mediaAffirmReply });
+      }
+      discardPendingDrafts(conv);
+      appendSmsRegeneratedDraft(mediaAffirmReply);
+      saveConversation(conv);
+      return res.json({ ok: true, conversation: conv, draft: mediaAffirmReply });
+    }
+  }
+
   const usersForMentions = await listUsers();
   if (latestInboundIsCreditAdf) {
     const firstName = normalizeDisplayCase(conv.lead?.firstName);
@@ -13637,61 +13713,26 @@ if (authToken && signature) {
     );
   const inboundText = String(event.body ?? "").trim();
   const inboundLower = inboundText.toLowerCase();
-  const mediaOfferPromptedByLastOutbound =
-    /\b(want|would you like|prefer)\b[\s\S]{0,80}\b(photo|photos|pic|pics|video|walkaround)\b/i.test(
-      lastOutboundText
-    ) ||
-    /\b(i can send|can send)\b[\s\S]{0,80}\b(photo|photos|pic|pics|video|walkaround)\b/i.test(
-      lastOutboundText
-    );
-  const inboundSimpleAffirmative =
-    /^(yes|yep|yeah|ya|sure|ok|okay|sounds good|please|yes please|do it|send it|send them|both)\b/i.test(
-      inboundText
-    ) || /\b(yes please|please do|send (it|them)|both)\b/i.test(inboundText);
-  const inboundMediaPreferencePhoto = /\b(photo|photos|pic|pics|picture|pictures|images?)\b/i.test(
-    inboundText
-  );
-  const inboundMediaPreferenceVideo = /\b(video|walkaround|walk around|walkthrough|walk-through|clip)\b/i.test(
-    inboundText
-  );
-  const inboundHasOtherPrimaryIntent =
-    /\b(price|pricing|payment|monthly|apr|term|trade|appraisal|finance|schedule|appointment|test ride|available|availability|in stock|service records?|records?|mileage)\b/i.test(
-      inboundText
-    );
-  if (
-    event.provider === "twilio" &&
-    mediaOfferPromptedByLastOutbound &&
-    inboundSimpleAffirmative &&
-    !inboundHasOtherPrimaryIntent
-  ) {
+  if (event.provider === "twilio") {
     const bike =
       formatModelLabel(
         conv.lead?.vehicle?.year ? String(conv.lead?.vehicle?.year) : null,
         conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null
       ) || "the bike";
-    const lastAskedPhoto = /\b(photo|photos|pic|pics|picture|pictures|images?)\b/i.test(lastOutboundText);
-    const lastAskedVideo = /\b(video|walkaround|walk around|walkthrough|walk-through|clip)\b/i.test(
-      lastOutboundText
-    );
-    const sendPhotos = inboundMediaPreferencePhoto || (!inboundMediaPreferenceVideo && lastAskedPhoto && !lastAskedVideo);
-    const sendVideo = inboundMediaPreferenceVideo || (!inboundMediaPreferencePhoto && lastAskedVideo);
-    const reply =
-      sendPhotos && sendVideo
-        ? `Okay — I’ll have one of the guys send photos and a quick walkaround video of ${bike} over to you.`
-        : sendPhotos
-          ? `Okay — I’ll have one of the guys send photos of ${bike} over to you.`
-          : `Okay — I’ll have one of the guys send a quick walkaround video of ${bike} over to you.`;
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+    const mediaAffirmReply = buildMediaAffirmativeReply(lastOutboundText, inboundText, bike);
+    if (mediaAffirmReply) {
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, mediaAffirmReply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, mediaAffirmReply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        mediaAffirmReply
+      )}</Message>\n</Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
   }
   const emojiOnly = isEmojiOnlyText(inboundText);
   const outboundHoldNotice =
