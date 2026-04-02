@@ -309,7 +309,7 @@ function requirePermission(key: "canEditAppointments" | "canToggleHumanOverride"
 type DepartmentRole = "service" | "parts" | "apparel";
 
 const SERVICE_DEPARTMENT_RE =
-  /\b(service|inspection|oil change|3[- ]hole|maintenance|repair|service department|service writer|warranty work|state inspection)\b/i;
+  /\b(service|inspection|oil change|3[- ]hole|maintenance|repair|service department|service writer|warranty work|state inspection|headlight|tail ?light|turn signal|led|light bulb|bulb|install|replace|swap|upgrade)\b/i;
 const PARTS_DEPARTMENT_RE =
   /\b(parts? department|parts? counter|parts? desk|order (a )?part|need (a )?part|part number|oem parts?|aftermarket parts?|parts? for my|do you (have|carry|stock)\b.{0,28}\bparts?)\b/i;
 const APPAREL_DEPARTMENT_RE =
@@ -12128,7 +12128,7 @@ if (authToken && signature) {
     /\b(stop|cancel|remove|delete|turn off|pause|disable|no more|don['’]?t|do not)\b/i.test(
       semanticTextLower
     ) ||
-    /\b(service|inspection|oil change|maintenance|repair|warranty|parts?|part number|apparel|merch|clothing|jacket|helmet|gloves|boots)\b/i.test(
+    /\b(service|inspection|oil change|maintenance|repair|warranty|headlight|tail ?light|turn signal|led|light bulb|bulb|install|replace|swap|upgrade|parts?|part number|apparel|merch|clothing|jacket|helmet|gloves|boots)\b/i.test(
       semanticTextLower
     ) ||
     !!conv.inventoryWatch ||

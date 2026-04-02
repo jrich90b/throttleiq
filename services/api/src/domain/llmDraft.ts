@@ -1394,6 +1394,7 @@ export async function parseSemanticSlotsWithLLM(args: {
     "- watch_action=stop_watch only when customer asks to stop those watch alerts/updates (not global STOP opt-out unless watch context is explicit).",
     "- watch_action=none for general inventory questions without watch request.",
     "- department_intent=service/parts/apparel only when customer explicitly requests that department/category help.",
+    "- department_intent=service for install/repair price questions like headlight bulb to LED, light replacement, wiring/fitment labor.",
     "- Use department_intent=none for general sales messages.",
     "- watch.model should be normalized human model text when possible; else empty string.",
     "- watch.year should be empty string unless explicitly provided.",
@@ -1478,7 +1479,7 @@ export async function parseSemanticSlotsWithLLM(args: {
   }
 
   const hasServiceCue =
-    /\b(service|inspection|oil change|maintenance|repair|service department|service writer|warranty)\b/.test(
+    /\b(service|inspection|oil change|maintenance|repair|service department|service writer|warranty|headlight|tail ?light|turn signal|led|light bulb|bulb|install|replace|swap|upgrade)\b/.test(
       textLower
     );
   const hasPartsCue =
