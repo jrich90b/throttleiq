@@ -11171,9 +11171,9 @@ app.post("/conversations/:id/media", upload.single("file"), async (req, res) => 
   if (!isImage && !isVideo) {
     return res.status(400).json({ ok: false, error: "only image/video files are allowed" });
   }
-  const maxBytes = 30 * 1024 * 1024;
+  const maxBytes = 100 * 1024 * 1024;
   if (Number(req.file.size ?? 0) > maxBytes) {
-    return res.status(400).json({ ok: false, error: "file too large (max 30MB)" });
+    return res.status(400).json({ ok: false, error: "file too large (max 100MB)" });
   }
 
   const extFromOriginal = path.extname(req.file.originalname || "").toLowerCase();
