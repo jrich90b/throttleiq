@@ -3712,8 +3712,8 @@ export default function Home() {
 </head>
 <body>
   <div class="no-print" style="margin-bottom: 12px;">
-    <button onclick="window.print()" style="padding:6px 10px;border:1px solid #ccc;border-radius:6px;background:#fff;cursor:pointer;">
-      Print
+    <button aria-label="Print" title="Print" onclick="window.print()" style="padding:6px 10px;border:1px solid #ccc;border-radius:6px;background:#fff;cursor:pointer;">
+      ⎙
     </button>
   </div>
   <h1>${escapeHtml(label)} Conversation</h1>
@@ -9836,8 +9836,9 @@ export default function Home() {
                   onClick={printCurrentConversationWindow}
                   disabled={!filteredMessages.length}
                   title="Print this conversation view"
+                  aria-label={`Print ${messageFilter === "calls" ? "Call Script" : messageFilter === "email" ? "Email" : "SMS"} conversation`}
                 >
-                  Print {messageFilter === "calls" ? "Call Script" : messageFilter === "email" ? "Email" : "SMS"}
+                  ⎙
                 </button>
               </div>
               {messageFilter === "sms" && selectedConv.contactPreference === "call_only" ? (
