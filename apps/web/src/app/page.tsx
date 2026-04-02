@@ -3454,8 +3454,34 @@ export default function Home() {
       );
     }
     setSendBody("");
+    setSendBodySource("system");
+    setLastDraftId(null);
     if (data?.conversation) {
       const conv = data.conversation;
+      if (Array.isArray(conv.messages)) {
+        // Keep composer clear immediately after a send by staling any draft message
+        // that is older than the latest sent outbound.
+        let lastSentIdx = -1;
+        conv.messages.forEach((m: any, idx: number) => {
+          if (m?.direction !== "out") return;
+          if (m?.provider === "twilio" || m?.provider === "human" || m?.provider === "sendgrid") {
+            lastSentIdx = idx;
+          }
+        });
+        if (lastSentIdx >= 0) {
+          conv.messages = conv.messages.map((m: any, idx: number) => {
+            if (
+              idx <= lastSentIdx &&
+              m?.direction === "out" &&
+              m?.provider === "draft_ai" &&
+              m?.draftStatus !== "stale"
+            ) {
+              return { ...m, draftStatus: "stale" };
+            }
+            return m;
+          });
+        }
+      }
       if (payload.draftId && Array.isArray(conv.messages)) {
         const msg = conv.messages.find((m: any) => m.id === payload.draftId);
         if (msg) {
