@@ -1110,6 +1110,50 @@ export function appendInbound(conv: Conversation, evt: InboundMessageEvent) {
   scheduleSave();
 }
 
+function normalizeInboundDedupBody(input: string): string {
+  return String(input ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+export function isDuplicateInboundEvent(
+  conv: Conversation,
+  evt: InboundMessageEvent,
+  opts?: { windowMs?: number }
+): boolean {
+  const messages = Array.isArray(conv.messages) ? conv.messages : [];
+  if (!messages.length) return false;
+  const provider = String(evt.provider ?? "").trim().toLowerCase();
+  const providerMessageId = String(evt.providerMessageId ?? "").trim();
+  if (providerMessageId) {
+    return messages.some(
+      m =>
+        m.direction === "in" &&
+        String(m.provider ?? "").trim().toLowerCase() === provider &&
+        String(m.providerMessageId ?? "").trim() === providerMessageId
+    );
+  }
+
+  const bodyNorm = normalizeInboundDedupBody(evt.body);
+  if (!bodyNorm) return false;
+  const from = String(evt.from ?? "").trim();
+  const to = String(evt.to ?? "").trim();
+  const nowMs = Date.now();
+  const windowMs = Number(opts?.windowMs ?? 2 * 60 * 1000);
+  const recentInbound = [...messages].reverse().find(
+    m => m.direction === "in" && String(m.provider ?? "").trim().toLowerCase() === provider
+  );
+  if (!recentInbound) return false;
+  const recentBody = normalizeInboundDedupBody(recentInbound.body);
+  if (recentBody !== bodyNorm) return false;
+  if (String(recentInbound.from ?? "").trim() !== from) return false;
+  if (String(recentInbound.to ?? "").trim() !== to) return false;
+  const atMs = Date.parse(String(recentInbound.at ?? ""));
+  if (!Number.isFinite(atMs)) return false;
+  return nowMs - atMs <= windowMs;
+}
+
 export function appendOutbound(
   conv: Conversation,
   from: string,

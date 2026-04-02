@@ -6,6 +6,7 @@ import {
   upsertConversationByLeadKey,
   createConversationForLeadKey,
   appendInbound,
+  isDuplicateInboundEvent,
   appendOutbound,
   mergeConversationLead,
   setConversationClassification,
@@ -1284,6 +1285,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       receivedAt: new Date().toISOString()
     };
 
+    if (isDuplicateInboundEvent(conv, event, { windowMs: 15 * 60 * 1000 })) {
+      console.log("[sendgrid inbound] duplicate ignored", {
+        convId: conv.id,
+        providerMessageId: event.providerMessageId
+      });
+      return res.status(200).json({ ok: true, parsed: true, duplicate: true, leadKey });
+    }
+
     appendInbound(conv, event);
     discardPendingDrafts(conv, "new_inbound");
     confirmAppointmentIfMatchesSuggested(conv, event.body, event.providerMessageId);
@@ -1716,6 +1725,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     providerMessageId: String(req.body?.MessageID ?? req.body?.message_id ?? ""),
     receivedAt: new Date().toISOString()
   };
+
+  if (isDuplicateInboundEvent(conv, event, { windowMs: 15 * 60 * 1000 })) {
+    console.log("[sendgrid inbound] duplicate ignored", {
+      convId: conv.id,
+      providerMessageId: event.providerMessageId
+    });
+    return res.status(200).json({ ok: true, parsed: true, duplicate: true, leadKey });
+  }
 
   const callOnlyRequested = isCallOnlyText(inquiryText);
 

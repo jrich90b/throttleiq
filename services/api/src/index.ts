@@ -121,6 +121,7 @@ import {
   upsertConversationByLeadKey,
   createConversationForLeadKey,
   appendInbound,
+  isDuplicateInboundEvent,
   appendOutbound,
   listConversations,
   getConversation,
@@ -12433,6 +12434,14 @@ if (authToken && signature) {
   console.log("[twilio inbound]", event);
 
   const conv = await resolveInboundConversationForSms(event);
+  if (isDuplicateInboundEvent(conv, event, { windowMs: 5 * 60 * 1000 })) {
+    console.log("[twilio inbound] duplicate ignored", {
+      convId: conv.id,
+      providerMessageId: event.providerMessageId
+    });
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   appendInbound(conv, event);
   pauseRelatedCadencesOnInbound(conv, event);
   const responseControlParserEligible =
