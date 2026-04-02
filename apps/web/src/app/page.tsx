@@ -127,6 +127,15 @@ function getMediaUrlInfo(url: string): { isImage: boolean; isPdf: boolean; fileN
   }
 }
 
+function escapeHtml(text: string): string {
+  return String(text ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 const CADENCE_ALERT_WINDOW_HOURS = 24;
 
 const CALENDAR_COLORS = [
@@ -2660,6 +2669,27 @@ export default function Home() {
     if (messageFilter === "sms") return !!pendingDraft;
     return false;
   }, [messageFilter, emailDraft, pendingDraft?.id]);
+  const filteredMessages = useMemo(() => {
+    if (!selectedConv) return [] as Message[];
+    return (selectedConv.messages ?? [])
+      .filter(m => m.draftStatus !== "stale")
+      .filter(m => {
+        const provider = m.provider ?? "";
+        const isEmail = provider === "sendgrid";
+        const isCall =
+          provider === "voice_call" ||
+          provider === "voice_transcript" ||
+          provider === "voice_summary";
+        const isSms =
+          provider === "twilio" ||
+          provider === "human" ||
+          provider === "draft_ai" ||
+          provider === "sendgrid_adf";
+        if (messageFilter === "email") return isEmail;
+        if (messageFilter === "calls") return isCall && provider !== "voice_summary";
+        return isSms;
+      });
+  }, [selectedConv, messageFilter]);
   const appointmentSalespersonName = useMemo(() => {
     const id = selectedConv?.appointment?.bookedSalespersonId ?? "";
     if (!id) return "";
@@ -3614,6 +3644,84 @@ export default function Home() {
     } finally {
       setClearDraftBusy(false);
     }
+  }
+
+  function printCurrentConversationWindow() {
+    if (!selectedConv) return;
+    const label =
+      messageFilter === "email" ? "Email" : messageFilter === "calls" ? "Call Script" : "SMS";
+    const leadName =
+      selectedConv.lead?.name ||
+      [selectedConv.lead?.firstName, selectedConv.lead?.lastName].filter(Boolean).join(" ") ||
+      selectedConv.leadKey;
+    const rows = filteredMessages
+      .map(m => {
+        const provider = m.provider ?? "?";
+        const providerLabel =
+          provider === "voice_call"
+            ? "call"
+            : provider === "voice_transcript"
+              ? "call transcript"
+              : provider === "voice_summary"
+                ? "call summary"
+                : provider;
+        const body =
+          m.direction === "in" && provider === "sendgrid"
+            ? cleanInboundEmailForDisplay(m.body)
+            : m.body;
+        const summaryText = (() => {
+          if (provider !== "voice_transcript") return "";
+          const id = m.providerMessageId ?? "";
+          if (id && callSummaryLookup.byId.has(id)) return callSummaryLookup.byId.get(id) ?? "";
+          const idxFull = callSummaryLookup.indexById.get(m.id);
+          if (idxFull == null) return "";
+          const prev = callSummaryLookup.full[idxFull - 1];
+          const next = callSummaryLookup.full[idxFull + 1];
+          if (prev?.provider === "voice_summary") return String(prev.body ?? "");
+          if (next?.provider === "voice_summary") return String(next.body ?? "");
+          return "";
+        })();
+        const bodyHtml = escapeHtml(String(body ?? "")).replace(/\n/g, "<br>");
+        const summaryHtml = summaryText
+          ? `<div class="summary"><strong>Call Summary:</strong><br>${escapeHtml(summaryText).replace(/\n/g, "<br>")}</div>`
+          : "";
+        return `<div class="msg">
+  <div class="meta">${escapeHtml(m.direction.toUpperCase())} • ${escapeHtml(providerLabel)} • ${escapeHtml(
+          new Date(m.at).toLocaleString()
+        )}</div>
+  <div class="body">${bodyHtml || "&nbsp;"}</div>
+  ${summaryHtml}
+</div>`;
+      })
+      .join("\n");
+    const html = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(label)} - ${escapeHtml(leadName)}</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; color: #111; }
+    h1 { margin: 0 0 4px; font-size: 20px; }
+    .sub { margin: 0 0 16px; color: #555; font-size: 13px; }
+    .msg { border: 1px solid #ddd; border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+    .meta { font-size: 12px; color: #666; margin-bottom: 6px; }
+    .body { font-size: 14px; line-height: 1.4; white-space: normal; }
+    .summary { margin-top: 8px; font-size: 13px; background: #f7f7f7; border: 1px solid #e5e5e5; border-radius: 6px; padding: 8px; }
+    @media print { .no-print { display: none; } }
+  </style>
+</head>
+<body>
+  <h1>${escapeHtml(label)} Conversation</h1>
+  <p class="sub">${escapeHtml(leadName)}${selectedConv.lead?.phone ? ` • ${escapeHtml(selectedConv.lead.phone)}` : ""}</p>
+  ${rows || "<p>No messages in this view.</p>"}
+  <script>window.onload = function () { window.print(); };</script>
+</body>
+</html>`;
+    const printWindow = window.open("", "_blank", "noopener,noreferrer");
+    if (!printWindow) return;
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
   }
 
   async function startCall(
@@ -9685,24 +9793,34 @@ export default function Home() {
             ) : null}
 
             <div className="mt-6 border rounded-lg p-4 space-y-3">
-              <div className="flex items-center gap-2 mb-2">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <div className="flex items-center gap-2">
+                  <button
+                    className={`px-2 py-1 border rounded text-xs ${messageFilter === "sms" ? "font-semibold bg-gray-100" : ""}`}
+                    onClick={() => setMessageFilter("sms")}
+                  >
+                    SMS
+                  </button>
+                  <button
+                    className={`px-2 py-1 border rounded text-xs ${messageFilter === "email" ? "font-semibold bg-gray-100" : ""}`}
+                    onClick={() => setMessageFilter("email")}
+                  >
+                    Email
+                  </button>
+                  <button
+                    className={`px-2 py-1 border rounded text-xs ${messageFilter === "calls" ? "font-semibold bg-gray-100" : ""}`}
+                    onClick={() => setMessageFilter("calls")}
+                  >
+                    Calls
+                  </button>
+                </div>
                 <button
-                  className={`px-2 py-1 border rounded text-xs ${messageFilter === "sms" ? "font-semibold bg-gray-100" : ""}`}
-                  onClick={() => setMessageFilter("sms")}
+                  className="px-2 py-1 border rounded text-xs hover:bg-gray-50"
+                  onClick={printCurrentConversationWindow}
+                  disabled={!filteredMessages.length}
+                  title="Print this conversation view"
                 >
-                  SMS
-                </button>
-                <button
-                  className={`px-2 py-1 border rounded text-xs ${messageFilter === "email" ? "font-semibold bg-gray-100" : ""}`}
-                  onClick={() => setMessageFilter("email")}
-                >
-                  Email
-                </button>
-                <button
-                  className={`px-2 py-1 border rounded text-xs ${messageFilter === "calls" ? "font-semibold bg-gray-100" : ""}`}
-                  onClick={() => setMessageFilter("calls")}
-                >
-                  Calls
+                  Print {messageFilter === "calls" ? "Call Script" : messageFilter === "email" ? "Email" : "SMS"}
                 </button>
               </div>
               {messageFilter === "sms" && selectedConv.contactPreference === "call_only" ? (
@@ -9716,25 +9834,7 @@ export default function Home() {
                   </button>
                 </div>
               ) : null}
-              {selectedConv.messages
-                .filter(m => m.draftStatus !== "stale")
-                .filter(m => {
-                  const provider = m.provider ?? "";
-                  const isEmail = provider === "sendgrid";
-                  const isCall =
-                    provider === "voice_call" ||
-                    provider === "voice_transcript" ||
-                    provider === "voice_summary";
-                  const isSms =
-                    provider === "twilio" ||
-                    provider === "human" ||
-                    provider === "draft_ai" ||
-                    provider === "sendgrid_adf";
-                  if (messageFilter === "email") return isEmail;
-                  if (messageFilter === "calls") return isCall && provider !== "voice_summary";
-                  return isSms;
-                })
-                .map(m => {
+              {filteredMessages.map(m => {
                   const isDraftMessage = m.direction === "out" && m.provider === "draft_ai";
                   const isPending = pendingDraft?.id === m.id;
                   const providerLabel =
