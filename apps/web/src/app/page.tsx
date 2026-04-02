@@ -3705,7 +3705,12 @@ export default function Home() {
         type: String((payload.type ?? file.type) || "application/octet-stream"),
         size: Number(payload.size ?? file.size ?? 0),
         url: String(payload.url),
-        mode: payload.mmsEligible === false ? ("link" as const) : ("mms" as const)
+        mode:
+          (typeof payload.mmsEligible === "boolean"
+            ? payload.mmsEligible
+            : file.size <= 5 * 1024 * 1024)
+            ? ("mms" as const)
+            : ("link" as const)
       };
       setSmsAttachments(prev => [...prev, nextAttachment]);
     }
