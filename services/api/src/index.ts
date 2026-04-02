@@ -13574,6 +13574,62 @@ if (authToken && signature) {
     );
   const inboundText = String(event.body ?? "").trim();
   const inboundLower = inboundText.toLowerCase();
+  const mediaOfferPromptedByLastOutbound =
+    /\b(want|would you like|prefer)\b[\s\S]{0,80}\b(photo|photos|pic|pics|video|walkaround)\b/i.test(
+      lastOutboundText
+    ) ||
+    /\b(i can send|can send)\b[\s\S]{0,80}\b(photo|photos|pic|pics|video|walkaround)\b/i.test(
+      lastOutboundText
+    );
+  const inboundSimpleAffirmative =
+    /^(yes|yep|yeah|ya|sure|ok|okay|sounds good|please|yes please|do it|send it|send them|both)\b/i.test(
+      inboundText
+    ) || /\b(yes please|please do|send (it|them)|both)\b/i.test(inboundText);
+  const inboundMediaPreferencePhoto = /\b(photo|photos|pic|pics|picture|pictures|images?)\b/i.test(
+    inboundText
+  );
+  const inboundMediaPreferenceVideo = /\b(video|walkaround|walk around|walkthrough|walk-through|clip)\b/i.test(
+    inboundText
+  );
+  const inboundHasOtherPrimaryIntent =
+    /\b(price|pricing|payment|monthly|apr|term|trade|appraisal|finance|schedule|appointment|test ride|available|availability|in stock|service records?|records?|mileage)\b/i.test(
+      inboundText
+    );
+  if (
+    event.provider === "twilio" &&
+    mediaOfferPromptedByLastOutbound &&
+    inboundSimpleAffirmative &&
+    !inboundHasOtherPrimaryIntent
+  ) {
+    const bike =
+      formatModelLabel(
+        conv.lead?.vehicle?.year ? String(conv.lead?.vehicle?.year) : null,
+        conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null
+      ) || "the bike";
+    const lastAskedPhoto = /\b(photo|photos|pic|pics|picture|pictures|images?)\b/i.test(lastOutboundText);
+    const lastAskedVideo = /\b(video|walkaround|walk around|walkthrough|walk-through|clip)\b/i.test(
+      lastOutboundText
+    );
+    const sendPhotos = inboundMediaPreferencePhoto || (!inboundMediaPreferenceVideo && lastAskedPhoto && !lastAskedVideo);
+    const sendVideo = inboundMediaPreferenceVideo || (!inboundMediaPreferencePhoto && lastAskedVideo);
+    const reply =
+      sendPhotos && sendVideo
+        ? `Perfect — I’ll send photos and a quick walkaround video of ${bike} shortly.`
+        : sendPhotos
+          ? `Perfect — I’ll send photos of ${bike} shortly.`
+          : `Perfect — I’ll send a quick walkaround video of ${bike} shortly.`;
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   const emojiOnly = isEmojiOnlyText(inboundText);
   const outboundHoldNotice =
     lastOutbound?.body &&
