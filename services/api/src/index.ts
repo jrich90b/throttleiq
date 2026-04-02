@@ -4590,6 +4590,25 @@ function ensureUniqueDraft(
     : candidate + suffix;
 }
 
+function ensureUniqueDispositionReply(reply: string, conv: any): string {
+  const used = new Set(
+    (conv?.messages ?? [])
+      .filter((m: any) => m.direction === "out")
+      .map((m: any) => normalizeOutboundText(m.body))
+  );
+  const base = String(reply ?? "").trim();
+  if (base && !used.has(normalizeOutboundText(base))) return base;
+  const fallbacks = [
+    "I hear you. No worries at all. If things change later, reach out anytime.",
+    "Totally get it. Thanks for being straight with me. If timing changes, I’m here.",
+    "All good — thanks for the update. If things open up later, just text me."
+  ];
+  for (const fb of fallbacks) {
+    if (!used.has(normalizeOutboundText(fb))) return fb;
+  }
+  return "No worries at all. If things change later, just text me.";
+}
+
 function draftHasSchedulingPrompt(text: string): boolean {
   return /(what day|what time|when.*available|schedule|appointment|come in|stop by|stop in|book|reserve|test ride|demo ride|which works best)/i.test(
     text
@@ -11676,12 +11695,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   );
   if (regenDispositionDecision) {
     applyCustomerDispositionCloseout(conv, regenDispositionDecision);
-    const regenReply = ensureUniqueDraft(
-      buildCustomerDispositionReply(event.body),
-      conv,
-      dealerProfile?.dealerName ?? "American Harley-Davidson",
-      dealerProfile?.agentName ?? "Brooke"
-    );
+    const regenReply = ensureUniqueDispositionReply(buildCustomerDispositionReply(event.body), conv);
     if (channel === "email") {
       conv.emailDraft = regenReply;
       saveConversation(conv);
@@ -12355,15 +12369,7 @@ if (authToken && signature) {
   );
   if (dispositionDecision) {
     applyCustomerDispositionCloseout(conv, dispositionDecision);
-    const dealerProfile = await getDealerProfile();
-    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = dealerProfile?.agentName ?? "Brooke";
-    const reply = ensureUniqueDraft(
-      buildCustomerDispositionReply(semanticInboundText),
-      conv,
-      dealerName,
-      agentName
-    );
+    const reply = ensureUniqueDispositionReply(buildCustomerDispositionReply(semanticInboundText), conv);
     const mode = webhookMode;
     if (mode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
