@@ -1474,6 +1474,19 @@ async function resetFollowUpCadenceOnInbound(conv: any, inboundText: string) {
   if (conv?.followUp?.mode === "manual_handoff") return;
   if (conv?.inventoryWatch || (conv?.inventoryWatches?.length ?? 0) > 0) return;
   if (conv?.hold) return;
+  const inbound = String(inboundText ?? "");
+  const shortAck = isShortAckText(inbound) || isEmojiOnlyText(inbound);
+  if (shortAck) {
+    const lastOutboundText = String(getLastNonVoiceOutbound(conv)?.body ?? "");
+    if (isReachOutWhenReadyCloseText(lastOutboundText)) {
+      stopFollowUpCadence(conv, "ack_after_soft_close");
+      if (conv?.followUp?.mode !== "holding_inventory" && conv?.followUp?.mode !== "manual_handoff") {
+        setFollowUpMode(conv, "paused_indefinite", "ack_after_soft_close");
+        setDialogState(conv, "followup_paused");
+      }
+    }
+    return;
+  }
 
   const cfg = await getSchedulerConfig();
   const tz = cfg.timezone || "America/New_York";
@@ -4708,6 +4721,17 @@ function isShortAckText(text: string): boolean {
   if (/[?]/.test(t)) return false;
   return /\b(thanks|thank you|thanks again|thx|ty|appreciate|got it|sounds good|sounds great|will do|ok|okay|k|kk|cool|perfect|great|all good|no problem|you bet|yep|yup|sure)\b/.test(
     t
+  );
+}
+
+function isReachOutWhenReadyCloseText(text: string): boolean {
+  const t = String(text ?? "")
+    .toLowerCase()
+    .replace(/[’']/g, "'");
+  if (!t.trim()) return false;
+  return (
+    /\b(no rush|if anything changes|down the road|time is right)\b/.test(t) &&
+    /\b(reach out|here when you're ready|give me a shout|just let me know)\b/.test(t)
   );
 }
 
