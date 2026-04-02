@@ -1011,9 +1011,18 @@ export function setContactPreference(
 
 export function appendInbound(conv: Conversation, evt: InboundMessageEvent) {
   if (conv.status === "closed") {
-    conv.status = "open";
-    conv.closedAt = undefined;
-    conv.closedReason = undefined;
+    const closedReason = String(conv.closedReason ?? "").toLowerCase();
+    const stickyClosed =
+      closedReason === "sold" ||
+      /\bhold\b/.test(closedReason) ||
+      !!conv.sale?.soldAt ||
+      !!conv.hold?.key ||
+      /\b(unit_hold|manual_hold|post_sale)\b/.test(String(conv.followUp?.reason ?? "").toLowerCase());
+    if (!stickyClosed) {
+      conv.status = "open";
+      conv.closedAt = undefined;
+      conv.closedReason = undefined;
+    }
   }
   conv.messages.push({
     id: makeId("msg"),
