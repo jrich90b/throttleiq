@@ -55,6 +55,7 @@ import { getInventoryFeed, hasInventoryForModelYear, findInventoryMatches } from
 import { resolveInventoryUrlByStock } from "../domain/inventoryUrlResolver.js";
 import { getAllModels } from "../domain/modelsByYear.js";
 import { shouldRouteRoom58PriceHandoff } from "../domain/adfPolicy.js";
+import { listUsers } from "../domain/userStore.js";
 
 function base64UrlDecode(input: string): string | null {
   try {
@@ -1869,6 +1870,31 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
     if (conv.lead) conv.lead.walkIn = true;
     const vendorFirst = vendorContactName.split(/\s+/).filter(Boolean)[0] || "";
+    if (!conv.leadOwner?.id && vendorFirst) {
+      try {
+        const users = await listUsers();
+        const vendorToken = vendorFirst.toLowerCase();
+        const owner = users.find(u => {
+          if (u.role !== "salesperson") return false;
+          const first = String(u.firstName ?? "").trim().toLowerCase();
+          const nameFirst = String(u.name ?? "")
+            .trim()
+            .split(/\s+/)
+            .filter(Boolean)[0]
+            ?.toLowerCase();
+          return first === vendorToken || nameFirst === vendorToken;
+        });
+        if (owner) {
+          conv.leadOwner = {
+            id: owner.id,
+            name: owner.name ?? owner.firstName ?? owner.email ?? vendorFirst,
+            assignedAt: new Date().toISOString()
+          };
+        }
+      } catch (e) {
+        console.warn("[sendgrid inbound] walk-in owner resolve failed:", (e as any)?.message ?? e);
+      }
+    }
     const salespersonName = vendorFirst || agentName;
     const modelRaw =
       conv.lead?.vehicle?.model ??
