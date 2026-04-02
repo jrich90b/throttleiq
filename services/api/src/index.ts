@@ -5307,6 +5307,29 @@ function isDownPaymentQuestion(text: string): boolean {
   );
 }
 
+function isModelUnknownForPayments(conv: any): boolean {
+  const model = String(conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description ?? "")
+    .trim()
+    .toLowerCase();
+  return !model || /\b(other|full line|full lineup|unknown)\b/.test(model);
+}
+
+function isAckOnlyCloseTurn(text: string, lastOutboundText: string): boolean {
+  const inbound = String(text ?? "").trim().toLowerCase();
+  if (!inbound) return false;
+  if (/[?]/.test(inbound)) return false;
+  if (hasPrimaryIntentBeyondWatch(inbound)) return false;
+  const hasAck =
+    /\b(ok|okay|sounds good|got it|will do|thanks|thank you|thx|appreciate it|perfect|cool|awesome|no problem)\b/.test(
+      inbound
+    );
+  if (!hasAck) return false;
+  const closeLikeLastOutbound = /\b(if anything changes|just let me know|reach out|i(?:’|')?ll be here when you(?:’|')?re ready|no rush|no pressure|when you(?:’|')?re ready)\b/i.test(
+    String(lastOutboundText ?? "")
+  );
+  return closeLikeLastOutbound;
+}
+
 function isExplicitAvailabilityQuestion(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
@@ -14763,6 +14786,55 @@ if (authToken && signature) {
       conv.scheduleSoft = undefined;
     }
   }
+  if (
+    event.provider === "twilio" &&
+    !schedulingSignals.hasDayTime &&
+    !schedulingSignals.hasDayOnlyRequest &&
+    !schedulingSignals.hasDayOnlyAvailability &&
+    !explicitScheduleSignal &&
+    (llmPaymentsIntent || (pricingPaymentsAccepted && pricingPaymentsParse?.intent === "payments"))
+  ) {
+    const monthlyBudget = extractMonthlyBudgetLimit(event.body ?? "");
+    const termMonths = extractPaymentTermMonths(event.body ?? "");
+    const downPayment = parseDownPaymentForBudget(event.body ?? "")?.amount ?? null;
+    let reply: string | null = null;
+    if (isModelUnknownForPayments(conv)) {
+      const budgetHint =
+        monthlyBudget && Number.isFinite(monthlyBudget)
+          ? ` around $${Number(monthlyBudget).toLocaleString("en-US")}/mo`
+          : "";
+      reply = `Got it${budgetHint}. Which bike are you looking at so I can run it correctly?`;
+      setDialogState(conv, "pricing_need_model");
+    } else if (monthlyBudget && !termMonths) {
+      reply = `Got it — to target around $${Number(monthlyBudget).toLocaleString("en-US")}/mo, do you want me to run 60, 72, or 84 months?`;
+      if (!isScheduleDialogState(getDialogState(conv))) {
+        setDialogState(conv, "pricing_init");
+      }
+    } else if (isDownPaymentQuestion(event.body ?? "") && !monthlyBudget) {
+      reply = "Got it — what monthly payment are you trying to stay around?";
+      if (!isScheduleDialogState(getDialogState(conv))) {
+        setDialogState(conv, "pricing_init");
+      }
+    } else if (monthlyBudget && termMonths && downPayment == null && isDownPaymentQuestion(event.body ?? "")) {
+      reply = "Got it — are you planning a trade-in or cash down?";
+      if (!isScheduleDialogState(getDialogState(conv))) {
+        setDialogState(conv, "pricing_init");
+      }
+    }
+    if (reply) {
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+  }
   if (event.provider === "twilio" && schedulingAllowed && schedulingSignals.hasDayOnlyRequest) {
     const dayInfo = parseDayOfWeek(textLower);
     const dayPart = extractDayPart(textLower);
@@ -16512,6 +16584,17 @@ if (authToken && signature) {
     }
   }
   if (event.provider === "twilio" && schedulingBlocked && shortAck) {
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+  if (
+    event.provider === "twilio" &&
+    !lastOutboundAskedQuestion &&
+    !conv.inventoryWatchPending &&
+    !conv.scheduler?.pendingSlot &&
+    !conv.appointment?.reschedulePending &&
+    isAckOnlyCloseTurn(event.body, lastOutboundText)
+  ) {
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
