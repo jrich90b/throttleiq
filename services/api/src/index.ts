@@ -108,6 +108,10 @@ import {
   normalizeInventorySoldKey
 } from "./domain/inventorySolds.js";
 import { sendEmail } from "./domain/emailSender.js";
+import {
+  canApplyDispositionCloseout,
+  isDispositionParserAccepted
+} from "./domain/transitionSafety.js";
 
 import {
   upsertConversationByLeadKey,
@@ -5290,58 +5294,24 @@ function resolveCustomerDispositionDecision(
   text: string,
   parsed: CustomerDispositionParse | null
 ): CustomerDispositionDecision | null {
-  const confidenceMin = Number(process.env.LLM_CUSTOMER_DISPOSITION_CONFIDENCE_MIN ?? 0.74);
-  const parsedConfidence =
-    typeof parsed?.confidence === "number" && Number.isFinite(parsed.confidence)
-      ? parsed.confidence
-      : 0;
-  const parsedAccepted =
-    !!parsed &&
-    parsed.explicitDisposition &&
-    parsed.disposition !== "none" &&
-    parsedConfidence >= confidenceMin;
-  if (parsedAccepted) {
-    if (parsed.disposition === "sell_on_own") {
+  const parsedAccepted = isDispositionParserAccepted(parsed);
+  const acceptedParsed = parsedAccepted ? parsed : null;
+  if (acceptedParsed) {
+    if (acceptedParsed.disposition === "sell_on_own") {
       return { reason: "customer_sell_on_own", state: "customer_sell_on_own" };
     }
-    if (parsed.disposition === "keep_current_bike") {
+    if (acceptedParsed.disposition === "keep_current_bike") {
       return { reason: "customer_keep_current_bike", state: "customer_keep_current_bike" };
     }
-    if (parsed.disposition === "stepping_back") {
+    if (acceptedParsed.disposition === "stepping_back") {
       return { reason: "customer_stepping_back", state: "customer_stepping_back" };
     }
-    if (parsed.disposition === "defer_no_window") {
+    if (acceptedParsed.disposition === "defer_no_window") {
       return { reason: "customer_stepping_back", state: "customer_stepping_back" };
     }
   }
   // Fallback for parser-disabled/low-confidence cases.
   return parseCustomerDispositionFallback(text);
-}
-
-function isLogisticsProgressUpdateText(text: string): boolean {
-  const t = String(text ?? "").toLowerCase();
-  if (!t.trim()) return false;
-  const hasProgress =
-    /\b(receive|received|get it|got it|arrives?|arrival|once i (?:get|receive)|as soon as i (?:get|receive))\b/.test(
-      t
-    ) ||
-    /\b(dmv|registration|register|title|plate|paperwork)\b/.test(t);
-  const hasDeferredFollowUp = /\b(let you know|get back to you|reach out)\b/.test(t);
-  return hasProgress && hasDeferredFollowUp;
-}
-
-function shouldSuppressCustomerDispositionCloseout(conv: any, text: string): boolean {
-  if (isLogisticsProgressUpdateText(text)) return true;
-  const soldContext =
-    conv?.closedReason === "sold" ||
-    !!conv?.sale?.soldAt ||
-    conv?.followUp?.mode === "post_sale";
-  if (!soldContext) return false;
-  const t = String(text ?? "").toLowerCase();
-  return (
-    /\b(let you know|get back to you|reach out)\b/.test(t) &&
-    /\b(dmv|registration|register|title|plate|paperwork|receive|received)\b/.test(t)
-  );
 }
 
 function applyCustomerDispositionCloseout(conv: any, decision: CustomerDispositionDecision) {
@@ -11996,7 +11966,16 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     event.body,
     regenCustomerDispositionParse
   );
-  if (regenDispositionDecision && !shouldSuppressCustomerDispositionCloseout(conv, event.body ?? "")) {
+  const regenParsedDispositionAccepted = isDispositionParserAccepted(regenCustomerDispositionParse);
+  if (
+    canApplyDispositionCloseout({
+      conv,
+      text: event.body ?? "",
+      parsedAccepted: regenParsedDispositionAccepted,
+      hasDecision: !!regenDispositionDecision
+    }) &&
+    regenDispositionDecision
+  ) {
     applyCustomerDispositionCloseout(conv, regenDispositionDecision);
     const regenReply = ensureUniqueDispositionReply(buildCustomerDispositionReply(event.body), conv);
     if (channel === "email") {
@@ -12674,7 +12653,16 @@ if (authToken && signature) {
     semanticInboundText,
     customerDispositionParse
   );
-  if (dispositionDecision && !shouldSuppressCustomerDispositionCloseout(conv, semanticInboundText)) {
+  const parsedDispositionAccepted = isDispositionParserAccepted(customerDispositionParse);
+  if (
+    canApplyDispositionCloseout({
+      conv,
+      text: semanticInboundText,
+      parsedAccepted: parsedDispositionAccepted,
+      hasDecision: !!dispositionDecision
+    }) &&
+    dispositionDecision
+  ) {
     applyCustomerDispositionCloseout(conv, dispositionDecision);
     const reply = ensureUniqueDispositionReply(buildCustomerDispositionReply(semanticInboundText), conv);
     const mode = webhookMode;
