@@ -5388,6 +5388,21 @@ function buildMediaAffirmativeReply(
   return `Okay — I’ll have one of the guys send a quick walkaround video of ${bikeLabel} over to you.`;
 }
 
+function addMediaRequestTodoIfMissing(conv: any, inboundText: string, sourceMessageId?: string) {
+  const alreadyOpen = listOpenTodos().some(
+    t =>
+      t.convId === conv.id &&
+      t.status === "open" &&
+      /\b(media request|walkaround|walk around|video|photos?|pics?)\b/i.test(String(t.summary ?? ""))
+  );
+  if (alreadyOpen) return;
+  const clean = String(inboundText ?? "").trim();
+  const summary = clean
+    ? `Media request: ${clean}`
+    : "Media request: Customer asked for a walkaround video/photos.";
+  addTodo(conv, "note", summary, sourceMessageId);
+}
+
 function buildOutOfStockHumanOptionsLine(): string {
   return "If you'd like, you can stop by and we can go over availability and pricing, or I can text you as soon as one comes in.";
 }
@@ -11790,6 +11805,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       ) || "the bike";
     const mediaAffirmReply = buildMediaAffirmativeReply(lastOutboundForMedia, event.body, bike);
     if (mediaAffirmReply) {
+      addMediaRequestTodoIfMissing(conv, event.body, event.providerMessageId);
       if (channel === "email") {
         conv.emailDraft = mediaAffirmReply;
         saveConversation(conv);
@@ -13721,6 +13737,7 @@ if (authToken && signature) {
       ) || "the bike";
     const mediaAffirmReply = buildMediaAffirmativeReply(lastOutboundText, inboundText, bike);
     if (mediaAffirmReply) {
+      addMediaRequestTodoIfMissing(conv, event.body, event.providerMessageId);
       const systemMode = webhookMode;
       if (systemMode === "suggest") {
         appendOutbound(conv, event.to, event.from, mediaAffirmReply, "draft_ai");
