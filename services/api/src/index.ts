@@ -13614,10 +13614,10 @@ if (authToken && signature) {
     const sendVideo = inboundMediaPreferenceVideo || (!inboundMediaPreferencePhoto && lastAskedVideo);
     const reply =
       sendPhotos && sendVideo
-        ? `Perfect — I’ll send photos and a quick walkaround video of ${bike} shortly.`
+        ? `Okay — I’ll have one of the guys send photos and a quick walkaround video of ${bike} over to you.`
         : sendPhotos
-          ? `Perfect — I’ll send photos of ${bike} shortly.`
-          : `Perfect — I’ll send a quick walkaround video of ${bike} shortly.`;
+          ? `Okay — I’ll have one of the guys send photos of ${bike} over to you.`
+          : `Okay — I’ll have one of the guys send a quick walkaround video of ${bike} over to you.`;
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
