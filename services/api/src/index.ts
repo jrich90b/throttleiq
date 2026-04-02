@@ -11858,10 +11858,25 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
 
   const usersForMentions = await listUsers();
+  const resolveRegenSenderName = () => {
+    const ownerId = String(conv.leadOwner?.id ?? "").trim();
+    const ownerFromUsers = ownerId
+      ? usersForMentions.find(u => String(u.id ?? "").trim() === ownerId)
+      : null;
+    const ownerName =
+      String(ownerFromUsers?.firstName ?? "").trim() ||
+      String(ownerFromUsers?.name ?? "").trim() ||
+      String(conv.leadOwner?.name ?? "").trim();
+    if (ownerName) return ownerName.split(/\s+/).filter(Boolean)[0] ?? ownerName;
+    const user = (req as any).user ?? null;
+    const actorName = String(user?.name ?? user?.email ?? "").trim();
+    if (actorName) return actorName.split(/\s+/).filter(Boolean)[0] ?? actorName;
+    return "";
+  };
   if (latestInboundIsCreditAdf) {
     const firstName = normalizeDisplayCase(conv.lead?.firstName);
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const agentName = resolveRegenSenderName() || dealerProfile?.agentName || "Brooke";
     const hasPriorOutbound = Array.isArray(conv.messages) && conv.messages.some(m => m.direction === "out");
     const reply = hasPriorOutbound
       ? firstName
@@ -12076,7 +12091,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
 
   const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-  const agentName = dealerProfile?.agentName ?? "Brooke";
+  const agentName = resolveRegenSenderName() || dealerProfile?.agentName || "Brooke";
   const firstName = normalizeDisplayCase(conv.lead?.firstName);
   const hasSentOutbound = (conv.messages ?? []).some(
     m =>
