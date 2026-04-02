@@ -10223,7 +10223,14 @@ app.get("/todos", requirePermission("canAccessTodos"), (req, res) => {
       const conv = getConversation(t.convId);
       const todoDepartment = inferTodoDepartment(t, conv);
       if (departmentRole) return todoDepartment === departmentRole;
-      if (isSalesperson) return !todoDepartment;
+      if (isSalesperson) {
+        if (todoDepartment) return false;
+        const ownerId = String(t.ownerId ?? "").trim();
+        if (!ownerId) return true;
+        if (requesterId && ownerId === requesterId) return true;
+        const leadOwnerId = String(conv?.leadOwner?.id ?? "").trim();
+        return !!requesterId && !!leadOwnerId && leadOwnerId === requesterId;
+      }
       if (todoDepartment) return false;
       if (!requesterId) return false;
       if (t.ownerId) return t.ownerId === requesterId;
@@ -10301,7 +10308,19 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), (re
       }
     } else {
       if (user?.role === "salesperson") {
-        // Sales todos (no department routing) are shared across all salespeople.
+        const requesterId = String(user?.id ?? "").trim();
+        const ownerId = String(existingTask.ownerId ?? "").trim();
+        if (!ownerId) {
+          // Unassigned sales todos are shared across all salespeople.
+        } else if (requesterId && ownerId === requesterId) {
+          // Todo explicitly assigned to this salesperson.
+        } else {
+          const convForOwner = convForAccess ?? getConversation(convId);
+          const leadOwnerId = String(convForOwner?.leadOwner?.id ?? "").trim();
+          if (!requesterId || !leadOwnerId || leadOwnerId !== requesterId) {
+            return res.status(403).json({ ok: false, error: "forbidden" });
+          }
+        }
       } else {
       const requesterId = String(user?.id ?? "").trim();
       const ownerId = String(existingTask.ownerId ?? "").trim();
