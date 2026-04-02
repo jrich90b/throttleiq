@@ -2808,6 +2808,17 @@ export default function Home() {
     const cadence = selectedConv.followUpCadence ?? listItem?.followUpCadence ?? undefined;
     return getCadenceAlert(cadence);
   }, [selectedConv, conversations]);
+  const selectedCadence = useMemo(() => {
+    if (!selectedConv) return null;
+    const listItem = conversations.find(
+      c =>
+        c.id === selectedConv.id ||
+        c.leadKey === selectedConv.id ||
+        c.id === selectedConv.leadKey ||
+        c.leadKey === selectedConv.leadKey
+    );
+    return selectedConv.followUpCadence ?? listItem?.followUpCadence ?? null;
+  }, [selectedConv, conversations]);
   const cadenceAlerts = useMemo(() => {
     const alerts = conversations
       .map(c => {
@@ -8754,6 +8765,24 @@ export default function Home() {
                   </div>
                   <div className="text-xs text-amber-800">
                     Scheduled to send: {formatCadenceDate(cadenceAlert.sendAt.toISOString())}
+                  </div>
+                </div>
+                <button
+                  className="px-3 py-2 border rounded text-sm bg-white"
+                  onClick={() => openCadenceResolve(selectedConv.id, "alert")}
+                >
+                  Review
+                </button>
+              </div>
+            ) : null}
+            {!cadenceAlert &&
+            selectedCadence?.status === "active" &&
+            selectedCadence?.nextDueAt ? (
+              <div className="mt-3 border rounded-lg bg-amber-50 px-3 py-2 text-sm flex items-center justify-between gap-3">
+                <div>
+                  <div className="font-medium text-amber-900">Follow-up cadence active</div>
+                  <div className="text-xs text-amber-800">
+                    Next due: {formatCadenceDate(selectedCadence.nextDueAt)}
                   </div>
                 </div>
                 <button
