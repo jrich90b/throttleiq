@@ -16700,6 +16700,9 @@ if (authToken && signature) {
     llmAvailabilityIntent ||
     availabilityExplicit ||
     (!isTradeLead &&
+      (!!llmAvailability?.color || !!inventoryEntityColorHint) &&
+      (!!conv.inventoryContext?.model || !!conv.lead?.vehicle?.model)) ||
+    (!isTradeLead &&
       (getHarleyModelLexicon().some(m => textLower.includes(m.toLowerCase())) ||
         (!!conv.inventoryContext?.model && textLower.includes(conv.inventoryContext.model.toLowerCase())) ||
         (!!conv.inventoryContext?.model &&
@@ -16722,15 +16725,22 @@ if (authToken && signature) {
     !schedulingSignals.hasDayOnlyAvailability &&
     !schedulingSignals.hasDayOnlyRequest &&
     !schedulingExplicit;
+  const explicitWatchIntent =
+    watchIntentText ||
+    promptedWatchAffirm ||
+    semanticWatchAction === "set_watch";
+  const passiveWatchIntent =
+    !!inventoryEntityModelHint &&
+    !hasPrimaryIntentBeyondWatch(String(event.body ?? "")) &&
+    !llmAvailabilityIntent &&
+    !availabilityExplicit &&
+    !inventoryCountQuestion;
   const watchIntent =
     event.provider === "twilio" &&
     !conv.inventoryWatchPending &&
     !watchHandledEarly &&
     !suppressWatchIntentThisTurn &&
-    (watchIntentText ||
-      promptedWatchAffirm ||
-      semanticWatchAction === "set_watch" ||
-      (!!inventoryEntityModelHint && !hasPrimaryIntentBeyondWatch(String(event.body ?? ""))));
+    (explicitWatchIntent || passiveWatchIntent);
   const watchAsSideEffectOnly = watchIntent && hasPrimaryIntentBeyondWatch(String(event.body ?? ""));
   if (watchIntent) {
     if (getDialogState(conv) === "inventory_watch_active" && conv.inventoryWatch) {
