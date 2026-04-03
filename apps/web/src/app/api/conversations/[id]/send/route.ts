@@ -16,12 +16,32 @@ export async function POST(
 
   const { id } = await params;
   const body = await req.text();
+  const controller = new AbortController();
+  const timeoutMs = Number(process.env.WEB_SEND_PROXY_TIMEOUT_MS ?? 25000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-  const r = await apiFetch(`${base}/conversations/${decodeURIComponent(id)}/send`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body
-  });
+  let r: Response;
+  try {
+    r = await apiFetch(`${base}/conversations/${decodeURIComponent(id)}/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      signal: controller.signal
+    });
+  } catch (err: any) {
+    if (err?.name === "AbortError") {
+      return NextResponse.json(
+        { ok: false, error: `send timed out after ${timeoutMs}ms` },
+        { status: 504 }
+      );
+    }
+    return NextResponse.json(
+      { ok: false, error: err?.message ?? "send request failed" },
+      { status: 502 }
+    );
+  } finally {
+    clearTimeout(timer);
+  }
 
   const text = await r.text();
   try {
