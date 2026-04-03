@@ -14371,6 +14371,45 @@ if (authToken && signature) {
     );
   const inboundText = String(event.body ?? "").trim();
   const inboundLower = inboundText.toLowerCase();
+  const lastOutboundAskedTradeQualifier =
+    /\bdo you have a trade\b/i.test(lastOutboundText) ||
+    /\bany trade\b/i.test(lastOutboundText);
+  if (event.provider === "twilio" && lastOutboundAskedTradeQualifier) {
+    const tradeYear = extractYearSingle(inboundLower);
+    const tradeModel = findMentionedModel(inboundLower);
+    const tradeAffirmed = isAffirmative(inboundText) || /\b(i have|i got|i've got|ive got)\b/i.test(inboundText);
+    if (tradeAffirmed) {
+      conv.lead = conv.lead ?? {};
+      conv.lead.tradeVehicle = conv.lead.tradeVehicle ?? {};
+      if (tradeYear) conv.lead.tradeVehicle.year = String(tradeYear);
+      if (tradeModel) {
+        conv.lead.tradeVehicle.model = tradeModel;
+        conv.lead.tradeVehicle.description = tradeModel;
+      }
+      if (!isTradeDialogState(getDialogState(conv))) {
+        setDialogState(conv, "trade_init");
+      }
+      const tradeLabel = tradeModel
+        ? formatModelLabel(tradeYear ? String(tradeYear) : null, tradeModel)
+        : tradeYear
+          ? `${tradeYear} bike`
+          : "your bike";
+      const reply = tradeModel || tradeYear
+        ? `Perfect — thanks. ${tradeLabel} helps. About how many miles are on it, and is there any payoff left on it?`
+        : "Perfect — thanks. What year and model is your trade, about how many miles are on it, and is there any payoff left?";
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+  }
   if (event.provider === "twilio") {
     const bike =
       formatModelLabel(
