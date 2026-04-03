@@ -861,6 +861,16 @@ function extractPriceRangeFromText(text?: string | null): { minPrice?: number; m
     const p = parsePriceToken(over[1].replace(",", ""));
     if (p) return { minPrice: p };
   }
+  const around = t.match(
+    /\b(?:around|about|roughly|close to|near|in the)\s*\$?\s*(\d+(?:[.,]\d+)?\s*k?)\s*(?:range)?\b/
+  );
+  if (around) {
+    const p = parsePriceToken(around[1].replace(",", ""));
+    if (p && p > 0) {
+      const spread = Math.max(1000, Math.round(p * 0.1));
+      return { minPrice: Math.max(0, p - spread), maxPrice: p + spread };
+    }
+  }
 
   const dollar = t.match(/\$\s*(\d{2,3}(?:,\d{3})+|\d{4,6})\b/);
   if (dollar) {
