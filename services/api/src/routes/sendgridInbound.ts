@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 import multer from "multer";
+import twilio from "twilio";
 import { XMLParser } from "fast-xml-parser";
 import { extractAdfXmlFromEmail, parseAdfXml } from "../domain/adfParser.js";
 import {
@@ -122,6 +123,36 @@ function normalizeDisplayCase(raw?: string | null): string {
   const letters = trimmed.replace(/[^A-Za-z]/g, "");
   if (!letters) return trimmed;
   return letters === letters.toUpperCase() ? toTitleCase(trimmed) : trimmed;
+}
+
+function normalizePhoneE164(raw: string | null | undefined): string {
+  const digits = String(raw ?? "").replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.startsWith("+")) return digits;
+  return digits.length >= 11 ? `+${digits}` : "";
+}
+
+async function sendInternalSalespersonSms(
+  toNumberRaw: string | null | undefined,
+  body: string
+): Promise<{ sent: boolean; sid?: string; reason?: string }> {
+  const to = normalizePhoneE164(toNumberRaw);
+  const from = normalizePhoneE164(String(process.env.TWILIO_FROM_NUMBER ?? "").trim());
+  const accountSid = String(process.env.TWILIO_ACCOUNT_SID ?? "").trim();
+  const authToken = String(process.env.TWILIO_AUTH_TOKEN ?? "").trim();
+  if (!to || !to.startsWith("+")) return { sent: false, reason: "invalid_to_number" };
+  if (!from || !from.startsWith("+") || !accountSid || !authToken) {
+    return { sent: false, reason: "twilio_not_configured" };
+  }
+  try {
+    const client = twilio(accountSid, authToken);
+    const msg = await client.messages.create({ from, to, body: String(body ?? "").trim() });
+    return { sent: true, sid: String(msg.sid ?? "") || undefined };
+  } catch (e: any) {
+    return { sent: false, reason: String(e?.message ?? "send_failed") };
+  }
 }
 
 function isStickyClosedJourney(conv: any): boolean {
@@ -1812,6 +1843,44 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       conv,
       "Dealer ride follow-up needed: thank customer, confirm how to proceed, and update lead status."
     );
+    const users = await listUsers();
+    const ownerId = String(conv.leadOwner?.id ?? "").trim();
+    const owner =
+      users.find(u => u.id === ownerId) ??
+      users.find(u => {
+        const ownerFirst = String(conv.leadOwner?.name ?? "")
+          .trim()
+          .toLowerCase()
+          .split(/\s+/)
+          .filter(Boolean)[0];
+        const first = String(u.firstName ?? "").trim().toLowerCase();
+        const nameFirst = String(u.name ?? "")
+          .trim()
+          .toLowerCase()
+          .split(/\s+/)
+          .filter(Boolean)[0];
+        return !!ownerFirst && (ownerFirst === first || ownerFirst === nameFirst);
+      }) ??
+      null;
+    const ownerName =
+      String(owner?.firstName ?? "").trim() ||
+      String(owner?.name ?? "").trim() ||
+      String(conv.leadOwner?.name ?? "").trim() ||
+      "salesperson";
+    const customerName =
+      [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() || conv.leadKey || "customer";
+    const leadSummary =
+      `Dealer ride update needed for ${customerName}. ` +
+      `DLA shows "not interested in purchasing at this time". ` +
+      `Please send status/next-step update in Leadrider.`;
+    const staffSms = await sendInternalSalespersonSms(owner?.phone, leadSummary);
+    addTodo(
+      conv,
+      "note",
+      staffSms.sent
+        ? `Salesperson SMS sent to ${ownerName}${staffSms.sid ? ` (SID ${staffSms.sid})` : ""}.`
+        : `Salesperson SMS failed for ${ownerName}: ${staffSms.reason ?? "unknown_error"}.`
+    );
     setFollowUpMode(conv, "manual_handoff", "dealer_ride_no_purchase");
     stopFollowUpCadence(conv, "manual_handoff");
     return res.status(200).json({
@@ -1825,7 +1894,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       channel,
       intent: "GENERAL",
       stage: "ENGAGED",
-      note: "dealer_ride_no_purchase_manual_handoff"
+      note: "dealer_ride_no_purchase_manual_handoff",
+      staffSms
     });
   }
 
