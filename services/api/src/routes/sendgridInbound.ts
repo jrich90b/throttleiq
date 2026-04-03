@@ -127,6 +127,14 @@ function normalizeDisplayCase(raw?: string | null): string {
   return letters === letters.toUpperCase() ? toTitleCase(trimmed) : trimmed;
 }
 
+function pickFirstToken(raw: string | null | undefined): string {
+  return String(raw ?? "")
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)[0] ?? "";
+}
+
 function normalizePhoneE164(raw: string | null | undefined): string {
   const digits = String(raw ?? "").replace(/\D/g, "");
   if (!digits) return "";
@@ -1483,6 +1491,38 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     if (strictSalesTrade) {
       conv = createConversationForLeadKey(leadKey, latestByLead.mode ?? "suggest");
       conv.leadOwner = latestByLead.leadOwner ? { ...latestByLead.leadOwner } : undefined;
+    }
+  }
+  if (!conv.leadOwner?.id) {
+    const users = await listUsers();
+    const manager = users.find(u => u.role === "manager") ?? null;
+    const vendorFirst = pickFirstToken(vendorContactName);
+    const rawSalespersonFromComment =
+      String(lead.comment ?? lead.inquiry ?? "").match(
+        /\bsalesperson\s*:\s*([a-z][a-z\s.'-]{1,40})/i
+      )?.[1] ?? "";
+    const salespersonFirst = pickFirstToken(rawSalespersonFromComment);
+    const matchedSalesperson =
+      users.find(u => {
+        if (u.role !== "salesperson") return false;
+        const first = pickFirstToken(u.firstName);
+        const nameFirst = pickFirstToken(u.name);
+        return !!salespersonFirst && (salespersonFirst === first || salespersonFirst === nameFirst);
+      }) ??
+      users.find(u => {
+        if (u.role !== "salesperson") return false;
+        const first = pickFirstToken(u.firstName);
+        const nameFirst = pickFirstToken(u.name);
+        return !!vendorFirst && (vendorFirst === first || vendorFirst === nameFirst);
+      }) ??
+      null;
+    const owner = matchedSalesperson ?? manager;
+    if (owner) {
+      conv.leadOwner = {
+        id: owner.id,
+        name: owner.name ?? owner.firstName ?? owner.email ?? "Salesperson",
+        assignedAt: new Date().toISOString()
+      };
     }
   }
   mergeConversationLead(conv, {
