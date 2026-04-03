@@ -1968,7 +1968,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         console.warn("[sendgrid inbound] walk-in owner resolve failed:", (e as any)?.message ?? e);
       }
     }
-    const salespersonName = vendorFirst || agentName;
+    const leadOwnerName = String(conv.leadOwner?.name ?? "").trim();
+    const leadOwnerFirst = leadOwnerName ? leadOwnerName.split(/\s+/).filter(Boolean)[0] ?? "" : "";
+    const salespersonName = leadOwnerFirst || vendorFirst || agentName;
     const modelRaw =
       conv.lead?.vehicle?.model ??
       conv.lead?.vehicle?.description ??
@@ -2140,6 +2142,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       }
     } else if (hasCompletedTestRideSignal) {
       conv.dialogState = { name: "test_ride_booked", updatedAt: new Date().toISOString() };
+      addCallTodoIfMissing(
+        conv,
+        "Post-test-ride update needed: contact customer, confirm next step, and update lead status."
+      );
+      setFollowUpMode(conv, "manual_handoff", "test_ride_completed_walkin");
+      stopFollowUpCadence(conv, "manual_handoff");
     }
     let walkInDelayReason: string | null = null;
     let walkInDelayDays: number | null = null;
@@ -2175,7 +2183,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         ? "Thanks again — we’ll take it from here and follow up if anything is needed."
         : "Thanks for the deposit note — we’ll follow up with next steps.";
     } else if (hasCompletedTestRideSignal) {
-      tail = "Thanks for taking the test ride — I’ll follow up with next steps.";
+      tail = "Thanks again for taking the test ride today. What feels like the best next step for you?";
     } else if (walkInDelayReason === "outside_financing_pending") {
       tail = "Sounds good — once you hear back from your credit union, text me and I’ll help with next steps.";
     } else if (walkInDelayReason === "down_payment_pending") {
@@ -2202,12 +2210,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       (walkInOutcomeAccepted && /next week/i.test(walkInFollowUpWindowHint)) ||
       /(next week|check back|reach out|follow up)/i.test(walkInCleanedComment);
 
-    if (walkInTestRideRequested && walkInWeatherSensitive) {
-      tail = "I’ll reach back when the weather looks better and we can line up your test ride.";
-    } else if (walkInTestRideRequested && walkInHasNextWeekWindow) {
-      tail = "I’ll check back next week and we can line up your test ride.";
+    if (!hasCompletedTestRideSignal) {
+      if (walkInTestRideRequested && walkInWeatherSensitive) {
+        tail = "I’ll reach back when the weather looks better and we can line up your test ride.";
+      } else if (walkInTestRideRequested && walkInHasNextWeekWindow) {
+        tail = "I’ll check back next week and we can line up your test ride.";
+      }
     }
-    if (modelLabel) {
+    if (modelLabel && !hasCompletedTestRideSignal) {
       if (wantsUsed) {
         const usedLabel = `used ${rangeLabel}${modelLabel}`;
         tail = hasUsedMatch
@@ -2267,6 +2277,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       "Thanks for stopping in, it was nice chatting with you. " +
       tail +
       (addendum ? ` ${addendum}` : "");
+    const suppressWalkInAutoAck = hasCompletedTestRideSignal;
 
     if (
       modelLabel &&
@@ -2335,7 +2346,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       stopFollowUpCadence(conv, "inventory_watch");
     }
 
-    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
+    if (!suppressWalkInAutoAck) {
+      appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
+    }
     if (walkInDelayReason && walkInDelayDays && !hasCreditCosignerSignal && !(hasDepositSignal || hasSoldSignal)) {
       const cfg = await getSchedulerConfig();
       if (!conv.followUpCadence?.status) {
@@ -2353,6 +2366,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       conv.followUp?.mode !== "holding_inventory" &&
       conv.followUp?.mode !== "manual_handoff" &&
       conv.followUp?.mode !== "paused_indefinite" &&
+      !hasCompletedTestRideSignal &&
       !hasDepositSignal &&
       !hasSoldSignal &&
       !hasCreditCosignerSignal;
