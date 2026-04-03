@@ -4209,6 +4209,9 @@ function parseTimeTokenToParts(token: string, fallbackHour24: number): { hour24:
 
 function extractTimeToken(msg: string): string | null {
   const s = String(msg ?? "").toLowerCase();
+  const financeNumericContext =
+    /\b(payment|monthly|per month|\/\s*mo|\/\s*month|down|down payment|apr|term|finance|financing|loan|loans?)\b/i
+      .test(s) || /\b\d{2,3}\s*(month|months|mo)\b/i.test(s);
 
   // colon format: 9:30, 09:30, 9:30am, 9:30 am
   let m = s.match(/\b(\d{1,2})\s*:\s*(\d{2})\s*(am|pm)?\b/);
@@ -4224,6 +4227,7 @@ function extractTimeToken(msg: string): string | null {
   if (m) {
     const digits = m[1];
     const ap = m[2] ?? "";
+    if (!ap && financeNumericContext) return null;
     const d = digits.padStart(4, "0");
     const hh = String(Number(d.slice(0, 2)));
     const mm = d.slice(2, 4);
