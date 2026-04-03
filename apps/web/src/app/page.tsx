@@ -2774,6 +2774,8 @@ export default function Home() {
     if (!lastInbound?.at) return false;
     const lastInboundAt = new Date(lastInbound.at).getTime();
     if (!Number.isFinite(lastInboundAt)) return false;
+    // Don't show "thinking" indefinitely when AI intentionally chooses no response.
+    if (Date.now() - lastInboundAt > 90 * 1000) return false;
     const lastOutboundAfterInbound = [...messages]
       .reverse()
       .find(m => m.direction === "out" && new Date(m.at).getTime() >= lastInboundAt);
