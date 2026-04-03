@@ -1898,6 +1898,11 @@ export function scheduleLongTermFollowUp(
 
 export function stopFollowUpCadence(conv: Conversation, reason: string) {
   if (!conv.followUpCadence) return;
+  // Post-sale cadence should continue even when sales flow triggers manual handoff
+  // (for example, a service request on a sold lead).
+  if (conv.followUpCadence.kind === "post_sale" && reason === "manual_handoff") {
+    return;
+  }
   conv.followUpCadence.status = "stopped";
   conv.followUpCadence.stopReason = reason;
   conv.followUpCadence.nextDueAt = undefined;
