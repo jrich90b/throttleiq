@@ -2125,6 +2125,17 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         /\b(waiting on insurance|insurance quote|need (the )?title|need docs|paperwork first|registration first|dmv first)\b/.test(
           commentLower
         ));
+    const hasHoldSignal =
+      /\b(mark|set|put|place)\b.{0,24}\b(on\s+)?hold\b/.test(commentLower) ||
+      /\bhold until\b/.test(commentLower) ||
+      /\bstatus\s*[:\-]?\s*hold\b/.test(commentLower) ||
+      /\bon hold\b/.test(commentLower);
+    const hasResumeHoldSignal =
+      /\b(clear|remove|release|take off)\b.{0,24}\bhold\b/.test(commentLower) ||
+      /\bunhold\b/.test(commentLower) ||
+      /\bresume\b/.test(commentLower) ||
+      /\breopen\b/.test(commentLower) ||
+      /\breactivate\b/.test(commentLower);
 
     if (hasCreditCosignerSignal) {
       conv.dialogState = { name: "payments_handoff", updatedAt: new Date().toISOString() };
@@ -2148,10 +2159,46 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       );
       setFollowUpMode(conv, "manual_handoff", "test_ride_completed_walkin");
       stopFollowUpCadence(conv, "manual_handoff");
+    } else if (hasHoldSignal) {
+      const nowIso = new Date().toISOString();
+      const createdAt = conv.hold?.createdAt ?? nowIso;
+      conv.status = "open";
+      if (conv.closedReason && /\bhold\b/i.test(String(conv.closedReason))) {
+        conv.closedReason = undefined;
+        conv.closedAt = undefined;
+      }
+      conv.hold = {
+        ...conv.hold,
+        note: walkInCleanedComment || event.body || "Walk-in hold note",
+        reason: "manual_hold",
+        createdAt,
+        updatedAt: nowIso
+      };
+      setFollowUpMode(conv, "paused_indefinite", "manual_hold");
+      stopFollowUpCadence(conv, "manual_hold");
+    } else if (hasResumeHoldSignal) {
+      conv.hold = undefined;
+      conv.status = "open";
+      if (conv.closedReason && /\bhold\b/i.test(String(conv.closedReason))) {
+        conv.closedReason = undefined;
+        conv.closedAt = undefined;
+      }
+      setFollowUpMode(conv, "active", "manual_hold_clear");
+      if (conv.followUpCadence?.status === "stopped") {
+        conv.followUpCadence = undefined;
+      }
+      const cfg = await getSchedulerConfig();
+      if (!conv.followUpCadence) {
+        startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
+      } else {
+        conv.followUpCadence.status = "active";
+        conv.followUpCadence.pausedUntil = undefined;
+        conv.followUpCadence.pauseReason = undefined;
+      }
     }
     let walkInDelayReason: string | null = null;
     let walkInDelayDays: number | null = null;
-    if (!(hasDepositSignal || hasSoldSignal || hasCreditCosignerSignal)) {
+    if (!(hasDepositSignal || hasSoldSignal || hasCreditCosignerSignal || hasHoldSignal || hasResumeHoldSignal)) {
       if (hasOutsideFinancingPendingSignal) {
         walkInDelayReason = "outside_financing_pending";
         walkInDelayDays = 5;
@@ -2198,6 +2245,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       tail = "Makes sense — once docs/insurance are lined up, I can help you finish this out.";
     } else if (walkInDelayReason === "decision_pending") {
       tail = "No rush — think it over and I’m here when you’re ready.";
+    } else if (hasHoldSignal) {
+      tail = "Understood — I marked this lead on hold and paused automated follow-up.";
+    } else if (hasResumeHoldSignal) {
+      tail = "Sounds good — I cleared the hold and reactivated follow-up.";
     }
     const walkInTestRideRequested =
       (walkInOutcomeAccepted && !!llmWalkInOutcome?.testRideRequested) ||
@@ -2277,7 +2328,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       "Thanks for stopping in, it was nice chatting with you. " +
       tail +
       (addendum ? ` ${addendum}` : "");
-    const suppressWalkInAutoAck = hasCompletedTestRideSignal;
+    const suppressWalkInAutoAck = hasCompletedTestRideSignal || hasHoldSignal || hasResumeHoldSignal;
 
     if (
       modelLabel &&
@@ -2367,6 +2418,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       conv.followUp?.mode !== "manual_handoff" &&
       conv.followUp?.mode !== "paused_indefinite" &&
       !hasCompletedTestRideSignal &&
+      !hasHoldSignal &&
+      !hasResumeHoldSignal &&
       !hasDepositSignal &&
       !hasSoldSignal &&
       !hasCreditCosignerSignal;
