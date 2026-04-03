@@ -3572,9 +3572,10 @@ export default function Home() {
           })
         );
       } else {
-        await loadConversation(selectedConv.id);
+        void loadConversation(selectedConv.id).catch(() => {});
       }
-      await load();
+      // Don't block "Sending..." on full list refresh; update in background.
+      void load().catch(() => {});
       return true;
     } finally {
       setComposeSending(false);
@@ -10308,6 +10309,27 @@ export default function Home() {
                     </div>
                   );
                 })}
+              {regenBusy || composeSending ? (
+                <div className="text-sm">
+                  <div className="text-xs text-gray-500">
+                    {regenBusy ? "AI • thinking" : "OUT • sending"}
+                  </div>
+                  <div className="inline-flex mt-1 items-center gap-2 px-3 py-2 rounded-2xl border bg-gray-100 text-gray-700 border-gray-200">
+                    <span>{regenBusy ? "Thinking" : "Sending"}</span>
+                    <span className="inline-flex items-center gap-1">
+                      <span className="h-1.5 w-1.5 rounded-full bg-gray-500 animate-pulse" />
+                      <span
+                        className="h-1.5 w-1.5 rounded-full bg-gray-500 animate-pulse"
+                        style={{ animationDelay: "150ms" }}
+                      />
+                      <span
+                        className="h-1.5 w-1.5 rounded-full bg-gray-500 animate-pulse"
+                        style={{ animationDelay: "300ms" }}
+                      />
+                    </span>
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <div className="mt-6 flex gap-2 items-start">
