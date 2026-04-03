@@ -17490,6 +17490,13 @@ if (authToken && signature) {
             finish: conv.inventoryContext?.finish,
             updatedAt: nowIso()
           };
+          conv.lead = conv.lead ?? {};
+          conv.lead.vehicle = conv.lead.vehicle ?? {};
+          if (picked.stockId) conv.lead.vehicle.stockId = picked.stockId;
+          if (picked.vin) conv.lead.vehicle.vin = picked.vin;
+          if (typeof picked.price === "number" && Number.isFinite(picked.price)) {
+            conv.lead.vehicle.listPrice = picked.price;
+          }
         }
         const pickedMonthlyEstimate =
           hasMonthlyBudgetTarget && picked
@@ -18082,6 +18089,35 @@ if (authToken && signature) {
   const history = buildHistory(conv, 20);
   const memorySummary = conv.memorySummary?.text ?? null;
   const memorySummaryShouldUpdate = shouldUpdateMemorySummary(conv);
+  const leadForOrchestrator = conv.lead
+    ? {
+        ...conv.lead,
+        vehicle: {
+          ...(conv.lead.vehicle ?? {}),
+          stockId:
+            (conv.inventoryContext as any)?.stockId ??
+            conv.lead.vehicle?.stockId,
+          vin:
+            (conv.inventoryContext as any)?.vin ??
+            conv.lead.vehicle?.vin,
+          year:
+            (conv.inventoryContext as any)?.year ??
+            conv.lead.vehicle?.year,
+          model:
+            (conv.inventoryContext as any)?.model ??
+            conv.lead.vehicle?.model,
+          color:
+            (conv.inventoryContext as any)?.color ??
+            conv.lead.vehicle?.color,
+          condition:
+            (conv.inventoryContext as any)?.condition ??
+            conv.lead.vehicle?.condition,
+          listPrice:
+            (conv.inventoryContext as any)?.listPrice ??
+            conv.lead.vehicle?.listPrice
+        }
+      }
+    : null;
   const weatherProfileStartedAt = Date.now();
   const weatherProfile = await getDealerProfileHot();
   logRouteTiming("dealer_profile_for_weather", weatherProfileStartedAt);
@@ -18093,7 +18129,7 @@ if (authToken && signature) {
     leadSource: conv.lead?.source ?? null,
     bucket: conv.classification?.bucket ?? null,
     cta: conv.classification?.cta ?? null,
-    lead: conv.lead ?? null,
+    lead: leadForOrchestrator,
     pricingAttempts: getPricingAttempts(conv),
     allowSchedulingOffer:
       turnPrimaryIntent === "scheduling" &&
