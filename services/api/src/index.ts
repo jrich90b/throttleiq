@@ -300,6 +300,7 @@ const HOT_CACHE_INVENTORY_FEED_MS = Number(process.env.HOT_CACHE_INVENTORY_FEED_
 const hotDealerProfileCache: HotCacheEntry<DealerProfileSnapshot> = { expiresAt: 0 };
 const hotSchedulerConfigCache: HotCacheEntry<SchedulerConfigSnapshot> = { expiresAt: 0 };
 const hotInventoryFeedCache: HotCacheEntry<InventoryFeedSnapshot> = { expiresAt: 0 };
+let dynamicInventoryColorPhrases: string[] = [];
 
 async function withHotCache<T>(
   cache: HotCacheEntry<T>,
@@ -347,9 +348,11 @@ async function getSchedulerConfigHot(): Promise<SchedulerConfigSnapshot> {
 }
 
 async function getInventoryFeedHot(): Promise<InventoryFeedSnapshot> {
-  return withHotCache(hotInventoryFeedCache, HOT_CACHE_INVENTORY_FEED_MS, "inventory_feed", () =>
+  const items = await withHotCache(hotInventoryFeedCache, HOT_CACHE_INVENTORY_FEED_MS, "inventory_feed", () =>
     getInventoryFeed()
   );
+  dynamicInventoryColorPhrases = buildInventoryColorPhrasesFromFeed(items);
+  return items;
 }
 
 function isPublicPath(pathname: string): boolean {
@@ -6487,6 +6490,49 @@ const INVENTORY_COLOR_PHRASES = [
   "billiard red"
 ].sort((a, b) => b.length - a.length);
 
+function buildInventoryColorPhrasesFromFeed(items: InventoryFeedSnapshot): string[] {
+  if (!Array.isArray(items) || items.length === 0) return [];
+  const out = new Set<string>();
+  const baseRegistry = [...INVENTORY_COLOR_PHRASES];
+  const maybeAdd = (rawText: string | null | undefined) => {
+    const raw = String(rawText ?? "").trim();
+    if (!raw) return;
+    const cleaned = sanitizeColorPhrase(raw);
+    if (!cleaned) return;
+    if (cleaned.length < 3 || cleaned.length > 80) return;
+    const normalized = normalizeColor(cleaned);
+    if (!normalized || BASIC_COLOR_WORDS.includes(normalized)) return;
+    out.add(normalized);
+  };
+  for (const item of items) {
+    const itemAny = item as Record<string, unknown>;
+    maybeAdd(item?.color);
+    const textFields = [
+      itemAny.title,
+      itemAny.name,
+      itemAny.description,
+      itemAny.vehicleDescription,
+      item?.model
+    ];
+    for (const field of textFields) {
+      const text = normalizeColor(String(field ?? ""));
+      if (!text) continue;
+      const direct = baseRegistry.find(c => text.includes(c));
+      if (direct) maybeAdd(direct);
+      const yearStockPattern =
+        /\b20\d{2}\s+[a-z0-9\s-]{2,50}\s+[a-z]{1,5}\d{1,4}(?:[-\s]\d{2})?\s+([a-z][a-z0-9\s-]{3,50}?)(?:\s+(?:black|chrome)\s+trim)?(?:\s|$)/i;
+      const patternMatch = String(field ?? "").match(yearStockPattern);
+      if (patternMatch?.[1]) maybeAdd(patternMatch[1]);
+    }
+  }
+  return Array.from(out).sort((a, b) => b.length - a.length);
+}
+
+function getInventoryColorPhraseRegistry(): string[] {
+  const merged = new Set<string>([...INVENTORY_COLOR_PHRASES, ...dynamicInventoryColorPhrases]);
+  return Array.from(merged).sort((a, b) => b.length - a.length);
+}
+
 const BASIC_COLOR_WORDS = [
   "black",
   "white",
@@ -6591,7 +6637,7 @@ function extractColorToken(text: string): string | null {
     .replace(/[\/&]+/g, " and ")
     .replace(/\s+/g, " ")
     .trim();
-  const direct = INVENTORY_COLOR_PHRASES.find(c => t.includes(c));
+  const direct = getInventoryColorPhraseRegistry().find(c => t.includes(c));
   if (direct) return direct;
   const twoTone = extractTwoToneColorPhrase(t);
   if (twoTone) return twoTone;
