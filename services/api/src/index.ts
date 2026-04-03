@@ -270,6 +270,19 @@ function shouldUpdateMemorySummary(conv: { messages?: any[]; memorySummary?: { m
   return messageCount - lastCount >= 6;
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise;
+  let timer: NodeJS.Timeout | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 type HotCacheEntry<T> = {
   value?: T;
   expiresAt: number;
@@ -6523,11 +6536,20 @@ function extractColorFromTrimContext(text: string): string | null {
   candidate = candidate
     .replace(/^(new|used|pre[-\s]?owned)\s+/i, "")
     .replace(/^(an|a|the)\s+/i, "")
+    .replace(/^any\s+/i, "")
     .replace(/^\d{4}\s+/, "")
+    .replace(/\b(ones?|bikes?|units?|models?|options?)\b$/i, "")
     .replace(/\b(with|w|in)\b\s*$/i, "")
     .replace(/\s+/g, " ")
     .trim();
   if (!candidate) return null;
+
+  const colorWordMatch = candidate.match(
+    /\b(black|white|red|blue|gray|grey|silver|green|orange|yellow|brown|tan|purple)\b/i
+  );
+  if (colorWordMatch?.[1]) {
+    return colorWordMatch[1].toLowerCase();
+  }
 
   const mentionedModel = findMentionedModel(text);
   if (mentionedModel) {
@@ -6571,6 +6593,7 @@ function extractColorToken(text: string): string | null {
       color => color !== "black" && color !== "chrome" && new RegExp(`\\b${color}\\b`, "i").test(t)
     );
     if (nonTrimColor) return nonTrimColor;
+    if (/\bblack\b/i.test(t)) return "black";
   }
   for (const color of BASIC_COLOR_WORDS) {
     if (hasTrimContext && (color === "black" || color === "chrome")) continue;
@@ -11708,6 +11731,7 @@ app.post("/conversations/:id/send", async (req, res) => {
   }
   const actorUserId = String(user?.id ?? "").trim();
   const actorUserName = String(user?.name ?? user?.email ?? "").trim();
+  const outboundSendTimeoutMs = Number(process.env.OUTBOUND_SEND_TIMEOUT_MS ?? 20000);
   const claimLeadOwnerFromActor = () => {
     if (!actorUserId) return;
     const existingOwner = conv.leadOwner;
@@ -11917,14 +11941,18 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
     const hadOutbound = conv.messages.some(m => m.direction === "out");
     try {
-      await sendEmail({
-        to: emailTo!,
-        subject,
-        text: signed,
-        from: emailFrom,
-        replyTo,
-        ...(attachments.length ? { attachments } : {})
-      });
+      await withTimeout(
+        sendEmail({
+          to: emailTo!,
+          subject,
+          text: signed,
+          from: emailFrom,
+          replyTo,
+          ...(attachments.length ? { attachments } : {})
+        }),
+        outboundSendTimeoutMs,
+        "email send"
+      );
       const outboundProvider = manualTakeover && !draftId ? "human" : "sendgrid";
       const fin = finalizeDraftAsSent(conv, draftId, signed, outboundProvider);
       if (!fin.usedDraft) {
@@ -12035,12 +12063,16 @@ app.post("/conversations/:id/send", async (req, res) => {
       });
     }
     const client = twilio(accountSid, authToken);
-    const msg = await client.messages.create({
-      from,
-      to,
-      body,
-      ...(mediaUrls && mediaUrls.length ? { mediaUrl: mediaUrls } : {})
-    });
+    const msg = await withTimeout(
+      client.messages.create({
+        from,
+        to,
+        body,
+        ...(mediaUrls && mediaUrls.length ? { mediaUrl: mediaUrls } : {})
+      }),
+      outboundSendTimeoutMs,
+      "twilio send"
+    );
 
     // Log as truly sent via Twilio (store SID)
     const hadOutbound = conv.messages.some(m => m.direction === "out");
@@ -17213,6 +17245,7 @@ if (authToken && signature) {
           : [];
         const responseMatches = hasMonthlyBudgetTarget ? budgetMatchedEntries.map(entry => entry.item) : availableMatches;
         const conditionLabel = formatRequestedConditionLabel(condition);
+        const requestedColorLabel = formatColorLabel(color) ?? color;
 
         if (matches.length === 0 && (leadSold || leadHold)) {
           const label =
@@ -17406,7 +17439,7 @@ if (authToken && signature) {
           : responseMatches;
         if (otherInventoryRequest && responseMatchesExcludingLead.length === 0) {
           const paintTrimPrompt = "Are you looking for any paint or trim specifically (chrome vs blacked-out)?";
-          const reply = `Right now that’s the only ${conditionLabel}${year ? `${year} ` : ""}${model}${color ? ` in ${color}` : ""} we have in stock. ${paintTrimPrompt}`;
+          const reply = `Right now that’s the only ${conditionLabel}${year ? `${year} ` : ""}${model}${requestedColorLabel ? ` in ${requestedColorLabel}` : ""} we have in stock. ${paintTrimPrompt}`;
           const systemMode = webhookMode;
           if (systemMode === "suggest") {
             appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -17463,8 +17496,8 @@ if (authToken && signature) {
             !colorMatchesExact(pickedColor, String(color), finish) &&
             !colorMatchesAlias(pickedColor, String(color), finish);
           const colorNote = explicitColor
-            ? color
-              ? ` in ${color}`
+            ? requestedColorLabel
+              ? ` in ${requestedColorLabel}`
               : pickedColor
                 ? ` in ${pickedColor}`
                 : ""
@@ -17472,7 +17505,7 @@ if (authToken && signature) {
               ? ` in ${pickedColor}`
               : "";
           const reply = colorMismatch
-            ? `I don’t see ${color} in stock right now, but I can send photos of the ${label}${pickedColor ? ` in ${pickedColor}` : ""} we do have. Want those?`
+            ? `I don’t see ${requestedColorLabel ?? "that color"} in stock right now, but I can send photos of the ${label}${pickedColor ? ` in ${pickedColor}` : ""} we do have. Want those?`
             : year || model
               ? `Yes — here’s a photo of the ${year ? `${year} ` : ""}${model ?? pickedModel}${colorNote} we have in stock.`
               : `Yes — here’s a photo of the ${colorNote ? colorNote.replace(/^ in /, "") + " " : ""}${label} we have in stock.`;
@@ -17556,7 +17589,7 @@ if (authToken && signature) {
         const imageUrl =
           responseMatches.find(m => Array.isArray(m.images) && m.images.length)?.images?.[0] ?? null;
         const finishLabel = finishFromText ? ` with ${finishFromText} finish` : "";
-        const colorLabel = color ? ` in ${color}` : "";
+        const colorLabel = requestedColorLabel ? ` in ${requestedColorLabel}` : "";
         const asksConditionOnly =
           /\b(new|used|pre[-\s]?owned|preowned)\b/i.test(textLower) &&
           (/\bor\b/i.test(textLower) || /\b(is it|that|this)\b/i.test(textLower)) &&
@@ -17630,8 +17663,8 @@ if (authToken && signature) {
             askedAt: new Date().toISOString()
           };
           const reply = year
-            ? `I’m not seeing a ${conditionLabel}${year} ${model}${color ? ` in ${color}` : ""} in stock right now. ${buildOutOfStockHumanOptionsLine()} Want me to keep an eye out for the ${watchExactLabel}?`
-            : `I’m not seeing a ${conditionLabel}${model}${color ? ` in ${color}` : ""} in stock right now. ${buildOutOfStockHumanOptionsLine()} Want me to keep an eye out for the ${watchExactLabel}?`;
+            ? `I’m not seeing a ${conditionLabel}${year} ${model}${requestedColorLabel ? ` in ${requestedColorLabel}` : ""} in stock right now. ${buildOutOfStockHumanOptionsLine()} Want me to keep an eye out for the ${watchExactLabel}?`
+            : `I’m not seeing a ${conditionLabel}${model}${requestedColorLabel ? ` in ${requestedColorLabel}` : ""} in stock right now. ${buildOutOfStockHumanOptionsLine()} Want me to keep an eye out for the ${watchExactLabel}?`;
           setDialogState(conv, "inventory_watch_prompted");
           const systemMode = webhookMode;
           if (systemMode === "suggest") {
@@ -17708,7 +17741,7 @@ if (authToken && signature) {
         addTodo(
           conv,
           "other",
-          `Verify inventory for ${conditionLabel}${year ? `${year} ` : ""}${model}${color ? ` (${color})` : ""}`.trim(),
+          `Verify inventory for ${conditionLabel}${year ? `${year} ` : ""}${model}${requestedColorLabel ? ` (${requestedColorLabel})` : ""}`.trim(),
           event.providerMessageId
         );
         const isGenericModel = /full line|other/i.test(model ?? "");
@@ -17732,7 +17765,7 @@ if (authToken && signature) {
         }
         const colorFinishPrompt = await buildColorFinishFollowUpPrompt(conv, model, year, color);
         const reply =
-          `I’m not seeing ${conditionLabel}${year ? `${year} ` : ""}${model}${color ? ` in ${color}` : ""} in stock right now. ` +
+          `I’m not seeing ${conditionLabel}${year ? `${year} ` : ""}${model}${requestedColorLabel ? ` in ${requestedColorLabel}` : ""} in stock right now. ` +
           (isGenericModel
             ? "I’ll have someone verify and follow up shortly."
             : `${buildOutOfStockHumanOptionsLine()}${colorFinishPrompt ? ` ${colorFinishPrompt}` : ""} Want me to keep an eye out and text you when one lands?`);
