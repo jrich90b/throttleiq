@@ -1795,6 +1795,40 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     });
   }
 
+  const timeframeLower = String(lead.purchaseTimeframe ?? "").toLowerCase();
+  const isDealerRideEventLead =
+    event.provider === "sendgrid_adf" &&
+    !(conv.messages ?? []).some((m: any) => m.direction === "out") &&
+    (leadSourceLower.includes("dealer lead app") ||
+      /event name:\s*dealer test ride|demo bikes ridden|dealer lead app/i.test(effectiveInquiry));
+  const isNoPurchaseNow =
+    /not interested in purchasing at this time/.test(timeframeLower) ||
+    /purchase timeframe:\s*i am not interested in purchasing at this time/.test(inquiryText) ||
+    /do you expect to make a motorcycle purchase in the near future\?\s*no/.test(inquiryText) ||
+    /not interested in purchasing at this time/.test(inquiryText);
+  if (isDealerRideEventLead && isNoPurchaseNow) {
+    conv.dialogState = { name: "test_ride_booked", updatedAt: new Date().toISOString() };
+    addCallTodoIfMissing(
+      conv,
+      "Dealer ride follow-up needed: thank customer, confirm how to proceed, and update lead status."
+    );
+    setFollowUpMode(conv, "manual_handoff", "dealer_ride_no_purchase");
+    stopFollowUpCadence(conv, "manual_handoff");
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      note: "dealer_ride_no_purchase_manual_handoff"
+    });
+  }
+
   const isInitialAdf =
     event.provider === "sendgrid_adf" &&
     !(conv.messages ?? []).some((m: any) => m.direction === "out");
