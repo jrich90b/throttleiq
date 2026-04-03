@@ -11785,6 +11785,11 @@ app.post("/conversations/:id/send", async (req, res) => {
       console.warn("⚠️ TLP async log failed:", err?.message ?? err);
     });
   };
+  const queueTuningLog = (twilioSid: string | null) => {
+    void logRow(twilioSid).catch((err: any) => {
+      console.warn("⚠️ Async tuning log failed:", err?.message ?? err);
+    });
+  };
 
   if (wantsEmail) {
     const forceEmail = req.body?.forceEmail === true;
@@ -11860,7 +11865,7 @@ app.post("/conversations/:id/send", async (req, res) => {
         setConversationMode(conv.id, "human");
       }
       markAppointmentAcknowledged(conv);
-      await logRow(null);
+      queueTuningLog(null);
       queueTlpLog();
       return res.json({ ok: true, conversation: conv });
     } catch (err: any) {
@@ -11895,7 +11900,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       setConversationMode(conv.id, "human");
     }
     markAppointmentAcknowledged(conv);
-    await logRow(null);
+    queueTuningLog(null);
     queueTlpLog();
     return res.status(400).json({
       ok: false,
@@ -11933,7 +11938,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       setConversationMode(conv.id, "human");
     }
     markAppointmentAcknowledged(conv);
-    await logRow(null);
+    queueTuningLog(null);
     queueTlpLog();
     return res.status(500).json({
       ok: false,
@@ -11976,7 +11981,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       setConversationMode(conv.id, "human");
     }
     markAppointmentAcknowledged(conv);
-    await logRow(msg.sid);
+    queueTuningLog(msg.sid);
     queueTlpLog();
 
     return res.json({
@@ -12003,7 +12008,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       setConversationMode(conv.id, "human");
     }
     markAppointmentAcknowledged(conv);
-    await logRow(null);
+    queueTuningLog(null);
 
     return res.status(502).json({
       ok: false,
