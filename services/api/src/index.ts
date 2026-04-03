@@ -270,6 +270,75 @@ function shouldUpdateMemorySummary(conv: { messages?: any[]; memorySummary?: { m
   return messageCount - lastCount >= 6;
 }
 
+type HotCacheEntry<T> = {
+  value?: T;
+  expiresAt: number;
+  inFlight?: Promise<T>;
+};
+
+type DealerProfileSnapshot = Awaited<ReturnType<typeof getDealerProfile>>;
+type SchedulerConfigSnapshot = Awaited<ReturnType<typeof getSchedulerConfig>>;
+type InventoryFeedSnapshot = Awaited<ReturnType<typeof getInventoryFeed>>;
+
+const HOT_CACHE_ENABLED = process.env.HOT_READ_CACHE_ENABLED !== "0";
+const HOT_CACHE_DEALER_PROFILE_MS = Number(process.env.HOT_CACHE_DEALER_PROFILE_MS ?? 5000);
+const HOT_CACHE_SCHEDULER_CONFIG_MS = Number(process.env.HOT_CACHE_SCHEDULER_CONFIG_MS ?? 5000);
+const HOT_CACHE_INVENTORY_FEED_MS = Number(process.env.HOT_CACHE_INVENTORY_FEED_MS ?? 3000);
+const hotDealerProfileCache: HotCacheEntry<DealerProfileSnapshot> = { expiresAt: 0 };
+const hotSchedulerConfigCache: HotCacheEntry<SchedulerConfigSnapshot> = { expiresAt: 0 };
+const hotInventoryFeedCache: HotCacheEntry<InventoryFeedSnapshot> = { expiresAt: 0 };
+
+async function withHotCache<T>(
+  cache: HotCacheEntry<T>,
+  ttlMs: number,
+  label: string,
+  loader: () => Promise<T>
+): Promise<T> {
+  if (!HOT_CACHE_ENABLED || ttlMs <= 0) {
+    return loader();
+  }
+  const now = Date.now();
+  if (cache.value !== undefined && cache.expiresAt > now) {
+    return cache.value;
+  }
+  if (cache.inFlight) {
+    return cache.inFlight;
+  }
+  cache.inFlight = (async () => {
+    const t0 = Date.now();
+    try {
+      const value = await loader();
+      cache.value = value;
+      cache.expiresAt = Date.now() + ttlMs;
+      if (process.env.DEBUG_ROUTE_TIMING === "1") {
+        console.log("[route-timing]", { stage: `${label}.load`, ms: Date.now() - t0, cache: "miss" });
+      }
+      return value;
+    } finally {
+      cache.inFlight = undefined;
+    }
+  })();
+  return cache.inFlight;
+}
+
+async function getDealerProfileHot(): Promise<DealerProfileSnapshot> {
+  return withHotCache(hotDealerProfileCache, HOT_CACHE_DEALER_PROFILE_MS, "dealer_profile", () =>
+    getDealerProfile()
+  );
+}
+
+async function getSchedulerConfigHot(): Promise<SchedulerConfigSnapshot> {
+  return withHotCache(hotSchedulerConfigCache, HOT_CACHE_SCHEDULER_CONFIG_MS, "scheduler_config", () =>
+    getSchedulerConfig()
+  );
+}
+
+async function getInventoryFeedHot(): Promise<InventoryFeedSnapshot> {
+  return withHotCache(hotInventoryFeedCache, HOT_CACHE_INVENTORY_FEED_MS, "inventory_feed", () =>
+    getInventoryFeed()
+  );
+}
+
 function isPublicPath(pathname: string): boolean {
   return (
     pathname === "/health" ||
@@ -433,7 +502,7 @@ app.use((req, res, next) => {
 });
 
 async function syncSchedulerSalespeopleFromUsers() {
-  const cfg = await getSchedulerConfig();
+  const cfg = await getSchedulerConfigHot();
   const users = await listUsers();
   const salespeople = users
     .filter(
@@ -912,7 +981,7 @@ async function processInventoryWatchlist(targetConvId?: string) {
   if (inventoryWatchRunning) return;
   inventoryWatchRunning = true;
   try {
-    const items = await getInventoryFeed();
+    const items = await getInventoryFeedHot();
     if (!items.length) return;
     const holds = await listInventoryHolds();
     const solds = await listInventorySolds();
@@ -923,7 +992,7 @@ async function processInventoryWatchlist(targetConvId?: string) {
       if (soldKey && solds?.[soldKey]) return false;
       return true;
     };
-    const cfg = await getSchedulerConfig();
+    const cfg = await getSchedulerConfigHot();
     const tz = cfg.timezone || "America/New_York";
     const snapshot = await loadInventorySnapshot();
     const prevKeys = new Set(snapshot.items.map(i => i.key));
@@ -1077,7 +1146,7 @@ app.get("/health", (_req, res) => {
 
 app.get("/inventory", async (_req, res) => {
   try {
-    const items = await getInventoryFeed();
+    const items = await getInventoryFeedHot();
     if (!items.length) {
       const snap = await loadInventorySnapshot();
       if (snap.items.length) {
@@ -1109,7 +1178,7 @@ app.get("/inventory", async (_req, res) => {
 
 app.get("/public/inventory", async (_req, res) => {
   try {
-    const items = await getInventoryFeed();
+    const items = await getInventoryFeedHot();
     let list = items;
     if (!list.length) {
       list = await getInventoryFeed({ bypassCache: true });
@@ -1190,7 +1259,7 @@ app.post("/debug/inbound/process", express.json(), async (req, res) => {
     const history = buildHistory(conv, 20);
     const memorySummary = conv.memorySummary?.text ?? null;
     const memorySummaryShouldUpdate = shouldUpdateMemorySummary(conv);
-    const dealerProfile = await getDealerProfile();
+    const dealerProfile = await getDealerProfileHot();
     const weatherStatus = await getDealerWeatherStatus(dealerProfile);
     const result = await orchestrateInbound(event, history, {
       appointment: conv.appointment,
@@ -1601,7 +1670,7 @@ async function resetFollowUpCadenceOnInbound(conv: any, inboundText: string) {
     return;
   }
 
-  const cfg = await getSchedulerConfig();
+  const cfg = await getSchedulerConfigHot();
   const tz = cfg.timezone || "America/New_York";
   const anchor = nowIso();
   cadence.anchorAt = anchor;
@@ -1881,7 +1950,7 @@ async function applyPostCallSummaryActions(opts: {
   if (bookingCue.test(lowerSummary) || bookingCue.test(lowerTranscript) || llmTestRideIntent) {
     if (!conv.appointment?.bookedEventId) {
       try {
-        const cfg = await getSchedulerConfig();
+        const cfg = await getSchedulerConfigHot();
         const requested =
           parseRequestedDayTime(summaryText, cfg.timezone) ||
           parseRequestedDayTime(transcriptText, cfg.timezone);
@@ -3108,7 +3177,7 @@ async function inferModelsFromText(text: string): Promise<string[]> {
   const t = text.toLowerCase();
   let candidates: string[] = [];
   try {
-    const items = await getInventoryFeed();
+    const items = await getInventoryFeedHot();
     candidates = items.map(i => i.model).filter(Boolean) as string[];
   } catch {
     candidates = [];
@@ -3636,7 +3705,7 @@ function ensureAppointmentOutcomeToken(appt: any): string {
 
 async function clearInventoryWatchState(conv: any, reason = "inventory_watch_clear"): Promise<void> {
   const nowIso = new Date().toISOString();
-  const cfg = await getSchedulerConfig();
+  const cfg = await getSchedulerConfigHot();
   const tz = cfg.timezone || "America/New_York";
 
   conv.inventoryWatch = undefined;
@@ -3763,7 +3832,7 @@ async function applyOutcomeSold(
 ) {
   const soldKey = normalizeInventorySoldKey(unit.stockId, unit.vin);
   if (!soldKey) return "Missing sold unit (stockId or VIN).";
-  const cfg = await getSchedulerConfig();
+  const cfg = await getSchedulerConfigHot();
   const salespeople = cfg.salespeople ?? [];
   const sp = soldById ? salespeople.find(s => s.id === soldById) ?? null : null;
   conv.sale = {
@@ -6737,7 +6806,7 @@ async function resolveWatchModelFromText(
     return "Sportster";
   }
   try {
-    const items = await getInventoryFeed();
+    const items = await getInventoryFeedHot();
     const inventoryModels = Array.from(new Set(items.map(i => i.model).filter(Boolean))) as string[];
     const range = extractYearRange(textLower);
     const singleYear = extractYearSingle(textLower);
@@ -7293,9 +7362,9 @@ function computeWeatherRecheckDueAt(now: Date, timeZone: string, daysAhead = 7):
 }
 
 async function processDueFollowUps() {
-  const cfg = await getSchedulerConfig();
+  const cfg = await getSchedulerConfigHot();
   if (cfg.enabled === false) return;
-  const dealerProfile = await getDealerProfile();
+  const dealerProfile = await getDealerProfileHot();
   const users = await listUsers();
   const userById = new Map(users.map(u => [u.id, u]));
   const now = new Date();
@@ -8178,7 +8247,7 @@ async function processDueFollowUps() {
 }
 
 async function processAppointmentConfirmations() {
-  const cfg = await getSchedulerConfig();
+  const cfg = await getSchedulerConfigHot();
   const now = new Date();
   const convs = getAllConversations();
 
@@ -8268,7 +8337,7 @@ async function processAppointmentConfirmations() {
 }
 
 async function processStaffAppointmentNotifications() {
-  const cfg = await getSchedulerConfig();
+  const cfg = await getSchedulerConfigHot();
   const users = await listUsers();
   const now = new Date();
   const convs = getAllConversations();
@@ -8375,7 +8444,7 @@ async function processAppointmentQuestions() {
   if (String(process.env.APPOINTMENT_INTERNAL_QUESTIONS ?? "").trim() !== "1") {
     return;
   }
-  const cfg = await getSchedulerConfig();
+  const cfg = await getSchedulerConfigHot();
   const now = new Date();
   const convs = getAllConversations();
   const openQuestions = listOpenQuestions();
@@ -8404,7 +8473,7 @@ async function maybeStartCadence(conv: any, sentAtIso: string) {
   if (conv.status === "closed") return;
   if (conv.classification?.bucket === "service" || conv.classification?.cta === "service_request") return;
   if (conv.followUpCadence?.status === "active" || conv.followUpCadence?.status === "stopped") return;
-  const cfg = await getSchedulerConfig();
+  const cfg = await getSchedulerConfigHot();
   startFollowUpCadence(conv, sentAtIso, cfg.timezone);
 }
 
@@ -8445,7 +8514,7 @@ app.get("/integrations/google/callback", async (req, res) => {
 });
 
 app.post("/scheduler/suggest", async (req, res) => {
-  const cfg = await getSchedulerConfig();
+  const cfg = await getSchedulerConfigHot();
   const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
   const preferredSalespeople = getPreferredSalespeople(cfg);
   const salespeople = cfg.salespeople ?? [];
@@ -8526,7 +8595,7 @@ app.post("/scheduler/suggest", async (req, res) => {
 });
 
 app.post("/scheduler/book", async (req, res) => {
-  const cfg = await getSchedulerConfig();
+  const cfg = await getSchedulerConfigHot();
   const salespeople = cfg.salespeople ?? [];
 
   const slot = req.body?.slot as { salespersonId: string; calendarId: string; start: string; end: string };
@@ -8601,13 +8670,13 @@ app.post("/scheduler/book", async (req, res) => {
 });
 
 app.get("/public/booking/config", async (req, res) => {
-  const profile = await getDealerProfile();
+  const profile = await getDealerProfileHot();
   const token = extractBookingToken(req);
   const expected = getBookingToken(profile);
   if (!token || !expected || token !== expected) {
     return res.status(401).json({ ok: false, error: "unauthorized" });
   }
-  const cfg = await getSchedulerConfig();
+  const cfg = await getSchedulerConfigHot();
   return res.json({
     ok: true,
     dealer: {
@@ -8623,14 +8692,14 @@ app.get("/public/booking/config", async (req, res) => {
 });
 
 app.get("/public/booking/availability", async (req, res) => {
-  const profile = await getDealerProfile();
+  const profile = await getDealerProfileHot();
   const token = extractBookingToken(req);
   const expected = getBookingToken(profile);
   if (!token || !expected || token !== expected) {
     return res.status(401).json({ ok: false, error: "unauthorized" });
   }
 
-  const cfg = await getSchedulerConfig();
+  const cfg = await getSchedulerConfigHot();
   const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
   const type = String(req.query?.type ?? "inventory_visit");
   const durationMinutes = appointmentTypes[type]?.durationMinutes ?? 60;
@@ -8708,14 +8777,14 @@ app.get("/public/booking/availability", async (req, res) => {
 });
 
 app.post("/public/booking/book", async (req, res) => {
-  const profile = await getDealerProfile();
+  const profile = await getDealerProfileHot();
   const token = extractBookingToken(req);
   const expected = getBookingToken(profile);
   if (!token || !expected || token !== expected) {
     return res.status(401).json({ ok: false, error: "unauthorized" });
   }
 
-  const cfg = await getSchedulerConfig();
+  const cfg = await getSchedulerConfigHot();
   const slot = req.body?.slot as {
     start: string;
     end: string;
@@ -8827,7 +8896,7 @@ app.post("/public/booking/book", async (req, res) => {
 });
 
 app.get("/public/booking/prefill", async (req, res) => {
-  const profile = await getDealerProfile();
+  const profile = await getDealerProfileHot();
   const token = extractBookingToken(req);
   const expected = getBookingToken(profile);
   if (!token || !expected || token !== expected) {
@@ -8858,7 +8927,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
   if (!token) return res.status(400).send("Missing token");
   const conv = findConversationByOutcomeToken(token);
   if (!conv) return res.status(404).send("Not found");
-  const cfg = await getSchedulerConfig();
+  const cfg = await getSchedulerConfigHot();
   const whenIso = conv.appointment?.whenIso ?? "";
   const whenText = whenIso ? formatSlotLocal(whenIso, cfg.timezone) : "appointment";
   const customer = conv.lead?.name ?? conv.leadName ?? conv.leadKey ?? "Customer";
@@ -9373,7 +9442,7 @@ app.post("/public/appointment/outcome", async (req, res) => {
     const err = await applyOutcomeSold(conv, unit, note || undefined, nowIso, soldById, "");
     if (err) return res.status(400).send(err);
   } else if (outcome === "financing_declined") {
-    const cfg = await getSchedulerConfig();
+    const cfg = await getSchedulerConfigHot();
     conv.followUp = {
       mode: "active",
       reason: "financing_declined",
@@ -9434,7 +9503,7 @@ app.post("/public/appointment/outcome/transcribe", upload.single("audio"), async
     const err = await applyOutcomeSold(conv, unit, transcript, nowIso, soldById, "");
     if (err) return res.status(400).json({ ok: false, error: err });
   } else if (status === "financing_declined") {
-    const cfg = await getSchedulerConfig();
+    const cfg = await getSchedulerConfigHot();
     conv.followUp = {
       mode: "active",
       reason: "financing_declined",
@@ -9606,7 +9675,7 @@ app.patch("/calendar/events/:calendarId/:eventId", requirePermission("canEditApp
     const calendarId = String(req.params.calendarId ?? "").trim();
     const eventId = String(req.params.eventId ?? "").trim();
     if (!calendarId || !eventId) return res.status(400).json({ ok: false, error: "Missing calendarId/eventId" });
-    const cfg = await getSchedulerConfig();
+    const cfg = await getSchedulerConfigHot();
     console.log("[calendar edit] cfg.timezone", cfg.timezone);
     const tz = typeof cfg.timezone === "string" && cfg.timezone ? cfg.timezone : "America/New_York";
     const startDate = String(req.body?.startDate ?? "").trim(); // YYYY-MM-DD
@@ -9717,7 +9786,7 @@ app.patch("/calendar/events/:calendarId/:eventId", requirePermission("canEditApp
 app.post("/scheduler/calendars", requireManager, async (req, res) => {
   const name = String(req.body?.name ?? "").trim();
   if (!name) return res.status(400).json({ ok: false, error: "Missing name" });
-  const cfg = await getSchedulerConfig();
+  const cfg = await getSchedulerConfigHot();
   const cal = await getAuthedCalendarClient();
   const created = await createCalendar(cal, name, cfg.timezone);
   res.json({ ok: true, calendar: { id: created.id, summary: created.summary, timeZone: created.timeZone } });
@@ -9733,7 +9802,7 @@ app.post("/scheduler/availability-blocks", requireManager, async (req, res) => {
   if (!salespersonId || !title || !rrule || !start || !end) {
     return res.status(400).json({ ok: false, error: "Missing salespersonId/title/rrule/start/end" });
   }
-  const cfg = await getSchedulerConfig();
+  const cfg = await getSchedulerConfigHot();
   const sp =
     (cfg.salespeople ?? []).find(s => s.id === salespersonId) ??
     (cfg.salespeople ?? []).find(s => s.calendarId === salespersonId);
@@ -9766,7 +9835,7 @@ app.post("/scheduler/availability-blocks", requireManager, async (req, res) => {
 app.delete("/scheduler/availability-blocks/:salespersonId/:eventId", requireManager, async (req, res) => {
   const salespersonId = String(req.params.salespersonId ?? "").trim();
   const eventId = String(req.params.eventId ?? "").trim();
-  const cfg = await getSchedulerConfig();
+  const cfg = await getSchedulerConfigHot();
   const sp =
     (cfg.salespeople ?? []).find(s => s.id === salespersonId) ??
     (cfg.salespeople ?? []).find(s => s.calendarId === salespersonId);
@@ -9785,7 +9854,7 @@ app.delete("/scheduler/availability-blocks/:salespersonId/:eventId", requireMana
 });
 
 app.get("/scheduler-config", async (_req, res) => {
-  const cfg = await getSchedulerConfig();
+  const cfg = await getSchedulerConfigHot();
   res.json({ ok: true, config: cfg });
 });
 
@@ -9818,12 +9887,12 @@ app.get("/debug/inventory-price", async (req, res) => {
 });
 
 app.get("/debug/dealer-profile", async (_req, res) => {
-  const profile = await getDealerProfile();
+  const profile = await getDealerProfileHot();
   res.json({ ok: true, profile });
 });
 
 app.get("/dealer-profile", async (_req, res) => {
-  const profile = await getDealerProfile();
+  const profile = await getDealerProfileHot();
   res.json({ ok: true, profile });
 });
 
@@ -9845,7 +9914,7 @@ app.post("/dealer-profile/logo", requireManager, upload.single("file"), async (r
   const dest = path.join(dir, fileName);
   await fs.promises.writeFile(dest, req.file.buffer);
 
-  const profile = (await getDealerProfile()) ?? {};
+  const profile = (await getDealerProfileHot()) ?? {};
   const publicBase = process.env.PUBLIC_BASE_URL ?? "";
   const url = publicBase
     ? `${publicBase.replace(/\/$/, "")}/uploads/${fileName}`
@@ -10055,7 +10124,7 @@ app.post("/conversations/:id/close", async (req, res) => {
   const reason = String(req.body?.reason ?? "closed").trim() || "closed";
   if (reason === "sold") {
     const nowIso = new Date().toISOString();
-    const cfg = await getSchedulerConfig();
+    const cfg = await getSchedulerConfigHot();
     const soldById = String(req.body?.soldById ?? "").trim();
     const soldByNameRaw = String(req.body?.soldByName ?? "").trim();
     const soldInput = req.body?.soldUnit ?? null;
@@ -10156,7 +10225,7 @@ app.post("/conversations/:id/appointment", requirePermission("canEditAppointment
       return res.status(403).json({ ok: false, error: "Service leads cannot be scheduled here" });
     }
 
-    const cfg = await getSchedulerConfig();
+    const cfg = await getSchedulerConfigHot();
     const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
     const rawType = String(req.body?.appointmentType ?? "").trim();
     const appointmentType = rawType || inferAppointmentTypeFromConv(conv) || "inventory_visit";
@@ -10306,7 +10375,7 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
     const holdLabel = String(holdInput?.label ?? "").trim() || undefined;
     const holdNote = String(holdInput?.note ?? "").trim() || undefined;
     const nowIso = new Date().toISOString();
-    const cfg = await getSchedulerConfig();
+    const cfg = await getSchedulerConfigHot();
     const tz = cfg.timezone || "America/New_York";
     let cadenceNotice: string | null = null;
 
@@ -10678,7 +10747,7 @@ app.post("/conversations/:id/watch", async (req, res) => {
       return res.status(400).json({ ok: false, error: "At least one watch model is required." });
     }
     const nowIso = new Date().toISOString();
-    const cfg = await getSchedulerConfig();
+    const cfg = await getSchedulerConfigHot();
     const tz = cfg.timezone || "America/New_York";
 
     const normalizeInputCondition = (raw?: string | null) => {
@@ -11028,7 +11097,7 @@ app.post("/questions/:convId/:questionId/done", (req, res) => {
   if (!conv) return res.status(404).json({ ok: false, error: "Conversation not found" });
   const nowIso = new Date().toISOString();
   const applyAction = async (action?: string) => {
-    const cfg = await getSchedulerConfig();
+    const cfg = await getSchedulerConfigHot();
     const tz = cfg.timezone || "America/New_York";
     if (!action || action === "none") return;
     if (action === "archive") {
@@ -11655,7 +11724,7 @@ app.post("/conversations/:id/send", async (req, res) => {
 
   let schedulerTimezone = "America/New_York";
   try {
-    const cfg = await getSchedulerConfig();
+    const cfg = await getSchedulerConfigHot();
     schedulerTimezone = cfg.timezone || schedulerTimezone;
     const sp = resolveSalespersonForUser(cfg, user);
     if (sp) {
@@ -11810,7 +11879,7 @@ app.post("/conversations/:id/send", async (req, res) => {
         conversation: conv
       });
     }
-    const dealerProfile = await getDealerProfile();
+    const dealerProfile = await getDealerProfileHot();
     const { from: emailFrom, replyTo: emailReplyTo, signature } = getEmailConfig(dealerProfile);
     const replyTo = maybeTagReplyTo(emailReplyTo, conv);
     if (!emailFrom) {
@@ -12230,7 +12299,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenNeedsLienHolderInfo = !!(
     regenTradePayoffAccepted && regenTradePayoffParse?.needsLienHolderInfo
   );
-  const dealerProfile = await getDealerProfile();
+  const dealerProfile = await getDealerProfileHot();
   const weatherStatus = await getDealerWeatherStatus(dealerProfile);
 
   if (event.provider === "twilio") {
@@ -12643,7 +12712,7 @@ app.post("/conversations/:id/call", async (req, res) => {
     });
   }
 
-  const dealerProfile = await getDealerProfile();
+  const dealerProfile = await getDealerProfileHot();
   const user = (req as any).user ?? null;
   const useExtension = req.body?.useExtension === true;
   const userPhoneRaw = String(user?.phone ?? "").trim();
@@ -12700,7 +12769,7 @@ app.post("/conversations/:id/call", async (req, res) => {
     : `${req.protocol}://${req.get("host")}`;
   const agentName = String(user?.name ?? user?.email ?? "Agent").trim() || "Agent";
   try {
-    const cfg = await getSchedulerConfig();
+    const cfg = await getSchedulerConfigHot();
     const sp = resolveSalespersonForUser(cfg, user);
     if (sp) {
       setPreferredSalespersonForConv(conv, sp, "voice_call");
@@ -13200,7 +13269,7 @@ if (authToken && signature) {
   }
 
   if (isLienHolderInfoRequestText(event.body ?? "")) {
-    const dealerProfileForLien = await getDealerProfile();
+    const dealerProfileForLien = await getDealerProfileHot();
     const reply = maybeEscalateLienHolderInfoRequest(conv, event, dealerProfileForLien, {
       createTodo: true,
       setManualHandoff: true
@@ -13389,7 +13458,7 @@ if (authToken && signature) {
         conv.scheduler.pendingSlot = undefined;
       } else if ((hasTimeToken && matchesPending) || (!hasTimeToken && isAffirmative(event.body))) {
         try {
-          const cfg = await getSchedulerConfig();
+          const cfg = await getSchedulerConfigHot();
           const tz = cfg.timezone || "America/New_York";
           const cal = await getAuthedCalendarClient();
           const salespeople = cfg.salespeople ?? [];
@@ -13474,7 +13543,7 @@ if (authToken && signature) {
         conv.scheduler.pendingSlot = undefined;
       } else if ((hasTimeToken && matchesPending) || (!hasTimeToken && isAffirmative(event.body))) {
         try {
-          const cfg = await getSchedulerConfig();
+          const cfg = await getSchedulerConfigHot();
           const tz = cfg.timezone || "America/New_York";
           const cal = await getAuthedCalendarClient();
 
@@ -13578,7 +13647,7 @@ if (authToken && signature) {
     if (chosen) {
       console.log("[auto-book] chosen slot", chosen?.startLocal, chosen?.calendarId);
       try {
-        const cfg = await getSchedulerConfig();
+        const cfg = await getSchedulerConfigHot();
         const tz = cfg.timezone || "America/New_York";
         const cal = await getAuthedCalendarClient();
 
@@ -13682,7 +13751,7 @@ if (authToken && signature) {
       };
       if (isNo) {
         try {
-          const cfg = await getSchedulerConfig();
+          const cfg = await getSchedulerConfigHot();
           tz = cfg.timezone;
           const cal = await getAuthedCalendarClient();
           const calendarId =
@@ -13709,7 +13778,7 @@ if (authToken && signature) {
       }
       if (isYes) {
         try {
-          const cfg = await getSchedulerConfig();
+          const cfg = await getSchedulerConfigHot();
           tz = cfg.timezone;
         } catch {}
       }
@@ -13763,7 +13832,7 @@ if (authToken && signature) {
   );
   let requestedReschedule: ReturnType<typeof parseRequestedDayTime> | null = null;
   if (conv.appointment?.bookedEventId) {
-    const cfg = await getSchedulerConfig();
+    const cfg = await getSchedulerConfigHot();
     const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
     const preferredSalespeople = getPreferredSalespeopleForConv(cfg, conv);
     const salespeople = cfg.salespeople ?? [];
@@ -14095,7 +14164,7 @@ if (authToken && signature) {
     conv.appointment.reschedulePending
   ) {
     try {
-      const cfg = await getSchedulerConfig();
+      const cfg = await getSchedulerConfigHot();
       const salespeople = cfg.salespeople ?? [];
       const cal = await getAuthedCalendarClient();
       const slot = conv.appointment.matchedSlot;
@@ -14159,7 +14228,7 @@ if (authToken && signature) {
   // If customer selected one of our suggested slots, auto-book immediately (Option B)
   if (didConfirm && conv.appointment?.matchedSlot && !conv.appointment.bookedEventId) {
     try {
-      const cfg = await getSchedulerConfig();
+      const cfg = await getSchedulerConfigHot();
       const cal = await getAuthedCalendarClient();
 
       const slot = conv.appointment.matchedSlot;
@@ -14533,7 +14602,7 @@ if (authToken && signature) {
   if (event.provider === "twilio" && isTradeLead) {
     const townMention = extractTownFromMessage(event.body ?? "");
     if (townMention && !conv.pickup?.town) {
-      const dealerProfile = await getDealerProfile();
+      const dealerProfile = await getDealerProfileHot();
       const coords = await resolveDealerLatLon(dealerProfile);
       const cfg = getWeatherConfig(dealerProfile);
       let townLabel = townMention;
@@ -14577,6 +14646,24 @@ if (authToken && signature) {
   }
   const shortAck = isShortAckText(inboundText) || emojiOnly;
   const recentHistory = buildHistory(conv, 6);
+  const routeTimingEnabled = process.env.DEBUG_ROUTE_TIMING === "1";
+  const logRouteTiming = (stage: string, startedAtMs: number, extra?: Record<string, unknown>) => {
+    if (!routeTimingEnabled) return;
+    console.log("[route-timing]", {
+      stage,
+      ms: Date.now() - startedAtMs,
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      ...(extra ?? {})
+    });
+  };
+  const highConfidenceFinanceTurn =
+    preParserFinanceSignal &&
+    !preParserSchedulingSignal &&
+    !detectCallbackText(event.body ?? "") &&
+    !isWatchConfirmationIntentText(String(event.body ?? ""));
+  const highConfidenceSchedulingTurn =
+    preParserSchedulingSignal && !preParserFinanceSignal && !detectCallbackText(event.body ?? "");
   const bookingParserEligible =
     event.provider === "twilio" &&
     process.env.LLM_ENABLED === "1" &&
@@ -14597,7 +14684,7 @@ if (authToken && signature) {
         textLower
       ));
   const bookingParsePromise =
-    bookingParserEligible && bookingParserHint && !shortAck
+    bookingParserEligible && bookingParserHint && !shortAck && !highConfidenceFinanceTurn
       ? parseBookingIntentWithLLM({
           text: event.body,
           history: recentHistory,
@@ -14611,7 +14698,7 @@ if (authToken && signature) {
     process.env.LLM_INTENT_PARSER_ENABLED === "1" &&
     !!process.env.OPENAI_API_KEY;
   const intentParsePromise =
-    intentParserEligible && !shortAck
+    intentParserEligible && !shortAck && !highConfidenceFinanceTurn
       ? parseIntentWithLLM({
           text: event.body,
           history: recentHistory,
@@ -14625,6 +14712,7 @@ if (authToken && signature) {
     !!process.env.OPENAI_API_KEY &&
     !shortAck;
   const dialogActParsePromise = dialogActParserEligible
+    && !highConfidenceFinanceTurn
     ? parseDialogActWithLLM({
         text: event.body,
         history: recentHistory,
@@ -14638,12 +14726,14 @@ if (authToken && signature) {
     !!process.env.OPENAI_API_KEY &&
     !shortAck;
   const pricingPaymentsParsePromise = pricingPaymentsParserEligible
+    && !highConfidenceSchedulingTurn
     ? parsePricingPaymentsIntentWithLLM({
         text: event.body,
         history: recentHistory,
         lead: conv.lead
       })
     : Promise.resolve(null);
+  const parserStageStartedAt = Date.now();
   const [bookingParse, intentParse, dialogActParse, pricingPaymentsParse] =
     await Promise.all([
       bookingParsePromise,
@@ -14651,6 +14741,10 @@ if (authToken && signature) {
       dialogActParsePromise,
       pricingPaymentsParsePromise
     ]);
+  logRouteTiming("parsers", parserStageStartedAt, {
+    highConfidenceFinanceTurn,
+    highConfidenceSchedulingTurn
+  });
   if (process.env.DEBUG_BOOKING_PARSER === "1" && bookingParse) {
     console.log("[llm-booking-parse]", {
       intent: bookingParse.intent,
@@ -14832,7 +14926,7 @@ if (authToken && signature) {
     }
   }
   if (event.provider === "twilio" && llmNeedsLienHolderInfo) {
-    const dealerProfile = await getDealerProfile();
+    const dealerProfile = await getDealerProfileHot();
     const reply =
       maybeEscalateLienHolderInfoRequest(conv, event, dealerProfile, {
         createTodo: true,
@@ -14872,7 +14966,7 @@ if (authToken && signature) {
       : /\b(call me|give me a call|can you call|please call|have .* call|reach me|contact me)\b/i.test(
           String(event.body ?? "")
         );
-    const dealerProfile = await getDealerProfile();
+    const dealerProfile = await getDealerProfileHot();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = dealerProfile?.agentName ?? "our team";
     const customerName = normalizeDisplayCase(conv.lead?.firstName) || "there";
@@ -15158,8 +15252,8 @@ if (authToken && signature) {
     );
 
   if (event.provider === "twilio" && hoursQuestion) {
-    const cfg = await getSchedulerConfig();
-    const dealerProfile = await getDealerProfile();
+    const cfg = await getSchedulerConfigHot();
+    const dealerProfile = await getDealerProfileHot();
     const country = dealerProfile?.address?.country ?? null;
     const directDayRequest = extractDayRequest(textLower);
     const wantsToday = /\btoday\b/.test(textLower);
@@ -15256,7 +15350,7 @@ if (authToken && signature) {
       conv.lead.vehicle = conv.lead.vehicle ?? {};
       conv.lead.vehicle.modelOptions = foundModels;
       saveConversation(conv);
-      const dealerProfile = await getDealerProfile();
+      const dealerProfile = await getDealerProfileHot();
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
       const agentName = dealerProfile?.agentName ?? "Brooke";
       const firstName = normalizeDisplayCase(conv.lead?.firstName);
@@ -15321,7 +15415,7 @@ if (authToken && signature) {
         setFollowUpMode(conv, "paused_indefinite", "customer_reminder");
         setDialogState(conv, "followup_paused");
       }
-    const dealerProfile = await getDealerProfile();
+    const dealerProfile = await getDealerProfileHot();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = dealerProfile?.agentName ?? "Brooke";
     const label = futureFromReply?.label;
@@ -15353,7 +15447,7 @@ if (authToken && signature) {
       stopFollowUpCadence(conv, "not_ready_no_timeframe");
       setFollowUpMode(conv, "paused_indefinite", "not_ready_no_timeframe");
       setDialogState(conv, "followup_paused");
-      const dealerProfile = await getDealerProfile();
+      const dealerProfile = await getDealerProfileHot();
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
       const agentName = dealerProfile?.agentName ?? "Brooke";
       const replyRaw = buildFriendlyReachOutClose(false);
@@ -15399,7 +15493,7 @@ if (authToken && signature) {
       setFollowUpMode(conv, "paused_indefinite", "future_timeframe");
       setDialogState(conv, "followup_paused");
     }
-    const dealerProfile = await getDealerProfile();
+    const dealerProfile = await getDealerProfileHot();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = dealerProfile?.agentName ?? "Brooke";
     const label = future.label;
@@ -15422,7 +15516,7 @@ if (authToken && signature) {
   if (event.provider === "twilio" && wantsReminder(event.body)) {
     const pauseUntil = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
     pauseFollowUpCadence(conv, pauseUntil, "customer_reminder");
-    const dealerProfile = await getDealerProfile();
+    const dealerProfile = await getDealerProfileHot();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = dealerProfile?.agentName ?? "Brooke";
     const replyRaw =
@@ -15454,9 +15548,9 @@ if (authToken && signature) {
   const bestDayQuestion = /\b(nicest day|nice day|best day)\b/i.test(textLower);
   const mentionsNextWeek = /\bnext week\b/i.test(textLower);
   if (event.provider === "twilio" && weatherQuestion) {
-    const cfg = await getSchedulerConfig();
+    const cfg = await getSchedulerConfigHot();
     const tz = cfg.timezone || "America/New_York";
-    const dealerProfile = await getDealerProfile();
+    const dealerProfile = await getDealerProfileHot();
     const dayRequest = extractDayRequest(textLower);
     const wantsToday = /\btoday\b/.test(textLower);
     const wantsTomorrow = /\btomorrow\b/.test(textLower);
@@ -15588,7 +15682,7 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
   if (event.provider === "twilio" && locationQuestion) {
-    const dealerProfile = await getDealerProfile();
+    const dealerProfile = await getDealerProfileHot();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = dealerProfile?.agentName ?? "Brooke";
     const address = dealerProfile?.address;
@@ -15619,7 +15713,7 @@ if (authToken && signature) {
   if (event.provider === "twilio" && testRideQuestion) {
     const requirements =
       "For a test ride, please bring a motorcycle endorsement, a DOT helmet, eyewear, long pants, a long sleeve shirt, and over-the-ankle boots.";
-    const dealerProfile = await getDealerProfile();
+    const dealerProfile = await getDealerProfileHot();
     const weather = await getDealerWeatherStatus(dealerProfile);
     const reply = conv.appointment?.bookedEventId
       ? weather?.bad
@@ -15660,7 +15754,7 @@ if (authToken && signature) {
         return res.status(200).type("text/xml").send(twiml);
       }
 
-      const dealerProfile = await getDealerProfile();
+      const dealerProfile = await getDealerProfileHot();
       const coords = await resolveDealerLatLon(dealerProfile);
       const cfg = getWeatherConfig(dealerProfile);
       let townLabel = townRaw;
@@ -15774,7 +15868,7 @@ if (authToken && signature) {
     !inventoryCountQuestion &&
     !watchPendingBlockedByPricingIntent
   ) {
-    const cfg = await getSchedulerConfig();
+    const cfg = await getSchedulerConfigHot();
     const tz = cfg.timezone || "America/New_York";
     const explicitRequested = parseRequestedDayTime(String(event.body ?? ""), tz);
     const hasDayTime = schedulingSignals.hasDayTime;
@@ -16841,7 +16935,7 @@ if (authToken && signature) {
     event.provider === "twilio" &&
     /(?:\bwho('?s| is)\s+this\b|^who dis\??$)/i.test(textLower)
   ) {
-    const dealerProfile = await getDealerProfile();
+    const dealerProfile = await getDealerProfileHot();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = dealerProfile?.agentName ?? "Alexandra";
     const bikeLabel = formatModelLabelForFollowUp(
@@ -16872,6 +16966,7 @@ if (authToken && signature) {
     !schedulingSignals.hasDayOnlyAvailability &&
     !schedulingSignals.hasDayOnlyRequest
   ) {
+    const inventoryStageStartedAt = Date.now();
     if (getDialogState(conv) === "inventory_watch_active" && conv.inventoryWatch) {
       const watch = conv.inventoryWatch;
       const watchCondition =
@@ -16912,7 +17007,9 @@ if (authToken && signature) {
         conv.lead?.vehicle?.model ??
         conv.lead?.vehicle?.description ??
         null;
-      const items = await getInventoryFeed();
+      const inventoryFeedStartedAt = Date.now();
+      const items = await getInventoryFeedHot();
+      logRouteTiming("inventory.feed", inventoryFeedStartedAt, { itemCount: items.length });
       const models = Array.from(new Set(items.map(i => i.model).filter(Boolean))) as string[];
       models.sort((a, b) => b.length - a.length);
       const modelFromText =
@@ -16927,7 +17024,7 @@ if (authToken && signature) {
       let paymentTaxRate = 0.08;
       if (hasMonthlyBudgetTarget) {
         try {
-          const dealerProfile = await getDealerProfile();
+          const dealerProfile = await getDealerProfileHot();
           paymentTaxRate = normalizeTaxRate((dealerProfile as any)?.taxRate);
         } catch {
           paymentTaxRate = 0.08;
@@ -17041,7 +17138,9 @@ if (authToken && signature) {
           !!conv.lead?.vehicle?.vin ||
           !!color ||
           !!condition;
+        const inventoryMatchStartedAt = Date.now();
         let matches = await findInventoryMatches({ year: year ?? null, model });
+        logRouteTiming("inventory.match", inventoryMatchStartedAt, { model, year: year ?? null });
         if (condition) {
           matches = matches.filter(i => inventoryItemMatchesRequestedCondition(i, condition));
         }
@@ -17547,7 +17646,9 @@ if (authToken && signature) {
           return res.status(200).type("text/xml").send(twiml);
         }
         if (matches.length === 0 && !hasIdentifiers) {
+          const inventoryFallbackMatchStartedAt = Date.now();
           let fallback = await findInventoryMatches({ year: null, model });
+          logRouteTiming("inventory.match_fallback", inventoryFallbackMatchStartedAt, { model });
           if (color) {
             const c = color.toLowerCase();
             fallback = fallback.filter(i => (i.color ?? "").toLowerCase().includes(c));
@@ -17674,6 +17775,8 @@ if (authToken && signature) {
         reply
       )}</Message>\\n</Response>`;
       return res.status(200).type("text/xml").send(twiml);
+    } finally {
+      logRouteTiming("inventory", inventoryStageStartedAt);
     }
   }
   // Deterministic slot offer for Twilio when scheduling context is known but no slots exist yet.
@@ -17706,8 +17809,11 @@ if (authToken && signature) {
       schedulingExplicit &&
       (ctxSuggestsScheduling || llmSuggestsScheduling || schedulingSignals.hasDayTime);
     if (schedulingIntent) {
+      const schedulerStageStartedAt = Date.now();
       try {
-        const cfg = await getSchedulerConfig();
+        const schedulerConfigStartedAt = Date.now();
+        const cfg = await getSchedulerConfigHot();
+        logRouteTiming("scheduler.config", schedulerConfigStartedAt);
         const requested = parseRequestedDayTime(
           bookingParseText || String(event.body ?? ""),
           cfg.timezone
@@ -17763,6 +17869,9 @@ if (authToken && signature) {
           }
         }
 
+        logRouteTiming("scheduler.deterministic_slots", schedulerStageStartedAt, {
+          slotCount: bestSlots.length
+        });
         if (bestSlots.length >= 2) {
           const timeLike = looksLikeTimeSelection(event.body);
           const chosen = timeLike ? chooseSlotFromReply(bestSlots, event.body) : null;
@@ -17828,12 +17937,14 @@ if (authToken && signature) {
             const confirmText = `Perfect — you’re all set for ${conv.appointment.whenText}${repSuffix}. See you then.`;
             const systemMode = webhookMode;
             if (systemMode === "suggest") {
+              logRouteTiming("scheduler.deterministic_booked", schedulerStageStartedAt, { mode: "suggest" });
               appendOutbound(conv, event.to, event.from, confirmText, "draft_ai");
               saveConversation(conv);
               await flushConversationStore();
               const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
               return res.status(200).type("text/xml").send(twiml);
             }
+            logRouteTiming("scheduler.deterministic_booked", schedulerStageStartedAt, { mode: "twilio" });
             appendOutbound(conv, event.to, event.from, confirmText, "twilio", created.id ?? undefined);
             saveConversation(conv);
             await flushConversationStore();
@@ -17867,6 +17978,7 @@ if (authToken && signature) {
           }
           const systemMode = webhookMode;
           if (systemMode === "suggest") {
+            logRouteTiming("scheduler.deterministic_offer", schedulerStageStartedAt, { mode: "suggest" });
             appendOutbound(conv, event.to, event.from, reply, "draft_ai");
             saveConversation(conv);
             await flushConversationStore();
@@ -17877,6 +17989,7 @@ if (authToken && signature) {
             const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
             return res.status(200).type("text/xml").send(twiml);
           }
+          logRouteTiming("scheduler.deterministic_offer", schedulerStageStartedAt, { mode: "twilio" });
           appendOutbound(conv, event.to, event.from, reply, "twilio");
           saveConversation(conv);
           await flushConversationStore();
@@ -17891,6 +18004,9 @@ if (authToken && signature) {
         }
         }
       } catch (e: any) {
+        logRouteTiming("scheduler.deterministic_error", schedulerStageStartedAt, {
+          error: String(e?.message ?? e)
+        });
         console.log("[scheduler] deterministic offer failed:", e?.message ?? e);
       }
     }
@@ -17912,8 +18028,11 @@ if (authToken && signature) {
   const history = buildHistory(conv, 20);
   const memorySummary = conv.memorySummary?.text ?? null;
   const memorySummaryShouldUpdate = shouldUpdateMemorySummary(conv);
-  const weatherProfile = await getDealerProfile();
+  const weatherProfileStartedAt = Date.now();
+  const weatherProfile = await getDealerProfileHot();
+  logRouteTiming("dealer_profile_for_weather", weatherProfileStartedAt);
   const weatherStatus = await getDealerWeatherStatus(weatherProfile);
+  const orchestratorStartedAt = Date.now();
   const result = await orchestrateInbound(event, history, {
     appointment: conv.appointment,
     followUp: conv.followUp,
@@ -17942,6 +18061,9 @@ if (authToken && signature) {
     pickup: conv.pickup ?? null,
     weather: weatherStatus ?? null
   });
+  logRouteTiming("orchestrator", orchestratorStartedAt, {
+    turnPrimaryIntent
+  });
   if (result.smallTalk) {
     setDialogState(conv, "small_talk");
   }
@@ -17955,7 +18077,7 @@ if (authToken && signature) {
   }
   if (!pricingOrPaymentsIntent && !result.requestedTime && schedulingAllowed && schedulingSignals.hasDayTime) {
     try {
-      const cfg = await getSchedulerConfig();
+      const cfg = await getSchedulerConfigHot();
       const tz = cfg.timezone || "America/New_York";
       const parsed = parseRequestedDayTime(bookingParseText || String(event.body ?? ""), tz);
       if (parsed) {
@@ -17993,7 +18115,7 @@ if (authToken && signature) {
       !!extractTimeToken(lastOutboundText) || draftHasSpecificTimes(lastOutboundText ?? "");
     if (isFresh && lastHadTime) {
       try {
-        const cfg = await getSchedulerConfig();
+        const cfg = await getSchedulerConfigHot();
         const tz = cfg.timezone || "America/New_York";
         const parsed = parseRequestedDayTime(conv.scheduler.requested.timeText, tz);
         if (parsed) {
@@ -18011,7 +18133,7 @@ if (authToken && signature) {
     let requested = result.requestedTime ?? null;
     if (!requested) {
       try {
-        const cfg = await getSchedulerConfig();
+        const cfg = await getSchedulerConfigHot();
         const tz = cfg.timezone || "America/New_York";
         requested = parseRequestedDayTime(bookingParseText || String(event.body ?? ""), tz);
       } catch {}
@@ -18089,7 +18211,7 @@ if (authToken && signature) {
   }
   if (result.handoff?.required) {
     const reason = result.handoff.reason;
-    const dealerProfile = await getDealerProfile();
+    const dealerProfile = await getDealerProfileHot();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = dealerProfile?.agentName ?? "Brooke";
     const ack = ensureUniqueDraft(result.handoff.ack, conv, dealerName, agentName);
@@ -18116,7 +18238,7 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
   if (result.autoClose?.reason) {
-    const dealerProfile = await getDealerProfile();
+    const dealerProfile = await getDealerProfileHot();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = dealerProfile?.agentName ?? "Brooke";
     const ack = ensureUniqueDraft(result.draft, conv, dealerName, agentName);
@@ -18142,14 +18264,14 @@ if (authToken && signature) {
       let requested = result.requestedTime ?? null;
       if (!requested) {
         try {
-          const cfg = await getSchedulerConfig();
+          const cfg = await getSchedulerConfigHot();
           const tz = cfg.timezone || "America/New_York";
           requested = parseRequestedDayTime(bookingParseText || String(event.body ?? ""), tz);
         } catch {}
       }
       if (requested) {
         try {
-          const cfg = await getSchedulerConfig();
+          const cfg = await getSchedulerConfigHot();
           const tz = cfg.timezone || "America/New_York";
           const requestedStartUtc = localPartsToUtcDate(tz, requested);
           const match = result.suggestedSlots.find(s => {
@@ -18288,7 +18410,7 @@ if (authToken && signature) {
   if (schedulingAllowed && !didConfirm && result.requestedTime) {
     try {
       const skipExactBooking = /(this time|same time)/i.test(event.body);
-      const cfg = await getSchedulerConfig();
+      const cfg = await getSchedulerConfigHot();
       const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
       const preferredSalespeople = getPreferredSalespeopleForConv(cfg, conv);
       const salespeople = cfg.salespeople ?? [];
@@ -18695,7 +18817,7 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
-  const dealerProfile = await getDealerProfile();
+  const dealerProfile = await getDealerProfileHot();
   const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
   const agentName = dealerProfile?.agentName ?? "Brooke";
   const lastOutboundTextFinal = getLastNonVoiceOutbound(conv)?.body ?? "";
@@ -18854,7 +18976,7 @@ app.post("/webhooks/twilio/voice", async (req, res) => {
   let dialTarget: string | null = requestedCustomerPhone || null;
   let callerId = from;
   if (isInbound) {
-    const dealerProfile = await getDealerProfile();
+    const dealerProfile = await getDealerProfileHot();
     const dealerPhone = normalizePhone(String(dealerProfile?.phone ?? "").trim());
     if (dealerPhone && dealerPhone.startsWith("+")) {
       dialTarget = dealerPhone;
@@ -18944,7 +19066,7 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
 
   if (agentName) {
     try {
-      const cfg = await getSchedulerConfig();
+      const cfg = await getSchedulerConfigHot();
       const sp = resolveSalespersonByName(cfg, agentName);
       if (sp) {
         setPreferredSalespersonForConv(conv, sp, "voice_transcript");
