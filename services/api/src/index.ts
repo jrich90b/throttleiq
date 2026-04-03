@@ -4715,7 +4715,13 @@ function isRecentDuplicateOutbound(
   conv: any,
   to: string,
   body: string,
-  opts?: { providers?: string[]; windowMs?: number; mediaUrls?: string[]; nowMs?: number }
+  opts?: {
+    providers?: string[];
+    windowMs?: number;
+    mediaUrls?: string[];
+    nowMs?: number;
+    excludeMessageId?: string | null;
+  }
 ): boolean {
   const bodyNorm = normalizeOutboundText(body);
   const toNorm = normalizeOutboundTarget(to);
@@ -4728,10 +4734,12 @@ function isRecentDuplicateOutbound(
   const windowMs = Number(opts?.windowMs ?? 90 * 1000);
   const nowMs = Number(opts?.nowMs ?? Date.now());
   const candidateMedia = normalizeOutboundMediaForDedup(opts?.mediaUrls);
+  const excludeMessageId = String(opts?.excludeMessageId ?? "").trim();
 
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const m = messages[i];
     if (m?.direction !== "out") continue;
+    if (excludeMessageId && String(m?.id ?? "") === excludeMessageId) continue;
     if (m?.draftStatus === "stale") continue;
     const provider = String(m?.provider ?? "").trim();
     if (providers && !providers.has(provider)) continue;
@@ -11828,7 +11836,8 @@ app.post("/conversations/:id/send", async (req, res) => {
     isRecentDuplicateOutbound(conv, toTarget, text, {
       providers,
       windowMs,
-      mediaUrls
+      mediaUrls,
+      excludeMessageId: draftId ?? null
     });
 
   const logRow = async (twilioSid: string | null) => {
