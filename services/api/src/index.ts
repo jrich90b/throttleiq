@@ -14297,6 +14297,19 @@ if (authToken && signature) {
     (/\b(other|another|different|else|more)\b/i.test(textLower) &&
       /\b(in[-\s]?stock|available|options?|units?|bikes?|models?)\b/i.test(textLower));
   const schedulingSignalsBase = detectSchedulingSignals(event.body);
+  const preParserExplicitFinanceTermIntent =
+    /\b\d{2,3}\s*(month|months|mo)\b/i.test(String(event.body ?? "")) ||
+    /\brun\s+(it|that|the numbers?)\s+for\s+\d{2,3}\b/i.test(String(event.body ?? ""));
+  const preParserFinanceSignal =
+    isPaymentText(event.body ?? "") ||
+    isDownPaymentQuestion(event.body ?? "") ||
+    preParserExplicitFinanceTermIntent;
+  const preParserSchedulingSignal =
+    schedulingSignalsBase.explicit ||
+    schedulingSignalsBase.hasDayTime ||
+    schedulingSignalsBase.hasDayOnlyAvailability ||
+    schedulingSignalsBase.hasDayOnlyRequest;
+  const preParserNonWatchPrimaryIntent = preParserFinanceSignal || preParserSchedulingSignal;
   const leadSourceText = String(conv.lead?.source ?? "").toLowerCase();
   const isTradeLead =
     /sell my bike/.test(leadSourceText) ||
@@ -14360,10 +14373,12 @@ if (authToken && signature) {
     !schedulingSignalsBase.hasDayTime &&
     !schedulingSignalsBase.hasDayOnlyAvailability &&
     !schedulingSignalsBase.hasDayOnlyRequest &&
-    !schedulingSignalsBase.explicit;
+    !schedulingSignalsBase.explicit &&
+    !preParserNonWatchPrimaryIntent;
   const earlyWatchIntent =
     event.provider === "twilio" &&
     !conv.inventoryWatchPending &&
+    !preParserNonWatchPrimaryIntent &&
     (earlyWatchIntentLLM || earlyWatchIntentText || earlyPromptedWatchAffirm);
   const earlyWatchAsSideEffectOnly =
     earlyWatchIntent && hasPrimaryIntentBeyondWatch(String(event.body ?? ""));
@@ -14960,6 +14975,14 @@ if (authToken && signature) {
     }
   }
   const schedulingExplicit = schedulingAllowed ? schedulingSignals.explicit : false;
+  const schedulingPrimaryIntent =
+    schedulingSignals.explicit ||
+    schedulingSignals.hasDayTime ||
+    schedulingSignals.hasDayOnlyAvailability ||
+    schedulingSignals.hasDayOnlyRequest ||
+    llmSchedulingIntent ||
+    !!llmTestRideIntent;
+  const suppressWatchIntentThisTurn = pricingOrPaymentsIntent || schedulingPrimaryIntent;
   if (schedulingSignals.explicit || schedulingSignals.hasDayTime) {
     if (conv.scheduleSoft) {
       conv.scheduleSoft = undefined;
@@ -15726,7 +15749,7 @@ if (authToken && signature) {
   }
 
   const watchPendingBlockedByPricingIntent =
-    pricingOrPaymentsIntent;
+    suppressWatchIntentThisTurn;
   if (
     event.provider === "twilio" &&
     conv.inventoryWatchPending &&
@@ -16556,6 +16579,7 @@ if (authToken && signature) {
     event.provider === "twilio" &&
     !conv.inventoryWatchPending &&
     !watchHandledEarly &&
+    !suppressWatchIntentThisTurn &&
     (watchIntentText ||
       promptedWatchAffirm ||
       semanticWatchAction === "set_watch" ||
