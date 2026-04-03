@@ -502,6 +502,7 @@ type Message = {
 type ConversationDetail = {
   id: string;
   leadKey: string;
+  updatedAt?: string;
   mode?: "suggest" | "human";
   status?: "open" | "closed";
   closedAt?: string | null;
@@ -2126,6 +2127,16 @@ export default function Home() {
   }, [authUser]);
 
   useEffect(() => {
+    if (!authUser) return;
+    const t = window.setInterval(() => {
+      void refreshConversationsRef.current();
+      const id = selectedIdRef.current;
+      if (id) void refreshSelectedRef.current(id);
+    }, 4000);
+    return () => window.clearInterval(t);
+  }, [authUser]);
+
+  useEffect(() => {
     if (section !== "contacts") setSelectedContact(null);
   }, [section]);
 
@@ -2735,6 +2746,20 @@ export default function Home() {
         return isSms;
       });
   }, [selectedConv, messageFilter]);
+  const selectedListItem = useMemo(() => {
+    if (!selectedId && !selectedConv?.id && !selectedConv?.leadKey) return null;
+    return (
+      conversations.find(
+        c =>
+          c.id === selectedId ||
+          c.leadKey === selectedId ||
+          c.id === selectedConv?.id ||
+          c.leadKey === selectedConv?.id ||
+          c.id === selectedConv?.leadKey ||
+          c.leadKey === selectedConv?.leadKey
+      ) ?? null
+    );
+  }, [conversations, selectedId, selectedConv?.id, selectedConv?.leadKey]);
   const inboundProcessing = useMemo(() => {
     if (!selectedConv || mode !== "suggest" || selectedConv.mode === "human") return false;
     const messages = selectedConv.messages ?? [];
@@ -2755,6 +2780,17 @@ export default function Home() {
     if (lastOutboundAfterInbound) return false;
     return true;
   }, [selectedConv, mode]);
+  const inboundProcessingFromList = useMemo(() => {
+    if (mode !== "suggest") return false;
+    if (selectedConv?.mode === "human") return false;
+    if (!selectedListItem) return false;
+    if (selectedListItem.lastMessage?.direction !== "in") return false;
+    const listUpdatedAt = Date.parse(String(selectedListItem.updatedAt ?? ""));
+    const detailUpdatedAt = Date.parse(String(selectedConv?.updatedAt ?? ""));
+    if (!Number.isFinite(listUpdatedAt)) return false;
+    if (!Number.isFinite(detailUpdatedAt)) return true;
+    return listUpdatedAt > detailUpdatedAt;
+  }, [mode, selectedConv?.mode, selectedConv?.updatedAt, selectedListItem]);
   const appointmentSalespersonName = useMemo(() => {
     const id = selectedConv?.appointment?.bookedSalespersonId ?? "";
     if (!id) return "";
@@ -10329,7 +10365,7 @@ export default function Home() {
                     </div>
                   );
                 })}
-              {detailLoading || regenBusy || composeSending || inboundProcessing ? (
+              {detailLoading || regenBusy || composeSending || inboundProcessing || inboundProcessingFromList ? (
                 <div className="text-sm">
                   <div className="text-xs text-gray-500">
                     {composeSending ? "OUT • sending" : "AI • thinking"}
