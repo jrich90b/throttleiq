@@ -3460,124 +3460,130 @@ export default function Home() {
     forceEmail?: boolean;
   }): Promise<boolean> {
     if (!selectedConv) return false;
-    const resp = await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/send`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ...payload,
-        manualTakeover: payload.manualTakeover ?? !payload.draftId,
-        skipEmailSignature: payload.skipEmailSignature === true,
-        channel: messageFilter,
-        forceEmail: payload.forceEmail === true,
-        attachments:
-          messageFilter === "email"
-            ? (payload.attachments || []).map(att => ({
-                content: att.content,
-                filename: att.name,
-                type: att.type
-              }))
-            : undefined,
-        mediaUrls: messageFilter === "sms" ? payload.mediaUrls ?? [] : undefined
-      })
-    });
-    const data = await resp.json().catch(() => null);
-    if (!resp.ok) {
-      if (
-        messageFilter === "email" &&
-        data?.error === "email opt-in not present for this lead" &&
-        !payload.forceEmail
-      ) {
-        const ok = window.confirm(
-          "Email opt-in is missing for this lead. Send anyway?"
-        );
-        if (ok) {
-          return await doSend({ ...payload, forceEmail: true });
+    setComposeSending(true);
+    try {
+      const resp = await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...payload,
+          manualTakeover: payload.manualTakeover ?? !payload.draftId,
+          skipEmailSignature: payload.skipEmailSignature === true,
+          channel: messageFilter,
+          forceEmail: payload.forceEmail === true,
+          attachments:
+            messageFilter === "email"
+              ? (payload.attachments || []).map(att => ({
+                  content: att.content,
+                  filename: att.name,
+                  type: att.type
+                }))
+              : undefined,
+          mediaUrls: messageFilter === "sms" ? payload.mediaUrls ?? [] : undefined
+        })
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) {
+        if (
+          messageFilter === "email" &&
+          data?.error === "email opt-in not present for this lead" &&
+          !payload.forceEmail
+        ) {
+          const ok = window.confirm(
+            "Email opt-in is missing for this lead. Send anyway?"
+          );
+          if (ok) {
+            return await doSend({ ...payload, forceEmail: true });
+          }
+          return false;
         }
+        window.alert(data?.error ?? "Send failed");
         return false;
       }
-      window.alert(data?.error ?? "Send failed");
-      return false;
-    }
-    if (messageFilter === "email") {
-      const attachmentCount = payload.attachments?.length ?? 0;
-      setEmailAttachments([]);
-      setEmailAttachmentsBusy(false);
-      setSaveToast(
-        attachmentCount > 0
-          ? `Email sent with ${attachmentCount} attachment${attachmentCount === 1 ? "" : "s"}.`
-          : "Email sent."
-      );
-    } else if (messageFilter === "sms") {
-      const mediaCount = payload.mediaUrls?.length ?? 0;
-      setSmsAttachments([]);
-      setSmsAttachmentsBusy(false);
-      if (mediaCount > 0) {
-        setSaveToast(`SMS sent with ${mediaCount} attachment${mediaCount === 1 ? "" : "s"}.`);
+      if (messageFilter === "email") {
+        const attachmentCount = payload.attachments?.length ?? 0;
+        setEmailAttachments([]);
+        setEmailAttachmentsBusy(false);
+        setSaveToast(
+          attachmentCount > 0
+            ? `Email sent with ${attachmentCount} attachment${attachmentCount === 1 ? "" : "s"}.`
+            : "Email sent."
+        );
+      } else if (messageFilter === "sms") {
+        const mediaCount = payload.mediaUrls?.length ?? 0;
+        setSmsAttachments([]);
+        setSmsAttachmentsBusy(false);
+        if (mediaCount > 0) {
+          setSaveToast(`SMS sent with ${mediaCount} attachment${mediaCount === 1 ? "" : "s"}.`);
+        }
       }
-    }
-    setSendBody("");
-    setSendBodySource("system");
-    setLastDraftId(null);
-    if (data?.conversation) {
-      const conv = data.conversation;
-      if (Array.isArray(conv.messages)) {
-        // Keep composer clear immediately after a send by staling any draft message
-        // that is older than the latest sent outbound.
-        let lastSentIdx = -1;
-        conv.messages.forEach((m: any, idx: number) => {
-          if (m?.direction !== "out") return;
-          if (m?.provider === "twilio" || m?.provider === "human" || m?.provider === "sendgrid") {
-            lastSentIdx = idx;
-          }
-        });
-        if (lastSentIdx >= 0) {
-          conv.messages = conv.messages.map((m: any, idx: number) => {
-            if (
-              idx <= lastSentIdx &&
-              m?.direction === "out" &&
-              m?.provider === "draft_ai" &&
-              m?.draftStatus !== "stale"
-            ) {
-              return { ...m, draftStatus: "stale" };
+      setSendBody("");
+      setSendBodySource("system");
+      setLastDraftId(null);
+      if (data?.conversation) {
+        const conv = data.conversation;
+        if (Array.isArray(conv.messages)) {
+          // Keep composer clear immediately after a send by staling any draft message
+          // that is older than the latest sent outbound.
+          let lastSentIdx = -1;
+          conv.messages.forEach((m: any, idx: number) => {
+            if (m?.direction !== "out") return;
+            if (m?.provider === "twilio" || m?.provider === "human" || m?.provider === "sendgrid") {
+              lastSentIdx = idx;
             }
-            return m;
           });
+          if (lastSentIdx >= 0) {
+            conv.messages = conv.messages.map((m: any, idx: number) => {
+              if (
+                idx <= lastSentIdx &&
+                m?.direction === "out" &&
+                m?.provider === "draft_ai" &&
+                m?.draftStatus !== "stale"
+              ) {
+                return { ...m, draftStatus: "stale" };
+              }
+              return m;
+            });
+          }
         }
-      }
-      if (payload.draftId && Array.isArray(conv.messages)) {
-        const msg = conv.messages.find((m: any) => m.id === payload.draftId);
-        if (msg) {
-          msg.body = payload.body;
-          msg.provider = data?.sent === true ? "twilio" : msg.provider ?? "human";
-          msg.draftStatus = undefined;
-          msg.at = new Date().toISOString();
+        if (payload.draftId && Array.isArray(conv.messages)) {
+          const msg = conv.messages.find((m: any) => m.id === payload.draftId);
+          if (msg) {
+            msg.body = payload.body;
+            msg.provider = data?.sent === true ? "twilio" : msg.provider ?? "human";
+            msg.draftStatus = undefined;
+            msg.at = new Date().toISOString();
+          }
         }
+        setSelectedConv(conv);
+        setConversations(prev =>
+          prev.map(c => {
+            if (c.id !== conv.id) return c;
+            const last = conv.messages?.[conv.messages.length - 1];
+            return {
+              ...c,
+              updatedAt: conv.updatedAt ?? c.updatedAt,
+              lastMessage: last?.body ?? c.lastMessage,
+              messageCount: conv.messages?.length ?? c.messageCount,
+              pendingDraft: false,
+              pendingDraftPreview: null,
+              mode: conv.mode ?? c.mode
+            };
+          })
+        );
+      } else {
+        await loadConversation(selectedConv.id);
       }
-      setSelectedConv(conv);
-      setConversations(prev =>
-        prev.map(c => {
-          if (c.id !== conv.id) return c;
-          const last = conv.messages?.[conv.messages.length - 1];
-          return {
-            ...c,
-            updatedAt: conv.updatedAt ?? c.updatedAt,
-            lastMessage: last?.body ?? c.lastMessage,
-            messageCount: conv.messages?.length ?? c.messageCount,
-            pendingDraft: false,
-            pendingDraftPreview: null,
-            mode: conv.mode ?? c.mode
-          };
-        })
-      );
-    } else {
-      await loadConversation(selectedConv.id);
+      await load();
+      return true;
+    } finally {
+      setComposeSending(false);
     }
-    await load();
-    return true;
   }
 
   async function send() {
     if (!selectedConv) return;
+    if (composeSending) return;
     if (messageFilter === "calls") return;
     if (messageFilter === "sms" && selectedConv.contactPreference === "call_only") {
       return;
@@ -3622,7 +3628,10 @@ export default function Home() {
     }
     if (!body && !(messageFilter === "sms" && smsMmsMediaUrls.length > 0)) return;
     const draftId = effectiveDraft?.id;
-    const edited = !!effectiveDraft && effectiveDraft.body.trim() !== body.trim();
+    const normalizeDraftCompare = (text: string) => text.replace(/\r\n/g, "\n").trim();
+    const edited =
+      !!effectiveDraft &&
+      normalizeDraftCompare(effectiveDraft.body) !== normalizeDraftCompare(body);
     if (edited) {
       setPendingSend({
         body,
@@ -10334,6 +10343,7 @@ export default function Home() {
                 <button
                   className={`px-4 py-2 border rounded ${
                     messageFilter === "calls" ||
+                    composeSending ||
                     (messageFilter === "sms" && selectedConv.contactPreference === "call_only") ||
                     (messageFilter === "sms" && smsAttachmentsBusy) ||
                     (messageFilter === "email" && emailAttachmentsBusy)
@@ -10343,12 +10353,13 @@ export default function Home() {
                   onClick={send}
                   disabled={
                     messageFilter === "calls" ||
+                    composeSending ||
                     (messageFilter === "sms" && selectedConv.contactPreference === "call_only") ||
                     (messageFilter === "sms" && smsAttachmentsBusy) ||
                     (messageFilter === "email" && emailAttachmentsBusy)
                   }
                 >
-                  Send
+                  {composeSending ? "Sending..." : "Send"}
                 </button>
                 {messageFilter === "email" ? (
                   emailManualMode ? (
