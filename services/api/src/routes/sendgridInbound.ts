@@ -850,6 +850,11 @@ function extractPriceRangeFromText(text?: string | null): { minPrice?: number; m
     const p = parsePriceToken(under[1].replace(",", ""));
     if (p) return { maxPrice: p };
   }
+  const trailingMax = t.match(/\$?\s*(\d+(?:[.,]\d+)?\s*k?)\s*(?:max(?:imum)?|or less|or under|or below)\b/);
+  if (trailingMax) {
+    const p = parsePriceToken(trailingMax[1].replace(",", ""));
+    if (p) return { maxPrice: p };
+  }
 
   const over = t.match(/\b(?:over|above|at least|min(?:imum)?|starting at)\s*\$?\s*(\d+(?:[.,]\d+)?\s*k?)\b/);
   if (over) {
@@ -863,6 +868,15 @@ function extractPriceRangeFromText(text?: string | null): { minPrice?: number; m
     if (p) return { maxPrice: p };
   }
   return null;
+}
+
+function extractWalkInModelHint(text?: string | null): string | undefined {
+  const t = String(text ?? "").toLowerCase();
+  if (!t) return undefined;
+  if (/\b(sportster|xl883c|xl\s*883|883)\b/.test(t)) return "Sportster";
+  if (/\b(road glide\s*(3|iii)|fltrt)\b/.test(t)) return "Road Glide 3";
+  if (/\b(street glide\s*(3|iii)|flhlt)\b/.test(t)) return "Street Glide 3 Limited";
+  return undefined;
 }
 
 function extractTrimFromText(text?: string | null): string | undefined {
@@ -2148,13 +2162,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       conv.lead?.vehicle?.description ??
       meta.model ??
       "";
+    const walkInModelHint = extractWalkInModelHint(walkInCleanedComment);
     const parserModel =
       inventoryEntityAccepted && llmInventoryEntities?.model
         ? normalizeVehicleModel(llmInventoryEntities.model, conv.lead?.vehicle?.make ?? null)
         : undefined;
     const modelLabel =
-      normalizeVehicleModel(String(modelRaw ?? ""), conv.lead?.vehicle?.make ?? null) ||
-      parserModel;
+      walkInModelHint ||
+      parserModel ||
+      normalizeVehicleModel(String(modelRaw ?? ""), conv.lead?.vehicle?.make ?? null);
     const hasWatchIntentFromParser =
       !!llmIntent &&
       llmIntent.intent === "availability" &&
