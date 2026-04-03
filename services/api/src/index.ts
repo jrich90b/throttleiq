@@ -14668,6 +14668,9 @@ if (authToken && signature) {
     (dialogActAccepted && dialogActParse?.topic === "pricing") ||
     (pricingPaymentsAccepted && pricingPaymentsParse?.intent === "pricing");
   const llmPricingOrPaymentsIntent = llmPricingIntent || llmPaymentsIntent;
+  const explicitFinanceTermIntent =
+    /\b\d{2,3}\s*(month|months|mo)\b/i.test(String(event.body ?? "")) ||
+    /\brun\s+(it|that|the numbers?)\s+for\s+\d{2,3}\b/i.test(String(event.body ?? ""));
   const llmSchedulingIntent = dialogActAccepted && dialogActParse?.topic === "scheduling";
   const pricingSignal =
     llmPricingOrPaymentsIntent ||
@@ -14683,6 +14686,8 @@ if (authToken && signature) {
     !schedulingSignalsBase.hasDayTime &&
     !schedulingSignalsBase.hasDayOnlyAvailability &&
     !schedulingSignalsBase.hasDayOnlyRequest;
+  const pricingOrPaymentsIntent =
+    llmPricingOrPaymentsIntent || paymentOrPricingNoSchedule || explicitFinanceTermIntent;
   if (
     getDialogState(conv) === "none" &&
     !isScheduleDialogState(getDialogState(conv)) &&
@@ -14924,6 +14929,12 @@ if (authToken && signature) {
     schedulingSignals.hasDayOnlyAvailability = false;
     schedulingSignals.hasDayOnlyRequest = false;
   }
+  if (pricingOrPaymentsIntent) {
+    schedulingSignals.explicit = false;
+    schedulingSignals.hasDayTime = false;
+    schedulingSignals.hasDayOnlyAvailability = false;
+    schedulingSignals.hasDayOnlyRequest = false;
+  }
   const softVisitIntent = schedulingSignalsBase.softVisit === true;
   if (event.provider === "twilio" && softVisitIntent) {
     conv.scheduleSoft = {
@@ -15052,8 +15063,7 @@ if (authToken && signature) {
   if (
     event.provider === "twilio" &&
     schedulingAllowed &&
-    !paymentOrPricingNoSchedule &&
-    !llmPricingOrPaymentsIntent &&
+    !pricingOrPaymentsIntent &&
     bookingIntentLow &&
     !schedulingSignalsBase.hasDayTime &&
     !schedulingSignalsBase.hasDayOnlyRequest &&
@@ -15701,11 +15711,8 @@ if (authToken && signature) {
     conv.inventoryWatchPending = undefined;
   }
 
-  const explicitFinanceTermIntent =
-    /\b\d{2,3}\s*(month|months|mo)\b/i.test(String(event.body ?? "")) ||
-    /\brun\s+(it|that|the numbers?)\s+for\s+\d{2,3}\b/i.test(String(event.body ?? ""));
   const watchPendingBlockedByPricingIntent =
-    llmPricingOrPaymentsIntent || paymentOrPricingNoSchedule || explicitFinanceTermIntent;
+    pricingOrPaymentsIntent;
   if (
     event.provider === "twilio" &&
     conv.inventoryWatchPending &&
@@ -17637,7 +17644,7 @@ if (authToken && signature) {
       }
     }
     const schedulingIntent =
-      !paymentOrPricingNoSchedule &&
+      !pricingOrPaymentsIntent &&
       schedulingExplicit &&
       (ctxSuggestsScheduling || llmSuggestsScheduling || schedulingSignals.hasDayTime);
     if (schedulingIntent) {
@@ -17856,7 +17863,8 @@ if (authToken && signature) {
     cta: conv.classification?.cta ?? null,
     lead: conv.lead ?? null,
     pricingAttempts: getPricingAttempts(conv),
-    allowSchedulingOffer: (schedulingExplicit || explicitScheduleSignal) && schedulingAllowed && !paymentOrPricingNoSchedule,
+    allowSchedulingOffer:
+      (schedulingExplicit || explicitScheduleSignal) && schedulingAllowed && !pricingOrPaymentsIntent,
     schedulingText: schedulingTextForOrchestrator,
     callbackRequestedOverride,
     appointmentTypeOverride,
@@ -17875,10 +17883,15 @@ if (authToken && signature) {
   if (result.smallTalk) {
     setDialogState(conv, "small_talk");
   }
+  if (pricingOrPaymentsIntent) {
+    result.requestedTime = undefined;
+    result.suggestedSlots = [];
+    result.draft = stripSchedulingLanguageIfNotAsked(String(result.draft ?? ""), String(event.body ?? ""));
+  }
   if (result.pickupUpdate) {
     conv.pickup = { ...(conv.pickup ?? {}), ...result.pickupUpdate, updatedAt: nowIso() };
   }
-  if (!result.requestedTime && schedulingAllowed && schedulingSignals.hasDayTime) {
+  if (!pricingOrPaymentsIntent && !result.requestedTime && schedulingAllowed && schedulingSignals.hasDayTime) {
     try {
       const cfg = await getSchedulerConfig();
       const tz = cfg.timezone || "America/New_York";
@@ -17888,7 +17901,12 @@ if (authToken && signature) {
       }
     } catch {}
   }
-  if (!result.requestedTime && schedulingAllowed && schedulingSignals.hasDayOnlyRequest) {
+  if (
+    !pricingOrPaymentsIntent &&
+    !result.requestedTime &&
+    schedulingAllowed &&
+    schedulingSignals.hasDayOnlyRequest
+  ) {
     const dayPart = extractDayPart(textLower);
     const dayInfo = parseDayOfWeek(textLower);
     if (dayInfo?.day) {
@@ -17901,6 +17919,7 @@ if (authToken && signature) {
     }
   }
   if (
+    !pricingOrPaymentsIntent &&
     !result.requestedTime &&
     !conv.appointment?.bookedEventId &&
     isAffirmative(event.body) &&
@@ -17922,7 +17941,11 @@ if (authToken && signature) {
     }
   }
   console.log("[twilio] result.suggestedSlots len:", result.suggestedSlots?.length ?? 0);
-  if ((result.suggestedSlots?.length ?? 0) === 0 && draftHasSpecificTimes(result.draft ?? "")) {
+  if (
+    !pricingOrPaymentsIntent &&
+    (result.suggestedSlots?.length ?? 0) === 0 &&
+    draftHasSpecificTimes(result.draft ?? "")
+  ) {
     let requested = result.requestedTime ?? null;
     if (!requested) {
       try {
@@ -18052,7 +18075,7 @@ if (authToken && signature) {
   if (result.pricingAttempted) {
     incrementPricingAttempt(conv);
   }
-  if (result.suggestedSlots && result.suggestedSlots.length > 0) {
+  if (!pricingOrPaymentsIntent && result.suggestedSlots && result.suggestedSlots.length > 0) {
     if (schedulingAllowed && schedulingSignals.hasDayTime && !conv.appointment?.bookedEventId) {
       let requested = result.requestedTime ?? null;
       if (!requested) {
