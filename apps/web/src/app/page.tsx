@@ -852,6 +852,7 @@ export default function Home() {
   const [composeSelection, setComposeSelection] = useState<any | null>(null);
   const [composeError, setComposeError] = useState<string | null>(null);
   const [composeSending, setComposeSending] = useState(false);
+  const [uiNowMs, setUiNowMs] = useState(() => Date.now());
   const [selectedContact, setSelectedContact] = useState<ContactItem | null>(null);
   const [contactEdit, setContactEdit] = useState(false);
   const [contactForm, setContactForm] = useState({
@@ -2667,6 +2668,10 @@ export default function Home() {
     return () => clearTimeout(t);
   }, [saveToast]);
   useEffect(() => {
+    const t = window.setInterval(() => setUiNowMs(Date.now()), 2000);
+    return () => window.clearInterval(t);
+  }, []);
+  useEffect(() => {
     if (authUser?.phone) {
       setCallMethod("cell");
     } else if (authUser?.extension) {
@@ -2735,6 +2740,26 @@ export default function Home() {
         return isSms;
       });
   }, [selectedConv, messageFilter]);
+  const inboundProcessing = useMemo(() => {
+    if (!selectedConv || mode !== "suggest" || selectedConv.mode === "human") return false;
+    const messages = selectedConv.messages ?? [];
+    if (!messages.length) return false;
+    const lastInbound = [...messages]
+      .reverse()
+      .find(
+        m =>
+          m.direction === "in" &&
+          (m.provider === "twilio" || m.provider === "sendgrid" || m.provider === "sendgrid_adf")
+      );
+    if (!lastInbound?.at) return false;
+    const lastInboundAt = new Date(lastInbound.at).getTime();
+    if (!Number.isFinite(lastInboundAt)) return false;
+    const lastOutboundAfterInbound = [...messages]
+      .reverse()
+      .find(m => m.direction === "out" && new Date(m.at).getTime() >= lastInboundAt);
+    if (lastOutboundAfterInbound) return false;
+    return uiNowMs - lastInboundAt < 120000;
+  }, [selectedConv, mode, uiNowMs]);
   const appointmentSalespersonName = useMemo(() => {
     const id = selectedConv?.appointment?.bookedSalespersonId ?? "";
     if (!id) return "";
@@ -10309,13 +10334,13 @@ export default function Home() {
                     </div>
                   );
                 })}
-              {regenBusy || composeSending ? (
+              {regenBusy || composeSending || inboundProcessing ? (
                 <div className="text-sm">
                   <div className="text-xs text-gray-500">
-                    {regenBusy ? "AI • thinking" : "OUT • sending"}
+                    {composeSending ? "OUT • sending" : "AI • thinking"}
                   </div>
                   <div className="inline-flex mt-1 items-center gap-2 px-3 py-2 rounded-2xl border bg-gray-100 text-gray-700 border-gray-200">
-                    <span>{regenBusy ? "Thinking" : "Sending"}</span>
+                    <span>{composeSending ? "Sending" : "Thinking"}</span>
                     <span className="inline-flex items-center gap-1">
                       <span className="h-1.5 w-1.5 rounded-full bg-gray-500 animate-pulse" />
                       <span
