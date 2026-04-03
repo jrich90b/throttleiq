@@ -5953,7 +5953,7 @@ function estimateMonthlyPaymentFromPrice(opts: {
   const taxRate = Number.isFinite(opts.taxRate) ? opts.taxRate : 0.08;
   const down = Number.isFinite(opts.downPayment) ? Number(opts.downPayment) : 0;
   const financed = Math.max(0, (price + fee) * (1 + taxRate) - Math.max(0, down));
-  const apr = opts.isUsed ? 0.1 : 0.085;
+  const apr = getPaymentAprMidpoint(opts.termMonths, opts.isUsed);
   return calcMonthlyPayment(financed, apr, termMonths);
 }
 
@@ -5987,11 +5987,106 @@ function estimateRequiredDownPaymentForTarget(opts: {
   if (!Number.isFinite(targetMonthly) || targetMonthly <= 0) return null;
   const fee = opts.isUsed ? 300 : 1200;
   const taxRate = Number.isFinite(opts.taxRate) ? opts.taxRate : 0.08;
-  const apr = opts.isUsed ? 0.1 : 0.085;
+  const apr = getPaymentAprMidpoint(termMonths, opts.isUsed);
   const totalWithFees = (price + fee) * (1 + taxRate);
   const maxPrincipal = calcPrincipalFromMonthlyPayment(targetMonthly, apr, termMonths);
   if (!Number.isFinite(maxPrincipal)) return null;
   return Math.max(0, totalWithFees - maxPrincipal);
+}
+
+function getPaymentAprRange(termMonths: number, isUsed: boolean): { min: number; max: number } {
+  const term = Number(termMonths);
+  let min = 0.1;
+  let max = 0.13;
+  if (term >= 84) {
+    min = 0.12;
+    max = 0.15;
+  } else if (term >= 72) {
+    min = 0.105;
+    max = 0.135;
+  } else if (term >= 60) {
+    min = 0.095;
+    max = 0.125;
+  }
+  if (isUsed) {
+    min += 0.01;
+    max += 0.01;
+  }
+  return { min, max };
+}
+
+function getPaymentAprMidpoint(termMonths: number, isUsed: boolean): number {
+  const range = getPaymentAprRange(termMonths, isUsed);
+  return (range.min + range.max) / 2;
+}
+
+function estimateRequiredDownPaymentRangeForTarget(opts: {
+  price: number;
+  isUsed: boolean;
+  termMonths: number;
+  taxRate: number;
+  targetMonthly: number;
+}): { minDown: number; maxDown: number; aprMin: number; aprMax: number } | null {
+  const price = Number(opts.price);
+  const termMonths = Number(opts.termMonths);
+  const targetMonthly = Number(opts.targetMonthly);
+  if (!Number.isFinite(price) || price <= 0) return null;
+  if (!Number.isFinite(termMonths) || termMonths <= 0) return null;
+  if (!Number.isFinite(targetMonthly) || targetMonthly <= 0) return null;
+  const fee = opts.isUsed ? 300 : 1200;
+  const taxRate = Number.isFinite(opts.taxRate) ? opts.taxRate : 0.08;
+  const totalWithFees = (price + fee) * (1 + taxRate);
+  const aprRange = getPaymentAprRange(termMonths, opts.isUsed);
+  const principalAtLowApr = calcPrincipalFromMonthlyPayment(targetMonthly, aprRange.min, termMonths);
+  const principalAtHighApr = calcPrincipalFromMonthlyPayment(targetMonthly, aprRange.max, termMonths);
+  if (!Number.isFinite(principalAtLowApr) || !Number.isFinite(principalAtHighApr)) return null;
+  const downLowApr = Math.max(0, totalWithFees - principalAtLowApr);
+  const downHighApr = Math.max(0, totalWithFees - principalAtHighApr);
+  return {
+    minDown: Math.min(downLowApr, downHighApr),
+    maxDown: Math.max(downLowApr, downHighApr),
+    aprMin: aprRange.min,
+    aprMax: aprRange.max
+  };
+}
+
+function buildPaymentTermDownCombosText(opts: {
+  price: number;
+  isUsed: boolean;
+  taxRate: number;
+  targetMonthly: number;
+  terms?: number[];
+}): string {
+  const nf = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0
+  });
+  const terms = (opts.terms ?? [84, 72, 60]).filter(t => Number.isFinite(t) && t > 0);
+  const parts: string[] = [];
+  for (const term of terms) {
+    const band = estimateRequiredDownPaymentRangeForTarget({
+      price: opts.price,
+      isUsed: opts.isUsed,
+      termMonths: term,
+      taxRate: opts.taxRate,
+      targetMonthly: opts.targetMonthly
+    });
+    if (!band) continue;
+    const aprMinPct = Math.round(band.aprMin * 1000) / 10;
+    const aprMaxPct = Math.round(band.aprMax * 1000) / 10;
+    const minDown = Math.max(0, Math.round(band.minDown / 100) * 100);
+    const maxDown = Math.max(0, Math.round(band.maxDown / 100) * 100);
+    const downText =
+      minDown === 0 && maxDown === 0
+        ? "little to no money down"
+        : minDown === maxDown
+          ? `about ${nf.format(minDown)} down`
+          : `${nf.format(minDown)}-${nf.format(maxDown)} down`;
+    parts.push(`${term} mo (${aprMinPct}-${aprMaxPct}% APR): ${downText}`);
+  }
+  if (!parts.length) return "";
+  return `Rough combos to be near ${nf.format(opts.targetMonthly)}/mo: ${parts.join("; ")}.`;
 }
 
 function formatBudgetInventoryOption(item: any): string {
@@ -17023,35 +17118,41 @@ if (authToken && signature) {
               null;
             const targetMonthly = Number(monthlyBudget);
             const budgetLabel = `$${Math.round(targetMonthly).toLocaleString("en-US")}/mo`;
-            if (pickedSpecific) {
-              const pickedLabel = formatBudgetInventoryOption(pickedSpecific);
-              const requiredDown = estimateRequiredDownPaymentForTarget({
-                price: Number(pickedSpecific?.price ?? NaN),
-                isUsed: isUsedInventoryConditionForBudget(pickedSpecific?.condition, pickedSpecific?.year),
+              if (pickedSpecific) {
+                const pickedLabel = formatBudgetInventoryOption(pickedSpecific);
+                const requiredDown = estimateRequiredDownPaymentForTarget({
+                  price: Number(pickedSpecific?.price ?? NaN),
+                  isUsed: isUsedInventoryConditionForBudget(pickedSpecific?.condition, pickedSpecific?.year),
                 termMonths: paymentTermMonths,
                 taxRate: paymentTaxRate,
                 targetMonthly
               });
-              const noDownMonthly = estimateInventoryItemMonthlyPayment(pickedSpecific, {
-                termMonths: paymentTermMonths,
-                taxRate: paymentTaxRate,
-                downPayment: 0
-              });
-              const noDownMonthlyRounded =
-                noDownMonthly != null ? Math.round((noDownMonthly as number) / 10) * 10 : null;
-              let reply = "";
-              if (requiredDown == null) {
-                reply = `For ${pickedLabel}, I can run that payment target for you. Do you want 60, 72, or 84 months?`;
-              } else if (requiredDown <= 0) {
-                reply = `On ${pickedLabel}, you should already be around ${budgetLabel} or lower on a ${paymentTermMonths}-month estimate with little to no money down (before taxes/fees and final APR). Want me to run 60/72/84 so you can compare?`;
-              } else {
-                const roundedDown = Math.max(0, Math.round(requiredDown / 100) * 100);
-                const noDownLine =
-                  noDownMonthlyRounded != null
-                    ? ` With $0 down it’s roughly $${noDownMonthlyRounded.toLocaleString("en-US")}/mo.`
-                    : "";
-                reply = `On ${pickedLabel}, to get near ${budgetLabel} on a ${paymentTermMonths}-month estimate, you’d be around $${roundedDown.toLocaleString("en-US")} down (before taxes/fees and final lender approval).${noDownLine} Want me to also run it at 84 months?`;
-              }
+                const noDownMonthly = estimateInventoryItemMonthlyPayment(pickedSpecific, {
+                  termMonths: paymentTermMonths,
+                  taxRate: paymentTaxRate,
+                  downPayment: 0
+                });
+                const noDownMonthlyRounded =
+                  noDownMonthly != null ? Math.round((noDownMonthly as number) / 10) * 10 : null;
+                const combosText = buildPaymentTermDownCombosText({
+                  price: Number(pickedSpecific?.price ?? NaN),
+                  isUsed: isUsedInventoryConditionForBudget(pickedSpecific?.condition, pickedSpecific?.year),
+                  taxRate: paymentTaxRate,
+                  targetMonthly
+                });
+                let reply = "";
+                if (requiredDown == null) {
+                  reply = `For ${pickedLabel}, I can run that payment target for you. Do you want 60, 72, or 84 months?`;
+                } else if (requiredDown <= 0) {
+                  reply = `On ${pickedLabel}, you should already be around ${budgetLabel} or lower on a ${paymentTermMonths}-month estimate with little to no money down (before taxes/fees and final APR). ${combosText}`;
+                } else {
+                  const roundedDown = Math.max(0, Math.round(requiredDown / 100) * 100);
+                  const noDownLine =
+                    noDownMonthlyRounded != null
+                      ? ` With $0 down it’s roughly $${noDownMonthlyRounded.toLocaleString("en-US")}/mo.`
+                      : "";
+                  reply = `On ${pickedLabel}, to get near ${budgetLabel} on a ${paymentTermMonths}-month estimate, you’d be around $${roundedDown.toLocaleString("en-US")} down (before taxes/fees and final lender approval).${noDownLine} ${combosText}`;
+                }
               const systemMode = webhookMode;
               if (systemMode === "suggest") {
                 appendOutbound(conv, event.to, event.from, reply, "draft_ai");
