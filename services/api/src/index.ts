@@ -5285,6 +5285,8 @@ function isPaymentText(text: string): boolean {
 function hasPrimaryIntentBeyondWatch(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
+  if (/\b\d{2,3}\s*(month|months|mo)\b/.test(t)) return true;
+  if (/\brun\s+(it|that|the numbers?)\s+for\s+\d{2,3}\b/.test(t)) return true;
   if (isPaymentText(t) || isDownPaymentQuestion(t)) return true;
   return (
     /\b(price|pricing|otd|monthly|apr|term|trade|trade in|appraisal|finance|financing|credit app|credit application|apply|application|schedule|book|appointment|test ride|available|availability|in stock|how many|what do you have|other options|another option|photos?|video|walkaround|specs?|engine|weight)\b/.test(
@@ -15562,7 +15564,17 @@ if (authToken && signature) {
     conv.inventoryWatchPending = undefined;
   }
 
-  if (event.provider === "twilio" && conv.inventoryWatchPending && !inventoryCountQuestion) {
+  const explicitFinanceTermIntent =
+    /\b\d{2,3}\s*(month|months|mo)\b/i.test(String(event.body ?? "")) ||
+    /\brun\s+(it|that|the numbers?)\s+for\s+\d{2,3}\b/i.test(String(event.body ?? ""));
+  const watchPendingBlockedByPricingIntent =
+    llmPricingOrPaymentsIntent || paymentOrPricingNoSchedule || explicitFinanceTermIntent;
+  if (
+    event.provider === "twilio" &&
+    conv.inventoryWatchPending &&
+    !inventoryCountQuestion &&
+    !watchPendingBlockedByPricingIntent
+  ) {
     const cfg = await getSchedulerConfig();
     const tz = cfg.timezone || "America/New_York";
     const explicitRequested = parseRequestedDayTime(String(event.body ?? ""), tz);
