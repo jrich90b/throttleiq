@@ -31,7 +31,9 @@ import {
   normalizeLeadKey,
   getConversation,
   saveConversation,
-  flushConversationStore
+  flushConversationStore,
+  listOpenQuestions,
+  markQuestionDone
 } from "../domain/conversationStore.js";
 import type { InventoryWatch } from "../domain/conversationStore.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
@@ -1832,6 +1834,32 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     !(conv.messages ?? []).some((m: any) => m.direction === "out") &&
     (leadSourceLower.includes("dealer lead app") ||
       /event name:\s*dealer test ride|demo bikes ridden|dealer lead app/i.test(effectiveInquiry));
+  if (isDealerRideEventLead) {
+    const appt = conv.appointment;
+    const apptType = String(appt?.appointmentType ?? appt?.matchedSlot?.appointmentType ?? "").toLowerCase();
+    const isBookedTestRide =
+      !!appt?.bookedEventId &&
+      (apptType === "test_ride" || inferredBucket === "test_ride" || inferredCta === "schedule_test_ride");
+    if (isBookedTestRide) {
+      const nowIso = new Date().toISOString();
+      appt.staffNotify = appt.staffNotify ?? {};
+      if (!appt.staffNotify.outcome) {
+        appt.staffNotify.outcome = {
+          status: "showed_up",
+          note: "Auto-marked from Dealer Lead App demo-ride submission.",
+          updatedAt: nowIso
+        };
+      }
+      appt.staffNotify.followUpSentAt = appt.staffNotify.followUpSentAt ?? nowIso;
+      appt.attendanceQuestionedAt = appt.attendanceQuestionedAt ?? nowIso;
+      const openAttendance = listOpenQuestions().filter(
+        q => q.convId === conv.id && q.status === "open" && q.type === "attendance"
+      );
+      for (const q of openAttendance) {
+        markQuestionDone(conv.id, q.id, "showed_up", "dealer_lead_app");
+      }
+    }
+  }
   const isNoPurchaseNow =
     /not interested in purchasing at this time/.test(timeframeLower) ||
     /purchase timeframe:\s*i am not interested in purchasing at this time/.test(inquiryText) ||
