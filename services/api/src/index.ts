@@ -5660,6 +5660,41 @@ function parseDownPaymentForBudget(text: string): { amount: number; assumedThous
   return { amount, assumedThousands };
 }
 
+function findRecentInboundPaymentBudgetContext(conv: any): {
+  monthlyBudget?: number;
+  termMonths?: number;
+  downPayment?: number;
+} {
+  const msgs = Array.isArray(conv?.messages) ? conv.messages : [];
+  for (let i = msgs.length - 1; i >= 0; i -= 1) {
+    const m = msgs[i];
+    if (!m || m.direction !== "in") continue;
+    const body = String(m.body ?? "");
+    const monthlyBudget = extractMonthlyBudgetLimit(body) ?? undefined;
+    const termMonths = extractPaymentTermMonths(body) ?? undefined;
+    const downPayment = parseDownPaymentForBudget(body)?.amount ?? undefined;
+    if (monthlyBudget != null || termMonths != null || downPayment != null) {
+      return { monthlyBudget, termMonths, downPayment };
+    }
+  }
+  return {};
+}
+
+function resolvePaymentBudgetForConversation(
+  conv: any,
+  text: string
+): {
+  monthlyBudget?: number;
+  termMonths?: number;
+  downPayment?: number;
+} {
+  const recent = findRecentInboundPaymentBudgetContext(conv);
+  const monthlyBudget = extractMonthlyBudgetLimit(text) ?? recent.monthlyBudget;
+  const termMonths = extractPaymentTermMonths(text) ?? recent.termMonths;
+  const downPayment = parseDownPaymentForBudget(text)?.amount ?? recent.downPayment;
+  return { monthlyBudget, termMonths, downPayment };
+}
+
 function parsePriceTokenForWatch(raw: string): number | null {
   const token = String(raw ?? "").trim().toLowerCase();
   if (!token) return null;
@@ -14814,9 +14849,10 @@ if (authToken && signature) {
     !explicitScheduleSignal &&
     (llmPaymentsIntent || (pricingPaymentsAccepted && pricingPaymentsParse?.intent === "payments"))
   ) {
-    const monthlyBudget = extractMonthlyBudgetLimit(event.body ?? "");
-    const termMonths = extractPaymentTermMonths(event.body ?? "");
-    const downPayment = parseDownPaymentForBudget(event.body ?? "")?.amount ?? null;
+    const paymentBudgetContext = resolvePaymentBudgetForConversation(conv, event.body ?? "");
+    const monthlyBudget = paymentBudgetContext.monthlyBudget ?? null;
+    const termMonths = paymentBudgetContext.termMonths ?? null;
+    const downPayment = paymentBudgetContext.downPayment ?? null;
     let reply: string | null = null;
     if (isModelUnknownForPayments(conv)) {
       const budgetHint =
@@ -14825,11 +14861,6 @@ if (authToken && signature) {
           : "";
       reply = `Got it${budgetHint}. Which bike are you looking at so I can run it correctly?`;
       setDialogState(conv, "pricing_need_model");
-    } else if (monthlyBudget && !termMonths) {
-      reply = `Got it — to target around $${Number(monthlyBudget).toLocaleString("en-US")}/mo, do you want me to run 60, 72, or 84 months?`;
-      if (!isScheduleDialogState(getDialogState(conv))) {
-        setDialogState(conv, "pricing_init");
-      }
     } else if (isDownPaymentQuestion(event.body ?? "") && !monthlyBudget) {
       reply = "Got it — what monthly payment are you trying to stay around?";
       if (!isScheduleDialogState(getDialogState(conv))) {
@@ -16724,11 +16755,11 @@ if (authToken && signature) {
         models.find(m => textLower.includes(m.toLowerCase())) ??
         findMentionedModel(textLower) ??
         null;
-      const monthlyBudget = extractMonthlyBudgetLimit(event.body);
+      const paymentBudgetContext = resolvePaymentBudgetForConversation(conv, event.body);
+      const monthlyBudget = paymentBudgetContext.monthlyBudget ?? null;
       const hasMonthlyBudgetTarget = monthlyBudget != null;
-      const paymentTermMonths = extractPaymentTermMonths(event.body) ?? 72;
-      const downPaymentInfo = hasMonthlyBudgetTarget ? parseDownPaymentForBudget(event.body) : null;
-      const downPayment = downPaymentInfo?.amount ?? 0;
+      const paymentTermMonths = paymentBudgetContext.termMonths ?? (hasMonthlyBudgetTarget ? 84 : 72);
+      const downPayment = hasMonthlyBudgetTarget ? (paymentBudgetContext.downPayment ?? 0) : 0;
       let paymentTaxRate = 0.08;
       if (hasMonthlyBudgetTarget) {
         try {
