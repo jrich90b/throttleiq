@@ -852,7 +852,6 @@ export default function Home() {
   const [composeSelection, setComposeSelection] = useState<any | null>(null);
   const [composeError, setComposeError] = useState<string | null>(null);
   const [composeSending, setComposeSending] = useState(false);
-  const [uiNowMs, setUiNowMs] = useState(() => Date.now());
   const [selectedContact, setSelectedContact] = useState<ContactItem | null>(null);
   const [contactEdit, setContactEdit] = useState(false);
   const [contactForm, setContactForm] = useState({
@@ -2668,10 +2667,6 @@ export default function Home() {
     return () => clearTimeout(t);
   }, [saveToast]);
   useEffect(() => {
-    const t = window.setInterval(() => setUiNowMs(Date.now()), 2000);
-    return () => window.clearInterval(t);
-  }, []);
-  useEffect(() => {
     if (authUser?.phone) {
       setCallMethod("cell");
     } else if (authUser?.extension) {
@@ -2758,8 +2753,8 @@ export default function Home() {
       .reverse()
       .find(m => m.direction === "out" && new Date(m.at).getTime() >= lastInboundAt);
     if (lastOutboundAfterInbound) return false;
-    return uiNowMs - lastInboundAt < 120000;
-  }, [selectedConv, mode, uiNowMs]);
+    return true;
+  }, [selectedConv, mode]);
   const appointmentSalespersonName = useMemo(() => {
     const id = selectedConv?.appointment?.bookedSalespersonId ?? "";
     if (!id) return "";
@@ -10334,7 +10329,7 @@ export default function Home() {
                     </div>
                   );
                 })}
-              {regenBusy || composeSending || inboundProcessing ? (
+              {detailLoading || regenBusy || composeSending || inboundProcessing ? (
                 <div className="text-sm">
                   <div className="text-xs text-gray-500">
                     {composeSending ? "OUT • sending" : "AI • thinking"}
