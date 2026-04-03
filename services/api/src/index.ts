@@ -4235,6 +4235,11 @@ function extractTimeToken(msg: string): string | null {
   // hour-only: 1, 11, 1pm, 11am
   m = s.match(/\b(\d{1,2})\s*(am|pm)?\b/);
   if (m) {
+    const hourNum = Number(m[1]);
+    const hasMeridiem = !!m[2];
+    // Prevent finance terms like "84 months" from being treated as a time.
+    if (!hasMeridiem && /\b(month|months|mo|year|years|yr|yrs)\b/.test(s)) return null;
+    if (!hasMeridiem && (hourNum < 1 || hourNum > 12)) return null;
     const hh = String(Number(m[1]));
     const ap = m[2] ?? "";
     return normalizeTimeToken(`${hh}:00${ap}`);
@@ -4791,6 +4796,8 @@ function wantsReminder(text: string): boolean {
 }
 
 function looksLikeTimeSelection(text: string): boolean {
+  // Finance phrasing (e.g., "run it for 84 months") should never be treated as slot selection.
+  if (isPaymentText(text)) return false;
   if (extractTimeToken(text)) return true;
   return /\b(first|second|earlier|later)\b/i.test(String(text ?? ""));
 }
@@ -5277,7 +5284,7 @@ function isPricingText(text: string): boolean {
 }
 
 function isPaymentText(text: string): boolean {
-  return /(monthly payment|what would it be a month|what would it be per month|how much down|money down|put (?:any )?money down|no money down|zero down|\$0 down|\bapr\b|term)/i.test(
+  return /(monthly payment|what would it be a month|what would it be per month|how much down|money down|put (?:any )?money down|no money down|zero down|\$0 down|\bapr\b|term|\b\d{2,3}\s*(month|months|mo)\b|\brun\s+(it|that|the numbers?)\s+for\s+\d{2,3}\b)/i.test(
     String(text ?? "")
   );
 }
