@@ -2579,7 +2579,11 @@ function extractColorFromDescription(desc?: string | null, stockId?: string | nu
 }
 
 function normalizeColor(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return s
+    .toLowerCase()
+    .replace(/\bmetalic\b/g, "metallic")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }
 
 function normalizeColorBase(s: string, keepTrim = false): string {
@@ -6460,6 +6464,7 @@ function extractYearSingle(text: string): number | null {
 }
 
 const INVENTORY_COLOR_PHRASES = [
+  "iron horse metallic",
   "blood orange and vivid black black trim",
   "blood orange and vivid black chrome trim",
   "blood orange and black",
