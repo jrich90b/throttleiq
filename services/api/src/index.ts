@@ -14982,7 +14982,25 @@ if (authToken && signature) {
     schedulingSignals.hasDayOnlyRequest ||
     llmSchedulingIntent ||
     !!llmTestRideIntent;
-  const suppressWatchIntentThisTurn = pricingOrPaymentsIntent || schedulingPrimaryIntent;
+  const callbackPrimaryIntent =
+    callbackRequestedOverride && !pricingOrPaymentsIntent && !schedulingPrimaryIntent;
+  const availabilityPrimaryIntent =
+    llmAvailabilityIntent && !pricingOrPaymentsIntent && !schedulingPrimaryIntent && !callbackPrimaryIntent;
+  const turnPrimaryIntent:
+    | "pricing_payments"
+    | "scheduling"
+    | "callback"
+    | "availability"
+    | "general" = pricingOrPaymentsIntent
+    ? "pricing_payments"
+    : schedulingPrimaryIntent
+      ? "scheduling"
+      : callbackPrimaryIntent
+        ? "callback"
+        : availabilityPrimaryIntent
+          ? "availability"
+          : "general";
+  const suppressWatchIntentThisTurn = turnPrimaryIntent !== "general";
   if (schedulingSignals.explicit || schedulingSignals.hasDayTime) {
     if (conv.scheduleSoft) {
       conv.scheduleSoft = undefined;
@@ -15059,7 +15077,7 @@ if (authToken && signature) {
       }
     }
   }
-  if (callbackRequestedOverride && !isScheduleDialogState(getDialogState(conv))) {
+  if (turnPrimaryIntent === "callback" && !isScheduleDialogState(getDialogState(conv))) {
     setDialogState(conv, "callback_requested");
   }
   if (
@@ -16100,13 +16118,15 @@ if (authToken && signature) {
     llmMediaIntent === "either" ||
     /\b(photo|picture|pic|image|images)\b/i.test(textLower);
   const availabilityExplicit =
-    (llmAvailabilityIntent ||
+    ((turnPrimaryIntent === "availability" || llmAvailabilityIntent) ||
       /(in[-\s]?stock|available|availability|do you have|have .* in[-\s]?stock|any .* in[-\s]?stock|do you carry|carry any)/i.test(
         textLower
       )) &&
+    turnPrimaryIntent !== "pricing_payments" &&
+    turnPrimaryIntent !== "callback" &&
     !specsSignal;
   const tradeYearCorrection =
-    isTradeLead && !availabilityExplicit && !llmAvailabilityIntent
+    isTradeLead && !availabilityExplicit && turnPrimaryIntent !== "availability"
       ? extractTradeYearCorrection(
           textLower,
           conv.lead?.tradeVehicle?.year ?? conv.lead?.vehicle?.year ?? null
@@ -16115,7 +16135,7 @@ if (authToken && signature) {
   const tradeFollowupMessage =
     isTradeLead &&
     !availabilityExplicit &&
-    !llmAvailabilityIntent &&
+    turnPrimaryIntent !== "availability" &&
     !isSteppingBackDispositionText(textLower) &&
     !pricingSignal &&
     (tradeYearCorrection ||
@@ -17682,7 +17702,7 @@ if (authToken && signature) {
       }
     }
     const schedulingIntent =
-      !pricingOrPaymentsIntent &&
+      turnPrimaryIntent === "scheduling" &&
       schedulingExplicit &&
       (ctxSuggestsScheduling || llmSuggestsScheduling || schedulingSignals.hasDayTime);
     if (schedulingIntent) {
@@ -17877,6 +17897,7 @@ if (authToken && signature) {
   }
 
   const schedulingTextForOrchestrator =
+    turnPrimaryIntent === "scheduling" &&
     bookingIntentAccepted &&
     bookingParseText &&
     !shortAck &&
@@ -17902,9 +17923,12 @@ if (authToken && signature) {
     lead: conv.lead ?? null,
     pricingAttempts: getPricingAttempts(conv),
     allowSchedulingOffer:
-      (schedulingExplicit || explicitScheduleSignal) && schedulingAllowed && !pricingOrPaymentsIntent,
+      turnPrimaryIntent === "scheduling" &&
+      (schedulingExplicit || explicitScheduleSignal) &&
+      schedulingAllowed &&
+      !pricingOrPaymentsIntent,
     schedulingText: schedulingTextForOrchestrator,
-    callbackRequestedOverride,
+    callbackRequestedOverride: turnPrimaryIntent === "callback" ? callbackRequestedOverride : false,
     appointmentTypeOverride,
     voiceSummary: getActiveVoiceContext(conv)?.summary ?? null,
     memorySummary,
