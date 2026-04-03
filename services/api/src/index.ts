@@ -11637,6 +11637,11 @@ app.post("/conversations/:id/send", async (req, res) => {
       addInternalQuestion(conv.id, conv.leadKey, msg);
     }
   };
+  const queueTlpLog = () => {
+    void maybeLogTlp().catch((err: any) => {
+      console.warn("⚠️ TLP async log failed:", err?.message ?? err);
+    });
+  };
 
   if (wantsEmail) {
     const forceEmail = req.body?.forceEmail === true;
@@ -11713,7 +11718,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       }
       markAppointmentAcknowledged(conv);
       await logRow(null);
-      await maybeLogTlp();
+      queueTlpLog();
       return res.json({ ok: true, conversation: conv });
     } catch (err: any) {
       console.warn("[email] send failed:", err?.message ?? err);
@@ -11748,7 +11753,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
     markAppointmentAcknowledged(conv);
     await logRow(null);
-    await maybeLogTlp();
+    queueTlpLog();
     return res.status(400).json({
       ok: false,
       error: "leadKey is not a valid phone number for SMS send",
@@ -11786,7 +11791,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
     markAppointmentAcknowledged(conv);
     await logRow(null);
-    await maybeLogTlp();
+    queueTlpLog();
     return res.status(500).json({
       ok: false,
       error: "Twilio credentials not configured (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_FROM_NUMBER)",
@@ -11829,7 +11834,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
     markAppointmentAcknowledged(conv);
     await logRow(msg.sid);
-    await maybeLogTlp();
+    queueTlpLog();
 
     return res.json({
       ok: true,
@@ -14419,15 +14424,61 @@ if (authToken && signature) {
       /\b(schedule|book|appt|appointment|stop in|stop by|come in|visit|time|times|available|availability|today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(
         textLower
       ));
-  const bookingParse =
+  const bookingParsePromise =
     bookingParserEligible && bookingParserHint && !shortAck
-      ? await parseBookingIntentWithLLM({
+      ? parseBookingIntentWithLLM({
           text: event.body,
           history: recentHistory,
           lastSuggestedSlots: conv.scheduler?.lastSuggestedSlots,
           appointment: conv.appointment
         })
-      : null;
+      : Promise.resolve(null);
+  const intentParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_INTENT_PARSER_ENABLED === "1" &&
+    !!process.env.OPENAI_API_KEY;
+  const intentParsePromise =
+    intentParserEligible && !shortAck
+      ? parseIntentWithLLM({
+          text: event.body,
+          history: recentHistory,
+          lead: conv.lead
+        })
+      : Promise.resolve(null);
+  const dialogActParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_DIALOG_ACT_PARSER_ENABLED === "1" &&
+    !!process.env.OPENAI_API_KEY &&
+    !shortAck;
+  const dialogActParsePromise = dialogActParserEligible
+    ? parseDialogActWithLLM({
+        text: event.body,
+        history: recentHistory,
+        lead: conv.lead
+      })
+    : Promise.resolve(null);
+  const pricingPaymentsParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_PRICING_PAYMENTS_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    !shortAck;
+  const pricingPaymentsParsePromise = pricingPaymentsParserEligible
+    ? parsePricingPaymentsIntentWithLLM({
+        text: event.body,
+        history: recentHistory,
+        lead: conv.lead
+      })
+    : Promise.resolve(null);
+  const [bookingParse, intentParse, dialogActParse, pricingPaymentsParse] =
+    await Promise.all([
+      bookingParsePromise,
+      intentParsePromise,
+      dialogActParsePromise,
+      pricingPaymentsParsePromise
+    ]);
   if (process.env.DEBUG_BOOKING_PARSER === "1" && bookingParse) {
     console.log("[llm-booking-parse]", {
       intent: bookingParse.intent,
@@ -14440,20 +14491,6 @@ if (authToken && signature) {
   const bookingParseTimeText =
     bookingParse?.requested?.timeText ??
     (bookingParse?.explicitRequest ? extractTimeToken(event.body) ?? "" : "");
-
-  const intentParserEligible =
-    event.provider === "twilio" &&
-    process.env.LLM_ENABLED === "1" &&
-    process.env.LLM_INTENT_PARSER_ENABLED === "1" &&
-    !!process.env.OPENAI_API_KEY;
-  const intentParse =
-    intentParserEligible && !shortAck
-      ? await parseIntentWithLLM({
-          text: event.body,
-          history: recentHistory,
-          lead: conv.lead
-        })
-      : null;
   if (process.env.DEBUG_INTENT_PARSER === "1" && intentParse) {
     console.log("[llm-intent-parse]", {
       intent: intentParse.intent,
@@ -14463,19 +14500,6 @@ if (authToken && signature) {
       callback: intentParse.callback
     });
   }
-  const dialogActParserEligible =
-    event.provider === "twilio" &&
-    process.env.LLM_ENABLED === "1" &&
-    process.env.LLM_DIALOG_ACT_PARSER_ENABLED === "1" &&
-    !!process.env.OPENAI_API_KEY &&
-    !shortAck;
-  const dialogActParse = dialogActParserEligible
-    ? await parseDialogActWithLLM({
-        text: event.body,
-        history: recentHistory,
-        lead: conv.lead
-      })
-    : null;
   if (process.env.DEBUG_DIALOG_ACT_PARSER === "1" && dialogActParse) {
     console.log("[llm-dialog-act-parse]", dialogActParse);
   }
@@ -14486,19 +14510,6 @@ if (authToken && signature) {
     !!dialogActParse?.explicitRequest &&
     dialogActParse.topic !== "general" &&
     dialogActConfidence >= dialogActConfidenceMin;
-  const pricingPaymentsParserEligible =
-    event.provider === "twilio" &&
-    process.env.LLM_ENABLED === "1" &&
-    process.env.LLM_PRICING_PAYMENTS_PARSER_ENABLED !== "0" &&
-    !!process.env.OPENAI_API_KEY &&
-    !shortAck;
-  const pricingPaymentsParse = pricingPaymentsParserEligible
-    ? await parsePricingPaymentsIntentWithLLM({
-        text: event.body,
-        history: recentHistory,
-        lead: conv.lead
-      })
-    : null;
   if (process.env.DEBUG_PRICING_PAYMENTS_PARSER === "1" && pricingPaymentsParse) {
     console.log("[llm-pricing-payments-parse]", pricingPaymentsParse);
   }
