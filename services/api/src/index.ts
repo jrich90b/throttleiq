@@ -5296,11 +5296,20 @@ function isPaymentText(text: string): boolean {
 function hasPrimaryIntentBeyondWatch(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
+  const schedulingSignals = detectSchedulingSignals(t);
+  if (
+    schedulingSignals.explicit ||
+    schedulingSignals.hasDayTime ||
+    schedulingSignals.hasDayOnlyAvailability ||
+    schedulingSignals.hasDayOnlyRequest
+  ) {
+    return true;
+  }
   if (/\b\d{2,3}\s*(month|months|mo)\b/.test(t)) return true;
   if (/\brun\s+(it|that|the numbers?)\s+for\s+\d{2,3}\b/.test(t)) return true;
   if (isPaymentText(t) || isDownPaymentQuestion(t)) return true;
   return (
-    /\b(price|pricing|otd|monthly|apr|term|trade|trade in|appraisal|finance|financing|credit app|credit application|apply|application|schedule|book|appointment|test ride|available|availability|in stock|how many|what do you have|other options|another option|photos?|video|walkaround|specs?|engine|weight)\b/.test(
+    /\b(price|pricing|otd|monthly|apr|term|trade|trade in|appraisal|finance|financing|credit app|credit application|apply|application|schedule|book|appointment|test ride|available|availability|in stock|how many|what do you have|other options|another option|photos?|video|walkaround|specs?|engine|weight|stop in|come in|come by|stop by|look at)\b/.test(
       t
     ) ||
     /\b(do you have|what do you have|any .* in[-\s]?stock)\b/.test(t)
