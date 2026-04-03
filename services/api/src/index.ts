@@ -16071,7 +16071,8 @@ if (authToken && signature) {
         : null;
     const conditionFromText = normalizeWatchCondition(textLower);
     const conditionFromLlm = normalizeWatchCondition(llmConditionRaw);
-    const explicitCondition = conditionFromLlm ?? conditionFromText;
+    const conditionFromLlmTrusted = conditionFromText ? conditionFromLlm : undefined;
+    const explicitCondition = conditionFromLlmTrusted ?? conditionFromText;
     const priorCondition = !modelChanged
       ? normalizeWatchCondition(conv.inventoryContext?.condition ?? conv.lead?.vehicle?.condition ?? null)
       : undefined;
@@ -16101,7 +16102,7 @@ if (authToken && signature) {
       !modelChanged && !resetContextForCondition
         ? normalizeWatchCondition(conv.inventoryContext?.condition ?? conv.lead?.vehicle?.condition ?? null)
         : undefined;
-    const condition = conditionFromLlm ?? conditionFromText ?? conditionFromContext;
+    const condition = conditionFromLlmTrusted ?? conditionFromText ?? conditionFromContext;
     if (model || yearFromText || colorFromText || finishFromText || condition) {
       conv.inventoryContext = {
         model: model ?? conv.inventoryContext?.model,
@@ -17085,7 +17086,8 @@ if (authToken && signature) {
           : null;
       const conditionFromText = normalizeWatchCondition(textLower);
       const conditionFromLlm = normalizeWatchCondition(llmConditionRaw);
-      const explicitCondition = conditionFromLlm ?? conditionFromText;
+      const conditionFromLlmTrusted = conditionFromText ? conditionFromLlm : undefined;
+      const explicitCondition = conditionFromLlmTrusted ?? conditionFromText;
       const priorCondition = !modelChanged
         ? normalizeWatchCondition(conv.inventoryContext?.condition ?? conv.lead?.vehicle?.condition ?? null)
         : undefined;
@@ -17115,7 +17117,7 @@ if (authToken && signature) {
         !modelChanged && !resetContextForCondition
           ? normalizeWatchCondition(conv.inventoryContext?.condition ?? conv.lead?.vehicle?.condition ?? null)
           : undefined;
-      const condition = conditionFromLlm ?? conditionFromText ?? conditionFromContext;
+      const condition = conditionFromLlmTrusted ?? conditionFromText ?? conditionFromContext;
       const downPaymentQuestion = isDownPaymentQuestion(event.body ?? "");
       const broadInventoryBudgetAsk =
         /\b(what do you have|what.*in stock|show me|options?|inventory|other|another|different)\b/i.test(
