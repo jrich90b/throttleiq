@@ -5966,6 +5966,7 @@ function isSteppingBackDispositionText(text: string): boolean {
 function isComplimentOnlyText(text: string): boolean {
   const t = String(text ?? "").toLowerCase().trim();
   if (!t) return false;
+  if (isShortAckText(t)) return false;
   const compliment =
     /\b(love|like|awesome|amazing|great|cool|nice|sweet|beautiful|killer|badass|sick|clean|gorgeous)\b/.test(t) ||
     /\b(looks?\s+(great|awesome|amazing|sweet|clean|sick|good)|sweet looking)\b/.test(t) ||
@@ -13319,7 +13320,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return res.json({ ok: true, conversation: conv, draft: reply });
   }
 
-  if (regenLlmComplimentOnly || isComplimentOnlyText(event.body)) {
+  if ((regenLlmComplimentOnly || isComplimentOnlyText(event.body)) && !isShortAckText(event.body)) {
     const reply = buildComplimentReply();
     if (channel === "email") {
       conv.emailDraft = reply;
@@ -14304,7 +14305,7 @@ if (authToken && signature) {
     }
   }
 
-  if (llmComplimentOnly || isComplimentOnlyText(event.body)) {
+  if ((llmComplimentOnly || isComplimentOnlyText(event.body)) && !isShortAckText(event.body)) {
     const reply = buildComplimentReply();
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
