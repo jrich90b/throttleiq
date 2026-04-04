@@ -12485,8 +12485,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     receivedAt: inbound.at ?? new Date().toISOString()
   };
   const regenInboundLower = String(event.body ?? "").toLowerCase();
+  const regenRawProvider = String((inbound as any)?.provider ?? "").toLowerCase();
+  const regenLooksLikeAdf =
+    regenRawProvider === "sendgrid_adf" ||
+    /web lead\s*\(adf\)|source:\s*[^\\n]+/i.test(String(event.body ?? ""));
   const regenDealerRideEventLead =
-    event.provider === "sendgrid_adf" &&
+    regenLooksLikeAdf &&
     (/source:\s*dealer lead app/i.test(String(event.body ?? "")) ||
       /event name:\s*dealer test ride|demo bikes ridden|dealer lead app/i.test(String(event.body ?? "")));
   const regenNoPurchaseNow =
