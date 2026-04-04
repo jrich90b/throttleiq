@@ -12983,13 +12983,25 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         const key = normalizeInventoryHoldKey(m.stockId, m.vin);
         return key ? !holds?.[key] && !solds?.[key] : true;
       });
+      const lastAvailabilityOutbound = [...(conv.messages ?? [])]
+        .filter(m => m.direction === "out" && typeof m.body === "string")
+        .reverse()
+        .find(m => /\b(in stock|available right now|still available)\b/i.test(String(m.body ?? "")));
+      const recentlyConfirmedAvailable = (() => {
+        if (!lastAvailabilityOutbound?.at) return false;
+        const sentMs = new Date(lastAvailabilityOutbound.at).getTime();
+        if (!Number.isFinite(sentMs)) return false;
+        return Date.now() - sentMs <= 2 * 60 * 60 * 1000;
+      })();
       const labelYear = contextYear ? `${contextYear} ` : "";
       const labelModel = normalizeDisplayCase(modelForLookup || contextModel);
       const labelColor = contextColor ? ` in ${formatColorLabel(contextColor)}` : "";
       const unitLabel = `${labelYear}${labelModel}${labelColor}`.trim();
       const reply =
         availableMatches.length > 0
-          ? `Absolutely — next week works. ${unitLabel} is still available right now. What day next week works best for you?`
+          ? recentlyConfirmedAvailable
+            ? "Absolutely — next week works. What day next week works best for you?"
+            : `Absolutely — next week works. ${unitLabel} is still available right now. What day next week works best for you?`
           : `Next week works. I’ll keep an eye on ${unitLabel} and update you right away. What day are you thinking to stop by?`;
       discardPendingDrafts(conv);
       appendSmsRegeneratedDraft(reply);
