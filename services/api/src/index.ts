@@ -13235,9 +13235,49 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
 
   const serviceDialogState = getDialogState(conv);
+  const regenInboundDepartmentIntent =
+    inferDepartmentFromText(event.body ?? "") ??
+    (regenUnifiedSlotParse?.departmentIntent && regenUnifiedSlotParse.departmentIntent !== "none"
+      ? (regenUnifiedSlotParse.departmentIntent as DepartmentRole)
+      : null);
+  if (regenInboundDepartmentIntent === "parts" || regenInboundDepartmentIntent === "apparel") {
+    conv.classification = {
+      ...(conv.classification ?? {}),
+      bucket: regenInboundDepartmentIntent,
+      cta: `${regenInboundDepartmentIntent}_request`
+    };
+    const hasDepartmentTodo = listOpenTodos().some(
+      t => t.convId === conv.id && t.reason === regenInboundDepartmentIntent
+    );
+    if (!hasDepartmentTodo) {
+      addTodo(
+        conv,
+        regenInboundDepartmentIntent,
+        event.body ?? `${regenInboundDepartmentIntent} request`,
+        event.providerMessageId
+      );
+    }
+    setFollowUpMode(conv, "manual_handoff", `${regenInboundDepartmentIntent}_request`);
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    const reply =
+      regenInboundDepartmentIntent === "parts"
+        ? "Got it — I’ll have our parts department reach out shortly."
+        : "Got it — I’ll have our apparel team reach out shortly.";
+    if (channel === "email") {
+      conv.emailDraft = reply;
+      saveConversation(conv);
+      return res.json({ ok: true, conversation: conv, draft: reply });
+    }
+    discardPendingDrafts(conv);
+    appendSmsRegeneratedDraft(reply);
+    saveConversation(conv);
+    return res.json({ ok: true, conversation: conv, draft: reply });
+  }
   const isServiceLead =
     conv.classification?.bucket === "service" ||
     conv.classification?.cta === "service_request" ||
+    regenInboundDepartmentIntent === "service" ||
     serviceDialogState === "service_request" ||
     serviceDialogState === "service_handoff" ||
     (conv.followUp?.mode === "manual_handoff" &&
@@ -13279,6 +13319,30 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       saveConversation(conv);
       return res.json({ ok: true, conversation: conv, draft: reply });
     }
+    if (getDialogState(conv) === "none") {
+      setDialogState(conv, "service_request");
+    }
+    setDialogState(conv, "service_handoff");
+    const hasServiceTodo = listOpenTodos().some(
+      todo => todo.convId === conv.id && todo.reason === "service"
+    );
+    if (!hasServiceTodo) {
+      addTodo(conv, "service", event.body ?? "Service request", event.providerMessageId);
+    }
+    setFollowUpMode(conv, "manual_handoff", "service_request");
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    const reply =
+      "We’ve received your service request and will have the service department reach out.";
+    if (channel === "email") {
+      conv.emailDraft = reply;
+      saveConversation(conv);
+      return res.json({ ok: true, conversation: conv, draft: reply });
+    }
+    discardPendingDrafts(conv);
+    appendSmsRegeneratedDraft(reply);
+    saveConversation(conv);
+    return res.json({ ok: true, conversation: conv, draft: reply });
   }
 
   if (event.provider === "twilio" && channel === "sms") {
