@@ -16329,12 +16329,12 @@ if (authToken && signature) {
     /\b(black(?:ed)?\s*(?:out|trim|finish)?|chrome\s*(?:trim|finish)?|black\s*trim|black\s*finish|chrome\s*trim|chrome\s*finish)\b/i.test(
       textLower
     ) &&
-    !/\b(specs?|spec sheet|highlights?|details|info|information|engine|performance|horsepower|torque|displacement|tech|electronics|infotainment|audio|screen|display|safety|dimensions|weight|seat height|fuel capacity|wheelbase|rake|trail|accessories)\b/i.test(
+    !/\b(specs?|spec sheet|highlights?|details|info|information|engine|performance|horsepower|torque|displacement|tech|electronics|infotainment|audio|sound system|stereo|speakers?|screen|display|safety|dimensions|weight|seat height|fuel capacity|wheelbase|rake|trail|accessories)\b/i.test(
       textLower
     );
   const specsSignal =
     !finishPreferenceOnlyRaw &&
-    /\b(specs?|spec sheet|features|highlights|details|info|information|engine|performance|horsepower|torque|displacement|tech|electronics|infotainment|audio|screen|display|safety|dimensions|weight|seat height|fuel capacity|wheelbase|rake|trail|accessories|trim)\b/i.test(
+    /\b(specs?|spec sheet|features|highlights|details|info|information|engine|performance|horsepower|torque|displacement|tech|electronics|infotainment|audio|sound system|stereo|speakers?|screen|display|safety|dimensions|weight|seat height|fuel capacity|wheelbase|rake|trail|accessories|trim)\b/i.test(
       textLower
     );
   const llmMediaIntent =
@@ -16348,6 +16348,7 @@ if (authToken && signature) {
       /(in[-\s]?stock|available|availability|do you have|have .* in[-\s]?stock|any .* in[-\s]?stock|do you carry|carry any)/i.test(
         textLower
       )) &&
+    !/\b(sound system|stereo|speakers?)\b/i.test(textLower) &&
     turnPrimaryIntent !== "pricing_payments" &&
     turnPrimaryIntent !== "callback" &&
     !specsSignal;
@@ -16463,7 +16464,7 @@ if (authToken && signature) {
       !!conv.lead?.vehicle?.model ||
       !!conv.lead?.vehicle?.description);
   const infoOnlyRequest =
-    (llmInventoryInfoIntent || isInfoOnlyRequest(textLower) || isCompare) && !skipInfoOnly;
+    (llmInventoryInfoIntent || isInfoOnlyRequest(textLower) || specsSignal || isCompare) && !skipInfoOnly;
   if (event.provider === "twilio" && finishPreferenceOnlyRaw && !hasModelContext) {
     const reply = "Got it — which model and year are you looking for?";
     const systemMode = webhookMode;
@@ -16701,7 +16702,9 @@ if (authToken && signature) {
         (wantsEverything ||
           !!specsFormatChoice ||
           !!specsFocus ||
-          /\b(specs?|spec sheet|highlights?|details|info|information)\b/i.test(textLower));
+          /\b(specs?|spec sheet|highlights?|details|info|information|sound system|stereo|speakers?|audio)\b/i.test(
+            textLower
+          ));
       if (wantsSpecsNow) {
         setDialogState(conv, "specs_single_answered");
         const wantsHighlights =
