@@ -12581,6 +12581,95 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   );
   const dealerProfile = await getDealerProfileHot();
   const weatherStatus = await getDealerWeatherStatus(dealerProfile);
+  const regenTextingTypoJoke = isTextingTypoJokeText(event.body ?? "");
+
+  // Keep regenerate aligned with inbound deterministic availability behavior.
+  if (event.provider === "twilio" && channel === "sms") {
+    const availabilityPhraseDetected = /\b(in[-\s]?stock|available|availability|do you have|have .* in[-\s]?stock|any .* in[-\s]?stock|do you carry|carry any)\b/i.test(
+      regenTextLower
+    );
+    const correctionCue = /\b(i meant|actually|sorry|correction|typo)\b/i.test(regenTextLower);
+    const mentionsModel = findMentionedModel(regenTextLower);
+    const mentionsColor = sanitizeColorPhrase(extractColorToken(regenTextLower));
+    const mentionsFinish = extractFinishToken(regenTextLower);
+    const mentionsCondition = normalizeWatchCondition(regenTextLower);
+    const mentionsYear = extractYearSingle(regenTextLower)?.toString() ?? null;
+    const hasContextModel =
+      !!conv.inventoryContext?.model || !!conv.lead?.vehicle?.model || !!conv.lead?.vehicle?.description;
+    const hasAvailabilityDetail =
+      !!mentionsModel || !!mentionsColor || !!mentionsFinish || !!mentionsCondition || !!mentionsYear;
+    const deterministicRegenAvailability =
+      (availabilityPhraseDetected || correctionCue) &&
+      hasAvailabilityDetail &&
+      (hasContextModel || !!mentionsModel);
+    if (deterministicRegenAvailability) {
+      const model =
+        mentionsModel ??
+        conv.inventoryContext?.model ??
+        conv.lead?.vehicle?.model ??
+        conv.lead?.vehicle?.description ??
+        null;
+      if (model) {
+        const modelForLookup = canonicalizeWatchModelLabel(model);
+        const year = mentionsYear ?? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null;
+        const color =
+          mentionsColor ??
+          sanitizeColorPhrase(conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null);
+        const finish = mentionsFinish ?? extractTrimToken(conv.inventoryContext?.finish ?? null);
+        const condition =
+          mentionsCondition ??
+          normalizeWatchCondition(conv.inventoryContext?.condition ?? conv.lead?.vehicle?.condition ?? null);
+        let matches = await findInventoryMatches({ year: year ?? null, model: modelForLookup });
+        if (condition) {
+          matches = matches.filter(i => inventoryItemMatchesRequestedCondition(i, condition));
+        }
+        if (color) {
+          const leadColor = String(color);
+          const leadTrim: "chrome" | "black" | null = finish;
+          matches = matches.filter(i => {
+            const itemColor = i.color ?? "";
+            if (colorMatchesExact(itemColor, leadColor, leadTrim) || colorMatchesAlias(itemColor, leadColor, leadTrim)) {
+              return true;
+            }
+            const itemNorm = normalizeColorBase(itemColor, !!leadTrim);
+            const leadNorm = normalizeColorBase(leadColor, !!leadTrim);
+            if (!itemNorm || !leadNorm) return false;
+            return itemNorm.includes(leadNorm) || leadNorm.includes(itemNorm);
+          });
+        }
+        const holds = await listInventoryHolds();
+        const solds = await listInventorySolds();
+        const availableMatches = matches.filter(m => {
+          const key = normalizeInventoryHoldKey(m.stockId, m.vin);
+          return key ? !holds?.[key] && !solds?.[key] : true;
+        });
+        const conditionLabel = formatRequestedConditionLabel(condition);
+        const yearText = year ? `${year} ` : "";
+        const modelLabel = normalizeDisplayCase(modelForLookup || model);
+        const colorLabel = color ? ` in ${formatColorLabel(color)}` : "";
+        const inventoryLabel = `${conditionLabel}${yearText}${modelLabel}${colorLabel}`.trim();
+        const reply = (() => {
+          if (availableMatches.length <= 0) {
+            return `I’m not seeing ${inventoryLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()} Want me to keep an eye out and text you when one lands?`;
+          }
+          const pick = pickClosestInventoryItem(availableMatches, year ?? null, color ?? null);
+          const item = pick?.item ?? availableMatches[0];
+          const stockText = item?.stockId ? ` (Stock ${item.stockId})` : "";
+          const priceNum = Number(item?.price ?? NaN);
+          const priceText = Number.isFinite(priceNum) && priceNum > 0
+            ? ` It’s listed at ${new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(priceNum)}${stockText}.`
+            : stockText
+              ? ` ${stockText}.`
+              : "";
+          return `Yes — we do have ${inventoryLabel} in stock right now.${priceText} Want to come see it, or want a couple photos first?`;
+        })();
+        discardPendingDrafts(conv);
+        appendSmsRegeneratedDraft(reply);
+        saveConversation(conv);
+        return res.json({ ok: true, conversation: conv, draft: reply });
+      }
+    }
+  }
 
   if (event.provider === "twilio") {
     const inboundAtMs = new Date(event.receivedAt).getTime();
@@ -12851,7 +12940,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     lead: conv.lead ?? null,
     pricingAttempts: getPricingAttempts(conv),
     allowSchedulingOffer: regenLlmExplicitScheduleIntent || isExplicitScheduleIntent(event.body),
-    callbackRequestedOverride: detectCallbackText(event.body ?? ""),
+    callbackRequestedOverride: !regenTextingTypoJoke && detectCallbackText(event.body ?? ""),
     voiceSummary: getActiveVoiceContext(conv)?.summary ?? null,
     memorySummary,
     memorySummaryShouldUpdate,
