@@ -5839,7 +5839,7 @@ function isPricingText(text: string): boolean {
 }
 
 function isPaymentText(text: string): boolean {
-  return /(monthly payment|what would it be a month|what would it be per month|how much down|money down|put (?:any )?money down|no money down|zero down|\$0 down|\bapr\b|term|\b\d{2,3}\s*(month|months|mo)\b|\brun\s+(it|that|the numbers?)\s+for\s+\d{2,3}\b)/i.test(
+  return /(monthly payment|what would it be a month|what would it be per month|how much down|money down|put (?:any )?money down|put down|to put down|no money down|zero down|\$0 down|\bapr\b|term|\b\d{2,3}\s*(month|months|mo)\b|\brun\s+(it|that|the numbers?)\s+for\s+\d{2,3}\b)/i.test(
     String(text ?? "")
   );
 }
@@ -16311,7 +16311,19 @@ if (authToken && signature) {
     !schedulingSignals.hasDayOnlyRequest &&
     !schedulingSignals.hasDayOnlyAvailability &&
     !explicitScheduleSignal &&
-    (llmPaymentsIntent || (pricingPaymentsAccepted && pricingPaymentsParse?.intent === "payments"))
+    (() => {
+      const paymentBudgetContext = resolvePaymentBudgetForConversation(conv, event.body ?? "");
+      const downPaymentProvided = paymentBudgetContext.downPayment != null;
+      const askedDownPaymentRecently =
+        /\b(how much can you put down|how much (?:are|can) you put down|money down|down payment|cash down)\b/i.test(
+          lastOutboundText
+        );
+      return (
+        llmPaymentsIntent ||
+        (pricingPaymentsAccepted && pricingPaymentsParse?.intent === "payments") ||
+        (downPaymentProvided && askedDownPaymentRecently)
+      );
+    })()
   ) {
     const paymentBudgetContext = resolvePaymentBudgetForConversation(conv, event.body ?? "");
     const monthlyBudget = paymentBudgetContext.monthlyBudget ?? null;
@@ -16332,6 +16344,19 @@ if (authToken && signature) {
       }
     } else if (monthlyBudget && termMonths && downPayment == null && isDownPaymentQuestion(event.body ?? "")) {
       reply = "Got it — are you planning a trade-in or cash down?";
+      if (!isScheduleDialogState(getDialogState(conv))) {
+        setDialogState(conv, "pricing_init");
+      }
+    } else if (monthlyBudget && downPayment != null && !termMonths) {
+      const downLabel = `$${Number(downPayment).toLocaleString("en-US")}`;
+      reply = `Perfect — with ${downLabel} down, do you want me to run 60, 72, or 84 months?`;
+      if (!isScheduleDialogState(getDialogState(conv))) {
+        setDialogState(conv, "pricing_init");
+      }
+    } else if (monthlyBudget && downPayment != null && termMonths) {
+      const downLabel = `$${Number(downPayment).toLocaleString("en-US")}`;
+      const budgetLabel = `$${Number(monthlyBudget).toLocaleString("en-US")}/mo`;
+      reply = `Perfect — with ${downLabel} down at ${termMonths} months targeting ${budgetLabel}, I can run the exact numbers now.`;
       if (!isScheduleDialogState(getDialogState(conv))) {
         setDialogState(conv, "pricing_init");
       }
