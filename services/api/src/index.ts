@@ -16340,6 +16340,7 @@ if (authToken && signature) {
       conv.lead?.vehicle?.description ??
       null;
     const model = modelFromText ?? priorModel ?? null;
+    const modelForLookup = model ? canonicalizeWatchModelLabel(model) : null;
     if (!model) {
       const reply = "Which model are you asking about?";
       const systemMode = webhookMode;
@@ -16423,7 +16424,7 @@ if (authToken && signature) {
         updatedAt: nowIso()
       };
     }
-    let matches = await findInventoryMatches({ year: year ?? null, model });
+    let matches = await findInventoryMatches({ year: year ?? null, model: modelForLookup });
     if (condition) {
       matches = matches.filter(i => inventoryItemMatchesRequestedCondition(i, condition));
     }
@@ -16479,7 +16480,7 @@ if (authToken && signature) {
         : [];
     const conditionLabel = formatRequestedConditionLabel(condition);
     const yearText = year ? `${year} ` : "";
-    const modelLabel = normalizeDisplayCase(model);
+    const modelLabel = normalizeDisplayCase(modelForLookup ?? model);
     const colorLabel = color ? ` in ${formatColorLabel(color)}` : "";
     const inventoryLabel = `${conditionLabel}${yearText}${modelLabel}${colorLabel}`;
     const paintTrimPrompt = "Are you looking for any paint or trim specifically (chrome vs blacked-out)?";
@@ -17392,6 +17393,7 @@ if (authToken && signature) {
         conv.lead?.vehicle?.model ??
         conv.lead?.vehicle?.description ??
         null;
+      const modelForLookup = model ? canonicalizeWatchModelLabel(model) : null;
       const modelChanged =
         explicitModelFromInbound &&
         priorModel &&
@@ -17493,8 +17495,8 @@ if (authToken && signature) {
           !!color ||
           !!condition;
         const inventoryMatchStartedAt = Date.now();
-        let matches = await findInventoryMatches({ year: year ?? null, model });
-        logRouteTiming("inventory.match", inventoryMatchStartedAt, { model, year: year ?? null });
+        let matches = await findInventoryMatches({ year: year ?? null, model: modelForLookup });
+        logRouteTiming("inventory.match", inventoryMatchStartedAt, { model: modelForLookup ?? model, year: year ?? null });
         if (condition) {
           matches = matches.filter(i => inventoryItemMatchesRequestedCondition(i, condition));
         }
@@ -18009,8 +18011,8 @@ if (authToken && signature) {
         }
         if (matches.length === 0 && !hasIdentifiers) {
           const inventoryFallbackMatchStartedAt = Date.now();
-          let fallback = await findInventoryMatches({ year: null, model });
-          logRouteTiming("inventory.match_fallback", inventoryFallbackMatchStartedAt, { model });
+          let fallback = await findInventoryMatches({ year: null, model: modelForLookup });
+          logRouteTiming("inventory.match_fallback", inventoryFallbackMatchStartedAt, { model: modelForLookup ?? model });
           if (color) {
             const c = color.toLowerCase();
             fallback = fallback.filter(i => (i.color ?? "").toLowerCase().includes(c));
