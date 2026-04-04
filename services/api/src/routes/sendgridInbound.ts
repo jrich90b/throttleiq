@@ -144,6 +144,26 @@ function normalizePhoneE164(raw: string | null | undefined): string {
   return digits.length >= 11 ? `+${digits}` : "";
 }
 
+function pickUserPhone(user: any): string {
+  if (!user || typeof user !== "object") return "";
+  const candidates = [
+    user.phone,
+    user.mobilePhone,
+    user.mobile_phone,
+    user.cellPhone,
+    user.cellphone,
+    user.cell,
+    user.mobile,
+    user.smsPhone,
+    user.sms_phone
+  ];
+  for (const raw of candidates) {
+    const normalized = normalizePhoneE164(String(raw ?? "").trim());
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
 async function sendInternalSalespersonSms(
   toNumberRaw: string | null | undefined,
   body: string
@@ -1990,6 +2010,46 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         markQuestionDone(conv.id, q.id, "showed_up", "dealer_lead_app");
       }
     }
+    const users = await listUsers();
+    const ownerId = String(conv.leadOwner?.id ?? "").trim();
+    const ownerById =
+      users.find(u => String(u.id ?? "").trim() === ownerId) ?? null;
+    const vendorFirst = pickFirstToken(vendorContactName);
+    const ownerByVendor =
+      users.find(u => {
+        const first = pickFirstToken(u.firstName);
+        const nameFirst = pickFirstToken(u.name);
+        return !!vendorFirst && (vendorFirst === first || vendorFirst === nameFirst);
+      }) ?? null;
+    const manager = users.find(u => u.role === "manager") ?? null;
+    const owner = ownerById ?? ownerByVendor ?? manager;
+    const ownerPhone = pickUserPhone(owner);
+    const ownerName =
+      String(owner?.firstName ?? "").trim() ||
+      String(owner?.name ?? "").trim() ||
+      String(conv.leadOwner?.name ?? "").trim() ||
+      "salesperson";
+    if (!appt?.staffNotify?.followUpSentAt) {
+      const customerName =
+        [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() ||
+        conv.leadKey ||
+        "customer";
+      const leadSummary =
+        `Dealer ride follow-up needed for ${customerName}. ` +
+        `Please text an outcome/status update in Leadrider.`;
+      const staffSms = await sendInternalSalespersonSms(ownerPhone, leadSummary);
+      addTodo(
+        conv,
+        "note",
+        staffSms.sent
+          ? `Salesperson SMS sent to ${ownerName}${staffSms.sid ? ` (SID ${staffSms.sid})` : ""}.`
+          : `Salesperson SMS failed for ${ownerName}: ${staffSms.reason ?? "unknown_error"}.`
+      );
+      if (appt) {
+        appt.staffNotify = appt.staffNotify ?? {};
+        appt.staffNotify.followUpSentAt = appt.staffNotify.followUpSentAt ?? new Date().toISOString();
+      }
+    }
   }
   const isNoPurchaseNow =
     /not interested in purchasing at this time/.test(timeframeLower) ||
@@ -2032,7 +2092,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       `Dealer ride update needed for ${customerName}. ` +
       `DLA shows "not interested in purchasing at this time". ` +
       `Please send status/next-step update in Leadrider.`;
-    const staffSms = await sendInternalSalespersonSms(owner?.phone, leadSummary);
+    const staffSms = await sendInternalSalespersonSms(pickUserPhone(owner), leadSummary);
     addTodo(
       conv,
       "note",

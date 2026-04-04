@@ -12626,7 +12626,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         const finish = mentionsFinish ?? extractTrimToken(conv.inventoryContext?.finish ?? null);
         const condition =
           mentionsCondition ??
-          normalizeWatchCondition(conv.inventoryContext?.condition ?? conv.lead?.vehicle?.condition ?? null);
+          (mentionsYear
+            ? undefined
+            : normalizeWatchCondition(conv.inventoryContext?.condition ?? conv.lead?.vehicle?.condition ?? null));
         let matches = await findInventoryMatches({ year: year ?? null, model: modelForLookup });
         if (condition) {
           matches = matches.filter(i => inventoryItemMatchesRequestedCondition(i, condition));
@@ -12959,8 +12961,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       const contextCondition = normalizeWatchCondition(
         conv.inventoryContext?.condition ?? conv.lead?.vehicle?.condition ?? null
       );
+      const suppressContextConditionForYear =
+        /\b(19|20)\d{2}\b/.test(String(event.body ?? "")) &&
+        !normalizeWatchCondition(String(event.body ?? ""));
       let matches = await findInventoryMatches({ year: contextYear ?? null, model: modelForLookup });
-      if (contextCondition) {
+      if (contextCondition && !suppressContextConditionForYear) {
         matches = matches.filter(i => inventoryItemMatchesRequestedCondition(i, contextCondition));
       }
       if (contextColor) {
@@ -16576,6 +16581,10 @@ if (authToken && signature) {
       !modelChanged &&
       !!explicitCondition &&
       ((!!priorCondition && explicitCondition !== priorCondition) || conditionSearchRequest);
+    const priorYear =
+      !modelChanged && !resetContextForCondition
+        ? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null
+        : null;
     const year =
       yearFromText ??
       (!modelChanged && !resetContextForCondition
@@ -16595,7 +16604,15 @@ if (authToken && signature) {
       !modelChanged && !resetContextForCondition
         ? normalizeWatchCondition(conv.inventoryContext?.condition ?? conv.lead?.vehicle?.condition ?? null)
         : undefined;
-    const condition = conditionFromLlmTrusted ?? conditionFromText ?? conditionFromContext;
+    const yearChangedFromContext =
+      !!yearFromText &&
+      !!priorYear &&
+      String(yearFromText).trim() !== String(priorYear).trim();
+    const keepContextCondition = !yearChangedFromContext || !!conditionFromText || !!conditionFromLlmTrusted;
+    const condition =
+      conditionFromLlmTrusted ??
+      conditionFromText ??
+      (keepContextCondition ? conditionFromContext : undefined);
     if (model || yearFromText || colorFromText || finishFromText || condition) {
       conv.inventoryContext = {
         model: model ?? conv.inventoryContext?.model,
@@ -17614,6 +17631,10 @@ if (authToken && signature) {
         !modelChanged &&
         !!explicitCondition &&
         ((!!priorCondition && explicitCondition !== priorCondition) || conditionSearchRequest);
+      const priorYear =
+        !modelChanged && !resetContextForCondition
+          ? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null
+          : null;
       const year =
         yearFromText ??
         (!modelChanged && !resetContextForCondition
@@ -17633,7 +17654,15 @@ if (authToken && signature) {
         !modelChanged && !resetContextForCondition
           ? normalizeWatchCondition(conv.inventoryContext?.condition ?? conv.lead?.vehicle?.condition ?? null)
           : undefined;
-      const condition = conditionFromLlmTrusted ?? conditionFromText ?? conditionFromContext;
+      const yearChangedFromContext =
+        !!yearFromText &&
+        !!priorYear &&
+        String(yearFromText).trim() !== String(priorYear).trim();
+      const keepContextCondition = !yearChangedFromContext || !!conditionFromText || !!conditionFromLlmTrusted;
+      const condition =
+        conditionFromLlmTrusted ??
+        conditionFromText ??
+        (keepContextCondition ? conditionFromContext : undefined);
       const downPaymentQuestion = isDownPaymentQuestion(event.body ?? "");
       const broadInventoryBudgetAsk =
         /\b(what do you have|what.*in stock|show me|options?|inventory|other|another|different)\b/i.test(
