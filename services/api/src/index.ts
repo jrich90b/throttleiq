@@ -2879,8 +2879,12 @@ const SPEC_SIGNAL_TERMS = [
   "electronics",
   "infotainment",
   "audio",
+  "audio system",
+  "sound",
   "sound system",
   "stereo",
+  "speaker",
+  "speaker system",
   "speakers",
   "display",
   "screen",
@@ -2907,10 +2911,13 @@ const SPEC_SIGNAL_TERMS = [
 const INFOTAINMENT_TERMS = [
   "infotainment",
   "audio",
+  "audio system",
+  "sound",
   "sound system",
   "stereo",
   "speakers",
   "speaker",
+  "speaker system",
   "screen",
   "display",
   "apple carplay",
@@ -2975,8 +2982,12 @@ function extractSpecsFocus(text: string): "engine" | "features" | "dimensions" |
       "electronics",
       "infotainment",
       "audio",
+      "audio system",
+      "sound",
       "sound system",
       "stereo",
+      "speaker",
+      "speaker system",
       "screen",
       "display",
       "safety",
@@ -16511,7 +16522,7 @@ if (authToken && signature) {
       /(in[-\s]?stock|available|availability|do you have|have .* in[-\s]?stock|any .* in[-\s]?stock|do you carry|carry any)/i.test(
         textLower
       )) &&
-    !/\b(sound system|stereo|speakers?)\b/i.test(textLower) &&
+    !/\b(sound system|audio system|stereo|speakers?|speaker system)\b/i.test(textLower) &&
     turnPrimaryIntent !== "pricing_payments" &&
     turnPrimaryIntent !== "callback" &&
     !specsSignal;
