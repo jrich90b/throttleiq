@@ -6405,6 +6405,14 @@ function isCallOnlyText(text: string): boolean {
   );
 }
 
+function isTextingTypoJokeText(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t) return false;
+  const cannotText = /\bi can(?:not|['’]t)\s+text\b/.test(t);
+  const correctionSignal = /\b(lol|haha|lmao|i meant|meant)\b/.test(t);
+  return cannotText && correctionSignal;
+}
+
 function isCustomerWillCallText(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t) return false;
@@ -13414,7 +13422,9 @@ if (authToken && signature) {
     (semanticSlotParse?.mediaIntent === "video" || semanticSlotParse?.mediaIntent === "either");
   const semanticServiceRecordsIntent =
     semanticRoutingAccepted && !!semanticSlotParse?.serviceRecordsIntent;
-  const callOnlyRequested = semanticCallOnlyIntent || isCallOnlyText(event.body);
+  const callOnlyRequested =
+    !isTextingTypoJokeText(event.body ?? "") &&
+    (semanticCallOnlyIntent || isCallOnlyText(event.body));
   const serviceRecordsRequested =
     semanticServiceRecordsIntent || isServiceRecordsRequest(event.body);
   const videoRequested =
@@ -15241,8 +15251,11 @@ if (authToken && signature) {
     !!intentParse?.explicitRequest && intentConfidence > 0 && intentConfidence < intentConfidenceMin;
   const llmCallbackRequested = intentAccepted && intentParse?.intent === "callback";
   const customerWillCallIntent = isCustomerWillCallText(event.body ?? "");
+  const textingTypoJoke = isTextingTypoJokeText(event.body ?? "");
   const callbackRequestedOverride =
-    !customerWillCallIntent && (llmCallbackRequested || detectCallbackText(event.body ?? ""));
+    !customerWillCallIntent &&
+    !textingTypoJoke &&
+    (llmCallbackRequested || detectCallbackText(event.body ?? ""));
   const llmAvailabilityIntent = intentAccepted && intentParse?.intent === "availability";
   const llmTestRideIntent = intentAccepted && intentParse?.intent === "test_ride";
   const llmAvailability = llmAvailabilityIntent ? intentParse?.availability ?? null : null;
