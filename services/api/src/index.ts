@@ -13565,6 +13565,36 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
 
   if (event.provider === "twilio" && channel === "sms") {
+    const regenPaymentBudget = resolvePaymentBudgetForConversation(conv, event.body ?? "");
+    const regenDownProvided = regenPaymentBudget.downPayment != null;
+    const regenMonthlyBudget = regenPaymentBudget.monthlyBudget ?? null;
+    const regenTermMonths = regenPaymentBudget.termMonths ?? null;
+    const lastOutboundBeforeInbound = [...(conv.messages ?? [])]
+      .filter(m => m.direction === "out" && m.body)
+      .slice(-1)[0];
+    const lastOutboundText = String(lastOutboundBeforeInbound?.body ?? "");
+    const askedDownRecently =
+      /\b(how much can you put down|how much (?:are|can) you put down|about how much down|how much down|money down|down payment|cash down)\b/i.test(
+        lastOutboundText
+      );
+    if (regenDownProvided && askedDownRecently) {
+      const downLabel = `$${Number(regenPaymentBudget.downPayment).toLocaleString("en-US")}`;
+      const budgetLabel =
+        regenMonthlyBudget != null ? `$${Number(regenMonthlyBudget).toLocaleString("en-US")}/mo` : null;
+      const reply =
+        regenTermMonths != null
+          ? budgetLabel
+            ? `Perfect — with ${downLabel} down at ${regenTermMonths} months targeting ${budgetLabel}, I can run the exact numbers now.`
+            : `Perfect — with ${downLabel} down at ${regenTermMonths} months, I can run the exact numbers now.`
+          : budgetLabel
+            ? `Perfect — with ${downLabel} down targeting ${budgetLabel}, do you want me to run 60, 72, or 84 months?`
+            : `Perfect — with ${downLabel} down, do you want me to run 60, 72, or 84 months?`;
+      discardPendingDrafts(conv);
+      appendSmsRegeneratedDraft(reply);
+      saveConversation(conv);
+      return res.json({ ok: true, conversation: conv, draft: reply });
+    }
+
     const regenSchedulingSignals = detectSchedulingSignals(event.body ?? "");
     const regenBody = String(event.body ?? "");
     const visitTimingIntent =
