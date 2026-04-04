@@ -4494,10 +4494,66 @@ function applyConversationStateReducer(
     stopFollowUpCadence(conv, "manual_handoff");
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
   }
+  if (
+    state.stateIntent === "scheduling" &&
+    state.explicitRequest &&
+    conv.followUp?.mode === "manual_handoff" &&
+    /^(handoff:pricing|handoff:payments|credit_app)$/.test(String(conv.followUp?.reason ?? ""))
+  ) {
+    setFollowUpMode(conv, "manual_handoff", "manual_appointment");
+  }
   if (state.departmentIntent !== "none") {
     return { departmentIntent: state.departmentIntent };
   }
   return { departmentIntent: null };
+}
+
+function hasConversationStateParserHint(text: string, conv: any): boolean {
+  const lower = String(text ?? "").toLowerCase();
+  return (
+    /\b(parts?|service|apparel|credit app|credit application|lien|binder|e-?sign|watch|notify|keep an eye out|price|payment|apr|term|schedule|appointment)\b/i.test(
+      lower
+    ) ||
+    !!conv.inventoryWatchPending ||
+    getDialogState(conv) === "pricing_need_model" ||
+    conv.followUp?.mode === "manual_handoff"
+  );
+}
+
+async function parseAndReduceConversationState(args: {
+  conv: any;
+  text: string;
+  history: { direction: "in" | "out"; body: string }[];
+  shortAck: boolean;
+  debugLabel: "live" | "regen";
+}): Promise<{ parsed: ConversationStateParse | null; reduced: { departmentIntent: DepartmentRole | null } }> {
+  const { conv, text, history, shortAck, debugLabel } = args;
+  const parserEligible =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_CONVERSATION_STATE_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    !shortAck;
+  const parsed =
+    parserEligible && hasConversationStateParserHint(text, conv)
+      ? await parseConversationStateWithLLM({
+          text,
+          history,
+          lead: conv.lead,
+          followUp: conv.followUp,
+          dialogState: getDialogState(conv),
+          inventoryWatchPending: conv.inventoryWatchPending
+        })
+      : null;
+  if (process.env.DEBUG_CONVERSATION_STATE_PARSER === "1" && parsed) {
+    console.log(
+      debugLabel === "regen" ? "[llm-conversation-state-parse] regen" : "[llm-conversation-state-parse]",
+      parsed
+    );
+  }
+  return {
+    parsed,
+    reduced: applyConversationStateReducer(conv, parsed)
+  };
 }
 
 function normalizePersonName(value: string): string {
@@ -13246,34 +13302,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     regenResponseControlAccepted && regenResponseControlParse?.intent === "compliment_only";
   const regenLlmExplicitScheduleIntent =
     regenResponseControlAccepted && regenResponseControlParse?.intent === "schedule_request";
-  const regenConversationStateParserEligible =
-    event.provider === "twilio" &&
-    process.env.LLM_ENABLED === "1" &&
-    process.env.LLM_CONVERSATION_STATE_PARSER_ENABLED !== "0" &&
-    !!process.env.OPENAI_API_KEY &&
-    !regenShortAck;
-  const regenConversationStateParserHint =
-    /\b(parts?|service|apparel|credit app|credit application|lien|binder|e-?sign|watch|notify|keep an eye out|price|payment|apr|term|schedule|appointment)\b/i.test(
-      regenTextLower
-    ) ||
-    !!conv.inventoryWatchPending ||
-    getDialogState(conv) === "pricing_need_model" ||
-    conv.followUp?.mode === "manual_handoff";
-  const regenConversationStateParse =
-    regenConversationStateParserEligible && regenConversationStateParserHint
-      ? await parseConversationStateWithLLM({
-          text: event.body,
-          history,
-          lead: conv.lead,
-          followUp: conv.followUp,
-          dialogState: getDialogState(conv),
-          inventoryWatchPending: conv.inventoryWatchPending
-        })
-      : null;
-  if (process.env.DEBUG_CONVERSATION_STATE_PARSER === "1" && regenConversationStateParse) {
-    console.log("[llm-conversation-state-parse] regen", regenConversationStateParse);
-  }
-  const regenReducedConversationState = applyConversationStateReducer(conv, regenConversationStateParse);
+  const { reduced: regenReducedConversationState } = await parseAndReduceConversationState({
+    conv,
+    text: event.body ?? "",
+    history,
+    shortAck: regenShortAck,
+    debugLabel: "regen"
+  });
   const regenDispositionDecision = resolveCustomerDispositionDecision(
     event.body,
     regenCustomerDispositionParse
@@ -14145,34 +14180,13 @@ if (authToken && signature) {
     semanticServiceRecordsIntent || isServiceRecordsRequest(event.body);
   const videoRequested =
     (semanticVideoIntent || isVideoRequest(event.body)) && !serviceRecordsRequested;
-  const conversationStateParserEligible =
-    event.provider === "twilio" &&
-    process.env.LLM_ENABLED === "1" &&
-    process.env.LLM_CONVERSATION_STATE_PARSER_ENABLED !== "0" &&
-    !!process.env.OPENAI_API_KEY &&
-    !semanticShortAck;
-  const conversationStateParserHint =
-    /\b(parts?|service|apparel|credit app|credit application|lien|binder|e-?sign|watch|notify|keep an eye out|price|payment|apr|term|schedule|appointment)\b/i.test(
-      semanticTextLower
-    ) ||
-    !!conv.inventoryWatchPending ||
-    getDialogState(conv) === "pricing_need_model" ||
-    conv.followUp?.mode === "manual_handoff";
-  const conversationStateParse =
-    conversationStateParserEligible && conversationStateParserHint
-      ? await parseConversationStateWithLLM({
-          text: semanticInboundText,
-          history: buildHistory(conv, 10),
-          lead: conv.lead,
-          followUp: conv.followUp,
-          dialogState: getDialogState(conv),
-          inventoryWatchPending: conv.inventoryWatchPending
-        })
-      : null;
-  if (process.env.DEBUG_CONVERSATION_STATE_PARSER === "1" && conversationStateParse) {
-    console.log("[llm-conversation-state-parse]", conversationStateParse);
-  }
-  const reducedConversationState = applyConversationStateReducer(conv, conversationStateParse);
+  const { reduced: reducedConversationState } = await parseAndReduceConversationState({
+    conv,
+    text: semanticInboundText,
+    history: buildHistory(conv, 10),
+    shortAck: semanticShortAck,
+    debugLabel: "live"
+  });
 
   if (
     (isWatchAlertStopIntent(event.body) || semanticWatchAction === "stop_watch") &&

@@ -3842,22 +3842,54 @@ export default function Home() {
         window.alert(data?.error ?? "Regenerate failed");
         return;
       }
+      if (data?.skipped) {
+        if (messageFilter === "sms") {
+          try {
+            await fetch(
+              `/api/conversations/${encodeURIComponent(selectedConv.id)}/draft/clear`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ clearSmsDraft: true, clearEmailDraft: false })
+              }
+            );
+          } catch {
+            // best-effort cleanup only
+          }
+        }
+        setSendBody("");
+        setSendBodySource("system");
+        setLastDraftId(null);
+      }
       if (data?.conversation) {
         if (messageFilter === "email") setEmailManualMode(false);
         const conv = data.conversation;
-        setSelectedConv(conv);
+        const convForUi =
+          data?.skipped && messageFilter === "sms" && Array.isArray(conv?.messages)
+            ? {
+                ...conv,
+                messages: conv.messages.map((m: any) =>
+                  m?.direction === "out" &&
+                  m?.provider === "draft_ai" &&
+                  m?.draftStatus !== "stale"
+                    ? { ...m, draftStatus: "stale" }
+                    : m
+                )
+              }
+            : conv;
+        setSelectedConv(convForUi);
         setConversations(prev =>
           prev.map(c => {
-            if (c.id !== conv.id) return c;
-            const last = conv.messages?.[conv.messages.length - 1];
+            if (c.id !== convForUi.id) return c;
+            const last = convForUi.messages?.[convForUi.messages.length - 1];
             return {
               ...c,
-              updatedAt: conv.updatedAt ?? c.updatedAt,
+              updatedAt: convForUi.updatedAt ?? c.updatedAt,
               lastMessage: last?.body ?? c.lastMessage,
-              messageCount: conv.messages?.length ?? c.messageCount,
-              pendingDraft: true,
-              pendingDraftPreview: last?.body ?? c.pendingDraftPreview ?? null,
-              mode: conv.mode ?? c.mode
+              messageCount: convForUi.messages?.length ?? c.messageCount,
+              pendingDraft: data?.skipped ? false : true,
+              pendingDraftPreview: data?.skipped ? null : last?.body ?? c.pendingDraftPreview ?? null,
+              mode: convForUi.mode ?? c.mode
             };
           })
         );
