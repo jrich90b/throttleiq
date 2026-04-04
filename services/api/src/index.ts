@@ -16523,7 +16523,6 @@ if (authToken && signature) {
       !!conv.inventoryContext?.model ||
       !!conv.lead?.vehicle?.model ||
       !!conv.lead?.vehicle?.description;
-    if (!hasAvailabilityContext) return false;
     const mentionsModel = !!(llmAvailability?.model ?? findMentionedModel(textLower));
     const mentionsColor = !!extractColorToken(textLower);
     const mentionsFinish = !!extractFinishToken(textLower);
