@@ -12389,6 +12389,80 @@ app.post("/conversations/:id/send", async (req, res) => {
       );
     }
   };
+  const applyManualOutboundStateHints = (outboundBody: string, opts?: { channel?: "sms" | "email" | null }) => {
+    const text = String(outboundBody ?? "").trim();
+    if (!text) return;
+    const lower = text.toLowerCase();
+    const department = inferDepartmentFromText(text);
+    if (department) {
+      conv.classification = {
+        ...(conv.classification ?? {}),
+        bucket: department,
+        cta: `${department}_request`,
+        channel: opts?.channel === "email" ? "email" : "sms"
+      };
+      conv.inventoryWatchPending = undefined;
+      if (getDialogState(conv) === "pricing_need_model" || getDialogState(conv) === "inventory_watch_prompted") {
+        setDialogState(conv, "none");
+      }
+      if (department === "service") {
+        setDialogState(conv, "service_handoff");
+      }
+      setFollowUpMode(conv, "manual_handoff", `${department}_request`);
+      stopFollowUpCadence(conv, "manual_handoff");
+      stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+      return;
+    }
+
+    const schedulingSignals = detectSchedulingSignals(text);
+    const scheduleConfirmation =
+      schedulingSignals.explicit ||
+      schedulingSignals.hasDayTime ||
+      /\b(see you|you(?:'|’)re all set|you are all set|confirmed|booked|scheduled|works for me|that works)\b/i.test(
+        lower
+      );
+    if (scheduleConfirmation) {
+      conv.inventoryWatchPending = undefined;
+      if (getDialogState(conv) === "pricing_need_model" || getDialogState(conv) === "inventory_watch_prompted") {
+        setDialogState(conv, "none");
+      }
+      setFollowUpMode(conv, "manual_handoff", "manual_appointment");
+      stopFollowUpCadence(conv, "manual_handoff");
+      stopRelatedCadences(conv, "manual_appointment", { setMode: "manual_handoff" });
+      return;
+    }
+
+    const financeDocsHint =
+      /\b(credit app|credit application|finance team|lien holder|binder|e-?sign|payoff)\b/i.test(
+        lower
+      );
+    if (financeDocsHint) {
+      conv.inventoryWatchPending = undefined;
+      if (getDialogState(conv) === "pricing_need_model" || getDialogState(conv) === "inventory_watch_prompted") {
+        setDialogState(conv, "none");
+      }
+      setFollowUpMode(conv, "manual_handoff", "credit_app");
+      stopFollowUpCadence(conv, "manual_handoff");
+      stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+      return;
+    }
+
+    if (
+      conv.inventoryWatchPending &&
+      !/\b(watch|keep an eye|notify|when one comes in|text you when one lands)\b/i.test(lower)
+    ) {
+      conv.inventoryWatchPending = undefined;
+      if (getDialogState(conv) === "inventory_watch_prompted") {
+        setDialogState(conv, "none");
+      }
+    }
+    if (
+      getDialogState(conv) === "pricing_need_model" &&
+      !/\b(price|pricing|payment|monthly|apr|term|down payment|otd)\b/i.test(lower)
+    ) {
+      setDialogState(conv, "none");
+    }
+  };
 
   // Normalize destination number from conversation leadKey
   const rawTo = String(conv.leadKey ?? "").trim();
@@ -12553,6 +12627,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       if (!fin.usedDraft) {
         appendOutbound(conv, emailFrom, emailTo!, signed, outboundProvider);
       }
+      applyManualOutboundStateHints(signed, { channel: "email" });
       finalizeManualSendDraftState({ clearEmailDraft: true, preserveSmsDrafts: true });
       saveConversation(conv);
       await flushConversationStore();
@@ -12590,6 +12665,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!fin.usedDraft) {
       appendOutbound(conv, "salesperson", conv.leadKey, body, "human", undefined, mediaUrls);
     }
+    applyManualOutboundStateHints(body, { channel: "sms" });
     finalizeManualSendDraftState();
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
@@ -12628,6 +12704,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!fin.usedDraft) {
       appendOutbound(conv, "salesperson", to, body, "human", undefined, mediaUrls);
     }
+    applyManualOutboundStateHints(body, { channel: "sms" });
     finalizeManualSendDraftState();
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
@@ -12675,6 +12752,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!fin.usedDraft) {
       appendOutbound(conv, from, to, body, "twilio", msg.sid, mediaUrls);
     }
+    applyManualOutboundStateHints(body, { channel: "sms" });
     finalizeManualSendDraftState();
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
@@ -12702,6 +12780,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!fin.usedDraft) {
       appendOutbound(conv, "salesperson", to, body, "human", undefined, mediaUrls);
     }
+    applyManualOutboundStateHints(body, { channel: "sms" });
     finalizeManualSendDraftState();
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
