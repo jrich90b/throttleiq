@@ -12442,8 +12442,16 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     /source:\s*hdfs\s*coa\s*online|credit application|finance application|apply for credit|prequal|coa/.test(
       latestInboundBodyLower
     );
+  const latestInboundIsDlaNoPurchaseAdf =
+    latestInboundBeforeDraft?.provider === "sendgrid_adf" &&
+    /source:\s*dealer lead app|event name:\s*dealer test ride|demo bikes ridden|dealer lead app/.test(
+      latestInboundBodyLower
+    ) &&
+    /purchase timeframe:\s*i am not interested in purchasing at this time|not interested in purchasing at this time/.test(
+      latestInboundBodyLower
+    );
   const inbound =
-    (latestInboundIsCreditAdf ? latestInboundBeforeDraft : null) ??
+    (latestInboundIsCreditAdf || latestInboundIsDlaNoPurchaseAdf ? latestInboundBeforeDraft : null) ??
     inboundMessages.find(m => m.provider !== "sendgrid_adf" && m.body && isBeforeDraft(m)) ??
     inboundMessages.find(m => m.body && isBeforeDraft(m)) ??
     inboundMessages.find(m => m.provider !== "sendgrid_adf" && m.body) ??
