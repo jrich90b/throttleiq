@@ -5753,6 +5753,14 @@ function isComplimentOnlyText(text: string): boolean {
     /\b(looks?\s+(great|awesome|amazing|sweet|clean|sick|good)|sweet looking)\b/.test(t) ||
     /\b(v&h|short shots?)\b/.test(t);
   if (!compliment) return false;
+  const softVisitIntent =
+    /\b(love to see (it|that|this)|would love to see (it|that|this)|want to see (it|that|this)|see it in person|stop by|come by|come in)\b/.test(
+      t
+    ) ||
+    /\b(wish i (didn['’]?t|did not) have plans|can['’]?t make it|can(?:not|'t) make it|not today|this afternoon|later today|tonight|tomorrow)\b/.test(
+      t
+    );
+  if (softVisitIntent) return false;
   const explicitAsk =
     /\?/.test(t) ||
     /\b(price|payment|monthly|otd|apr|term|down|available|availability|in stock|stock|schedule|book|appointment|test ride|trade|finance|credit|call|phone|email|address|hours|open|close|where|when)\b/.test(
