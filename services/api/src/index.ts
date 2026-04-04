@@ -12499,7 +12499,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     setFollowUpMode(conv, "manual_handoff", "dealer_ride_no_purchase");
     stopFollowUpCadence(conv, "manual_handoff");
     saveConversation(conv);
-    return res.json({ ok: true, conversation: conv, skipped: true, note: "dealer_ride_no_purchase_manual_handoff" });
+    const draft =
+      "No customer reply needed — dealer ride outcome requires salesperson follow-up.";
+    return res.json({
+      ok: true,
+      conversation: conv,
+      skipped: true,
+      draft,
+      note: "dealer_ride_no_purchase_manual_handoff"
+    });
   }
 
   const history = buildHistory(conv, 60);
