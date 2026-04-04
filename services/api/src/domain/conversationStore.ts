@@ -1970,6 +1970,14 @@ export function advanceFollowUpCadence(conv: Conversation, timeZone: string) {
   const isPostSale = conv.followUpCadence.kind === "post_sale";
   const isEngaged = conv.followUpCadence.kind === "engaged";
   const isLongTerm = conv.followUpCadence.kind === "long_term";
+  const isRideChallengeReminder = conv.followUpCadence.deferredMessage === "ride_challenge_final_mileage";
+  if (isLongTerm && isRideChallengeReminder) {
+    conv.followUpCadence.status = "completed";
+    conv.followUpCadence.nextDueAt = undefined;
+    conv.updatedAt = nowIso();
+    scheduleSave();
+    return;
+  }
   const offsets = isPostSale
     ? POST_SALE_DAY_OFFSETS
     : isEngaged

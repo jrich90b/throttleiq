@@ -1907,8 +1907,37 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       "Thanks for signing up for this year's ride challenge. " +
       "Feel free to stop in and record your miles throughout the year. " +
       "Let us know if you need anything to keep your bike rolling through the challenge!";
-    setFollowUpMode(conv, "paused_indefinite", "ride_challenge_signup");
-    stopFollowUpCadence(conv, "ride_challenge_signup");
+    const cfg = await getSchedulerConfig();
+    const tz = cfg.timezone || "America/New_York";
+    const now = new Date();
+    const local = new Date(now.toLocaleString("en-US", { timeZone: tz }));
+    const year = local.getFullYear();
+    const month = local.getMonth() + 1;
+    const day = local.getDate();
+    let reminderYear = year;
+    let reminderMonth = 9;
+    let reminderDay = 15;
+    // If this lead arrives after Sep 15 but before Nov 1, send a near-term catch-up reminder.
+    if (month > 9 || (month === 9 && day > 15)) {
+      if (month < 11) {
+        const tomorrow = new Date(local);
+        tomorrow.setDate(local.getDate() + 1);
+        reminderYear = tomorrow.getFullYear();
+        reminderMonth = tomorrow.getMonth() + 1;
+        reminderDay = tomorrow.getDate();
+      } else {
+        reminderYear = year + 1;
+      }
+    }
+    const dueAt = localPartsToUtcDate(tz, {
+      year: reminderYear,
+      month: reminderMonth,
+      day: reminderDay,
+      hour24: 10,
+      minute: 30
+    }).toISOString();
+    scheduleLongTermFollowUp(conv, dueAt, "ride_challenge_final_mileage");
+    setFollowUpMode(conv, "active", "ride_challenge_signup");
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai");
     return res.status(200).json({
       ok: true,
@@ -1922,7 +1951,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       intent: "GENERAL",
       stage: "ENGAGED",
       note: "ride_challenge_signup_non_sales",
-      draft: ack
+      draft: ack,
+      rideChallengeReminderDueAt: dueAt
     });
   }
 
