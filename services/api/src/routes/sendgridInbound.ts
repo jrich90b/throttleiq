@@ -1892,6 +1892,40 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     });
   }
 
+  const isRideChallengeSignup =
+    event.provider === "sendgrid_adf" &&
+    !(conv.messages ?? []).some((m: any) => m.direction === "out") &&
+    (/ride challenge|challenge signup|miles challenge/i.test(leadSourceLower) ||
+      /ride challenge|challenge signup|record your miles|ride challenge/i.test(inquiryText));
+  if (isRideChallengeSignup) {
+    const profile = await getDealerProfile();
+    const dealerName = profile?.dealerName ?? "American Harley-Davidson";
+    const agentName = profile?.agentName ?? "Alexandra";
+    const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
+    const ack =
+      `Hi ${firstName} — this is ${agentName} at ${dealerName}. ` +
+      "Thanks for signing up for this year's ride challenge. " +
+      "Feel free to stop in and record your miles throughout the year. " +
+      "Let us know if you need anything to keep your bike rolling through the challenge!";
+    setFollowUpMode(conv, "paused_indefinite", "ride_challenge_signup");
+    stopFollowUpCadence(conv, "ride_challenge_signup");
+    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai");
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      note: "ride_challenge_signup_non_sales",
+      draft: ack
+    });
+  }
+
   const timeframeLower = String(lead.purchaseTimeframe ?? "").toLowerCase();
   const isDealerRideEventLead =
     event.provider === "sendgrid_adf" &&
