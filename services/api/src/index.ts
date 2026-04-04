@@ -6646,9 +6646,31 @@ function findUserFromRecentOutbound(conv: any, users: Array<any>): any | null {
   return null;
 }
 
-function applyPricingPolicy(conv: any, reply: string, lastOutboundText: string): string {
+function applyPricingPolicy(
+  conv: any,
+  reply: string,
+  lastOutboundText: string,
+  inboundText?: string,
+  opts?: { pricingActiveThisTurn?: boolean }
+): string {
   const state = getDialogState(conv);
   if (!(state.startsWith("pricing_") || state === "payments_handoff" || state === "payments_answered")) {
+    return reply;
+  }
+  const body = String(inboundText ?? "");
+  const pricingActiveThisTurn =
+    opts?.pricingActiveThisTurn === true ||
+    isPricingText(body) ||
+    isPaymentText(body) ||
+    /\b(finance|financing|apr|credit score|monthly|per month|down payment|term|0%\s*apr)\b/i.test(body);
+  const schedulingConfirmThisTurn =
+    /\b(see you|sounds good|that sounds|works for me|i can come|i['’]ll come|i will come|next week works|this week works|tomorrow works)\b/i.test(
+      body
+    ) &&
+    /\b(mon|tue|wed|thu|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow|next week|this week)\b/i.test(
+      body
+    );
+  if (!pricingActiveThisTurn || schedulingConfirmThisTurn) {
     return reply;
   }
   let out = reply;
@@ -13357,7 +13379,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   reply = applySlotOfferPolicy(conv, reply, lastOutboundTextFinal);
   reply = applyTradePolicy(conv, reply, lastOutboundTextFinal, result.suggestedSlots);
   reply = applyPickupPolicy(conv, reply);
-  reply = applyPricingPolicy(conv, reply, lastOutboundTextFinal);
+  reply = applyPricingPolicy(conv, reply, lastOutboundTextFinal, String(event.body ?? ""), {
+    pricingActiveThisTurn:
+      result.intent === "PRICING" ||
+      result.intent === "FINANCING" ||
+      isPricingText(String(event.body ?? "")) ||
+      isPaymentText(String(event.body ?? ""))
+  });
   reply = applyCallbackPolicy(conv, reply, lastOutboundTextFinal);
   reply = applyServicePolicy(conv, reply, lastOutboundTextFinal);
   reply = applySoftSchedulePolicy(conv, reply, String(event.body ?? ""));
@@ -15924,6 +15952,9 @@ if (authToken && signature) {
       textLower
     );
   const schedulePriorityOverride = schedulingPrimaryIntent;
+  if (turnPrimaryIntent === "scheduling" && getDialogState(conv) === "pricing_need_model") {
+    setDialogState(conv, "schedule_request");
+  }
   const suppressWatchIntentThisTurn = turnPrimaryIntent !== "general";
   if (schedulingSignals.explicit || schedulingSignals.hasDayTime) {
     if (conv.scheduleSoft) {
@@ -19747,7 +19778,9 @@ if (authToken && signature) {
   reply = applySlotOfferPolicy(conv, reply, lastOutboundTextFinal);
   reply = applyTradePolicy(conv, reply, lastOutboundTextFinal, result.suggestedSlots);
   reply = applyPickupPolicy(conv, reply);
-  reply = applyPricingPolicy(conv, reply, lastOutboundTextFinal);
+  reply = applyPricingPolicy(conv, reply, lastOutboundTextFinal, String(event.body ?? ""), {
+    pricingActiveThisTurn: turnPrimaryIntent === "pricing_payments" || pricingSignal
+  });
   reply = applyCallbackPolicy(conv, reply, lastOutboundTextFinal);
   reply = applyServicePolicy(conv, reply, lastOutboundTextFinal);
   reply = applySoftSchedulePolicy(conv, reply, String(event.body ?? ""));
