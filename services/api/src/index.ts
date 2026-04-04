@@ -6096,6 +6096,93 @@ function buildMediaAffirmativeReply(
   return `Okay — I’ll have one of the guys send a quick walkaround video of ${bikeLabel} over to you.`;
 }
 
+async function findAutoMediaUrlsForConversationContext(
+  conv: any,
+  opts?: { max?: number }
+): Promise<string[]> {
+  const max = Math.max(1, Math.min(4, Number(opts?.max ?? 2)));
+  const contextModel = String(
+    conv?.inventoryContext?.model ??
+      conv?.lead?.vehicle?.model ??
+      conv?.lead?.vehicle?.description ??
+      ""
+  ).trim();
+  if (!contextModel) return [];
+  const contextYearRaw = String(conv?.inventoryContext?.year ?? conv?.lead?.vehicle?.year ?? "").trim();
+  const contextYear = contextYearRaw || null;
+  const requestedCondition = normalizeWatchCondition(
+    conv?.inventoryContext?.condition ?? conv?.lead?.vehicle?.condition
+  );
+  const preferredColor = String(conv?.inventoryContext?.color ?? conv?.lead?.vehicle?.color ?? "").trim() || null;
+  const leadTrim = extractTrimToken(preferredColor);
+
+  let matches = await findInventoryMatches({ year: contextYear, model: contextModel });
+  if (!matches.length && contextYear) {
+    matches = await findInventoryMatches({ year: null, model: contextModel });
+  }
+  if (requestedCondition) {
+    matches = matches.filter(i => inventoryItemMatchesRequestedCondition(i, requestedCondition));
+  }
+  if (preferredColor) {
+    const colorFiltered = matches.filter(i => {
+      const itemColor = String(i.color ?? "").trim();
+      if (!itemColor) return false;
+      if (
+        colorMatchesExact(itemColor, preferredColor, leadTrim) ||
+        colorMatchesAlias(itemColor, preferredColor, leadTrim)
+      ) {
+        return true;
+      }
+      const itemNorm = normalizeColorBase(itemColor, !!leadTrim);
+      const leadNorm = normalizeColorBase(preferredColor, !!leadTrim);
+      return !!itemNorm && !!leadNorm && (itemNorm.includes(leadNorm) || leadNorm.includes(itemNorm));
+    });
+    if (colorFiltered.length) matches = colorFiltered;
+  }
+  if (!matches.length) return [];
+
+  const holds = await listInventoryHolds();
+  const solds = await listInventorySolds();
+  const availableMatches = matches.filter(m => {
+    const key = normalizeInventoryHoldKey(m.stockId, m.vin);
+    return key ? !holds?.[key] && !solds?.[key] : true;
+  });
+  if (!availableMatches.length) return [];
+
+  const alreadySent = new Set<string>();
+  for (const msg of conv?.messages ?? []) {
+    if (msg?.direction !== "out") continue;
+    if (!Array.isArray(msg?.mediaUrls)) continue;
+    for (const u of msg.mediaUrls) {
+      if (typeof u === "string" && u.trim()) alreadySent.add(u.trim());
+    }
+  }
+
+  const withImages = availableMatches.filter(
+    item => Array.isArray(item.images) && item.images.some((u: string) => /^https?:\/\//i.test(String(u ?? "")))
+  );
+  if (!withImages.length) return [];
+
+  const unseenFirst = withImages
+    .map(item => ({
+      item,
+      urls: (item.images ?? []).filter((u: string) => /^https?:\/\//i.test(String(u ?? "")))
+    }))
+    .filter(entry => entry.urls.some(u => !alreadySent.has(u)));
+  const pool = unseenFirst.length ? unseenFirst : withImages.map(item => ({ item, urls: item.images ?? [] }));
+
+  const picked: string[] = [];
+  for (const entry of pool) {
+    for (const raw of entry.urls) {
+      const url = String(raw ?? "").trim();
+      if (!url || picked.includes(url)) continue;
+      picked.push(url);
+      if (picked.length >= max) return picked;
+    }
+  }
+  return picked;
+}
+
 function addMediaRequestTodoIfMissing(conv: any, inboundText: string, sourceMessageId?: string) {
   const alreadyOpen = listOpenTodos().some(
     t =>
@@ -12920,11 +13007,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     /purchase timeframe:\s*i am not interested in purchasing at this time/.test(regenInboundLower) ||
     /do you expect to make a motorcycle purchase in the near future\?\s*no/.test(regenInboundLower) ||
     /not interested in purchasing at this time/.test(regenInboundLower);
-  const appendSmsRegeneratedDraft = (text: string) => {
+  const appendSmsRegeneratedDraft = (text: string, mediaUrls?: string[]) => {
     const from = String(event.to ?? "dealership").trim() || "dealership";
     const leadKey = String(conv.leadKey ?? "").trim();
     const to = leadKey || String(event.from ?? "").trim();
-    appendOutbound(conv, from, to, text, "draft_ai");
+    appendOutbound(conv, from, to, text, "draft_ai", undefined, mediaUrls);
   };
   if (regenDealerRideEventLead && regenNoPurchaseNow) {
     addCallTodoIfMissing(
@@ -13250,16 +13337,22 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       ) || "the bike";
     const mediaAffirmReply = buildMediaAffirmativeReply(lastOutboundForMedia, event.body, bike);
     if (mediaAffirmReply) {
-      addMediaRequestTodoIfMissing(conv, event.body, event.providerMessageId);
+      const autoMediaUrls = await findAutoMediaUrlsForConversationContext(conv, { max: 2 });
+      const mediaReply = autoMediaUrls.length
+        ? `Absolutely — here ${autoMediaUrls.length === 1 ? "is a photo" : "are a couple photos"} of ${bike}.`
+        : mediaAffirmReply;
+      if (!autoMediaUrls.length) {
+        addMediaRequestTodoIfMissing(conv, event.body, event.providerMessageId);
+      }
       if (channel === "email") {
-        conv.emailDraft = mediaAffirmReply;
+        conv.emailDraft = mediaReply;
         saveConversation(conv);
-        return res.json({ ok: true, conversation: conv, draft: mediaAffirmReply });
+        return res.json({ ok: true, conversation: conv, draft: mediaReply });
       }
       discardPendingDrafts(conv);
-      appendSmsRegeneratedDraft(mediaAffirmReply);
+      appendSmsRegeneratedDraft(mediaReply, autoMediaUrls.length ? autoMediaUrls : undefined);
       saveConversation(conv);
-      return res.json({ ok: true, conversation: conv, draft: mediaAffirmReply });
+      return res.json({ ok: true, conversation: conv, draft: mediaReply });
     }
   }
 
@@ -15535,17 +15628,42 @@ if (authToken && signature) {
       ) || "the bike";
     const mediaAffirmReply = buildMediaAffirmativeReply(lastOutboundText, inboundText, bike);
     if (mediaAffirmReply) {
-      addMediaRequestTodoIfMissing(conv, event.body, event.providerMessageId);
+      const autoMediaUrls = await findAutoMediaUrlsForConversationContext(conv, { max: 2 });
+      const mediaReply = autoMediaUrls.length
+        ? `Absolutely — here ${autoMediaUrls.length === 1 ? "is a photo" : "are a couple photos"} of ${bike}.`
+        : mediaAffirmReply;
+      if (!autoMediaUrls.length) {
+        addMediaRequestTodoIfMissing(conv, event.body, event.providerMessageId);
+      }
       const systemMode = webhookMode;
       if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, mediaAffirmReply, "draft_ai");
+        appendOutbound(
+          conv,
+          event.to,
+          event.from,
+          mediaReply,
+          "draft_ai",
+          undefined,
+          autoMediaUrls.length ? autoMediaUrls : undefined
+        );
         const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
         return res.status(200).type("text/xml").send(twiml);
       }
-      appendOutbound(conv, event.to, event.from, mediaAffirmReply, "twilio");
+      appendOutbound(
+        conv,
+        event.to,
+        event.from,
+        mediaReply,
+        "twilio",
+        undefined,
+        autoMediaUrls.length ? autoMediaUrls : undefined
+      );
+      const mediaTags = autoMediaUrls.length
+        ? autoMediaUrls.map(u => `\n    <Media>${escapeXml(u)}</Media>`).join("")
+        : "";
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        mediaAffirmReply
-      )}</Message>\n</Response>`;
+        mediaReply
+      )}${mediaTags}\n  </Message>\n</Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
   }
