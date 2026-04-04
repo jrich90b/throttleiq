@@ -2853,16 +2853,166 @@ function normalizeModelText(val?: string | null): string {
     .trim();
 }
 
+const SPEC_SIGNAL_TERMS = [
+  "spec",
+  "specs",
+  "spec sheet",
+  "feature",
+  "features",
+  "highlight",
+  "highlights",
+  "details",
+  "info",
+  "information",
+  "engine",
+  "motor",
+  "powertrain",
+  "horsepower",
+  "hp",
+  "torque",
+  "displacement",
+  "transmission",
+  "gearbox",
+  "gear",
+  "gears",
+  "tech",
+  "electronics",
+  "infotainment",
+  "audio",
+  "sound system",
+  "stereo",
+  "speakers",
+  "display",
+  "screen",
+  "safety",
+  "dimensions",
+  "weight",
+  "seat height",
+  "fuel capacity",
+  "gas tank",
+  "tank size",
+  "tank capacity",
+  "wheelbase",
+  "rake",
+  "trail",
+  "accessories",
+  "trim",
+  "suspension",
+  "brakes",
+  "cruise control",
+  "ride mode",
+  "ride modes"
+];
+
+const INFOTAINMENT_TERMS = [
+  "infotainment",
+  "audio",
+  "sound system",
+  "stereo",
+  "speakers",
+  "speaker",
+  "screen",
+  "display",
+  "apple carplay",
+  "android auto"
+];
+
+const SPEC_NEEDLE_ALIASES: Record<string, string[]> = {
+  "infotainment system": ["infotainment system", "infotainment", "sound system", "stereo", "audio"],
+  infotainment: ["infotainment", "sound system", "stereo", "audio"],
+  "screen size": ["screen size", "display size", "screen", "display"],
+  display: ["display", "screen", "touchscreen", "touch screen"],
+  speakers: ["speakers", "speaker count", "speaker"],
+  "speaker size": ["speaker size", "speaker diameter"],
+  "voice recognition": ["voice recognition", "voice control", "voice command"]
+};
+
+function specTermToRegex(term: string): RegExp {
+  const normalized = term.trim().toLowerCase().replace(/\s+/g, " ");
+  const pattern = escapeRegex(normalized).replace(/\\ /g, "\\s+");
+  return new RegExp(`\\b${pattern}\\b`, "i");
+}
+
+function hasAnySpecTerm(text: string, terms: string[]): boolean {
+  const source = String(text ?? "");
+  if (!source) return false;
+  return terms.some(term => specTermToRegex(term).test(source));
+}
+
+function hasSpecsSignal(text: string): boolean {
+  return hasAnySpecTerm(text, SPEC_SIGNAL_TERMS);
+}
+
+function hasInfotainmentSignal(text: string): boolean {
+  return hasAnySpecTerm(text, INFOTAINMENT_TERMS);
+}
+
 function extractSpecsFocus(text: string): "engine" | "features" | "dimensions" | "accessories" | null {
-  const t = String(text ?? "").toLowerCase();
-  if (/\b(engine|motor|performance|horsepower|torque|displacement)\b/.test(t)) return "engine";
-  if (/\b(feature|features|tech|electronics|infotainment|audio|screen|display|safety|navigation)\b/.test(t)) {
+  const t = String(text ?? "");
+  if (
+    hasAnySpecTerm(t, [
+      "engine",
+      "motor",
+      "powertrain",
+      "performance",
+      "horsepower",
+      "hp",
+      "torque",
+      "displacement",
+      "transmission",
+      "gearbox",
+      "gear",
+      "gears"
+    ])
+  ) {
+    return "engine";
+  }
+  if (
+    hasAnySpecTerm(t, [
+      "feature",
+      "features",
+      "tech",
+      "electronics",
+      "infotainment",
+      "audio",
+      "sound system",
+      "stereo",
+      "screen",
+      "display",
+      "safety",
+      "navigation",
+      "apple carplay",
+      "android auto",
+      "ride mode",
+      "ride modes",
+      "cruise control",
+      "suspension",
+      "brakes"
+    ])
+  ) {
     return "features";
   }
-  if (/\b(dimension|dimensions|weight|seat height|fuel capacity|wheelbase|rake|trail|length)\b/.test(t)) {
+  if (
+    hasAnySpecTerm(t, [
+      "dimension",
+      "dimensions",
+      "weight",
+      "seat height",
+      "fuel capacity",
+      "gas tank",
+      "tank size",
+      "tank capacity",
+      "wheelbase",
+      "rake",
+      "trail",
+      "length",
+      "height",
+      "width"
+    ])
+  ) {
     return "dimensions";
   }
-  if (/\b(accessories|trim|finish|package)\b/.test(t)) return "accessories";
+  if (hasAnySpecTerm(t, ["accessories", "trim", "finish", "package"])) return "accessories";
   return null;
 }
 
@@ -2901,7 +3051,7 @@ function formatSpecPhrase(key: string, value: string): string {
     return /\b(ft|lb|nm)\b/i.test(v) ? `${v} torque` : `torque ${v}`;
   }
   if (lk.includes("displacement")) return `${v} displacement`;
-  if (lk.includes("fuel capacity")) return `fuel capacity ${v}`;
+  if (lk.includes("fuel capacity") || lk.includes("tank capacity") || lk.includes("fuel tank")) return `fuel capacity ${v}`;
   if (lk.includes("seat height")) return `seat height ${v}`;
   if (lk.includes("wheelbase")) return `wheelbase ${v}`;
   if (lk.includes("weight")) return `weight ${v}`;
@@ -2910,7 +3060,7 @@ function formatSpecPhrase(key: string, value: string): string {
   if (lk.includes("length")) return `length ${v}`;
   if (lk.includes("width")) return `width ${v}`;
   if (lk.includes("height")) return `height ${v}`;
-  if (lk.includes("transmission")) return `transmission ${v}`;
+  if (lk.includes("transmission") || lk.includes("gearbox") || lk.includes("gear ratio")) return `transmission ${v}`;
   if (lk.includes("engine")) {
     return /engine|motor/i.test(v) ? v : `${v} engine`;
   }
@@ -3007,14 +3157,31 @@ function buildFocusedSpecsSummary(
       "screen",
       "display",
       "audio",
+      "sound",
+      "stereo",
       "speaker",
       "navigation",
       "tech",
       "electronics",
       "safety",
-      "suspension"
+      "suspension",
+      "brake",
+      "ride mode",
+      "cruise"
     ],
-    dimensions: ["weight", "seat height", "fuel capacity", "wheelbase", "rake", "trail", "length", "height", "width"],
+    dimensions: [
+      "weight",
+      "seat height",
+      "fuel capacity",
+      "tank capacity",
+      "fuel tank",
+      "wheelbase",
+      "rake",
+      "trail",
+      "length",
+      "height",
+      "width"
+    ],
     accessories: ["accessories", "trim", "finish", "package"]
   };
   const wanted = focusKeys[focus] ?? [];
@@ -3031,7 +3198,12 @@ function buildFocusedSpecsSummary(
 }
 
 function findSpecValue(specs: Record<string, string>, needles: string[]): string | null {
-  const wanted = needles.map(n => n.toLowerCase());
+  const wanted = needles
+    .flatMap(needle => {
+      const normalizedNeedle = needle.toLowerCase();
+      return [normalizedNeedle, ...(SPEC_NEEDLE_ALIASES[normalizedNeedle] ?? [])];
+    })
+    .map(n => n.toLowerCase());
   for (const key of Object.keys(specs)) {
     const lk = key.toLowerCase();
     if (wanted.some(n => lk.includes(n))) {
@@ -3077,14 +3249,11 @@ function isCompareRequest(text: string): boolean {
 }
 
 function isInfoOnlyRequest(text: string): boolean {
-  const t = String(text ?? "").toLowerCase();
+  const t = String(text ?? "");
   return (
     /\b(just want to know|just want info|just want to learn|want to know about|tell me about|more info|more information|details on|information on)\b/.test(
       t
-    ) ||
-    /\b(specs?|spec sheet|features|highlights|details|engine|motor|performance|horsepower|torque|displacement|tech|electronics|infotainment|audio|screen|display|safety|dimensions|weight|seat height|fuel capacity|wheelbase|rake|trail|accessories|trim)\b/.test(
-      t
-    )
+    ) || hasSpecsSignal(t)
   );
 }
 
@@ -16329,14 +16498,8 @@ if (authToken && signature) {
     /\b(black(?:ed)?\s*(?:out|trim|finish)?|chrome\s*(?:trim|finish)?|black\s*trim|black\s*finish|chrome\s*trim|chrome\s*finish)\b/i.test(
       textLower
     ) &&
-    !/\b(specs?|spec sheet|highlights?|details|info|information|engine|performance|horsepower|torque|displacement|tech|electronics|infotainment|audio|sound system|stereo|speakers?|screen|display|safety|dimensions|weight|seat height|fuel capacity|wheelbase|rake|trail|accessories)\b/i.test(
-      textLower
-    );
-  const specsSignal =
-    !finishPreferenceOnlyRaw &&
-    /\b(specs?|spec sheet|features|highlights|details|info|information|engine|performance|horsepower|torque|displacement|tech|electronics|infotainment|audio|sound system|stereo|speakers?|screen|display|safety|dimensions|weight|seat height|fuel capacity|wheelbase|rake|trail|accessories|trim)\b/i.test(
-      textLower
-    );
+    !hasSpecsSignal(textLower);
+  const specsSignal = !finishPreferenceOnlyRaw && hasSpecsSignal(textLower);
   const llmMediaIntent =
     semanticRoutingAccepted && semanticSlotParse?.mediaIntent ? semanticSlotParse.mediaIntent : "none";
   const photoRequested =
@@ -16702,9 +16865,7 @@ if (authToken && signature) {
         (wantsEverything ||
           !!specsFormatChoice ||
           !!specsFocus ||
-          /\b(specs?|spec sheet|highlights?|details|info|information|sound system|stereo|speakers?|audio)\b/i.test(
-            textLower
-          ));
+          hasSpecsSignal(textLower));
       if (wantsSpecsNow) {
         setDialogState(conv, "specs_single_answered");
         const wantsHighlights =
@@ -16716,9 +16877,7 @@ if (authToken && signature) {
         let reply = "";
         if (specs?.specs && Object.keys(specs.specs).length) {
           const maxItems = wantsHighlights ? 6 : 10;
-          const wantsInfotainment = /\b(infotainment|screen|display|audio|speakers?)\b/i.test(
-            textLower
-          );
+          const wantsInfotainment = hasInfotainmentSignal(textLower);
           const infotainmentSummary =
             specsFocus === "features" && wantsInfotainment
               ? buildInfotainmentSummary(baseLabel, specs.specs)
