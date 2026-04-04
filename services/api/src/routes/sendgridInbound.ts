@@ -1982,7 +1982,6 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const timeframeLower = String(lead.purchaseTimeframe ?? "").toLowerCase();
   const isDealerRideEventLead =
     event.provider === "sendgrid_adf" &&
-    !(conv.messages ?? []).some((m: any) => m.direction === "out") &&
     (leadSourceLower.includes("dealer lead app") ||
       /event name:\s*dealer test ride|demo bikes ridden|dealer lead app/i.test(effectiveInquiry));
   if (isDealerRideEventLead) {
