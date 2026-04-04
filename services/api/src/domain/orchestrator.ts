@@ -194,6 +194,23 @@ function pickSmallTalkReply(seed: string): string {
   return pool[hash];
 }
 
+function hasRecentInventoryInvitePrompt(
+  history: { direction: "in" | "out"; body: string }[] | undefined
+): boolean {
+  const items = Array.isArray(history) ? history : [];
+  if (!items.length) return false;
+  const recentOut = items
+    .filter(m => m?.direction === "out" && m?.body)
+    .slice(-4)
+    .map(m => String(m.body));
+  if (!recentOut.length) return false;
+  return recentOut.some(body =>
+    /(want to come check|want to come see|want details or to stop by|would you like to stop by|what day .* works best|take a look|come check one out)/i.test(
+      body
+    )
+  );
+}
+
 function buildDialogActReply(args: {
   act: "trust_concern" | "frustration" | "objection" | "preference" | "clarification" | "none";
   topic: "used_inventory" | "new_inventory" | "pricing" | "trade" | "scheduling" | "service" | "general";
@@ -348,7 +365,7 @@ function detectExactNumberPressure(text: string): boolean {
 function detectPaymentPressure(text: string): boolean {
   const t = text.toLowerCase();
   return (
-    /(monthly payment|payments?\b|what.*payment|payment.*(month|monthly)|how much.*(payment|monthly)|how much down|money down|put (?:any )?money down|no money down|zero down|\$0 down|\$\s*\d+[,\d]*\s*(\/\s*mo|\/\s*month|per month|a month|monthly)|\bapr\b|term)/.test(
+    /(monthly payment|payments?\b|what.*payment|payment.*(month|monthly)|how much.*(payment|monthly)|how much down|money down|put (?:any )?money down|put down|to put down|no money down|zero down|\$0 down|\$\s*\d+[,\d]*\s*(\/\s*mo|\/\s*month|per month|a month|monthly)|\bapr\b|term)/.test(
       t
     )
   );
@@ -666,7 +683,7 @@ function findRecentInboundColor(
 
 function looksLikePaymentEstimateMessage(text: string): boolean {
   const t = text.toLowerCase();
-  return /(ballpark|\/mo|per month|monthly|payments?)/.test(t);
+  return /(ballpark|\/mo|\/month|per month|monthly|payments?)/.test(t);
 }
 
 function detectPaymentFollowUp(text: string, history: { direction: "in" | "out"; body: string }[]): boolean {
@@ -2661,12 +2678,23 @@ export async function orchestrateInbound(
         requestedCondition,
         color
       });
-      const reply =
+      const photoRequestedLocal = /\b(photo|picture|pic|image|images)\b/i.test(event.body);
+      const inviteInCooldown = hasRecentInventoryInvitePrompt(history);
+      let reply =
         count <= 0
           ? `I’m not seeing ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}${preferencePrompt ? ` ${preferencePrompt}` : ""}`
           : count === 1
             ? `That’s the only ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} we have in stock right now.`
             : `We have ${count} ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} units in stock right now.`;
+      if (count > 0 && !inviteInCooldown) {
+        reply +=
+          count === 1
+            ? " Want to come check it out, or want a couple photos first?"
+            : " Want to come check one out, or want a couple photos first?";
+      }
+      if (count > 0 && photoRequestedLocal) {
+        reply += " I can have one of the guys send photos over by text.";
+      }
       return finalize({
         intent: "AVAILABILITY",
         stage: "ENGAGED",
