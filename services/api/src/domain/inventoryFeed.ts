@@ -122,6 +122,15 @@ function normalizeModel(s: string): string {
     .trim();
 }
 
+function modelMatches(candidateRaw: string | undefined, targetRaw: string): boolean {
+  if (!candidateRaw) return false;
+  const candidate = normalizeModel(candidateRaw);
+  const target = normalizeModel(targetRaw);
+  if (!candidate || !target) return false;
+  if (candidate === target) return true;
+  return candidate.includes(target) || target.includes(candidate);
+}
+
 export function extractImageDate(url: string): Date | null {
   const m = url.match(/\/(\d{4})\/(\d{2})\/(\d{2})\//);
   if (!m) return null;
@@ -141,11 +150,9 @@ export async function findInventoryMatches(opts: {
   const year = opts.year?.trim();
   const model = opts.model?.trim();
   if (!model) return [];
-  const target = normalizeModel(model);
   return items.filter(i => {
-    if (!i.model) return false;
     if (year && i.year !== year) return false;
-    return normalizeModel(i.model) === target;
+    return modelMatches(i.model, model);
   });
 }
 
@@ -208,9 +215,9 @@ export async function findInventoryPrice(opts: {
     if (item) return { price: item.price ?? null, item };
   }
   const year = opts.year?.trim();
-  const model = opts.model?.trim() ? normalizeModel(opts.model.trim()) : null;
+  const model = opts.model?.trim() ?? null;
   if (year && model) {
-    const item = items.find(i => i.year === year && i.model && normalizeModel(i.model) === model);
+    const item = items.find(i => i.year === year && modelMatches(i.model, model));
     if (item) return { price: item.price ?? null, item };
   }
   return null;
@@ -223,10 +230,10 @@ export async function findPriceRange(opts: {
   const items = await getInventoryFeed();
   if (!items.length) return null;
   const year = opts.year?.trim();
-  const model = opts.model?.trim() ? normalizeModel(opts.model.trim()) : null;
+  const model = opts.model?.trim() ?? null;
   if (!year || !model) return null;
   const matches = items.filter(
-    i => i.year === year && !!i.model && normalizeModel(i.model) === model && i.price && i.price > 0
+    i => i.year === year && modelMatches(i.model, model) && i.price && i.price > 0
   );
   if (!matches.length) return null;
   const prices = matches.map(m => m.price as number).sort((a, b) => a - b);

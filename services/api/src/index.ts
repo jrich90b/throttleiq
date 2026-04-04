@@ -14688,7 +14688,7 @@ if (authToken && signature) {
   const hasAvailabilityDetailEarly =
     !!mentionedModelEarly || !!colorCueEarly || !!finishCueEarly || !!conditionCueEarly || !!yearCueEarly;
   const availabilityRefinementDetectedEarly =
-    correctionCue && hasAvailabilityContextEarly && hasAvailabilityDetailEarly;
+    correctionCue && hasAvailabilityDetailEarly;
   const deterministicAvailabilityLookup =
     inventoryCountQuestion || availabilityPhraseDetected || availabilityRefinementDetectedEarly;
   const otherInventoryRequest =
