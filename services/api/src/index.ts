@@ -12496,6 +12496,76 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       conv,
       "Dealer ride follow-up needed: thank customer, confirm how to proceed, and update lead status."
     );
+    const users = await listUsers();
+    const pickUserPhone = (user: any): string => {
+      if (!user || typeof user !== "object") return "";
+      const candidates = [
+        user.phone,
+        user.mobilePhone,
+        user.mobile_phone,
+        user.cellPhone,
+        user.cellphone,
+        user.cell,
+        user.mobile,
+        user.smsPhone,
+        user.sms_phone
+      ];
+      for (const raw of candidates) {
+        const normalized = normalizePhone(String(raw ?? "").trim());
+        if (normalized) return normalized;
+      }
+      return "";
+    };
+    const ownerId = String(conv.leadOwner?.id ?? "").trim();
+    const ownerById =
+      users.find(u => String(u.id ?? "").trim() === ownerId) ?? null;
+    const ownerFirst = String(conv.leadOwner?.name ?? "")
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean)[0];
+    const ownerByName =
+      users.find(u => {
+        const first = String(u.firstName ?? "").trim().toLowerCase();
+        const nameFirst = String(u.name ?? "")
+          .trim()
+          .toLowerCase()
+          .split(/\s+/)
+          .filter(Boolean)[0];
+        return !!ownerFirst && (ownerFirst === first || ownerFirst === nameFirst);
+      }) ?? null;
+    const manager = users.find(u => u.role === "manager") ?? null;
+    const owner = ownerById ?? ownerByName ?? manager;
+    const ownerName =
+      String(owner?.firstName ?? "").trim() ||
+      String(owner?.name ?? "").trim() ||
+      String(conv.leadOwner?.name ?? "").trim() ||
+      "salesperson";
+    const ownerPhone = pickUserPhone(owner);
+    if (ownerPhone) {
+      const customerName =
+        [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() ||
+        conv.leadKey ||
+        "customer";
+      const leadSummary =
+        `Dealer ride update needed for ${customerName}. ` +
+        `DLA shows "not interested in purchasing at this time". ` +
+        `Please send status/next-step update in Leadrider.`;
+      const sent = await sendInternalSms(ownerPhone, leadSummary);
+      addTodo(
+        conv,
+        "note",
+        sent
+          ? `Salesperson SMS sent to ${ownerName}.`
+          : `Salesperson SMS failed for ${ownerName}: send_failed.`
+      );
+    } else {
+      addTodo(
+        conv,
+        "note",
+        `Salesperson SMS failed for ${ownerName}: invalid_to_number.`
+      );
+    }
     setFollowUpMode(conv, "manual_handoff", "dealer_ride_no_purchase");
     stopFollowUpCadence(conv, "manual_handoff");
     saveConversation(conv);
