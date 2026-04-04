@@ -10394,7 +10394,40 @@ app.put("/dealer-profile", requireManager, async (req, res) => {
       delete incoming.bookingUrl;
     }
   }
-  const saved = await saveDealerProfile(incoming);
+  const current = (await getDealerProfileHot()) ?? {};
+  const merged = {
+    ...current,
+    ...incoming,
+    address: {
+      ...(current?.address ?? {}),
+      ...(incoming?.address ?? {})
+    },
+    hours:
+      incoming?.hours && typeof incoming.hours === "object"
+        ? incoming.hours
+        : current?.hours,
+    policies: {
+      ...(current?.policies ?? {}),
+      ...(incoming?.policies ?? {})
+    },
+    voice: {
+      ...(current?.voice ?? {}),
+      ...(incoming?.voice ?? {})
+    },
+    followUp: {
+      ...(current?.followUp ?? {}),
+      ...(incoming?.followUp ?? {})
+    },
+    weather: {
+      ...(current?.weather ?? {}),
+      ...(incoming?.weather ?? {})
+    },
+    buying: {
+      ...(current?.buying ?? {}),
+      ...(incoming?.buying ?? {})
+    }
+  };
+  const saved = await saveDealerProfile(merged);
   console.log("[dealer-profile] save done");
   res.json({ ok: true, profile: saved });
 });
