@@ -459,6 +459,30 @@ export type UnifiedSemanticSlotParse = {
   confidence?: number;
 };
 
+export type ConversationStateParse = {
+  stateIntent:
+    | "finance_docs"
+    | "inventory_watch"
+    | "service_request"
+    | "parts_request"
+    | "apparel_request"
+    | "scheduling"
+    | "pricing"
+    | "general"
+    | "none";
+  departmentIntent: "service" | "parts" | "apparel" | "none";
+  explicitRequest: boolean;
+  clearInventoryWatchPending: boolean;
+  clearPricingNeedModel: boolean;
+  manualHandoffReason:
+    | "credit_app"
+    | "service_request"
+    | "parts_request"
+    | "apparel_request"
+    | "none";
+  confidence?: number;
+};
+
 function safeParseJson(text: string): any | null {
   const raw = String(text ?? "").trim();
   if (!raw) return null;
@@ -844,6 +868,48 @@ const SEMANTIC_SLOT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
       type: "boolean"
     },
     confidence: { type: "number" }
+  }
+};
+
+const CONVERSATION_STATE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "state_intent",
+    "department_intent",
+    "explicit_request",
+    "clear_inventory_watch_pending",
+    "clear_pricing_need_model",
+    "manual_handoff_reason",
+    "confidence"
+  ],
+  properties: {
+    state_intent: {
+      type: "string",
+      enum: [
+        "finance_docs",
+        "inventory_watch",
+        "service_request",
+        "parts_request",
+        "apparel_request",
+        "scheduling",
+        "pricing",
+        "general",
+        "none"
+      ]
+    },
+    department_intent: {
+      type: "string",
+      enum: ["service", "parts", "apparel", "none"]
+    },
+    explicit_request: { type: "boolean" },
+    clear_inventory_watch_pending: { type: "boolean" },
+    clear_pricing_need_model: { type: "boolean" },
+    manual_handoff_reason: {
+      type: "string",
+      enum: ["credit_app", "service_request", "parts_request", "apparel_request", "none"]
+    },
+    confidence: { type: "number", minimum: 0, maximum: 1 }
   }
 };
 
@@ -1995,6 +2061,123 @@ export async function parseWalkInOutcomeWithLLM(args: {
     testRideRequested: !!parsed.test_ride_requested,
     weatherSensitive: !!parsed.weather_sensitive,
     followUpWindowText: cleanOptionalString(parsed.follow_up_window_text),
+    confidence
+  };
+}
+
+export async function parseConversationStateWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+  followUp?: Conversation["followUp"] | null;
+  dialogState?: string | null;
+  inventoryWatchPending?: Conversation["inventoryWatchPending"] | null;
+}): Promise<ConversationStateParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_CONVERSATION_STATE_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_CONVERSATION_STATE_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_CONVERSATION_STATE_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_CONVERSATION_STATE_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const prompt = [
+    "You parse inbound dealership messages into conversation state transitions.",
+    "Return only JSON matching the schema.",
+    "",
+    "Choose a primary state intent:",
+    "- finance_docs: credit app/docs/lien holder/binder/e-sign flow.",
+    "- inventory_watch: watch/notify me when available language.",
+    "- service_request / parts_request / apparel_request: department handoff intents.",
+    "- scheduling: appointment timing/day/time selection.",
+    "- pricing: pricing/payment/apr/down/term questions.",
+    "- general: neutral update or acknowledgement.",
+    "- none: unknown.",
+    "",
+    "Department intent rules:",
+    "- service/parts/apparel only when explicitly requested or clearly implied.",
+    "",
+    "State hygiene rules:",
+    "- clear_inventory_watch_pending=true when current message clearly shifts away from watch flow (especially into service/parts/apparel or finance docs).",
+    "- clear_pricing_need_model=true when message is not asking pricing anymore and is clearly another workflow.",
+    "",
+    "manual_handoff_reason rules:",
+    "- credit_app for finance docs flow, department-specific values for department flows, else none.",
+    "",
+    `Current context: ${JSON.stringify({
+      followUpMode: args.followUp?.mode ?? null,
+      followUpReason: args.followUp?.reason ?? null,
+      dialogState: args.dialogState ?? null,
+      hasInventoryWatchPending: !!args.inventoryWatchPending,
+      leadModel: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      leadYear: lead?.vehicle?.year ?? null,
+      leadSource: lead?.source ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Inbound message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "conversation_state_parser",
+      schema: CONVERSATION_STATE_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 220,
+      debugTag: "llm-conversation-state-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const stateRaw = String(parsed.state_intent ?? "").toLowerCase();
+  const stateIntent: ConversationStateParse["stateIntent"] =
+    stateRaw === "finance_docs" ||
+    stateRaw === "inventory_watch" ||
+    stateRaw === "service_request" ||
+    stateRaw === "parts_request" ||
+    stateRaw === "apparel_request" ||
+    stateRaw === "scheduling" ||
+    stateRaw === "pricing" ||
+    stateRaw === "general"
+      ? stateRaw
+      : "none";
+  const deptRaw = String(parsed.department_intent ?? "").toLowerCase();
+  const departmentIntent: ConversationStateParse["departmentIntent"] =
+    deptRaw === "service" || deptRaw === "parts" || deptRaw === "apparel" ? deptRaw : "none";
+  const handoffRaw = String(parsed.manual_handoff_reason ?? "").toLowerCase();
+  const manualHandoffReason: ConversationStateParse["manualHandoffReason"] =
+    handoffRaw === "credit_app" ||
+    handoffRaw === "service_request" ||
+    handoffRaw === "parts_request" ||
+    handoffRaw === "apparel_request"
+      ? handoffRaw
+      : "none";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    stateIntent,
+    departmentIntent,
+    explicitRequest: !!parsed.explicit_request,
+    clearInventoryWatchPending: !!parsed.clear_inventory_watch_pending,
+    clearPricingNeedModel: !!parsed.clear_pricing_need_model,
+    manualHandoffReason,
     confidence
   };
 }

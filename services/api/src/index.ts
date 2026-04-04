@@ -24,6 +24,7 @@ import {
   parseCustomerDispositionWithLLM,
   parseResponseControlWithLLM,
   parseJourneyIntentWithLLM,
+  parseConversationStateWithLLM,
   parseStaffOutcomeUpdateWithLLM,
   parseUnifiedSemanticSlotsWithLLM,
   parseSemanticSlotsWithLLM,
@@ -31,6 +32,7 @@ import {
   summarizeVoiceTranscriptWithLLM
 } from "./domain/llmDraft.js";
 import type {
+  ConversationStateParse,
   CustomerDispositionParse,
   JourneyIntentParse,
   SemanticSlotParse,
@@ -4451,6 +4453,51 @@ function setDialogState(conv: any, name: DialogStateName) {
   if (intent) {
     updateLastIntent(conv, intent, "dialog_state");
   }
+}
+
+function isConversationStateParserAccepted(parsed: ConversationStateParse | null): boolean {
+  if (!parsed) return false;
+  const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_CONVERSATION_STATE_CONFIDENCE_MIN ?? 0.74);
+  if (confidence < min) return false;
+  if (
+    parsed.stateIntent === "none" &&
+    parsed.departmentIntent === "none" &&
+    parsed.manualHandoffReason === "none" &&
+    !parsed.clearInventoryWatchPending &&
+    !parsed.clearPricingNeedModel
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function applyConversationStateReducer(
+  conv: any,
+  parsed: ConversationStateParse | null
+): { departmentIntent: DepartmentRole | null } {
+  if (!isConversationStateParserAccepted(parsed)) {
+    return { departmentIntent: null };
+  }
+  const state = parsed as ConversationStateParse;
+  if (state.clearInventoryWatchPending || state.departmentIntent !== "none") {
+    conv.inventoryWatchPending = undefined;
+    if (getDialogState(conv) === "inventory_watch_prompted") {
+      setDialogState(conv, "none");
+    }
+  }
+  if (state.clearPricingNeedModel && getDialogState(conv) === "pricing_need_model") {
+    setDialogState(conv, "none");
+  }
+  if (state.manualHandoffReason !== "none") {
+    setFollowUpMode(conv, "manual_handoff", state.manualHandoffReason);
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+  }
+  if (state.departmentIntent !== "none") {
+    return { departmentIntent: state.departmentIntent };
+  }
+  return { departmentIntent: null };
 }
 
 function normalizePersonName(value: string): string {
@@ -13170,6 +13217,34 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     regenResponseControlAccepted && regenResponseControlParse?.intent === "compliment_only";
   const regenLlmExplicitScheduleIntent =
     regenResponseControlAccepted && regenResponseControlParse?.intent === "schedule_request";
+  const regenConversationStateParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_CONVERSATION_STATE_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    !regenShortAck;
+  const regenConversationStateParserHint =
+    /\b(parts?|service|apparel|credit app|credit application|lien|binder|e-?sign|watch|notify|keep an eye out|price|payment|apr|term|schedule|appointment)\b/i.test(
+      regenTextLower
+    ) ||
+    !!conv.inventoryWatchPending ||
+    getDialogState(conv) === "pricing_need_model" ||
+    conv.followUp?.mode === "manual_handoff";
+  const regenConversationStateParse =
+    regenConversationStateParserEligible && regenConversationStateParserHint
+      ? await parseConversationStateWithLLM({
+          text: event.body,
+          history,
+          lead: conv.lead,
+          followUp: conv.followUp,
+          dialogState: getDialogState(conv),
+          inventoryWatchPending: conv.inventoryWatchPending
+        })
+      : null;
+  if (process.env.DEBUG_CONVERSATION_STATE_PARSER === "1" && regenConversationStateParse) {
+    console.log("[llm-conversation-state-parse] regen", regenConversationStateParse);
+  }
+  const regenReducedConversationState = applyConversationStateReducer(conv, regenConversationStateParse);
   const regenDispositionDecision = resolveCustomerDispositionDecision(
     event.body,
     regenCustomerDispositionParse
@@ -13236,6 +13311,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
 
   const serviceDialogState = getDialogState(conv);
   const regenInboundDepartmentIntent =
+    regenReducedConversationState.departmentIntent ??
     inferDepartmentFromText(event.body ?? "") ??
     (regenUnifiedSlotParse?.departmentIntent && regenUnifiedSlotParse.departmentIntent !== "none"
       ? (regenUnifiedSlotParse.departmentIntent as DepartmentRole)
@@ -14030,6 +14106,34 @@ if (authToken && signature) {
     semanticServiceRecordsIntent || isServiceRecordsRequest(event.body);
   const videoRequested =
     (semanticVideoIntent || isVideoRequest(event.body)) && !serviceRecordsRequested;
+  const conversationStateParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_CONVERSATION_STATE_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    !semanticShortAck;
+  const conversationStateParserHint =
+    /\b(parts?|service|apparel|credit app|credit application|lien|binder|e-?sign|watch|notify|keep an eye out|price|payment|apr|term|schedule|appointment)\b/i.test(
+      semanticTextLower
+    ) ||
+    !!conv.inventoryWatchPending ||
+    getDialogState(conv) === "pricing_need_model" ||
+    conv.followUp?.mode === "manual_handoff";
+  const conversationStateParse =
+    conversationStateParserEligible && conversationStateParserHint
+      ? await parseConversationStateWithLLM({
+          text: semanticInboundText,
+          history: buildHistory(conv, 10),
+          lead: conv.lead,
+          followUp: conv.followUp,
+          dialogState: getDialogState(conv),
+          inventoryWatchPending: conv.inventoryWatchPending
+        })
+      : null;
+  if (process.env.DEBUG_CONVERSATION_STATE_PARSER === "1" && conversationStateParse) {
+    console.log("[llm-conversation-state-parse]", conversationStateParse);
+  }
+  const reducedConversationState = applyConversationStateReducer(conv, conversationStateParse);
 
   if (
     (isWatchAlertStopIntent(event.body) || semanticWatchAction === "stop_watch") &&
@@ -14188,7 +14292,10 @@ if (authToken && signature) {
   }
 
   const dialogState = getDialogState(conv);
-  const inboundDepartmentIntent = inferDepartmentFromText(event.body ?? "") ?? semanticDepartmentIntent;
+  const inboundDepartmentIntent =
+    reducedConversationState.departmentIntent ??
+    inferDepartmentFromText(event.body ?? "") ??
+    semanticDepartmentIntent;
   if (inboundDepartmentIntent === "parts" || inboundDepartmentIntent === "apparel") {
     conv.classification = {
       ...(conv.classification ?? {}),
