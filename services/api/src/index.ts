@@ -12767,6 +12767,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     providerMessageId: inbound.providerMessageId ?? `regen_${Date.now()}`,
     receivedAt: inbound.at ?? new Date().toISOString()
   };
+  if (event.provider === "twilio" && shouldSuppressShortAckDraft(event.body ?? "")) {
+    saveConversation(conv);
+    return res.json({ ok: true, conversation: conv, skipped: true, note: "short_ack_no_action" });
+  }
   const regenInboundLower = String(event.body ?? "").toLowerCase();
   const regenRawProvider = String((inbound as any)?.provider ?? "").toLowerCase();
   const regenLooksLikeAdf =
@@ -13884,6 +13888,10 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
   appendInbound(conv, event);
+  if (event.provider === "twilio" && shouldSuppressShortAckDraft(event.body ?? "")) {
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   pauseRelatedCadencesOnInbound(conv, event);
   const responseControlParserEligible =
     event.provider === "twilio" &&
