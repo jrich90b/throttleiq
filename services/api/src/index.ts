@@ -14672,6 +14672,25 @@ if (authToken && signature) {
     /\b(only one|just one|is that all|any others|how many|how many do you have|only one you have)\b/i.test(
       textLower
     );
+  const availabilityPhraseDetected = /\b(in[-\s]?stock|available|availability|do you have|have .* in[-\s]?stock|any .* in[-\s]?stock|do you carry|carry any)\b/i.test(
+    textLower
+  );
+  const correctionCue = /\b(i meant|actually|sorry|correction|typo)\b/i.test(textLower);
+  const mentionedModelEarly = findMentionedModel(textLower);
+  const colorCueEarly = extractColorToken(textLower);
+  const finishCueEarly = extractFinishToken(textLower);
+  const conditionCueEarly = normalizeWatchCondition(textLower);
+  const yearCueEarly = extractYearSingle(textLower);
+  const hasAvailabilityContextEarly =
+    !!conv.inventoryContext?.model ||
+    !!conv.lead?.vehicle?.model ||
+    !!conv.lead?.vehicle?.description;
+  const hasAvailabilityDetailEarly =
+    !!mentionedModelEarly || !!colorCueEarly || !!finishCueEarly || !!conditionCueEarly || !!yearCueEarly;
+  const availabilityRefinementDetectedEarly =
+    correctionCue && hasAvailabilityContextEarly && hasAvailabilityDetailEarly;
+  const deterministicAvailabilityLookup =
+    inventoryCountQuestion || availabilityPhraseDetected || availabilityRefinementDetectedEarly;
   const otherInventoryRequest =
     /\b(any|what|do you have|got)\s+(other|another|different|more)\b/i.test(textLower) ||
     (/\b(other|another|different|else|more)\b/i.test(textLower) &&
@@ -16313,7 +16332,7 @@ if (authToken && signature) {
     }
   }
 
-  if (event.provider === "twilio" && inventoryCountQuestion) {
+  if (event.provider === "twilio" && deterministicAvailabilityLookup) {
     const modelFromText = llmAvailability?.model ?? findMentionedModel(textLower);
     const priorModel =
       conv.inventoryContext?.model ??
