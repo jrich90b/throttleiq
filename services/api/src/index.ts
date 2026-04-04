@@ -19505,8 +19505,8 @@ if (authToken && signature) {
     flowDialogState !== "callback_requested" &&
     flowDialogState !== "callback_handoff" &&
     flowDialogState !== "call_only";
-  if (result.intent === "TRADE_IN" && !isScheduleDialogState(flowDialogState)) {
-    if (!isTradeDialogState(dialogState)) {
+  if (result.intent === "TRADE_IN" && !isScheduleDialogState(getDialogState(conv))) {
+    if (!isTradeDialogState(getDialogState(conv))) {
       const sellOption = conv.lead?.sellOption;
       if (sellOption === "cash") setDialogState(conv, "trade_cash");
       else if (sellOption === "trade") setDialogState(conv, "trade_trade");
@@ -19514,13 +19514,13 @@ if (authToken && signature) {
       else setDialogState(conv, "trade_init");
     }
   }
-  if (result.intent === "TEST_RIDE" && !isScheduleDialogState(dialogState)) {
-    if (!isTestRideDialogState(dialogState)) {
+  if (result.intent === "TEST_RIDE" && !isScheduleDialogState(getDialogState(conv))) {
+    if (!isTestRideDialogState(getDialogState(conv))) {
       setDialogState(conv, "test_ride_init");
     }
   }
   if (
-    !isTestRideDialogState(dialogState) &&
+    !isTestRideDialogState(getDialogState(conv)) &&
     /test ride/i.test(draftText) &&
     /(what day|what time|what time works|reserve|set up|schedule)/i.test(draftText)
   ) {
@@ -19537,7 +19537,7 @@ if (authToken && signature) {
       setDialogState(conv, "pricing_need_model");
     } else if (detectsPricingAnswer(result.draft ?? "")) {
       setDialogState(conv, "pricing_answered");
-    } else if (pricingSignal && dialogState === "none") {
+    } else if (pricingSignal && getDialogState(conv) === "none") {
       setDialogState(conv, "pricing_init");
     }
   }
