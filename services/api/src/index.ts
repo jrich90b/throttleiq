@@ -16517,8 +16517,28 @@ if (authToken && signature) {
     llmMediaIntent === "photos" ||
     llmMediaIntent === "either" ||
     /\b(photo|picture|pic|image|images)\b/i.test(textLower);
+  const availabilityRefinementSignal = (() => {
+    if (turnPrimaryIntent === "pricing_payments" || turnPrimaryIntent === "callback") return false;
+    const hasAvailabilityContext =
+      !!conv.inventoryContext?.model ||
+      !!conv.lead?.vehicle?.model ||
+      !!conv.lead?.vehicle?.description;
+    if (!hasAvailabilityContext) return false;
+    const mentionsModel = !!(llmAvailability?.model ?? findMentionedModel(textLower));
+    const mentionsColor = !!extractColorToken(textLower);
+    const mentionsFinish = !!extractFinishToken(textLower);
+    const mentionsCondition = !!normalizeWatchCondition(textLower);
+    const mentionsYear = !!extractYearSingle(textLower);
+    const hasRefinementDetail =
+      mentionsModel || mentionsColor || mentionsFinish || mentionsCondition || mentionsYear;
+    if (!hasRefinementDetail) return false;
+    if (specsSignal || pricingSignal) return false;
+    const correctionCue = /\b(i meant|actually|sorry|correction|typo)\b/i.test(textLower);
+    const contextCue = /\b(that one|the one|this one|that bike|this bike)\b/i.test(textLower);
+    return correctionCue || contextCue || hasAvailabilityContext;
+  })();
   const availabilityExplicit =
-    ((turnPrimaryIntent === "availability" || llmAvailabilityIntent) ||
+    ((turnPrimaryIntent === "availability" || llmAvailabilityIntent || availabilityRefinementSignal) ||
       /(in[-\s]?stock|available|availability|do you have|have .* in[-\s]?stock|any .* in[-\s]?stock|do you carry|carry any)/i.test(
         textLower
       )) &&
