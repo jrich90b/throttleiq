@@ -5396,6 +5396,29 @@ function isShortAckText(text: string): boolean {
   );
 }
 
+function shouldSuppressShortAckDraft(text: string): boolean {
+  const t = String(text ?? "").trim();
+  if (!isShortAckText(t)) return false;
+  const schedulingSignals = detectSchedulingSignals(t);
+  if (
+    schedulingSignals.explicit ||
+    schedulingSignals.hasDayTime ||
+    schedulingSignals.hasDayOnlyAvailability ||
+    schedulingSignals.hasDayOnlyRequest ||
+    extractTimeToken(t)
+  ) {
+    return false;
+  }
+  if (
+    /\b(price|pricing|payment|monthly|apr|term|down payment|trade|trade in|service|parts|apparel|available|availability|in stock|stock|test ride|appointment|schedule|call|video|photos?|email|watch)\b/i.test(
+      t
+    )
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function isReachOutWhenReadyCloseText(text: string): boolean {
   const t = String(text ?? "")
     .toLowerCase()
@@ -13504,6 +13527,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
   }
 
+  if (event.provider === "twilio" && shouldSuppressShortAckDraft(event.body ?? "")) {
+    saveConversation(conv);
+    return res.json({ ok: true, conversation: conv, skipped: true, note: "short_ack_no_action" });
+  }
+
   const result = await orchestrateInbound(event, history, {
     appointment: conv.appointment,
     followUp: conv.followUp,
@@ -19197,6 +19225,10 @@ if (authToken && signature) {
   const weatherProfile = await getDealerProfileHot();
   logRouteTiming("dealer_profile_for_weather", weatherProfileStartedAt);
   const weatherStatus = await getDealerWeatherStatus(weatherProfile);
+  if (event.provider === "twilio" && shouldSuppressShortAckDraft(event.body ?? "")) {
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   const orchestratorStartedAt = Date.now();
   const result = await orchestrateInbound(event, history, {
     appointment: conv.appointment,
