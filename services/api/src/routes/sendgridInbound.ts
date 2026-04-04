@@ -1143,6 +1143,9 @@ function normalizeVehicleModel(raw?: string | null, make?: string | null): strin
   model = model.replace(/\bharley[-\s]?davidson\b/gi, "").replace(/\bh[-\s]?d\b/gi, "").trim();
   model = model.replace(/^[\s\-–—:,]+|[\s\-–—:,]+$/g, "").trim();
   const normalized = model.toLowerCase();
+  if (/^(full line|full lineup|other|unknown|null)$/.test(normalized)) {
+    return undefined;
+  }
   // Collapse known Harley code/name aliases to one canonical label so watch matching
   // and UI state do not split equivalent models into separate entries.
   if (/\bfltrt\b/.test(normalized) || /\broad glide\s*(?:3|iii)\b/.test(normalized)) {
