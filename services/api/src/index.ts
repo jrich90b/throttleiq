@@ -12939,6 +12939,65 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
   }
 
+  if (event.provider === "twilio" && channel === "sms") {
+    const regenSchedulingSignals = detectSchedulingSignals(event.body ?? "");
+    const visitTimingIntent =
+      regenSchedulingSignals.hasDayOnlyRequest ||
+      regenSchedulingSignals.softVisit ||
+      /\b(next week|this week|tomorrow|later today|this afternoon|come in|stop by|see it)\b/i.test(
+        String(event.body ?? "")
+      );
+    const contextModel =
+      conv.inventoryContext?.model ?? conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null;
+    if (visitTimingIntent && contextModel) {
+      const modelForLookup = canonicalizeWatchModelLabel(contextModel);
+      const contextYear = conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null;
+      const contextColor = sanitizeColorPhrase(
+        conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null
+      );
+      const contextFinish = extractTrimToken(conv.inventoryContext?.finish ?? null);
+      const contextCondition = normalizeWatchCondition(
+        conv.inventoryContext?.condition ?? conv.lead?.vehicle?.condition ?? null
+      );
+      let matches = await findInventoryMatches({ year: contextYear ?? null, model: modelForLookup });
+      if (contextCondition) {
+        matches = matches.filter(i => inventoryItemMatchesRequestedCondition(i, contextCondition));
+      }
+      if (contextColor) {
+        const leadColor = String(contextColor);
+        const leadTrim: "chrome" | "black" | null = contextFinish;
+        matches = matches.filter(i => {
+          const itemColor = i.color ?? "";
+          if (colorMatchesExact(itemColor, leadColor, leadTrim) || colorMatchesAlias(itemColor, leadColor, leadTrim)) {
+            return true;
+          }
+          const itemNorm = normalizeColorBase(itemColor, !!leadTrim);
+          const leadNorm = normalizeColorBase(leadColor, !!leadTrim);
+          if (!itemNorm || !leadNorm) return false;
+          return itemNorm.includes(leadNorm) || leadNorm.includes(itemNorm);
+        });
+      }
+      const holds = await listInventoryHolds();
+      const solds = await listInventorySolds();
+      const availableMatches = matches.filter(m => {
+        const key = normalizeInventoryHoldKey(m.stockId, m.vin);
+        return key ? !holds?.[key] && !solds?.[key] : true;
+      });
+      const labelYear = contextYear ? `${contextYear} ` : "";
+      const labelModel = normalizeDisplayCase(modelForLookup || contextModel);
+      const labelColor = contextColor ? ` in ${formatColorLabel(contextColor)}` : "";
+      const unitLabel = `${labelYear}${labelModel}${labelColor}`.trim();
+      const reply =
+        availableMatches.length > 0
+          ? `Absolutely — next week works. ${unitLabel} is still available right now. What day next week works best for you?`
+          : `Next week works. I’ll keep an eye on ${unitLabel} and update you right away. What day are you thinking to stop by?`;
+      discardPendingDrafts(conv);
+      appendSmsRegeneratedDraft(reply);
+      saveConversation(conv);
+      return res.json({ ok: true, conversation: conv, draft: reply });
+    }
+  }
+
   const result = await orchestrateInbound(event, history, {
     appointment: conv.appointment,
     followUp: conv.followUp,
