@@ -12768,6 +12768,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     receivedAt: inbound.at ?? new Date().toISOString()
   };
   if (event.provider === "twilio" && shouldSuppressShortAckDraft(event.body ?? "")) {
+    discardPendingDrafts(conv, "short_ack_no_action");
     saveConversation(conv);
     return res.json({ ok: true, conversation: conv, skipped: true, note: "short_ack_no_action" });
   }
@@ -13889,6 +13890,7 @@ if (authToken && signature) {
   }
   appendInbound(conv, event);
   if (event.provider === "twilio" && shouldSuppressShortAckDraft(event.body ?? "")) {
+    discardPendingDrafts(conv, "short_ack_no_action");
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
