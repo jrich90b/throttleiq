@@ -2516,10 +2516,16 @@ export async function orchestrateInbound(
         if (modelUnknown) {
           const firstName = leadForPrice?.firstName?.trim() || "there";
           const yearLabel = yearForRange ? `${yearForRange} ` : "";
+          const isFirstOutbound = !history.some(h => h.direction === "out");
+          const isInitialFacebookLeadTouch =
+            isFirstOutbound && /facebook/i.test(String(leadSourceRaw ?? ""));
+          const openingLine = isInitialFacebookLeadTouch
+            ? "Thanks for your Facebook quote request."
+            : "Thanks for the update.";
           const timelineNote = longTermInvite ? longTermInvite.trim() : "";
           const draft =
             `Hi ${firstName} — this is ${agentName} at ${dealerName}. ` +
-            `Thanks for your Facebook quote request. I’d love to help with pricing. Which ${yearLabel}model are you interested in?` +
+            `${openingLine} I’d love to help with pricing. Which ${yearLabel}model are you interested in?` +
             (timelineNote ? ` ${timelineNote}` : "") +
             (financeLine ? ` ${financeLine}` : "");
           return finalize({
@@ -2533,9 +2539,14 @@ export async function orchestrateInbound(
         const modelLabel = normalizeModelLabel(modelForRange);
         const modelKnown = modelForRange && !isUnknownModel(modelForRange);
         const yearLabel = yearForRange ? `${yearForRange} ` : "";
+        const isFirstOutbound = !history.some(h => h.direction === "out");
+        const isInitialFacebookLeadTouch =
+          isFirstOutbound && /facebook/i.test(String(leadSourceRaw ?? ""));
         const thankLine = modelKnown
           ? `Thanks for your interest in the ${yearLabel}${modelLabel}. `
-          : "Thanks for your Facebook quote request. ";
+          : isInitialFacebookLeadTouch
+            ? "Thanks for your Facebook quote request. "
+            : "Thanks for reaching out. ";
         const timelineNote = longTermInvite ? longTermInvite.trim() : "";
         const ack =
           `Hi ${firstName} — ${thankLine}This is ${agentName} at ${dealerName}. ` +
