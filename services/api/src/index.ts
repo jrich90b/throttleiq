@@ -12476,12 +12476,31 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     providerMessageId: inbound.providerMessageId ?? `regen_${Date.now()}`,
     receivedAt: inbound.at ?? new Date().toISOString()
   };
+  const regenInboundLower = String(event.body ?? "").toLowerCase();
+  const regenDealerRideEventLead =
+    event.provider === "sendgrid_adf" &&
+    (/source:\s*dealer lead app/i.test(String(event.body ?? "")) ||
+      /event name:\s*dealer test ride|demo bikes ridden|dealer lead app/i.test(String(event.body ?? "")));
+  const regenNoPurchaseNow =
+    /purchase timeframe:\s*i am not interested in purchasing at this time/.test(regenInboundLower) ||
+    /do you expect to make a motorcycle purchase in the near future\?\s*no/.test(regenInboundLower) ||
+    /not interested in purchasing at this time/.test(regenInboundLower);
   const appendSmsRegeneratedDraft = (text: string) => {
     const from = String(event.to ?? "dealership").trim() || "dealership";
     const leadKey = String(conv.leadKey ?? "").trim();
     const to = leadKey || String(event.from ?? "").trim();
     appendOutbound(conv, from, to, text, "draft_ai");
   };
+  if (regenDealerRideEventLead && regenNoPurchaseNow) {
+    addCallTodoIfMissing(
+      conv,
+      "Dealer ride follow-up needed: thank customer, confirm how to proceed, and update lead status."
+    );
+    setFollowUpMode(conv, "manual_handoff", "dealer_ride_no_purchase");
+    stopFollowUpCadence(conv, "manual_handoff");
+    saveConversation(conv);
+    return res.json({ ok: true, conversation: conv, skipped: true, note: "dealer_ride_no_purchase_manual_handoff" });
+  }
 
   const history = buildHistory(conv, 60);
   const memorySummary = conv.memorySummary?.text ?? null;
