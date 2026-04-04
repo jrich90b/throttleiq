@@ -12880,7 +12880,14 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       (availabilityPhraseDetected || correctionCue) &&
       hasAvailabilityDetail &&
       (hasContextModel || !!mentionsModel);
-    if (deterministicRegenAvailability) {
+    const regenFinancePriorityOverride =
+      /\b(financing|finance|apr|credit score|monthly|per month|down payment|term|0%\s*apr)\b/i.test(
+        regenTextLower
+      ) ||
+      isPaymentText(event.body ?? "") ||
+      isDownPaymentQuestion(event.body ?? "");
+    const regenSchedulePriorityOverride = detectSchedulingSignals(event.body).explicit;
+    if (deterministicRegenAvailability && !regenFinancePriorityOverride && !regenSchedulePriorityOverride) {
       const model =
         mentionsModel ??
         conv.inventoryContext?.model ??
@@ -13213,15 +13220,22 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
 
   if (event.provider === "twilio" && channel === "sms") {
     const regenSchedulingSignals = detectSchedulingSignals(event.body ?? "");
+    const regenBody = String(event.body ?? "");
     const visitTimingIntent =
       regenSchedulingSignals.hasDayOnlyRequest ||
       regenSchedulingSignals.softVisit ||
       /\b(next week|this week|tomorrow|later today|this afternoon|come in|stop by|see it)\b/i.test(
-        String(event.body ?? "")
+        regenBody
       );
+    const explicitAvailabilityAskThisTurn = /\b(in[-\s]?stock|available|availability|do you have|have any|any .* in[-\s]?stock|still available)\b/i.test(
+      regenBody
+    );
+    const financeOrRateAskThisTurn = /\b(financing|finance|apr|credit score|monthly|per month|down payment|term|0%\s*apr)\b/i.test(
+      regenBody
+    );
     const contextModel =
       conv.inventoryContext?.model ?? conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null;
-    if (visitTimingIntent && contextModel) {
+    if (visitTimingIntent && contextModel && !financeOrRateAskThisTurn) {
       const modelForLookup = canonicalizeWatchModelLabel(contextModel);
       const contextYear = conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null;
       const contextColor = sanitizeColorPhrase(
@@ -13274,10 +13288,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       const unitLabel = `${labelYear}${labelModel}${labelColor}`.trim();
       const reply =
         availableMatches.length > 0
-          ? recentlyConfirmedAvailable
-            ? "Absolutely — next week works. What day next week works best for you?"
-            : `Absolutely — next week works. ${unitLabel} is still available right now. What day next week works best for you?`
-          : `Next week works. I’ll keep an eye on ${unitLabel} and update you right away. What day are you thinking to stop by?`;
+          ? explicitAvailabilityAskThisTurn && !recentlyConfirmedAvailable
+            ? `Absolutely — next week works. ${unitLabel} is still available right now. What day next week works best for you?`
+            : "Absolutely — next week works. What day next week works best for you?"
+          : explicitAvailabilityAskThisTurn
+            ? `Next week works. I’ll keep an eye on ${unitLabel} and update you right away. What day are you thinking to stop by?`
+            : "Next week works. What day are you thinking to stop by?";
       discardPendingDrafts(conv);
       appendSmsRegeneratedDraft(reply);
       saveConversation(conv);
@@ -15902,6 +15918,12 @@ if (authToken && signature) {
         : availabilityPrimaryIntent
           ? "availability"
           : "general";
+  const financePriorityOverride =
+    pricingOrPaymentsIntent ||
+    /\b(financing|finance|apr|credit score|monthly|per month|down payment|term|0%\s*apr)\b/i.test(
+      textLower
+    );
+  const schedulePriorityOverride = schedulingPrimaryIntent;
   const suppressWatchIntentThisTurn = turnPrimaryIntent !== "general";
   if (schedulingSignals.explicit || schedulingSignals.hasDayTime) {
     if (conv.scheduleSoft) {
@@ -16810,7 +16832,12 @@ if (authToken && signature) {
     }
   }
 
-  if (event.provider === "twilio" && deterministicAvailabilityLookup) {
+  if (
+    event.provider === "twilio" &&
+    deterministicAvailabilityLookup &&
+    !financePriorityOverride &&
+    !schedulePriorityOverride
+  ) {
     const modelFromText = llmAvailability?.model ?? findMentionedModel(textLower);
     const priorModel =
       conv.inventoryContext?.model ??
