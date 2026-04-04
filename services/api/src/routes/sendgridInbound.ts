@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import multer from "multer";
 import twilio from "twilio";
+import crypto from "node:crypto";
 import { XMLParser } from "fast-xml-parser";
 import { extractAdfXmlFromEmail, parseAdfXml } from "../domain/adfParser.js";
 import {
@@ -183,6 +184,21 @@ async function sendInternalSalespersonSms(
   } catch (e: any) {
     return { sent: false, reason: String(e?.message ?? "send_failed") };
   }
+}
+
+function buildStaffOutcomeLink(token: string): string | null {
+  const base = String(process.env.PUBLIC_BASE_URL ?? "").trim().replace(/\/+$/, "");
+  if (!base) return null;
+  return `${base}/public/appointment/outcome?token=${encodeURIComponent(token)}`;
+}
+
+function ensureDealerRideOutcomeToken(conv: any): string {
+  conv.dealerRide = conv.dealerRide ?? {};
+  conv.dealerRide.staffNotify = conv.dealerRide.staffNotify ?? {};
+  if (conv.dealerRide.staffNotify.outcomeToken) return conv.dealerRide.staffNotify.outcomeToken;
+  const token = crypto.randomBytes(12).toString("hex");
+  conv.dealerRide.staffNotify.outcomeToken = token;
+  return token;
 }
 
 function isStickyClosedJourney(conv: any): boolean {
@@ -2033,9 +2049,18 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() ||
         conv.leadKey ||
         "customer";
-      const leadSummary =
-        `Dealer ride follow-up needed for ${customerName}. ` +
-        `Please text an outcome/status update in Leadrider.`;
+      const token = ensureDealerRideOutcomeToken(conv);
+      const outcomeLink = buildStaffOutcomeLink(token);
+      conv.dealerRide = conv.dealerRide ?? {};
+      conv.dealerRide.staffNotify = conv.dealerRide.staffNotify ?? {};
+      const leadSummary = [
+        `Dealer ride outcome needed for ${customerName}.`,
+        "DLA confirms they rode a demo bike.",
+        `Reply: OUTCOME ${token} SOLD <stock/vin> | HOLD <stock/vin> <when> | FOLLOWUP <when> | LOST <reason>.`,
+        outcomeLink ? `Update form: ${outcomeLink}` : null
+      ]
+        .filter(Boolean)
+        .join("\n");
       const staffSms = await sendInternalSalespersonSms(ownerPhone, leadSummary);
       addTodo(
         conv,
@@ -2047,6 +2072,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       if (appt) {
         appt.staffNotify = appt.staffNotify ?? {};
         appt.staffNotify.followUpSentAt = appt.staffNotify.followUpSentAt ?? new Date().toISOString();
+      }
+      if (staffSms.sent) {
+        conv.dealerRide.staffNotify.followUpSentAt =
+          conv.dealerRide.staffNotify.followUpSentAt ?? new Date().toISOString();
       }
     }
   }
@@ -2087,10 +2116,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       "salesperson";
     const customerName =
       [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() || conv.leadKey || "customer";
-    const leadSummary =
-      `Dealer ride update needed for ${customerName}. ` +
-      `DLA shows "not interested in purchasing at this time". ` +
-      `Please send status/next-step update in Leadrider.`;
+    const token = ensureDealerRideOutcomeToken(conv);
+    const outcomeLink = buildStaffOutcomeLink(token);
+    const leadSummary = [
+      `Dealer ride outcome needed for ${customerName}.`,
+      'DLA says "not interested in purchasing at this time".',
+      `Reply: OUTCOME ${token} SOLD <stock/vin> | HOLD <stock/vin> <when> | FOLLOWUP <when> | LOST <reason>.`,
+      outcomeLink ? `Update form: ${outcomeLink}` : null
+    ]
+      .filter(Boolean)
+      .join("\n");
     const staffSms = await sendInternalSalespersonSms(pickUserPhone(owner), leadSummary);
     addTodo(
       conv,
@@ -2099,6 +2134,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         ? `Salesperson SMS sent to ${ownerName}${staffSms.sid ? ` (SID ${staffSms.sid})` : ""}.`
         : `Salesperson SMS failed for ${ownerName}: ${staffSms.reason ?? "unknown_error"}.`
     );
+    if (staffSms.sent) {
+      conv.dealerRide = conv.dealerRide ?? {};
+      conv.dealerRide.staffNotify = conv.dealerRide.staffNotify ?? {};
+      conv.dealerRide.staffNotify.followUpSentAt =
+        conv.dealerRide.staffNotify.followUpSentAt ?? new Date().toISOString();
+    }
     setFollowUpMode(conv, "manual_handoff", "dealer_ride_no_purchase");
     stopFollowUpCadence(conv, "manual_handoff");
     return res.status(200).json({

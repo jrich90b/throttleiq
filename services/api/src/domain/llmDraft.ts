@@ -411,6 +411,19 @@ export type JourneyIntentParse = {
   confidence?: number;
 };
 
+export type StaffOutcomeUpdateParse = {
+  outcome: "sold" | "hold" | "follow_up" | "lost" | "other" | "none";
+  explicitOutcome: boolean;
+  followUpWindowText?: string | null;
+  unitStockId?: string | null;
+  unitVin?: string | null;
+  unitYear?: number | null;
+  unitMake?: string | null;
+  unitModel?: string | null;
+  unitTrim?: string | null;
+  confidence?: number;
+};
+
 export type SemanticSlotParse = {
   watchAction: "set_watch" | "stop_watch" | "none";
   watch?: {
@@ -752,6 +765,38 @@ const JOURNEY_INTENT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     },
     explicit_request: { type: "boolean" },
     confidence: { type: "number" }
+  }
+};
+
+const STAFF_OUTCOME_UPDATE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "outcome",
+    "explicit_outcome",
+    "follow_up_window_text",
+    "unit_stock_id",
+    "unit_vin",
+    "unit_year",
+    "unit_make",
+    "unit_model",
+    "unit_trim",
+    "confidence"
+  ],
+  properties: {
+    outcome: {
+      type: "string",
+      enum: ["sold", "hold", "follow_up", "lost", "other", "none"]
+    },
+    explicit_outcome: { type: "boolean" },
+    follow_up_window_text: { type: "string" },
+    unit_stock_id: { type: "string" },
+    unit_vin: { type: "string" },
+    unit_year: { type: "integer", minimum: 0, maximum: 3000 },
+    unit_make: { type: "string" },
+    unit_model: { type: "string" },
+    unit_trim: { type: "string" },
+    confidence: { type: "number", minimum: 0, maximum: 1 }
   }
 };
 
@@ -1742,6 +1787,106 @@ export async function parseJourneyIntentWithLLM(args: {
   return {
     journeyIntent,
     explicitRequest,
+    confidence
+  };
+}
+
+export async function parseStaffOutcomeUpdateWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<StaffOutcomeUpdateParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_STAFF_OUTCOME_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_STAFF_OUTCOME_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_STAFF_OUTCOME_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_STAFF_OUTCOME_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const prompt = [
+    "You parse internal salesperson SMS updates about post-ride/test-ride outcomes.",
+    "Return only JSON matching the schema.",
+    "",
+    "Outcome mapping:",
+    "- sold: sold/delivered/picked up/deal done.",
+    "- hold: hold/paused/waiting with a clear defer window.",
+    "- follow_up: still working, follow-up needed, call/text next week, waiting on financing/down payment/cosigner/docs/insurance/trade.",
+    "- lost: customer passed, bought elsewhere, no deal.",
+    "- other: explicit update that does not fit above.",
+    "- none: no clear outcome.",
+    "",
+    "Unit extraction:",
+    "- Extract stock/VIN/year/make/model/trim only if explicitly provided in text.",
+    "- Do not invent unit identifiers.",
+    "",
+    "Rules:",
+    "- If sold + another state appear, choose sold.",
+    "- If hold + follow-up appear, choose hold.",
+    "- If uncertain, choose none with low confidence.",
+    "",
+    `Known lead info: ${JSON.stringify({
+      leadRef: lead?.leadRef ?? null,
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Update text: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "staff_outcome_update_parser",
+      schema: STAFF_OUTCOME_UPDATE_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 240,
+      debugTag: "llm-staff-outcome-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const outcomeRaw = String(parsed.outcome ?? "").toLowerCase();
+  const outcome: StaffOutcomeUpdateParse["outcome"] =
+    outcomeRaw === "sold" ||
+    outcomeRaw === "hold" ||
+    outcomeRaw === "follow_up" ||
+    outcomeRaw === "lost" ||
+    outcomeRaw === "other"
+      ? outcomeRaw
+      : "none";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    outcome,
+    explicitOutcome: !!parsed.explicit_outcome,
+    followUpWindowText: cleanOptionalString(parsed.follow_up_window_text),
+    unitStockId: cleanOptionalString(parsed.unit_stock_id),
+    unitVin: cleanOptionalString(parsed.unit_vin),
+    unitYear:
+      typeof parsed.unit_year === "number" && Number.isFinite(parsed.unit_year)
+        ? Math.max(0, Math.min(3000, Math.trunc(parsed.unit_year)))
+        : null,
+    unitMake: cleanOptionalString(parsed.unit_make),
+    unitModel: cleanOptionalString(parsed.unit_model),
+    unitTrim: cleanOptionalString(parsed.unit_trim),
     confidence
   };
 }

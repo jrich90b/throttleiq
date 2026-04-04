@@ -394,6 +394,18 @@ export type Conversation = {
   lead?: LeadProfile;
   classification?: { bucket?: string; cta?: string; channel?: string; ruleName?: string };
   appointment?: AppointmentMemory;
+  dealerRide?: {
+    staffNotify?: {
+      outcomeToken?: string;
+      followUpSentAt?: string;
+      outcome?: {
+        status?: string;
+        note?: string;
+        updatedAt?: string;
+      };
+      contextUsedAt?: string;
+    };
+  };
   followUp?: {
     mode: "active" | "holding_inventory" | "manual_handoff" | "paused_indefinite";
     reason?: string;

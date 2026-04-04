@@ -24,6 +24,7 @@ import {
   parseCustomerDispositionWithLLM,
   parseResponseControlWithLLM,
   parseJourneyIntentWithLLM,
+  parseStaffOutcomeUpdateWithLLM,
   parseUnifiedSemanticSlotsWithLLM,
   parseSemanticSlotsWithLLM,
   parseTradePayoffWithLLM,
@@ -2724,7 +2725,9 @@ function findConversationByOutcomeToken(token: string): any | null {
   const convs = getAllConversations();
   return (
     convs.find(
-      (c: any) => c?.appointment?.staffNotify?.outcomeToken === token
+      (c: any) =>
+        c?.appointment?.staffNotify?.outcomeToken === token ||
+        c?.dealerRide?.staffNotify?.outcomeToken === token
     ) ?? null
   );
 }
@@ -3867,6 +3870,15 @@ function buildStaffOutcomeLink(token: string): string | null {
   return `${base}/public/appointment/outcome?token=${encodeURIComponent(token)}`;
 }
 
+function ensureDealerRideOutcomeToken(conv: any): string {
+  conv.dealerRide = conv.dealerRide ?? {};
+  conv.dealerRide.staffNotify = conv.dealerRide.staffNotify ?? {};
+  if (conv.dealerRide.staffNotify.outcomeToken) return conv.dealerRide.staffNotify.outcomeToken;
+  const token = crypto.randomBytes(12).toString("hex");
+  conv.dealerRide.staffNotify.outcomeToken = token;
+  return token;
+}
+
 function summarizeConversationForStaff(conv: any): string {
   const lastInbound = String(getLastInboundBody(conv) ?? "").trim();
   if (lastInbound) {
@@ -3901,6 +3913,16 @@ function ensureAppointmentOutcomeToken(appt: any): string {
   appt.staffNotify = appt.staffNotify ?? {};
   appt.staffNotify.outcomeToken = token;
   return token;
+}
+
+function getOutcomeStaffNotifyTarget(conv: any): any {
+  if (conv?.appointment) {
+    conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
+    return conv.appointment.staffNotify;
+  }
+  conv.dealerRide = conv.dealerRide ?? {};
+  conv.dealerRide.staffNotify = conv.dealerRide.staffNotify ?? {};
+  return conv.dealerRide.staffNotify;
 }
 
 async function clearInventoryWatchState(conv: any, reason = "inventory_watch_clear"): Promise<void> {
@@ -4082,6 +4104,132 @@ async function applyOutcomeSold(
     }
   }
   return null;
+}
+
+function resolveUserByPhone(users: any[], phoneRaw: string): any | null {
+  const phone = normalizePhone(phoneRaw);
+  if (!phone) return null;
+  for (const user of users) {
+    const userPhone = normalizePhone(String(user?.phone ?? "").trim());
+    if (userPhone && userPhone === phone) return user;
+  }
+  return null;
+}
+
+function extractOutcomeTokenFromText(text: string): string | null {
+  const source = String(text ?? "");
+  const tagged = source.match(/\boutcome\s+([a-f0-9]{24})\b/i)?.[1];
+  if (tagged) return tagged.toLowerCase();
+  const token = source.match(/\b[a-f0-9]{24}\b/i)?.[0];
+  return token ? token.toLowerCase() : null;
+}
+
+function readOutcomeUnitFromText(text: string, parsed: any): OutcomeUnitInput {
+  const source = String(text ?? "");
+  const stockMatch = source.match(/\b([A-Z]\d{1,4}-\d{2}[A-Z]?)\b/i)?.[1] ?? "";
+  const vinMatch = source.match(/\b([A-HJ-NPR-Z0-9]{17})\b/i)?.[1] ?? "";
+  const unit: OutcomeUnitInput = {
+    stockId: (parsed?.unitStockId ?? stockMatch)?.toString().trim() || undefined,
+    vin: (parsed?.unitVin ?? vinMatch)?.toString().trim() || undefined,
+    year:
+      typeof parsed?.unitYear === "number" && Number.isFinite(parsed.unitYear)
+        ? String(parsed.unitYear)
+        : undefined,
+    make: String(parsed?.unitMake ?? "").trim() || undefined,
+    model: String(parsed?.unitModel ?? "").trim() || undefined,
+    trim: String(parsed?.unitTrim ?? "").trim() || undefined
+  };
+  unit.label = buildUnitLabel(unit);
+  return unit;
+}
+
+async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
+  handled: boolean;
+  replyBody?: string;
+}> {
+  if (event.provider !== "twilio" || event.channel !== "sms") return { handled: false };
+  const body = String(event.body ?? "").trim();
+  if (!body) return { handled: false };
+  const token = extractOutcomeTokenFromText(body);
+  if (!token) return { handled: false };
+
+  const users = await listUsers();
+  const staff = resolveUserByPhone(users, event.from ?? "");
+  if (!staff) return { handled: false };
+
+  const conv = findConversationByOutcomeToken(token);
+  if (!conv) {
+    return {
+      handled: true,
+      replyBody: "I couldn't find that outcome token. Please open the lead and resend the update."
+    };
+  }
+
+  const cleanedText = body
+    .replace(new RegExp(`\\boutcome\\s+${token}\\b`, "i"), "")
+    .replace(new RegExp(`\\b${token}\\b`, "i"), "")
+    .trim();
+  const parsed = await parseStaffOutcomeUpdateWithLLM({
+    text: cleanedText || body,
+    history: buildHistory(conv, 10),
+    lead: conv.lead
+  });
+  if (!parsed || !parsed.explicitOutcome || (parsed.confidence ?? 0) < 0.55 || parsed.outcome === "none") {
+    return {
+      handled: true,
+      replyBody:
+        "Please reply with: OUTCOME <token> SOLD <stock/vin> | HOLD <stock/vin> <when> | FOLLOWUP <when> | LOST <reason>."
+    };
+  }
+
+  const nowIso = new Date().toISOString();
+  const note = cleanedText || body;
+  const unit = readOutcomeUnitFromText(cleanedText || body, parsed);
+  let confirmation = "Outcome saved.";
+
+  if (parsed.outcome === "sold") {
+    const err = await applyOutcomeSold(
+      conv,
+      unit,
+      note,
+      nowIso,
+      String(staff.id ?? "").trim(),
+      String(staff.name ?? staff.firstName ?? "").trim()
+    );
+    if (err) {
+      return { handled: true, replyBody: `Couldn't save SOLD: ${err}` };
+    }
+    confirmation = `Saved SOLD${unit.stockId ? ` (${unit.stockId})` : ""}.`;
+  } else if (parsed.outcome === "hold") {
+    const err = await applyOutcomeHold(conv, unit, note, nowIso);
+    if (err) {
+      return { handled: true, replyBody: `Couldn't save HOLD: ${err}` };
+    }
+    confirmation = `Saved HOLD${unit.stockId ? ` (${unit.stockId})` : ""}.`;
+  } else if (parsed.outcome === "lost") {
+    closeConversation(conv, "not_interested");
+    setFollowUpMode(conv, "manual_handoff", "dealer_ride_lost");
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff", close: true });
+    confirmation = "Saved LOST and closed the lead.";
+  } else {
+    setFollowUpMode(conv, "manual_handoff", "dealer_ride_follow_up");
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    confirmation = "Saved FOLLOW UP outcome.";
+  }
+
+  const outcomeTarget = getOutcomeStaffNotifyTarget(conv);
+  outcomeTarget.outcome = {
+    status: parsed.outcome,
+    note,
+    updatedAt: nowIso
+  };
+  outcomeTarget.contextUsedAt = nowIso;
+  addTodo(conv, "note", `Dealer ride outcome by ${staff.name ?? staff.email ?? "staff"}: ${parsed.outcome}.`);
+  saveConversation(conv);
+  await flushConversationStore();
+  return { handled: true, replyBody: confirmation };
 }
 
 async function transcribeRecordingMp3(buffer: Buffer, agentLabel = "Agent"): Promise<string | null> {
@@ -9205,9 +9353,10 @@ app.get("/public/appointment/outcome", async (req, res) => {
   if (!token) return res.status(400).send("Missing token");
   const conv = findConversationByOutcomeToken(token);
   if (!conv) return res.status(404).send("Not found");
+  const isAppointmentOutcome = !!conv.appointment;
   const cfg = await getSchedulerConfigHot();
   const whenIso = conv.appointment?.whenIso ?? "";
-  const whenText = whenIso ? formatSlotLocal(whenIso, cfg.timezone) : "appointment";
+  const whenText = whenIso ? formatSlotLocal(whenIso, cfg.timezone) : isAppointmentOutcome ? "appointment" : "dealer ride";
   const customer = conv.lead?.name ?? conv.leadName ?? conv.leadKey ?? "Customer";
   const vehicle =
     conv.vehicleDescription ??
@@ -9278,7 +9427,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Appointment Outcome</title>
+    <title>${isAppointmentOutcome ? "Appointment Outcome" : "Dealer Ride Outcome"}</title>
     <style>
       body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px; color: #111; }
       h1 { font-size: 20px; margin: 0 0 8px; }
@@ -9308,7 +9457,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
     </style>
   </head>
   <body>
-    <h1>Appointment Outcome</h1>
+    <h1>${isAppointmentOutcome ? "Appointment Outcome" : "Dealer Ride Outcome"}</h1>
     <div class="row"><strong>${escapeHtml(customer)}</strong> — ${escapeHtml(vehicle)}</div>
     <div class="row">${escapeHtml(whenText)}</div>
 
@@ -9696,7 +9845,7 @@ app.post("/public/appointment/outcome", async (req, res) => {
   const note = String(req.body?.note ?? "").trim();
   if (!token || !outcome) return res.status(400).send("Missing data");
   const conv = findConversationByOutcomeToken(token);
-  if (!conv || !conv.appointment) return res.status(404).send("Not found");
+  if (!conv) return res.status(404).send("Not found");
 
   const allowed = new Set([
     "showed_up",
@@ -9716,7 +9865,7 @@ app.post("/public/appointment/outcome", async (req, res) => {
     const err = await applyOutcomeHold(conv, unit, note || undefined, nowIso);
     if (err) return res.status(400).send(err);
   } else if (outcome === "sold") {
-    const soldById = conv.appointment?.bookedSalespersonId ?? "";
+    const soldById = conv.appointment?.bookedSalespersonId ?? conv.leadOwner?.id ?? "";
     const err = await applyOutcomeSold(conv, unit, note || undefined, nowIso, soldById, "");
     if (err) return res.status(400).send(err);
   } else if (outcome === "financing_declined") {
@@ -9735,13 +9884,13 @@ app.post("/public/appointment/outcome", async (req, res) => {
     };
   }
 
-  conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
-  conv.appointment.staffNotify.outcome = {
+  const outcomeTarget = getOutcomeStaffNotifyTarget(conv);
+  outcomeTarget.outcome = {
     status: outcome as any,
     note: note || undefined,
     updatedAt: nowIso
   };
-  conv.appointment.updatedAt = new Date().toISOString();
+  if (conv.appointment) conv.appointment.updatedAt = new Date().toISOString();
   saveConversation(conv);
   await flushConversationStore();
   return res.send("Thanks — your update was saved.");
@@ -9752,7 +9901,7 @@ app.post("/public/appointment/outcome/transcribe", upload.single("audio"), async
   const outcomeRaw = String(req.body?.outcome ?? "").trim();
   if (!token) return res.status(400).json({ ok: false, error: "Missing token" });
   const conv = findConversationByOutcomeToken(token);
-  if (!conv || !conv.appointment) return res.status(404).json({ ok: false, error: "Not found" });
+  if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
   const file = (req as any).file;
   if (!file?.buffer) return res.status(400).json({ ok: false, error: "Missing audio" });
 
@@ -9769,7 +9918,7 @@ app.post("/public/appointment/outcome/transcribe", upload.single("audio"), async
     "follow_up",
     "other"
   ]);
-  const fallbackStatus = conv.appointment.staffNotify?.outcome?.status ?? "follow_up";
+  const fallbackStatus = conv.appointment?.staffNotify?.outcome?.status ?? conv.dealerRide?.staffNotify?.outcome?.status ?? "follow_up";
   const status = allowed.has(outcomeRaw) ? outcomeRaw : fallbackStatus;
   const nowIso = new Date().toISOString();
   const unit = readOutcomeUnit(req.body);
@@ -9777,7 +9926,7 @@ app.post("/public/appointment/outcome/transcribe", upload.single("audio"), async
     const err = await applyOutcomeHold(conv, unit, transcript, nowIso);
     if (err) return res.status(400).json({ ok: false, error: err });
   } else if (status === "sold") {
-    const soldById = conv.appointment?.bookedSalespersonId ?? "";
+    const soldById = conv.appointment?.bookedSalespersonId ?? conv.leadOwner?.id ?? "";
     const err = await applyOutcomeSold(conv, unit, transcript, nowIso, soldById, "");
     if (err) return res.status(400).json({ ok: false, error: err });
   } else if (status === "financing_declined") {
@@ -9796,13 +9945,13 @@ app.post("/public/appointment/outcome/transcribe", upload.single("audio"), async
     };
   }
 
-  conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
-  conv.appointment.staffNotify.outcome = {
+  const outcomeTarget = getOutcomeStaffNotifyTarget(conv);
+  outcomeTarget.outcome = {
     status: status as any,
     note: transcript,
     updatedAt: nowIso
   };
-  conv.appointment.updatedAt = new Date().toISOString();
+  if (conv.appointment) conv.appointment.updatedAt = new Date().toISOString();
   saveConversation(conv);
   await flushConversationStore();
   return res.json({ ok: true, transcript, status });
@@ -12559,10 +12708,18 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() ||
         conv.leadKey ||
         "customer";
-      const leadSummary =
-        `Dealer ride update needed for ${customerName}. ` +
-        `DLA shows "not interested in purchasing at this time". ` +
-        `Please send status/next-step update in Leadrider.`;
+      const token = ensureDealerRideOutcomeToken(conv);
+      const outcomeLink = buildStaffOutcomeLink(token);
+      conv.dealerRide = conv.dealerRide ?? {};
+      conv.dealerRide.staffNotify = conv.dealerRide.staffNotify ?? {};
+      const leadSummary = [
+        `Dealer ride outcome needed for ${customerName}.`,
+        "DLA confirms they rode a demo bike.",
+        `Reply: OUTCOME ${token} SOLD <stock/vin> | HOLD <stock/vin> <when> | FOLLOWUP <when> | LOST <reason>.`,
+        outcomeLink ? `Update form: ${outcomeLink}` : null
+      ]
+        .filter(Boolean)
+        .join("\n");
       const sent = await sendInternalSms(ownerPhone, leadSummary);
       addTodo(
         conv,
@@ -12571,6 +12728,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
           ? `Salesperson SMS sent to ${ownerName}.`
           : `Salesperson SMS failed for ${ownerName}: send_failed.`
       );
+      if (sent) {
+        conv.dealerRide.staffNotify.followUpSentAt =
+          conv.dealerRide.staffNotify.followUpSentAt ?? new Date().toISOString();
+      }
     } else {
       addTodo(
         conv,
@@ -13447,6 +13608,15 @@ if (authToken && signature) {
     providerMessageId,
     receivedAt: new Date().toISOString()
   };
+
+  const internalOutcomeHandled = await maybeHandleStaffOutcomeSms(event);
+  if (internalOutcomeHandled.handled) {
+    const body = String(internalOutcomeHandled.replyBody ?? "").trim();
+    const twiml = body
+      ? `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(body)}</Message>\n</Response>`
+      : `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
 
   console.log("[twilio inbound]", event);
 
