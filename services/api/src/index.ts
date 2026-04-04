@@ -15232,10 +15232,23 @@ if (authToken && signature) {
     /\b\d{2,3}\s*(month|months|mo)\b/i.test(String(event.body ?? "")) ||
     /\brun\s+(it|that|the numbers?)\s+for\s+\d{2,3}\b/i.test(String(event.body ?? ""));
   const llmSchedulingIntent = dialogActAccepted && dialogActParse?.topic === "scheduling";
+  const insuranceStatusUpdateOnly = (() => {
+    const body = String(event.body ?? "");
+    const lower = body.toLowerCase();
+    const hasInsurance = /\binsurance\b/.test(lower);
+    const hasQuoteOrRate = /\b(quote|quoted|rate|fair price|priced)\b/.test(lower);
+    const hasVisitTiming = /\b(come in|stop by|stop in|see it|next week|this week|tomorrow|later today|this afternoon)\b/.test(lower);
+    const hasExplicitFinanceAsk =
+      /\b(how much|what(?:'s| is) (the )?(price|payment)|monthly|per month|down payment|apr|term|otd|out the door|msrp)\b/.test(
+        lower
+      ) || /\?/.test(body);
+    return hasInsurance && hasQuoteOrRate && hasVisitTiming && !hasExplicitFinanceAsk;
+  })();
   const pricingSignal =
-    llmPricingOrPaymentsIntent ||
-    isPricingText(event.body ?? "") ||
-    isPaymentText(event.body ?? "");
+    !insuranceStatusUpdateOnly &&
+    (llmPricingOrPaymentsIntent ||
+      isPricingText(event.body ?? "") ||
+      isPaymentText(event.body ?? ""));
   const scheduleFromDialogAct = llmSchedulingIntent && !llmPricingOrPaymentsIntent;
   const explicitScheduleSignal =
     llmExplicitScheduleIntent || scheduleFromDialogAct || isExplicitScheduleIntent(event.body);
