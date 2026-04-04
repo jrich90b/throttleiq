@@ -13569,8 +13569,14 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const regenDownProvided = regenPaymentBudget.downPayment != null;
     const regenMonthlyBudget = regenPaymentBudget.monthlyBudget ?? null;
     const regenTermMonths = regenPaymentBudget.termMonths ?? null;
+    const regenInboundAtMs = new Date(event.receivedAt).getTime();
     const lastOutboundBeforeInbound = [...(conv.messages ?? [])]
       .filter(m => m.direction === "out" && m.body)
+      .filter(m => {
+        if (!Number.isFinite(regenInboundAtMs)) return true;
+        const atMs = new Date(m.at ?? "").getTime();
+        return !Number.isFinite(atMs) || atMs <= regenInboundAtMs;
+      })
       .slice(-1)[0];
     const lastOutboundText = String(lastOutboundBeforeInbound?.body ?? "");
     const askedDownRecently =
