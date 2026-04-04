@@ -6008,8 +6008,13 @@ async function seedInventoryWatchPendingFromReply(
 ): Promise<void> {
   if (event.provider !== "twilio") return;
   if (!isOutOfStockWatchInviteReply(reply)) return;
-  if (conv.inventoryWatchPending || conv.inventoryWatch || (conv.inventoryWatches?.length ?? 0) > 0) return;
+  if (String(conv?.followUp?.mode ?? "").toLowerCase() === "manual_handoff") return;
   const inboundText = String(event.body ?? "");
+  const inferredDept = inferDepartmentFromText(inboundText);
+  if (inferredDept === "service" || inferredDept === "parts" || inferredDept === "apparel") return;
+  const conversationDept = getConversationDepartment(conv);
+  if (conversationDept === "service" || conversationDept === "parts" || conversationDept === "apparel") return;
+  if (conv.inventoryWatchPending || conv.inventoryWatch || (conv.inventoryWatches?.length ?? 0) > 0) return;
   const model = await resolveWatchModelFromText(
     inboundText.toLowerCase(),
     conv.inventoryContext?.model ?? conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null
@@ -7100,8 +7105,11 @@ function parseInventoryWatchPreference(
     /(similar|anything like|anything similar|anything close|whatever you can find|open to similar)/.test(
       t
     );
+  const specificAnyPreference =
+    /\b(any color|any colour|any year|any trim|any finish|any condition)\b/.test(t);
   const mentionsPreference =
-    /(exact|only|same|any|no preference|no pref|either|range|year|color)/.test(t) ||
+    /(exact|only|same|no preference|no pref|either|range|year|color|colour|trim|finish|condition)/.test(t) ||
+    specificAnyPreference ||
     similar ||
     /\b(20\d{2})\b/.test(t);
   if (!mentionsPreference) return { action: "ignore" };
