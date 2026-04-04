@@ -115,7 +115,11 @@ function extractColor(item: Record<string, any>): string | undefined {
 }
 
 function normalizeModel(s: string): string {
-  return s.toLowerCase().replace(/\s+/g, " ").trim();
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function extractImageDate(url: string): Date | null {
@@ -204,9 +208,9 @@ export async function findInventoryPrice(opts: {
     if (item) return { price: item.price ?? null, item };
   }
   const year = opts.year?.trim();
-  const model = opts.model?.trim().toLowerCase();
+  const model = opts.model?.trim() ? normalizeModel(opts.model.trim()) : null;
   if (year && model) {
-    const item = items.find(i => i.year === year && i.model?.toLowerCase() === model);
+    const item = items.find(i => i.year === year && i.model && normalizeModel(i.model) === model);
     if (item) return { price: item.price ?? null, item };
   }
   return null;
@@ -219,10 +223,10 @@ export async function findPriceRange(opts: {
   const items = await getInventoryFeed();
   if (!items.length) return null;
   const year = opts.year?.trim();
-  const model = opts.model?.trim().toLowerCase();
+  const model = opts.model?.trim() ? normalizeModel(opts.model.trim()) : null;
   if (!year || !model) return null;
   const matches = items.filter(
-    i => i.year === year && i.model?.toLowerCase() === model && i.price && i.price > 0
+    i => i.year === year && !!i.model && normalizeModel(i.model) === model && i.price && i.price > 0
   );
   if (!matches.length) return null;
   const prices = matches.map(m => m.price as number).sort((a, b) => a - b);
