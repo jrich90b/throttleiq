@@ -17393,13 +17393,15 @@ if (authToken && signature) {
           noStockColorFinishPrompt ? ` ${noStockColorFinishPrompt}` : ""
         }`;
       } else if (count === 1) {
-        reply = `That’s the only ${inventoryLabel} we have in stock right now.`;
+        reply = `That’s the only ${inventoryLabel} we have in stock right now. Want to come check it out, or want a couple photos first?`;
       } else {
-        reply = `We have ${count} ${inventoryLabel} units in stock right now.`;
+        reply = `We have ${count} ${inventoryLabel} units in stock right now. Want to come check one out, or want a couple photos first?`;
       }
     }
     if (extraMediaUrls.length) {
       reply += ` Here ${extraMediaUrls.length === 1 ? "is" : "are"} photo${extraMediaUrls.length === 1 ? "" : "s"}.`;
+    } else if (photoRequestedLocal && count > 0) {
+      reply += " I can have one of the guys send photos over by text.";
     }
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
@@ -17900,23 +17902,27 @@ if (authToken && signature) {
   }
 
   const inventoryQuestion =
-    llmAvailabilityIntent ||
-    availabilityExplicit ||
-    (!isTradeLead &&
-      (!!llmAvailability?.color || !!inventoryEntityColorHint) &&
-      (!!conv.inventoryContext?.model || !!conv.lead?.vehicle?.model)) ||
-    (!isTradeLead &&
-      (getHarleyModelLexicon().some(m => textLower.includes(m.toLowerCase())) ||
-        (!!conv.inventoryContext?.model && textLower.includes(conv.inventoryContext.model.toLowerCase())) ||
-        (!!conv.inventoryContext?.model &&
-          /\b(\d{4}|blue|black|white|red|green|gray|grey|silver|chrome|trim|finish|color|standard|special|st|new|used|pre[-\s]?owned|preowned)\b/i.test(
-            textLower
-          )) ||
-        (!!conv.lead?.vehicle?.model && textLower.includes(conv.lead.vehicle.model.toLowerCase())) ||
-        (!!conv.lead?.vehicle?.model &&
-          /\b(\d{4}|blue|black|white|red|green|gray|grey|silver|chrome|trim|color|standard|special|st|new|used|pre[-\s]?owned|preowned)\b/i.test(
-            textLower
-          ))));
+    !pricingOrPaymentsIntent &&
+    !/\b(payment|payments|monthly|per month|apr|term|down payment|otd|out the door|finance|financing|credit)\b/i.test(
+      textLower
+    ) &&
+    (llmAvailabilityIntent ||
+      availabilityExplicit ||
+      (!isTradeLead &&
+        (!!llmAvailability?.color || !!inventoryEntityColorHint) &&
+        (!!conv.inventoryContext?.model || !!conv.lead?.vehicle?.model)) ||
+      (!isTradeLead &&
+        (getHarleyModelLexicon().some(m => textLower.includes(m.toLowerCase())) ||
+          (!!conv.inventoryContext?.model && textLower.includes(conv.inventoryContext.model.toLowerCase())) ||
+          (!!conv.inventoryContext?.model &&
+            /\b(\d{4}|blue|black|white|red|green|gray|grey|silver|chrome|trim|finish|color|standard|special|st|new|used|pre[-\s]?owned|preowned)\b/i.test(
+              textLower
+            )) ||
+          (!!conv.lead?.vehicle?.model && textLower.includes(conv.lead.vehicle.model.toLowerCase())) ||
+          (!!conv.lead?.vehicle?.model &&
+            /\b(\d{4}|blue|black|white|red|green|gray|grey|silver|chrome|trim|color|standard|special|st|new|used|pre[-\s]?owned|preowned)\b/i.test(
+              textLower
+            )))));
   const watchPrompted = /\b(keep an eye|keep me posted|watch for|watch\b)\b/i.test(
     lastOutboundText
   );
