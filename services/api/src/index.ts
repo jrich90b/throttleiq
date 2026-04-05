@@ -14785,24 +14785,26 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
             : `Perfect — with ${downLabel} down at ${regenTermMonths} months, I can run the exact numbers now.`
           : budgetLabel
             ? `Perfect — with ${downLabel} down targeting ${budgetLabel}, do you want me to run 60, 72, or 84 months?`
-            : `Perfect — with ${downLabel} down, do you want me to run 60, 72, or 84 months?`;
+          : `Perfect — with ${downLabel} down, do you want me to run 60, 72, or 84 months?`;
       return respondWithSmsRegeneratedDraft(reply);
     }
 
-    const regenSchedulingSignals = detectSchedulingSignals(event.body ?? "");
+    const regenVisitSignals = resolveRoutePrioritySignals({
+      text: event.body ?? "",
+      conv,
+      lastOutboundText
+    });
+    const regenSchedulingSignals = regenVisitSignals.schedulingSignals;
     const regenBody = String(event.body ?? "");
     const visitTimingIntent =
+      regenVisitSignals.schedulePriorityOverride ||
       regenSchedulingSignals.hasDayOnlyRequest ||
       regenSchedulingSignals.softVisit ||
       /\b(next week|this week|tomorrow|later today|this afternoon|come in|stop by|see it)\b/i.test(
         regenBody
       );
-    const explicitAvailabilityAskThisTurn = /\b(in[-\s]?stock|available|availability|do you have|have any|any .* in[-\s]?stock|still available)\b/i.test(
-      regenBody
-    );
-    const financeOrRateAskThisTurn = /\b(financing|finance|apr|credit score|monthly|per month|down payment|term|0%\s*apr)\b/i.test(
-      regenBody
-    );
+    const explicitAvailabilityAskThisTurn = regenVisitSignals.availabilityIntentOverride;
+    const financeOrRateAskThisTurn = regenVisitSignals.currentTurnFinanceSignal;
     const contextModel =
       conv.inventoryContext?.model ?? conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null;
     if (visitTimingIntent && contextModel && !financeOrRateAskThisTurn) {
