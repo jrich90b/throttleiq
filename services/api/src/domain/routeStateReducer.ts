@@ -3,6 +3,7 @@ export type RouteStateReducerInput = {
   channel: "sms" | "email";
   isShortAck: boolean;
   deterministicAvailabilityLookup?: boolean;
+  availabilityIntentOverride?: boolean;
   financePriorityOverride?: boolean;
   schedulePriorityOverride?: boolean;
   dealerRideNoPurchaseAdf?: boolean;
@@ -33,6 +34,7 @@ export function nextActionFromState(input: RouteStateReducerInput): RouteStateDe
     input.provider === "twilio" &&
     input.channel === "sms" &&
     !!input.deterministicAvailabilityLookup &&
+    !!input.availabilityIntentOverride &&
     !input.financePriorityOverride &&
     !input.schedulePriorityOverride
   ) {
@@ -41,4 +43,3 @@ export function nextActionFromState(input: RouteStateReducerInput): RouteStateDe
 
   return { kind: "continue" };
 }
-

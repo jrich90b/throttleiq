@@ -7,6 +7,7 @@ type Case = {
     channel: "sms" | "email";
     isShortAck: boolean;
     deterministicAvailabilityLookup?: boolean;
+    availabilityIntentOverride?: boolean;
     financePriorityOverride?: boolean;
     schedulePriorityOverride?: boolean;
     dealerRideNoPurchaseAdf?: boolean;
@@ -41,6 +42,7 @@ const cases: Case[] = [
       channel: "sms",
       isShortAck: false,
       deterministicAvailabilityLookup: true,
+      availabilityIntentOverride: true,
       financePriorityOverride: false,
       schedulePriorityOverride: false
     },
@@ -53,6 +55,7 @@ const cases: Case[] = [
       channel: "sms",
       isShortAck: false,
       deterministicAvailabilityLookup: true,
+      availabilityIntentOverride: true,
       financePriorityOverride: true,
       schedulePriorityOverride: false
     },
@@ -65,8 +68,22 @@ const cases: Case[] = [
       channel: "sms",
       isShortAck: false,
       deterministicAvailabilityLookup: true,
+      availabilityIntentOverride: true,
       financePriorityOverride: false,
       schedulePriorityOverride: true
+    },
+    expected: { kind: "continue" }
+  },
+  {
+    id: "weak_availability_signal_blocks_deterministic_lookup",
+    input: {
+      provider: "twilio",
+      channel: "sms",
+      isShortAck: false,
+      deterministicAvailabilityLookup: true,
+      availabilityIntentOverride: false,
+      financePriorityOverride: false,
+      schedulePriorityOverride: false
     },
     expected: { kind: "continue" }
   }
@@ -92,4 +109,3 @@ if (passed !== cases.length) {
 }
 
 console.log(`\nAll ${cases.length} route-state checks passed.`);
-

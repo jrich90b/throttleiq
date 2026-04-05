@@ -1332,6 +1332,7 @@ app.post("/debug/inbound/process", express.json(), async (req, res) => {
       leadSource: conv.lead?.source ?? null,
       bucket: conv.classification?.bucket ?? null,
       cta: conv.classification?.cta ?? null,
+      primaryIntentHint: "general",
       lead: conv.lead ?? null,
       pricingAttempts: getPricingAttempts(conv),
       allowSchedulingOffer: isExplicitScheduleIntent(body),
@@ -6020,6 +6021,7 @@ function getDeterministicAvailabilitySignals(
   conv: any
 ): {
   inventoryCountQuestion: boolean;
+  explicitAvailabilityAsk: boolean;
   shouldLookupAvailability: boolean;
 } {
   const lower = String(text ?? "").toLowerCase();
@@ -6027,6 +6029,7 @@ function getDeterministicAvailabilitySignals(
     /\b(only one|just one|is that all|any others|how many|how many do you have|only one you have)\b/i.test(
       lower
     );
+  const explicitAvailabilityAsk = isExplicitAvailabilityQuestion(lower);
   const availabilityPhraseDetected =
     /\b(in[-\s]?stock|available|availability|do you have|have .* in[-\s]?stock|any .* in[-\s]?stock|do you carry|carry any)\b/i.test(
       lower
@@ -6050,7 +6053,7 @@ function getDeterministicAvailabilitySignals(
     inventoryCountQuestion ||
     ((availabilityPhraseDetected || correctionCue) &&
       (hasAvailabilityDetail || hasAvailabilityContext || referencesContextUnit));
-  return { inventoryCountQuestion, shouldLookupAvailability };
+  return { inventoryCountQuestion, explicitAvailabilityAsk, shouldLookupAvailability };
 }
 
 function reconcileStateFromRecentManualOutbound(
@@ -13889,14 +13892,22 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (event.provider === "twilio" && channel === "sms") {
     const availabilitySignals = getDeterministicAvailabilitySignals(regenTextLower, conv);
     const deterministicRegenAvailability = availabilitySignals.shouldLookupAvailability;
+    const regenAvailabilityIntentOverride =
+      availabilitySignals.inventoryCountQuestion || availabilitySignals.explicitAvailabilityAsk;
     const regenFinancePriorityOverride = hasFinancePrioritySignals(event.body ?? "", conv);
-    const regenSchedulePriorityOverride = detectSchedulingSignals(event.body).explicit;
+    const regenSchedulingSignals = detectSchedulingSignals(event.body ?? "");
+    const regenSchedulePriorityOverride =
+      regenSchedulingSignals.explicit ||
+      regenSchedulingSignals.hasDayTime ||
+      regenSchedulingSignals.hasDayOnlyAvailability ||
+      regenSchedulingSignals.hasDayOnlyRequest;
     const regenOtherInventoryRequest = isOtherInventoryRequestText(regenTextLower);
     const regenRouteDecision = nextActionFromState({
       provider: event.provider,
       channel,
       isShortAck: false,
       deterministicAvailabilityLookup: deterministicRegenAvailability,
+      availabilityIntentOverride: regenAvailabilityIntentOverride,
       financePriorityOverride: regenFinancePriorityOverride,
       schedulePriorityOverride: regenSchedulePriorityOverride
     });
@@ -14328,6 +14339,20 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (event.provider === "twilio" && shouldSuppressShortAckDraft(event.body ?? "")) {
     return respondRegenerateSkipped("short_ack_no_action");
   }
+  const regenSchedulingSignalsForHint = detectSchedulingSignals(event.body ?? "");
+  const regenPrimaryIntentHint: "pricing_payments" | "scheduling" | "callback" | "availability" | "general" =
+    hasFinancePrioritySignals(event.body ?? "", conv)
+      ? "pricing_payments"
+      : regenSchedulingSignalsForHint.explicit ||
+          regenSchedulingSignalsForHint.hasDayTime ||
+          regenSchedulingSignalsForHint.hasDayOnlyAvailability ||
+          regenSchedulingSignalsForHint.hasDayOnlyRequest
+        ? "scheduling"
+        : !regenTextingTypoJoke && detectCallbackText(event.body ?? "")
+          ? "callback"
+          : isExplicitAvailabilityQuestion(event.body ?? "")
+            ? "availability"
+            : "general";
 
   const result = await orchestrateInbound(event, history, {
     appointment: conv.appointment,
@@ -14335,6 +14360,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     leadSource: conv.lead?.source ?? null,
     bucket: conv.classification?.bucket ?? null,
     cta: conv.classification?.cta ?? null,
+    primaryIntentHint: regenPrimaryIntentHint,
     lead: conv.lead ?? null,
     pricingAttempts: getPricingAttempts(conv),
     allowSchedulingOffer: regenLlmExplicitScheduleIntent || isExplicitScheduleIntent(event.body),
@@ -16248,6 +16274,8 @@ if (authToken && signature) {
   const availabilitySignalsEarly = getDeterministicAvailabilitySignals(textLower, conv);
   const inventoryCountQuestion = availabilitySignalsEarly.inventoryCountQuestion;
   const deterministicAvailabilityLookup = availabilitySignalsEarly.shouldLookupAvailability;
+  const deterministicAvailabilityIntentBase =
+    inventoryCountQuestion || availabilitySignalsEarly.explicitAvailabilityAsk;
   const otherInventoryRequest = isOtherInventoryRequestText(textLower);
   const schedulingSignalsBase = detectSchedulingSignals(event.body);
   const preParserExplicitFinanceTermIntent =
@@ -17020,6 +17048,8 @@ if (authToken && signature) {
         : availabilityPrimaryIntent
           ? "availability"
           : "general";
+  const deterministicAvailabilityIntentOverride =
+    deterministicAvailabilityIntentBase || availabilityPrimaryIntent;
   const financePriorityOverride = hasFinancePrioritySignals(event.body ?? "", conv, {
     pricingOrPaymentsIntent
   });
@@ -17031,6 +17061,7 @@ if (authToken && signature) {
     schedulingPrimaryIntent,
     callbackPrimaryIntent,
     availabilityPrimaryIntent,
+    deterministicAvailabilityIntentOverride,
     financePriorityOverride,
     schedulePriorityOverride,
     deterministicAvailabilityLookup
@@ -17974,6 +18005,7 @@ if (authToken && signature) {
     channel: event.channel === "email" ? "email" : "sms",
     isShortAck: false,
     deterministicAvailabilityLookup,
+    availabilityIntentOverride: deterministicAvailabilityIntentOverride,
     financePriorityOverride,
     schedulePriorityOverride
   });
@@ -20021,6 +20053,7 @@ if (authToken && signature) {
     leadSource: conv.lead?.source ?? null,
     bucket: conv.classification?.bucket ?? null,
     cta: conv.classification?.cta ?? null,
+    primaryIntentHint: turnPrimaryIntent,
     lead: leadForOrchestrator,
     pricingAttempts: getPricingAttempts(conv),
     allowSchedulingOffer:

@@ -34,7 +34,44 @@ import {
   localPartsToUtcDate
 } from "./schedulerEngine.js";
 
-function simpleIntent(body: string): OrchestratorResult["intent"] {
+type PrimaryIntentHint =
+  | "pricing_payments"
+  | "scheduling"
+  | "callback"
+  | "availability"
+  | "general";
+
+function normalizePrimaryIntentHint(value: unknown): PrimaryIntentHint | null {
+  const v = String(value ?? "").trim().toLowerCase();
+  if (
+    v === "pricing_payments" ||
+    v === "scheduling" ||
+    v === "callback" ||
+    v === "availability" ||
+    v === "general"
+  ) {
+    return v;
+  }
+  return null;
+}
+
+function mapPrimaryIntentHintToLeadIntent(
+  hint: PrimaryIntentHint | null,
+  body: string
+): OrchestratorResult["intent"] | null {
+  if (!hint) return null;
+  if (hint === "availability") return "AVAILABILITY";
+  if (hint === "pricing_payments") {
+    return detectFinanceRequest(body) ? "FINANCING" : "PRICING";
+  }
+  if (hint === "scheduling") {
+    if (/(test ride|ride it|demo)/i.test(String(body ?? ""))) return "TEST_RIDE";
+    return "GENERAL";
+  }
+  return "GENERAL";
+}
+
+function inferHeuristicIntent(body: string): OrchestratorResult["intent"] {
   const t = body.toLowerCase();
   if (detectTradeRequest(t)) {
     return "TRADE_IN";
@@ -435,8 +472,11 @@ function detectPendingIntents(text: string): Set<
 
 function mergePendingInboundText(
   currentText: string,
-  history: { direction: "in" | "out"; body: string }[]
+  history: { direction: "in" | "out"; body: string }[],
+  opts?: { primaryIntentHint?: PrimaryIntentHint | null }
 ): string {
+  const primaryIntentHint = normalizePrimaryIntentHint(opts?.primaryIntentHint ?? null);
+  if (primaryIntentHint && primaryIntentHint !== "general") return currentText;
   const latest = String(currentText ?? "").trim();
   if (!latest) return currentText;
   if (isSmallTalkCandidate(latest)) return currentText;
@@ -1208,6 +1248,7 @@ export async function orchestrateInbound(
     leadSource?: string | null;
     bucket?: string | null;
     cta?: string | null;
+    primaryIntentHint?: PrimaryIntentHint | null;
     lead?: LeadProfile | null;
     pricingAttempts?: number;
     allowSchedulingOffer?: boolean;
@@ -1254,7 +1295,10 @@ export async function orchestrateInbound(
     });
   }
 
-  const mergedBody = mergePendingInboundText(String(event.body ?? ""), history ?? []);
+  const primaryIntentHint = normalizePrimaryIntentHint(ctx?.primaryIntentHint ?? null);
+  const mergedBody = mergePendingInboundText(String(event.body ?? ""), history ?? [], {
+    primaryIntentHint
+  });
   if (mergedBody && mergedBody !== event.body) {
     event.body = mergedBody;
   }
@@ -1491,7 +1535,8 @@ export async function orchestrateInbound(
     });
   }
 
-  const intent = simpleIntent(event.body);
+  const hintedIntent = mapPrimaryIntentHintToLeadIntent(primaryIntentHint, event.body);
+  const intent = hintedIntent ?? inferHeuristicIntent(event.body);
   const pricingAttempts = ctx?.pricingAttempts ?? 0;
   const managerRequest = detectManagerRequest(event.body);
   const approvalStatus = detectApprovalStatus(event.body);
