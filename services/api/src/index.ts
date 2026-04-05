@@ -6321,6 +6321,36 @@ function extractMonthlyBudgetLimit(text: string): number | null {
   return null;
 }
 
+function extractBareBudgetAmount(text: string): number | null {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return null;
+  const capped = t.match(
+    /\b(?:under|below|less than|no more than|max(?:imum)?|around|about|~|stay under|keep (?:it|me)?\s*under)\s*\$?\s*([0-9][0-9,]{1,6})\b/i
+  );
+  if (!capped?.[1]) return null;
+  const n = Number(capped[1].replace(/,/g, ""));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
+function hasRecentPricingPromptContext(conv: any): boolean {
+  const msgs = Array.isArray(conv?.messages) ? conv.messages : [];
+  for (let i = msgs.length - 1; i >= 0 && i >= msgs.length - 6; i -= 1) {
+    const m = msgs[i];
+    if (!m || m.direction !== "out") continue;
+    const body = String(m.body ?? "").toLowerCase();
+    if (!body.trim()) continue;
+    if (
+      /\b(monthly|per month|a month|payment|payments|how much can you put down|money down|down payment|cash down|apr|term|60,? 72,? or 84|60|72|84)\b/.test(
+        body
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function extractPaymentTermMonths(text: string): number | null {
   const t = String(text ?? "").toLowerCase();
   const termMatch = t.match(/\b(60|72|84)\s*(month|mo|mos|months|term)?\b/);
@@ -6379,7 +6409,14 @@ function resolvePaymentBudgetForConversation(
   downPayment?: number;
 } {
   const recent = findRecentInboundPaymentBudgetContext(conv);
-  const monthlyBudget = extractMonthlyBudgetLimit(text) ?? recent.monthlyBudget;
+  let monthlyBudget = extractMonthlyBudgetLimit(text) ?? recent.monthlyBudget;
+  if (monthlyBudget == null) {
+    const bareBudget = extractBareBudgetAmount(text);
+    const inPricingDialog = String(getDialogState(conv) ?? "").startsWith("pricing_");
+    if (bareBudget != null && (inPricingDialog || hasRecentPricingPromptContext(conv))) {
+      monthlyBudget = bareBudget;
+    }
+  }
   const termMonths = extractPaymentTermMonths(text) ?? recent.termMonths;
   const downPayment = parseDownPaymentForBudget(text)?.amount ?? recent.downPayment;
   return { monthlyBudget, termMonths, downPayment };
@@ -16244,9 +16281,15 @@ if (authToken && signature) {
       ) || /\?/.test(body);
     return hasInsurance && hasQuoteOrRate && hasVisitTiming && !hasExplicitFinanceAsk;
   })();
+  const paymentBudgetContext = resolvePaymentBudgetForConversation(conv, event.body ?? "");
+  const explicitBudgetSignal =
+    paymentBudgetContext.monthlyBudget != null ||
+    paymentBudgetContext.termMonths != null ||
+    paymentBudgetContext.downPayment != null;
   const pricingSignal =
     !insuranceStatusUpdateOnly &&
     (llmPricingOrPaymentsIntent ||
+      explicitBudgetSignal ||
       isPricingText(event.body ?? "") ||
       isPaymentText(event.body ?? ""));
   const scheduleFromDialogAct = llmSchedulingIntent && !llmPricingOrPaymentsIntent;
@@ -16569,7 +16612,6 @@ if (authToken && signature) {
     !schedulingSignals.hasDayOnlyAvailability &&
     !explicitScheduleSignal &&
     (() => {
-      const paymentBudgetContext = resolvePaymentBudgetForConversation(conv, event.body ?? "");
       const downPaymentProvided = paymentBudgetContext.downPayment != null;
       const askedDownPaymentRecently =
         /\b(how much can you put down|how much (?:are|can) you put down|money down|down payment|cash down)\b/i.test(
@@ -16582,7 +16624,6 @@ if (authToken && signature) {
       );
     })()
   ) {
-    const paymentBudgetContext = resolvePaymentBudgetForConversation(conv, event.body ?? "");
     const monthlyBudget = paymentBudgetContext.monthlyBudget ?? null;
     const termMonths = paymentBudgetContext.termMonths ?? null;
     const downPayment = paymentBudgetContext.downPayment ?? null;
