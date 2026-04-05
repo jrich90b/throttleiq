@@ -9153,8 +9153,27 @@ async function maybeStartCadence(conv: any, sentAtIso: string) {
   if (conv.appointment?.bookedEventId) return;
   if (conv.status === "closed") return;
   if (conv.classification?.bucket === "service" || conv.classification?.cta === "service_request") return;
+  if (conv.followUp?.mode === "manual_handoff" || conv.followUp?.mode === "paused_indefinite") return;
   if (conv.followUpCadence?.status === "active" || conv.followUpCadence?.status === "stopped") return;
+  const purchaseTimeframeRaw = String(conv.lead?.purchaseTimeframe ?? "").toLowerCase();
+  const notReadyTimeframe =
+    /\b(not interested|not ready|not (yet|right now)|not in the market|not looking)\b/i.test(
+      purchaseTimeframeRaw
+    );
+  if (notReadyTimeframe) return;
   const cfg = await getSchedulerConfigHot();
+  const monthsStart = Number(conv.lead?.purchaseTimeframeMonthsStart ?? 0);
+  if (Number.isFinite(monthsStart) && monthsStart >= 1) {
+    const due = new Date(sentAtIso || new Date().toISOString());
+    due.setMonth(due.getMonth() + monthsStart);
+    due.setHours(10, 30, 0, 0);
+    const timeframeLabel = String(conv.lead?.purchaseTimeframe ?? "").trim() || "a future";
+    const msg =
+      `Hi, this is Brooke at American Harley-Davidson. You mentioned a ${timeframeLabel} timeline. ` +
+      "I’m here when you’re ready. Just reach out when the time is right.";
+    scheduleLongTermFollowUp(conv, due.toISOString(), msg);
+    return;
+  }
   startFollowUpCadence(conv, sentAtIso, cfg.timezone);
 }
 
