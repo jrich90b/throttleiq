@@ -120,6 +120,7 @@ import {
   isDispositionParserAccepted,
   isResponseControlParserAccepted
 } from "./domain/transitionSafety.js";
+import { pickRegenerateInbound } from "./domain/regenerateSelection.js";
 
 import {
   upsertConversationByLeadKey,
@@ -4536,7 +4537,7 @@ async function parseAndReduceConversationState(args: {
   text: string;
   history: { direction: "in" | "out"; body: string }[];
   shortAck: boolean;
-  debugLabel: "live" | "regen";
+  debugLabel: "live" | "regen" | "manual";
 }): Promise<{ parsed: ConversationStateParse | null; reduced: { departmentIntent: DepartmentRole | null } }> {
   const { conv, text, history, shortAck, debugLabel } = args;
   const parserEligible =
@@ -4556,8 +4557,14 @@ async function parseAndReduceConversationState(args: {
         })
       : null;
   if (process.env.DEBUG_CONVERSATION_STATE_PARSER === "1" && parsed) {
+    const label =
+      debugLabel === "regen"
+        ? "[llm-conversation-state-parse] regen"
+        : debugLabel === "manual"
+          ? "[llm-conversation-state-parse] manual"
+          : "[llm-conversation-state-parse]";
     console.log(
-      debugLabel === "regen" ? "[llm-conversation-state-parse] regen" : "[llm-conversation-state-parse]",
+      label,
       parsed
     );
   }
@@ -12976,6 +12983,55 @@ app.post("/conversations/:id/send", async (req, res) => {
       setDialogState(conv, "none");
     }
   };
+  const reconcileManualOutboundState = async (
+    outboundBody: string,
+    opts?: { channel?: "sms" | "email" | null }
+  ) => {
+    if (process.env.MANUAL_OUTBOUND_STATE_REDUCER_ENABLED === "0") return;
+    const text = String(outboundBody ?? "").trim();
+    if (!text) return;
+    const shortAck = isShortAckText(text) || isEmojiOnlyText(text);
+    const history = buildHistory(conv, 12);
+    try {
+      const { parsed, reduced } = await parseAndReduceConversationState({
+        conv,
+        text,
+        history,
+        shortAck,
+        debugLabel: "manual"
+      });
+      if (reduced.departmentIntent) {
+        conv.classification = {
+          ...(conv.classification ?? {}),
+          bucket: reduced.departmentIntent,
+          cta: `${reduced.departmentIntent}_request`,
+          channel: opts?.channel === "email" ? "email" : "sms"
+        };
+      }
+      if (process.env.DEBUG_DECISION_TRACE === "1") {
+        console.log("[decision-trace]", {
+          stage: "manual.outbound_reducer",
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          parsedStateIntent: parsed?.stateIntent ?? null,
+          parsedDepartmentIntent: parsed?.departmentIntent ?? null,
+          reducedDepartmentIntent: reduced.departmentIntent,
+          followUpMode: conv.followUp?.mode ?? null,
+          followUpReason: conv.followUp?.reason ?? null,
+          dialogState: getDialogState(conv),
+          text: text.slice(0, 140)
+        });
+      }
+    } catch (err: any) {
+      if (process.env.DEBUG_DECISION_TRACE === "1") {
+        console.warn("[decision-trace] manual.outbound_reducer_error", {
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          message: String(err?.message ?? err)
+        });
+      }
+    }
+  };
 
   // Normalize destination number from conversation leadKey
   const rawTo = String(conv.leadKey ?? "").trim();
@@ -13141,6 +13197,7 @@ app.post("/conversations/:id/send", async (req, res) => {
         appendOutbound(conv, emailFrom, emailTo!, signed, outboundProvider);
       }
       applyManualOutboundStateHints(signed, { channel: "email" });
+      await reconcileManualOutboundState(signed, { channel: "email" });
       finalizeManualSendDraftState({ clearEmailDraft: true, preserveSmsDrafts: true });
       saveConversation(conv);
       await flushConversationStore();
@@ -13179,6 +13236,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       appendOutbound(conv, "salesperson", conv.leadKey, body, "human", undefined, mediaUrls);
     }
     applyManualOutboundStateHints(body, { channel: "sms" });
+    await reconcileManualOutboundState(body, { channel: "sms" });
     finalizeManualSendDraftState();
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
@@ -13218,6 +13276,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       appendOutbound(conv, "salesperson", to, body, "human", undefined, mediaUrls);
     }
     applyManualOutboundStateHints(body, { channel: "sms" });
+    await reconcileManualOutboundState(body, { channel: "sms" });
     finalizeManualSendDraftState();
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
@@ -13266,6 +13325,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       appendOutbound(conv, from, to, body, "twilio", msg.sid, mediaUrls);
     }
     applyManualOutboundStateHints(body, { channel: "sms" });
+    await reconcileManualOutboundState(body, { channel: "sms" });
     finalizeManualSendDraftState();
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
@@ -13294,6 +13354,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       appendOutbound(conv, "salesperson", to, body, "human", undefined, mediaUrls);
     }
     applyManualOutboundStateHints(body, { channel: "sms" });
+    await reconcileManualOutboundState(body, { channel: "sms" });
     finalizeManualSendDraftState();
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
@@ -13355,38 +13416,30 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
 
   const channel =
     req.body?.channel === "email" ? "email" : req.body?.channel === "sms" ? "sms" : "sms";
-  const inboundMessages = [...(conv.messages ?? [])].reverse().filter(m => m.direction === "in");
   const lastDraft = [...(conv.messages ?? [])].reverse().find(m => m.provider === "draft_ai" && m.body);
-  const draftTime = lastDraft?.at ? new Date(lastDraft.at).getTime() : null;
-  const isBeforeDraft = (m: any) => {
-    if (!draftTime) return true;
-    if (!m?.at) return true;
-    const t = new Date(m.at).getTime();
-    return Number.isFinite(t) ? t <= draftTime : true;
-  };
-  const latestInboundBeforeDraft =
-    inboundMessages.find(m => m.body && isBeforeDraft(m)) ??
-    inboundMessages.find(m => m.body);
-  const latestInboundBodyLower = String(latestInboundBeforeDraft?.body ?? "").toLowerCase();
-  const latestInboundIsCreditAdf =
-    latestInboundBeforeDraft?.provider === "sendgrid_adf" &&
-    /source:\s*hdfs\s*coa\s*online|credit application|finance application|apply for credit|prequal|coa/.test(
-      latestInboundBodyLower
-    );
-  const latestInboundIsDlaNoPurchaseAdf =
-    latestInboundBeforeDraft?.provider === "sendgrid_adf" &&
-    /source:\s*dealer lead app|event name:\s*dealer test ride|demo bikes ridden|dealer lead app/.test(
-      latestInboundBodyLower
-    ) &&
-    /purchase timeframe:\s*i am not interested in purchasing at this time|not interested in purchasing at this time/.test(
-      latestInboundBodyLower
-    );
-  const inbound =
-    (latestInboundIsCreditAdf || latestInboundIsDlaNoPurchaseAdf ? latestInboundBeforeDraft : null) ??
-    inboundMessages.find(m => m.provider !== "sendgrid_adf" && m.body && isBeforeDraft(m)) ??
-    inboundMessages.find(m => m.body && isBeforeDraft(m)) ??
-    inboundMessages.find(m => m.provider !== "sendgrid_adf" && m.body) ??
-    inboundMessages.find(m => m.body);
+  const {
+    inbound,
+    latestInboundBeforeDraft,
+    latestInboundIsCreditAdf,
+    latestInboundIsDlaNoPurchaseAdf
+  } = pickRegenerateInbound({
+    messages: conv.messages ?? [],
+    latestDraftAt: lastDraft?.at ?? null
+  });
+  if (process.env.DEBUG_DECISION_TRACE === "1") {
+    console.log("[decision-trace]", {
+      stage: "regen.pick_inbound",
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      selectedProvider: inbound?.provider ?? null,
+      selectedAt: inbound?.at ?? null,
+      selectedPreview: String(inbound?.body ?? "").slice(0, 120),
+      latestInboundProvider: latestInboundBeforeDraft?.provider ?? null,
+      latestInboundAt: latestInboundBeforeDraft?.at ?? null,
+      latestInboundIsCreditAdf,
+      latestInboundIsDlaNoPurchaseAdf
+    });
+  }
   if (!inbound?.body) {
     return res.status(400).json({ ok: false, error: "no_inbound_message" });
   }
@@ -16317,6 +16370,7 @@ if (authToken && signature) {
   const shortAck = isShortAckText(inboundText) || emojiOnly;
   const recentHistory = buildHistory(conv, 6);
   const routeTimingEnabled = process.env.DEBUG_ROUTE_TIMING === "1";
+  const decisionTraceEnabled = process.env.DEBUG_DECISION_TRACE === "1";
   const logRouteTiming = (stage: string, startedAtMs: number, extra?: Record<string, unknown>) => {
     if (!routeTimingEnabled) return;
     console.log("[route-timing]", {
@@ -16324,6 +16378,18 @@ if (authToken && signature) {
       ms: Date.now() - startedAtMs,
       convId: conv.id,
       leadKey: conv.leadKey,
+      ...(extra ?? {})
+    });
+  };
+  const logDecisionTrace = (stage: string, extra?: Record<string, unknown>) => {
+    if (!decisionTraceEnabled) return;
+    console.log("[decision-trace]", {
+      stage,
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      dialogState: getDialogState(conv),
+      followUpMode: conv.followUp?.mode ?? null,
+      followUpReason: conv.followUp?.reason ?? null,
       ...(extra ?? {})
     });
   };
@@ -16790,6 +16856,17 @@ if (authToken && signature) {
     pricingOrPaymentsIntent
   });
   const schedulePriorityOverride = schedulingPrimaryIntent;
+  logDecisionTrace("live.intent_routing", {
+    inboundProvider: event.provider,
+    turnPrimaryIntent,
+    pricingOrPaymentsIntent,
+    schedulingPrimaryIntent,
+    callbackPrimaryIntent,
+    availabilityPrimaryIntent,
+    financePriorityOverride,
+    schedulePriorityOverride,
+    deterministicAvailabilityLookup
+  });
   if (turnPrimaryIntent === "scheduling" && getDialogState(conv) === "pricing_need_model") {
     setDialogState(conv, "schedule_request");
   }
@@ -17730,6 +17807,10 @@ if (authToken && signature) {
     !financePriorityOverride &&
     !schedulePriorityOverride
   ) {
+    logDecisionTrace("live.route_deterministic_availability", {
+      source: "deterministicAvailabilityLookup",
+      text: String(event.body ?? "").slice(0, 180)
+    });
     const availabilityResolution = await resolveDeterministicAvailabilityReply({
       conv,
       text: event.body ?? "",
@@ -17816,6 +17897,65 @@ if (authToken && signature) {
     turnPrimaryIntent !== "pricing_payments" &&
     turnPrimaryIntent !== "callback" &&
     !specsSignal;
+  if (
+    event.provider === "twilio" &&
+    availabilityExplicit &&
+    !deterministicAvailabilityLookup &&
+    !financePriorityOverride &&
+    !schedulePriorityOverride &&
+    !pricingSignal &&
+    !pricingOrPaymentsIntent &&
+    !/\b(compare|comparison|vs\.?|versus|specs?|spec sheet)\b/i.test(textLower)
+  ) {
+    logDecisionTrace("live.route_availability_explicit_fallback", {
+      source: "availabilityExplicit",
+      text: String(event.body ?? "").slice(0, 180)
+    });
+    const availabilityResolution = await resolveDeterministicAvailabilityReply({
+      conv,
+      text: event.body ?? "",
+      parsedAvailability: llmAvailability,
+      otherInventoryRequest
+    });
+    const reply =
+      availabilityResolution.kind === "reply"
+        ? availabilityResolution.reply
+        : "Which model are you asking about?";
+    const extraMediaUrls =
+      availabilityResolution.kind === "reply" && Array.isArray(availabilityResolution.mediaUrls)
+        ? availabilityResolution.mediaUrls
+        : [];
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(
+        conv,
+        event.to,
+        event.from,
+        reply,
+        "draft_ai",
+        undefined,
+        extraMediaUrls.length ? extraMediaUrls : undefined
+      );
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(
+      conv,
+      event.to,
+      event.from,
+      reply,
+      "twilio",
+      undefined,
+      extraMediaUrls.length ? extraMediaUrls : undefined
+    );
+    const mediaTags = extraMediaUrls.length
+      ? extraMediaUrls.map(u => `\n    <Media>${escapeXml(u)}</Media>`).join("")
+      : "";
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}${mediaTags}\n  </Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   const tradeYearCorrection =
     isTradeLead && !availabilityExplicit && turnPrimaryIntent !== "availability"
       ? extractTradeYearCorrection(
@@ -18264,7 +18404,6 @@ if (authToken && signature) {
       textLower
     ) &&
     (llmAvailabilityIntent ||
-      availabilityExplicit ||
       (!isTradeLead &&
         (!!llmAvailability?.color || !!inventoryEntityColorHint) &&
         (!!conv.inventoryContext?.model || !!conv.lead?.vehicle?.model)) ||
@@ -18575,6 +18714,10 @@ if (authToken && signature) {
     !schedulingSignals.hasDayOnlyAvailability &&
     !schedulingSignals.hasDayOnlyRequest
   ) {
+    logDecisionTrace("live.route_inventory_question", {
+      source: "inventoryQuestion",
+      text: String(event.body ?? "").slice(0, 180)
+    });
     const inventoryStageStartedAt = Date.now();
     if (getDialogState(conv) === "inventory_watch_active" && conv.inventoryWatch) {
       const watch = conv.inventoryWatch;
