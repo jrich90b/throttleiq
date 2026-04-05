@@ -35,6 +35,10 @@ function run() {
   const dataDir = process.env.DATA_DIR || path.resolve(cwd, "data");
   const conversationsPath =
     process.env.CONVERSATIONS_DB_PATH || path.join(dataDir, "conversations.json");
+  const sinceHoursRaw = String(process.env.CHANGED_MESSAGES_SINCE_HOURS ?? "").trim();
+  const sinceHours = Number.isFinite(Number(sinceHoursRaw)) ? Number(sinceHoursRaw) : 0;
+  const sinceMs = sinceHours > 0 ? Date.now() - sinceHours * 60 * 60 * 1000 : null;
+  const windowStartIso = sinceMs != null ? new Date(sinceMs).toISOString() : null;
 
   if (!fs.existsSync(conversationsPath)) {
     console.error(`conversations.json not found: ${conversationsPath}`);
@@ -78,12 +82,22 @@ function run() {
   }
 
   rows.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  const filteredRows =
+    sinceMs == null
+      ? rows
+      : rows.filter(row => {
+          const atMs = Date.parse(String(row.at ?? ""));
+          if (!Number.isFinite(atMs)) return false;
+          return atMs >= sinceMs;
+        });
 
   const out = {
     generatedAt: new Date().toISOString(),
     conversationsPath,
-    count: rows.length,
-    rows
+    sinceHours: sinceHours > 0 ? sinceHours : null,
+    windowStart: windowStartIso,
+    count: filteredRows.length,
+    rows: filteredRows
   };
 
   fs.mkdirSync(path.dirname(changedPath), { recursive: true });
@@ -93,7 +107,9 @@ function run() {
       {
         ok: true,
         changedPath,
-        count: rows.length
+        count: filteredRows.length,
+        sinceHours: sinceHours > 0 ? sinceHours : null,
+        windowStart: windowStartIso
       },
       null,
       2
@@ -102,4 +118,3 @@ function run() {
 }
 
 run();
-

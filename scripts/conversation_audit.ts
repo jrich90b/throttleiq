@@ -66,6 +66,10 @@ function issuePush(issues: string[], issue: string) {
 function run() {
   const dataDir = process.env.DATA_DIR || path.resolve(process.cwd(), "data");
   const filePath = process.env.CONVERSATIONS_DB_PATH || path.join(dataDir, "conversations.json");
+  const sinceHoursRaw = String(process.env.AUDIT_SINCE_HOURS ?? "").trim();
+  const sinceHours = Number.isFinite(Number(sinceHoursRaw)) ? Number(sinceHoursRaw) : 0;
+  const sinceMs = sinceHours > 0 ? Date.now() - sinceHours * 60 * 60 * 1000 : null;
+  const windowStartIso = sinceMs != null ? new Date(sinceMs).toISOString() : null;
   if (!fs.existsSync(filePath)) {
     console.error(`conversations.json not found: ${filePath}`);
     process.exit(1);
@@ -75,11 +79,22 @@ function run() {
   const nowIso = new Date().toISOString();
   const results: Array<AnyObj> = [];
 
+  let scopedConversations = 0;
   for (const conv of conversations) {
     const issues: string[] = [];
     const messages = Array.isArray(conv?.messages) ? conv.messages : [];
     const lastInbound = lastMessageByDirection(messages, "in");
     const lastOutbound = lastMessageByDirection(messages, "out");
+    const activityCandidates = [
+      Date.parse(String(conv?.updatedAt ?? "")),
+      Date.parse(String(lastInbound?.at ?? "")),
+      Date.parse(String(lastOutbound?.at ?? ""))
+    ].filter(ms => Number.isFinite(ms)) as number[];
+    const latestActivityMs = activityCandidates.length > 0 ? Math.max(...activityCandidates) : null;
+    if (sinceMs != null && (latestActivityMs == null || latestActivityMs < sinceMs)) {
+      continue;
+    }
+    scopedConversations += 1;
 
     const pendingDrafts = messages.filter(
       m => m?.direction === "out" && m?.provider === "draft_ai" && m?.draftStatus !== "stale"
@@ -184,9 +199,36 @@ function run() {
   const summary = {
     evaluatedAt: nowIso,
     filePath,
-    totalConversations: conversations.length,
-    openConversations: conversations.filter(c => String(c?.status ?? "open") !== "closed").length,
-    closedConversations: conversations.filter(c => String(c?.status ?? "") === "closed").length,
+    sinceHours: sinceHours > 0 ? sinceHours : null,
+    windowStart: windowStartIso,
+    totalConversations: scopedConversations,
+    totalConversationsAll: conversations.length,
+    openConversations: conversations.filter(c => {
+      const messages = Array.isArray(c?.messages) ? c.messages : [];
+      const lastInbound = lastMessageByDirection(messages, "in");
+      const lastOutbound = lastMessageByDirection(messages, "out");
+      const activityCandidates = [
+        Date.parse(String(c?.updatedAt ?? "")),
+        Date.parse(String(lastInbound?.at ?? "")),
+        Date.parse(String(lastOutbound?.at ?? ""))
+      ].filter(ms => Number.isFinite(ms)) as number[];
+      const latestActivityMs = activityCandidates.length > 0 ? Math.max(...activityCandidates) : null;
+      if (sinceMs != null && (latestActivityMs == null || latestActivityMs < sinceMs)) return false;
+      return String(c?.status ?? "open") !== "closed";
+    }).length,
+    closedConversations: conversations.filter(c => {
+      const messages = Array.isArray(c?.messages) ? c.messages : [];
+      const lastInbound = lastMessageByDirection(messages, "in");
+      const lastOutbound = lastMessageByDirection(messages, "out");
+      const activityCandidates = [
+        Date.parse(String(c?.updatedAt ?? "")),
+        Date.parse(String(lastInbound?.at ?? "")),
+        Date.parse(String(lastOutbound?.at ?? ""))
+      ].filter(ms => Number.isFinite(ms)) as number[];
+      const latestActivityMs = activityCandidates.length > 0 ? Math.max(...activityCandidates) : null;
+      if (sinceMs != null && (latestActivityMs == null || latestActivityMs < sinceMs)) return false;
+      return String(c?.status ?? "") === "closed";
+    }).length,
     totalTodos: todos.length,
     flaggedConversations: results.length,
     issueCounts: Array.from(issueCounts.entries())

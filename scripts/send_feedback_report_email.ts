@@ -80,6 +80,12 @@ async function run() {
   const text = [
     `Feedback loop completed: ${ts}`,
     "",
+    `Snapshot window: ${
+      summary.sinceHours && summary.windowStart
+        ? `last ${summary.sinceHours}h (since ${summary.windowStart})`
+        : "all-time"
+    }`,
+    "",
     `Changed rows: ${summary.totalChangedRows ?? 0}`,
     `Fixture candidates: ${summary.fixtureCandidates ?? 0}`,
     `Fixture pass/fail: ${summary.fixturePassNow ?? 0}/${summary.fixtureFailNow ?? 0}`,

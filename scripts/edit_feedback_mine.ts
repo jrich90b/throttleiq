@@ -416,7 +416,8 @@ function main() {
     process.exit(1);
   }
 
-  const rows = normalizeRows(readJson(changesPath));
+  const changesRaw = readJson(changesPath);
+  const rows = normalizeRows(changesRaw);
   const conversationsById = loadConversations(conversationsPath);
   const labeled: Array<
     ChangedRow & {
@@ -523,7 +524,15 @@ function main() {
     generatedAt: new Date().toISOString(),
     source: {
       changesPath,
-      conversationsPath
+      conversationsPath,
+      sinceHours:
+        Number.isFinite(Number(changesRaw?.sinceHours)) && Number(changesRaw?.sinceHours) > 0
+          ? Number(changesRaw?.sinceHours)
+          : null,
+      windowStart:
+        typeof changesRaw?.windowStart === "string" && changesRaw.windowStart.trim()
+          ? changesRaw.windowStart
+          : null
     },
     totalChangedRows: labeled.length,
     labelCounts: Array.from(byLabel.entries())

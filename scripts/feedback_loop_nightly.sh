@@ -8,6 +8,8 @@ DATA_DIR="${DATA_DIR:-/home/ubuntu/throttleiq-runtime/data}"
 CONVERSATIONS_DB_PATH="${CONVERSATIONS_DB_PATH:-$DATA_DIR/conversations.json}"
 REPORT_ROOT="${REPORT_ROOT:-/home/ubuntu/throttleiq-runtime/reports}"
 CHANGED_MESSAGES_PATH="${CHANGED_MESSAGES_PATH:-$REPORT_ROOT/changed_messages_all.json}"
+CHANGED_MESSAGES_SINCE_HOURS="${CHANGED_MESSAGES_SINCE_HOURS:-24}"
+AUDIT_SINCE_HOURS="${AUDIT_SINCE_HOURS:-24}"
 EDIT_FEEDBACK_OUT_DIR="${EDIT_FEEDBACK_OUT_DIR:-$REPORT_ROOT/edit_feedback}"
 LOG_DIR="${LOG_DIR:-$REPORT_ROOT/feedback_loop_logs}"
 
@@ -23,9 +25,11 @@ RUN_LOG="$LOG_DIR/feedback_loop_$TS.log"
   echo "[feedback-loop] DATA_DIR=$DATA_DIR"
   echo "[feedback-loop] CONVERSATIONS_DB_PATH=$CONVERSATIONS_DB_PATH"
   echo "[feedback-loop] CHANGED_MESSAGES_PATH=$CHANGED_MESSAGES_PATH"
+  echo "[feedback-loop] CHANGED_MESSAGES_SINCE_HOURS=$CHANGED_MESSAGES_SINCE_HOURS"
+  echo "[feedback-loop] AUDIT_SINCE_HOURS=$AUDIT_SINCE_HOURS"
   echo "[feedback-loop] EDIT_FEEDBACK_OUT_DIR=$EDIT_FEEDBACK_OUT_DIR"
 
-  export DATA_DIR CONVERSATIONS_DB_PATH CHANGED_MESSAGES_PATH EDIT_FEEDBACK_OUT_DIR
+  export DATA_DIR CONVERSATIONS_DB_PATH CHANGED_MESSAGES_PATH CHANGED_MESSAGES_SINCE_HOURS AUDIT_SINCE_HOURS EDIT_FEEDBACK_OUT_DIR
 
   echo "[feedback-loop] step=export_changed_messages"
   npm run export:changed_messages
@@ -36,15 +40,14 @@ RUN_LOG="$LOG_DIR/feedback_loop_$TS.log"
   echo "[feedback-loop] step=edit_feedback_mine -> $MINE_LOG"
   npm run edit_feedback:mine | tee "$MINE_LOG"
 
-  if [[ -n "${FEEDBACK_REPORT_EMAIL_TO:-}" && -n "${SENDGRID_API_KEY:-}" ]]; then
+  if [[ -n "${FEEDBACK_REPORT_EMAIL_TO:-}" ]]; then
     echo "[feedback-loop] step=email_report -> ${FEEDBACK_REPORT_EMAIL_TO}"
     FEEDBACK_REPORT_AUDIT_PATH="$AUDIT_JSON" \
     FEEDBACK_REPORT_MINE_LOG_PATH="$MINE_LOG" \
     npm run edit_feedback:email
   else
-    echo "[feedback-loop] step=email_report skipped (missing FEEDBACK_REPORT_EMAIL_TO or SENDGRID_API_KEY)"
+    echo "[feedback-loop] step=email_report skipped (missing FEEDBACK_REPORT_EMAIL_TO)"
   fi
 
   echo "[feedback-loop] completed at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } | tee "$RUN_LOG"
-
