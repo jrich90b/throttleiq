@@ -127,6 +127,10 @@ function modelMatches(candidateRaw: string | undefined, targetRaw: string): bool
   const candidate = normalizeModel(candidateRaw);
   const target = normalizeModel(targetRaw);
   if (!candidate || !target) return false;
+  const hasWord = (text: string, word: string) => text.split(" ").includes(word);
+  // Guard against over-broad fallback matching:
+  // if customer explicitly asked for a CVO model, do not match non-CVO variants.
+  if (hasWord(target, "cvo") && !hasWord(candidate, "cvo")) return false;
   if (candidate === target) return true;
   return candidate.includes(target) || target.includes(candidate);
 }
