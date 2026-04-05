@@ -5442,6 +5442,20 @@ function isLienHolderInfoRequestText(text: string): boolean {
   return !hasProvideCue;
 }
 
+function isFinanceDocsQuestionText(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  const asksDocs =
+    /\b(what do i need to bring|what (?:should|do) i bring|what documents?|which documents?|what paperwork|what do you need from me)\b/.test(
+      t
+    ) || /\bwhat(?:'| i)?s needed\b/.test(t);
+  const financeContext =
+    /\b(financ|credit app|credit application|loan|approval|lien|binder|insurance|payoff|e-?sign)\b/.test(
+      t
+    );
+  return asksDocs && financeContext;
+}
+
 function stringifyPolicyField(value: unknown): string {
   if (typeof value !== "string") return "";
   return value.trim();
@@ -15202,11 +15216,12 @@ if (authToken && signature) {
       }
     }
     const rescheduleIntent =
-      reschedulePending ||
-      reschedulePhrase ||
-      !!requestedReschedule ||
-      llmExplicitScheduleIntent ||
-      isExplicitScheduleIntent(event.body);
+      !isFinanceDocsQuestionText(event.body) &&
+      (reschedulePending ||
+        reschedulePhrase ||
+        !!requestedReschedule ||
+        llmExplicitScheduleIntent ||
+        isExplicitScheduleIntent(event.body));
     if (!rescheduleIntent) {
       // fall through
     } else {
