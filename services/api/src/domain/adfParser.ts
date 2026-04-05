@@ -29,6 +29,7 @@ export type ParsedAdfLead = {
   emailOptIn?: boolean;
   smsOptIn?: boolean;
   phoneOptIn?: boolean;
+  preferredContactMethod?: "email" | "sms" | "phone";
   preferredDate?: string;
   preferredTime?: string;
   tradeVehicle?: {
@@ -195,6 +196,23 @@ function parseColorTrimFromItem(item?: string) {
 function parseFromComment(comment?: string) {
   if (!comment) return {};
   const clean = stripHtml(comment);
+  const parsePreferredContactMethod = (text: string): "email" | "sms" | "phone" | undefined => {
+    const normalized = String(text ?? "").toLowerCase();
+    if (!normalized) return undefined;
+    const explicitMatch = normalized.match(
+      /preferred contact method\s*[:\-]?\s*(email|e-mail|text|sms|phone|call|voice)/i
+    );
+    const token = explicitMatch?.[1]?.toLowerCase();
+    if (token) {
+      if (token === "email" || token === "e-mail") return "email";
+      if (token === "text" || token === "sms") return "sms";
+      if (token === "phone" || token === "call" || token === "voice") return "phone";
+    }
+    if (/\b(email|e-mail)\s+only\b/.test(normalized)) return "email";
+    if (/\b(text|sms)\s+only\b/.test(normalized)) return "sms";
+    if (/\b(phone|call|voice)\s+only\b/.test(normalized)) return "phone";
+    return undefined;
+  };
   const inquiryMatch = clean.match(/your inquiry:\s*([^\n\r]+)/i);
   const stockMatch = clean.match(/inventory stock id:\s*([A-Z0-9-]+)/i);
   const vinMatch = clean.match(/vin:\s*([A-HJ-NPR-Z0-9]{8,17})/i);
@@ -229,6 +247,7 @@ function parseFromComment(comment?: string) {
   const smsOptInMatch =
     clean.match(/text opt-?in:\s*(yes|no)/i) ||
     clean.match(/can we contact you via text\?:\s*(yes|no)/i);
+  const preferredContactMethod = parsePreferredContactMethod(clean);
   const sourceIdMatch = clean.match(/source id:\s*(\d+)/i);
   const leadSourceId = sourceIdMatch?.[1] ? Number(sourceIdMatch[1]) : undefined;
   let sellOption: "cash" | "trade" | "either" | undefined;
@@ -261,7 +280,8 @@ function parseFromComment(comment?: string) {
     preferredTime: preferredTimeMatch?.[1]?.trim(),
     emailOptIn: emailOptInMatch ? emailOptInMatch[1].toLowerCase() === "yes" : undefined,
     phoneOptIn: phoneOptInMatch ? phoneOptInMatch[1].toLowerCase() === "yes" : undefined,
-    smsOptIn: smsOptInMatch ? smsOptInMatch[1].toLowerCase() === "yes" : undefined
+    smsOptIn: smsOptInMatch ? smsOptInMatch[1].toLowerCase() === "yes" : undefined,
+    preferredContactMethod
   };
 }
 
@@ -455,6 +475,7 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
     emailOptIn: parsedFromComment.emailOptIn,
     phoneOptIn: parsedFromComment.phoneOptIn,
     smsOptIn: parsedFromComment.smsOptIn,
+    preferredContactMethod: parsedFromComment.preferredContactMethod,
     street,
     city,
     region,

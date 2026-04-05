@@ -1609,6 +1609,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     emailOptIn: lead.emailOptIn,
     smsOptIn: lead.smsOptIn,
     phoneOptIn: lead.phoneOptIn,
+    preferredContactMethod: lead.preferredContactMethod,
     sellOption: lead.sellOption,
     vehicle: {
       stockId: lead.stockId,
@@ -1804,6 +1805,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     sourceId: leadSourceId,
     hasSms: !!lead.phone,
     hasEmail: !!lead.email,
+    hasPhone: !!lead.phone,
+    primaryChannel:
+      lead.preferredContactMethod === "email"
+        ? "email"
+        : lead.preferredContactMethod === "sms"
+          ? "sms"
+          : lead.preferredContactMethod === "phone"
+            ? "phone"
+            : undefined,
     hasFacebook:
       leadSourceLower.includes("facebook") ||
       leadSourceLower.includes("autodealers.digital") ||
@@ -2235,6 +2245,38 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     if (!isInitialAdf) return;
     addCallTodoIfMissing(conv, "Call customer (initial reply sent).");
   };
+  const prefersPhoneOnly = conv.lead?.preferredContactMethod === "phone";
+  const prefersEmailOnly = conv.lead?.preferredContactMethod === "email";
+  if (prefersPhoneOnly) {
+    setContactPreference(conv, "call_only");
+  }
+  const queueInitialDraftForPreferredContact = (text: string, mediaUrls?: string[]) => {
+    if (prefersPhoneOnly) {
+      addCallTodoIfMissing(conv, "Preferred contact method is phone. Call customer (no auto text/email).");
+      return;
+    }
+    if (prefersEmailOnly) {
+      conv.emailDraft = text;
+      return;
+    }
+    appendOutbound(conv, "dealership", leadKey, text, "draft_ai", undefined, mediaUrls);
+  };
+  if (isInitialAdf && prefersPhoneOnly) {
+    maybeAddInitialCallTodo();
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      note: "preferred_contact_phone_no_auto_reply"
+    });
+  }
   if (isServiceLead) {
     let ack =
       "Thanks — I’ve received your service request. I’ll have our service department reach out shortly.";
@@ -2245,7 +2287,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     addTodo(conv, "service", event.body, event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "service_request");
     stopFollowUpCadence(conv, "manual_handoff");
-    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
+    queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     maybeAddInitialCallTodo();
     return res.status(200).json({
       ok: true,
@@ -2275,7 +2317,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     addTodo(conv, "approval", event.body ?? "Credit application", event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "credit_app");
     stopFollowUpCadence(conv, "manual_handoff");
-    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai");
+    queueInitialDraftForPreferredContact(ack);
     maybeAddInitialCallTodo();
     return res.status(200).json({
       ok: true,
@@ -2763,7 +2805,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
 
     if (!suppressWalkInAutoAck) {
-      appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
+      queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     }
     if (walkInDelayReason && walkInDelayDays && !hasCreditCosignerSignal && !(hasDepositSignal || hasSoldSignal)) {
       const cfg = await getSchedulerConfig();
@@ -2823,7 +2865,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     addTodo(conv, "other", event.body, event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "pending_used_followup");
     stopFollowUpCadence(conv, "manual_handoff");
-    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
+    queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     maybeAddInitialCallTodo();
     return res.status(200).json({
       ok: true,
@@ -2930,7 +2972,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         }
       }
     }
-    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
+    queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     maybeAddInitialCallTodo();
     return res.status(200).json({
       ok: true,
@@ -2961,7 +3003,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     addTodo(conv, "other", event.body, event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "room58_standard");
     stopFollowUpCadence(conv, "manual_handoff");
-    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
+    queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     maybeAddInitialCallTodo();
     return res.status(200).json({
       ok: true,
@@ -3009,7 +3051,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     setFollowUpMode(conv, "manual_handoff", "room58_price_confirm");
     stopFollowUpCadence(conv, "manual_handoff");
     markPricingEscalated(conv);
-    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
+    queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     maybeAddInitialCallTodo();
     return res.status(200).json({
       ok: true,
@@ -3079,7 +3121,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       `I saw ${modelMismatch.leadModel} on the lead and ${modelMismatch.inquiryModel} in your message. ` +
       "Which one would you like pricing on?";
     ack = await applyInitialAdfPrefix(ack);
-    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai");
+    queueInitialDraftForPreferredContact(ack);
     maybeAddInitialCallTodo();
     conv.emailDraft = ack;
     return res.status(200).json({
@@ -3145,7 +3187,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     if (reason === "pricing" || reason === "payments") {
       markPricingEscalated(conv);
     }
-    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
+    queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     maybeAddInitialCallTodo();
     conv.emailDraft = ack;
     return res.status(200).json({
@@ -3169,7 +3211,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     ack = withInitialPhoto(ack);
     ack = withInitialAvailabilityLine(ack);
     closeConversation(conv, result.autoClose.reason);
-    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
+    queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     maybeAddInitialCallTodo();
     conv.emailDraft = ack;
     return res.status(200).json({
@@ -3392,7 +3434,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
             `You’re booked for ${when}${repName}. ` +
             `${dealerName} is at ${addressLine}.`;
 
-          appendOutbound(conv, "dealership", leadKey, confirmText, "draft_ai", eventObj.id ?? undefined);
+          queueInitialDraftForPreferredContact(confirmText);
           maybeAddInitialCallTodo();
           saveConversation(conv);
           await flushConversationStore();
@@ -3586,16 +3628,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         await flushConversationStore();
       } catch (e: any) {
         console.log("[sendgrid inbound] email send failed:", e?.message ?? e);
-        appendOutbound(conv, "dealership", leadKey, draft, "draft_ai", undefined, initialMediaUrls);
+        queueInitialDraftForPreferredContact(draft, initialMediaUrls);
         maybeAddInitialCallTodo();
       }
     } else {
-      appendOutbound(conv, "dealership", leadKey, draft, "draft_ai", undefined, initialMediaUrls);
+      queueInitialDraftForPreferredContact(draft, initialMediaUrls);
       maybeAddInitialCallTodo();
     }
   } else {
     // Store the draft as an outbound message (suggest-only for now)
-    appendOutbound(conv, "dealership", leadKey, draft, "draft_ai", undefined, initialMediaUrls);
+    queueInitialDraftForPreferredContact(draft, initialMediaUrls);
     maybeAddInitialCallTodo();
   }
   if (conv.classification?.bucket === "event_promo") {

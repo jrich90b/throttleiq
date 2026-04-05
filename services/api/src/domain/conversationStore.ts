@@ -235,6 +235,7 @@ export type LeadProfile = {
   emailOptIn?: boolean;
   smsOptIn?: boolean;
   phoneOptIn?: boolean;
+  preferredContactMethod?: "email" | "sms" | "phone";
   street?: string;
   city?: string;
   region?: string;
@@ -1396,6 +1397,7 @@ export function listConversations() {
           null,
         vehicleDescription: c.lead?.vehicle?.description ?? null,
         contactPreference: c.contactPreference,
+        preferredContactMethod: c.lead?.preferredContactMethod ?? null,
         leadSource,
         walkIn: inferredWalkIn ? true : null,
         engagement: c.engagement ?? null,

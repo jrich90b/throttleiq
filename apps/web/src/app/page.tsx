@@ -5726,7 +5726,7 @@ export default function Home() {
                                 ) : null}
                                 {c.contactPreference === "call_only" ? (
                                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
-                                    Call Only
+                                    Prefers Call
                                   </span>
                                 ) : null}
                                 {c.status === "closed" ? (
@@ -8936,7 +8936,7 @@ export default function Home() {
                   })()}
                   {selectedConv.contactPreference === "call_only" ? (
                     <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
-                      Call Only
+                      Prefers Call
                     </span>
                   ) : null}
                   {selectedConv.leadOwner?.name || selectedConv.leadOwner?.id ? (

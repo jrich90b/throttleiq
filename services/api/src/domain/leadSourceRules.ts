@@ -454,6 +454,9 @@ function isChannelAvailable(channel: LeadChannel, opts: ChannelOpts): boolean {
 }
 
 export function resolveChannel(opts: ChannelOpts): LeadChannel {
+  if (opts.primaryChannel && isChannelAvailable(opts.primaryChannel, opts)) {
+    return opts.primaryChannel;
+  }
   const rule = findRule(opts.leadSource, opts.sourceId);
   const order = rule?.channel_overrides?.fallback_order ?? CHANNEL_RESOLUTION.preferred_order;
 
