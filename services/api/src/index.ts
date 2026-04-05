@@ -323,6 +323,22 @@ app.get("/debug/route-outcomes/recent", (req, res) => {
   const leadKeyQ = String(req.query.leadKey ?? "").trim();
   const convIdQ = String(req.query.convId ?? "").trim();
   const phoneQ = String(req.query.phone ?? "").replace(/\D/g, "");
+  const phoneVariants = new Set<string>();
+  if (phoneQ) {
+    phoneVariants.add(phoneQ);
+    if (phoneQ.length === 10) phoneVariants.add(`1${phoneQ}`);
+    if (phoneQ.length === 11 && phoneQ.startsWith("1")) phoneVariants.add(phoneQ.slice(1));
+  }
+  const matchesPhone = (digits: string) => {
+    if (!phoneVariants.size) return true;
+    for (const variant of phoneVariants) {
+      if (!variant) continue;
+      if (digits === variant || digits.endsWith(variant) || variant.endsWith(digits)) {
+        return true;
+      }
+    }
+    return false;
+  };
   const sinceMinRaw = Number(req.query.sinceMin ?? 180);
   const limitRaw = Number(req.query.limit ?? 200);
   const sinceMs =
@@ -339,10 +355,10 @@ app.get("/debug/route-outcomes/recent", (req, res) => {
       const rowConvId = String((detail as any).convId ?? "");
       if (leadKeyQ && rowLeadKey !== leadKeyQ) return false;
       if (convIdQ && rowConvId !== convIdQ) return false;
-      if (phoneQ) {
+      if (phoneVariants.size) {
         const leadDigits = normDigits(rowLeadKey);
         const convDigits = normDigits(rowConvId);
-        if (leadDigits !== phoneQ && convDigits !== phoneQ) return false;
+        if (!matchesPhone(leadDigits) && !matchesPhone(convDigits)) return false;
       }
       return true;
     })
@@ -366,6 +382,23 @@ app.get("/debug/stuck-turns", (req, res) => {
   }
   const olderThanSecRaw = Number(req.query.olderThanSec ?? 45);
   const limitRaw = Number(req.query.limit ?? 100);
+  const phoneQ = String(req.query.phone ?? "").replace(/\D/g, "");
+  const phoneVariants = new Set<string>();
+  if (phoneQ) {
+    phoneVariants.add(phoneQ);
+    if (phoneQ.length === 10) phoneVariants.add(`1${phoneQ}`);
+    if (phoneQ.length === 11 && phoneQ.startsWith("1")) phoneVariants.add(phoneQ.slice(1));
+  }
+  const matchesPhone = (digits: string) => {
+    if (!phoneVariants.size) return true;
+    for (const variant of phoneVariants) {
+      if (!variant) continue;
+      if (digits === variant || digits.endsWith(variant) || variant.endsWith(digits)) {
+        return true;
+      }
+    }
+    return false;
+  };
   const olderThanSec =
     Number.isFinite(olderThanSecRaw) && olderThanSecRaw > 0 ? olderThanSecRaw : 45;
   const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 500) : 100;
@@ -388,6 +421,10 @@ app.get("/debug/stuck-turns", (req, res) => {
       if (hasOutboundAfter) return null;
       const ageSec = Math.floor((nowMs - inboundAtMs) / 1000);
       if (ageSec < olderThanSec) return null;
+      if (!matchesPhone(String(conv.leadKey ?? "").replace(/\D/g, "")) &&
+          !matchesPhone(String(conv.id ?? "").replace(/\D/g, ""))) {
+        return null;
+      }
       return {
         convId: conv.id,
         leadKey: conv.leadKey,
