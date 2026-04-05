@@ -326,6 +326,21 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
   }
 }
 
+const DEFAULT_LLM_PARSER_TIMEOUT_MS = Number(process.env.LLM_PARSER_TIMEOUT_MS ?? 9000);
+
+async function safeLlmParse<T>(
+  label: string,
+  run: () => Promise<T>,
+  timeoutMs: number = DEFAULT_LLM_PARSER_TIMEOUT_MS
+): Promise<T | null> {
+  try {
+    return await withTimeout(run(), timeoutMs, label);
+  } catch (err: any) {
+    console.warn(`[llm-parse] ${label} failed:`, err?.message ?? err);
+    return null;
+  }
+}
+
 type HotCacheEntry<T> = {
   value?: T;
   expiresAt: number;
@@ -4587,14 +4602,16 @@ async function parseAndReduceConversationState(args: {
     !shortAck;
   const parsed =
     parserEligible && hasConversationStateParserHint(text, conv)
-      ? await parseConversationStateWithLLM({
-          text,
-          history,
-          lead: conv.lead,
-          followUp: conv.followUp,
-          dialogState: getDialogState(conv),
-          inventoryWatchPending: conv.inventoryWatchPending
-        })
+      ? await safeLlmParse(`conversation_state_parser_${debugLabel}`, () =>
+          parseConversationStateWithLLM({
+            text,
+            history,
+            lead: conv.lead,
+            followUp: conv.followUp,
+            dialogState: getDialogState(conv),
+            inventoryWatchPending: conv.inventoryWatchPending
+          })
+        )
       : null;
   if (process.env.DEBUG_CONVERSATION_STATE_PARSER === "1" && parsed) {
     const label =
@@ -13870,15 +13887,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     !regenShortAck;
   const regenUnifiedSlotParse =
     regenUnifiedSlotRouterEnabled && regenUnifiedSlotParserEligible && regenTradePayoffParserHint
-      ? await parseUnifiedSemanticSlotsWithLLM({
-          text: event.body,
-          history,
-          lead: conv.lead,
-          inventoryWatch: conv.inventoryWatch,
-          inventoryWatchPending: conv.inventoryWatchPending,
-          tradePayoff: conv.tradePayoff,
-          dialogState: getDialogState(conv)
-        })
+      ? await safeLlmParse("regen_unified_semantic_slot_parser", () =>
+          parseUnifiedSemanticSlotsWithLLM({
+            text: event.body,
+            history,
+            lead: conv.lead,
+            inventoryWatch: conv.inventoryWatch,
+            inventoryWatchPending: conv.inventoryWatchPending,
+            tradePayoff: conv.tradePayoff,
+            dialogState: getDialogState(conv)
+          })
+        )
       : null;
   const regenUnifiedTradeParse: TradePayoffParse | null =
     regenUnifiedSlotParse && regenTradePayoffParserHint
@@ -13896,12 +13915,14 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     ? regenUnifiedTradeParse
     : null;
   if (!regenTradePayoffParse && regenTradePayoffParserEligible && regenTradePayoffParserHint) {
-    regenTradePayoffParse = await parseTradePayoffWithLLM({
-      text: event.body,
-      history,
-      lead: conv.lead,
-      tradePayoff: conv.tradePayoff
-    });
+    regenTradePayoffParse = await safeLlmParse("regen_trade_payoff_parser", () =>
+      parseTradePayoffWithLLM({
+        text: event.body,
+        history,
+        lead: conv.lead,
+        tradePayoff: conv.tradePayoff
+      })
+    );
     if (regenUnifiedSlotRouterEnabled && process.env.DEBUG_UNIFIED_SLOT_PARSER === "1") {
       console.log("[llm-unified-slot-parse] regen trade fallback to legacy parser");
     }
@@ -13910,12 +13931,14 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const legacyRegenTradeShadow =
       regenTradePayoffParserEligible &&
       (!regenTradePayoffParse || regenTradePayoffParse === regenUnifiedTradeParse)
-        ? await parseTradePayoffWithLLM({
-            text: event.body,
-            history,
-            lead: conv.lead,
-            tradePayoff: conv.tradePayoff
-          })
+        ? await safeLlmParse("regen_trade_payoff_parser_legacy_shadow", () =>
+            parseTradePayoffWithLLM({
+              text: event.body,
+              history,
+              lead: conv.lead,
+              tradePayoff: conv.tradePayoff
+            })
+          )
         : null;
     if (legacyRegenTradeShadow) {
       const mismatch =
@@ -14114,11 +14137,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     );
   const regenCustomerDispositionParse =
     regenCustomerDispositionParserEligible && regenCustomerDispositionParserHint
-      ? await parseCustomerDispositionWithLLM({
-          text: event.body,
-          history,
-          lead: conv.lead
-        })
+      ? await safeLlmParse("regen_customer_disposition_parser", () =>
+          parseCustomerDispositionWithLLM({
+            text: event.body,
+            history,
+            lead: conv.lead
+          })
+        )
       : null;
   if (process.env.DEBUG_CUSTOMER_DISPOSITION_PARSER === "1" && regenCustomerDispositionParse) {
     console.log("[llm-customer-disposition-parse] regen", regenCustomerDispositionParse);
@@ -14130,11 +14155,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     !!process.env.OPENAI_API_KEY &&
     !regenShortAck;
   const regenResponseControlParse = regenResponseControlParserEligible
-    ? await parseResponseControlWithLLM({
-        text: event.body ?? "",
-        history,
-        lead: conv.lead
-      })
+    ? await safeLlmParse("regen_response_control_parser", () =>
+        parseResponseControlWithLLM({
+          text: event.body ?? "",
+          history,
+          lead: conv.lead
+        })
+      )
     : null;
   const regenResponseControlAccepted = isResponseControlParserAccepted(regenResponseControlParse);
   const regenLlmComplimentOnly =
@@ -14820,11 +14847,13 @@ if (authToken && signature) {
     process.env.LLM_RESPONSE_CONTROL_PARSER_ENABLED !== "0" &&
     !!process.env.OPENAI_API_KEY;
   const responseControlParse = responseControlParserEligible
-    ? await parseResponseControlWithLLM({
-        text: event.body ?? "",
-        history: buildHistory(conv, 8),
-        lead: conv.lead
-      })
+    ? await safeLlmParse("response_control_parser", () =>
+        parseResponseControlWithLLM({
+          text: event.body ?? "",
+          history: buildHistory(conv, 8),
+          lead: conv.lead
+        })
+      )
     : null;
   if (process.env.DEBUG_RESPONSE_CONTROL_PARSER === "1" && responseControlParse) {
     console.log("[llm-response-control-parse]", responseControlParse);
@@ -14943,15 +14972,17 @@ if (authToken && signature) {
     !semanticShortAck;
   const unifiedSemanticSlotParse =
     unifiedSlotRouterEnabled && unifiedSlotParserEligible
-      ? await parseUnifiedSemanticSlotsWithLLM({
-          text: semanticInboundText,
-          history: buildHistory(conv, 12),
-          lead: conv.lead,
-          inventoryWatch: conv.inventoryWatch,
-          inventoryWatchPending: conv.inventoryWatchPending,
-          tradePayoff: conv.tradePayoff,
-          dialogState: getDialogState(conv)
-        })
+      ? await safeLlmParse("unified_semantic_slot_parser", () =>
+          parseUnifiedSemanticSlotsWithLLM({
+            text: semanticInboundText,
+            history: buildHistory(conv, 12),
+            lead: conv.lead,
+            inventoryWatch: conv.inventoryWatch,
+            inventoryWatchPending: conv.inventoryWatchPending,
+            tradePayoff: conv.tradePayoff,
+            dialogState: getDialogState(conv)
+          })
+        )
       : null;
   if (process.env.DEBUG_UNIFIED_SLOT_PARSER === "1" && unifiedSemanticSlotParse) {
     console.log("[llm-unified-slot-parse]", unifiedSemanticSlotParse);
@@ -14975,14 +15006,16 @@ if (authToken && signature) {
       ? unifiedSemanticOnlyParse
       : null;
   if (!semanticSlotParse && semanticSlotParserEligible) {
-    semanticSlotParse = await parseSemanticSlotsWithLLM({
-      text: semanticInboundText,
-      history: buildHistory(conv, 12),
-      lead: conv.lead,
-      inventoryWatch: conv.inventoryWatch,
-      inventoryWatchPending: conv.inventoryWatchPending,
-      dialogState: getDialogState(conv)
-    });
+    semanticSlotParse = await safeLlmParse("semantic_slot_parser", () =>
+      parseSemanticSlotsWithLLM({
+        text: semanticInboundText,
+        history: buildHistory(conv, 12),
+        lead: conv.lead,
+        inventoryWatch: conv.inventoryWatch,
+        inventoryWatchPending: conv.inventoryWatchPending,
+        dialogState: getDialogState(conv)
+      })
+    );
     if (unifiedSlotRouterEnabled && process.env.DEBUG_UNIFIED_SLOT_PARSER === "1") {
       console.log("[llm-unified-slot-parse] semantic fallback to legacy parser");
     }
@@ -14990,14 +15023,16 @@ if (authToken && signature) {
   if (unifiedSlotRouterEnabled && unifiedSlotCompareLogEnabled && semanticSlotParserHint) {
     const legacySemanticShadow =
       semanticSlotParserEligible && (!semanticSlotParse || semanticSlotParse === unifiedSemanticOnlyParse)
-        ? await parseSemanticSlotsWithLLM({
-            text: semanticInboundText,
-            history: buildHistory(conv, 12),
-            lead: conv.lead,
-            inventoryWatch: conv.inventoryWatch,
-            inventoryWatchPending: conv.inventoryWatchPending,
-            dialogState: getDialogState(conv)
-          })
+        ? await safeLlmParse("semantic_slot_parser_legacy_shadow", () =>
+            parseSemanticSlotsWithLLM({
+              text: semanticInboundText,
+              history: buildHistory(conv, 12),
+              lead: conv.lead,
+              inventoryWatch: conv.inventoryWatch,
+              inventoryWatchPending: conv.inventoryWatchPending,
+              dialogState: getDialogState(conv)
+            })
+          )
         : null;
     if (legacySemanticShadow) {
       const mismatch =
@@ -15100,11 +15135,13 @@ if (authToken && signature) {
     !semanticShortAck;
   const customerDispositionParse =
     customerDispositionParserEligible
-      ? await parseCustomerDispositionWithLLM({
-          text: semanticInboundText,
-          history: buildHistory(conv, 8),
-          lead: conv.lead
-        })
+      ? await safeLlmParse("customer_disposition_parser", () =>
+          parseCustomerDispositionWithLLM({
+            text: semanticInboundText,
+            history: buildHistory(conv, 8),
+            lead: conv.lead
+          })
+        )
       : null;
   if (process.env.DEBUG_CUSTOMER_DISPOSITION_PARSER === "1" && customerDispositionParse) {
     console.log("[llm-customer-disposition-parse]", customerDispositionParse);
@@ -16384,11 +16421,13 @@ if (authToken && signature) {
     !emojiOnly &&
     !isShortAckText(inboundText);
   const inventoryEntityParse = inventoryEntityParserEligible
-    ? await parseInventoryEntitiesWithLLM({
-        text: event.body ?? "",
-        history: buildHistory(conv, 8),
-        lead: conv.lead
-      })
+    ? await safeLlmParse("inventory_entity_parser", () =>
+        parseInventoryEntitiesWithLLM({
+          text: event.body ?? "",
+          history: buildHistory(conv, 8),
+          lead: conv.lead
+        })
+      )
     : null;
   if (process.env.DEBUG_INVENTORY_ENTITY_PARSER === "1" && inventoryEntityParse) {
     console.log("[llm-inventory-entity-parse]", inventoryEntityParse);
@@ -16695,12 +16734,14 @@ if (authToken && signature) {
       ));
   const bookingParsePromise =
     bookingParserEligible && bookingParserHint && !shortAck && !highConfidenceFinanceTurn
-      ? parseBookingIntentWithLLM({
-          text: event.body,
-          history: recentHistory,
-          lastSuggestedSlots: conv.scheduler?.lastSuggestedSlots,
-          appointment: conv.appointment
-        })
+      ? safeLlmParse("booking_intent_parser", () =>
+          parseBookingIntentWithLLM({
+            text: event.body,
+            history: recentHistory,
+            lastSuggestedSlots: conv.scheduler?.lastSuggestedSlots,
+            appointment: conv.appointment
+          })
+        )
       : Promise.resolve(null);
   const intentParserEligible =
     event.provider === "twilio" &&
@@ -16709,11 +16750,13 @@ if (authToken && signature) {
     !!process.env.OPENAI_API_KEY;
   const intentParsePromise =
     intentParserEligible && !shortAck && !highConfidenceFinanceTurn
-      ? parseIntentWithLLM({
-          text: event.body,
-          history: recentHistory,
-          lead: conv.lead
-        })
+      ? safeLlmParse("intent_parser", () =>
+          parseIntentWithLLM({
+            text: event.body,
+            history: recentHistory,
+            lead: conv.lead
+          })
+        )
       : Promise.resolve(null);
   const dialogActParserEligible =
     event.provider === "twilio" &&
@@ -16723,11 +16766,13 @@ if (authToken && signature) {
     !shortAck;
   const dialogActParsePromise = dialogActParserEligible
     && !highConfidenceFinanceTurn
-    ? parseDialogActWithLLM({
-        text: event.body,
-        history: recentHistory,
-        lead: conv.lead
-      })
+    ? safeLlmParse("dialog_act_parser", () =>
+        parseDialogActWithLLM({
+          text: event.body,
+          history: recentHistory,
+          lead: conv.lead
+        })
+      )
     : Promise.resolve(null);
   const pricingPaymentsParserEligible =
     event.provider === "twilio" &&
@@ -16737,11 +16782,13 @@ if (authToken && signature) {
     !shortAck;
   const pricingPaymentsParsePromise = pricingPaymentsParserEligible
     && !highConfidenceSchedulingTurn
-    ? parsePricingPaymentsIntentWithLLM({
-        text: event.body,
-        history: recentHistory,
-        lead: conv.lead
-      })
+    ? safeLlmParse("pricing_payments_parser", () =>
+        parsePricingPaymentsIntentWithLLM({
+          text: event.body,
+          history: recentHistory,
+          lead: conv.lead
+        })
+      )
     : Promise.resolve(null);
   const parserStageStartedAt = Date.now();
   const [bookingParse, intentParse, dialogActParse, pricingPaymentsParse] =
@@ -16875,12 +16922,14 @@ if (authToken && signature) {
     ? unifiedTradeParse
     : null;
   if (!tradePayoffParse && tradePayoffParserEligible && tradePayoffParserHint) {
-    tradePayoffParse = await parseTradePayoffWithLLM({
-      text: event.body,
-      history: recentHistory,
-      lead: conv.lead,
-      tradePayoff: conv.tradePayoff
-    });
+    tradePayoffParse = await safeLlmParse("trade_payoff_parser", () =>
+      parseTradePayoffWithLLM({
+        text: event.body,
+        history: recentHistory,
+        lead: conv.lead,
+        tradePayoff: conv.tradePayoff
+      })
+    );
     if (unifiedSlotRouterEnabled && process.env.DEBUG_UNIFIED_SLOT_PARSER === "1") {
       console.log("[llm-unified-slot-parse] trade fallback to legacy parser");
     }
@@ -16888,12 +16937,14 @@ if (authToken && signature) {
   if (unifiedSlotRouterEnabled && unifiedSlotCompareLogEnabled && tradePayoffParserHint) {
     const legacyTradeShadow =
       tradePayoffParserEligible && (!tradePayoffParse || tradePayoffParse === unifiedTradeParse)
-        ? await parseTradePayoffWithLLM({
-            text: event.body,
-            history: recentHistory,
-            lead: conv.lead,
-            tradePayoff: conv.tradePayoff
-          })
+        ? await safeLlmParse("trade_payoff_parser_legacy_shadow", () =>
+            parseTradePayoffWithLLM({
+              text: event.body,
+              history: recentHistory,
+              lead: conv.lead,
+              tradePayoff: conv.tradePayoff
+            })
+          )
         : null;
     if (legacyTradeShadow) {
       const mismatch =
