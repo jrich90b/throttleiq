@@ -1,3 +1,4 @@
+import { config as dotenvConfig } from "dotenv";
 import fs from "node:fs";
 import path from "node:path";
 import { sendEmail } from "../services/api/src/domain/emailSender.ts";
@@ -27,6 +28,17 @@ function fmtCountRows(rows: AnyObj[] | undefined, key: string, valueKey = "count
 }
 
 async function run() {
+  // Mirror API startup behavior: load .env automatically.
+  dotenvConfig();
+  const feedbackLoopEnvPath = String(
+    process.env.FEEDBACK_LOOP_ENV_PATH || "/home/ubuntu/throttleiq-runtime/.feedback_loop.env"
+  ).trim();
+  if (feedbackLoopEnvPath && fs.existsSync(feedbackLoopEnvPath)) {
+    // Feedback-loop env should take precedence over base .env
+    // so each dealer/runtime can use its own report email settings.
+    dotenvConfig({ path: feedbackLoopEnvPath, override: true });
+  }
+
   const cwd = process.cwd();
   const outDir =
     process.env.EDIT_FEEDBACK_OUT_DIR ||
@@ -131,4 +143,3 @@ run().catch(err => {
   console.error("send_feedback_report_email failed:", err instanceof Error ? err.message : err);
   process.exit(1);
 });
-
