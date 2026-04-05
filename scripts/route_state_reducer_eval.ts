@@ -1,6 +1,8 @@
 import {
   nextActionFromState,
-  reduceStaleStateForInbound
+  reduceStaleStateForInbound,
+  resolveRoutingParserDecision,
+  resolveTurnPrimaryIntent
 } from "../services/api/src/domain/routeStateReducer.ts";
 
 type Case = {
@@ -113,6 +115,72 @@ if (passed !== cases.length) {
 
 console.log(`\nAll ${cases.length} route-state checks passed.`);
 
+type TurnIntentCase = {
+  id: string;
+  input: {
+    financePriorityOverride?: boolean;
+    schedulePriorityOverride?: boolean;
+    availabilityIntentOverride?: boolean;
+    hasPricingIntent?: boolean;
+    hasSchedulingIntent?: boolean;
+    hasAvailabilityIntent?: boolean;
+    callbackRequested?: boolean;
+  };
+  expectedPrimaryIntent: "pricing_payments" | "scheduling" | "callback" | "availability" | "general";
+};
+
+const turnIntentCases: TurnIntentCase[] = [
+  {
+    id: "pricing_wins_when_finance_override_true",
+    input: { financePriorityOverride: true, callbackRequested: true, availabilityIntentOverride: true },
+    expectedPrimaryIntent: "pricing_payments"
+  },
+  {
+    id: "scheduling_wins_when_schedule_override_true_and_no_finance",
+    input: { schedulePriorityOverride: true, callbackRequested: true, availabilityIntentOverride: true },
+    expectedPrimaryIntent: "scheduling"
+  },
+  {
+    id: "callback_wins_when_no_pricing_or_scheduling",
+    input: { callbackRequested: true, availabilityIntentOverride: true },
+    expectedPrimaryIntent: "callback"
+  },
+  {
+    id: "availability_wins_when_only_availability_signals_present",
+    input: { availabilityIntentOverride: true },
+    expectedPrimaryIntent: "availability"
+  },
+  {
+    id: "general_when_no_signals_present",
+    input: {},
+    expectedPrimaryIntent: "general"
+  },
+  {
+    id: "explicit_pricing_signal_wins_over_schedule_signal",
+    input: { hasPricingIntent: true, hasSchedulingIntent: true },
+    expectedPrimaryIntent: "pricing_payments"
+  }
+];
+
+let turnIntentPassed = 0;
+for (const c of turnIntentCases) {
+  const actual = resolveTurnPrimaryIntent(c.input);
+  const ok = actual.primaryIntent === c.expectedPrimaryIntent;
+  if (ok) turnIntentPassed += 1;
+  console.log(
+    `${ok ? "PASS" : "FAIL"} ${c.id} expected=${c.expectedPrimaryIntent} actual=${actual.primaryIntent}`
+  );
+}
+
+if (turnIntentPassed !== turnIntentCases.length) {
+  console.error(
+    `\n${turnIntentCases.length - turnIntentPassed} failures out of ${turnIntentCases.length} turn-intent cases`
+  );
+  process.exit(1);
+}
+
+console.log(`\nAll ${turnIntentCases.length} turn-intent checks passed.`);
+
 type StaleCase = {
   id: string;
   input: {
@@ -199,3 +267,106 @@ if (stalePassed !== staleCases.length) {
 }
 
 console.log(`\nAll ${staleCases.length} stale-state checks passed.`);
+
+type RoutingParserCase = {
+  id: string;
+  input: {
+    parserIntent?: "pricing_payments" | "scheduling" | "callback" | "availability" | "general" | "none" | null;
+    parserFallbackAction?: "none" | "clarify" | "no_response" | null;
+    parserClarifyPrompt?: string | null;
+    parserConfidence?: number | null;
+    parserConfidenceMin?: number;
+  };
+  expected: {
+    accepted: boolean;
+    intentOverride: "pricing_payments" | "scheduling" | "callback" | "availability" | "general" | null;
+    fallbackAction: "none" | "clarify" | "no_response";
+    reason:
+      | "accepted"
+      | "below_confidence"
+      | "no_signal"
+      | "intent_override"
+      | "clarify_fallback"
+      | "no_response_fallback";
+  };
+};
+
+const routingParserCases: RoutingParserCase[] = [
+  {
+    id: "below_confidence_rejected",
+    input: { parserIntent: "pricing_payments", parserConfidence: 0.51, parserConfidenceMin: 0.72 },
+    expected: {
+      accepted: false,
+      intentOverride: null,
+      fallbackAction: "none",
+      reason: "below_confidence"
+    }
+  },
+  {
+    id: "pricing_override_accepted",
+    input: { parserIntent: "pricing_payments", parserConfidence: 0.9 },
+    expected: {
+      accepted: true,
+      intentOverride: "pricing_payments",
+      fallbackAction: "none",
+      reason: "intent_override"
+    }
+  },
+  {
+    id: "clarify_fallback_accepted",
+    input: {
+      parserIntent: "none",
+      parserFallbackAction: "clarify",
+      parserClarifyPrompt: "Quick check — payments, availability, or appointment?",
+      parserConfidence: 0.86
+    },
+    expected: {
+      accepted: true,
+      intentOverride: null,
+      fallbackAction: "clarify",
+      reason: "clarify_fallback"
+    }
+  },
+  {
+    id: "no_response_fallback_accepted",
+    input: {
+      parserIntent: "none",
+      parserFallbackAction: "no_response",
+      parserConfidence: 0.95
+    },
+    expected: {
+      accepted: true,
+      intentOverride: null,
+      fallbackAction: "no_response",
+      reason: "no_response_fallback"
+    }
+  }
+];
+
+let routingParserPassed = 0;
+for (const c of routingParserCases) {
+  const actual = resolveRoutingParserDecision(c.input);
+  const ok =
+    actual.accepted === c.expected.accepted &&
+    actual.intentOverride === c.expected.intentOverride &&
+    actual.fallbackAction === c.expected.fallbackAction &&
+    actual.reason === c.expected.reason;
+  if (ok) routingParserPassed += 1;
+  console.log(
+    `${ok ? "PASS" : "FAIL"} ${c.id} expected=${JSON.stringify(c.expected)} actual=${JSON.stringify({
+      accepted: actual.accepted,
+      intentOverride: actual.intentOverride,
+      fallbackAction: actual.fallbackAction,
+      reason: actual.reason
+    })}`
+  );
+}
+
+if (routingParserPassed !== routingParserCases.length) {
+  console.error(
+    `\n${routingParserCases.length - routingParserPassed} failures out of ${routingParserCases.length} routing-parser cases`
+  );
+  process.exit(1);
+}
+
+console.log(`\nAll ${routingParserCases.length} routing-parser checks passed.`);

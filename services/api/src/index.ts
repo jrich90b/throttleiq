@@ -20,6 +20,7 @@ import {
   parseInventoryEntitiesWithLLM,
   parseIntentWithLLM,
   parsePricingPaymentsIntentWithLLM,
+  parseRoutingDecisionWithLLM,
   parseDialogActWithLLM,
   parseCustomerDispositionWithLLM,
   parseResponseControlWithLLM,
@@ -125,7 +126,9 @@ import { applyDraftStateInvariants } from "./domain/draftStateInvariants.js";
 import {
   DEALER_RIDE_NO_PURCHASE_SKIP_DRAFT,
   nextActionFromState,
-  reduceStaleStateForInbound
+  reduceStaleStateForInbound,
+  resolveRoutingParserDecision,
+  resolveTurnPrimaryIntent
 } from "./domain/routeStateReducer.js";
 
 import {
@@ -14538,13 +14541,64 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const dealerProfile = await getDealerProfileHot();
   const weatherStatus = await getDealerWeatherStatus(dealerProfile);
   const regenTextingTypoJoke = isTextingTypoJokeText(event.body ?? "");
+  const regenRoutingParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_ROUTING_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    !regenShortAck;
+  const regenRoutingDecisionParse = regenRoutingParserEligible
+    ? await safeLlmParse("regen_routing_decision_parser", () =>
+        parseRoutingDecisionWithLLM({
+          text: event.body ?? "",
+          history: buildHistory(conv, 8),
+          lead: conv.lead,
+          followUp: conv.followUp ?? null,
+          dialogState: getDialogState(conv),
+          classification: conv.classification ?? null
+        })
+      )
+    : null;
+  if (process.env.LLM_ROUTING_PARSER_DEBUG === "1" && regenRoutingDecisionParse) {
+    console.log("[llm-routing-parser][regen]", regenRoutingDecisionParse);
+  }
+  const regenRoutingParserDecision = resolveRoutingParserDecision({
+    parserIntent: regenRoutingDecisionParse?.primaryIntent ?? null,
+    parserFallbackAction: regenRoutingDecisionParse?.fallbackAction ?? null,
+    parserClarifyPrompt: regenRoutingDecisionParse?.clarifyPrompt ?? null,
+    parserConfidence: regenRoutingDecisionParse?.confidence ?? null,
+    parserConfidenceMin: Number(process.env.LLM_ROUTING_PARSER_CONFIDENCE_MIN ?? 0.72)
+  });
+  const regenRoutingIntentOverride =
+    regenRoutingParserDecision.intentOverride &&
+    regenRoutingParserDecision.intentOverride !== "general"
+      ? regenRoutingParserDecision.intentOverride
+      : null;
+  const regenParserPricingIntent = regenRoutingIntentOverride === "pricing_payments";
+  const regenParserSchedulingIntent = regenRoutingIntentOverride === "scheduling";
+  const regenParserCallbackIntent = regenRoutingIntentOverride === "callback";
+  const regenParserAvailabilityIntent = regenRoutingIntentOverride === "availability";
+  if (regenRoutingParserDecision.accepted && regenRoutingParserDecision.fallbackAction === "no_response") {
+    return respondRegenerateSkipped("routing_parser_no_response");
+  }
+  if (regenRoutingParserDecision.accepted && regenRoutingParserDecision.fallbackAction === "clarify") {
+    const clarifyReply =
+      regenRoutingParserDecision.clarifyPrompt ??
+      "Quick check — are you asking about payments, availability, or setting a time to come in?";
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(clarifyReply);
+    }
+    return respondWithSmsRegeneratedDraft(clarifyReply);
+  }
 
   // Keep regenerate aligned with inbound deterministic availability behavior.
   if (event.provider === "twilio" && channel === "sms") {
     const regenRouteSignals = resolveRoutePrioritySignals({
       text: event.body ?? "",
       conv,
-      lastOutboundText: String(getLastNonVoiceOutbound(conv)?.body ?? "")
+      lastOutboundText: String(getLastNonVoiceOutbound(conv)?.body ?? ""),
+      pricingOrPaymentsIntent: regenParserPricingIntent,
+      explicitAvailabilityIntentExtra: regenParserAvailabilityIntent
     });
     const regenRouteDecision = nextActionFromState({
       provider: event.provider,
@@ -14552,8 +14606,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       isShortAck: false,
       deterministicAvailabilityLookup: regenRouteSignals.deterministicAvailabilityLookup,
       availabilityIntentOverride: regenRouteSignals.availabilityIntentOverride,
-      financePriorityOverride: regenRouteSignals.financePriorityOverride,
-      schedulePriorityOverride: regenRouteSignals.schedulePriorityOverride
+      financePriorityOverride: regenRouteSignals.financePriorityOverride || regenParserPricingIntent,
+      schedulePriorityOverride: regenRouteSignals.schedulePriorityOverride || regenParserSchedulingIntent
     });
     if (regenRouteDecision.kind === "deterministic_availability_lookup") {
       const availabilityResolution = await resolveDeterministicAvailabilityReply({
@@ -15018,24 +15072,27 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenHintSignals = resolveRoutePrioritySignals({
     text: event.body ?? "",
     conv,
-    lastOutboundText: String(getLastNonVoiceOutbound(conv)?.body ?? "")
+    lastOutboundText: String(getLastNonVoiceOutbound(conv)?.body ?? ""),
+    pricingOrPaymentsIntent: regenParserPricingIntent,
+    explicitAvailabilityIntentExtra: regenParserAvailabilityIntent
   });
-  const regenAvailabilityIntentHint = regenHintSignals.availabilityIntentOverride;
-  const regenFinancePriorityHint = regenHintSignals.financePriorityOverride;
-  const regenPrimaryIntentHint: "pricing_payments" | "scheduling" | "callback" | "availability" | "general" =
-    regenFinancePriorityHint
-      ? "pricing_payments"
-      : regenHintSignals.schedulePriorityOverride
-        ? "scheduling"
-        : !regenTextingTypoJoke && detectCallbackText(event.body ?? "")
-          ? "callback"
-          : regenAvailabilityIntentHint
-            ? "availability"
-            : "general";
+  const regenFinancePriorityHint = regenHintSignals.financePriorityOverride || regenParserPricingIntent;
+  const regenCallbackRequested = !regenTextingTypoJoke && detectCallbackText(event.body ?? "");
+  const regenIntentPlan = resolveTurnPrimaryIntent({
+    hasPricingIntent: regenParserPricingIntent,
+    hasSchedulingIntent: regenParserSchedulingIntent,
+    hasAvailabilityIntent: regenParserAvailabilityIntent,
+    financePriorityOverride: regenHintSignals.financePriorityOverride || regenParserPricingIntent,
+    schedulePriorityOverride: regenHintSignals.schedulePriorityOverride || regenParserSchedulingIntent,
+    availabilityIntentOverride: regenHintSignals.availabilityIntentOverride,
+    callbackRequested: regenCallbackRequested || regenParserCallbackIntent
+  });
+  const regenPrimaryIntentHint = regenRoutingIntentOverride ?? regenIntentPlan.primaryIntent;
   const regenPricingIntentHint = regenPrimaryIntentHint === "pricing_payments";
   const regenSchedulingIntentHint = regenPrimaryIntentHint === "scheduling";
   const regenAvailabilityPrimaryIntentHint = regenPrimaryIntentHint === "availability";
-  const regenCallbackIntentHint = regenPrimaryIntentHint === "callback";
+  const regenCallbackIntentHint =
+    regenPrimaryIntentHint === "callback" || regenIntentPlan.callbackIntent || regenParserCallbackIntent;
 
   const result = await orchestrateInbound(event, history, {
     appointment: conv.appointment,
@@ -15052,7 +15109,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     pricingAttempts: getPricingAttempts(conv),
     allowSchedulingOffer: regenLlmExplicitScheduleIntent || isExplicitScheduleIntent(event.body),
     callbackRequestedOverride:
-      !regenTextingTypoJoke && (regenCallbackIntentHint || detectCallbackText(event.body ?? "")),
+      !regenTextingTypoJoke && (regenCallbackIntentHint || regenCallbackRequested),
     voiceSummary: getActiveVoiceContext(conv)?.summary ?? null,
     memorySummary,
     memorySummaryShouldUpdate,
@@ -17387,13 +17444,32 @@ if (authToken && signature) {
         })
       )
     : Promise.resolve(null);
+  const routingDecisionParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_ROUTING_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    !shortAck;
+  const routingDecisionParsePromise = routingDecisionParserEligible
+    ? safeLlmParse("routing_decision_parser", () =>
+        parseRoutingDecisionWithLLM({
+          text: event.body,
+          history: recentHistory,
+          lead: conv.lead,
+          followUp: conv.followUp ?? null,
+          dialogState: getDialogState(conv),
+          classification: conv.classification ?? null
+        })
+      )
+    : Promise.resolve(null);
   const parserStageStartedAt = Date.now();
-  const [bookingParse, intentParse, dialogActParse, pricingPaymentsParse] =
+  const [bookingParse, intentParse, dialogActParse, pricingPaymentsParse, routingDecisionParse] =
     await Promise.all([
       bookingParsePromise,
       intentParsePromise,
       dialogActParsePromise,
-      pricingPaymentsParsePromise
+      pricingPaymentsParsePromise,
+      routingDecisionParsePromise
     ]);
   logRouteTiming("parsers", parserStageStartedAt, {
     highConfidenceFinanceTurn,
@@ -17433,6 +17509,24 @@ if (authToken && signature) {
   if (process.env.DEBUG_PRICING_PAYMENTS_PARSER === "1" && pricingPaymentsParse) {
     console.log("[llm-pricing-payments-parse]", pricingPaymentsParse);
   }
+  if (process.env.LLM_ROUTING_PARSER_DEBUG === "1" && routingDecisionParse) {
+    console.log("[llm-routing-parser][live]", routingDecisionParse);
+  }
+  const routingParserDecision = resolveRoutingParserDecision({
+    parserIntent: routingDecisionParse?.primaryIntent ?? null,
+    parserFallbackAction: routingDecisionParse?.fallbackAction ?? null,
+    parserClarifyPrompt: routingDecisionParse?.clarifyPrompt ?? null,
+    parserConfidence: routingDecisionParse?.confidence ?? null,
+    parserConfidenceMin: Number(process.env.LLM_ROUTING_PARSER_CONFIDENCE_MIN ?? 0.72)
+  });
+  const routingParserIntentOverride =
+    routingParserDecision.intentOverride && routingParserDecision.intentOverride !== "general"
+      ? routingParserDecision.intentOverride
+      : null;
+  const parserPricingIntent = routingParserIntentOverride === "pricing_payments";
+  const parserSchedulingIntent = routingParserIntentOverride === "scheduling";
+  const parserCallbackIntent = routingParserIntentOverride === "callback";
+  const parserAvailabilityIntent = routingParserIntentOverride === "availability";
   const pricingPaymentsConfidence =
     typeof pricingPaymentsParse?.confidence === "number" ? pricingPaymentsParse.confidence : 0;
   const pricingPaymentsConfidenceMin = Number(process.env.LLM_PRICING_PAYMENTS_CONFIDENCE_MIN ?? 0.74);
@@ -17444,7 +17538,7 @@ if (authToken && signature) {
   const llmPricingIntentRaw =
     (dialogActAccepted && dialogActParse?.topic === "pricing") ||
     (pricingPaymentsAccepted && pricingPaymentsParse?.intent === "pricing");
-  const llmPricingOrPaymentsIntentRaw = llmPricingIntentRaw || llmPaymentsIntentRaw;
+  const llmPricingOrPaymentsIntentRaw = llmPricingIntentRaw || llmPaymentsIntentRaw || parserPricingIntent;
   const explicitFinanceTermIntent = preParserExplicitFinanceTermIntent;
   const routeSignalsForRawPricing = resolveRoutePrioritySignals({
     text: event.body ?? "",
@@ -17460,7 +17554,7 @@ if (authToken && signature) {
   const llmPricingOrPaymentsIntent = pricingHistoryBleedGuard
     ? false
     : llmPricingOrPaymentsIntentRaw;
-  const llmSchedulingIntent = dialogActAccepted && dialogActParse?.topic === "scheduling";
+  const llmSchedulingIntent = parserSchedulingIntent || (dialogActAccepted && dialogActParse?.topic === "scheduling");
   const insuranceStatusUpdateOnly = (() => {
     const body = String(event.body ?? "");
     const lower = body.toLowerCase();
@@ -17602,14 +17696,14 @@ if (authToken && signature) {
   const intentAccepted = !!intentParse?.explicitRequest && intentConfidence >= intentConfidenceMin;
   const intentLow =
     !!intentParse?.explicitRequest && intentConfidence > 0 && intentConfidence < intentConfidenceMin;
-  const llmCallbackRequested = intentAccepted && intentParse?.intent === "callback";
+  const llmCallbackRequested = parserCallbackIntent || (intentAccepted && intentParse?.intent === "callback");
   const customerWillCallIntent = isCustomerWillCallText(event.body ?? "");
   const textingTypoJoke = isTextingTypoJokeText(event.body ?? "");
   const callbackRequestedOverride =
     !customerWillCallIntent &&
     !textingTypoJoke &&
     (llmCallbackRequested || detectCallbackText(event.body ?? ""));
-  const llmAvailabilityIntent = intentAccepted && intentParse?.intent === "availability";
+  const llmAvailabilityIntent = parserAvailabilityIntent || (intentAccepted && intentParse?.intent === "availability");
   const llmTestRideIntent = intentAccepted && intentParse?.intent === "test_ride";
   const llmAvailability = llmAvailabilityIntent ? intentParse?.availability ?? null : null;
   let mentionedUser: any | null = null;
@@ -17776,20 +17870,6 @@ if (authToken && signature) {
     callbackRequestedOverride && !pricingOrPaymentsIntent && !schedulingPrimaryIntent;
   const availabilityPrimaryIntent =
     llmAvailabilityIntent && !pricingOrPaymentsIntent && !schedulingPrimaryIntent && !callbackPrimaryIntent;
-  const turnPrimaryIntent:
-    | "pricing_payments"
-    | "scheduling"
-    | "callback"
-    | "availability"
-    | "general" = pricingOrPaymentsIntent
-    ? "pricing_payments"
-    : schedulingPrimaryIntent
-      ? "scheduling"
-    : callbackPrimaryIntent
-      ? "callback"
-      : availabilityPrimaryIntent
-        ? "availability"
-        : "general";
   const routeSignalsFinal = resolveRoutePrioritySignals({
     text: event.body ?? "",
     conv,
@@ -17808,6 +17888,16 @@ if (authToken && signature) {
   const deterministicAvailabilityIntentOverride = routeSignalsFinal.availabilityIntentOverride;
   const financePriorityOverride = routeSignalsFinal.financePriorityOverride;
   const schedulePriorityOverride = routeSignalsFinal.schedulePriorityOverride;
+  const turnIntentPlan = resolveTurnPrimaryIntent({
+    hasPricingIntent: pricingOrPaymentsIntent || parserPricingIntent,
+    hasSchedulingIntent: schedulingPrimaryIntent || parserSchedulingIntent,
+    hasAvailabilityIntent: availabilityPrimaryIntent || parserAvailabilityIntent,
+    callbackRequested: callbackPrimaryIntent || parserCallbackIntent,
+    financePriorityOverride,
+    schedulePriorityOverride,
+    availabilityIntentOverride: deterministicAvailabilityIntentOverride
+  });
+  const turnPrimaryIntent = routingParserIntentOverride ?? turnIntentPlan.primaryIntent;
   logDecisionTrace("live.intent_routing", {
     inboundProvider: event.provider,
     turnPrimaryIntent,
@@ -17821,6 +17911,29 @@ if (authToken && signature) {
     deterministicAvailabilityLookup,
     pricingHistoryBleedGuard
   });
+  if (routingParserDecision.accepted && routingParserDecision.fallbackAction === "no_response") {
+    logRouteOutcome("routing_parser_no_response");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+  if (routingParserDecision.accepted && routingParserDecision.fallbackAction === "clarify") {
+    const clarifyReply =
+      routingParserDecision.clarifyPrompt ??
+      "Quick check — are you asking about payments, availability, or setting a time to come in?";
+    setDialogState(conv, "clarify_schedule");
+    if (webhookMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, clarifyReply, "draft_ai");
+      logRouteOutcome("routing_parser_clarify_draft");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, clarifyReply, "twilio");
+    logRouteOutcome("routing_parser_clarify_send");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      clarifyReply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (turnPrimaryIntent === "scheduling" && getDialogState(conv) === "pricing_need_model") {
     setDialogState(conv, "schedule_request");
   }
@@ -18827,9 +18940,9 @@ if (authToken && signature) {
     channel: event.channel === "email" ? "email" : "sms",
     isShortAck: false,
     deterministicAvailabilityLookup,
-    availabilityIntentOverride: deterministicAvailabilityIntentOverride,
-    financePriorityOverride,
-    schedulePriorityOverride
+    availabilityIntentOverride: deterministicAvailabilityIntentOverride || parserAvailabilityIntent,
+    financePriorityOverride: financePriorityOverride || parserPricingIntent,
+    schedulePriorityOverride: schedulePriorityOverride || parserSchedulingIntent
   });
   if (liveRouteDecision.kind === "deterministic_availability_lookup") {
     logDecisionTrace("live.route_deterministic_availability", {

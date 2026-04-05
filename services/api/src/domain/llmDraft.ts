@@ -423,6 +423,14 @@ export type PricingPaymentsIntentParse = {
   confidence?: number;
 };
 
+export type RoutingDecisionParse = {
+  primaryIntent: "pricing_payments" | "scheduling" | "callback" | "availability" | "general" | "none";
+  explicitRequest: boolean;
+  fallbackAction: "none" | "clarify" | "no_response";
+  clarifyPrompt?: string | null;
+  confidence?: number;
+};
+
 export type InventoryEntityParse = {
   model?: string | null;
   year?: number | null;
@@ -796,6 +804,22 @@ const PRICING_PAYMENTS_INTENT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     asks_monthly_target: { type: "boolean" },
     asks_down_payment: { type: "boolean" },
     asks_apr_or_term: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const ROUTING_DECISION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["primary_intent", "explicit_request", "fallback_action", "clarify_prompt", "confidence"],
+  properties: {
+    primary_intent: {
+      type: "string",
+      enum: ["pricing_payments", "scheduling", "callback", "availability", "general", "none"]
+    },
+    explicit_request: { type: "boolean" },
+    fallback_action: { type: "string", enum: ["none", "clarify", "no_response"] },
+    clarify_prompt: { type: "string" },
     confidence: { type: "number" }
   }
 };
@@ -1821,6 +1845,132 @@ export async function parsePricingPaymentsIntentWithLLM(args: {
     asksMonthlyTarget: !!parsed.asks_monthly_target,
     asksDownPayment: !!parsed.asks_down_payment,
     asksAprOrTerm: !!parsed.asks_apr_or_term,
+    confidence
+  };
+}
+
+export async function parseRoutingDecisionWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+  followUp?: any;
+  dialogState?: string | null;
+  classification?: { bucket?: string | null; cta?: string | null } | null;
+}): Promise<RoutingDecisionParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_ROUTING_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_ROUTING_PARSER_DEBUG === "1";
+  const primaryModel = process.env.OPENAI_ROUTING_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_ROUTING_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const followUp = args.followUp ?? {};
+  const examples = [
+    `EXAMPLE A
+inbound: "Do you have any black street glides in stock?"
+output: {"primary_intent":"availability","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.97}`,
+    `EXAMPLE B
+inbound: "I have $2,500 down and want to stay under $500/mo"
+output: {"primary_intent":"pricing_payments","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.97}`,
+    `EXAMPLE C
+inbound: "Can I come in Wednesday at 1?"
+output: {"primary_intent":"scheduling","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.98}`,
+    `EXAMPLE D
+inbound: "Can you call me after 3?"
+output: {"primary_intent":"callback","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.95}`,
+    `EXAMPLE E
+inbound: "Ok thanks"
+output: {"primary_intent":"none","explicit_request":false,"fallback_action":"no_response","clarify_prompt":"","confidence":0.96}`,
+    `EXAMPLE F
+inbound: "Yeah maybe"
+output: {"primary_intent":"none","explicit_request":false,"fallback_action":"clarify","clarify_prompt":"Quick check — are you asking about payments, availability, or setting a time to come in?","confidence":0.86}`
+  ];
+  const prompt = [
+    "You are a strict routing parser for dealership inbound messages.",
+    "Return only JSON matching the schema.",
+    "",
+    "Choose one primary_intent:",
+    "- pricing_payments: price, payments, APR, term, down payment, deals/specials/incentives.",
+    "- availability: in stock, still available, colors/trims/years inventory availability.",
+    "- scheduling: appointment/day/time/come in/stop by requests.",
+    "- callback: customer asks for a phone call.",
+    "- general: clear request but not one of the above.",
+    "- none: no actionable request.",
+    "",
+    "Rules:",
+    "- Use the latest inbound ask as source of truth even if prior turns were different.",
+    "- If inbound is short acknowledgment only, use primary_intent=none and fallback_action=no_response.",
+    "- Use fallback_action=clarify only when message is ambiguous and not safely routable.",
+    "- confidence is 0..1.",
+    "",
+    ...examples,
+    "",
+    `Known lead info: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null,
+      source: lead?.source ?? null
+    })}`,
+    `Known workflow state: ${JSON.stringify({
+      followUpMode: followUp?.mode ?? null,
+      followUpReason: followUp?.reason ?? null,
+      dialogState: args.dialogState ?? null,
+      bucket: args.classification?.bucket ?? null,
+      cta: args.classification?.cta ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "routing_decision_parser",
+      schema: ROUTING_DECISION_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 240,
+      debugTag: "llm-routing-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const primaryIntentRaw = String(parsed.primary_intent ?? "").toLowerCase();
+  const primaryIntent: RoutingDecisionParse["primaryIntent"] =
+    primaryIntentRaw === "pricing_payments" ||
+    primaryIntentRaw === "scheduling" ||
+    primaryIntentRaw === "callback" ||
+    primaryIntentRaw === "availability" ||
+    primaryIntentRaw === "general"
+      ? primaryIntentRaw
+      : "none";
+  const fallbackActionRaw = String(parsed.fallback_action ?? "").toLowerCase();
+  const fallbackAction: RoutingDecisionParse["fallbackAction"] =
+    fallbackActionRaw === "clarify" || fallbackActionRaw === "no_response"
+      ? fallbackActionRaw
+      : "none";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    primaryIntent,
+    explicitRequest: !!parsed.explicit_request,
+    fallbackAction,
+    clarifyPrompt: cleanOptionalString(parsed.clarify_prompt),
     confidence
   };
 }
