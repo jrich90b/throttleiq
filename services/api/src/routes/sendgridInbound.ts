@@ -3557,6 +3557,30 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       draft = `Hi ${name} — thanks for your interest in a test ride. ${rest}`.trim();
     }
   }
+  if (
+    isInitialAdf &&
+    /meta/i.test(leadSourceLower) &&
+    inferredBucket === "general_inquiry" &&
+    typeof draft === "string"
+  ) {
+    const modelLabel = normalizeVehicleModel(
+      conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "",
+      conv.lead?.vehicle?.make ?? null
+    );
+    const monthsStart = conv.lead?.purchaseTimeframeMonthsStart;
+    const isFutureWindow = typeof monthsStart === "number" && monthsStart >= 4;
+    const asksModel = /which model|what model|model are you interested|bike preference/i.test(draft);
+    const hasSoftInvite = /\b(stop in|come in|check (it|them) out|go over options|take a look)\b/i.test(draft);
+    if (!asksModel || !hasSoftInvite || isFutureWindow) {
+      const modelQuestion = modelLabel
+        ? `Are you leaning toward a specific ${modelLabel}, or still comparing?`
+        : "Do you have a bike preference, or are you still comparing models?";
+      const timeframeNote = isFutureWindow
+        ? "Even if you’re a few months out, you’re welcome to stop in anytime to check bikes out and go over options."
+        : "You’re welcome to stop in anytime to check bikes out and go over options.";
+      draft = `${modelQuestion} ${timeframeNote}`;
+    }
+  }
   const rawModel = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "";
   if (/full line/i.test(rawModel) && typeof draft === "string") {
     draft = draft
