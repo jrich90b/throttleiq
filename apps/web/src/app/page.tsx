@@ -3858,29 +3858,29 @@ export default function Home() {
         return;
       }
       if (data?.skipped) {
-        if (messageFilter === "sms") {
-          try {
-            await fetch(
-              `/api/conversations/${encodeURIComponent(selectedConv.id)}/draft/clear`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ clearSmsDraft: true, clearEmailDraft: false })
-              }
-            );
-          } catch {
-            // best-effort cleanup only
-          }
+        try {
+          await fetch(
+            `/api/conversations/${encodeURIComponent(selectedConv.id)}/draft/clear`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ clearSmsDraft: true, clearEmailDraft: true })
+            }
+          );
+        } catch {
+          // best-effort cleanup only
         }
         setSendBody("");
         setSendBodySource("system");
         setLastDraftId(null);
+        const skipMsg = String(data?.draft ?? data?.note ?? "").trim();
+        setSaveToast(skipMsg || "No customer reply needed.");
       }
       if (data?.conversation) {
         if (messageFilter === "email") setEmailManualMode(false);
         const conv = data.conversation;
         const convForUi =
-          data?.skipped && messageFilter === "sms" && Array.isArray(conv?.messages)
+          data?.skipped && Array.isArray(conv?.messages)
             ? {
                 ...conv,
                 messages: conv.messages.map((m: any) =>

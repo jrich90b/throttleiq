@@ -121,6 +121,7 @@ import {
   isResponseControlParserAccepted
 } from "./domain/transitionSafety.js";
 import { pickRegenerateInbound } from "./domain/regenerateSelection.js";
+import { applyDraftStateInvariants } from "./domain/draftStateInvariants.js";
 
 import {
   upsertConversationByLeadKey,
@@ -224,6 +225,22 @@ const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
 app.use(cors());
 app.use("/uploads", express.static(path.resolve(getDataDir(), "uploads")));
+
+const routeOutcomeCounters = new Map<string, number>();
+function recordRouteOutcome(scope: "live" | "regen" | "manual", outcome: string, detail?: Record<string, unknown>) {
+  if (process.env.DEBUG_DECISION_TRACE !== "1") return;
+  const normalizedScope = String(scope ?? "live");
+  const normalizedOutcome = String(outcome ?? "unknown").trim() || "unknown";
+  const key = `${normalizedScope}:${normalizedOutcome}`;
+  const count = (routeOutcomeCounters.get(key) ?? 0) + 1;
+  routeOutcomeCounters.set(key, count);
+  console.log("[route-outcome]", {
+    scope: normalizedScope,
+    outcome: normalizedOutcome,
+    count,
+    ...(detail ?? {})
+  });
+}
 app.post(
   "/debug/inbound",
   express.raw({ type: "*/*", limit: "10mb" }),
@@ -13468,10 +13485,71 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     providerMessageId: inbound.providerMessageId ?? `regen_${Date.now()}`,
     receivedAt: inbound.at ?? new Date().toISOString()
   };
-  if (event.provider === "twilio" && shouldSuppressShortAckDraft(event.body ?? "")) {
-    discardPendingDrafts(conv, "short_ack_no_action");
+  const evaluateRegenDraftInvariant = (text: string) =>
+    applyDraftStateInvariants({
+      inboundText: event.body ?? "",
+      draftText: text,
+      followUpMode: conv.followUp?.mode ?? null,
+      followUpReason: conv.followUp?.reason ?? null,
+      dialogState: getDialogState(conv),
+      classificationBucket: conv.classification?.bucket ?? null,
+      classificationCta: conv.classification?.cta ?? null
+    });
+  const respondRegenerateSkipped = (note: string, draft?: string) => {
+    recordRouteOutcome("regen", note, {
+      convId: conv.id,
+      leadKey: conv.leadKey
+    });
+    discardPendingDrafts(conv, note);
+    delete conv.emailDraft;
     saveConversation(conv);
-    return res.json({ ok: true, conversation: conv, skipped: true, note: "short_ack_no_action" });
+    return res.json({
+      ok: true,
+      conversation: conv,
+      skipped: true,
+      note,
+      ...(draft ? { draft } : {})
+    });
+  };
+  const appendSmsRegeneratedDraft = (text: string, mediaUrls?: string[]) => {
+    const invariant = evaluateRegenDraftInvariant(text);
+    if (!invariant.allow) {
+      return { ok: false as const, reason: invariant.reason ?? "draft_invariant_blocked" };
+    }
+    const from = String(event.to ?? "dealership").trim() || "dealership";
+    const leadKey = String(conv.leadKey ?? "").trim();
+    const to = leadKey || String(event.from ?? "").trim();
+    appendOutbound(conv, from, to, invariant.draftText, "draft_ai", undefined, mediaUrls);
+    return { ok: true as const, draft: invariant.draftText };
+  };
+  const respondWithSmsRegeneratedDraft = (text: string, mediaUrls?: string[]) => {
+    discardPendingDrafts(conv);
+    const published = appendSmsRegeneratedDraft(text, mediaUrls);
+    if (!published.ok) {
+      return respondRegenerateSkipped(published.reason);
+    }
+    saveConversation(conv);
+    recordRouteOutcome("regen", "draft_published", {
+      convId: conv.id,
+      leadKey: conv.leadKey
+    });
+    return res.json({ ok: true, conversation: conv, draft: published.draft });
+  };
+  const respondWithEmailRegeneratedDraft = (text: string) => {
+    const invariant = evaluateRegenDraftInvariant(text);
+    if (!invariant.allow) {
+      return respondRegenerateSkipped(invariant.reason ?? "draft_invariant_blocked");
+    }
+    conv.emailDraft = invariant.draftText;
+    saveConversation(conv);
+    recordRouteOutcome("regen", "email_draft_published", {
+      convId: conv.id,
+      leadKey: conv.leadKey
+    });
+    return res.json({ ok: true, conversation: conv, draft: invariant.draftText });
+  };
+  if (event.provider === "twilio" && shouldSuppressShortAckDraft(event.body ?? "")) {
+    return respondRegenerateSkipped("short_ack_no_action");
   }
   const regenInboundLower = String(event.body ?? "").toLowerCase();
   const regenRawProvider = String((inbound as any)?.provider ?? "").toLowerCase();
@@ -13486,12 +13564,6 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     /purchase timeframe:\s*i am not interested in purchasing at this time/.test(regenInboundLower) ||
     /do you expect to make a motorcycle purchase in the near future\?\s*no/.test(regenInboundLower) ||
     /not interested in purchasing at this time/.test(regenInboundLower);
-  const appendSmsRegeneratedDraft = (text: string, mediaUrls?: string[]) => {
-    const from = String(event.to ?? "dealership").trim() || "dealership";
-    const leadKey = String(conv.leadKey ?? "").trim();
-    const to = leadKey || String(event.from ?? "").trim();
-    appendOutbound(conv, from, to, text, "draft_ai", undefined, mediaUrls);
-  };
   if (regenDealerRideEventLead && regenNoPurchaseNow) {
     addCallTodoIfMissing(
       conv,
@@ -13584,13 +13656,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     saveConversation(conv);
     const draft =
       "No customer reply needed — dealer ride outcome requires salesperson follow-up.";
-    return res.json({
-      ok: true,
-      conversation: conv,
-      skipped: true,
-      draft,
-      note: "dealer_ride_no_purchase_manual_handoff"
-    });
+    return respondRegenerateSkipped("dealer_ride_no_purchase_manual_handoff", draft);
   }
 
   const history = buildHistory(conv, 60);
@@ -13723,10 +13789,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         availabilityResolution.kind === "reply" && Array.isArray(availabilityResolution.mediaUrls)
           ? availabilityResolution.mediaUrls
           : undefined;
-      discardPendingDrafts(conv);
-      appendSmsRegeneratedDraft(reply, mediaUrls);
-      saveConversation(conv);
-      return res.json({ ok: true, conversation: conv, draft: reply });
+      return respondWithSmsRegeneratedDraft(reply, mediaUrls);
     }
   }
 
@@ -13756,14 +13819,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         addMediaRequestTodoIfMissing(conv, event.body, event.providerMessageId);
       }
       if (channel === "email") {
-        conv.emailDraft = mediaReply;
-        saveConversation(conv);
-        return res.json({ ok: true, conversation: conv, draft: mediaReply });
+        return respondWithEmailRegeneratedDraft(mediaReply);
       }
-      discardPendingDrafts(conv);
-      appendSmsRegeneratedDraft(mediaReply, autoMediaUrls.length ? autoMediaUrls : undefined);
-      saveConversation(conv);
-      return res.json({ ok: true, conversation: conv, draft: mediaReply });
+      return respondWithSmsRegeneratedDraft(
+        mediaReply,
+        autoMediaUrls.length ? autoMediaUrls : undefined
+      );
     }
   }
 
@@ -13803,14 +13864,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     stopFollowUpCadence(conv, "manual_handoff");
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
     if (channel === "email") {
-      conv.emailDraft = reply;
-      saveConversation(conv);
-      return res.json({ ok: true, conversation: conv, draft: reply });
+      return respondWithEmailRegeneratedDraft(reply);
     }
-    discardPendingDrafts(conv);
-    appendSmsRegeneratedDraft(reply);
-    saveConversation(conv);
-    return res.json({ ok: true, conversation: conv, draft: reply });
+    return respondWithSmsRegeneratedDraft(reply);
   }
   let mentionedUser =
     event.provider === "sendgrid_adf" ? null : findMentionedUser(event.body ?? "", usersForMentions);
@@ -13840,10 +13896,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       ? `I'll have ${firstName} reach out.`
       : `I'll let ${firstName} know.`;
     const reply = `${intro}${empathyNeeded ? "I'm really sorry to hear that. " : "Got it — "}${handoff}`;
-    discardPendingDrafts(conv);
-    appendSmsRegeneratedDraft(reply);
-    saveConversation(conv);
-    return res.json({ ok: true, conversation: conv, draft: reply });
+    return respondWithSmsRegeneratedDraft(reply);
   }
 
   const regenCustomerDispositionParserEligible =
@@ -13909,14 +13962,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     applyCustomerDispositionCloseout(conv, regenDispositionDecision);
     const regenReply = ensureUniqueDispositionReply(buildCustomerDispositionReply(event.body), conv);
     if (channel === "email") {
-      conv.emailDraft = regenReply;
-      saveConversation(conv);
-      return res.json({ ok: true, conversation: conv, draft: regenReply });
+      return respondWithEmailRegeneratedDraft(regenReply);
     }
-    discardPendingDrafts(conv);
-    appendSmsRegeneratedDraft(regenReply);
-    saveConversation(conv);
-    return res.json({ ok: true, conversation: conv, draft: regenReply });
+    return respondWithSmsRegeneratedDraft(regenReply);
   }
 
   if (isServiceRecordsRequest(event.body)) {
@@ -13933,27 +13981,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const reply =
       "Thanks for the details — I’ll have the team check service records (battery/tires) and follow up. I’ll also keep an eye on availability for early May.";
     if (channel === "email") {
-      conv.emailDraft = reply;
-      saveConversation(conv);
-      return res.json({ ok: true, conversation: conv, draft: reply });
+      return respondWithEmailRegeneratedDraft(reply);
     }
-    discardPendingDrafts(conv);
-    appendSmsRegeneratedDraft(reply);
-    saveConversation(conv);
-    return res.json({ ok: true, conversation: conv, draft: reply });
+    return respondWithSmsRegeneratedDraft(reply);
   }
 
   if ((regenLlmComplimentOnly || isComplimentOnlyText(event.body)) && !isShortAckText(event.body)) {
     const reply = buildComplimentReply();
     if (channel === "email") {
-      conv.emailDraft = reply;
-      saveConversation(conv);
-      return res.json({ ok: true, conversation: conv, draft: reply });
+      return respondWithEmailRegeneratedDraft(reply);
     }
-    discardPendingDrafts(conv);
-    appendSmsRegeneratedDraft(reply);
-    saveConversation(conv);
-    return res.json({ ok: true, conversation: conv, draft: reply });
+    return respondWithSmsRegeneratedDraft(reply);
   }
 
   const serviceDialogState = getDialogState(conv);
@@ -13988,14 +14026,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         ? "Got it — I’ll have our parts department reach out shortly."
         : "Got it — I’ll have our apparel team reach out shortly.";
     if (channel === "email") {
-      conv.emailDraft = reply;
-      saveConversation(conv);
-      return res.json({ ok: true, conversation: conv, draft: reply });
+      return respondWithEmailRegeneratedDraft(reply);
     }
-    discardPendingDrafts(conv);
-    appendSmsRegeneratedDraft(reply);
-    saveConversation(conv);
-    return res.json({ ok: true, conversation: conv, draft: reply });
+    return respondWithSmsRegeneratedDraft(reply);
   }
   const isServiceLead =
     conv.classification?.bucket === "service" ||
@@ -14021,26 +14054,16 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     if (complimentRegex || complimentLLM) {
       const reply = "Totally — glad you like it.";
       if (channel === "email") {
-        conv.emailDraft = reply;
-        saveConversation(conv);
-        return res.json({ ok: true, conversation: conv, draft: reply });
+        return respondWithEmailRegeneratedDraft(reply);
       }
-      discardPendingDrafts(conv);
-      appendSmsRegeneratedDraft(reply);
-      saveConversation(conv);
-      return res.json({ ok: true, conversation: conv, draft: reply });
+      return respondWithSmsRegeneratedDraft(reply);
     }
     if (/\b(thanks|thank you|thanks again|thx|ty|appreciate)\b/.test(t)) {
       const reply = "You're welcome!";
       if (channel === "email") {
-        conv.emailDraft = reply;
-        saveConversation(conv);
-        return res.json({ ok: true, conversation: conv, draft: reply });
+        return respondWithEmailRegeneratedDraft(reply);
       }
-      discardPendingDrafts(conv);
-      appendSmsRegeneratedDraft(reply);
-      saveConversation(conv);
-      return res.json({ ok: true, conversation: conv, draft: reply });
+      return respondWithSmsRegeneratedDraft(reply);
     }
     if (getDialogState(conv) === "none") {
       setDialogState(conv, "service_request");
@@ -14058,14 +14081,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const reply =
       "We’ve received your service request and will have the service department reach out.";
     if (channel === "email") {
-      conv.emailDraft = reply;
-      saveConversation(conv);
-      return res.json({ ok: true, conversation: conv, draft: reply });
+      return respondWithEmailRegeneratedDraft(reply);
     }
-    discardPendingDrafts(conv);
-    appendSmsRegeneratedDraft(reply);
-    saveConversation(conv);
-    return res.json({ ok: true, conversation: conv, draft: reply });
+    return respondWithSmsRegeneratedDraft(reply);
   }
 
   if (event.provider === "twilio" && channel === "sms") {
@@ -14099,10 +14117,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
           : budgetLabel
             ? `Perfect — with ${downLabel} down targeting ${budgetLabel}, do you want me to run 60, 72, or 84 months?`
             : `Perfect — with ${downLabel} down, do you want me to run 60, 72, or 84 months?`;
-      discardPendingDrafts(conv);
-      appendSmsRegeneratedDraft(reply);
-      saveConversation(conv);
-      return res.json({ ok: true, conversation: conv, draft: reply });
+      return respondWithSmsRegeneratedDraft(reply);
     }
 
     const regenSchedulingSignals = detectSchedulingSignals(event.body ?? "");
@@ -14180,16 +14195,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
           : explicitAvailabilityAskThisTurn
             ? `Next week works. I’ll keep an eye on ${unitLabel} and update you right away. What day are you thinking to stop by?`
             : "Next week works. What day are you thinking to stop by?";
-      discardPendingDrafts(conv);
-      appendSmsRegeneratedDraft(reply);
-      saveConversation(conv);
-      return res.json({ ok: true, conversation: conv, draft: reply });
+      return respondWithSmsRegeneratedDraft(reply);
     }
   }
 
   if (event.provider === "twilio" && shouldSuppressShortAckDraft(event.body ?? "")) {
-    saveConversation(conv);
-    return res.json({ ok: true, conversation: conv, skipped: true, note: "short_ack_no_action" });
+    return respondRegenerateSkipped("short_ack_no_action");
   }
 
   const result = await orchestrateInbound(event, history, {
@@ -14216,7 +14227,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   });
 
   if (!result?.draft || result.shouldRespond === false) {
-    return res.json({ ok: true, conversation: conv, skipped: true });
+    return respondRegenerateSkipped("no_draft");
   }
 
   if (result.pickupUpdate) {
@@ -14302,13 +14313,36 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
   await seedInventoryWatchPendingFromReply(conv, event, reply);
 
-  if (channel === "email") {
-    conv.emailDraft = reply;
+    if (channel === "email") {
+      const invariant = evaluateRegenDraftInvariant(reply);
+      if (!invariant.allow) {
+        return respondRegenerateSkipped(invariant.reason ?? "draft_invariant_blocked");
+      }
+      conv.emailDraft = invariant.draftText;
+      saveConversation(conv);
+      return res.json({
+        ok: true,
+        conversation: conv,
+        draft: invariant.draftText,
+        debug: {
+          inboundBody: event.body,
+          inboundAt: event.receivedAt,
+          historyCount: history.length,
+          lastDraftAt: lastDraft?.at ?? null
+        }
+      });
+    }
+
+    discardPendingDrafts(conv);
+    const published = appendSmsRegeneratedDraft(reply);
+    if (!published.ok) {
+      return respondRegenerateSkipped(published.reason);
+    }
     saveConversation(conv);
     return res.json({
       ok: true,
       conversation: conv,
-      draft: reply,
+      draft: published.draft,
       debug: {
         inboundBody: event.body,
         inboundAt: event.receivedAt,
@@ -14316,23 +14350,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         lastDraftAt: lastDraft?.at ?? null
       }
     });
-  }
-
-  discardPendingDrafts(conv);
-  appendSmsRegeneratedDraft(reply);
-  saveConversation(conv);
-  return res.json({
-    ok: true,
-    conversation: conv,
-    draft: reply,
-    debug: {
-      inboundBody: event.body,
-      inboundAt: event.receivedAt,
-      historyCount: history.length,
-      lastDraftAt: lastDraft?.at ?? null
-    }
   });
-});
 
 app.post("/conversations/:id/call", async (req, res) => {
   const conv = getConversation(req.params.id);
@@ -14545,6 +14563,10 @@ if (authToken && signature) {
   appendInbound(conv, event);
   if (event.provider === "twilio" && shouldSuppressShortAckDraft(event.body ?? "")) {
     discardPendingDrafts(conv, "short_ack_no_action");
+    recordRouteOutcome("live", "short_ack_no_action", {
+      convId: conv.id,
+      leadKey: conv.leadKey
+    });
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
@@ -16393,6 +16415,13 @@ if (authToken && signature) {
       ...(extra ?? {})
     });
   };
+  const logRouteOutcome = (outcome: string, extra?: Record<string, unknown>) => {
+    recordRouteOutcome("live", outcome, {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      ...(extra ?? {})
+    });
+  };
   const highConfidenceFinanceTurn =
     preParserFinanceSignal &&
     !preParserSchedulingSignal &&
@@ -17836,6 +17865,7 @@ if (authToken && signature) {
         undefined,
         extraMediaUrls.length ? extraMediaUrls : undefined
       );
+      logRouteOutcome("deterministic_availability_draft");
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
@@ -17848,6 +17878,7 @@ if (authToken && signature) {
       undefined,
       extraMediaUrls.length ? extraMediaUrls : undefined
     );
+    logRouteOutcome("deterministic_availability_send");
     const mediaTags = extraMediaUrls.length
       ? extraMediaUrls.map(u => `\n    <Media>${escapeXml(u)}</Media>`).join("")
       : "";
@@ -17936,6 +17967,7 @@ if (authToken && signature) {
         undefined,
         extraMediaUrls.length ? extraMediaUrls : undefined
       );
+      logRouteOutcome("availability_explicit_draft");
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
@@ -17948,6 +17980,7 @@ if (authToken && signature) {
       undefined,
       extraMediaUrls.length ? extraMediaUrls : undefined
     );
+    logRouteOutcome("availability_explicit_send");
     const mediaTags = extraMediaUrls.length
       ? extraMediaUrls.map(u => `\n    <Media>${escapeXml(u)}</Media>`).join("")
       : "";
@@ -20686,6 +20719,9 @@ if (authToken && signature) {
     }
     console.log("[twilio] result.suggestedSlots len:", result.suggestedSlots?.length ?? 0);
     appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+    logRouteOutcome("orchestrator_draft", {
+      intent: result.intent ?? "unknown"
+    });
     if (result.memorySummary) {
       setMemorySummary(conv, result.memorySummary, conv.messages.length);
     }
@@ -20718,6 +20754,9 @@ if (authToken && signature) {
     }
   }
   appendOutbound(conv, event.to, event.from, reply, "twilio");
+  logRouteOutcome("orchestrator_send", {
+    intent: result.intent ?? "unknown"
+  });
   if (result.memorySummary) {
     setMemorySummary(conv, result.memorySummary, conv.messages.length);
   }

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { dataPath } from "./dataDir.js";
 import { normalizeSalesTone } from "./tone.js";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
+import { applyDraftStateInvariants } from "./draftStateInvariants.js";
 
 export type ConversationMode = "autopilot" | "suggest" | "human";
 export type MessageProvider =
@@ -1181,10 +1182,27 @@ export function appendOutbound(
     .find(m => m.direction === "in" && m.body);
   const inboundText = lastInbound?.body ?? "";
   const normalizedBody = normalizeGotItLeadIn(body, inboundText, provider);
-  const tonedBody =
+  let tonedBody =
     provider === "draft_ai" || provider === "twilio" || provider === "sendgrid"
       ? normalizeSalesTone(normalizedBody)
       : normalizedBody;
+  if (provider === "draft_ai") {
+    const invariant = applyDraftStateInvariants({
+      inboundText,
+      draftText: tonedBody,
+      followUpMode: conv.followUp?.mode ?? null,
+      followUpReason: conv.followUp?.reason ?? null,
+      dialogState: conv.dialogState?.name ?? null,
+      classificationBucket: conv.classification?.bucket ?? null,
+      classificationCta: conv.classification?.cta ?? null
+    });
+    if (!invariant.allow) {
+      conv.updatedAt = nowIso();
+      scheduleSave();
+      return;
+    }
+    tonedBody = invariant.draftText;
+  }
   // If this is an email-thread draft, store it as an email draft instead of a SMS draft.
   if (
     provider === "draft_ai" &&
