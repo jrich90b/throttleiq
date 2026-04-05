@@ -8042,6 +8042,53 @@ function computeWeatherRecheckDueAt(now: Date, timeZone: string, daysAhead = 7):
   return localPartsToUtcDate(timeZone, { year, month, day, hour24: 10, minute: 45 }).toISOString();
 }
 
+function zonedDateTimeParts(
+  date: Date,
+  timeZone: string
+): { year: number; month: number; day: number; hour: number; minute: number } | null {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+  const parts = fmt.formatToParts(date);
+  const map: Record<string, string> = {};
+  for (const p of parts) {
+    if (p.type !== "literal") map[p.type] = p.value;
+  }
+  const year = Number(map.year);
+  const month = Number(map.month);
+  const day = Number(map.day);
+  const hour = Number(map.hour);
+  const minute = Number(map.minute);
+  if (![year, month, day, hour, minute].every(v => Number.isFinite(v))) return null;
+  return { year, month, day, hour, minute };
+}
+
+function clampCadenceToEarliestHour(
+  dueAtIso: string,
+  timeZone: string,
+  earliestHour = 9
+): { adjusted: boolean; dueAtIso: string } {
+  const due = new Date(dueAtIso);
+  if (Number.isNaN(due.getTime())) return { adjusted: false, dueAtIso };
+  const local = zonedDateTimeParts(due, timeZone);
+  if (!local) return { adjusted: false, dueAtIso };
+  if (local.hour >= earliestHour) return { adjusted: false, dueAtIso };
+  const clamped = localPartsToUtcDate(timeZone, {
+    year: local.year,
+    month: local.month,
+    day: local.day,
+    hour24: earliestHour,
+    minute: 0
+  }).toISOString();
+  return { adjusted: true, dueAtIso: clamped };
+}
+
 async function processDueFollowUps() {
   const cfg = await getSchedulerConfigHot();
   if (cfg.enabled === false) return;
@@ -8360,6 +8407,12 @@ async function processDueFollowUps() {
         }
         if (weatherDeferred) continue;
       }
+    }
+    const clamped = clampCadenceToEarliestHour(cadence.nextDueAt, cfg.timezone, 9);
+    if (clamped.adjusted) {
+      cadence.nextDueAt = clamped.dueAtIso;
+      conv.updatedAt = nowIso();
+      saveConversation(conv);
     }
     if (new Date(cadence.nextDueAt) > now) continue;
     if (conv.appointment?.bookedEventId) {
