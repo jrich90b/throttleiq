@@ -6819,18 +6819,30 @@ function findRecentInboundPaymentBudgetContext(conv: any): {
   downPayment?: number;
 } {
   const msgs = Array.isArray(conv?.messages) ? conv.messages : [];
+  let monthlyBudget: number | undefined;
+  let termMonths: number | undefined;
+  let downPayment: number | undefined;
+  let inboundScanned = 0;
   for (let i = msgs.length - 1; i >= 0; i -= 1) {
     const m = msgs[i];
     if (!m || m.direction !== "in") continue;
+    inboundScanned += 1;
     const body = String(m.body ?? "");
-    const monthlyBudget = extractMonthlyBudgetLimit(body) ?? undefined;
-    const termMonths = extractPaymentTermMonths(body) ?? undefined;
-    const downPayment = parseDownPaymentForBudget(body)?.amount ?? undefined;
-    if (monthlyBudget != null || termMonths != null || downPayment != null) {
-      return { monthlyBudget, termMonths, downPayment };
+    if (monthlyBudget == null) {
+      monthlyBudget = extractMonthlyBudgetLimit(body) ?? undefined;
     }
+    if (termMonths == null) {
+      termMonths = extractPaymentTermMonths(body) ?? undefined;
+    }
+    if (downPayment == null) {
+      const parsedDown = parseDownPaymentForBudget(body)?.amount;
+      const zeroDown = /\b(no money down|zero down|\$0 down)\b/i.test(body);
+      downPayment = parsedDown ?? (zeroDown ? 0 : undefined);
+    }
+    if (monthlyBudget != null && termMonths != null && downPayment != null) break;
+    if (inboundScanned >= 8) break;
   }
-  return {};
+  return { monthlyBudget, termMonths, downPayment };
 }
 
 function resolvePaymentBudgetForConversation(
@@ -6851,7 +6863,9 @@ function resolvePaymentBudgetForConversation(
     }
   }
   const termMonths = extractPaymentTermMonths(text) ?? recent.termMonths;
-  const downPayment = parseDownPaymentForBudget(text)?.amount ?? recent.downPayment;
+  const parsedDown = parseDownPaymentForBudget(text)?.amount;
+  const zeroDown = /\b(no money down|zero down|\$0 down)\b/i.test(String(text ?? ""));
+  const downPayment = parsedDown ?? (zeroDown ? 0 : recent.downPayment);
   return { monthlyBudget, termMonths, downPayment };
 }
 
