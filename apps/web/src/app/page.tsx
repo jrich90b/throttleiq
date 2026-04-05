@@ -400,6 +400,29 @@ function getCadenceAlert(cadence?: {
   return { sendAt, msUntil };
 }
 
+function isEmojiOnlyAckText(text: string): boolean {
+  const t = String(text ?? "").trim();
+  return t.length > 0 && /^[\p{Extended_Pictographic}\s]+$/u.test(t);
+}
+
+function isShortAckNoActionText(text: string): boolean {
+  const t = String(text ?? "").trim().toLowerCase();
+  if (!t) return false;
+  if (isEmojiOnlyAckText(t)) return true;
+  if (t.length > 60) return false;
+  if (/[?]/.test(t)) return false;
+  if (
+    /\b(price|pricing|payment|monthly|apr|term|down payment|trade|trade in|service|parts|apparel|available|availability|in stock|stock|test ride|appointment|schedule|call|video|photos?|email|watch)\b/i.test(
+      t
+    )
+  ) {
+    return false;
+  }
+  return /\b(thanks|thank you|thanks again|thx|ty|appreciate|got it|sounds good|sounds great|will do|ok|okay|k|kk|cool|perfect|great|all good|no problem|you bet|yep|yup|sure)\b/.test(
+    t
+  );
+}
+
 type SystemMode = "suggest" | "autopilot";
 
 type ConversationListItem = {
@@ -2787,6 +2810,7 @@ export default function Home() {
           (m.provider === "twilio" || m.provider === "sendgrid" || m.provider === "sendgrid_adf")
       );
     if (!lastInbound?.at) return false;
+    if (isShortAckNoActionText(lastInbound.body ?? "")) return false;
     const lastInboundAt = new Date(lastInbound.at).getTime();
     if (!Number.isFinite(lastInboundAt)) return false;
     // Don't show "thinking" indefinitely when AI intentionally chooses no response.
@@ -2802,9 +2826,11 @@ export default function Home() {
     if (selectedConv?.mode === "human") return false;
     if (!selectedListItem) return false;
     if (selectedListItem.lastMessage?.direction !== "in") return false;
+    if (isShortAckNoActionText(selectedListItem.lastMessage?.body ?? "")) return false;
     const listUpdatedAt = Date.parse(String(selectedListItem.updatedAt ?? ""));
     const detailUpdatedAt = Date.parse(String(selectedConv?.updatedAt ?? ""));
     if (!Number.isFinite(listUpdatedAt)) return false;
+    if (Date.now() - listUpdatedAt > 90 * 1000) return false;
     if (!Number.isFinite(detailUpdatedAt)) return true;
     return listUpdatedAt > detailUpdatedAt;
   }, [mode, selectedConv?.mode, selectedConv?.updatedAt, selectedListItem]);
