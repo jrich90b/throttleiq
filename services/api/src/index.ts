@@ -231,19 +231,38 @@ app.use(cors());
 app.use("/uploads", express.static(path.resolve(getDataDir(), "uploads")));
 
 const routeOutcomeCounters = new Map<string, number>();
+const routeOutcomeHistory: Array<{
+  ts: string;
+  scope: "live" | "regen" | "manual";
+  outcome: string;
+  count: number;
+  detail?: Record<string, unknown>;
+}> = [];
+const ROUTE_OUTCOME_HISTORY_MAX = Number(process.env.ROUTE_OUTCOME_HISTORY_MAX ?? 2000);
 function recordRouteOutcome(scope: "live" | "regen" | "manual", outcome: string, detail?: Record<string, unknown>) {
-  if (process.env.DEBUG_DECISION_TRACE !== "1") return;
   const normalizedScope = String(scope ?? "live");
   const normalizedOutcome = String(outcome ?? "unknown").trim() || "unknown";
   const key = `${normalizedScope}:${normalizedOutcome}`;
   const count = (routeOutcomeCounters.get(key) ?? 0) + 1;
   routeOutcomeCounters.set(key, count);
-  console.log("[route-outcome]", {
-    scope: normalizedScope,
+  routeOutcomeHistory.push({
+    ts: new Date().toISOString(),
+    scope,
     outcome: normalizedOutcome,
     count,
-    ...(detail ?? {})
+    detail: detail ?? undefined
   });
+  if (routeOutcomeHistory.length > ROUTE_OUTCOME_HISTORY_MAX) {
+    routeOutcomeHistory.splice(0, routeOutcomeHistory.length - ROUTE_OUTCOME_HISTORY_MAX);
+  }
+  if (process.env.DEBUG_DECISION_TRACE === "1") {
+    console.log("[route-outcome]", {
+      scope: normalizedScope,
+      outcome: normalizedOutcome,
+      count,
+      ...(detail ?? {})
+    });
+  }
 }
 app.post(
   "/debug/inbound",
@@ -288,7 +307,112 @@ app.get("/debug/route-outcomes", (req, res) => {
 
 app.post("/debug/route-outcomes/reset", (_req, res) => {
   routeOutcomeCounters.clear();
-  return res.json({ ok: true, counters: [] });
+  routeOutcomeHistory.splice(0, routeOutcomeHistory.length);
+  return res.json({ ok: true, counters: [], recent: [] });
+});
+
+app.get("/debug/route-outcomes/recent", (req, res) => {
+  const debugEnabled =
+    process.env.DEBUG_DECISION_TRACE === "1" || process.env.DEBUG_ROUTE_TIMING === "1";
+  if (!debugEnabled) {
+    return res.status(403).json({
+      ok: false,
+      error: "enable DEBUG_DECISION_TRACE=1 or DEBUG_ROUTE_TIMING=1"
+    });
+  }
+  const leadKeyQ = String(req.query.leadKey ?? "").trim();
+  const convIdQ = String(req.query.convId ?? "").trim();
+  const phoneQ = String(req.query.phone ?? "").replace(/\D/g, "");
+  const sinceMinRaw = Number(req.query.sinceMin ?? 180);
+  const limitRaw = Number(req.query.limit ?? 200);
+  const sinceMs =
+    Date.now() -
+    (Number.isFinite(sinceMinRaw) && sinceMinRaw > 0 ? sinceMinRaw : 180) * 60 * 1000;
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 1000) : 200;
+  const normDigits = (v: unknown) => String(v ?? "").replace(/\D/g, "");
+  const rows = [...routeOutcomeHistory]
+    .filter(row => {
+      const ts = Date.parse(String(row.ts ?? ""));
+      if (Number.isFinite(ts) && ts < sinceMs) return false;
+      const detail = row.detail ?? {};
+      const rowLeadKey = String((detail as any).leadKey ?? "");
+      const rowConvId = String((detail as any).convId ?? "");
+      if (leadKeyQ && rowLeadKey !== leadKeyQ) return false;
+      if (convIdQ && rowConvId !== convIdQ) return false;
+      if (phoneQ) {
+        const leadDigits = normDigits(rowLeadKey);
+        const convDigits = normDigits(rowConvId);
+        if (leadDigits !== phoneQ && convDigits !== phoneQ) return false;
+      }
+      return true;
+    })
+    .slice(-limit);
+  return res.json({
+    ok: true,
+    enabled: debugEnabled,
+    count: rows.length,
+    rows
+  });
+});
+
+app.get("/debug/stuck-turns", (req, res) => {
+  const debugEnabled =
+    process.env.DEBUG_DECISION_TRACE === "1" || process.env.DEBUG_ROUTE_TIMING === "1";
+  if (!debugEnabled) {
+    return res.status(403).json({
+      ok: false,
+      error: "enable DEBUG_DECISION_TRACE=1 or DEBUG_ROUTE_TIMING=1"
+    });
+  }
+  const olderThanSecRaw = Number(req.query.olderThanSec ?? 45);
+  const limitRaw = Number(req.query.limit ?? 100);
+  const olderThanSec =
+    Number.isFinite(olderThanSecRaw) && olderThanSecRaw > 0 ? olderThanSecRaw : 45;
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 500) : 100;
+  const nowMs = Date.now();
+  const rows = getAllConversations()
+    .map(conv => {
+      const msgs = Array.isArray(conv.messages) ? conv.messages : [];
+      const lastInbound = [...msgs]
+        .reverse()
+        .find(m => m.direction === "in" && (m.provider === "twilio" || m.provider === "sendgrid" || m.provider === "sendgrid_adf"));
+      if (!lastInbound?.at) return null;
+      const inboundAtMs = Date.parse(String(lastInbound.at ?? ""));
+      if (!Number.isFinite(inboundAtMs)) return null;
+      const hasOutboundAfter = msgs.some(
+        m =>
+          m.direction === "out" &&
+          Number.isFinite(Date.parse(String(m.at ?? ""))) &&
+          Date.parse(String(m.at ?? "")) >= inboundAtMs
+      );
+      if (hasOutboundAfter) return null;
+      const ageSec = Math.floor((nowMs - inboundAtMs) / 1000);
+      if (ageSec < olderThanSec) return null;
+      return {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        mode: conv.mode,
+        followUp: conv.followUp ?? null,
+        dialogState: conv.dialogState ?? null,
+        classification: conv.classification ?? null,
+        lastInbound: {
+          at: lastInbound.at,
+          provider: lastInbound.provider,
+          body: String(lastInbound.body ?? "").slice(0, 200)
+        },
+        ageSec
+      };
+    })
+    .filter(Boolean)
+    .sort((a: any, b: any) => b.ageSec - a.ageSec)
+    .slice(0, limit);
+  return res.json({
+    ok: true,
+    enabled: debugEnabled,
+    olderThanSec,
+    count: rows.length,
+    rows
+  });
 });
 
 app.use(express.json({ limit: "30mb" }));
@@ -21004,6 +21128,9 @@ if (authToken && signature) {
   }
 
   if (!result.shouldRespond) {
+    logRouteOutcome("orchestrator_no_response", {
+      intent: result.intent ?? "unknown"
+    });
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
