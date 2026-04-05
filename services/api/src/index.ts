@@ -17337,7 +17337,7 @@ if (authToken && signature) {
     pricingOrPaymentsIntent: llmPricingOrPaymentsIntent || explicitFinanceTermIntent,
     explicitFinanceTermIntent
   });
-  const financePrioritySignal = routeSignalsForPricing.financePriorityRaw;
+  const financePrioritySignal = routeSignalsForPricing.financePriorityOverride;
   const pricingSignal =
     !insuranceStatusUpdateOnly &&
     (llmPricingOrPaymentsIntent ||
