@@ -1,0 +1,204 @@
+[
+  {
+    "id": "payments_basic",
+    "text": "What would payments be on this bike?",
+    "expected": {
+      "intent": "payments",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "payments_monthly_target_under",
+    "text": "I want to stay under $500/month.",
+    "expected": {
+      "intent": "payments",
+      "explicit_request": true,
+      "asks_monthly_target": true
+    }
+  },
+  {
+    "id": "payments_monthly_target_phrase",
+    "text": "trying to be around 500 monthly",
+    "expected": {
+      "intent": "payments",
+      "explicit_request": true,
+      "asks_monthly_target": true
+    }
+  },
+  {
+    "id": "payments_under_with_down",
+    "text": "I have $2,500 down and want under $500/mo",
+    "expected": {
+      "intent": "payments",
+      "explicit_request": true,
+      "asks_monthly_target": true,
+      "asks_down_payment": true
+    }
+  },
+  {
+    "id": "payments_down_question",
+    "text": "How much down would I need?",
+    "expected": {
+      "intent": "payments",
+      "explicit_request": true,
+      "asks_down_payment": true
+    }
+  },
+  {
+    "id": "payments_zero_down",
+    "text": "I really don't want to put anything down",
+    "expected": {
+      "intent": "payments",
+      "explicit_request": true,
+      "asks_down_payment": true
+    }
+  },
+  {
+    "id": "payments_term_72",
+    "text": "Can you run it for 72 months?",
+    "expected": {
+      "intent": "payments",
+      "explicit_request": true,
+      "asks_apr_or_term": true
+    }
+  },
+  {
+    "id": "payments_term_84_short",
+    "text": "run that at 84 mo",
+    "expected": {
+      "intent": "payments",
+      "explicit_request": true,
+      "asks_apr_or_term": true
+    }
+  },
+  {
+    "id": "payments_apr_question",
+    "text": "What APR can I get with good credit?",
+    "expected": {
+      "intent": "payments",
+      "intent_any": ["payments", "pricing"],
+      "explicit_request": true,
+      "asks_apr_or_term": true
+    }
+  },
+  {
+    "id": "payments_finance_docs",
+    "text": "Before I come in, what do I need to bring for financing?",
+    "expected": {
+      "intent": "payments",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "payments_followup_from_history",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Ballpark, on about $24,999, you’re around $550–$570/mo at 60 months. How much can you put down?"
+      }
+    ],
+    "text": "I can put down 5000",
+    "expected": {
+      "intent": "payments",
+      "explicit_request": true,
+      "asks_down_payment": true
+    }
+  },
+  {
+    "id": "pricing_otd",
+    "text": "What's your best out-the-door price?",
+    "expected": {
+      "intent": "pricing",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "pricing_price_only",
+    "text": "What is the price on this bike?",
+    "expected": {
+      "intent": "pricing",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "pricing_deals_specials",
+    "text": "Any deals or finance specials right now?",
+    "expected": {
+      "intent": "pricing",
+      "intent_any": ["pricing", "payments"],
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "pricing_rebates",
+    "text": "Any rebates or incentives on this one?",
+    "expected": {
+      "intent": "pricing",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "none_availability",
+    "text": "Do you have any black street glides in stock?",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "none_schedule",
+    "text": "Can I come in Wednesday at 1?",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "none_callback",
+    "text": "Can you call me after 3 today?",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "none_engine_spec",
+    "text": "What size motor is in this one?",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "none_parts_question",
+    "text": "Can you add this to parts from Drag Specialties?",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "none_service_question",
+    "text": "How much to switch my headlight bulb to LED?",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "none_short_ack",
+    "text": "Ok sounds great",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "none_general_thanks",
+    "text": "Thanks I appreciate it",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  }
+]

@@ -1790,6 +1790,38 @@ export async function parsePricingPaymentsIntentWithLLM(args: {
 
   const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
+  const examples = [
+    `EXAMPLE A
+inbound: "What would payments be on this bike?"
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"confidence":0.97}`,
+    `EXAMPLE B
+inbound: "I want to stay under $500/month."
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":true,"asks_down_payment":false,"asks_apr_or_term":false,"confidence":0.98}`,
+    `EXAMPLE C
+inbound: "I have $2,500 down and want under $500/mo."
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":true,"asks_down_payment":true,"asks_apr_or_term":false,"confidence":0.98}`,
+    `EXAMPLE D
+inbound: "Can you run it for 72 months?"
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":true,"confidence":0.97}`,
+    `EXAMPLE E
+inbound: "I don't want to put anything down."
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":true,"asks_apr_or_term":false,"confidence":0.96}`,
+    `EXAMPLE F
+inbound: "Any deals or finance specials right now?"
+output: {"intent":"pricing","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"confidence":0.95}`,
+    `EXAMPLE G
+inbound: "What is your best out-the-door price?"
+output: {"intent":"pricing","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"confidence":0.97}`,
+    `EXAMPLE H
+inbound: "Do you have any black street glides in stock?"
+output: {"intent":"none","explicit_request":false,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"confidence":0.96}`,
+    `EXAMPLE I
+inbound: "Can I come in Wednesday at 1?"
+output: {"intent":"none","explicit_request":false,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"confidence":0.97}`,
+    `EXAMPLE J
+inbound: "Before I come in, what do I need to bring for financing?"
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"confidence":0.94}`
+  ];
   const prompt = [
     "You parse dealership inbound intent for pricing/payments routing.",
     "Return only JSON matching the schema.",
@@ -1805,6 +1837,8 @@ export async function parsePricingPaymentsIntentWithLLM(args: {
     "- If mixed but payment structure is present, prefer payments.",
     "- explicit_request=true only when they clearly ask a question or request numbers.",
     "- confidence is 0..1.",
+    "",
+    ...examples,
     "",
     `Known lead info: ${JSON.stringify({
       model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
@@ -1893,6 +1927,25 @@ output: {"primary_intent":"none","explicit_request":false,"fallback_action":"no_
     `EXAMPLE F
 inbound: "Yeah maybe"
 output: {"primary_intent":"none","explicit_request":false,"fallback_action":"clarify","clarify_prompt":"Quick check — are you asking about payments, availability, or setting a time to come in?","confidence":0.86}`
+    ,
+    `EXAMPLE G
+inbound: "I have $2,500 down and want to stay under $500/mo."
+output: {"primary_intent":"pricing_payments","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.98}`,
+    `EXAMPLE H
+inbound: "Can you run it at 84 months with no money down?"
+output: {"primary_intent":"pricing_payments","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.98}`,
+    `EXAMPLE I
+inbound: "Do you have any black street glides in stock?"
+output: {"primary_intent":"availability","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.98}`,
+    `EXAMPLE J
+inbound: "What size motor is in this one?"
+output: {"primary_intent":"general","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.9}`,
+    `EXAMPLE K
+inbound: "Any deals or finance specials right now?"
+output: {"primary_intent":"pricing_payments","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.96}`,
+    `EXAMPLE L
+inbound: "Ok sounds great"
+output: {"primary_intent":"none","explicit_request":false,"fallback_action":"no_response","clarify_prompt":"","confidence":0.97}`
   ];
   const prompt = [
     "You are a strict routing parser for dealership inbound messages.",

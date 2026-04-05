@@ -9,6 +9,13 @@ type FinanceCase = {
     followUpReason?: string | null;
     dialogState?: string | null;
   };
+  hints?: {
+    turnFinanceIntent?: boolean;
+    turnAvailabilityIntent?: boolean;
+    turnSchedulingIntent?: boolean;
+    shortAckIntent?: boolean;
+    financeContextIntent?: boolean;
+  };
 };
 
 const inventoryPromptDraft =
@@ -108,6 +115,36 @@ const cases: FinanceCase[] = [
     expectScheduleGuard: true
   },
   {
+    id: "down_and_budget_combo",
+    inboundText: "I have $2,500 to put down and want to stay under $500/mo",
+    expectInventoryGuard: true,
+    expectScheduleGuard: true
+  },
+  {
+    id: "down_and_budget_combo_no_symbols",
+    inboundText: "well i have 2500 down and want under 500 a month",
+    expectInventoryGuard: true,
+    expectScheduleGuard: true
+  },
+  {
+    id: "term_and_zero_down_combo",
+    inboundText: "can you run it for 72 months with 0 down",
+    expectInventoryGuard: true,
+    expectScheduleGuard: true
+  },
+  {
+    id: "money_down_question",
+    inboundText: "do i need any money down?",
+    expectInventoryGuard: true,
+    expectScheduleGuard: true
+  },
+  {
+    id: "finance_docs_question",
+    inboundText: "before i come in what do i need to bring for financing?",
+    expectInventoryGuard: true,
+    expectScheduleGuard: true
+  },
+  {
     id: "credit_app_question",
     inboundText: "should I fill out the credit app first?",
     expectInventoryGuard: true,
@@ -117,19 +154,36 @@ const cases: FinanceCase[] = [
     id: "non_finance_inventory_question",
     inboundText: "do you have any black road glides?",
     expectInventoryGuard: false,
-    expectScheduleGuard: false
+    expectScheduleGuard: false,
+    hints: { turnFinanceIntent: false, turnAvailabilityIntent: true }
   },
   {
     id: "non_finance_photo_request",
     inboundText: "can you send photos?",
     expectInventoryGuard: false,
-    expectScheduleGuard: false
+    expectScheduleGuard: false,
+    hints: { turnFinanceIntent: false }
+  },
+  {
+    id: "non_finance_engine_spec",
+    inboundText: "what size motor is in this one?",
+    expectInventoryGuard: false,
+    expectScheduleGuard: false,
+    hints: { turnFinanceIntent: false }
+  },
+  {
+    id: "non_finance_trim_inventory",
+    inboundText: "do you have any black ones with black trim?",
+    expectInventoryGuard: false,
+    expectScheduleGuard: false,
+    hints: { turnFinanceIntent: false, turnAvailabilityIntent: true }
   },
   {
     id: "non_finance_schedule_question",
     inboundText: "can I come in Wednesday at 1?",
     expectInventoryGuard: false,
-    expectScheduleGuard: false
+    expectScheduleGuard: false,
+    hints: { turnFinanceIntent: false, turnSchedulingIntent: true }
   }
 ];
 
@@ -145,7 +199,14 @@ function evaluateCase(c: FinanceCase): { ok: boolean; detail: string } {
     followUpReason: c.context?.followUpReason ?? "pricing",
     dialogState: c.context?.dialogState ?? "pricing_answered",
     classificationBucket: "inventory_interest",
-    classificationCta: "ask_payment"
+    classificationCta: "ask_payment",
+    turnFinanceIntent:
+      c.hints?.turnFinanceIntent ?? (c.expectInventoryGuard || c.expectScheduleGuard),
+    turnAvailabilityIntent: c.hints?.turnAvailabilityIntent ?? false,
+    turnSchedulingIntent: c.hints?.turnSchedulingIntent ?? false,
+    financeContextIntent:
+      c.hints?.financeContextIntent ?? (c.expectInventoryGuard || c.expectScheduleGuard),
+    shortAckIntent: c.hints?.shortAckIntent ?? false
   };
 
   const inventoryResult = applyDraftStateInvariants({
