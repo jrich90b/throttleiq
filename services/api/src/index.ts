@@ -7517,6 +7517,105 @@ function estimateMonthlyPaymentBandFromPrice(opts: {
   return { low: Math.min(low, high), high: Math.max(low, high) };
 }
 
+type TermPaymentBand = {
+  termMonths: number;
+  low: number;
+  high: number;
+};
+
+function buildTermPaymentBandsFromPrice(opts: {
+  price: number;
+  isUsed: boolean;
+  taxRate: number;
+  downPayment?: number;
+  terms?: number[];
+}): TermPaymentBand[] {
+  const terms = Array.isArray(opts.terms) && opts.terms.length ? opts.terms : [60, 72, 84];
+  const bands: TermPaymentBand[] = [];
+  for (const term of terms) {
+    const band = estimateMonthlyPaymentBandFromPrice({
+      price: opts.price,
+      isUsed: opts.isUsed,
+      termMonths: term,
+      taxRate: opts.taxRate,
+      downPayment: opts.downPayment
+    });
+    if (!band) continue;
+    bands.push({
+      termMonths: term,
+      low: Math.round(band.low / 10) * 10,
+      high: Math.round(band.high / 10) * 10
+    });
+  }
+  return bands;
+}
+
+function formatTermChoiceList(terms: number[]): string {
+  const unique = Array.from(new Set(terms.filter(t => Number.isFinite(t) && t > 0)));
+  if (!unique.length) return "";
+  if (unique.length === 1) return `${unique[0]} months`;
+  if (unique.length === 2) return `${unique[0]} or ${unique[1]} months`;
+  return `${unique.slice(0, -1).join(", ")}, or ${unique[unique.length - 1]} months`;
+}
+
+function buildDownPaymentTermOptionsReply(opts: {
+  price: number;
+  isUsed: boolean;
+  taxRate: number;
+  downPayment: number;
+  monthlyBudget?: number | null;
+  terms?: number[];
+}): string | null {
+  const price = Number(opts.price);
+  if (!Number.isFinite(price) || price <= 0) return null;
+  const downValue = Number(opts.downPayment);
+  if (!Number.isFinite(downValue)) return null;
+  const budgetValue = Number(opts.monthlyBudget);
+  const hasBudget = Number.isFinite(budgetValue) && budgetValue > 0;
+  const bands = buildTermPaymentBandsFromPrice({
+    price,
+    isUsed: opts.isUsed,
+    taxRate: opts.taxRate,
+    downPayment: downValue,
+    terms: opts.terms
+  });
+  if (!bands.length) return null;
+
+  const downLabel =
+    downValue <= 0 ? "$0 down" : `$${Math.round(downValue).toLocaleString("en-US")} down`;
+  const priceLabel = `$${Math.round(price).toLocaleString("en-US")}`;
+  const bandsLabel = bands
+    .map(
+      band =>
+        `${band.termMonths} mo ~$${band.low.toLocaleString("en-US")}–$${band.high.toLocaleString("en-US")}/mo`
+    )
+    .join(", ");
+  let reply = `Ballpark, with ${downLabel} on about ${priceLabel}: ${bandsLabel} before taxes, fees, and final APR.`;
+
+  if (hasBudget) {
+    const budgetLabel = `$${Math.round(budgetValue).toLocaleString("en-US")}/mo`;
+    const safeTerms = bands.filter(band => band.high <= budgetValue).map(band => band.termMonths);
+    const possibleTerms = bands.filter(band => band.low <= budgetValue).map(band => band.termMonths);
+    if (safeTerms.length) {
+      const termLabel = formatTermChoiceList(safeTerms);
+      reply += ` To stay near ${budgetLabel}, ${termLabel} ${safeTerms.length === 1 ? "is" : "are"} the best fit.`;
+    } else if (possibleTerms.length) {
+      const termLabel = formatTermChoiceList(possibleTerms);
+      reply += ` To stay near ${budgetLabel}, ${termLabel} could work depending on final APR.`;
+    } else {
+      reply += ` To stay near ${budgetLabel}, you’d likely need more down or a lower-priced unit.`;
+    }
+    reply += " Want me to run one term exactly?";
+  } else {
+    reply += " Want me to run one term exactly?";
+  }
+
+  if (downValue <= 0) {
+    reply += " $0 down options are application-dependent and lender approval is required.";
+  }
+  return reply;
+}
+
 function estimateInventoryItemMonthlyPayment(
   item: any,
   opts: { termMonths: number; taxRate: number; downPayment?: number }
@@ -7808,7 +7907,8 @@ function applyPricingPolicy(
 function buildFinancePriorityInvariantFallbackReply(
   conv: any,
   inboundText: string,
-  paymentBudget: { monthlyBudget?: number; termMonths?: number; downPayment?: number }
+  paymentBudget: { monthlyBudget?: number; termMonths?: number; downPayment?: number },
+  pricingHint?: { price?: number | null; isUsed?: boolean | null; taxRate?: number | null }
 ): string {
   const monthlyBudget = paymentBudget.monthlyBudget ?? null;
   const termMonths = paymentBudget.termMonths ?? null;
@@ -7837,6 +7937,22 @@ function buildFinancePriorityInvariantFallbackReply(
   }
 
   if (monthlyBudget != null && downValue != null && termMonths == null) {
+    const hintedPrice = Number(pricingHint?.price);
+    if (
+      Number.isFinite(hintedPrice) &&
+      hintedPrice > 0 &&
+      pricingHint?.isUsed != null &&
+      Number.isFinite(Number(pricingHint?.taxRate))
+    ) {
+      const optionsReply = buildDownPaymentTermOptionsReply({
+        price: hintedPrice,
+        isUsed: Boolean(pricingHint?.isUsed),
+        taxRate: Number(pricingHint?.taxRate),
+        downPayment: downValue,
+        monthlyBudget
+      });
+      if (optionsReply) return optionsReply;
+    }
     return `Perfect — with ${downLabel} targeting ${budgetLabel}, do you want me to run 60, 72, or 84 months?`;
   }
 
@@ -14778,14 +14894,40 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       const downLabel = `$${Number(regenPaymentBudget.downPayment).toLocaleString("en-US")}`;
       const budgetLabel =
         regenMonthlyBudget != null ? `$${Number(regenMonthlyBudget).toLocaleString("en-US")}/mo` : null;
-      const reply =
-        regenTermMonths != null
-          ? budgetLabel
-            ? `Perfect — with ${downLabel} down at ${regenTermMonths} months targeting ${budgetLabel}, I can run the exact numbers now.`
-            : `Perfect — with ${downLabel} down at ${regenTermMonths} months, I can run the exact numbers now.`
-          : budgetLabel
+      let reply: string;
+      if (regenTermMonths != null) {
+        reply = budgetLabel
+          ? `Perfect — with ${downLabel} down at ${regenTermMonths} months targeting ${budgetLabel}, I can run the exact numbers now.`
+          : `Perfect — with ${downLabel} down at ${regenTermMonths} months, I can run the exact numbers now.`;
+      } else {
+        const stockId = conv.lead?.vehicle?.stockId ?? null;
+        const vin = conv.lead?.vehicle?.vin ?? null;
+        const match = stockId || vin ? await findInventoryPrice({ stockId, vin }) : null;
+        const item = match?.item ?? null;
+        const itemPrice = Number(item?.price ?? NaN);
+        if (Number.isFinite(itemPrice) && itemPrice > 0) {
+          const isUsed = isUsedInventoryConditionForBudget(
+            item?.condition ?? conv.lead?.vehicle?.condition,
+            item?.year ?? conv.lead?.vehicle?.year
+          );
+          const taxRate = normalizeTaxRate((await getDealerProfileHot())?.taxRate ?? 8);
+          reply =
+            buildDownPaymentTermOptionsReply({
+              price: itemPrice,
+              isUsed,
+              taxRate,
+              downPayment: Number(regenPaymentBudget.downPayment),
+              monthlyBudget: regenMonthlyBudget
+            }) ??
+            (budgetLabel
+              ? `Perfect — with ${downLabel} down targeting ${budgetLabel}, do you want me to run 60, 72, or 84 months?`
+              : `Perfect — with ${downLabel} down, do you want me to run 60, 72, or 84 months?`);
+        } else {
+          reply = budgetLabel
             ? `Perfect — with ${downLabel} down targeting ${budgetLabel}, do you want me to run 60, 72, or 84 months?`
-          : `Perfect — with ${downLabel} down, do you want me to run 60, 72, or 84 months?`;
+            : `Perfect — with ${downLabel} down, do you want me to run 60, 72, or 84 months?`;
+        }
+      }
       return respondWithSmsRegeneratedDraft(reply);
     }
 
@@ -17729,7 +17871,30 @@ if (authToken && signature) {
       }
     } else if (monthlyBudget && downPayment != null && !termMonths) {
       const downLabel = `$${Number(downPayment).toLocaleString("en-US")}`;
-      reply = `Perfect — with ${downLabel} down, do you want me to run 60, 72, or 84 months?`;
+      const budgetLabel = `$${Number(monthlyBudget).toLocaleString("en-US")}/mo`;
+      const stockId = conv.lead?.vehicle?.stockId ?? null;
+      const vin = conv.lead?.vehicle?.vin ?? null;
+      const match = stockId || vin ? await findInventoryPrice({ stockId, vin }) : null;
+      const item = match?.item ?? null;
+      const itemPrice = Number(item?.price ?? NaN);
+      if (Number.isFinite(itemPrice) && itemPrice > 0) {
+        const isUsed = isUsedInventoryConditionForBudget(
+          item?.condition ?? conv.lead?.vehicle?.condition,
+          item?.year ?? conv.lead?.vehicle?.year
+        );
+        const taxRate = normalizeTaxRate((await getDealerProfileHot())?.taxRate ?? 8);
+        reply =
+          buildDownPaymentTermOptionsReply({
+            price: itemPrice,
+            isUsed,
+            taxRate,
+            downPayment,
+            monthlyBudget
+          }) ??
+          `Perfect — with ${downLabel} down targeting ${budgetLabel}, do you want me to run 60, 72, or 84 months?`;
+      } else {
+        reply = `Perfect — with ${downLabel} down targeting ${budgetLabel}, do you want me to run 60, 72, or 84 months?`;
+      }
       if (!isScheduleDialogState(getDialogState(conv))) {
         setDialogState(conv, "pricing_init");
       }
@@ -21539,10 +21704,29 @@ if (authToken && signature) {
       invariantReason === "finance_priority_inventory_prompt_guard" ||
       invariantReason === "finance_priority_schedule_prompt_guard";
     if (financePriorityInvariant) {
+      let financePricingHint:
+        | { price?: number | null; isUsed?: boolean | null; taxRate?: number | null }
+        | undefined;
+      const stockId = conv.lead?.vehicle?.stockId ?? null;
+      const vin = conv.lead?.vehicle?.vin ?? null;
+      if (stockId || vin) {
+        const match = await findInventoryPrice({ stockId, vin });
+        const item = match?.item ?? null;
+        const itemPrice = Number(item?.price ?? NaN);
+        if (Number.isFinite(itemPrice) && itemPrice > 0) {
+          const isUsed = isUsedInventoryConditionForBudget(
+            item?.condition ?? conv.lead?.vehicle?.condition,
+            item?.year ?? conv.lead?.vehicle?.year
+          );
+          const taxRate = normalizeTaxRate((await getDealerProfileHot())?.taxRate ?? 8);
+          financePricingHint = { price: itemPrice, isUsed, taxRate };
+        }
+      }
       const financeFallback = buildFinancePriorityInvariantFallbackReply(
         conv,
         String(event.body ?? ""),
-        paymentBudgetContext
+        paymentBudgetContext,
+        financePricingHint
       );
       const financeFallbackInvariant = evaluateLiveDraftInvariant(financeFallback);
       if (financeFallbackInvariant.allow) {
