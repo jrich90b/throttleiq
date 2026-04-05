@@ -905,9 +905,15 @@ function isStreetGlide3Variant(model: string | null | undefined): boolean {
 function canonicalizeWatchModelLabel(model: string | null | undefined): string {
   const raw = String(model ?? "").trim();
   if (!raw) return "";
-  const t = normalizeModelName(raw);
-  if (isRoadGlide3Variant(raw)) return "Road Glide 3";
-  if (isStreetGlide3Variant(raw)) return "Street Glide 3 Limited";
+  const cleaned = raw
+    .replace(/\s*\/\s*anniversary\s+edition\b/gi, " ")
+    .replace(/\banniversary\s+edition\b/gi, " ")
+    .replace(/\banniversary\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const t = normalizeModelName(cleaned);
+  if (isRoadGlide3Variant(cleaned)) return "Road Glide 3";
+  if (isStreetGlide3Variant(cleaned)) return "Street Glide 3 Limited";
   if (/\bflhtcutg\b/.test(t) || /\btri glide(?:\s+ultra)?\b/.test(t)) return "Tri Glide Ultra";
   if (/\bflhxxx\b/.test(t) || /\bstreet glide trike\b/.test(t)) return "Street Glide Trike";
   if (/\bra1250st\b/.test(t) || /\bpan america(?:\s+1250)?\s+st\b/.test(t)) return "Pan America 1250 ST";
@@ -916,7 +922,7 @@ function canonicalizeWatchModelLabel(model: string | null | undefined): string {
   if (/\brh1250s\b/.test(t) || /\bsportster\s+s\b/.test(t)) return "Sportster S";
   if (/\brh975s\b/.test(t) || /\bnightster\s+special\b/.test(t)) return "Nightster Special";
   if (/\brh975\b/.test(t) || /\bnightster\b/.test(t)) return "Nightster";
-  return raw;
+  return cleaned || raw;
 }
 
 function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
@@ -2851,8 +2857,13 @@ function formatModelToken(model?: string | null): string {
 }
 
 function normalizeModelText(val?: string | null): string {
-  return String(val ?? "")
-    .toLowerCase()
+  const source = String(val ?? "").toLowerCase();
+  const withoutAnniversarySuffix = source
+    // Treat "<model> / anniversary edition" as one model variant, not two bikes.
+    .replace(/\s*\/\s*anniversary\s+edition\b/g, " ")
+    .replace(/\banniversary\s+edition\b/g, " ")
+    .replace(/\banniversary\b/g, " ");
+  return withoutAnniversarySuffix
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -13258,10 +13269,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       if (model) {
         const modelForLookup = canonicalizeWatchModelLabel(model);
         const year = mentionsYear ?? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null;
+        const explicitModelNoColorOrFinish = !!mentionsModel && !mentionsColor && !mentionsFinish;
         const color =
-          mentionsColor ??
-          sanitizeColorPhrase(conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null);
-        const finish = mentionsFinish ?? extractTrimToken(conv.inventoryContext?.finish ?? null);
+          explicitModelNoColorOrFinish
+            ? null
+            : mentionsColor ??
+              sanitizeColorPhrase(conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null);
+        const finish = explicitModelNoColorOrFinish
+          ? null
+          : mentionsFinish ?? extractTrimToken(conv.inventoryContext?.finish ?? null);
         const condition =
           mentionsCondition ??
           (mentionsYear
@@ -17423,6 +17439,7 @@ if (authToken && signature) {
     const colorFromLlm = sanitizeColorPhrase(llmAvailability?.color ?? null);
     const colorFromText = pickMostSpecificColor(colorFromLlm, colorFromParser);
     const finishFromText = extractFinishToken(textLower);
+    const explicitModelNoColorOrFinish = !!modelFromText && !colorFromText && !finishFromText;
     const llmConditionRaw =
       llmAvailability?.condition && llmAvailability.condition !== "unknown"
         ? llmAvailability.condition
@@ -17451,14 +17468,18 @@ if (authToken && signature) {
         ? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null
         : null);
     const colorCandidate =
-      colorFromText ??
-      (!modelChanged && !resetContextForCondition
-        ? conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null
-        : null);
+      explicitModelNoColorOrFinish
+        ? null
+        : colorFromText ??
+          (!modelChanged && !resetContextForCondition
+            ? conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null
+            : null);
     const color = sanitizeColorPhrase(colorCandidate) ?? null;
     const finish = extractTrimToken(
-      finishFromText ??
-        (!modelChanged && !resetContextForCondition ? conv.inventoryContext?.finish ?? null : null)
+      explicitModelNoColorOrFinish
+        ? null
+        : finishFromText ??
+          (!modelChanged && !resetContextForCondition ? conv.inventoryContext?.finish ?? null : null)
     );
     const conditionFromContext =
       !modelChanged && !resetContextForCondition
@@ -17485,11 +17506,15 @@ if (authToken && signature) {
             ? (explicitCondition ?? undefined)
             : (condition ?? conv.inventoryContext?.condition),
         color:
-          modelChanged || resetContextForCondition
+          explicitModelNoColorOrFinish
+            ? undefined
+            : modelChanged || resetContextForCondition
             ? (colorFromText ?? undefined)
             : (colorFromText ?? conv.inventoryContext?.color),
         finish:
-          modelChanged || resetContextForCondition
+          explicitModelNoColorOrFinish
+            ? undefined
+            : modelChanged || resetContextForCondition
             ? (finishFromText ?? undefined)
             : (finishFromText ?? conv.inventoryContext?.finish),
         updatedAt: nowIso()
