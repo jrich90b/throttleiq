@@ -1,4 +1,7 @@
-import { nextActionFromState } from "../services/api/src/domain/routeStateReducer.ts";
+import {
+  nextActionFromState,
+  reduceStaleStateForInbound
+} from "../services/api/src/domain/routeStateReducer.ts";
 
 type Case = {
   id: string;
@@ -109,3 +112,90 @@ if (passed !== cases.length) {
 }
 
 console.log(`\nAll ${cases.length} route-state checks passed.`);
+
+type StaleCase = {
+  id: string;
+  input: {
+    followUpMode?: string | null;
+    followUpReason?: string | null;
+    dialogState?: string | null;
+    hasInventoryWatchPending?: boolean;
+    inventoryWatchPendingAgeHours?: number | null;
+    hasWatchIntent?: boolean;
+    hasFinanceIntent?: boolean;
+    hasSchedulingIntent?: boolean;
+    hasDepartmentIntent?: boolean;
+  };
+  expected: { clearInventoryWatchPending: boolean; setDialogStateToNone: boolean };
+};
+
+const staleCases: StaleCase[] = [
+  {
+    id: "manual_handoff_clears_sticky_dialog",
+    input: {
+      followUpMode: "manual_handoff",
+      followUpReason: "manual_appointment",
+      dialogState: "pricing_need_model",
+      hasInventoryWatchPending: false
+    },
+    expected: { clearInventoryWatchPending: false, setDialogStateToNone: true }
+  },
+  {
+    id: "manual_handoff_clears_pending_watch_without_watch_intent",
+    input: {
+      followUpMode: "manual_handoff",
+      followUpReason: "credit_app",
+      dialogState: "none",
+      hasInventoryWatchPending: true,
+      hasWatchIntent: false
+    },
+    expected: { clearInventoryWatchPending: true, setDialogStateToNone: false }
+  },
+  {
+    id: "watch_context_keeps_pending_watch",
+    input: {
+      followUpMode: "holding_inventory",
+      followUpReason: "inventory_watch",
+      dialogState: "inventory_watch_prompted",
+      hasInventoryWatchPending: true,
+      hasWatchIntent: true
+    },
+    expected: { clearInventoryWatchPending: false, setDialogStateToNone: false }
+  },
+  {
+    id: "expired_pending_watch_clears_on_context_shift",
+    input: {
+      followUpMode: "active",
+      followUpReason: "standard",
+      dialogState: "inventory_watch_prompted",
+      hasInventoryWatchPending: true,
+      inventoryWatchPendingAgeHours: 30,
+      hasWatchIntent: false,
+      hasFinanceIntent: true
+    },
+    expected: { clearInventoryWatchPending: true, setDialogStateToNone: true }
+  }
+];
+
+let stalePassed = 0;
+for (const c of staleCases) {
+  const actual = reduceStaleStateForInbound(c.input);
+  const ok =
+    actual.clearInventoryWatchPending === c.expected.clearInventoryWatchPending &&
+    actual.setDialogStateToNone === c.expected.setDialogStateToNone;
+  if (ok) stalePassed += 1;
+  console.log(
+    `${ok ? "PASS" : "FAIL"} ${c.id} expected=${JSON.stringify(c.expected)} actual=${JSON.stringify({
+      clearInventoryWatchPending: actual.clearInventoryWatchPending,
+      setDialogStateToNone: actual.setDialogStateToNone,
+      reasons: actual.reasons
+    })}`
+  );
+}
+
+if (stalePassed !== staleCases.length) {
+  console.error(`\n${staleCases.length - stalePassed} failures out of ${staleCases.length} stale-state cases`);
+  process.exit(1);
+}
+
+console.log(`\nAll ${staleCases.length} stale-state checks passed.`);

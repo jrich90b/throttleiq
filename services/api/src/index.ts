@@ -124,7 +124,8 @@ import { pickRegenerateInbound } from "./domain/regenerateSelection.js";
 import { applyDraftStateInvariants } from "./domain/draftStateInvariants.js";
 import {
   DEALER_RIDE_NO_PURCHASE_SKIP_DRAFT,
-  nextActionFromState
+  nextActionFromState,
+  reduceStaleStateForInbound
 } from "./domain/routeStateReducer.js";
 
 import {
@@ -6330,6 +6331,68 @@ function reconcileStateFromRecentManualOutbound(
   }
 
   return { changed, reasons };
+}
+
+function reduceStaleWorkflowStateForInbound(
+  conv: any,
+  inboundText: string,
+  inboundAtIso?: string
+): { changed: boolean; reasons: string[] } {
+  if (!conv || typeof conv !== "object") return { changed: false, reasons: [] };
+  const inbound = String(inboundText ?? "");
+  const inboundLower = inbound.toLowerCase();
+  const mode = String(conv.followUp?.mode ?? "").toLowerCase();
+  const reason = String(conv.followUp?.reason ?? "").toLowerCase();
+  const pendingAskedAtMs = new Date(String(conv.inventoryWatchPending?.askedAt ?? "")).getTime();
+  const inboundAtMs = new Date(String(inboundAtIso ?? "")).getTime();
+  const nowMs = Number.isFinite(inboundAtMs) ? inboundAtMs : Date.now();
+  const pendingAgeHours =
+    Number.isFinite(pendingAskedAtMs) && pendingAskedAtMs > 0
+      ? Math.max(0, (nowMs - pendingAskedAtMs) / 36e5)
+      : null;
+  const schedulingSignals = detectSchedulingSignals(inbound);
+  const hasSchedulingIntent =
+    schedulingSignals.explicit ||
+    schedulingSignals.hasDayTime ||
+    schedulingSignals.hasDayOnlyAvailability ||
+    schedulingSignals.hasDayOnlyRequest ||
+    !!extractTimeToken(inbound);
+  const hasWatchIntent =
+    isWatchConfirmationIntentText(inbound) ||
+    /\b(keep an eye out|watch for|notify me|let me know when|text me when|if one comes in|when one comes in)\b/i.test(
+      inboundLower
+    );
+  const hasFinanceIntent = hasFinancePrioritySignals(inbound, conv);
+  const hasDepartmentIntent = !!inferDepartmentFromText(inbound);
+  const decision = reduceStaleStateForInbound({
+    followUpMode: mode,
+    followUpReason: reason,
+    dialogState: getDialogState(conv),
+    hasInventoryWatchPending: !!conv.inventoryWatchPending,
+    inventoryWatchPendingAgeHours: pendingAgeHours,
+    hasWatchIntent,
+    hasFinanceIntent,
+    hasSchedulingIntent,
+    hasDepartmentIntent
+  });
+  let changed = false;
+  if (decision.clearInventoryWatchPending && conv.inventoryWatchPending) {
+    conv.inventoryWatchPending = undefined;
+    changed = true;
+  }
+  if (decision.setDialogStateToNone && getDialogState(conv) !== "none") {
+    setDialogState(conv, "none");
+    changed = true;
+  }
+  if (changed) {
+    (conv as any).workflowStateReduced = {
+      at: nowIso(),
+      mode: mode || null,
+      reason: reason || null,
+      reasons: decision.reasons
+    };
+  }
+  return { changed, reasons: decision.reasons };
 }
 
 function isOtherInventoryRequestText(text: string): boolean {
@@ -14012,6 +14075,14 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       reasons: regenManualReconcile.reasons
     });
   }
+  const regenStaleStateCleanup = reduceStaleWorkflowStateForInbound(conv, event.body ?? "", event.receivedAt);
+  if (regenStaleStateCleanup.changed) {
+    recordRouteOutcome("regen", "stale_state_reduced", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      reasons: regenStaleStateCleanup.reasons
+    });
+  }
   const regenShortAckSuppression = shouldSuppressShortAckDraft(event.body ?? "");
   const regenInboundLower = String(event.body ?? "").toLowerCase();
   const regenRawProvider = String((inbound as any)?.provider ?? "").toLowerCase();
@@ -15097,6 +15168,14 @@ if (authToken && signature) {
       convId: conv.id,
       leadKey: conv.leadKey,
       reasons: liveManualReconcile.reasons
+    });
+  }
+  const liveStaleStateCleanup = reduceStaleWorkflowStateForInbound(conv, event.body ?? "", event.receivedAt);
+  if (liveStaleStateCleanup.changed) {
+    recordRouteOutcome("live", "stale_state_reduced", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      reasons: liveStaleStateCleanup.reasons
     });
   }
   const liveEarlyDecision = nextActionFromState({
