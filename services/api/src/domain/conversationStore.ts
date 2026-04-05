@@ -355,6 +355,16 @@ export type Message = {
   provider?: MessageProvider;
   providerMessageId?: string; // e.g., Twilio SID for sent messages
   draftStatus?: "pending" | "stale";
+  feedback?: MessageFeedback;
+};
+
+export type MessageFeedback = {
+  rating: "up" | "down";
+  reason?: string;
+  note?: string;
+  byUserId?: string;
+  byUserName?: string;
+  at: string;
 };
 
 export type Conversation = {
@@ -1289,6 +1299,30 @@ export function finalizeDraftAsSent(
   scheduleSave();
 
   return { usedDraft: true, originalDraftBody: original };
+}
+
+export function setMessageFeedback(
+  conv: Conversation,
+  messageId: string,
+  feedback: MessageFeedback | null
+): Message | null {
+  const msg = conv.messages.find(m => m.id === messageId);
+  if (!msg) return null;
+  if (feedback) {
+    msg.feedback = {
+      rating: feedback.rating,
+      reason: feedback.reason,
+      note: feedback.note,
+      byUserId: feedback.byUserId,
+      byUserName: feedback.byUserName,
+      at: feedback.at || nowIso()
+    };
+  } else {
+    delete msg.feedback;
+  }
+  conv.updatedAt = nowIso();
+  scheduleSave();
+  return msg;
 }
 
 export function mergeConversationLead(conv: Conversation, patch: Partial<LeadProfile>): Conversation {

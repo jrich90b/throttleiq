@@ -533,6 +533,14 @@ type Message = {
   provider?: string;
   providerMessageId?: string;
   draftStatus?: "pending" | "stale";
+  feedback?: {
+    rating?: "up" | "down";
+    reason?: string;
+    note?: string;
+    byUserId?: string;
+    byUserName?: string;
+    at?: string;
+  };
 };
 
 type ConversationDetail = {
@@ -942,6 +950,7 @@ export default function Home() {
   const [emailAttachmentsBusy, setEmailAttachmentsBusy] = useState(false);
   const [regenBusy, setRegenBusy] = useState(false);
   const [clearDraftBusy, setClearDraftBusy] = useState(false);
+  const [messageFeedbackBusy, setMessageFeedbackBusy] = useState<Record<string, boolean>>({});
   const [closeReason, setCloseReason] = useState("sold");
   const [soldById, setSoldById] = useState("");
   const [listActionsOpenId, setListActionsOpenId] = useState<string | null>(null);
@@ -3982,6 +3991,64 @@ export default function Home() {
       window.alert("Failed to clear draft");
     } finally {
       setClearDraftBusy(false);
+    }
+  }
+
+  async function submitMessageFeedback(messageId: string, rating: "up" | "down") {
+    if (!selectedConv) return;
+    const existing = (selectedConv.messages ?? []).find(m => m.id === messageId);
+    if (!existing) return;
+    const shouldClear = existing.feedback?.rating === rating;
+    let note = "";
+    if (!shouldClear && rating === "down") {
+      const input = window.prompt("Optional: what was wrong with this response?");
+      if (input === null) return;
+      note = input.trim();
+    }
+
+    setMessageFeedbackBusy(prev => ({ ...prev, [messageId]: true }));
+    try {
+      const resp = await fetch(
+        `/api/conversations/${encodeURIComponent(selectedConv.id)}/messages/${encodeURIComponent(messageId)}/feedback`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            shouldClear
+              ? { clear: true }
+              : {
+                  rating,
+                  note: note || undefined
+                }
+          )
+        }
+      );
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) {
+        window.alert(data?.error ?? "Failed to save feedback");
+        return;
+      }
+
+      if (data?.conversation) {
+        const conv = data.conversation;
+        setSelectedConv(conv);
+        setConversations(prev =>
+          prev.map(c =>
+            c.id === conv.id
+              ? {
+                  ...c,
+                  updatedAt: conv.updatedAt ?? c.updatedAt,
+                  messageCount: conv.messages?.length ?? c.messageCount
+                }
+              : c
+          )
+        );
+      }
+      setSaveToast(shouldClear ? "Feedback removed." : rating === "up" ? "Marked helpful." : "Marked needs work.");
+    } catch {
+      window.alert("Failed to save feedback");
+    } finally {
+      setMessageFeedbackBusy(prev => ({ ...prev, [messageId]: false }));
     }
   }
 
@@ -10347,6 +10414,16 @@ export default function Home() {
                     m.direction === "in" && m.provider === "sendgrid"
                       ? cleanInboundEmailForDisplay(m.body)
                       : m.body;
+                  const canRateMessage =
+                    m.direction === "out" &&
+                    (m.provider === "draft_ai" ||
+                      m.provider === "twilio" ||
+                      m.provider === "sendgrid" ||
+                      m.provider === "human");
+                  const feedback = m.feedback;
+                  const feedbackBusy = !!messageFeedbackBusy[m.id];
+                  const ratedUp = feedback?.rating === "up";
+                  const ratedDown = feedback?.rating === "down";
                   return (
                     <div key={m.id} className={`text-sm ${m.direction === "in" || isSummary ? "" : "text-right"}`}>
                       <div className="text-xs text-gray-500">
@@ -10435,6 +10512,37 @@ export default function Home() {
                               </a>
                             );
                           })}
+                        </div>
+                      ) : null}
+                      {canRateMessage ? (
+                        <div className={`mt-1 flex items-center gap-1 ${m.direction === "in" ? "" : "justify-end"}`}>
+                          <button
+                            type="button"
+                            disabled={feedbackBusy}
+                            onClick={() => void submitMessageFeedback(m.id, "up")}
+                            className={`text-xs border rounded px-2 py-0.5 ${
+                              ratedUp ? "bg-green-100 border-green-300" : "hover:bg-gray-50"
+                            } ${feedbackBusy ? "opacity-50 cursor-not-allowed" : ""}`}
+                            title={ratedUp ? "Remove helpful vote" : "Mark helpful"}
+                          >
+                            👍
+                          </button>
+                          <button
+                            type="button"
+                            disabled={feedbackBusy}
+                            onClick={() => void submitMessageFeedback(m.id, "down")}
+                            className={`text-xs border rounded px-2 py-0.5 ${
+                              ratedDown ? "bg-red-100 border-red-300" : "hover:bg-gray-50"
+                            } ${feedbackBusy ? "opacity-50 cursor-not-allowed" : ""}`}
+                            title={ratedDown ? "Remove needs work vote" : "Mark needs work"}
+                          >
+                            👎
+                          </button>
+                          {feedback?.rating ? (
+                            <span className="text-[11px] text-gray-500" title={feedback.note ?? feedback.reason ?? ""}>
+                              {feedback.rating === "up" ? "Helpful" : "Needs work"}
+                            </span>
+                          ) : null}
                         </div>
                       ) : null}
                     </div>

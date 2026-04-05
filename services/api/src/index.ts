@@ -151,6 +151,7 @@ import {
   findConversationsByLeadKey,
   finalizeDraftAsSent,
   discardPendingDrafts,
+  setMessageFeedback,
   addTodo,
   addCallTodoIfMissing,
   listOpenTodos,
@@ -11542,6 +11543,52 @@ app.get("/conversations/:id", async (req, res) => {
     systemMode: getSystemMode(),
     conversation: { ...conv, emailDraft, leadSource, walkIn }
   });
+});
+
+app.post("/conversations/:id/messages/:messageId/feedback", (req, res) => {
+  const conv = getConversation(req.params.id);
+  if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+  const user = (req as any).user ?? null;
+  if (!canUserAccessConversation(user, conv)) {
+    return res.status(403).json({ ok: false, error: "forbidden" });
+  }
+
+  const clear = req.body?.clear === true;
+  const messageId = String(req.params.messageId ?? "").trim();
+  if (!messageId) {
+    return res.status(400).json({ ok: false, error: "messageId required" });
+  }
+
+  if (clear) {
+    const msg = setMessageFeedback(conv, messageId, null);
+    if (!msg) return res.status(404).json({ ok: false, error: "message not found" });
+    saveConversation(conv);
+    return res.json({ ok: true, conversation: conv, message: msg });
+  }
+
+  const rating = String(req.body?.rating ?? "")
+    .trim()
+    .toLowerCase();
+  if (rating !== "up" && rating !== "down") {
+    return res.status(400).json({ ok: false, error: "rating must be 'up' or 'down'" });
+  }
+
+  const reasonRaw = String(req.body?.reason ?? "").trim();
+  const noteRaw = String(req.body?.note ?? "").trim();
+  const reason = reasonRaw ? reasonRaw.slice(0, 80) : undefined;
+  const note = noteRaw ? noteRaw.slice(0, 500) : undefined;
+
+  const msg = setMessageFeedback(conv, messageId, {
+    rating: rating as "up" | "down",
+    reason,
+    note,
+    byUserId: String(user?.id ?? "").trim() || undefined,
+    byUserName: String(user?.name ?? user?.email ?? "").trim() || undefined,
+    at: new Date().toISOString()
+  });
+  if (!msg) return res.status(404).json({ ok: false, error: "message not found" });
+  saveConversation(conv);
+  return res.json({ ok: true, conversation: conv, message: msg });
 });
 
 app.post("/conversations/:id/mode", requirePermission("canToggleHumanOverride"), (req, res) => {
