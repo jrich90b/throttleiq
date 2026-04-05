@@ -1959,7 +1959,7 @@ export async function orchestrateInbound(
   const pricingTermsOnly = /(price|pricing|msrp|cost|how much|what's the price|what is the price|out the door|\botd\b|total price)/i.test(
     String(event.body ?? "")
   );
-  if (financeRequest && !pricingTermsOnly && !wantsPayments) {
+  if (financeRequest && !specialsQuestion && !pricingTermsOnly && !wantsPayments) {
     const dealerProfile = await getDealerProfile();
     const hasCoSignerDetails = /\b(co[-\s]?sign(?:er)?|cosign(?:er)?)\b/i.test(
       String(event.body ?? "")
