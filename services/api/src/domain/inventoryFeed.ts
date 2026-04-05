@@ -14,6 +14,7 @@ export type InventoryFeedItem = {
 };
 
 const CACHE_TTL_MS = 10 * 60 * 1000;
+const INVENTORY_FETCH_TIMEOUT_MS = Number(process.env.INVENTORY_FETCH_TIMEOUT_MS ?? 8000);
 let cache: { items: InventoryFeedItem[]; loadedAt: number } | null = null;
 
 function getFeedUrl(): string | null {
@@ -187,17 +188,37 @@ export async function getInventoryFeed(opts?: { bypassCache?: boolean }): Promis
   if (!opts?.bypassCache && cache && now - cache.loadedAt < CACHE_TTL_MS) return cache.items;
   const url = getFeedUrl();
   if (!url) return [];
-  const r = await fetch(url, {
-    headers: {
-      "User-Agent": "ThrottleIQ/1.0 (inventory-feed)",
-      Accept: "application/xml,text/xml,*/*"
+  const staleItems = cache?.items ?? [];
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1000, INVENTORY_FETCH_TIMEOUT_MS));
+  try {
+    const r = await fetch(url, {
+      headers: {
+        "User-Agent": "ThrottleIQ/1.0 (inventory-feed)",
+        Accept: "application/xml,text/xml,*/*"
+      },
+      signal: controller.signal
+    });
+    if (!r.ok) {
+      console.warn("[inventory-feed] fetch failed", { status: r.status, url });
+      return staleItems;
     }
-  });
-  if (!r.ok) return [];
-  const xml = await r.text();
-  const items = parseFeed(xml);
-  cache = { items, loadedAt: now };
-  return items;
+    const xml = await r.text();
+    const items = parseFeed(xml);
+    cache = { items, loadedAt: now };
+    return items;
+  } catch (err: any) {
+    const reason = err?.name === "AbortError" ? "timeout" : "fetch_error";
+    console.warn("[inventory-feed] fetch error", {
+      reason,
+      message: err?.message ?? String(err),
+      timeoutMs: INVENTORY_FETCH_TIMEOUT_MS,
+      url
+    });
+    return staleItems;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function findInventoryPrice(opts: {
