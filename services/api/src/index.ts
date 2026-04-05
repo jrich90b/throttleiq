@@ -6007,6 +6007,230 @@ function getDeterministicAvailabilitySignals(
   return { inventoryCountQuestion, shouldLookupAvailability };
 }
 
+function isOtherInventoryRequestText(text: string): boolean {
+  const lower = String(text ?? "").toLowerCase();
+  if (!lower.trim()) return false;
+  return (
+    /\b(any|what|do you have|got)\s+(other|another|different|more)\b/i.test(lower) ||
+    (/\b(other|another|different|else|more)\b/i.test(lower) &&
+      /\b(in[-\s]?stock|available|availability|options?|ones|units|bikes)\b/i.test(lower))
+  );
+}
+
+type DeterministicAvailabilityResolution =
+  | { kind: "missing_model" }
+  | { kind: "reply"; reply: string; mediaUrls?: string[] };
+
+async function resolveDeterministicAvailabilityReply(args: {
+  conv: any;
+  text: string;
+  parsedAvailability?: { model?: string | null; year?: string | number | null; color?: string | null; condition?: string | null } | null;
+  otherInventoryRequest?: boolean;
+}): Promise<DeterministicAvailabilityResolution> {
+  const { conv, parsedAvailability } = args;
+  const textLower = String(args.text ?? "").toLowerCase();
+  const otherInventoryRequest = !!args.otherInventoryRequest;
+  const modelFromText = parsedAvailability?.model ?? findMentionedModel(textLower);
+  const priorModel =
+    conv.inventoryContext?.model ??
+    conv.lead?.vehicle?.model ??
+    conv.lead?.vehicle?.description ??
+    null;
+  const model = modelFromText ?? priorModel ?? null;
+  if (!model) return { kind: "missing_model" };
+  const modelForLookup = canonicalizeWatchModelLabel(model);
+  const modelChanged =
+    !!modelFromText &&
+    !!priorModel &&
+    normalizeModelText(modelFromText) !== normalizeModelText(priorModel);
+  const yearFromText =
+    parsedAvailability?.year != null
+      ? String(parsedAvailability.year)
+      : (extractYearSingle(textLower)?.toString() ?? null);
+  const colorFromParser = sanitizeColorPhrase(extractColorToken(textLower));
+  const colorFromLlm = sanitizeColorPhrase(parsedAvailability?.color ?? null);
+  const colorFromText = pickMostSpecificColor(colorFromLlm, colorFromParser);
+  const finishFromText = extractFinishToken(textLower);
+  const explicitModelNoColorOrFinish = !!modelFromText && !colorFromText && !finishFromText;
+  const llmConditionRaw =
+    parsedAvailability?.condition && parsedAvailability.condition !== "unknown"
+      ? parsedAvailability.condition
+      : null;
+  const conditionFromText = normalizeWatchCondition(textLower);
+  const conditionFromLlm = normalizeWatchCondition(llmConditionRaw);
+  const conditionFromLlmTrusted = conditionFromText ? conditionFromLlm : undefined;
+  const explicitCondition = conditionFromLlmTrusted ?? conditionFromText;
+  const priorCondition = !modelChanged
+    ? normalizeWatchCondition(conv.inventoryContext?.condition ?? conv.lead?.vehicle?.condition ?? null)
+    : undefined;
+  const conditionSearchRequest = /\b(looking for|want|need|after|open to)\b[^.?!]*\b(new|used|pre[-\s]?owned|preowned)\b/i.test(
+    textLower
+  );
+  const resetContextForCondition =
+    !modelChanged &&
+    !!explicitCondition &&
+    ((!!priorCondition && explicitCondition !== priorCondition) || conditionSearchRequest);
+  const priorYear =
+    !modelChanged && !resetContextForCondition
+      ? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null
+      : null;
+  const year =
+    yearFromText ??
+    (!modelChanged && !resetContextForCondition
+      ? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null
+      : null);
+  const colorCandidate =
+    explicitModelNoColorOrFinish
+      ? null
+      : colorFromText ??
+        (!modelChanged && !resetContextForCondition
+          ? conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null
+          : null);
+  const color = sanitizeColorPhrase(colorCandidate) ?? null;
+  const finish = extractTrimToken(
+    explicitModelNoColorOrFinish
+      ? null
+      : finishFromText ??
+        (!modelChanged && !resetContextForCondition ? conv.inventoryContext?.finish ?? null : null)
+  );
+  const conditionFromContext =
+    !modelChanged && !resetContextForCondition
+      ? normalizeWatchCondition(conv.inventoryContext?.condition ?? conv.lead?.vehicle?.condition ?? null)
+      : undefined;
+  const yearChangedFromContext =
+    !!yearFromText &&
+    !!priorYear &&
+    String(yearFromText).trim() !== String(priorYear).trim();
+  const keepContextCondition = !yearChangedFromContext || !!conditionFromText || !!conditionFromLlmTrusted;
+  const condition =
+    conditionFromLlmTrusted ??
+    conditionFromText ??
+    (keepContextCondition ? conditionFromContext : undefined);
+  if (model || yearFromText || colorFromText || finishFromText || condition) {
+    conv.inventoryContext = {
+      model: model ?? conv.inventoryContext?.model,
+      year:
+        (modelChanged || resetContextForCondition) && !yearFromText
+          ? undefined
+          : year ?? conv.inventoryContext?.year,
+      condition:
+        modelChanged || resetContextForCondition
+          ? (explicitCondition ?? undefined)
+          : (condition ?? conv.inventoryContext?.condition),
+      color:
+        explicitModelNoColorOrFinish
+          ? undefined
+          : modelChanged || resetContextForCondition
+          ? (colorFromText ?? undefined)
+          : (colorFromText ?? conv.inventoryContext?.color),
+      finish:
+        explicitModelNoColorOrFinish
+          ? undefined
+          : modelChanged || resetContextForCondition
+          ? (finishFromText ?? undefined)
+          : (finishFromText ?? conv.inventoryContext?.finish),
+      updatedAt: nowIso()
+    };
+  }
+  let matches = await findInventoryMatches({ year: year ?? null, model: modelForLookup });
+  if (condition) {
+    matches = matches.filter(i => inventoryItemMatchesRequestedCondition(i, condition));
+  }
+  if (color) {
+    const leadColor = String(color);
+    const leadTrim: "chrome" | "black" | null = finish;
+    matches = matches.filter(i => {
+      const itemColor = i.color ?? "";
+      if (colorMatchesExact(itemColor, leadColor, leadTrim) || colorMatchesAlias(itemColor, leadColor, leadTrim)) {
+        return true;
+      }
+      const itemNorm = normalizeColorBase(itemColor, !!leadTrim);
+      const leadNorm = normalizeColorBase(leadColor, !!leadTrim);
+      if (!itemNorm || !leadNorm) return false;
+      return itemNorm.includes(leadNorm) || leadNorm.includes(itemNorm);
+    });
+  }
+  const holds = await listInventoryHolds();
+  const solds = await listInventorySolds();
+  const availableMatches = matches.filter(m => {
+    const key = normalizeInventoryHoldKey(m.stockId, m.vin);
+    return key ? !holds?.[key] && !solds?.[key] : true;
+  });
+  const leadStockId = conv.lead?.vehicle?.stockId ?? null;
+  const leadVin = conv.lead?.vehicle?.vin ?? null;
+  const availableMatchesForCount = otherInventoryRequest
+    ? availableMatches.filter(
+        m => !((leadStockId && m.stockId === leadStockId) || (leadVin && m.vin === leadVin))
+      )
+    : availableMatches;
+  const count = availableMatchesForCount.length;
+  const sentMediaUrls = new Set<string>();
+  for (const msg of conv.messages ?? []) {
+    if (msg.direction !== "out") continue;
+    if (!Array.isArray(msg.mediaUrls)) continue;
+    for (const url of msg.mediaUrls) {
+      if (typeof url === "string" && url) sentMediaUrls.add(url);
+    }
+  }
+  const hasSentPhoto = sentMediaUrls.size > 0;
+  const remainingWithImages = availableMatchesForCount.filter(item =>
+    Array.isArray(item.images) &&
+    item.images.length &&
+    !item.images.some((u: string) => sentMediaUrls.has(u))
+  );
+  const photoRequestedLocal = /\b(photo|picture|pic|image|images)\b/i.test(textLower);
+  const extraMediaUrls =
+    count > 1 && (photoRequestedLocal || hasSentPhoto)
+      ? remainingWithImages
+          .slice(0, 2)
+          .map(item => item.images?.find((u: string) => /^https?:\/\//i.test(u)) ?? null)
+          .filter((u: string | null): u is string => !!u)
+      : [];
+  const conditionLabel = formatRequestedConditionLabel(condition);
+  const yearText = year ? `${year} ` : "";
+  const modelLabel = normalizeDisplayCase(modelForLookup ?? model);
+  const colorLabel = color ? ` in ${formatColorLabel(color)}` : "";
+  const inventoryLabel = `${conditionLabel}${yearText}${modelLabel}${colorLabel}`;
+  const inventoryLabelLower = inventoryLabel.toLowerCase();
+  const hasPriorSpecificInventoryMention = (conv.messages ?? []).some(
+    (m: any) =>
+      m?.direction === "out" &&
+      typeof m?.body === "string" &&
+      m.body.toLowerCase().includes(inventoryLabelLower)
+  );
+  const paintTrimPrompt = "Are you looking for any paint or trim specifically (chrome vs blacked-out)?";
+  const noStockColorFinishPrompt =
+    count <= 0 ? await buildColorFinishFollowUpPrompt(conv, model, year, color) : "";
+  let reply = "";
+  if (otherInventoryRequest) {
+    if (count <= 0) {
+      reply = `Right now that’s the only ${inventoryLabel} we have in stock. ${paintTrimPrompt}`;
+    } else if (count === 1) {
+      reply = `Yes — we have one other ${inventoryLabel} in stock. ${paintTrimPrompt}`;
+    } else {
+      reply = `Yes — we have ${count} other ${inventoryLabel} units in stock. ${paintTrimPrompt}`;
+    }
+  } else {
+    if (count <= 0) {
+      reply = `I’m not seeing ${inventoryLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}${
+        noStockColorFinishPrompt ? ` ${noStockColorFinishPrompt}` : ""
+      }`;
+    } else if (count === 1) {
+      reply = hasPriorSpecificInventoryMention
+        ? `That’s the only ${inventoryLabel} we have in stock right now. Want to come check it out, or want a couple photos first?`
+        : `Yes — we have one ${inventoryLabel} in stock right now. Want to come check it out, or want a couple photos first?`;
+    } else {
+      reply = `We have ${count} ${inventoryLabel} units in stock right now. Want to come check one out, or want a couple photos first?`;
+    }
+  }
+  if (extraMediaUrls.length) {
+    reply += ` Here ${extraMediaUrls.length === 1 ? "is" : "are"} photo${extraMediaUrls.length === 1 ? "" : "s"}.`;
+  } else if (photoRequestedLocal && count > 0) {
+    reply += " I can have one of the guys send photos over by text.";
+  }
+  return { kind: "reply", reply, mediaUrls: extraMediaUrls.length ? extraMediaUrls : undefined };
+}
+
 function referencesSpecificInventoryUnit(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
@@ -13427,87 +13651,29 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   // Keep regenerate aligned with inbound deterministic availability behavior.
   if (event.provider === "twilio" && channel === "sms") {
     const availabilitySignals = getDeterministicAvailabilitySignals(regenTextLower, conv);
-    const mentionsModel = findMentionedModel(regenTextLower);
-    const mentionsColor = sanitizeColorPhrase(extractColorToken(regenTextLower));
-    const mentionsFinish = extractFinishToken(regenTextLower);
-    const mentionsCondition = normalizeWatchCondition(regenTextLower);
-    const mentionsYear = extractYearSingle(regenTextLower)?.toString() ?? null;
     const deterministicRegenAvailability = availabilitySignals.shouldLookupAvailability;
     const regenFinancePriorityOverride = hasFinancePrioritySignals(event.body ?? "", conv);
     const regenSchedulePriorityOverride = detectSchedulingSignals(event.body).explicit;
+    const regenOtherInventoryRequest = isOtherInventoryRequestText(regenTextLower);
     if (deterministicRegenAvailability && !regenFinancePriorityOverride && !regenSchedulePriorityOverride) {
-      const model =
-        mentionsModel ??
-        conv.inventoryContext?.model ??
-        conv.lead?.vehicle?.model ??
-        conv.lead?.vehicle?.description ??
-        null;
-      if (model) {
-        const modelForLookup = canonicalizeWatchModelLabel(model);
-        const year = mentionsYear ?? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null;
-        const explicitModelNoColorOrFinish = !!mentionsModel && !mentionsColor && !mentionsFinish;
-        const color =
-          explicitModelNoColorOrFinish
-            ? null
-            : mentionsColor ??
-              sanitizeColorPhrase(conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null);
-        const finish = explicitModelNoColorOrFinish
-          ? null
-          : mentionsFinish ?? extractTrimToken(conv.inventoryContext?.finish ?? null);
-        const condition =
-          mentionsCondition ??
-          (mentionsYear
-            ? undefined
-            : normalizeWatchCondition(conv.inventoryContext?.condition ?? conv.lead?.vehicle?.condition ?? null));
-        let matches = await findInventoryMatches({ year: year ?? null, model: modelForLookup });
-        if (condition) {
-          matches = matches.filter(i => inventoryItemMatchesRequestedCondition(i, condition));
-        }
-        if (color) {
-          const leadColor = String(color);
-          const leadTrim: "chrome" | "black" | null = finish;
-          matches = matches.filter(i => {
-            const itemColor = i.color ?? "";
-            if (colorMatchesExact(itemColor, leadColor, leadTrim) || colorMatchesAlias(itemColor, leadColor, leadTrim)) {
-              return true;
-            }
-            const itemNorm = normalizeColorBase(itemColor, !!leadTrim);
-            const leadNorm = normalizeColorBase(leadColor, !!leadTrim);
-            if (!itemNorm || !leadNorm) return false;
-            return itemNorm.includes(leadNorm) || leadNorm.includes(itemNorm);
-          });
-        }
-        const holds = await listInventoryHolds();
-        const solds = await listInventorySolds();
-        const availableMatches = matches.filter(m => {
-          const key = normalizeInventoryHoldKey(m.stockId, m.vin);
-          return key ? !holds?.[key] && !solds?.[key] : true;
-        });
-        const conditionLabel = formatRequestedConditionLabel(condition);
-        const yearText = year ? `${year} ` : "";
-        const modelLabel = normalizeDisplayCase(modelForLookup || model);
-        const colorLabel = color ? ` in ${formatColorLabel(color)}` : "";
-        const inventoryLabel = `${conditionLabel}${yearText}${modelLabel}${colorLabel}`.trim();
-        const reply = (() => {
-          if (availableMatches.length <= 0) {
-            return `I’m not seeing ${inventoryLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()} Want me to keep an eye out and text you when one lands?`;
-          }
-          const pick = pickClosestInventoryItem(availableMatches, year ?? null, color ?? null);
-          const item = pick?.item ?? availableMatches[0];
-          const stockText = item?.stockId ? ` (Stock ${item.stockId})` : "";
-          const priceNum = Number(item?.price ?? NaN);
-          const priceText = Number.isFinite(priceNum) && priceNum > 0
-            ? ` It’s listed at ${new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(priceNum)}${stockText}.`
-            : stockText
-              ? ` ${stockText}.`
-              : "";
-          return `Yes — we do have ${inventoryLabel} in stock right now.${priceText} Want to come see it, or want a couple photos first?`;
-        })();
-        discardPendingDrafts(conv);
-        appendSmsRegeneratedDraft(reply);
-        saveConversation(conv);
-        return res.json({ ok: true, conversation: conv, draft: reply });
-      }
+      const availabilityResolution = await resolveDeterministicAvailabilityReply({
+        conv,
+        text: event.body ?? "",
+        parsedAvailability: null,
+        otherInventoryRequest: regenOtherInventoryRequest
+      });
+      const reply =
+        availabilityResolution.kind === "reply"
+          ? availabilityResolution.reply
+          : "Which model are you asking about?";
+      const mediaUrls =
+        availabilityResolution.kind === "reply" && Array.isArray(availabilityResolution.mediaUrls)
+          ? availabilityResolution.mediaUrls
+          : undefined;
+      discardPendingDrafts(conv);
+      appendSmsRegeneratedDraft(reply, mediaUrls);
+      saveConversation(conv);
+      return res.json({ ok: true, conversation: conv, draft: reply });
     }
   }
 
@@ -15868,10 +16034,7 @@ if (authToken && signature) {
   const availabilitySignalsEarly = getDeterministicAvailabilitySignals(textLower, conv);
   const inventoryCountQuestion = availabilitySignalsEarly.inventoryCountQuestion;
   const deterministicAvailabilityLookup = availabilitySignalsEarly.shouldLookupAvailability;
-  const otherInventoryRequest =
-    /\b(any|what|do you have|got)\s+(other|another|different|more)\b/i.test(textLower) ||
-    (/\b(other|another|different|else|more)\b/i.test(textLower) &&
-      /\b(in[-\s]?stock|available|options?|units?|bikes?|models?)\b/i.test(textLower));
+  const otherInventoryRequest = isOtherInventoryRequestText(textLower);
   const schedulingSignalsBase = detectSchedulingSignals(event.body);
   const preParserExplicitFinanceTermIntent =
     /\b\d{2,3}\s*(month|months|mo)\b/i.test(String(event.body ?? "")) ||
@@ -17567,221 +17730,43 @@ if (authToken && signature) {
     !financePriorityOverride &&
     !schedulePriorityOverride
   ) {
-    const modelFromText = llmAvailability?.model ?? findMentionedModel(textLower);
-    const priorModel =
-      conv.inventoryContext?.model ??
-      conv.lead?.vehicle?.model ??
-      conv.lead?.vehicle?.description ??
-      null;
-    const model = modelFromText ?? priorModel ?? null;
-    const modelForLookup = model ? canonicalizeWatchModelLabel(model) : null;
-    if (!model) {
-      const reply = "Which model are you asking about?";
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    const modelChanged =
-      !!modelFromText &&
-      !!priorModel &&
-      normalizeModelText(modelFromText) !== normalizeModelText(priorModel);
-    const yearFromText = llmAvailability?.year ?? (extractYearSingle(textLower)?.toString() ?? null);
-    const colorFromParser = sanitizeColorPhrase(extractColorToken(textLower));
-    const colorFromLlm = sanitizeColorPhrase(llmAvailability?.color ?? null);
-    const colorFromText = pickMostSpecificColor(colorFromLlm, colorFromParser);
-    const finishFromText = extractFinishToken(textLower);
-    const explicitModelNoColorOrFinish = !!modelFromText && !colorFromText && !finishFromText;
-    const llmConditionRaw =
-      llmAvailability?.condition && llmAvailability.condition !== "unknown"
-        ? llmAvailability.condition
-        : null;
-    const conditionFromText = normalizeWatchCondition(textLower);
-    const conditionFromLlm = normalizeWatchCondition(llmConditionRaw);
-    const conditionFromLlmTrusted = conditionFromText ? conditionFromLlm : undefined;
-    const explicitCondition = conditionFromLlmTrusted ?? conditionFromText;
-    const priorCondition = !modelChanged
-      ? normalizeWatchCondition(conv.inventoryContext?.condition ?? conv.lead?.vehicle?.condition ?? null)
-      : undefined;
-    const conditionSearchRequest = /\b(looking for|want|need|after|open to)\b[^.?!]*\b(new|used|pre[-\s]?owned|preowned)\b/i.test(
-      textLower
-    );
-    const resetContextForCondition =
-      !modelChanged &&
-      !!explicitCondition &&
-      ((!!priorCondition && explicitCondition !== priorCondition) || conditionSearchRequest);
-    const priorYear =
-      !modelChanged && !resetContextForCondition
-        ? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null
-        : null;
-    const year =
-      yearFromText ??
-      (!modelChanged && !resetContextForCondition
-        ? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null
-        : null);
-    const colorCandidate =
-      explicitModelNoColorOrFinish
-        ? null
-        : colorFromText ??
-          (!modelChanged && !resetContextForCondition
-            ? conv.inventoryContext?.color ?? conv.lead?.vehicle?.color ?? null
-            : null);
-    const color = sanitizeColorPhrase(colorCandidate) ?? null;
-    const finish = extractTrimToken(
-      explicitModelNoColorOrFinish
-        ? null
-        : finishFromText ??
-          (!modelChanged && !resetContextForCondition ? conv.inventoryContext?.finish ?? null : null)
-    );
-    const conditionFromContext =
-      !modelChanged && !resetContextForCondition
-        ? normalizeWatchCondition(conv.inventoryContext?.condition ?? conv.lead?.vehicle?.condition ?? null)
-        : undefined;
-    const yearChangedFromContext =
-      !!yearFromText &&
-      !!priorYear &&
-      String(yearFromText).trim() !== String(priorYear).trim();
-    const keepContextCondition = !yearChangedFromContext || !!conditionFromText || !!conditionFromLlmTrusted;
-    const condition =
-      conditionFromLlmTrusted ??
-      conditionFromText ??
-      (keepContextCondition ? conditionFromContext : undefined);
-    if (model || yearFromText || colorFromText || finishFromText || condition) {
-      conv.inventoryContext = {
-        model: model ?? conv.inventoryContext?.model,
-        year:
-          (modelChanged || resetContextForCondition) && !yearFromText
-            ? undefined
-            : year ?? conv.inventoryContext?.year,
-        condition:
-          modelChanged || resetContextForCondition
-            ? (explicitCondition ?? undefined)
-            : (condition ?? conv.inventoryContext?.condition),
-        color:
-          explicitModelNoColorOrFinish
-            ? undefined
-            : modelChanged || resetContextForCondition
-            ? (colorFromText ?? undefined)
-            : (colorFromText ?? conv.inventoryContext?.color),
-        finish:
-          explicitModelNoColorOrFinish
-            ? undefined
-            : modelChanged || resetContextForCondition
-            ? (finishFromText ?? undefined)
-            : (finishFromText ?? conv.inventoryContext?.finish),
-        updatedAt: nowIso()
-      };
-    }
-    let matches = await findInventoryMatches({ year: year ?? null, model: modelForLookup });
-    if (condition) {
-      matches = matches.filter(i => inventoryItemMatchesRequestedCondition(i, condition));
-    }
-    if (color) {
-      const leadColor = String(color);
-      const leadTrim: "chrome" | "black" | null = finish;
-      matches = matches.filter(i => {
-        const itemColor = i.color ?? "";
-        if (colorMatchesExact(itemColor, leadColor, leadTrim) || colorMatchesAlias(itemColor, leadColor, leadTrim)) {
-          return true;
-        }
-        const itemNorm = normalizeColorBase(itemColor, !!leadTrim);
-        const leadNorm = normalizeColorBase(leadColor, !!leadTrim);
-        if (!itemNorm || !leadNorm) return false;
-        return itemNorm.includes(leadNorm) || leadNorm.includes(itemNorm);
-      });
-    }
-    const holds = await listInventoryHolds();
-    const solds = await listInventorySolds();
-    const availableMatches = matches.filter(m => {
-      const key = normalizeInventoryHoldKey(m.stockId, m.vin);
-      return key ? !holds?.[key] && !solds?.[key] : true;
+    const availabilityResolution = await resolveDeterministicAvailabilityReply({
+      conv,
+      text: event.body ?? "",
+      parsedAvailability: llmAvailability,
+      otherInventoryRequest
     });
-    const leadStockId = conv.lead?.vehicle?.stockId ?? null;
-    const leadVin = conv.lead?.vehicle?.vin ?? null;
-    const availableMatchesForCount = otherInventoryRequest
-      ? availableMatches.filter(
-          m => !((leadStockId && m.stockId === leadStockId) || (leadVin && m.vin === leadVin))
-        )
-      : availableMatches;
-    const count = availableMatchesForCount.length;
-    const sentMediaUrls = new Set<string>();
-    for (const msg of conv.messages ?? []) {
-      if (msg.direction !== "out") continue;
-      if (!Array.isArray(msg.mediaUrls)) continue;
-      for (const url of msg.mediaUrls) {
-        if (typeof url === "string" && url) sentMediaUrls.add(url);
-      }
-    }
-    const hasSentPhoto = sentMediaUrls.size > 0;
-    const remainingWithImages = availableMatchesForCount.filter(item =>
-      Array.isArray(item.images) &&
-      item.images.length &&
-      !item.images.some((u: string) => sentMediaUrls.has(u))
-    );
-    const photoRequestedLocal = /\b(photo|picture|pic|image|images)\b/i.test(textLower);
+    const reply =
+      availabilityResolution.kind === "reply"
+        ? availabilityResolution.reply
+        : "Which model are you asking about?";
     const extraMediaUrls =
-      count > 1 && (photoRequestedLocal || hasSentPhoto)
-        ? remainingWithImages
-            .slice(0, 2)
-            .map(item => item.images?.find((u: string) => /^https?:\/\//i.test(u)) ?? null)
-            .filter((u: string | null): u is string => !!u)
+      availabilityResolution.kind === "reply" && Array.isArray(availabilityResolution.mediaUrls)
+        ? availabilityResolution.mediaUrls
         : [];
-    const conditionLabel = formatRequestedConditionLabel(condition);
-    const yearText = year ? `${year} ` : "";
-    const modelLabel = normalizeDisplayCase(modelForLookup ?? model);
-    const colorLabel = color ? ` in ${formatColorLabel(color)}` : "";
-    const inventoryLabel = `${conditionLabel}${yearText}${modelLabel}${colorLabel}`;
-    const inventoryLabelLower = inventoryLabel.toLowerCase();
-    const hasPriorSpecificInventoryMention = (conv.messages ?? []).some(
-      m =>
-        m?.direction === "out" &&
-        typeof m?.body === "string" &&
-        m.body.toLowerCase().includes(inventoryLabelLower)
-    );
-    const paintTrimPrompt = "Are you looking for any paint or trim specifically (chrome vs blacked-out)?";
-    const noStockColorFinishPrompt =
-      count <= 0 ? await buildColorFinishFollowUpPrompt(conv, model, year, color) : "";
-    let reply = "";
-    if (otherInventoryRequest) {
-      if (count <= 0) {
-        reply = `Right now that’s the only ${inventoryLabel} we have in stock. ${paintTrimPrompt}`;
-      } else if (count === 1) {
-        reply = `Yes — we have one other ${inventoryLabel} in stock. ${paintTrimPrompt}`;
-      } else {
-        reply = `Yes — we have ${count} other ${inventoryLabel} units in stock. ${paintTrimPrompt}`;
-      }
-    } else {
-      if (count <= 0) {
-        reply = `I’m not seeing ${inventoryLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}${
-          noStockColorFinishPrompt ? ` ${noStockColorFinishPrompt}` : ""
-        }`;
-      } else if (count === 1) {
-        reply = hasPriorSpecificInventoryMention
-          ? `That’s the only ${inventoryLabel} we have in stock right now. Want to come check it out, or want a couple photos first?`
-          : `Yes — we have one ${inventoryLabel} in stock right now. Want to come check it out, or want a couple photos first?`;
-      } else {
-        reply = `We have ${count} ${inventoryLabel} units in stock right now. Want to come check one out, or want a couple photos first?`;
-      }
-    }
-    if (extraMediaUrls.length) {
-      reply += ` Here ${extraMediaUrls.length === 1 ? "is" : "are"} photo${extraMediaUrls.length === 1 ? "" : "s"}.`;
-    } else if (photoRequestedLocal && count > 0) {
-      reply += " I can have one of the guys send photos over by text.";
-    }
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai", undefined, extraMediaUrls.length ? extraMediaUrls : undefined);
+      appendOutbound(
+        conv,
+        event.to,
+        event.from,
+        reply,
+        "draft_ai",
+        undefined,
+        extraMediaUrls.length ? extraMediaUrls : undefined
+      );
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
-    appendOutbound(conv, event.to, event.from, reply, "twilio", undefined, extraMediaUrls.length ? extraMediaUrls : undefined);
+    appendOutbound(
+      conv,
+      event.to,
+      event.from,
+      reply,
+      "twilio",
+      undefined,
+      extraMediaUrls.length ? extraMediaUrls : undefined
+    );
     const mediaTags = extraMediaUrls.length
       ? extraMediaUrls.map(u => `\n    <Media>${escapeXml(u)}</Media>`).join("")
       : "";
