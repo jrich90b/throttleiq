@@ -17554,6 +17554,13 @@ if (authToken && signature) {
     const modelLabel = normalizeDisplayCase(modelForLookup ?? model);
     const colorLabel = color ? ` in ${formatColorLabel(color)}` : "";
     const inventoryLabel = `${conditionLabel}${yearText}${modelLabel}${colorLabel}`;
+    const inventoryLabelLower = inventoryLabel.toLowerCase();
+    const hasPriorSpecificInventoryMention = (conv.messages ?? []).some(
+      m =>
+        m?.direction === "out" &&
+        typeof m?.body === "string" &&
+        m.body.toLowerCase().includes(inventoryLabelLower)
+    );
     const paintTrimPrompt = "Are you looking for any paint or trim specifically (chrome vs blacked-out)?";
     const noStockColorFinishPrompt =
       count <= 0 ? await buildColorFinishFollowUpPrompt(conv, model, year, color) : "";
@@ -17572,7 +17579,9 @@ if (authToken && signature) {
           noStockColorFinishPrompt ? ` ${noStockColorFinishPrompt}` : ""
         }`;
       } else if (count === 1) {
-        reply = `That’s the only ${inventoryLabel} we have in stock right now. Want to come check it out, or want a couple photos first?`;
+        reply = hasPriorSpecificInventoryMention
+          ? `That’s the only ${inventoryLabel} we have in stock right now. Want to come check it out, or want a couple photos first?`
+          : `Yes — we have one ${inventoryLabel} in stock right now. Want to come check it out, or want a couple photos first?`;
       } else {
         reply = `We have ${count} ${inventoryLabel} units in stock right now. Want to come check one out, or want a couple photos first?`;
       }
