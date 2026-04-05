@@ -104,6 +104,21 @@ const cases: Case[] = [
     }
   },
   {
+    id: "joseph_availability_question_blocks_pricing_prompt",
+    expectedAllow: false,
+    expectedReason: "availability_priority_pricing_prompt_guard",
+    input: {
+      inboundText: "Do you have any black street glides in-stock?",
+      draftText:
+        "The price we have listed for T19-26 is $24,999. Final price can change with tax, fees, trade-in, and financing. Do you have a trade?",
+      followUpMode: "active",
+      followUpReason: "pricing",
+      dialogState: "pricing_answered",
+      classificationBucket: "inventory_interest",
+      classificationCta: "check_availability"
+    }
+  },
+  {
     id: "blake_credit_app_blocks_inventory_prompt",
     expectedAllow: false,
     expectedReason: "finance_priority_inventory_prompt_guard",

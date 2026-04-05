@@ -6216,6 +6216,19 @@ function hasFinancePrioritySignals(
   return false;
 }
 
+function hasCurrentTurnFinanceSignals(text: string): boolean {
+  const value = String(text ?? "");
+  const lower = value.toLowerCase();
+  if (!value.trim()) return false;
+  if (isPricingText(value) || isPaymentText(value) || isDownPaymentQuestion(value)) return true;
+  if (extractMonthlyBudgetLimit(value) != null) return true;
+  if (extractPaymentTermMonths(value) != null) return true;
+  if (parseDownPaymentForBudget(value)?.amount != null) return true;
+  return /\b(financing|finance|apr|credit score|monthly|per month|down payment|money down|cash down|term)\b/i.test(
+    lower
+  );
+}
+
 function getDeterministicAvailabilitySignals(
   text: string,
   conv: any
@@ -14325,9 +14338,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const deterministicRegenAvailability = availabilitySignals.shouldLookupAvailability;
     const regenAvailabilityIntentOverride =
       availabilitySignals.inventoryCountQuestion || availabilitySignals.explicitAvailabilityAsk;
-    const regenFinancePriorityOverride = hasFinancePrioritySignals(event.body ?? "", conv, {
+    const regenCurrentTurnFinanceSignal = hasCurrentTurnFinanceSignals(event.body ?? "");
+    const regenFinancePriorityRaw = hasFinancePrioritySignals(event.body ?? "", conv, {
       lastOutboundText: String(getLastNonVoiceOutbound(conv)?.body ?? "")
     });
+    const regenPricingHistoryBleedGuard =
+      regenAvailabilityIntentOverride &&
+      !regenCurrentTurnFinanceSignal &&
+      regenFinancePriorityRaw;
+    const regenFinancePriorityOverride = regenPricingHistoryBleedGuard ? false : regenFinancePriorityRaw;
     const regenSchedulingSignals = detectSchedulingSignals(event.body ?? "");
     const regenSchedulePriorityOverride =
       regenSchedulingSignals.explicit ||
@@ -14777,9 +14796,21 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return respondRegenerateSkipped("short_ack_no_action");
   }
   const regenSchedulingSignalsForHint = detectSchedulingSignals(event.body ?? "");
-  const regenFinancePriorityHint = hasFinancePrioritySignals(event.body ?? "", conv, {
+  const regenAvailabilitySignalsForHint = getDeterministicAvailabilitySignals(regenTextLower, conv);
+  const regenCurrentTurnFinanceSignalForHint = hasCurrentTurnFinanceSignals(event.body ?? "");
+  const regenFinancePriorityHintRaw = hasFinancePrioritySignals(event.body ?? "", conv, {
     lastOutboundText: String(getLastNonVoiceOutbound(conv)?.body ?? "")
   });
+  const regenAvailabilityIntentHint =
+    regenAvailabilitySignalsForHint.inventoryCountQuestion ||
+    regenAvailabilitySignalsForHint.explicitAvailabilityAsk;
+  const regenPricingHistoryBleedGuardForHint =
+    regenAvailabilityIntentHint &&
+    !regenCurrentTurnFinanceSignalForHint &&
+    regenFinancePriorityHintRaw;
+  const regenFinancePriorityHint = regenPricingHistoryBleedGuardForHint
+    ? false
+    : regenFinancePriorityHintRaw;
   const regenPrimaryIntentHint: "pricing_payments" | "scheduling" | "callback" | "availability" | "general" =
     regenFinancePriorityHint
       ? "pricing_payments"
@@ -14790,12 +14821,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         ? "scheduling"
         : !regenTextingTypoJoke && detectCallbackText(event.body ?? "")
           ? "callback"
-          : isExplicitAvailabilityQuestion(event.body ?? "")
+          : regenAvailabilityIntentHint || isExplicitAvailabilityQuestion(event.body ?? "")
             ? "availability"
             : "general";
   const regenPricingIntentHint = regenPrimaryIntentHint === "pricing_payments";
   const regenSchedulingIntentHint = regenPrimaryIntentHint === "scheduling";
-  const regenAvailabilityIntentHint = regenPrimaryIntentHint === "availability";
+  const regenAvailabilityPrimaryIntentHint = regenPrimaryIntentHint === "availability";
   const regenCallbackIntentHint = regenPrimaryIntentHint === "callback";
 
   const result = await orchestrateInbound(event, history, {
@@ -14805,7 +14836,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     bucket: conv.classification?.bucket ?? null,
     cta: conv.classification?.cta ?? null,
     primaryIntentHint: regenPrimaryIntentHint,
-    availabilityIntentHint: regenAvailabilityIntentHint,
+    availabilityIntentHint: regenAvailabilityPrimaryIntentHint,
     schedulingIntentHint: regenSchedulingIntentHint,
     pricingIntentHint: regenPricingIntentHint,
     financeIntentHint: regenFinancePriorityHint,
@@ -17195,14 +17226,29 @@ if (authToken && signature) {
     !!pricingPaymentsParse?.explicitRequest &&
     pricingPaymentsConfidence >= pricingPaymentsConfidenceMin &&
     pricingPaymentsParse.intent !== "none";
-  const llmPaymentsIntent = pricingPaymentsAccepted && pricingPaymentsParse?.intent === "payments";
-  const llmPricingIntent =
+  const llmPaymentsIntentRaw = pricingPaymentsAccepted && pricingPaymentsParse?.intent === "payments";
+  const llmPricingIntentRaw =
     (dialogActAccepted && dialogActParse?.topic === "pricing") ||
     (pricingPaymentsAccepted && pricingPaymentsParse?.intent === "pricing");
-  const llmPricingOrPaymentsIntent = llmPricingIntent || llmPaymentsIntent;
+  const llmPricingOrPaymentsIntentRaw = llmPricingIntentRaw || llmPaymentsIntentRaw;
   const explicitFinanceTermIntent =
     /\b\d{2,3}\s*(month|months|mo)\b/i.test(String(event.body ?? "")) ||
     /\brun\s+(it|that|the numbers?)\s+for\s+\d{2,3}\b/i.test(String(event.body ?? ""));
+  const explicitAvailabilitySignalThisTurn =
+    deterministicAvailabilityIntentBase ||
+    availabilitySignalsEarly.explicitAvailabilityAsk ||
+    isExplicitAvailabilityQuestion(event.body ?? "");
+  const currentTurnFinanceSignal =
+    hasCurrentTurnFinanceSignals(event.body ?? "") || explicitFinanceTermIntent;
+  const pricingHistoryBleedGuard =
+    explicitAvailabilitySignalThisTurn &&
+    !currentTurnFinanceSignal &&
+    llmPricingOrPaymentsIntentRaw;
+  const llmPaymentsIntent = pricingHistoryBleedGuard ? false : llmPaymentsIntentRaw;
+  const llmPricingIntent = pricingHistoryBleedGuard ? false : llmPricingIntentRaw;
+  const llmPricingOrPaymentsIntent = pricingHistoryBleedGuard
+    ? false
+    : llmPricingOrPaymentsIntentRaw;
   const llmSchedulingIntent = dialogActAccepted && dialogActParse?.topic === "scheduling";
   const insuranceStatusUpdateOnly = (() => {
     const body = String(event.body ?? "");
@@ -17546,7 +17592,8 @@ if (authToken && signature) {
     deterministicAvailabilityIntentOverride,
     financePriorityOverride,
     schedulePriorityOverride,
-    deterministicAvailabilityLookup
+    deterministicAvailabilityLookup,
+    pricingHistoryBleedGuard
   });
   if (turnPrimaryIntent === "scheduling" && getDialogState(conv) === "pricing_need_model") {
     setDialogState(conv, "schedule_request");

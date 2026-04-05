@@ -53,6 +53,24 @@ function looksLikeSchedulingPromptDraft(text: string): boolean {
   );
 }
 
+function looksLikePricingPromptDraft(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\b(the price we have listed|ballpark|before taxes and fees|monthly payment|what monthly payment|what monthly|how much down|down payment|do you have a trade|60,?\s*72,?\s*or\s*84)\b/.test(
+      t
+    ) || /\b(per month|\/mo|apr|financing)\b/.test(t)
+  );
+}
+
+function hasAvailabilityTurnSignal(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return /\b(in[-\s]?stock|available|availability|do you have|have any|any .* in[-\s]?stock|still there|still available)\b/.test(
+    t
+  );
+}
+
 function hasFinanceTurnSignal(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
@@ -127,8 +145,10 @@ export function applyDraftStateInvariants(
   const dialogState = String(input.dialogState ?? "").toLowerCase();
   const inboundText = String(input.inboundText ?? "");
   const inventoryPrompt = looksLikeInventoryPromptDraft(draftText);
+  const pricingPrompt = looksLikePricingPromptDraft(draftText);
   const schedulingPrompt = looksLikeSchedulingPromptDraft(draftText);
   const financeSignal = hasFinanceTurnSignal(inboundText);
+  const availabilitySignal = hasAvailabilityTurnSignal(inboundText);
   const financeContextSignal = hasFinanceContext(input) && hasBareBudgetSignal(inboundText);
   const financePriority = financeSignal || financeContextSignal;
 
@@ -169,6 +189,14 @@ export function applyDraftStateInvariants(
       allow: false,
       draftText: "",
       reason: "finance_priority_schedule_prompt_guard"
+    };
+  }
+
+  if (availabilitySignal && !financeSignal && pricingPrompt) {
+    return {
+      allow: false,
+      draftText: "",
+      reason: "availability_priority_pricing_prompt_guard"
     };
   }
 
