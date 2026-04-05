@@ -22,13 +22,13 @@ type Case = {
 
 const cases: Case[] = [
   {
-    id: "short_ack_skips",
+    id: "short_ack_continues_parser_first",
     input: {
       provider: "twilio",
       channel: "sms",
       isShortAck: true
     },
-    expected: { kind: "skip", note: "short_ack_no_action" }
+    expected: { kind: "continue" }
   },
   {
     id: "dealer_ride_no_purchase_skips",
@@ -41,7 +41,7 @@ const cases: Case[] = [
     expected: { kind: "skip", note: "dealer_ride_no_purchase_manual_handoff" }
   },
   {
-    id: "deterministic_availability_allowed",
+    id: "parser_first_blocks_deterministic_availability",
     input: {
       provider: "twilio",
       channel: "sms",
@@ -51,7 +51,7 @@ const cases: Case[] = [
       financePriorityOverride: false,
       schedulePriorityOverride: false
     },
-    expected: { kind: "deterministic_availability_lookup" }
+    expected: { kind: "continue" }
   },
   {
     id: "finance_priority_blocks_deterministic_availability",

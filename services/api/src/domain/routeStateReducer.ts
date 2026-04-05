@@ -11,7 +11,6 @@ export type RouteStateReducerInput = {
 
 export type RouteStateDecision =
   | { kind: "skip"; note: "short_ack_no_action" | "dealer_ride_no_purchase_manual_handoff"; draft?: string }
-  | { kind: "deterministic_availability_lookup" }
   | { kind: "continue" };
 
 export type TurnPrimaryIntent =
@@ -94,20 +93,8 @@ export function nextActionFromState(input: RouteStateReducerInput): RouteStateDe
     };
   }
 
-  if (input.provider === "twilio" && input.isShortAck) {
-    return { kind: "skip", note: "short_ack_no_action" };
-  }
-
-  if (
-    input.provider === "twilio" &&
-    input.channel === "sms" &&
-    !!input.deterministicAvailabilityLookup &&
-    !!input.availabilityIntentOverride &&
-    !input.financePriorityOverride &&
-    !input.schedulePriorityOverride
-  ) {
-    return { kind: "deterministic_availability_lookup" };
-  }
+  // Parser-first routing: deterministic regex lookups are disabled by default.
+  // Availability handling still occurs later via parser-driven intent paths.
 
   return { kind: "continue" };
 }

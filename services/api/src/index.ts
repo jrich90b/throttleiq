@@ -6174,104 +6174,6 @@ function isExplicitAvailabilityQuestion(text: string): boolean {
   );
 }
 
-function hasPricingDialogContext(conv: any): boolean {
-  return (
-    String(getDialogState(conv) ?? "").startsWith("pricing_") ||
-    hasRecentPricingPromptContext(conv)
-  );
-}
-
-function hasFinancePrioritySignals(
-  text: string,
-  conv: any,
-  opts?: { pricingOrPaymentsIntent?: boolean; lastOutboundText?: string | null }
-): boolean {
-  if (opts?.pricingOrPaymentsIntent) return true;
-  const lower = String(text ?? "").toLowerCase();
-  if (
-    /\b(financing|finance|apr|credit score|monthly|per month|down payment|term|0%\s*apr)\b/i.test(
-      lower
-    )
-  ) {
-    return true;
-  }
-  if (isPricingText(text) || isPaymentText(text) || isDownPaymentQuestion(text)) return true;
-  if (extractMonthlyBudgetLimit(text) != null) return true;
-  if (extractPaymentTermMonths(text) != null) return true;
-  if (parseDownPaymentForBudget(text)?.amount != null) return true;
-  const bareBudget = extractBareBudgetAmount(text);
-  if (bareBudget != null && hasPricingDialogContext(conv)) return true;
-  const lastOutboundText =
-    String(opts?.lastOutboundText ?? "").trim() ||
-    String(getLastNonVoiceOutbound(conv)?.body ?? "").trim();
-  if (lastOutboundText) {
-    const askedFinanceFollowUpRecently =
-      /\b(how much can you put down|about how much down|how much down|money down|down payment|cash down|what monthly payment|what monthly|target monthly|60,?\s*72,?\s*or\s*84|60 months|72 months|84 months|which term|run (?:it|that|the numbers?))/i.test(
-        lastOutboundText
-      );
-    const hasFinanceValueReply =
-      parseDownPaymentForBudget(text)?.amount != null ||
-      extractMonthlyBudgetLimit(text) != null ||
-      extractPaymentTermMonths(text) != null ||
-      /\b(yes i have|i have (?:a )?trade|no trade|no trade-in|without a trade)\b/i.test(lower);
-    if (askedFinanceFollowUpRecently && hasFinanceValueReply) return true;
-  }
-  return false;
-}
-
-function hasCurrentTurnFinanceSignals(text: string): boolean {
-  const value = String(text ?? "");
-  const lower = value.toLowerCase();
-  if (!value.trim()) return false;
-  if (isPricingText(value) || isPaymentText(value) || isDownPaymentQuestion(value)) return true;
-  if (extractMonthlyBudgetLimit(value) != null) return true;
-  if (extractPaymentTermMonths(value) != null) return true;
-  if (parseDownPaymentForBudget(value)?.amount != null) return true;
-  return /\b(financing|finance|apr|credit score|monthly|per month|down payment|money down|cash down|term)\b/i.test(
-    lower
-  );
-}
-
-function getDeterministicAvailabilitySignals(
-  text: string,
-  conv: any
-): {
-  inventoryCountQuestion: boolean;
-  explicitAvailabilityAsk: boolean;
-  shouldLookupAvailability: boolean;
-} {
-  const lower = String(text ?? "").toLowerCase();
-  const inventoryCountQuestion =
-    /\b(only one|just one|is that all|any others|how many|how many do you have|only one you have)\b/i.test(
-      lower
-    );
-  const explicitAvailabilityAsk = isExplicitAvailabilityQuestion(lower);
-  const availabilityPhraseDetected =
-    /\b(in[-\s]?stock|available|availability|do you have|have .* in[-\s]?stock|any .* in[-\s]?stock|do you carry|carry any)\b/i.test(
-      lower
-    );
-  const correctionCue = /\b(i meant|actually|sorry|correction|typo)\b/i.test(lower);
-  const mentionsModel = !!findMentionedModel(lower);
-  const mentionsColor = !!extractColorToken(lower);
-  const mentionsFinish = !!extractFinishToken(lower);
-  const mentionsCondition = !!normalizeWatchCondition(lower);
-  const mentionsYear = !!extractYearSingle(lower);
-  const hasAvailabilityContext =
-    !!conv.inventoryContext?.model ||
-    !!conv.lead?.vehicle?.model ||
-    !!conv.lead?.vehicle?.description;
-  const hasAvailabilityDetail =
-    mentionsModel || mentionsColor || mentionsFinish || mentionsCondition || mentionsYear;
-  const referencesContextUnit =
-    referencesSpecificInventoryUnit(lower) ||
-    /\b(this|that|the)\s+(cvo|street glide|road glide|tri glide|bike|unit|one)\b/.test(lower);
-  const shouldLookupAvailability =
-    inventoryCountQuestion ||
-    ((availabilityPhraseDetected || correctionCue) &&
-      (hasAvailabilityDetail || hasAvailabilityContext || referencesContextUnit));
-  return { inventoryCountQuestion, explicitAvailabilityAsk, shouldLookupAvailability };
-}
-
 type RoutePrioritySignalsInput = {
   text: string;
   conv: any;
@@ -6306,10 +6208,14 @@ type RoutePrioritySignals = {
 };
 
 function resolveRoutePrioritySignals(input: RoutePrioritySignalsInput): RoutePrioritySignals {
-  const text = String(input.text ?? "");
-  const lower = text.toLowerCase();
-  const availabilitySignals = getDeterministicAvailabilitySignals(lower, input.conv);
-  const schedulingSignalsBase = detectSchedulingSignals(text);
+  const availabilityExplicit = !!input.explicitAvailabilityIntentExtra;
+  const schedulingSignalsBase = {
+    explicit: false,
+    hasDayTime: false,
+    hasDayOnlyAvailability: false,
+    hasDayOnlyRequest: false,
+    softVisit: false
+  };
   const schedulingSignals = {
     ...schedulingSignalsBase,
     explicit:
@@ -6325,24 +6231,18 @@ function resolveRoutePrioritySignals(input: RoutePrioritySignalsInput): RoutePri
       schedulingSignalsBase.hasDayOnlyRequest ||
       !!input.schedulingSignalsExtra?.hasDayOnlyRequest
   };
-  const deterministicAvailabilityLookup = availabilitySignals.shouldLookupAvailability;
-  const availabilityIntentOverride =
-    availabilitySignals.inventoryCountQuestion ||
-    availabilitySignals.explicitAvailabilityAsk ||
-    !!input.explicitAvailabilityIntentExtra;
+  const availabilitySignals = {
+    inventoryCountQuestion: false,
+    explicitAvailabilityAsk: availabilityExplicit,
+    shouldLookupAvailability: false
+  };
+  const deterministicAvailabilityLookup = false;
+  const availabilityIntentOverride = availabilityExplicit;
   const currentTurnFinanceSignal =
-    hasCurrentTurnFinanceSignals(text) || !!input.explicitFinanceTermIntent;
-  const financePriorityRaw = hasFinancePrioritySignals(text, input.conv, {
-    pricingOrPaymentsIntent: input.pricingOrPaymentsIntent,
-    lastOutboundText: input.lastOutboundText ?? undefined
-  });
-  const pricingHistoryBleedGuard =
-    availabilityIntentOverride &&
-    !currentTurnFinanceSignal &&
-    (input.llmPricingOrPaymentsIntentRaw ?? financePriorityRaw);
-  const financePriorityOverride = pricingHistoryBleedGuard
-    ? false
-    : financePriorityRaw;
+    !!input.pricingOrPaymentsIntent || !!input.explicitFinanceTermIntent;
+  const financePriorityRaw = currentTurnFinanceSignal;
+  const pricingHistoryBleedGuard = false;
+  const financePriorityOverride = financePriorityRaw;
   const schedulePriorityOverride =
     schedulingSignals.explicit ||
     schedulingSignals.hasDayTime ||
@@ -6354,7 +6254,7 @@ function resolveRoutePrioritySignals(input: RoutePrioritySignalsInput): RoutePri
     schedulingSignals,
     deterministicAvailabilityLookup,
     availabilityIntentOverride,
-    otherInventoryRequest: isOtherInventoryRequestText(lower),
+    otherInventoryRequest: false,
     currentTurnFinanceSignal,
     financePriorityRaw,
     pricingHistoryBleedGuard,
@@ -6443,11 +6343,15 @@ function reconcileStateFromRecentManualOutbound(
 function reduceStaleWorkflowStateForInbound(
   conv: any,
   inboundText: string,
-  inboundAtIso?: string
+  inboundAtIso?: string,
+  intentHints?: {
+    hasWatchIntent?: boolean;
+    hasFinanceIntent?: boolean;
+    hasSchedulingIntent?: boolean;
+    hasDepartmentIntent?: boolean;
+  }
 ): { changed: boolean; reasons: string[] } {
   if (!conv || typeof conv !== "object") return { changed: false, reasons: [] };
-  const inbound = String(inboundText ?? "");
-  const inboundLower = inbound.toLowerCase();
   const mode = String(conv.followUp?.mode ?? "").toLowerCase();
   const reason = String(conv.followUp?.reason ?? "").toLowerCase();
   const pendingAskedAtMs = new Date(String(conv.inventoryWatchPending?.askedAt ?? "")).getTime();
@@ -6457,20 +6361,10 @@ function reduceStaleWorkflowStateForInbound(
     Number.isFinite(pendingAskedAtMs) && pendingAskedAtMs > 0
       ? Math.max(0, (nowMs - pendingAskedAtMs) / 36e5)
       : null;
-  const schedulingSignals = detectSchedulingSignals(inbound);
-  const hasSchedulingIntent =
-    schedulingSignals.explicit ||
-    schedulingSignals.hasDayTime ||
-    schedulingSignals.hasDayOnlyAvailability ||
-    schedulingSignals.hasDayOnlyRequest ||
-    !!extractTimeToken(inbound);
-  const hasWatchIntent =
-    isWatchConfirmationIntentText(inbound) ||
-    /\b(keep an eye out|watch for|notify me|let me know when|text me when|if one comes in|when one comes in)\b/i.test(
-      inboundLower
-    );
-  const hasFinanceIntent = hasFinancePrioritySignals(inbound, conv);
-  const hasDepartmentIntent = !!inferDepartmentFromText(inbound);
+  const hasSchedulingIntent = intentHints?.hasSchedulingIntent === true;
+  const hasWatchIntent = intentHints?.hasWatchIntent === true;
+  const hasFinanceIntent = intentHints?.hasFinanceIntent === true;
+  const hasDepartmentIntent = intentHints?.hasDepartmentIntent === true;
   const decision = reduceStaleStateForInbound({
     followUpMode: mode,
     followUpReason: reason,
@@ -7878,11 +7772,7 @@ function applyPricingPolicy(
     return reply;
   }
   const body = String(inboundText ?? "");
-  const pricingActiveThisTurn =
-    opts?.pricingActiveThisTurn === true ||
-    isPricingText(body) ||
-    isPaymentText(body) ||
-    /\b(finance|financing|apr|credit score|monthly|per month|down payment|term|0%\s*apr)\b/i.test(body);
+  const pricingActiveThisTurn = opts?.pricingActiveThisTurn === true;
   const schedulingConfirmThisTurn =
     /\b(see you|sounds good|that sounds|works for me|i can come|i['’]ll come|i will come|next week works|this week works|tomorrow works)\b/i.test(
       body
@@ -14231,7 +14121,23 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     providerMessageId: inbound.providerMessageId ?? `regen_${Date.now()}`,
     receivedAt: inbound.at ?? new Date().toISOString()
   };
-  const evaluateRegenDraftInvariant = (text: string) =>
+  let regenDraftInvariantHints: {
+    turnFinanceIntent?: boolean;
+    turnAvailabilityIntent?: boolean;
+    turnSchedulingIntent?: boolean;
+    financeContextIntent?: boolean;
+    shortAckIntent?: boolean;
+  } = {};
+  const evaluateRegenDraftInvariant = (
+    text: string,
+    extraHints?: {
+      turnFinanceIntent?: boolean;
+      turnAvailabilityIntent?: boolean;
+      turnSchedulingIntent?: boolean;
+      financeContextIntent?: boolean;
+      shortAckIntent?: boolean;
+    }
+  ) =>
     applyDraftStateInvariants({
       inboundText: event.body ?? "",
       draftText: text,
@@ -14239,7 +14145,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       followUpReason: conv.followUp?.reason ?? null,
       dialogState: getDialogState(conv),
       classificationBucket: conv.classification?.bucket ?? null,
-      classificationCta: conv.classification?.cta ?? null
+      classificationCta: conv.classification?.cta ?? null,
+      ...regenDraftInvariantHints,
+      ...(extraHints ?? {})
     });
   const respondRegenerateSkipped = (note: string, draft?: string) => {
     recordRouteOutcome("regen", note, {
@@ -14310,7 +14218,6 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       reasons: regenStaleStateCleanup.reasons
     });
   }
-  const regenShortAckSuppression = shouldSuppressShortAckDraft(event.body ?? "");
   const regenInboundLower = String(event.body ?? "").toLowerCase();
   const regenRawProvider = String((inbound as any)?.provider ?? "").toLowerCase();
   const regenLooksLikeAdf =
@@ -14327,12 +14234,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenPreRouteDecision = nextActionFromState({
     provider: event.provider,
     channel,
-    isShortAck: regenShortAckSuppression,
+    isShortAck: false,
     dealerRideNoPurchaseAdf: regenDealerRideEventLead && regenNoPurchaseNow
   });
-  if (regenPreRouteDecision.kind === "skip" && regenPreRouteDecision.note === "short_ack_no_action") {
-    return respondRegenerateSkipped(regenPreRouteDecision.note);
-  }
   if (
     regenPreRouteDecision.kind === "skip" &&
     regenPreRouteDecision.note === "dealer_ride_no_purchase_manual_handoff"
@@ -14593,43 +14497,6 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       return respondWithEmailRegeneratedDraft(clarifyReply);
     }
     return respondWithSmsRegeneratedDraft(clarifyReply);
-  }
-
-  // Keep regenerate aligned with inbound deterministic availability behavior.
-  if (event.provider === "twilio" && channel === "sms") {
-    const regenRouteSignals = resolveRoutePrioritySignals({
-      text: event.body ?? "",
-      conv,
-      lastOutboundText: String(getLastNonVoiceOutbound(conv)?.body ?? ""),
-      pricingOrPaymentsIntent: regenParserPricingIntent,
-      explicitAvailabilityIntentExtra: regenParserAvailabilityIntent
-    });
-    const regenRouteDecision = nextActionFromState({
-      provider: event.provider,
-      channel,
-      isShortAck: false,
-      deterministicAvailabilityLookup: regenRouteSignals.deterministicAvailabilityLookup,
-      availabilityIntentOverride: regenRouteSignals.availabilityIntentOverride,
-      financePriorityOverride: regenRouteSignals.financePriorityOverride || regenParserPricingIntent,
-      schedulePriorityOverride: regenRouteSignals.schedulePriorityOverride || regenParserSchedulingIntent
-    });
-    if (regenRouteDecision.kind === "deterministic_availability_lookup") {
-      const availabilityResolution = await resolveDeterministicAvailabilityReply({
-        conv,
-        text: event.body ?? "",
-        parsedAvailability: null,
-        otherInventoryRequest: regenRouteSignals.otherInventoryRequest
-      });
-      const reply =
-        availabilityResolution.kind === "reply"
-          ? availabilityResolution.reply
-          : "Which model are you asking about?";
-      const mediaUrls =
-        availabilityResolution.kind === "reply" && Array.isArray(availabilityResolution.mediaUrls)
-          ? availabilityResolution.mediaUrls
-          : undefined;
-      return respondWithSmsRegeneratedDraft(reply, mediaUrls);
-    }
   }
 
   if (event.provider === "twilio") {
@@ -14992,17 +14859,16 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const regenVisitSignals = resolveRoutePrioritySignals({
       text: event.body ?? "",
       conv,
-      lastOutboundText
+      lastOutboundText,
+      pricingOrPaymentsIntent: regenParserPricingIntent,
+      explicitAvailabilityIntentExtra: regenParserAvailabilityIntent,
+      schedulingSignalsExtra: { explicit: regenParserSchedulingIntent }
     });
     const regenSchedulingSignals = regenVisitSignals.schedulingSignals;
-    const regenBody = String(event.body ?? "");
     const visitTimingIntent =
       regenVisitSignals.schedulePriorityOverride ||
       regenSchedulingSignals.hasDayOnlyRequest ||
-      regenSchedulingSignals.softVisit ||
-      /\b(next week|this week|tomorrow|later today|this afternoon|come in|stop by|see it)\b/i.test(
-        regenBody
-      );
+      regenSchedulingSignals.softVisit;
     const explicitAvailabilityAskThisTurn = regenVisitSignals.availabilityIntentOverride;
     const financeOrRateAskThisTurn = regenVisitSignals.currentTurnFinanceSignal;
     const contextModel =
@@ -15070,15 +14936,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
   }
 
-  if (event.provider === "twilio" && shouldSuppressShortAckDraft(event.body ?? "")) {
-    return respondRegenerateSkipped("short_ack_no_action");
-  }
   const regenHintSignals = resolveRoutePrioritySignals({
     text: event.body ?? "",
     conv,
     lastOutboundText: String(getLastNonVoiceOutbound(conv)?.body ?? ""),
     pricingOrPaymentsIntent: regenParserPricingIntent,
-    explicitAvailabilityIntentExtra: regenParserAvailabilityIntent
+    explicitAvailabilityIntentExtra: regenParserAvailabilityIntent,
+    schedulingSignalsExtra: { explicit: regenParserSchedulingIntent }
   });
   const regenFinancePriorityHint = regenHintSignals.financePriorityOverride || regenParserPricingIntent;
   const regenCallbackRequested = !regenTextingTypoJoke && detectCallbackText(event.body ?? "");
@@ -15097,6 +14961,31 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenAvailabilityPrimaryIntentHint = regenPrimaryIntentHint === "availability";
   const regenCallbackIntentHint =
     regenPrimaryIntentHint === "callback" || regenIntentPlan.callbackIntent || regenParserCallbackIntent;
+  regenDraftInvariantHints = {
+    turnFinanceIntent: regenPricingIntentHint,
+    turnSchedulingIntent: regenSchedulingIntentHint,
+    turnAvailabilityIntent: regenAvailabilityPrimaryIntentHint,
+    financeContextIntent: String(getDialogState(conv) ?? "").startsWith("pricing_"),
+    shortAckIntent: regenShortAck
+  };
+  const regenParserStateCleanup = reduceStaleWorkflowStateForInbound(
+    conv,
+    event.body ?? "",
+    event.receivedAt,
+    {
+      hasWatchIntent: false,
+      hasFinanceIntent: regenPricingIntentHint,
+      hasSchedulingIntent: regenSchedulingIntentHint,
+      hasDepartmentIntent: !!regenReducedConversationState.departmentIntent
+    }
+  );
+  if (regenParserStateCleanup.changed) {
+    recordRouteOutcome("regen", "stale_state_reduced_parser", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      reasons: regenParserStateCleanup.reasons
+    });
+  }
 
   const result = await orchestrateInbound(event, history, {
     appointment: conv.appointment,
@@ -15111,7 +15000,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     financeIntentHint: regenFinancePriorityHint,
     lead: conv.lead ?? null,
     pricingAttempts: getPricingAttempts(conv),
-    allowSchedulingOffer: regenLlmExplicitScheduleIntent || isExplicitScheduleIntent(event.body),
+    allowSchedulingOffer: regenSchedulingIntentHint,
     callbackRequestedOverride:
       !regenTextingTypoJoke && (regenCallbackIntentHint || regenCallbackRequested),
     voiceSummary: getActiveVoiceContext(conv)?.summary ?? null,
@@ -15164,8 +15053,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     pricingActiveThisTurn:
       result.intent === "PRICING" ||
       result.intent === "FINANCING" ||
-      isPricingText(String(event.body ?? "")) ||
-      isPaymentText(String(event.body ?? ""))
+      regenPricingIntentHint
   });
   reply = applyCallbackPolicy(conv, reply, lastOutboundTextFinal);
   reply = applyServicePolicy(conv, reply, lastOutboundTextFinal);
@@ -15477,20 +15365,6 @@ if (authToken && signature) {
       leadKey: conv.leadKey,
       reasons: liveStaleStateCleanup.reasons
     });
-  }
-  const liveEarlyDecision = nextActionFromState({
-    provider: event.provider,
-    channel: event.channel === "email" ? "email" : "sms",
-    isShortAck: shouldSuppressShortAckDraft(event.body ?? "")
-  });
-  if (liveEarlyDecision.kind === "skip" && liveEarlyDecision.note === "short_ack_no_action") {
-    discardPendingDrafts(conv, "short_ack_no_action");
-    recordRouteOutcome("live", "short_ack_no_action", {
-      convId: conv.id,
-      leadKey: conv.leadKey
-    });
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-    return res.status(200).type("text/xml").send(twiml);
   }
   pauseRelatedCadencesOnInbound(conv, event);
   const responseControlParserEligible =
@@ -16488,11 +16362,7 @@ if (authToken && signature) {
     }
     const rescheduleIntent =
       !isFinanceDocsQuestionText(event.body) &&
-      (reschedulePending ||
-        reschedulePhrase ||
-        !!requestedReschedule ||
-        llmExplicitScheduleIntent ||
-        isExplicitScheduleIntent(event.body));
+      (reschedulePending || reschedulePhrase || !!requestedReschedule || llmExplicitScheduleIntent);
     if (!rescheduleIntent) {
       // fall through
     } else {
@@ -17046,9 +16916,11 @@ if (authToken && signature) {
     lastOutbound?.body &&
     /(on hold|hold with deposit|deposit|sale pending|pending|sold|already sold)/i.test(lastOutbound.body);
   const textLower = inboundLower;
+  const regexIntentFallbackEnabled = false;
   const preParserExplicitFinanceTermIntent =
-    /\b\d{2,3}\s*(month|months|mo)\b/i.test(String(event.body ?? "")) ||
-    /\brun\s+(it|that|the numbers?)\s+for\s+\d{2,3}\b/i.test(String(event.body ?? ""));
+    regexIntentFallbackEnabled &&
+    (/\b\d{2,3}\s*(month|months|mo)\b/i.test(String(event.body ?? "")) ||
+      /\brun\s+(it|that|the numbers?)\s+for\s+\d{2,3}\b/i.test(String(event.body ?? "")));
   const preParserRouteSignals = resolveRoutePrioritySignals({
     text: event.body ?? "",
     conv,
@@ -17378,6 +17250,7 @@ if (authToken && signature) {
     !!process.env.OPENAI_API_KEY &&
     schedulingAllowed;
   let paymentOrPricingNoSchedule =
+    regexIntentFallbackEnabled &&
     isPricingText(event.body ?? "") &&
     !schedulingSignalsBase.explicit &&
     !schedulingSignalsBase.hasDayTime &&
@@ -17391,7 +17264,7 @@ if (authToken && signature) {
         textLower
       ));
   const bookingParsePromise =
-    bookingParserEligible && bookingParserHint && !shortAck && !highConfidenceFinanceTurn
+    bookingParserEligible && bookingParserHint && !highConfidenceFinanceTurn
       ? safeLlmParse("booking_intent_parser", () =>
           parseBookingIntentWithLLM({
             text: event.body,
@@ -17407,7 +17280,7 @@ if (authToken && signature) {
     process.env.LLM_INTENT_PARSER_ENABLED === "1" &&
     !!process.env.OPENAI_API_KEY;
   const intentParsePromise =
-    intentParserEligible && !shortAck && !highConfidenceFinanceTurn
+    intentParserEligible && !highConfidenceFinanceTurn
       ? safeLlmParse("intent_parser", () =>
           parseIntentWithLLM({
             text: event.body,
@@ -17420,8 +17293,7 @@ if (authToken && signature) {
     event.provider === "twilio" &&
     process.env.LLM_ENABLED === "1" &&
     process.env.LLM_DIALOG_ACT_PARSER_ENABLED === "1" &&
-    !!process.env.OPENAI_API_KEY &&
-    !shortAck;
+    !!process.env.OPENAI_API_KEY;
   const dialogActParsePromise = dialogActParserEligible
     && !highConfidenceFinanceTurn
     ? safeLlmParse("dialog_act_parser", () =>
@@ -17436,8 +17308,7 @@ if (authToken && signature) {
     event.provider === "twilio" &&
     process.env.LLM_ENABLED === "1" &&
     process.env.LLM_PRICING_PAYMENTS_PARSER_ENABLED !== "0" &&
-    !!process.env.OPENAI_API_KEY &&
-    !shortAck;
+    !!process.env.OPENAI_API_KEY;
   const pricingPaymentsParsePromise = pricingPaymentsParserEligible
     && !highConfidenceSchedulingTurn
     ? safeLlmParse("pricing_payments_parser", () =>
@@ -17452,8 +17323,7 @@ if (authToken && signature) {
     event.provider === "twilio" &&
     process.env.LLM_ENABLED === "1" &&
     process.env.LLM_ROUTING_PARSER_ENABLED !== "0" &&
-    !!process.env.OPENAI_API_KEY &&
-    !shortAck;
+    !!process.env.OPENAI_API_KEY;
   const routingDecisionParsePromise = routingDecisionParserEligible
     ? safeLlmParse("routing_decision_parser", () =>
         parseRoutingDecisionWithLLM({
@@ -17549,7 +17419,9 @@ if (authToken && signature) {
     conv,
     lastOutboundText,
     llmPricingOrPaymentsIntentRaw,
-    explicitFinanceTermIntent
+    explicitFinanceTermIntent,
+    explicitAvailabilityIntentExtra: parserAvailabilityIntent,
+    schedulingSignalsExtra: { explicit: parserSchedulingIntent }
   });
   const explicitAvailabilitySignalThisTurn = routeSignalsForRawPricing.availabilityIntentOverride;
   const pricingHistoryBleedGuard = routeSignalsForRawPricing.pricingHistoryBleedGuard;
@@ -17577,18 +17449,22 @@ if (authToken && signature) {
     conv,
     lastOutboundText,
     pricingOrPaymentsIntent: llmPricingOrPaymentsIntent || explicitFinanceTermIntent,
-    explicitFinanceTermIntent
+    explicitFinanceTermIntent,
+    explicitAvailabilityIntentExtra: parserAvailabilityIntent,
+    schedulingSignalsExtra: { explicit: parserSchedulingIntent || llmExplicitScheduleIntent }
   });
   const financePrioritySignal = routeSignalsForPricing.financePriorityOverride;
   const pricingSignal =
     !insuranceStatusUpdateOnly &&
     (llmPricingOrPaymentsIntent ||
       financePrioritySignal ||
-      isPricingText(event.body ?? "") ||
-      isPaymentText(event.body ?? ""));
+      (regexIntentFallbackEnabled &&
+        (isPricingText(event.body ?? "") || isPaymentText(event.body ?? ""))));
   const scheduleFromDialogAct = llmSchedulingIntent && !llmPricingOrPaymentsIntent;
   const explicitScheduleSignal =
-    llmExplicitScheduleIntent || scheduleFromDialogAct || isExplicitScheduleIntent(event.body);
+    llmExplicitScheduleIntent ||
+    scheduleFromDialogAct ||
+    (regexIntentFallbackEnabled && isExplicitScheduleIntent(event.body));
   paymentOrPricingNoSchedule =
     pricingSignal &&
     !llmExplicitScheduleIntent &&
@@ -17902,6 +17778,22 @@ if (authToken && signature) {
     availabilityIntentOverride: deterministicAvailabilityIntentOverride
   });
   const turnPrimaryIntent = routingParserIntentOverride ?? turnIntentPlan.primaryIntent;
+  const liveParserStateCleanup = reduceStaleWorkflowStateForInbound(
+    conv,
+    event.body ?? "",
+    event.receivedAt,
+    {
+      hasWatchIntent: semanticWatchAction === "set_watch",
+      hasFinanceIntent: turnPrimaryIntent === "pricing_payments",
+      hasSchedulingIntent: turnPrimaryIntent === "scheduling",
+      hasDepartmentIntent: !!(reducedConversationState.departmentIntent ?? semanticDepartmentIntent)
+    }
+  );
+  if (liveParserStateCleanup.changed) {
+    logRouteOutcome("stale_state_reduced_parser", {
+      reasons: liveParserStateCleanup.reasons
+    });
+  }
   logDecisionTrace("live.intent_routing", {
     inboundProvider: event.provider,
     turnPrimaryIntent,
@@ -17952,6 +17844,7 @@ if (authToken && signature) {
     const monthlyBudgetProvided = paymentBudgetContext.monthlyBudget != null;
     const termProvided = paymentBudgetContext.termMonths != null;
     const askedFinanceFollowUpRecently =
+      regexIntentFallbackEnabled &&
       /\b(how much can you put down|how much (?:are|can) you put down|about how much down|how much down|money down|down payment|cash down|what monthly payment|what monthly|target monthly|60,?\s*72,?\s*or\s*84|60 months|72 months|84 months|which term|run (?:it|that|the numbers?))\b/i.test(
         lastOutboundText
       );
@@ -18946,68 +18839,6 @@ if (authToken && signature) {
     }
   }
 
-  const liveRouteDecision = nextActionFromState({
-    provider: event.provider,
-    channel: event.channel === "email" ? "email" : "sms",
-    isShortAck: false,
-    deterministicAvailabilityLookup,
-    availabilityIntentOverride: deterministicAvailabilityIntentOverride || parserAvailabilityIntent,
-    financePriorityOverride: financePriorityOverride || parserPricingIntent,
-    schedulePriorityOverride: schedulePriorityOverride || parserSchedulingIntent
-  });
-  if (liveRouteDecision.kind === "deterministic_availability_lookup") {
-    logDecisionTrace("live.route_deterministic_availability", {
-      source: "deterministicAvailabilityLookup",
-      text: String(event.body ?? "").slice(0, 180)
-    });
-    const availabilityResolution = await resolveDeterministicAvailabilityReply({
-      conv,
-      text: event.body ?? "",
-      parsedAvailability: llmAvailability,
-      otherInventoryRequest
-    });
-    const reply =
-      availabilityResolution.kind === "reply"
-        ? availabilityResolution.reply
-        : "Which model are you asking about?";
-    const extraMediaUrls =
-      availabilityResolution.kind === "reply" && Array.isArray(availabilityResolution.mediaUrls)
-        ? availabilityResolution.mediaUrls
-        : [];
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(
-        conv,
-        event.to,
-        event.from,
-        reply,
-        "draft_ai",
-        undefined,
-        extraMediaUrls.length ? extraMediaUrls : undefined
-      );
-      logRouteOutcome("deterministic_availability_draft");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(
-      conv,
-      event.to,
-      event.from,
-      reply,
-      "twilio",
-      undefined,
-      extraMediaUrls.length ? extraMediaUrls : undefined
-    );
-    logRouteOutcome("deterministic_availability_send");
-    const mediaTags = extraMediaUrls.length
-      ? extraMediaUrls.map(u => `\n    <Media>${escapeXml(u)}</Media>`).join("")
-      : "";
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}${mediaTags}\n  </Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
-  }
-
   const finishPreferenceOnlyRaw =
     /\b(black(?:ed)?\s*(?:out|trim|finish)?|chrome\s*(?:trim|finish)?|black\s*trim|black\s*finish|chrome\s*trim|chrome\s*finish)\b/i.test(
       textLower
@@ -19020,27 +18851,8 @@ if (authToken && signature) {
     llmMediaIntent === "photos" ||
     llmMediaIntent === "either" ||
     /\b(photo|picture|pic|image|images)\b/i.test(textLower);
-  const availabilityRefinementSignal = (() => {
-    if (turnPrimaryIntent === "pricing_payments" || turnPrimaryIntent === "callback") return false;
-    const hasAvailabilityContext =
-      !!conv.inventoryContext?.model ||
-      !!conv.lead?.vehicle?.model ||
-      !!conv.lead?.vehicle?.description;
-    const mentionsModel = !!(llmAvailability?.model ?? findMentionedModel(textLower));
-    const mentionsColor = !!extractColorToken(textLower);
-    const mentionsFinish = !!extractFinishToken(textLower);
-    const mentionsCondition = !!normalizeWatchCondition(textLower);
-    const mentionsYear = !!extractYearSingle(textLower);
-    const hasRefinementDetail =
-      mentionsModel || mentionsColor || mentionsFinish || mentionsCondition || mentionsYear;
-    if (!hasRefinementDetail) return false;
-    if (specsSignal || pricingSignal) return false;
-    const correctionCue = /\b(i meant|actually|sorry|correction|typo)\b/i.test(textLower);
-    const contextCue = /\b(that one|the one|this one|that bike|this bike)\b/i.test(textLower);
-    return correctionCue || contextCue || hasAvailabilityContext;
-  })();
   const availabilityExplicit =
-    (turnPrimaryIntent === "availability" || llmAvailabilityIntent || availabilityRefinementSignal) &&
+    (turnPrimaryIntent === "availability" || llmAvailabilityIntent) &&
     !/\b(sound system|audio system|stereo|speakers?|speaker system)\b/i.test(textLower) &&
     turnPrimaryIntent !== "pricing_payments" &&
     turnPrimaryIntent !== "callback" &&
@@ -19048,12 +18860,10 @@ if (authToken && signature) {
   if (
     event.provider === "twilio" &&
     availabilityExplicit &&
-    !deterministicAvailabilityLookup &&
     !financePriorityOverride &&
     !schedulePriorityOverride &&
     !pricingSignal &&
-    !pricingOrPaymentsIntent &&
-    !/\b(compare|comparison|vs\.?|versus|specs?|spec sheet)\b/i.test(textLower)
+    !pricingOrPaymentsIntent
   ) {
     logDecisionTrace("live.route_availability_explicit_fallback", {
       source: "availabilityExplicit",
@@ -20990,10 +20800,6 @@ if (authToken && signature) {
   const weatherProfile = await getDealerProfileHot();
   logRouteTiming("dealer_profile_for_weather", weatherProfileStartedAt);
   const weatherStatus = await getDealerWeatherStatus(weatherProfile);
-  if (event.provider === "twilio" && shouldSuppressShortAckDraft(event.body ?? "")) {
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-    return res.status(200).type("text/xml").send(twiml);
-  }
   const orchestratorStartedAt = Date.now();
   const result = await orchestrateInbound(event, history, {
     appointment: conv.appointment,
@@ -21796,7 +21602,7 @@ if (authToken && signature) {
   reply = applyTradePolicy(conv, reply, lastOutboundTextFinal, result.suggestedSlots);
   reply = applyPickupPolicy(conv, reply);
   reply = applyPricingPolicy(conv, reply, lastOutboundTextFinal, String(event.body ?? ""), {
-    pricingActiveThisTurn: turnPrimaryIntent === "pricing_payments" || pricingSignal
+    pricingActiveThisTurn: turnPrimaryIntent === "pricing_payments"
   });
   reply = applyCallbackPolicy(conv, reply, lastOutboundTextFinal);
   reply = applyServicePolicy(conv, reply, lastOutboundTextFinal);
@@ -21811,7 +21617,23 @@ if (authToken && signature) {
   if (lienHolderFallback) {
     reply = lienHolderFallback;
   }
-  const evaluateLiveDraftInvariant = (text: string) =>
+  const liveDraftInvariantHints = {
+    turnFinanceIntent: turnPrimaryIntent === "pricing_payments",
+    turnSchedulingIntent: turnPrimaryIntent === "scheduling",
+    turnAvailabilityIntent: turnPrimaryIntent === "availability",
+    financeContextIntent: String(getDialogState(conv) ?? "").startsWith("pricing_"),
+    shortAckIntent: shortAck
+  };
+  const evaluateLiveDraftInvariant = (
+    text: string,
+    extraHints?: {
+      turnFinanceIntent?: boolean;
+      turnSchedulingIntent?: boolean;
+      turnAvailabilityIntent?: boolean;
+      financeContextIntent?: boolean;
+      shortAckIntent?: boolean;
+    }
+  ) =>
     applyDraftStateInvariants({
       inboundText: event.body ?? "",
       draftText: text,
@@ -21819,7 +21641,9 @@ if (authToken && signature) {
       followUpReason: conv.followUp?.reason ?? null,
       dialogState: getDialogState(conv),
       classificationBucket: conv.classification?.bucket ?? null,
-      classificationCta: conv.classification?.cta ?? null
+      classificationCta: conv.classification?.cta ?? null,
+      ...liveDraftInvariantHints,
+      ...(extraHints ?? {})
     });
   const liveDraftInvariant = evaluateLiveDraftInvariant(reply);
   if (!liveDraftInvariant.allow) {
@@ -21852,7 +21676,12 @@ if (authToken && signature) {
         paymentBudgetContext,
         financePricingHint
       );
-      const financeFallbackInvariant = evaluateLiveDraftInvariant(financeFallback);
+      const financeFallbackInvariant = evaluateLiveDraftInvariant(financeFallback, {
+        turnFinanceIntent: true,
+        turnSchedulingIntent: false,
+        turnAvailabilityIntent: false,
+        financeContextIntent: true
+      });
       if (financeFallbackInvariant.allow) {
         reply = financeFallbackInvariant.draftText;
         logRouteOutcome("finance_priority_invariant_fallback", {

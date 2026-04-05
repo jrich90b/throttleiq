@@ -12,6 +12,8 @@ type Case = {
 const dmvText = "Thanks Gio! I will let you know as soon as I receive it and get to the DMV.";
 const steppingBackText = "I think I'm going to keep my bike and hold off for now.";
 const financeInfoText = "I have $2,500 to put down and want to stay under $500/month.";
+const availabilityText = "Do you have any black street glides in stock?";
+const schedulingText = "Can I come in Monday at 3:45?";
 
 const parsedAccepted = {
   explicitDisposition: true,
@@ -66,6 +68,28 @@ const cases: Case[] = [
       canApplyDispositionCloseout({
         conv: { followUp: { mode: "active" } },
         text: financeInfoText,
+        parsedAccepted: isDispositionParserAccepted(parsedAccepted),
+        hasDecision: true
+      })
+  },
+  {
+    id: "availability_question_blocks_closeout_even_if_parser_accepts_disposition",
+    expected: false,
+    run: () =>
+      canApplyDispositionCloseout({
+        conv: { followUp: { mode: "active" } },
+        text: availabilityText,
+        parsedAccepted: isDispositionParserAccepted(parsedAccepted),
+        hasDecision: true
+      })
+  },
+  {
+    id: "scheduling_request_blocks_closeout_even_if_parser_accepts_disposition",
+    expected: false,
+    run: () =>
+      canApplyDispositionCloseout({
+        conv: { followUp: { mode: "active" } },
+        text: schedulingText,
         parsedAccepted: isDispositionParserAccepted(parsedAccepted),
         hasDecision: true
       })

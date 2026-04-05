@@ -6,6 +6,11 @@ export type DraftStateInvariantInput = {
   dialogState?: string | null;
   classificationBucket?: string | null;
   classificationCta?: string | null;
+  turnFinanceIntent?: boolean | null;
+  turnAvailabilityIntent?: boolean | null;
+  turnSchedulingIntent?: boolean | null;
+  financeContextIntent?: boolean | null;
+  shortAckIntent?: boolean | null;
 };
 
 export type DraftStateInvariantResult = {
@@ -144,15 +149,54 @@ export function applyDraftStateInvariants(
   const followUpMode = String(input.followUpMode ?? "").toLowerCase();
   const dialogState = String(input.dialogState ?? "").toLowerCase();
   const inboundText = String(input.inboundText ?? "");
+  // Parser-first: do not activate invariant routing guards from regex fallbacks.
+  const regexFallbackEnabled = false;
   const inventoryPrompt = looksLikeInventoryPromptDraft(draftText);
   const pricingPrompt = looksLikePricingPromptDraft(draftText);
   const schedulingPrompt = looksLikeSchedulingPromptDraft(draftText);
-  const financeSignal = hasFinanceTurnSignal(inboundText);
-  const availabilitySignal = hasAvailabilityTurnSignal(inboundText);
-  const financeContextSignal = hasFinanceContext(input) && hasBareBudgetSignal(inboundText);
+  const financeSignal =
+    input.turnFinanceIntent === true
+      ? true
+      : input.turnFinanceIntent === false
+        ? false
+        : regexFallbackEnabled
+          ? hasFinanceTurnSignal(inboundText)
+          : false;
+  const availabilitySignal =
+    input.turnAvailabilityIntent === true
+      ? true
+      : input.turnAvailabilityIntent === false
+        ? false
+        : regexFallbackEnabled
+          ? hasAvailabilityTurnSignal(inboundText)
+          : false;
+  const financeContextSignal =
+    input.financeContextIntent === true
+      ? true
+      : input.financeContextIntent === false
+        ? false
+        : regexFallbackEnabled
+          ? hasFinanceContext(input) && hasBareBudgetSignal(inboundText)
+          : false;
+  const schedulingSignal =
+    input.turnSchedulingIntent === true
+      ? true
+      : input.turnSchedulingIntent === false
+        ? false
+        : regexFallbackEnabled
+          ? hasSchedulingTurnSignal(inboundText)
+          : false;
+  const shortAckSignal =
+    input.shortAckIntent === true
+      ? true
+      : input.shortAckIntent === false
+        ? false
+        : regexFallbackEnabled
+          ? isShortAckText(inboundText)
+          : false;
   const financePriority = financeSignal || financeContextSignal;
 
-  if (isShortAckText(inboundText) && inventoryPrompt) {
+  if (shortAckSignal && inventoryPrompt) {
     return {
       allow: false,
       draftText: "",
@@ -184,7 +228,7 @@ export function applyDraftStateInvariants(
     };
   }
 
-  if (financePriority && !hasSchedulingTurnSignal(inboundText) && schedulingPrompt) {
+  if (financePriority && !schedulingSignal && schedulingPrompt) {
     return {
       allow: false,
       draftText: "",

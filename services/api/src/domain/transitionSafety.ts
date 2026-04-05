@@ -21,6 +21,7 @@ export function hasPostSaleOrOwnershipContext(conv: any): boolean {
 export function shouldSuppressDispositionCloseout(conv: any, text: string): boolean {
   if (isLogisticsProgressUpdateText(text)) return true;
   if (isStructuredFinanceInfoText(text)) return true;
+  if (hasCompetingActiveIntentText(text)) return true;
   if (!hasPostSaleOrOwnershipContext(conv)) return false;
   const t = String(text ?? "").toLowerCase();
   return (
@@ -46,6 +47,24 @@ function isStructuredFinanceInfoText(text: string): boolean {
     /\b(apr|rate|interest|financing|finance special|specials?)\b/.test(t) &&
     /\$?\s*\d[\d,]*/.test(t);
   return hasMonthlyTarget || hasDownPaymentDetail || hasTermDetail || hasFinanceProgramDetail;
+}
+
+function hasCompetingActiveIntentText(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  const hasAvailabilityAsk =
+    /\b(do you have|do u have|have any|any .* in[-\s]?stock|in[-\s]?stock|available|availability)\b/.test(
+      t
+    ) || /\bwhat do you have\b/.test(t);
+  const hasSchedulingAsk =
+    /\b(can i come in|stop by|come by|what day|what time|set up a time|book (a )?(time|appointment)|schedule (a )?(time|appointment)|works for you)\b/.test(
+      t
+    ) || /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\b/.test(t);
+  const hasActiveBuyingSignal =
+    /\b(ready to buy|pull the trigger|i want (it|that bike)|i['’]?m interested|interested in|want to move forward)\b/.test(
+      t
+    );
+  return hasAvailabilityAsk || hasSchedulingAsk || hasActiveBuyingSignal;
 }
 
 export function isDispositionParserAccepted(parsed: {
