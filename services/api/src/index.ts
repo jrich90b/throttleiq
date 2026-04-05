@@ -7638,6 +7638,66 @@ function applyPricingPolicy(
   return out;
 }
 
+function buildFinancePriorityInvariantFallbackReply(
+  conv: any,
+  inboundText: string,
+  paymentBudget: { monthlyBudget?: number; termMonths?: number; downPayment?: number }
+): string {
+  const monthlyBudget = paymentBudget.monthlyBudget ?? null;
+  const termMonths = paymentBudget.termMonths ?? null;
+  const downPayment = paymentBudget.downPayment;
+  const downValue = downPayment != null && Number.isFinite(Number(downPayment)) ? Number(downPayment) : null;
+  const budgetLabel =
+    monthlyBudget != null ? `$${Number(monthlyBudget).toLocaleString("en-US")}/mo` : null;
+  const downLabel =
+    downValue == null
+      ? null
+      : downValue <= 0
+        ? "$0 down"
+        : `$${Math.round(downValue).toLocaleString("en-US")} down`;
+
+  if (isModelUnknownForPayments(conv)) {
+    const withBudget = budgetLabel ? ` around ${budgetLabel}` : "";
+    return `Got it${withBudget}. Which bike are you looking at so I can run it correctly?`;
+  }
+
+  if (isDownPaymentQuestion(inboundText) && monthlyBudget == null) {
+    return "Got it — what monthly payment are you trying to stay around?";
+  }
+
+  if (monthlyBudget != null && termMonths != null && downValue == null) {
+    return `To target ${budgetLabel}, are you planning a trade-in or cash down?`;
+  }
+
+  if (monthlyBudget != null && downValue != null && termMonths == null) {
+    return `Perfect — with ${downLabel} targeting ${budgetLabel}, do you want me to run 60, 72, or 84 months?`;
+  }
+
+  if (monthlyBudget == null && termMonths != null && downValue != null) {
+    return `Got it — ${downLabel} at ${termMonths} months. What monthly payment are you trying to stay around?`;
+  }
+
+  if (monthlyBudget != null && termMonths != null && downValue != null) {
+    const zeroDownTail =
+      downValue <= 0 ? " $0 down options are application-dependent and lender approval is required." : "";
+    return `Perfect — with ${downLabel} at ${termMonths} months targeting ${budgetLabel}, I can run the exact numbers now.${zeroDownTail}`;
+  }
+
+  if (monthlyBudget != null && termMonths == null && downValue == null) {
+    return `Got it — to target ${budgetLabel}, about how much are you planning to put down, and did you want 60, 72, or 84 months?`;
+  }
+
+  if (monthlyBudget == null && termMonths != null && downValue == null) {
+    return `Got it — at ${termMonths} months, what monthly payment are you trying to stay around, and are you planning any money down?`;
+  }
+
+  if (monthlyBudget == null && termMonths == null && downValue != null) {
+    return `Perfect — with ${downLabel}, what monthly payment are you trying to stay around, and do you want 60, 72, or 84 months?`;
+  }
+
+  return "Got it — I can run numbers. What monthly payment are you trying to stay around, and what term works best (60, 72, or 84 months)?";
+}
+
 function applyCallbackPolicy(conv: any, reply: string, lastOutboundText: string): string {
   const state = getDialogState(conv);
   if (state !== "callback_requested" && state !== "callback_handoff") return reply;
@@ -21247,6 +21307,50 @@ if (authToken && signature) {
   });
   if (lienHolderFallback) {
     reply = lienHolderFallback;
+  }
+  const evaluateLiveDraftInvariant = (text: string) =>
+    applyDraftStateInvariants({
+      inboundText: event.body ?? "",
+      draftText: text,
+      followUpMode: conv.followUp?.mode ?? null,
+      followUpReason: conv.followUp?.reason ?? null,
+      dialogState: getDialogState(conv),
+      classificationBucket: conv.classification?.bucket ?? null,
+      classificationCta: conv.classification?.cta ?? null
+    });
+  const liveDraftInvariant = evaluateLiveDraftInvariant(reply);
+  if (!liveDraftInvariant.allow) {
+    const invariantReason = liveDraftInvariant.reason ?? "draft_invariant_blocked";
+    const financePriorityInvariant =
+      invariantReason === "finance_priority_inventory_prompt_guard" ||
+      invariantReason === "finance_priority_schedule_prompt_guard";
+    if (financePriorityInvariant) {
+      const financeFallback = buildFinancePriorityInvariantFallbackReply(
+        conv,
+        String(event.body ?? ""),
+        paymentBudgetContext
+      );
+      const financeFallbackInvariant = evaluateLiveDraftInvariant(financeFallback);
+      if (financeFallbackInvariant.allow) {
+        reply = financeFallbackInvariant.draftText;
+        logRouteOutcome("finance_priority_invariant_fallback", {
+          blockedReason: invariantReason
+        });
+      } else {
+        const fallbackReason = financeFallbackInvariant.reason ?? invariantReason;
+        discardPendingDrafts(conv, fallbackReason);
+        logRouteOutcome(fallbackReason);
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+    } else {
+      discardPendingDrafts(conv, invariantReason);
+      logRouteOutcome(invariantReason);
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+  } else {
+    reply = liveDraftInvariant.draftText;
   }
   await seedInventoryWatchPendingFromReply(conv, event, reply);
   if (isSlotOfferMessage(reply)) {
