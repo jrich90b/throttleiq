@@ -2465,6 +2465,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const walkInOutcomeConfidence =
       typeof llmWalkInOutcome?.confidence === "number" ? llmWalkInOutcome.confidence : 0;
     const walkInOutcomeConfidenceMin = Number(process.env.LLM_WALKIN_OUTCOME_CONFIDENCE_MIN ?? 0.72);
+    const walkInOutcomeRegexFallbackEnabled =
+      process.env.LLM_WALKIN_OUTCOME_REGEX_FALLBACK_ENABLED === "1";
     const walkInOutcomeAccepted =
       !!llmWalkInOutcome &&
       walkInOutcomeConfidence >= walkInOutcomeConfidenceMin &&
@@ -2473,62 +2475,62 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
     const hasDepositSignal =
       walkInState === "deposit_left" ||
-      (!walkInOutcomeAccepted &&
+      (walkInOutcomeRegexFallbackEnabled &&
         (/\b(left|put|placed|took|received)\s+(a\s+)?deposit\b/.test(commentLower) ||
           /\bdeposit\s+(left|taken|received|put|placed)\b/.test(commentLower)));
     const hasSoldSignal =
       walkInState === "sold_delivered" ||
-      (!walkInOutcomeAccepted && /\b(sold|delivered|picked up)\b/.test(commentLower));
+      (walkInOutcomeRegexFallbackEnabled && /\b(sold|delivered|picked up)\b/.test(commentLower));
     const hasCreditCosignerSignal =
       walkInState === "cosigner_required" ||
-      (!walkInOutcomeAccepted &&
+      (walkInOutcomeRegexFallbackEnabled &&
         ((/\b(credit app|credit application|finance app|finance application|ran credit)\b/.test(commentLower) &&
           /\b(co[-\s]?signer|cosigner)\b/.test(commentLower)) ||
           /\bneeds?\s+(a\s+)?co[-\s]?signer\b/.test(commentLower)));
     const hasCompletedTestRideSignal =
       walkInState === "test_ride_completed" ||
-      (!walkInOutcomeAccepted &&
+      (walkInOutcomeRegexFallbackEnabled &&
         (/\b(took|completed|did|finished)\s+(a\s+)?(test ride|demo ride)\b/.test(commentLower) ||
           /\b(test ride|demo ride)\s+(completed|done)\b/.test(commentLower)));
     const hasDecisionPendingSignal =
       walkInState === "decision_pending" ||
-      (!walkInOutcomeAccepted &&
+      (walkInOutcomeRegexFallbackEnabled &&
         /\b(thinking it over|think it over|sleep on it|not ready|not ready yet|will let (you|us) know|get back to (you|us)|reach back out)\b/.test(
           commentLower
         ));
     const hasOutsideFinancingPendingSignal =
       walkInState === "outside_financing_pending" ||
-      (!walkInOutcomeAccepted &&
+      (walkInOutcomeRegexFallbackEnabled &&
         /\b(credit union|cu financing|bank loan|bank financing|outside financing|waiting on (the )?(bank|credit union)|waiting on approval)\b/.test(
           commentLower
         ));
     const hasDownPaymentPendingSignal =
       walkInState === "down_payment_pending" ||
-      (!walkInOutcomeAccepted &&
+      (walkInOutcomeRegexFallbackEnabled &&
         /\b(waiting for down payment|saving up for down payment|save up for down payment|don'?t have enough down|need more down|down payment)\b/.test(
           commentLower
         ));
     const hasTradeEquityPendingSignal =
       walkInState === "trade_equity_pending" ||
-      (!walkInOutcomeAccepted &&
+      (walkInOutcomeRegexFallbackEnabled &&
         /\b(sell my bike first|sell it first|trade value|waiting on trade value|upside down|negative equity|payoff)\b/.test(
           commentLower
         ));
     const hasTimingDeferWindowSignal =
       walkInState === "timing_defer_window" ||
-      (!walkInOutcomeAccepted &&
+      (walkInOutcomeRegexFallbackEnabled &&
         /\b(after winter|next month|after tax return|after taxes|after bonus|later this year|next season)\b/.test(
           commentLower
         ));
     const hasHouseholdApprovalPendingSignal =
       walkInState === "household_approval_pending" ||
-      (!walkInOutcomeAccepted &&
+      (walkInOutcomeRegexFallbackEnabled &&
         /\b(talk to (my )?(wife|husband|spouse|partner)|wife needs to approve|husband needs to approve|spouse decision|partner decision)\b/.test(
           commentLower
         ));
     const hasDocsOrInsurancePendingSignal =
       walkInState === "docs_or_insurance_pending" ||
-      (!walkInOutcomeAccepted &&
+      (walkInOutcomeRegexFallbackEnabled &&
         /\b(waiting on insurance|insurance quote|need (the )?title|need docs|paperwork first|registration first|dmv first)\b/.test(
           commentLower
         ));
@@ -2543,6 +2545,19 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       /\bresume\b/.test(commentLower) ||
       /\breopen\b/.test(commentLower) ||
       /\breactivate\b/.test(commentLower);
+    const walkInOutcomeNeedsReview =
+      !!llmWalkInOutcome &&
+      !walkInOutcomeAccepted &&
+      llmWalkInOutcome.explicitState &&
+      llmWalkInOutcome.state !== "none";
+    if (walkInOutcomeNeedsReview) {
+      addTodo(
+        conv,
+        "note",
+        `Walk-in outcome parser below confidence threshold (${walkInOutcomeConfidence.toFixed(2)} < ${walkInOutcomeConfidenceMin.toFixed(2)}): ${llmWalkInOutcome.state}`,
+        event.providerMessageId
+      );
+    }
 
     if (hasCreditCosignerSignal) {
       conv.dialogState = { name: "payments_handoff", updatedAt: new Date().toISOString() };
