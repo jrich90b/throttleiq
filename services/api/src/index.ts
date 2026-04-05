@@ -7144,6 +7144,28 @@ function estimateMonthlyPaymentFromPrice(opts: {
   return calcMonthlyPayment(financed, apr, termMonths);
 }
 
+function estimateMonthlyPaymentBandFromPrice(opts: {
+  price: number;
+  isUsed: boolean;
+  termMonths: number;
+  taxRate: number;
+  downPayment?: number;
+}): { low: number; high: number } | null {
+  const price = Number(opts.price);
+  if (!Number.isFinite(price) || price <= 0) return null;
+  const termMonths = Number(opts.termMonths);
+  if (!Number.isFinite(termMonths) || termMonths <= 0) return null;
+  const fee = opts.isUsed ? 300 : 1200;
+  const taxRate = Number.isFinite(opts.taxRate) ? opts.taxRate : 0.08;
+  const down = Number.isFinite(opts.downPayment) ? Number(opts.downPayment) : 0;
+  const financed = Math.max(0, (price + fee) * (1 + taxRate) - Math.max(0, down));
+  const aprRange = getPaymentAprRange(termMonths, opts.isUsed);
+  const low = calcMonthlyPayment(financed, aprRange.min, termMonths);
+  const high = calcMonthlyPayment(financed, aprRange.max, termMonths);
+  if (!Number.isFinite(low) || !Number.isFinite(high)) return null;
+  return { low: Math.min(low, high), high: Math.max(low, high) };
+}
+
 function estimateInventoryItemMonthlyPayment(
   item: any,
   opts: { termMonths: number; taxRate: number; downPayment?: number }
@@ -17188,9 +17210,45 @@ if (authToken && signature) {
         setDialogState(conv, "pricing_init");
       }
     } else if (monthlyBudget && downPayment != null && termMonths) {
-      const downLabel = `$${Number(downPayment).toLocaleString("en-US")}`;
+      const downValue = Number(downPayment);
+      const downLabel =
+        downValue <= 0 ? "$0 down" : `$${Number(downPayment).toLocaleString("en-US")} down`;
       const budgetLabel = `$${Number(monthlyBudget).toLocaleString("en-US")}/mo`;
-      reply = `Perfect — with ${downLabel} down at ${termMonths} months targeting ${budgetLabel}, I can run the exact numbers now.`;
+      const stockId = conv.lead?.vehicle?.stockId ?? null;
+      const vin = conv.lead?.vehicle?.vin ?? null;
+      const match = stockId || vin ? await findInventoryPrice({ stockId, vin }) : null;
+      const item = match?.item ?? null;
+      const itemPrice = Number(item?.price ?? NaN);
+      if (Number.isFinite(itemPrice) && itemPrice > 0) {
+        const isUsed = isUsedInventoryConditionForBudget(
+          item?.condition ?? conv.lead?.vehicle?.condition,
+          item?.year ?? conv.lead?.vehicle?.year
+        );
+        const taxRate = normalizeTaxRate((await getDealerProfileHot())?.taxRate ?? 8);
+        const paymentBand = estimateMonthlyPaymentBandFromPrice({
+          price: itemPrice,
+          isUsed,
+          termMonths,
+          taxRate,
+          downPayment
+        });
+        if (paymentBand) {
+          const lowRounded = Math.round(paymentBand.low / 10) * 10;
+          const highRounded = Math.round(paymentBand.high / 10) * 10;
+          const priceLabel = `$${Math.round(itemPrice).toLocaleString("en-US")}`;
+          reply =
+            `Ballpark, with ${downLabel} on about ${priceLabel} at ${termMonths} months, ` +
+            `you’re around $${lowRounded.toLocaleString("en-US")}–$${highRounded.toLocaleString("en-US")}/mo ` +
+            `depending on taxes, fees, and APR.`;
+          if (downValue <= 0) {
+            reply += " $0 down options are application-dependent and lender approval is required.";
+          }
+        } else {
+          reply = `Perfect — with ${downLabel} at ${termMonths} months targeting ${budgetLabel}, I can run the exact numbers now.`;
+        }
+      } else {
+        reply = `Perfect — with ${downLabel} at ${termMonths} months targeting ${budgetLabel}, I can run the exact numbers now.`;
+      }
       if (!isScheduleDialogState(getDialogState(conv))) {
         setDialogState(conv, "pricing_init");
       }
