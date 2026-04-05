@@ -39,7 +39,7 @@ import type {
   SemanticSlotParse,
   TradePayoffParse
 } from "./domain/llmDraft.js";
-import type { InboundMessageEvent } from "./domain/types.js";
+import type { InboundMessageEvent, OrchestratorResult } from "./domain/types.js";
 import { sendgridInboundMiddleware, handleSendgridInbound } from "./routes/sendgridInbound.js";
 import { resolveInventoryUrlByStock } from "./domain/inventoryUrlResolver.js";
 import { checkInventorySalePendingByUrl } from "./domain/inventoryChecker.js";
@@ -498,6 +498,8 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
 }
 
 const DEFAULT_LLM_PARSER_TIMEOUT_MS = Number(process.env.LLM_PARSER_TIMEOUT_MS ?? 9000);
+const DEFAULT_WEATHER_STATUS_TIMEOUT_MS = Number(process.env.WEATHER_STATUS_TIMEOUT_MS ?? 5000);
+const DEFAULT_ORCHESTRATOR_TIMEOUT_MS = Number(process.env.ORCHESTRATOR_TIMEOUT_MS ?? 15000);
 
 async function safeLlmParse<T>(
   label: string,
@@ -509,6 +511,40 @@ async function safeLlmParse<T>(
   } catch (err: any) {
     console.warn(`[llm-parse] ${label} failed:`, err?.message ?? err);
     return null;
+  }
+}
+
+async function safeDealerWeatherStatus(
+  profile: any,
+  label: string,
+  timeoutMs: number = DEFAULT_WEATHER_STATUS_TIMEOUT_MS
+) {
+  try {
+    return await withTimeout(getDealerWeatherStatus(profile), timeoutMs, `weather.${label}`);
+  } catch (err: any) {
+    console.warn(`[weather] ${label} failed:`, err?.message ?? err);
+    return null;
+  }
+}
+
+async function safeOrchestrateInbound(
+  label: string,
+  event: InboundMessageEvent,
+  history: { direction: "in" | "out"; body: string }[],
+  ctx: Parameters<typeof orchestrateInbound>[2],
+  timeoutMs: number = DEFAULT_ORCHESTRATOR_TIMEOUT_MS
+): Promise<OrchestratorResult> {
+  try {
+    return await withTimeout(orchestrateInbound(event, history, ctx), timeoutMs, `orchestrator.${label}`);
+  } catch (err: any) {
+    console.warn(`[orchestrator] ${label} failed:`, err?.message ?? err);
+    return {
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft: "Thanks for the message — I’m checking that now and will follow up shortly.",
+      suggestedSlots: []
+    };
   }
 }
 
@@ -1511,8 +1547,8 @@ app.post("/debug/inbound/process", express.json(), async (req, res) => {
     const memorySummary = conv.memorySummary?.text ?? null;
     const memorySummaryShouldUpdate = shouldUpdateMemorySummary(conv);
     const dealerProfile = await getDealerProfileHot();
-    const weatherStatus = await getDealerWeatherStatus(dealerProfile);
-    const result = await orchestrateInbound(event, history, {
+    const weatherStatus = await safeDealerWeatherStatus(dealerProfile, "debug_inbound");
+    const result = await safeOrchestrateInbound("debug_inbound", event, history, {
       appointment: conv.appointment,
       followUp: conv.followUp,
       leadSource: conv.lead?.source ?? null,
@@ -9494,7 +9530,7 @@ async function processDueFollowUps() {
         "If timing changed, that's fine — I can still help with your trade estimate whenever you're ready."
       ];
     } else if (isSellMyBikeLead) {
-      const weatherStatus = await getDealerWeatherStatus(dealerProfile);
+      const weatherStatus = await safeDealerWeatherStatus(dealerProfile, "cadence_sell_weather");
       let pickupEligible = conv.pickup?.eligible === true;
       let pickupKnown = !!conv.pickup?.town;
       if (!pickupKnown) {
@@ -14447,7 +14483,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     regenTradePayoffAccepted && regenTradePayoffParse?.needsLienHolderInfo
   );
   const dealerProfile = await getDealerProfileHot();
-  const weatherStatus = await getDealerWeatherStatus(dealerProfile);
+  const weatherStatus = await safeDealerWeatherStatus(dealerProfile, "regen");
   const regenTextingTypoJoke = isTextingTypoJokeText(event.body ?? "");
   const regenRoutingParserEligible =
     event.provider === "twilio" &&
@@ -14987,7 +15023,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     });
   }
 
-  const result = await orchestrateInbound(event, history, {
+  const result = await safeOrchestrateInbound("regen", event, history, {
     appointment: conv.appointment,
     followUp: conv.followUp,
     leadSource: conv.lead?.source ?? null,
@@ -18551,7 +18587,7 @@ if (authToken && signature) {
     const requirements =
       "For a test ride, please bring a motorcycle endorsement, a DOT helmet, eyewear, long pants, a long sleeve shirt, and over-the-ankle boots.";
     const dealerProfile = await getDealerProfileHot();
-    const weather = await getDealerWeatherStatus(dealerProfile);
+    const weather = await safeDealerWeatherStatus(dealerProfile, "test_ride_question");
     const reply = conv.appointment?.bookedEventId
       ? weather?.bad
         ? `If the weather’s rough, we can plan the test ride for a better day. ${requirements} If you want to reschedule, just let me know.`
@@ -20799,9 +20835,9 @@ if (authToken && signature) {
   const weatherProfileStartedAt = Date.now();
   const weatherProfile = await getDealerProfileHot();
   logRouteTiming("dealer_profile_for_weather", weatherProfileStartedAt);
-  const weatherStatus = await getDealerWeatherStatus(weatherProfile);
+  const weatherStatus = await safeDealerWeatherStatus(weatherProfile, "twilio_inbound");
   const orchestratorStartedAt = Date.now();
-  const result = await orchestrateInbound(event, history, {
+  const result = await safeOrchestrateInbound("twilio_inbound", event, history, {
     appointment: conv.appointment,
     followUp: conv.followUp,
     leadSource: conv.lead?.source ?? null,

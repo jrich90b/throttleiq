@@ -35,9 +35,23 @@ const weatherCache = new Map<string, { value: WeatherStatus; expiresAt: number }
 
 const GEO_TTL_MS = 6 * 60 * 60 * 1000;
 const WEATHER_TTL_MS = 15 * 60 * 1000;
+const WEATHER_FETCH_TIMEOUT_MS = Number(process.env.WEATHER_FETCH_TIMEOUT_MS ?? 5000);
 
 function cacheKey(lat: number, lon: number, hours: number, cold: number) {
   return `${lat.toFixed(4)}|${lon.toFixed(4)}|${hours}|${cold}`;
+}
+
+async function fetchJsonWithTimeout(url: string, timeoutMs: number): Promise<any | null> {
+  const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : WEATHER_FETCH_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const resp = await fetch(url, { signal: controller.signal });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export function getWeatherConfig(profile: DealerProfileLike | null | undefined): WeatherConfig {
@@ -62,9 +76,8 @@ async function geocodeZip(zip: string): Promise<LatLon | null> {
     key
   )}&count=3&language=en&format=json`;
   try {
-    const resp = await fetch(url);
-    if (!resp.ok) return null;
-    const data = (await resp.json()) as any;
+    const data = (await fetchJsonWithTimeout(url, WEATHER_FETCH_TIMEOUT_MS)) as any;
+    if (!data) return null;
     const results = Array.isArray(data?.results) ? data.results : [];
     const best = results.find((r: any) => String(r?.country_code ?? "").toUpperCase() === "US") ?? results[0];
     if (!best) return null;
@@ -108,9 +121,8 @@ export async function getDealerWeatherStatus(
     `&hourly=temperature_2m,snowfall,snow_depth` +
     `&forecast_days=3&temperature_unit=fahrenheit&timezone=auto`;
   try {
-    const resp = await fetch(url);
-    if (!resp.ok) return null;
-    const data = (await resp.json()) as any;
+    const data = (await fetchJsonWithTimeout(url, WEATHER_FETCH_TIMEOUT_MS)) as any;
+    if (!data) return null;
     const hourly = data?.hourly ?? {};
     const times: string[] = Array.isArray(hourly.time) ? hourly.time : [];
     const temps: number[] = Array.isArray(hourly.temperature_2m) ? hourly.temperature_2m : [];
@@ -167,9 +179,8 @@ export async function getDealerDailyForecasts(
     `&daily=temperature_2m_max,temperature_2m_min,snowfall_sum` +
     `&forecast_days=14&temperature_unit=fahrenheit&timezone=auto`;
   try {
-    const resp = await fetch(url);
-    if (!resp.ok) return null;
-    const data = (await resp.json()) as any;
+    const data = (await fetchJsonWithTimeout(url, WEATHER_FETCH_TIMEOUT_MS)) as any;
+    if (!data) return null;
     const daily = data?.daily ?? {};
     const dates: string[] = Array.isArray(daily.time) ? daily.time : [];
     const maxTemps: number[] = Array.isArray(daily.temperature_2m_max) ? daily.temperature_2m_max : [];
