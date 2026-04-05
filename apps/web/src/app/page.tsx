@@ -368,8 +368,19 @@ function getCadenceAlert(cadence?: {
   status?: string;
   pausedUntil?: string | null;
   nextDueAt?: string | null;
+  anchorAt?: string | null;
+  kind?: string | null;
+  stopReason?: string | null;
 }) {
-  if (!cadence || cadence.status !== "active") return null;
+  if (!cadence) return null;
+  const status = String(cadence.status ?? "").toLowerCase();
+  const kind = String(cadence.kind ?? "").toLowerCase();
+  const stopReason = String(cadence.stopReason ?? "").toLowerCase();
+  const preserveStoppedCadence =
+    status === "stopped" &&
+    stopReason === "manual_handoff" &&
+    (kind === "long_term" || kind === "post_sale");
+  if (status !== "active" && !preserveStoppedCadence) return null;
   const nowMs = Date.now();
   if (cadence.pausedUntil) {
     const pausedAt = new Date(cadence.pausedUntil);
@@ -380,7 +391,7 @@ function getCadenceAlert(cadence?: {
       }
     }
   }
-  const sendAtRaw = cadence.nextDueAt ?? null;
+  const sendAtRaw = cadence.nextDueAt ?? cadence.anchorAt ?? null;
   if (!sendAtRaw) return null;
   const sendAt = new Date(sendAtRaw);
   if (Number.isNaN(sendAt.getTime())) return null;
@@ -444,6 +455,8 @@ type ConversationListItem = {
     pausedUntil?: string | null;
     pauseReason?: string | null;
     stopReason?: string | null;
+    anchorAt?: string | null;
+    kind?: string | null;
   } | null;
   followUp?: { mode?: string; reason?: string; updatedAt?: string } | null;
   inventoryWatches?: Array<{
@@ -551,6 +564,8 @@ type ConversationDetail = {
     pausedUntil?: string | null;
     pauseReason?: string | null;
     stopReason?: string | null;
+    anchorAt?: string | null;
+    kind?: string | null;
   };
   followUp?: { mode?: string; reason?: string; updatedAt?: string };
   inventoryWatches?: Array<{
