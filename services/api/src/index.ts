@@ -6792,8 +6792,21 @@ function extractPaymentTermMonths(text: string): number | null {
   return Number.isFinite(months) && months > 0 ? months : null;
 }
 
+function hasZeroDownSignal(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\b(no money down|zero down|\$0 down|no down payment)\b/.test(t) ||
+    /\b(?:don'?t|dont|do not)\s+have to put\s+(?:anything|nothing|any money|money)\s+down\b/.test(t) ||
+    /\b(?:without|with no)\s+(?:any\s+)?(?:money|cash|anything)\s+down\b/.test(t)
+  );
+}
+
 function parseDownPaymentForBudget(text: string): { amount: number; assumedThousands: boolean } | null {
   const t = String(text ?? "").toLowerCase();
+  if (hasZeroDownSignal(t)) {
+    return { amount: 0, assumedThousands: false };
+  }
   const match = t.match(
     /(?:\$\s*)?(\d{1,3}(?:,\d{3})+|\d+)\s*(k|grand)?\s*(?:down|down payment|deposit|dp|put down)/
   );
@@ -6836,7 +6849,7 @@ function findRecentInboundPaymentBudgetContext(conv: any): {
     }
     if (downPayment == null) {
       const parsedDown = parseDownPaymentForBudget(body)?.amount;
-      const zeroDown = /\b(no money down|zero down|\$0 down)\b/i.test(body);
+      const zeroDown = hasZeroDownSignal(body);
       downPayment = parsedDown ?? (zeroDown ? 0 : undefined);
     }
     if (monthlyBudget != null && termMonths != null && downPayment != null) break;
@@ -6864,7 +6877,7 @@ function resolvePaymentBudgetForConversation(
   }
   const termMonths = extractPaymentTermMonths(text) ?? recent.termMonths;
   const parsedDown = parseDownPaymentForBudget(text)?.amount;
-  const zeroDown = /\b(no money down|zero down|\$0 down)\b/i.test(String(text ?? ""));
+  const zeroDown = hasZeroDownSignal(text);
   const downPayment = parsedDown ?? (zeroDown ? 0 : recent.downPayment);
   return { monthlyBudget, termMonths, downPayment };
 }
@@ -17162,6 +17175,15 @@ if (authToken && signature) {
     } else if (monthlyBudget && downPayment != null && !termMonths) {
       const downLabel = `$${Number(downPayment).toLocaleString("en-US")}`;
       reply = `Perfect — with ${downLabel} down, do you want me to run 60, 72, or 84 months?`;
+      if (!isScheduleDialogState(getDialogState(conv))) {
+        setDialogState(conv, "pricing_init");
+      }
+    } else if (!monthlyBudget && termMonths && downPayment != null) {
+      const downLabel =
+        Number(downPayment) <= 0
+          ? "$0 down"
+          : `$${Number(downPayment).toLocaleString("en-US")} down`;
+      reply = `Got it — ${downLabel} at ${termMonths} months. What monthly payment are you trying to stay around?`;
       if (!isScheduleDialogState(getDialogState(conv))) {
         setDialogState(conv, "pricing_init");
       }

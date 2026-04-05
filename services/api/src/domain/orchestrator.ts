@@ -402,9 +402,19 @@ function detectExactNumberPressure(text: string): boolean {
 function detectPaymentPressure(text: string): boolean {
   const t = text.toLowerCase();
   return (
-    /(monthly payment|payments?\b|what.*payment|payment.*(month|monthly)|how much.*(payment|monthly)|how much down|money down|put (?:any )?money down|put down|to put down|no money down|zero down|\$0 down|\$\s*\d+[,\d]*\s*(\/\s*mo|\/\s*month|per month|a month|monthly)|\bapr\b|term)/.test(
+    /(monthly payment|payments?\b|what.*payment|payment.*(month|monthly)|how much.*(payment|monthly)|how much down|money down|put (?:any )?money down|put down|to put down|no money down|zero down|\$0 down|don't have to put anything down|do not have to put anything down|dont have to put anything down|\$\s*\d+[,\d]*\s*(\/\s*mo|\/\s*month|per month|a month|monthly)|\bapr\b|term)/.test(
       t
     )
+  );
+}
+
+function hasZeroDownSignal(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\b(no money down|zero down|\$0 down|no down payment)\b/.test(t) ||
+    /\b(?:don'?t|dont|do not)\s+have to put\s+(?:anything|nothing|any money|money)\s+down\b/.test(t) ||
+    /\b(?:without|with no)\s+(?:any\s+)?(?:money|cash|anything)\s+down\b/.test(t)
   );
 }
 
@@ -414,7 +424,7 @@ function detectDownPaymentQuestion(text: string): boolean {
     /(how much|what|what would|what do|do i need|need|do i have to|will i have to|can i).*(down payment|downpayment|money down|put (?:any )?money down|down|deposit|zero down|\$0 down)/.test(
       t
     ) ||
-    /\b(no money down|zero down|\$0 down)\b/.test(t)
+    hasZeroDownSignal(t)
   );
 }
 
@@ -522,6 +532,7 @@ function extractPreferredTermMonths(text: string): number | null {
 
 function parseDownPayment(text: string): { amount: number; assumedThousands: boolean } | null {
   const t = text.toLowerCase();
+  if (hasZeroDownSignal(t)) return { amount: 0, assumedThousands: false };
   const match = t.match(
     /(?:\$\s*)?(\d{1,3}(?:,\d{3})+|\d+)\s*(k|grand)?\s*(?:down|down payment|deposit|dp|put down)/
   );
