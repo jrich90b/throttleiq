@@ -775,6 +775,20 @@ function detectPricingOrPayment(text: string, intent?: OrchestratorResult["inten
   return /(price|\bdeal(?:s)?\b|discount|lowest|\botd\b|out the door|payment|monthly|down|apr|term)/.test(t);
 }
 
+function detectDealsOrFinanceSpecialsQuestion(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  const specialsCue =
+    /\b(deal(?:s)?|special(?:s)?|finance special(?:s)?|promo(?:tion)?(?:s)?|offer(?:s)?|incentive(?:s)?|rebate(?:s)?|discount(?:s)?)\b/.test(
+      t
+    );
+  const hardPaymentCue =
+    /\b(monthly|per month|payment|payments|how much down|down payment|money down|cash down|term|60|72|84|\$\s*\d+)\b/.test(
+      t
+    );
+  return specialsCue && !hardPaymentCue;
+}
+
 function isUsedDealerTrustStatement(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   const mentionsUsed = /\b(used|pre[-\s]?owned)\b/.test(t);
@@ -1898,8 +1912,9 @@ export async function orchestrateInbound(
     !schedulingIntentHint;
   const wantsScheduling =
     schedulingIntentHint || hasSchedulingIntent(event.body) || !!dayName || !!dayPart || !!timeMatch;
+  const specialsQuestion = detectDealsOrFinanceSpecialsQuestion(event.body);
   const wantsPayments =
-    pricingIntentHint ||
+    (pricingIntentHint && !specialsQuestion) ||
     detectPaymentPressure(event.body) ||
     detectPaymentFollowUp(event.body, history ?? []);
   const recentInboundAskedDown = [...(history ?? [])]
@@ -2378,6 +2393,7 @@ export async function orchestrateInbound(
       const paymentFollowUp = detectPaymentFollowUp(event.body, history ?? []);
       const paymentQuestion = detectPaymentPressure(event.body) || paymentFollowUp;
       const targetMonthly = extractMonthlyBudget(event.body);
+      const specialsQuestion = detectDealsOrFinanceSpecialsQuestion(event.body);
       const downQuestionOnly =
         detectDownPaymentQuestion(event.body) &&
         !/(payment|monthly|month|\/\s*mo|\/\s*month|per month|a month|apr|term|rate|interest|\$\s*\d+)/i.test(
@@ -2410,6 +2426,30 @@ export async function orchestrateInbound(
             : msrpLookup?.exact != null
               ? { min: msrpLookup.exact, max: msrpLookup.exact }
               : msrpLookup?.rangeForTrim ?? msrpLookup?.rangeForColor ?? msrpLookup?.range ?? null;
+
+      if (specialsQuestion) {
+        const modelLabel = modelForRange && !isUnknownModel(modelForRange)
+          ? normalizeModelLabel(modelForRange)
+          : "that bike";
+        const yearLabel = yearForRange ? `${yearForRange} ` : "";
+        const scopeLabel = `${yearLabel}${modelLabel}`.trim();
+        const noteLine = inventoryNote ? `Right now there’s ${inventoryNote} available. ` : "";
+        const prompt =
+          paymentRange != null
+            ? "If you want, I can run 60/72/84-month options and show the strongest program available right now."
+            : "If you want, I can check current programs and share what applies right now.";
+        const draft =
+          `Good question — yes, we can check current finance programs and specials on the ${scopeLabel}. ` +
+          `${noteLine}Programs vary by approval tier and term. ${prompt}`;
+        return finalize({
+          intent,
+          stage: "ENGAGED",
+          shouldRespond: true,
+          draft,
+          pricingAttempted,
+          paymentsAnswered: true
+        });
+      }
 
       if (detectDownPaymentQuestion(event.body) && targetMonthly != null) {
         const nf = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
