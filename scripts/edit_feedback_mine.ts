@@ -188,6 +188,28 @@ function hasSchedulingSignal(text: string): boolean {
   );
 }
 
+function isAdfInboundBlob(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\bweb lead\s*\(adf\)\b/.test(t) ||
+    (/^\s*source:\s/m.test(t) &&
+      /^\s*ref:\s/m.test(t) &&
+      /^\s*name:\s/m.test(t) &&
+      /^\s*inquiry:\s/m.test(t))
+  );
+}
+
+function hasInventoryAskSignal(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\b(in stock|available|availability|do you have|got any|what do you have|any .* in stock)\b/.test(t) ||
+    /\b(anything in (?:the )?\$?\d[\d,]*(?:\s*-\s*\$?\d[\d,]*)?\s*range)\b/.test(t) ||
+    /\b(looking for|watch for|keep an eye out)\b/.test(t)
+  );
+}
+
 function inferDepartment(text: string): "service" | "parts" | "apparel" | null {
   const t = String(text ?? "").toLowerCase();
   if (
@@ -241,20 +263,29 @@ function classifyEdit(
   const schedulingDraft = looksSchedulingPromptDraft(generated);
   const inboundShortAck = isShortAckText(inbound);
   const inboundFinance = hasFinanceSignal(inbound);
-  const finalFinance = hasFinanceSignal(final);
+  const inboundInventoryAsk = hasInventoryAskSignal(inbound);
+  const inboundIsAdf = isAdfInboundBlob(inbound);
   const finalDepartment = inferDepartment(final);
 
   if (String(row.provider ?? "").toLowerCase() === "human") {
     return { label: "manual_takeover_rewrite", severity: "low", rationale: "provider_human" };
   }
-  if (inboundShortAck && inventoryDraft) {
+  if (inboundShortAck && inventoryDraft && !inboundIsAdf) {
     return { label: "short_ack_miss", severity: "high", rationale: "short_ack_with_inventory_prompt" };
   }
-  if ((inboundFinance || finalFinance) && inventoryDraft) {
-    return { label: "finance_inventory_miss", severity: "high", rationale: "finance_turn_with_inventory_prompt" };
+  if (inboundFinance && inventoryDraft && !inboundIsAdf && !inboundInventoryAsk) {
+    return {
+      label: "finance_inventory_miss",
+      severity: "high",
+      rationale: "finance_turn_without_inventory_ask_with_inventory_prompt"
+    };
   }
-  if ((inboundFinance || finalFinance) && schedulingDraft && !hasSchedulingSignal(inbound)) {
-    return { label: "finance_schedule_miss", severity: "high", rationale: "finance_turn_with_schedule_prompt" };
+  if (inboundFinance && schedulingDraft && !hasSchedulingSignal(inbound) && !inboundIsAdf) {
+    return {
+      label: "finance_schedule_miss",
+      severity: "high",
+      rationale: "finance_turn_without_schedule_ask_with_schedule_prompt"
+    };
   }
   if (finalDepartment && inventoryDraft) {
     return {

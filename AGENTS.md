@@ -169,6 +169,40 @@ When changing responses:
   - `npm run intent:add -- --text "..." --intent callback|test_ride|availability|none --explicit true|false --id example_id`
   - Optional: `--availability "model=Road Glide;year=2025;color=purple"`, `--history '[{"direction":"out","body":"..."}]'`, `--lead '{"vehicle":{"model":"Street Glide"}}'`
 
+## Feedback Loop Commands (Edited Messages -> Fixtures)
+- Mine changed outbound edits into labels + replay fixtures (instance/runtime data):
+  - `cd ~/throttleiq`
+  - `CHANGED_MESSAGES_PATH=/home/ubuntu/throttleiq-runtime/reports/changed_messages_all.json CONVERSATIONS_PATH=/home/ubuntu/throttleiq-runtime/data/conversations.json EDIT_FEEDBACK_OUT_DIR=/home/ubuntu/throttleiq-runtime/reports/edit_feedback npm run edit_feedback:mine`
+- Run audit + mining loop together:
+  - `cd ~/throttleiq`
+  - `CHANGED_MESSAGES_PATH=/home/ubuntu/throttleiq-runtime/reports/changed_messages_all.json CONVERSATIONS_PATH=/home/ubuntu/throttleiq-runtime/data/conversations.json EDIT_FEEDBACK_OUT_DIR=/home/ubuntu/throttleiq-runtime/reports/edit_feedback npm run edit_feedback:loop`
+- Output files:
+  - `/home/ubuntu/throttleiq-runtime/reports/edit_feedback/edit_feedback_labeled.json`
+  - `/home/ubuntu/throttleiq-runtime/reports/edit_feedback/edit_replay_fixtures.json`
+  - `/home/ubuntu/throttleiq-runtime/reports/edit_feedback/edit_replay_fixture_results.json`
+  - `/home/ubuntu/throttleiq-runtime/reports/edit_feedback/edit_feedback_summary.json`
+
+## Nightly Automation (Near Hands-Off)
+- One-command nightly loop:
+  - `cd ~/throttleiq`
+  - `npm run feedback:nightly`
+- The nightly loop runs:
+  1) `export:changed_messages` (auto-builds `changed_messages_all.json` from conversations)
+  2) `conversation:audit` (writes JSON audit log)
+  3) `edit_feedback:mine` (labels edits + generates replay fixtures/results)
+  4) Optional email report (`edit_feedback:email`) if env vars are set
+
+- Email env vars (set on instance shell/PM2 environment):
+  - `SENDGRID_API_KEY`
+  - `FEEDBACK_REPORT_EMAIL_TO` (recipient)
+  - `FEEDBACK_REPORT_EMAIL_FROM` (sender; falls back to `NOTIFICATION_FROM_EMAIL`)
+  - Optional: `FEEDBACK_REPORT_ATTACH_FULL=1` (attach full labeled + fixture payloads)
+
+- Cron setup (daily at 8:15 AM ET):
+  - `crontab -e`
+  - Add line:
+    - `15 8 * * * cd /home/ubuntu/throttleiq && DATA_DIR=/home/ubuntu/throttleiq-runtime/data REPORT_ROOT=/home/ubuntu/throttleiq-runtime/reports FEEDBACK_REPORT_EMAIL_TO=joeh@americanharley-davidson.com FEEDBACK_REPORT_EMAIL_FROM=sales@americanharley-davidson.com npm run feedback:nightly >> /home/ubuntu/throttleiq-runtime/reports/feedback_loop_cron.log 2>&1`
+
 ## After Any Code Change (Always Include These)
 - Local (push):
   - `cd ~/throttleiq`
