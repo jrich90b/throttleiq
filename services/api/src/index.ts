@@ -7161,9 +7161,13 @@ function parseDownPaymentForBudget(text: string): { amount: number; assumedThous
   if (hasZeroDownSignal(t)) {
     return { amount: 0, assumedThousands: false };
   }
-  const match = t.match(
-    /(?:\$\s*)?(\d{1,3}(?:,\d{3})+|\d+)\s*(k|grand)?\s*(?:down|down payment|deposit|dp|put down)/
+  const numberFirstMatch = t.match(
+    /(?:\$\s*)?(\d{1,3}(?:,\d{3})+|\d+)\s*(k|grand)?(?:\s*(?:to|toward|towards|for|as)\s*)?(?:\s*(?:a|an|the))?\s*(?:down payment|down|deposit|dp|put down|cash down)\b/
   );
+  const intentFirstMatch = t.match(
+    /(?:down payment|put down|cash down|deposit|dp)(?:\s*(?:of|for|around|about|at|is|would be))?\s*(?:\$\s*)?(\d{1,3}(?:,\d{3})+|\d+)\s*(k|grand)?\b/
+  );
+  const match = numberFirstMatch ?? intentFirstMatch;
   if (!match?.[1]) return null;
   const rawNum = Number(String(match[1]).replace(/,/g, ""));
   if (!Number.isFinite(rawNum) || rawNum <= 0) return null;
@@ -17945,11 +17949,18 @@ if (authToken && signature) {
   }
   const financeFollowUpContinuationSignal = (() => {
     const downPaymentProvided = paymentBudgetContext.downPayment != null;
-    const askedDownPaymentRecently =
-      /\b(how much can you put down|how much (?:are|can) you put down|money down|down payment|cash down)\b/i.test(
+    const monthlyBudgetProvided = paymentBudgetContext.monthlyBudget != null;
+    const termProvided = paymentBudgetContext.termMonths != null;
+    const askedFinanceFollowUpRecently =
+      /\b(how much can you put down|how much (?:are|can) you put down|about how much down|how much down|money down|down payment|cash down|what monthly payment|what monthly|target monthly|60,?\s*72,?\s*or\s*84|60 months|72 months|84 months|which term|run (?:it|that|the numbers?))\b/i.test(
         lastOutboundText
       );
-    return llmPaymentsIntent || (downPaymentProvided && askedDownPaymentRecently);
+    return (
+      llmPaymentsIntent ||
+      ((downPaymentProvided || monthlyBudgetProvided || termProvided) &&
+        askedFinanceFollowUpRecently) ||
+      (downPaymentProvided && monthlyBudgetProvided)
+    );
   })();
   if (
     event.provider === "twilio" &&
