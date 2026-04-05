@@ -86,20 +86,35 @@ export async function classifySchedulingIntent(input: string): Promise<boolean> 
   const model = process.env.OPENAI_MODEL || "gpt-5-mini";
   const text = String(input ?? "").trim();
   if (!text) return false;
+  const schema: { [key: string]: unknown } = {
+    type: "object",
+    additionalProperties: false,
+    required: ["is_schedule", "confidence"],
+    properties: {
+      is_schedule: { type: "boolean" },
+      confidence: { type: "number" }
+    }
+  };
   const prompt = [
     "You are a classifier for dealership SMS.",
+    "Return only JSON that matches the schema.",
     "Question: Is the customer trying to schedule or pick an appointment time?",
-    "Answer with only YES or NO.",
+    "is_schedule=true only when there is a clear scheduling intent.",
+    "confidence is 0 to 1.",
     "",
     `Message: ${text}`
   ].join("\n");
   try {
-    const resp = await client.responses.create({
+    const parsed = await requestStructuredJson({
       model,
-      input: prompt
+      prompt,
+      schemaName: "scheduling_intent_classifier",
+      schema,
+      maxOutputTokens: 80,
+      debugTag: "llm-scheduling-classifier"
     });
-    const out = resp.output_text?.trim().toLowerCase() ?? "";
-    return out.startsWith("y");
+    if (!parsed || typeof parsed !== "object") return false;
+    return !!parsed.is_schedule;
   } catch {
     return false;
   }
@@ -115,15 +130,18 @@ export async function classifySmallTalkWithLLM(args: {
   const text = String(args.text ?? "").trim();
   if (!text) return null;
   const history = (args.history ?? []).slice(-4).map(h => `${h.direction}: ${h.body}`);
+  const schema: { [key: string]: unknown } = {
+    type: "object",
+    additionalProperties: false,
+    required: ["small_talk", "confidence"],
+    properties: {
+      small_talk: { type: "boolean" },
+      confidence: { type: "number" }
+    }
+  };
   const prompt = [
-    "You are a classifier for dealership SMS. Return ONLY valid JSON.",
+    "You are a classifier for dealership SMS. Return only JSON that matches the schema.",
     "Decide if the message is small talk/pleasantry with no actionable intent.",
-    "",
-    "JSON SCHEMA:",
-    "{",
-    '  \"small_talk\": true|false,',
-    '  \"confidence\": 0.0',
-    "}",
     "",
     "Guidelines:",
     "- small_talk=true only for acknowledgements, thanks, emojis, or brief pleasantries.",
@@ -134,14 +152,14 @@ export async function classifySmallTalkWithLLM(args: {
     `Message: ${text}`
   ].join("\n");
   try {
-    const resp = await client.responses.create({
+    const parsed = await requestStructuredJson({
       model,
-      input: prompt,
-      temperature: 0,
-      max_output_tokens: 120
+      prompt,
+      schemaName: "small_talk_classifier",
+      schema,
+      maxOutputTokens: 120,
+      debugTag: "llm-smalltalk-classifier"
     });
-    const raw = resp.output_text?.trim() ?? "";
-    const parsed = safeParseJson(raw);
     if (!parsed || typeof parsed !== "object") return null;
     const smallTalk = !!parsed.small_talk;
     const confidence =
@@ -164,24 +182,36 @@ export async function classifyEmpathyNeedWithLLM(args: {
   const text = String(args.text ?? "").trim();
   if (!text) return null;
   const history = (args.history ?? []).slice(-2).map(h => `${h.direction}: ${h.body}`);
+  const schema: { [key: string]: unknown } = {
+    type: "object",
+    additionalProperties: false,
+    required: ["needs_empathy", "confidence"],
+    properties: {
+      needs_empathy: { type: "boolean" },
+      confidence: { type: "number" }
+    }
+  };
   const prompt = [
     "You are a classifier for dealership SMS.",
+    "Return only JSON that matches the schema.",
     "Question: Does this message describe a personal hardship or serious situation where empathy is appropriate?",
-    "Answer with only YES or NO.",
+    "needs_empathy=true only when empathy is clearly appropriate.",
+    "confidence is 0 to 1.",
     "",
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
     `Message: ${text}`
   ].join("\n");
   try {
-    const resp = await client.responses.create({
+    const parsed = await requestStructuredJson({
       model,
-      input: prompt,
-      temperature: 0,
-      max_output_tokens: 20
+      prompt,
+      schemaName: "empathy_need_classifier",
+      schema,
+      maxOutputTokens: 80,
+      debugTag: "llm-empathy-classifier"
     });
-    const out = resp.output_text?.trim().toLowerCase() ?? "";
-    if (!out) return null;
-    return out.startsWith("y");
+    if (!parsed || typeof parsed !== "object") return null;
+    return !!parsed.needs_empathy;
   } catch {
     return null;
   }
@@ -197,24 +227,36 @@ export async function classifyComplimentWithLLM(args: {
   const text = String(args.text ?? "").trim();
   if (!text) return null;
   const history = (args.history ?? []).slice(-2).map(h => `${h.direction}: ${h.body}`);
+  const schema: { [key: string]: unknown } = {
+    type: "object",
+    additionalProperties: false,
+    required: ["is_compliment", "confidence"],
+    properties: {
+      is_compliment: { type: "boolean" },
+      confidence: { type: "number" }
+    }
+  };
   const prompt = [
     "You are a classifier for dealership SMS.",
+    "Return only JSON that matches the schema.",
     "Question: Is this message a compliment or positive remark about the bike or its features (e.g., love the wheels, nice exhaust, looks great)?",
-    "Answer with only YES or NO.",
+    "is_compliment=true only when the message has a clear compliment.",
+    "confidence is 0 to 1.",
     "",
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
     `Message: ${text}`
   ].join("\n");
   try {
-    const resp = await client.responses.create({
+    const parsed = await requestStructuredJson({
       model,
-      input: prompt,
-      temperature: 0,
-      max_output_tokens: 20
+      prompt,
+      schemaName: "compliment_classifier",
+      schema,
+      maxOutputTokens: 80,
+      debugTag: "llm-compliment-classifier"
     });
-    const out = resp.output_text?.trim().toLowerCase() ?? "";
-    if (!out) return null;
-    return out.startsWith("y");
+    if (!parsed || typeof parsed !== "object") return null;
+    return !!parsed.is_compliment;
   } catch {
     return null;
   }
@@ -228,10 +270,22 @@ export async function classifyCadenceContextWithLLM(args: {
   const model = process.env.OPENAI_MODEL || "gpt-5-mini";
   const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
   if (!history.length) return null;
+  const schema: { [key: string]: unknown } = {
+    type: "object",
+    additionalProperties: false,
+    required: ["label", "confidence"],
+    properties: {
+      label: {
+        type: "string",
+        enum: ["trade", "pricing", "payments", "inventory", "scheduling", "general"]
+      },
+      confidence: { type: "number" }
+    }
+  };
   const prompt = [
     "You are a classifier for dealership follow-up context.",
-    "Return ONLY one label from this list:",
-    "trade, pricing, payments, inventory, scheduling, general",
+    "Return only JSON that matches the schema.",
+    "label must be one of: trade, pricing, payments, inventory, scheduling, general.",
     "",
     "Guidelines:",
     "- trade: trade-in, appraisal, sell my bike, cash offer, payoff/lien.",
@@ -244,17 +298,16 @@ export async function classifyCadenceContextWithLLM(args: {
     `Recent messages:\n${history.join("\n")}`
   ].join("\n");
   try {
-    const resp = await client.responses.create({
+    const parsed = await requestStructuredJson({
       model,
-      input: prompt,
-      temperature: 0,
-      max_output_tokens: 20
+      prompt,
+      schemaName: "cadence_context_classifier",
+      schema,
+      maxOutputTokens: 80,
+      debugTag: "llm-cadence-context-classifier"
     });
-    const out = resp.output_text?.trim().toLowerCase() ?? "";
-    const label = out.split(/\s+/)[0];
-    if (["trade", "pricing", "payments", "inventory", "scheduling", "general"].includes(label)) {
-      return label;
-    }
+    const label = String(parsed?.label ?? "").toLowerCase().trim();
+    if (["trade", "pricing", "payments", "inventory", "scheduling", "general"].includes(label)) return label;
     return null;
   } catch {
     return null;
