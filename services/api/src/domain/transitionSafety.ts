@@ -20,12 +20,32 @@ export function hasPostSaleOrOwnershipContext(conv: any): boolean {
 
 export function shouldSuppressDispositionCloseout(conv: any, text: string): boolean {
   if (isLogisticsProgressUpdateText(text)) return true;
+  if (isStructuredFinanceInfoText(text)) return true;
   if (!hasPostSaleOrOwnershipContext(conv)) return false;
   const t = String(text ?? "").toLowerCase();
   return (
     /\b(let you know|get back to you|reach out)\b/.test(t) &&
     /\b(dmv|registration|register|title|plate|paperwork|receive|received)\b/.test(t)
   );
+}
+
+function isStructuredFinanceInfoText(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  const hasMonthlyTarget =
+    /\b(under|around|about|stay|no more than|max)\s*\$?\s*\d[\d,]*\s*(?:\/?\s*mo(?:nth)?|per\s*month|monthly)\b/.test(
+      t
+    ) ||
+    /\$\s*\d[\d,]*\s*(?:\/?\s*mo(?:nth)?|per\s*month|monthly)\b/.test(t);
+  const hasDownPaymentDetail =
+    /\bi have\s+\$?\s*\d[\d,]*\s*(?:to\s*)?(?:put\s*)?down\b/.test(t) ||
+    /\$\s*\d[\d,]*\s*(?:cash\s*)?down\b/.test(t) ||
+    /\b(?:put|puts|putting)\s+\$?\s*\d[\d,]*\s*down\b/.test(t);
+  const hasTermDetail = /\b(36|48|60|72|84)\s*months?\b/.test(t);
+  const hasFinanceProgramDetail =
+    /\b(apr|rate|interest|financing|finance special|specials?)\b/.test(t) &&
+    /\$?\s*\d[\d,]*/.test(t);
+  return hasMonthlyTarget || hasDownPaymentDetail || hasTermDetail || hasFinanceProgramDetail;
 }
 
 export function isDispositionParserAccepted(parsed: {

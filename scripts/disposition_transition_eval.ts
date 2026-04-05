@@ -11,6 +11,7 @@ type Case = {
 
 const dmvText = "Thanks Gio! I will let you know as soon as I receive it and get to the DMV.";
 const steppingBackText = "I think I'm going to keep my bike and hold off for now.";
+const financeInfoText = "I have $2,500 to put down and want to stay under $500/month.";
 
 const parsedAccepted = {
   explicitDisposition: true,
@@ -55,6 +56,17 @@ const cases: Case[] = [
         conv: { followUp: { mode: "active" } },
         text: "I'll let you know.",
         parsedAccepted: isDispositionParserAccepted(parsedLow),
+        hasDecision: true
+      })
+  },
+  {
+    id: "structured_finance_info_blocks_closeout_even_if_parser_accepts_disposition",
+    expected: false,
+    run: () =>
+      canApplyDispositionCloseout({
+        conv: { followUp: { mode: "active" } },
+        text: financeInfoText,
+        parsedAccepted: isDispositionParserAccepted(parsedAccepted),
         hasDecision: true
       })
   }
