@@ -6269,6 +6269,97 @@ function getDeterministicAvailabilitySignals(
   return { inventoryCountQuestion, explicitAvailabilityAsk, shouldLookupAvailability };
 }
 
+type RoutePrioritySignalsInput = {
+  text: string;
+  conv: any;
+  lastOutboundText?: string | null;
+  pricingOrPaymentsIntent?: boolean;
+  llmPricingOrPaymentsIntentRaw?: boolean;
+  explicitAvailabilityIntentExtra?: boolean;
+  explicitFinanceTermIntent?: boolean;
+  schedulingSignalsExtra?: {
+    explicit?: boolean;
+    hasDayTime?: boolean;
+    hasDayOnlyAvailability?: boolean;
+    hasDayOnlyRequest?: boolean;
+  };
+};
+
+type RoutePrioritySignals = {
+  availabilitySignals: {
+    inventoryCountQuestion: boolean;
+    explicitAvailabilityAsk: boolean;
+    shouldLookupAvailability: boolean;
+  };
+  schedulingSignals: ReturnType<typeof detectSchedulingSignals>;
+  deterministicAvailabilityLookup: boolean;
+  availabilityIntentOverride: boolean;
+  otherInventoryRequest: boolean;
+  currentTurnFinanceSignal: boolean;
+  financePriorityRaw: boolean;
+  pricingHistoryBleedGuard: boolean;
+  financePriorityOverride: boolean;
+  schedulePriorityOverride: boolean;
+};
+
+function resolveRoutePrioritySignals(input: RoutePrioritySignalsInput): RoutePrioritySignals {
+  const text = String(input.text ?? "");
+  const lower = text.toLowerCase();
+  const availabilitySignals = getDeterministicAvailabilitySignals(lower, input.conv);
+  const schedulingSignalsBase = detectSchedulingSignals(text);
+  const schedulingSignals = {
+    ...schedulingSignalsBase,
+    explicit:
+      schedulingSignalsBase.explicit ||
+      !!input.schedulingSignalsExtra?.explicit,
+    hasDayTime:
+      schedulingSignalsBase.hasDayTime ||
+      !!input.schedulingSignalsExtra?.hasDayTime,
+    hasDayOnlyAvailability:
+      schedulingSignalsBase.hasDayOnlyAvailability ||
+      !!input.schedulingSignalsExtra?.hasDayOnlyAvailability,
+    hasDayOnlyRequest:
+      schedulingSignalsBase.hasDayOnlyRequest ||
+      !!input.schedulingSignalsExtra?.hasDayOnlyRequest
+  };
+  const deterministicAvailabilityLookup = availabilitySignals.shouldLookupAvailability;
+  const availabilityIntentOverride =
+    availabilitySignals.inventoryCountQuestion ||
+    availabilitySignals.explicitAvailabilityAsk ||
+    !!input.explicitAvailabilityIntentExtra;
+  const currentTurnFinanceSignal =
+    hasCurrentTurnFinanceSignals(text) || !!input.explicitFinanceTermIntent;
+  const financePriorityRaw = hasFinancePrioritySignals(text, input.conv, {
+    pricingOrPaymentsIntent: input.pricingOrPaymentsIntent,
+    lastOutboundText: input.lastOutboundText ?? undefined
+  });
+  const pricingHistoryBleedGuard =
+    availabilityIntentOverride &&
+    !currentTurnFinanceSignal &&
+    (input.llmPricingOrPaymentsIntentRaw ?? financePriorityRaw);
+  const financePriorityOverride = pricingHistoryBleedGuard
+    ? false
+    : financePriorityRaw;
+  const schedulePriorityOverride =
+    schedulingSignals.explicit ||
+    schedulingSignals.hasDayTime ||
+    schedulingSignals.hasDayOnlyAvailability ||
+    schedulingSignals.hasDayOnlyRequest;
+
+  return {
+    availabilitySignals,
+    schedulingSignals,
+    deterministicAvailabilityLookup,
+    availabilityIntentOverride,
+    otherInventoryRequest: isOtherInventoryRequestText(lower),
+    currentTurnFinanceSignal,
+    financePriorityRaw,
+    pricingHistoryBleedGuard,
+    financePriorityOverride,
+    schedulePriorityOverride
+  };
+}
+
 function reconcileStateFromRecentManualOutbound(
   conv: any,
   inboundAtIso?: string
@@ -14334,41 +14425,26 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
 
   // Keep regenerate aligned with inbound deterministic availability behavior.
   if (event.provider === "twilio" && channel === "sms") {
-    const availabilitySignals = getDeterministicAvailabilitySignals(regenTextLower, conv);
-    const deterministicRegenAvailability = availabilitySignals.shouldLookupAvailability;
-    const regenAvailabilityIntentOverride =
-      availabilitySignals.inventoryCountQuestion || availabilitySignals.explicitAvailabilityAsk;
-    const regenCurrentTurnFinanceSignal = hasCurrentTurnFinanceSignals(event.body ?? "");
-    const regenFinancePriorityRaw = hasFinancePrioritySignals(event.body ?? "", conv, {
+    const regenRouteSignals = resolveRoutePrioritySignals({
+      text: event.body ?? "",
+      conv,
       lastOutboundText: String(getLastNonVoiceOutbound(conv)?.body ?? "")
     });
-    const regenPricingHistoryBleedGuard =
-      regenAvailabilityIntentOverride &&
-      !regenCurrentTurnFinanceSignal &&
-      regenFinancePriorityRaw;
-    const regenFinancePriorityOverride = regenPricingHistoryBleedGuard ? false : regenFinancePriorityRaw;
-    const regenSchedulingSignals = detectSchedulingSignals(event.body ?? "");
-    const regenSchedulePriorityOverride =
-      regenSchedulingSignals.explicit ||
-      regenSchedulingSignals.hasDayTime ||
-      regenSchedulingSignals.hasDayOnlyAvailability ||
-      regenSchedulingSignals.hasDayOnlyRequest;
-    const regenOtherInventoryRequest = isOtherInventoryRequestText(regenTextLower);
     const regenRouteDecision = nextActionFromState({
       provider: event.provider,
       channel,
       isShortAck: false,
-      deterministicAvailabilityLookup: deterministicRegenAvailability,
-      availabilityIntentOverride: regenAvailabilityIntentOverride,
-      financePriorityOverride: regenFinancePriorityOverride,
-      schedulePriorityOverride: regenSchedulePriorityOverride
+      deterministicAvailabilityLookup: regenRouteSignals.deterministicAvailabilityLookup,
+      availabilityIntentOverride: regenRouteSignals.availabilityIntentOverride,
+      financePriorityOverride: regenRouteSignals.financePriorityOverride,
+      schedulePriorityOverride: regenRouteSignals.schedulePriorityOverride
     });
     if (regenRouteDecision.kind === "deterministic_availability_lookup") {
       const availabilityResolution = await resolveDeterministicAvailabilityReply({
         conv,
         text: event.body ?? "",
         parsedAvailability: null,
-        otherInventoryRequest: regenOtherInventoryRequest
+        otherInventoryRequest: regenRouteSignals.otherInventoryRequest
       });
       const reply =
         availabilityResolution.kind === "reply"
@@ -14795,33 +14871,21 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (event.provider === "twilio" && shouldSuppressShortAckDraft(event.body ?? "")) {
     return respondRegenerateSkipped("short_ack_no_action");
   }
-  const regenSchedulingSignalsForHint = detectSchedulingSignals(event.body ?? "");
-  const regenAvailabilitySignalsForHint = getDeterministicAvailabilitySignals(regenTextLower, conv);
-  const regenCurrentTurnFinanceSignalForHint = hasCurrentTurnFinanceSignals(event.body ?? "");
-  const regenFinancePriorityHintRaw = hasFinancePrioritySignals(event.body ?? "", conv, {
+  const regenHintSignals = resolveRoutePrioritySignals({
+    text: event.body ?? "",
+    conv,
     lastOutboundText: String(getLastNonVoiceOutbound(conv)?.body ?? "")
   });
-  const regenAvailabilityIntentHint =
-    regenAvailabilitySignalsForHint.inventoryCountQuestion ||
-    regenAvailabilitySignalsForHint.explicitAvailabilityAsk;
-  const regenPricingHistoryBleedGuardForHint =
-    regenAvailabilityIntentHint &&
-    !regenCurrentTurnFinanceSignalForHint &&
-    regenFinancePriorityHintRaw;
-  const regenFinancePriorityHint = regenPricingHistoryBleedGuardForHint
-    ? false
-    : regenFinancePriorityHintRaw;
+  const regenAvailabilityIntentHint = regenHintSignals.availabilityIntentOverride;
+  const regenFinancePriorityHint = regenHintSignals.financePriorityOverride;
   const regenPrimaryIntentHint: "pricing_payments" | "scheduling" | "callback" | "availability" | "general" =
     regenFinancePriorityHint
       ? "pricing_payments"
-      : regenSchedulingSignalsForHint.explicit ||
-          regenSchedulingSignalsForHint.hasDayTime ||
-          regenSchedulingSignalsForHint.hasDayOnlyAvailability ||
-          regenSchedulingSignalsForHint.hasDayOnlyRequest
+      : regenHintSignals.schedulePriorityOverride
         ? "scheduling"
         : !regenTextingTypoJoke && detectCallbackText(event.body ?? "")
           ? "callback"
-          : regenAvailabilityIntentHint || isExplicitAvailabilityQuestion(event.body ?? "")
+          : regenAvailabilityIntentHint
             ? "availability"
             : "general";
   const regenPricingIntentHint = regenPrimaryIntentHint === "pricing_payments";
@@ -15622,10 +15686,18 @@ if (authToken && signature) {
       const systemMode = webhookMode;
       if (systemMode === "suggest") {
         appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        recordRouteOutcome("live", "finance_followup_continuation_draft", {
+          convId: conv.id,
+          leadKey: conv.leadKey
+        });
         const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
         return res.status(200).type("text/xml").send(twiml);
       }
       appendOutbound(conv, event.to, event.from, reply, "twilio");
+      recordRouteOutcome("live", "finance_followup_continuation_send", {
+        convId: conv.id,
+        leadKey: conv.leadKey
+      });
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
         reply
       )}</Message>\n</Response>`;
@@ -16769,25 +16841,23 @@ if (authToken && signature) {
     lastOutbound?.body &&
     /(on hold|hold with deposit|deposit|sale pending|pending|sold|already sold)/i.test(lastOutbound.body);
   const textLower = inboundLower;
-  const availabilitySignalsEarly = getDeterministicAvailabilitySignals(textLower, conv);
-  const inventoryCountQuestion = availabilitySignalsEarly.inventoryCountQuestion;
-  const deterministicAvailabilityLookup = availabilitySignalsEarly.shouldLookupAvailability;
-  const deterministicAvailabilityIntentBase =
-    inventoryCountQuestion || availabilitySignalsEarly.explicitAvailabilityAsk;
-  const otherInventoryRequest = isOtherInventoryRequestText(textLower);
-  const schedulingSignalsBase = detectSchedulingSignals(event.body);
   const preParserExplicitFinanceTermIntent =
     /\b\d{2,3}\s*(month|months|mo)\b/i.test(String(event.body ?? "")) ||
     /\brun\s+(it|that|the numbers?)\s+for\s+\d{2,3}\b/i.test(String(event.body ?? ""));
-  const preParserFinanceSignal =
-    isPaymentText(event.body ?? "") ||
-    isDownPaymentQuestion(event.body ?? "") ||
-    preParserExplicitFinanceTermIntent;
-  const preParserSchedulingSignal =
-    schedulingSignalsBase.explicit ||
-    schedulingSignalsBase.hasDayTime ||
-    schedulingSignalsBase.hasDayOnlyAvailability ||
-    schedulingSignalsBase.hasDayOnlyRequest;
+  const preParserRouteSignals = resolveRoutePrioritySignals({
+    text: event.body ?? "",
+    conv,
+    lastOutboundText,
+    explicitFinanceTermIntent: preParserExplicitFinanceTermIntent
+  });
+  const availabilitySignalsEarly = preParserRouteSignals.availabilitySignals;
+  const inventoryCountQuestion = availabilitySignalsEarly.inventoryCountQuestion;
+  const deterministicAvailabilityLookup = preParserRouteSignals.deterministicAvailabilityLookup;
+  const deterministicAvailabilityIntentBase = preParserRouteSignals.availabilityIntentOverride;
+  const otherInventoryRequest = preParserRouteSignals.otherInventoryRequest;
+  const schedulingSignalsBase = preParserRouteSignals.schedulingSignals;
+  const preParserFinanceSignal = preParserRouteSignals.currentTurnFinanceSignal;
+  const preParserSchedulingSignal = preParserRouteSignals.schedulePriorityOverride;
   const preParserNonWatchPrimaryIntent = preParserFinanceSignal || preParserSchedulingSignal;
   const leadSourceText = String(conv.lead?.source ?? "").toLowerCase();
   const isTradeLead =
@@ -17231,19 +17301,16 @@ if (authToken && signature) {
     (dialogActAccepted && dialogActParse?.topic === "pricing") ||
     (pricingPaymentsAccepted && pricingPaymentsParse?.intent === "pricing");
   const llmPricingOrPaymentsIntentRaw = llmPricingIntentRaw || llmPaymentsIntentRaw;
-  const explicitFinanceTermIntent =
-    /\b\d{2,3}\s*(month|months|mo)\b/i.test(String(event.body ?? "")) ||
-    /\brun\s+(it|that|the numbers?)\s+for\s+\d{2,3}\b/i.test(String(event.body ?? ""));
-  const explicitAvailabilitySignalThisTurn =
-    deterministicAvailabilityIntentBase ||
-    availabilitySignalsEarly.explicitAvailabilityAsk ||
-    isExplicitAvailabilityQuestion(event.body ?? "");
-  const currentTurnFinanceSignal =
-    hasCurrentTurnFinanceSignals(event.body ?? "") || explicitFinanceTermIntent;
-  const pricingHistoryBleedGuard =
-    explicitAvailabilitySignalThisTurn &&
-    !currentTurnFinanceSignal &&
-    llmPricingOrPaymentsIntentRaw;
+  const explicitFinanceTermIntent = preParserExplicitFinanceTermIntent;
+  const routeSignalsForRawPricing = resolveRoutePrioritySignals({
+    text: event.body ?? "",
+    conv,
+    lastOutboundText,
+    llmPricingOrPaymentsIntentRaw,
+    explicitFinanceTermIntent
+  });
+  const explicitAvailabilitySignalThisTurn = routeSignalsForRawPricing.availabilityIntentOverride;
+  const pricingHistoryBleedGuard = routeSignalsForRawPricing.pricingHistoryBleedGuard;
   const llmPaymentsIntent = pricingHistoryBleedGuard ? false : llmPaymentsIntentRaw;
   const llmPricingIntent = pricingHistoryBleedGuard ? false : llmPricingIntentRaw;
   const llmPricingOrPaymentsIntent = pricingHistoryBleedGuard
@@ -17263,10 +17330,14 @@ if (authToken && signature) {
     return hasInsurance && hasQuoteOrRate && hasVisitTiming && !hasExplicitFinanceAsk;
   })();
   const paymentBudgetContext = resolvePaymentBudgetForConversation(conv, event.body ?? "");
-  const financePrioritySignal = hasFinancePrioritySignals(event.body ?? "", conv, {
+  const routeSignalsForPricing = resolveRoutePrioritySignals({
+    text: event.body ?? "",
+    conv,
+    lastOutboundText,
     pricingOrPaymentsIntent: llmPricingOrPaymentsIntent || explicitFinanceTermIntent,
-    lastOutboundText
+    explicitFinanceTermIntent
   });
+  const financePrioritySignal = routeSignalsForPricing.financePriorityRaw;
   const pricingSignal =
     !insuranceStatusUpdateOnly &&
     (llmPricingOrPaymentsIntent ||
@@ -17570,18 +17641,29 @@ if (authToken && signature) {
     ? "pricing_payments"
     : schedulingPrimaryIntent
       ? "scheduling"
-      : callbackPrimaryIntent
-        ? "callback"
-        : availabilityPrimaryIntent
-          ? "availability"
-          : "general";
-  const deterministicAvailabilityIntentOverride =
-    deterministicAvailabilityIntentBase || availabilityPrimaryIntent;
-  const financePriorityOverride = hasFinancePrioritySignals(event.body ?? "", conv, {
+    : callbackPrimaryIntent
+      ? "callback"
+      : availabilityPrimaryIntent
+        ? "availability"
+        : "general";
+  const routeSignalsFinal = resolveRoutePrioritySignals({
+    text: event.body ?? "",
+    conv,
+    lastOutboundText,
     pricingOrPaymentsIntent,
-    lastOutboundText
+    llmPricingOrPaymentsIntentRaw: llmPricingOrPaymentsIntent,
+    explicitAvailabilityIntentExtra: availabilityPrimaryIntent,
+    explicitFinanceTermIntent,
+    schedulingSignalsExtra: {
+      explicit: schedulingSignals.explicit,
+      hasDayTime: schedulingSignals.hasDayTime,
+      hasDayOnlyAvailability: schedulingSignals.hasDayOnlyAvailability,
+      hasDayOnlyRequest: schedulingSignals.hasDayOnlyRequest
+    }
   });
-  const schedulePriorityOverride = schedulingPrimaryIntent;
+  const deterministicAvailabilityIntentOverride = routeSignalsFinal.availabilityIntentOverride;
+  const financePriorityOverride = routeSignalsFinal.financePriorityOverride;
+  const schedulePriorityOverride = routeSignalsFinal.schedulePriorityOverride;
   logDecisionTrace("live.intent_routing", {
     inboundProvider: event.provider,
     turnPrimaryIntent,
@@ -17604,24 +17686,23 @@ if (authToken && signature) {
       conv.scheduleSoft = undefined;
     }
   }
+  const financeFollowUpContinuationSignal = (() => {
+    const downPaymentProvided = paymentBudgetContext.downPayment != null;
+    const askedDownPaymentRecently =
+      /\b(how much can you put down|how much (?:are|can) you put down|money down|down payment|cash down)\b/i.test(
+        lastOutboundText
+      );
+    return llmPaymentsIntent || (downPaymentProvided && askedDownPaymentRecently);
+  })();
   if (
     event.provider === "twilio" &&
+    turnPrimaryIntent === "pricing_payments" &&
+    !explicitAvailabilitySignalThisTurn &&
     !schedulingSignals.hasDayTime &&
     !schedulingSignals.hasDayOnlyRequest &&
     !schedulingSignals.hasDayOnlyAvailability &&
     !explicitScheduleSignal &&
-    (() => {
-      const downPaymentProvided = paymentBudgetContext.downPayment != null;
-      const askedDownPaymentRecently =
-        /\b(how much can you put down|how much (?:are|can) you put down|money down|down payment|cash down)\b/i.test(
-          lastOutboundText
-        );
-      return (
-        llmPaymentsIntent ||
-        (pricingPaymentsAccepted && pricingPaymentsParse?.intent === "payments") ||
-        (downPaymentProvided && askedDownPaymentRecently)
-      );
-    })()
+    financeFollowUpContinuationSignal
   ) {
     const monthlyBudget = paymentBudgetContext.monthlyBudget ?? null;
     const termMonths = paymentBudgetContext.termMonths ?? null;
