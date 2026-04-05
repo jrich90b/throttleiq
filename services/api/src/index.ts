@@ -17138,14 +17138,14 @@ if (authToken && signature) {
     return hasInsurance && hasQuoteOrRate && hasVisitTiming && !hasExplicitFinanceAsk;
   })();
   const paymentBudgetContext = resolvePaymentBudgetForConversation(conv, event.body ?? "");
-  const explicitBudgetSignal =
-    paymentBudgetContext.monthlyBudget != null ||
-    paymentBudgetContext.termMonths != null ||
-    paymentBudgetContext.downPayment != null;
+  const financePrioritySignal = hasFinancePrioritySignals(event.body ?? "", conv, {
+    pricingOrPaymentsIntent: llmPricingOrPaymentsIntent || explicitFinanceTermIntent,
+    lastOutboundText
+  });
   const pricingSignal =
     !insuranceStatusUpdateOnly &&
     (llmPricingOrPaymentsIntent ||
-      explicitBudgetSignal ||
+      financePrioritySignal ||
       isPricingText(event.body ?? "") ||
       isPaymentText(event.body ?? ""));
   const scheduleFromDialogAct = llmSchedulingIntent && !llmPricingOrPaymentsIntent;
