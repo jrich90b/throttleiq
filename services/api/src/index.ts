@@ -5939,6 +5939,74 @@ function isExplicitAvailabilityQuestion(text: string): boolean {
   );
 }
 
+function hasPricingDialogContext(conv: any): boolean {
+  return (
+    String(getDialogState(conv) ?? "").startsWith("pricing_") ||
+    hasRecentPricingPromptContext(conv)
+  );
+}
+
+function hasFinancePrioritySignals(
+  text: string,
+  conv: any,
+  opts?: { pricingOrPaymentsIntent?: boolean }
+): boolean {
+  if (opts?.pricingOrPaymentsIntent) return true;
+  const lower = String(text ?? "").toLowerCase();
+  if (
+    /\b(financing|finance|apr|credit score|monthly|per month|down payment|term|0%\s*apr)\b/i.test(
+      lower
+    )
+  ) {
+    return true;
+  }
+  if (isPricingText(text) || isPaymentText(text) || isDownPaymentQuestion(text)) return true;
+  if (extractMonthlyBudgetLimit(text) != null) return true;
+  if (extractPaymentTermMonths(text) != null) return true;
+  if (parseDownPaymentForBudget(text)?.amount != null) return true;
+  const bareBudget = extractBareBudgetAmount(text);
+  if (bareBudget != null && hasPricingDialogContext(conv)) return true;
+  return false;
+}
+
+function getDeterministicAvailabilitySignals(
+  text: string,
+  conv: any
+): {
+  inventoryCountQuestion: boolean;
+  shouldLookupAvailability: boolean;
+} {
+  const lower = String(text ?? "").toLowerCase();
+  const inventoryCountQuestion =
+    /\b(only one|just one|is that all|any others|how many|how many do you have|only one you have)\b/i.test(
+      lower
+    );
+  const availabilityPhraseDetected =
+    /\b(in[-\s]?stock|available|availability|do you have|have .* in[-\s]?stock|any .* in[-\s]?stock|do you carry|carry any)\b/i.test(
+      lower
+    );
+  const correctionCue = /\b(i meant|actually|sorry|correction|typo)\b/i.test(lower);
+  const mentionsModel = !!findMentionedModel(lower);
+  const mentionsColor = !!extractColorToken(lower);
+  const mentionsFinish = !!extractFinishToken(lower);
+  const mentionsCondition = !!normalizeWatchCondition(lower);
+  const mentionsYear = !!extractYearSingle(lower);
+  const hasAvailabilityContext =
+    !!conv.inventoryContext?.model ||
+    !!conv.lead?.vehicle?.model ||
+    !!conv.lead?.vehicle?.description;
+  const hasAvailabilityDetail =
+    mentionsModel || mentionsColor || mentionsFinish || mentionsCondition || mentionsYear;
+  const referencesContextUnit =
+    referencesSpecificInventoryUnit(lower) ||
+    /\b(this|that|the)\s+(cvo|street glide|road glide|tri glide|bike|unit|one)\b/.test(lower);
+  const shouldLookupAvailability =
+    inventoryCountQuestion ||
+    ((availabilityPhraseDetected || correctionCue) &&
+      (hasAvailabilityDetail || hasAvailabilityContext || referencesContextUnit));
+  return { inventoryCountQuestion, shouldLookupAvailability };
+}
+
 function referencesSpecificInventoryUnit(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
@@ -13358,29 +13426,14 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
 
   // Keep regenerate aligned with inbound deterministic availability behavior.
   if (event.provider === "twilio" && channel === "sms") {
-    const availabilityPhraseDetected = /\b(in[-\s]?stock|available|availability|do you have|have .* in[-\s]?stock|any .* in[-\s]?stock|do you carry|carry any)\b/i.test(
-      regenTextLower
-    );
-    const correctionCue = /\b(i meant|actually|sorry|correction|typo)\b/i.test(regenTextLower);
+    const availabilitySignals = getDeterministicAvailabilitySignals(regenTextLower, conv);
     const mentionsModel = findMentionedModel(regenTextLower);
     const mentionsColor = sanitizeColorPhrase(extractColorToken(regenTextLower));
     const mentionsFinish = extractFinishToken(regenTextLower);
     const mentionsCondition = normalizeWatchCondition(regenTextLower);
     const mentionsYear = extractYearSingle(regenTextLower)?.toString() ?? null;
-    const hasContextModel =
-      !!conv.inventoryContext?.model || !!conv.lead?.vehicle?.model || !!conv.lead?.vehicle?.description;
-    const hasAvailabilityDetail =
-      !!mentionsModel || !!mentionsColor || !!mentionsFinish || !!mentionsCondition || !!mentionsYear;
-    const deterministicRegenAvailability =
-      (availabilityPhraseDetected || correctionCue) &&
-      hasAvailabilityDetail &&
-      (hasContextModel || !!mentionsModel);
-    const regenFinancePriorityOverride =
-      /\b(financing|finance|apr|credit score|monthly|per month|down payment|term|0%\s*apr)\b/i.test(
-        regenTextLower
-      ) ||
-      isPaymentText(event.body ?? "") ||
-      isDownPaymentQuestion(event.body ?? "");
+    const deterministicRegenAvailability = availabilitySignals.shouldLookupAvailability;
+    const regenFinancePriorityOverride = hasFinancePrioritySignals(event.body ?? "", conv);
     const regenSchedulePriorityOverride = detectSchedulingSignals(event.body).explicit;
     if (deterministicRegenAvailability && !regenFinancePriorityOverride && !regenSchedulePriorityOverride) {
       const model =
@@ -15812,29 +15865,9 @@ if (authToken && signature) {
     lastOutbound?.body &&
     /(on hold|hold with deposit|deposit|sale pending|pending|sold|already sold)/i.test(lastOutbound.body);
   const textLower = inboundLower;
-  const inventoryCountQuestion =
-    /\b(only one|just one|is that all|any others|how many|how many do you have|only one you have)\b/i.test(
-      textLower
-    );
-  const availabilityPhraseDetected = /\b(in[-\s]?stock|available|availability|do you have|have .* in[-\s]?stock|any .* in[-\s]?stock|do you carry|carry any)\b/i.test(
-    textLower
-  );
-  const correctionCue = /\b(i meant|actually|sorry|correction|typo)\b/i.test(textLower);
-  const mentionedModelEarly = findMentionedModel(textLower);
-  const colorCueEarly = extractColorToken(textLower);
-  const finishCueEarly = extractFinishToken(textLower);
-  const conditionCueEarly = normalizeWatchCondition(textLower);
-  const yearCueEarly = extractYearSingle(textLower);
-  const hasAvailabilityContextEarly =
-    !!conv.inventoryContext?.model ||
-    !!conv.lead?.vehicle?.model ||
-    !!conv.lead?.vehicle?.description;
-  const hasAvailabilityDetailEarly =
-    !!mentionedModelEarly || !!colorCueEarly || !!finishCueEarly || !!conditionCueEarly || !!yearCueEarly;
-  const availabilityRefinementDetectedEarly =
-    correctionCue && hasAvailabilityDetailEarly;
-  const deterministicAvailabilityLookup =
-    inventoryCountQuestion || availabilityPhraseDetected || availabilityRefinementDetectedEarly;
+  const availabilitySignalsEarly = getDeterministicAvailabilitySignals(textLower, conv);
+  const inventoryCountQuestion = availabilitySignalsEarly.inventoryCountQuestion;
+  const deterministicAvailabilityLookup = availabilitySignalsEarly.shouldLookupAvailability;
   const otherInventoryRequest =
     /\b(any|what|do you have|got)\s+(other|another|different|more)\b/i.test(textLower) ||
     (/\b(other|another|different|else|more)\b/i.test(textLower) &&
@@ -16590,11 +16623,9 @@ if (authToken && signature) {
         : availabilityPrimaryIntent
           ? "availability"
           : "general";
-  const financePriorityOverride =
-    pricingOrPaymentsIntent ||
-    /\b(financing|finance|apr|credit score|monthly|per month|down payment|term|0%\s*apr)\b/i.test(
-      textLower
-    );
+  const financePriorityOverride = hasFinancePrioritySignals(event.body ?? "", conv, {
+    pricingOrPaymentsIntent
+  });
   const schedulePriorityOverride = schedulingPrimaryIntent;
   if (turnPrimaryIntent === "scheduling" && getDialogState(conv) === "pricing_need_model") {
     setDialogState(conv, "schedule_request");
