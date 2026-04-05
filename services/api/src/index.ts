@@ -331,6 +331,7 @@ app.get("/debug/route-outcomes/recent", (req, res) => {
   }
   const matchesPhone = (digits: string) => {
     if (!phoneVariants.size) return true;
+    if (!digits) return false;
     for (const variant of phoneVariants) {
       if (!variant) continue;
       if (digits === variant || digits.endsWith(variant) || variant.endsWith(digits)) {
@@ -391,6 +392,7 @@ app.get("/debug/stuck-turns", (req, res) => {
   }
   const matchesPhone = (digits: string) => {
     if (!phoneVariants.size) return true;
+    if (!digits) return false;
     for (const variant of phoneVariants) {
       if (!variant) continue;
       if (digits === variant || digits.endsWith(variant) || variant.endsWith(digits)) {
@@ -421,8 +423,11 @@ app.get("/debug/stuck-turns", (req, res) => {
       if (hasOutboundAfter) return null;
       const ageSec = Math.floor((nowMs - inboundAtMs) / 1000);
       if (ageSec < olderThanSec) return null;
-      if (!matchesPhone(String(conv.leadKey ?? "").replace(/\D/g, "")) &&
-          !matchesPhone(String(conv.id ?? "").replace(/\D/g, ""))) {
+      if (
+        !matchesPhone(String(conv.leadKey ?? "").replace(/\D/g, "")) &&
+        !matchesPhone(String(conv.id ?? "").replace(/\D/g, "")) &&
+        !matchesPhone(String(conv.lead?.phone ?? "").replace(/\D/g, ""))
+      ) {
         return null;
       }
       return {

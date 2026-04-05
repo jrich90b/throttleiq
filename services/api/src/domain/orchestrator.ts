@@ -402,7 +402,7 @@ function detectExactNumberPressure(text: string): boolean {
 function detectPaymentPressure(text: string): boolean {
   const t = text.toLowerCase();
   return (
-    /(monthly payment|payments?\b|what.*payment|payment.*(month|monthly)|how much.*(payment|monthly)|how much down|money down|put (?:any )?money down|put down|to put down|no money down|zero down|\$0 down|don't have to put anything down|do not have to put anything down|dont have to put anything down|\$\s*\d+[,\d]*\s*(\/\s*mo|\/\s*month|per month|a month|monthly)|\bapr\b|term)/.test(
+    /(monthly payment|payments?\b|what.*payment|payment.*(month|monthly)|how much.*(payment|monthly)|how much down|money down|put (?:any )?money down|put down|to put down|no money down|zero down|\$0 down|don't have to put anything down|do not have to put anything down|dont have to put anything down|(?:\$?\s*)\d+[,\d]*\s*(\/\s*mo|\/\s*month|per month|a month|monthly)|\bapr\b|term)/.test(
       t
     )
   );
@@ -743,7 +743,10 @@ function detectPaymentFollowUp(text: string, history: { direction: "in" | "out";
   if (!looksLikePaymentEstimateMessage(lastOutbound)) return false;
   const hasTerm = extractPreferredTermMonths(t) != null;
   const hasDown = /(down|down payment|deposit|dp|put down)/.test(t);
-  return hasTerm || hasDown;
+  const hasBudget =
+    extractMonthlyBudget(t) != null ||
+    /\b\d{2,4}\s*(?:\/\s*mo|\/\s*month|per month|a month|monthly)\b/i.test(t);
+  return hasTerm || hasDown || hasBudget || hasZeroDownSignal(t);
 }
 
 function detectFinanceApplyFollowUp(
@@ -1044,7 +1047,7 @@ function extractMonthlyBudget(text?: string | null): number | null {
   const t = String(text);
   const capped = t.match(/\b(?:no more than|max(?:imum)?|under|<=?)\s*\$?\s*([0-9][0-9,]{1,6})\b/i);
   if (capped?.[1]) return Number(capped[1].replace(/,/g, ""));
-  const dollar = t.match(/\$\s*([0-9][0-9,]{1,6})\b/);
+  const dollar = t.match(/\$?\s*([0-9][0-9,]{1,6})\s*(?:\/\s*mo|\/\s*month|per month|a month|monthly)\b/i);
   if (dollar && /\b(month|monthly|mo)\b/i.test(t)) {
     return Number(dollar[1].replace(/,/g, ""));
   }
@@ -2391,8 +2394,12 @@ export async function orchestrateInbound(
       });
       const numericYear = yearForRange ? Number(yearForRange) : null;
       const paymentFollowUp = detectPaymentFollowUp(event.body, history ?? []);
-      const paymentQuestion = detectPaymentPressure(event.body) || paymentFollowUp;
       const targetMonthly = extractMonthlyBudget(event.body);
+      const paymentQuestion =
+        detectPaymentPressure(event.body) ||
+        paymentFollowUp ||
+        targetMonthly != null ||
+        hasZeroDownSignal(event.body);
       const specialsQuestion = detectDealsOrFinanceSpecialsQuestion(event.body);
       const downQuestionOnly =
         detectDownPaymentQuestion(event.body) &&
