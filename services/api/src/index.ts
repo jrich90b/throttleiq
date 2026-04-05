@@ -5996,7 +5996,7 @@ function hasPricingDialogContext(conv: any): boolean {
 function hasFinancePrioritySignals(
   text: string,
   conv: any,
-  opts?: { pricingOrPaymentsIntent?: boolean }
+  opts?: { pricingOrPaymentsIntent?: boolean; lastOutboundText?: string | null }
 ): boolean {
   if (opts?.pricingOrPaymentsIntent) return true;
   const lower = String(text ?? "").toLowerCase();
@@ -6013,6 +6013,21 @@ function hasFinancePrioritySignals(
   if (parseDownPaymentForBudget(text)?.amount != null) return true;
   const bareBudget = extractBareBudgetAmount(text);
   if (bareBudget != null && hasPricingDialogContext(conv)) return true;
+  const lastOutboundText =
+    String(opts?.lastOutboundText ?? "").trim() ||
+    String(getLastNonVoiceOutbound(conv)?.body ?? "").trim();
+  if (lastOutboundText) {
+    const askedFinanceFollowUpRecently =
+      /\b(how much can you put down|about how much down|how much down|money down|down payment|cash down|what monthly payment|what monthly|target monthly|60,?\s*72,?\s*or\s*84|60 months|72 months|84 months|which term|run (?:it|that|the numbers?))/i.test(
+        lastOutboundText
+      );
+    const hasFinanceValueReply =
+      parseDownPaymentForBudget(text)?.amount != null ||
+      extractMonthlyBudgetLimit(text) != null ||
+      extractPaymentTermMonths(text) != null ||
+      /\b(yes i have|i have (?:a )?trade|no trade|no trade-in|without a trade)\b/i.test(lower);
+    if (askedFinanceFollowUpRecently && hasFinanceValueReply) return true;
+  }
   return false;
 }
 
@@ -13894,7 +13909,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const deterministicRegenAvailability = availabilitySignals.shouldLookupAvailability;
     const regenAvailabilityIntentOverride =
       availabilitySignals.inventoryCountQuestion || availabilitySignals.explicitAvailabilityAsk;
-    const regenFinancePriorityOverride = hasFinancePrioritySignals(event.body ?? "", conv);
+    const regenFinancePriorityOverride = hasFinancePrioritySignals(event.body ?? "", conv, {
+      lastOutboundText: String(getLastNonVoiceOutbound(conv)?.body ?? "")
+    });
     const regenSchedulingSignals = detectSchedulingSignals(event.body ?? "");
     const regenSchedulePriorityOverride =
       regenSchedulingSignals.explicit ||
@@ -14340,7 +14357,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return respondRegenerateSkipped("short_ack_no_action");
   }
   const regenSchedulingSignalsForHint = detectSchedulingSignals(event.body ?? "");
-  const regenFinancePriorityHint = hasFinancePrioritySignals(event.body ?? "", conv);
+  const regenFinancePriorityHint = hasFinancePrioritySignals(event.body ?? "", conv, {
+    lastOutboundText: String(getLastNonVoiceOutbound(conv)?.body ?? "")
+  });
   const regenPrimaryIntentHint: "pricing_payments" | "scheduling" | "callback" | "availability" | "general" =
     regenFinancePriorityHint
       ? "pricing_payments"
@@ -17061,7 +17080,8 @@ if (authToken && signature) {
   const deterministicAvailabilityIntentOverride =
     deterministicAvailabilityIntentBase || availabilityPrimaryIntent;
   const financePriorityOverride = hasFinancePrioritySignals(event.body ?? "", conv, {
-    pricingOrPaymentsIntent
+    pricingOrPaymentsIntent,
+    lastOutboundText
   });
   const schedulePriorityOverride = schedulingPrimaryIntent;
   logDecisionTrace("live.intent_routing", {
@@ -18104,10 +18124,7 @@ if (authToken && signature) {
     return correctionCue || contextCue || hasAvailabilityContext;
   })();
   const availabilityExplicit =
-    ((turnPrimaryIntent === "availability" || llmAvailabilityIntent || availabilityRefinementSignal) ||
-      /(in[-\s]?stock|available|availability|do you have|have .* in[-\s]?stock|any .* in[-\s]?stock|do you carry|carry any)/i.test(
-        textLower
-      )) &&
+    (turnPrimaryIntent === "availability" || llmAvailabilityIntent || availabilityRefinementSignal) &&
     !/\b(sound system|audio system|stereo|speakers?|speaker system)\b/i.test(textLower) &&
     turnPrimaryIntent !== "pricing_payments" &&
     turnPrimaryIntent !== "callback" &&

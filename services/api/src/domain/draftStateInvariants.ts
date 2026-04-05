@@ -41,6 +41,18 @@ function looksLikeInventoryPromptDraft(text: string): boolean {
   );
 }
 
+function looksLikeSchedulingPromptDraft(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\b(what day and time works|what day works|what time works|what time were you thinking)\b/.test(t) ||
+    /\b(are you looking to set a time|want me to lock that in|want me to book|do any of these times work)\b/.test(
+      t
+    ) ||
+    /\b(appointment|schedule|book)\b/.test(t)
+  );
+}
+
 function hasFinanceTurnSignal(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
@@ -50,6 +62,16 @@ function hasFinanceTurnSignal(text: string): boolean {
     ) ||
     /\$\s?\d[\d,]*(?:\s*\/\s*(?:mo|month))?/.test(t) ||
     /\b\d{2,3}\s*(?:mo|month|months)\b/.test(t)
+  );
+}
+
+function hasSchedulingTurnSignal(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(t) ||
+    /\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/.test(t) ||
+    /\b(schedule|book|appointment|time works)\b/.test(t)
   );
 }
 
@@ -75,6 +97,7 @@ export function applyDraftStateInvariants(
   const dialogState = String(input.dialogState ?? "").toLowerCase();
   const inboundText = String(input.inboundText ?? "");
   const inventoryPrompt = looksLikeInventoryPromptDraft(draftText);
+  const schedulingPrompt = looksLikeSchedulingPromptDraft(draftText);
 
   if (isShortAckText(inboundText) && inventoryPrompt) {
     return {
@@ -105,6 +128,14 @@ export function applyDraftStateInvariants(
       allow: false,
       draftText: "",
       reason: "finance_priority_inventory_prompt_guard"
+    };
+  }
+
+  if (hasFinanceTurnSignal(inboundText) && !hasSchedulingTurnSignal(inboundText) && schedulingPrompt) {
+    return {
+      allow: false,
+      draftText: "",
+      reason: "finance_priority_schedule_prompt_guard"
     };
   }
 

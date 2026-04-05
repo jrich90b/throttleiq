@@ -89,6 +89,35 @@ const cases: Case[] = [
     }
   },
   {
+    id: "joseph_monthly_target_blocks_availability_offer",
+    expectedAllow: false,
+    expectedReason: "finance_priority_inventory_prompt_guard",
+    input: {
+      inboundText: "I really want to stay under $400.",
+      draftText:
+        "Yes — we do have a new 2026 Street Glide in Dark Billiard Gray Chrome Trim in stock. Would you like to stop by to take a look?",
+      followUpMode: "active",
+      followUpReason: "pricing",
+      dialogState: "pricing_answered",
+      classificationBucket: "inventory_interest",
+      classificationCta: "ask_payment"
+    }
+  },
+  {
+    id: "finance_docs_blocks_schedule_reask",
+    expectedAllow: false,
+    expectedReason: "finance_priority_schedule_prompt_guard",
+    input: {
+      inboundText: "Before I come in, what do I need to bring in for financing?",
+      draftText: "Absolutely — what day and time works for you?",
+      followUpMode: "manual_handoff",
+      followUpReason: "manual_appointment",
+      dialogState: "none",
+      classificationBucket: "general_inquiry",
+      classificationCta: "unknown"
+    }
+  },
+  {
     id: "finance_docs_question_is_allowed",
     expectedAllow: true,
     input: {
