@@ -1249,6 +1249,10 @@ export async function orchestrateInbound(
     bucket?: string | null;
     cta?: string | null;
     primaryIntentHint?: PrimaryIntentHint | null;
+    availabilityIntentHint?: boolean;
+    schedulingIntentHint?: boolean;
+    pricingIntentHint?: boolean;
+    financeIntentHint?: boolean;
     lead?: LeadProfile | null;
     pricingAttempts?: number;
     allowSchedulingOffer?: boolean;
@@ -1549,6 +1553,13 @@ export async function orchestrateInbound(
   const pricingIntent =
     detectPricingOrPayment(event.body, intent) ||
     /request a quote|raq/i.test(ctx?.leadSource ?? "");
+  const availabilityIntentHint =
+    ctx?.availabilityIntentHint === true || primaryIntentHint === "availability";
+  const schedulingIntentHint =
+    ctx?.schedulingIntentHint === true || primaryIntentHint === "scheduling";
+  const pricingIntentHint =
+    ctx?.pricingIntentHint === true || primaryIntentHint === "pricing_payments";
+  const financePriorityHint = ctx?.financeIntentHint === true || pricingIntentHint;
 
   if (isUsedDealerTrustStatement(event.body)) {
     const model = normalizeModelLabel(
@@ -1866,10 +1877,18 @@ export async function orchestrateInbound(
   const financeRequest =
     detectFinanceRequest(event.body) || detectFinanceApplyFollowUp(event.body, history ?? []);
   const explicitTradeRequest = detectTradeRequest(event.body);
-  const availabilityAskedMulti = /(available|availability|still there|in stock|do you have|have any)/i.test(event.body);
-  const wantsAvailability = (availabilityAskedMulti || intent === "AVAILABILITY") && !explicitTradeRequest;
-  const wantsScheduling = hasSchedulingIntent(event.body) || !!dayName || !!dayPart || !!timeMatch;
+  const availabilityAskedMulti =
+    availabilityIntentHint ||
+    /(available|availability|still there|in stock|do you have|have any)/i.test(event.body);
+  const wantsAvailability =
+    (availabilityAskedMulti || intent === "AVAILABILITY") &&
+    !explicitTradeRequest &&
+    !financePriorityHint &&
+    !schedulingIntentHint;
+  const wantsScheduling =
+    schedulingIntentHint || hasSchedulingIntent(event.body) || !!dayName || !!dayPart || !!timeMatch;
   const wantsPayments =
+    pricingIntentHint ||
     detectPaymentPressure(event.body) ||
     detectPaymentFollowUp(event.body, history ?? []);
   const recentInboundAskedDown = [...(history ?? [])]
@@ -2640,7 +2659,8 @@ export async function orchestrateInbound(
   let inventoryStatus: InventoryStatus | null = null;
   let stockId: string | null = null;
   const vin = ctx?.lead?.vehicle?.vin ?? null;
-  const availabilityAskedStock = /(available|availability|still there|in stock)/i.test(event.body);
+  const availabilityAskedStock =
+    availabilityIntentHint || /(available|availability|still there|in stock)/i.test(event.body);
   const inventoryCountQuestion =
     /\b(only one|just one|is that all|any others|how many|how many do you have|only one you have)\b/i.test(
       event.body
@@ -2798,7 +2818,13 @@ export async function orchestrateInbound(
     }
   }
 
-  if (availabilityAskedStock && stockId && inventoryStatus === "UNKNOWN") {
+  if (
+    availabilityAskedStock &&
+    stockId &&
+    inventoryStatus === "UNKNOWN" &&
+    !financePriorityHint &&
+    !pricingIntentHint
+  ) {
     const dealerProfile = await getDealerProfile();
     const agentName = dealerProfile?.agentName ?? "Brooke";
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
@@ -2814,7 +2840,13 @@ export async function orchestrateInbound(
     });
   }
 
-  if (availabilityAskedStock && stockId && inventoryStatus === "AVAILABLE") {
+  if (
+    availabilityAskedStock &&
+    stockId &&
+    inventoryStatus === "AVAILABLE" &&
+    !financePriorityHint &&
+    !pricingIntentHint
+  ) {
     const dayName = extractDayName(event.body);
     const dayPart = extractDayPart(event.body);
     const modelLabelRaw =
@@ -2906,7 +2938,7 @@ export async function orchestrateInbound(
       let requestedDayClosed = false;
       let requestedDayMaxSlots = 0;
       const schedulingText = ctx?.schedulingText || event.body;
-      const hasIntent = hasSchedulingIntent(schedulingText);
+      const hasIntent = schedulingIntentHint || hasSchedulingIntent(schedulingText);
       const isAdfLead = /adf/i.test(ctx?.leadSource ?? "") || /adf/i.test(ctx?.lead?.source ?? "");
       const cta = ctx?.cta ?? "";
       const bucket = ctx?.bucket ?? "";
@@ -3454,7 +3486,8 @@ export async function orchestrateInbound(
           ? `thanks for building your ${thankYear}${thankLabel} online. `
           : `thanks for your interest in the ${thankYear}${thankLabel}. `;
         const greeting = `Hi ${leadName} — ${thanksLine}`;
-        const availabilityAskedLead = /(available|availability|still there|in stock)/i.test(event.body);
+        const availabilityAskedLead =
+          availabilityIntentHint || /(available|availability|still there|in stock)/i.test(event.body);
         const hasAvailabilityAnswer = inventoryStatus === "AVAILABLE";
         const hasPendingAnswer = inventoryStatus === "PENDING";
         const hasUnknownAnswer = inventoryStatus === "UNKNOWN" || !inventoryStatus;

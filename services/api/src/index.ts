@@ -14340,8 +14340,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return respondRegenerateSkipped("short_ack_no_action");
   }
   const regenSchedulingSignalsForHint = detectSchedulingSignals(event.body ?? "");
+  const regenFinancePriorityHint = hasFinancePrioritySignals(event.body ?? "", conv);
   const regenPrimaryIntentHint: "pricing_payments" | "scheduling" | "callback" | "availability" | "general" =
-    hasFinancePrioritySignals(event.body ?? "", conv)
+    regenFinancePriorityHint
       ? "pricing_payments"
       : regenSchedulingSignalsForHint.explicit ||
           regenSchedulingSignalsForHint.hasDayTime ||
@@ -14353,6 +14354,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
           : isExplicitAvailabilityQuestion(event.body ?? "")
             ? "availability"
             : "general";
+  const regenPricingIntentHint = regenPrimaryIntentHint === "pricing_payments";
+  const regenSchedulingIntentHint = regenPrimaryIntentHint === "scheduling";
+  const regenAvailabilityIntentHint = regenPrimaryIntentHint === "availability";
+  const regenCallbackIntentHint = regenPrimaryIntentHint === "callback";
 
   const result = await orchestrateInbound(event, history, {
     appointment: conv.appointment,
@@ -14361,10 +14366,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     bucket: conv.classification?.bucket ?? null,
     cta: conv.classification?.cta ?? null,
     primaryIntentHint: regenPrimaryIntentHint,
+    availabilityIntentHint: regenAvailabilityIntentHint,
+    schedulingIntentHint: regenSchedulingIntentHint,
+    pricingIntentHint: regenPricingIntentHint,
+    financeIntentHint: regenFinancePriorityHint,
     lead: conv.lead ?? null,
     pricingAttempts: getPricingAttempts(conv),
     allowSchedulingOffer: regenLlmExplicitScheduleIntent || isExplicitScheduleIntent(event.body),
-    callbackRequestedOverride: !regenTextingTypoJoke && detectCallbackText(event.body ?? ""),
+    callbackRequestedOverride:
+      !regenTextingTypoJoke && (regenCallbackIntentHint || detectCallbackText(event.body ?? "")),
     voiceSummary: getActiveVoiceContext(conv)?.summary ?? null,
     memorySummary,
     memorySummaryShouldUpdate,
@@ -20054,6 +20064,10 @@ if (authToken && signature) {
     bucket: conv.classification?.bucket ?? null,
     cta: conv.classification?.cta ?? null,
     primaryIntentHint: turnPrimaryIntent,
+    availabilityIntentHint: deterministicAvailabilityIntentOverride,
+    schedulingIntentHint: schedulingPrimaryIntent,
+    pricingIntentHint: pricingOrPaymentsIntent,
+    financeIntentHint: financePriorityOverride,
     lead: leadForOrchestrator,
     pricingAttempts: getPricingAttempts(conv),
     allowSchedulingOffer:

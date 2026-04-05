@@ -1683,6 +1683,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     history: adfHistory,
     lead: conv.lead
   });
+  const llmJourneyIntent = await parseJourneyIntentWithLLM({
+    text: effectiveInquiry,
+    history: adfHistory,
+    lead: conv.lead
+  });
   const llmInventoryEntities = await parseInventoryEntitiesWithLLM({
     text: effectiveInquiry,
     history: adfHistory,
@@ -1700,6 +1705,19 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   });
   const dialogActConfidenceMin = Number(process.env.LLM_DIALOG_ACT_CONFIDENCE_MIN ?? 0.68);
   const intentConfidenceMin = Number(process.env.LLM_INTENT_CONFIDENCE_MIN ?? 0.75);
+  const journeyIntentConfidence =
+    typeof llmJourneyIntent?.confidence === "number" ? llmJourneyIntent.confidence : 0;
+  const journeyIntentConfidenceMin = Number(process.env.LLM_JOURNEY_INTENT_CONFIDENCE_MIN ?? 0.72);
+  const journeyIntentAccepted =
+    !!llmJourneyIntent &&
+    llmJourneyIntent.explicitRequest === true &&
+    journeyIntentConfidence >= journeyIntentConfidenceMin;
+  const saleTradeIntentFromParser =
+    journeyIntentAccepted && llmJourneyIntent?.journeyIntent === "sale_trade";
+  const serviceSupportIntentFromParser =
+    journeyIntentAccepted && llmJourneyIntent?.journeyIntent === "service_support";
+  const marketingEventIntentFromParser =
+    journeyIntentAccepted && llmJourneyIntent?.journeyIntent === "marketing_event";
   const pricingInquiryIntentFromParser =
     !!llmDialogAct &&
     llmDialogAct.topic === "pricing" &&
@@ -1738,7 +1756,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   let inferredBucket = rule.bucket;
   let inferredCta = rule.cta;
   if (!leadSource || rule.ruleName === "default") {
-    if (hasStockIntent) {
+    if (serviceSupportIntentFromParser) {
+      inferredBucket = "service";
+      inferredCta = "service_request";
+    } else if (marketingEventIntentFromParser) {
+      inferredBucket = "event_promo";
+      inferredCta = "event_rsvp";
+    } else if (hasStockIntent) {
       inferredBucket = "inventory_interest";
       inferredCta = "check_availability";
     } else if (
@@ -1778,6 +1802,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     } else {
       inferredBucket = "general_inquiry";
       inferredCta = "unknown";
+    }
+    if (saleTradeIntentFromParser && inferredBucket === "general_inquiry") {
+      inferredBucket = hasStockIntent ? "inventory_interest" : "trade_in_sell";
+      inferredCta = hasStockIntent ? "check_availability" : "value_my_trade";
     }
   }
   const forcedTestRide = leadSourceLower.includes("test ride") || leadSourceLower.includes("book test ride");
@@ -2006,10 +2034,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
 
   const timeframeLower = String(lead.purchaseTimeframe ?? "").toLowerCase();
+  const isDealerRideEventFromParser =
+    marketingEventIntentFromParser &&
+    /event name:\s*dealer test ride|demo bikes ridden|dealer lead app/i.test(effectiveInquiry);
   const isDealerRideEventLead =
     event.provider === "sendgrid_adf" &&
     (leadSourceLower.includes("dealer lead app") ||
-      /event name:\s*dealer test ride|demo bikes ridden|dealer lead app/i.test(effectiveInquiry));
+      /event name:\s*dealer test ride|demo bikes ridden|dealer lead app/i.test(effectiveInquiry) ||
+      isDealerRideEventFromParser);
   if (isDealerRideEventLead) {
     const appt = conv.appointment;
     const apptType = String(appt?.appointmentType ?? appt?.matchedSlot?.appointmentType ?? "").toLowerCase();
@@ -2093,7 +2125,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     /not interested in purchasing at this time/.test(timeframeLower) ||
     /purchase timeframe:\s*i am not interested in purchasing at this time/.test(inquiryText) ||
     /do you expect to make a motorcycle purchase in the near future\?\s*no/.test(inquiryText) ||
-    /not interested in purchasing at this time/.test(inquiryText);
+    /not interested in purchasing at this time/.test(inquiryText) ||
+    (journeyIntentAccepted &&
+      llmJourneyIntent?.journeyIntent !== "sale_trade" &&
+      /purchase timeframe|not interested in purchasing/i.test(inquiryText));
   if (isDealerRideEventLead && isNoPurchaseNow) {
     conv.dialogState = { name: "test_ride_booked", updatedAt: new Date().toISOString() };
     addCallTodoIfMissing(
@@ -3163,6 +3198,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     leadSource: conv.lead?.source ?? null,
     bucket: conv.classification?.bucket ?? null,
     cta: conv.classification?.cta ?? null,
+    availabilityIntentHint: availabilityIntentFromParser || hasStockIntent,
+    schedulingIntentHint: scheduleIntentFromParser || forcedTestRide,
+    pricingIntentHint: pricingInquiryIntent,
+    financeIntentHint: pricingInquiryIntent,
     pricingAttempts: getPricingAttempts(conv),
     allowSchedulingOffer: true
   });
