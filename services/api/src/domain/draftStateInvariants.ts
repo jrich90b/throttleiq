@@ -57,11 +57,41 @@ function hasFinanceTurnSignal(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
   return (
-    /\b(apr|rate|monthly|payment|payments|per month|down payment|put down|money down|cash down|term|months?|financing|finance|credit score)\b/.test(
+    /\b(apr|rate|rates|monthly|payment|payments|per month|down payment|how much down|put down|money down|cash down|term|months?|financing|finance|credit score|credit app|credit application|application)\b/.test(
       t
     ) ||
+    /\bput\b[^.?!]{0,40}\bdown\b/.test(t) ||
+    /\b(deal(?:s)?|finance special(?:s)?|special(?:s)?|promo(?:tion)?(?:s)?|offer(?:s)?|incentive(?:s)?|rebate(?:s)?|discount(?:s)?)\b/.test(
+      t
+    ) ||
+    /\b(?:no|zero|\$?0)\s*(?:money\s*)?down\b/.test(t) ||
+    /\b(?:don'?t|dont|do not)\s+(?:want|have)\s+to\s+put\s+(?:anything|any money|money)\s+down\b/.test(
+      t
+    ) ||
+    /\b(?:under|below|around|about|stay under|keep (?:it|me)? under|max(?:imum)?)\s*\$?\s*\d{2,6}\s*(?:\/\s*mo|\/\s*month|per month|a month|monthly)\b/.test(
+      t
+    ) ||
+    /\bcan you run (?:it|that|the numbers?) for\s+\d{2,3}\s*(?:months?|mo)?\b/.test(t) ||
     /\$\s?\d[\d,]*(?:\s*\/\s*(?:mo|month))?/.test(t) ||
     /\b\d{2,3}\s*(?:mo|month|months)\b/.test(t)
+  );
+}
+
+function hasFinanceContext(input: DraftStateInvariantInput): boolean {
+  const dialogState = String(input.dialogState ?? "").toLowerCase();
+  const followUpReason = String(input.followUpReason ?? "").toLowerCase();
+  return (
+    dialogState.startsWith("pricing_") ||
+    dialogState.startsWith("payments_") ||
+    /(^|:|\b)(pricing|payments?|finance|financing|credit|approval)\b/.test(followUpReason)
+  );
+}
+
+function hasBareBudgetSignal(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return /\b(?:under|below|around|about|stay under|keep (?:it|me)? under|max(?:imum)?)\s*\$?\s*\d{2,6}\b/.test(
+    t
   );
 }
 
@@ -98,6 +128,9 @@ export function applyDraftStateInvariants(
   const inboundText = String(input.inboundText ?? "");
   const inventoryPrompt = looksLikeInventoryPromptDraft(draftText);
   const schedulingPrompt = looksLikeSchedulingPromptDraft(draftText);
+  const financeSignal = hasFinanceTurnSignal(inboundText);
+  const financeContextSignal = hasFinanceContext(input) && hasBareBudgetSignal(inboundText);
+  const financePriority = financeSignal || financeContextSignal;
 
   if (isShortAckText(inboundText) && inventoryPrompt) {
     return {
@@ -123,7 +156,7 @@ export function applyDraftStateInvariants(
     };
   }
 
-  if (hasFinanceTurnSignal(inboundText) && inventoryPrompt) {
+  if (financePriority && inventoryPrompt) {
     return {
       allow: false,
       draftText: "",
@@ -131,7 +164,7 @@ export function applyDraftStateInvariants(
     };
   }
 
-  if (hasFinanceTurnSignal(inboundText) && !hasSchedulingTurnSignal(inboundText) && schedulingPrompt) {
+  if (financePriority && !hasSchedulingTurnSignal(inboundText) && schedulingPrompt) {
     return {
       allow: false,
       draftText: "",
