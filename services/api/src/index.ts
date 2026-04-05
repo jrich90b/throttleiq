@@ -19771,8 +19771,13 @@ if (authToken && signature) {
           if (touringRequested) {
             alternativePool = alternativePool.filter(i => isTouringModelName(i.model));
           }
-          if (modelExplicitInInbound && model) {
-            const modelKey = normalizeModelText(model);
+          const scopedModelBudgetFallback =
+            !!model && !broadBudgetScopeRequest && !touringRequested;
+          if (scopedModelBudgetFallback && model) {
+            const modelKey = normalizeModelText(modelForLookup ?? model);
+            alternativePool = alternativePool.filter(i => normalizeModelText(i.model ?? "") === modelKey);
+          } else if (modelExplicitInInbound && model) {
+            const modelKey = normalizeModelText(modelForLookup ?? model);
             alternativePool = alternativePool.filter(i => normalizeModelText(i.model ?? "") === modelKey);
           }
           const alternativeBudgetEntries = alternativePool
@@ -19788,7 +19793,7 @@ if (authToken && signature) {
             .sort((a, b) => (a.monthly as number) - (b.monthly as number));
           const budgetLabel = `$${Number(monthlyBudget).toLocaleString("en-US")}/mo`;
           const scopeLabel =
-            modelExplicitInInbound && model
+            (modelExplicitInInbound && model) || (scopedModelBudgetFallback && model)
               ? normalizeDisplayCase(String(model))
               : touringRequested
                 ? "touring bikes"
