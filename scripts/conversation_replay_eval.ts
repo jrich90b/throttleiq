@@ -75,6 +75,34 @@ const cases: Case[] = [
     }
   },
   {
+    id: "joseph_down_payment_blocks_inventory_model_prompt",
+    expectedAllow: false,
+    expectedReason: "finance_priority_inventory_prompt_guard",
+    input: {
+      inboundText: "I have 5000 to put down",
+      draftText: "Sounds good. happy to help with pricing or a model comparison. Which model are you leaning toward?",
+      followUpMode: "active",
+      followUpReason: "pricing",
+      dialogState: "pricing_answered",
+      classificationBucket: "inventory_interest",
+      classificationCta: "ask_payment"
+    }
+  },
+  {
+    id: "finance_docs_question_is_allowed",
+    expectedAllow: true,
+    input: {
+      inboundText: "Before I come in, what do I need to bring in for financing?",
+      draftText:
+        "Bring your driver's license, proof of income, and insurance card. If you have a trade, bring title/registration and payoff info.",
+      followUpMode: "manual_handoff",
+      followUpReason: "manual_appointment",
+      dialogState: "none",
+      classificationBucket: "general_inquiry",
+      classificationCta: "unknown"
+    }
+  },
+  {
     id: "noah_service_manual_handoff_blocks_walkaround_prompt",
     expectedAllow: false,
     expectedReason: "short_ack_no_action_guard",

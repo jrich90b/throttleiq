@@ -41,6 +41,18 @@ function looksLikeInventoryPromptDraft(text: string): boolean {
   );
 }
 
+function hasFinanceTurnSignal(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\b(apr|rate|monthly|payment|payments|per month|down payment|put down|money down|cash down|term|months?|financing|finance|credit score)\b/.test(
+      t
+    ) ||
+    /\$\s?\d[\d,]*(?:\s*\/\s*(?:mo|month))?/.test(t) ||
+    /\b\d{2,3}\s*(?:mo|month|months)\b/.test(t)
+  );
+}
+
 function isDepartmentHandoff(input: DraftStateInvariantInput): boolean {
   const bucket = String(input.classificationBucket ?? "").toLowerCase();
   const cta = String(input.classificationCta ?? "").toLowerCase();
@@ -85,6 +97,14 @@ export function applyDraftStateInvariants(
       allow: false,
       draftText: "",
       reason: "paused_state_inventory_prompt_guard"
+    };
+  }
+
+  if (hasFinanceTurnSignal(inboundText) && inventoryPrompt) {
+    return {
+      allow: false,
+      draftText: "",
+      reason: "finance_priority_inventory_prompt_guard"
     };
   }
 

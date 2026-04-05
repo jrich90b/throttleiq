@@ -122,6 +122,10 @@ import {
 } from "./domain/transitionSafety.js";
 import { pickRegenerateInbound } from "./domain/regenerateSelection.js";
 import { applyDraftStateInvariants } from "./domain/draftStateInvariants.js";
+import {
+  DEALER_RIDE_NO_PURCHASE_SKIP_DRAFT,
+  nextActionFromState
+} from "./domain/routeStateReducer.js";
 
 import {
   upsertConversationByLeadKey,
@@ -269,6 +273,24 @@ app.post(
     return res.status(200).send("ok");
   }
 );
+
+app.get("/debug/route-outcomes", (req, res) => {
+  const counters = [...routeOutcomeCounters.entries()]
+    .map(([key, count]) => ({ key, count }))
+    .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
+  return res.json({
+    ok: true,
+    enabled: process.env.DEBUG_DECISION_TRACE === "1",
+    total: counters.reduce((sum, row) => sum + row.count, 0),
+    counters
+  });
+});
+
+app.post("/debug/route-outcomes/reset", (_req, res) => {
+  routeOutcomeCounters.clear();
+  return res.json({ ok: true, counters: [] });
+});
+
 app.use(express.json({ limit: "30mb" }));
 app.use(express.urlencoded({ extended: false, limit: "30mb" }));
 
@@ -6029,6 +6051,83 @@ function getDeterministicAvailabilitySignals(
     ((availabilityPhraseDetected || correctionCue) &&
       (hasAvailabilityDetail || hasAvailabilityContext || referencesContextUnit));
   return { inventoryCountQuestion, shouldLookupAvailability };
+}
+
+function reconcileStateFromRecentManualOutbound(
+  conv: any,
+  inboundAtIso?: string
+): { changed: boolean; reasons: string[] } {
+  if (!conv || typeof conv !== "object") return { changed: false, reasons: [] };
+  const mode = String(conv.followUp?.mode ?? "").toLowerCase();
+  const convMode = String(conv.mode ?? "").toLowerCase();
+  if (mode !== "manual_handoff" && convMode !== "human") {
+    return { changed: false, reasons: [] };
+  }
+  const inboundAtMs = new Date(String(inboundAtIso ?? "")).getTime();
+  const lastManualOutbound = [...(conv.messages ?? [])]
+    .reverse()
+    .find((m: any) => {
+      if (!m || m.direction !== "out" || !m.body) return false;
+      const provider = String(m.provider ?? "").toLowerCase();
+      if (provider === "draft_ai" || provider === "voice_transcript") return false;
+      if (!Number.isFinite(inboundAtMs)) return true;
+      const atMs = new Date(String(m.at ?? "")).getTime();
+      return !Number.isFinite(atMs) || atMs <= inboundAtMs;
+    });
+  if (!lastManualOutbound?.body) return { changed: false, reasons: [] };
+  const lastOutboundText = String(lastManualOutbound.body ?? "").toLowerCase();
+  const dialogState = String(getDialogState(conv) ?? "").toLowerCase();
+  const reasons: string[] = [];
+  let changed = false;
+
+  const manualAppointmentCue =
+    /\b(see you|i(?:’|')?ll be here|that works|works for me|you(?:’|')?re all set|you are all set|look forward to meeting|come in|stop by|stop in)\b/.test(
+      lastOutboundText
+    ) ||
+    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(lastOutboundText) ||
+    /\b\d{1,2}(?::\d{2})?\s*(am|pm)\b/.test(lastOutboundText);
+  const manualFinanceCue =
+    /\b(apr|rate|monthly|payment|down payment|put down|term|months?|financing|credit)\b/.test(
+      lastOutboundText
+    );
+
+  if (
+    manualAppointmentCue &&
+    [
+      "pricing_need_model",
+      "inventory_watch_prompted",
+      "inventory_init",
+      "schedule_soft",
+      "followup_paused"
+    ].includes(dialogState)
+  ) {
+    setDialogState(conv, "none");
+    changed = true;
+    reasons.push("manual_appointment_context");
+  }
+
+  if (conv.inventoryWatchPending && manualAppointmentCue) {
+    conv.inventoryWatchPending = undefined;
+    changed = true;
+    reasons.push("clear_inventory_watch_pending_after_manual_context");
+  }
+
+  if (manualFinanceCue && dialogState === "pricing_need_model") {
+    setDialogState(conv, "pricing_answered");
+    changed = true;
+    reasons.push("manual_finance_context");
+  }
+
+  if (changed) {
+    (conv as any).manualStateReconciled = {
+      at: nowIso(),
+      sourceProvider: lastManualOutbound.provider ?? null,
+      sourceAt: lastManualOutbound.at ?? null,
+      reasons
+    };
+  }
+
+  return { changed, reasons };
 }
 
 function isOtherInventoryRequestText(text: string): boolean {
@@ -13548,9 +13647,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     });
     return res.json({ ok: true, conversation: conv, draft: invariant.draftText });
   };
-  if (event.provider === "twilio" && shouldSuppressShortAckDraft(event.body ?? "")) {
-    return respondRegenerateSkipped("short_ack_no_action");
+  const regenManualReconcile = reconcileStateFromRecentManualOutbound(conv, event.receivedAt);
+  if (regenManualReconcile.changed) {
+    recordRouteOutcome("regen", "manual_outbound_reconciled", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      reasons: regenManualReconcile.reasons
+    });
   }
+  const regenShortAckSuppression = shouldSuppressShortAckDraft(event.body ?? "");
   const regenInboundLower = String(event.body ?? "").toLowerCase();
   const regenRawProvider = String((inbound as any)?.provider ?? "").toLowerCase();
   const regenLooksLikeAdf =
@@ -13564,7 +13669,19 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     /purchase timeframe:\s*i am not interested in purchasing at this time/.test(regenInboundLower) ||
     /do you expect to make a motorcycle purchase in the near future\?\s*no/.test(regenInboundLower) ||
     /not interested in purchasing at this time/.test(regenInboundLower);
-  if (regenDealerRideEventLead && regenNoPurchaseNow) {
+  const regenPreRouteDecision = nextActionFromState({
+    provider: event.provider,
+    channel,
+    isShortAck: regenShortAckSuppression,
+    dealerRideNoPurchaseAdf: regenDealerRideEventLead && regenNoPurchaseNow
+  });
+  if (regenPreRouteDecision.kind === "skip" && regenPreRouteDecision.note === "short_ack_no_action") {
+    return respondRegenerateSkipped(regenPreRouteDecision.note);
+  }
+  if (
+    regenPreRouteDecision.kind === "skip" &&
+    regenPreRouteDecision.note === "dealer_ride_no_purchase_manual_handoff"
+  ) {
     addCallTodoIfMissing(
       conv,
       "Dealer ride follow-up needed: thank customer, confirm how to proceed, and update lead status."
@@ -13654,9 +13771,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     setFollowUpMode(conv, "manual_handoff", "dealer_ride_no_purchase");
     stopFollowUpCadence(conv, "manual_handoff");
     saveConversation(conv);
-    const draft =
-      "No customer reply needed — dealer ride outcome requires salesperson follow-up.";
-    return respondRegenerateSkipped("dealer_ride_no_purchase_manual_handoff", draft);
+    return respondRegenerateSkipped(
+      regenPreRouteDecision.note,
+      regenPreRouteDecision.draft ?? DEALER_RIDE_NO_PURCHASE_SKIP_DRAFT
+    );
   }
 
   const history = buildHistory(conv, 60);
@@ -13774,7 +13892,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const regenFinancePriorityOverride = hasFinancePrioritySignals(event.body ?? "", conv);
     const regenSchedulePriorityOverride = detectSchedulingSignals(event.body).explicit;
     const regenOtherInventoryRequest = isOtherInventoryRequestText(regenTextLower);
-    if (deterministicRegenAvailability && !regenFinancePriorityOverride && !regenSchedulePriorityOverride) {
+    const regenRouteDecision = nextActionFromState({
+      provider: event.provider,
+      channel,
+      isShortAck: false,
+      deterministicAvailabilityLookup: deterministicRegenAvailability,
+      financePriorityOverride: regenFinancePriorityOverride,
+      schedulePriorityOverride: regenSchedulePriorityOverride
+    });
+    if (regenRouteDecision.kind === "deterministic_availability_lookup") {
       const availabilityResolution = await resolveDeterministicAvailabilityReply({
         conv,
         text: event.body ?? "",
@@ -14561,7 +14687,20 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
   appendInbound(conv, event);
-  if (event.provider === "twilio" && shouldSuppressShortAckDraft(event.body ?? "")) {
+  const liveManualReconcile = reconcileStateFromRecentManualOutbound(conv, event.receivedAt);
+  if (liveManualReconcile.changed) {
+    recordRouteOutcome("live", "manual_outbound_reconciled", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      reasons: liveManualReconcile.reasons
+    });
+  }
+  const liveEarlyDecision = nextActionFromState({
+    provider: event.provider,
+    channel: event.channel === "email" ? "email" : "sms",
+    isShortAck: shouldSuppressShortAckDraft(event.body ?? "")
+  });
+  if (liveEarlyDecision.kind === "skip" && liveEarlyDecision.note === "short_ack_no_action") {
     discardPendingDrafts(conv, "short_ack_no_action");
     recordRouteOutcome("live", "short_ack_no_action", {
       convId: conv.id,
@@ -17830,12 +17969,15 @@ if (authToken && signature) {
     }
   }
 
-  if (
-    event.provider === "twilio" &&
-    deterministicAvailabilityLookup &&
-    !financePriorityOverride &&
-    !schedulePriorityOverride
-  ) {
+  const liveRouteDecision = nextActionFromState({
+    provider: event.provider,
+    channel: event.channel === "email" ? "email" : "sms",
+    isShortAck: false,
+    deterministicAvailabilityLookup,
+    financePriorityOverride,
+    schedulePriorityOverride
+  });
+  if (liveRouteDecision.kind === "deterministic_availability_lookup") {
     logDecisionTrace("live.route_deterministic_availability", {
       source: "deterministicAvailabilityLookup",
       text: String(event.body ?? "").slice(0, 180)

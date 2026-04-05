@@ -23,7 +23,9 @@
     "disposition_transition:eval": "npx tsx scripts/disposition_transition_eval.ts",
     "response_control:eval": "npx tsx scripts/response_control_eval.ts",
     "regenerate_selection:eval": "npx tsx scripts/regenerate_selection_eval.ts",
-    "conversation_replay:eval": "npx tsx scripts/conversation_replay_eval.ts"
+    "conversation_replay:eval": "npx tsx scripts/conversation_replay_eval.ts",
+    "route_state:eval": "npx tsx scripts/route_state_reducer_eval.ts",
+    "ci:eval": "npm run adf_policy:eval && npm run response_control:eval && npm run disposition_transition:eval && npm run regenerate_selection:eval && npm run conversation_replay:eval && npm run route_state:eval"
   },
   "devDependencies": {
     "concurrently": "^9.0.0",

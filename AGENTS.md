@@ -133,8 +133,23 @@ When changing responses:
 - `services/api/src/domain/tone.ts` — centralized tone normalization for outbound sales language.
 - `scripts/*_eval.ts` + `scripts/*_examples.json` — parser evals and regression fixtures.
 
+## Phase 1 Routing Alignment (No Line Number Notes)
+- Deterministic availability and finance-priority gating are shared helpers in `services/api/src/index.ts`:
+  - `getDeterministicAvailabilitySignals(...)`
+  - `hasFinancePrioritySignals(...)`
+  - `hasPricingDialogContext(...)`
+- These helpers must be used in both:
+  - live inbound route (`/webhooks/twilio`)
+  - regenerate route (`/conversations/:id/regenerate`)
+- When documenting this behavior, reference helper names and route names, not raw line numbers (line numbers drift frequently).
+
 ## Ops Note
 - On the Ubuntu instance, `rg` may not be installed. Use `grep` for on‑box searches.
+
+## Deferred Feature Notes
+- JD Power trade-budget workflow scope is documented in:
+  - `docs/JD_Power_Trade_Budget_Implementation.md`
+- When resumed, implement parser-first + state machine from that doc (no regex-only flow).
 
 ## Data Path Safety (Do Not Wipe Dealer Profile)
 - **Source of truth for instance data is runtime storage**, not repo data files.
