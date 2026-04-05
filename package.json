@@ -27,6 +27,8 @@
     "route_state:eval": "npx tsx scripts/route_state_reducer_eval.ts",
     "finance_language_fuzz:eval": "npx tsx scripts/finance_language_fuzz_eval.ts",
     "conversation:audit": "npx tsx scripts/conversation_audit.ts",
+    "edit_feedback:mine": "npx tsx scripts/edit_feedback_mine.ts",
+    "edit_feedback:loop": "npm run conversation:audit && npm run edit_feedback:mine",
     "ci:eval": "npm run adf_policy:eval && npm run response_control:eval && npm run disposition_transition:eval && npm run regenerate_selection:eval && npm run conversation_replay:eval && npm run route_state:eval && npm run finance_language_fuzz:eval"
   },
   "devDependencies": {
