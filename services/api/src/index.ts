@@ -2687,10 +2687,7 @@ async function resolveCadenceContextTag(conv: any, cadence: any): Promise<string
     cadence.contextTagUpdatedAt = nowIso();
     return bucketTag;
   }
-  const history = (conv.messages ?? [])
-    .filter((m: any) => m?.body && m.direction && !["voice_call", "voice_transcript", "voice_summary"].includes(m.provider))
-    .slice(-6)
-    .map((m: any) => ({ direction: m.direction, body: String(m.body ?? "") }));
+  const history = buildHistory(conv, 8).slice(-8);
   const llmTag = history.length ? await classifyCadenceContextWithLLM({ history }) : null;
   const finalTag = llmTag || "general";
   cadence.contextTag = finalTag;
