@@ -2286,7 +2286,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     if (isMetaLead) {
       body = body.replace(/^thanks\s*[-—]\s*i saw you wanted to learn more about[^.]*\.\s*/i, "");
       body = body.replace(/^thanks\s*[-—]\s*/i, "");
-      if (!/\bmeta\b/i.test(body)) {
+      if (!/\b(meta|facebook)\b/i.test(body)) {
         const metaLine = modelLabel
           ? `I saw your Meta inquiry come over for the ${modelLabel}.`
           : "I saw your Meta inquiry come over.";
@@ -3628,15 +3628,33 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     inferredBucket === "general_inquiry" &&
     typeof draft === "string"
   ) {
+    let usedNearTermMetaTemplate = false;
     const modelLabel = normalizeVehicleModel(
       conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "",
       conv.lead?.vehicle?.make ?? null
     );
     const monthsStart = conv.lead?.purchaseTimeframeMonthsStart;
+    const monthsEnd = conv.lead?.purchaseTimeframeMonthsEnd;
+    const rawModelLabel = String(conv.lead?.vehicle?.model ?? "").trim();
+    const genericModel = /^(other|full line)$/i.test(rawModelLabel);
+    const nearTermWindow =
+      typeof monthsStart === "number" && Number.isFinite(monthsStart) && monthsStart >= 0 && monthsStart <= 3;
+    if (genericModel && nearTermWindow) {
+      const timeframeLabel =
+        conv.lead?.purchaseTimeframe?.trim() ||
+        (typeof monthsEnd === "number" && Number.isFinite(monthsEnd)
+          ? `${Math.max(0, Math.round(monthsStart))}-${Math.max(Math.round(monthsStart), Math.round(monthsEnd))} months`
+          : "0-3 months");
+      draft =
+        `Thanks for reaching out on Facebook. Since you’re shopping in the next ${timeframeLabel}, ` +
+        "I can send 2-3 bikes that are a good fit and price range. " +
+        "Are you leaning more Street Glide style or something lighter for a first Harley?";
+      usedNearTermMetaTemplate = true;
+    }
     const isFutureWindow = typeof monthsStart === "number" && monthsStart >= 4;
     const asksModel = /which model|what model|model are you interested|bike preference/i.test(draft);
     const hasSoftInvite = /\b(stop in|come in|check (it|them) out|go over options|take a look)\b/i.test(draft);
-    if (!asksModel || !hasSoftInvite || isFutureWindow) {
+    if (!usedNearTermMetaTemplate && (!asksModel || !hasSoftInvite || isFutureWindow)) {
       const modelQuestion = modelLabel
         ? `Are you leaning toward a specific ${modelLabel}, or still comparing?`
         : "Do you have a bike preference, or are you still comparing models?";
