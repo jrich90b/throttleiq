@@ -165,6 +165,50 @@ function pickUserPhone(user: any): string {
   return "";
 }
 
+function normalizeAdfIdentityToken(raw?: string | null): string {
+  return String(raw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function normalizeAdfRequestDate(raw?: string | null): string {
+  const normalized = normalizeAdfIdentityToken(raw);
+  if (!normalized) return "";
+  const ms = Date.parse(normalized);
+  if (!Number.isFinite(ms)) return normalized;
+  return new Date(ms).toISOString();
+}
+
+function extractAdfRequestDate(adfXml: string): string {
+  return adfXml.match(/<requestdate[^>]*>([^<]+)<\/requestdate>/i)?.[1]?.trim() ?? "";
+}
+
+function buildSyntheticAdfProviderMessageId(args: {
+  requestDate?: string | null;
+  leadRef?: string | null;
+  leadSource?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  stockId?: string | null;
+  vin?: string | null;
+  inquiry?: string | null;
+}): string {
+  const parts = [
+    normalizeAdfRequestDate(args.requestDate),
+    normalizeAdfIdentityToken(args.leadRef),
+    normalizeAdfIdentityToken(args.leadSource),
+    normalizePhoneE164(args.phone),
+    normalizeAdfIdentityToken(args.email),
+    normalizeAdfIdentityToken(args.stockId),
+    normalizeAdfIdentityToken(args.vin),
+    normalizeAdfIdentityToken(args.inquiry).slice(0, 256)
+  ];
+  const seed = parts.join("|");
+  const digest = crypto.createHash("sha1").update(seed).digest("hex").slice(0, 24);
+  return `adf_${digest}`;
+}
+
 async function sendInternalSalespersonSms(
   toNumberRaw: string | null | undefined,
   body: string
@@ -1670,6 +1714,56 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const effectiveInquiry = combinedInquiry || inquiryRaw;
   lead.inquiry = effectiveInquiry;
   const inquiryText = String(effectiveInquiry).toLowerCase();
+  const inboundBody =
+    [
+      `WEB LEAD (ADF)`,
+      leadSource ? `Source: ${leadSource}` : null,
+      leadRef ? `Ref: ${leadRef}` : null,
+      lead.firstName || lead.lastName ? `Name: ${(lead.firstName ?? "").trim()} ${(lead.lastName ?? "").trim()}`.trim() : null,
+      lead.email ? `Email: ${lead.email}` : null,
+      lead.phone ? `Phone: ${lead.phone}` : null,
+      lead.stockId ? `Stock: ${lead.stockId}` : null,
+      lead.vin ? `VIN: ${lead.vin}` : null,
+      lead.year ? `Year: ${lead.year}` : null,
+      lead.vehicleDescription ? `Vehicle: ${lead.vehicleDescription}` : null,
+      lead.tradeVehicle?.description || lead.tradeVehicle?.year
+        ? `Trade-In: ${[lead.tradeVehicle?.year, lead.tradeVehicle?.description ?? lead.tradeVehicle?.model]
+            .filter(Boolean)
+            .join(" ")}`
+        : null,
+      "",
+      `Inquiry:`,
+      inquiryText
+    ]
+      .filter(v => v !== null)
+      .join("\n");
+  const inboundProviderMessageIdRaw = String(req.body?.MessageID ?? req.body?.message_id ?? "").trim();
+  const syntheticAdfProviderMessageId = buildSyntheticAdfProviderMessageId({
+    requestDate: extractAdfRequestDate(adfXml),
+    leadRef,
+    leadSource,
+    phone: leadPhone,
+    email: leadEmailForConversation ?? leadEmail,
+    stockId: lead.stockId,
+    vin: lead.vin,
+    inquiry: effectiveInquiry
+  });
+  const event: InboundMessageEvent = {
+    channel: "email",
+    provider: "sendgrid_adf",
+    from: leadEmailForConversation || leadPhone || leadKey || "unknown_sender",
+    to: "dealership",
+    body: inboundBody,
+    providerMessageId: inboundProviderMessageIdRaw || syntheticAdfProviderMessageId,
+    receivedAt: new Date().toISOString()
+  };
+  if (isDuplicateInboundEvent(conv, event, { windowMs: 15 * 60 * 1000 })) {
+    console.log("[sendgrid inbound] duplicate ignored", {
+      convId: conv.id,
+      providerMessageId: event.providerMessageId
+    });
+    return res.status(200).json({ ok: true, parsed: true, duplicate: true, leadKey });
+  }
   const adfHistory = (conv.messages ?? [])
     .slice(-6)
     .map(m => ({ direction: m.direction as "in" | "out", body: String(m.body ?? "") }));
@@ -1870,48 +1964,6 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     } else if (inferredBucket === "service" || inferredCta === "service_request") {
       conv.dialogState = { name: "service_request", updatedAt: new Date().toISOString() };
     }
-  }
-
-  const inboundBody =
-    [
-      `WEB LEAD (ADF)`,
-      leadSource ? `Source: ${leadSource}` : null,
-      leadRef ? `Ref: ${leadRef}` : null,
-      lead.firstName || lead.lastName ? `Name: ${(lead.firstName ?? "").trim()} ${(lead.lastName ?? "").trim()}`.trim() : null,
-      lead.email ? `Email: ${lead.email}` : null,
-      lead.phone ? `Phone: ${lead.phone}` : null,
-      lead.stockId ? `Stock: ${lead.stockId}` : null,
-      lead.vin ? `VIN: ${lead.vin}` : null,
-      lead.year ? `Year: ${lead.year}` : null,
-      lead.vehicleDescription ? `Vehicle: ${lead.vehicleDescription}` : null,
-      lead.tradeVehicle?.description || lead.tradeVehicle?.year
-        ? `Trade-In: ${[lead.tradeVehicle?.year, lead.tradeVehicle?.description ?? lead.tradeVehicle?.model]
-            .filter(Boolean)
-            .join(" ")}`
-        : null,
-      "",
-      `Inquiry:`,
-      inquiryText
-    ]
-      .filter(v => v !== null)
-      .join("\n");
-
-  const event: InboundMessageEvent = {
-    channel: "email",
-    provider: "sendgrid_adf",
-    from: leadEmailForConversation || leadPhone || leadKey || "unknown_sender",
-    to: "dealership",
-    body: inboundBody,
-    providerMessageId: String(req.body?.MessageID ?? req.body?.message_id ?? ""),
-    receivedAt: new Date().toISOString()
-  };
-
-  if (isDuplicateInboundEvent(conv, event, { windowMs: 15 * 60 * 1000 })) {
-    console.log("[sendgrid inbound] duplicate ignored", {
-      convId: conv.id,
-      providerMessageId: event.providerMessageId
-    });
-    return res.status(200).json({ ok: true, parsed: true, duplicate: true, leadKey });
   }
 
   const callOnlyRequested = isCallOnlyText(inquiryText);
