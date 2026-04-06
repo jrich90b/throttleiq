@@ -2442,14 +2442,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       llmIntent.intent === "availability" &&
       llmIntent.explicitRequest === true &&
       Number(llmIntent.confidence ?? 0) >= intentConfidenceMin;
-    const walkInWatchRegexFallbackEnabled =
-      process.env.LLM_WALKIN_WATCH_REGEX_FALLBACK_ENABLED === "1";
-    const hasWatchIntent =
-      hasWatchIntentFromParser ||
-      (walkInWatchRegexFallbackEnabled &&
-        /\b(keep an eye out|watch for|let me know when|notify me when|if you get|when you get|reach out when)\b/.test(
-          commentLower
-        ));
+    const hasWatchIntent = hasWatchIntentFromParser;
     const wantsUsed =
       conv.lead?.vehicle?.condition === "used" ||
       /pre[-\s]?owned|used/.test(commentLower);
@@ -2515,95 +2508,25 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const walkInOutcomeConfidence =
       typeof llmWalkInOutcome?.confidence === "number" ? llmWalkInOutcome.confidence : 0;
     const walkInOutcomeConfidenceMin = Number(process.env.LLM_WALKIN_OUTCOME_CONFIDENCE_MIN ?? 0.72);
-    const walkInOutcomeRegexFallbackEnabled =
-      process.env.LLM_WALKIN_OUTCOME_REGEX_FALLBACK_ENABLED === "1";
     const walkInOutcomeAccepted =
       !!llmWalkInOutcome &&
       walkInOutcomeConfidence >= walkInOutcomeConfidenceMin &&
       llmWalkInOutcome.explicitState;
     const walkInState = walkInOutcomeAccepted ? llmWalkInOutcome?.state ?? "none" : "none";
-
-    const hasStrongDepositLexeme =
-      /\bdeposit\b/.test(commentLower) &&
-      (/\$\s*\d+/.test(commentLower) ||
-        /\b(left|put|placed|took|received|paid)\b/.test(commentLower));
-    const hasFinalizeDealSignal =
-      /\b(finali[sz]e|close|closing)\s+(the\s+)?(deal|paperwork|sale)\b/.test(commentLower) ||
-      /\bcoming in\b.{0,60}\b(finali[sz]e|close|closing)\b/.test(commentLower);
-    const hasLateWalkInStepSignal = /\(\s*step\s*(?:[5-9]|[1-9]\d)\s*\)/i.test(walkInCleanedComment);
-    const hasDepositSignal =
-      walkInState === "deposit_left" ||
-      hasStrongDepositLexeme ||
-      (walkInOutcomeRegexFallbackEnabled &&
-        (/\b(left|put|placed|took|received)\s+(a\s+)?deposit\b/.test(commentLower) ||
-          /\bdeposit\s+(left|taken|received|put|placed)\b/.test(commentLower)));
-    const hasSoldSignal =
-      walkInState === "sold_delivered" ||
-      (walkInOutcomeRegexFallbackEnabled && /\b(sold|delivered|picked up)\b/.test(commentLower));
-    const hasCreditCosignerSignal =
-      walkInState === "cosigner_required" ||
-      (walkInOutcomeRegexFallbackEnabled &&
-        ((/\b(credit app|credit application|finance app|finance application|ran credit)\b/.test(commentLower) &&
-          /\b(co[-\s]?signer|cosigner)\b/.test(commentLower)) ||
-          /\bneeds?\s+(a\s+)?co[-\s]?signer\b/.test(commentLower)));
-    const hasCompletedTestRideSignal =
-      walkInState === "test_ride_completed" ||
-      (walkInOutcomeRegexFallbackEnabled &&
-        (/\b(took|completed|did|finished)\s+(a\s+)?(test ride|demo ride)\b/.test(commentLower) ||
-          /\b(test ride|demo ride)\s+(completed|done)\b/.test(commentLower)));
-    const hasDecisionPendingSignal =
-      walkInState === "decision_pending" ||
-      (walkInOutcomeRegexFallbackEnabled &&
-        /\b(thinking it over|think it over|sleep on it|not ready|not ready yet|will let (you|us) know|get back to (you|us)|reach back out)\b/.test(
-          commentLower
-        ));
-    const hasOutsideFinancingPendingSignal =
-      walkInState === "outside_financing_pending" ||
-      (walkInOutcomeRegexFallbackEnabled &&
-        /\b(credit union|cu financing|bank loan|bank financing|outside financing|waiting on (the )?(bank|credit union)|waiting on approval)\b/.test(
-          commentLower
-        ));
-    const hasDownPaymentPendingSignal =
-      walkInState === "down_payment_pending" ||
-      (walkInOutcomeRegexFallbackEnabled &&
-        /\b(waiting for down payment|saving up for down payment|save up for down payment|don'?t have enough down|need more down|down payment)\b/.test(
-          commentLower
-        ));
-    const hasTradeEquityPendingSignal =
-      walkInState === "trade_equity_pending" ||
-      (walkInOutcomeRegexFallbackEnabled &&
-        /\b(sell my bike first|sell it first|trade value|waiting on trade value|upside down|negative equity|payoff)\b/.test(
-          commentLower
-        ));
-    const hasTimingDeferWindowSignal =
-      walkInState === "timing_defer_window" ||
-      (walkInOutcomeRegexFallbackEnabled &&
-        /\b(after winter|next month|after tax return|after taxes|after bonus|later this year|next season)\b/.test(
-          commentLower
-        ));
-    const hasHouseholdApprovalPendingSignal =
-      walkInState === "household_approval_pending" ||
-      (walkInOutcomeRegexFallbackEnabled &&
-        /\b(talk to (my )?(wife|husband|spouse|partner)|wife needs to approve|husband needs to approve|spouse decision|partner decision)\b/.test(
-          commentLower
-        ));
-    const hasDocsOrInsurancePendingSignal =
-      walkInState === "docs_or_insurance_pending" ||
-      (walkInOutcomeRegexFallbackEnabled &&
-        /\b(waiting on insurance|insurance quote|need (the )?title|need docs|paperwork first|registration first|dmv first)\b/.test(
-          commentLower
-        ));
-    const hasHoldSignal =
-      /\b(mark|set|put|place)\b.{0,24}\b(on\s+)?hold\b/.test(commentLower) ||
-      /\bhold until\b/.test(commentLower) ||
-      /\bstatus\s*[:\-]?\s*hold\b/.test(commentLower) ||
-      /\bon hold\b/.test(commentLower);
-    const hasResumeHoldSignal =
-      /\b(clear|remove|release|take off)\b.{0,24}\bhold\b/.test(commentLower) ||
-      /\bunhold\b/.test(commentLower) ||
-      /\bresume\b/.test(commentLower) ||
-      /\breopen\b/.test(commentLower) ||
-      /\breactivate\b/.test(commentLower);
+    const hasDealFinalizingSignal = walkInState === "deal_finalizing";
+    const hasDepositSignal = walkInState === "deposit_left";
+    const hasSoldSignal = walkInState === "sold_delivered";
+    const hasCreditCosignerSignal = walkInState === "cosigner_required";
+    const hasCompletedTestRideSignal = walkInState === "test_ride_completed";
+    const hasDecisionPendingSignal = walkInState === "decision_pending";
+    const hasOutsideFinancingPendingSignal = walkInState === "outside_financing_pending";
+    const hasDownPaymentPendingSignal = walkInState === "down_payment_pending";
+    const hasTradeEquityPendingSignal = walkInState === "trade_equity_pending";
+    const hasTimingDeferWindowSignal = walkInState === "timing_defer_window";
+    const hasHouseholdApprovalPendingSignal = walkInState === "household_approval_pending";
+    const hasDocsOrInsurancePendingSignal = walkInState === "docs_or_insurance_pending";
+    const hasHoldSignal = walkInState === "hold_requested";
+    const hasResumeHoldSignal = walkInState === "hold_cleared";
     const walkInOutcomeNeedsReview =
       !!llmWalkInOutcome &&
       !walkInOutcomeAccepted &&
@@ -2619,7 +2542,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
 
     const hasDealProgressSignal =
-      hasDepositSignal || hasSoldSignal || hasFinalizeDealSignal || hasLateWalkInStepSignal;
+      hasDepositSignal || hasSoldSignal || hasDealFinalizingSignal;
     if (hasCreditCosignerSignal) {
       conv.dialogState = { name: "payments_handoff", updatedAt: new Date().toISOString() };
       addTodo(conv, "approval", event.body ?? walkInCleanedComment, event.providerMessageId);
@@ -2740,15 +2663,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       tail = "Sounds good — I cleared the hold and reactivated follow-up.";
     }
     const walkInTestRideRequested =
-      (walkInOutcomeAccepted && !!llmWalkInOutcome?.testRideRequested) ||
-      /(test ride|demo ride)/i.test(walkInCleanedComment);
+      walkInOutcomeAccepted && !!llmWalkInOutcome?.testRideRequested;
     const walkInWeatherSensitive =
-      (walkInOutcomeAccepted && !!llmWalkInOutcome?.weatherSensitive) ||
-      /weather/i.test(walkInCleanedComment);
+      walkInOutcomeAccepted && !!llmWalkInOutcome?.weatherSensitive;
     const walkInFollowUpWindowHint = String(llmWalkInOutcome?.followUpWindowText ?? "").trim();
     const walkInHasNextWeekWindow =
-      (walkInOutcomeAccepted && /next week/i.test(walkInFollowUpWindowHint)) ||
-      /(next week|check back|reach out|follow up)/i.test(walkInCleanedComment);
+      walkInOutcomeAccepted && /next week/i.test(walkInFollowUpWindowHint);
 
     if (!hasCompletedTestRideSignal) {
       if (walkInTestRideRequested && walkInWeatherSensitive) {
@@ -2799,17 +2719,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     );
     const buildWalkInAddendum = () => {
       if (!walkInCleanedComment) return "";
-      const followUpHint = /(follow\s*up|check\s*back|reach\s*out).{0,40}\b(next\s+week|next\s+month|this\s+week|this\s+month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.exec(walkInCleanedComment);
       const parserWindow = walkInOutcomeAccepted ? walkInFollowUpWindowHint : "";
-      const followUpWindow = parserWindow || (followUpHint?.[2] ?? "");
+      const followUpWindow = parserWindow;
       if (followUpWindow) {
         return `I’ll plan to follow up ${followUpWindow.toLowerCase()}.`;
       }
-      if (/(thinking it over|think it over|sleep on it|not ready|no rush|not ready yet|just looking)/i.test(walkInCleanedComment)) {
+      if (hasDecisionPendingSignal) {
         return "No rush — I’m here whenever you’re ready.";
-      }
-      if (/(order|factory order|place an order|put an order)/i.test(walkInCleanedComment)) {
-        return "If you decide to place an order, I can help with next steps.";
       }
       if (walkInTestRideRequested) {
         if (hasDirectedTestRidePlan) return "";

@@ -476,8 +476,11 @@ export type InventoryEntityParse = {
 export type WalkInOutcomeParse = {
   state:
     | "none"
+    | "deal_finalizing"
     | "deposit_left"
     | "sold_delivered"
+    | "hold_requested"
+    | "hold_cleared"
     | "cosigner_required"
     | "test_ride_completed"
     | "decision_pending"
@@ -678,8 +681,11 @@ const WALK_IN_OUTCOME_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
       type: "string",
       enum: [
         "none",
+        "deal_finalizing",
         "deposit_left",
         "sold_delivered",
+        "hold_requested",
+        "hold_cleared",
         "cosigner_required",
         "test_ride_completed",
         "decision_pending",
@@ -2475,15 +2481,27 @@ comment: "thinking it over, will let you know next week"
 output: {"state":"decision_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"next week","confidence":0.95}`,
     `EXAMPLE C
 comment: "wants a test ride next week when weather is better"
-output: {"state":"timing_defer_window","explicit_state":true,"test_ride_requested":true,"weather_sensitive":true,"follow_up_window_text":"next week","confidence":0.9}`
+ output: {"state":"timing_defer_window","explicit_state":true,"test_ride_requested":true,"weather_sensitive":true,"follow_up_window_text":"next week","confidence":0.9}`,
+    `EXAMPLE D
+comment: "mark this lead on hold until next Friday"
+output: {"state":"hold_requested","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"next Friday","confidence":0.94}`,
+    `EXAMPLE E
+comment: "clear hold and resume follow up"
+output: {"state":"hold_cleared","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","confidence":0.94}`,
+    `EXAMPLE F
+comment: "coming in tomorrow to finalize paperwork"
+output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"tomorrow","confidence":0.93}`
   ];
   const prompt = [
     "You parse walk-in salesperson comments from dealership ADF leads.",
     "Return only JSON that matches the schema.",
     "",
     "Choose exactly one primary state:",
+    "- deal_finalizing: finalizing paperwork/deal soon but not explicitly sold yet.",
     "- deposit_left: left/placed/took deposit.",
     "- sold_delivered: sold, delivered, or picked up.",
+    "- hold_requested: explicitly asks to mark/set/put lead on hold.",
+    "- hold_cleared: explicitly asks to clear/release hold or resume.",
     "- cosigner_required: needs co-signer / credit app waiting for co-signer.",
     "- test_ride_completed: customer already took/completed test ride.",
     "- decision_pending: thinking it over / not ready / will let us know.",
@@ -2505,7 +2523,8 @@ output: {"state":"timing_defer_window","explicit_state":true,"test_ride_requeste
     "Rules:",
     "- If both sold/delivered and another pending state appear, prefer sold_delivered.",
     "- If deposit and pending state both appear, prefer deposit_left.",
-    "- Phrases like 'left $X deposit', 'coming in to finalize deal', and high pipeline notes such as '(step 6)' indicate deposit_left unless sold/delivered is explicit.",
+    "- If finalizing language appears without explicit sold/delivered, choose deal_finalizing.",
+    "- Phrases like 'left $X deposit' and high pipeline notes such as '(step 6)' usually indicate deposit_left unless sold/delivered is explicit.",
     "- If uncertain, return state=none, explicit_state=false, low confidence.",
     "",
     ...examples,
@@ -2538,8 +2557,11 @@ output: {"state":"timing_defer_window","explicit_state":true,"test_ride_requeste
 
   const stateRaw = String(parsed.state ?? "").toLowerCase();
   const state: WalkInOutcomeParse["state"] =
+    stateRaw === "deal_finalizing" ||
     stateRaw === "deposit_left" ||
     stateRaw === "sold_delivered" ||
+    stateRaw === "hold_requested" ||
+    stateRaw === "hold_cleared" ||
     stateRaw === "cosigner_required" ||
     stateRaw === "test_ride_completed" ||
     stateRaw === "decision_pending" ||
