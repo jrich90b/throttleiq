@@ -431,6 +431,34 @@ export type RoutingDecisionParse = {
   confidence?: number;
 };
 
+export type DealershipFaqTopicParse = {
+  topic:
+    | "pricing_cost_range"
+    | "price_negotiation"
+    | "fees_out_the_door"
+    | "model_availability"
+    | "custom_order"
+    | "factory_order_timing"
+    | "finance_approval"
+    | "credit_score"
+    | "finance_specials"
+    | "no_money_down"
+    | "trade_in"
+    | "trade_tax_advantage"
+    | "registration_requirements"
+    | "street_legal"
+    | "inspection_requirements"
+    | "insurance_cost"
+    | "insurance_required"
+    | "warranty"
+    | "authorized_dealer_benefits"
+    | "test_ride"
+    | "new_vs_used"
+    | "none";
+  explicitRequest: boolean;
+  confidence?: number;
+};
+
 export type InventoryEntityParse = {
   model?: string | null;
   year?: number | null;
@@ -820,6 +848,43 @@ const ROUTING_DECISION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     explicit_request: { type: "boolean" },
     fallback_action: { type: "string", enum: ["none", "clarify", "no_response"] },
     clarify_prompt: { type: "string" },
+    confidence: { type: "number" }
+  }
+};
+
+const DEALERSHIP_FAQ_TOPIC_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["topic", "explicit_request", "confidence"],
+  properties: {
+    topic: {
+      type: "string",
+      enum: [
+        "pricing_cost_range",
+        "price_negotiation",
+        "fees_out_the_door",
+        "model_availability",
+        "custom_order",
+        "factory_order_timing",
+        "finance_approval",
+        "credit_score",
+        "finance_specials",
+        "no_money_down",
+        "trade_in",
+        "trade_tax_advantage",
+        "registration_requirements",
+        "street_legal",
+        "inspection_requirements",
+        "insurance_cost",
+        "insurance_required",
+        "warranty",
+        "authorized_dealer_benefits",
+        "test_ride",
+        "new_vs_used",
+        "none"
+      ]
+    },
+    explicit_request: { type: "boolean" },
     confidence: { type: "number" }
   }
 };
@@ -2024,6 +2089,172 @@ output: {"primary_intent":"none","explicit_request":false,"fallback_action":"no_
     explicitRequest: !!parsed.explicit_request,
     fallbackAction,
     clarifyPrompt: cleanOptionalString(parsed.clarify_prompt),
+    confidence
+  };
+}
+
+export async function parseDealershipFaqTopicWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<DealershipFaqTopicParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_FAQ_TOPIC_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_FAQ_TOPIC_PARSER_DEBUG === "1";
+  const primaryModel = process.env.OPENAI_FAQ_TOPIC_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_FAQ_TOPIC_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const examples = [
+    `EXAMPLE A
+inbound: "How much does a new Harley usually cost?"
+output: {"topic":"pricing_cost_range","explicit_request":true,"confidence":0.97}`,
+    `EXAMPLE B
+inbound: "Can you negotiate on price?"
+output: {"topic":"price_negotiation","explicit_request":true,"confidence":0.97}`,
+    `EXAMPLE C
+inbound: "What fees are included in out the door?"
+output: {"topic":"fees_out_the_door","explicit_request":true,"confidence":0.98}`,
+    `EXAMPLE D
+inbound: "Can I custom order one with different bars and seat?"
+output: {"topic":"custom_order","explicit_request":true,"confidence":0.97}`,
+    `EXAMPLE E
+inbound: "How long does factory order usually take?"
+output: {"topic":"factory_order_timing","explicit_request":true,"confidence":0.96}`,
+    `EXAMPLE F
+inbound: "Can I finance through the dealership?"
+output: {"topic":"finance_approval","explicit_request":true,"confidence":0.97}`,
+    `EXAMPLE G
+inbound: "What credit score do I need?"
+output: {"topic":"credit_score","explicit_request":true,"confidence":0.97}`,
+    `EXAMPLE H
+inbound: "Any low APR specials right now?"
+output: {"topic":"finance_specials","explicit_request":true,"confidence":0.97}`,
+    `EXAMPLE I
+inbound: "Can I do no money down?"
+output: {"topic":"no_money_down","explicit_request":true,"confidence":0.97}`,
+    `EXAMPLE J
+inbound: "Can I trade my bike in?"
+output: {"topic":"trade_in","explicit_request":true,"confidence":0.98}`,
+    `EXAMPLE K
+inbound: "Do I need insurance before I can take delivery?"
+output: {"topic":"insurance_required","explicit_request":true,"confidence":0.98}`,
+    `EXAMPLE L
+inbound: "What warranty comes with a new Harley?"
+output: {"topic":"warranty","explicit_request":true,"confidence":0.98}`,
+    `EXAMPLE M
+inbound: "Do you have any black Street Glides in stock?"
+output: {"topic":"none","explicit_request":true,"confidence":0.99}`,
+    `EXAMPLE N
+inbound: "Run this at 72 months with $5,000 down."
+output: {"topic":"none","explicit_request":true,"confidence":0.99}`,
+    `EXAMPLE O
+inbound: "Can I come in Wednesday at 1?"
+output: {"topic":"none","explicit_request":true,"confidence":0.99}`
+  ];
+  const prompt = [
+    "You are a strict parser for dealership FAQ-style questions.",
+    "Return only JSON matching the schema.",
+    "",
+    "Pick exactly one topic:",
+    "- pricing_cost_range: broad cost range questions for new Harley bikes.",
+    "- price_negotiation: asks if pricing is negotiable.",
+    "- fees_out_the_door: asks about fees/OTD/tax/docs/freight/setup.",
+    "- model_availability: asks what models are available right now.",
+    "- custom_order: asks about custom/factory ordering.",
+    "- factory_order_timing: asks how long factory order takes.",
+    "- finance_approval: asks if financing is available.",
+    "- credit_score: asks what credit score is needed.",
+    "- finance_specials: asks about APR promotions/deals/specials.",
+    "- no_money_down: asks about zero/low down payment.",
+    "- trade_in: asks if trade-ins are accepted.",
+    "- trade_tax_advantage: asks if trade lowers taxable amount.",
+    "- registration_requirements: asks what docs are needed to buy/register.",
+    "- street_legal: asks if bikes are street legal from factory.",
+    "- inspection_requirements: asks about inspection before riding.",
+    "- insurance_cost: asks how much insurance costs.",
+    "- insurance_required: asks if insurance is required before delivery.",
+    "- warranty: asks about factory warranty or extended coverage.",
+    "- authorized_dealer_benefits: asks why buy from authorized dealer.",
+    "- test_ride: asks if test rides are available.",
+    "- new_vs_used: asks whether new or used is better.",
+    "- none: not an FAQ-style question above.",
+    "",
+    "Rules:",
+    "- If message is a transactional request (specific availability, exact payment calc, scheduling), choose none.",
+    "- explicit_request=true only when user clearly asks a question/request.",
+    "- confidence is 0..1.",
+    "",
+    ...examples,
+    "",
+    `Known lead info: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null,
+      source: lead?.source ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "dealership_faq_topic_parser",
+      schema: DEALERSHIP_FAQ_TOPIC_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 180,
+      debugTag: "llm-faq-topic-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const topicRaw = String(parsed.topic ?? "").toLowerCase();
+  const topic: DealershipFaqTopicParse["topic"] =
+    topicRaw === "pricing_cost_range" ||
+    topicRaw === "price_negotiation" ||
+    topicRaw === "fees_out_the_door" ||
+    topicRaw === "model_availability" ||
+    topicRaw === "custom_order" ||
+    topicRaw === "factory_order_timing" ||
+    topicRaw === "finance_approval" ||
+    topicRaw === "credit_score" ||
+    topicRaw === "finance_specials" ||
+    topicRaw === "no_money_down" ||
+    topicRaw === "trade_in" ||
+    topicRaw === "trade_tax_advantage" ||
+    topicRaw === "registration_requirements" ||
+    topicRaw === "street_legal" ||
+    topicRaw === "inspection_requirements" ||
+    topicRaw === "insurance_cost" ||
+    topicRaw === "insurance_required" ||
+    topicRaw === "warranty" ||
+    topicRaw === "authorized_dealer_benefits" ||
+    topicRaw === "test_ride" ||
+    topicRaw === "new_vs_used"
+      ? topicRaw
+      : "none";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    topic,
+    explicitRequest: !!parsed.explicit_request,
     confidence
   };
 }

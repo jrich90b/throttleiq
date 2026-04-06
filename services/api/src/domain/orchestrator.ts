@@ -3,6 +3,7 @@ import { loadSystemPrompt } from "./loadPrompt.js";
 import type { InboundMessageEvent, OrchestratorResult } from "./types.js";
 import {
   classifySmallTalkWithLLM,
+  parseDealershipFaqTopicWithLLM,
   parseDialogActWithLLM,
   generateDraftWithLLM,
   summarizeConversationMemoryWithLLM
@@ -82,6 +83,87 @@ function inferHeuristicIntent(body: string): OrchestratorResult["intent"] {
   if (/(test ride|ride it|demo)/.test(t)) return "TEST_RIDE";
   if (/(spec|seat height|weight|hp|horsepower|torque)/.test(t)) return "SPECS";
   return "GENERAL";
+}
+
+function isFaqLayerEnabled(): boolean {
+  return process.env.FAQ_LAYER_ENABLED === "1";
+}
+
+function buildDealershipFaqReply(args: {
+  topic:
+    | "pricing_cost_range"
+    | "price_negotiation"
+    | "fees_out_the_door"
+    | "model_availability"
+    | "custom_order"
+    | "factory_order_timing"
+    | "finance_approval"
+    | "credit_score"
+    | "finance_specials"
+    | "no_money_down"
+    | "trade_in"
+    | "trade_tax_advantage"
+    | "registration_requirements"
+    | "street_legal"
+    | "inspection_requirements"
+    | "insurance_cost"
+    | "insurance_required"
+    | "warranty"
+    | "authorized_dealer_benefits"
+    | "test_ride"
+    | "new_vs_used";
+  lead?: LeadProfile | null;
+  dealerName: string;
+}): string {
+  const yearLabel = args.lead?.vehicle?.year ? `${args.lead.vehicle.year} ` : "";
+  const modelRaw = args.lead?.vehicle?.model ?? args.lead?.vehicle?.description ?? "that bike";
+  const bikeLabel = `${yearLabel}${normalizeModelLabel(modelRaw)}`.trim();
+  switch (args.topic) {
+    case "pricing_cost_range":
+      return "New Harley-Davidson models usually run from about $11,000 to $45,000+, depending on model, trim, and options. Want me to narrow it down to the exact bike you want?";
+    case "price_negotiation":
+      return "Yes — we can talk through price, promotions, trade value, and financing options on in-stock bikes. Want me to pull numbers on your preferred model?";
+    case "fees_out_the_door":
+      return "Great question. Out-the-door includes bike price plus tax/title/registration and dealer fees like freight/setup/doc. I can send a full OTD breakdown on your exact bike.";
+    case "model_availability":
+      return "We can check exactly what’s in stock now and what’s inbound. Tell me the model/year/color you want and I’ll narrow it down.";
+    case "custom_order":
+      return "Yes — we can place a factory order and spec it with genuine Harley-Davidson options. If you want, we can map your build today.";
+    case "factory_order_timing":
+      return "Factory orders are usually around 6 to 12 weeks, depending on model and build details.";
+    case "finance_approval":
+      return `Yes — we offer financing through Harley-Davidson Financial Services and partner lenders here at ${args.dealerName}.`;
+    case "credit_score":
+      return "Approval depends on the full application, but we see fair, good, and excellent credit get approved. If you want, I can send the credit app link.";
+    case "finance_specials":
+      return `Good question. Programs change, but we can check current APR and cash offers right now on ${bikeLabel}. Want me to pull today’s programs?`;
+    case "no_money_down":
+      return "Some qualified buyers can do low or no money down. It’s application-dependent, but we can check your options quickly.";
+    case "trade_in":
+      return "Yes — we take Harley and non-Harley trades. Value depends on condition, miles, and market.";
+    case "trade_tax_advantage":
+      return "In many states, trade credit can reduce the taxable amount. We can run exact numbers for your deal structure.";
+    case "registration_requirements":
+      return "Usually you’ll need ID, motorcycle license/permit, proof of insurance, and title/registration paperwork. We handle most paperwork in-store.";
+    case "street_legal":
+      return "Yes — new Harley-Davidson motorcycles sold through authorized dealers are street-legal from the factory.";
+    case "inspection_requirements":
+      return "Inspection rules depend on your location, and we handle any required dealer-side steps before delivery.";
+    case "insurance_cost":
+      return "Insurance depends on rider profile, bike, coverage, and location. It can range from a few hundred to over a thousand per year.";
+    case "insurance_required":
+      return "Yes — proof of insurance is typically required before registration and delivery.";
+    case "warranty":
+      return "New Harley-Davidson motorcycles include a factory limited warranty, and extended coverage options are available.";
+    case "authorized_dealer_benefits":
+      return "Authorized dealers provide factory warranty support, genuine parts, certified service, financing/trade options, and recall support.";
+    case "test_ride":
+      return "Yes — we offer test rides/demo opportunities based on license, weather, and bike availability.";
+    case "new_vs_used":
+      return "New gives you full warranty and latest tech; used lowers upfront cost. If you want, I can compare both options for your budget.";
+    default:
+      return "Thanks for reaching out. How can I help?";
+  }
 }
 
 function detectTradeRequest(text: string): boolean {
@@ -1896,6 +1978,45 @@ export async function orchestrateInbound(
   if (process.env.LLM_DEBUG_FLOW === "1") {
     // eslint-disable-next-line no-console
     console.log("[llm-flow]", { leadKey: event.from, ...flowDebug });
+  }
+
+  const faqLayerEligible =
+    isFaqLayerEnabled() &&
+    useLLM &&
+    intent === "GENERAL" &&
+    ambiguousFlow &&
+    !depositRequest &&
+    !callbackRequest;
+  if (faqLayerEligible) {
+    const faqParse = await parseDealershipFaqTopicWithLLM({
+      text: event.body,
+      history,
+      lead: ctx?.lead ?? undefined
+    });
+    const faqConfidence =
+      typeof faqParse?.confidence === "number" && Number.isFinite(faqParse.confidence)
+        ? faqParse.confidence
+        : 0;
+    const faqConfidenceMin = Number(process.env.LLM_FAQ_TOPIC_CONFIDENCE_MIN ?? 0.8);
+    if (
+      faqParse &&
+      faqParse.topic !== "none" &&
+      faqParse.explicitRequest === true &&
+      faqConfidence >= faqConfidenceMin
+    ) {
+      const dealerProfile = await getDealerProfile();
+      const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+      return finalize({
+        intent: "GENERAL",
+        stage: "ENGAGED",
+        shouldRespond: true,
+        draft: buildDealershipFaqReply({
+          topic: faqParse.topic,
+          lead: ctx?.lead ?? null,
+          dealerName
+        })
+      });
+    }
   }
 
   const pricingTermsOnly = /(price|pricing|msrp|cost|how much|what's the price|what is the price|out the door|\botd\b|total price)/i.test(
