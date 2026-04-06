@@ -6244,14 +6244,10 @@ type RoutePrioritySignals = {
 };
 
 function resolveRoutePrioritySignals(input: RoutePrioritySignalsInput): RoutePrioritySignals {
+  const text = String(input.text ?? "");
+  const textLower = text.toLowerCase();
   const availabilityExplicit = !!input.explicitAvailabilityIntentExtra;
-  const schedulingSignalsBase = {
-    explicit: false,
-    hasDayTime: false,
-    hasDayOnlyAvailability: false,
-    hasDayOnlyRequest: false,
-    softVisit: false
-  };
+  const schedulingSignalsBase = detectSchedulingSignals(text);
   const schedulingSignals = {
     ...schedulingSignalsBase,
     explicit:
@@ -6267,30 +6263,50 @@ function resolveRoutePrioritySignals(input: RoutePrioritySignalsInput): RoutePri
       schedulingSignalsBase.hasDayOnlyRequest ||
       !!input.schedulingSignalsExtra?.hasDayOnlyRequest
   };
-  const availabilitySignals = {
-    inventoryCountQuestion: false,
-    explicitAvailabilityAsk: availabilityExplicit,
-    shouldLookupAvailability: false
-  };
-  const deterministicAvailabilityLookup = false;
-  const availabilityIntentOverride = availabilityExplicit;
-  const currentTurnFinanceSignal =
-    !!input.pricingOrPaymentsIntent || !!input.explicitFinanceTermIntent;
-  const financePriorityRaw = currentTurnFinanceSignal;
-  const pricingHistoryBleedGuard = false;
-  const financePriorityOverride = financePriorityRaw;
-  const schedulePriorityOverride =
+  const explicitAvailabilityFromText = isExplicitAvailabilityQuestion(text);
+  const inventoryCountQuestion =
+    /\bhow many\b[\w\s-]{0,30}\b(in[-\s]?stock|do you have|available|units|bikes|ones)\b/i.test(
+      textLower
+    ) || /\bhow many\s+(?:do you have|in[-\s]?stock)\b/i.test(textLower);
+  const otherInventoryRequest = isOtherInventoryRequestText(text);
+  const explicitAvailabilityAsk =
+    availabilityExplicit ||
+    explicitAvailabilityFromText ||
+    inventoryCountQuestion ||
+    otherInventoryRequest;
+  const schedulePriorityRaw =
     schedulingSignals.explicit ||
     schedulingSignals.hasDayTime ||
     schedulingSignals.hasDayOnlyAvailability ||
     schedulingSignals.hasDayOnlyRequest;
+  const fallbackFinanceSignal = isPricingText(text) || isPaymentText(text);
+  const currentTurnFinanceSignal =
+    !!input.pricingOrPaymentsIntent || !!input.explicitFinanceTermIntent || fallbackFinanceSignal;
+  const shouldLookupAvailability =
+    explicitAvailabilityAsk && !currentTurnFinanceSignal && !schedulePriorityRaw;
+  const availabilitySignals = {
+    inventoryCountQuestion,
+    explicitAvailabilityAsk,
+    shouldLookupAvailability
+  };
+  const deterministicAvailabilityLookup = shouldLookupAvailability;
+  const availabilityIntentOverride = explicitAvailabilityAsk;
+  const financePriorityRaw = currentTurnFinanceSignal;
+  const pricingHistoryBleedGuard =
+    !!input.llmPricingOrPaymentsIntentRaw &&
+    explicitAvailabilityAsk &&
+    !fallbackFinanceSignal &&
+    !input.explicitFinanceTermIntent;
+  const financePriorityOverride =
+    financePriorityRaw && !availabilityIntentOverride && !schedulePriorityRaw;
+  const schedulePriorityOverride = schedulePriorityRaw && !currentTurnFinanceSignal;
 
   return {
     availabilitySignals,
     schedulingSignals,
     deterministicAvailabilityLookup,
     availabilityIntentOverride,
-    otherInventoryRequest: false,
+    otherInventoryRequest,
     currentTurnFinanceSignal,
     financePriorityRaw,
     pricingHistoryBleedGuard,
@@ -17955,7 +17971,13 @@ if (authToken && signature) {
     hasActionableFinanceContext || hasActionableAvailabilityContext || hasActionableSchedulingContext;
   if (routingParserDecision.accepted && routingParserDecision.fallbackAction === "no_response") {
     if (!hasActionableTurnContext) {
-      logRouteOutcome("routing_parser_no_response");
+      logRouteOutcome("routing_parser_no_response", {
+        turnPrimaryIntent,
+        parserReason: routingParserDecision.reason,
+        hasActionableFinanceContext,
+        hasActionableAvailabilityContext,
+        hasActionableSchedulingContext
+      });
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
@@ -21777,7 +21799,11 @@ if (authToken && signature) {
       return res.status(200).type("text/xml").send(twiml);
     }
     logRouteOutcome("orchestrator_no_response", {
-      intent: result.intent ?? "unknown"
+      intent: result.intent ?? "unknown",
+      turnPrimaryIntent,
+      hasActionableFinanceContext,
+      hasActionableAvailabilityContext,
+      hasActionableSchedulingContext
     });
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
