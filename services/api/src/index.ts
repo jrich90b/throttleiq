@@ -17843,19 +17843,36 @@ if (authToken && signature) {
     deterministicAvailabilityLookup,
     pricingHistoryBleedGuard
   });
+  const hasActionableFinanceContext =
+    turnPrimaryIntent === "pricing_payments" ||
+    paymentBudgetContext.monthlyBudget != null ||
+    paymentBudgetContext.downPayment != null ||
+    paymentBudgetContext.termMonths != null;
+  const hasActionableAvailabilityContext =
+    turnPrimaryIntent === "availability" ||
+    availabilityPrimaryIntent ||
+    explicitAvailabilitySignalThisTurn ||
+    deterministicAvailabilityLookup ||
+    inventoryCountQuestion;
+  const hasActionableSchedulingContext =
+    turnPrimaryIntent === "scheduling" ||
+    schedulingSignals.explicit ||
+    schedulingSignals.hasDayTime ||
+    schedulingSignals.hasDayOnlyAvailability ||
+    schedulingSignals.hasDayOnlyRequest;
+  const hasActionableTurnContext =
+    hasActionableFinanceContext || hasActionableAvailabilityContext || hasActionableSchedulingContext;
   if (routingParserDecision.accepted && routingParserDecision.fallbackAction === "no_response") {
-    const hasActionableFinanceContext =
-      turnPrimaryIntent === "pricing_payments" ||
-      paymentBudgetContext.monthlyBudget != null ||
-      paymentBudgetContext.downPayment != null ||
-      paymentBudgetContext.termMonths != null;
-    if (!hasActionableFinanceContext) {
+    if (!hasActionableTurnContext) {
       logRouteOutcome("routing_parser_no_response");
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
     logRouteOutcome("routing_parser_no_response_overridden", {
-      turnPrimaryIntent
+      turnPrimaryIntent,
+      hasActionableFinanceContext,
+      hasActionableAvailabilityContext,
+      hasActionableSchedulingContext
     });
   }
   if (routingParserDecision.accepted && routingParserDecision.fallbackAction === "clarify") {
@@ -21632,6 +21649,36 @@ if (authToken && signature) {
   }
 
   if (!result.shouldRespond) {
+    if (hasActionableTurnContext) {
+      let fallbackReply =
+        "Happy to help — are you asking about availability, payments, or setting a time to come in?";
+      if (hasActionableFinanceContext) {
+        fallbackReply =
+          "Happy to help with payments. What term do you want me to run: 60, 72, or 84 months?";
+      } else if (hasActionableAvailabilityContext) {
+        fallbackReply =
+          "Happy to check inventory right now. Are you looking for a specific year, color, or trim?";
+      } else if (hasActionableSchedulingContext) {
+        fallbackReply = "Happy to set that up. What day and time work best for you?";
+      }
+      logRouteOutcome("orchestrator_no_response_overridden", {
+        intent: result.intent ?? "unknown",
+        turnPrimaryIntent,
+        hasActionableFinanceContext,
+        hasActionableAvailabilityContext,
+        hasActionableSchedulingContext
+      });
+      if (webhookMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, fallbackReply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, fallbackReply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        fallbackReply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
     logRouteOutcome("orchestrator_no_response", {
       intent: result.intent ?? "unknown"
     });
