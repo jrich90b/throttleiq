@@ -135,7 +135,7 @@ function isDepartmentHandoff(input: DraftStateInvariantInput): boolean {
   return (
     ["service", "parts", "apparel"].includes(bucket) ||
     /(service|parts|apparel)_request/.test(cta) ||
-    /(service|parts|apparel|dealer_ride_no_purchase|credit_app|manual_appointment|handoff:)/.test(reason)
+    /(service|parts|apparel|dealer_ride_no_purchase|credit_app|handoff:)/.test(reason)
   );
 }
 

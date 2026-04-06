@@ -194,7 +194,11 @@ type StaleCase = {
     hasSchedulingIntent?: boolean;
     hasDepartmentIntent?: boolean;
   };
-  expected: { clearInventoryWatchPending: boolean; setDialogStateToNone: boolean };
+  expected: {
+    clearInventoryWatchPending: boolean;
+    setDialogStateToNone: boolean;
+    clearManualAppointmentHandoff?: boolean;
+  };
 };
 
 const staleCases: StaleCase[] = [
@@ -206,7 +210,27 @@ const staleCases: StaleCase[] = [
       dialogState: "pricing_need_model",
       hasInventoryWatchPending: false
     },
-    expected: { clearInventoryWatchPending: false, setDialogStateToNone: true }
+    expected: {
+      clearInventoryWatchPending: false,
+      setDialogStateToNone: true,
+      clearManualAppointmentHandoff: false
+    }
+  },
+  {
+    id: "manual_appointment_clears_on_finance_shift",
+    input: {
+      followUpMode: "manual_handoff",
+      followUpReason: "manual_appointment",
+      dialogState: "none",
+      hasInventoryWatchPending: false,
+      hasFinanceIntent: true,
+      hasSchedulingIntent: false
+    },
+    expected: {
+      clearInventoryWatchPending: false,
+      setDialogStateToNone: false,
+      clearManualAppointmentHandoff: true
+    }
   },
   {
     id: "manual_handoff_clears_pending_watch_without_watch_intent",
@@ -217,7 +241,11 @@ const staleCases: StaleCase[] = [
       hasInventoryWatchPending: true,
       hasWatchIntent: false
     },
-    expected: { clearInventoryWatchPending: true, setDialogStateToNone: false }
+    expected: {
+      clearInventoryWatchPending: true,
+      setDialogStateToNone: false,
+      clearManualAppointmentHandoff: false
+    }
   },
   {
     id: "watch_context_keeps_pending_watch",
@@ -228,7 +256,11 @@ const staleCases: StaleCase[] = [
       hasInventoryWatchPending: true,
       hasWatchIntent: true
     },
-    expected: { clearInventoryWatchPending: false, setDialogStateToNone: false }
+    expected: {
+      clearInventoryWatchPending: false,
+      setDialogStateToNone: false,
+      clearManualAppointmentHandoff: false
+    }
   },
   {
     id: "expired_pending_watch_clears_on_context_shift",
@@ -241,7 +273,11 @@ const staleCases: StaleCase[] = [
       hasWatchIntent: false,
       hasFinanceIntent: true
     },
-    expected: { clearInventoryWatchPending: true, setDialogStateToNone: true }
+    expected: {
+      clearInventoryWatchPending: true,
+      setDialogStateToNone: true,
+      clearManualAppointmentHandoff: false
+    }
   }
 ];
 
@@ -250,12 +286,14 @@ for (const c of staleCases) {
   const actual = reduceStaleStateForInbound(c.input);
   const ok =
     actual.clearInventoryWatchPending === c.expected.clearInventoryWatchPending &&
-    actual.setDialogStateToNone === c.expected.setDialogStateToNone;
+    actual.setDialogStateToNone === c.expected.setDialogStateToNone &&
+    actual.clearManualAppointmentHandoff === (c.expected.clearManualAppointmentHandoff ?? false);
   if (ok) stalePassed += 1;
   console.log(
     `${ok ? "PASS" : "FAIL"} ${c.id} expected=${JSON.stringify(c.expected)} actual=${JSON.stringify({
       clearInventoryWatchPending: actual.clearInventoryWatchPending,
       setDialogStateToNone: actual.setDialogStateToNone,
+      clearManualAppointmentHandoff: actual.clearManualAppointmentHandoff,
       reasons: actual.reasons
     })}`
   );

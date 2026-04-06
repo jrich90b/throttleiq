@@ -6437,6 +6437,14 @@ function reduceStaleWorkflowStateForInbound(
     setDialogState(conv, "none");
     changed = true;
   }
+  if (
+    decision.clearManualAppointmentHandoff &&
+    String(conv.followUp?.mode ?? "").toLowerCase() === "manual_handoff" &&
+    String(conv.followUp?.reason ?? "").toLowerCase() === "manual_appointment"
+  ) {
+    setFollowUpMode(conv, "active", "manual_appointment_cleared");
+    changed = true;
+  }
   if (changed) {
     (conv as any).workflowStateReduced = {
       at: nowIso(),
@@ -13705,12 +13713,14 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
 
     const schedulingSignals = detectSchedulingSignals(text);
-    const scheduleConfirmation =
-      schedulingSignals.explicit ||
-      schedulingSignals.hasDayTime ||
-      /\b(see you|you(?:'|’)re all set|you are all set|confirmed|booked|scheduled|works for me|that works)\b/i.test(
+    const hasDayToken =
+      /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week|this weekend|weekend|next month)\b/i.test(
         lower
       );
+    const scheduleConfirmation =
+      schedulingSignals.hasDayTime ||
+      /\b(you(?:'|’)re all set|you are all set|confirmed|booked|scheduled)\b/i.test(lower) ||
+      (/\bsee you\b/i.test(lower) && (schedulingSignals.hasDayTime || hasDayToken));
     if (scheduleConfirmation) {
       conv.inventoryWatchPending = undefined;
       if (getDialogState(conv) === "pricing_need_model" || getDialogState(conv) === "inventory_watch_prompted") {

@@ -78,6 +78,7 @@ export type StaleStateCleanupInput = {
 export type StaleStateCleanupDecision = {
   clearInventoryWatchPending: boolean;
   setDialogStateToNone: boolean;
+  clearManualAppointmentHandoff: boolean;
   reasons: string[];
 };
 
@@ -242,6 +243,7 @@ export function reduceStaleStateForInbound(input: StaleStateCleanupInput): Stale
   const reasons: string[] = [];
   let clearInventoryWatchPending = false;
   let setDialogStateToNone = false;
+  let clearManualAppointmentHandoff = false;
 
   if (mode === "manual_handoff" && stickyDialogStates.has(dialogState)) {
     setDialogStateToNone = true;
@@ -270,9 +272,20 @@ export function reduceStaleStateForInbound(input: StaleStateCleanupInput): Stale
     reasons.push("clear_inventory_watch_prompted_after_shift");
   }
 
+  if (
+    mode === "manual_handoff" &&
+    reason === "manual_appointment" &&
+    !hasSchedulingIntent &&
+    (hasFinanceIntent || hasWatchIntent || hasDepartmentIntent)
+  ) {
+    clearManualAppointmentHandoff = true;
+    reasons.push("clear_manual_appointment_context_shift");
+  }
+
   return {
     clearInventoryWatchPending,
     setDialogStateToNone,
+    clearManualAppointmentHandoff,
     reasons
   };
 }
