@@ -2520,8 +2520,17 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       llmWalkInOutcome.explicitState;
     const walkInState = walkInOutcomeAccepted ? llmWalkInOutcome?.state ?? "none" : "none";
 
+    const hasStrongDepositLexeme =
+      /\bdeposit\b/.test(commentLower) &&
+      (/\$\s*\d+/.test(commentLower) ||
+        /\b(left|put|placed|took|received|paid)\b/.test(commentLower));
+    const hasFinalizeDealSignal =
+      /\b(finali[sz]e|close|closing)\s+(the\s+)?(deal|paperwork|sale)\b/.test(commentLower) ||
+      /\bcoming in\b.{0,60}\b(finali[sz]e|close|closing)\b/.test(commentLower);
+    const hasLateWalkInStepSignal = /\(\s*step\s*(?:[5-9]|[1-9]\d)\s*\)/i.test(walkInCleanedComment);
     const hasDepositSignal =
       walkInState === "deposit_left" ||
+      hasStrongDepositLexeme ||
       (walkInOutcomeRegexFallbackEnabled &&
         (/\b(left|put|placed|took|received)\s+(a\s+)?deposit\b/.test(commentLower) ||
           /\bdeposit\s+(left|taken|received|put|placed)\b/.test(commentLower)));
@@ -2606,16 +2615,22 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       );
     }
 
+    const hasDealProgressSignal =
+      hasDepositSignal || hasSoldSignal || hasFinalizeDealSignal || hasLateWalkInStepSignal;
     if (hasCreditCosignerSignal) {
       conv.dialogState = { name: "payments_handoff", updatedAt: new Date().toISOString() };
       addTodo(conv, "approval", event.body ?? walkInCleanedComment, event.providerMessageId);
       setFollowUpMode(conv, "manual_handoff", "credit_app_cosigner");
       stopFollowUpCadence(conv, "manual_handoff");
     }
-    if (hasDepositSignal || hasSoldSignal) {
+    if (hasDealProgressSignal) {
       conv.dialogState = { name: "schedule_booked", updatedAt: new Date().toISOString() };
       addTodo(conv, "other", event.body ?? walkInCleanedComment, event.providerMessageId);
-      setFollowUpMode(conv, "manual_handoff", hasSoldSignal ? "sold_walkin_note" : "deposit_walkin_note");
+      setFollowUpMode(
+        conv,
+        "manual_handoff",
+        hasSoldSignal ? "sold_walkin_note" : hasDepositSignal ? "deposit_walkin_note" : "deal_finalizing_walkin_note"
+      );
       stopFollowUpCadence(conv, "manual_handoff");
       if (hasSoldSignal) {
         closeConversation(conv, "sold_walkin_note");
@@ -2667,7 +2682,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
     let walkInDelayReason: string | null = null;
     let walkInDelayDays: number | null = null;
-    if (!(hasDepositSignal || hasSoldSignal || hasCreditCosignerSignal || hasHoldSignal || hasResumeHoldSignal)) {
+    if (!(hasDealProgressSignal || hasCreditCosignerSignal || hasHoldSignal || hasResumeHoldSignal)) {
       if (hasOutsideFinancingPendingSignal) {
         walkInDelayReason = "outside_financing_pending";
         walkInDelayDays = 5;
@@ -2694,10 +2709,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     let tail = "I’ll keep an eye out and let you know if one comes in.";
     if (hasCreditCosignerSignal) {
       tail = "I saw the credit app note and I’ll have our finance team follow up about the co-signer.";
-    } else if (hasDepositSignal || hasSoldSignal) {
+    } else if (hasDealProgressSignal) {
       tail = hasSoldSignal
         ? "Thanks again — we’ll take it from here and follow up if anything is needed."
-        : "Thanks for the deposit note — we’ll follow up with next steps.";
+        : hasDepositSignal
+          ? "Thanks for the deposit note — we’ll follow up with next steps."
+          : "Got it — we’ll pick up with finalizing details at your visit.";
     } else if (hasCompletedTestRideSignal) {
       tail = "Thanks again for taking the test ride today. What feels like the best next step for you?";
     } else if (walkInDelayReason === "outside_financing_pending") {
@@ -2797,13 +2814,19 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       "Thanks for stopping in, it was nice chatting with you. " +
       tail +
       (addendum ? ` ${addendum}` : "");
-    const suppressWalkInAutoAck = hasCompletedTestRideSignal || hasHoldSignal || hasResumeHoldSignal;
+    const suppressWalkInAutoAck =
+      hasCompletedTestRideSignal ||
+      hasHoldSignal ||
+      hasResumeHoldSignal ||
+      hasDealProgressSignal ||
+      !!conv.hold ||
+      conv.followUp?.mode === "paused_indefinite";
 
     if (
       modelLabel &&
       wantsUsed &&
       !hasUsedMatch &&
-      !(hasDepositSignal || hasSoldSignal || hasCreditCosignerSignal)
+      !(hasDealProgressSignal || hasCreditCosignerSignal)
     ) {
       const watch: InventoryWatch = {
         model: modelLabel,
@@ -2836,7 +2859,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       wantsNew &&
       hasWatchIntent &&
       !hasNewMatch &&
-      !(hasDepositSignal || hasSoldSignal || hasCreditCosignerSignal)
+      !(hasDealProgressSignal || hasCreditCosignerSignal)
     ) {
       const watch: InventoryWatch = {
         model: modelLabel,
@@ -2869,7 +2892,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     if (!suppressWalkInAutoAck) {
       queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     }
-    if (walkInDelayReason && walkInDelayDays && !hasCreditCosignerSignal && !(hasDepositSignal || hasSoldSignal)) {
+    if (walkInDelayReason && walkInDelayDays && !hasCreditCosignerSignal && !hasDealProgressSignal) {
       const cfg = await getSchedulerConfig();
       if (!conv.followUpCadence?.status) {
         startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
@@ -2889,8 +2912,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       !hasCompletedTestRideSignal &&
       !hasHoldSignal &&
       !hasResumeHoldSignal &&
-      !hasDepositSignal &&
-      !hasSoldSignal &&
+      !hasDealProgressSignal &&
       !hasCreditCosignerSignal;
     if (shouldStartWalkInCadence) {
       const cfg = await getSchedulerConfig();

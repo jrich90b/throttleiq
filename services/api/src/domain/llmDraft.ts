@@ -2466,6 +2466,17 @@ export async function parseWalkInOutcomeWithLLM(args: {
 
   const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
+  const examples = [
+    `EXAMPLE A
+comment: "left $1,000 deposit on motorcycle. coming in 4/6 at 4:00pm to finalize deal. (step 6)"
+output: {"state":"deposit_left","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","confidence":0.98}`,
+    `EXAMPLE B
+comment: "thinking it over, will let you know next week"
+output: {"state":"decision_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"next week","confidence":0.95}`,
+    `EXAMPLE C
+comment: "wants a test ride next week when weather is better"
+output: {"state":"timing_defer_window","explicit_state":true,"test_ride_requested":true,"weather_sensitive":true,"follow_up_window_text":"next week","confidence":0.9}`
+  ];
   const prompt = [
     "You parse walk-in salesperson comments from dealership ADF leads.",
     "Return only JSON that matches the schema.",
@@ -2494,7 +2505,10 @@ export async function parseWalkInOutcomeWithLLM(args: {
     "Rules:",
     "- If both sold/delivered and another pending state appear, prefer sold_delivered.",
     "- If deposit and pending state both appear, prefer deposit_left.",
+    "- Phrases like 'left $X deposit', 'coming in to finalize deal', and high pipeline notes such as '(step 6)' indicate deposit_left unless sold/delivered is explicit.",
     "- If uncertain, return state=none, explicit_state=false, low confidence.",
+    "",
+    ...examples,
     "",
     `Known lead info: ${JSON.stringify({
       model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
