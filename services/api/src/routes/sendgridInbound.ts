@@ -38,6 +38,7 @@ import {
 } from "../domain/conversationStore.js";
 import type { InventoryWatch } from "../domain/conversationStore.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
+import { buildEffectiveHistory } from "../domain/effectiveContext.js";
 import { resolveChannel, resolveLeadRule } from "../domain/leadSourceRules.js";
 import {
   parseDialogActWithLLM,
@@ -1488,7 +1489,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       });
     }
 
-    const history = conv.messages.slice(-20).map(m => ({ direction: m.direction, body: m.body }));
+    const history = buildEffectiveHistory(conv, 20);
     const allowSchedulingOffer =
       /(appointment|appt|schedule|book|reserve|come in|stop in|stop by|visit|test ride|demo ride|\b\d{1,2}(:\d{2})?\s*(am|pm)\b)/i.test(
         event.body ?? ""
@@ -1764,9 +1765,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     });
     return res.status(200).json({ ok: true, parsed: true, duplicate: true, leadKey });
   }
-  const adfHistory = (conv.messages ?? [])
-    .slice(-6)
-    .map(m => ({ direction: m.direction as "in" | "out", body: String(m.body ?? "") }));
+  const adfHistory = buildEffectiveHistory(conv, 6);
   const llmDialogAct = await parseDialogActWithLLM({
     text: effectiveInquiry,
     history: adfHistory,
@@ -2553,6 +2552,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
     if (walkInCleanedComment) {
       conv.lead.walkInComment = walkInCleanedComment;
+      conv.lead.walkInCommentCapturedAt = new Date().toISOString();
       conv.lead.walkInCommentUsedAt = undefined;
       conv.updatedAt = new Date().toISOString();
       saveConversation(conv);
@@ -3201,7 +3201,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     });
   }
 
-  const history = conv.messages.slice(-20).map(m => ({ direction: m.direction, body: m.body }));
+  const history = buildEffectiveHistory(conv, 20);
   const result = await orchestrateInbound(event, history, {
     appointment: conv.appointment,
     followUp: conv.followUp,

@@ -185,12 +185,12 @@ import {
   getConversationStorePath,
   setAgentContext,
   clearAgentContext,
-  getActiveAgentContextText,
   type Conversation,
   type InventoryWatch,
   type InventoryWatchPending,
   type DialogStateName
 } from "./domain/conversationStore.js";
+import { buildEffectiveHistory } from "./domain/effectiveContext.js";
 import { logTuningRow } from "./domain/tuningLogger.js";
 import {
   addSuppression,
@@ -1929,6 +1929,7 @@ async function resolveInboundConversationForSms(event: InboundMessageEvent): Pro
     created.lead = {
       ...latest.lead,
       walkInComment: undefined,
+      walkInCommentCapturedAt: undefined,
       walkInCommentUsedAt: undefined
     };
   }
@@ -4666,7 +4667,11 @@ function findConversationByPhone(rawPhone?: string | null) {
 }
 
 function isVoiceProvider(msg: { provider?: string } | null | undefined): boolean {
-  return msg?.provider === "voice_call" || msg?.provider === "voice_transcript";
+  return (
+    msg?.provider === "voice_call" ||
+    msg?.provider === "voice_transcript" ||
+    msg?.provider === "voice_summary"
+  );
 }
 
 function getNonVoiceMessages(conv: any) {
@@ -4674,20 +4679,7 @@ function getNonVoiceMessages(conv: any) {
 }
 
 function buildHistory(conv: any, limit = 20) {
-  const history = getNonVoiceMessages(conv)
-    .slice(-limit)
-    .map((m: any) => ({ direction: m.direction, body: m.body }));
-  const agentContext = getActiveAgentContextText(conv);
-  if (!agentContext) return history;
-  const safeSnippet = agentContext.replace(/\s+/g, " ").trim().slice(0, 800);
-  if (!safeSnippet) return history;
-  return [
-    {
-      direction: "out" as const,
-      body: `INTERNAL STAFF CONTEXT (never send verbatim to customer): ${safeSnippet}`
-    },
-    ...history
-  ];
+  return buildEffectiveHistory(conv, limit);
 }
 
 function getRecentMessagesText(conv: any, limit = 12): string {
