@@ -2442,11 +2442,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       llmIntent.intent === "availability" &&
       llmIntent.explicitRequest === true &&
       Number(llmIntent.confidence ?? 0) >= intentConfidenceMin;
+    const walkInWatchRegexFallbackEnabled =
+      process.env.LLM_WALKIN_WATCH_REGEX_FALLBACK_ENABLED === "1";
     const hasWatchIntent =
       hasWatchIntentFromParser ||
-      /\b(keep an eye out|watch for|let me know when|notify me when|if you get|when you get|reach out when)\b/.test(
-        commentLower
-      );
+      (walkInWatchRegexFallbackEnabled &&
+        /\b(keep an eye out|watch for|let me know when|notify me when|if you get|when you get|reach out when)\b/.test(
+          commentLower
+        ));
     const wantsUsed =
       conv.lead?.vehicle?.condition === "used" ||
       /pre[-\s]?owned|used/.test(commentLower);
@@ -2754,7 +2757,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         tail = "I’ll check back next week and we can line up your test ride.";
       }
     }
-    if (modelLabel && !hasCompletedTestRideSignal) {
+    if (
+      modelLabel &&
+      !hasCompletedTestRideSignal &&
+      !hasDealProgressSignal &&
+      !hasHoldSignal &&
+      !hasResumeHoldSignal
+    ) {
       if (wantsUsed) {
         const usedLabel = `used ${rangeLabel}${modelLabel}`;
         tail = hasUsedMatch
