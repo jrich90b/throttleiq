@@ -13838,9 +13838,17 @@ app.post("/conversations/:id/send", async (req, res) => {
   // Normalize destination number from conversation leadKey
   const rawTo = String(conv.leadKey ?? "").trim();
   const emailTo = conv.lead?.email ?? (rawTo.includes("@") ? rawTo : null);
+  const requestedEmailChannel = channel === "email";
   const wantsEmail =
     !!emailTo &&
     (channel === "email" || rawTo.includes("@") || conv.classification?.channel === "email");
+  if (requestedEmailChannel && !emailTo) {
+    return res.status(400).json({
+      ok: false,
+      error: "lead has no email address",
+      conversation: conv
+    });
+  }
   const emailOptInOk = hasEmailOptIn(conv.lead);
   if (!wantsEmail && conv.contactPreference === "call_only") {
     return res.status(400).json({

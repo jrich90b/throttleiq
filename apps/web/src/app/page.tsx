@@ -3698,6 +3698,12 @@ export default function Home() {
     if (messageFilter === "sms" && selectedConv.contactPreference === "call_only") {
       return;
     }
+    const leadEmail = String(selectedConv.lead?.email ?? "").trim();
+    const hasLeadEmail = leadEmail.includes("@");
+    if (messageFilter === "email" && !hasLeadEmail) {
+      window.alert("No email address is on this lead. Add an email first, or send SMS instead.");
+      return;
+    }
     if (messageFilter === "email" && emailAttachmentsBusy) {
       window.alert("Attachments are still processing. Please wait a moment.");
       return;
@@ -10386,6 +10392,14 @@ export default function Home() {
                   </button>
                 </div>
               ) : null}
+              {messageFilter === "email" &&
+              !String(selectedConv?.lead?.email ?? "")
+                .trim()
+                .includes("@") ? (
+                <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                  No email address on this lead. Email send is disabled until an email is added.
+                </div>
+              ) : null}
               {filteredMessages.map(m => {
                   const isDraftMessage = m.direction === "out" && m.provider === "draft_ai";
                   const isPending = pendingDraft?.id === m.id;
@@ -10610,7 +10624,11 @@ export default function Home() {
                     composeSending ||
                     (messageFilter === "sms" && selectedConv.contactPreference === "call_only") ||
                     (messageFilter === "sms" && smsAttachmentsBusy) ||
-                    (messageFilter === "email" && emailAttachmentsBusy)
+                    (messageFilter === "email" && emailAttachmentsBusy) ||
+                    (messageFilter === "email" &&
+                      !String(selectedConv?.lead?.email ?? "")
+                        .trim()
+                        .includes("@"))
                       ? "opacity-50 cursor-not-allowed"
                       : ""
                   }`}
@@ -10620,7 +10638,11 @@ export default function Home() {
                     composeSending ||
                     (messageFilter === "sms" && selectedConv.contactPreference === "call_only") ||
                     (messageFilter === "sms" && smsAttachmentsBusy) ||
-                    (messageFilter === "email" && emailAttachmentsBusy)
+                    (messageFilter === "email" && emailAttachmentsBusy) ||
+                    (messageFilter === "email" &&
+                      !String(selectedConv?.lead?.email ?? "")
+                        .trim()
+                        .includes("@"))
                   }
                 >
                   {composeSending ? "Sending..." : "Send"}
