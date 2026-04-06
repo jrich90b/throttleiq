@@ -807,53 +807,6 @@ function isUsedDealerTrustStatement(text: string): boolean {
   return mentionsUsed && trustLanguage && !explicitAsk;
 }
 
-function detectCorporateIntent(text: string): boolean {
-  const t = text.toLowerCase();
-  const tokens = t.split(/[^a-z0-9]+/).filter(Boolean);
-  const hasToken = (w: string) => tokens.includes(w);
-  const hasAnyToken = (list: string[]) => list.some(hasToken);
-  const applyOrApplication = /\b(apply|application)\b/.test(t);
-  const employmentContext =
-    /\b(job|career|careers|hiring|position|positions|opening|openings|opportunity|opportunities|employment|resume|cv|recruit|recruiter|internship|internships)\b/.test(
-      t
-    ) || (hasToken("human") && hasToken("resources")) || hasToken("hr");
-  const employmentIntent =
-    /\b(employment|career|careers|job opening|job openings|open position|open positions|hiring|recruit|recruiter|resume|cv|internship|internships)\b/.test(
-      t
-    ) ||
-    (applyOrApplication && employmentContext) ||
-    (hasToken("job") && /\b(hiring|apply|application|opening|position|opportunity|opportunities|career|careers)\b/.test(t));
-  return (
-    /(harley[-\s]?davidson corporate|harley corporate|corporate office|headquarters|\bhq\b)/.test(t) ||
-    /(customer service|complaint|feedback|warranty|recall|vin lookup|information on.*vin|vin information)/.test(t) ||
-    employmentIntent ||
-    (hasToken("human") && hasToken("resources")) ||
-    hasToken("hr") ||
-    hasToken("media") ||
-    hasToken("press") ||
-    /business relations/.test(t)
-  );
-}
-
-if (process.env.DEBUG_INTENT_TESTS === "1") {
-  const cases: Array<[string, boolean]> = [
-    ["blue with chrome trim", false],
-    ["wow beautiful paint job", false],
-    ["how do i apply?", false],
-    ["need HR contact", true],
-    ["press inquiry", true],
-    ["career opportunities", true],
-    ["customer service complaint", true],
-    ["do you have a 2026 street glide", false]
-  ];
-  for (const [input, expected] of cases) {
-    const got = detectCorporateIntent(input);
-    if (got !== expected) {
-      console.log("[intent-test] corporate mismatch", { input, expected, got });
-    }
-  }
-}
-
 function isNonUsPhone(from?: string): boolean {
   const raw = String(from ?? "").trim();
   return raw.startsWith("+") && !raw.startsWith("+1");
@@ -1536,25 +1489,11 @@ export async function orchestrateInbound(
     });
   }
 
-  const corporateIntent = !isSellMyBike && detectCorporateIntent(event.body);
   const internationalBuyer = detectInternationalBuyer(event.body, event.from);
-  if (corporateIntent || internationalBuyer) {
+  if (internationalBuyer) {
     const dealerProfile = await getDealerProfile();
     const agentName = dealerProfile?.agentName ?? "Brooke";
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    if (corporateIntent) {
-      const ack =
-        `Hi, this is ${agentName} at ${dealerName}. ` +
-        "We’re a dealership, not Harley‑Davidson corporate. " +
-        "For corporate assistance, please call 800‑258‑2464.";
-      return finalize({
-        intent: "GENERAL",
-        stage: "ENGAGED",
-        shouldRespond: true,
-        draft: ack,
-        autoClose: { reason: "corporate" }
-      });
-    }
     const ack =
       `Hi, this is ${agentName} at ${dealerName}. ` +
       "Thanks for reaching out. We can only sell to customers in the United States.";

@@ -56,7 +56,7 @@ export type OrchestratorResult = {
   };
   smallTalk?: boolean;
   handoff?: { required: boolean; reason: "pricing" | "payments" | "approval" | "manager" | "other"; ack: string };
-  autoClose?: { reason: "international" | "corporate" | "other" };
+  autoClose?: { reason: "international" | "other" };
   pricingAttempted?: boolean;
   paymentsAnswered?: boolean;
   suggestedSlots?: any[];
