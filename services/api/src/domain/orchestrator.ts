@@ -154,7 +154,7 @@ function buildDealershipFaqReply(args: {
     case "insurance_required":
       return "Yes — proof of insurance is typically required before registration and delivery.";
     case "warranty":
-      return "New Harley-Davidson motorcycles include a factory limited warranty, and extended coverage options are available.";
+      return "New Harley-Davidson motorcycles include a 2-year factory limited warranty, and extended coverage options are available.";
     case "authorized_dealer_benefits":
       return "Authorized dealers provide factory warranty support, genuine parts, certified service, financing/trade options, and recall support.";
     case "test_ride":
