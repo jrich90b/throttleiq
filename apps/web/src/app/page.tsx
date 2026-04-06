@@ -9660,14 +9660,14 @@ export default function Home() {
               <div className="mt-2 flex items-center gap-2">
                 <button
                   className="px-3 py-2 border rounded text-sm bg-white disabled:opacity-60"
-                  onClick={saveAgentContext}
+                  onClick={() => void saveAgentContext()}
                   disabled={agentContextSaving}
                 >
                   {agentContextSaving ? "Saving..." : "Save context"}
                 </button>
                 <button
                   className="px-3 py-2 border rounded text-sm bg-white disabled:opacity-60"
-                  onClick={() => saveAgentContext({ addNote: true })}
+                  onClick={() => void saveAgentContext({ addNote: true })}
                   disabled={agentContextSaving}
                 >
                   {agentContextSaving ? "Saving..." : "Add Context Note"}
