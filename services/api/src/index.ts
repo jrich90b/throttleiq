@@ -6642,6 +6642,7 @@ async function resolveDeterministicAvailabilityReply(args: {
           .map(item => item.images?.find((u: string) => /^https?:\/\//i.test(u)) ?? null)
           .filter((u: string | null): u is string => !!u)
       : [];
+  const includePhotosInReply = extraMediaUrls.length > 0;
   const conditionLabel = formatRequestedConditionLabel(condition);
   const yearText = year ? `${year} ` : "";
   const modelLabel = normalizeDisplayCase(modelForLookup ?? model);
@@ -6672,11 +6673,17 @@ async function resolveDeterministicAvailabilityReply(args: {
         noStockColorFinishPrompt ? ` ${noStockColorFinishPrompt}` : ""
       }`;
     } else if (count === 1) {
+      const inStockSingleCta = includePhotosInReply
+        ? "Want to come check it out?"
+        : "Want to come check it out, or want a couple photos first?";
       reply = hasPriorSpecificInventoryMention
-        ? `That’s the only ${inventoryLabel} we have in stock right now. Want to come check it out, or want a couple photos first?`
-        : `Yes — we have one ${inventoryLabel} in stock right now. Want to come check it out, or want a couple photos first?`;
+        ? `That’s the only ${inventoryLabel} we have in stock right now. ${inStockSingleCta}`
+        : `Yes — we have one ${inventoryLabel} in stock right now. ${inStockSingleCta}`;
     } else {
-      reply = `We have ${count} ${inventoryLabel} units in stock right now. Want to come check one out, or want a couple photos first?`;
+      const inStockMultiCta = includePhotosInReply
+        ? "Want to come check one out?"
+        : "Want to come check one out, or want a couple photos first?";
+      reply = `We have ${count} ${inventoryLabel} units in stock right now. ${inStockMultiCta}`;
     }
   }
   if (extraMediaUrls.length) {
