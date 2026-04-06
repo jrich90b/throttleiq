@@ -10114,223 +10114,6 @@ export default function Home() {
               </div>
             ) : null}
 
-            {composeOpen ? (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-                <div className="w-full max-w-xl rounded-lg bg-white shadow-lg border p-4">
-                  <div className="text-sm font-semibold">Compose SMS</div>
-                  <div className="mt-3">
-                    <div className="text-xs text-gray-500 mb-1">Phone</div>
-                    <input
-                      className="border rounded px-3 py-2 text-sm w-full"
-                      placeholder="+15551234567"
-                      value={composePhone}
-                      onChange={e => setComposePhone(e.target.value)}
-                    />
-                  </div>
-                  <div className="mt-3">
-                    <div className="text-xs text-gray-500 mb-1">Message</div>
-                    <textarea
-                      className="border rounded px-3 py-2 text-sm w-full"
-                      rows={3}
-                      value={composeBody}
-                      onChange={e => setComposeBody(e.target.value)}
-                      placeholder="Type your message…"
-                    />
-                  </div>
-
-                  <div className="mt-3">
-                    <button
-                      className="text-xs px-2 py-1 border rounded"
-                      onClick={() => setComposeShowDetails(v => !v)}
-                    >
-                      {composeShowDetails ? "Hide details" : "+ Add details"}
-                    </button>
-                  </div>
-
-                  {composeShowDetails ? (
-                    <div className="mt-3 space-y-3">
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <div className="text-xs text-gray-500 mb-1">First name</div>
-                          <input
-                            className="border rounded px-3 py-2 text-sm w-full"
-                            value={composeFirstName}
-                            onChange={e => setComposeFirstName(e.target.value)}
-                          />
-                        </div>
-                        <div>
-                          <div className="text-xs text-gray-500 mb-1">Last name</div>
-                          <input
-                            className="border rounded px-3 py-2 text-sm w-full"
-                            value={composeLastName}
-                            onChange={e => setComposeLastName(e.target.value)}
-                          />
-                        </div>
-                        <div className="col-span-2">
-                          <div className="text-xs text-gray-500 mb-1">Email</div>
-                          <input
-                            className="border rounded px-3 py-2 text-sm w-full"
-                            value={composeEmail}
-                            onChange={e => setComposeEmail(e.target.value)}
-                          />
-                        </div>
-                      </div>
-
-                      <div className="text-xs font-semibold text-gray-700">Bike of interest</div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <div className="text-xs text-gray-500 mb-1">Year</div>
-                          <input
-                            className="border rounded px-3 py-2 text-sm w-full"
-                            value={composeVehicle.year ?? ""}
-                            onChange={e =>
-                              setComposeVehicle((v: any) => ({ ...v, year: e.target.value }))
-                            }
-                          />
-                        </div>
-                        <div>
-                          <div className="text-xs text-gray-500 mb-1">Make</div>
-                          <input
-                            className="border rounded px-3 py-2 text-sm w-full"
-                            value={composeVehicle.make ?? ""}
-                            onChange={e =>
-                              setComposeVehicle((v: any) => ({ ...v, make: e.target.value }))
-                            }
-                          />
-                        </div>
-                        <div>
-                          <div className="text-xs text-gray-500 mb-1">Model</div>
-                          <input
-                            className="border rounded px-3 py-2 text-sm w-full"
-                            value={composeVehicle.model ?? ""}
-                            onChange={e =>
-                              setComposeVehicle((v: any) => ({ ...v, model: e.target.value }))
-                            }
-                          />
-                        </div>
-                        <div>
-                          <div className="text-xs text-gray-500 mb-1">Trim/Finish</div>
-                          <input
-                            className="border rounded px-3 py-2 text-sm w-full"
-                            value={composeVehicle.trim ?? ""}
-                            onChange={e =>
-                              setComposeVehicle((v: any) => ({ ...v, trim: e.target.value }))
-                            }
-                          />
-                        </div>
-                        <div>
-                          <div className="text-xs text-gray-500 mb-1">Color</div>
-                          <input
-                            className="border rounded px-3 py-2 text-sm w-full"
-                            value={composeVehicle.color ?? ""}
-                            onChange={e =>
-                              setComposeVehicle((v: any) => ({ ...v, color: e.target.value }))
-                            }
-                          />
-                        </div>
-                      </div>
-
-                      <div>
-                        <button
-                          className="text-xs px-2 py-1 border rounded"
-                          onClick={toggleComposeInventory}
-                        >
-                          {composeInventoryOpen ? "Hide inventory" : "Select from inventory"}
-                        </button>
-                      </div>
-
-                      {composeInventoryOpen ? (
-                        <div className="mt-2">
-                          <div className="text-xs text-gray-500 mb-1">Search inventory</div>
-                          <input
-                            className="border rounded px-3 py-2 text-sm w-full"
-                            placeholder="Search by model, stock, VIN, color..."
-                            value={composeSearch}
-                            onChange={e => setComposeSearch(e.target.value)}
-                          />
-                          <div className="mt-2 max-h-56 overflow-auto border rounded">
-                            {composeInventoryLoading ? (
-                              <div className="p-3 text-sm text-gray-500">Loading inventory…</div>
-                            ) : composeInventoryItems.length === 0 ? (
-                              <div className="p-3 text-sm text-gray-500">No inventory items found.</div>
-                            ) : (
-                              composeInventoryItems
-                                .filter((it: any) => {
-                                  if (!composeSearch.trim()) return true;
-                                  const q = composeSearch.trim().toLowerCase();
-                                  const hay = [
-                                    it.year,
-                                    it.make,
-                                    it.model,
-                                    it.trim,
-                                    it.color,
-                                    it.stockId,
-                                    it.vin
-                                  ]
-                                    .filter(Boolean)
-                                    .join(" ")
-                                    .toLowerCase();
-                                  return hay.includes(q);
-                                })
-                                .slice(0, 60)
-                                .map((it: any) => {
-                                  const key = String(it.stockId ?? it.vin ?? "").trim().toLowerCase();
-                                  const selectedKey = String(composeSelection?.stockId ?? composeSelection?.vin ?? "")
-                                    .trim()
-                                    .toLowerCase();
-                                  const isSelected = key && key === selectedKey;
-                                  const label = [it.year, it.make, it.model, it.trim].filter(Boolean).join(" ");
-                                  const color = it.color ? ` • ${it.color}` : "";
-                                  return (
-                                    <button
-                                      key={key || label}
-                                      className={`w-full text-left px-3 py-2 border-b last:border-b-0 hover:bg-gray-50 ${
-                                        isSelected ? "bg-blue-50" : ""
-                                      }`}
-                                      onClick={() => applyComposeSelection(it)}
-                                      type="button"
-                                    >
-                                      <div className="text-sm font-medium">
-                                        {label || it.model || it.stockId || it.vin}
-                                        {color}
-                                      </div>
-                                      <div className="text-xs text-gray-500">
-                                        {it.stockId ? `Stock ${it.stockId}` : ""}
-                                        {it.stockId && it.vin ? " • " : ""}
-                                        {it.vin ? `VIN ${it.vin}` : ""}
-                                      </div>
-                                    </button>
-                                  );
-                                })
-                            )}
-                          </div>
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-
-                  {composeError ? <div className="text-xs text-red-600 mt-2">{composeError}</div> : null}
-
-                  <div className="mt-4 flex items-center justify-between">
-                    <button
-                      className="px-3 py-2 border rounded text-sm"
-                      onClick={() => setComposeOpen(false)}
-                      disabled={composeSending}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      className="px-3 py-2 border rounded text-sm"
-                      onClick={sendCompose}
-                      disabled={composeSending}
-                    >
-                      {composeSending ? "Sending…" : "Send SMS"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-
             {pendingDraft ? (
               <div className="mt-4 border rounded-lg p-3 text-sm">
                 <div className="font-medium">Draft ready to send</div>
@@ -10934,6 +10717,225 @@ export default function Home() {
           <div className="text-gray-500">Conversation not found.</div>
         )}
       </section>
+
+      {composeOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-xl rounded-lg bg-white shadow-lg border p-4">
+            <div className="text-sm font-semibold">Compose SMS</div>
+            <div className="mt-3">
+              <div className="text-xs text-gray-500 mb-1">Phone</div>
+              <input
+                className="border rounded px-3 py-2 text-sm w-full"
+                placeholder="+15551234567"
+                value={composePhone}
+                onChange={e => setComposePhone(e.target.value)}
+              />
+            </div>
+            <div className="mt-3">
+              <div className="text-xs text-gray-500 mb-1">Message</div>
+              <textarea
+                className="border rounded px-3 py-2 text-sm w-full"
+                rows={3}
+                value={composeBody}
+                onChange={e => setComposeBody(e.target.value)}
+                placeholder="Type your message…"
+              />
+            </div>
+
+            <div className="mt-3">
+              <button
+                className="text-xs px-2 py-1 border rounded"
+                onClick={() => setComposeShowDetails(v => !v)}
+              >
+                {composeShowDetails ? "Hide details" : "+ Add details"}
+              </button>
+            </div>
+
+            {composeShowDetails ? (
+              <div className="mt-3 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">First name</div>
+                    <input
+                      className="border rounded px-3 py-2 text-sm w-full"
+                      value={composeFirstName}
+                      onChange={e => setComposeFirstName(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">Last name</div>
+                    <input
+                      className="border rounded px-3 py-2 text-sm w-full"
+                      value={composeLastName}
+                      onChange={e => setComposeLastName(e.target.value)}
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <div className="text-xs text-gray-500 mb-1">Email</div>
+                    <input
+                      className="border rounded px-3 py-2 text-sm w-full"
+                      value={composeEmail}
+                      onChange={e => setComposeEmail(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="text-xs font-semibold text-gray-700">Bike of interest</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">Year</div>
+                    <input
+                      className="border rounded px-3 py-2 text-sm w-full"
+                      value={composeVehicle.year ?? ""}
+                      onChange={e =>
+                        setComposeVehicle((v: any) => ({ ...v, year: e.target.value }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">Make</div>
+                    <input
+                      className="border rounded px-3 py-2 text-sm w-full"
+                      value={composeVehicle.make ?? ""}
+                      onChange={e =>
+                        setComposeVehicle((v: any) => ({ ...v, make: e.target.value }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">Model</div>
+                    <input
+                      className="border rounded px-3 py-2 text-sm w-full"
+                      value={composeVehicle.model ?? ""}
+                      onChange={e =>
+                        setComposeVehicle((v: any) => ({ ...v, model: e.target.value }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">Trim/Finish</div>
+                    <input
+                      className="border rounded px-3 py-2 text-sm w-full"
+                      value={composeVehicle.trim ?? ""}
+                      onChange={e =>
+                        setComposeVehicle((v: any) => ({ ...v, trim: e.target.value }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">Color</div>
+                    <input
+                      className="border rounded px-3 py-2 text-sm w-full"
+                      value={composeVehicle.color ?? ""}
+                      onChange={e =>
+                        setComposeVehicle((v: any) => ({ ...v, color: e.target.value }))
+                      }
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <button
+                    className="text-xs px-2 py-1 border rounded"
+                    onClick={toggleComposeInventory}
+                  >
+                    {composeInventoryOpen ? "Hide inventory" : "Select from inventory"}
+                  </button>
+                </div>
+
+                {composeInventoryOpen ? (
+                  <div className="mt-2">
+                    <div className="text-xs text-gray-500 mb-1">Search inventory</div>
+                    <input
+                      className="border rounded px-3 py-2 text-sm w-full"
+                      placeholder="Search by model, stock, VIN, color..."
+                      value={composeSearch}
+                      onChange={e => setComposeSearch(e.target.value)}
+                    />
+                    <div className="mt-2 max-h-56 overflow-auto border rounded">
+                      {composeInventoryLoading ? (
+                        <div className="p-3 text-sm text-gray-500">Loading inventory…</div>
+                      ) : composeInventoryItems.length === 0 ? (
+                        <div className="p-3 text-sm text-gray-500">No inventory items found.</div>
+                      ) : (
+                        composeInventoryItems
+                          .filter((it: any) => {
+                            if (!composeSearch.trim()) return true;
+                            const q = composeSearch.trim().toLowerCase();
+                            const hay = [
+                              it.year,
+                              it.make,
+                              it.model,
+                              it.trim,
+                              it.color,
+                              it.stockId,
+                              it.vin
+                            ]
+                              .filter(Boolean)
+                              .join(" ")
+                              .toLowerCase();
+                            return hay.includes(q);
+                          })
+                          .slice(0, 60)
+                          .map((it: any) => {
+                            const key = String(it.stockId ?? it.vin ?? "").trim().toLowerCase();
+                            const selectedKey = String(
+                              composeSelection?.stockId ?? composeSelection?.vin ?? ""
+                            )
+                              .trim()
+                              .toLowerCase();
+                            const isSelected = key && key === selectedKey;
+                            const label = [it.year, it.make, it.model, it.trim].filter(Boolean).join(" ");
+                            const color = it.color ? ` • ${it.color}` : "";
+                            return (
+                              <button
+                                key={key || label}
+                                className={`w-full text-left px-3 py-2 border-b last:border-b-0 hover:bg-gray-50 ${
+                                  isSelected ? "bg-blue-50" : ""
+                                }`}
+                                onClick={() => applyComposeSelection(it)}
+                                type="button"
+                              >
+                                <div className="text-sm font-medium">
+                                  {label || it.model || it.stockId || it.vin}
+                                  {color}
+                                </div>
+                                <div className="text-xs text-gray-500">
+                                  {it.stockId ? `Stock ${it.stockId}` : ""}
+                                  {it.stockId && it.vin ? " • " : ""}
+                                  {it.vin ? `VIN ${it.vin}` : ""}
+                                </div>
+                              </button>
+                            );
+                          })
+                      )}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {composeError ? <div className="text-xs text-red-600 mt-2">{composeError}</div> : null}
+
+            <div className="mt-4 flex items-center justify-between">
+              <button
+                className="px-3 py-2 border rounded text-sm"
+                onClick={() => setComposeOpen(false)}
+                disabled={composeSending}
+              >
+                Cancel
+              </button>
+              <button
+                className="px-3 py-2 border rounded text-sm"
+                onClick={sendCompose}
+                disabled={composeSending}
+              >
+                {composeSending ? "Sending…" : "Send SMS"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {watchEditOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
