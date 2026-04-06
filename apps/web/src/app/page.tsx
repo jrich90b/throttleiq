@@ -900,6 +900,10 @@ export default function Home() {
   const [composeSelection, setComposeSelection] = useState<any | null>(null);
   const [composeError, setComposeError] = useState<string | null>(null);
   const [composeSending, setComposeSending] = useState(false);
+  const [composeSmsAttachments, setComposeSmsAttachments] = useState<
+    { name: string; type: string; size: number; file: File }[]
+  >([]);
+  const [composeSmsAttachmentsBusy, setComposeSmsAttachmentsBusy] = useState(false);
   const [selectedContact, setSelectedContact] = useState<ContactItem | null>(null);
   const [contactEdit, setContactEdit] = useState(false);
   const [contactForm, setContactForm] = useState({
@@ -1570,6 +1574,8 @@ export default function Home() {
     setComposeInventoryOpen(false);
     setComposeSearch("");
     setComposeSelection(null);
+    setComposeSmsAttachments([]);
+    setComposeSmsAttachmentsBusy(false);
     setComposeOpen(true);
   }
 
@@ -1605,13 +1611,49 @@ export default function Home() {
     });
   }
 
+  async function handleComposeSmsAttachments(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setComposeSmsAttachmentsBusy(true);
+    const selected = Array.from(files);
+    const maxPerFile = 100 * 1024 * 1024;
+    const next: { name: string; type: string; size: number; file: File }[] = [];
+    for (const file of selected) {
+      if (file.size > maxPerFile) {
+        window.alert(`"${file.name}" is too large (max 100MB).`);
+        continue;
+      }
+      if (!(file.type.startsWith("image/") || file.type.startsWith("video/"))) {
+        window.alert(`"${file.name}" must be an image or video file.`);
+        continue;
+      }
+      next.push({
+        name: file.name,
+        type: file.type || "application/octet-stream",
+        size: file.size,
+        file
+      });
+    }
+    if (next.length) {
+      setComposeSmsAttachments(prev => [...prev, ...next]);
+    }
+    setComposeSmsAttachmentsBusy(false);
+  }
+
+  function removeComposeSmsAttachment(index: number) {
+    setComposeSmsAttachments(prev => prev.filter((_, i) => i !== index));
+  }
+
   async function sendCompose() {
     if (!composePhone.trim()) {
       setComposeError("Phone is required.");
       return;
     }
-    if (!composeBody.trim()) {
-      setComposeError("Message is required.");
+    if (!composeBody.trim() && composeSmsAttachments.length === 0) {
+      setComposeError("Message or media is required.");
+      return;
+    }
+    if (composeSmsAttachmentsBusy) {
+      setComposeError("Media is still uploading. Please wait a moment.");
       return;
     }
     setComposeSending(true);
@@ -1649,19 +1691,55 @@ export default function Home() {
       if (!conv?.id) {
         throw new Error("Conversation not returned");
       }
+      const uploadedComposeMedia: { name: string; url: string; mode: "mms" | "link" }[] = [];
+      for (const att of composeSmsAttachments) {
+        const fd = new FormData();
+        fd.append("file", att.file);
+        const mediaResp = await fetch(`/api/conversations/${encodeURIComponent(conv.id)}/media`, {
+          method: "POST",
+          body: fd
+        });
+        const mediaPayload = await mediaResp.json().catch(() => null);
+        if (!mediaResp.ok || !mediaPayload?.url) {
+          throw new Error(mediaPayload?.error ?? `Failed to upload "${att.name}".`);
+        }
+        const mode =
+          (typeof mediaPayload.mmsEligible === "boolean"
+            ? mediaPayload.mmsEligible
+            : att.size <= 5 * 1024 * 1024)
+            ? ("mms" as const)
+            : ("link" as const);
+        uploadedComposeMedia.push({
+          name: String(mediaPayload.name ?? att.name),
+          url: String(mediaPayload.url),
+          mode
+        });
+      }
+      const composeMmsMediaUrls = uploadedComposeMedia
+        .filter(att => att.mode === "mms")
+        .map(att => att.url);
+      const composeLinkSuffix = uploadedComposeMedia
+        .filter(att => att.mode === "link")
+        .map(att => `${att.name || "Media"}: ${att.url}`)
+        .join("\n");
+      const composeBodyWithLinks = composeLinkSuffix
+        ? `${composeBody.trim()}\n\n${composeLinkSuffix}`.trim()
+        : composeBody.trim();
       const sendResp = await fetch(`/api/conversations/${encodeURIComponent(conv.id)}/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          body: composeBody.trim(),
+          body: composeBodyWithLinks,
           channel: "sms",
-          manualTakeover: true
+          manualTakeover: true,
+          mediaUrls: composeMmsMediaUrls
         })
       });
       const sendData = await sendResp.json().catch(() => null);
       if (!sendResp.ok || sendData?.ok === false) {
         throw new Error(sendData?.error ?? "Failed to send SMS");
       }
+      setComposeSmsAttachments([]);
       setComposeOpen(false);
       openConversation(conv.id);
       setSelectedConv(sendData?.conversation ?? conv);
@@ -10719,8 +10797,8 @@ export default function Home() {
       </section>
 
       {composeOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="w-full max-w-xl rounded-lg bg-white shadow-lg border p-4">
+        <div className="fixed inset-0 z-50 flex items-start md:items-center justify-center bg-black/40 p-3 overflow-y-auto">
+          <div className="w-full max-w-xl max-h-[calc(100dvh-1.5rem)] overflow-y-auto rounded-lg bg-white shadow-lg border p-4">
             <div className="text-sm font-semibold">Compose SMS</div>
             <div className="mt-3">
               <div className="text-xs text-gray-500 mb-1">Phone</div>
@@ -10740,6 +10818,55 @@ export default function Home() {
                 onChange={e => setComposeBody(e.target.value)}
                 placeholder="Type your message…"
               />
+            </div>
+            <div className="mt-3 flex flex-col gap-2">
+              {composeSmsAttachments.length ? (
+                <div className="flex flex-wrap gap-2">
+                  {composeSmsAttachments.map((att, idx) => (
+                    <div
+                      key={`${att.name}-${att.size}-${idx}`}
+                      className="flex items-center gap-2 border rounded px-2 py-1 text-xs"
+                    >
+                      <span className="truncate max-w-[220px]">
+                        {att.name}
+                        {att.size > 5 * 1024 * 1024 ? " (link)" : ""}
+                      </span>
+                      <button
+                        type="button"
+                        className="text-gray-500 hover:text-gray-800"
+                        onClick={() => removeComposeSmsAttachment(idx)}
+                        disabled={composeSending}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {composeSmsAttachmentsBusy ? (
+                <div className="text-xs text-gray-500">Processing media…</div>
+              ) : null}
+              {composeSmsAttachments.some(att => att.size > 5 * 1024 * 1024) ? (
+                <div className="text-xs text-gray-500">
+                  Large files will be sent as links automatically.
+                </div>
+              ) : null}
+              <div>
+                <label className="inline-flex items-center gap-2 text-xs border rounded px-3 py-2 cursor-pointer hover:bg-gray-50">
+                  Attach media
+                  <input
+                    type="file"
+                    multiple
+                    accept="image/*,video/*"
+                    className="hidden"
+                    disabled={composeSending}
+                    onChange={e => {
+                      void handleComposeSmsAttachments(e.target.files);
+                      e.currentTarget.value = "";
+                    }}
+                  />
+                </label>
+              </div>
             </div>
 
             <div className="mt-3">
@@ -10928,9 +11055,9 @@ export default function Home() {
               <button
                 className="px-3 py-2 border rounded text-sm"
                 onClick={sendCompose}
-                disabled={composeSending}
+                disabled={composeSending || composeSmsAttachmentsBusy}
               >
-                {composeSending ? "Sending…" : "Send SMS"}
+                {composeSending ? "Sending…" : composeSmsAttachmentsBusy ? "Processing…" : "Send SMS"}
               </button>
             </div>
           </div>
