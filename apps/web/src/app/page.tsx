@@ -723,6 +723,7 @@ function todoActionLabel(todo: TodoItem): string {
   const reason = (todo.reason ?? "").toLowerCase();
   const summary = (todo.summary ?? "").toLowerCase();
   const text = `${reason} ${summary}`;
+  if (reason === "approval") return "Business manager follow-up (credit app/prequal).";
   if (/(^|\\b)call(\\b|$)/.test(reason)) return "Call customer.";
   if (/(call only|phone only|no text|do not text)/.test(text)) return "Call customer (call-only).";
   if (/(credit|prequal|finance)/.test(text)) return "Business manager follow-up (credit app).";
@@ -6143,7 +6144,9 @@ export default function Home() {
         (authUser?.role === "manager" || authUser?.role === "salesperson" || isDepartmentUser || authUser?.permissions?.canAccessTodos) ? (
           <div className="mt-3 border rounded-lg divide-y">
             {todos.map(t => {
-              const isCallTodo = (t.reason ?? "").toLowerCase() === "call";
+              const reason = (t.reason ?? "").toLowerCase();
+              const isInternalNoteTodo = /(^|\\b)note(\\b|$)/.test(reason);
+              const showCallButton = !isInternalNoteTodo;
               return (
                 <div key={t.id} className="p-4 flex items-start justify-between gap-4">
                   <div>
@@ -6172,7 +6175,7 @@ export default function Home() {
                   </button>
                   </div>
                   <div className="flex flex-col items-end gap-2">
-                    {isCallTodo ? (
+                    {showCallButton ? (
                       <button
                         className="px-3 py-2 border rounded text-sm"
                         onClick={() => openCallFromTodo(t)}
