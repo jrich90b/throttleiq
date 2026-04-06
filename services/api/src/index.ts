@@ -184,6 +184,7 @@ import {
   saveConversation,
   getConversationStorePath,
   setAgentContext,
+  addAgentContextNote,
   clearAgentContext,
   type Conversation,
   type InventoryWatch,
@@ -12017,7 +12018,11 @@ app.post("/conversations/:id/agent-context", (req, res) => {
     return res.json({ ok: true, conversation: conv });
   }
 
+  const addNote = req.body?.addNote === true;
   const text = String(req.body?.text ?? "").trim();
+  if (addNote && !text) {
+    return res.status(400).json({ ok: false, error: "text required when addNote=true" });
+  }
   if (!text) {
     clearAgentContext(conv, "empty_text");
     saveConversation(conv);
@@ -12034,6 +12039,22 @@ app.post("/conversations/:id/agent-context", (req, res) => {
     if (Number.isNaN(parsed.getTime())) {
       return res.status(400).json({ ok: false, error: "Invalid expiresAt datetime" });
     }
+  }
+
+  if (addNote) {
+    try {
+      addAgentContextNote(conv, {
+        text,
+        mode,
+        expiresAt: expiresAtRaw || undefined,
+        createdByUserId: String(user?.id ?? "").trim() || undefined,
+        createdByUserName: String(user?.name ?? user?.email ?? "").trim() || undefined
+      });
+    } catch (err: any) {
+      return res.status(400).json({ ok: false, error: err?.message ?? "Failed to add context note" });
+    }
+    saveConversation(conv);
+    return res.json({ ok: true, conversation: conv });
   }
 
   setAgentContext(conv, {

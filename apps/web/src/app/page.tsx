@@ -621,6 +621,15 @@ type ConversationDetail = {
     updatedByUserName?: string;
     consumedAt?: string;
     consumedReason?: string;
+    notes?: Array<{
+      id?: string;
+      text?: string;
+      mode?: "persistent" | "next_reply";
+      expiresAt?: string;
+      createdAt?: string;
+      createdByUserId?: string;
+      createdByUserName?: string;
+    }>;
   } | null;
   inventoryWatches?: Array<{
     model: string;
@@ -4456,12 +4465,16 @@ export default function Home() {
     await load();
   }
 
-  async function saveAgentContext() {
+  async function saveAgentContext(opts?: { addNote?: boolean }) {
     if (!selectedConv) return;
     setAgentContextSaving(true);
     setAgentContextError(null);
     try {
       const text = agentContextText.trim();
+      const addNote = opts?.addNote === true;
+      if (addNote && !text) {
+        throw new Error("Enter a context note first.");
+      }
       const expiresInput = agentContextExpiresAt.trim();
       let expiresAt: string | undefined;
       if (expiresInput) {
@@ -4479,7 +4492,8 @@ export default function Home() {
           body: JSON.stringify({
             text,
             mode: agentContextMode,
-            expiresAt
+            expiresAt,
+            addNote
           })
         }
       );
@@ -4493,7 +4507,12 @@ export default function Home() {
         await loadConversation(selectedConv.id);
       }
       await load();
-      setSaveToast(text ? "Agent context saved." : "Agent context cleared.");
+      if (addNote) {
+        setAgentContextText("");
+        setSaveToast("Context note added.");
+      } else {
+        setSaveToast(text ? "Agent context saved." : "Agent context cleared.");
+      }
     } catch (err: any) {
       setAgentContextError(err?.message ?? "Failed to save agent context");
     } finally {
@@ -9557,7 +9576,7 @@ export default function Home() {
                 <textarea
                   className="md:col-span-3 border rounded px-3 py-2 text-sm"
                   rows={3}
-                  placeholder="Internal guidance for agent (never sent verbatim)."
+                  placeholder="Internal guidance note for agent (never sent verbatim)."
                   value={agentContextText}
                   onChange={e => setAgentContextText(e.target.value)}
                 />
@@ -9592,6 +9611,49 @@ export default function Home() {
                     : ""}
                 </div>
               ) : null}
+              {(() => {
+                const notes = (selectedConv.agentContext?.notes ?? [])
+                  .filter(note => String(note?.text ?? "").trim().length > 0)
+                  .slice()
+                  .sort((a, b) => {
+                    const aMs = a?.createdAt ? new Date(a.createdAt).getTime() : 0;
+                    const bMs = b?.createdAt ? new Date(b.createdAt).getTime() : 0;
+                    return bMs - aMs;
+                  });
+                if (!notes.length) return null;
+                return (
+                  <div className="mt-3 border rounded bg-white">
+                    <div className="px-2 py-1 text-xs font-medium text-slate-700 border-b">
+                      Context Notes
+                    </div>
+                    <div className="max-h-40 overflow-y-auto divide-y">
+                      {notes.map(note => {
+                        const modeLabel = note.mode === "next_reply" ? "Next reply" : "Persistent";
+                        const expiresAt = note.expiresAt ? new Date(note.expiresAt) : null;
+                        const expiresLabel =
+                          expiresAt && !Number.isNaN(expiresAt.getTime())
+                            ? expiresAt.toLocaleString()
+                            : "";
+                        return (
+                          <div key={note.id ?? `${note.createdAt ?? "note"}-${note.text ?? ""}`} className="px-2 py-2">
+                            <div className="text-[11px] text-slate-500">
+                              {note.createdAt ? new Date(note.createdAt).toLocaleString() : "Unknown date"}
+                              {note.createdByUserName ? ` • ${note.createdByUserName}` : ""}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-700 whitespace-pre-wrap">
+                              {note.text}
+                            </div>
+                            <div className="mt-1 text-[11px] text-slate-500">
+                              {modeLabel}
+                              {expiresLabel ? ` • Expires ${expiresLabel}` : ""}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
               {agentContextError ? (
                 <div className="mt-2 text-xs text-red-600">{agentContextError}</div>
               ) : null}
@@ -9602,6 +9664,13 @@ export default function Home() {
                   disabled={agentContextSaving}
                 >
                   {agentContextSaving ? "Saving..." : "Save context"}
+                </button>
+                <button
+                  className="px-3 py-2 border rounded text-sm bg-white disabled:opacity-60"
+                  onClick={() => saveAgentContext({ addNote: true })}
+                  disabled={agentContextSaving}
+                >
+                  {agentContextSaving ? "Saving..." : "Add Context Note"}
                 </button>
                 <button
                   className="px-3 py-2 border rounded text-sm bg-white disabled:opacity-60"

@@ -368,6 +368,16 @@ export type MessageFeedback = {
   at: string;
 };
 
+export type AgentContextNote = {
+  id: string;
+  text: string;
+  mode?: "persistent" | "next_reply";
+  expiresAt?: string;
+  createdAt: string;
+  createdByUserId?: string;
+  createdByUserName?: string;
+};
+
 export type Conversation = {
   id: string;
   leadKey: string;
@@ -487,6 +497,7 @@ export type Conversation = {
     updatedByUserName?: string;
     consumedAt?: string;
     consumedReason?: string;
+    notes?: AgentContextNote[];
   };
   lastDecision?: {
     at: string;
@@ -1279,6 +1290,9 @@ export function setAgentContext(
   const mode = args.mode === "next_reply" ? "next_reply" : "persistent";
   const expiresAtRaw = String(args.expiresAt ?? "").trim();
   const expiresAt = expiresAtRaw ? new Date(expiresAtRaw) : null;
+  const notes = Array.isArray(conv.agentContext?.notes)
+    ? conv.agentContext?.notes.slice(-50)
+    : undefined;
   conv.agentContext = {
     text: text.slice(0, 2000),
     mode,
@@ -1287,10 +1301,56 @@ export function setAgentContext(
     updatedByUserId: String(args.updatedByUserId ?? "").trim() || undefined,
     updatedByUserName: String(args.updatedByUserName ?? "").trim() || undefined,
     consumedAt: undefined,
-    consumedReason: undefined
+    consumedReason: undefined,
+    notes
   };
   conv.updatedAt = nowIso();
   scheduleSave();
+}
+
+export function addAgentContextNote(
+  conv: Conversation,
+  args: {
+    text: string;
+    mode?: "persistent" | "next_reply";
+    expiresAt?: string;
+    createdByUserId?: string;
+    createdByUserName?: string;
+  }
+): AgentContextNote {
+  const text = String(args.text ?? "").trim();
+  if (!text) {
+    throw new Error("Agent context note text required");
+  }
+  const mode = args.mode === "next_reply" ? "next_reply" : "persistent";
+  const expiresAtRaw = String(args.expiresAt ?? "").trim();
+  const expiresAt = expiresAtRaw ? new Date(expiresAtRaw) : null;
+  const createdAt = nowIso();
+  const note: AgentContextNote = {
+    id: makeId("ctxn"),
+    text: text.slice(0, 2000),
+    mode,
+    expiresAt: expiresAt && !Number.isNaN(expiresAt.getTime()) ? expiresAt.toISOString() : undefined,
+    createdAt,
+    createdByUserId: String(args.createdByUserId ?? "").trim() || undefined,
+    createdByUserName: String(args.createdByUserName ?? "").trim() || undefined
+  };
+  const previousNotes = Array.isArray(conv.agentContext?.notes) ? conv.agentContext.notes : [];
+  const nextNotes = [...previousNotes, note].slice(-50);
+  conv.agentContext = {
+    text: note.text,
+    mode: note.mode,
+    expiresAt: note.expiresAt,
+    updatedAt: createdAt,
+    updatedByUserId: note.createdByUserId,
+    updatedByUserName: note.createdByUserName,
+    consumedAt: undefined,
+    consumedReason: undefined,
+    notes: nextNotes
+  };
+  conv.updatedAt = nowIso();
+  scheduleSave();
+  return note;
 }
 
 export function clearAgentContext(conv: Conversation, reason = "manual_clear") {
@@ -1320,14 +1380,29 @@ function consumeAgentContextIfNeeded(conv: Conversation, reason: string) {
   if (!context) return;
   const mode = context.mode === "next_reply" ? "next_reply" : "persistent";
   if (mode !== "next_reply") return;
+  const hasNotes = Array.isArray(context.notes) && context.notes.length > 0;
   const active = getActiveAgentContextText(conv);
   if (!active) {
-    conv.agentContext = undefined;
+    if (hasNotes) {
+      context.text = "";
+      context.mode = "persistent";
+      context.expiresAt = undefined;
+      context.consumedAt = nowIso();
+      context.consumedReason = reason;
+    } else {
+      conv.agentContext = undefined;
+    }
     return;
   }
   context.consumedAt = nowIso();
   context.consumedReason = reason;
-  conv.agentContext = undefined;
+  if (hasNotes) {
+    context.text = "";
+    context.mode = "persistent";
+    context.expiresAt = undefined;
+  } else {
+    conv.agentContext = undefined;
+  }
 }
 
 function pickLeadInVariant(text: string): string {
