@@ -913,6 +913,7 @@ export default function Home() {
   const [agentContextExpiresAt, setAgentContextExpiresAt] = useState("");
   const [agentContextSaving, setAgentContextSaving] = useState(false);
   const [agentContextError, setAgentContextError] = useState<string | null>(null);
+  const [agentContextOpen, setAgentContextOpen] = useState(false);
   const [composeOpen, setComposeOpen] = useState(false);
   const [composePhone, setComposePhone] = useState("");
   const [composeBody, setComposeBody] = useState("");
@@ -1355,6 +1356,10 @@ export default function Home() {
     setAgentContextExpiresAt(isoToLocalDateTimeInput(context?.expiresAt));
     setAgentContextError(null);
   }, [selectedConv?.id, selectedConv?.agentContext?.updatedAt, selectedConv?.agentContext?.text]);
+
+  useEffect(() => {
+    setAgentContextOpen(false);
+  }, [selectedConv?.id]);
 
   function seedWatchItemsFromConv(conv: ConversationDetail | null): WatchFormItem[] {
     const fromExisting =
@@ -3683,15 +3688,6 @@ export default function Home() {
         outcome: outcome || undefined,
         followUpAction: followUpAction || undefined
       })
-    });
-    await load();
-  }
-
-  async function createQuestion(convId: string, text: string) {
-    await fetch("/api/questions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ convId, text })
     });
     await load();
   }
@@ -9479,15 +9475,11 @@ export default function Home() {
                 ) : null}
                 {(authUser?.role === "manager" || authUser?.permissions?.canAccessTodos) ? (
                   <button
-                    className="px-2 py-1 border rounded text-sm"
-                    onClick={async () => {
-                      const text = window.prompt("Internal question for this conversation:");
-                      if (!text || !selectedConv) return;
-                      await createQuestion(selectedConv.id, text.trim());
-                    }}
-                    title="Create internal question"
+                    className={`px-2 py-1 border rounded text-sm ${agentContextOpen ? "bg-gray-100 font-medium" : "hover:bg-gray-50"}`}
+                    onClick={() => setAgentContextOpen(prev => !prev)}
+                    title="Open internal agent context"
                   >
-                    Ask
+                    Context
                   </button>
                 ) : null}
                 {modeSaving ? <span className="text-xs text-gray-500">Saving…</span> : null}
@@ -9535,6 +9527,7 @@ export default function Home() {
                 </button>
               </div>
             ) : null}
+            {agentContextOpen ? (
             <div className="mt-3 border rounded-lg bg-slate-50 px-3 py-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="text-sm font-medium text-slate-800">Agent Context (Internal)</div>
@@ -9619,6 +9612,7 @@ export default function Home() {
                 </button>
               </div>
             </div>
+            ) : null}
 
             {callPickerOpen ? (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
