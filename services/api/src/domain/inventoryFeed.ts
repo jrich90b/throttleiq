@@ -116,11 +116,19 @@ function extractColor(item: Record<string, any>): string | undefined {
 }
 
 function normalizeModel(s: string): string {
-  return s
+  const raw = s
     .toLowerCase()
+    // common model-word cleanup for user-entered text
+    .replace(/\bstreet\s+glides\b/g, "street glide")
+    .replace(/\broad\s+glides\b/g, "road glide")
+    .replace(/\btri\s+glides\b/g, "tri glide")
+    .replace(/\blimieteds?\b/g, "limited")
+    .replace(/\blimteds?\b/g, "limited")
+    .replace(/\blimiteds\b/g, "limited")
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+  return raw;
 }
 
 function modelMatches(candidateRaw: string | undefined, targetRaw: string): boolean {
@@ -133,7 +141,9 @@ function modelMatches(candidateRaw: string | undefined, targetRaw: string): bool
   // if customer explicitly asked for a CVO model, do not match non-CVO variants.
   if (hasWord(target, "cvo") && !hasWord(candidate, "cvo")) return false;
   if (candidate === target) return true;
-  return candidate.includes(target) || target.includes(candidate);
+  // Keep matching directional so trim-specific asks do not collapse to base families:
+  // target="street glide limited" should NOT match candidate="street glide".
+  return candidate.includes(target);
 }
 
 export function extractImageDate(url: string): Date | null {

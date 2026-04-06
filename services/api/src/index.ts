@@ -3125,7 +3125,14 @@ function normalizeModelText(val?: string | null): string {
     // Treat "<model> / anniversary edition" as one model variant, not two bikes.
     .replace(/\s*\/\s*anniversary\s+edition\b/g, " ")
     .replace(/\banniversary\s+edition\b/g, " ")
-    .replace(/\banniversary\b/g, " ");
+    .replace(/\banniversary\b/g, " ")
+    // common typing/plural variants that affect trim-specific matching
+    .replace(/\bstreet\s+glides\b/g, "street glide")
+    .replace(/\broad\s+glides\b/g, "road glide")
+    .replace(/\btri\s+glides\b/g, "tri glide")
+    .replace(/\blimieteds?\b/g, "limited")
+    .replace(/\blimteds?\b/g, "limited")
+    .replace(/\blimiteds\b/g, "limited");
   return withoutAnniversarySuffix
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
