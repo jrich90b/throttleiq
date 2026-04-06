@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 const BOOKING_LINK_RE =
@@ -3318,6 +3318,56 @@ export default function Home() {
     return groups;
   }, [filteredConversations]);
 
+  const contactLookup = useMemo(() => {
+    const byConversationId = new Map<string, ContactItem>();
+    const byLeadKey = new Map<string, ContactItem>();
+    const byPhoneDigits = new Map<string, ContactItem>();
+    for (const contact of contacts) {
+      const convId = String(contact.conversationId ?? "").trim();
+      if (convId && !byConversationId.has(convId)) {
+        byConversationId.set(convId, contact);
+      }
+      const leadKey = String(contact.leadKey ?? "").trim();
+      if (leadKey) {
+        const normalizedLeadKey = leadKey.toLowerCase();
+        if (!byLeadKey.has(normalizedLeadKey)) {
+          byLeadKey.set(normalizedLeadKey, contact);
+        }
+        const leadKeyDigits = leadKey.replace(/\D/g, "");
+        if (leadKeyDigits && !byPhoneDigits.has(leadKeyDigits)) {
+          byPhoneDigits.set(leadKeyDigits, contact);
+        }
+      }
+      const phoneDigits = String(contact.phone ?? "").replace(/\D/g, "");
+      if (phoneDigits && !byPhoneDigits.has(phoneDigits)) {
+        byPhoneDigits.set(phoneDigits, contact);
+      }
+    }
+    return { byConversationId, byLeadKey, byPhoneDigits };
+  }, [contacts]);
+
+  const findLinkedContactForConversation = useCallback(
+    (conv: ConversationListItem): ContactItem | null => {
+      const convId = String(conv.id ?? "").trim();
+      if (convId) {
+        const byConv = contactLookup.byConversationId.get(convId);
+        if (byConv) return byConv;
+      }
+      const leadKey = String(conv.leadKey ?? "").trim();
+      if (leadKey) {
+        const byLeadKey = contactLookup.byLeadKey.get(leadKey.toLowerCase());
+        if (byLeadKey) return byLeadKey;
+        const digits = leadKey.replace(/\D/g, "");
+        if (digits) {
+          const byPhone = contactLookup.byPhoneDigits.get(digits);
+          if (byPhone) return byPhone;
+        }
+      }
+      return null;
+    },
+    [contactLookup]
+  );
+
   const days = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"];
   const followUpMonths = [
     { value: 1, label: "Jan" },
@@ -4496,15 +4546,27 @@ export default function Home() {
   }
 
   function openInlineContactFromConversation(c: ConversationListItem) {
+    const linkedContact = findLinkedContactForConversation(c);
     const selectedLead = selectedConv?.id === c.id ? selectedConv.lead : null;
     const name = splitContactName(c.leadName ?? selectedLead?.name ?? "");
     const leadKey = String(c.leadKey ?? "").trim();
-    const phone = String(selectedLead?.phone ?? "").trim() || (isLikelyPhoneLeadKey(leadKey) ? leadKey : "");
+    const phone =
+      String(linkedContact?.phone ?? "").trim() ||
+      String(selectedLead?.phone ?? "").trim() ||
+      (isLikelyPhoneLeadKey(leadKey) ? leadKey : "");
     const email =
-      String(selectedLead?.email ?? "").trim() || (leadKey.includes("@") ? leadKey : "");
+      String(linkedContact?.email ?? "").trim() ||
+      String(selectedLead?.email ?? "").trim() ||
+      (leadKey.includes("@") ? leadKey : "");
     setContactInlineForm({
-      firstName: String(selectedLead?.firstName ?? "").trim() || name.firstName,
-      lastName: String(selectedLead?.lastName ?? "").trim() || name.lastName,
+      firstName:
+        String(linkedContact?.firstName ?? "").trim() ||
+        String(selectedLead?.firstName ?? "").trim() ||
+        name.firstName,
+      lastName:
+        String(linkedContact?.lastName ?? "").trim() ||
+        String(selectedLead?.lastName ?? "").trim() ||
+        name.lastName,
       phone,
       email
     });
@@ -6049,7 +6111,9 @@ export default function Home() {
                                     </div>
                                   ) : contactInlineOpenId === c.id ? (
                                     <div className="p-2">
-                                      <div className="text-[11px] text-gray-500 mb-1">New contact</div>
+                                      <div className="text-[11px] text-gray-500 mb-1">
+                                        {findLinkedContactForConversation(c) ? "Edit contact" : "New contact"}
+                                      </div>
                                       <div className="grid grid-cols-2 gap-2">
                                         <input
                                           className="border rounded px-2 py-1 text-xs"
@@ -6184,7 +6248,7 @@ export default function Home() {
                                           openInlineContactFromConversation(c);
                                         }}
                                       >
-                                        Add new contact
+                                        {findLinkedContactForConversation(c) ? "Edit contact" : "Add new contact"}
                                       </button>
                                       {(authUser?.role === "manager" || authUser?.permissions?.canAccessTodos) ? (
                                         <button
