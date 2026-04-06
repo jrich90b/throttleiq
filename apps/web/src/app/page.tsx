@@ -3,6 +3,30 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
+type SpeechRecognitionLike = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  maxAlternatives: number;
+  onresult: ((event: any) => void) | null;
+  onerror: ((event: any) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+};
+
+type SpeechRecognitionCtorLike = new () => SpeechRecognitionLike;
+
+function getSpeechRecognitionCtor(): SpeechRecognitionCtorLike | null {
+  if (typeof window === "undefined") return null;
+  return (
+    (window as any).SpeechRecognition ??
+    (window as any).webkitSpeechRecognition ??
+    null
+  );
+}
+
 const BOOKING_LINK_RE =
   /(Book here|You can choose a time here|You can book an appointment here):\s*(https?:\/\/[^\s<]+)/i;
 const BOOKING_LABEL_ONLY_RE =
@@ -923,6 +947,12 @@ export default function Home() {
   const [agentContextSaving, setAgentContextSaving] = useState(false);
   const [agentContextError, setAgentContextError] = useState<string | null>(null);
   const [agentContextOpen, setAgentContextOpen] = useState(false);
+  const [agentContextSpeechSupported, setAgentContextSpeechSupported] = useState(false);
+  const [agentContextSpeechListening, setAgentContextSpeechListening] = useState(false);
+  const [agentContextSpeechError, setAgentContextSpeechError] = useState<string | null>(null);
+  const agentContextSpeechRef = useRef<SpeechRecognitionLike | null>(null);
+  const agentContextSpeechBaseRef = useRef("");
+  const agentContextSpeechFinalRef = useRef("");
   const [composeOpen, setComposeOpen] = useState(false);
   const [composePhone, setComposePhone] = useState("");
   const [composeBody, setComposeBody] = useState("");
@@ -1364,11 +1394,32 @@ export default function Home() {
     setAgentContextMode(context?.mode === "next_reply" ? "next_reply" : "persistent");
     setAgentContextExpiresAt(isoToLocalDateTimeInput(context?.expiresAt));
     setAgentContextError(null);
+    setAgentContextSpeechError(null);
   }, [selectedConv?.id, selectedConv?.agentContext?.updatedAt, selectedConv?.agentContext?.text]);
 
   useEffect(() => {
     setAgentContextOpen(false);
   }, [selectedConv?.id]);
+
+  useEffect(() => {
+    setAgentContextSpeechSupported(!!getSpeechRecognitionCtor());
+  }, []);
+
+  useEffect(() => {
+    if (agentContextOpen || !agentContextSpeechListening) return;
+    try {
+      agentContextSpeechRef.current?.stop();
+    } catch {}
+    setAgentContextSpeechListening(false);
+  }, [agentContextOpen, agentContextSpeechListening]);
+
+  useEffect(() => {
+    return () => {
+      try {
+        agentContextSpeechRef.current?.abort();
+      } catch {}
+    };
+  }, []);
 
   function seedWatchItemsFromConv(conv: ConversationDetail | null): WatchFormItem[] {
     const fromExisting =
@@ -4464,6 +4515,86 @@ export default function Home() {
     await loadConversation(selectedConv.id);
     await load();
   }
+
+  const stopAgentContextSpeech = useCallback(() => {
+    try {
+      agentContextSpeechRef.current?.stop();
+    } catch {}
+    setAgentContextSpeechListening(false);
+  }, []);
+
+  const startAgentContextSpeech = useCallback(() => {
+    if (agentContextSpeechListening) return;
+    const Ctor = getSpeechRecognitionCtor();
+    if (!Ctor) {
+      setAgentContextSpeechSupported(false);
+      setAgentContextSpeechError("Voice input is not supported on this device/browser.");
+      return;
+    }
+    let recognizer = agentContextSpeechRef.current;
+    if (!recognizer) {
+      recognizer = new Ctor();
+      recognizer.lang = "en-US";
+      recognizer.continuous = true;
+      recognizer.interimResults = true;
+      recognizer.maxAlternatives = 1;
+      recognizer.onresult = (event: any) => {
+        if (!event?.results) return;
+        let interim = "";
+        const from = Number.isFinite(Number(event?.resultIndex)) ? Number(event.resultIndex) : 0;
+        for (let i = from; i < event.results.length; i += 1) {
+          const text = String(event.results?.[i]?.[0]?.transcript ?? "").trim();
+          if (!text) continue;
+          if (event.results[i]?.isFinal) {
+            agentContextSpeechFinalRef.current = `${agentContextSpeechFinalRef.current} ${text}`.trim();
+          } else {
+            interim = `${interim} ${text}`.trim();
+          }
+        }
+        const combined = [
+          agentContextSpeechBaseRef.current,
+          agentContextSpeechFinalRef.current,
+          interim
+        ]
+          .map(s => String(s ?? "").trim())
+          .filter(Boolean)
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim();
+        setAgentContextText(combined);
+      };
+      recognizer.onerror = (event: any) => {
+        const code = String(event?.error ?? "").trim().toLowerCase();
+        const msg =
+          code === "not-allowed" || code === "service-not-allowed"
+            ? "Microphone access is blocked. Allow microphone permission and try again."
+            : code === "no-speech"
+              ? "No speech detected. Press and hold the button while talking."
+              : code
+                ? `Voice input error: ${code}`
+                : "Voice input failed.";
+        setAgentContextSpeechError(msg);
+      };
+      recognizer.onend = () => {
+        setAgentContextSpeechListening(false);
+      };
+      agentContextSpeechRef.current = recognizer;
+    }
+    agentContextSpeechBaseRef.current = String(agentContextText ?? "").trim();
+    agentContextSpeechFinalRef.current = "";
+    setAgentContextSpeechError(null);
+    try {
+      recognizer.start();
+      setAgentContextSpeechListening(true);
+    } catch (err: any) {
+      const message = String(err?.message ?? err ?? "");
+      if (/already started/i.test(message)) {
+        setAgentContextSpeechListening(true);
+        return;
+      }
+      setAgentContextSpeechError("Could not start voice input. Try again.");
+    }
+  }, [agentContextSpeechListening, agentContextText]);
 
   async function saveAgentContext(opts?: { addNote?: boolean }) {
     if (!selectedConv) return;
@@ -9580,6 +9711,47 @@ export default function Home() {
                   value={agentContextText}
                   onChange={e => setAgentContextText(e.target.value)}
                 />
+                <div className="md:col-span-3 flex items-center gap-2">
+                  <button
+                    type="button"
+                    className={`px-3 py-2 border rounded text-sm disabled:opacity-60 ${
+                      agentContextSpeechListening ? "bg-emerald-50 border-emerald-300 text-emerald-800" : "bg-white"
+                    }`}
+                    disabled={!agentContextSpeechSupported || agentContextSaving}
+                    onPointerDown={() => {
+                      void startAgentContextSpeech();
+                    }}
+                    onPointerUp={() => stopAgentContextSpeech()}
+                    onPointerCancel={() => stopAgentContextSpeech()}
+                    onPointerLeave={() => {
+                      if (agentContextSpeechListening) stopAgentContextSpeech();
+                    }}
+                    onKeyDown={e => {
+                      if (e.key === " " || e.key === "Enter") {
+                        e.preventDefault();
+                        void startAgentContextSpeech();
+                      }
+                    }}
+                    onKeyUp={e => {
+                      if (e.key === " " || e.key === "Enter") {
+                        e.preventDefault();
+                        stopAgentContextSpeech();
+                      }
+                    }}
+                    title={
+                      agentContextSpeechSupported
+                        ? "Hold while speaking to fill context text."
+                        : "Voice input not supported on this browser."
+                    }
+                  >
+                    {agentContextSpeechListening ? "🎙️ Listening... release to stop" : "🎤 Hold to talk"}
+                  </button>
+                  {!agentContextSpeechSupported ? (
+                    <span className="text-xs text-slate-500">Voice input not supported on this browser.</span>
+                  ) : (
+                    <span className="text-xs text-slate-500">Press and hold while speaking.</span>
+                  )}
+                </div>
                 <label className="text-xs text-slate-600">
                   Scope
                   <select
@@ -9656,6 +9828,9 @@ export default function Home() {
               })()}
               {agentContextError ? (
                 <div className="mt-2 text-xs text-red-600">{agentContextError}</div>
+              ) : null}
+              {agentContextSpeechError ? (
+                <div className="mt-2 text-xs text-red-600">{agentContextSpeechError}</div>
               ) : null}
               <div className="mt-2 flex items-center gap-2">
                 <button
