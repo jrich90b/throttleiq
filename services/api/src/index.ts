@@ -188,6 +188,7 @@ import {
   setAgentContext,
   addAgentContextNote,
   clearAgentContext,
+  getActiveAgentContextText,
   type Conversation,
   type InventoryWatch,
   type InventoryWatchPending,
@@ -2394,6 +2395,10 @@ const ENGAGED_FOLLOW_UP_VARIANTS_WITH_SLOTS: Record<string, string[]> = {
     "Hey {name}, I can do {a} or {b} if you want to stop by. Which works better?{extraLine}",
     "Quick one {name} — I have {a} or {b} open. Want either?{extraLine}"
   ],
+  deal_progress: [
+    "Hey {name}, I can go over final numbers and your setup on the {model}. I have {a} or {b}. Want me to hold one?{extraLine}",
+    "Quick check {name} — if you’re still planning to come in, I can do {a} or {b} to go over everything. Which works better?{extraLine}"
+  ],
   trade: [
     "Hey {name}, if you want to go over trade numbers for {trade}, I have {a} or {b} open. Which works better?{extraLine}",
     "{name}, I can set a quick trade appraisal for {trade} at {a} or {b}. Which one?{extraLine}",
@@ -2428,6 +2433,20 @@ const ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS: Record<string, Record<number, string[
     ],
     2: [
       "Quick check {name} — still leaning toward{label} or comparing a few?"
+    ]
+  },
+  deal_progress: {
+    0: [
+      "Hey {name}, quick check-in. I can go over final numbers and the setup you picked whenever you’re ready.{extraLine}",
+      "{name}, still good to go over numbers this week? I can make it quick.{extraLine}"
+    ],
+    1: [
+      "If it helps, I can send a quick recap of bike, parts, and payment options before you come in.",
+      "Want me to text a quick recap before you stop by?"
+    ],
+    2: [
+      "Still want me to keep this deal moving, or hold off for now?",
+      "Quick check {name} — should I keep working this setup for you?"
     ]
   },
   trade: {
@@ -2573,6 +2592,30 @@ function getFollowUpContextLine(conv: any, now: Date): string | null {
   return buildOutcomeContextLine(note);
 }
 
+function getCadenceAgentContextText(conv: any, now: Date): string {
+  const text = getActiveAgentContextText(conv).replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  const updatedAt = conv?.agentContext?.updatedAt ? new Date(conv.agentContext.updatedAt) : null;
+  if (updatedAt && !Number.isNaN(updatedAt.getTime())) {
+    const ageMs = now.getTime() - updatedAt.getTime();
+    if (ageMs > 60 * 24 * 60 * 60 * 1000) return "";
+  }
+  return text;
+}
+
+function inferCadenceTagFromAgentContext(conv: any): string | null {
+  const text = getCadenceAgentContextText(conv, new Date()).toLowerCase();
+  if (!text) return null;
+  if (
+    /\b(left|put)\b[^.]{0,40}\bdeposit\b/.test(text) ||
+    /\bdealer\s*trade\b/.test(text) ||
+    /\b(parts?|accessor(y|ies)|setup|go over numbers|finalize|coming in|come in|ready to buy|pull trigger)\b/.test(text)
+  ) {
+    return "deal_progress";
+  }
+  return null;
+}
+
 function mapDialogStateToCadenceTag(name: DialogStateName): string | null {
   if (!name || name === "none") return null;
   if (name.startsWith("trade_")) return "trade";
@@ -2662,6 +2705,12 @@ async function resolveCadenceContextTag(conv: any, cadence: any): Promise<string
   const cachedAt = cadence?.contextTagUpdatedAt ? new Date(cadence.contextTagUpdatedAt) : null;
   if (cached && cachedAt && Date.now() - cachedAt.getTime() < 24 * 60 * 60 * 1000) {
     return cached;
+  }
+  const fromAgentContext = inferCadenceTagFromAgentContext(conv);
+  if (fromAgentContext) {
+    cadence.contextTag = fromAgentContext;
+    cadence.contextTagUpdatedAt = nowIso();
+    return fromAgentContext;
   }
   const lastIntent = conv?.lastIntent;
   if (lastIntent?.name && lastIntent.updatedAt) {
@@ -9648,7 +9697,14 @@ async function processDueFollowUps() {
       cadence.kind !== "long_term" &&
       !isTradeNoInterest &&
       !isSellMyBikeLead;
-    if (!isPostSale && !isTradeNoInterest && !isSellMyBikeLead && conv.engagement?.at && cadence.kind !== "engaged") {
+    const hasAgentContextForCadence = !!getActiveAgentContextText(conv).trim();
+    if (
+      !isPostSale &&
+      !isTradeNoInterest &&
+      !isSellMyBikeLead &&
+      (conv.engagement?.at || hasAgentContextForCadence) &&
+      cadence.kind !== "engaged"
+    ) {
       cadence.kind = "engaged";
     }
     const isEngagedCadence = cadence.kind === "engaged";
