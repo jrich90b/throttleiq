@@ -1157,73 +1157,78 @@ export default function Home() {
 
   async function load() {
     setLoading(true);
-
-    const authResp = await fetch("/api/auth/me", { cache: "no-store" });
-    const authJson = await authResp.json();
-    if (!authResp.ok || !authJson?.ok) {
-      setAuthUser(null);
-      setAuthLoading(false);
+    try {
+      const authResp = await fetch("/api/auth/me", { cache: "no-store" });
+      const authJson = await authResp.json().catch(() => null);
+      if (!authResp.ok || !authJson?.ok) {
+        setAuthUser(null);
+        setAuthLoading(false);
+        setNeedsBootstrap(false);
+        setLoading(false);
+        return;
+      }
+      if (authJson?.needsBootstrap) {
+        setNeedsBootstrap(true);
+        setAuthUser(null);
+        setAuthLoading(false);
+        setLoading(false);
+        return;
+      }
       setNeedsBootstrap(false);
+      setAuthUser(authJson?.user ?? null);
+
+      const [s, c, contactsResp, contactListsResp, modelsResp] = await Promise.all([
+        fetch("/api/settings", { cache: "no-store" }),
+        fetch("/api/conversations", { cache: "no-store" }),
+        fetch("/api/contacts", { cache: "no-store" }),
+        fetch("/api/contacts/lists", { cache: "no-store" }),
+        fetch("/api/models-by-year", { cache: "no-store" })
+      ]);
+      const [t, q, sup, googleResp] = await Promise.all([
+        fetch("/api/todos", { cache: "no-store" }),
+        fetch("/api/questions", { cache: "no-store" }),
+        fetch("/api/suppressions", { cache: "no-store" }),
+        fetch("/api/google/status", { cache: "no-store" })
+      ]);
+
+      const settings = await s.json().catch(() => null);
+      const convs = await c.json().catch(() => null);
+      const contactsJson = await contactsResp.json().catch(() => null);
+      const contactListsJson = await contactListsResp.json().catch(() => null);
+      const modelsJson = await modelsResp.json().catch(() => null);
+      const todosResp = await t.json().catch(() => null);
+      const questionsResp = await q.json().catch(() => null);
+      const suppressionsResp = await sup.json().catch(() => null);
+      const googleJson = await googleResp.json().catch(() => null);
+
+      setMode((settings?.mode as SystemMode) ?? "suggest");
+      setConversations(
+        (convs?.conversations as ConversationListItem[])?.map(c => ({
+          ...c,
+          mode: c.mode ?? "suggest"
+        })) ?? []
+      );
+      setTodos((todosResp?.todos as TodoItem[]) ?? []);
+      setQuestions((questionsResp?.questions as QuestionItem[]) ?? []);
+      setSuppressions((suppressionsResp?.suppressions as SuppressionItem[]) ?? []);
+      if (googleResp.ok && googleJson?.ok && typeof googleJson.connected === "boolean") {
+        setGoogleStatus({ connected: googleJson.connected, reason: googleJson.reason, error: googleJson.error });
+      } else {
+        setGoogleStatus(null);
+      }
+
+      if (modelsJson?.ok && modelsJson?.modelsByYear) {
+        setModelsByYear(modelsJson.modelsByYear as Record<string, string[]>);
+      }
+      setContacts((contactsJson?.contacts as ContactItem[]) ?? []);
+      setContactLists((contactListsJson?.lists as ContactListItem[]) ?? []);
       setLoading(false);
-      return;
-    }
-    if (authJson?.needsBootstrap) {
-      setNeedsBootstrap(true);
-      setAuthUser(null);
+      setAuthLoading(false);
+    } catch (err) {
+      console.error("[home] initial load failed", err);
       setAuthLoading(false);
       setLoading(false);
-      return;
     }
-    setNeedsBootstrap(false);
-    setAuthUser(authJson?.user ?? null);
-
-    const [s, c, contactsResp, contactListsResp, modelsResp] = await Promise.all([
-      fetch("/api/settings", { cache: "no-store" }),
-      fetch("/api/conversations", { cache: "no-store" }),
-      fetch("/api/contacts", { cache: "no-store" }),
-      fetch("/api/contacts/lists", { cache: "no-store" }),
-      fetch("/api/models-by-year", { cache: "no-store" })
-    ]);
-    const [t, q, sup, googleResp] = await Promise.all([
-      fetch("/api/todos", { cache: "no-store" }),
-      fetch("/api/questions", { cache: "no-store" }),
-      fetch("/api/suppressions", { cache: "no-store" }),
-      fetch("/api/google/status", { cache: "no-store" })
-    ]);
-
-    const settings = await s.json();
-    const convs = await c.json();
-    const contactsJson = await contactsResp.json();
-    const contactListsJson = await contactListsResp.json().catch(() => null);
-    const modelsJson = await modelsResp.json().catch(() => null);
-    const todosResp = await t.json();
-    const questionsResp = await q.json();
-    const suppressionsResp = await sup.json();
-    const googleJson = await googleResp.json().catch(() => null);
-
-    setMode((settings?.mode as SystemMode) ?? "suggest");
-    setConversations(
-      (convs?.conversations as ConversationListItem[])?.map(c => ({
-        ...c,
-        mode: c.mode ?? "suggest"
-      })) ?? []
-    );
-    setTodos((todosResp?.todos as TodoItem[]) ?? []);
-    setQuestions((questionsResp?.questions as QuestionItem[]) ?? []);
-    setSuppressions((suppressionsResp?.suppressions as SuppressionItem[]) ?? []);
-    if (googleResp.ok && googleJson?.ok && typeof googleJson.connected === "boolean") {
-      setGoogleStatus({ connected: googleJson.connected, reason: googleJson.reason, error: googleJson.error });
-    } else {
-      setGoogleStatus(null);
-    }
-
-    if (modelsJson?.ok && modelsJson?.modelsByYear) {
-      setModelsByYear(modelsJson.modelsByYear as Record<string, string[]>);
-    }
-    setContacts((contactsJson?.contacts as ContactItem[]) ?? []);
-    setContactLists((contactListsJson?.lists as ContactListItem[]) ?? []);
-    setLoading(false);
-    setAuthLoading(false);
   }
 
   useEffect(() => {
