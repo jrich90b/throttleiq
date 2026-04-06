@@ -2152,6 +2152,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       const outcomeLink = buildStaffOutcomeLink(token);
       conv.dealerRide = conv.dealerRide ?? {};
       conv.dealerRide.staffNotify = conv.dealerRide.staffNotify ?? {};
+      conv.dealerRide.staffNotify.userId =
+        String(owner?.id ?? "").trim() || conv.dealerRide.staffNotify.userId;
+      conv.dealerRide.staffNotify.phone = ownerPhone || conv.dealerRide.staffNotify.phone;
       const leadSummary = [
         `Dealer ride outcome needed for ${customerName}.`,
         "DLA confirms they rode a demo bike.",
@@ -2220,6 +2223,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() || conv.leadKey || "customer";
     const token = ensureDealerRideOutcomeToken(conv);
     const outcomeLink = buildStaffOutcomeLink(token);
+    conv.dealerRide = conv.dealerRide ?? {};
+    conv.dealerRide.staffNotify = conv.dealerRide.staffNotify ?? {};
+    conv.dealerRide.staffNotify.userId =
+      String(owner?.id ?? "").trim() || conv.dealerRide.staffNotify.userId;
+    conv.dealerRide.staffNotify.phone =
+      pickUserPhone(owner) || conv.dealerRide.staffNotify.phone;
     const leadSummary = [
       `Dealer ride outcome needed for ${customerName}.`,
       'DLA says "not interested in purchasing at this time".',

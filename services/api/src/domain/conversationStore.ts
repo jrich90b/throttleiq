@@ -57,6 +57,8 @@ export type AppointmentMemory = {
     followUpSentAt?: string;
     lastEventId?: string | null;
     outcomeToken?: string;
+    userId?: string;
+    phone?: string;
     contextUsedAt?: string;
     outcome?: {
       status:
@@ -414,13 +416,22 @@ export type Conversation = {
   updatedAt: string;
   messages: Message[];
   leadOwner?: LeadOwner;
+  manualSender?: {
+    userId?: string;
+    userName?: string;
+    activatedAt: string;
+    source?: "manual_takeover";
+  };
   lead?: LeadProfile;
   classification?: { bucket?: string; cta?: string; channel?: string; ruleName?: string };
   appointment?: AppointmentMemory;
   dealerRide?: {
     staffNotify?: {
+      bookedSentAt?: string;
       outcomeToken?: string;
       followUpSentAt?: string;
+      userId?: string;
+      phone?: string;
       outcome?: {
         status?: string;
         note?: string;

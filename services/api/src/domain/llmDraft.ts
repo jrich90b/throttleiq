@@ -622,7 +622,7 @@ export type JourneyIntentParse = {
 };
 
 export type StaffOutcomeUpdateParse = {
-  outcome: "sold" | "hold" | "follow_up" | "lost" | "other" | "none";
+  outcome: "showed_up" | "no_show" | "sold" | "hold" | "follow_up" | "lost" | "other" | "none";
   explicitOutcome: boolean;
   followUpWindowText?: string | null;
   unitStockId?: string | null;
@@ -1104,7 +1104,7 @@ const STAFF_OUTCOME_UPDATE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   properties: {
     outcome: {
       type: "string",
-      enum: ["sold", "hold", "follow_up", "lost", "other", "none"]
+      enum: ["showed_up", "no_show", "sold", "hold", "follow_up", "lost", "other", "none"]
     },
     explicit_outcome: { type: "boolean" },
     follow_up_window_text: { type: "string" },
@@ -2541,6 +2541,8 @@ export async function parseStaffOutcomeUpdateWithLLM(args: {
     "Return only JSON matching the schema.",
     "",
     "Outcome mapping:",
+    "- showed_up: customer came in / arrived / met / completed visit or ride.",
+    "- no_show: customer did not show / no-show / missed appointment.",
     "- sold: sold/delivered/picked up/deal done.",
     "- hold: hold/paused/waiting with a clear defer window.",
     "- follow_up: still working, follow-up needed, call/text next week, waiting on financing/down payment/cosigner/docs/insurance/trade.",
@@ -2554,6 +2556,7 @@ export async function parseStaffOutcomeUpdateWithLLM(args: {
     "",
     "Rules:",
     "- If sold + another state appear, choose sold.",
+    "- If no_show + follow-up appear, choose no_show.",
     "- If hold + follow-up appear, choose hold.",
     "- If uncertain, choose none with low confidence.",
     "",
@@ -2585,6 +2588,8 @@ export async function parseStaffOutcomeUpdateWithLLM(args: {
 
   const outcomeRaw = String(parsed.outcome ?? "").toLowerCase();
   const outcome: StaffOutcomeUpdateParse["outcome"] =
+    outcomeRaw === "showed_up" ||
+    outcomeRaw === "no_show" ||
     outcomeRaw === "sold" ||
     outcomeRaw === "hold" ||
     outcomeRaw === "follow_up" ||
