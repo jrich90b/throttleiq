@@ -2850,7 +2850,7 @@ function buildInitialEmailDraft(conv: any, dealerProfile: any): string {
   const rawName = conv?.lead?.firstName?.trim() || conv?.lead?.name?.trim() || "there";
   const name = rawName.split(" ")[0] || "there";
   const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-  const agentName = dealerProfile?.agentName ?? "our team";
+  const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "our team");
   const bookingUrl = buildBookingUrlForLead(dealerProfile?.bookingUrl, conv);
   const label = normalizeLeadLabel(conv);
   const leadSourceLower = (conv?.lead?.source ?? conv?.leadSource ?? "").toLowerCase();
@@ -4480,6 +4480,65 @@ function extractOutcomeTokenFromText(text: string): string | null {
   return token ? token.toLowerCase() : null;
 }
 
+function isLikelyStaffOutcomeUpdateText(text: string): boolean {
+  const source = String(text ?? "").toLowerCase();
+  if (!source.trim()) return false;
+  return /\b(showed up|showed|no show|no-show|didn't show|didnt show|sold|delivered|deal done|hold|on hold|follow ?up|lost|bought elsewhere|finance(?:|d|ing) declined|not approved)\b/.test(
+    source
+  );
+}
+
+type PendingStaffOutcomeCandidate = {
+  conv: any;
+  token: string;
+  touchedAtMs: number;
+  customerName: string;
+};
+
+function findPendingStaffOutcomeCandidates(staff: any, fromPhoneRaw: string): PendingStaffOutcomeCandidate[] {
+  const staffId = String(staff?.id ?? "").trim();
+  const fromPhone = normalizePhone(fromPhoneRaw);
+  if (!staffId && !fromPhone) return [];
+  const maxAgeHoursRaw = Number(process.env.STAFF_OUTCOME_TOKENLESS_MAX_AGE_HOURS ?? 72);
+  const maxAgeHours = Number.isFinite(maxAgeHoursRaw) ? Math.max(1, Math.min(24 * 14, maxAgeHoursRaw)) : 72;
+  const maxAgeMs = maxAgeHours * 60 * 60 * 1000;
+  const nowMs = Date.now();
+  const candidates: PendingStaffOutcomeCandidate[] = [];
+  for (const conv of getAllConversations()) {
+    const notify = conv?.appointment?.staffNotify ?? conv?.dealerRide?.staffNotify;
+    const token = String(notify?.outcomeToken ?? "").trim().toLowerCase();
+    if (!token) continue;
+    if (notify?.outcome) continue;
+
+    const appointmentAssigneeId = String(conv?.appointment?.bookedSalespersonId ?? "").trim();
+    const notifyAssigneeId = String(notify?.userId ?? "").trim();
+    const ownerAssigneeId = String(conv?.leadOwner?.id ?? "").trim();
+    const assignedId = appointmentAssigneeId || notifyAssigneeId || ownerAssigneeId;
+    const notifyPhone = normalizePhone(String(notify?.phone ?? "").trim());
+    const idMatched = !!staffId && !!assignedId && staffId === assignedId;
+    const phoneMatched = !!fromPhone && !!notifyPhone && fromPhone === notifyPhone;
+    if (!idMatched && !phoneMatched) continue;
+
+    const touchedAtRaw =
+      String(notify?.followUpSentAt ?? "").trim() ||
+      String(notify?.bookedSentAt ?? "").trim() ||
+      String(notify?.contextUsedAt ?? "").trim() ||
+      String(conv?.updatedAt ?? "").trim() ||
+      String(conv?.createdAt ?? "").trim();
+    const touchedAtMs = Date.parse(touchedAtRaw);
+    if (!Number.isFinite(touchedAtMs)) continue;
+    if (nowMs - touchedAtMs > maxAgeMs) continue;
+    const customerName =
+      [conv?.lead?.firstName, conv?.lead?.lastName].filter(Boolean).join(" ").trim() ||
+      conv?.lead?.name ||
+      conv?.leadKey ||
+      "customer";
+    candidates.push({ conv, token, touchedAtMs, customerName });
+  }
+  candidates.sort((a, b) => b.touchedAtMs - a.touchedAtMs);
+  return candidates;
+}
+
 function readOutcomeUnitFromText(text: string, parsed: any): OutcomeUnitInput {
   const source = String(text ?? "");
   const stockMatch = source.match(/\b([A-Z]\d{1,4}-\d{2}[A-Z]?)\b/i)?.[1] ?? "";
@@ -4506,12 +4565,33 @@ async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
   if (event.provider !== "twilio" || event.channel !== "sms") return { handled: false };
   const body = String(event.body ?? "").trim();
   if (!body) return { handled: false };
-  const token = extractOutcomeTokenFromText(body);
-  if (!token) return { handled: false };
-
   const users = await listUsers();
   const staff = resolveUserByPhone(users, event.from ?? "");
   if (!staff) return { handled: false };
+  let token = extractOutcomeTokenFromText(body);
+  if (!token) {
+    if (!isLikelyStaffOutcomeUpdateText(body)) return { handled: false };
+    const candidates = findPendingStaffOutcomeCandidates(staff, event.from ?? "");
+    if (candidates.length === 0) {
+      return {
+        handled: true,
+        replyBody:
+          "I couldn't match that update to an open outcome request. Please include the token: OUTCOME <token> ...",
+      };
+    }
+    if (candidates.length > 1) {
+      const hints = candidates
+        .slice(0, 3)
+        .map(c => `${c.customerName} (${c.token})`)
+        .join(" | ");
+      return {
+        handled: true,
+        replyBody: `I found multiple open outcome requests. Please include token: OUTCOME <token> ... (${hints})`,
+      };
+    }
+    token = candidates[0]?.token ?? null;
+    if (!token) return { handled: false };
+  }
 
   const conv = findConversationByOutcomeToken(token);
   if (!conv) {
@@ -4534,7 +4614,7 @@ async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
     return {
       handled: true,
       replyBody:
-        "Please reply with: OUTCOME <token> SOLD <stock/vin> | HOLD <stock/vin> <when> | FOLLOWUP <when> | LOST <reason>."
+        "Please reply with: OUTCOME <token> SHOWED_UP | NO_SHOW | SOLD <stock/vin> | HOLD <stock/vin> <when> | FOLLOWUP <when> | LOST <reason>."
     };
   }
 
@@ -4556,6 +4636,16 @@ async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
       return { handled: true, replyBody: `Couldn't save SOLD: ${err}` };
     }
     confirmation = `Saved SOLD${unit.stockId ? ` (${unit.stockId})` : ""}.`;
+  } else if (parsed.outcome === "showed_up") {
+    setFollowUpMode(conv, "manual_handoff", "appointment_showed_up");
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    confirmation = "Saved SHOWED UP.";
+  } else if (parsed.outcome === "no_show") {
+    setFollowUpMode(conv, "manual_handoff", "appointment_no_show");
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    confirmation = "Saved NO SHOW.";
   } else if (parsed.outcome === "hold") {
     const err = await applyOutcomeHold(conv, unit, note, nowIso);
     if (err) {
@@ -5031,6 +5121,14 @@ function getPreferredSalespeopleForConv(
   }
 
   return ordered;
+}
+
+function resolveConversationAgentName(conv: any, fallbackName?: string): string {
+  const fallback = String(fallbackName ?? "").trim() || "our team";
+  const lockedNameRaw = String(conv?.manualSender?.userName ?? "").trim();
+  if (!lockedNameRaw) return fallback;
+  const first = lockedNameRaw.split(/\s+/).filter(Boolean)[0] ?? "";
+  return first || lockedNameRaw || fallback;
 }
 
 function getLastNonVoiceOutbound(conv: any) {
@@ -9316,7 +9414,7 @@ async function processDueFollowUps() {
     return canOfferTestRideForLead(conv?.lead, dealerProfile);
   };
   const resolvePostSaleSender = (conv: any) => {
-    const agentName = dealerProfile?.agentName ?? "our team";
+    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "our team");
     const soldById = conv?.sale?.soldById;
     if (!soldById) return agentName;
     const user = userById.get(soldById);
@@ -9651,7 +9749,7 @@ async function processDueFollowUps() {
     const isSellMyBikeLead = isSellLead(conv);
     const sellBikeLabel = isSellMyBikeLead ? getSellBikeLabel(conv) : null;
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = dealerProfile?.agentName ?? "our team";
+    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "our team");
     const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
     const followUpLabel = formatModelLabelForFollowUp(
       conv.lead?.vehicle?.year ?? null,
@@ -10021,6 +10119,15 @@ async function processDueFollowUps() {
     const useEmail =
       !isPostSale && conv.classification?.channel === "email" && !!emailTo && hasEmailOptIn(conv.lead);
     const systemMode = effectiveMode(conv);
+    const recentHumanOutboundInLoop = (conv.messages ?? []).some((m: any) => {
+      if (m?.direction !== "out" || m?.provider !== "human") return false;
+      const atMs = new Date(String(m?.at ?? "")).getTime();
+      if (Number.isNaN(atMs)) return false;
+      return now.getTime() - atMs <= 14 * 24 * 60 * 60 * 1000;
+    });
+    const manualSenderInLoop =
+      !!(conv.manualSender?.userId || conv.manualSender?.userName) || recentHumanOutboundInLoop;
+    const enforceSalesReviewForCadence = manualSenderInLoop && !isPostSale;
     const { from: emailFrom, replyTo: emailReplyTo, signature } = getEmailConfig(dealerProfile);
     const replyTo = maybeTagReplyTo(emailReplyTo, conv);
     const bookingUrl = buildBookingUrlForLead(dealerProfile?.bookingUrl, conv);
@@ -10076,7 +10183,7 @@ async function processDueFollowUps() {
       addCallTodoIfMissing(conv, "Call customer (follow-up).");
     };
 
-    if (systemMode === "suggest") {
+    if (systemMode === "suggest" || enforceSalesReviewForCadence) {
       const draftTo = useEmail ? emailTo! : to;
       const draftMessage = useEmail && emailMessage ? emailMessage : message;
       if (
@@ -10313,6 +10420,14 @@ async function processStaffAppointmentNotifications() {
     appt.staffNotify = appt.staffNotify ?? {};
     const token = ensureAppointmentOutcomeToken(appt);
     const link = buildStaffOutcomeLink(token);
+    if (String(appt.staffNotify.userId ?? "").trim() !== String(user.id ?? "").trim()) {
+      appt.staffNotify.userId = String(user.id ?? "").trim() || undefined;
+      changed = true;
+    }
+    if (String(appt.staffNotify.phone ?? "").trim() !== toNumber) {
+      appt.staffNotify.phone = toNumber;
+      changed = true;
+    }
     const whenLocal = formatSlotLocal(appt.whenIso, cfg.timezone);
     const customerName =
       [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() ||
@@ -10373,7 +10488,11 @@ async function processStaffAppointmentNotifications() {
     if (now < followAt) continue;
 
     const followText = link
-      ? `Did ${customerName} show for the ${whenLocal} appointment? Update here: ${link}`
+      ? [
+          `Did ${customerName} show for the ${whenLocal} appointment?`,
+          `Update: ${link}`,
+          `Reply: OUTCOME ${token} SHOWED_UP | NO_SHOW | SOLD <stock/vin> | HOLD <stock/vin> <when> | FOLLOWUP <when> | LOST <reason>.`
+        ].join("\n")
       : `Did ${customerName} show for the ${whenLocal} appointment?`;
     const followSent = await sendInternalSms(toNumber, followText);
     if (followSent) {
@@ -13821,12 +13940,22 @@ app.post("/conversations/:id/send", async (req, res) => {
   const actorUserName = String(user?.name ?? user?.email ?? "").trim();
   const outboundSendTimeoutMs = Number(process.env.OUTBOUND_SEND_TIMEOUT_MS ?? 20000);
   const claimLeadOwnerFromActor = () => {
+    if (!actorUserId && !actorUserName) return;
+    const now = new Date().toISOString();
+    if (actorUserName) {
+      conv.manualSender = {
+        userId: actorUserId || undefined,
+        userName: actorUserName,
+        activatedAt: now,
+        source: "manual_takeover"
+      };
+    }
     if (!actorUserId) return;
     const existingOwner = conv.leadOwner;
     const assignedAt =
       existingOwner?.id === actorUserId
-        ? existingOwner?.assignedAt ?? new Date().toISOString()
-        : new Date().toISOString();
+        ? existingOwner?.assignedAt ?? now
+        : now;
     conv.leadOwner = {
       id: actorUserId,
       name: actorUserName || existingOwner?.name || undefined,
@@ -14631,6 +14760,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       const outcomeLink = buildStaffOutcomeLink(token);
       conv.dealerRide = conv.dealerRide ?? {};
       conv.dealerRide.staffNotify = conv.dealerRide.staffNotify ?? {};
+      conv.dealerRide.staffNotify.userId =
+        String(owner?.id ?? "").trim() || conv.dealerRide.staffNotify.userId;
+      conv.dealerRide.staffNotify.phone = ownerPhone || conv.dealerRide.staffNotify.phone;
       const leadSummary = [
         `Dealer ride outcome needed for ${customerName}.`,
         "DLA confirms they rode a demo bike.",
@@ -14894,15 +15026,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
 
   const usersForMentions = await listUsers();
   const resolveRegenSenderName = () => {
-    const ownerId = String(conv.leadOwner?.id ?? "").trim();
-    const ownerFromUsers = ownerId
-      ? usersForMentions.find(u => String(u.id ?? "").trim() === ownerId)
-      : null;
-    const ownerName =
-      String(ownerFromUsers?.firstName ?? "").trim() ||
-      String(ownerFromUsers?.name ?? "").trim() ||
-      String(conv.leadOwner?.name ?? "").trim();
-    if (ownerName) return ownerName.split(/\s+/).filter(Boolean)[0] ?? ownerName;
+    const locked = resolveConversationAgentName(conv, "");
+    if (locked) return locked;
     const user = (req as any).user ?? null;
     const actorName = String(user?.name ?? user?.email ?? "").trim();
     if (actorName) return actorName.split(/\s+/).filter(Boolean)[0] ?? actorName;
@@ -14911,7 +15036,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (latestInboundIsCreditAdf) {
     const firstName = normalizeDisplayCase(conv.lead?.firstName);
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = resolveRegenSenderName() || dealerProfile?.agentName || "Brooke";
+    const agentName =
+      resolveRegenSenderName() ||
+      resolveConversationAgentName(conv, dealerProfile?.agentName || "Brooke");
     const hasPriorOutbound = Array.isArray(conv.messages) && conv.messages.some(m => m.direction === "out");
     const latestInboundBodyLower = String(latestInboundBeforeDraft?.body ?? "").toLowerCase();
     const latestInboundIsPrequalAdf =
@@ -14967,7 +15094,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       String(event.body ?? "")
     );
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = dealerProfile?.agentName ?? "our team";
+    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "our team");
     const customerName = normalizeDisplayCase(conv.lead?.firstName) || "there";
     const intro = isDirectUserMention(event.body ?? "", mentionedUser)
       ? `Hey ${customerName} — this is ${agentName} at ${dealerName}. `
@@ -15399,7 +15526,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
 
   const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-  const agentName = resolveRegenSenderName() || dealerProfile?.agentName || "Brooke";
+  const agentName =
+    resolveRegenSenderName() ||
+    resolveConversationAgentName(conv, dealerProfile?.agentName || "Brooke");
   const firstName = normalizeDisplayCase(conv.lead?.firstName);
   const hasSentOutbound = (conv.messages ?? []).some(
     m =>
@@ -18040,7 +18169,7 @@ if (authToken && signature) {
         );
     const dealerProfile = await getDealerProfileHot();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = dealerProfile?.agentName ?? "our team";
+    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "our team");
     const customerName = normalizeDisplayCase(conv.lead?.firstName) || "there";
     const intro = isDirectUserMention(event.body ?? "", mentionedUser)
       ? `Hey ${customerName} — this is ${agentName} at ${dealerName}. `
@@ -18659,7 +18788,7 @@ if (authToken && signature) {
       saveConversation(conv);
       const dealerProfile = await getDealerProfileHot();
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-      const agentName = dealerProfile?.agentName ?? "Brooke";
+      const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
       const firstName = normalizeDisplayCase(conv.lead?.firstName);
       const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
       const replyRaw =
@@ -18724,7 +18853,7 @@ if (authToken && signature) {
       }
     const dealerProfile = await getDealerProfileHot();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
     const label = futureFromReply?.label;
     const labelText = label ? label.charAt(0).toUpperCase() + label.slice(1) : "";
     const replyRaw = label
@@ -18756,7 +18885,7 @@ if (authToken && signature) {
       setDialogState(conv, "followup_paused");
       const dealerProfile = await getDealerProfileHot();
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-      const agentName = dealerProfile?.agentName ?? "Brooke";
+      const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
       const replyRaw = buildFriendlyReachOutClose(false);
       const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
       const systemMode = webhookMode;
@@ -18802,7 +18931,7 @@ if (authToken && signature) {
     }
     const dealerProfile = await getDealerProfileHot();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
     const label = future.label;
     const labelText = label.charAt(0).toUpperCase() + label.slice(1);
     const replyRaw = `Got it — I’ll pause things until ${labelText}. Just reach out when the time is right.`;
@@ -18825,7 +18954,7 @@ if (authToken && signature) {
     pauseFollowUpCadence(conv, pauseUntil, "customer_reminder");
     const dealerProfile = await getDealerProfileHot();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
     const replyRaw =
       "Sounds good — I’m here when you’re ready. Just reach out when the time is right.";
     const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
@@ -18991,7 +19120,7 @@ if (authToken && signature) {
   if (event.provider === "twilio" && locationQuestion) {
     const dealerProfile = await getDealerProfileHot();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
     const address = dealerProfile?.address;
     const line1 = address?.line1 ?? "1149 Erie Ave.";
     const city = address?.city ?? "North Tonawanda";
@@ -20115,7 +20244,7 @@ if (authToken && signature) {
   ) {
     const dealerProfile = await getDealerProfileHot();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = dealerProfile?.agentName ?? "Alexandra";
+    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra");
     const bikeLabel = formatModelLabelForFollowUp(
       conv.lead?.vehicle?.year ?? null,
       conv.lead?.vehicle?.model ?? null
@@ -21456,7 +21585,7 @@ if (authToken && signature) {
     const reason = result.handoff.reason;
     const dealerProfile = await getDealerProfileHot();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
     const ack = ensureUniqueDraft(result.handoff.ack, conv, dealerName, agentName);
     if (getDialogState(conv) === "callback_requested") {
       setDialogState(conv, "callback_handoff");
@@ -21483,7 +21612,7 @@ if (authToken && signature) {
   if (result.autoClose?.reason) {
     const dealerProfile = await getDealerProfileHot();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
     const ack = ensureUniqueDraft(result.draft, conv, dealerName, agentName);
     closeConversation(conv, result.autoClose.reason);
     stopRelatedCadences(conv, result.autoClose.reason, { close: true });
@@ -22099,7 +22228,7 @@ if (authToken && signature) {
 
   const dealerProfile = await getDealerProfileHot();
   const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-  const agentName = dealerProfile?.agentName ?? "Brooke";
+  const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
   const lastOutboundTextFinal = getLastNonVoiceOutbound(conv)?.body ?? "";
   let reply = ensureUniqueDraft(result.draft, conv, dealerName, agentName);
   reply = applySlotOfferPolicy(conv, reply, lastOutboundTextFinal);
