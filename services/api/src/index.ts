@@ -17844,9 +17844,19 @@ if (authToken && signature) {
     pricingHistoryBleedGuard
   });
   if (routingParserDecision.accepted && routingParserDecision.fallbackAction === "no_response") {
-    logRouteOutcome("routing_parser_no_response");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    const hasActionableFinanceContext =
+      turnPrimaryIntent === "pricing_payments" ||
+      paymentBudgetContext.monthlyBudget != null ||
+      paymentBudgetContext.downPayment != null ||
+      paymentBudgetContext.termMonths != null;
+    if (!hasActionableFinanceContext) {
+      logRouteOutcome("routing_parser_no_response");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    logRouteOutcome("routing_parser_no_response_overridden", {
+      turnPrimaryIntent
+    });
   }
   if (routingParserDecision.accepted && routingParserDecision.fallbackAction === "clarify") {
     const clarifyReply =
