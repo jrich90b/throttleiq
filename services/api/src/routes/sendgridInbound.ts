@@ -1917,6 +1917,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const callOnlyRequested = isCallOnlyText(inquiryText);
 
   let creditTodoCreated = false;
+  const inquiryLower = inquiryText.toLowerCase();
+  const isPrequalLead =
+    inferredCta === "prequalify" ||
+    (inferredBucket === "finance_prequal" && inferredCta !== "hdfs_coa") ||
+    /prequal|pre-qual/.test(leadSourceLower) ||
+    /\bprequal\b/.test(inquiryLower);
   const isCreditLead =
     inferredBucket === "finance_prequal" ||
     inferredCta === "hdfs_coa" ||
@@ -2341,11 +2347,17 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   if (isCreditLead) {
     const firstName = normalizeDisplayCase(conv.lead?.firstName);
-    let ack = isInitialAdf
-      ? "Thanks — I received your credit application. I’ll have our finance team reach out shortly."
-      : firstName
-        ? `Thanks ${firstName} — we just received your online credit application. Our finance team will reach out shortly to go over options.`
-        : "Thanks — we just received your online credit application. Our finance team will reach out shortly to go over options.";
+    let ack = isPrequalLead
+      ? isInitialAdf
+        ? "Thanks — I received your pre-qualification submission. I’ll have our finance team reach out shortly to review options."
+        : firstName
+          ? `Thanks ${firstName} — we just received your pre-qualification submission. Our finance team will reach out shortly to review options and next steps.`
+          : "Thanks — we just received your pre-qualification submission. Our finance team will reach out shortly to review options and next steps."
+      : isInitialAdf
+        ? "Thanks — I received your credit application. I’ll have our finance team reach out shortly."
+        : firstName
+          ? `Thanks ${firstName} — we just received your online credit application. Our finance team will reach out shortly to go over options.`
+          : "Thanks — we just received your online credit application. Our finance team will reach out shortly to go over options.";
     if (isInitialAdf) {
       ack = await applyInitialAdfPrefix(ack);
     }

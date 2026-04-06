@@ -14696,16 +14696,32 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = resolveRegenSenderName() || dealerProfile?.agentName || "Brooke";
     const hasPriorOutbound = Array.isArray(conv.messages) && conv.messages.some(m => m.direction === "out");
-    const reply = hasPriorOutbound
-      ? firstName
-        ? `Thanks ${firstName} — we just received your online credit application. Our finance team will reach out shortly to go over options.`
-        : "Thanks — we just received your online credit application. Our finance team will reach out shortly to go over options."
-      : `${firstName ? `Hi ${firstName} — ` : "Hi — "}This is ${agentName} at ${dealerName}. Thanks — I received your credit application. I’ll have our finance team reach out shortly.`;
+    const latestInboundBodyLower = String(latestInboundBeforeDraft?.body ?? "").toLowerCase();
+    const latestInboundIsPrequalAdf =
+      latestInboundBeforeDraft?.provider === "sendgrid_adf" &&
+      (/source:\s*marketplace\s*-\s*prequal/.test(latestInboundBodyLower) ||
+        /\bprequal\b|\bpre-qual\b/.test(latestInboundBodyLower));
+    const reply = latestInboundIsPrequalAdf
+      ? hasPriorOutbound
+        ? firstName
+          ? `Thanks ${firstName} — we just received your pre-qualification submission. Our finance team will reach out shortly to review options and next steps.`
+          : "Thanks — we just received your pre-qualification submission. Our finance team will reach out shortly to review options and next steps."
+        : `${firstName ? `Hi ${firstName} — ` : "Hi — "}This is ${agentName} at ${dealerName}. Thanks — I received your pre-qualification submission. I’ll have our finance team reach out shortly to review options.`
+      : hasPriorOutbound
+        ? firstName
+          ? `Thanks ${firstName} — we just received your online credit application. Our finance team will reach out shortly to go over options.`
+          : "Thanks — we just received your online credit application. Our finance team will reach out shortly to go over options."
+        : `${firstName ? `Hi ${firstName} — ` : "Hi — "}This is ${agentName} at ${dealerName}. Thanks — I received your credit application. I’ll have our finance team reach out shortly.`;
     const hasApprovalTodo = listOpenTodos().some(
       t => t.convId === conv.id && t.reason === "approval" && t.status === "open"
     );
     if (!hasApprovalTodo) {
-      addTodo(conv, "approval", event.body ?? "Credit application", event.providerMessageId);
+      addTodo(
+        conv,
+        "approval",
+        event.body ?? (latestInboundIsPrequalAdf ? "Finance pre-qualification" : "Credit application"),
+        event.providerMessageId
+      );
     }
     setFollowUpMode(conv, "manual_handoff", "credit_app");
     stopFollowUpCadence(conv, "manual_handoff");

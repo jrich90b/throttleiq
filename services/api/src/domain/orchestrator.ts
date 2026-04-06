@@ -960,14 +960,18 @@ function buildScheduleInvite(hasConcreteInventory: boolean): string {
   return "I can set up a time to stop in.";
 }
 
-function isCreditAppSource(source?: string | null, sourceId?: number | null): boolean {
+function inferFinanceSubmissionSourceType(
+  source?: string | null,
+  sourceId?: number | null
+): "credit_application" | "prequal" | null {
   const creditIds = new Set([2852, 2883, 2915, 2946, 2949, 2955, 2956, 2928, 2930]);
-  if (sourceId != null && creditIds.has(sourceId)) return true;
+  if (sourceId != null && creditIds.has(sourceId)) return "credit_application";
   const s = (source ?? "").toLowerCase();
-  return (
-    /credit application|apply for credit|finance application|prequal|pre-qual|prequalify|coa|dfi/.test(s) ||
-    /hdfs.*prequal|hdfs.*credit/.test(s)
-  );
+  if (/prequal|pre-qual|prequalify|marketplace\s*-\s*prequal/.test(s)) return "prequal";
+  if (/credit application|apply for credit|finance application|coa|dfi/.test(s)) return "credit_application";
+  if (/hdfs.*credit/.test(s)) return "credit_application";
+  if (/hdfs.*prequal/.test(s)) return "prequal";
+  return null;
 }
 
 function inferAppointmentType(
@@ -1526,8 +1530,8 @@ export async function orchestrateInbound(
   }
 
   const sourceId = ctx?.lead?.sourceId ?? null;
-  const isCreditAppLead = isCreditAppSource(leadSourceRaw, sourceId);
-  if (isCreditAppLead && event.provider === "sendgrid_adf") {
+  const financeSubmissionType = inferFinanceSubmissionSourceType(leadSourceRaw, sourceId);
+  if (financeSubmissionType && event.provider === "sendgrid_adf") {
     const leadFirst = ctx?.lead?.firstName?.trim() || "there";
     const yearLabel = ctx?.lead?.vehicle?.year ? `${ctx.lead.vehicle.year} ` : "";
     const modelLabel = normalizeModelLabel(ctx?.lead?.vehicle?.model ?? ctx?.lead?.vehicle?.description);
@@ -1535,12 +1539,20 @@ export async function orchestrateInbound(
     const agentName = dealerProfile?.agentName ?? "Brooke";
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const bikeLabel = `${yearLabel}${modelLabel}`.trim() || "the bike";
-    const draft = hasPriorOutbound
-      ? `Perfect, thanks ${leadFirst} — we just saw your online credit app come through for ${bikeLabel}. ` +
-        "Our business manager will review it and reach out shortly to go over options."
-      : `Hi ${leadFirst} — thanks for your interest in the ${bikeLabel}. ` +
-        `This is ${agentName} at ${dealerName}. We received your online credit application. ` +
-        "I’ll have our business manager reach out to go over your options.";
+    const isPrequalSubmission = financeSubmissionType === "prequal";
+    const draft = isPrequalSubmission
+      ? hasPriorOutbound
+        ? `Perfect, thanks ${leadFirst} — we just saw your pre-qualification submission come through for ${bikeLabel}. ` +
+          "Our business manager will review it and reach out shortly to go over options and next steps."
+        : `Hi ${leadFirst} — thanks for your interest in the ${bikeLabel}. ` +
+          `This is ${agentName} at ${dealerName}. We received your pre-qualification submission. ` +
+          "I’ll have our business manager reach out to review options."
+      : hasPriorOutbound
+        ? `Perfect, thanks ${leadFirst} — we just saw your online credit app come through for ${bikeLabel}. ` +
+          "Our business manager will review it and reach out shortly to go over options."
+        : `Hi ${leadFirst} — thanks for your interest in the ${bikeLabel}. ` +
+          `This is ${agentName} at ${dealerName}. We received your online credit application. ` +
+          "I’ll have our business manager reach out to go over your options.";
     return finalize({
       intent: "FINANCING",
       stage: "ENGAGED",
