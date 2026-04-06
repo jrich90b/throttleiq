@@ -439,6 +439,12 @@ export type Conversation = {
     finish?: string;
     updatedAt?: string;
   };
+  paymentBudgetContext?: {
+    monthlyBudget?: number | null;
+    termMonths?: number | null;
+    downPayment?: number | null;
+    updatedAt?: string;
+  };
   compareContext?: {
     models?: string[];
     year?: string | number | null;

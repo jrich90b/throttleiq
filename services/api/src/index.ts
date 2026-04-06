@@ -7146,6 +7146,21 @@ function findRecentInboundPaymentBudgetContext(conv: any): {
   return { monthlyBudget, termMonths, downPayment };
 }
 
+function getStoredPaymentBudgetContext(conv: any): {
+  monthlyBudget?: number;
+  termMonths?: number;
+  downPayment?: number;
+} {
+  const stored = conv?.paymentBudgetContext ?? {};
+  const monthlyRaw = Number(stored?.monthlyBudget ?? NaN);
+  const termRaw = Number(stored?.termMonths ?? NaN);
+  const downRaw = Number(stored?.downPayment ?? NaN);
+  const monthlyBudget = Number.isFinite(monthlyRaw) && monthlyRaw > 0 ? monthlyRaw : undefined;
+  const termMonths = Number.isFinite(termRaw) && termRaw > 0 ? termRaw : undefined;
+  const downPayment = Number.isFinite(downRaw) && downRaw >= 0 ? downRaw : undefined;
+  return { monthlyBudget, termMonths, downPayment };
+}
+
 function resolvePaymentBudgetForConversation(
   conv: any,
   text: string
@@ -7155,7 +7170,8 @@ function resolvePaymentBudgetForConversation(
   downPayment?: number;
 } {
   const recent = findRecentInboundPaymentBudgetContext(conv);
-  let monthlyBudget = extractMonthlyBudgetLimit(text) ?? recent.monthlyBudget;
+  const stored = getStoredPaymentBudgetContext(conv);
+  let monthlyBudget = extractMonthlyBudgetLimit(text) ?? recent.monthlyBudget ?? stored.monthlyBudget;
   if (monthlyBudget == null) {
     const bareBudget = extractBareBudgetAmount(text);
     const inPricingDialog = String(getDialogState(conv) ?? "").startsWith("pricing_");
@@ -7163,10 +7179,10 @@ function resolvePaymentBudgetForConversation(
       monthlyBudget = bareBudget;
     }
   }
-  const termMonths = extractPaymentTermMonths(text) ?? recent.termMonths;
+  const termMonths = extractPaymentTermMonths(text) ?? recent.termMonths ?? stored.termMonths;
   const parsedDown = parseDownPaymentForBudget(text)?.amount;
   const zeroDown = hasZeroDownSignal(text);
-  const downPayment = parsedDown ?? (zeroDown ? 0 : recent.downPayment);
+  const downPayment = parsedDown ?? (zeroDown ? 0 : (recent.downPayment ?? stored.downPayment));
   return { monthlyBudget, termMonths, downPayment };
 }
 
@@ -7834,6 +7850,52 @@ function applyPricingPolicy(
       out = "Got it — I’ll have a manager pull the exact numbers and follow up shortly.";
     }
   }
+  const knownBudget = resolvePaymentBudgetForConversation(conv, body);
+  const knownMonthly = knownBudget.monthlyBudget ?? null;
+  const knownTerm = knownBudget.termMonths ?? null;
+  const knownDown = knownBudget.downPayment;
+  const hasKnownDown = knownDown != null;
+  const hasKnownMonthly = knownMonthly != null;
+  const hasKnownTerm = knownTerm != null;
+  if (
+    hasKnownDown &&
+    /\b(about\s+how\s+much\s+down\s+were\s+you\s+thinking|how\s+much\s+down\s+were\s+you\s+thinking|how\s+much\s+down|money\s+down|down\s+payment)\b/i.test(
+      out
+    )
+  ) {
+    if (hasKnownMonthly && hasKnownTerm) {
+      const downLabel =
+        Number(knownDown) <= 0
+          ? "$0 down"
+          : `$${Number(knownDown).toLocaleString("en-US")} down`;
+      const budgetLabel = `$${Number(knownMonthly).toLocaleString("en-US")}/mo`;
+      out =
+        `Perfect — with ${downLabel} at ${knownTerm} months targeting ${budgetLabel}, ` +
+        "if that works for you, want to set a time to stop in or fill out the online credit app?";
+    } else if (!hasKnownTerm) {
+      out = "Perfect — do you want me to run 60, 72, or 84 months?";
+    }
+  }
+  if (
+    hasKnownMonthly &&
+    /\bwhat\s+monthly\s+payment\s+feels\s+comfortable\b/i.test(out) &&
+    /\b(what monthly|monthly payment feels comfortable|target monthly)\b/i.test(String(body).toLowerCase())
+  ) {
+    if (hasKnownDown && hasKnownTerm) {
+      const downLabel =
+        Number(knownDown) <= 0
+          ? "$0 down"
+          : `$${Number(knownDown).toLocaleString("en-US")} down`;
+      const budgetLabel = `$${Number(knownMonthly).toLocaleString("en-US")}/mo`;
+      out =
+        `Perfect — with ${downLabel} at ${knownTerm} months targeting ${budgetLabel}, ` +
+        "if that works for you, want to set a time to stop in or fill out the online credit app?";
+    } else if (!hasKnownDown) {
+      out = "Got it — about how much are you planning to put down?";
+    } else if (!hasKnownTerm) {
+      out = "Got it — do you want me to run 60, 72, or 84 months?";
+    }
+  }
   return out;
 }
 
@@ -7896,7 +7958,10 @@ function buildFinancePriorityInvariantFallbackReply(
   if (monthlyBudget != null && termMonths != null && downValue != null) {
     const zeroDownTail =
       downValue <= 0 ? " $0 down options are application-dependent and lender approval is required." : "";
-    return `Perfect — with ${downLabel} at ${termMonths} months targeting ${budgetLabel}, I can run the exact numbers now.${zeroDownTail}`;
+    return (
+      `Perfect — with ${downLabel} at ${termMonths} months targeting ${budgetLabel}, ` +
+      `if that works for you, want to set a time to stop in or fill out the online credit app?${zeroDownTail}`
+    );
   }
 
   if (monthlyBudget != null && termMonths == null && downValue == null) {
@@ -17813,7 +17878,33 @@ if (authToken && signature) {
     schedulePriorityOverride,
     availabilityIntentOverride: deterministicAvailabilityIntentOverride
   });
-  const turnPrimaryIntent = routingParserIntentOverride ?? turnIntentPlan.primaryIntent;
+  let turnPrimaryIntent = routingParserIntentOverride ?? turnIntentPlan.primaryIntent;
+  const financeContinuationContext =
+    hasRecentPricingPromptContext(conv) &&
+    (paymentBudgetContext.monthlyBudget != null ||
+      paymentBudgetContext.downPayment != null ||
+      paymentBudgetContext.termMonths != null);
+  if (
+    turnPrimaryIntent === "general" &&
+    financeContinuationContext &&
+    !availabilityPrimaryIntent &&
+    !schedulingPrimaryIntent &&
+    !callbackPrimaryIntent
+  ) {
+    turnPrimaryIntent = "pricing_payments";
+    logRouteOutcome("finance_continuation_intent_override", {
+      monthlyBudget: paymentBudgetContext.monthlyBudget ?? null,
+      termMonths: paymentBudgetContext.termMonths ?? null,
+      downPayment: paymentBudgetContext.downPayment ?? null
+    });
+  }
+  const previousPaymentContext = getStoredPaymentBudgetContext(conv);
+  conv.paymentBudgetContext = {
+    monthlyBudget: paymentBudgetContext.monthlyBudget ?? previousPaymentContext.monthlyBudget ?? null,
+    termMonths: paymentBudgetContext.termMonths ?? previousPaymentContext.termMonths ?? null,
+    downPayment: paymentBudgetContext.downPayment ?? previousPaymentContext.downPayment ?? null,
+    updatedAt: new Date().toISOString()
+  };
   const liveParserStateCleanup = reduceStaleWorkflowStateForInbound(
     conv,
     event.body ?? "",
@@ -17908,7 +17999,7 @@ if (authToken && signature) {
     const termProvided = paymentBudgetContext.termMonths != null;
     const askedFinanceFollowUpRecently =
       regexIntentFallbackEnabled &&
-      /\b(how much can you put down|how much (?:are|can) you put down|about how much down|how much down|money down|down payment|cash down|what monthly payment|what monthly|target monthly|60,?\s*72,?\s*or\s*84|60 months|72 months|84 months|which term|run (?:it|that|the numbers?))\b/i.test(
+      /\b(how much can you put down|how much (?:are|can) you put down|about how much down|how much down|money down|down payment|cash down|what monthly payment|what monthly|target monthly|60,?\s*72,?\s*or\s*84|60 months|72 months|84 months|which term|run (?:it|that|the numbers?)|run (?:one )?term(?: exactly)?)\b/i.test(
         lastOutboundText
       );
     return (
@@ -18021,11 +18112,17 @@ if (authToken && signature) {
           if (downValue <= 0) {
             reply += " $0 down options are application-dependent and lender approval is required.";
           }
+          reply +=
+            " If that works for you, want to set a time to stop in or fill out the online credit app?";
         } else {
-          reply = `Perfect — with ${downLabel} at ${termMonths} months targeting ${budgetLabel}, I can run the exact numbers now.`;
+          reply =
+            `Perfect — with ${downLabel} at ${termMonths} months targeting ${budgetLabel}, ` +
+            "if that works for you, want to set a time to stop in or fill out the online credit app?";
         }
       } else {
-        reply = `Perfect — with ${downLabel} at ${termMonths} months targeting ${budgetLabel}, I can run the exact numbers now.`;
+        reply =
+          `Perfect — with ${downLabel} at ${termMonths} months targeting ${budgetLabel}, ` +
+          "if that works for you, want to set a time to stop in or fill out the online credit app?";
       }
       if (!isScheduleDialogState(getDialogState(conv))) {
         setDialogState(conv, "pricing_init");
