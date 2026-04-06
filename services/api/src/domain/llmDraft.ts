@@ -1170,6 +1170,13 @@ export async function parseBookingIntentWithLLM(args: {
     .slice(0, 2)
     .join(" | ");
   const apptStatus = args.appointment?.status ?? "none";
+  const voiceExamples = [
+    'input: "Customer: can we do Tuesday around 4?" output: {"intent":"schedule","explicit_request":true,"requested":{"day":"tuesday","time_text":"around 4","time_window":"range"},"reference":"none","normalized_text":"tuesday around 4","confidence":0.96}',
+    'input: "Customer: i can come in next week sometime afternoon" output: {"intent":"schedule","explicit_request":true,"requested":{"day":"next week","time_text":"afternoon","time_window":"range"},"reference":"none","normalized_text":"next week afternoon","confidence":0.92}',
+    'input: "Customer: can you move me later than that time?" output: {"intent":"reschedule","explicit_request":true,"requested":{"day":"","time_text":"later","time_window":"range"},"reference":"last_suggested","normalized_text":"later than last suggested","confidence":0.9}',
+    'input: "Customer: what openings do you have friday?" output: {"intent":"availability","explicit_request":true,"requested":{"day":"friday","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"friday","confidence":0.95}',
+    'input: "Customer: payments are too high right now" output: {"intent":"none","explicit_request":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.93}'
+  ];
 
   const prompt = [
     "You are a scheduling parser for dealership SMS.",
@@ -1187,6 +1194,8 @@ export async function parseBookingIntentWithLLM(args: {
     `Appointment status: ${apptStatus}`,
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
     lastSlots ? `Last suggested slots: ${lastSlots}` : "Last suggested slots: (none)",
+    "Voice-style examples:",
+    ...voiceExamples,
     `Message: ${text}`
   ].join("\n");
 
@@ -1320,6 +1329,13 @@ export async function parseIntentWithLLM(args: {
 
   const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
+  const voiceExamples = [
+    'input: "Customer: can you call me after 4?" output: {"intent":"callback","explicit_request":true,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":true,"time_text":"after 4","phone":""},"confidence":0.97}',
+    'input: "Customer: do you have any black street glides in stock?" output: {"intent":"availability","explicit_request":true,"availability":{"model":"Street Glide","year":"","color":"black","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.97}',
+    'input: "Customer: can i test ride one this week?" output: {"intent":"test_ride","explicit_request":true,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.95}',
+    'input: "Customer: i can come in tuesday at 3:45" output: {"intent":"none","explicit_request":false,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.94}',
+    'input: "Customer: im trying to stay under 500 a month" output: {"intent":"none","explicit_request":false,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.94}'
+  ];
 
   const prompt = [
     "You are a parser for dealership SMS.",
@@ -1344,6 +1360,8 @@ export async function parseIntentWithLLM(args: {
       stockId: lead?.vehicle?.stockId ?? null
     })}`,
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    "Voice-style examples:",
+    ...voiceExamples,
     `Message: ${text}`
   ].join("\n");
 
@@ -2613,6 +2631,14 @@ export async function parseConversationStateWithLLM(args: {
 
   const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
+  const voiceExamples = [
+    'input: "Customer: can service quote an LED headlight install?" output: {"state_intent":"service_request","department_intent":"service","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"service_request","confidence":0.97}',
+    'input: "Customer: can parts order drag specialties for me?" output: {"state_intent":"parts_request","department_intent":"parts","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"parts_request","confidence":0.97}',
+    'input: "Customer: keep an eye out for a black road glide and text me when one lands" output: {"state_intent":"inventory_watch","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":false,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.96}',
+    'input: "Customer: tuesday around 4 works for me" output: {"state_intent":"scheduling","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.94}',
+    'input: "Customer: i can do 2500 down and want to stay under 500 monthly" output: {"state_intent":"pricing","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":false,"manual_handoff_reason":"none","confidence":0.95}',
+    'input: "Customer: ok sounds good thanks" output: {"state_intent":"general","department_intent":"none","explicit_request":false,"clear_inventory_watch_pending":false,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.9}'
+  ];
   const prompt = [
     "You parse inbound dealership messages into conversation state transitions.",
     "Return only JSON matching the schema.",
@@ -2646,6 +2672,8 @@ export async function parseConversationStateWithLLM(args: {
       leadSource: lead?.source ?? null
     })}`,
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    "Voice-style examples:",
+    ...voiceExamples,
     `Inbound message: ${text}`
   ].join("\n");
 
@@ -2727,6 +2755,14 @@ export async function parseInventoryEntitiesWithLLM(args: {
 
   const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
+  const voiceExamples = [
+    'input: "Customer: do you have any black street glides in stock?" output: {"model":"Street Glide","year":0,"year_min":0,"year_max":0,"color":"black","trim":"","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.97}',
+    'input: "Customer: looking for a 2026 road glide limited in vivid black" output: {"model":"Road Glide Limited","year":2026,"year_min":0,"year_max":0,"color":"vivid black","trim":"","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.97}',
+    'input: "Customer: if i can stay around 500 a month with 2500 down id do it" output: {"model":"","year":0,"year_min":0,"year_max":0,"color":"","trim":"","min_price":0,"max_price":0,"monthly_budget":500,"down_payment":2500,"confidence":0.95}',
+    'input: "Customer: anything between 2021 and 2023 under 20k?" output: {"model":"","year":0,"year_min":2021,"year_max":2023,"color":"","trim":"","min_price":0,"max_price":20000,"monthly_budget":0,"down_payment":0,"confidence":0.94}',
+    'input: "Customer: im after a black trim cvo street glide st" output: {"model":"CVO Street Glide ST","year":0,"year_min":0,"year_max":0,"color":"","trim":"black trim","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.93}',
+    'input: "Customer: tuesday at 4 works for me" output: {"model":"","year":0,"year_min":0,"year_max":0,"color":"","trim":"","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.92}'
+  ];
   const prompt = [
     "You extract structured motorcycle shopping entities from dealership inbound text.",
     "Return only JSON matching the schema.",
@@ -2747,6 +2783,8 @@ export async function parseInventoryEntitiesWithLLM(args: {
       year: lead?.vehicle?.year ?? null
     })}`,
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    "Voice-style examples:",
+    ...voiceExamples,
     `Message: ${text}`
   ].join("\n");
 

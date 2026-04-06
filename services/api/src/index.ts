@@ -2083,62 +2083,6 @@ function buildBookingUrlForLead(baseUrl: string | undefined | null, conv: any): 
   }
 }
 
-function detectSummaryCallback(summaryText: string, transcriptText: string): { label: string } | null {
-  const source = `${summaryText}\n${transcriptText}`.toLowerCase();
-  if (!/(call back|call me back|call him back|call her back|call you back|call around|call after|follow up|check back|reach back|call later)/i.test(source)) {
-    return null;
-  }
-  const dayMatch = source.match(
-    /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i
-  );
-  const dayLabel = dayMatch ? dayMatch[1] : /next day/.test(source) ? "tomorrow" : "";
-  const timeMatch = source.match(/\b(after|around|by|at)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
-  let timeLabel = "";
-  if (timeMatch) {
-    const minute = timeMatch[3] ? `:${timeMatch[3]}` : "";
-    timeLabel = `${timeMatch[1]} ${timeMatch[2]}${minute} ${timeMatch[4].toUpperCase()}`;
-  }
-  const when = [dayLabel, timeLabel].filter(Boolean).join(" ").trim();
-  const label = when ? `Call back ${when}` : "Call back when available";
-  return { label };
-}
-
-function findModelMention(text: string): string | null {
-  const models = getAllModels();
-  if (!models.length) return null;
-  const hay = text.toLowerCase();
-  let best: string | null = null;
-  for (const model of models) {
-    const m = String(model ?? "").trim();
-    if (!m) continue;
-    const needle = m.toLowerCase();
-    if (!hay.includes(needle)) continue;
-    if (!best || needle.length > best.toLowerCase().length) {
-      best = m;
-    }
-  }
-  return best;
-}
-
-function extractYear(text: string): number | null {
-  const match = text.match(/\b(19|20)\d{2}\b/);
-  if (!match) return null;
-  const year = Number(match[0]);
-  return Number.isFinite(year) ? year : null;
-}
-
-function detectCondition(text: string, year: number | null): "new" | "used" | "unknown" {
-  const t = text.toLowerCase();
-  if (/\b(pre[-\s]?owned|used)\b/.test(t)) return "used";
-  if (/\bnew\b/.test(t)) return "new";
-  if (year) {
-    const nowYear = new Date().getFullYear();
-    if (year >= nowYear - 1) return "new";
-    if (year <= nowYear - 2) return "used";
-  }
-  return "unknown";
-}
-
 async function applyPostCallSummaryActions(opts: {
   conv: Conversation;
   summaryText: string;
@@ -2146,8 +2090,6 @@ async function applyPostCallSummaryActions(opts: {
   sourceMessageId?: string;
 }) {
   const { conv, summaryText, transcriptText, sourceMessageId } = opts;
-  const lowerSummary = summaryText.toLowerCase();
-  const lowerTranscript = transcriptText.toLowerCase();
   const extractCustomerUtterances = (text: string) => {
     if (!text) return "";
     const lines = text.split(/\r?\n/);
@@ -2160,6 +2102,7 @@ async function applyPostCallSummaryActions(opts: {
     return customerLines.length ? customerLines.join(" ") : "";
   };
   const customerText = extractCustomerUtterances(transcriptText) || summaryText;
+  const parserHistory = [{ direction: "in" as const, body: customerText }];
 
   const intentParse = await parseIntentWithLLM({
     text: customerText,
@@ -2173,6 +2116,41 @@ async function applyPostCallSummaryActions(opts: {
   const llmAvailabilityIntent = intentAccepted && intentParse?.intent === "availability";
   const llmTestRideIntent = intentAccepted && intentParse?.intent === "test_ride";
   const llmAvailability = llmAvailabilityIntent ? intentParse?.availability ?? null : null;
+  const conversationStateParse = await parseConversationStateWithLLM({
+    text: customerText,
+    history: parserHistory,
+    lead: conv.lead,
+    followUp: conv.followUp ?? null,
+    dialogState: getDialogState(conv),
+    inventoryWatchPending: conv.inventoryWatchPending ?? null
+  });
+  const conversationStateAccepted = isConversationStateParserAccepted(conversationStateParse);
+  const parserInventoryWatchIntent =
+    conversationStateAccepted &&
+    conversationStateParse?.stateIntent === "inventory_watch" &&
+    conversationStateParse?.explicitRequest;
+  const parserSchedulingIntent =
+    conversationStateAccepted &&
+    conversationStateParse?.stateIntent === "scheduling" &&
+    conversationStateParse?.explicitRequest;
+  const bookingParse = await parseBookingIntentWithLLM({
+    text: customerText,
+    history: parserHistory,
+    lastSuggestedSlots: conv.scheduler?.lastSuggestedSlots ?? [],
+    appointment: conv.appointment
+  });
+  const bookingConfidence =
+    typeof bookingParse?.confidence === "number" ? bookingParse.confidence : 0;
+  const bookingConfidenceMin = Number(process.env.LLM_BOOKING_CONFIDENCE_MIN ?? 0.7);
+  const bookingIntentAccepted =
+    !!bookingParse?.explicitRequest &&
+    bookingConfidence >= bookingConfidenceMin &&
+    (bookingParse.intent === "schedule" ||
+      bookingParse.intent === "reschedule" ||
+      bookingParse.intent === "availability");
+  if (bookingIntentAccepted && !isScheduleDialogState(getDialogState(conv))) {
+    setDialogState(conv, "schedule_request");
+  }
 
   if (llmTestRideIntent && !isTestRideDialogState(getDialogState(conv))) {
     setDialogState(conv, "test_ride_init");
@@ -2184,7 +2162,7 @@ async function applyPostCallSummaryActions(opts: {
           ? `Customer requested a call back ${intentParse.callback.timeText}`
           : "Customer requested a call back."
       }
-    : detectSummaryCallback(summaryText, transcriptText);
+    : null;
   if (callback) {
     const hasOpenCall = listOpenTodos().some(
       t => t.convId === conv.id && t.status === "open" && t.reason === "call"
@@ -2194,39 +2172,33 @@ async function applyPostCallSummaryActions(opts: {
     }
   }
 
-  const watchCue = /(looking for|interested in|shopping for|considering|plans to buy|wants to buy|still interested)/i;
-  const notInStockCue =
-    /\b(don'?t|do not|not)\s+(currently\s+)?(have|see|show|carry|stock)\b.*\b(in stock|available)\b|\bnot available\b|\bsold out\b|\bno\s+.*\bin stock\b/i;
-  const notifyCue =
-    /\b(let (you|me) know|keep (you|me) posted|keep an eye out|watch for|call (you|me) if|text (you|me) if|send(?:ing)? (?:it|one|them)?\s*my way|send(?:ing)? (?:it|one|them)?\s*over)\b.*\b(comes in|available|get one|get it|in stock|find one)\b/i;
-  if (
-    watchCue.test(lowerSummary) ||
-    watchCue.test(lowerTranscript) ||
-    notInStockCue.test(lowerSummary) ||
-    notInStockCue.test(lowerTranscript) ||
-    notifyCue.test(lowerSummary) ||
-    notifyCue.test(lowerTranscript)
-  ) {
+  if (llmAvailabilityIntent || parserInventoryWatchIntent) {
     const model =
       llmAvailability?.model ||
-      findModelMention(summaryText) ||
-      findModelMention(transcriptText) ||
       conv.lead?.vehicle?.model ||
       conv.lead?.vehicle?.description ||
       undefined;
     const hasWatch = !!(conv.inventoryWatch || (conv.inventoryWatches && conv.inventoryWatches.length));
     if (model && !hasWatch) {
+      const parsedLeadYear = Number(conv.lead?.vehicle?.year ?? "");
       const yearFromIntent = llmAvailability?.year ? Number(llmAvailability.year) : undefined;
-      const year = yearFromIntent || extractYear(summaryText) || extractYear(transcriptText);
-      const cond =
+      const year =
+        yearFromIntent ??
+        (Number.isFinite(parsedLeadYear) ? parsedLeadYear : undefined);
+      const leadCondition = String(conv.lead?.vehicle?.condition ?? "").toLowerCase();
+      const inferredCondition =
         llmAvailability?.condition && llmAvailability.condition !== "unknown"
           ? llmAvailability.condition
-          : detectCondition(summaryText + " " + transcriptText, year);
+          : leadCondition === "used"
+            ? "used"
+            : leadCondition === "new"
+              ? "new"
+              : "unknown";
       const watch: InventoryWatch = {
         model,
         year: year ?? undefined,
         make: conv.lead?.vehicle?.make,
-        condition: cond === "unknown" ? undefined : cond,
+        condition: inferredCondition === "unknown" ? undefined : inferredCondition,
         exactness: year ? "year_model" : "model_only",
         status: "active",
         createdAt: new Date().toISOString(),
@@ -2242,14 +2214,25 @@ async function applyPostCallSummaryActions(opts: {
     }
   }
 
-  const bookingCue = /(scheduled|booked|appointment|set for|confirmed|coming in|stop(ping)? in|visit)/i;
-  if (bookingCue.test(lowerSummary) || bookingCue.test(lowerTranscript) || llmTestRideIntent) {
+  if (bookingIntentAccepted || llmTestRideIntent || parserSchedulingIntent) {
     if (!conv.appointment?.bookedEventId) {
       try {
         const cfg = await getSchedulerConfigHot();
+        const bookingRequestedDay = String(bookingParse?.requested?.day ?? "").trim();
+        const bookingRequestedTime = String(bookingParse?.requested?.timeText ?? "").trim();
+        const bookingRequestedText = [bookingRequestedDay, bookingRequestedTime]
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+        const candidateRequestedTexts = [
+          bookingRequestedText,
+          String(bookingParse?.normalizedText ?? "").trim(),
+          customerText
+        ].filter(Boolean);
         const requested =
-          parseRequestedDayTime(summaryText, cfg.timezone) ||
-          parseRequestedDayTime(transcriptText, cfg.timezone);
+          candidateRequestedTexts
+            .map(text => parseRequestedDayTime(text, cfg.timezone))
+            .find(Boolean) ?? null;
         if (requested) {
           const appointmentType = inferAppointmentTypeFromConv(conv) || "inventory_visit";
           const durationMinutes = cfg.appointmentTypes?.[appointmentType]?.durationMinutes ?? 60;
@@ -8023,6 +8006,41 @@ function buildFinancePriorityInvariantFallbackReply(
   }
 
   return "Got it — I can run numbers. What monthly payment are you trying to stay around, and what term works best (60, 72, or 84 months)?";
+}
+
+function buildInvariantGuardFallbackReply(args: {
+  reason: string;
+  inboundText: string;
+  hasActionableFinanceContext: boolean;
+  hasActionableAvailabilityContext: boolean;
+  hasActionableSchedulingContext: boolean;
+}): string | null {
+  const reason = String(args.reason ?? "").toLowerCase();
+  if (reason === "short_ack_no_action_guard") return null;
+
+  if (args.hasActionableFinanceContext) {
+    return "Happy to help with payments. What term do you want me to run: 60, 72, or 84 months?";
+  }
+  if (args.hasActionableAvailabilityContext) {
+    return "Happy to check inventory right now. Are you looking for a specific year, color, or trim?";
+  }
+  if (args.hasActionableSchedulingContext) {
+    return "Happy to set that up. What day and time work best for you?";
+  }
+
+  if (reason === "manual_handoff_inventory_prompt_guard") {
+    return "Got it — I’ll have someone on our team follow up with you.";
+  }
+  if (reason === "paused_state_inventory_prompt_guard") {
+    return "Sounds good — when you’re ready, share the bike details and I can help.";
+  }
+  if (reason === "availability_priority_pricing_prompt_guard") {
+    return "Happy to check inventory right now. Are you looking for a specific year, color, or trim?";
+  }
+
+  const inbound = String(args.inboundText ?? "").trim();
+  if (!inbound) return null;
+  return "Happy to help — are you asking about availability, payments, or setting a time to come in?";
 }
 
 function applyCallbackPolicy(conv: any, reply: string, lastOutboundText: string): string {
@@ -21967,10 +21985,39 @@ if (authToken && signature) {
         return res.status(200).type("text/xml").send(twiml);
       }
     } else {
-      discardPendingDrafts(conv, invariantReason);
-      logRouteOutcome(invariantReason);
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      const invariantFallback = buildInvariantGuardFallbackReply({
+        reason: invariantReason,
+        inboundText: String(event.body ?? ""),
+        hasActionableFinanceContext,
+        hasActionableAvailabilityContext,
+        hasActionableSchedulingContext
+      });
+      if (invariantFallback) {
+        const invariantFallbackCheck = evaluateLiveDraftInvariant(invariantFallback, {
+          turnFinanceIntent: hasActionableFinanceContext,
+          turnSchedulingIntent: hasActionableSchedulingContext,
+          turnAvailabilityIntent: hasActionableAvailabilityContext,
+          financeContextIntent: hasActionableFinanceContext,
+          shortAckIntent: shortAck
+        });
+        if (invariantFallbackCheck.allow) {
+          reply = invariantFallbackCheck.draftText;
+          logRouteOutcome("draft_invariant_fallback", {
+            blockedReason: invariantReason
+          });
+        } else {
+          const fallbackReason = invariantFallbackCheck.reason ?? invariantReason;
+          discardPendingDrafts(conv, fallbackReason);
+          logRouteOutcome(fallbackReason);
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+      } else {
+        discardPendingDrafts(conv, invariantReason);
+        logRouteOutcome(invariantReason);
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
     }
   } else {
     reply = liveDraftInvariant.draftText;

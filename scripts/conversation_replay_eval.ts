@@ -12,6 +12,11 @@ type Case = {
     dialogState?: string | null;
     classificationBucket?: string | null;
     classificationCta?: string | null;
+    turnFinanceIntent?: boolean | null;
+    turnAvailabilityIntent?: boolean | null;
+    turnSchedulingIntent?: boolean | null;
+    financeContextIntent?: boolean | null;
+    shortAckIntent?: boolean | null;
   };
 };
 
@@ -28,7 +33,8 @@ const cases: Case[] = [
       followUpReason: "manual_appointment",
       dialogState: "none",
       classificationBucket: "general_inquiry",
-      classificationCta: "unknown"
+      classificationCta: "unknown",
+      shortAckIntent: true
     }
   },
   {
@@ -71,7 +77,9 @@ const cases: Case[] = [
       followUpReason: "pricing",
       dialogState: "pricing_answered",
       classificationBucket: "inventory_interest",
-      classificationCta: "ask_payment"
+      classificationCta: "ask_payment",
+      turnFinanceIntent: true,
+      financeContextIntent: true
     }
   },
   {
@@ -85,7 +93,9 @@ const cases: Case[] = [
       followUpReason: "pricing",
       dialogState: "pricing_answered",
       classificationBucket: "inventory_interest",
-      classificationCta: "ask_payment"
+      classificationCta: "ask_payment",
+      turnFinanceIntent: true,
+      financeContextIntent: true
     }
   },
   {
@@ -100,7 +110,9 @@ const cases: Case[] = [
       followUpReason: "pricing",
       dialogState: "pricing_answered",
       classificationBucket: "inventory_interest",
-      classificationCta: "ask_payment"
+      classificationCta: "ask_payment",
+      turnFinanceIntent: true,
+      financeContextIntent: true
     }
   },
   {
@@ -115,7 +127,8 @@ const cases: Case[] = [
       followUpReason: "pricing",
       dialogState: "pricing_answered",
       classificationBucket: "inventory_interest",
-      classificationCta: "check_availability"
+      classificationCta: "check_availability",
+      turnAvailabilityIntent: true
     }
   },
   {
@@ -129,7 +142,9 @@ const cases: Case[] = [
       followUpReason: "pricing",
       dialogState: "pricing_answered",
       classificationBucket: "inventory_interest",
-      classificationCta: "ask_payment"
+      classificationCta: "ask_payment",
+      turnFinanceIntent: true,
+      financeContextIntent: true
     }
   },
   {
@@ -144,7 +159,8 @@ const cases: Case[] = [
       followUpReason: "manual_appointment",
       dialogState: "none",
       classificationBucket: "general_inquiry",
-      classificationCta: "unknown"
+      classificationCta: "unknown",
+      shortAckIntent: true
     }
   },
   {
@@ -158,7 +174,9 @@ const cases: Case[] = [
       followUpReason: "manual_appointment",
       dialogState: "none",
       classificationBucket: "general_inquiry",
-      classificationCta: "unknown"
+      classificationCta: "unknown",
+      turnFinanceIntent: true,
+      financeContextIntent: true
     }
   },
   {
@@ -187,7 +205,8 @@ const cases: Case[] = [
       followUpReason: "service_request",
       dialogState: "service_handoff",
       classificationBucket: "service",
-      classificationCta: "service_request"
+      classificationCta: "service_request",
+      shortAckIntent: true
     }
   },
   {
