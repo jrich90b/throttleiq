@@ -477,6 +477,16 @@ export type Conversation = {
   contactPreference?: "call_only";
   voiceContext?: VoiceContext;
   memorySummary?: { text: string; updatedAt: string; messageCount: number };
+  agentContext?: {
+    text: string;
+    mode?: "persistent" | "next_reply";
+    expiresAt?: string;
+    updatedAt: string;
+    updatedByUserId?: string;
+    updatedByUserName?: string;
+    consumedAt?: string;
+    consumedReason?: string;
+  };
   lastDecision?: {
     at: string;
     ambiguousFlow: boolean;
@@ -1225,6 +1235,7 @@ export function appendOutbound(
     (String(from ?? "").includes("@") || String(to ?? "").includes("@"))
   ) {
     conv.emailDraft = tonedBody;
+    consumeAgentContextIfNeeded(conv, "outbound_email_draft");
     conv.updatedAt = nowIso();
     scheduleSave();
     return;
@@ -1244,8 +1255,78 @@ export function appendOutbound(
     trackFinanceDocsRequestFromOutbound(conv, tonedBody);
     trackTradePayoffFromOutbound(conv, tonedBody);
   }
+  consumeAgentContextIfNeeded(conv, "outbound_sent");
   conv.updatedAt = nowIso();
   scheduleSave();
+}
+
+export function setAgentContext(
+  conv: Conversation,
+  args: {
+    text: string;
+    mode?: "persistent" | "next_reply";
+    expiresAt?: string;
+    updatedByUserId?: string;
+    updatedByUserName?: string;
+  }
+) {
+  const text = String(args.text ?? "").trim();
+  if (!text) {
+    clearAgentContext(conv, "empty_text");
+    return;
+  }
+  const mode = args.mode === "next_reply" ? "next_reply" : "persistent";
+  const expiresAtRaw = String(args.expiresAt ?? "").trim();
+  const expiresAt = expiresAtRaw ? new Date(expiresAtRaw) : null;
+  conv.agentContext = {
+    text: text.slice(0, 2000),
+    mode,
+    expiresAt: expiresAt && !Number.isNaN(expiresAt.getTime()) ? expiresAt.toISOString() : undefined,
+    updatedAt: nowIso(),
+    updatedByUserId: String(args.updatedByUserId ?? "").trim() || undefined,
+    updatedByUserName: String(args.updatedByUserName ?? "").trim() || undefined,
+    consumedAt: undefined,
+    consumedReason: undefined
+  };
+  conv.updatedAt = nowIso();
+  scheduleSave();
+}
+
+export function clearAgentContext(conv: Conversation, reason = "manual_clear") {
+  if (!conv.agentContext) return;
+  conv.agentContext = undefined;
+  conv.updatedAt = nowIso();
+  scheduleSave();
+}
+
+export function getActiveAgentContextText(conv: Conversation): string {
+  const context = conv.agentContext;
+  if (!context) return "";
+  const text = String(context.text ?? "").trim();
+  if (!text) return "";
+  const expiresAtIso = String(context.expiresAt ?? "").trim();
+  if (expiresAtIso) {
+    const expiry = new Date(expiresAtIso);
+    if (Number.isNaN(expiry.getTime()) || expiry.getTime() <= Date.now()) {
+      return "";
+    }
+  }
+  return text;
+}
+
+function consumeAgentContextIfNeeded(conv: Conversation, reason: string) {
+  const context = conv.agentContext;
+  if (!context) return;
+  const mode = context.mode === "next_reply" ? "next_reply" : "persistent";
+  if (mode !== "next_reply") return;
+  const active = getActiveAgentContextText(conv);
+  if (!active) {
+    conv.agentContext = undefined;
+    return;
+  }
+  context.consumedAt = nowIso();
+  context.consumedReason = reason;
+  conv.agentContext = undefined;
 }
 
 function pickLeadInVariant(text: string): string {

@@ -232,6 +232,19 @@ function formatWatchDate(iso?: string) {
   return d.toLocaleString();
 }
 
+function isoToLocalDateTimeInput(iso?: string | null) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (v: number) => String(v).padStart(2, "0");
+  const year = d.getFullYear();
+  const month = pad(d.getMonth() + 1);
+  const day = pad(d.getDate());
+  const hour = pad(d.getHours());
+  const minute = pad(d.getMinutes());
+  return `${year}-${month}-${day}T${hour}:${minute}`;
+}
+
 function formatMotorcycleOfInterest(contact?: {
   vehicleDescription?: string;
   year?: string;
@@ -599,6 +612,16 @@ type ConversationDetail = {
     kind?: string | null;
   };
   followUp?: { mode?: string; reason?: string; updatedAt?: string };
+  agentContext?: {
+    text?: string;
+    mode?: "persistent" | "next_reply";
+    expiresAt?: string;
+    updatedAt?: string;
+    updatedByUserId?: string;
+    updatedByUserName?: string;
+    consumedAt?: string;
+    consumedReason?: string;
+  } | null;
   inventoryWatches?: Array<{
     model: string;
     year?: number | string;
@@ -885,6 +908,11 @@ export default function Home() {
   const [soldNote, setSoldNote] = useState("");
   const [soldError, setSoldError] = useState<string | null>(null);
   const [soldSaving, setSoldSaving] = useState(false);
+  const [agentContextText, setAgentContextText] = useState("");
+  const [agentContextMode, setAgentContextMode] = useState<"persistent" | "next_reply">("persistent");
+  const [agentContextExpiresAt, setAgentContextExpiresAt] = useState("");
+  const [agentContextSaving, setAgentContextSaving] = useState(false);
+  const [agentContextError, setAgentContextError] = useState<string | null>(null);
   const [composeOpen, setComposeOpen] = useState(false);
   const [composePhone, setComposePhone] = useState("");
   const [composeBody, setComposeBody] = useState("");
@@ -1319,6 +1347,14 @@ export default function Home() {
     lastSelectedSigRef.current = sig;
     setSelectedConv(conv);
   }
+
+  useEffect(() => {
+    const context = selectedConv?.agentContext ?? null;
+    setAgentContextText(String(context?.text ?? ""));
+    setAgentContextMode(context?.mode === "next_reply" ? "next_reply" : "persistent");
+    setAgentContextExpiresAt(isoToLocalDateTimeInput(context?.expiresAt));
+    setAgentContextError(null);
+  }, [selectedConv?.id, selectedConv?.agentContext?.updatedAt, selectedConv?.agentContext?.text]);
 
   function seedWatchItemsFromConv(conv: ConversationDetail | null): WatchFormItem[] {
     const fromExisting =
@@ -4422,6 +4458,85 @@ export default function Home() {
     );
     await loadConversation(selectedConv.id);
     await load();
+  }
+
+  async function saveAgentContext() {
+    if (!selectedConv) return;
+    setAgentContextSaving(true);
+    setAgentContextError(null);
+    try {
+      const text = agentContextText.trim();
+      const expiresInput = agentContextExpiresAt.trim();
+      let expiresAt: string | undefined;
+      if (expiresInput) {
+        const d = new Date(expiresInput);
+        if (Number.isNaN(d.getTime())) {
+          throw new Error("Invalid expiration date/time.");
+        }
+        expiresAt = d.toISOString();
+      }
+      const resp = await fetch(
+        `/api/conversations/${encodeURIComponent(selectedConv.id)}/agent-context`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text,
+            mode: agentContextMode,
+            expiresAt
+          })
+        }
+      );
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || data?.ok === false) {
+        throw new Error(data?.error ?? "Failed to save agent context");
+      }
+      if (data?.conversation) {
+        setSelectedConv(data.conversation);
+      } else {
+        await loadConversation(selectedConv.id);
+      }
+      await load();
+      setSaveToast(text ? "Agent context saved." : "Agent context cleared.");
+    } catch (err: any) {
+      setAgentContextError(err?.message ?? "Failed to save agent context");
+    } finally {
+      setAgentContextSaving(false);
+    }
+  }
+
+  async function clearAgentContextNow() {
+    if (!selectedConv) return;
+    setAgentContextSaving(true);
+    setAgentContextError(null);
+    try {
+      const resp = await fetch(
+        `/api/conversations/${encodeURIComponent(selectedConv.id)}/agent-context`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clear: true })
+        }
+      );
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || data?.ok === false) {
+        throw new Error(data?.error ?? "Failed to clear agent context");
+      }
+      setAgentContextText("");
+      setAgentContextMode("persistent");
+      setAgentContextExpiresAt("");
+      if (data?.conversation) {
+        setSelectedConv(data.conversation);
+      } else {
+        await loadConversation(selectedConv.id);
+      }
+      await load();
+      setSaveToast("Agent context cleared.");
+    } catch (err: any) {
+      setAgentContextError(err?.message ?? "Failed to clear agent context");
+    } finally {
+      setAgentContextSaving(false);
+    }
   }
 
   async function closeConv() {
@@ -9420,6 +9535,90 @@ export default function Home() {
                 </button>
               </div>
             ) : null}
+            <div className="mt-3 border rounded-lg bg-slate-50 px-3 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-medium text-slate-800">Agent Context (Internal)</div>
+                {(() => {
+                  const ctx = selectedConv.agentContext;
+                  if (!ctx?.text) return null;
+                  const expiresAt = ctx.expiresAt ? new Date(ctx.expiresAt) : null;
+                  const expired =
+                    !!expiresAt && !Number.isNaN(expiresAt.getTime()) && expiresAt.getTime() <= Date.now();
+                  const modeLabel = ctx.mode === "next_reply" ? "Next reply only" : "Persistent";
+                  return (
+                    <div className="text-xs text-slate-600">
+                      {expired ? (
+                        <span className="px-2 py-0.5 rounded-full border border-amber-300 bg-amber-100 text-amber-800">
+                          Expired
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-full border border-slate-300 bg-white">
+                          {modeLabel}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+              <div className="mt-2 grid gap-2 md:grid-cols-3">
+                <textarea
+                  className="md:col-span-3 border rounded px-3 py-2 text-sm"
+                  rows={3}
+                  placeholder="Internal guidance for agent (never sent verbatim)."
+                  value={agentContextText}
+                  onChange={e => setAgentContextText(e.target.value)}
+                />
+                <label className="text-xs text-slate-600">
+                  Scope
+                  <select
+                    className="mt-1 w-full border rounded px-2 py-2 text-sm bg-white"
+                    value={agentContextMode}
+                    onChange={e =>
+                      setAgentContextMode(e.target.value === "next_reply" ? "next_reply" : "persistent")
+                    }
+                  >
+                    <option value="persistent">Persistent</option>
+                    <option value="next_reply">Next reply only</option>
+                  </select>
+                </label>
+                <label className="text-xs text-slate-600 md:col-span-2">
+                  Expires At (optional)
+                  <input
+                    type="datetime-local"
+                    className="mt-1 w-full border rounded px-2 py-2 text-sm"
+                    value={agentContextExpiresAt}
+                    onChange={e => setAgentContextExpiresAt(e.target.value)}
+                  />
+                </label>
+              </div>
+              {selectedConv.agentContext?.updatedAt ? (
+                <div className="mt-2 text-[11px] text-slate-500">
+                  Updated {new Date(selectedConv.agentContext.updatedAt).toLocaleString()}
+                  {selectedConv.agentContext.updatedByUserName
+                    ? ` by ${selectedConv.agentContext.updatedByUserName}`
+                    : ""}
+                </div>
+              ) : null}
+              {agentContextError ? (
+                <div className="mt-2 text-xs text-red-600">{agentContextError}</div>
+              ) : null}
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  className="px-3 py-2 border rounded text-sm bg-white disabled:opacity-60"
+                  onClick={saveAgentContext}
+                  disabled={agentContextSaving}
+                >
+                  {agentContextSaving ? "Saving..." : "Save context"}
+                </button>
+                <button
+                  className="px-3 py-2 border rounded text-sm bg-white disabled:opacity-60"
+                  onClick={clearAgentContextNow}
+                  disabled={agentContextSaving}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
 
             {callPickerOpen ? (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">

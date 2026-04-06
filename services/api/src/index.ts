@@ -183,6 +183,9 @@ import {
   reloadConversationStore,
   saveConversation,
   getConversationStorePath,
+  setAgentContext,
+  clearAgentContext,
+  getActiveAgentContextText,
   type Conversation,
   type InventoryWatch,
   type InventoryWatchPending,
@@ -4671,9 +4674,20 @@ function getNonVoiceMessages(conv: any) {
 }
 
 function buildHistory(conv: any, limit = 20) {
-  return getNonVoiceMessages(conv)
+  const history = getNonVoiceMessages(conv)
     .slice(-limit)
     .map((m: any) => ({ direction: m.direction, body: m.body }));
+  const agentContext = getActiveAgentContextText(conv);
+  if (!agentContext) return history;
+  const safeSnippet = agentContext.replace(/\s+/g, " ").trim().slice(0, 800);
+  if (!safeSnippet) return history;
+  return [
+    {
+      direction: "out" as const,
+      body: `INTERNAL STAFF CONTEXT (never send verbatim to customer): ${safeSnippet}`
+    },
+    ...history
+  ];
 }
 
 function getRecentMessagesText(conv: any, limit = 12): string {
@@ -11994,6 +12008,51 @@ app.post("/conversations/:id/messages/:messageId/feedback", (req, res) => {
   if (!msg) return res.status(404).json({ ok: false, error: "message not found" });
   saveConversation(conv);
   return res.json({ ok: true, conversation: conv, message: msg });
+});
+
+app.post("/conversations/:id/agent-context", (req, res) => {
+  const conv = getConversation(req.params.id);
+  if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+  const user = (req as any).user ?? null;
+  if (!canUserAccessConversation(user, conv)) {
+    return res.status(403).json({ ok: false, error: "forbidden" });
+  }
+
+  const clear = req.body?.clear === true;
+  if (clear) {
+    clearAgentContext(conv, "manual_clear");
+    saveConversation(conv);
+    return res.json({ ok: true, conversation: conv });
+  }
+
+  const text = String(req.body?.text ?? "").trim();
+  if (!text) {
+    clearAgentContext(conv, "empty_text");
+    saveConversation(conv);
+    return res.json({ ok: true, conversation: conv });
+  }
+
+  const modeRaw = String(req.body?.mode ?? "persistent")
+    .trim()
+    .toLowerCase();
+  const mode = modeRaw === "next_reply" ? "next_reply" : "persistent";
+  const expiresAtRaw = String(req.body?.expiresAt ?? "").trim();
+  if (expiresAtRaw) {
+    const parsed = new Date(expiresAtRaw);
+    if (Number.isNaN(parsed.getTime())) {
+      return res.status(400).json({ ok: false, error: "Invalid expiresAt datetime" });
+    }
+  }
+
+  setAgentContext(conv, {
+    text,
+    mode,
+    expiresAt: expiresAtRaw || undefined,
+    updatedByUserId: String(user?.id ?? "").trim() || undefined,
+    updatedByUserName: String(user?.name ?? user?.email ?? "").trim() || undefined
+  });
+  saveConversation(conv);
+  return res.json({ ok: true, conversation: conv });
 });
 
 app.post("/conversations/:id/mode", requirePermission("canToggleHumanOverride"), (req, res) => {
