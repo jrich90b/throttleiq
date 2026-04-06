@@ -758,6 +758,14 @@ function canUserAccessConversation(user: any, conv: any): boolean {
   if (AUTH_DISABLED || !user) return true;
   const role = String(user?.role ?? "").toLowerCase();
   if (role === "manager") return true;
+  const requesterId = String(user?.id ?? "").trim();
+  const ownerId = String(conv?.leadOwner?.id ?? "").trim();
+  const requesterName = String(user?.name ?? "").trim().toLowerCase();
+  const ownerName = String(conv?.leadOwner?.name ?? "").trim().toLowerCase();
+  const isLeadOwner =
+    (!!requesterId && !!ownerId && requesterId === ownerId) ||
+    (!!requesterName && !!ownerName && requesterName === ownerName);
+  if (isLeadOwner) return true;
   const dept = getConversationDepartment(conv);
   if (role === "service" || role === "parts" || role === "apparel") {
     return dept === role;
