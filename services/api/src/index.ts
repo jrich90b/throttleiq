@@ -15,6 +15,7 @@ import {
   classifyCadenceContextWithLLM,
   classifyEmpathyNeedWithLLM,
   classifyComplimentWithLLM,
+  parseAffectWithLLM,
   summarizeSalespersonNoteWithLLM,
   parseBookingIntentWithLLM,
   parseInventoryEntitiesWithLLM,
@@ -33,6 +34,7 @@ import {
   summarizeVoiceTranscriptWithLLM
 } from "./domain/llmDraft.js";
 import type {
+  AffectParse,
   ConversationStateParse,
   CustomerDispositionParse,
   JourneyIntentParse,
@@ -2610,6 +2612,35 @@ function updateLastIntent(conv: any, intent: LastIntentName, source: "dialog_sta
     return;
   }
   conv.lastIntent = { name: intent, updatedAt, source };
+}
+
+function applyAffectParseSnapshot(
+  conv: any,
+  affectParse: AffectParse | null | undefined,
+  sourceMessageId?: string | null
+): AffectParse | null {
+  if (!conv || !affectParse) return null;
+  const confidence =
+    typeof affectParse.confidence === "number" && Number.isFinite(affectParse.confidence)
+      ? Math.max(0, Math.min(1, affectParse.confidence))
+      : 0;
+  const confidenceMin = Number(process.env.LLM_AFFECT_CONFIDENCE_MIN ?? 0.68);
+  const hasAffectSignal = affectParse.explicitAffect || affectParse.primaryAffect !== "none";
+  if (!hasAffectSignal || confidence < confidenceMin) return null;
+  conv.lastAffect = {
+    primary: affectParse.primaryAffect,
+    explicitAffect: !!affectParse.explicitAffect,
+    needsEmpathy: !!affectParse.needsEmpathy,
+    hasHumor: !!affectParse.hasHumor,
+    hasPositiveEnergy: !!affectParse.hasPositiveEnergy,
+    hasNegativeSentiment: !!affectParse.hasNegativeSentiment,
+    toneIntensity: affectParse.toneIntensity,
+    confidence,
+    source: "llm",
+    sourceMessageId: sourceMessageId ? String(sourceMessageId) : undefined,
+    updatedAt: nowIso()
+  };
+  return affectParse;
 }
 
 function mapBucketToCadenceTag(bucket?: string | null): string | null {
@@ -14702,6 +14733,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     process.env.LLM_ROUTING_PARSER_ENABLED !== "0" &&
     !!process.env.OPENAI_API_KEY &&
     !regenShortAck;
+  const regenAffectParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_AFFECT_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    !regenShortAck;
   const regenRoutingDecisionParse = regenRoutingParserEligible
     ? await safeLlmParse("regen_routing_decision_parser", () =>
         parseRoutingDecisionWithLLM({
@@ -14714,8 +14751,29 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         })
       )
     : null;
+  const regenAffectParse = regenAffectParserEligible
+    ? await safeLlmParse("regen_affect_parser", () =>
+        parseAffectWithLLM({
+          text: event.body ?? "",
+          history,
+          lead: conv.lead
+        })
+      )
+    : null;
+  const regenAcceptedAffect = applyAffectParseSnapshot(conv, regenAffectParse, event.providerMessageId);
+  if (process.env.LLM_AFFECT_PARSER_DEBUG === "1" && regenAffectParse) {
+    console.log("[llm-affect-parse][regen]", regenAffectParse);
+  }
   if (process.env.LLM_ROUTING_PARSER_DEBUG === "1" && regenRoutingDecisionParse) {
     console.log("[llm-routing-parser][regen]", regenRoutingDecisionParse);
+  }
+  if (process.env.LLM_AFFECT_PARSER_DEBUG === "1" && regenAcceptedAffect) {
+    console.log("[llm-affect-parse][regen][accepted]", {
+      primaryAffect: regenAcceptedAffect.primaryAffect,
+      needsEmpathy: regenAcceptedAffect.needsEmpathy,
+      hasHumor: regenAcceptedAffect.hasHumor,
+      confidence: regenAcceptedAffect.confidence ?? null
+    });
   }
   const regenRoutingParserDecision = resolveRoutingParserDecision({
     parserIntent: regenRoutingDecisionParse?.primaryIntent ?? null,
@@ -17599,14 +17657,30 @@ if (authToken && signature) {
         })
       )
     : Promise.resolve(null);
+  const affectParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_AFFECT_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    !shortAck;
+  const affectParsePromise = affectParserEligible
+    ? safeLlmParse("affect_parser", () =>
+        parseAffectWithLLM({
+          text: event.body ?? "",
+          history: recentHistory,
+          lead: conv.lead
+        })
+      )
+    : Promise.resolve(null);
   const parserStageStartedAt = Date.now();
-  const [bookingParse, intentParse, dialogActParse, pricingPaymentsParse, routingDecisionParse] =
+  const [bookingParse, intentParse, dialogActParse, pricingPaymentsParse, routingDecisionParse, affectParse] =
     await Promise.all([
       bookingParsePromise,
       intentParsePromise,
       dialogActParsePromise,
       pricingPaymentsParsePromise,
-      routingDecisionParsePromise
+      routingDecisionParsePromise,
+      affectParsePromise
     ]);
   logRouteTiming("parsers", parserStageStartedAt, {
     highConfidenceFinanceTurn,
@@ -17648,6 +17722,18 @@ if (authToken && signature) {
   }
   if (process.env.LLM_ROUTING_PARSER_DEBUG === "1" && routingDecisionParse) {
     console.log("[llm-routing-parser][live]", routingDecisionParse);
+  }
+  if (process.env.LLM_AFFECT_PARSER_DEBUG === "1" && affectParse) {
+    console.log("[llm-affect-parse][live]", affectParse);
+  }
+  const acceptedAffect = applyAffectParseSnapshot(conv, affectParse, event.providerMessageId);
+  if (process.env.LLM_AFFECT_PARSER_DEBUG === "1" && acceptedAffect) {
+    console.log("[llm-affect-parse][live][accepted]", {
+      primaryAffect: acceptedAffect.primaryAffect,
+      needsEmpathy: acceptedAffect.needsEmpathy,
+      hasHumor: acceptedAffect.hasHumor,
+      confidence: acceptedAffect.confidence ?? null
+    });
   }
   const routingParserDecision = resolveRoutingParserDecision({
     parserIntent: routingDecisionParse?.primaryIntent ?? null,
@@ -18094,7 +18180,10 @@ if (authToken && signature) {
     financePriorityOverride,
     schedulePriorityOverride,
     deterministicAvailabilityLookup,
-    pricingHistoryBleedGuard
+    pricingHistoryBleedGuard,
+    affectPrimary: acceptedAffect?.primaryAffect ?? null,
+    affectNeedsEmpathy: acceptedAffect?.needsEmpathy ?? null,
+    affectHasHumor: acceptedAffect?.hasHumor ?? null
   });
   const hasActionableFinanceContext =
     turnPrimaryIntent === "pricing_payments" ||

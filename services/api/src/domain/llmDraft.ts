@@ -314,6 +314,104 @@ export async function classifyCadenceContextWithLLM(args: {
   }
 }
 
+export async function parseAffectWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<AffectParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_AFFECT_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_AFFECT_PARSER_DEBUG === "1";
+  const primaryModel = process.env.OPENAI_AFFECT_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_AFFECT_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const prompt = [
+    "You parse customer affect for dealership conversations.",
+    "Return only JSON matching the schema.",
+    "",
+    "Output fields:",
+    "- primary_affect: one of neutral, frustrated, excited, humorous, confused, anxious, angry, urgent, none.",
+    "- explicit_affect: true only when affect is clearly expressed in the message.",
+    "- needs_empathy: true when a short empathy acknowledgment is appropriate.",
+    "- has_humor: true when message includes joking/light humor.",
+    "- has_positive_energy: true for excitement/positive enthusiasm.",
+    "- has_negative_sentiment: true for frustration, anger, anxiety, or disappointment.",
+    "- tone_intensity: 0..1 strength of tone in the latest inbound message.",
+    "- confidence: 0..1.",
+    "",
+    "Rules:",
+    "- Focus on the latest inbound message first; use history only to disambiguate.",
+    "- If uncertain, choose primary_affect=none with lower confidence.",
+    "- A short acknowledgment like 'ok thanks' is usually neutral unless clear frustration/excitement appears.",
+    "",
+    `Known lead info: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "affect_parser",
+      schema: AFFECT_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 180,
+      debugTag: "llm-affect-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const primaryAffectRaw = String(parsed.primary_affect ?? "").toLowerCase();
+  const primaryAffect: AffectParse["primaryAffect"] =
+    primaryAffectRaw === "neutral" ||
+    primaryAffectRaw === "frustrated" ||
+    primaryAffectRaw === "excited" ||
+    primaryAffectRaw === "humorous" ||
+    primaryAffectRaw === "confused" ||
+    primaryAffectRaw === "anxious" ||
+    primaryAffectRaw === "angry" ||
+    primaryAffectRaw === "urgent"
+      ? primaryAffectRaw
+      : "none";
+  const toneIntensity =
+    typeof parsed.tone_intensity === "number" && Number.isFinite(parsed.tone_intensity)
+      ? Math.max(0, Math.min(1, parsed.tone_intensity))
+      : undefined;
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    primaryAffect,
+    explicitAffect: !!parsed.explicit_affect,
+    needsEmpathy: !!parsed.needs_empathy,
+    hasHumor: !!parsed.has_humor,
+    hasPositiveEnergy: !!parsed.has_positive_energy,
+    hasNegativeSentiment: !!parsed.has_negative_sentiment,
+    toneIntensity,
+    confidence
+  };
+}
+
 export async function summarizeSalespersonNoteWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
@@ -411,6 +509,26 @@ export type TradePayoffParse = {
 export type ResponseControlParse = {
   intent: "opt_out" | "not_interested" | "schedule_request" | "compliment_only" | "none";
   explicitRequest: boolean;
+  confidence?: number;
+};
+
+export type AffectParse = {
+  primaryAffect:
+    | "neutral"
+    | "frustrated"
+    | "excited"
+    | "humorous"
+    | "confused"
+    | "anxious"
+    | "angry"
+    | "urgent"
+    | "none";
+  explicitAffect: boolean;
+  needsEmpathy: boolean;
+  hasHumor: boolean;
+  hasPositiveEnergy: boolean;
+  hasNegativeSentiment: boolean;
+  toneIntensity?: number;
   confidence?: number;
 };
 
@@ -814,6 +932,34 @@ const RESPONSE_CONTROL_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
       enum: ["opt_out", "not_interested", "schedule_request", "compliment_only", "none"]
     },
     explicit_request: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const AFFECT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "primary_affect",
+    "explicit_affect",
+    "needs_empathy",
+    "has_humor",
+    "has_positive_energy",
+    "has_negative_sentiment",
+    "tone_intensity",
+    "confidence"
+  ],
+  properties: {
+    primary_affect: {
+      type: "string",
+      enum: ["neutral", "frustrated", "excited", "humorous", "confused", "anxious", "angry", "urgent", "none"]
+    },
+    explicit_affect: { type: "boolean" },
+    needs_empathy: { type: "boolean" },
+    has_humor: { type: "boolean" },
+    has_positive_energy: { type: "boolean" },
+    has_negative_sentiment: { type: "boolean" },
+    tone_intensity: { type: "number" },
     confidence: { type: "number" }
   }
 };

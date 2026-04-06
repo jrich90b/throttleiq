@@ -539,6 +539,28 @@ export type Conversation = {
     updatedAt: string;
     source?: "dialog_state" | "llm" | "manual";
   };
+  lastAffect?: {
+    primary:
+      | "neutral"
+      | "frustrated"
+      | "excited"
+      | "humorous"
+      | "confused"
+      | "anxious"
+      | "angry"
+      | "urgent"
+      | "none";
+    explicitAffect: boolean;
+    needsEmpathy: boolean;
+    hasHumor: boolean;
+    hasPositiveEnergy: boolean;
+    hasNegativeSentiment: boolean;
+    toneIntensity?: number;
+    confidence?: number;
+    source?: "llm";
+    sourceMessageId?: string;
+    updatedAt: string;
+  };
   dialogState?: { name: DialogStateName; updatedAt: string };
   engagement?: {
     at: string;
