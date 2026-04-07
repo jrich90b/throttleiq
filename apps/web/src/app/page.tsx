@@ -998,6 +998,7 @@ export default function Home() {
   const [watchSalespersonFilter, setWatchSalespersonFilter] = useState("all");
   const [inboxQuery, setInboxQuery] = useState("");
   const [inboxOwnerFilter, setInboxOwnerFilter] = useState("all");
+  const [inboxLeadScope, setInboxLeadScope] = useState<"online_first" | "online_only" | "walkin_only">("online_first");
   const [todoQuery, setTodoQuery] = useState("");
   const [todoLeadOwnerFilter, setTodoLeadOwnerFilter] = useState("all");
   const [kpiOverview, setKpiOverview] = useState<KpiOverview | null>(null);
@@ -3943,7 +3944,10 @@ export default function Home() {
     const ownerNameFilter = inboxOwnerFilter.startsWith("owner:")
       ? decodeURIComponent(inboxOwnerFilter.slice("owner:".length)).toLowerCase()
       : "";
-    return visibleConversations.filter(c => {
+    const rows = visibleConversations.filter(c => {
+      const isWalkIn = !!c.walkIn;
+      if (inboxLeadScope === "online_only" && isWalkIn) return false;
+      if (inboxLeadScope === "walkin_only" && !isWalkIn) return false;
       if (isManager && inboxOwnerFilter !== "all") {
         const leadOwner = canonicalizeOwnerName(
           String(c.leadOwner?.name ?? c.leadOwner?.id ?? "").trim(),
@@ -3983,7 +3987,27 @@ export default function Home() {
       }
       return false;
     });
-  }, [visibleConversations, inboxQuery, isManager, inboxOwnerFilter, inboxDepartmentTeamsByConv, canonicalizeOwnerName, inferOwnerDepartment]);
+    const sorted = [...rows].sort((a, b) => {
+      if (inboxLeadScope === "online_first") {
+        const aWalkIn = !!a.walkIn;
+        const bWalkIn = !!b.walkIn;
+        if (aWalkIn !== bWalkIn) return aWalkIn ? 1 : -1;
+      }
+      const aMs = Date.parse(String(a.updatedAt ?? "")) || 0;
+      const bMs = Date.parse(String(b.updatedAt ?? "")) || 0;
+      return bMs - aMs;
+    });
+    return sorted;
+  }, [
+    visibleConversations,
+    inboxQuery,
+    isManager,
+    inboxOwnerFilter,
+    inboxLeadScope,
+    inboxDepartmentTeamsByConv,
+    canonicalizeOwnerName,
+    inferOwnerDepartment
+  ]);
 
   const groupedConversations = useMemo(() => {
     const groups: Array<{ label: string; items: ConversationListItem[] }> = [];
@@ -6912,6 +6936,20 @@ export default function Home() {
                 value={inboxQuery}
                 onChange={e => setInboxQuery(e.target.value)}
               />
+              <select
+                className="w-36 self-start border rounded px-3 py-2 text-sm bg-white md:w-36"
+                value={inboxLeadScope}
+                onChange={e =>
+                  setInboxLeadScope(
+                    (e.target.value as "online_first" | "online_only" | "walkin_only") || "online_first"
+                  )
+                }
+                title="Filter inbox by lead type"
+              >
+                <option value="online_first">Online first</option>
+                <option value="online_only">Online only</option>
+                <option value="walkin_only">Walk-ins only</option>
+              </select>
               {isManager ? (
                 <select
                   className="w-28 self-start border rounded px-3 py-2 text-sm bg-white md:w-28"
