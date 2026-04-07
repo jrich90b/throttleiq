@@ -2393,13 +2393,13 @@ const buildWalkInCommentFollowUp = ({
   const mentionsDepositOrCommitment =
     /\b(deposit|left\s+\$?\d+|finalize|finalise)\b/.test(lower);
   if (mentionsDepositOrCommitment) {
-    return `${intro} If you still want to move forward on ${bikeWithArticle}, we can go over options and next steps when you come in.`;
+    return `${intro} Let’s get a time set to go over options and next steps on ${bikeWithArticle}. What day works best for you?`;
   }
 
   const mentionsOrderPath =
     /\b(order|dealer trade|get one|find one|locate one|commitment|commit)\b/.test(lower);
   if (mentionsOrderPath) {
-    return `${intro} If you want to go over options to get ${bikeWithArticle}, I can walk you through timing, numbers, and next steps when you come in.`;
+    return `${intro} Let’s set a time to go over timing, numbers, and next steps to get ${bikeWithArticle}. What day works best for you?`;
   }
 
   const mentionsWeatherTestRide =
