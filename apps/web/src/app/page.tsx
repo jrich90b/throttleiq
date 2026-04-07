@@ -1064,9 +1064,7 @@ export default function Home() {
     email: ""
   });
   const [reassignInlineOpenId, setReassignInlineOpenId] = useState<string | null>(null);
-  const [reassignInlineDepartment, setReassignInlineDepartment] = useState<"service" | "parts" | "apparel">(
-    "service"
-  );
+  const [reassignInlineTarget, setReassignInlineTarget] = useState<string>("department:service");
   const [reassignInlineSummary, setReassignInlineSummary] = useState("");
   const [reassignInlineSaving, setReassignInlineSaving] = useState(false);
   const sendBoxRef = useRef<HTMLTextAreaElement | null>(null);
@@ -3017,6 +3015,33 @@ export default function Home() {
     return Array.from(merged.values());
   }, [usersList, salespeopleList]);
 
+  const reassignSalesOwnerOptions = useMemo(() => {
+    const options = (usersList ?? [])
+      .filter((u: any) => {
+        const role = String(u?.role ?? "").trim().toLowerCase();
+        return role === "salesperson" || role === "manager";
+      })
+      .map((u: any) => {
+        const name =
+          [u?.firstName, u?.lastName].filter(Boolean).join(" ").trim() ||
+          String(u?.name ?? "").trim() ||
+          String(u?.email ?? "").trim() ||
+          String(u?.id ?? "").trim();
+        return {
+          id: String(u?.id ?? "").trim(),
+          name
+        };
+      })
+      .filter((u: any) => !!u.id && !!u.name);
+    const deduped = new Map<string, { id: string; name: string }>();
+    for (const item of options) {
+      if (!deduped.has(item.id)) deduped.set(item.id, item);
+    }
+    return Array.from(deduped.values()).sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true })
+    );
+  }, [usersList]);
+
   const ownerDirectory = useMemo(() => {
     const normalize = (v: string) => String(v ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
     const byId = new Map<string, { name: string; role: string }>();
@@ -3597,7 +3622,7 @@ export default function Home() {
       setContactInlineSaving(false);
       setContactInlineForm({ firstName: "", lastName: "", phone: "", email: "" });
       setReassignInlineOpenId(null);
-      setReassignInlineDepartment("service");
+      setReassignInlineTarget("department:service");
       setReassignInlineSummary("");
       setReassignInlineSaving(false);
     }
@@ -5116,26 +5141,39 @@ export default function Home() {
     await load();
   }
 
-  function openReassignLeadInline(convId: string) {
+  function openReassignLeadInline(conv: ConversationListItem) {
     setTodoInlineOpenId(null);
     setTodoInlineText("");
     setContactInlineOpenId(null);
-    setReassignInlineDepartment("service");
+    const currentOwnerId = String(conv.leadOwner?.id ?? "").trim();
+    const hasCurrentOwnerOption = reassignSalesOwnerOptions.some(o => o.id === currentOwnerId);
+    setReassignInlineTarget(hasCurrentOwnerOption ? `owner:${currentOwnerId}` : "department:service");
     setReassignInlineSummary("");
-    setReassignInlineOpenId(convId);
+    setReassignInlineOpenId(conv.id);
   }
 
-  async function reassignLeadDepartmentInline(conv: ConversationListItem) {
+  async function reassignLeadInline(conv: ConversationListItem) {
     const summary = reassignInlineSummary.trim();
     setReassignInlineSaving(true);
-    const resp = await fetch(`/api/conversations/${encodeURIComponent(conv.id)}/department`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        department: reassignInlineDepartment,
-        summary: summary || `Manual reassignment to ${reassignInlineDepartment} department`
-      })
-    });
+    const isOwnerTarget = reassignInlineTarget.startsWith("owner:");
+    const resp = isOwnerTarget
+      ? await fetch(`/api/conversations/${encodeURIComponent(conv.id)}/lead-owner`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ownerId: reassignInlineTarget.slice("owner:".length)
+          })
+        })
+      : await fetch(`/api/conversations/${encodeURIComponent(conv.id)}/department`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            department: reassignInlineTarget.replace("department:", ""),
+            summary:
+              summary ||
+              `Manual reassignment to ${reassignInlineTarget.replace("department:", "")} department`
+          })
+        });
     const data = await resp.json().catch(() => null);
     setReassignInlineSaving(false);
     if (!resp.ok || data?.ok === false) {
@@ -5143,6 +5181,7 @@ export default function Home() {
       return;
     }
     setReassignInlineOpenId(null);
+    setReassignInlineTarget("department:service");
     setReassignInlineSummary("");
     setListActionsOpenId(null);
     if (selectedId === conv.id) {
@@ -6854,29 +6893,43 @@ export default function Home() {
                                       <div className="text-[11px] text-gray-500 mb-1">Reassign lead</div>
                                       <select
                                         className="w-full border rounded px-2 py-1 text-xs"
-                                        value={reassignInlineDepartment}
-                                        onChange={e =>
-                                          setReassignInlineDepartment(
-                                            e.target.value as "service" | "parts" | "apparel"
-                                          )
-                                        }
+                                        value={reassignInlineTarget}
+                                        onChange={e => setReassignInlineTarget(e.target.value)}
                                       >
-                                        <option value="service">Service</option>
-                                        <option value="parts">Parts</option>
-                                        <option value="apparel">Apparel</option>
+                                        {reassignSalesOwnerOptions.length ? (
+                                          <optgroup label="Salespeople">
+                                            {reassignSalesOwnerOptions.map(owner => (
+                                              <option key={`reassign-owner-${owner.id}`} value={`owner:${owner.id}`}>
+                                                {owner.name}
+                                              </option>
+                                            ))}
+                                          </optgroup>
+                                        ) : null}
+                                        <optgroup label="Departments">
+                                          <option value="department:service">Service</option>
+                                          <option value="department:parts">Parts</option>
+                                          <option value="department:apparel">Apparel</option>
+                                        </optgroup>
                                       </select>
-                                      <textarea
-                                        className="w-full border rounded px-2 py-1 text-xs mt-2"
-                                        rows={3}
-                                        value={reassignInlineSummary}
-                                        onChange={e => setReassignInlineSummary(e.target.value)}
-                                        placeholder="Optional note for department"
-                                      />
+                                      {reassignInlineTarget.startsWith("department:") ? (
+                                        <textarea
+                                          className="w-full border rounded px-2 py-1 text-xs mt-2"
+                                          rows={3}
+                                          value={reassignInlineSummary}
+                                          onChange={e => setReassignInlineSummary(e.target.value)}
+                                          placeholder="Optional note for department"
+                                        />
+                                      ) : (
+                                        <div className="mt-2 text-[11px] text-gray-500">
+                                          This will reassign lead owner only.
+                                        </div>
+                                      )}
                                       <div className="mt-2 flex justify-end gap-2">
                                         <button
                                           className="px-2 py-1 border rounded text-xs"
                                           onClick={() => {
                                             setReassignInlineOpenId(null);
+                                            setReassignInlineTarget("department:service");
                                             setReassignInlineSummary("");
                                           }}
                                         >
@@ -6886,7 +6939,7 @@ export default function Home() {
                                           className="px-2 py-1 border rounded text-xs"
                                           disabled={reassignInlineSaving}
                                           onClick={() => {
-                                            void reassignLeadDepartmentInline(c);
+                                            void reassignLeadInline(c);
                                           }}
                                         >
                                           {reassignInlineSaving ? "Saving..." : "Save"}
@@ -6917,7 +6970,7 @@ export default function Home() {
                                         <button
                                           className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
                                           onClick={() => {
-                                            openReassignLeadInline(c.id);
+                                            openReassignLeadInline(c);
                                           }}
                                         >
                                           Reassign lead

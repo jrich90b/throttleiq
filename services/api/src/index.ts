@@ -13156,6 +13156,45 @@ app.post("/conversations/:id/department", requirePermission("canAccessTodos"), (
   return res.json({ ok: true, conversation: conv });
 });
 
+app.post("/conversations/:id/lead-owner", requirePermission("canAccessTodos"), async (req, res) => {
+  const conv = getConversation(req.params.id);
+  if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+  const user = (req as any).user ?? null;
+  if (!canUserAccessConversation(user, conv)) {
+    return res.status(403).json({ ok: false, error: "forbidden" });
+  }
+
+  const ownerIdRaw = String(req.body?.ownerId ?? "").trim();
+  if (!ownerIdRaw) {
+    return res.status(400).json({ ok: false, error: "Missing ownerId" });
+  }
+
+  const users = await listUsers();
+  const owner = users.find(u => String(u?.id ?? "").trim() === ownerIdRaw) ?? null;
+  if (!owner) {
+    return res.status(404).json({ ok: false, error: "Owner not found" });
+  }
+
+  const role = String(owner?.role ?? "").trim().toLowerCase();
+  if (!["manager", "salesperson", "service", "parts", "apparel"].includes(role)) {
+    return res.status(400).json({ ok: false, error: "Invalid owner role" });
+  }
+
+  const ownerName =
+    String(owner?.name ?? "").trim() ||
+    [owner?.firstName, owner?.lastName].filter(Boolean).join(" ").trim() ||
+    String(owner?.email ?? "").trim() ||
+    String(owner?.id ?? "").trim();
+  conv.leadOwner = {
+    id: String(owner.id ?? "").trim(),
+    name: ownerName,
+    assignedAt: new Date().toISOString()
+  };
+  conv.updatedAt = new Date().toISOString();
+  saveConversation(conv);
+  return res.json({ ok: true, conversation: conv });
+});
+
 app.post("/conversations/:id/contact-preference", (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
