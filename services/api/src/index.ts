@@ -16293,14 +16293,33 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     return respondWithSmsRegeneratedDraft(reply);
   }
+  const regenInboundSchedulingSignalsForServiceGuard = detectSchedulingSignals(event.body ?? "");
+  const regenSourceLowerForServiceGuard = String(conv.lead?.source ?? "").toLowerCase();
+  const regenCtaLowerForServiceGuard = String(conv.classification?.cta ?? "").toLowerCase();
+  const regenBucketLowerForServiceGuard = String(conv.classification?.bucket ?? "").toLowerCase();
+  const regenLikelySalesOriginForServiceGuard =
+    /(hdfs|marketplace|room58|meta|traffic log pro|trade accelerator|kenect|dealer lead app)/.test(
+      regenSourceLowerForServiceGuard
+    ) ||
+    /(check_availability|inventory|hdfs_coa|hdfs_pq|schedule|quote|pricing|trade)/.test(
+      `${regenCtaLowerForServiceGuard} ${regenBucketLowerForServiceGuard}`
+    );
+  const regenStickyServiceOnlyContext =
+    regenInboundDepartmentIntent !== "service" &&
+    (conv.classification?.bucket === "service" ||
+      conv.classification?.cta === "service_request" ||
+      serviceDialogState === "service_request" ||
+      serviceDialogState === "service_handoff" ||
+      (conv.followUp?.mode === "manual_handoff" &&
+        /service/.test(String(conv.followUp?.reason ?? ""))));
+  const regenSuppressStickyServiceRouting =
+    regenStickyServiceOnlyContext &&
+    regenLikelySalesOriginForServiceGuard &&
+    regenInboundSchedulingSignalsForServiceGuard.explicit &&
+    !SERVICE_DEPARTMENT_RE.test(String(event.body ?? ""));
   const isServiceLead =
-    conv.classification?.bucket === "service" ||
-    conv.classification?.cta === "service_request" ||
     regenInboundDepartmentIntent === "service" ||
-    serviceDialogState === "service_request" ||
-    serviceDialogState === "service_handoff" ||
-    (conv.followUp?.mode === "manual_handoff" &&
-      /service/.test(String(conv.followUp?.reason ?? "")));
+    (!regenSuppressStickyServiceRouting && regenStickyServiceOnlyContext);
   if (isServiceLead) {
     await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
     const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
