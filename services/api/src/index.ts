@@ -1745,7 +1745,9 @@ app.post("/debug/inbound/process", express.json(), async (req, res) => {
       hold: conv.hold ?? null,
       sale: conv.sale ?? null,
       pickup: conv.pickup ?? null,
-      weather: weatherStatus ?? null
+      weather: weatherStatus ?? null,
+      dealerProfile,
+      agentNameOverride: resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke")
     });
 
   if (result?.draft && result.shouldRespond) {
@@ -16592,18 +16594,18 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       const requestedDayPart = extractDayPart(event.body ?? "");
       const requestedDayLabel = requestedDay?.day ?? "";
       const timePrompt = requestedDayPart
-        ? `What time ${requestedDayLabel.toLowerCase()} works best for you?`
-        : "What time works best for you?";
+        ? `What time on ${requestedDayLabel} works best for you? I can confirm availability.`
+        : "What time works best for you? I can confirm availability.";
       if (requestedDayLabel) {
         const requestedPhrase = `${requestedDayLabel}${requestedDayPart ? ` ${requestedDayPart}` : ""}`;
         const daySpecificReply =
           availableMatches.length > 0
             ? explicitAvailabilityAskThisTurn && !recentlyConfirmedAvailable
-              ? `Absolutely — ${unitLabel} is still available right now. ${requestedPhrase} works. ${timePrompt}`
-              : `${requestedPhrase} works. ${timePrompt}`
+              ? `Absolutely — ${unitLabel} is still available right now. ${requestedPhrase} can work. ${timePrompt}`
+              : `${requestedPhrase} can work. ${timePrompt}`
             : explicitAvailabilityAskThisTurn
-              ? `I’ll keep an eye on ${unitLabel} and update you right away. ${requestedPhrase} works to plan around. ${timePrompt}`
-              : `${requestedPhrase} works. ${timePrompt}`;
+              ? `I’ll keep an eye on ${unitLabel} and update you right away. ${requestedPhrase} can work to plan around. ${timePrompt}`
+              : `${requestedPhrase} can work. ${timePrompt}`;
         return respondWithSmsRegeneratedDraft(daySpecificReply);
       }
       const reply =
@@ -16717,7 +16719,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     hold: conv.hold ?? null,
     sale: conv.sale ?? null,
     pickup: conv.pickup ?? null,
-    weather: weatherStatus ?? null
+    weather: weatherStatus ?? null,
+    dealerProfile,
+    agentNameOverride: resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke")
   });
 
   if (!result?.draft || result.shouldRespond === false) {
@@ -19774,6 +19778,29 @@ if (authToken && signature) {
   }
   if (routingParserDecision.accepted && routingParserDecision.fallbackAction === "no_response") {
     if (!hasActionableTurnContext) {
+      const manualHandoffNoResponseQuestion =
+        String(conv?.followUp?.mode ?? "").toLowerCase() === "manual_handoff" &&
+        !shortAck &&
+        /\?/.test(String(event.body ?? ""));
+      if (manualHandoffNoResponseQuestion) {
+        const dealerProfile = await getDealerProfileHot();
+        const speaker = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
+        const reply = `Got it — this is ${speaker}. I’m checking that now and will follow up shortly.`;
+        logRouteOutcome("routing_parser_no_response_manual_handoff_ack", {
+          turnPrimaryIntent,
+          parserReason: routingParserDecision.reason
+        });
+        if (webhookMode === "suggest") {
+          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+        appendOutbound(conv, event.to, event.from, reply, "twilio");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+          reply
+        )}</Message>\n</Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
       if (logisticsProgressUpdate) {
         const progressReply = "Thanks for the update. I’m here if you need anything.";
         logRouteOutcome("routing_parser_no_response_progress_update_ack", {
@@ -19994,7 +20021,7 @@ if (authToken && signature) {
       if (match?.item) {
         const unitLabel = stockId || vin || "that unit";
         const dayPhrase = `${dayInfo.day} ${dayPart}`;
-        const reply = `Got it — ${unitLabel} is available right now. ${dayPhrase} works — what time were you thinking?`;
+        const reply = `Got it — ${unitLabel} is available right now. ${dayPhrase} can work. What time were you thinking? I can confirm availability.`;
         setDialogState(conv, "schedule_request");
         const systemMode = webhookMode;
         if (systemMode === "suggest") {
@@ -22835,7 +22862,9 @@ if (authToken && signature) {
     hold: conv.hold ?? null,
     sale: conv.sale ?? null,
     pickup: conv.pickup ?? null,
-    weather: weatherStatus ?? null
+    weather: weatherStatus ?? null,
+    dealerProfile: weatherProfile,
+    agentNameOverride: resolveConversationAgentName(conv, weatherProfile?.agentName ?? "Brooke")
   });
   logRouteTiming("orchestrator", orchestratorStartedAt, {
     turnPrimaryIntent
@@ -22871,10 +22900,10 @@ if (authToken && signature) {
     const dayInfo = parseDayOfWeek(textLower);
     if (dayInfo?.day) {
       const partLabel = dayPart ? ` ${dayPart}` : "";
-      result.draft = `Got it — ${dayInfo.day}${partLabel} works. What time were you thinking?`;
+      result.draft = `Got it — ${dayInfo.day}${partLabel} can work. What time were you thinking? I can confirm availability.`;
       setDialogState(conv, "schedule_request");
     } else if (dayPart) {
-      result.draft = `Got it — ${dayPart} works. What time were you thinking?`;
+      result.draft = `Got it — ${dayPart} can work. What time were you thinking? I can confirm availability.`;
       setDialogState(conv, "schedule_request");
     }
   }

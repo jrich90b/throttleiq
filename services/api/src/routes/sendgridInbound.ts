@@ -1557,7 +1557,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       bucket: conv.classification?.bucket ?? null,
       cta: conv.classification?.cta ?? null,
       pricingAttempts: getPricingAttempts(conv),
-      allowSchedulingOffer
+      allowSchedulingOffer,
+      agentNameOverride:
+        String(conv?.manualSender?.userName ?? conv?.leadOwner?.name ?? "")
+          .trim() || undefined
     });
 
     if (result.handoff?.required) {
@@ -3390,7 +3393,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     pricingIntentHint: pricingInquiryIntent,
     financeIntentHint: pricingInquiryIntent,
     pricingAttempts: getPricingAttempts(conv),
-    allowSchedulingOffer: true
+    allowSchedulingOffer: true,
+    agentNameOverride:
+      String(conv?.manualSender?.userName ?? conv?.leadOwner?.name ?? "")
+        .trim() || undefined
   });
   console.log("[sendgrid inbound] requestedTime", result.requestedTime);
 

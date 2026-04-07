@@ -1337,6 +1337,8 @@ export async function orchestrateInbound(
     sale?: any;
     pickup?: any;
     weather?: { bad?: boolean; cold?: boolean; snow?: boolean } | null;
+    dealerProfile?: any;
+    agentNameOverride?: string | null;
   }
 ): Promise<OrchestratorResult> {
   await loadSystemPrompt("orchestrator");
@@ -1353,6 +1355,20 @@ export async function orchestrateInbound(
       suggestedSlotsLen: out.suggestedSlots?.length ?? 0
     });
     return out;
+  };
+
+  const agentNameOverride = String(ctx?.agentNameOverride ?? "").trim();
+  const getAgentNameFromProfile = (profile: any, fallback: string = "Brooke") => {
+    const profileName = String(profile?.agentName ?? "").trim();
+    return agentNameOverride || profileName || fallback;
+  };
+  let dealerProfileCache: any = ctx?.dealerProfile ?? null;
+  const getDealerProfileWithAgentName = async () => {
+    if (!dealerProfileCache) {
+      dealerProfileCache = await getDealerProfile();
+    }
+    if (!agentNameOverride) return dealerProfileCache;
+    return { ...(dealerProfileCache ?? {}), agentName: agentNameOverride };
   };
 
   const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
@@ -1535,8 +1551,8 @@ export async function orchestrateInbound(
     const leadFirst = ctx?.lead?.firstName?.trim() || "there";
     const yearLabel = ctx?.lead?.vehicle?.year ? `${ctx.lead.vehicle.year} ` : "";
     const modelLabel = normalizeModelLabel(ctx?.lead?.vehicle?.model ?? ctx?.lead?.vehicle?.description);
-    const dealerProfile = await getDealerProfile();
-    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const dealerProfile = await getDealerProfileWithAgentName();
+    const agentName = getAgentNameFromProfile(dealerProfile, "Brooke");
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const bikeLabel = `${yearLabel}${modelLabel}`.trim() || "the bike";
     const isPrequalSubmission = financeSubmissionType === "prequal";
@@ -1564,8 +1580,8 @@ export async function orchestrateInbound(
 
   const isDemoRideEventLead = ctx?.bucket === "event_promo" && ctx?.cta === "demo_ride_event";
   if (isDemoRideEventLead && event.provider === "sendgrid_adf") {
-    const dealerProfile = await getDealerProfile();
-    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const dealerProfile = await getDealerProfileWithAgentName();
+    const agentName = getAgentNameFromProfile(dealerProfile, "Brooke");
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const leadFirst = ctx?.lead?.firstName?.trim() || "there";
     const yearLabel = ctx?.lead?.vehicle?.year ? `${ctx.lead.vehicle.year} ` : "";
@@ -1585,8 +1601,8 @@ export async function orchestrateInbound(
 
   const internationalBuyer = detectInternationalBuyer(event.body, event.from);
   if (internationalBuyer) {
-    const dealerProfile = await getDealerProfile();
-    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const dealerProfile = await getDealerProfileWithAgentName();
+    const agentName = getAgentNameFromProfile(dealerProfile, "Brooke");
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const ack =
       `Hi, this is ${agentName} at ${dealerName}. ` +
@@ -1695,9 +1711,9 @@ export async function orchestrateInbound(
   }
 
   if (depositRequest) {
-    const dealerProfile = await getDealerProfile();
+    const dealerProfile = await getDealerProfileWithAgentName();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const agentName = getAgentNameFromProfile(dealerProfile, "Brooke");
     const firstName = ctx?.lead?.firstName?.trim() || "";
     const greeting = firstName ? `Hi ${firstName} — ` : "";
     const leadIn = pickDepositLeadIn(event.body);
@@ -1787,9 +1803,9 @@ export async function orchestrateInbound(
 
   if (callbackRequest) {
     if (!useLLM) {
-      const dealerProfile = await getDealerProfile();
+      const dealerProfile = await getDealerProfileWithAgentName();
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-      const agentName = dealerProfile?.agentName ?? "Brooke";
+      const agentName = getAgentNameFromProfile(dealerProfile, "Brooke");
       const firstName = ctx?.lead?.firstName?.trim() || "";
       const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
       const rawModel = ctx?.lead?.vehicle?.model ?? ctx?.lead?.vehicle?.description ?? "";
@@ -2016,7 +2032,7 @@ export async function orchestrateInbound(
       faqParse.explicitRequest === true &&
       faqConfidence >= faqConfidenceMin
     ) {
-      const dealerProfile = await getDealerProfile();
+      const dealerProfile = await getDealerProfileWithAgentName();
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
       return finalize({
         intent: "GENERAL",
@@ -2035,7 +2051,7 @@ export async function orchestrateInbound(
     String(event.body ?? "")
   );
   if (financeRequest && !specialsQuestion && !pricingTermsOnly && !wantsPayments) {
-    const dealerProfile = await getDealerProfile();
+    const dealerProfile = await getDealerProfileWithAgentName();
     const hasCoSignerDetails = /\b(co[-\s]?sign(?:er)?|cosign(?:er)?)\b/i.test(
       String(event.body ?? "")
     );
@@ -2112,7 +2128,7 @@ export async function orchestrateInbound(
         : "Thanks for the detail. You’d probably be looking at something $10k and under.";
       const firstName = (ctx?.lead?.firstName ?? "").trim() || "there";
       const greeting = channelIsEmail ? `Hey ${normalizeModelLabel(firstName)},\n\n` : "";
-      const dealerProfile = await getDealerProfile();
+      const dealerProfile = await getDealerProfileWithAgentName();
       const inventoryLink = String(
         dealerProfile?.usedInventoryUrl ??
           dealerProfile?.preownedInventoryUrl ??
@@ -2333,7 +2349,7 @@ export async function orchestrateInbound(
           .join(" ")
           .toLowerCase();
         const isUsed = /(pre|used|pre-owned|preowned|owned)/.test(conditionRaw);
-        const dealerProfile = await getDealerProfile();
+        const dealerProfile = await getDealerProfileWithAgentName();
         const taxRateRaw = Number((dealerProfile as any)?.taxRate ?? 8);
         const taxRate = Number.isFinite(taxRateRaw) ? (taxRateRaw > 1 ? taxRateRaw / 100 : taxRateRaw) : 0.08;
         const preferredTerm = extractPreferredTermMonths(event.body) ?? 60;
@@ -2423,8 +2439,8 @@ export async function orchestrateInbound(
       const wantsSoftTimeline =
         event.provider === "sendgrid_adf" &&
         ((!!longTermMonths && longTermMonths >= 7) || /\bmonth|months|year|years\b/i.test(longTermTimeframe));
-      const dealerProfile = await getDealerProfile();
-      const agentName = dealerProfile?.agentName ?? "Brooke";
+      const dealerProfile = await getDealerProfileWithAgentName();
+      const agentName = getAgentNameFromProfile(dealerProfile, "Brooke");
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
       const financeLine = financeRequest ? buildFinanceAppLine(dealerProfile) : "";
       const yearForRange =
@@ -2955,8 +2971,8 @@ export async function orchestrateInbound(
     !financePriorityHint &&
     !pricingIntentHint
   ) {
-    const dealerProfile = await getDealerProfile();
-    const agentName = dealerProfile?.agentName ?? "Brooke";
+    const dealerProfile = await getDealerProfileWithAgentName();
+    const agentName = getAgentNameFromProfile(dealerProfile, "Brooke");
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const ack =
       `Hi, this is ${agentName} at ${dealerName}. ` +
@@ -3006,7 +3022,7 @@ export async function orchestrateInbound(
 
   if (useLLM) {
     try {
-      const dealerProfile = await getDealerProfile();
+      const dealerProfile = await getDealerProfileWithAgentName();
       const cfg = await getSchedulerConfig();
       const tz = cfg.timezone ?? "America/New_York";
       const today = new Date().toLocaleDateString("en-US", { weekday: "long", timeZone: tz });
@@ -3383,8 +3399,8 @@ export async function orchestrateInbound(
         (ctx?.cta === "value_my_trade" || ctx?.cta === "trade_in_value") &&
         !hasPriorOutbound;
       if (isTradeValueLead) {
-        const dealerProfile = await getDealerProfile();
-        const agentName = dealerProfile?.agentName ?? "Brooke";
+        const dealerProfile = await getDealerProfileWithAgentName();
+        const agentName = getAgentNameFromProfile(dealerProfile, "Brooke");
         const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
         const leadFirst = ctx?.lead?.firstName?.trim() || "there";
         const trade = ctx?.lead?.tradeVehicle;
@@ -3410,7 +3426,7 @@ export async function orchestrateInbound(
       }
 
       if (pricingIntent && (listPrice || priceRange)) {
-        const dealerProfile = await getDealerProfile();
+        const dealerProfile = await getDealerProfileWithAgentName();
         const financeLine = financeRequest ? buildFinanceAppLine(dealerProfile) : "";
         const nf = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
         const yearLabel = lead.vehicle?.year ? `${lead.vehicle.year} ` : "";
@@ -3605,7 +3621,7 @@ export async function orchestrateInbound(
       }
       const isFirstOutbound = !history.some(h => h.direction === "out");
       if (isFirstOutbound && event.provider === "sendgrid_adf") {
-        const agentName = dealerProfile?.agentName ?? "Brooke";
+        const agentName = getAgentNameFromProfile(dealerProfile, "Brooke");
         const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
         const leadName = lead?.firstName?.trim() || "there";
         const thankLabel = normalizeModelLabel(lead.vehicle?.model ?? lead.vehicle?.description);
