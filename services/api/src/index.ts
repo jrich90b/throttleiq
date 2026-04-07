@@ -9425,6 +9425,109 @@ function clampCadenceToEarliestHour(
   return { adjusted: true, dueAtIso: clamped };
 }
 
+function trimTodoDetail(text: string, maxLen = 120): string {
+  const compact = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (!compact) return "";
+  return compact.length <= maxLen ? compact : `${compact.slice(0, maxLen - 1)}…`;
+}
+
+function extractLastMeaningfulInboundForTodo(conv: any): string {
+  const lastInbound = [...(conv?.messages ?? [])]
+    .reverse()
+    .find((m: any) => m?.direction === "in" && String(m?.body ?? "").trim());
+  const body = String(lastInbound?.body ?? "").trim();
+  if (!body) return "";
+  if (lastInbound?.provider === "sendgrid_adf" || /web lead\s*\(adf\)/i.test(body)) return "";
+  if (/^(ok|okay|k|kk|thanks|thank you|thx|ty|sounds good|perfect)[.! ]*$/i.test(body)) return "";
+  return trimTodoDetail(body, 110);
+}
+
+function buildCadenceFollowUpCallTodoSummary(conv: any): string {
+  const cta = String(conv?.classification?.cta ?? "").toLowerCase();
+  const bucket = String(conv?.classification?.bucket ?? "").toLowerCase();
+  const state = String(getDialogState(conv) ?? "").toLowerCase();
+  const followUpReason = String(conv?.followUp?.reason ?? "").toLowerCase();
+  const model = formatModelLabelForFollowUp(
+    conv?.lead?.vehicle?.year ?? null,
+    conv?.lead?.vehicle?.model ?? null
+  ).replace(/^the\s+/i, "");
+  const modelWithArticle = model ? `the ${model}` : "the bike";
+  let focus = `follow up on ${modelWithArticle}`;
+  if (/(pricing|payment|finance|credit|prequal)/.test(`${cta} ${bucket} ${state} ${followUpReason}`)) {
+    focus = `review pricing and payment options for ${modelWithArticle}`;
+  } else if (/(inventory|availability|watch)/.test(`${cta} ${bucket} ${state} ${followUpReason}`)) {
+    focus = `confirm inventory and availability for ${modelWithArticle}`;
+  } else if (/(service|parts|apparel)/.test(`${cta} ${bucket} ${state} ${followUpReason}`)) {
+    focus = `review the open ${bucket || cta || "department"} request`;
+  } else if (/(schedule|appointment|test_ride)/.test(`${cta} ${bucket} ${state} ${followUpReason}`)) {
+    focus = `confirm appointment timing and next steps`;
+  } else if (/(trade|sell)/.test(`${cta} ${bucket} ${state} ${followUpReason}`)) {
+    focus = `continue trade/sell discussion and next steps`;
+  }
+  const lastInbound = extractLastMeaningfulInboundForTodo(conv);
+  const detail = lastInbound ? ` Last customer message: "${lastInbound}"` : "";
+  return `Call customer (follow-up): ${focus}.${detail}`.trim();
+}
+
+function deriveTodoActionLabel(todo: any, conv: any): string {
+  const reason = String(todo?.reason ?? "").toLowerCase();
+  const summary = String(todo?.summary ?? "");
+  const text = `${reason} ${summary}`.toLowerCase();
+  const focusFromSummary =
+    summary.match(/^call customer \(follow-up\):\s*(.+)$/i)?.[1]?.trim() ??
+    summary.match(/^call requested:\s*(.+)$/i)?.[1]?.trim() ??
+    "";
+  if (reason === "approval") return "Business manager follow-up (credit app/prequal).";
+  if (reason === "call") {
+    if (focusFromSummary) return `Call customer about ${trimTodoDetail(focusFromSummary, 100)}.`;
+    if (/dealer ride follow-up needed/i.test(summary)) {
+      return "Call customer to confirm dealer ride outcome and next step.";
+    }
+    if (/preferred contact method is phone|call-only|phone only|no auto text/i.test(text)) {
+      return "Call customer (phone preferred).";
+    }
+    if (/(credit|prequal|finance|apr|payment|monthly)/.test(text)) {
+      return "Call customer to review financing and payment options.";
+    }
+    if (/(inventory|availability|stock|watch)/.test(text)) {
+      return "Call customer to confirm inventory and availability.";
+    }
+    const model = formatModelLabelForFollowUp(
+      conv?.lead?.vehicle?.year ?? null,
+      conv?.lead?.vehicle?.model ?? null
+    );
+    if (model) return `Call customer to follow up on ${model}.`;
+    return "Call customer and update status.";
+  }
+  if (/(call only|phone only|no text|do not text)/.test(text)) return "Call customer (call-only).";
+  if (/(credit|prequal|finance)/.test(text)) return "Business manager follow-up (credit app).";
+  if (
+    reason === "service" ||
+    /(service|inspection|oil change|3[- ]hole|maintenance|repair|service department)/.test(text)
+  ) {
+    return "Service department follow-up and scheduling.";
+  }
+  if (
+    reason === "parts" ||
+    /(parts? department|parts? counter|part number|oem parts?|aftermarket parts?|order.*part|need.*part)/.test(text)
+  ) {
+    return "Parts department follow-up.";
+  }
+  if (
+    reason === "apparel" ||
+    /(apparel|merch|merchandise|clothing|jacket|hoodie|t-?shirt|helmet|gloves?|boots?|riding gear)/.test(text)
+  ) {
+    return "Apparel department follow-up.";
+  }
+  if (/(trade|appraisal|trade[- ]in)/.test(text)) return "Discuss trade appraisal and next steps.";
+  if (/(inventory|verify|check stock|not seeing|live feed)/.test(text)) return "Verify inventory and follow up.";
+  if (/(video|walkaround|photos)/.test(text)) return "Send a walkaround video or photos.";
+  if (/(appointment|schedule|book)/.test(text)) return "Schedule an appointment.";
+  if (/(pricing|price|quote|payment)/.test(text)) return "Provide pricing or payment details.";
+  if (/(^|\\b)note(\\b|$)/.test(reason) || /update for/.test(text)) return "Internal note (no customer follow-up).";
+  return "Follow up with the customer.";
+}
+
 async function processDueFollowUps() {
   const cfg = await getSchedulerConfigHot();
   if (cfg.enabled === false) return;
@@ -10212,7 +10315,7 @@ async function processDueFollowUps() {
 
     const maybeAddCallTodoForFollowUp = () => {
       if (isPostSale) return;
-      addCallTodoIfMissing(conv, "Call customer (follow-up).");
+      addCallTodoIfMissing(conv, buildCadenceFollowUpCallTodoSummary(conv));
     };
 
     if (systemMode === "suggest" || enforceSalesReviewForCadence) {
@@ -13199,7 +13302,8 @@ app.get("/todos", requirePermission("canAccessTodos"), (req, res) => {
         [firstName, lastName].filter(Boolean).join(" ").trim() ||
         extractNameFromSummary(t.summary) ||
         null;
-      return { ...t, leadName };
+      const action = deriveTodoActionLabel(t, conv);
+      return { ...t, leadName, action };
     });
   res.json({ ok: true, todos });
 });

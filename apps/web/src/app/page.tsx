@@ -748,6 +748,7 @@ type TodoItem = {
   leadName?: string | null;
   reason: string;
   summary: string;
+  action?: string;
   createdAt: string;
 };
 
@@ -776,6 +777,8 @@ type WatchFormItem = {
 };
 
 function todoActionLabel(todo: TodoItem): string {
+  const explicitAction = String(todo.action ?? "").trim();
+  if (explicitAction) return explicitAction;
   const reason = (todo.reason ?? "").toLowerCase();
   const summary = (todo.summary ?? "").toLowerCase();
   const text = `${reason} ${summary}`;
