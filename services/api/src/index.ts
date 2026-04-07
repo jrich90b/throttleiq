@@ -761,6 +761,38 @@ function inferTodoDepartment(todo: any, conv: any): DepartmentRole | null {
   return inferDepartmentFromText(String(todo?.summary ?? ""));
 }
 
+async function resolveDepartmentTodoOwner(
+  role: DepartmentRole,
+  preferredName?: string | null
+): Promise<{ id?: string | null; name?: string | null }> {
+  const firstToken = (raw: unknown): string =>
+    String(raw ?? "")
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean)[0] ?? "";
+  const users = await listUsers();
+  const roleKey = String(role ?? "").trim().toLowerCase();
+  const preferredFirst = firstToken(preferredName ?? "");
+  const matches = users.filter(u => String(u?.role ?? "").trim().toLowerCase() === roleKey);
+  if (!matches.length) {
+    // Explicit empty owner prevents addTodo() from defaulting back to leadOwner.
+    return { id: "", name: "" };
+  }
+  const chosen =
+    matches.find(u => {
+      if (!preferredFirst) return false;
+      const first = firstToken(u?.firstName);
+      const nameFirst = firstToken(u?.name);
+      return preferredFirst === first || preferredFirst === nameFirst;
+    }) ?? matches[0];
+  const id = String(chosen?.id ?? "").trim();
+  const name =
+    String(chosen?.name ?? "").trim() ||
+    [chosen?.firstName, chosen?.lastName].filter(Boolean).join(" ").trim();
+  return { id: id || "", name: name || "" };
+}
+
 function canUserAccessConversation(user: any, conv: any): boolean {
   if (AUTH_DISABLED || !user) return true;
   const role = String(user?.role ?? "").toLowerCase();
@@ -15179,11 +15211,18 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
 
   if (isServiceRecordsRequest(event.body)) {
+    const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
     const hasServiceTodo = listOpenTodos().some(
       t => t.convId === conv.id && t.reason === "service"
     );
     if (!hasServiceTodo) {
-      addTodo(conv, "service", `Service records request: ${event.body}`, event.providerMessageId);
+      addTodo(
+        conv,
+        "service",
+        `Service records request: ${event.body}`,
+        event.providerMessageId,
+        serviceTodoOwner
+      );
     }
     setDialogState(conv, "service_handoff");
     setFollowUpMode(conv, "manual_handoff", "service_records");
@@ -15213,6 +15252,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       ? (regenUnifiedSlotParse.departmentIntent as DepartmentRole)
       : null);
   if (regenInboundDepartmentIntent === "parts" || regenInboundDepartmentIntent === "apparel") {
+    const departmentTodoOwner = await resolveDepartmentTodoOwner(
+      regenInboundDepartmentIntent,
+      conv.leadOwner?.name
+    );
     conv.classification = {
       ...(conv.classification ?? {}),
       bucket: regenInboundDepartmentIntent,
@@ -15226,7 +15269,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         conv,
         regenInboundDepartmentIntent,
         event.body ?? `${regenInboundDepartmentIntent} request`,
-        event.providerMessageId
+        event.providerMessageId,
+        departmentTodoOwner
       );
     }
     setFollowUpMode(conv, "manual_handoff", `${regenInboundDepartmentIntent}_request`);
@@ -15250,6 +15294,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     (conv.followUp?.mode === "manual_handoff" &&
       /service/.test(String(conv.followUp?.reason ?? "")));
   if (isServiceLead) {
+    const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
     const t = String(event.body ?? "").toLowerCase();
     const complimentRegex =
       /\b(love|like|awesome|amazing|great|cool|nice|sweet|beautiful|killer|badass|sick|clean)\b/.test(t) ||
@@ -15284,7 +15329,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       todo => todo.convId === conv.id && todo.reason === "service"
     );
     if (!hasServiceTodo) {
-      addTodo(conv, "service", event.body ?? "Service request", event.providerMessageId);
+      addTodo(
+        conv,
+        "service",
+        event.body ?? "Service request",
+        event.providerMessageId,
+        serviceTodoOwner
+      );
     }
     setFollowUpMode(conv, "manual_handoff", "service_request");
     stopFollowUpCadence(conv, "manual_handoff");
@@ -16233,11 +16284,18 @@ if (authToken && signature) {
   }
 
   if (serviceRecordsRequested) {
+    const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
     const hasServiceTodo = listOpenTodos().some(
       t => t.convId === conv.id && t.reason === "service"
     );
     if (!hasServiceTodo) {
-      addTodo(conv, "service", `Service records request: ${event.body}`, event.providerMessageId);
+      addTodo(
+        conv,
+        "service",
+        `Service records request: ${event.body}`,
+        event.providerMessageId,
+        serviceTodoOwner
+      );
     }
     setDialogState(conv, "service_handoff");
     setFollowUpMode(conv, "manual_handoff", "service_records");
@@ -16308,6 +16366,10 @@ if (authToken && signature) {
     inferDepartmentFromText(event.body ?? "") ??
     semanticDepartmentIntent;
   if (inboundDepartmentIntent === "parts" || inboundDepartmentIntent === "apparel") {
+    const departmentTodoOwner = await resolveDepartmentTodoOwner(
+      inboundDepartmentIntent,
+      conv.leadOwner?.name
+    );
     conv.classification = {
       ...(conv.classification ?? {}),
       bucket: inboundDepartmentIntent,
@@ -16321,7 +16383,8 @@ if (authToken && signature) {
         conv,
         inboundDepartmentIntent,
         event.body ?? `${inboundDepartmentIntent} request`,
-        event.providerMessageId
+        event.providerMessageId,
+        departmentTodoOwner
       );
     }
     setFollowUpMode(conv, "manual_handoff", `${inboundDepartmentIntent}_request`);
@@ -16352,6 +16415,7 @@ if (authToken && signature) {
     (conv.followUp?.mode === "manual_handoff" &&
       /service/.test(String(conv.followUp?.reason ?? "")));
   if (isServiceLead) {
+    const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
     const t = String(event.body ?? "").toLowerCase();
     const complimentRegex =
       /\b(love|like|awesome|amazing|great|cool|nice|sweet|beautiful|killer|badass|sick|clean)\b/.test(t) ||
@@ -16400,7 +16464,13 @@ if (authToken && signature) {
       t => t.convId === conv.id && t.reason === "service"
     );
     if (!hasServiceTodo) {
-      addTodo(conv, "service", event.body ?? "Service request", event.providerMessageId);
+      addTodo(
+        conv,
+        "service",
+        event.body ?? "Service request",
+        event.providerMessageId,
+        serviceTodoOwner
+      );
     }
     setFollowUpMode(conv, "manual_handoff", "service_request");
     stopFollowUpCadence(conv, "manual_handoff");
@@ -19267,7 +19337,8 @@ if (authToken && signature) {
         (typeof distance === "number"
           ? `Distance: ${distance} miles${eligible === false ? " (outside pickup range)" : ""}.`
           : "Distance: unknown.");
-      addTodo(conv, "service", summary, event.providerMessageId);
+      const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
+      addTodo(conv, "service", summary, event.providerMessageId, serviceTodoOwner);
       setFollowUpMode(conv, "manual_handoff", "pickup_request");
       stopFollowUpCadence(conv, "pickup_request");
       stopRelatedCadences(conv, "pickup_request", { setMode: "manual_handoff" });

@@ -166,6 +166,24 @@ function pickUserPhone(user: any): string {
   return "";
 }
 
+function pickUserForRole(
+  users: any[],
+  role: string,
+  preferredFirstToken?: string | null
+): any | null {
+  const token = pickFirstToken(preferredFirstToken ?? "");
+  const byPreferred =
+    users.find(u => {
+      if (String(u?.role ?? "").trim().toLowerCase() !== role) return false;
+      if (!token) return false;
+      const first = pickFirstToken(u?.firstName);
+      const nameFirst = pickFirstToken(u?.name);
+      return token === first || token === nameFirst;
+    }) ?? null;
+  if (byPreferred) return byPreferred;
+  return users.find(u => String(u?.role ?? "").trim().toLowerCase() === role) ?? null;
+}
+
 function normalizeAdfIdentityToken(raw?: string | null): string {
   return String(raw ?? "")
     .trim()
@@ -1829,6 +1847,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const responseControlAccepted = isResponseControlParserAccepted(llmResponseControl);
   const scheduleIntentFromParser =
     responseControlAccepted && llmResponseControl?.intent === "schedule_request";
+  const callbackIntentFromParser =
+    !!llmIntent &&
+    llmIntent.intent === "callback" &&
+    llmIntent.explicitRequest === true &&
+    Number(llmIntent.confidence ?? 0) >= intentConfidenceMin;
+  const callbackTimeFromParser = String(llmIntent?.callback?.timeText ?? "").trim();
   const serviceIntentFromParser =
     !!llmDialogAct &&
     llmDialogAct.topic === "service" &&
@@ -1966,6 +1990,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
 
   const callOnlyRequested = isCallOnlyText(inquiryText);
+  const callbackRequestedInLead = callbackIntentFromParser || !!String(lead.preferredTime ?? "").trim();
+  const callbackTimeHint =
+    callbackTimeFromParser ||
+    String(lead.preferredTime ?? "").trim() ||
+    (inquiryDayPart ? `${inquiryDayPart.dayLabel} ${inquiryDayPart.dayPart}` : "");
 
   let creditTodoCreated = false;
   const inquiryLower = inquiryText.toLowerCase();
@@ -2384,8 +2413,69 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     ack = await applyInitialAdfPrefix(ack);
     ack = withInitialPhoto(ack);
     ack = withInitialAvailabilityLine(ack);
+    const users = await listUsers();
+    const ownerId = String(conv.leadOwner?.id ?? "").trim();
+    const leadOwner = users.find(u => String(u?.id ?? "").trim() === ownerId) ?? null;
+    const serviceOwner = pickUserForRole(users, "service", vendorContactName);
+    const serviceTodoOwner = serviceOwner
+      ? {
+          id: String(serviceOwner.id ?? "").trim(),
+          name:
+            String(serviceOwner.name ?? "").trim() ||
+            String(serviceOwner.firstName ?? "").trim() ||
+            "Service"
+        }
+      : { id: "", name: "" };
+    const notifyOwner = serviceOwner ?? leadOwner;
+    const ownerName =
+      String(notifyOwner?.name ?? "").trim() ||
+      String(notifyOwner?.firstName ?? "").trim() ||
+      String(conv.leadOwner?.name ?? "").trim() ||
+      "service team";
+    const ownerPhone = pickUserPhone(notifyOwner);
     conv.dialogState = { name: "service_handoff", updatedAt: new Date().toISOString() };
-    addTodo(conv, "service", event.body, event.providerMessageId);
+    addTodo(conv, "service", event.body, event.providerMessageId, serviceTodoOwner);
+    if (callbackRequestedInLead) {
+      const callbackSummary = callbackTimeHint
+        ? `Call requested${callbackTimeHint ? `: ${callbackTimeHint}` : ""}.`
+        : "Call requested.";
+      const callbackTodoOwner = serviceOwner
+        ? serviceTodoOwner
+        : conv.leadOwner?.id
+          ? {
+              id: conv.leadOwner.id,
+              name: conv.leadOwner.name
+            }
+          : undefined;
+      addTodo(
+        conv,
+        "call",
+        callbackSummary,
+        event.providerMessageId,
+        callbackTodoOwner
+      );
+      const customerName =
+        [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() ||
+        conv.leadKey ||
+        "customer";
+      const ownerSummary = [
+        `Service lead callback requested for ${customerName}.`,
+        callbackTimeHint ? `Requested time: ${callbackTimeHint}.` : null,
+        conv.lead?.phone ? `Customer phone: ${conv.lead.phone}` : null,
+        conv.lead?.leadRef ? `Lead Ref: ${conv.lead.leadRef}` : null
+      ]
+        .filter(Boolean)
+        .join("\n");
+      const staffSms = await sendInternalSalespersonSms(ownerPhone, ownerSummary);
+      if (!staffSms.sent) {
+        addTodo(
+          conv,
+          "note",
+          `Owner SMS failed for ${ownerName}: ${staffSms.reason ?? "unknown_error"}.`,
+          event.providerMessageId
+        );
+      }
+    }
     setFollowUpMode(conv, "manual_handoff", "service_request");
     stopFollowUpCadence(conv, "manual_handoff");
     queueInitialDraftForPreferredContact(ack, initialMediaUrls);
