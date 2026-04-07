@@ -15437,12 +15437,156 @@ app.post("/conversations/:id/send", async (req, res) => {
   };
   const reconcileManualOutboundState = async (
     outboundBody: string,
-    opts?: { channel?: "sms" | "email" | null }
+    opts?: {
+      channel?: "sms" | "email" | null;
+      delivered?: boolean;
+      sourceMessageId?: string | null;
+    }
   ) => {
-    void outboundBody;
-    void opts;
-    // Hard lock: manual salesperson text must not trigger parser/reducer state transitions.
-    return;
+    // Hard lock default for manual outbound state mutation:
+    // only allow appointment confirmation/re-schedule updates, never department/workflow routing.
+    if (opts?.delivered === false) return;
+    const text = String(outboundBody ?? "").trim();
+    if (!text) return;
+
+    const lower = text.toLowerCase();
+    const asksForTimeChoice =
+      /\b(what time|what day|which day|which time|works best|what works|do any of these times work|let me know what time)\b/i.test(
+        lower
+      );
+    if (asksForTimeChoice) return;
+
+    const hasCallCue =
+      /\b(call|phone|reach out|give you a call|service department|parts department|motorclothes|apparel)\b/i.test(
+        lower
+      );
+    if (hasCallCue) return;
+
+    const hasAppointmentContext =
+      (conv.scheduler?.lastSuggestedSlots?.length ?? 0) > 0 ||
+      String(conv.appointment?.status ?? "none").toLowerCase() !== "none" ||
+      String(getDialogState(conv) ?? "")
+        .toLowerCase()
+        .startsWith("schedule");
+
+    let didSetAppointment = false;
+    const matchedSuggested = confirmAppointmentIfMatchesSuggested(
+      conv,
+      text,
+      opts?.sourceMessageId ? String(opts.sourceMessageId) : undefined
+    );
+    if (matchedSuggested) {
+      conv.appointment = conv.appointment ?? { status: "none", updatedAt: nowIso() };
+      conv.appointment.confirmedBy = "salesperson";
+      conv.appointment.updatedAt = nowIso();
+      conv.appointment.acknowledged = true;
+      didSetAppointment = true;
+    }
+
+    const bookingParserEligible =
+      process.env.LLM_ENABLED === "1" &&
+      process.env.LLM_BOOKING_PARSER_ENABLED === "1" &&
+      !!process.env.OPENAI_API_KEY;
+    const hasScheduleKeyword =
+      /\b(schedule|book|appointment|appt|reschedule|availability|available|stop by|stop in|come in|see you|works)\b/i.test(
+        text
+      );
+    const hasDayToken =
+      /\b(today|tomorrow|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun|next week|this week|this weekend|weekend)\b/i.test(
+        text
+      );
+    const hasTimeToken =
+      /\b(\d{1,2}(:\d{2})?\s*(am|pm)\b|morning|afternoon|evening|night|noon|midnight)\b/i.test(
+        text
+      );
+
+    let bookingParse: any = null;
+    if (!didSetAppointment && bookingParserEligible && (hasScheduleKeyword || hasAppointmentContext)) {
+      bookingParse = await safeLlmParse("manual_outbound_booking_parser", () =>
+        parseBookingIntentWithLLM({
+          text,
+          history: buildHistory(conv, 8),
+          lastSuggestedSlots: conv.scheduler?.lastSuggestedSlots,
+          appointment: conv.appointment
+        })
+      );
+    }
+
+    const bookingConfidence =
+      typeof bookingParse?.confidence === "number" ? bookingParse.confidence : 0;
+    const bookingConfidenceMin = Number(process.env.LLM_BOOKING_CONFIDENCE_MIN ?? 0.7);
+    const bookingAccepted =
+      !!bookingParse?.explicitRequest &&
+      bookingConfidence >= bookingConfidenceMin &&
+      (bookingParse.intent === "schedule" || bookingParse.intent === "reschedule");
+
+    const normalizedText = String(
+      bookingParse?.normalizedText ??
+        [String(bookingParse?.requested?.day ?? "").trim(), String(bookingParse?.requested?.timeText ?? "").trim()]
+          .filter(Boolean)
+          .join(" ")
+    ).trim();
+    const parseSource = normalizedText || text;
+
+    let requested = parseRequestedDayTime(parseSource, schedulerTimezone);
+    if (!requested && bookingAccepted && hasDayToken && !hasTimeToken) {
+      requested = parseRequestedDayTime(`${parseSource} at 9am`, schedulerTimezone);
+    }
+    if (!requested && hasAppointmentContext && hasDayToken && !hasTimeToken) {
+      requested = parseRequestedDayTime(`${text} at 9am`, schedulerTimezone);
+    }
+
+    const confirmCue =
+      /\b(works|see you|all set|confirmed|booked|sounds good|perfect|that works|can work)\b/i.test(
+        lower
+      );
+    const shouldInferManualAppointment =
+      !didSetAppointment &&
+      !!requested &&
+      !hasCallCue &&
+      (bookingAccepted || (confirmCue && (hasScheduleKeyword || hasAppointmentContext)));
+
+    if (shouldInferManualAppointment && requested) {
+      const whenUtc = localPartsToUtcDate(schedulerTimezone, requested).toISOString();
+      const whenText = formatSlotLocal(whenUtc, schedulerTimezone);
+      conv.appointment = conv.appointment ?? { status: "none", updatedAt: nowIso() };
+      conv.appointment.status = "confirmed";
+      conv.appointment.whenIso = whenUtc;
+      conv.appointment.whenText = whenText;
+      conv.appointment.confirmedBy = "salesperson";
+      conv.appointment.updatedAt = nowIso();
+      conv.appointment.sourceMessageId =
+        opts?.sourceMessageId ? String(opts.sourceMessageId) : conv.appointment.sourceMessageId;
+      conv.appointment.acknowledged = true;
+      setRequestedTime(conv, {
+        day: String(bookingParse?.requested?.day ?? "").trim() || undefined,
+        timeText: normalizedText || text
+      });
+      setDialogState(conv, "schedule_booked");
+      onAppointmentBooked(conv);
+      recordRouteOutcome("live", "manual_outbound_schedule_confirmed", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        channel: opts?.channel ?? null,
+        whenIso: whenUtc,
+        parserAccepted: bookingAccepted,
+        confidence: bookingAccepted ? bookingConfidence : null
+      });
+      return;
+    }
+
+    if (didSetAppointment) {
+      setDialogState(conv, "schedule_booked");
+      onAppointmentBooked(conv);
+      recordRouteOutcome("live", "manual_outbound_schedule_confirmed", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        channel: opts?.channel ?? null,
+        whenIso: conv.appointment?.whenIso ?? null,
+        parserAccepted: false,
+        confidence: null
+      });
+    }
   };
 
   // Normalize destination number from conversation leadKey
@@ -15617,7 +15761,7 @@ app.post("/conversations/:id/send", async (req, res) => {
         appendOutbound(conv, emailFrom, emailTo!, signed, outboundProvider);
       }
       applyManualOutboundStateHints(signed, { channel: "email" });
-      await reconcileManualOutboundState(signed, { channel: "email" });
+      await reconcileManualOutboundState(signed, { channel: "email", delivered: true });
       finalizeManualSendDraftState({ clearEmailDraft: true, preserveSmsDrafts: true });
       saveConversation(conv);
       await flushConversationStore();
@@ -15656,7 +15800,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       appendOutbound(conv, "salesperson", conv.leadKey, body, "human", undefined, mediaUrls);
     }
     applyManualOutboundStateHints(body, { channel: "sms" });
-    await reconcileManualOutboundState(body, { channel: "sms" });
+    await reconcileManualOutboundState(body, { channel: "sms", delivered: false });
     finalizeManualSendDraftState();
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
@@ -15696,7 +15840,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       appendOutbound(conv, "salesperson", to, body, "human", undefined, mediaUrls);
     }
     applyManualOutboundStateHints(body, { channel: "sms" });
-    await reconcileManualOutboundState(body, { channel: "sms" });
+    await reconcileManualOutboundState(body, { channel: "sms", delivered: false });
     finalizeManualSendDraftState();
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
@@ -15745,7 +15889,11 @@ app.post("/conversations/:id/send", async (req, res) => {
       appendOutbound(conv, from, to, body, "twilio", msg.sid, mediaUrls);
     }
     applyManualOutboundStateHints(body, { channel: "sms" });
-    await reconcileManualOutboundState(body, { channel: "sms" });
+    await reconcileManualOutboundState(body, {
+      channel: "sms",
+      delivered: true,
+      sourceMessageId: msg.sid ?? null
+    });
     finalizeManualSendDraftState();
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
@@ -15774,7 +15922,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       appendOutbound(conv, "salesperson", to, body, "human", undefined, mediaUrls);
     }
     applyManualOutboundStateHints(body, { channel: "sms" });
-    await reconcileManualOutboundState(body, { channel: "sms" });
+    await reconcileManualOutboundState(body, { channel: "sms", delivered: false });
     finalizeManualSendDraftState();
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
@@ -17333,6 +17481,113 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
   if (conv.mode === "human") {
+    discardPendingDrafts(conv, "new_inbound_human_mode");
+    didConfirm = confirmAppointmentIfMatchesSuggested(conv, event.body, event.providerMessageId);
+    if (didConfirm) {
+      setDialogState(conv, "schedule_booked");
+      recordRouteOutcome("live", "human_mode_schedule_confirmed", {
+        convId: conv.id,
+        leadKey: conv.leadKey
+      });
+    }
+    const humanModeBookingParserEligible =
+      event.provider === "twilio" &&
+      process.env.LLM_ENABLED === "1" &&
+      process.env.LLM_BOOKING_PARSER_ENABLED === "1" &&
+      !!process.env.OPENAI_API_KEY;
+    const humanModeText = String(event.body ?? "");
+    const humanModeHasScheduleKeyword =
+      /\b(schedule|book|appointment|appt|reschedule|move|availability|available|openings?|stop by|stop in|come in|works?|what time|what times)\b/i.test(
+        humanModeText
+      );
+    const humanModeHasDayToken =
+      /\b(today|tomorrow|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun|next week|this week|this weekend|weekend)\b/i.test(
+        humanModeText
+      );
+    const humanModeHasTimeToken =
+      /\b(\d{1,2}(:\d{2})?\s*(am|pm)\b|morning|afternoon|evening|night|noon|midnight)\b/i.test(
+        humanModeText
+      );
+    const humanModeBookingParserHint =
+      llmExplicitScheduleIntent ||
+      humanModeHasScheduleKeyword ||
+      (((conv.scheduler?.lastSuggestedSlots?.length ?? 0) > 0 ||
+        String(conv.appointment?.status ?? "").toLowerCase() !== "none") &&
+        (humanModeHasDayToken || humanModeHasTimeToken));
+    if (humanModeBookingParserEligible && humanModeBookingParserHint && !didConfirm) {
+      const humanBookingParse = await safeLlmParse("booking_intent_parser_human_mode", () =>
+        parseBookingIntentWithLLM({
+          text: humanModeText,
+          history: buildHistory(conv, 8),
+          lastSuggestedSlots: conv.scheduler?.lastSuggestedSlots,
+          appointment: conv.appointment
+        })
+      );
+      const bookingConfidence =
+        typeof humanBookingParse?.confidence === "number" ? humanBookingParse.confidence : 0;
+      const bookingConfidenceMin = Number(process.env.LLM_BOOKING_CONFIDENCE_MIN ?? 0.7);
+      const humanBookingAccepted =
+        !!humanBookingParse?.explicitRequest &&
+        bookingConfidence >= bookingConfidenceMin &&
+        (humanBookingParse.intent === "schedule" ||
+          humanBookingParse.intent === "reschedule" ||
+          humanBookingParse.intent === "availability");
+      if (humanBookingAccepted) {
+        const cfg = await getSchedulerConfigHot();
+        const timezone = cfg.timezone || "America/New_York";
+        const normalizedText = String(
+          humanBookingParse?.normalizedText ??
+            [
+              String(humanBookingParse?.requested?.day ?? "").trim(),
+              String(humanBookingParse?.requested?.timeText ?? "").trim()
+            ]
+              .filter(Boolean)
+              .join(" ")
+        ).trim();
+        const rawTimePhrase = normalizedText || humanModeText;
+        let schedule = buildCallbackTodoSchedule(rawTimePhrase, timezone);
+        const hasDayWithoutTime = humanModeHasDayToken && !humanModeHasTimeToken;
+        if ((!schedule.dueAt || !schedule.reminderAt) && hasDayWithoutTime) {
+          schedule = buildCallbackTodoSchedule(`${rawTimePhrase} at 9am`, timezone);
+        }
+        const requestedLabel = schedule.dueAt ? formatSlotLocal(String(schedule.dueAt), timezone) : null;
+        const intentLabel =
+          humanBookingParse.intent === "reschedule"
+            ? "Appointment reschedule requested."
+            : humanBookingParse.intent === "availability"
+              ? "Customer asked for appointment availability."
+              : "Appointment requested.";
+        const summary = requestedLabel
+          ? `${intentLabel} Requested time: ${requestedLabel}.`
+          : normalizedText
+            ? `${intentLabel} Requested: ${normalizedText}.`
+            : intentLabel;
+        const owner = conv.leadOwner
+          ? {
+              id: String(conv.leadOwner.id ?? "").trim() || undefined,
+              name: String(conv.leadOwner.name ?? "").trim() || undefined
+            }
+          : undefined;
+        const todo = addTodo(
+          conv,
+          "call",
+          summary,
+          event.providerMessageId,
+          owner,
+          schedule
+        );
+        setDialogState(conv, "schedule_request");
+        recordRouteOutcome("live", "human_mode_schedule_todo_created", {
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          intent: humanBookingParse.intent,
+          confidence: bookingConfidence,
+          dueAt: todo?.dueAt ?? null
+        });
+      }
+    }
+    saveConversation(conv);
+    await flushConversationStore();
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }

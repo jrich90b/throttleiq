@@ -46,6 +46,7 @@ import {
   parseInventoryEntitiesWithLLM,
   parseIntentWithLLM,
   parseResponseControlWithLLM,
+  parseBookingIntentWithLLM,
   parseJourneyIntentWithLLM,
   parseWalkInOutcomeWithLLM
 } from "../domain/llmDraft.js";
@@ -1520,6 +1521,103 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
 
     if (conv.mode === "human" || isReplyToSalespersonEmailThread(conv)) {
+      const schedulingParserEligible =
+        process.env.LLM_ENABLED === "1" &&
+        process.env.LLM_BOOKING_PARSER_ENABLED === "1" &&
+        !!process.env.OPENAI_API_KEY;
+      const bodyText = String(event.body ?? "");
+      const hasScheduleKeyword =
+        /\b(schedule|book|appointment|appt|reschedule|availability|available|openings?|stop by|stop in|come in|works?|what time|what times)\b/i.test(
+          bodyText
+        );
+      const hasDayToken =
+        /\b(today|tomorrow|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun|next week|this week|this weekend|weekend)\b/i.test(
+          bodyText
+        );
+      const hasTimeToken =
+        /\b(\d{1,2}(:\d{2})?\s*(am|pm)\b|morning|afternoon|evening|night|noon|midnight)\b/i.test(
+          bodyText
+        );
+      const schedulingParserHint =
+        hasScheduleKeyword ||
+        (((conv.scheduler?.lastSuggestedSlots?.length ?? 0) > 0 ||
+          String(conv.appointment?.status ?? "").toLowerCase() !== "none") &&
+          (hasDayToken || hasTimeToken));
+      if (schedulingParserEligible && schedulingParserHint) {
+        try {
+          const bookingParse = await parseBookingIntentWithLLM({
+            text: bodyText,
+            history: buildEffectiveHistory(conv, 8),
+            lastSuggestedSlots: conv.scheduler?.lastSuggestedSlots,
+            appointment: conv.appointment
+          });
+          const bookingConfidence =
+            typeof bookingParse?.confidence === "number" ? bookingParse.confidence : 0;
+          const bookingConfidenceMin = Number(process.env.LLM_BOOKING_CONFIDENCE_MIN ?? 0.7);
+          const bookingIntentAccepted =
+            !!bookingParse?.explicitRequest &&
+            bookingConfidence >= bookingConfidenceMin &&
+            (bookingParse.intent === "schedule" ||
+              bookingParse.intent === "reschedule" ||
+              bookingParse.intent === "availability");
+          if (bookingIntentAccepted) {
+            const cfg = await getSchedulerConfig();
+            const timezone = cfg.timezone || "America/New_York";
+            const normalizedText = String(
+              bookingParse?.normalizedText ??
+                [
+                  String(bookingParse?.requested?.day ?? "").trim(),
+                  String(bookingParse?.requested?.timeText ?? "").trim()
+                ]
+                  .filter(Boolean)
+                  .join(" ")
+            ).trim();
+            const parseSource = normalizedText || bodyText;
+            let requested = parseRequestedDayTime(parseSource, timezone);
+            const hasDayWithoutTime = hasDayToken && !hasTimeToken;
+            if (!requested && hasDayWithoutTime) {
+              requested = parseRequestedDayTime(`${parseSource} at 9am`, timezone);
+            }
+            const dueAtDate = requested ? localPartsToUtcDate(timezone, requested) : null;
+            const dueAtIso = dueAtDate ? dueAtDate.toISOString() : undefined;
+            const reminderAtIso = dueAtDate
+              ? new Date(dueAtDate.getTime() - 30 * 60 * 1000).toISOString()
+              : undefined;
+            const requestedLabel = dueAtIso ? formatSlotLocal(dueAtIso, timezone) : null;
+            const intentLabel =
+              bookingParse.intent === "reschedule"
+                ? "Appointment reschedule requested."
+                : bookingParse.intent === "availability"
+                  ? "Customer asked for appointment availability."
+                  : "Appointment requested.";
+            const summary = requestedLabel
+              ? `${intentLabel} Requested time: ${requestedLabel}.`
+              : normalizedText
+                ? `${intentLabel} Requested: ${normalizedText}.`
+                : intentLabel;
+            addTodo(
+              conv,
+              "call",
+              summary,
+              event.providerMessageId,
+              conv.leadOwner
+                ? {
+                    id: String(conv.leadOwner.id ?? "").trim() || undefined,
+                    name: String(conv.leadOwner.name ?? "").trim() || undefined
+                  }
+                : undefined,
+              dueAtIso
+                ? {
+                    dueAt: dueAtIso,
+                    reminderAt: reminderAtIso
+                  }
+                : undefined
+            );
+          }
+        } catch (err: any) {
+          console.warn("[sendgrid inbound] human scheduling parser failed:", err?.message ?? err);
+        }
+      }
       addTodo(
         conv,
         "note",
