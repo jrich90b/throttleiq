@@ -703,6 +703,33 @@ function inferDepartmentFromText(text: string): DepartmentRole | null {
   return null;
 }
 
+function hasExplicitDepartmentHandoffPhrase(text: string, role: DepartmentRole): boolean {
+  const t = String(text ?? "").trim().toLowerCase();
+  if (!t) return false;
+  if (role === "service") {
+    return (
+      /\b(service department|service team|service advisor|service writer|service request)\b/.test(t) ||
+      /\b(i('| wi)ll|we('| wi)ll|let me|i can|we can)\b.{0,24}\b(service)\b.{0,28}\b(reach out|call|text|follow up|be in touch)\b/.test(
+        t
+      )
+    );
+  }
+  if (role === "parts") {
+    return (
+      /\b(parts? department|parts? counter|parts? team)\b/.test(t) ||
+      /\b(i('| wi)ll|we('| wi)ll|let me|i can|we can)\b.{0,24}\b(parts?)\b.{0,28}\b(reach out|call|text|follow up|be in touch)\b/.test(
+        t
+      )
+    );
+  }
+  return (
+    /\b(apparel team|motorclothes|clothing department|apparel department)\b/.test(t) ||
+    /\b(i('| wi)ll|we('| wi)ll|let me|i can|we can)\b.{0,24}\b(apparel|gear|clothing|motorclothes)\b.{0,28}\b(reach out|call|text|follow up|be in touch)\b/.test(
+      t
+    )
+  );
+}
+
 function departmentFromReasonText(reasonText: string): DepartmentRole | null {
   const t = String(reasonText ?? "").toLowerCase();
   if (!t) return null;
@@ -14997,7 +15024,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!text) return;
     const lower = text.toLowerCase();
     const department = inferDepartmentFromText(text);
-    if (department) {
+    if (department && hasExplicitDepartmentHandoffPhrase(text, department)) {
       conv.classification = {
         ...(conv.classification ?? {}),
         bucket: department,
@@ -15086,12 +15113,15 @@ app.post("/conversations/:id/send", async (req, res) => {
         debugLabel: "manual"
       });
       if (reduced.departmentIntent) {
-        conv.classification = {
-          ...(conv.classification ?? {}),
-          bucket: reduced.departmentIntent,
-          cta: `${reduced.departmentIntent}_request`,
-          channel: opts?.channel === "email" ? "email" : "sms"
-        };
+        const explicit = !!parsed?.explicitRequest;
+        if (explicit && hasExplicitDepartmentHandoffPhrase(text, reduced.departmentIntent)) {
+          conv.classification = {
+            ...(conv.classification ?? {}),
+            bucket: reduced.departmentIntent,
+            cta: `${reduced.departmentIntent}_request`,
+            channel: opts?.channel === "email" ? "email" : "sms"
+          };
+        }
       }
       if (process.env.DEBUG_DECISION_TRACE === "1") {
         console.log("[decision-trace]", {
@@ -17409,14 +17439,33 @@ if (authToken && signature) {
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
+  const inboundSchedulingSignals = detectSchedulingSignals(event.body ?? "");
+  const sourceLowerForServiceGuard = String(conv.lead?.source ?? "").toLowerCase();
+  const ctaLowerForServiceGuard = String(conv.classification?.cta ?? "").toLowerCase();
+  const bucketLowerForServiceGuard = String(conv.classification?.bucket ?? "").toLowerCase();
+  const likelySalesOriginForServiceGuard =
+    /(hdfs|marketplace|room58|meta|traffic log pro|trade accelerator|kenect|dealer lead app)/.test(
+      sourceLowerForServiceGuard
+    ) ||
+    /(check_availability|inventory|hdfs_coa|hdfs_pq|schedule|quote|pricing|trade)/.test(
+      `${ctaLowerForServiceGuard} ${bucketLowerForServiceGuard}`
+    );
+  const stickyServiceOnlyContext =
+    inboundDepartmentIntent !== "service" &&
+    (conv.classification?.bucket === "service" ||
+      conv.classification?.cta === "service_request" ||
+      dialogState === "service_request" ||
+      dialogState === "service_handoff" ||
+      (conv.followUp?.mode === "manual_handoff" &&
+        /service/.test(String(conv.followUp?.reason ?? ""))));
+  const suppressStickyServiceRouting =
+    stickyServiceOnlyContext &&
+    likelySalesOriginForServiceGuard &&
+    inboundSchedulingSignals.explicit &&
+    !SERVICE_DEPARTMENT_RE.test(String(event.body ?? ""));
   const isServiceLead =
-    conv.classification?.bucket === "service" ||
-    conv.classification?.cta === "service_request" ||
     inboundDepartmentIntent === "service" ||
-    dialogState === "service_request" ||
-    dialogState === "service_handoff" ||
-    (conv.followUp?.mode === "manual_handoff" &&
-      /service/.test(String(conv.followUp?.reason ?? "")));
+    (!suppressStickyServiceRouting && stickyServiceOnlyContext);
   if (isServiceLead) {
     await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
     const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
