@@ -6302,7 +6302,7 @@ export default function Home() {
               />
               {isManager ? (
                 <select
-                  className="w-full md:w-36 border rounded px-3 py-2 text-sm bg-white"
+                  className="w-28 self-start border rounded px-3 py-2 text-sm bg-white md:w-28"
                   value={inboxOwnerFilter}
                   onChange={e => setInboxOwnerFilter(e.target.value)}
                   title="Filter inbox by owner"
@@ -9573,7 +9573,7 @@ export default function Home() {
           <div className="text-gray-500">Loading…</div>
         ) : selectedConv ? (
           <div>
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <div className="text-2xl font-semibold flex items-center gap-2">
                   <span>
@@ -9736,11 +9736,11 @@ export default function Home() {
                   })()}
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
                 {(authUser?.phone || authUser?.extension) ? (
                   <div className="flex items-center gap-2">
                     <button
-                      className={`px-2 py-1 border rounded text-sm cursor-pointer ${callBusy ? "opacity-60" : "hover:bg-gray-50"}`}
+                      className={`px-2 py-1 border rounded text-sm cursor-pointer shrink-0 ${callBusy ? "opacity-60" : "hover:bg-gray-50"}`}
                       onClick={() => {
                         if (authUser?.phone && authUser?.extension) {
                           setCallPickerOpen(true);
@@ -9763,7 +9763,7 @@ export default function Home() {
                 {(authUser?.role === "manager" || authUser?.permissions?.canEditAppointments) &&
                 !(selectedConv.classification?.bucket === "service" || selectedConv.classification?.cta === "service_request") ? (
                   <button
-                    className="px-2 py-1 border rounded text-sm"
+                    className="px-2 py-1 border rounded text-sm shrink-0"
                     onClick={openManualAppointment}
                     title="Set appointment"
                   >
@@ -9772,7 +9772,7 @@ export default function Home() {
                 ) : null}
                 {!(selectedConv.classification?.bucket === "service" || selectedConv.classification?.cta === "service_request") ? (
                   <button
-                    className="px-2 py-1 border rounded text-sm"
+                    className="px-2 py-1 border rounded text-sm shrink-0"
                     onClick={() => openCadenceResolve(selectedConv.id, "watch")}
                     title="Add vehicle watch"
                   >
@@ -9781,7 +9781,7 @@ export default function Home() {
                 ) : null}
                 {(authUser?.role === "manager" || authUser?.permissions?.canToggleHumanOverride) ? (
                   <button
-                    className={`px-2 py-1 border rounded text-sm cursor-pointer ${selectedConv.mode === "human" ? "font-semibold bg-black text-white" : "hover:bg-gray-50"}`}
+                    className={`px-2 py-1 border rounded text-sm cursor-pointer shrink-0 ${selectedConv.mode === "human" ? "font-semibold bg-black text-white" : "hover:bg-gray-50"}`}
                     onClick={() => setHumanMode(selectedConv.mode === "human" ? "suggest" : "human")}
                     title={selectedConv.mode === "human" ? "Disable human override" : "Human takeover"}
                   >
@@ -9790,11 +9790,12 @@ export default function Home() {
                 ) : null}
                 {(authUser?.role === "manager" || authUser?.permissions?.canAccessTodos) ? (
                   <button
-                    className={`px-2 py-1 border rounded text-sm ${agentContextOpen ? "bg-gray-100 font-medium" : "hover:bg-gray-50"}`}
+                    className={`px-2 py-1 border rounded text-sm shrink-0 ${agentContextOpen ? "bg-gray-100 font-medium" : "hover:bg-gray-50"}`}
                     onClick={() => setAgentContextOpen(prev => !prev)}
                     title="Open internal agent context"
                   >
-                    Context
+                    <span className="sm:hidden">Ctx</span>
+                    <span className="hidden sm:inline">Context</span>
                   </button>
                 ) : null}
                 {modeSaving ? <span className="text-xs text-gray-500">Saving…</span> : null}
