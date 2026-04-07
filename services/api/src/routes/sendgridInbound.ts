@@ -179,17 +179,27 @@ function buildCallbackTodoSchedule(
 ): { dueAt?: string; reminderAt?: string; reminderLeadMinutes?: number } {
   const source = String(callbackTimeHint ?? "").trim();
   if (!source) return {};
-  const requested = parseRequestedDayTime(source, timezone);
+  const hasDayToken = /\b(today|tomorrow|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun)\b/i.test(source);
+  const hasTimeToken =
+    /\b(\d{1,2}(:\d{2})?\s*(am|pm)\b|noon\b|midnight\b|\b(?:at|around|about|after|before|by)\s+\d{1,2}(?::\d{2})?\b)/i.test(
+      source
+    );
+  let requested = parseRequestedDayTime(source, timezone);
+  let defaultedToNineAm = false;
+  if (!requested && hasDayToken && !hasTimeToken) {
+    requested = parseRequestedDayTime(`${source} at 9am`, timezone);
+    defaultedToNineAm = !!requested;
+  }
   if (!requested) return {};
   const dueAtDate = localPartsToUtcDate(timezone, requested);
   const dueAtMs = dueAtDate.getTime();
   if (!Number.isFinite(dueAtMs)) return {};
   const reminderLeadMinutes = getCallbackReminderLeadMinutes();
-  const reminderAt = new Date(dueAtMs - reminderLeadMinutes * 60 * 1000);
+  const reminderAt = defaultedToNineAm ? new Date(dueAtMs) : new Date(dueAtMs - reminderLeadMinutes * 60 * 1000);
   return {
     dueAt: dueAtDate.toISOString(),
     reminderAt: reminderAt.toISOString(),
-    reminderLeadMinutes
+    reminderLeadMinutes: defaultedToNineAm ? 0 : reminderLeadMinutes
   };
 }
 
