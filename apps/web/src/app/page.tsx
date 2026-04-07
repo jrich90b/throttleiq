@@ -3017,8 +3017,38 @@ export default function Home() {
     return Array.from(merged.values());
   }, [usersList, salespeopleList]);
 
+  const managerLeadOwnerOptions = useMemo(() => {
+    const byName = new Map<string, string>();
+    const addName = (raw: string) => {
+      const name = String(raw ?? "").trim();
+      if (!name) return;
+      const key = name.toLowerCase();
+      if (!byName.has(key)) byName.set(key, name);
+    };
+    for (const c of conversations) {
+      addName(String(c.leadOwner?.name ?? ""));
+    }
+    for (const t of todos) {
+      addName(String(t.leadOwnerName ?? ""));
+    }
+    for (const u of usersList ?? []) {
+      const role = String(u?.role ?? "").toLowerCase();
+      if (role !== "salesperson" && role !== "manager") continue;
+      const fullName =
+        [u?.firstName, u?.lastName].filter(Boolean).join(" ").trim() ||
+        String(u?.name ?? "").trim();
+      addName(fullName);
+    }
+    return Array.from(byName.values()).sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: "base", numeric: true })
+    );
+  }, [conversations, todos, usersList]);
+
   const filteredTodos = useMemo(() => {
     const q = todoQuery.trim().toLowerCase();
+    const ownerNameFilter = todoLeadOwnerFilter.startsWith("owner:")
+      ? decodeURIComponent(todoLeadOwnerFilter.slice("owner:".length)).toLowerCase()
+      : "";
     return todos.filter(t => {
       const leadName = String(t.leadName ?? "").toLowerCase();
       const leadKey = String(t.leadKey ?? "").toLowerCase();
@@ -3036,6 +3066,8 @@ export default function Home() {
           }
         } else if (todoLeadOwnerFilter.startsWith("team:")) {
           if (todoTeam !== todoLeadOwnerFilter.slice(5)) return false;
+        } else if (ownerNameFilter) {
+          if (String(t.leadOwnerName ?? "").trim().toLowerCase() !== ownerNameFilter) return false;
         } else {
           return false;
         }
@@ -3570,6 +3602,9 @@ export default function Home() {
   const filteredConversations = useMemo(() => {
     const q = inboxQuery.trim().toLowerCase();
     const qDigits = q.replace(/\D/g, "");
+    const ownerNameFilter = inboxOwnerFilter.startsWith("owner:")
+      ? decodeURIComponent(inboxOwnerFilter.slice("owner:".length)).toLowerCase()
+      : "";
     return visibleConversations.filter(c => {
       if (isManager && inboxOwnerFilter !== "all") {
         const leadOwner = String(c.leadOwner?.name ?? c.leadOwner?.id ?? "").trim();
@@ -3587,6 +3622,8 @@ export default function Home() {
           if (!hasApparelTodo) return false;
         } else if (inboxOwnerFilter === "team:unassigned") {
           if (leadOwner || hasServiceTodo || hasPartsTodo || hasApparelTodo) return false;
+        } else if (ownerNameFilter) {
+          if (String(c.leadOwner?.name ?? "").trim().toLowerCase() !== ownerNameFilter) return false;
         } else {
           return false;
         }
@@ -6410,10 +6447,21 @@ export default function Home() {
                   title="Filter inbox by owner"
                 >
                   <option value="all">Owners</option>
+                  {managerLeadOwnerOptions.length ? (
+                    <optgroup label="Salespeople">
+                      {managerLeadOwnerOptions.map(name => (
+                        <option key={`inbox-owner-${name}`} value={`owner:${encodeURIComponent(name)}`}>
+                          {name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ) : null}
+                  <optgroup label="Departments">
                   <option value="team:sales">Sales (Lead Owner)</option>
                   <option value="team:service">Service (Department)</option>
                   <option value="team:parts">Parts (Department)</option>
                   <option value="team:apparel">Apparel (Department)</option>
+                  </optgroup>
                   <option value="team:unassigned">Unassigned</option>
                 </select>
               ) : null}
@@ -6797,10 +6845,21 @@ export default function Home() {
                     title="Filter by owner"
                   >
                     <option value="all">Owners</option>
+                    {managerLeadOwnerOptions.length ? (
+                      <optgroup label="Salespeople">
+                        {managerLeadOwnerOptions.map(name => (
+                          <option key={`todo-owner-${name}`} value={`owner:${encodeURIComponent(name)}`}>
+                            {name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ) : null}
+                    <optgroup label="Departments">
                     <option value="team:sales">Sales (Lead Owner)</option>
                     <option value="team:service">Service (Department)</option>
                     <option value="team:parts">Parts (Department)</option>
                     <option value="team:apparel">Apparel (Department)</option>
+                    </optgroup>
                     <option value="team:unassigned">Unassigned</option>
                   </select>
                 </>
