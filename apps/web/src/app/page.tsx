@@ -2920,10 +2920,17 @@ export default function Home() {
       const leadName = String(t.leadName ?? "").toLowerCase();
       const leadKey = String(t.leadKey ?? "").toLowerCase();
       const leadOwner = String(t.leadOwnerName ?? "").trim();
+      const departmentOwner = String(t.departmentOwnerName ?? "").trim();
       if (isManager && todoLeadOwnerFilter !== "all") {
-        if (todoLeadOwnerFilter === "__unassigned__") {
+        if (todoLeadOwnerFilter === "lead:__unassigned__") {
           if (leadOwner) return false;
-        } else if (leadOwner !== todoLeadOwnerFilter) {
+        } else if (todoLeadOwnerFilter === "department:__unassigned__") {
+          if (departmentOwner) return false;
+        } else if (todoLeadOwnerFilter.startsWith("lead:")) {
+          if (leadOwner !== todoLeadOwnerFilter.slice(5)) return false;
+        } else if (todoLeadOwnerFilter.startsWith("department:")) {
+          if (departmentOwner !== todoLeadOwnerFilter.slice(11)) return false;
+        } else {
           return false;
         }
       }
@@ -2937,6 +2944,17 @@ export default function Home() {
       new Set(
         todos
           .map(t => String(t.leadOwnerName ?? "").trim())
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b));
+    return names;
+  }, [todos]);
+
+  const todoDepartmentOwnerOptions = useMemo(() => {
+    const names = Array.from(
+      new Set(
+        todos
+          .map(t => String(t.departmentOwnerName ?? "").trim())
           .filter(Boolean)
       )
     ).sort((a, b) => a.localeCompare(b));
@@ -6617,20 +6635,32 @@ export default function Home() {
                 onChange={e => setTodoQuery(e.target.value)}
               />
               {isManager ? (
-                <select
-                  className="w-full md:w-64 border rounded px-3 py-2 text-sm bg-white"
-                  value={todoLeadOwnerFilter}
-                  onChange={e => setTodoLeadOwnerFilter(e.target.value)}
-                  title="Filter by lead owner"
-                >
-                  <option value="all">All lead owners</option>
-                  {todoLeadOwnerOptions.map(name => (
-                    <option key={name} value={name}>
-                      {name}
-                    </option>
-                  ))}
-                  <option value="__unassigned__">Unassigned lead owner</option>
-                </select>
+                <>
+                  <select
+                    className="w-full md:w-64 border rounded px-3 py-2 text-sm bg-white"
+                    value={todoLeadOwnerFilter}
+                    onChange={e => setTodoLeadOwnerFilter(e.target.value)}
+                    title="Filter by owner"
+                  >
+                    <option value="all">All owners</option>
+                    <optgroup label="Lead owners">
+                      {todoLeadOwnerOptions.map(name => (
+                        <option key={`lead:${name}`} value={`lead:${name}`}>
+                          {name}
+                        </option>
+                      ))}
+                      <option value="lead:__unassigned__">Unassigned</option>
+                    </optgroup>
+                    <optgroup label="Department owners">
+                      {todoDepartmentOwnerOptions.map(name => (
+                        <option key={`department:${name}`} value={`department:${name}`}>
+                          {name}
+                        </option>
+                      ))}
+                      <option value="department:__unassigned__">Unassigned</option>
+                    </optgroup>
+                  </select>
+                </>
               ) : null}
             </div>
             <div className="mt-3 border rounded-lg divide-y">
