@@ -2474,6 +2474,18 @@ export async function handleSendgridInbound(req: Request, res: Response) {
             "Service"
         }
       : { id: "", name: "" };
+    const shouldTransferLeadOwnerToService =
+      !!serviceOwner && !isStickyClosedJourney(conv);
+    if (shouldTransferLeadOwnerToService) {
+      conv.leadOwner = {
+        id: String(serviceOwner.id ?? "").trim(),
+        name:
+          String(serviceOwner.name ?? "").trim() ||
+          String(serviceOwner.firstName ?? "").trim() ||
+          "Service",
+        assignedAt: new Date().toISOString()
+      };
+    }
     const notifyOwner = serviceOwner ?? leadOwner;
     const ownerName =
       String(notifyOwner?.name ?? "").trim() ||
