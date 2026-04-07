@@ -4432,6 +4432,62 @@ function buildStaffOutcomeLink(token: string): string | null {
   return `${base}/public/appointment/outcome?token=${encodeURIComponent(token)}`;
 }
 
+function parseHttpUrl(raw: string | undefined | null): URL | null {
+  const text = String(raw ?? "").trim();
+  if (!text) return null;
+  try {
+    const url = new URL(text);
+    const proto = String(url.protocol ?? "").toLowerCase();
+    if (proto !== "http:" && proto !== "https:") return null;
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+function deriveStaffWebBaseUrl(profile?: any): string | null {
+  const explicit = parseHttpUrl(process.env.STAFF_WEB_BASE_URL);
+  if (explicit) {
+    explicit.hash = "";
+    explicit.search = "";
+    return explicit.toString().replace(/\/+$/, "");
+  }
+
+  const booking = parseHttpUrl(profile?.bookingUrl);
+  if (booking) {
+    return booking.origin;
+  }
+
+  const publicBase = parseHttpUrl(process.env.PUBLIC_BASE_URL);
+  if (publicBase) {
+    if (/^api\./i.test(publicBase.hostname)) {
+      publicBase.hostname = publicBase.hostname.replace(/^api\./i, "");
+    }
+    publicBase.hash = "";
+    publicBase.search = "";
+    if (/^\/api\/?$/i.test(publicBase.pathname)) {
+      publicBase.pathname = "/";
+    }
+    return publicBase.toString().replace(/\/+$/, "");
+  }
+  return null;
+}
+
+function buildCallbackCallLink(conv: any, profile?: any): string | null {
+  const base = deriveStaffWebBaseUrl(profile);
+  const convId = String(conv?.id ?? conv?.leadKey ?? "").trim();
+  if (!base || !convId) return null;
+  try {
+    const url = new URL(base);
+    url.searchParams.set("section", "inbox");
+    url.searchParams.set("convId", convId);
+    url.searchParams.set("action", "call");
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 function ensureDealerRideOutcomeToken(conv: any): string {
   conv.dealerRide = conv.dealerRide ?? {};
   conv.dealerRide.staffNotify = conv.dealerRide.staffNotify ?? {};
@@ -9921,10 +9977,12 @@ async function processDueFollowUps() {
       "customer";
     const customerPhone = normalizePhone(String(conv?.lead?.phone ?? conv?.leadKey ?? "").trim());
     const dueLabel = dueAtIso ? formatSlotLocal(dueAtIso, callbackReminderTz) : "soon";
+    const callbackLink = buildCallbackCallLink(conv, dealerProfile);
     const reminderText = [
       `Reminder: ${customerName} asked for a callback ${dueLabel}.`,
       customerPhone ? `Customer phone: ${customerPhone}` : null,
-      conv?.lead?.leadRef ? `Lead Ref: ${conv.lead.leadRef}` : null
+      conv?.lead?.leadRef ? `Lead Ref: ${conv.lead.leadRef}` : null,
+      callbackLink ? `Call: ${callbackLink}` : null
     ]
       .filter(Boolean)
       .join("\n");

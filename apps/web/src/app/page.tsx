@@ -1229,10 +1229,12 @@ export default function Home() {
   const [callBusy, setCallBusy] = useState(false);
   const [callMethod, setCallMethod] = useState<"cell" | "extension">("cell");
   const [callPickerOpen, setCallPickerOpen] = useState(false);
+  const [pendingDeepLinkCallId, setPendingDeepLinkCallId] = useState<string | null>(null);
   const groupCsvInputRef = useRef<HTMLInputElement | null>(null);
   const calendarColumnRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const calendarEventsRef = useRef<any[]>([]);
   const calendarGridRef = useRef<HTMLDivElement | null>(null);
+  const deepLinkCallInFlightRef = useRef(false);
   const dragGuardRef = useRef<{ blockUntil: number }>({ blockUntil: 0 });
   const dragStateRef = useRef<{
     mode: "move" | "resize" | null;
@@ -2321,8 +2323,106 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const params = url.searchParams;
+    const sectionParam = String(params.get("section") ?? "").trim().toLowerCase();
+    const convHint = String(params.get("convId") ?? params.get("leadKey") ?? "").trim();
+    const actionParam = String(params.get("action") ?? "").trim().toLowerCase();
+    const hasRouteParams =
+      params.has("section") || params.has("convId") || params.has("leadKey") || params.has("action");
+    const allowedSections = new Set([
+      "inbox",
+      "todos",
+      "questions",
+      "suppressions",
+      "contacts",
+      "watches",
+      "inventory",
+      "settings",
+      "calendar"
+    ]);
+    if (allowedSections.has(sectionParam)) {
+      const next = sectionParam as
+        | "inbox"
+        | "todos"
+        | "questions"
+        | "suppressions"
+        | "contacts"
+        | "watches"
+        | "inventory"
+        | "settings"
+        | "calendar";
+      setSection(next);
+      if (next === "calendar" || next === "settings" || next === "inventory" || next === "suppressions") {
+        setMobilePanel("detail");
+      } else {
+        setMobilePanel("list");
+      }
+    }
+    if (convHint) {
+      setSection("inbox");
+      setSelectedId(convHint);
+      setMobilePanel("detail");
+    }
+    if (actionParam === "call" && convHint) {
+      setSection("inbox");
+      setPendingDeepLinkCallId(convHint);
+    }
+    if (hasRouteParams) {
+      params.delete("section");
+      params.delete("convId");
+      params.delete("leadKey");
+      params.delete("action");
+      const next = `${url.pathname}${params.toString() ? `?${params.toString()}` : ""}${url.hash}`;
+      window.history.replaceState({}, "", next);
+    }
+  }, []);
+
+  useEffect(() => {
     if (selectedId) void loadConversation(selectedId);
   }, [selectedId]);
+
+  useEffect(() => {
+    if (!pendingDeepLinkCallId) return;
+    if (!authUser) return;
+    if (deepLinkCallInFlightRef.current) return;
+    deepLinkCallInFlightRef.current = true;
+    void (async () => {
+      try {
+        let targetId = pendingDeepLinkCallId;
+        const listMatch = conversations.find(c => c.id === targetId || c.leadKey === targetId);
+        if (listMatch?.id) {
+          targetId = listMatch.id;
+        }
+        setSection("inbox");
+        setSelectedId(targetId);
+        setMobilePanel("detail");
+        let conv = selectedConv?.id === targetId ? selectedConv : null;
+        if (!conv) {
+          conv = await fetchConversationDetail(targetId);
+        }
+        if (!conv && listMatch?.leadKey && listMatch.leadKey !== targetId) {
+          conv = await fetchConversationDetail(listMatch.leadKey);
+        }
+        if (!conv) return;
+        setSelectedConv(conv);
+        if (!authUser.phone && !authUser.extension) return;
+        if (authUser.phone && authUser.extension) {
+          setCallPickerOpen(true);
+          return;
+        }
+        if (authUser.extension && !authUser.phone) {
+          await startCall("extension", conv);
+          return;
+        }
+        await startCall("cell", conv);
+      } finally {
+        setPendingDeepLinkCallId(null);
+        deepLinkCallInFlightRef.current = false;
+      }
+    })();
+  }, [pendingDeepLinkCallId, authUser, conversations, selectedConv]);
 
   useEffect(() => {
     loadRef.current = load;
