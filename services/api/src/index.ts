@@ -204,6 +204,7 @@ import {
   listSuppressions,
   removeSuppression
 } from "./domain/suppressionStore.js";
+import { buildKpiOverview } from "./domain/kpiAnalytics.js";
 import { tlpLogCustomerContact, tlpMarkDealershipVisitDelivered } from "./connectors/crm/tlpPlaywright.js";
 import { listContacts, upsertContact, updateContact, deleteContact } from "./domain/contactsStore.js";
 import {
@@ -12924,6 +12925,44 @@ app.get("/conversations", (req, res) => {
   const user = (req as any).user ?? null;
   const conversations = listConversations().filter(conv => canUserAccessConversation(user, conv));
   res.json({ ok: true, systemMode: getSystemMode(), conversations });
+});
+
+app.get("/analytics/kpi", async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (String(user?.role ?? "").toLowerCase() !== "manager") {
+    return res.status(403).json({ ok: false, error: "manager access required" });
+  }
+  const source = String(req.query?.source ?? "all").trim();
+  const ownerId = String(req.query?.ownerId ?? "all").trim();
+  const leadType = String(req.query?.leadType ?? "all")
+    .trim()
+    .toLowerCase();
+  const from = String(req.query?.from ?? "").trim();
+  const to = String(req.query?.to ?? "").trim();
+
+  const conversations = getAllConversations();
+  const schedulerCfg = await getSchedulerConfig();
+  const overview = buildKpiOverview(
+    conversations,
+    {
+      source: source || "all",
+      ownerId: ownerId || "all",
+      leadType: (leadType || "all") as "all" | "new" | "used" | "walk_in",
+      from: from || undefined,
+      to: to || undefined
+    },
+    {
+      businessHours: {
+        timezone: String(schedulerCfg.timezone || "America/New_York"),
+        businessHours: schedulerCfg.businessHours ?? {}
+      }
+    }
+  );
+
+  res.json({
+    ok: true,
+    overview
+  });
 });
 
 app.post("/conversations/compose", (req, res) => {
