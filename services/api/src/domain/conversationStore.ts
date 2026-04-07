@@ -171,6 +171,17 @@ export type TodoTask = {
   sourceMessageId?: string;
   status: "open" | "done";
   doneAt?: string;
+  dueAt?: string;
+  reminderAt?: string;
+  reminderLeadMinutes?: number;
+  reminderSentAt?: string;
+};
+
+export type TodoScheduleOptions = {
+  dueAt?: string;
+  reminderAt?: string;
+  reminderLeadMinutes?: number;
+  reminderSentAt?: string;
 };
 
 export type InternalQuestion = {
@@ -2582,7 +2593,8 @@ export function addTodo(
   reason: TodoTask["reason"],
   summary: string,
   sourceMessageId?: string,
-  owner?: { id?: string | null; name?: string | null }
+  owner?: { id?: string | null; name?: string | null },
+  schedule?: TodoScheduleOptions
 ): TodoTask | null {
   const soldContext =
     conv?.closedReason === "sold" ||
@@ -2626,6 +2638,24 @@ export function addTodo(
     if (sourceMessageId) existing.sourceMessageId = sourceMessageId;
     if (ownerId) existing.ownerId = ownerId;
     if (ownerName) existing.ownerName = ownerName;
+    if (schedule?.dueAt) {
+      if (existing.dueAt && existing.dueAt !== schedule.dueAt) {
+        existing.reminderSentAt = undefined;
+      }
+      existing.dueAt = schedule.dueAt;
+    }
+    if (schedule?.reminderAt) {
+      existing.reminderAt = schedule.reminderAt;
+    }
+    if (
+      Number.isFinite(schedule?.reminderLeadMinutes) &&
+      Number(schedule?.reminderLeadMinutes) > 0
+    ) {
+      existing.reminderLeadMinutes = Math.round(Number(schedule?.reminderLeadMinutes));
+    }
+    if (schedule?.reminderSentAt) {
+      existing.reminderSentAt = schedule.reminderSentAt;
+    }
     conv.updatedAt = nowIso();
     scheduleSave();
     return existing;
@@ -2640,7 +2670,14 @@ export function addTodo(
     summary,
     sourceMessageId,
     createdAt: nowIso(),
-    status: "open"
+    status: "open",
+    dueAt: schedule?.dueAt,
+    reminderAt: schedule?.reminderAt,
+    reminderLeadMinutes:
+      Number.isFinite(schedule?.reminderLeadMinutes) && Number(schedule?.reminderLeadMinutes) > 0
+        ? Math.round(Number(schedule?.reminderLeadMinutes))
+        : undefined,
+    reminderSentAt: schedule?.reminderSentAt
   };
   todos.push(task);
   conv.updatedAt = nowIso();
@@ -2703,6 +2740,18 @@ export function markTodoDone(convId: string, todoId: string): TodoTask | null {
   if (!task) return null;
   task.status = "done";
   task.doneAt = nowIso();
+  scheduleSave();
+  return task;
+}
+
+export function markTodoReminderSent(
+  convId: string,
+  todoId: string,
+  sentAtIso?: string
+): TodoTask | null {
+  const task = todos.find(t => t.id === todoId && t.convId === convId);
+  if (!task) return null;
+  task.reminderSentAt = sentAtIso || nowIso();
   scheduleSave();
   return task;
 }

@@ -29,6 +29,7 @@ import {
   markPricingEscalated,
   closeConversation,
   setContactPreference,
+  parseRequestedDayTime,
   normalizeLeadKey,
   getConversation,
   saveConversation,
@@ -164,6 +165,32 @@ function pickUserPhone(user: any): string {
     if (normalized) return normalized;
   }
   return "";
+}
+
+function getCallbackReminderLeadMinutes(): number {
+  const raw = Number(process.env.CALLBACK_REMINDER_LEAD_MINUTES ?? 30);
+  if (!Number.isFinite(raw)) return 30;
+  return Math.max(5, Math.min(24 * 60, Math.round(raw)));
+}
+
+function buildCallbackTodoSchedule(
+  callbackTimeHint: string,
+  timezone: string
+): { dueAt?: string; reminderAt?: string; reminderLeadMinutes?: number } {
+  const source = String(callbackTimeHint ?? "").trim();
+  if (!source) return {};
+  const requested = parseRequestedDayTime(source, timezone);
+  if (!requested) return {};
+  const dueAtDate = localPartsToUtcDate(timezone, requested);
+  const dueAtMs = dueAtDate.getTime();
+  if (!Number.isFinite(dueAtMs)) return {};
+  const reminderLeadMinutes = getCallbackReminderLeadMinutes();
+  const reminderAt = new Date(dueAtMs - reminderLeadMinutes * 60 * 1000);
+  return {
+    dueAt: dueAtDate.toISOString(),
+    reminderAt: reminderAt.toISOString(),
+    reminderLeadMinutes
+  };
 }
 
 function pickUserForRole(
@@ -2439,6 +2466,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       const callbackSummary = callbackTimeHint
         ? `Call requested${callbackTimeHint ? `: ${callbackTimeHint}` : ""}.`
         : "Call requested.";
+      const callbackCfg = await getSchedulerConfig();
+      const callbackTz = callbackCfg.timezone || "America/New_York";
+      const callbackSchedule = buildCallbackTodoSchedule(callbackTimeHint, callbackTz);
       const callbackTodoOwner = serviceOwner
         ? serviceTodoOwner
         : conv.leadOwner?.id
@@ -2452,7 +2482,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         "call",
         callbackSummary,
         event.providerMessageId,
-        callbackTodoOwner
+        callbackTodoOwner,
+        callbackSchedule
       );
       const customerName =
         [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() ||
