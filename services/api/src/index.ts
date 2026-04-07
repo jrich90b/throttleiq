@@ -19082,11 +19082,7 @@ if (authToken && signature) {
   if (routingParserDecision.accepted && routingParserDecision.fallbackAction === "no_response") {
     if (!hasActionableTurnContext) {
       if (logisticsProgressUpdate) {
-        const inboundLower = String(event.body ?? "").toLowerCase();
-        const progressReply =
-          /\b(dmv|notary)\b/.test(inboundLower)
-            ? "Perfect — thanks for the update. Hope the notary/DMV visit goes smoothly this afternoon. Keep me posted."
-            : "Perfect — thanks for the update. Keep me posted and I’ll stay on top of everything on our end.";
+        const progressReply = "Thanks for the update. I’m here if you need anything.";
         logRouteOutcome("routing_parser_no_response_progress_update_ack", {
           turnPrimaryIntent,
           parserReason: routingParserDecision.reason
