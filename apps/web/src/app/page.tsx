@@ -886,6 +886,7 @@ type ContactListItem = {
 };
 
 type KpiLeadType = "all" | "new" | "used" | "walk_in";
+type KpiLeadScope = "online_only" | "include_walkins" | "walkin_only";
 
 type KpiOverview = {
   applied: {
@@ -894,6 +895,7 @@ type KpiOverview = {
     source: string;
     ownerId: string;
     leadType: KpiLeadType;
+    leadScope: KpiLeadScope;
   };
   totals: {
     leadVolume: number;
@@ -1006,6 +1008,7 @@ export default function Home() {
   const [kpiError, setKpiError] = useState<string | null>(null);
   const [kpiSourceFilter, setKpiSourceFilter] = useState("all");
   const [kpiLeadTypeFilter, setKpiLeadTypeFilter] = useState<KpiLeadType>("all");
+  const [kpiLeadScopeFilter, setKpiLeadScopeFilter] = useState<KpiLeadScope>("online_only");
   const [kpiOwnerFilter, setKpiOwnerFilter] = useState("all");
   const [kpiCallOwnerFilter, setKpiCallOwnerFilter] = useState("all");
   const [kpiFrom, setKpiFrom] = useState<string>("");
@@ -1400,6 +1403,7 @@ export default function Home() {
       params.set("source", kpiSourceFilter || "all");
       params.set("ownerId", kpiOwnerFilter || "all");
       params.set("leadType", kpiLeadTypeFilter || "all");
+      params.set("leadScope", kpiLeadScopeFilter || "online_only");
       if (kpiFrom) params.set("from", `${kpiFrom}T00:00:00.000Z`);
       if (kpiTo) params.set("to", `${kpiTo}T23:59:59.999Z`);
       const resp = await fetch(`/api/analytics/kpi?${params.toString()}`, { cache: "no-store" });
@@ -3149,7 +3153,7 @@ export default function Home() {
   useEffect(() => {
     if (!isManager || section !== "kpi") return;
     void loadKpiOverview();
-  }, [section, isManager, kpiSourceFilter, kpiLeadTypeFilter, kpiOwnerFilter, kpiFrom, kpiTo]);
+  }, [section, isManager, kpiSourceFilter, kpiLeadTypeFilter, kpiLeadScopeFilter, kpiOwnerFilter, kpiFrom, kpiTo]);
 
   function openConversation(id: string) {
     setSelectedId(id);
@@ -6839,13 +6843,23 @@ export default function Home() {
             </div>
             <select
               className="w-full border rounded px-3 py-2 text-sm"
+              value={kpiLeadScopeFilter}
+              onChange={e =>
+                setKpiLeadScopeFilter((e.target.value as KpiLeadScope) || "online_only")
+              }
+            >
+              <option value="online_only">Online leads only</option>
+              <option value="include_walkins">Include walk-ins</option>
+              <option value="walkin_only">Walk-ins only</option>
+            </select>
+            <select
+              className="w-full border rounded px-3 py-2 text-sm"
               value={kpiLeadTypeFilter}
               onChange={e => setKpiLeadTypeFilter((e.target.value as KpiLeadType) || "all")}
             >
               <option value="all">All lead types</option>
               <option value="new">New</option>
               <option value="used">Used</option>
-              <option value="walk_in">Walk-in</option>
             </select>
             <select
               className="w-full border rounded px-3 py-2 text-sm"
@@ -7871,6 +7885,14 @@ export default function Home() {
                 <h2 className="text-xl font-semibold">Manager KPI Overview</h2>
                 <p className="text-xs text-gray-500 mt-1">
                   Tracks response, call speed, appointments, close outcomes, and source performance.
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  Scope:{" "}
+                  {kpiLeadScopeFilter === "online_only"
+                    ? "Online leads only"
+                    : kpiLeadScopeFilter === "walkin_only"
+                    ? "Walk-ins only"
+                    : "Online + walk-ins"}
                 </p>
               </div>
               <button

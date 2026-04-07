@@ -13042,6 +13042,9 @@ app.get("/analytics/kpi", async (req, res) => {
   const leadType = String(req.query?.leadType ?? "all")
     .trim()
     .toLowerCase();
+  const leadScope = String(req.query?.leadScope ?? "include_walkins")
+    .trim()
+    .toLowerCase();
   const from = String(req.query?.from ?? "").trim();
   const to = String(req.query?.to ?? "").trim();
 
@@ -13053,6 +13056,10 @@ app.get("/analytics/kpi", async (req, res) => {
       source: source || "all",
       ownerId: ownerId || "all",
       leadType: (leadType || "all") as "all" | "new" | "used" | "walk_in",
+      leadScope: (leadScope || "include_walkins") as
+        | "online_only"
+        | "include_walkins"
+        | "walkin_only",
       from: from || undefined,
       to: to || undefined
     },

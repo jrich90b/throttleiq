@@ -3,11 +3,13 @@ import { dayKey } from "./schedulerConfig.js";
 import { localPartsToUtcDate } from "./schedulerEngine.js";
 
 type LeadTypeFilter = "all" | "new" | "used" | "walk_in";
+type LeadScopeFilter = "online_only" | "include_walkins" | "walkin_only";
 
 type BusinessHoursConfig = {
   timezone: string;
   businessHours: Record<string, { open: string | null; close: string | null }>;
 };
+const FALLBACK_TIMEZONE = "America/New_York";
 
 export type KpiFilters = {
   from?: string;
@@ -15,6 +17,7 @@ export type KpiFilters = {
   source?: string;
   ownerId?: string;
   leadType?: LeadTypeFilter;
+  leadScope?: LeadScopeFilter;
 };
 
 export type KpiTotals = {
@@ -87,6 +90,7 @@ export type KpiOverview = {
     source: string;
     ownerId: string;
     leadType: LeadTypeFilter;
+    leadScope: LeadScopeFilter;
   };
   totals: KpiTotals;
   bySource: KpiSourceRow[];
@@ -132,6 +136,16 @@ function toMs(raw: string | undefined | null): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
+function normalizeTimeZone(raw: string | null | undefined): string {
+  const tz = String(raw ?? "").trim() || FALLBACK_TIMEZONE;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+    return tz;
+  } catch {
+    return FALLBACK_TIMEZONE;
+  }
+}
+
 function parseHm(raw: string | null | undefined): { h: number; m: number } | null {
   const txt = String(raw ?? "").trim();
   const m = /^(\d{1,2}):(\d{2})$/.exec(txt);
@@ -144,8 +158,9 @@ function parseHm(raw: string | null | undefined): { h: number; m: number } | nul
 }
 
 function getZonedParts(date: Date, timeZone: string) {
+  const safeTz = normalizeTimeZone(timeZone);
   const fmt = new Intl.DateTimeFormat("en-US", {
-    timeZone,
+    timeZone: safeTz,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -192,21 +207,22 @@ function localDayOffsetMs(ms: number, cfg: BusinessHoursConfig, days: number): n
 
 function getBusinessWindowMs(dayMs: number, cfg: BusinessHoursConfig): { openMs: number; closeMs: number } | null {
   const dayDate = new Date(dayMs);
-  const key = dayKey(dayDate, cfg.timezone);
+  const safeTz = normalizeTimeZone(cfg.timezone);
+  const key = dayKey(dayDate, safeTz);
   const hours = cfg.businessHours?.[key];
   if (!hours?.open || !hours?.close) return null;
   const openHm = parseHm(hours.open);
   const closeHm = parseHm(hours.close);
   if (!openHm || !closeHm) return null;
   const local = getZonedParts(dayDate, cfg.timezone);
-  const openMs = localPartsToUtcDate(cfg.timezone, {
+  const openMs = localPartsToUtcDate(safeTz, {
     year: local.year,
     month: local.month,
     day: local.day,
     hour24: openHm.h,
     minute: openHm.m
   }).getTime();
-  const closeMs = localPartsToUtcDate(cfg.timezone, {
+  const closeMs = localPartsToUtcDate(safeTz, {
     year: local.year,
     month: local.month,
     day: local.day,
@@ -231,19 +247,23 @@ function nextBusinessOpenMs(fromMs: number, cfg: BusinessHoursConfig): number | 
 
 function elapsedBusinessMinutes(startMs: number, endMs: number, cfg: BusinessHoursConfig | null | undefined): number {
   if (!(endMs > startMs)) return 0;
-  if (!cfg || !cfg.timezone || !cfg.businessHours || !Object.keys(cfg.businessHours).length) {
+  if (!cfg || !cfg.businessHours || !Object.keys(cfg.businessHours).length) {
     return (endMs - startMs) / (1000 * 60);
   }
+  const safeCfg: BusinessHoursConfig = {
+    timezone: normalizeTimeZone(cfg.timezone),
+    businessHours: cfg.businessHours
+  };
 
-  let cursor = nextBusinessOpenMs(startMs, cfg);
+  let cursor = nextBusinessOpenMs(startMs, safeCfg);
   if (cursor == null || cursor >= endMs) return 0;
   let totalMs = 0;
 
   for (let guard = 0; guard < 5000 && cursor < endMs; guard++) {
-    const dayMs = startOfLocalDayMs(cursor, cfg);
-    const window = getBusinessWindowMs(dayMs, cfg);
+    const dayMs = startOfLocalDayMs(cursor, safeCfg);
+    const window = getBusinessWindowMs(dayMs, safeCfg);
     if (!window || cursor >= window.closeMs) {
-      const next = nextBusinessOpenMs(cursor + 60_000, cfg);
+      const next = nextBusinessOpenMs(cursor + 60_000, safeCfg);
       if (next == null || next <= cursor) break;
       cursor = next;
       continue;
@@ -253,7 +273,7 @@ function elapsedBusinessMinutes(startMs: number, endMs: number, cfg: BusinessHou
     const segmentEnd = Math.min(endMs, window.closeMs);
     if (segmentEnd > cursor) totalMs += segmentEnd - cursor;
     if (segmentEnd >= endMs) break;
-    const next = nextBusinessOpenMs(window.closeMs + 60_000, cfg);
+    const next = nextBusinessOpenMs(window.closeMs + 60_000, safeCfg);
     if (next == null || next <= segmentEnd) break;
     cursor = next;
   }
@@ -381,6 +401,10 @@ function leadMatchesFilters(
   }
 
   const leadType = (String(filters.leadType ?? "all").trim().toLowerCase() || "all") as LeadTypeFilter;
+  const leadScope = (String(filters.leadScope ?? "include_walkins").trim().toLowerCase() ||
+    "include_walkins") as LeadScopeFilter;
+  if (leadScope === "online_only" && isWalkIn(conv)) return false;
+  if (leadScope === "walkin_only" && !isWalkIn(conv)) return false;
   if (leadType === "walk_in" && !isWalkIn(conv)) return false;
   if (leadType === "new" && normalizeCondition(conv) !== "new") return false;
   if (leadType === "used" && normalizeCondition(conv) !== "used") return false;
@@ -579,7 +603,10 @@ export function buildKpiOverview(
       to: new Date(toBoundMs).toISOString(),
       source: String(filters.source ?? "all").trim() || "all",
       ownerId: String(filters.ownerId ?? "all").trim() || "all",
-      leadType: (String(filters.leadType ?? "all").trim().toLowerCase() || "all") as LeadTypeFilter
+      leadType: (String(filters.leadType ?? "all").trim().toLowerCase() || "all") as LeadTypeFilter,
+      leadScope:
+        (String(filters.leadScope ?? "include_walkins").trim().toLowerCase() ||
+          "include_walkins") as LeadScopeFilter
     },
     totals,
     bySource,
