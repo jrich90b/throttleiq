@@ -686,6 +686,14 @@ function requirePermission(key: "canEditAppointments" | "canToggleHumanOverride"
 }
 
 type DepartmentRole = "service" | "parts" | "apparel";
+type ManualOutboundSoftTag = {
+  tag: "department_mention";
+  department: DepartmentRole;
+  source: "manual_outbound";
+  channel: "sms" | "email" | "unknown";
+  at: string;
+  textSnippet?: string;
+};
 
 const SERVICE_DEPARTMENT_RE =
   /\b(service|inspection|oil change|3[- ]hole|maintenance|repair|service department|service writer|warranty work|state inspection|headlight|tail ?light|turn signal|led|light bulb|bulb|install|replace|swap|upgrade)\b/i;
@@ -701,6 +709,65 @@ function inferDepartmentFromText(text: string): DepartmentRole | null {
   if (PARTS_DEPARTMENT_RE.test(t)) return "parts";
   if (APPAREL_DEPARTMENT_RE.test(t)) return "apparel";
   return null;
+}
+
+function inferDepartmentMentionsFromText(text: string): DepartmentRole[] {
+  const t = String(text ?? "").trim();
+  if (!t) return [];
+  const found: DepartmentRole[] = [];
+  if (SERVICE_DEPARTMENT_RE.test(t)) found.push("service");
+  if (PARTS_DEPARTMENT_RE.test(t)) found.push("parts");
+  if (APPAREL_DEPARTMENT_RE.test(t)) found.push("apparel");
+  return found;
+}
+
+function appendManualOutboundDepartmentSoftTags(
+  conv: any,
+  text: string,
+  opts?: { channel?: "sms" | "email" | null }
+): { added: number; departments: DepartmentRole[] } {
+  if (!conv || typeof conv !== "object") return { added: 0, departments: [] };
+  const departments = inferDepartmentMentionsFromText(text);
+  if (!departments.length) return { added: 0, departments: [] };
+
+  const now = new Date();
+  const channel: "sms" | "email" | "unknown" =
+    opts?.channel === "sms" || opts?.channel === "email" ? opts.channel : "unknown";
+  const dedupeWindowMs = Number(process.env.MANUAL_SOFT_TAG_DEDUPE_MS ?? 12 * 60 * 60 * 1000);
+  const existing = Array.isArray((conv as any).manualOutboundSoftTags)
+    ? ((conv as any).manualOutboundSoftTags as ManualOutboundSoftTag[])
+    : [];
+  const next = [...existing];
+  let added = 0;
+
+  for (const department of departments) {
+    const hasRecent = existing.some(tag => {
+      if (!tag || tag.tag !== "department_mention") return false;
+      if (String(tag.department ?? "") !== department) return false;
+      if (String(tag.source ?? "") !== "manual_outbound") return false;
+      if (channel !== "unknown" && String(tag.channel ?? "") !== channel) return false;
+      const atMs = new Date(String(tag.at ?? "")).getTime();
+      if (!Number.isFinite(atMs)) return false;
+      return now.getTime() - atMs <= dedupeWindowMs;
+    });
+    if (hasRecent) continue;
+    next.push({
+      tag: "department_mention",
+      department,
+      source: "manual_outbound",
+      channel,
+      at: now.toISOString(),
+      textSnippet: String(text ?? "").trim().slice(0, 220)
+    });
+    added += 1;
+  }
+
+  if (added > 0) {
+    (conv as any).manualOutboundSoftTags = next.slice(-100);
+    (conv as any).manualOutboundSoftTagLastAt = now.toISOString();
+  }
+
+  return { added, departments };
 }
 
 function hasExplicitDepartmentHandoffPhrase(text: string, role: DepartmentRole): boolean {
@@ -15208,10 +15275,10 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
   };
   const applyManualOutboundStateHints = (outboundBody: string, opts?: { channel?: "sms" | "email" | null }) => {
-    void outboundBody;
-    void opts;
     // Hard lock: manual salesperson text must not mutate workflow state.
     // State changes should come from parser-driven inbound turns or explicit UI actions.
+    // We only collect soft department mention tags for analytics/context.
+    appendManualOutboundDepartmentSoftTags(conv, outboundBody, opts);
     return;
   };
   const reconcileManualOutboundState = async (
