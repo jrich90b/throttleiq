@@ -15606,6 +15606,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenParserCallbackIntent = regenRoutingIntentOverride === "callback";
   const regenParserAvailabilityIntent = regenRoutingIntentOverride === "availability";
   if (regenRoutingParserDecision.accepted && regenRoutingParserDecision.fallbackAction === "no_response") {
+    if (isLogisticsProgressUpdateText(event.body ?? "")) {
+      const progressReply = "Thanks for the update. I’m here if you need anything.";
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(progressReply);
+      }
+      return respondWithSmsRegeneratedDraft(progressReply);
+    }
     return respondRegenerateSkipped("routing_parser_no_response");
   }
   if (regenRoutingParserDecision.accepted && regenRoutingParserDecision.fallbackAction === "clarify") {
