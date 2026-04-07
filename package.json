@@ -28,6 +28,7 @@
     "multi_turn:eval": "npx tsx scripts/multi_turn_synthetic_eval.ts",
     "route_state:eval": "npx tsx scripts/route_state_reducer_eval.ts",
     "finance_language_fuzz:eval": "npx tsx scripts/finance_language_fuzz_eval.ts",
+    "walkin_outcome:eval": "LLM_ENABLED=1 LLM_WALKIN_OUTCOME_PARSER_ENABLED=1 npx tsx scripts/walkin_outcome_eval.ts",
     "conversation:audit": "npx tsx scripts/conversation_audit.ts",
     "export:changed_messages": "npx tsx scripts/export_changed_messages.ts",
     "edit_feedback:mine": "npx tsx scripts/edit_feedback_mine.ts",

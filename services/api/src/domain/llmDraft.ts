@@ -2659,7 +2659,28 @@ comment: "clear hold and resume follow up"
 output: {"state":"hold_cleared","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","confidence":0.94}`,
     `EXAMPLE F
 comment: "coming in tomorrow to finalize paperwork"
-output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"tomorrow","confidence":0.93}`
+output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"tomorrow","confidence":0.93}`,
+    `EXAMPLE G
+comment: "Sean is looking for a 2026 Dark Billiard Gray Street Glide Limited, we need to order one for him. would like to get a commitment and put an order in for him."
+output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","confidence":0.9}`,
+    `EXAMPLE H
+comment: "going to credit union this week, waiting on approval"
+output: {"state":"outside_financing_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"this week","confidence":0.93}`,
+    `EXAMPLE I
+comment: "saving up for down payment, should be ready in a few weeks"
+output: {"state":"down_payment_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"few weeks","confidence":0.92}`,
+    `EXAMPLE J
+comment: "need to sell my bike first before moving forward"
+output: {"state":"trade_equity_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","confidence":0.93}`,
+    `EXAMPLE K
+comment: "need to talk to my wife first"
+output: {"state":"household_approval_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","confidence":0.93}`,
+    `EXAMPLE L
+comment: "picked out accessories and wants to go over final numbers this week"
+output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"this week","confidence":0.9}`,
+    `EXAMPLE M
+comment: "looking for a 2026 Street Glide Limited in Dark Billiard Gray, please watch and let me know when one comes in"
+output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","confidence":0.78}`
   ];
   const prompt = [
     "You parse walk-in salesperson comments from dealership ADF leads.",

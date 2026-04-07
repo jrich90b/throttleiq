@@ -1,0 +1,177 @@
+[
+  {
+    "id": "deposit_left_step6",
+    "text": "left $1,000 deposit on motorcycle. coming in 4/6/26 at 4:00pm to finalize deal. (step 6)",
+    "expected": {
+      "state": "deposit_left",
+      "explicit_state": true,
+      "test_ride_requested": false,
+      "weather_sensitive": false,
+      "follow_up_window_text_any": [
+        "",
+        "4/6/26",
+        "4:00pm"
+      ]
+    }
+  },
+  {
+    "id": "decision_pending_next_week",
+    "text": "thinking it over, will let you know next week",
+    "expected": {
+      "state": "decision_pending",
+      "explicit_state": true,
+      "test_ride_requested": false,
+      "weather_sensitive": false,
+      "follow_up_window_text_any_contains": [
+        "next week"
+      ]
+    }
+  },
+  {
+    "id": "weather_test_ride_window",
+    "text": "reach out to schedule a test ride for the end of next week when the weather looks better",
+    "expected": {
+      "state_any": [
+        "timing_defer_window",
+        "decision_pending"
+      ],
+      "explicit_state": true,
+      "test_ride_requested": true,
+      "weather_sensitive": true,
+      "follow_up_window_text_any_contains": [
+        "next week",
+        "end of next week"
+      ]
+    }
+  },
+  {
+    "id": "hold_requested_explicit",
+    "text": "mark this lead on hold until next Friday",
+    "expected": {
+      "state": "hold_requested",
+      "explicit_state": true,
+      "test_ride_requested": false,
+      "weather_sensitive": false,
+      "follow_up_window_text_any_contains": [
+        "next friday"
+      ]
+    }
+  },
+  {
+    "id": "hold_cleared_explicit",
+    "text": "clear hold and resume follow up",
+    "expected": {
+      "state": "hold_cleared",
+      "explicit_state": true,
+      "test_ride_requested": false,
+      "weather_sensitive": false,
+      "follow_up_window_text_any": [
+        ""
+      ]
+    }
+  },
+  {
+    "id": "sean_order_commitment_context",
+    "text": "Sean is looking for a 2026 Dark Billiard Gray Street Glide Limited, we need to order one for him. would like to get a commitment and put an order in for him.",
+    "expected": {
+      "state": "deal_finalizing",
+      "explicit_state": true,
+      "test_ride_requested": false,
+      "weather_sensitive": false,
+      "follow_up_window_text_any": [
+        ""
+      ]
+    }
+  },
+  {
+    "id": "outside_financing_credit_union",
+    "text": "going to credit union this week. i will let you know once i get approval",
+    "expected": {
+      "state": "outside_financing_pending",
+      "explicit_state": true,
+      "test_ride_requested": false,
+      "weather_sensitive": false,
+      "follow_up_window_text_any_contains": [
+        "this week"
+      ]
+    }
+  },
+  {
+    "id": "down_payment_pending_saving",
+    "text": "i'm saving up for down payment and should be ready in a few weeks",
+    "expected": {
+      "state": "down_payment_pending",
+      "explicit_state": true,
+      "test_ride_requested": false,
+      "weather_sensitive": false,
+      "follow_up_window_text_any_contains": [
+        "few weeks"
+      ]
+    }
+  },
+  {
+    "id": "trade_equity_pending_sell_first",
+    "text": "i need to sell my bike first then i can move forward",
+    "expected": {
+      "state": "trade_equity_pending",
+      "explicit_state": true,
+      "test_ride_requested": false,
+      "weather_sensitive": false,
+      "follow_up_window_text_any": [
+        ""
+      ]
+    }
+  },
+  {
+    "id": "household_approval_pending",
+    "text": "i need to talk to my wife first and then i will get back to you",
+    "expected": {
+      "state": "household_approval_pending",
+      "explicit_state": true,
+      "test_ride_requested": false,
+      "weather_sensitive": false,
+      "follow_up_window_text_any": [
+        ""
+      ]
+    }
+  },
+  {
+    "id": "docs_or_insurance_pending",
+    "text": "waiting on insurance quote and dmv paperwork, then i can finalize",
+    "expected": {
+      "state": "docs_or_insurance_pending",
+      "explicit_state": true,
+      "test_ride_requested": false,
+      "weather_sensitive": false,
+      "follow_up_window_text_any": [
+        ""
+      ]
+    }
+  },
+  {
+    "id": "parts_accessories_finalize_numbers",
+    "text": "picked out a bunch of parts and accessories. want to go over final numbers and put it together this week",
+    "expected": {
+      "state": "deal_finalizing",
+      "explicit_state": true,
+      "test_ride_requested": false,
+      "weather_sensitive": false,
+      "follow_up_window_text_any_contains": [
+        "this week"
+      ]
+    }
+  },
+  {
+    "id": "inventory_watch_style_comment",
+    "text": "looking for a 2026 street glide limited in dark billiard gray. please watch and let me know when one comes in",
+    "expected": {
+      "state": "none",
+      "explicit_state": false,
+      "test_ride_requested": false,
+      "weather_sensitive": false,
+      "follow_up_window_text_any": [
+        ""
+      ]
+    }
+  }
+]

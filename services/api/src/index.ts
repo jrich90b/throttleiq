@@ -10157,6 +10157,14 @@ async function processDueFollowUps() {
     const contextTag = isEngagedCadence
       ? await resolveCadenceContextTag(conv, cadence)
       : null;
+    const shouldPreferContextualStep0NoSlots =
+      cadence.stepIndex === 0 &&
+      !isPostSale &&
+      cadence.kind !== "long_term" &&
+      !isTradeNoInterest &&
+      !isSellMyBikeLead &&
+      (hasAgentContextForCadence || !!walkInComment || !!conv.engagement?.at) &&
+      contextTag !== "scheduling";
     const engagedNoSlotMap =
       (contextTag && ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS[contextTag]) ||
       ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS.general;
@@ -10305,7 +10313,7 @@ async function processDueFollowUps() {
       }
     } else if (cadence.stepIndex === 0) {
       const day2 = await buildDay2Options(cfg);
-      if (day2) {
+      if (day2 && !shouldPreferContextualStep0NoSlots) {
         const variant = isEngagedCadence
           ? pickVariantNoRepeat(
               cadence,
