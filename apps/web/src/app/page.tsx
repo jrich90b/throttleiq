@@ -885,6 +885,76 @@ type ContactListItem = {
   lastImportAt?: string;
 };
 
+type KpiLeadType = "all" | "new" | "used" | "walk_in";
+
+type KpiOverview = {
+  applied: {
+    from: string;
+    to: string;
+    source: string;
+    ownerId: string;
+    leadType: KpiLeadType;
+  };
+  totals: {
+    leadVolume: number;
+    respondedCount: number;
+    responseRatePct: number;
+    avgFirstResponseMinutes: number | null;
+    medianFirstResponseMinutes: number | null;
+    callCount: number;
+    callRatePct: number;
+    avgTimeToCallMinutes: number | null;
+    medianTimeToCallMinutes: number | null;
+    appointmentCount: number;
+    appointmentRatePct: number;
+    soldCount: number;
+    soldCloseRatePct: number;
+    closedCount: number;
+    closeRatePct: number;
+    avgTimeToCloseDays: number | null;
+    medianTimeToCloseDays: number | null;
+    closeRate30dPct: number;
+    closeRate60dPct: number;
+    closeRate90dPct: number;
+    closeRate120dPct: number;
+  };
+  bySource: Array<{
+    source: string;
+    leadCount: number;
+    responseRatePct: number;
+    appointmentRatePct: number;
+    callRatePct: number;
+    soldCloseRatePct: number;
+  }>;
+  topMotorcycles: Array<{
+    motorcycle: string;
+    count: number;
+    newCount: number;
+    usedCount: number;
+  }>;
+  trend: Array<{
+    day: string;
+    leadCount: number;
+    respondedCount: number;
+    responseRatePct: number;
+    appointmentCount: number;
+    callCount: number;
+    soldCount: number;
+  }>;
+  callDetails: Array<{
+    convId: string;
+    leadKey: string;
+    leadName: string;
+    leadPhone: string;
+    source: string;
+    ownerId: string;
+    ownerName: string;
+    firstInboundAt: string | null;
+    firstCallAt: string | null;
+    timeToCallMinutes: number | null;
+  }>;
+};
+
 export default function Home() {
   const [mode, setMode] = useState<SystemMode>("suggest");
   const [conversations, setConversations] = useState<ConversationListItem[]>([]);
@@ -905,6 +975,7 @@ export default function Home() {
     | "contacts"
     | "watches"
     | "inventory"
+    | "kpi"
     | "settings"
     | "calendar"
   >("inbox");
@@ -929,6 +1000,15 @@ export default function Home() {
   const [inboxOwnerFilter, setInboxOwnerFilter] = useState("all");
   const [todoQuery, setTodoQuery] = useState("");
   const [todoLeadOwnerFilter, setTodoLeadOwnerFilter] = useState("all");
+  const [kpiOverview, setKpiOverview] = useState<KpiOverview | null>(null);
+  const [kpiLoading, setKpiLoading] = useState(false);
+  const [kpiError, setKpiError] = useState<string | null>(null);
+  const [kpiSourceFilter, setKpiSourceFilter] = useState("all");
+  const [kpiLeadTypeFilter, setKpiLeadTypeFilter] = useState<KpiLeadType>("all");
+  const [kpiOwnerFilter, setKpiOwnerFilter] = useState("all");
+  const [kpiCallOwnerFilter, setKpiCallOwnerFilter] = useState("all");
+  const [kpiFrom, setKpiFrom] = useState<string>("");
+  const [kpiTo, setKpiTo] = useState<string>("");
   const cadenceResolveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [watchEditOpen, setWatchEditOpen] = useState(false);
   const [watchEditConvId, setWatchEditConvId] = useState<string | null>(null);
@@ -1252,6 +1332,87 @@ export default function Home() {
     end: "13:00",
     allDay: false
   });
+
+  const kpiOwnerOptions = useMemo(
+    () =>
+      (usersList ?? [])
+        .filter((u: any) => {
+          const role = String(u?.role ?? "").toLowerCase();
+          return role === "manager" || role === "salesperson";
+        })
+        .map((u: any) => ({
+          id: String(u?.id ?? "").trim(),
+          name:
+            [u?.firstName, u?.lastName].filter(Boolean).join(" ").trim() ||
+            String(u?.name ?? "").trim() ||
+            String(u?.email ?? "").trim() ||
+            String(u?.id ?? "").trim()
+        }))
+        .filter((u: any) => u.id)
+        .sort((a: any, b: any) => a.name.localeCompare(b.name)),
+    [usersList]
+  );
+
+  const kpiCallOwnerOptions = useMemo(() => {
+    const byId = new Map<string, string>();
+    (kpiOverview?.callDetails ?? []).forEach(row => {
+      const id = String(row.ownerId ?? "").trim();
+      if (!id) return;
+      const name = String(row.ownerName ?? "").trim() || id;
+      if (!byId.has(id)) byId.set(id, name);
+    });
+    return Array.from(byId.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [kpiOverview?.callDetails]);
+
+  const kpiVisibleCallDetails = useMemo(() => {
+    const ownerFilter = String(kpiCallOwnerFilter ?? "all").trim();
+    const rows = kpiOverview?.callDetails ?? [];
+    if (!ownerFilter || ownerFilter === "all") return rows;
+    return rows.filter(row => String(row.ownerId ?? "").trim() === ownerFilter);
+  }, [kpiOverview?.callDetails, kpiCallOwnerFilter]);
+
+  function dateInputOffset(daysAgo: number): string {
+    const d = new Date();
+    d.setDate(d.getDate() - daysAgo);
+    return d.toISOString().slice(0, 10);
+  }
+
+  useEffect(() => {
+    if (!kpiFrom) setKpiFrom(dateInputOffset(30));
+    if (!kpiTo) setKpiTo(dateInputOffset(0));
+  }, [kpiFrom, kpiTo]);
+
+  useEffect(() => {
+    if (!kpiCallOwnerOptions.some(o => o.id === kpiCallOwnerFilter)) {
+      if (kpiCallOwnerFilter !== "all") setKpiCallOwnerFilter("all");
+    }
+  }, [kpiCallOwnerFilter, kpiCallOwnerOptions]);
+
+  async function loadKpiOverview() {
+    if (!isManager) return;
+    setKpiLoading(true);
+    setKpiError(null);
+    try {
+      const params = new URLSearchParams();
+      params.set("source", kpiSourceFilter || "all");
+      params.set("ownerId", kpiOwnerFilter || "all");
+      params.set("leadType", kpiLeadTypeFilter || "all");
+      if (kpiFrom) params.set("from", `${kpiFrom}T00:00:00.000Z`);
+      if (kpiTo) params.set("to", `${kpiTo}T23:59:59.999Z`);
+      const resp = await fetch(`/api/analytics/kpi?${params.toString()}`, { cache: "no-store" });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.ok || !data?.overview) {
+        throw new Error(data?.error ?? "Failed to load KPI overview");
+      }
+      setKpiOverview(data.overview as KpiOverview);
+    } catch (err: any) {
+      setKpiError(err?.message ?? "Failed to load KPI overview");
+    } finally {
+      setKpiLoading(false);
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -2923,6 +3084,8 @@ export default function Home() {
             ? "Inventory"
             : section === "watches"
               ? "Vehicle Watches"
+              : section === "kpi"
+                ? "KPI Overview"
               : section === "calendar"
                 ? "Calendar"
                 : section === "settings"
@@ -2941,6 +3104,8 @@ export default function Home() {
             ? `${inventoryItems.length} bikes`
             : section === "watches"
               ? `${visibleWatchItems.length} active`
+              : section === "kpi"
+                ? "Manager analytics"
               : section === "calendar"
                 ? "Google Calendar view"
                 : section === "settings"
@@ -2952,7 +3117,13 @@ export default function Home() {
   }, [selectedId]);
 
   useEffect(() => {
-    if (section === "calendar" || section === "settings" || section === "inventory" || section === "suppressions") {
+    if (
+      section === "calendar" ||
+      section === "settings" ||
+      section === "inventory" ||
+      section === "suppressions" ||
+      section === "kpi"
+    ) {
       setMobilePanel("detail");
       return;
     }
@@ -2966,6 +3137,18 @@ export default function Home() {
       setMobilePanel("list");
     }
   }, [isDepartmentUser, section]);
+
+  useEffect(() => {
+    if (section === "kpi" && !isManager) {
+      setSection("inbox");
+      setMobilePanel("list");
+    }
+  }, [section, isManager]);
+
+  useEffect(() => {
+    if (!isManager || section !== "kpi") return;
+    void loadKpiOverview();
+  }, [section, isManager, kpiSourceFilter, kpiLeadTypeFilter, kpiOwnerFilter, kpiFrom, kpiTo]);
 
   function openConversation(id: string) {
     setSelectedId(id);
@@ -2981,13 +3164,20 @@ export default function Home() {
       | "contacts"
       | "watches"
       | "inventory"
+      | "kpi"
       | "settings"
       | "calendar"
   ) {
     const target = isDepartmentUser && next !== "inbox" && next !== "todos" ? "inbox" : next;
     setSection(target);
     setMobileNavOpen(false);
-    if (target === "calendar" || target === "settings" || target === "inventory" || target === "suppressions") {
+    if (
+      target === "calendar" ||
+      target === "settings" ||
+      target === "inventory" ||
+      target === "suppressions" ||
+      target === "kpi"
+    ) {
       setMobilePanel("detail");
     } else {
       setMobilePanel("list");
@@ -6291,6 +6481,15 @@ export default function Home() {
           ) : null}
         </button>
         ) : null}
+        {!isDepartmentUser && authUser?.role === "manager" ? (
+          <button
+            className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "kpi" ? "bg-white/10" : "hover:bg-white/5"}`}
+            title="KPI Overview"
+            onClick={() => goToSection("kpi")}
+          >
+            📈
+          </button>
+        ) : null}
         {!isDepartmentUser ? (
           <button
             className={`relative w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "questions" ? "bg-white/10" : "hover:bg-white/5"}`}
@@ -6567,6 +6766,111 @@ export default function Home() {
                 })}
               </div>
             )}
+          </div>
+        ) : section === "kpi" ? (
+          <div className="mt-4 space-y-3">
+            <div className="text-xs text-gray-600">Date range</div>
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                type="date"
+                className="w-full border rounded px-2 py-2 text-sm"
+                value={kpiFrom}
+                onChange={e => setKpiFrom(e.target.value)}
+              />
+              <input
+                type="date"
+                className="w-full border rounded px-2 py-2 text-sm"
+                value={kpiTo}
+                onChange={e => setKpiTo(e.target.value)}
+              />
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                className="px-2 py-1.5 border rounded text-xs hover:bg-[var(--surface-2)]"
+                onClick={() => {
+                  setKpiFrom(dateInputOffset(30));
+                  setKpiTo(dateInputOffset(0));
+                }}
+              >
+                30d
+              </button>
+              <button
+                className="px-2 py-1.5 border rounded text-xs hover:bg-[var(--surface-2)]"
+                onClick={() => {
+                  setKpiFrom(dateInputOffset(60));
+                  setKpiTo(dateInputOffset(0));
+                }}
+              >
+                60d
+              </button>
+              <button
+                className="px-2 py-1.5 border rounded text-xs hover:bg-[var(--surface-2)]"
+                onClick={() => {
+                  setKpiFrom(dateInputOffset(90));
+                  setKpiTo(dateInputOffset(0));
+                }}
+              >
+                90d
+              </button>
+            </div>
+            <select
+              className="w-full border rounded px-3 py-2 text-sm"
+              value={kpiLeadTypeFilter}
+              onChange={e => setKpiLeadTypeFilter((e.target.value as KpiLeadType) || "all")}
+            >
+              <option value="all">All lead types</option>
+              <option value="new">New</option>
+              <option value="used">Used</option>
+              <option value="walk_in">Walk-in</option>
+            </select>
+            <select
+              className="w-full border rounded px-3 py-2 text-sm"
+              value={kpiSourceFilter}
+              onChange={e => setKpiSourceFilter(e.target.value)}
+            >
+              <option value="all">All sources</option>
+              {kpiOverview?.bySource?.map(row => (
+                <option key={`kpi-source-${row.source}`} value={row.source}>
+                  {row.source}
+                </option>
+              ))}
+            </select>
+            <select
+              className="w-full border rounded px-3 py-2 text-sm"
+              value={kpiOwnerFilter}
+              onChange={e => setKpiOwnerFilter(e.target.value)}
+            >
+              <option value="all">All salespeople</option>
+              {kpiOwnerOptions.map(owner => (
+                <option key={`kpi-owner-${owner.id}`} value={owner.id}>
+                  {owner.name}
+                </option>
+              ))}
+            </select>
+            <button
+              className="w-full px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)]"
+              onClick={() => {
+                void loadKpiOverview();
+              }}
+            >
+              Refresh KPI
+            </button>
+            <div className="border rounded p-2 bg-[var(--surface-2)]">
+              <div className="text-xs text-gray-600 mb-1">Call details filter</div>
+              <select
+                className="w-full border rounded px-2 py-2 text-sm"
+                value={kpiCallOwnerFilter}
+                onChange={e => setKpiCallOwnerFilter(e.target.value)}
+              >
+                <option value="all">All salespeople</option>
+                {kpiCallOwnerOptions.map(owner => (
+                  <option key={`kpi-call-owner-${owner.id}`} value={owner.id}>
+                    {owner.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {kpiError ? <div className="text-xs text-red-600">{kpiError}</div> : null}
           </div>
         ) : section === "inbox" ? (
           <>
@@ -7521,7 +7825,278 @@ export default function Home() {
           section === "calendar" ? "p-2 overflow-hidden" : "p-6 overflow-y-auto"
         } ${isConversationSection && mobilePanel === "list" ? "hidden md:block" : ""}`}
       >
-        {section === "calendar" ? (
+        {section === "kpi" ? (
+          <div className="space-y-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-semibold">Manager KPI Overview</h2>
+                <p className="text-xs text-gray-500 mt-1">
+                  Tracks response, call speed, appointments, close outcomes, and source performance.
+                </p>
+              </div>
+              <button
+                className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)]"
+                onClick={() => void loadKpiOverview()}
+              >
+                Refresh
+              </button>
+            </div>
+
+            {kpiLoading ? (
+              <div className="text-sm text-gray-500">Loading KPI overview...</div>
+            ) : !kpiOverview ? (
+              <div className="text-sm text-gray-500">No KPI data available for the selected filters.</div>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                  <div className="border rounded-lg p-3 bg-white">
+                    <div className="text-xs text-gray-500">Lead Volume</div>
+                    <div className="text-2xl font-semibold mt-1">{kpiOverview.totals.leadVolume}</div>
+                  </div>
+                  <div className="border rounded-lg p-3 bg-white">
+                    <div className="text-xs text-gray-500">% Responded</div>
+                    <div className="text-2xl font-semibold mt-1">{kpiOverview.totals.responseRatePct.toFixed(2)}%</div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      {kpiOverview.totals.respondedCount} responded
+                    </div>
+                  </div>
+                  <div className="border rounded-lg p-3 bg-white">
+                    <div className="text-xs text-gray-500">Avg First Response</div>
+                    <div className="text-2xl font-semibold mt-1">
+                      {kpiOverview.totals.avgFirstResponseMinutes != null
+                        ? `${kpiOverview.totals.avgFirstResponseMinutes}m`
+                        : "N/A"}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      Median:{" "}
+                      {kpiOverview.totals.medianFirstResponseMinutes != null
+                        ? `${kpiOverview.totals.medianFirstResponseMinutes}m`
+                        : "N/A"}
+                    </div>
+                  </div>
+                  <div className="border rounded-lg p-3 bg-white">
+                    <div className="text-xs text-gray-500">Appointment Rate</div>
+                    <div className="text-2xl font-semibold mt-1">
+                      {kpiOverview.totals.appointmentRatePct.toFixed(2)}%
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      {kpiOverview.totals.appointmentCount} appointments
+                    </div>
+                  </div>
+                  <div className="border rounded-lg p-3 bg-white">
+                    <div className="text-xs text-gray-500">Call Rate</div>
+                    <div className="text-2xl font-semibold mt-1">{kpiOverview.totals.callRatePct.toFixed(2)}%</div>
+                    <div className="text-xs text-gray-500 mt-1">{kpiOverview.totals.callCount} called</div>
+                  </div>
+                  <div className="border rounded-lg p-3 bg-white">
+                    <div className="text-xs text-gray-500">Time To Call</div>
+                    <div className="text-2xl font-semibold mt-1">
+                      {kpiOverview.totals.avgTimeToCallMinutes != null
+                        ? `${kpiOverview.totals.avgTimeToCallMinutes}m`
+                        : "N/A"}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      Median:{" "}
+                      {kpiOverview.totals.medianTimeToCallMinutes != null
+                        ? `${kpiOverview.totals.medianTimeToCallMinutes}m`
+                        : "N/A"}
+                    </div>
+                  </div>
+                  <div className="border rounded-lg p-3 bg-white">
+                    <div className="text-xs text-gray-500">Close Rate</div>
+                    <div className="text-2xl font-semibold mt-1">{kpiOverview.totals.closeRatePct.toFixed(2)}%</div>
+                    <div className="text-xs text-gray-500 mt-1">{kpiOverview.totals.closedCount} closed</div>
+                  </div>
+                  <div className="border rounded-lg p-3 bg-white">
+                    <div className="text-xs text-gray-500">Sold Close Rate</div>
+                    <div className="text-2xl font-semibold mt-1">
+                      {kpiOverview.totals.soldCloseRatePct.toFixed(2)}%
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">{kpiOverview.totals.soldCount} sold</div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="border rounded-lg p-3 bg-white">
+                    <div className="text-xs text-gray-500">30d Close</div>
+                    <div className="text-lg font-semibold mt-1">{kpiOverview.totals.closeRate30dPct.toFixed(2)}%</div>
+                  </div>
+                  <div className="border rounded-lg p-3 bg-white">
+                    <div className="text-xs text-gray-500">60d Close</div>
+                    <div className="text-lg font-semibold mt-1">{kpiOverview.totals.closeRate60dPct.toFixed(2)}%</div>
+                  </div>
+                  <div className="border rounded-lg p-3 bg-white">
+                    <div className="text-xs text-gray-500">90d Close</div>
+                    <div className="text-lg font-semibold mt-1">{kpiOverview.totals.closeRate90dPct.toFixed(2)}%</div>
+                  </div>
+                  <div className="border rounded-lg p-3 bg-white">
+                    <div className="text-xs text-gray-500">120d Close</div>
+                    <div className="text-lg font-semibold mt-1">
+                      {kpiOverview.totals.closeRate120dPct.toFixed(2)}%
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+                  <div className="border rounded-lg bg-white overflow-hidden">
+                    <div className="px-4 py-3 border-b text-sm font-semibold">Lead Performance By Source</div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="text-left px-3 py-2">Source</th>
+                            <th className="text-right px-3 py-2">Leads</th>
+                            <th className="text-right px-3 py-2">Response %</th>
+                            <th className="text-right px-3 py-2">Call %</th>
+                            <th className="text-right px-3 py-2">Appt %</th>
+                            <th className="text-right px-3 py-2">Sold %</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {kpiOverview.bySource.map(row => (
+                            <tr key={`kpi-source-row-${row.source}`} className="border-t">
+                              <td className="px-3 py-2">{row.source}</td>
+                              <td className="px-3 py-2 text-right">{row.leadCount}</td>
+                              <td className="px-3 py-2 text-right">{row.responseRatePct.toFixed(2)}%</td>
+                              <td className="px-3 py-2 text-right">{row.callRatePct.toFixed(2)}%</td>
+                              <td className="px-3 py-2 text-right">{row.appointmentRatePct.toFixed(2)}%</td>
+                              <td className="px-3 py-2 text-right">{row.soldCloseRatePct.toFixed(2)}%</td>
+                            </tr>
+                          ))}
+                          {kpiOverview.bySource.length === 0 ? (
+                            <tr>
+                              <td className="px-3 py-3 text-gray-500" colSpan={6}>
+                                No source rows for selected filters.
+                              </td>
+                            </tr>
+                          ) : null}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div className="border rounded-lg bg-white overflow-hidden">
+                    <div className="px-4 py-3 border-b text-sm font-semibold">Top Incoming Motorcycles</div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="text-left px-3 py-2">Motorcycle</th>
+                            <th className="text-right px-3 py-2">Count</th>
+                            <th className="text-right px-3 py-2">New</th>
+                            <th className="text-right px-3 py-2">Used</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {kpiOverview.topMotorcycles.map(row => (
+                            <tr key={`kpi-bike-${row.motorcycle}`} className="border-t">
+                              <td className="px-3 py-2">{row.motorcycle}</td>
+                              <td className="px-3 py-2 text-right">{row.count}</td>
+                              <td className="px-3 py-2 text-right">{row.newCount}</td>
+                              <td className="px-3 py-2 text-right">{row.usedCount}</td>
+                            </tr>
+                          ))}
+                          {kpiOverview.topMotorcycles.length === 0 ? (
+                            <tr>
+                              <td className="px-3 py-3 text-gray-500" colSpan={4}>
+                                No motorcycle volume for selected filters.
+                              </td>
+                            </tr>
+                          ) : null}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border rounded-lg bg-white overflow-hidden">
+                  <div className="px-4 py-3 border-b text-sm font-semibold">Daily Trend</div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="text-left px-3 py-2">Day</th>
+                          <th className="text-right px-3 py-2">Leads</th>
+                          <th className="text-right px-3 py-2">% Responded</th>
+                          <th className="text-right px-3 py-2">Calls</th>
+                          <th className="text-right px-3 py-2">Appointments</th>
+                          <th className="text-right px-3 py-2">Sold</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {kpiOverview.trend.map(row => (
+                          <tr key={`kpi-trend-${row.day}`} className="border-t">
+                            <td className="px-3 py-2">{row.day}</td>
+                            <td className="px-3 py-2 text-right">{row.leadCount}</td>
+                            <td className="px-3 py-2 text-right">{row.responseRatePct.toFixed(2)}%</td>
+                            <td className="px-3 py-2 text-right">{row.callCount}</td>
+                            <td className="px-3 py-2 text-right">{row.appointmentCount}</td>
+                            <td className="px-3 py-2 text-right">{row.soldCount}</td>
+                          </tr>
+                        ))}
+                        {kpiOverview.trend.length === 0 ? (
+                          <tr>
+                            <td className="px-3 py-3 text-gray-500" colSpan={6}>
+                              No trend points for selected filters.
+                            </td>
+                          </tr>
+                        ) : null}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="border rounded-lg bg-white overflow-hidden">
+                  <div className="px-4 py-3 border-b text-sm font-semibold">
+                    Call Details (filterable by salesperson)
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="text-left px-3 py-2">Lead</th>
+                          <th className="text-left px-3 py-2">Source</th>
+                          <th className="text-left px-3 py-2">Salesperson</th>
+                          <th className="text-left px-3 py-2">First Inbound</th>
+                          <th className="text-left px-3 py-2">First Call</th>
+                          <th className="text-right px-3 py-2">Time To Call</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {kpiVisibleCallDetails.map(row => (
+                          <tr key={`kpi-call-detail-${row.convId}-${row.firstCallAt ?? "none"}`} className="border-t">
+                            <td className="px-3 py-2">
+                              <div className="font-medium">{row.leadName || row.leadKey}</div>
+                              <div className="text-xs text-gray-500">{row.leadPhone || row.leadKey}</div>
+                            </td>
+                            <td className="px-3 py-2">{row.source}</td>
+                            <td className="px-3 py-2">{row.ownerName || "Unassigned"}</td>
+                            <td className="px-3 py-2">
+                              {row.firstInboundAt ? new Date(row.firstInboundAt).toLocaleString() : "N/A"}
+                            </td>
+                            <td className="px-3 py-2">
+                              {row.firstCallAt ? new Date(row.firstCallAt).toLocaleString() : "N/A"}
+                            </td>
+                            <td className="px-3 py-2 text-right">
+                              {row.timeToCallMinutes != null ? `${row.timeToCallMinutes}m` : "N/A"}
+                            </td>
+                          </tr>
+                        ))}
+                        {kpiVisibleCallDetails.length === 0 ? (
+                          <tr>
+                            <td className="px-3 py-3 text-gray-500" colSpan={6}>
+                              No call detail rows for the selected filters.
+                            </td>
+                          </tr>
+                        ) : null}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        ) : section === "calendar" ? (
           <div className="flex flex-col h-full">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 md:gap-4">
               <div className="flex items-center gap-2">
