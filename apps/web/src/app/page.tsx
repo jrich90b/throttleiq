@@ -925,6 +925,7 @@ export default function Home() {
   const [watchSalespersonFilter, setWatchSalespersonFilter] = useState("all");
   const [inboxQuery, setInboxQuery] = useState("");
   const [todoQuery, setTodoQuery] = useState("");
+  const [todoLeadOwnerFilter, setTodoLeadOwnerFilter] = useState("all");
   const cadenceResolveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [watchEditOpen, setWatchEditOpen] = useState(false);
   const [watchEditConvId, setWatchEditConvId] = useState<string | null>(null);
@@ -2915,13 +2916,32 @@ export default function Home() {
 
   const filteredTodos = useMemo(() => {
     const q = todoQuery.trim().toLowerCase();
-    if (!q) return todos;
     return todos.filter(t => {
       const leadName = String(t.leadName ?? "").toLowerCase();
       const leadKey = String(t.leadKey ?? "").toLowerCase();
+      const leadOwner = String(t.leadOwnerName ?? "").trim();
+      if (isManager && todoLeadOwnerFilter !== "all") {
+        if (todoLeadOwnerFilter === "__unassigned__") {
+          if (leadOwner) return false;
+        } else if (leadOwner !== todoLeadOwnerFilter) {
+          return false;
+        }
+      }
+      if (!q) return true;
       return leadName.includes(q) || leadKey.includes(q);
     });
-  }, [todos, todoQuery]);
+  }, [todos, todoQuery, isManager, todoLeadOwnerFilter]);
+
+  const todoLeadOwnerOptions = useMemo(() => {
+    const names = Array.from(
+      new Set(
+        todos
+          .map(t => String(t.leadOwnerName ?? "").trim())
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b));
+    return names;
+  }, [todos]);
 
   useEffect(() => {
     if (blockForm.salespersonId) return;
@@ -6589,13 +6609,29 @@ export default function Home() {
         {section === "todos" &&
         (authUser?.role === "manager" || authUser?.role === "salesperson" || isDepartmentUser || authUser?.permissions?.canAccessTodos) ? (
           <>
-            <div className="mt-3">
+            <div className="mt-3 flex flex-col gap-2 md:flex-row">
               <input
                 className="w-full border rounded px-3 py-2 text-sm"
                 placeholder="Search To-Dos by customer name..."
                 value={todoQuery}
                 onChange={e => setTodoQuery(e.target.value)}
               />
+              {isManager ? (
+                <select
+                  className="w-full md:w-64 border rounded px-3 py-2 text-sm bg-white"
+                  value={todoLeadOwnerFilter}
+                  onChange={e => setTodoLeadOwnerFilter(e.target.value)}
+                  title="Filter by lead owner"
+                >
+                  <option value="all">All lead owners</option>
+                  {todoLeadOwnerOptions.map(name => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                  <option value="__unassigned__">Unassigned lead owner</option>
+                </select>
+              ) : null}
             </div>
             <div className="mt-3 border rounded-lg divide-y">
             {filteredTodos.map(t => {
