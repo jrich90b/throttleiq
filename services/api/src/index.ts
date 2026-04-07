@@ -2669,6 +2669,21 @@ const FOLLOW_UP_VARIANTS_NO_SLOTS: Record<number, string[]> = {
   ]
 };
 
+const FOLLOW_UP_VARIANTS_NO_MODEL_NO_SLOTS: Record<number, string[]> = {
+  0: [
+    "Hey {name}, quick check-in. Want me to send a couple models that fit what you’re after?{extraLine}",
+    "Hey {name}, still looking around? I can send 2–3 options that fit your range.{extraLine}"
+  ],
+  1: [
+    "Hey {name}, if it helps, I can send a quick walkaround on a couple good options.",
+    "{name}, want me to text over a couple options to compare?"
+  ],
+  2: [
+    "Quick check {name} — still narrowing down models or comparing a few?",
+    "Hey {name}, want me to send a short list of bikes that fit what you’re after?"
+  ]
+};
+
 const ENGAGED_FOLLOW_UP_VARIANTS_WITH_SLOTS: Record<string, string[]> = {
   general: [
     "Hey {name}, I can do {a} or {b} if you want to stop by. Which works better?{extraLine}",
@@ -3063,12 +3078,12 @@ async function buildCadenceRegeneratedDraft(
   const hasAgentContextForCadence = !!getActiveAgentContextText(conv).trim();
   const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
   const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "our team");
-  const followUpLabel = formatModelLabelForFollowUp(
-    conv.lead?.vehicle?.year ?? null,
-    conv.lead?.vehicle?.model ?? null
-  );
+  const hasSpecificFollowUpModel = !isUnknownInterestVehicle(conv);
+  const followUpLabel = hasSpecificFollowUpModel
+    ? formatModelLabelForFollowUp(conv.lead?.vehicle?.year ?? null, conv.lead?.vehicle?.model ?? null)
+    : "";
   const labelClause = followUpLabel ? ` about ${followUpLabel}` : "";
-  const labelWithThe = followUpLabel ? ` ${followUpLabel}` : " the bike";
+  const labelWithThe = followUpLabel ? ` ${followUpLabel}` : " a model";
   const modelName = formatModelToken(conv.lead?.vehicle?.model);
   const modelYear = conv.lead?.vehicle?.year ? `${conv.lead?.vehicle?.year} ${modelName}` : modelName;
   const tradeVehicle = conv?.lead?.tradeVehicle ?? null;
@@ -3113,10 +3128,16 @@ async function buildCadenceRegeneratedDraft(
       label: labelWithThe.trim() || "the bike"
     });
   } else {
+    const noModelStep0Variants = FOLLOW_UP_VARIANTS_NO_MODEL_NO_SLOTS[0] ?? [];
     const engagedNoSlotMap =
       (contextTag && ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS[contextTag]) ||
       ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS.general;
-    const variants = engagedKind ? engagedNoSlotMap[0] ?? [] : FOLLOW_UP_VARIANTS_NO_SLOTS[0] ?? [];
+    const variants =
+      !hasSpecificFollowUpModel && noModelStep0Variants.length
+        ? noModelStep0Variants
+        : engagedKind
+          ? engagedNoSlotMap[0] ?? []
+          : FOLLOW_UP_VARIANTS_NO_SLOTS[0] ?? [];
     const fallback = renderFollowUpTemplate(FOLLOW_UP_MESSAGES[0], baseCtx);
     message = variants.length
       ? renderFollowUpTemplate(
@@ -10843,12 +10864,12 @@ async function processDueFollowUps() {
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "our team");
     const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
-    const followUpLabel = formatModelLabelForFollowUp(
-      conv.lead?.vehicle?.year ?? null,
-      conv.lead?.vehicle?.model ?? null
-    );
+    const hasSpecificFollowUpModel = !isUnknownInterestVehicle(conv);
+    const followUpLabel = hasSpecificFollowUpModel
+      ? formatModelLabelForFollowUp(conv.lead?.vehicle?.year ?? null, conv.lead?.vehicle?.model ?? null)
+      : "";
     const labelClause = followUpLabel ? ` about ${followUpLabel}` : "";
-    const labelWithThe = followUpLabel ? ` ${followUpLabel}` : " the bike";
+    const labelWithThe = followUpLabel ? ` ${followUpLabel}` : " a model";
     const tradeVehicle = conv?.lead?.tradeVehicle ?? null;
     const tradeLabel =
       tradeVehicle && (tradeVehicle.model || tradeVehicle.description)
@@ -10878,7 +10899,7 @@ async function processDueFollowUps() {
       trade: tradeName
     };
     const walkInComment = String(conv.lead?.walkInComment ?? "").trim();
-    const walkInCommentLabel = labelWithThe.trim() || "the bike";
+    const walkInCommentLabel = labelWithThe.trim() || "a model";
     const canUseWalkInComment =
       !isPostSale &&
       cadence.stepIndex === 0 &&
@@ -10915,6 +10936,15 @@ async function processDueFollowUps() {
     const engagedWithSlot =
       (contextTag && ENGAGED_FOLLOW_UP_VARIANTS_WITH_SLOTS[contextTag]) ||
       ENGAGED_FOLLOW_UP_VARIANTS_WITH_SLOTS.general;
+    const pickNoSlotVariantsForStep = (step: number): string[] => {
+      if (!hasSpecificFollowUpModel) {
+        return (
+          FOLLOW_UP_VARIANTS_NO_MODEL_NO_SLOTS[step] ??
+          (isEngagedCadence ? engagedNoSlotMap[step] ?? [] : FOLLOW_UP_VARIANTS_NO_SLOTS[step] ?? [])
+        );
+      }
+      return isEngagedCadence ? engagedNoSlotMap[step] ?? [] : FOLLOW_UP_VARIANTS_NO_SLOTS[step] ?? [];
+    };
     let message = FOLLOW_UP_MESSAGES[cadence.stepIndex] ?? FOLLOW_UP_MESSAGES[FOLLOW_UP_MESSAGES.length - 1];
     let cadenceNoRepeatFallbacks: string[] = [];
     let mediaUrls: string[] | undefined;
@@ -11078,9 +11108,7 @@ async function processDueFollowUps() {
         });
         setLastSuggestedSlots(conv, day2.slots);
       } else {
-        const variants = isEngagedCadence
-          ? engagedNoSlotMap[cadence.stepIndex] ?? []
-          : FOLLOW_UP_VARIANTS_NO_SLOTS[cadence.stepIndex] ?? [];
+        const variants = pickNoSlotVariantsForStep(cadence.stepIndex);
         message = variants.length
           ? renderFollowUpTemplate(
               pickVariantNoRepeat(
@@ -11097,9 +11125,7 @@ async function processDueFollowUps() {
       if (canTestRideFlag) {
         message = "If you want to set up a test ride, I can hold a time. What day and time works for you?";
       } else {
-        const variants = isEngagedCadence
-          ? engagedNoSlotMap[cadence.stepIndex] ?? []
-          : FOLLOW_UP_VARIANTS_NO_SLOTS[cadence.stepIndex] ?? [];
+        const variants = pickNoSlotVariantsForStep(cadence.stepIndex);
         message = variants.length
           ? renderFollowUpTemplate(
               pickVariantNoRepeat(
@@ -11112,13 +11138,8 @@ async function processDueFollowUps() {
             )
           : FOLLOW_UP_MESSAGES[2];
       }
-    } else if (
-      FOLLOW_UP_VARIANTS_NO_SLOTS[cadence.stepIndex] ||
-      (isEngagedCadence && engagedNoSlotMap[cadence.stepIndex])
-    ) {
-      const variants = isEngagedCadence
-        ? engagedNoSlotMap[cadence.stepIndex] ?? []
-        : FOLLOW_UP_VARIANTS_NO_SLOTS[cadence.stepIndex] ?? [];
+    } else {
+      const variants = pickNoSlotVariantsForStep(cadence.stepIndex);
       message = variants.length
         ? renderFollowUpTemplate(
             pickVariantNoRepeat(
@@ -11130,10 +11151,11 @@ async function processDueFollowUps() {
             baseCtx
           )
         : message;
-    } else if (cadence.stepIndex >= 10) {
+      if (cadence.stepIndex >= 10) {
       const late = await buildLateFollowUp(conv, cadence.stepIndex, dealerProfile);
       message = late.body;
       mediaUrls = late.mediaUrls;
+      }
     }
     if (canUseWalkInComment) {
       message = buildWalkInCommentFollowUp({
