@@ -650,6 +650,8 @@ type ConversationDetail = {
       text?: string;
       mode?: "persistent" | "next_reply";
       expiresAt?: string;
+      addressedAt?: string;
+      addressedReason?: string;
       createdAt?: string;
       createdByUserId?: string;
       createdByUserName?: string;
@@ -9969,8 +9971,18 @@ export default function Home() {
                           expiresAt && !Number.isNaN(expiresAt.getTime())
                             ? expiresAt.toLocaleString()
                             : "";
+                        const addressedAt = note.addressedAt ? new Date(note.addressedAt) : null;
+                        const addressedLabel =
+                          addressedAt && !Number.isNaN(addressedAt.getTime())
+                            ? addressedAt.toLocaleString()
+                            : "";
+                        const addressedReason = String(note.addressedReason ?? "").trim();
+                        const isAddressed = !!addressedLabel;
                         return (
-                          <div key={note.id ?? `${note.createdAt ?? "note"}-${note.text ?? ""}`} className="px-2 py-2">
+                          <div
+                            key={note.id ?? `${note.createdAt ?? "note"}-${note.text ?? ""}`}
+                            className={`px-2 py-2 ${isAddressed ? "bg-slate-50" : ""}`}
+                          >
                             <div className="text-[11px] text-slate-500">
                               {note.createdAt ? new Date(note.createdAt).toLocaleString() : "Unknown date"}
                               {note.createdByUserName ? ` • ${note.createdByUserName}` : ""}
@@ -9981,6 +9993,8 @@ export default function Home() {
                             <div className="mt-1 text-[11px] text-slate-500">
                               {modeLabel}
                               {expiresLabel ? ` • Expires ${expiresLabel}` : ""}
+                              {addressedLabel ? ` • Addressed ${addressedLabel}` : ""}
+                              {addressedReason ? ` (${addressedReason.replace(/_/g, " ")})` : ""}
                             </div>
                           </div>
                         );

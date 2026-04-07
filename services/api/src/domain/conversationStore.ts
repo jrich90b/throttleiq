@@ -389,6 +389,8 @@ export type AgentContextNote = {
   createdAt: string;
   createdByUserId?: string;
   createdByUserName?: string;
+  addressedAt?: string;
+  addressedReason?: string;
 };
 
 export type Conversation = {
@@ -1202,6 +1204,7 @@ export function appendInbound(conv: Conversation, evt: InboundMessageEvent) {
   trackFinanceDocsReceiptFromInbound(conv, evt);
   trackTradePayoffFromInbound(conv, evt);
   maybeMarkEngagedFromInbound(conv, evt);
+  consumeAgentContextOnInboundIfNeeded(conv, "inbound_customer_reply");
   conv.updatedAt = nowIso();
   scheduleSave();
 }
@@ -1331,6 +1334,7 @@ export function setAgentContext(
     clearAgentContext(conv, "empty_text");
     return;
   }
+  markNextReplyContextNotesAddressed(conv, "superseded_by_context_update");
   const mode = args.mode === "next_reply" ? "next_reply" : "persistent";
   const expiresAtRaw = String(args.expiresAt ?? "").trim();
   const expiresAt = expiresAtRaw ? new Date(expiresAtRaw) : null;
@@ -1366,6 +1370,7 @@ export function addAgentContextNote(
   if (!text) {
     throw new Error("Agent context note text required");
   }
+  markNextReplyContextNotesAddressed(conv, "superseded_by_new_context_note");
   const mode = args.mode === "next_reply" ? "next_reply" : "persistent";
   const expiresAtRaw = String(args.expiresAt ?? "").trim();
   const expiresAt = expiresAtRaw ? new Date(expiresAtRaw) : null;
@@ -1424,6 +1429,7 @@ function consumeAgentContextIfNeeded(conv: Conversation, reason: string) {
   if (!context) return;
   const mode = context.mode === "next_reply" ? "next_reply" : "persistent";
   if (mode !== "next_reply") return;
+  markNextReplyContextNotesAddressed(conv, reason);
   const hasNotes = Array.isArray(context.notes) && context.notes.length > 0;
   const active = getActiveAgentContextText(conv);
   if (!active) {
@@ -1438,6 +1444,42 @@ function consumeAgentContextIfNeeded(conv: Conversation, reason: string) {
     }
     return;
   }
+  context.consumedAt = nowIso();
+  context.consumedReason = reason;
+  if (hasNotes) {
+    context.text = "";
+    context.mode = "persistent";
+    context.expiresAt = undefined;
+  } else {
+    conv.agentContext = undefined;
+  }
+}
+
+function markNextReplyContextNotesAddressed(conv: Conversation, reason: string) {
+  const notes = conv.agentContext?.notes;
+  if (!Array.isArray(notes) || !notes.length) return;
+  const at = nowIso();
+  let changed = false;
+  for (const note of notes) {
+    const noteMode = note.mode === "next_reply" ? "next_reply" : "persistent";
+    if (noteMode !== "next_reply") continue;
+    if (String(note.addressedAt ?? "").trim()) continue;
+    note.addressedAt = at;
+    note.addressedReason = reason;
+    changed = true;
+  }
+  if (changed) {
+    conv.updatedAt = at;
+  }
+}
+
+function consumeAgentContextOnInboundIfNeeded(conv: Conversation, reason: string) {
+  const context = conv.agentContext;
+  if (!context) return;
+  const mode = context.mode === "next_reply" ? "next_reply" : "persistent";
+  if (mode !== "next_reply") return;
+  markNextReplyContextNotesAddressed(conv, reason);
+  const hasNotes = Array.isArray(context.notes) && context.notes.length > 0;
   context.consumedAt = nowIso();
   context.consumedReason = reason;
   if (hasNotes) {
