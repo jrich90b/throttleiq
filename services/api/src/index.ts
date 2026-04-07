@@ -165,6 +165,7 @@ import {
   listOpenQuestions,
   markQuestionDone,
   markTodoDone,
+  markTodoReminderSent,
   markOpenTodosDoneForConversation,
   deleteConversation,
   setFollowUpMode,
@@ -2196,20 +2197,18 @@ async function applyPostCallSummaryActions(opts: {
     setDialogState(conv, "test_ride_init");
   }
 
-  const callback = llmCallbackRequested
-    ? {
-        label: intentParse?.callback?.timeText
-          ? `Customer requested a call back ${intentParse.callback.timeText}`
-          : "Customer requested a call back."
-      }
-    : null;
-  if (callback) {
-    const hasOpenCall = listOpenTodos().some(
-      t => t.convId === conv.id && t.status === "open" && t.reason === "call"
-    );
-    if (!hasOpenCall) {
-      addTodo(conv, "call", callback.label, sourceMessageId);
-    }
+  const callbackRequested = llmCallbackRequested;
+  if (callbackRequested) {
+    const cfg = await getSchedulerConfigHot();
+    const timezone = cfg.timezone || "America/New_York";
+    const owner = resolveCallbackTodoOwner(conv);
+    addOrUpdateCallbackCallTodo(conv, {
+      sourceMessageId,
+      callbackTimeHint: intentParse?.callback?.timeText ?? "",
+      parseSourceText: customerText,
+      owner,
+      timezone
+    });
   }
 
   if (llmAvailabilityIntent || parserInventoryWatchIntent) {
@@ -4500,6 +4499,130 @@ function resolveUserByPhone(users: any[], phoneRaw: string): any | null {
   for (const user of users) {
     const userPhone = normalizePhone(String(user?.phone ?? "").trim());
     if (userPhone && userPhone === phone) return user;
+  }
+  return null;
+}
+
+function pickUserPhoneFromRecord(user: any): string {
+  if (!user || typeof user !== "object") return "";
+  const candidates = [
+    user.phone,
+    user.mobilePhone,
+    user.mobile_phone,
+    user.cellPhone,
+    user.cellphone,
+    user.cell,
+    user.mobile,
+    user.smsPhone,
+    user.sms_phone
+  ];
+  for (const raw of candidates) {
+    const normalized = normalizePhone(String(raw ?? "").trim());
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
+function getCallbackReminderLeadMinutes(): number {
+  const raw = Number(process.env.CALLBACK_REMINDER_LEAD_MINUTES ?? 30);
+  if (!Number.isFinite(raw)) return 30;
+  return Math.max(5, Math.min(24 * 60, Math.round(raw)));
+}
+
+function buildCallbackTodoSummary(timeHint?: string | null): string {
+  const hint = String(timeHint ?? "").trim();
+  return hint ? `Call requested: ${hint}.` : "Call requested.";
+}
+
+function buildCallbackTodoSchedule(
+  parseSourceText: string | null | undefined,
+  timezone: string
+): { dueAt?: string; reminderAt?: string; reminderLeadMinutes?: number } {
+  const source = String(parseSourceText ?? "").trim();
+  if (!source) return {};
+  const requested = parseRequestedDayTime(source, timezone);
+  if (!requested) return {};
+  const dueAtDate = localPartsToUtcDate(timezone, requested);
+  const dueAtMs = dueAtDate.getTime();
+  if (!Number.isFinite(dueAtMs)) return {};
+  const reminderLeadMinutes = getCallbackReminderLeadMinutes();
+  const reminderAt = new Date(dueAtMs - reminderLeadMinutes * 60_000);
+  return {
+    dueAt: dueAtDate.toISOString(),
+    reminderAt: reminderAt.toISOString(),
+    reminderLeadMinutes
+  };
+}
+
+function resolveCallbackTodoOwner(conv: any): { id?: string | null; name?: string | null } | undefined {
+  const departmentTodo = listOpenTodos().find(
+    t =>
+      t.convId === conv.id &&
+      t.status === "open" &&
+      (t.reason === "service" || t.reason === "parts" || t.reason === "apparel")
+  );
+  if (!departmentTodo) return undefined;
+  const ownerId = String(departmentTodo.ownerId ?? "").trim();
+  const ownerName = String(departmentTodo.ownerName ?? "").trim();
+  return {
+    // Explicit empty id/name avoids addTodo() falling back to leadOwner when only one is known.
+    id: ownerId || "",
+    name: ownerName || ""
+  };
+}
+
+function addOrUpdateCallbackCallTodo(
+  conv: Conversation,
+  args: {
+    sourceMessageId?: string;
+    callbackTimeHint?: string | null;
+    parseSourceText?: string | null;
+    owner?: { id?: string | null; name?: string | null };
+    timezone: string;
+  }
+) {
+  const callbackTimeHint = String(args.callbackTimeHint ?? "").trim();
+  const summary = buildCallbackTodoSummary(callbackTimeHint);
+  const parseSource = String(args.parseSourceText ?? "").trim();
+  const schedule = buildCallbackTodoSchedule(
+    callbackTimeHint || parseSource || "",
+    args.timezone
+  );
+  return addTodo(conv, "call", summary, args.sourceMessageId, args.owner, schedule);
+}
+
+function resolveTodoOwnerUser(
+  todo: any,
+  conv: any,
+  users: any[],
+  userById: Map<string, any>
+): any | null {
+  const ownerId = String(todo?.ownerId ?? "").trim();
+  if (ownerId && userById.has(ownerId)) return userById.get(ownerId) ?? null;
+  const ownerName = String(todo?.ownerName ?? "").trim().toLowerCase();
+  if (ownerName) {
+    const byName =
+      users.find(u => String(u?.name ?? "").trim().toLowerCase() === ownerName) ??
+      users.find(
+        u =>
+          String(u?.firstName ?? "").trim().toLowerCase() === ownerName ||
+          String(u?.email ?? "").trim().toLowerCase() === ownerName
+      );
+    if (byName) return byName;
+  }
+  const leadOwnerId = String(conv?.leadOwner?.id ?? "").trim();
+  if (leadOwnerId && userById.has(leadOwnerId)) return userById.get(leadOwnerId) ?? null;
+  const leadOwnerName = String(conv?.leadOwner?.name ?? "").trim().toLowerCase();
+  if (leadOwnerName) {
+    return (
+      users.find(u => String(u?.name ?? "").trim().toLowerCase() === leadOwnerName) ??
+      users.find(
+        u =>
+          String(u?.firstName ?? "").trim().toLowerCase() === leadOwnerName ||
+          String(u?.email ?? "").trim().toLowerCase() === leadOwnerName
+      ) ??
+      null
+    );
   }
   return null;
 }
@@ -9469,35 +9592,46 @@ function buildCadenceFollowUpCallTodoSummary(conv: any): string {
   return `Call customer (follow-up): ${focus}.${detail}`.trim();
 }
 
-function deriveTodoActionLabel(todo: any, conv: any): string {
+function formatTodoCallDueAtLabel(dueAtIso: string, timeZone: string): string | null {
+  const iso = String(dueAtIso ?? "").trim();
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  return formatSlotLocal(iso, timeZone);
+}
+
+function deriveTodoActionLabel(todo: any, conv: any, timeZone = "America/New_York"): string {
   const reason = String(todo?.reason ?? "").toLowerCase();
   const summary = String(todo?.summary ?? "");
   const text = `${reason} ${summary}`.toLowerCase();
+  const dueLabel = formatTodoCallDueAtLabel(todo?.dueAt, timeZone);
+  const withDue = (label: string) =>
+    dueLabel ? `${label.replace(/[. ]*$/, "")} (requested: ${dueLabel}).` : label;
   const focusFromSummary =
     summary.match(/^call customer \(follow-up\):\s*(.+)$/i)?.[1]?.trim() ??
     summary.match(/^call requested:\s*(.+)$/i)?.[1]?.trim() ??
     "";
   if (reason === "approval") return "Business manager follow-up (credit app/prequal).";
   if (reason === "call") {
-    if (focusFromSummary) return `Call customer about ${trimTodoDetail(focusFromSummary, 100)}.`;
+    if (focusFromSummary) return withDue(`Call customer about ${trimTodoDetail(focusFromSummary, 100)}.`);
     if (/dealer ride follow-up needed/i.test(summary)) {
-      return "Call customer to confirm dealer ride outcome and next step.";
+      return withDue("Call customer to confirm dealer ride outcome and next step.");
     }
     if (/preferred contact method is phone|call-only|phone only|no auto text/i.test(text)) {
-      return "Call customer (phone preferred).";
+      return withDue("Call customer (phone preferred).");
     }
     if (/(credit|prequal|finance|apr|payment|monthly)/.test(text)) {
-      return "Call customer to review financing and payment options.";
+      return withDue("Call customer to review financing and payment options.");
     }
     if (/(inventory|availability|stock|watch)/.test(text)) {
-      return "Call customer to confirm inventory and availability.";
+      return withDue("Call customer to confirm inventory and availability.");
     }
     const model = formatModelLabelForFollowUp(
       conv?.lead?.vehicle?.year ?? null,
       conv?.lead?.vehicle?.model ?? null
     );
-    if (model) return `Call customer to follow up on ${model}.`;
-    return "Call customer and update status.";
+    if (model) return withDue(`Call customer to follow up on ${model}.`);
+    return withDue("Call customer and update status.");
   }
   if (/(call only|phone only|no text|do not text)/.test(text)) return "Call customer (call-only).";
   if (/(credit|prequal|finance)/.test(text)) return "Business manager follow-up (credit app).";
@@ -9536,11 +9670,80 @@ async function processDueFollowUps() {
   const userById = new Map(users.map(u => [u.id, u]));
   const now = new Date();
   const convs = getAllConversations();
+  const convById = new Map(convs.map(c => [c.id, c]));
+  const openTodos = listOpenTodos();
   const todoConvIds = new Set(
-    listOpenTodos()
+    openTodos
       .filter(t => t.reason !== "call")
       .map(t => t.convId)
   );
+  const callbackReminderTz = cfg.timezone || "America/New_York";
+  for (const todo of openTodos) {
+    if (todo.reason !== "call" || todo.status !== "open") continue;
+    const conv = convById.get(todo.convId);
+    if (!conv) continue;
+    let dueAtIso = String(todo.dueAt ?? "").trim();
+    let reminderAtIso = String(todo.reminderAt ?? "").trim();
+    if ((!dueAtIso || !reminderAtIso) && /^call requested:/i.test(String(todo.summary ?? ""))) {
+      const rawHint = String(todo.summary ?? "")
+        .match(/^call requested:\s*(.+)$/i)?.[1]
+        ?.trim();
+      const callbackTimeHint = String(rawHint ?? "").replace(/[.]+$/, "").trim();
+      if (callbackTimeHint) {
+        const updated = addOrUpdateCallbackCallTodo(conv, {
+          sourceMessageId: todo.sourceMessageId,
+          callbackTimeHint,
+          parseSourceText: callbackTimeHint,
+          owner: {
+            id: String(todo.ownerId ?? "").trim() || "",
+            name: String(todo.ownerName ?? "").trim() || ""
+          },
+          timezone: callbackReminderTz
+        });
+        dueAtIso = String(updated?.dueAt ?? "").trim();
+        reminderAtIso = String(updated?.reminderAt ?? "").trim();
+      }
+    }
+    if (!reminderAtIso) continue;
+    if (String(todo.reminderSentAt ?? "").trim()) continue;
+    const reminderAtMs = Date.parse(reminderAtIso);
+    if (!Number.isFinite(reminderAtMs) || reminderAtMs > now.getTime()) continue;
+
+    const ownerUser = resolveTodoOwnerUser(todo, conv, users, userById);
+    const ownerPhone = pickUserPhoneFromRecord(ownerUser);
+    const ownerLabel =
+      String(ownerUser?.firstName ?? "").trim() ||
+      String(ownerUser?.name ?? "").trim() ||
+      String(todo.ownerName ?? "").trim() ||
+      String(conv?.leadOwner?.name ?? "").trim() ||
+      "assigned staff";
+    const customerName =
+      [conv?.lead?.firstName, conv?.lead?.lastName].filter(Boolean).join(" ").trim() ||
+      conv?.lead?.name ||
+      conv?.leadKey ||
+      "customer";
+    const customerPhone = normalizePhone(String(conv?.lead?.phone ?? conv?.leadKey ?? "").trim());
+    const dueLabel = dueAtIso ? formatSlotLocal(dueAtIso, callbackReminderTz) : "soon";
+    const reminderText = [
+      `Reminder: ${customerName} asked for a callback ${dueLabel}.`,
+      customerPhone ? `Customer phone: ${customerPhone}` : null,
+      conv?.lead?.leadRef ? `Lead Ref: ${conv.lead.leadRef}` : null
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const sent = ownerPhone ? await sendInternalSms(ownerPhone, reminderText) : false;
+    markTodoReminderSent(todo.convId, todo.id);
+    if (!sent) {
+      addTodo(conv, "note", `Callback reminder SMS failed for ${ownerLabel}.`);
+    }
+    recordRouteOutcome("manual", sent ? "callback_reminder_sms_sent" : "callback_reminder_sms_failed", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      dueAt: dueAtIso || null,
+      reminderAt: reminderAtIso,
+      owner: ownerLabel
+    });
+  }
   const openQuestions = listOpenQuestions();
   const openCheckinByConv = new Set(
     openQuestions.filter(q => q.type === "cadence_checkin").map(q => q.convId)
@@ -13253,59 +13456,65 @@ app.delete("/conversations/:id", (req, res) => {
   return res.json({ ok: true });
 });
 
-app.get("/todos", requirePermission("canAccessTodos"), (req, res) => {
-  const user = (req as any).user ?? null;
-  const isManager = user?.role === "manager";
-  const isSalesperson = user?.role === "salesperson";
-  const departmentRole =
-    user?.role === "service" || user?.role === "parts" || user?.role === "apparel"
-      ? (user.role as DepartmentRole)
-      : null;
-  const requesterId = String(user?.id ?? "").trim();
-  const extractNameFromSummary = (summary?: string | null) => {
-    const text = String(summary ?? "");
-    const match =
-      text.match(/\bName:\s*([A-Za-z][^\n,]*)/i) ||
-      text.match(/\bCustomer:\s*([A-Za-z][^\n,]*)/i) ||
-      text.match(/\bLead:\s*([A-Za-z][^\n,]*)/i);
-    const raw = match?.[1]?.trim() ?? "";
-    if (!raw) return null;
-    const cleaned = raw.replace(/\s{2,}/g, " ").trim();
-    return cleaned || null;
-  };
-  const todos = listOpenTodos()
-    .filter(t => {
-      if (isManager) return true;
-      const conv = getConversation(t.convId);
-      const todoDepartment = inferTodoDepartment(t, conv);
-      if (departmentRole) return todoDepartment === departmentRole;
-      if (isSalesperson) {
+app.get("/todos", requirePermission("canAccessTodos"), async (req, res) => {
+  try {
+    const user = (req as any).user ?? null;
+    const isManager = user?.role === "manager";
+    const isSalesperson = user?.role === "salesperson";
+    const departmentRole =
+      user?.role === "service" || user?.role === "parts" || user?.role === "apparel"
+        ? (user.role as DepartmentRole)
+        : null;
+    const requesterId = String(user?.id ?? "").trim();
+    const cfg = await getSchedulerConfigHot();
+    const actionTimeZone = cfg.timezone || "America/New_York";
+    const extractNameFromSummary = (summary?: string | null) => {
+      const text = String(summary ?? "");
+      const match =
+        text.match(/\bName:\s*([A-Za-z][^\n,]*)/i) ||
+        text.match(/\bCustomer:\s*([A-Za-z][^\n,]*)/i) ||
+        text.match(/\bLead:\s*([A-Za-z][^\n,]*)/i);
+      const raw = match?.[1]?.trim() ?? "";
+      if (!raw) return null;
+      const cleaned = raw.replace(/\s{2,}/g, " ").trim();
+      return cleaned || null;
+    };
+    const todos = listOpenTodos()
+      .filter(t => {
+        if (isManager) return true;
+        const conv = getConversation(t.convId);
+        const todoDepartment = inferTodoDepartment(t, conv);
+        if (departmentRole) return todoDepartment === departmentRole;
+        if (isSalesperson) {
+          if (todoDepartment) return false;
+          const ownerId = String(t.ownerId ?? "").trim();
+          if (!ownerId) return true;
+          if (requesterId && ownerId === requesterId) return true;
+          const leadOwnerId = String(conv?.leadOwner?.id ?? "").trim();
+          return !!requesterId && !!leadOwnerId && leadOwnerId === requesterId;
+        }
         if (todoDepartment) return false;
-        const ownerId = String(t.ownerId ?? "").trim();
-        if (!ownerId) return true;
-        if (requesterId && ownerId === requesterId) return true;
-        const leadOwnerId = String(conv?.leadOwner?.id ?? "").trim();
-        return !!requesterId && !!leadOwnerId && leadOwnerId === requesterId;
-      }
-      if (todoDepartment) return false;
-      if (!requesterId) return false;
-      if (t.ownerId) return t.ownerId === requesterId;
-      return conv?.leadOwner?.id === requesterId;
-    })
-    .map(t => {
-      const conv = getConversation(t.convId);
-      const leadNameRaw = conv?.lead?.name?.trim() ?? "";
-      const firstName = conv?.lead?.firstName ?? "";
-      const lastName = conv?.lead?.lastName ?? "";
-      const leadName =
-        leadNameRaw ||
-        [firstName, lastName].filter(Boolean).join(" ").trim() ||
-        extractNameFromSummary(t.summary) ||
-        null;
-      const action = deriveTodoActionLabel(t, conv);
-      return { ...t, leadName, action };
-    });
-  res.json({ ok: true, todos });
+        if (!requesterId) return false;
+        if (t.ownerId) return t.ownerId === requesterId;
+        return conv?.leadOwner?.id === requesterId;
+      })
+      .map(t => {
+        const conv = getConversation(t.convId);
+        const leadNameRaw = conv?.lead?.name?.trim() ?? "";
+        const firstName = conv?.lead?.firstName ?? "";
+        const lastName = conv?.lead?.lastName ?? "";
+        const leadName =
+          leadNameRaw ||
+          [firstName, lastName].filter(Boolean).join(" ").trim() ||
+          extractNameFromSummary(t.summary) ||
+          null;
+        const action = deriveTodoActionLabel(t, conv, actionTimeZone);
+        return { ...t, leadName, action };
+      });
+    res.json({ ok: true, todos });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err?.message ?? "failed_to_list_todos" });
+  }
 });
 
 app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
@@ -18560,6 +18769,31 @@ if (authToken && signature) {
     schedulingSignals.hasDayOnlyRequest;
   const hasActionableTurnContext =
     hasActionableFinanceContext || hasActionableAvailabilityContext || hasActionableSchedulingContext;
+  if (event.provider === "twilio" && turnPrimaryIntent === "callback") {
+    const cfg = await getSchedulerConfigHot();
+    const timezone = cfg.timezone || "America/New_York";
+    const owner = resolveCallbackTodoOwner(conv);
+    const callbackTodo = addOrUpdateCallbackCallTodo(conv, {
+      sourceMessageId: event.providerMessageId,
+      callbackTimeHint: intentParse?.callback?.timeText ?? "",
+      parseSourceText: event.body ?? "",
+      owner,
+      timezone
+    });
+    if (callbackTodo?.dueAt && callbackTodo?.reminderAt) {
+      logRouteOutcome("callback_call_todo_scheduled", {
+        dueAt: callbackTodo.dueAt,
+        reminderAt: callbackTodo.reminderAt,
+        ownerId: callbackTodo.ownerId ?? null,
+        ownerName: callbackTodo.ownerName ?? null
+      });
+    } else {
+      logRouteOutcome("callback_call_todo_created", {
+        ownerId: callbackTodo?.ownerId ?? null,
+        ownerName: callbackTodo?.ownerName ?? null
+      });
+    }
+  }
   if (routingParserDecision.accepted && routingParserDecision.fallbackAction === "no_response") {
     if (!hasActionableTurnContext) {
       logRouteOutcome("routing_parser_no_response", {
