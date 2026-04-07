@@ -3095,6 +3095,42 @@ export default function Home() {
     [ownerDirectory]
   );
 
+  const inferDepartmentFromText = useCallback(
+    (raw: string): "service" | "parts" | "apparel" | null => {
+      const text = String(raw ?? "").trim().toLowerCase();
+      if (!text) return null;
+      if (/\bservice\b/.test(text)) return "service";
+      if (/\bparts\b/.test(text)) return "parts";
+      if (/\bapparel\b/.test(text)) return "apparel";
+      return null;
+    },
+    []
+  );
+
+  const inferTodoDepartment = useCallback(
+    (todo: TodoItem): "service" | "parts" | "apparel" | null => {
+      const reason = String(todo.reason ?? "").toLowerCase();
+      if (reason === "service" || reason === "parts" || reason === "apparel") {
+        return reason as "service" | "parts" | "apparel";
+      }
+      const fromDepartmentOwner = inferDepartmentFromText(String(todo.departmentOwnerName ?? ""));
+      if (fromDepartmentOwner) return fromDepartmentOwner;
+      const ownerType = String(todo.ownerDisplayType ?? "").toLowerCase();
+      if (ownerType === "department_owner" || ownerType === "department") {
+        const fromDisplay = inferDepartmentFromText(
+          String(todo.ownerDisplayName ?? todo.ownerName ?? "")
+        );
+        if (fromDisplay) return fromDisplay;
+      }
+      const fromDisplayFallback = inferDepartmentFromText(
+        String(todo.ownerDisplayName ?? todo.ownerName ?? "")
+      );
+      if (fromDisplayFallback) return fromDisplayFallback;
+      return null;
+    },
+    [inferDepartmentFromText]
+  );
+
   const managerLeadOwnerOptions = useMemo(() => {
     const byName = new Map<string, string>();
     const addName = (raw: string, ownerId?: string | null) => {
@@ -3140,10 +3176,9 @@ export default function Home() {
       const leadOwnerCanonical = canonicalizeOwnerName(String(t.leadOwnerName ?? "").trim());
       const leadOwner = String(leadOwnerCanonical ?? "").trim();
       const departmentOwner = String(t.departmentOwnerName ?? "").trim();
-      const reason = String(t.reason ?? "").toLowerCase();
+      const todoDept = inferTodoDepartment(t);
       const inferredDeptOwner = inferOwnerDepartment(leadOwner);
-      const todoTeamBase =
-        reason === "service" || reason === "parts" || reason === "apparel" ? reason : "sales";
+      const todoTeamBase = todoDept ?? "sales";
       const todoTeam = todoTeamBase === "sales" && inferredDeptOwner ? inferredDeptOwner : todoTeamBase;
       if (isManager && todoLeadOwnerFilter !== "all") {
         if (todoLeadOwnerFilter === "team:unassigned") {
@@ -3163,7 +3198,7 @@ export default function Home() {
       if (!q) return true;
       return leadName.includes(q) || leadKey.includes(q);
     });
-  }, [todos, todoQuery, isManager, todoLeadOwnerFilter, canonicalizeOwnerName, inferOwnerDepartment]);
+  }, [todos, todoQuery, isManager, todoLeadOwnerFilter, canonicalizeOwnerName, inferOwnerDepartment, inferTodoDepartment]);
 
   useEffect(() => {
     if (blockForm.salespersonId) return;
@@ -3660,13 +3695,13 @@ export default function Home() {
   const inboxDepartmentTeamsByConv = useMemo(() => {
     const out = new Map<string, Set<string>>();
     for (const t of todos) {
-      const reason = String(t.reason ?? "").toLowerCase();
-      if (reason !== "service" && reason !== "parts" && reason !== "apparel") continue;
+      const team = inferTodoDepartment(t);
+      if (!team) continue;
       if (!out.has(t.convId)) out.set(t.convId, new Set<string>());
-      out.get(t.convId)?.add(reason);
+      out.get(t.convId)?.add(team);
     }
     return out;
-  }, [todos]);
+  }, [todos, inferTodoDepartment]);
 
   const inboxTodoOwnerByConv = useMemo(() => {
     const out = new Map<string, string>();
