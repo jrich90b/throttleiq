@@ -847,6 +847,82 @@ async function assignDepartmentLeadOwnerIfUnassigned(
   };
 }
 
+function isLikelySalesOriginConversation(conv: any): boolean {
+  const sourceLower = String(conv?.lead?.source ?? "").toLowerCase();
+  const ctaLower = String(conv?.classification?.cta ?? "").toLowerCase();
+  const bucketLower = String(conv?.classification?.bucket ?? "").toLowerCase();
+  return (
+    /(hdfs|marketplace|room58|meta|traffic log pro|trade accelerator|kenect|dealer lead app)/.test(
+      sourceLower
+    ) ||
+    /(check_availability|inventory|hdfs_coa|hdfs_pq|schedule|quote|pricing|trade)/.test(
+      `${ctaLower} ${bucketLower}`
+    )
+  );
+}
+
+async function maybeRestoreSalesLeadOwnerFromPreference(conv: any): Promise<boolean> {
+  if (!conv) return false;
+  if (!isLikelySalesOriginConversation(conv)) return false;
+  const ownerId = String(conv?.leadOwner?.id ?? "").trim();
+  if (!ownerId) return false;
+  const users = await listUsers();
+  const currentOwner = users.find(u => String(u?.id ?? "").trim() === ownerId) ?? null;
+  const currentRole = String(currentOwner?.role ?? "").trim().toLowerCase();
+  if (!["service", "parts", "apparel"].includes(currentRole)) return false;
+
+  const preferredSalesId = String(conv?.scheduler?.preferredSalespersonId ?? "").trim();
+  const preferredSalesName = String(conv?.scheduler?.preferredSalespersonName ?? "").trim().toLowerCase();
+  const manualSenderId = String(conv?.manualSender?.userId ?? "").trim();
+  const manualSenderName = String(conv?.manualSender?.userName ?? "").trim().toLowerCase();
+
+  const isSalesRole = (u: any) => {
+    const role = String(u?.role ?? "").trim().toLowerCase();
+    return role === "salesperson" || role === "manager";
+  };
+
+  let target =
+    users.find(u => preferredSalesId && String(u?.id ?? "").trim() === preferredSalesId && isSalesRole(u)) ??
+    null;
+  if (!target && preferredSalesName) {
+    target =
+      users.find(u => {
+        if (!isSalesRole(u)) return false;
+        const full = String(u?.name ?? "").trim().toLowerCase();
+        const first = String(u?.firstName ?? "").trim().toLowerCase();
+        return full === preferredSalesName || first === preferredSalesName;
+      }) ?? null;
+  }
+  if (!target && manualSenderId) {
+    target =
+      users.find(u => String(u?.id ?? "").trim() === manualSenderId && isSalesRole(u)) ?? null;
+  }
+  if (!target && manualSenderName) {
+    target =
+      users.find(u => {
+        if (!isSalesRole(u)) return false;
+        const full = String(u?.name ?? "").trim().toLowerCase();
+        const first = String(u?.firstName ?? "").trim().toLowerCase();
+        return full === manualSenderName || first === manualSenderName;
+      }) ?? null;
+  }
+  if (!target) return false;
+
+  const targetId = String(target?.id ?? "").trim();
+  if (!targetId || targetId === ownerId) return false;
+  const targetName =
+    String(target?.name ?? "").trim() ||
+    [target?.firstName, target?.lastName].filter(Boolean).join(" ").trim() ||
+    String(target?.email ?? "").trim() ||
+    targetId;
+  conv.leadOwner = {
+    id: targetId,
+    name: targetName,
+    assignedAt: new Date().toISOString()
+  };
+  return true;
+}
+
 function canUserAccessConversation(user: any, conv: any): boolean {
   if (AUTH_DISABLED || !user) return true;
   const role = String(user?.role ?? "").toLowerCase();
@@ -16265,6 +16341,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     regenInboundDepartmentIntentFromRegex === "apparel"
       ? regenInboundDepartmentIntentFromRegex
       : null);
+  await maybeRestoreSalesLeadOwnerFromPreference(conv);
   if (regenInboundDepartmentIntent === "parts" || regenInboundDepartmentIntent === "apparel") {
     await assignDepartmentLeadOwnerIfUnassigned(conv, regenInboundDepartmentIntent);
     const departmentTodoOwner = await resolveDepartmentTodoOwner(
@@ -17446,6 +17523,7 @@ if (authToken && signature) {
     (inboundDepartmentIntentFromRegex === "parts" || inboundDepartmentIntentFromRegex === "apparel"
       ? inboundDepartmentIntentFromRegex
       : null);
+  await maybeRestoreSalesLeadOwnerFromPreference(conv);
   if (inboundDepartmentIntent === "parts" || inboundDepartmentIntent === "apparel") {
     await assignDepartmentLeadOwnerIfUnassigned(conv, inboundDepartmentIntent);
     const departmentTodoOwner = await resolveDepartmentTodoOwner(
