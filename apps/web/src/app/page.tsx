@@ -7935,6 +7935,9 @@ export default function Home() {
                       {kpiOverview.totals.appointmentCount} appointments
                     </div>
                   </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <div className="border rounded-lg p-3 bg-white">
                     <div className="text-xs text-gray-500">Call Rate</div>
                     <div className="text-2xl font-semibold mt-1">{kpiOverview.totals.callRatePct.toFixed(2)}%</div>
