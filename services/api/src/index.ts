@@ -13536,8 +13536,11 @@ app.get("/todos", requirePermission("canAccessTodos"), async (req, res) => {
           [firstName, lastName].filter(Boolean).join(" ").trim() ||
           extractNameFromSummary(t.summary) ||
           null;
-        const action = deriveTodoActionLabel(t, conv, actionTimeZone);
         const callbackTimeLabel = callbackTimeByConv.get(t.convId) ?? null;
+        let action = deriveTodoActionLabel(t, conv, actionTimeZone);
+        if (callbackTimeLabel && !/requested call time:/i.test(action)) {
+          action = `${action.replace(/[. ]*$/, "")} Requested call time: ${callbackTimeLabel}.`;
+        }
         return { ...t, leadName, action, callbackTimeLabel };
       });
     res.json({ ok: true, todos });
