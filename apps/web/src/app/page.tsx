@@ -7091,7 +7091,8 @@ export default function Home() {
                               : `updated: ${new Date(c.updatedAt).toLocaleString()}`}
                           </div>
                           {(() => {
-                            const inboxOwner = inboxTodoOwnerByConv.get(c.id) || c.leadOwner?.name || c.leadOwner?.id;
+                            const inboxOwner =
+                              c.leadOwner?.name || c.leadOwner?.id || inboxTodoOwnerByConv.get(c.id);
                             return inboxOwner ? (
                             <div className="text-xs text-red-600 mt-1">
                               Owner: {inboxOwner}
