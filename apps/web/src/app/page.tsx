@@ -924,6 +924,7 @@ export default function Home() {
   const [watchQuery, setWatchQuery] = useState("");
   const [watchSalespersonFilter, setWatchSalespersonFilter] = useState("all");
   const [inboxQuery, setInboxQuery] = useState("");
+  const [inboxOwnerFilter, setInboxOwnerFilter] = useState("all");
   const [todoQuery, setTodoQuery] = useState("");
   const [todoLeadOwnerFilter, setTodoLeadOwnerFilter] = useState("all");
   const cadenceResolveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -3453,11 +3454,60 @@ export default function Home() {
     );
   }, [conversations, view]);
 
+  const inboxDepartmentOwnerByConv = useMemo(() => {
+    const out = new Map<string, string>();
+    for (const t of todos) {
+      const reason = String(t.reason ?? "").toLowerCase();
+      if (reason !== "service" && reason !== "parts" && reason !== "apparel") continue;
+      const owner = String(t.departmentOwnerName ?? "").trim();
+      if (!owner) continue;
+      if (!out.has(t.convId)) out.set(t.convId, owner);
+    }
+    return out;
+  }, [todos]);
+
+  const inboxLeadOwnerOptions = useMemo(() => {
+    const names = Array.from(
+      new Set(
+        visibleConversations
+          .map(c => String(c.leadOwner?.name ?? c.leadOwner?.id ?? "").trim())
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b));
+    return names;
+  }, [visibleConversations]);
+
+  const inboxDepartmentOwnerOptions = useMemo(() => {
+    const names = Array.from(
+      new Set(
+        visibleConversations
+          .map(c => String(inboxDepartmentOwnerByConv.get(c.id) ?? "").trim())
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b));
+    return names;
+  }, [visibleConversations, inboxDepartmentOwnerByConv]);
+
   const filteredConversations = useMemo(() => {
     const q = inboxQuery.trim().toLowerCase();
-    if (!q) return visibleConversations;
     const qDigits = q.replace(/\D/g, "");
     return visibleConversations.filter(c => {
+      if (isManager && inboxOwnerFilter !== "all") {
+        const leadOwner = String(c.leadOwner?.name ?? c.leadOwner?.id ?? "").trim();
+        const departmentOwner = String(inboxDepartmentOwnerByConv.get(c.id) ?? "").trim();
+        if (inboxOwnerFilter === "lead:__unassigned__") {
+          if (leadOwner) return false;
+        } else if (inboxOwnerFilter === "department:__unassigned__") {
+          if (departmentOwner) return false;
+        } else if (inboxOwnerFilter.startsWith("lead:")) {
+          if (leadOwner !== inboxOwnerFilter.slice(5)) return false;
+        } else if (inboxOwnerFilter.startsWith("department:")) {
+          if (departmentOwner !== inboxOwnerFilter.slice(11)) return false;
+        } else {
+          return false;
+        }
+      }
+      if (!q) return true;
       const name = (c.leadName ?? "").toLowerCase();
       const key = (c.leadKey ?? "").toLowerCase();
       if (name.includes(q) || key.includes(q)) return true;
@@ -3467,7 +3517,7 @@ export default function Home() {
       }
       return false;
     });
-  }, [visibleConversations, inboxQuery]);
+  }, [visibleConversations, inboxQuery, isManager, inboxOwnerFilter, inboxDepartmentOwnerByConv]);
 
   const groupedConversations = useMemo(() => {
     const groups: Array<{ label: string; items: ConversationListItem[] }> = [];
@@ -6259,13 +6309,39 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="mt-3">
+            <div className="mt-3 flex flex-col gap-2 md:flex-row">
               <input
                 className="w-full border rounded px-3 py-2 text-sm"
                 placeholder="Search name or phone..."
                 value={inboxQuery}
                 onChange={e => setInboxQuery(e.target.value)}
               />
+              {isManager ? (
+                <select
+                  className="w-full md:w-64 border rounded px-3 py-2 text-sm bg-white"
+                  value={inboxOwnerFilter}
+                  onChange={e => setInboxOwnerFilter(e.target.value)}
+                  title="Filter inbox by owner"
+                >
+                  <option value="all">All owners</option>
+                  <optgroup label="Lead owners">
+                    {inboxLeadOwnerOptions.map(name => (
+                      <option key={`inbox-lead:${name}`} value={`lead:${name}`}>
+                        {name}
+                      </option>
+                    ))}
+                    <option value="lead:__unassigned__">Unassigned</option>
+                  </optgroup>
+                  <optgroup label="Department owners">
+                    {inboxDepartmentOwnerOptions.map(name => (
+                      <option key={`inbox-dept:${name}`} value={`department:${name}`}>
+                        {name}
+                      </option>
+                    ))}
+                    <option value="department:__unassigned__">Unassigned</option>
+                  </optgroup>
+                </select>
+              ) : null}
             </div>
 
             <div className="mt-3 space-y-3">
