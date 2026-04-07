@@ -5558,13 +5558,35 @@ function shouldAlwaysDraftCorporateMisroute(): boolean {
 
 function applyConversationStateReducer(
   conv: any,
-  parsed: ConversationStateParse | null
+  parsed: ConversationStateParse | null,
+  text: string
 ): { departmentIntent: DepartmentRole | null; corporateMisrouteTopic: CorporateMisrouteTopic | null } {
   if (!isConversationStateParserAccepted(parsed)) {
     return { departmentIntent: null, corporateMisrouteTopic: null };
   }
   const state = parsed as ConversationStateParse;
   const corporateMisrouteTopic = getCorporateMisrouteTopic(state);
+  const normalizedText = String(text ?? "");
+  const lexicalDepartmentIntent = inferDepartmentFromText(normalizedText);
+  const parserDepartmentIntent = state.departmentIntent !== "none" ? state.departmentIntent : null;
+  const departmentIntentAccepted =
+    !!state.explicitRequest &&
+    !!parserDepartmentIntent &&
+    !!lexicalDepartmentIntent &&
+    parserDepartmentIntent === lexicalDepartmentIntent
+      ? parserDepartmentIntent
+      : null;
+  const departmentManualHandoffReason = (() => {
+    const reason = String(state.manualHandoffReason ?? "").toLowerCase();
+    if (reason === "service_request") return "service" as DepartmentRole;
+    if (reason === "parts_request") return "parts" as DepartmentRole;
+    if (reason === "apparel_request") return "apparel" as DepartmentRole;
+    return null;
+  })();
+  const allowDepartmentManualHandoff =
+    !!state.explicitRequest &&
+    !!departmentManualHandoffReason &&
+    departmentManualHandoffReason === departmentIntentAccepted;
   if (state.clearInventoryWatchPending || state.departmentIntent !== "none") {
     conv.inventoryWatchPending = undefined;
     if (getDialogState(conv) === "inventory_watch_prompted") {
@@ -5574,7 +5596,10 @@ function applyConversationStateReducer(
   if (state.clearPricingNeedModel && getDialogState(conv) === "pricing_need_model") {
     setDialogState(conv, "none");
   }
-  if (state.manualHandoffReason !== "none") {
+  if (
+    state.manualHandoffReason !== "none" &&
+    (!departmentManualHandoffReason || allowDepartmentManualHandoff)
+  ) {
     setFollowUpMode(conv, "manual_handoff", state.manualHandoffReason);
     stopFollowUpCadence(conv, "manual_handoff");
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
@@ -5587,8 +5612,8 @@ function applyConversationStateReducer(
   ) {
     setFollowUpMode(conv, "manual_handoff", "manual_appointment");
   }
-  if (state.departmentIntent !== "none") {
-    return { departmentIntent: state.departmentIntent, corporateMisrouteTopic };
+  if (departmentIntentAccepted) {
+    return { departmentIntent: departmentIntentAccepted, corporateMisrouteTopic };
   }
   return { departmentIntent: null, corporateMisrouteTopic };
 }
@@ -5648,7 +5673,7 @@ async function parseAndReduceConversationState(args: {
   }
   return {
     parsed,
-    reduced: applyConversationStateReducer(conv, parsed)
+    reduced: applyConversationStateReducer(conv, parsed, text)
   };
 }
 
