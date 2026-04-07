@@ -817,10 +817,12 @@ function todoActionLabel(todo: TodoItem): string {
 
 function todoRequestedCallTimeLabel(todo: TodoItem): string | null {
   const dueAt = String(todo.dueAt ?? "").trim();
-  if (!dueAt) return null;
+  const rawSummary = String(todo.summary ?? "");
+  const summaryTime = rawSummary.match(/^call requested:\s*(.+)$/i)?.[1]?.replace(/[.]+$/, "").trim();
+  if (!dueAt) return summaryTime || null;
   const at = new Date(dueAt);
-  if (Number.isNaN(at.getTime())) return null;
-  return at.toLocaleString();
+  if (!Number.isNaN(at.getTime())) return at.toLocaleString();
+  return summaryTime || null;
 }
 
 type SuppressionItem = {
