@@ -13536,9 +13536,32 @@ app.get("/todos", requirePermission("canAccessTodos"), async (req, res) => {
           [firstName, lastName].filter(Boolean).join(" ").trim() ||
           extractNameFromSummary(t.summary) ||
           null;
+        const todoDepartment = inferTodoDepartment(t, conv);
+        const departmentOwnerName = String(t.ownerName ?? "").trim() || null;
+        const leadOwnerName = String(conv?.leadOwner?.name ?? "").trim() || null;
+        const fallbackDepartmentOwner = todoDepartment
+          ? `${todoDepartment.slice(0, 1).toUpperCase()}${todoDepartment.slice(1)} Department`
+          : null;
+        const ownerDisplayName = departmentOwnerName || leadOwnerName || fallbackDepartmentOwner || null;
+        const ownerDisplayType = departmentOwnerName
+          ? "department_owner"
+          : leadOwnerName
+            ? "lead_owner"
+            : fallbackDepartmentOwner
+              ? "department"
+              : null;
         const callbackTimeLabel = callbackTimeByConv.get(t.convId) ?? null;
         const action = deriveTodoActionLabel(t, conv, actionTimeZone);
-        return { ...t, leadName, action, callbackTimeLabel };
+        return {
+          ...t,
+          leadName,
+          action,
+          callbackTimeLabel,
+          ownerDisplayName,
+          ownerDisplayType,
+          leadOwnerName,
+          departmentOwnerName
+        };
       });
     res.json({ ok: true, todos });
   } catch (err: any) {

@@ -746,6 +746,11 @@ type TodoItem = {
   convId: string;
   leadKey: string;
   leadName?: string | null;
+  ownerName?: string | null;
+  ownerDisplayName?: string | null;
+  ownerDisplayType?: "department_owner" | "lead_owner" | "department" | null;
+  leadOwnerName?: string | null;
+  departmentOwnerName?: string | null;
   reason: string;
   summary: string;
   action?: string;
@@ -919,6 +924,7 @@ export default function Home() {
   const [watchQuery, setWatchQuery] = useState("");
   const [watchSalespersonFilter, setWatchSalespersonFilter] = useState("all");
   const [inboxQuery, setInboxQuery] = useState("");
+  const [todoQuery, setTodoQuery] = useState("");
   const cadenceResolveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [watchEditOpen, setWatchEditOpen] = useState(false);
   const [watchEditConvId, setWatchEditConvId] = useState<string | null>(null);
@@ -2906,6 +2912,16 @@ export default function Home() {
     fromUsers.forEach(sp => merged.set(sp.id, sp));
     return Array.from(merged.values());
   }, [usersList, salespeopleList]);
+
+  const filteredTodos = useMemo(() => {
+    const q = todoQuery.trim().toLowerCase();
+    if (!q) return todos;
+    return todos.filter(t => {
+      const leadName = String(t.leadName ?? "").toLowerCase();
+      const leadKey = String(t.leadKey ?? "").toLowerCase();
+      return leadName.includes(q) || leadKey.includes(q);
+    });
+  }, [todos, todoQuery]);
 
   useEffect(() => {
     if (blockForm.salespersonId) return;
@@ -6572,8 +6588,17 @@ export default function Home() {
 
         {section === "todos" &&
         (authUser?.role === "manager" || authUser?.role === "salesperson" || isDepartmentUser || authUser?.permissions?.canAccessTodos) ? (
-          <div className="mt-3 border rounded-lg divide-y">
-            {todos.map(t => {
+          <>
+            <div className="mt-3">
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="Search To-Dos by customer name..."
+                value={todoQuery}
+                onChange={e => setTodoQuery(e.target.value)}
+              />
+            </div>
+            <div className="mt-3 border rounded-lg divide-y">
+            {filteredTodos.map(t => {
               const reason = (t.reason ?? "").toLowerCase();
               const isInternalNoteTodo = /(^|\\b)note(\\b|$)/.test(reason);
               const showCallButton = !isInternalNoteTodo;
@@ -6582,6 +6607,7 @@ export default function Home() {
                 todoRequestedCallTimeLabel(t) || String(t.callbackTimeLabel ?? "").trim() || null;
               const actionAlreadyHasRequestedTime = /\brequested(?::| call time:)/i.test(actionLabel);
               const showRequestedCallTime = !!requestedCallTime && !actionAlreadyHasRequestedTime;
+              const ownerDisplay = String(t.ownerDisplayName ?? t.ownerName ?? t.leadOwnerName ?? "").trim();
               return (
                 <div key={t.id} className="p-4 flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
@@ -6600,6 +6626,9 @@ export default function Home() {
                   <div className="text-sm font-semibold text-red-600 mt-2">
                     Action: {actionLabel}
                   </div>
+                  {ownerDisplay ? (
+                    <div className="text-xs text-gray-600 mt-1">Owner: {ownerDisplay}</div>
+                  ) : null}
                   {showRequestedCallTime ? (
                     <div className="text-xs text-gray-600 mt-1">
                       Requested call time: {requestedCallTime}
@@ -6636,10 +6665,13 @@ export default function Home() {
                 </div>
               );
             })}
-            {!loading && todos.length === 0 && (
-              <div className="p-4 text-sm text-gray-600">No open To-Dos.</div>
+            {!loading && filteredTodos.length === 0 && (
+              <div className="p-4 text-sm text-gray-600">
+                {todoQuery.trim() ? "No To-Dos match your search." : "No open To-Dos."}
+              </div>
             )}
           </div>
+          </>
         ) : null}
 
         {section === "questions" ? (
