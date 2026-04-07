@@ -13478,6 +13478,25 @@ app.get("/todos", requirePermission("canAccessTodos"), async (req, res) => {
     const requesterId = String(user?.id ?? "").trim();
     const cfg = await getSchedulerConfigHot();
     const actionTimeZone = cfg.timezone || "America/New_York";
+    const users = await listUsers();
+    const userNameById = new Map<string, string>();
+    for (const u of users) {
+      const id = String(u?.id ?? "").trim();
+      if (!id) continue;
+      const firstName = String(u?.firstName ?? "").trim();
+      const lastName = String(u?.lastName ?? "").trim();
+      const fullName =
+        [firstName, lastName].filter(Boolean).join(" ").trim() ||
+        String(u?.name ?? "").trim() ||
+        String(u?.email ?? "").trim() ||
+        id;
+      if (fullName) userNameById.set(id, fullName);
+    }
+    const resolveUserNameById = (idRaw: string | null | undefined) => {
+      const id = String(idRaw ?? "").trim();
+      if (!id) return null;
+      return userNameById.get(id) ?? null;
+    };
     const openTodos = listOpenTodos();
     const callbackTimeByConv = new Map<string, string>();
     for (const todo of openTodos) {
@@ -13537,12 +13556,16 @@ app.get("/todos", requirePermission("canAccessTodos"), async (req, res) => {
           extractNameFromSummary(t.summary) ||
           null;
         const todoDepartment = inferTodoDepartment(t, conv);
-        const departmentOwnerName = String(t.ownerName ?? "").trim() || null;
-        const leadOwnerName = String(conv?.leadOwner?.name ?? "").trim() || null;
+        const todoOwnerId = String(t.ownerId ?? "").trim() || null;
+        const leadOwnerId = String(conv?.leadOwner?.id ?? "").trim() || null;
+        const departmentOwnerName =
+          String(t.ownerName ?? "").trim() || resolveUserNameById(todoOwnerId) || null;
+        const leadOwnerName =
+          String(conv?.leadOwner?.name ?? "").trim() || resolveUserNameById(leadOwnerId) || null;
         const fallbackDepartmentOwner = todoDepartment
           ? `${todoDepartment.slice(0, 1).toUpperCase()}${todoDepartment.slice(1)} Department`
           : null;
-        const ownerDisplayName = departmentOwnerName || leadOwnerName || fallbackDepartmentOwner || null;
+        const ownerDisplayName = departmentOwnerName || leadOwnerName || fallbackDepartmentOwner || "Unassigned";
         const ownerDisplayType = departmentOwnerName
           ? "department_owner"
           : leadOwnerName
