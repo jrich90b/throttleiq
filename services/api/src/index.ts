@@ -5361,6 +5361,94 @@ async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
   return { handled: true, replyBody: confirmation };
 }
 
+type VoiceRoleScore = { agent: number; customer: number };
+
+const VOICE_AGENT_ROLE_HINTS: Array<{ pattern: RegExp; weight: number }> = [
+  { pattern: /\bthank you for calling\b/i, weight: 4 },
+  { pattern: /\bthis is [a-z]+(?: [a-z]+)?\b/i, weight: 3 },
+  { pattern: /\bcan i help you\b/i, weight: 3 },
+  { pattern: /\bhow can i help\b/i, weight: 3 },
+  { pattern: /\bwe (?:do|have|sell|can)\b/i, weight: 2 },
+  { pattern: /\bwe'?re open\b/i, weight: 2 },
+  { pattern: /\bstop by\b/i, weight: 2 },
+  { pattern: /\bcome in\b/i, weight: 2 },
+  { pattern: /\bamerican harley\b/i, weight: 2 },
+  { pattern: /\bdealership\b/i, weight: 1 },
+  { pattern: /\bextension\b/i, weight: 1 }
+];
+
+const VOICE_CUSTOMER_ROLE_HINTS: Array<{ pattern: RegExp; weight: number }> = [
+  { pattern: /\bi was looking\b/i, weight: 3 },
+  { pattern: /\bi(?:'m| am) looking\b/i, weight: 3 },
+  { pattern: /\bi keep getting\b/i, weight: 3 },
+  { pattern: /\bmy budget\b/i, weight: 2 },
+  { pattern: /\bi want\b/i, weight: 2 },
+  { pattern: /\bi like\b/i, weight: 2 },
+  { pattern: /\bi just got\b/i, weight: 2 },
+  { pattern: /\bi (?:work|live|weigh)\b/i, weight: 2 },
+  { pattern: /\bdo you have\b/i, weight: 2 },
+  { pattern: /\bare you (?:guys|open)\b/i, weight: 2 },
+  { pattern: /\bi (?:can|could) do\b/i, weight: 1 }
+];
+
+function scoreVoiceRole(rawText: string): VoiceRoleScore {
+  const text = String(rawText || "").trim();
+  if (!text) return { agent: 0, customer: 0 };
+  let agent = 0;
+  let customer = 0;
+  for (const hint of VOICE_AGENT_ROLE_HINTS) {
+    if (hint.pattern.test(text)) agent += hint.weight;
+  }
+  for (const hint of VOICE_CUSTOMER_ROLE_HINTS) {
+    if (hint.pattern.test(text)) customer += hint.weight;
+  }
+  return { agent, customer };
+}
+
+function normalizeVoiceChannelIndex(raw: unknown): number | null {
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string") {
+    const n = Number(raw);
+    if (Number.isFinite(n)) return n;
+  }
+  if (Array.isArray(raw)) {
+    for (const part of raw) {
+      const n = normalizeVoiceChannelIndex(part);
+      if (n !== null) return n;
+    }
+  }
+  return null;
+}
+
+function inferVoiceChannelRoleMapping(channelTexts: Map<number, string>): {
+  agentChannel: number;
+  customerChannel: number;
+  swapped: boolean;
+  scoreDefault: number;
+  scoreSwapped: number;
+  channel0: VoiceRoleScore;
+  channel1: VoiceRoleScore;
+} {
+  const channel0Text = String(channelTexts.get(0) ?? "").trim();
+  const channel1Text = String(channelTexts.get(1) ?? "").trim();
+  const channel0 = scoreVoiceRole(channel0Text);
+  const channel1 = scoreVoiceRole(channel1Text);
+  const scoreDefault = channel0.agent + channel1.customer;
+  const scoreSwapped = channel1.agent + channel0.customer;
+  const hasBoth = !!channel0Text && !!channel1Text;
+  const swapAdvantage = scoreSwapped - scoreDefault;
+  const swapped = hasBoth && swapAdvantage >= 2;
+  return {
+    agentChannel: swapped ? 1 : 0,
+    customerChannel: swapped ? 0 : 1,
+    swapped,
+    scoreDefault,
+    scoreSwapped,
+    channel0,
+    channel1
+  };
+}
+
 async function transcribeRecordingMp3(buffer: Buffer, agentLabel = "Agent"): Promise<string | null> {
   const deepgramKey = process.env.DEEPGRAM_API_KEY?.trim();
   if (deepgramKey) {
@@ -5384,20 +5472,54 @@ async function transcribeRecordingMp3(buffer: Buffer, agentLabel = "Agent"): Pro
         const chCount = Array.isArray(data?.results?.channels) ? data.results.channels.length : 0;
         const metaChannels = data?.results?.metadata?.channels ?? null;
         console.log("[voice] deepgram channels", { count: chCount, meta: metaChannels });
+        const channelTexts = new Map<number, string>();
+        const mergeChannelText = (channel: number, text: string) => {
+          const cleaned = String(text || "").trim();
+          if (!cleaned) return;
+          const prev = String(channelTexts.get(channel) ?? "").trim();
+          channelTexts.set(channel, prev ? `${prev}\n${cleaned}` : cleaned);
+        };
         const utterances = data?.results?.utterances;
+        if (Array.isArray(utterances) && utterances.length) {
+          for (const u of utterances) {
+            const idx =
+              normalizeVoiceChannelIndex(u?.channel) ??
+              normalizeVoiceChannelIndex(u?.channel_index);
+            if (idx === null) continue;
+            mergeChannelText(idx, String(u?.transcript ?? ""));
+          }
+        }
+        const channels = data?.results?.channels;
+        if (Array.isArray(channels) && channels.length) {
+          for (let i = 0; i < channels.length; i += 1) {
+            const ch = channels[i];
+            const text =
+              ch?.alternatives?.[0]?.paragraphs?.transcript ||
+              ch?.alternatives?.[0]?.transcript ||
+              "";
+            mergeChannelText(i, String(text));
+          }
+        }
+        const roleMap = inferVoiceChannelRoleMapping(channelTexts);
+        console.log("[voice] deepgram role-map", {
+          agentChannel: roleMap.agentChannel,
+          customerChannel: roleMap.customerChannel,
+          swapped: roleMap.swapped,
+          scoreDefault: roleMap.scoreDefault,
+          scoreSwapped: roleMap.scoreSwapped,
+          channel0: roleMap.channel0,
+          channel1: roleMap.channel1
+        });
         if (Array.isArray(utterances) && utterances.length) {
           return utterances
             .map((u: any) => {
               const channel =
-                typeof u.channel === "number"
-                  ? u.channel
-                  : typeof u.channel_index === "number"
-                    ? u.channel_index
-                    : null;
+                normalizeVoiceChannelIndex(u.channel) ??
+                normalizeVoiceChannelIndex(u.channel_index);
               let who = "";
-              if (channel === 0) {
+              if (channel === roleMap.agentChannel) {
                 who = agentLabel;
-              } else if (channel === 1) {
+              } else if (channel === roleMap.customerChannel) {
                 who = "Customer";
               } else if (typeof u.speaker === "number") {
                 who = `Speaker ${Number(u.speaker) + 1}`;
@@ -5408,16 +5530,15 @@ async function transcribeRecordingMp3(buffer: Buffer, agentLabel = "Agent"): Pro
             })
             .join("\n");
         }
-        const channels = data?.results?.channels;
         if (Array.isArray(channels) && channels.length >= 2) {
           const getText = (ch: any) =>
             ch?.alternatives?.[0]?.paragraphs?.transcript ||
             ch?.alternatives?.[0]?.transcript ||
             "";
-          const agentText = getText(channels[0]);
-          const customerText = getText(channels[1]);
+          const agentText = getText(channels[roleMap.agentChannel] ?? channels[0]);
+          const customerText = getText(channels[roleMap.customerChannel] ?? channels[1]);
           const parts: string[] = [];
-          if (agentText) parts.push(`Agent: ${agentText}`);
+          if (agentText) parts.push(`${agentLabel}: ${agentText}`);
           if (customerText) parts.push(`Customer: ${customerText}`);
           if (parts.length) return parts.join("\n");
         }
