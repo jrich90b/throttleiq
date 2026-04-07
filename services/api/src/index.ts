@@ -5962,7 +5962,7 @@ function isExplicitScheduleIntent(text: string): boolean {
     return true;
   }
   // Day words only count as scheduling if paired with a time.
-  if (/\b(today|tomorrow|next week|this week|next month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(t) &&
+  if (/\b(today|tomorrow|next week|this week|next month|monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun)\b/i.test(t) &&
       /\b(\d{1,2})(?::\d{2})?\s*(am|pm)?\b/i.test(t)) {
     return true;
   }
@@ -5987,7 +5987,7 @@ function detectSoftVisitIntent(text: string): boolean {
   const hardConstraint =
     /\b(can'?t|cannot|can not|won'?t|unable|not able|have to work|working|stuck at work|something came up)\b/i;
   const rescheduleLike =
-    /\b(make it|make it in|come in|stop in|stop by|visit|today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week)\b/i;
+    /\b(make it|make it in|come in|stop in|stop by|visit|today|tomorrow|monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun|this week|next week)\b/i;
   if (hardConstraint.test(t) && rescheduleLike.test(t)) return false;
   const visitVerb =
     /\b(come|stop|swing|drop|head|drive|ride|make it|make it in|get there|come up|come down|stop by|come by|come in)\b/i;
@@ -5995,7 +5995,7 @@ function detectSoftVisitIntent(text: string): boolean {
   const softQualifier =
     /\b(might|maybe|probably|try|trying|hope|hoping|plan|planning|if i can|if i could|if possible|sometime|some time|soon|eventually|later|in a few|in a couple|a couple (days|weeks)|next week|next month|this week|this weekend|weekend)\b/i;
   const dayToken =
-    /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|this week|this weekend|weekend|next month)\b/i;
+    /\b(today|tomorrow|monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun|next week|this week|this weekend|weekend|next month)\b/i;
   if (hasDayPart && dayToken.test(t)) return false;
   return visitVerb.test(t) && (softQualifier.test(t) || dayToken.test(t));
 }
@@ -6003,7 +6003,7 @@ function detectSoftVisitIntent(text: string): boolean {
 function detectSchedulingSignals(text: string) {
   const t = String(text ?? "").toLowerCase();
   const hasDayToken =
-    /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week|this weekend|weekend|next month)\b/i.test(
+    /\b(today|tomorrow|monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun|this week|next week|this weekend|weekend|next month)\b/i.test(
       t
     );
   const hasDayPart = /\b(morning|afternoon|evening|tonight|tonite)\b/i.test(t);
@@ -16511,6 +16511,24 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       const labelModel = normalizeDisplayCase(modelForLookup || contextModel);
       const labelColor = contextColor ? ` in ${formatColorLabel(contextColor)}` : "";
       const unitLabel = `${labelYear}${labelModel}${labelColor}`.trim();
+      const requestedDay = parseDayOfWeek(event.body ?? "");
+      const requestedDayPart = extractDayPart(event.body ?? "");
+      const requestedDayLabel = requestedDay?.day ?? "";
+      const timePrompt = requestedDayPart
+        ? `What time ${requestedDayLabel.toLowerCase()} works best for you?`
+        : "What time works best for you?";
+      if (requestedDayLabel) {
+        const requestedPhrase = `${requestedDayLabel}${requestedDayPart ? ` ${requestedDayPart}` : ""}`;
+        const daySpecificReply =
+          availableMatches.length > 0
+            ? explicitAvailabilityAskThisTurn && !recentlyConfirmedAvailable
+              ? `Absolutely — ${unitLabel} is still available right now. ${requestedPhrase} works. ${timePrompt}`
+              : `${requestedPhrase} works. ${timePrompt}`
+            : explicitAvailabilityAskThisTurn
+              ? `I’ll keep an eye on ${unitLabel} and update you right away. ${requestedPhrase} works to plan around. ${timePrompt}`
+              : `${requestedPhrase} works. ${timePrompt}`;
+        return respondWithSmsRegeneratedDraft(daySpecificReply);
+      }
       const reply =
         availableMatches.length > 0
           ? explicitAvailabilityAskThisTurn && !recentlyConfirmedAvailable

@@ -27,6 +27,20 @@
     }
   },
   {
+    "id": "schedule_shorthand_sat_morning_1",
+    "text": "I work m-f 7/4... does sat morning work 4 u",
+    "expected": {
+      "intent": "schedule",
+      "explicit_request": true,
+      "requested": {
+        "day": "saturday",
+        "time_text": "morning",
+        "time_window": "range"
+      },
+      "normalized_contains": "saturday morning"
+    }
+  },
+  {
     "id": "availability_next_week_1",
     "text": "Any openings next week?",
     "expected": {
