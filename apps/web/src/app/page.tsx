@@ -6849,8 +6849,8 @@ export default function Home() {
               }
             >
               <option value="online_only">Online</option>
-              <option value="include_walkins">All</option>
               <option value="walkin_only">Walk-in</option>
+              <option value="include_walkins">All</option>
             </select>
             <select
               className="w-full border rounded px-3 py-2 text-sm"
