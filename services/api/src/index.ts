@@ -9032,13 +9032,33 @@ function stripAgentCallFollowupWhenCustomerWillCall(reply: string, inboundText: 
   return "Sounds good — thanks for the update. When you’re ready, call us or text us and we can line up the appraisal.";
 }
 
-function applyServicePolicy(conv: any, reply: string, lastOutboundText: string): string {
+function applyServicePolicy(
+  conv: any,
+  reply: string,
+  lastOutboundText: string,
+  opts?: {
+    inboundText?: string;
+    explicitServiceIntentThisTurn?: boolean;
+    hasActionableFinanceContext?: boolean;
+    hasActionableAvailabilityContext?: boolean;
+    hasActionableSchedulingContext?: boolean;
+  }
+): string {
+  const inboundText = String(opts?.inboundText ?? "");
+  const explicitServiceIntentThisTurn =
+    opts?.explicitServiceIntentThisTurn === true || SERVICE_DEPARTMENT_RE.test(inboundText);
+  const hasActionableSalesContext =
+    opts?.hasActionableFinanceContext === true ||
+    opts?.hasActionableAvailabilityContext === true ||
+    opts?.hasActionableSchedulingContext === true;
   const state = getDialogState(conv);
   const isService =
     isServiceDialogState(state) ||
     conv.classification?.bucket === "service" ||
     conv.classification?.cta === "service_request";
   if (!isService) return reply;
+  // Prevent stale service state from overriding active sales/scheduling turns.
+  if (!explicitServiceIntentThisTurn && hasActionableSalesContext) return reply;
   let out = "We’ve received your service request and will have the service department reach out.";
   if (normalizeOutboundText(out) === normalizeOutboundText(lastOutboundText)) {
     out = "Got it — our service department will be in touch shortly.";
@@ -16798,7 +16818,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       regenPricingIntentHint
   });
   reply = applyCallbackPolicy(conv, reply, lastOutboundTextFinal);
-  reply = applyServicePolicy(conv, reply, lastOutboundTextFinal);
+  reply = applyServicePolicy(conv, reply, lastOutboundTextFinal, {
+    inboundText: String(event.body ?? ""),
+    explicitServiceIntentThisTurn: regenReducedConversationState.departmentIntent === "service",
+    hasActionableFinanceContext: regenPricingIntentHint,
+    hasActionableAvailabilityContext: regenAvailabilityPrimaryIntentHint,
+    hasActionableSchedulingContext: regenSchedulingIntentHint
+  });
   reply = applySoftSchedulePolicy(conv, reply, String(event.body ?? ""));
   reply = stripYearPreferenceIfAnyYearSpecified(reply, String(event.body ?? ""));
   reply = stripSchedulingLanguageIfNotAsked(reply, String(event.body ?? ""));
@@ -23703,7 +23729,13 @@ if (authToken && signature) {
     pricingActiveThisTurn: turnPrimaryIntent === "pricing_payments"
   });
   reply = applyCallbackPolicy(conv, reply, lastOutboundTextFinal);
-  reply = applyServicePolicy(conv, reply, lastOutboundTextFinal);
+  reply = applyServicePolicy(conv, reply, lastOutboundTextFinal, {
+    inboundText: String(event.body ?? ""),
+    explicitServiceIntentThisTurn: inboundDepartmentIntent === "service",
+    hasActionableFinanceContext,
+    hasActionableAvailabilityContext,
+    hasActionableSchedulingContext
+  });
   reply = applySoftSchedulePolicy(conv, reply, String(event.body ?? ""));
   reply = stripYearPreferenceIfAnyYearSpecified(reply, String(event.body ?? ""));
   reply = stripSchedulingLanguageIfNotAsked(reply, String(event.body ?? ""));
