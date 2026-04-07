@@ -795,6 +795,30 @@ async function resolveDepartmentTodoOwner(
   return { id: id || "", name: name || "" };
 }
 
+async function assignDepartmentLeadOwnerIfUnassigned(
+  conv: any,
+  role: DepartmentRole,
+  preferredName?: string | null
+): Promise<void> {
+  const existingOwnerId = String(conv?.leadOwner?.id ?? "").trim();
+  if (existingOwnerId) return;
+  const owner = await resolveDepartmentTodoOwner(role, preferredName);
+  const ownerId = String(owner?.id ?? "").trim();
+  if (!ownerId) return;
+  const ownerName = String(owner?.name ?? "").trim();
+  const fallbackName =
+    role === "service"
+      ? "Service Department"
+      : role === "parts"
+        ? "Parts Department"
+        : "Apparel Department";
+  conv.leadOwner = {
+    id: ownerId,
+    name: ownerName || fallbackName,
+    assignedAt: new Date().toISOString()
+  };
+}
+
 function canUserAccessConversation(user: any, conv: any): boolean {
   if (AUTH_DISABLED || !user) return true;
   const role = String(user?.role ?? "").toLowerCase();
@@ -16127,6 +16151,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       ? (regenUnifiedSlotParse.departmentIntent as DepartmentRole)
       : null);
   if (regenInboundDepartmentIntent === "parts" || regenInboundDepartmentIntent === "apparel") {
+    await assignDepartmentLeadOwnerIfUnassigned(conv, regenInboundDepartmentIntent);
     const departmentTodoOwner = await resolveDepartmentTodoOwner(
       regenInboundDepartmentIntent,
       conv.leadOwner?.name
@@ -16169,6 +16194,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     (conv.followUp?.mode === "manual_handoff" &&
       /service/.test(String(conv.followUp?.reason ?? "")));
   if (isServiceLead) {
+    await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
     const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
     const t = String(event.body ?? "").toLowerCase();
     const complimentRegex =
@@ -17264,6 +17290,7 @@ if (authToken && signature) {
     inferDepartmentFromText(event.body ?? "") ??
     semanticDepartmentIntent;
   if (inboundDepartmentIntent === "parts" || inboundDepartmentIntent === "apparel") {
+    await assignDepartmentLeadOwnerIfUnassigned(conv, inboundDepartmentIntent);
     const departmentTodoOwner = await resolveDepartmentTodoOwner(
       inboundDepartmentIntent,
       conv.leadOwner?.name
@@ -17313,6 +17340,7 @@ if (authToken && signature) {
     (conv.followUp?.mode === "manual_handoff" &&
       /service/.test(String(conv.followUp?.reason ?? "")));
   if (isServiceLead) {
+    await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
     const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
     const t = String(event.body ?? "").toLowerCase();
     const complimentRegex =

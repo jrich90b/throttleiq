@@ -1635,6 +1635,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   const existingByLead = findConversationsByLeadKey(leadKey);
   const latestByLead = existingByLead[0];
+  const isFreshLeadConversation = !latestByLead;
   let conv =
     latestByLead ??
     upsertConversationByLeadKey(leadKey, "suggest");
@@ -2014,6 +2015,37 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     channel,
     ruleName: forcedTestRide ? "room58_book_test_ride_forced" : rule.ruleName
   });
+  const inferredBucketKey = String(inferredBucket ?? "").trim().toLowerCase();
+  const inferredCtaKey = String(inferredCta ?? "").trim().toLowerCase();
+  const departmentLeadRole =
+    inferredBucketKey === "service" || inferredCtaKey === "service_request" || serviceVinRequest
+      ? "service"
+      : inferredBucketKey === "parts" || inferredCtaKey === "parts_request" || inferredCtaKey === "parts_inquiry"
+        ? "parts"
+        : inferredBucketKey === "apparel" ||
+            inferredCtaKey === "apparel_request" ||
+            inferredCtaKey === "apparel_inquiry"
+          ? "apparel"
+          : null;
+  if (isFreshLeadConversation && departmentLeadRole) {
+    const users = await listUsers();
+    const departmentOwner = pickUserForRole(users, departmentLeadRole, vendorContactName);
+    if (departmentOwner?.id) {
+      conv.leadOwner = {
+        id: departmentOwner.id,
+        name:
+          departmentOwner.name ??
+          departmentOwner.firstName ??
+          departmentOwner.email ??
+          (departmentLeadRole === "service"
+            ? "Service Department"
+            : departmentLeadRole === "parts"
+              ? "Parts Department"
+              : "Apparel Department"),
+        assignedAt: new Date().toISOString()
+      };
+    }
+  }
   if (!conv.dialogState?.name || conv.dialogState.name === "none") {
     if (inferredBucket === "inventory_interest") {
       conv.dialogState = { name: "inventory_init", updatedAt: new Date().toISOString() };
