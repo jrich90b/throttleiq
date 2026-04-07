@@ -2775,6 +2775,130 @@ async function resolveCadenceContextTag(conv: any, cadence: any): Promise<string
   return finalTag;
 }
 
+async function buildCadenceRegeneratedDraft(
+  conv: any,
+  dealerProfile: any,
+  lastDraft: any
+): Promise<{ body: string; mediaUrls?: string[] } | null> {
+  const cadence = conv?.followUpCadence;
+  if (!cadence || !lastDraft || lastDraft.provider !== "draft_ai") return null;
+  const lastSentStepRaw =
+    typeof cadence.lastSentStep === "number"
+      ? cadence.lastSentStep
+      : typeof cadence.stepIndex === "number"
+        ? Math.max(0, cadence.stepIndex - 1)
+        : null;
+  if (lastSentStepRaw == null || !Number.isFinite(lastSentStepRaw)) return null;
+  const lastSentStep = Math.max(0, Math.floor(lastSentStepRaw));
+  if (lastSentStep !== 0) return null;
+  if (cadence.kind === "post_sale" || cadence.kind === "long_term") return null;
+
+  const draftAtMs = new Date(String(lastDraft.at ?? "")).getTime();
+  if (Number.isFinite(draftAtMs)) {
+    const hasInboundAfterDraft = (conv.messages ?? []).some((m: any) => {
+      if (m?.direction !== "in") return false;
+      const atMs = new Date(String(m?.at ?? "")).getTime();
+      return Number.isFinite(atMs) && atMs > draftAtMs;
+    });
+    if (hasInboundAfterDraft) return null;
+  }
+
+  const isTradeNoInterest =
+    conv?.classification?.bucket === "trade_in_sell" &&
+    isUnknownInterestVehicle(conv) &&
+    isTradeAcceleratorLead(conv);
+  const isSellMyBikeLead = isSellLead(conv);
+  if (isTradeNoInterest || isSellMyBikeLead) return null;
+
+  const now = new Date();
+  const walkInComment = String(conv.lead?.walkInComment ?? "").trim();
+  const hasAgentContextForCadence = !!getActiveAgentContextText(conv).trim();
+  const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
+  const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "our team");
+  const followUpLabel = formatModelLabelForFollowUp(
+    conv.lead?.vehicle?.year ?? null,
+    conv.lead?.vehicle?.model ?? null
+  );
+  const labelClause = followUpLabel ? ` about ${followUpLabel}` : "";
+  const labelWithThe = followUpLabel ? ` ${followUpLabel}` : " the bike";
+  const modelName = formatModelToken(conv.lead?.vehicle?.model);
+  const modelYear = conv.lead?.vehicle?.year ? `${conv.lead?.vehicle?.year} ${modelName}` : modelName;
+  const tradeVehicle = conv?.lead?.tradeVehicle ?? null;
+  const tradeLabel =
+    tradeVehicle && (tradeVehicle.model || tradeVehicle.description) ? getSellBikeLabel(conv) : "";
+  const tradeName = normalizeDisplayCase(tradeVehicle?.model) || tradeLabel || "your trade";
+  const pricingLine =
+    getPricingAttempts(conv) > 0 ? " If you want me to run numbers, just say the word." : "";
+  const tradeLine = tradeLabel ? ` If you want to go over the trade on ${tradeLabel}, just let me know.` : "";
+  const paymentLine =
+    getDialogState(conv) === "payments_answered"
+      ? " If you want a more exact payment, I can run a quick credit app or set a time to go over numbers."
+      : "";
+  const extraLine = paymentLine || pricingLine || tradeLine;
+  const baseCtx = {
+    name: firstName,
+    agent: agentName,
+    labelClause,
+    label: labelWithThe,
+    extraLine,
+    model: modelName,
+    modelYear,
+    trade: tradeName
+  };
+
+  const engagedKind = cadence.kind === "engaged" || (!!(conv.engagement?.at || hasAgentContextForCadence));
+  const contextTag = engagedKind ? await resolveCadenceContextTag(conv, cadence) : null;
+  const shouldPreferContextualStep0NoSlots =
+    !isTradeNoInterest &&
+    !isSellMyBikeLead &&
+    (hasAgentContextForCadence || !!walkInComment || !!conv.engagement?.at) &&
+    contextTag !== "scheduling";
+  if (!shouldPreferContextualStep0NoSlots) return null;
+
+  let message: string;
+  if (!conv.lead?.walkInCommentUsedAt && walkInComment) {
+    message = buildWalkInCommentFollowUp({
+      name: firstName,
+      agent: agentName,
+      dealerName: dealerProfile?.dealerName ?? "American Harley-Davidson",
+      comment: walkInComment,
+      label: labelWithThe.trim() || "the bike"
+    });
+  } else {
+    const engagedNoSlotMap =
+      (contextTag && ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS[contextTag]) ||
+      ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS.general;
+    const variants = engagedKind ? engagedNoSlotMap[0] ?? [] : FOLLOW_UP_VARIANTS_NO_SLOTS[0] ?? [];
+    const fallback = renderFollowUpTemplate(FOLLOW_UP_MESSAGES[0], baseCtx);
+    message = variants.length
+      ? renderFollowUpTemplate(
+          pickVariantNoRepeat(
+            cadence,
+            variants,
+            `${conv.leadKey}|regen|${engagedKind ? "engaged" : "standard"}|0`,
+            `${engagedKind ? `engaged:${contextTag ?? "general"}` : "standard"}:0:noslots:regen`
+          ),
+          baseCtx
+        )
+      : fallback;
+  }
+
+  const allowProactiveSchedule = shouldAllowProactiveScheduleAsk(conv, now);
+  if (conv.scheduleSoft && !allowProactiveSchedule) {
+    message = stripSchedulingPromptFromFollowUp(message);
+  }
+  const contextLine = getFollowUpContextLine(conv, now);
+  if (contextLine && !message.toLowerCase().includes(contextLine.toLowerCase())) {
+    message = `${message} ${contextLine}`.trim();
+  }
+  message = selectNonRepeatingCadenceMessage(conv, message, [
+    "Quick follow-up — I'm here if you want to revisit this.",
+    "No rush — whenever you're ready, I can help with next steps.",
+    "If timing changed, just let me know and I can adjust."
+  ]);
+  return { body: message };
+}
+
 const SELL_FOLLOW_UP_MESSAGES = [
   "Quick check-in. If you want a fast appraisal on {bike}, I can hold a time that works for you.",
   "If it helps, we can start with a rough number first, then confirm in person. What day works?",
@@ -15090,6 +15214,21 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     });
     return res.json({ ok: true, conversation: conv, draft: invariant.draftText });
   };
+  const dealerProfile = await getDealerProfileHot();
+  const cadenceRegeneratedDraft = await buildCadenceRegeneratedDraft(conv, dealerProfile, lastDraft);
+  if (cadenceRegeneratedDraft?.body) {
+    recordRouteOutcome("regen", "cadence_contextual_regenerated", {
+      convId: conv.id,
+      leadKey: conv.leadKey
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(cadenceRegeneratedDraft.body);
+    }
+    return respondWithSmsRegeneratedDraft(
+      cadenceRegeneratedDraft.body,
+      cadenceRegeneratedDraft.mediaUrls
+    );
+  }
   const regenManualReconcile = reconcileStateFromRecentManualOutbound(conv, event.receivedAt);
   if (regenManualReconcile.changed) {
     recordRouteOutcome("regen", "manual_outbound_reconciled", {
@@ -15337,7 +15476,6 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenNeedsLienHolderInfo = !!(
     regenTradePayoffAccepted && regenTradePayoffParse?.needsLienHolderInfo
   );
-  const dealerProfile = await getDealerProfileHot();
   const weatherStatus = await safeDealerWeatherStatus(dealerProfile, "regen");
   const regenTextingTypoJoke = isTextingTypoJokeText(event.body ?? "");
   const regenRoutingParserEligible =
