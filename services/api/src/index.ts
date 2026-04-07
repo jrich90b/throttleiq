@@ -5419,6 +5419,13 @@ function buildCorporateMisrouteReply(topic: CorporateMisrouteTopic): string {
   return `${prefix} For country-level or international support, please use Harley-Davidson’s website country selector and your local Motor Company support team.`;
 }
 
+function shouldAlwaysDraftCorporateMisroute(): boolean {
+  const raw = String(process.env.CORPORATE_MISROUTE_ALWAYS_DRAFT ?? "true")
+    .trim()
+    .toLowerCase();
+  return !(raw === "0" || raw === "false" || raw === "no" || raw === "off");
+}
+
 function applyConversationStateReducer(
   conv: any,
   parsed: ConversationStateParse | null
@@ -19417,11 +19424,13 @@ if (authToken && signature) {
     !semanticDepartmentIntent
   ) {
     const reply = buildCorporateMisrouteReply(corporateMisrouteTopic);
+    const forceDraft = shouldAlwaysDraftCorporateMisroute();
     logRouteOutcome("corporate_misroute_redirect", {
       topic: corporateMisrouteTopic,
-      confidence: conversationStateParse?.confidence ?? null
+      confidence: conversationStateParse?.confidence ?? null,
+      draftOnly: forceDraft
     });
-    if (webhookMode === "suggest") {
+    if (webhookMode === "suggest" || forceDraft) {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
