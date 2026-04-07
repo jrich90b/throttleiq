@@ -15435,6 +15435,144 @@ app.post("/conversations/:id/send", async (req, res) => {
     appendManualOutboundDepartmentSoftTags(conv, outboundBody, opts);
     return;
   };
+  const maybeBookManualOutboundAppointmentEvent = async (): Promise<boolean> => {
+    const appt = conv.appointment;
+    if (!appt) return false;
+    if (String(appt.bookedEventId ?? "").trim()) return false;
+    const whenIso = String(appt.whenIso ?? "").trim();
+    if (!whenIso) return false;
+    const start = new Date(whenIso);
+    if (Number.isNaN(start.getTime())) return false;
+
+    try {
+      const cfg = await getSchedulerConfigHot();
+      const cal = await getAuthedCalendarClient();
+      const appointmentType = String(appt.matchedSlot?.appointmentType ?? inferAppointmentTypeFromConv(conv));
+      const durationMinutes = cfg.appointmentTypes?.[appointmentType]?.durationMinutes ?? 60;
+      const fallbackEnd = new Date(start.getTime() + durationMinutes * 60_000);
+
+      let chosenSlot =
+        appt.matchedSlot?.calendarId && appt.matchedSlot?.start && appt.matchedSlot?.end
+          ? {
+              salespersonId: String(appt.matchedSlot.salespersonId ?? "").trim() || null,
+              salespersonName: String(appt.matchedSlot.salespersonName ?? "").trim() || null,
+              calendarId: String(appt.matchedSlot.calendarId ?? "").trim(),
+              start: String(appt.matchedSlot.start ?? "").trim(),
+              end: String(appt.matchedSlot.end ?? "").trim(),
+              startLocal:
+                String(appt.matchedSlot.startLocal ?? "").trim() ||
+                formatSlotLocal(String(appt.matchedSlot.start ?? "").trim(), cfg.timezone),
+              endLocal:
+                String(appt.matchedSlot.endLocal ?? "").trim() ||
+                formatSlotLocal(String(appt.matchedSlot.end ?? "").trim(), cfg.timezone),
+              appointmentType
+            }
+          : null;
+
+      if (!chosenSlot) {
+        const prefIds = getPreferredSalespeopleForConv(cfg, conv);
+        const salespeople = cfg.salespeople ?? [];
+        const startIso = start.toISOString();
+        const endIso = fallbackEnd.toISOString();
+        for (const salespersonId of prefIds) {
+          const sp = salespeople.find(s => s.id === salespersonId);
+          if (!sp?.calendarId) continue;
+          const fb = await queryFreeBusy(cal, [sp.calendarId], startIso, endIso, cfg.timezone);
+          const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any[];
+          const blocked = busy.some((b: any) => {
+            const bStart = new Date(b.start);
+            const bEnd = new Date(b.end);
+            return start < bEnd && bStart < fallbackEnd;
+          });
+          if (blocked) continue;
+          chosenSlot = {
+            salespersonId: sp.id,
+            salespersonName: sp.name,
+            calendarId: sp.calendarId,
+            start: startIso,
+            end: endIso,
+            startLocal: formatSlotLocal(startIso, cfg.timezone),
+            endLocal: formatSlotLocal(endIso, cfg.timezone),
+            appointmentType
+          };
+          break;
+        }
+      }
+
+      if (!chosenSlot?.calendarId || !chosenSlot.start || !chosenSlot.end) return false;
+
+      const lead = conv.lead ?? {};
+      const leadNameRaw = String(lead?.name ?? "").trim();
+      const firstName = lead?.firstName ?? "";
+      const lastName = lead?.lastName ?? "";
+      const leadName =
+        leadNameRaw || [firstName, lastName].filter(Boolean).join(" ").trim() || conv.leadKey;
+      const stockId = lead?.vehicle?.stockId ?? null;
+      const summary = `Appt: ${appointmentType} – ${leadName}${stockId ? ` – ${stockId}` : ""}`.trim();
+      const descriptionLines = [
+        `LeadKey: ${conv.leadKey}`,
+        `LeadRef: ${lead?.leadRef ?? ""}`,
+        `Phone: ${lead?.phone ?? conv.leadKey}`,
+        `Email: ${lead?.email ?? ""}`,
+        `FirstName: ${firstName ?? ""}`,
+        `LastName: ${lastName ?? ""}`,
+        `Stock: ${lead?.vehicle?.stockId ?? ""}`,
+        `VIN: ${lead?.vehicle?.vin ?? ""}`,
+        `Source: ${lead?.source ?? ""}`,
+        `VisitType: ${appointmentType}`
+      ].filter(Boolean);
+      const colorId = getAppointmentTypeColorId(cfg, appointmentType);
+      const eventObj = await insertEvent(
+        cal,
+        chosenSlot.calendarId,
+        cfg.timezone,
+        summary,
+        descriptionLines.join("\n"),
+        chosenSlot.start,
+        chosenSlot.end,
+        colorId
+      );
+
+      appt.status = "confirmed";
+      appt.whenIso = chosenSlot.start;
+      appt.whenText = chosenSlot.startLocal ?? formatSlotLocal(chosenSlot.start, cfg.timezone);
+      appt.updatedAt = new Date().toISOString();
+      appt.acknowledged = true;
+      appt.bookedEventId = eventObj.id ?? null;
+      appt.bookedEventLink = eventObj.htmlLink ?? null;
+      appt.bookedSalespersonId = chosenSlot.salespersonId ?? null;
+      appt.matchedSlot = {
+        salespersonId: chosenSlot.salespersonId ?? undefined,
+        salespersonName: chosenSlot.salespersonName ?? undefined,
+        calendarId: chosenSlot.calendarId,
+        start: chosenSlot.start,
+        end: chosenSlot.end,
+        startLocal: chosenSlot.startLocal,
+        endLocal: chosenSlot.endLocal,
+        appointmentType
+      };
+      appt.reschedulePending = false;
+      if (chosenSlot.salespersonId) {
+        setPreferredSalespersonForConv(
+          conv,
+          { id: chosenSlot.salespersonId, name: chosenSlot.salespersonName ?? undefined },
+          "manual_outbound_schedule_confirmed"
+        );
+      }
+      onAppointmentBooked(conv);
+      recordRouteOutcome("live", "manual_outbound_schedule_event_booked", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        eventId: eventObj.id ?? null,
+        salespersonId: chosenSlot.salespersonId ?? null,
+        whenIso: chosenSlot.start
+      });
+      return true;
+    } catch (err: any) {
+      console.log("[manual-outbound-schedule-book] failed:", err?.message ?? err);
+      return false;
+    }
+  };
   const reconcileManualOutboundState = async (
     outboundBody: string,
     opts?: {
@@ -15563,7 +15701,7 @@ app.post("/conversations/:id/send", async (req, res) => {
         timeText: normalizedText || text
       });
       setDialogState(conv, "schedule_booked");
-      onAppointmentBooked(conv);
+      await maybeBookManualOutboundAppointmentEvent();
       recordRouteOutcome("live", "manual_outbound_schedule_confirmed", {
         convId: conv.id,
         leadKey: conv.leadKey,
@@ -15577,7 +15715,7 @@ app.post("/conversations/:id/send", async (req, res) => {
 
     if (didSetAppointment) {
       setDialogState(conv, "schedule_booked");
-      onAppointmentBooked(conv);
+      await maybeBookManualOutboundAppointmentEvent();
       recordRouteOutcome("live", "manual_outbound_schedule_confirmed", {
         convId: conv.id,
         leadKey: conv.leadKey,
