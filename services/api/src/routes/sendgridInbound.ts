@@ -2473,7 +2473,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
             String(serviceOwner.firstName ?? "").trim() ||
             "Service"
         }
-      : { id: "", name: "" };
+      : { id: "", name: "Service Department" };
     const notifyOwner = serviceOwner ?? leadOwner;
     const ownerName =
       String(notifyOwner?.name ?? "").trim() ||
@@ -2490,14 +2490,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       const callbackCfg = await getSchedulerConfig();
       const callbackTz = callbackCfg.timezone || "America/New_York";
       const callbackSchedule = buildCallbackTodoSchedule(callbackTimeHint, callbackTz);
-      const callbackTodoOwner = serviceOwner
-        ? serviceTodoOwner
-        : conv.leadOwner?.id
-          ? {
-              id: conv.leadOwner.id,
-              name: conv.leadOwner.name
-            }
-          : undefined;
+      const callbackTodoOwner = serviceTodoOwner;
       addTodo(
         conv,
         "call",

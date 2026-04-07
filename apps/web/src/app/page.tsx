@@ -2922,15 +2922,18 @@ export default function Home() {
       const leadKey = String(t.leadKey ?? "").toLowerCase();
       const leadOwner = String(t.leadOwnerName ?? "").trim();
       const departmentOwner = String(t.departmentOwnerName ?? "").trim();
+      const reason = String(t.reason ?? "").toLowerCase();
+      const todoTeam =
+        reason === "service" || reason === "parts" || reason === "apparel" ? reason : "sales";
       if (isManager && todoLeadOwnerFilter !== "all") {
-        if (todoLeadOwnerFilter === "lead:__unassigned__") {
-          if (leadOwner) return false;
-        } else if (todoLeadOwnerFilter === "department:__unassigned__") {
-          if (departmentOwner) return false;
-        } else if (todoLeadOwnerFilter.startsWith("lead:")) {
-          if (leadOwner !== todoLeadOwnerFilter.slice(5)) return false;
-        } else if (todoLeadOwnerFilter.startsWith("department:")) {
-          if (departmentOwner !== todoLeadOwnerFilter.slice(11)) return false;
+        if (todoLeadOwnerFilter === "team:unassigned") {
+          if (todoTeam === "sales") {
+            if (leadOwner) return false;
+          } else if (departmentOwner) {
+            return false;
+          }
+        } else if (todoLeadOwnerFilter.startsWith("team:")) {
+          if (todoTeam !== todoLeadOwnerFilter.slice(5)) return false;
         } else {
           return false;
         }
@@ -2939,28 +2942,6 @@ export default function Home() {
       return leadName.includes(q) || leadKey.includes(q);
     });
   }, [todos, todoQuery, isManager, todoLeadOwnerFilter]);
-
-  const todoLeadOwnerOptions = useMemo(() => {
-    const names = Array.from(
-      new Set(
-        todos
-          .map(t => String(t.leadOwnerName ?? "").trim())
-          .filter(Boolean)
-      )
-    ).sort((a, b) => a.localeCompare(b));
-    return names;
-  }, [todos]);
-
-  const todoDepartmentOwnerOptions = useMemo(() => {
-    const names = Array.from(
-      new Set(
-        todos
-          .map(t => String(t.departmentOwnerName ?? "").trim())
-          .filter(Boolean)
-      )
-    ).sort((a, b) => a.localeCompare(b));
-    return names;
-  }, [todos]);
 
   useEffect(() => {
     if (blockForm.salespersonId) return;
@@ -3454,39 +3435,35 @@ export default function Home() {
     );
   }, [conversations, view]);
 
-  const inboxDepartmentOwnerByConv = useMemo(() => {
-    const out = new Map<string, string>();
+  const inboxDepartmentTeamsByConv = useMemo(() => {
+    const out = new Map<string, Set<string>>();
     for (const t of todos) {
       const reason = String(t.reason ?? "").toLowerCase();
       if (reason !== "service" && reason !== "parts" && reason !== "apparel") continue;
-      const owner = String(t.departmentOwnerName ?? "").trim();
-      if (!owner) continue;
-      if (!out.has(t.convId)) out.set(t.convId, owner);
+      if (!out.has(t.convId)) out.set(t.convId, new Set<string>());
+      out.get(t.convId)?.add(reason);
     }
     return out;
   }, [todos]);
 
-  const inboxLeadOwnerOptions = useMemo(() => {
-    const names = Array.from(
-      new Set(
-        visibleConversations
-          .map(c => String(c.leadOwner?.name ?? c.leadOwner?.id ?? "").trim())
-          .filter(Boolean)
-      )
-    ).sort((a, b) => a.localeCompare(b));
-    return names;
-  }, [visibleConversations]);
-
-  const inboxDepartmentOwnerOptions = useMemo(() => {
-    const names = Array.from(
-      new Set(
-        visibleConversations
-          .map(c => String(inboxDepartmentOwnerByConv.get(c.id) ?? "").trim())
-          .filter(Boolean)
-      )
-    ).sort((a, b) => a.localeCompare(b));
-    return names;
-  }, [visibleConversations, inboxDepartmentOwnerByConv]);
+  const inboxTodoOwnerByConv = useMemo(() => {
+    const out = new Map<string, string>();
+    for (const t of todos) {
+      const ownerDisplay = String(
+        t.ownerDisplayName ?? t.departmentOwnerName ?? t.ownerName ?? ""
+      ).trim();
+      const reason = String(t.reason ?? "").toLowerCase();
+      const isDepartmentTodo =
+        reason === "service" ||
+        reason === "parts" ||
+        reason === "apparel" ||
+        t.ownerDisplayType === "department_owner";
+      if (!isDepartmentTodo) continue;
+      if (!ownerDisplay) continue;
+      if (!out.has(t.convId)) out.set(t.convId, ownerDisplay);
+    }
+    return out;
+  }, [todos]);
 
   const filteredConversations = useMemo(() => {
     const q = inboxQuery.trim().toLowerCase();
@@ -3494,15 +3471,20 @@ export default function Home() {
     return visibleConversations.filter(c => {
       if (isManager && inboxOwnerFilter !== "all") {
         const leadOwner = String(c.leadOwner?.name ?? c.leadOwner?.id ?? "").trim();
-        const departmentOwner = String(inboxDepartmentOwnerByConv.get(c.id) ?? "").trim();
-        if (inboxOwnerFilter === "lead:__unassigned__") {
-          if (leadOwner) return false;
-        } else if (inboxOwnerFilter === "department:__unassigned__") {
-          if (departmentOwner) return false;
-        } else if (inboxOwnerFilter.startsWith("lead:")) {
-          if (leadOwner !== inboxOwnerFilter.slice(5)) return false;
-        } else if (inboxOwnerFilter.startsWith("department:")) {
-          if (departmentOwner !== inboxOwnerFilter.slice(11)) return false;
+        const teams = inboxDepartmentTeamsByConv.get(c.id) ?? new Set<string>();
+        const hasServiceTodo = teams.has("service");
+        const hasPartsTodo = teams.has("parts");
+        const hasApparelTodo = teams.has("apparel");
+        if (inboxOwnerFilter === "team:sales") {
+          if (!leadOwner) return false;
+        } else if (inboxOwnerFilter === "team:service") {
+          if (!hasServiceTodo) return false;
+        } else if (inboxOwnerFilter === "team:parts") {
+          if (!hasPartsTodo) return false;
+        } else if (inboxOwnerFilter === "team:apparel") {
+          if (!hasApparelTodo) return false;
+        } else if (inboxOwnerFilter === "team:unassigned") {
+          if (leadOwner || hasServiceTodo || hasPartsTodo || hasApparelTodo) return false;
         } else {
           return false;
         }
@@ -3517,7 +3499,7 @@ export default function Home() {
       }
       return false;
     });
-  }, [visibleConversations, inboxQuery, isManager, inboxOwnerFilter, inboxDepartmentOwnerByConv]);
+  }, [visibleConversations, inboxQuery, isManager, inboxOwnerFilter, inboxDepartmentTeamsByConv]);
 
   const groupedConversations = useMemo(() => {
     const groups: Array<{ label: string; items: ConversationListItem[] }> = [];
@@ -6324,22 +6306,11 @@ export default function Home() {
                   title="Filter inbox by owner"
                 >
                   <option value="all">All owners</option>
-                  <optgroup label="Lead owners">
-                    {inboxLeadOwnerOptions.map(name => (
-                      <option key={`inbox-lead:${name}`} value={`lead:${name}`}>
-                        {name}
-                      </option>
-                    ))}
-                    <option value="lead:__unassigned__">Unassigned</option>
-                  </optgroup>
-                  <optgroup label="Department owners">
-                    {inboxDepartmentOwnerOptions.map(name => (
-                      <option key={`inbox-dept:${name}`} value={`department:${name}`}>
-                        {name}
-                      </option>
-                    ))}
-                    <option value="department:__unassigned__">Unassigned</option>
-                  </optgroup>
+                  <option value="team:sales">Sales</option>
+                  <option value="team:service">Service</option>
+                  <option value="team:parts">Parts</option>
+                  <option value="team:apparel">Apparel</option>
+                  <option value="team:unassigned">Unassigned</option>
                 </select>
               ) : null}
             </div>
@@ -6456,11 +6427,14 @@ export default function Home() {
                               ? `closed: ${new Date(c.closedAt).toLocaleString()}`
                               : `updated: ${new Date(c.updatedAt).toLocaleString()}`}
                           </div>
-                          {c.leadOwner?.name || c.leadOwner?.id ? (
+                          {(() => {
+                            const inboxOwner = inboxTodoOwnerByConv.get(c.id) || c.leadOwner?.name || c.leadOwner?.id;
+                            return inboxOwner ? (
                             <div className="text-xs text-red-600 mt-1">
-                              Owner: {c.leadOwner?.name || c.leadOwner?.id}
+                              Owner: {inboxOwner}
                             </div>
-                          ) : null}
+                            ) : null;
+                          })()}
                         </button>
                         <div className="relative border-l shrink-0 w-10 flex items-center justify-center bg-[var(--surface-2)]">
                           <button
@@ -6719,22 +6693,11 @@ export default function Home() {
                     title="Filter by owner"
                   >
                     <option value="all">All owners</option>
-                    <optgroup label="Lead owners">
-                      {todoLeadOwnerOptions.map(name => (
-                        <option key={`lead:${name}`} value={`lead:${name}`}>
-                          {name}
-                        </option>
-                      ))}
-                      <option value="lead:__unassigned__">Unassigned</option>
-                    </optgroup>
-                    <optgroup label="Department owners">
-                      {todoDepartmentOwnerOptions.map(name => (
-                        <option key={`department:${name}`} value={`department:${name}`}>
-                          {name}
-                        </option>
-                      ))}
-                      <option value="department:__unassigned__">Unassigned</option>
-                    </optgroup>
+                    <option value="team:sales">Sales</option>
+                    <option value="team:service">Service</option>
+                    <option value="team:parts">Parts</option>
+                    <option value="team:apparel">Apparel</option>
+                    <option value="team:unassigned">Unassigned</option>
                   </select>
                 </>
               ) : null}
