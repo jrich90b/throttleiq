@@ -5883,25 +5883,27 @@ export default function Home() {
           onClick={() => setMobileNavOpen(false)}
         />
       ) : null}
-      <div className="md:hidden w-full flex items-center justify-between px-3 py-2 border-b border-[var(--border)] bg-[var(--surface)]">
-        <button
-          className="px-2 py-1 border rounded text-sm"
-          onClick={() => setMobileNavOpen(true)}
-          title="Menu"
-        >
-          ☰
-        </button>
-        <div className="text-sm font-semibold">{getSectionTitle()}</div>
-        {isConversationSection && mobilePanel === "detail" ? (
+      <div className="md:hidden w-full flex items-center gap-2 px-4 py-2 border-b border-[var(--border)] bg-[var(--surface)]">
+        <div className="w-[60px] shrink-0">
           <button
             className="px-2 py-1 border rounded text-sm"
-            onClick={() => setMobilePanel("list")}
+            onClick={() => setMobileNavOpen(true)}
+            title="Menu"
           >
-            Back
+            ☰
           </button>
-        ) : (
-          <div className="w-[52px]" />
-        )}
+        </div>
+        <div className="min-w-0 flex-1 text-center text-sm font-semibold truncate">{getSectionTitle()}</div>
+        <div className="w-[60px] shrink-0 flex justify-end">
+          {isConversationSection && mobilePanel === "detail" ? (
+            <button
+              className="px-2 py-1 border rounded text-sm"
+              onClick={() => setMobilePanel("list")}
+            >
+              Back
+            </button>
+          ) : null}
+        </div>
       </div>
       <div className="flex-1 flex md:flex-row flex-col min-h-0">
       <aside className={`fixed inset-y-0 left-0 md:relative md:inset-auto z-50 w-16 md:h-screen border-r border-[var(--palette-graphite)] bg-[var(--palette-graphite)] text-white flex flex-col items-center py-3 cursor-pointer overflow-x-visible overflow-y-hidden transform transition-transform duration-200 ${mobileNavOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"} md:flex`}>
@@ -9794,8 +9796,7 @@ export default function Home() {
                     onClick={() => setAgentContextOpen(prev => !prev)}
                     title="Open internal agent context"
                   >
-                    <span className="sm:hidden">Ctx</span>
-                    <span className="hidden sm:inline">Context</span>
+                    Context
                   </button>
                 ) : null}
                 {modeSaving ? <span className="text-xs text-gray-500">Saving…</span> : null}
