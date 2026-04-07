@@ -5618,6 +5618,21 @@ function applyConversationStateReducer(
   return { departmentIntent: null, corporateMisrouteTopic };
 }
 
+function resolveValidatedDepartmentIntent(args: {
+  parserIntent: DepartmentRole | null;
+  semanticIntent: DepartmentRole | null;
+  text: string;
+}): DepartmentRole | null {
+  if (args.parserIntent) return args.parserIntent;
+  const semantic = args.semanticIntent;
+  if (!semantic) return null;
+  const lexical = inferDepartmentFromText(args.text);
+  if (semantic === "service") return lexical === "service" ? "service" : null;
+  if (semantic === "parts") return lexical === "parts" ? "parts" : null;
+  if (semantic === "apparel") return lexical === "apparel" ? "apparel" : null;
+  return null;
+}
+
 function hasConversationStateParserHint(text: string, conv: any): boolean {
   const lower = String(text ?? "").toLowerCase();
   return (
@@ -15666,6 +15681,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       }
     }
   }
+  try {
 
   const channel =
     req.body?.channel === "email" ? "email" : req.body?.channel === "sms" ? "sms" : "sms";
@@ -16382,15 +16398,19 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
 
   const serviceDialogState = getDialogState(conv);
-  const regenInboundDepartmentIntentFromParser =
-    regenReducedConversationState.departmentIntent ??
-    (regenUnifiedSlotParse?.departmentIntent && regenUnifiedSlotParse.departmentIntent !== "none"
+  const regenInboundDepartmentIntentFromParser = regenReducedConversationState.departmentIntent;
+  const regenInboundDepartmentIntentFromSemantic =
+    regenUnifiedSlotParse?.departmentIntent && regenUnifiedSlotParse.departmentIntent !== "none"
       ? (regenUnifiedSlotParse.departmentIntent as DepartmentRole)
-      : null);
+      : null;
   const regenInboundDepartmentIntentFromRegex = inferDepartmentFromText(event.body ?? "");
   // Service routing must be parser/schema driven (no regex fallback for service).
   const regenInboundDepartmentIntent =
-    regenInboundDepartmentIntentFromParser ??
+    resolveValidatedDepartmentIntent({
+      parserIntent: regenInboundDepartmentIntentFromParser,
+      semanticIntent: regenInboundDepartmentIntentFromSemantic,
+      text: event.body ?? ""
+    }) ??
     (regenInboundDepartmentIntentFromRegex === "parts" ||
     regenInboundDepartmentIntentFromRegex === "apparel"
       ? regenInboundDepartmentIntentFromRegex
@@ -16907,7 +16927,18 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         lastDraftAt: lastDraft?.at ?? null
       }
     });
-  });
+  } catch (err: any) {
+    console.error("[regenerate] failed", {
+      convId: conv?.id ?? null,
+      leadKey: conv?.leadKey ?? null,
+      error: err?.message ?? String(err),
+      stack: err?.stack ?? null
+    });
+    return res
+      .status(500)
+      .json({ ok: false, error: err?.message ?? "regenerate_failed" });
+  }
+});
 
 app.post("/conversations/:id/call", async (req, res) => {
   const conv = getConversation(req.params.id);
@@ -17576,12 +17607,16 @@ if (authToken && signature) {
   }
 
   const dialogState = getDialogState(conv);
-  const inboundDepartmentIntentFromParser =
-    reducedConversationState.departmentIntent ?? semanticDepartmentIntent;
+  const inboundDepartmentIntentFromParser = reducedConversationState.departmentIntent;
+  const inboundDepartmentIntentFromSemantic = semanticDepartmentIntent;
   const inboundDepartmentIntentFromRegex = inferDepartmentFromText(event.body ?? "");
   // Service routing must be parser/schema driven (no regex fallback for service).
   const inboundDepartmentIntent =
-    inboundDepartmentIntentFromParser ??
+    resolveValidatedDepartmentIntent({
+      parserIntent: inboundDepartmentIntentFromParser,
+      semanticIntent: inboundDepartmentIntentFromSemantic,
+      text: event.body ?? ""
+    }) ??
     (inboundDepartmentIntentFromRegex === "parts" || inboundDepartmentIntentFromRegex === "apparel"
       ? inboundDepartmentIntentFromRegex
       : null);
