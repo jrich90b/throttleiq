@@ -16252,11 +16252,18 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
 
   const serviceDialogState = getDialogState(conv);
-  const regenInboundDepartmentIntent =
+  const regenInboundDepartmentIntentFromParser =
     regenReducedConversationState.departmentIntent ??
-    inferDepartmentFromText(event.body ?? "") ??
     (regenUnifiedSlotParse?.departmentIntent && regenUnifiedSlotParse.departmentIntent !== "none"
       ? (regenUnifiedSlotParse.departmentIntent as DepartmentRole)
+      : null);
+  const regenInboundDepartmentIntentFromRegex = inferDepartmentFromText(event.body ?? "");
+  // Service routing must be parser/schema driven (no regex fallback for service).
+  const regenInboundDepartmentIntent =
+    regenInboundDepartmentIntentFromParser ??
+    (regenInboundDepartmentIntentFromRegex === "parts" ||
+    regenInboundDepartmentIntentFromRegex === "apparel"
+      ? regenInboundDepartmentIntentFromRegex
       : null);
   if (regenInboundDepartmentIntent === "parts" || regenInboundDepartmentIntent === "apparel") {
     await assignDepartmentLeadOwnerIfUnassigned(conv, regenInboundDepartmentIntent);
@@ -16315,7 +16322,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenSuppressStickyServiceRouting =
     regenStickyServiceOnlyContext &&
     regenLikelySalesOriginForServiceGuard &&
-    regenInboundSchedulingSignalsForServiceGuard.explicit &&
+    regenInboundDepartmentIntent !== "service" &&
     !SERVICE_DEPARTMENT_RE.test(String(event.body ?? ""));
   const isServiceLead =
     regenInboundDepartmentIntent === "service" ||
@@ -17412,10 +17419,15 @@ if (authToken && signature) {
   }
 
   const dialogState = getDialogState(conv);
+  const inboundDepartmentIntentFromParser =
+    reducedConversationState.departmentIntent ?? semanticDepartmentIntent;
+  const inboundDepartmentIntentFromRegex = inferDepartmentFromText(event.body ?? "");
+  // Service routing must be parser/schema driven (no regex fallback for service).
   const inboundDepartmentIntent =
-    reducedConversationState.departmentIntent ??
-    inferDepartmentFromText(event.body ?? "") ??
-    semanticDepartmentIntent;
+    inboundDepartmentIntentFromParser ??
+    (inboundDepartmentIntentFromRegex === "parts" || inboundDepartmentIntentFromRegex === "apparel"
+      ? inboundDepartmentIntentFromRegex
+      : null);
   if (inboundDepartmentIntent === "parts" || inboundDepartmentIntent === "apparel") {
     await assignDepartmentLeadOwnerIfUnassigned(conv, inboundDepartmentIntent);
     const departmentTodoOwner = await resolveDepartmentTodoOwner(
@@ -17480,7 +17492,7 @@ if (authToken && signature) {
   const suppressStickyServiceRouting =
     stickyServiceOnlyContext &&
     likelySalesOriginForServiceGuard &&
-    inboundSchedulingSignals.explicit &&
+    inboundDepartmentIntent !== "service" &&
     !SERVICE_DEPARTMENT_RE.test(String(event.body ?? ""));
   const isServiceLead =
     inboundDepartmentIntent === "service" ||
