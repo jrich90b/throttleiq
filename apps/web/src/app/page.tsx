@@ -749,6 +749,7 @@ type TodoItem = {
   reason: string;
   summary: string;
   action?: string;
+  callbackTimeLabel?: string | null;
   dueAt?: string | null;
   reminderAt?: string | null;
   createdAt: string;
@@ -6576,7 +6577,8 @@ export default function Home() {
               const reason = (t.reason ?? "").toLowerCase();
               const isInternalNoteTodo = /(^|\\b)note(\\b|$)/.test(reason);
               const showCallButton = !isInternalNoteTodo;
-              const requestedCallTime = todoRequestedCallTimeLabel(t);
+              const requestedCallTime =
+                todoRequestedCallTimeLabel(t) || String(t.callbackTimeLabel ?? "").trim() || null;
               return (
                 <div key={t.id} className="p-4 flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">

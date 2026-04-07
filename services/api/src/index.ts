@@ -13478,6 +13478,24 @@ app.get("/todos", requirePermission("canAccessTodos"), async (req, res) => {
     const requesterId = String(user?.id ?? "").trim();
     const cfg = await getSchedulerConfigHot();
     const actionTimeZone = cfg.timezone || "America/New_York";
+    const openTodos = listOpenTodos();
+    const callbackTimeByConv = new Map<string, string>();
+    for (const todo of openTodos) {
+      if (todo.status !== "open" || String(todo.reason ?? "").toLowerCase() !== "call") continue;
+      const dueAtIso = String((todo as any).dueAt ?? "").trim();
+      const dueLabel = formatTodoCallDueAtLabel(dueAtIso, actionTimeZone);
+      if (dueLabel) {
+        if (!callbackTimeByConv.has(todo.convId)) callbackTimeByConv.set(todo.convId, dueLabel);
+        continue;
+      }
+      const summaryHint = String(todo.summary ?? "")
+        .match(/^call requested:\s*(.+)$/i)?.[1]
+        ?.replace(/[.]+$/, "")
+        ?.trim();
+      if (summaryHint && !callbackTimeByConv.has(todo.convId)) {
+        callbackTimeByConv.set(todo.convId, summaryHint);
+      }
+    }
     const extractNameFromSummary = (summary?: string | null) => {
       const text = String(summary ?? "");
       const match =
@@ -13489,7 +13507,7 @@ app.get("/todos", requirePermission("canAccessTodos"), async (req, res) => {
       const cleaned = raw.replace(/\s{2,}/g, " ").trim();
       return cleaned || null;
     };
-    const todos = listOpenTodos()
+    const todos = openTodos
       .filter(t => {
         if (isManager) return true;
         const conv = getConversation(t.convId);
@@ -13519,7 +13537,8 @@ app.get("/todos", requirePermission("canAccessTodos"), async (req, res) => {
           extractNameFromSummary(t.summary) ||
           null;
         const action = deriveTodoActionLabel(t, conv, actionTimeZone);
-        return { ...t, leadName, action };
+        const callbackTimeLabel = callbackTimeByConv.get(t.convId) ?? null;
+        return { ...t, leadName, action, callbackTimeLabel };
       });
     res.json({ ok: true, todos });
   } catch (err: any) {
