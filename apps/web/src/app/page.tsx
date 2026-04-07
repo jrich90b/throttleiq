@@ -7955,11 +7955,6 @@ export default function Home() {
                     </div>
                   </div>
                   <div className="border rounded-lg p-3 bg-white">
-                    <div className="text-xs text-gray-500">Close Rate</div>
-                    <div className="text-2xl font-semibold mt-1">{kpiOverview.totals.closeRatePct.toFixed(2)}%</div>
-                    <div className="text-xs text-gray-500 mt-1">{kpiOverview.totals.closedCount} closed</div>
-                  </div>
-                  <div className="border rounded-lg p-3 bg-white">
                     <div className="text-xs text-gray-500">Sold Close Rate</div>
                     <div className="text-2xl font-semibold mt-1">
                       {kpiOverview.totals.soldCloseRatePct.toFixed(2)}%
