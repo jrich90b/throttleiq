@@ -2399,7 +2399,7 @@ const buildWalkInCommentFollowUp = ({
   const mentionsOrderPath =
     /\b(order|dealer trade|get one|find one|locate one|commitment|commit)\b/.test(lower);
   if (mentionsOrderPath) {
-    return `${intro} Let’s set a time to go over timing, numbers, and next steps to get ${bikeWithArticle}. What day works best for you?`;
+    return `${intro} Just following up. I can walk you through timing, numbers, and next steps to get ${bikeWithArticle}. Want to pick a time this week to go over options?`;
   }
 
   const mentionsWeatherTestRide =
