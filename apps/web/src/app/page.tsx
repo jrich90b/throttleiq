@@ -909,6 +909,8 @@ type KpiOverview = {
     medianTimeToCallMinutes: number | null;
     appointmentCount: number;
     appointmentRatePct: number;
+    appointmentShowedCount: number;
+    appointmentShowRatePct: number;
     soldCount: number;
     soldCloseRatePct: number;
     closedCount: number;
@@ -925,6 +927,7 @@ type KpiOverview = {
     leadCount: number;
     responseRatePct: number;
     appointmentRatePct: number;
+    appointmentShowRatePct: number;
     callRatePct: number;
     soldCloseRatePct: number;
   }>;
@@ -940,6 +943,7 @@ type KpiOverview = {
     respondedCount: number;
     responseRatePct: number;
     appointmentCount: number;
+    appointmentShowedCount: number;
     callCount: number;
     soldCount: number;
   }>;
@@ -7991,7 +7995,7 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                   <div className="border rounded-lg p-3 bg-white">
                     <div className="text-xs text-gray-500">Call Rate</div>
                     <div className="text-2xl font-semibold mt-1">{kpiOverview.totals.callRatePct.toFixed(2)}%</div>
@@ -8009,6 +8013,15 @@ export default function Home() {
                       {kpiOverview.totals.medianTimeToCallMinutes != null
                         ? `${kpiOverview.totals.medianTimeToCallMinutes}m`
                         : "N/A"}
+                    </div>
+                  </div>
+                  <div className="border rounded-lg p-3 bg-white">
+                    <div className="text-xs text-gray-500">Appointment Show Rate</div>
+                    <div className="text-2xl font-semibold mt-1">
+                      {kpiOverview.totals.appointmentShowRatePct.toFixed(2)}%
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      {kpiOverview.totals.appointmentShowedCount} showed up
                     </div>
                   </div>
                   <div className="border rounded-lg p-3 bg-white">
@@ -8053,6 +8066,7 @@ export default function Home() {
                             <th className="text-right px-3 py-2">Response %</th>
                             <th className="text-right px-3 py-2">Call %</th>
                             <th className="text-right px-3 py-2">Appt %</th>
+                            <th className="text-right px-3 py-2">Show %</th>
                             <th className="text-right px-3 py-2">Sold %</th>
                           </tr>
                         </thead>
@@ -8064,6 +8078,7 @@ export default function Home() {
                               <td className="px-3 py-2 text-right">{row.responseRatePct.toFixed(2)}%</td>
                               <td className="px-3 py-2 text-right">{row.callRatePct.toFixed(2)}%</td>
                               <td className="px-3 py-2 text-right">{row.appointmentRatePct.toFixed(2)}%</td>
+                              <td className="px-3 py-2 text-right">{row.appointmentShowRatePct.toFixed(2)}%</td>
                               <td className="px-3 py-2 text-right">{row.soldCloseRatePct.toFixed(2)}%</td>
                             </tr>
                           ))}

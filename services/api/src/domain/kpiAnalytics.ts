@@ -32,6 +32,8 @@ export type KpiTotals = {
   medianTimeToCallMinutes: number | null;
   appointmentCount: number;
   appointmentRatePct: number;
+  appointmentShowedCount: number;
+  appointmentShowRatePct: number;
   soldCount: number;
   soldCloseRatePct: number;
   closedCount: number;
@@ -49,6 +51,7 @@ export type KpiSourceRow = {
   leadCount: number;
   responseRatePct: number;
   appointmentRatePct: number;
+  appointmentShowRatePct: number;
   callRatePct: number;
   soldCloseRatePct: number;
 };
@@ -59,6 +62,7 @@ export type KpiTrendRow = {
   respondedCount: number;
   responseRatePct: number;
   appointmentCount: number;
+  appointmentShowedCount: number;
   callCount: number;
   soldCount: number;
 };
@@ -120,6 +124,7 @@ type LeadStatsRow = {
   called: boolean;
   timeToCallMinutes: number | null;
   appointment: boolean;
+  appointmentShowed: boolean;
   closed: boolean;
   sold: boolean;
   timeToCloseDays: number | null;
@@ -432,6 +437,10 @@ function toLeadStats(conv: Conversation, opts: KpiOverviewOptions): LeadStatsRow
       : null;
   const closeDays =
     createdAt != null && soldAt != null ? Math.max(0, (soldAt - createdAt) / (1000 * 60 * 60 * 24)) : null;
+  const appointmentStatus = String(conv.appointment?.status ?? "").trim().toLowerCase();
+  const appointmentConfirmed = appointmentStatus === "confirmed";
+  const attendanceStatus = String(conv.appointment?.staffNotify?.outcome?.status ?? "").trim().toLowerCase();
+  const appointmentShowed = attendanceStatus === "showed_up" || appointmentStatus === "showed_up";
 
   return {
     convId: String(conv.id ?? ""),
@@ -449,7 +458,8 @@ function toLeadStats(conv: Conversation, opts: KpiOverviewOptions): LeadStatsRow
     responseMinutes: responseMinutes != null ? Number(responseMinutes.toFixed(2)) : null,
     called: callAt != null,
     timeToCallMinutes: callMinutes != null ? Number(callMinutes.toFixed(2)) : null,
-    appointment: String(conv.appointment?.status ?? "").toLowerCase() === "confirmed",
+    appointment: appointmentConfirmed,
+    appointmentShowed,
     closed,
     sold,
     timeToCloseDays: closeDays != null ? Number(closeDays.toFixed(2)) : null,
@@ -483,6 +493,7 @@ export function buildKpiOverview(
   const respondedCount = scoped.filter(r => r.responded).length;
   const callCount = scoped.filter(r => r.called).length;
   const appointmentCount = scoped.filter(r => r.appointment).length;
+  const appointmentShowedCount = scoped.filter(r => r.appointment && r.appointmentShowed).length;
   const soldCount = scoped.filter(r => r.sold).length;
   const closedCount = scoped.filter(r => r.closed).length;
 
@@ -498,6 +509,8 @@ export function buildKpiOverview(
     medianTimeToCallMinutes: median(callTimes),
     appointmentCount,
     appointmentRatePct: clampPct(appointmentCount, leadVolume),
+    appointmentShowedCount,
+    appointmentShowRatePct: clampPct(appointmentShowedCount, appointmentCount),
     soldCount,
     soldCloseRatePct: clampPct(soldCount, leadVolume),
     closedCount,
@@ -520,6 +533,7 @@ export function buildKpiOverview(
       const total = rows.length;
       const responded = rows.filter(r => r.responded).length;
       const appointments = rows.filter(r => r.appointment).length;
+      const appointmentsShowed = rows.filter(r => r.appointment && r.appointmentShowed).length;
       const calls = rows.filter(r => r.called).length;
       const sold = rows.filter(r => r.sold).length;
       return {
@@ -527,6 +541,7 @@ export function buildKpiOverview(
         leadCount: total,
         responseRatePct: clampPct(responded, total),
         appointmentRatePct: clampPct(appointments, total),
+        appointmentShowRatePct: clampPct(appointmentsShowed, appointments),
         callRatePct: clampPct(calls, total),
         soldCloseRatePct: clampPct(sold, total)
       };
@@ -563,6 +578,7 @@ export function buildKpiOverview(
       const leadCount = rows.length;
       const respondedCount = rows.filter(r => r.responded).length;
       const appointmentCount = rows.filter(r => r.appointment).length;
+      const appointmentShowedCount = rows.filter(r => r.appointment && r.appointmentShowed).length;
       const callCount = rows.filter(r => r.called).length;
       const soldCount = rows.filter(r => r.sold).length;
       return {
@@ -571,6 +587,7 @@ export function buildKpiOverview(
         respondedCount,
         responseRatePct: clampPct(respondedCount, leadCount),
         appointmentCount,
+        appointmentShowedCount,
         callCount,
         soldCount
       };
