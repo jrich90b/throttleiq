@@ -676,9 +676,17 @@ export type ConversationStateParse = {
     | "service_request"
     | "parts_request"
     | "apparel_request"
+    | "corporate_misroute"
     | "scheduling"
     | "pricing"
     | "general"
+    | "none";
+  corporateTopic:
+    | "other_dealer_experience"
+    | "vehicle_documents_or_warranty"
+    | "investor_or_corporate_culture"
+    | "internship_or_careers"
+    | "international_support"
     | "none";
   departmentIntent: "service" | "parts" | "apparel" | "none";
   explicitRequest: boolean;
@@ -1170,6 +1178,7 @@ const CONVERSATION_STATE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   additionalProperties: false,
   required: [
     "state_intent",
+    "corporate_topic",
     "department_intent",
     "explicit_request",
     "clear_inventory_watch_pending",
@@ -1186,9 +1195,21 @@ const CONVERSATION_STATE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
         "service_request",
         "parts_request",
         "apparel_request",
+        "corporate_misroute",
         "scheduling",
         "pricing",
         "general",
+        "none"
+      ]
+    },
+    corporate_topic: {
+      type: "string",
+      enum: [
+        "other_dealer_experience",
+        "vehicle_documents_or_warranty",
+        "investor_or_corporate_culture",
+        "internship_or_careers",
+        "international_support",
         "none"
       ]
     },
@@ -2808,12 +2829,15 @@ export async function parseConversationStateWithLLM(args: {
   const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
   const voiceExamples = [
-    'input: "Customer: can service quote an LED headlight install?" output: {"state_intent":"service_request","department_intent":"service","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"service_request","confidence":0.97}',
-    'input: "Customer: can parts order drag specialties for me?" output: {"state_intent":"parts_request","department_intent":"parts","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"parts_request","confidence":0.97}',
-    'input: "Customer: keep an eye out for a black road glide and text me when one lands" output: {"state_intent":"inventory_watch","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":false,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.96}',
-    'input: "Customer: tuesday around 4 works for me" output: {"state_intent":"scheduling","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.94}',
-    'input: "Customer: i can do 2500 down and want to stay under 500 monthly" output: {"state_intent":"pricing","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":false,"manual_handoff_reason":"none","confidence":0.95}',
-    'input: "Customer: ok sounds good thanks" output: {"state_intent":"general","department_intent":"none","explicit_request":false,"clear_inventory_watch_pending":false,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.9}'
+    'input: "Customer: can service quote an LED headlight install?" output: {"state_intent":"service_request","corporate_topic":"none","department_intent":"service","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"service_request","confidence":0.97}',
+    'input: "Customer: can parts order drag specialties for me?" output: {"state_intent":"parts_request","corporate_topic":"none","department_intent":"parts","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"parts_request","confidence":0.97}',
+    'input: "Customer: keep an eye out for a black road glide and text me when one lands" output: {"state_intent":"inventory_watch","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":false,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.96}',
+    'input: "Customer: tuesday around 4 works for me" output: {"state_intent":"scheduling","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.94}',
+    'input: "Customer: i can do 2500 down and want to stay under 500 monthly" output: {"state_intent":"pricing","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":false,"manual_handoff_reason":"none","confidence":0.95}',
+    'input: "Customer: i had a bad experience at another harley dealer and need corporate to step in" output: {"state_intent":"corporate_misroute","corporate_topic":"other_dealer_experience","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.95}',
+    'input: "Customer: hi i just want to let you know about an experience i had at dealership abc" output: {"state_intent":"corporate_misroute","corporate_topic":"other_dealer_experience","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.92}',
+    'input: "Customer: is this bike still under harley factory warranty?" output: {"state_intent":"general","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":false,"clear_pricing_need_model":false,"manual_handoff_reason":"none","confidence":0.9}',
+    'input: "Customer: ok sounds good thanks" output: {"state_intent":"general","corporate_topic":"none","department_intent":"none","explicit_request":false,"clear_inventory_watch_pending":false,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.9}'
   ];
   const prompt = [
     "You parse inbound dealership messages into conversation state transitions.",
@@ -2823,10 +2847,20 @@ export async function parseConversationStateWithLLM(args: {
     "- finance_docs: credit app/docs/lien holder/binder/e-sign flow.",
     "- inventory_watch: watch/notify me when available language.",
     "- service_request / parts_request / apparel_request: department handoff intents.",
+    "- corporate_misroute: customer clearly intends Harley-Davidson Motor Company or another dealership/corporate process (not this dealership workflow).",
     "- scheduling: appointment timing/day/time selection.",
     "- pricing: pricing/payment/apr/down/term questions.",
     "- general: neutral update or acknowledgement.",
     "- none: unknown.",
+    "",
+    "Corporate misroute topic rules (only when state_intent=corporate_misroute):",
+    "- other_dealer_experience: complaint/escalation about another dealer experience.",
+    "- vehicle_documents_or_warranty: asks for HDMC-level vehicle docs/warranty ownership support outside normal dealer workflow.",
+    "- investor_or_corporate_culture: investor, stock, corporate culture, headquarters questions.",
+    "- internship_or_careers: internship/careers with HDMC corporate.",
+    "- international_support: non-US or country-level corporate support requests.",
+    "- IMPORTANT: If the customer asks normal dealership sales/service questions (inventory, pricing, test ride, finance, warranty on this bike), do NOT use corporate_misroute.",
+    "- For corporate-misroute messages, set explicit_request=true even when phrased as a statement (for example: 'just letting you know about another dealership experience').",
     "",
     "Department intent rules:",
     "- service/parts/apparel only when explicitly requested or clearly implied.",
@@ -2877,10 +2911,20 @@ export async function parseConversationStateWithLLM(args: {
     stateRaw === "service_request" ||
     stateRaw === "parts_request" ||
     stateRaw === "apparel_request" ||
+    stateRaw === "corporate_misroute" ||
     stateRaw === "scheduling" ||
     stateRaw === "pricing" ||
     stateRaw === "general"
       ? stateRaw
+      : "none";
+  const corporateTopicRaw = String(parsed.corporate_topic ?? "").toLowerCase();
+  const corporateTopic: ConversationStateParse["corporateTopic"] =
+    corporateTopicRaw === "other_dealer_experience" ||
+    corporateTopicRaw === "vehicle_documents_or_warranty" ||
+    corporateTopicRaw === "investor_or_corporate_culture" ||
+    corporateTopicRaw === "internship_or_careers" ||
+    corporateTopicRaw === "international_support"
+      ? corporateTopicRaw
       : "none";
   const deptRaw = String(parsed.department_intent ?? "").toLowerCase();
   const departmentIntent: ConversationStateParse["departmentIntent"] =
@@ -2900,6 +2944,7 @@ export async function parseConversationStateWithLLM(args: {
 
   return {
     stateIntent,
+    corporateTopic,
     departmentIntent,
     explicitRequest: !!parsed.explicit_request,
     clearInventoryWatchPending: !!parsed.clear_inventory_watch_pending,

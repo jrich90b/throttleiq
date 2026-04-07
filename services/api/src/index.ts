@@ -5383,14 +5383,51 @@ function isConversationStateParserAccepted(parsed: ConversationStateParse | null
   return true;
 }
 
+type CorporateMisrouteTopic = Exclude<ConversationStateParse["corporateTopic"], "none">;
+
+function getCorporateMisrouteTopic(
+  parsed: ConversationStateParse | null
+): CorporateMisrouteTopic | null {
+  if (!isConversationStateParserAccepted(parsed)) return null;
+  const state = parsed as ConversationStateParse;
+  if (state.stateIntent !== "corporate_misroute") return null;
+  if (!state.explicitRequest) return null;
+  const topic = state.corporateTopic;
+  if (!topic || topic === "none") return null;
+  const confidence = typeof state.confidence === "number" ? state.confidence : 0;
+  const min = Number(process.env.LLM_CONVERSATION_STATE_CORPORATE_CONFIDENCE_MIN ?? 0.86);
+  if (!Number.isFinite(confidence) || confidence < min) return null;
+  return topic;
+}
+
+function buildCorporateMisrouteReply(topic: CorporateMisrouteTopic): string {
+  const prefix =
+    "Quick heads-up — we’re an independent Harley-Davidson dealership, not Harley-Davidson Motor Company.";
+  const contact = "For Harley-Davidson Motor Company support, call 1-800-258-2464.";
+  if (topic === "other_dealer_experience") {
+    return `${prefix} Sorry you had that experience. ${contact} I can still help with anything at our dealership.`;
+  }
+  if (topic === "vehicle_documents_or_warranty") {
+    return `${prefix} For corporate vehicle-doc/warranty support, ${contact} If this is about a bike with us, I can still help from the dealership side.`;
+  }
+  if (topic === "investor_or_corporate_culture") {
+    return `${prefix} For investor or corporate questions, please use Harley-Davidson’s corporate site (Investor Relations/Corporate).`;
+  }
+  if (topic === "internship_or_careers") {
+    return `${prefix} For internships/careers, please apply through Harley-Davidson’s corporate careers page.`;
+  }
+  return `${prefix} For country-level or international support, please use Harley-Davidson’s website country selector and your local Motor Company support team.`;
+}
+
 function applyConversationStateReducer(
   conv: any,
   parsed: ConversationStateParse | null
-): { departmentIntent: DepartmentRole | null } {
+): { departmentIntent: DepartmentRole | null; corporateMisrouteTopic: CorporateMisrouteTopic | null } {
   if (!isConversationStateParserAccepted(parsed)) {
-    return { departmentIntent: null };
+    return { departmentIntent: null, corporateMisrouteTopic: null };
   }
   const state = parsed as ConversationStateParse;
+  const corporateMisrouteTopic = getCorporateMisrouteTopic(state);
   if (state.clearInventoryWatchPending || state.departmentIntent !== "none") {
     conv.inventoryWatchPending = undefined;
     if (getDialogState(conv) === "inventory_watch_prompted") {
@@ -5414,15 +5451,15 @@ function applyConversationStateReducer(
     setFollowUpMode(conv, "manual_handoff", "manual_appointment");
   }
   if (state.departmentIntent !== "none") {
-    return { departmentIntent: state.departmentIntent };
+    return { departmentIntent: state.departmentIntent, corporateMisrouteTopic };
   }
-  return { departmentIntent: null };
+  return { departmentIntent: null, corporateMisrouteTopic };
 }
 
 function hasConversationStateParserHint(text: string, conv: any): boolean {
   const lower = String(text ?? "").toLowerCase();
   return (
-    /\b(parts?|service|apparel|credit app|credit application|lien|binder|e-?sign|watch|notify|keep an eye out|price|payment|apr|term|schedule|appointment)\b/i.test(
+    /\b(parts?|service|apparel|credit app|credit application|lien|binder|e-?sign|watch|notify|keep an eye out|price|payment|apr|term|schedule|appointment|harley[- ]?davidson motor company|corporate|headquarters|hq|other dealership|another dealership|internship|careers?|invest(or|ing|or relations)|international|outside the us)\b/i.test(
       lower
     ) ||
     !!conv.inventoryWatchPending ||
@@ -5437,7 +5474,10 @@ async function parseAndReduceConversationState(args: {
   history: { direction: "in" | "out"; body: string }[];
   shortAck: boolean;
   debugLabel: "live" | "regen" | "manual";
-}): Promise<{ parsed: ConversationStateParse | null; reduced: { departmentIntent: DepartmentRole | null } }> {
+}): Promise<{
+  parsed: ConversationStateParse | null;
+  reduced: { departmentIntent: DepartmentRole | null; corporateMisrouteTopic: CorporateMisrouteTopic | null };
+}> {
   const { conv, text, history, shortAck, debugLabel } = args;
   const parserEligible =
     process.env.LLM_ENABLED === "1" &&
@@ -16002,13 +16042,14 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     regenResponseControlAccepted && regenResponseControlParse?.intent === "compliment_only";
   const regenLlmExplicitScheduleIntent =
     regenResponseControlAccepted && regenResponseControlParse?.intent === "schedule_request";
-  const { reduced: regenReducedConversationState } = await parseAndReduceConversationState({
+  const { parsed: regenConversationStateParse, reduced: regenReducedConversationState } =
+    await parseAndReduceConversationState({
     conv,
     text: event.body ?? "",
     history,
     shortAck: regenShortAck,
     debugLabel: "regen"
-  });
+    });
   const regenDispositionDecision = resolveCustomerDispositionDecision(
     event.body,
     regenCustomerDispositionParse
@@ -16334,6 +16375,28 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenAvailabilityPrimaryIntentHint = regenPrimaryIntentHint === "availability";
   const regenCallbackIntentHint =
     regenPrimaryIntentHint === "callback" || regenIntentPlan.callbackIntent || regenParserCallbackIntent;
+  const regenCorporateMisrouteTopic = getCorporateMisrouteTopic(regenConversationStateParse);
+  if (
+    regenCorporateMisrouteTopic &&
+    regenPrimaryIntentHint === "general" &&
+    !regenParserPricingIntent &&
+    !regenParserSchedulingIntent &&
+    !regenParserAvailabilityIntent &&
+    !regenParserCallbackIntent &&
+    !regenReducedConversationState.departmentIntent
+  ) {
+    const reply = buildCorporateMisrouteReply(regenCorporateMisrouteTopic);
+    recordRouteOutcome("regen", "corporate_misroute_redirect", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      topic: regenCorporateMisrouteTopic,
+      confidence: regenConversationStateParse?.confidence ?? null
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply);
+  }
   regenDraftInvariantHints = {
     turnFinanceIntent: regenPricingIntentHint,
     turnSchedulingIntent: regenSchedulingIntentHint,
@@ -17000,13 +17063,14 @@ if (authToken && signature) {
     semanticServiceRecordsIntent || isServiceRecordsRequest(event.body);
   const videoRequested =
     (semanticVideoIntent || isVideoRequest(event.body)) && !serviceRecordsRequested;
-  const { reduced: reducedConversationState } = await parseAndReduceConversationState({
+  const { parsed: conversationStateParse, reduced: reducedConversationState } =
+    await parseAndReduceConversationState({
     conv,
     text: semanticInboundText,
     history: buildHistory(conv, 10),
     shortAck: semanticShortAck,
     debugLabel: "live"
-  });
+    });
 
   if (
     (isWatchAlertStopIntent(event.body) || semanticWatchAction === "stop_watch") &&
@@ -19343,6 +19407,31 @@ if (authToken && signature) {
     schedulingSignals.hasDayOnlyRequest;
   const hasActionableTurnContext =
     hasActionableFinanceContext || hasActionableAvailabilityContext || hasActionableSchedulingContext;
+  const corporateMisrouteTopic = getCorporateMisrouteTopic(conversationStateParse);
+  if (
+    event.provider === "twilio" &&
+    corporateMisrouteTopic &&
+    turnPrimaryIntent === "general" &&
+    !hasActionableTurnContext &&
+    !reducedConversationState.departmentIntent &&
+    !semanticDepartmentIntent
+  ) {
+    const reply = buildCorporateMisrouteReply(corporateMisrouteTopic);
+    logRouteOutcome("corporate_misroute_redirect", {
+      topic: corporateMisrouteTopic,
+      confidence: conversationStateParse?.confidence ?? null
+    });
+    if (webhookMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   const logisticsProgressUpdate = isLogisticsProgressUpdateText(event.body ?? "");
   if (event.provider === "twilio" && turnPrimaryIntent === "callback") {
     const cfg = await getSchedulerConfigHot();
