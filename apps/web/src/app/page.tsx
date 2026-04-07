@@ -1000,7 +1000,6 @@ export default function Home() {
   const [watchSalespersonFilter, setWatchSalespersonFilter] = useState("all");
   const [inboxQuery, setInboxQuery] = useState("");
   const [inboxOwnerFilter, setInboxOwnerFilter] = useState("all");
-  const [inboxLeadScope, setInboxLeadScope] = useState<"online_first" | "online_only" | "walkin_only">("online_first");
   const [todoQuery, setTodoQuery] = useState("");
   const [todoLeadOwnerFilter, setTodoLeadOwnerFilter] = useState("all");
   const [kpiOverview, setKpiOverview] = useState<KpiOverview | null>(null);
@@ -1139,6 +1138,7 @@ export default function Home() {
   const [listActionsOpenId, setListActionsOpenId] = useState<string | null>(null);
   const [todoInlineOpenId, setTodoInlineOpenId] = useState<string | null>(null);
   const [todoInlineText, setTodoInlineText] = useState("");
+  const [todoInlineTarget, setTodoInlineTarget] = useState<string>("lead_owner");
   const [contactInlineOpenId, setContactInlineOpenId] = useState<string | null>(null);
   const [contactInlineSaving, setContactInlineSaving] = useState(false);
   const [contactInlineForm, setContactInlineForm] = useState({
@@ -3237,6 +3237,30 @@ export default function Home() {
     );
   }, [usersList]);
 
+  const departmentOwnerByRole = useMemo(() => {
+    const empty = {
+      service: null as { id: string; name: string } | null,
+      parts: null as { id: string; name: string } | null,
+      apparel: null as { id: string; name: string } | null
+    };
+    for (const raw of usersList ?? []) {
+      const role = String(raw?.role ?? "").trim().toLowerCase();
+      if (role !== "service" && role !== "parts" && role !== "apparel") continue;
+      if (empty[role]) continue;
+      const id = String(raw?.id ?? "").trim();
+      const name =
+        [raw?.firstName, raw?.lastName].filter(Boolean).join(" ").trim() ||
+        String(raw?.name ?? "").trim() ||
+        String(raw?.email ?? "").trim() ||
+        `${role[0].toUpperCase()}${role.slice(1)} Department`;
+      empty[role] = {
+        id,
+        name
+      };
+    }
+    return empty;
+  }, [usersList]);
+
   const ownerDirectory = useMemo(() => {
     const normalize = (v: string) => String(v ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
     const byId = new Map<string, { name: string; role: string }>();
@@ -3813,6 +3837,7 @@ export default function Home() {
     if (!listActionsOpenId) {
       setTodoInlineOpenId(null);
       setTodoInlineText("");
+      setTodoInlineTarget(isManager ? "lead_owner" : "self");
       setContactInlineOpenId(null);
       setContactInlineSaving(false);
       setContactInlineForm({ firstName: "", lastName: "", phone: "", email: "" });
@@ -3821,7 +3846,7 @@ export default function Home() {
       setReassignInlineSummary("");
       setReassignInlineSaving(false);
     }
-  }, [listActionsOpenId]);
+  }, [listActionsOpenId, isManager]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -3949,9 +3974,6 @@ export default function Home() {
       ? decodeURIComponent(inboxOwnerFilter.slice("owner:".length)).toLowerCase()
       : "";
     const rows = visibleConversations.filter(c => {
-      const isWalkIn = !!c.walkIn;
-      if (inboxLeadScope === "online_only" && isWalkIn) return false;
-      if (inboxLeadScope === "walkin_only" && !isWalkIn) return false;
       if (isManager && inboxOwnerFilter !== "all") {
         const leadOwner = canonicalizeOwnerName(
           String(c.leadOwner?.name ?? c.leadOwner?.id ?? "").trim(),
@@ -3992,11 +4014,6 @@ export default function Home() {
       return false;
     });
     const sorted = [...rows].sort((a, b) => {
-      if (inboxLeadScope === "online_first") {
-        const aWalkIn = !!a.walkIn;
-        const bWalkIn = !!b.walkIn;
-        if (aWalkIn !== bWalkIn) return aWalkIn ? 1 : -1;
-      }
       const aMs = Date.parse(String(a.updatedAt ?? "")) || 0;
       const bMs = Date.parse(String(b.updatedAt ?? "")) || 0;
       return bMs - aMs;
@@ -4007,7 +4024,6 @@ export default function Home() {
     inboxQuery,
     isManager,
     inboxOwnerFilter,
-    inboxLeadScope,
     inboxDepartmentTeamsByConv,
     canonicalizeOwnerName,
     inferOwnerDepartment
@@ -5408,19 +5424,43 @@ export default function Home() {
     await load();
   }
 
-  async function submitTodoInline(convId: string) {
+  async function submitTodoInline(conv: ConversationListItem) {
     const summary = todoInlineText.trim();
     if (!summary) {
       window.alert("Please enter what the salesperson should do.");
       return;
     }
+    const target = isManager ? todoInlineTarget : "self";
+    let reason = "other";
+    let ownerId = "";
+    let ownerName = "";
+    if (target === "lead_owner") {
+      ownerId = String(conv.leadOwner?.id ?? "").trim();
+      ownerName = String(conv.leadOwner?.name ?? "").trim();
+    } else if (target.startsWith("owner:")) {
+      ownerId = target.slice("owner:".length).trim();
+      if (ownerId) {
+        ownerName = reassignSalesOwnerOptions.find(o => o.id === ownerId)?.name ?? "";
+      }
+    } else if (target.startsWith("department:")) {
+      const role = target.slice("department:".length).trim().toLowerCase();
+      if (role === "service" || role === "parts" || role === "apparel") {
+        reason = role;
+        ownerId = String(departmentOwnerByRole[role]?.id ?? "").trim();
+        ownerName =
+          String(departmentOwnerByRole[role]?.name ?? "").trim() ||
+          `${role[0].toUpperCase()}${role.slice(1)} Department`;
+      }
+    }
     const resp = await fetch("/api/todos/create", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        convId,
+        convId: conv.id,
         summary,
-        reason: "other"
+        reason,
+        ownerId: ownerId || undefined,
+        ownerName: ownerName || undefined
       })
     });
     const data = await resp.json().catch(() => null);
@@ -5430,6 +5470,7 @@ export default function Home() {
     }
     setTodoInlineOpenId(null);
     setTodoInlineText("");
+    setTodoInlineTarget(isManager ? "lead_owner" : "self");
     setListActionsOpenId(null);
     await load();
   }
@@ -5461,6 +5502,7 @@ export default function Home() {
     });
     setTodoInlineOpenId(null);
     setTodoInlineText("");
+    setTodoInlineTarget(isManager ? "lead_owner" : "self");
     setContactInlineOpenId(c.id);
   }
 
@@ -6941,20 +6983,6 @@ export default function Home() {
                 value={inboxQuery}
                 onChange={e => setInboxQuery(e.target.value)}
               />
-              <select
-                className="w-36 self-start border rounded px-3 py-2 text-sm bg-white md:w-36"
-                value={inboxLeadScope}
-                onChange={e =>
-                  setInboxLeadScope(
-                    (e.target.value as "online_first" | "online_only" | "walkin_only") || "online_first"
-                  )
-                }
-                title="Filter inbox by lead type"
-              >
-                <option value="online_first">Online first</option>
-                <option value="online_only">Online only</option>
-                <option value="walkin_only">Walk-ins only</option>
-              </select>
               {isManager ? (
                 <select
                   className="w-28 self-start border rounded px-3 py-2 text-sm bg-white md:w-28"
@@ -7132,6 +7160,30 @@ export default function Home() {
                                       <div className="text-[11px] text-gray-500 mb-1">
                                         To‑do note
                                       </div>
+                                      {isManager ? (
+                                        <select
+                                          className="w-full border rounded px-2 py-1 text-xs mb-2 bg-white"
+                                          value={todoInlineTarget}
+                                          onChange={e => setTodoInlineTarget(e.target.value)}
+                                          title="Who this to-do is for"
+                                        >
+                                          <option value="lead_owner">Lead owner</option>
+                                          {reassignSalesOwnerOptions.length ? (
+                                            <optgroup label="Salespeople">
+                                              {reassignSalesOwnerOptions.map(owner => (
+                                                <option key={`todo-owner-${owner.id}`} value={`owner:${owner.id}`}>
+                                                  {owner.name}
+                                                </option>
+                                              ))}
+                                            </optgroup>
+                                          ) : null}
+                                          <optgroup label="Departments">
+                                            <option value="department:service">Service Department</option>
+                                            <option value="department:parts">Parts Department</option>
+                                            <option value="department:apparel">Apparel Department</option>
+                                          </optgroup>
+                                        </select>
+                                      ) : null}
                                       <textarea
                                         className="w-full border rounded px-2 py-1 text-xs"
                                         rows={3}
@@ -7145,6 +7197,7 @@ export default function Home() {
                                           onClick={() => {
                                             setTodoInlineOpenId(null);
                                             setTodoInlineText("");
+                                            setTodoInlineTarget(isManager ? "lead_owner" : "self");
                                           }}
                                         >
                                           Cancel
@@ -7152,7 +7205,7 @@ export default function Home() {
                                         <button
                                           className="px-2 py-1 border rounded text-xs"
                                           onClick={() => {
-                                            void submitTodoInline(c.id);
+                                            void submitTodoInline(c);
                                           }}
                                         >
                                           Create
@@ -7302,6 +7355,7 @@ export default function Home() {
                                           setContactInlineOpenId(null);
                                           setTodoInlineOpenId(c.id);
                                           setTodoInlineText("");
+                                          setTodoInlineTarget(isManager ? "lead_owner" : "self");
                                         }}
                                       >
                                         Create to-do

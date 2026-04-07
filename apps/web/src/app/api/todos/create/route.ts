@@ -11,6 +11,8 @@ export async function POST(req: Request) {
   const convId = String(body?.convId ?? "").trim();
   const summary = String(body?.summary ?? "").trim();
   const reason = String(body?.reason ?? "other").trim();
+  const ownerId = String(body?.ownerId ?? "").trim();
+  const ownerName = String(body?.ownerName ?? "").trim();
   if (!convId || !summary) {
     return NextResponse.json({ ok: false, error: "Missing convId/summary" }, { status: 400 });
   }
@@ -18,7 +20,13 @@ export async function POST(req: Request) {
   const r = await apiFetch(`${base}/todos`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ convId, summary, reason })
+    body: JSON.stringify({
+      convId,
+      summary,
+      reason,
+      ownerId: ownerId || undefined,
+      ownerName: ownerName || undefined
+    })
   });
   const text = await r.text();
   try {

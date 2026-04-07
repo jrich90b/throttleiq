@@ -14432,6 +14432,8 @@ app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
   const convId = String(req.body?.convId ?? "").trim();
   const summary = String(req.body?.summary ?? "").trim();
   const reasonRaw = String(req.body?.reason ?? "other").trim();
+  const ownerIdRaw = String(req.body?.ownerId ?? "").trim();
+  const ownerNameRaw = String(req.body?.ownerName ?? "").trim();
   if (!convId || !summary) {
     return res.status(400).json({ ok: false, error: "Missing convId/summary" });
   }
@@ -14440,6 +14442,9 @@ app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
   const user = (req as any).user ?? null;
   if (!canUserAccessConversation(user, conv)) {
     return res.status(403).json({ ok: false, error: "forbidden" });
+  }
+  if ((ownerIdRaw || ownerNameRaw) && user?.role !== "manager") {
+    return res.status(403).json({ ok: false, error: "manager required to assign owner" });
   }
   const allowedReasons: Array<
     | "pricing"
@@ -14456,14 +14461,20 @@ app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
   const reason = allowedReasons.includes(reasonRaw as any)
     ? (reasonRaw as any)
     : "other";
-  const ownerId = user?.role === "manager" ? "" : String(user?.id ?? "").trim();
-  const ownerName = String(user?.name ?? user?.email ?? "").trim();
+  const owner =
+    ownerIdRaw || ownerNameRaw
+      ? { id: ownerIdRaw || undefined, name: ownerNameRaw || undefined }
+      : (() => {
+          const ownerId = user?.role === "manager" ? "" : String(user?.id ?? "").trim();
+          const ownerName = String(user?.name ?? user?.email ?? "").trim();
+          return ownerId ? { id: ownerId, name: ownerName || undefined } : undefined;
+        })();
   const task = addTodo(
     conv,
     reason,
     summary,
     undefined,
-    ownerId ? { id: ownerId, name: ownerName || undefined } : undefined
+    owner
   );
   if (!task) {
     return res.status(200).json({
