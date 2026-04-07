@@ -2391,9 +2391,15 @@ const buildWalkInCommentFollowUp = ({
   const intro = `Hi ${name} — this is ${agent} at ${dealerName}.`;
 
   const mentionsDepositOrCommitment =
-    /\b(deposit|left\s+\$?\d+|finalize|finalise|coming in|commitment|commit)\b/.test(lower);
+    /\b(deposit|left\s+\$?\d+|finalize|finalise)\b/.test(lower);
   if (mentionsDepositOrCommitment) {
-    return `${intro} Thanks again for coming in. If you’re still good to move forward on ${bikeWithArticle}, I can get everything lined up so you can finalize when you come in.`;
+    return `${intro} If you still want to move forward on ${bikeWithArticle}, we can go over options and next steps when you come in.`;
+  }
+
+  const mentionsOrderPath =
+    /\b(order|dealer trade|get one|find one|locate one|commitment|commit)\b/.test(lower);
+  if (mentionsOrderPath) {
+    return `${intro} If you want to go over options to get ${bikeWithArticle}, I can walk you through timing, numbers, and next steps when you come in.`;
   }
 
   const mentionsWeatherTestRide =
@@ -2424,7 +2430,7 @@ const buildWalkInCommentFollowUp = ({
     return `${intro} No pressure at all. If you want to revisit ${bikeWithArticle}, just text me and I’ll help from there.`;
   }
 
-  return `${intro} Thanks again for stopping in. Just checking in on ${bikeWithArticle} — if you want to move forward, I can go over numbers and next steps with you.`;
+  return `${intro} Just checking in on ${bikeWithArticle} — if you want to go over options and next steps, I can help when you’re ready.`;
 };
 
 const FOLLOW_UP_VARIANTS_WITH_SLOTS: string[] = [
