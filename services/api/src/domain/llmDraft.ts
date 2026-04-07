@@ -2181,6 +2181,10 @@ output: {"primary_intent":"pricing_payments","explicit_request":true,"fallback_a
     `EXAMPLE L
 inbound: "Ok sounds great"
 output: {"primary_intent":"none","explicit_request":false,"fallback_action":"no_response","clarify_prompt":"","confidence":0.97}`
+    ,
+    `EXAMPLE M
+inbound: "Hi Gio, I received all my paperwork yesterday. I am going to the notary/DMV this afternoon."
+output: {"primary_intent":"general","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.93}`
   ];
   const prompt = [
     "You are a strict routing parser for dealership inbound messages.",

@@ -120,6 +120,7 @@ import {
 import { sendEmail } from "./domain/emailSender.js";
 import {
   canApplyDispositionCloseout,
+  isLogisticsProgressUpdateText,
   isDispositionParserAccepted,
   isResponseControlParserAccepted
 } from "./domain/transitionSafety.js";
@@ -19052,6 +19053,7 @@ if (authToken && signature) {
     schedulingSignals.hasDayOnlyRequest;
   const hasActionableTurnContext =
     hasActionableFinanceContext || hasActionableAvailabilityContext || hasActionableSchedulingContext;
+  const logisticsProgressUpdate = isLogisticsProgressUpdateText(event.body ?? "");
   if (event.provider === "twilio" && turnPrimaryIntent === "callback") {
     const cfg = await getSchedulerConfigHot();
     const timezone = cfg.timezone || "America/New_York";
@@ -19079,6 +19081,27 @@ if (authToken && signature) {
   }
   if (routingParserDecision.accepted && routingParserDecision.fallbackAction === "no_response") {
     if (!hasActionableTurnContext) {
+      if (logisticsProgressUpdate) {
+        const inboundLower = String(event.body ?? "").toLowerCase();
+        const progressReply =
+          /\b(dmv|notary)\b/.test(inboundLower)
+            ? "Perfect — thanks for the update. Hope the notary/DMV visit goes smoothly this afternoon. Keep me posted."
+            : "Perfect — thanks for the update. Keep me posted and I’ll stay on top of everything on our end.";
+        logRouteOutcome("routing_parser_no_response_progress_update_ack", {
+          turnPrimaryIntent,
+          parserReason: routingParserDecision.reason
+        });
+        if (webhookMode === "suggest") {
+          appendOutbound(conv, event.to, event.from, progressReply, "draft_ai");
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+        appendOutbound(conv, event.to, event.from, progressReply, "twilio");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+          progressReply
+        )}</Message>\n</Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
       logRouteOutcome("routing_parser_no_response", {
         turnPrimaryIntent,
         parserReason: routingParserDecision.reason,
