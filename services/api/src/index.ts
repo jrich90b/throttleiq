@@ -9072,6 +9072,8 @@ function applyServicePolicy(
     conv.classification?.bucket === "service" ||
     conv.classification?.cta === "service_request";
   if (!isService) return reply;
+  // Final hard gate: never emit service handoff language unless this turn explicitly asks for service.
+  if (!explicitServiceIntentThisTurn) return reply;
   // Prevent stale service state from overriding active sales/scheduling turns.
   if (!explicitServiceIntentThisTurn && hasActionableSalesContext) return reply;
   let out = "We’ve received your service request and will have the service department reach out.";
@@ -9079,6 +9081,47 @@ function applyServicePolicy(
     out = "Got it — our service department will be in touch shortly.";
   }
   return out;
+}
+
+function sanitizeDepartmentClassificationForTurn(
+  conv: any,
+  inboundText: string,
+  explicitDepartmentIntent: DepartmentRole | null
+): { bucket: string | null; cta: string | null } {
+  const bucketRaw = String(conv?.classification?.bucket ?? "").toLowerCase();
+  const ctaRaw = String(conv?.classification?.cta ?? "").toLowerCase();
+  const followUpReasonRaw = String(conv?.followUp?.reason ?? "").toLowerCase();
+  const lexicalDepartment = inferDepartmentFromText(inboundText);
+  const hasExplicitDepartmentIntent =
+    explicitDepartmentIntent === "service" ||
+    explicitDepartmentIntent === "parts" ||
+    explicitDepartmentIntent === "apparel" ||
+    lexicalDepartment === "service" ||
+    lexicalDepartment === "parts" ||
+    lexicalDepartment === "apparel";
+  if (hasExplicitDepartmentIntent) {
+    return {
+      bucket: conv?.classification?.bucket ?? null,
+      cta: conv?.classification?.cta ?? null
+    };
+  }
+  const staleDepartmentContext =
+    bucketRaw === "service" ||
+    bucketRaw === "parts" ||
+    bucketRaw === "apparel" ||
+    ctaRaw === "service_request" ||
+    ctaRaw === "parts_request" ||
+    ctaRaw === "apparel_request" ||
+    /\b(service|parts|apparel)_request\b/.test(followUpReasonRaw) ||
+    getDialogState(conv) === "service_request" ||
+    getDialogState(conv) === "service_handoff";
+  if (staleDepartmentContext) {
+    return { bucket: "general_inquiry", cta: "unknown" };
+  }
+  return {
+    bucket: conv?.classification?.bucket ?? null,
+    cta: conv?.classification?.cta ?? null
+  };
 }
 
 function parseSellOptionFromText(text: string): "cash" | "trade" | "either" | null {
@@ -16403,18 +16446,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     regenUnifiedSlotParse?.departmentIntent && regenUnifiedSlotParse.departmentIntent !== "none"
       ? (regenUnifiedSlotParse.departmentIntent as DepartmentRole)
       : null;
-  const regenInboundDepartmentIntentFromRegex = inferDepartmentFromText(event.body ?? "");
-  // Service routing must be parser/schema driven (no regex fallback for service).
+  // Department routing is parser/schema driven.
   const regenInboundDepartmentIntent =
     resolveValidatedDepartmentIntent({
       parserIntent: regenInboundDepartmentIntentFromParser,
       semanticIntent: regenInboundDepartmentIntentFromSemantic,
       text: event.body ?? ""
-    }) ??
-    (regenInboundDepartmentIntentFromRegex === "parts" ||
-    regenInboundDepartmentIntentFromRegex === "apparel"
-      ? regenInboundDepartmentIntentFromRegex
-      : null);
+    });
   await maybeRestoreSalesLeadOwnerFromPreference(conv);
   if (regenInboundDepartmentIntent === "parts" || regenInboundDepartmentIntent === "apparel") {
     await assignDepartmentLeadOwnerIfUnassigned(conv, regenInboundDepartmentIntent);
@@ -16451,33 +16489,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     return respondWithSmsRegeneratedDraft(reply);
   }
-  const regenInboundSchedulingSignalsForServiceGuard = detectSchedulingSignals(event.body ?? "");
-  const regenSourceLowerForServiceGuard = String(conv.lead?.source ?? "").toLowerCase();
-  const regenCtaLowerForServiceGuard = String(conv.classification?.cta ?? "").toLowerCase();
-  const regenBucketLowerForServiceGuard = String(conv.classification?.bucket ?? "").toLowerCase();
-  const regenLikelySalesOriginForServiceGuard =
-    /(hdfs|marketplace|room58|meta|traffic log pro|trade accelerator|kenect|dealer lead app)/.test(
-      regenSourceLowerForServiceGuard
-    ) ||
-    /(check_availability|inventory|hdfs_coa|hdfs_pq|schedule|quote|pricing|trade)/.test(
-      `${regenCtaLowerForServiceGuard} ${regenBucketLowerForServiceGuard}`
-    );
-  const regenStickyServiceOnlyContext =
-    regenInboundDepartmentIntent !== "service" &&
-    (conv.classification?.bucket === "service" ||
-      conv.classification?.cta === "service_request" ||
-      serviceDialogState === "service_request" ||
-      serviceDialogState === "service_handoff" ||
-      (conv.followUp?.mode === "manual_handoff" &&
-        /service/.test(String(conv.followUp?.reason ?? ""))));
-  const regenSuppressStickyServiceRouting =
-    regenStickyServiceOnlyContext &&
-    regenLikelySalesOriginForServiceGuard &&
-    regenInboundDepartmentIntent !== "service" &&
-    !SERVICE_DEPARTMENT_RE.test(String(event.body ?? ""));
-  const isServiceLead =
-    regenInboundDepartmentIntent === "service" ||
-    (!regenSuppressStickyServiceRouting && regenStickyServiceOnlyContext);
+  const isServiceLead = regenInboundDepartmentIntent === "service";
   if (isServiceLead) {
     await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
     const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
@@ -16765,12 +16777,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     });
   }
 
+  const regenClassificationForTurn = sanitizeDepartmentClassificationForTurn(
+    conv,
+    String(event.body ?? ""),
+    regenInboundDepartmentIntent
+  );
   const result = await safeOrchestrateInbound("regen", event, history, {
     appointment: conv.appointment,
     followUp: conv.followUp,
     leadSource: conv.lead?.source ?? null,
-    bucket: conv.classification?.bucket ?? null,
-    cta: conv.classification?.cta ?? null,
+    bucket: regenClassificationForTurn.bucket,
+    cta: regenClassificationForTurn.cta,
     primaryIntentHint: regenPrimaryIntentHint,
     availabilityIntentHint: regenAvailabilityPrimaryIntentHint,
     schedulingIntentHint: regenSchedulingIntentHint,
@@ -17609,17 +17626,13 @@ if (authToken && signature) {
   const dialogState = getDialogState(conv);
   const inboundDepartmentIntentFromParser = reducedConversationState.departmentIntent;
   const inboundDepartmentIntentFromSemantic = semanticDepartmentIntent;
-  const inboundDepartmentIntentFromRegex = inferDepartmentFromText(event.body ?? "");
-  // Service routing must be parser/schema driven (no regex fallback for service).
+  // Department routing is parser/schema driven.
   const inboundDepartmentIntent =
     resolveValidatedDepartmentIntent({
       parserIntent: inboundDepartmentIntentFromParser,
       semanticIntent: inboundDepartmentIntentFromSemantic,
       text: event.body ?? ""
-    }) ??
-    (inboundDepartmentIntentFromRegex === "parts" || inboundDepartmentIntentFromRegex === "apparel"
-      ? inboundDepartmentIntentFromRegex
-      : null);
+    });
   await maybeRestoreSalesLeadOwnerFromPreference(conv);
   if (inboundDepartmentIntent === "parts" || inboundDepartmentIntent === "apparel") {
     await assignDepartmentLeadOwnerIfUnassigned(conv, inboundDepartmentIntent);
@@ -17663,33 +17676,7 @@ if (authToken && signature) {
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
-  const inboundSchedulingSignals = detectSchedulingSignals(event.body ?? "");
-  const sourceLowerForServiceGuard = String(conv.lead?.source ?? "").toLowerCase();
-  const ctaLowerForServiceGuard = String(conv.classification?.cta ?? "").toLowerCase();
-  const bucketLowerForServiceGuard = String(conv.classification?.bucket ?? "").toLowerCase();
-  const likelySalesOriginForServiceGuard =
-    /(hdfs|marketplace|room58|meta|traffic log pro|trade accelerator|kenect|dealer lead app)/.test(
-      sourceLowerForServiceGuard
-    ) ||
-    /(check_availability|inventory|hdfs_coa|hdfs_pq|schedule|quote|pricing|trade)/.test(
-      `${ctaLowerForServiceGuard} ${bucketLowerForServiceGuard}`
-    );
-  const stickyServiceOnlyContext =
-    inboundDepartmentIntent !== "service" &&
-    (conv.classification?.bucket === "service" ||
-      conv.classification?.cta === "service_request" ||
-      dialogState === "service_request" ||
-      dialogState === "service_handoff" ||
-      (conv.followUp?.mode === "manual_handoff" &&
-        /service/.test(String(conv.followUp?.reason ?? ""))));
-  const suppressStickyServiceRouting =
-    stickyServiceOnlyContext &&
-    likelySalesOriginForServiceGuard &&
-    inboundDepartmentIntent !== "service" &&
-    !SERVICE_DEPARTMENT_RE.test(String(event.body ?? ""));
-  const isServiceLead =
-    inboundDepartmentIntent === "service" ||
-    (!suppressStickyServiceRouting && stickyServiceOnlyContext);
+  const isServiceLead = inboundDepartmentIntent === "service";
   if (isServiceLead) {
     await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
     const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
@@ -22924,12 +22911,17 @@ if (authToken && signature) {
   logRouteTiming("dealer_profile_for_weather", weatherProfileStartedAt);
   const weatherStatus = await safeDealerWeatherStatus(weatherProfile, "twilio_inbound");
   const orchestratorStartedAt = Date.now();
+  const liveClassificationForTurn = sanitizeDepartmentClassificationForTurn(
+    conv,
+    String(event.body ?? ""),
+    inboundDepartmentIntent
+  );
   const result = await safeOrchestrateInbound("twilio_inbound", event, history, {
     appointment: conv.appointment,
     followUp: conv.followUp,
     leadSource: conv.lead?.source ?? null,
-    bucket: conv.classification?.bucket ?? null,
-    cta: conv.classification?.cta ?? null,
+    bucket: liveClassificationForTurn.bucket,
+    cta: liveClassificationForTurn.cta,
     primaryIntentHint: turnPrimaryIntent,
     availabilityIntentHint: deterministicAvailabilityIntentOverride,
     schedulingIntentHint: schedulingPrimaryIntent,
