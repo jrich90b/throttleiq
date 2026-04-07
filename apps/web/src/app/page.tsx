@@ -6302,16 +6302,16 @@ export default function Home() {
               />
               {isManager ? (
                 <select
-                  className="w-full md:w-64 border rounded px-3 py-2 text-sm bg-white"
+                  className="w-full md:w-36 border rounded px-3 py-2 text-sm bg-white"
                   value={inboxOwnerFilter}
                   onChange={e => setInboxOwnerFilter(e.target.value)}
                   title="Filter inbox by owner"
                 >
-                  <option value="all">All owners</option>
-                  <option value="team:sales">Sales</option>
-                  <option value="team:service">Service</option>
-                  <option value="team:parts">Parts</option>
-                  <option value="team:apparel">Apparel</option>
+                  <option value="all">Owners</option>
+                  <option value="team:sales">Sales (Lead Owner)</option>
+                  <option value="team:service">Service (Department)</option>
+                  <option value="team:parts">Parts (Department)</option>
+                  <option value="team:apparel">Apparel (Department)</option>
                   <option value="team:unassigned">Unassigned</option>
                 </select>
               ) : null}
@@ -6689,16 +6689,16 @@ export default function Home() {
               {isManager ? (
                 <>
                   <select
-                    className="w-full md:w-64 border rounded px-3 py-2 text-sm bg-white"
+                    className="w-full md:w-36 border rounded px-3 py-2 text-sm bg-white"
                     value={todoLeadOwnerFilter}
                     onChange={e => setTodoLeadOwnerFilter(e.target.value)}
                     title="Filter by owner"
                   >
-                    <option value="all">All owners</option>
-                    <option value="team:sales">Sales</option>
-                    <option value="team:service">Service</option>
-                    <option value="team:parts">Parts</option>
-                    <option value="team:apparel">Apparel</option>
+                    <option value="all">Owners</option>
+                    <option value="team:sales">Sales (Lead Owner)</option>
+                    <option value="team:service">Service (Department)</option>
+                    <option value="team:parts">Parts (Department)</option>
+                    <option value="team:apparel">Apparel (Department)</option>
                     <option value="team:unassigned">Unassigned</option>
                   </select>
                 </>
