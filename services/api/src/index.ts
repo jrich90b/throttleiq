@@ -4795,6 +4795,23 @@ function buildCallbackTodoSchedule(
   };
 }
 
+function buildDefaultCallbackFallbackSchedule(
+  timezone: string
+): { dueAt?: string; reminderAt?: string; reminderLeadMinutes?: number } {
+  const parsed = parseRequestedDayTime("tomorrow at 9am", timezone);
+  if (!parsed) return {};
+  const dueAtDate = localPartsToUtcDate(timezone, parsed);
+  const dueAtMs = dueAtDate.getTime();
+  if (!Number.isFinite(dueAtMs)) return {};
+  const reminderLeadMinutes = getCallbackReminderLeadMinutes();
+  const reminderAt = new Date(dueAtMs - reminderLeadMinutes * 60_000);
+  return {
+    dueAt: dueAtDate.toISOString(),
+    reminderAt: reminderAt.toISOString(),
+    reminderLeadMinutes
+  };
+}
+
 function resolveCallbackTodoOwner(conv: any): { id?: string | null; name?: string | null } | undefined {
   const departmentTodo = listOpenTodos().find(
     t =>
@@ -4825,11 +4842,63 @@ function addOrUpdateCallbackCallTodo(
   const callbackTimeHint = String(args.callbackTimeHint ?? "").trim();
   const summary = buildCallbackTodoSummary(callbackTimeHint);
   const parseSource = String(args.parseSourceText ?? "").trim();
-  const schedule = buildCallbackTodoSchedule(
+  let schedule = buildCallbackTodoSchedule(
     callbackTimeHint || parseSource || "",
     args.timezone
   );
+  if (!schedule.dueAt || !schedule.reminderAt) {
+    const fallback = buildDefaultCallbackFallbackSchedule(args.timezone);
+    if (fallback.dueAt && fallback.reminderAt) {
+      schedule = fallback;
+    }
+  }
   return addTodo(conv, "call", summary, args.sourceMessageId, args.owner, schedule);
+}
+
+async function sendImmediateCallbackLinkSms(opts: {
+  conv: any;
+  todo: any;
+  users: any[];
+  timezone: string;
+  preferredOwner?: any | null;
+}): Promise<{ sent: boolean; ownerLabel: string }> {
+  const { conv, todo, users, timezone, preferredOwner } = opts;
+  const userById = new Map((users ?? []).map(u => [String(u?.id ?? ""), u]));
+  const ownerUser =
+    preferredOwner ??
+    resolveTodoOwnerUser(todo, conv, users ?? [], userById) ??
+    null;
+  const ownerPhone = pickUserPhoneFromRecord(ownerUser);
+  const ownerLabel =
+    String(ownerUser?.firstName ?? "").trim() ||
+    String(ownerUser?.name ?? "").trim() ||
+    String(todo?.ownerName ?? "").trim() ||
+    String(conv?.leadOwner?.name ?? "").trim() ||
+    "assigned staff";
+  const dealerProfile = await getDealerProfileHot();
+  const callbackLink = buildCallbackCallLink(conv, dealerProfile);
+  if (!ownerPhone || !callbackLink) {
+    return { sent: false, ownerLabel };
+  }
+  const customerName =
+    [conv?.lead?.firstName, conv?.lead?.lastName].filter(Boolean).join(" ").trim() ||
+    conv?.lead?.name ||
+    conv?.leadKey ||
+    "customer";
+  const customerPhone = normalizePhone(String(conv?.lead?.phone ?? conv?.leadKey ?? "").trim());
+  const dueLabel = todo?.dueAt ? formatSlotLocal(String(todo.dueAt), timezone) : "";
+  const message = [
+    dueLabel
+      ? `Callback request: ${customerName} asked for a call ${dueLabel}.`
+      : `Callback request: ${customerName} asked for a call.`,
+    customerPhone ? `Customer phone: ${customerPhone}` : null,
+    conv?.lead?.leadRef ? `Lead Ref: ${conv.lead.leadRef}` : null,
+    `Call: ${callbackLink}`
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const sent = await sendInternalSms(ownerPhone, message);
+  return { sent, ownerLabel };
 }
 
 function resolveTodoOwnerUser(
@@ -8383,21 +8452,104 @@ function detectCallbackText(text: string): boolean {
   return hasCallback || (hasTimeframe && (hasPhone || hasTrade));
 }
 
-function findMentionedUser(text: string, users: Array<any>): any | null {
+function normalizeMentionToken(raw: string): string {
+  return String(raw ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function getUserMentionToken(user: any): string {
+  const first =
+    String(user?.firstName ?? "").trim() ||
+    String(user?.name ?? "").trim().split(/\s+/).filter(Boolean)[0] ||
+    "";
+  return normalizeMentionToken(first);
+}
+
+function getUserDisplayName(user: any): string {
+  const fromName = String(user?.name ?? "").trim();
+  if (fromName) return fromName;
+  const first = String(user?.firstName ?? "").trim();
+  const last = String(user?.lastName ?? "").trim();
+  const combined = [first, last].filter(Boolean).join(" ").trim();
+  if (combined) return combined;
+  return String(user?.email ?? "").trim();
+}
+
+function findMentionedUsers(text: string, users: Array<any>): {
+  user: any | null;
+  ambiguousUsers: any[];
+  token: string | null;
+} {
   const body = String(text ?? "");
-  if (!body) return null;
+  if (!body) return { user: null, ambiguousUsers: [], token: null };
+  const normalizedBody = body.toLowerCase();
+  const matched: Array<{ user: any; token: string }> = [];
   for (const user of users ?? []) {
     const name = String(user?.firstName ?? "").trim() || String(user?.name ?? "").split(" ")[0];
     if (!name) continue;
+    const tokenNorm = normalizeMentionToken(name);
+    if (!tokenNorm) continue;
     const token = escapeRegex(name);
     const direct = new RegExp(`^\\s*(hey|hi|yo|ok|okay)?\\s*${token}\\b`, "i");
     const refer = new RegExp(`\\b${token}\\b`, "i");
     const tell = new RegExp(`\\b(tell|let)\\s+${token}\\b`, "i");
     if (direct.test(body) || tell.test(body) || refer.test(body)) {
-      return user;
+      matched.push({ user, token: tokenNorm });
     }
   }
-  return null;
+  if (!matched.length) return { user: null, ambiguousUsers: [], token: null };
+
+  const uniqueById = new Map<string, { user: any; token: string }>();
+  for (const row of matched) {
+    const id = String(row.user?.id ?? row.user?.email ?? getUserDisplayName(row.user)).trim();
+    if (!id) continue;
+    if (!uniqueById.has(id)) uniqueById.set(id, row);
+  }
+  const uniques = Array.from(uniqueById.values());
+  if (!uniques.length) return { user: null, ambiguousUsers: [], token: null };
+  if (uniques.length === 1) return { user: uniques[0].user, ambiguousUsers: [], token: uniques[0].token };
+
+  // If customer used full name, prefer exact full-name match over first-name ambiguity.
+  const byFullName = uniques.filter(row => {
+    const first = String(row.user?.firstName ?? "").trim().toLowerCase();
+    const last =
+      String(row.user?.lastName ?? "").trim().toLowerCase() ||
+      String(row.user?.name ?? "")
+        .trim()
+        .toLowerCase()
+        .split(/\s+/)
+        .slice(1)
+        .join(" ");
+    if (!first || !last) return false;
+    const full = `${first} ${last}`.replace(/\s+/g, " ").trim();
+    return full.length > 3 && normalizedBody.includes(full);
+  });
+  if (byFullName.length === 1) {
+    return { user: byFullName[0].user, ambiguousUsers: [], token: byFullName[0].token };
+  }
+
+  return {
+    user: null,
+    ambiguousUsers: uniques.map(row => row.user),
+    token: uniques[0]?.token ?? null
+  };
+}
+
+function findMentionedUser(text: string, users: Array<any>): any | null {
+  return findMentionedUsers(text, users).user;
+}
+
+function buildMentionClarificationReply(ambiguousUsers: any[]): string {
+  const names = ambiguousUsers
+    .map(getUserDisplayName)
+    .filter(Boolean)
+    .slice(0, 4);
+  if (!names.length) {
+    return "Just to confirm — which team member should reach out?";
+  }
+  const list = names.join(" or ");
+  return `Just to confirm — did you mean ${list}?`;
 }
 
 function isDirectUserMention(text: string, user: any): boolean {
@@ -8425,8 +8577,8 @@ function findUserFromRecentOutbound(conv: any, users: Array<any>): any | null {
     .reverse()
     .filter((m: any) => m.direction === "out" && m.body);
   for (const m of outbounds.slice(0, 6)) {
-    const found = findMentionedUser(m.body, users);
-    if (found) return found;
+    const found = findMentionedUsers(m.body, users);
+    if (found.user) return found.user;
   }
   return null;
 }
@@ -15769,8 +15921,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     return respondWithSmsRegeneratedDraft(reply);
   }
-  let mentionedUser =
-    event.provider === "sendgrid_adf" ? null : findMentionedUser(event.body ?? "", usersForMentions);
+  const mentionResolution =
+    event.provider === "sendgrid_adf"
+      ? { user: null, ambiguousUsers: [], token: null as string | null }
+      : findMentionedUsers(event.body ?? "", usersForMentions);
+  let mentionedUser = mentionResolution.user;
+  const ambiguousMentionUsers = mentionResolution.ambiguousUsers;
+  if (event.provider === "twilio" && !mentionedUser && ambiguousMentionUsers.length > 1) {
+    return respondWithSmsRegeneratedDraft(buildMentionClarificationReply(ambiguousMentionUsers));
+  }
   if (!mentionedUser && inboundReferencesOtherPerson(event.body ?? "")) {
     mentionedUser = findUserFromRecentOutbound(conv, usersForMentions);
   }
@@ -18850,10 +19009,26 @@ if (authToken && signature) {
   const llmTestRideIntent = intentAccepted && intentParse?.intent === "test_ride";
   const llmAvailability = llmAvailabilityIntent ? intentParse?.availability ?? null : null;
   let mentionedUser: any | null = null;
+  let ambiguousMentionUsers: any[] = [];
   let usersForMentions: Array<any> = [];
   if (event.provider === "twilio") {
     usersForMentions = await listUsers();
-    mentionedUser = findMentionedUser(event.body ?? "", usersForMentions);
+    const mentionResolution = findMentionedUsers(event.body ?? "", usersForMentions);
+    mentionedUser = mentionResolution.user;
+    ambiguousMentionUsers = mentionResolution.ambiguousUsers;
+    if (!mentionedUser && ambiguousMentionUsers.length > 1) {
+      const clarifyReply = buildMentionClarificationReply(ambiguousMentionUsers);
+      if (webhookMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, clarifyReply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, clarifyReply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        clarifyReply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
     if (!mentionedUser && inboundReferencesOtherPerson(event.body ?? "")) {
       mentionedUser = findUserFromRecentOutbound(conv, usersForMentions);
     }
@@ -18899,6 +19074,56 @@ if (authToken && signature) {
       : /\b(call me|give me a call|can you call|please call|have .* call|reach me|contact me)\b/i.test(
           String(event.body ?? "")
         );
+    if (wantsCall) {
+      const cfg = await getSchedulerConfigHot();
+      const timezone = cfg.timezone || "America/New_York";
+      const callbackTodo = addOrUpdateCallbackCallTodo(conv, {
+        sourceMessageId: event.providerMessageId,
+        callbackTimeHint: intentParse?.callback?.timeText ?? "",
+        parseSourceText: event.body ?? "",
+        owner: {
+          id: String(mentionedUser.id ?? "").trim() || "",
+          name:
+            String(mentionedUser.name ?? "").trim() ||
+            String(mentionedUser.firstName ?? "").trim() ||
+            ""
+        },
+        timezone
+      });
+      const callbackSms = await sendImmediateCallbackLinkSms({
+        conv,
+        todo: callbackTodo,
+        users: usersForMentions,
+        timezone,
+        preferredOwner: mentionedUser
+      });
+      if (callbackTodo?.dueAt && callbackTodo?.reminderAt) {
+        logRouteOutcome("callback_call_todo_scheduled", {
+          dueAt: callbackTodo.dueAt,
+          reminderAt: callbackTodo.reminderAt,
+          ownerId: callbackTodo.ownerId ?? null,
+          ownerName: callbackTodo.ownerName ?? null,
+          source: "mentioned_user"
+        });
+      } else {
+        logRouteOutcome("callback_call_todo_created", {
+          ownerId: callbackTodo?.ownerId ?? null,
+          ownerName: callbackTodo?.ownerName ?? null,
+          source: "mentioned_user"
+        });
+      }
+      logRouteOutcome(
+        callbackSms.sent ? "callback_link_sms_sent" : "callback_link_sms_failed",
+        {
+          owner: callbackSms.ownerLabel,
+          source: "mentioned_user",
+          dueAt: callbackTodo?.dueAt ?? null
+        }
+      );
+      if (!callbackSms.sent) {
+        addTodo(conv, "note", `Callback link SMS failed for ${callbackSms.ownerLabel}.`);
+      }
+    }
     const dealerProfile = await getDealerProfileHot();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "our team");
@@ -19142,6 +19367,23 @@ if (authToken && signature) {
         ownerId: callbackTodo?.ownerId ?? null,
         ownerName: callbackTodo?.ownerName ?? null
       });
+    }
+    const callbackSms = await sendImmediateCallbackLinkSms({
+      conv,
+      todo: callbackTodo,
+      users: usersForMentions,
+      timezone
+    });
+    logRouteOutcome(
+      callbackSms.sent ? "callback_link_sms_sent" : "callback_link_sms_failed",
+      {
+        owner: callbackSms.ownerLabel,
+        source: "callback_intent",
+        dueAt: callbackTodo?.dueAt ?? null
+      }
+    );
+    if (!callbackSms.sent) {
+      addTodo(conv, "note", `Callback link SMS failed for ${callbackSms.ownerLabel}.`);
     }
   }
   if (routingParserDecision.accepted && routingParserDecision.fallbackAction === "no_response") {
