@@ -6577,8 +6577,11 @@ export default function Home() {
               const reason = (t.reason ?? "").toLowerCase();
               const isInternalNoteTodo = /(^|\\b)note(\\b|$)/.test(reason);
               const showCallButton = !isInternalNoteTodo;
+              const actionLabel = todoActionLabel(t);
               const requestedCallTime =
                 todoRequestedCallTimeLabel(t) || String(t.callbackTimeLabel ?? "").trim() || null;
+              const actionAlreadyHasRequestedTime = /\brequested(?::| call time:)/i.test(actionLabel);
+              const showRequestedCallTime = !!requestedCallTime && !actionAlreadyHasRequestedTime;
               return (
                 <div key={t.id} className="p-4 flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
@@ -6595,9 +6598,9 @@ export default function Home() {
                   </div>
                   <div className="text-sm text-gray-700 mt-2 line-clamp-3 break-words">{t.summary}</div>
                   <div className="text-sm font-semibold text-red-600 mt-2">
-                    Action: {todoActionLabel(t)}
+                    Action: {actionLabel}
                   </div>
-                  {requestedCallTime ? (
+                  {showRequestedCallTime ? (
                     <div className="text-xs text-gray-600 mt-1">
                       Requested call time: {requestedCallTime}
                     </div>
