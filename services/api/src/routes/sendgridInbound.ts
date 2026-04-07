@@ -2027,7 +2027,18 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
 
   const callOnlyRequested = isCallOnlyText(inquiryText);
-  const callbackRequestedInLead = callbackIntentFromParser || !!String(lead.preferredTime ?? "").trim();
+  const isServiceLeadByClassifier =
+    inferredBucket === "service" || inferredCta === "service_request" || serviceVinRequest;
+  const callbackRequestedByServiceHeuristic =
+    isServiceLeadByClassifier &&
+    /\b(call|callback|call me|give me a call|reach out|reach me|phone me|call us)\b/i.test(inquiryText) &&
+    /\b(today|tomorrow|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun|morning|afternoon|evening)\b/i.test(
+      inquiryText
+    );
+  const callbackRequestedInLead =
+    callbackIntentFromParser ||
+    callbackRequestedByServiceHeuristic ||
+    !!String(lead.preferredTime ?? "").trim();
   const callbackTimeHint =
     callbackTimeFromParser ||
     String(lead.preferredTime ?? "").trim() ||
