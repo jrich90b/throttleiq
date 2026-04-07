@@ -6563,19 +6563,19 @@ export default function Home() {
               const showCallButton = !isInternalNoteTodo;
               return (
                 <div key={t.id} className="p-4 flex items-start justify-between gap-4">
-                  <div>
+                  <div className="min-w-0 flex-1">
                   {t.leadName ? (
                     <>
                       <div className="text-sm font-medium">{t.leadName}</div>
-                      <div className="text-sm text-gray-600">{t.leadKey}</div>
+                      <div className="text-sm text-gray-600 break-all">{t.leadKey}</div>
                     </>
                   ) : (
-                    <div className="text-sm font-medium">{t.leadKey}</div>
+                    <div className="text-sm font-medium break-all">{t.leadKey}</div>
                   )}
                   <div className="text-xs text-gray-500 mt-1">
                     {t.reason} • {new Date(t.createdAt).toLocaleString()}
                   </div>
-                  <div className="text-sm text-gray-700 mt-2 line-clamp-3">{t.summary}</div>
+                  <div className="text-sm text-gray-700 mt-2 line-clamp-3 break-words">{t.summary}</div>
                   <div className="text-sm font-semibold text-red-600 mt-2">
                     Action: {todoActionLabel(t)}
                   </div>
@@ -6588,7 +6588,7 @@ export default function Home() {
                     Open conversation
                   </button>
                   </div>
-                  <div className="flex flex-col items-end gap-2">
+                  <div className="shrink-0 flex flex-col items-end gap-2">
                     {showCallButton ? (
                       <button
                         className="px-3 py-2 border rounded text-sm"
