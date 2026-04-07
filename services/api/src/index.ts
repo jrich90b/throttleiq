@@ -16594,8 +16594,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       const requestedDayPart = extractDayPart(event.body ?? "");
       const requestedDayLabel = requestedDay?.day ?? "";
       const timePrompt = requestedDayPart
-        ? `What time on ${requestedDayLabel} works best for you? I can confirm availability.`
-        : "What time works best for you? I can confirm availability.";
+        ? `What time on ${requestedDayLabel} works best for you?`
+        : "What time works best for you?";
       if (requestedDayLabel) {
         const requestedPhrase = `${requestedDayLabel}${requestedDayPart ? ` ${requestedDayPart}` : ""}`;
         const daySpecificReply =
@@ -20021,7 +20021,7 @@ if (authToken && signature) {
       if (match?.item) {
         const unitLabel = stockId || vin || "that unit";
         const dayPhrase = `${dayInfo.day} ${dayPart}`;
-        const reply = `Got it — ${unitLabel} is available right now. ${dayPhrase} can work. What time were you thinking? I can confirm availability.`;
+        const reply = `Got it — ${unitLabel} is available right now. ${dayPhrase} can work. What time were you thinking?`;
         setDialogState(conv, "schedule_request");
         const systemMode = webhookMode;
         if (systemMode === "suggest") {
@@ -22900,10 +22900,10 @@ if (authToken && signature) {
     const dayInfo = parseDayOfWeek(textLower);
     if (dayInfo?.day) {
       const partLabel = dayPart ? ` ${dayPart}` : "";
-      result.draft = `Got it — ${dayInfo.day}${partLabel} can work. What time were you thinking? I can confirm availability.`;
+      result.draft = `Got it — ${dayInfo.day}${partLabel} can work. What time were you thinking?`;
       setDialogState(conv, "schedule_request");
     } else if (dayPart) {
-      result.draft = `Got it — ${dayPart} can work. What time were you thinking? I can confirm availability.`;
+      result.draft = `Got it — ${dayPart} can work. What time were you thinking?`;
       setDialogState(conv, "schedule_request");
     }
   }
