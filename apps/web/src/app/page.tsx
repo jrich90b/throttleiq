@@ -886,7 +886,7 @@ type ContactListItem = {
 };
 
 type KpiLeadType = "all" | "new" | "used" | "walk_in";
-type KpiLeadScope = "online_only" | "walkin_only";
+type KpiLeadScope = "online_only" | "include_walkins" | "walkin_only";
 
 type KpiOverview = {
   applied: {
@@ -6849,6 +6849,7 @@ export default function Home() {
               }
             >
               <option value="online_only">Online</option>
+              <option value="include_walkins">All</option>
               <option value="walkin_only">Walk-in</option>
             </select>
             <select
@@ -7878,7 +7879,11 @@ export default function Home() {
                 </p>
                 <p className="text-xs text-gray-500 mt-1">
                   Scope:{" "}
-                  {kpiLeadScopeFilter === "walkin_only" ? "Walk-ins only" : "Online leads only"}
+                  {kpiLeadScopeFilter === "walkin_only"
+                    ? "Walk-ins only"
+                    : kpiLeadScopeFilter === "include_walkins"
+                      ? "Online + walk-ins"
+                      : "Online leads only"}
                 </p>
               </div>
               <button
