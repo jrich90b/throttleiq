@@ -9,6 +9,7 @@ export async function GET(req: NextRequest) {
   const source = url.searchParams.get("source") ?? "all";
   const ownerId = url.searchParams.get("ownerId") ?? "all";
   const leadType = url.searchParams.get("leadType") ?? "all";
+  const leadScope = url.searchParams.get("leadScope") ?? "online_only";
   const from = url.searchParams.get("from") ?? "";
   const to = url.searchParams.get("to") ?? "";
 
@@ -16,6 +17,7 @@ export async function GET(req: NextRequest) {
   upstream.searchParams.set("source", source);
   upstream.searchParams.set("ownerId", ownerId);
   upstream.searchParams.set("leadType", leadType);
+  upstream.searchParams.set("leadScope", leadScope);
   if (from) upstream.searchParams.set("from", from);
   if (to) upstream.searchParams.set("to", to);
 
