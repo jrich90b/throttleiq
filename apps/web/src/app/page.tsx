@@ -749,6 +749,8 @@ type TodoItem = {
   reason: string;
   summary: string;
   action?: string;
+  dueAt?: string | null;
+  reminderAt?: string | null;
   createdAt: string;
 };
 
@@ -811,6 +813,14 @@ function todoActionLabel(todo: TodoItem): string {
   if (/(pricing|price|quote|payment)/.test(text)) return "Provide pricing or payment details.";
   if (/(^|\\b)note(\\b|$)/.test(reason) || /update for/.test(text)) return "Internal note (no customer follow-up).";
   return "Follow up with the customer.";
+}
+
+function todoRequestedCallTimeLabel(todo: TodoItem): string | null {
+  const dueAt = String(todo.dueAt ?? "").trim();
+  if (!dueAt) return null;
+  const at = new Date(dueAt);
+  if (Number.isNaN(at.getTime())) return null;
+  return at.toLocaleString();
 }
 
 type SuppressionItem = {
@@ -6564,6 +6574,7 @@ export default function Home() {
               const reason = (t.reason ?? "").toLowerCase();
               const isInternalNoteTodo = /(^|\\b)note(\\b|$)/.test(reason);
               const showCallButton = !isInternalNoteTodo;
+              const requestedCallTime = todoRequestedCallTimeLabel(t);
               return (
                 <div key={t.id} className="p-4 flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
@@ -6582,6 +6593,11 @@ export default function Home() {
                   <div className="text-sm font-semibold text-red-600 mt-2">
                     Action: {todoActionLabel(t)}
                   </div>
+                  {requestedCallTime ? (
+                    <div className="text-xs text-gray-600 mt-1">
+                      Requested call time: {requestedCallTime}
+                    </div>
+                  ) : null}
                   <button
                     className="text-xs text-blue-600 mt-2 inline-block"
                     onClick={() => {
