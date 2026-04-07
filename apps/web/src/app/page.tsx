@@ -3017,18 +3017,103 @@ export default function Home() {
     return Array.from(merged.values());
   }, [usersList, salespeopleList]);
 
+  const ownerDirectory = useMemo(() => {
+    const normalize = (v: string) => String(v ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const byId = new Map<string, { name: string; role: string }>();
+    const byExact = new Map<string, string>();
+    const byFirst = new Map<string, Set<string>>();
+    const addFirst = (firstRaw: string, name: string) => {
+      const key = normalize(firstRaw);
+      if (!key) return;
+      if (!byFirst.has(key)) byFirst.set(key, new Set<string>());
+      byFirst.get(key)?.add(name);
+    };
+    for (const user of usersList ?? []) {
+      const first = String(user?.firstName ?? "").trim();
+      const last = String(user?.lastName ?? "").trim();
+      const name =
+        [first, last].filter(Boolean).join(" ").trim() ||
+        String(user?.name ?? "").trim() ||
+        String(user?.email ?? "").trim() ||
+        String(user?.id ?? "").trim();
+      if (!name) continue;
+      const role = String(user?.role ?? "").toLowerCase();
+      const id = String(user?.id ?? "").trim();
+      if (id) byId.set(id, { name, role });
+      const exact = normalize(name);
+      if (exact && !byExact.has(exact)) byExact.set(exact, name);
+      addFirst(first || name.split(/\s+/)[0] || "", name);
+    }
+    return { normalize, byId, byExact, byFirst };
+  }, [usersList]);
+
+  const canonicalizeOwnerName = useCallback(
+    (rawName: string, ownerId?: string | null): string => {
+      const normalize = ownerDirectory.normalize;
+      const id = String(ownerId ?? "").trim();
+      if (id && ownerDirectory.byId.has(id)) {
+        return ownerDirectory.byId.get(id)?.name ?? String(rawName ?? "").trim();
+      }
+      const name = String(rawName ?? "").trim();
+      if (!name) return "";
+      const exact = normalize(name);
+      if (exact && ownerDirectory.byExact.has(exact)) {
+        return ownerDirectory.byExact.get(exact) ?? name;
+      }
+      if (exact.length >= 3) {
+        const exactFirst = ownerDirectory.byFirst.get(exact);
+        if (exactFirst && exactFirst.size === 1) return Array.from(exactFirst)[0];
+        const prefixMatches = new Set<string>();
+        for (const [first, names] of ownerDirectory.byFirst.entries()) {
+          if (first.startsWith(exact)) {
+            for (const n of names) prefixMatches.add(n);
+          }
+        }
+        if (prefixMatches.size === 1) return Array.from(prefixMatches)[0];
+      }
+      return name;
+    },
+    [ownerDirectory]
+  );
+
+  const inferOwnerDepartment = useCallback(
+    (ownerNameRaw: string, ownerId?: string | null): "service" | "parts" | "apparel" | null => {
+      const byIdHit = String(ownerId ?? "").trim();
+      if (byIdHit && ownerDirectory.byId.has(byIdHit)) {
+        const role = String(ownerDirectory.byId.get(byIdHit)?.role ?? "").toLowerCase();
+        if (role === "service" || role === "parts" || role === "apparel") {
+          return role as "service" | "parts" | "apparel";
+        }
+      }
+      const name = String(ownerNameRaw ?? "").trim().toLowerCase();
+      if (!name) return null;
+      if (/\bservice\b/.test(name)) return "service";
+      if (/\bparts\b/.test(name)) return "parts";
+      if (/\bapparel\b/.test(name)) return "apparel";
+      return null;
+    },
+    [ownerDirectory]
+  );
+
   const managerLeadOwnerOptions = useMemo(() => {
     const byName = new Map<string, string>();
-    const addName = (raw: string) => {
-      const name = String(raw ?? "").trim();
+    const addName = (raw: string, ownerId?: string | null) => {
+      const name = canonicalizeOwnerName(raw, ownerId);
       if (!name) return;
       const key = name.toLowerCase();
       if (!byName.has(key)) byName.set(key, name);
     };
     for (const c of conversations) {
-      addName(String(c.leadOwner?.name ?? ""));
+      const departmentOwner = inferOwnerDepartment(
+        String(c.leadOwner?.name ?? "").trim(),
+        String(c.leadOwner?.id ?? "").trim()
+      );
+      if (departmentOwner) continue;
+      addName(String(c.leadOwner?.name ?? ""), c.leadOwner?.id);
     }
     for (const t of todos) {
+      const departmentOwner = inferOwnerDepartment(String(t.leadOwnerName ?? "").trim());
+      if (departmentOwner) continue;
       addName(String(t.leadOwnerName ?? ""));
     }
     for (const u of usersList ?? []) {
@@ -3037,12 +3122,12 @@ export default function Home() {
       const fullName =
         [u?.firstName, u?.lastName].filter(Boolean).join(" ").trim() ||
         String(u?.name ?? "").trim();
-      addName(fullName);
+      addName(fullName, String(u?.id ?? ""));
     }
     return Array.from(byName.values()).sort((a, b) =>
       a.localeCompare(b, undefined, { sensitivity: "base", numeric: true })
     );
-  }, [conversations, todos, usersList]);
+  }, [conversations, todos, usersList, canonicalizeOwnerName, inferOwnerDepartment]);
 
   const filteredTodos = useMemo(() => {
     const q = todoQuery.trim().toLowerCase();
@@ -3052,11 +3137,14 @@ export default function Home() {
     return todos.filter(t => {
       const leadName = String(t.leadName ?? "").toLowerCase();
       const leadKey = String(t.leadKey ?? "").toLowerCase();
-      const leadOwner = String(t.leadOwnerName ?? "").trim();
+      const leadOwnerCanonical = canonicalizeOwnerName(String(t.leadOwnerName ?? "").trim());
+      const leadOwner = String(leadOwnerCanonical ?? "").trim();
       const departmentOwner = String(t.departmentOwnerName ?? "").trim();
       const reason = String(t.reason ?? "").toLowerCase();
-      const todoTeam =
+      const inferredDeptOwner = inferOwnerDepartment(leadOwner);
+      const todoTeamBase =
         reason === "service" || reason === "parts" || reason === "apparel" ? reason : "sales";
+      const todoTeam = todoTeamBase === "sales" && inferredDeptOwner ? inferredDeptOwner : todoTeamBase;
       if (isManager && todoLeadOwnerFilter !== "all") {
         if (todoLeadOwnerFilter === "team:unassigned") {
           if (todoTeam === "sales") {
@@ -3067,7 +3155,7 @@ export default function Home() {
         } else if (todoLeadOwnerFilter.startsWith("team:")) {
           if (todoTeam !== todoLeadOwnerFilter.slice(5)) return false;
         } else if (ownerNameFilter) {
-          if (String(t.leadOwnerName ?? "").trim().toLowerCase() !== ownerNameFilter) return false;
+          if (leadOwner.toLowerCase() !== ownerNameFilter) return false;
         } else {
           return false;
         }
@@ -3075,7 +3163,7 @@ export default function Home() {
       if (!q) return true;
       return leadName.includes(q) || leadKey.includes(q);
     });
-  }, [todos, todoQuery, isManager, todoLeadOwnerFilter]);
+  }, [todos, todoQuery, isManager, todoLeadOwnerFilter, canonicalizeOwnerName, inferOwnerDepartment]);
 
   useEffect(() => {
     if (blockForm.salespersonId) return;
@@ -3607,13 +3695,20 @@ export default function Home() {
       : "";
     return visibleConversations.filter(c => {
       if (isManager && inboxOwnerFilter !== "all") {
-        const leadOwner = String(c.leadOwner?.name ?? c.leadOwner?.id ?? "").trim();
+        const leadOwner = canonicalizeOwnerName(
+          String(c.leadOwner?.name ?? c.leadOwner?.id ?? "").trim(),
+          c.leadOwner?.id
+        );
+        const ownerDepartment = inferOwnerDepartment(
+          String(c.leadOwner?.name ?? c.leadOwner?.id ?? "").trim(),
+          c.leadOwner?.id
+        );
         const teams = inboxDepartmentTeamsByConv.get(c.id) ?? new Set<string>();
-        const hasServiceTodo = teams.has("service");
-        const hasPartsTodo = teams.has("parts");
-        const hasApparelTodo = teams.has("apparel");
+        const hasServiceTodo = teams.has("service") || ownerDepartment === "service";
+        const hasPartsTodo = teams.has("parts") || ownerDepartment === "parts";
+        const hasApparelTodo = teams.has("apparel") || ownerDepartment === "apparel";
         if (inboxOwnerFilter === "team:sales") {
-          if (!leadOwner) return false;
+          if (!leadOwner || ownerDepartment) return false;
         } else if (inboxOwnerFilter === "team:service") {
           if (!hasServiceTodo) return false;
         } else if (inboxOwnerFilter === "team:parts") {
@@ -3621,9 +3716,9 @@ export default function Home() {
         } else if (inboxOwnerFilter === "team:apparel") {
           if (!hasApparelTodo) return false;
         } else if (inboxOwnerFilter === "team:unassigned") {
-          if (leadOwner || hasServiceTodo || hasPartsTodo || hasApparelTodo) return false;
+          if (leadOwner || hasServiceTodo || hasPartsTodo || hasApparelTodo || ownerDepartment) return false;
         } else if (ownerNameFilter) {
-          if (String(c.leadOwner?.name ?? "").trim().toLowerCase() !== ownerNameFilter) return false;
+          if (leadOwner.toLowerCase() !== ownerNameFilter) return false;
         } else {
           return false;
         }
@@ -3638,7 +3733,7 @@ export default function Home() {
       }
       return false;
     });
-  }, [visibleConversations, inboxQuery, isManager, inboxOwnerFilter, inboxDepartmentTeamsByConv]);
+  }, [visibleConversations, inboxQuery, isManager, inboxOwnerFilter, inboxDepartmentTeamsByConv, canonicalizeOwnerName, inferOwnerDepartment]);
 
   const groupedConversations = useMemo(() => {
     const groups: Array<{ label: string; items: ConversationListItem[] }> = [];
