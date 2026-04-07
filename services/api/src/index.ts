@@ -15208,132 +15208,20 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
   };
   const applyManualOutboundStateHints = (outboundBody: string, opts?: { channel?: "sms" | "email" | null }) => {
-    const text = String(outboundBody ?? "").trim();
-    if (!text) return;
-    const lower = text.toLowerCase();
-    const department = inferDepartmentFromText(text);
-    if (department && hasExplicitDepartmentHandoffPhrase(text, department)) {
-      conv.classification = {
-        ...(conv.classification ?? {}),
-        bucket: department,
-        cta: `${department}_request`,
-        channel: opts?.channel === "email" ? "email" : "sms"
-      };
-      conv.inventoryWatchPending = undefined;
-      if (getDialogState(conv) === "pricing_need_model" || getDialogState(conv) === "inventory_watch_prompted") {
-        setDialogState(conv, "none");
-      }
-      if (department === "service") {
-        setDialogState(conv, "service_handoff");
-      }
-      setFollowUpMode(conv, "manual_handoff", `${department}_request`);
-      stopFollowUpCadence(conv, "manual_handoff");
-      stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
-      return;
-    }
-
-    const schedulingSignals = detectSchedulingSignals(text);
-    const hasDayToken =
-      /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week|this weekend|weekend|next month)\b/i.test(
-        lower
-      );
-    const scheduleConfirmation =
-      schedulingSignals.hasDayTime ||
-      /\b(you(?:'|’)re all set|you are all set|confirmed|booked|scheduled)\b/i.test(lower) ||
-      (/\bsee you\b/i.test(lower) && (schedulingSignals.hasDayTime || hasDayToken));
-    if (scheduleConfirmation) {
-      conv.inventoryWatchPending = undefined;
-      if (getDialogState(conv) === "pricing_need_model" || getDialogState(conv) === "inventory_watch_prompted") {
-        setDialogState(conv, "none");
-      }
-      setFollowUpMode(conv, "manual_handoff", "manual_appointment");
-      stopFollowUpCadence(conv, "manual_handoff");
-      stopRelatedCadences(conv, "manual_appointment", { setMode: "manual_handoff" });
-      return;
-    }
-
-    const financeDocsHint =
-      /\b(credit app|credit application|finance team|lien holder|binder|e-?sign|payoff)\b/i.test(
-        lower
-      );
-    if (financeDocsHint) {
-      conv.inventoryWatchPending = undefined;
-      if (getDialogState(conv) === "pricing_need_model" || getDialogState(conv) === "inventory_watch_prompted") {
-        setDialogState(conv, "none");
-      }
-      setFollowUpMode(conv, "manual_handoff", "credit_app");
-      stopFollowUpCadence(conv, "manual_handoff");
-      stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
-      return;
-    }
-
-    if (
-      conv.inventoryWatchPending &&
-      !/\b(watch|keep an eye|notify|when one comes in|text you when one lands)\b/i.test(lower)
-    ) {
-      conv.inventoryWatchPending = undefined;
-      if (getDialogState(conv) === "inventory_watch_prompted") {
-        setDialogState(conv, "none");
-      }
-    }
-    if (
-      getDialogState(conv) === "pricing_need_model" &&
-      !/\b(price|pricing|payment|monthly|apr|term|down payment|otd)\b/i.test(lower)
-    ) {
-      setDialogState(conv, "none");
-    }
+    void outboundBody;
+    void opts;
+    // Hard lock: manual salesperson text must not mutate workflow state.
+    // State changes should come from parser-driven inbound turns or explicit UI actions.
+    return;
   };
   const reconcileManualOutboundState = async (
     outboundBody: string,
     opts?: { channel?: "sms" | "email" | null }
   ) => {
-    if (process.env.MANUAL_OUTBOUND_STATE_REDUCER_ENABLED === "0") return;
-    const text = String(outboundBody ?? "").trim();
-    if (!text) return;
-    const shortAck = isShortAckText(text) || isEmojiOnlyText(text);
-    const history = buildHistory(conv, 12);
-    try {
-      const { parsed, reduced } = await parseAndReduceConversationState({
-        conv,
-        text,
-        history,
-        shortAck,
-        debugLabel: "manual"
-      });
-      if (reduced.departmentIntent) {
-        const explicit = !!parsed?.explicitRequest;
-        if (explicit && hasExplicitDepartmentHandoffPhrase(text, reduced.departmentIntent)) {
-          conv.classification = {
-            ...(conv.classification ?? {}),
-            bucket: reduced.departmentIntent,
-            cta: `${reduced.departmentIntent}_request`,
-            channel: opts?.channel === "email" ? "email" : "sms"
-          };
-        }
-      }
-      if (process.env.DEBUG_DECISION_TRACE === "1") {
-        console.log("[decision-trace]", {
-          stage: "manual.outbound_reducer",
-          convId: conv.id,
-          leadKey: conv.leadKey,
-          parsedStateIntent: parsed?.stateIntent ?? null,
-          parsedDepartmentIntent: parsed?.departmentIntent ?? null,
-          reducedDepartmentIntent: reduced.departmentIntent,
-          followUpMode: conv.followUp?.mode ?? null,
-          followUpReason: conv.followUp?.reason ?? null,
-          dialogState: getDialogState(conv),
-          text: text.slice(0, 140)
-        });
-      }
-    } catch (err: any) {
-      if (process.env.DEBUG_DECISION_TRACE === "1") {
-        console.warn("[decision-trace] manual.outbound_reducer_error", {
-          convId: conv.id,
-          leadKey: conv.leadKey,
-          message: String(err?.message ?? err)
-        });
-      }
-    }
+    void outboundBody;
+    void opts;
+    // Hard lock: manual salesperson text must not trigger parser/reducer state transitions.
+    return;
   };
 
   // Normalize destination number from conversation leadKey
