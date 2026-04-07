@@ -886,7 +886,7 @@ type ContactListItem = {
 };
 
 type KpiLeadType = "all" | "new" | "used" | "walk_in";
-type KpiLeadScope = "online_only" | "include_walkins" | "walkin_only";
+type KpiLeadScope = "online_only" | "walkin_only";
 
 type KpiOverview = {
   applied: {
@@ -6848,18 +6848,8 @@ export default function Home() {
                 setKpiLeadScopeFilter((e.target.value as KpiLeadScope) || "online_only")
               }
             >
-              <option value="online_only">Online leads only</option>
-              <option value="include_walkins">Include walk-ins</option>
-              <option value="walkin_only">Walk-ins only</option>
-            </select>
-            <select
-              className="w-full border rounded px-3 py-2 text-sm"
-              value={kpiLeadTypeFilter}
-              onChange={e => setKpiLeadTypeFilter((e.target.value as KpiLeadType) || "all")}
-            >
-              <option value="all">All lead types</option>
-              <option value="new">New</option>
-              <option value="used">Used</option>
+              <option value="online_only">Online</option>
+              <option value="walkin_only">Walk-in</option>
             </select>
             <select
               className="w-full border rounded px-3 py-2 text-sm"
@@ -7888,11 +7878,7 @@ export default function Home() {
                 </p>
                 <p className="text-xs text-gray-500 mt-1">
                   Scope:{" "}
-                  {kpiLeadScopeFilter === "online_only"
-                    ? "Online leads only"
-                    : kpiLeadScopeFilter === "walkin_only"
-                    ? "Walk-ins only"
-                    : "Online + walk-ins"}
+                  {kpiLeadScopeFilter === "walkin_only" ? "Walk-ins only" : "Online leads only"}
                 </p>
               </div>
               <button
