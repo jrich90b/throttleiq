@@ -7710,9 +7710,7 @@ function reconcileStateFromRecentManualOutbound(
     });
   if (!lastManualOutbound?.body) return { changed: false, reasons: [] };
   const lastOutboundText = String(lastManualOutbound.body ?? "").toLowerCase();
-  const dialogState = String(getDialogState(conv) ?? "").toLowerCase();
   const reasons: string[] = [];
-  let changed = false;
 
   const manualAppointmentCue =
     /\b(see you|i(?:’|')?ll be here|that works|works for me|you(?:’|')?re all set|you are all set|look forward to meeting|come in|stop by|stop in)\b/.test(
@@ -7724,44 +7722,24 @@ function reconcileStateFromRecentManualOutbound(
     /\b(apr|rate|monthly|payment|down payment|put down|term|months?|financing|credit)\b/.test(
       lastOutboundText
     );
-
-  if (
-    manualAppointmentCue &&
-    [
-      "pricing_need_model",
-      "inventory_watch_prompted",
-      "inventory_init",
-      "schedule_soft",
-      "followup_paused"
-    ].includes(dialogState)
-  ) {
-    setDialogState(conv, "none");
-    changed = true;
-    reasons.push("manual_appointment_context");
-  }
-
-  if (conv.inventoryWatchPending && manualAppointmentCue) {
-    conv.inventoryWatchPending = undefined;
-    changed = true;
-    reasons.push("clear_inventory_watch_pending_after_manual_context");
-  }
-
-  if (manualFinanceCue && dialogState === "pricing_need_model") {
-    setDialogState(conv, "pricing_answered");
-    changed = true;
-    reasons.push("manual_finance_context");
-  }
-
-  if (changed) {
-    (conv as any).manualStateReconciled = {
-      at: nowIso(),
-      sourceProvider: lastManualOutbound.provider ?? null,
-      sourceAt: lastManualOutbound.at ?? null,
-      reasons
-    };
-  }
-
-  return { changed, reasons };
+  const nextHints = {
+    at: nowIso(),
+    sourceProvider: lastManualOutbound.provider ?? null,
+    sourceAt: lastManualOutbound.at ?? null,
+    appointmentMentioned: manualAppointmentCue,
+    financeMentioned: manualFinanceCue
+  };
+  const prevHints = (conv as any).manualOutboundHints ?? {};
+  const changed =
+    String(prevHints.sourceProvider ?? "") !== String(nextHints.sourceProvider ?? "") ||
+    String(prevHints.sourceAt ?? "") !== String(nextHints.sourceAt ?? "") ||
+    Boolean(prevHints.appointmentMentioned) !== Boolean(nextHints.appointmentMentioned) ||
+    Boolean(prevHints.financeMentioned) !== Boolean(nextHints.financeMentioned);
+  if (!changed) return { changed: false, reasons: [] };
+  (conv as any).manualOutboundHints = nextHints;
+  if (manualAppointmentCue) reasons.push("manual_appointment_context_hint");
+  if (manualFinanceCue) reasons.push("manual_finance_context_hint");
+  return { changed: true, reasons };
 }
 
 function reduceStaleWorkflowStateForInbound(
