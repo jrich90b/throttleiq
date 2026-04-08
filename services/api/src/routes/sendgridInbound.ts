@@ -4195,10 +4195,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     !notReadyTimeframe;
   if (shouldStartCadence) {
     const cfg = await getSchedulerConfig();
-    const monthsStart = conv.lead?.purchaseTimeframeMonthsStart;
-    if (monthsStart && monthsStart >= 1) {
+    const storedMonthsStart = Number(conv.lead?.purchaseTimeframeMonthsStart);
+    const parsedTimeframe = parseTimeframeMonths(conv.lead?.purchaseTimeframe);
+    const monthsStart = Number.isFinite(storedMonthsStart) && storedMonthsStart > 0
+      ? storedMonthsStart
+      : Number(parsedTimeframe?.start ?? NaN);
+    if (Number.isFinite(monthsStart) && monthsStart >= 1) {
       const due = new Date();
-      due.setMonth(due.getMonth() + monthsStart);
+      due.setMonth(due.getMonth() + Math.max(1, Math.round(monthsStart)));
       due.setHours(10, 30, 0, 0);
       const msg = buildLongTermMessage(conv.lead?.purchaseTimeframe, conv.lead?.hasMotoLicense);
       scheduleLongTermFollowUp(conv, due.toISOString(), msg);

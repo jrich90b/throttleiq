@@ -12226,6 +12226,37 @@ async function processAppointmentQuestions() {
   }
 }
 
+function parseTimeframeMonthsFromLabel(raw?: string | null): { start?: number; end?: number } | null {
+  const text = String(raw ?? "").trim().toLowerCase();
+  if (!text) return null;
+  if (/unsure|not sure|unknown/.test(text)) return null;
+  if (/over\s*\d+\s*year/.test(text) || /over\s*a\s*year/.test(text) || /over\s*one\s*year/.test(text)) {
+    return { start: 12 };
+  }
+  if (/\byear\b/.test(text)) {
+    const years = text.match(/(\d+)\s*year/);
+    if (years) {
+      const y = Number(years[1]);
+      if (Number.isFinite(y)) return { start: y * 12 };
+    }
+    return { start: 12 };
+  }
+  const range = text.match(/(\d+)\s*[-to]+\s*(\d+)\s*month/);
+  if (range) {
+    const a = Number(range[1]);
+    const b = Number(range[2]);
+    if (Number.isFinite(a) && Number.isFinite(b)) {
+      return { start: Math.min(a, b), end: Math.max(a, b) };
+    }
+  }
+  const single = text.match(/(\d+)\s*month/);
+  if (single) {
+    const a = Number(single[1]);
+    if (Number.isFinite(a)) return { start: a };
+  }
+  return null;
+}
+
 async function maybeStartCadence(conv: any, sentAtIso: string) {
   if (conv.appointment?.bookedEventId) return;
   if (conv.status === "closed") return;
@@ -12239,10 +12270,14 @@ async function maybeStartCadence(conv: any, sentAtIso: string) {
     );
   if (notReadyTimeframe) return;
   const cfg = await getSchedulerConfigHot();
-  const monthsStart = Number(conv.lead?.purchaseTimeframeMonthsStart ?? 0);
+  const storedMonthsStart = Number(conv.lead?.purchaseTimeframeMonthsStart);
+  const parsedTimeframe = parseTimeframeMonthsFromLabel(conv.lead?.purchaseTimeframe);
+  const monthsStart = Number.isFinite(storedMonthsStart) && storedMonthsStart > 0
+    ? storedMonthsStart
+    : Number(parsedTimeframe?.start ?? NaN);
   if (Number.isFinite(monthsStart) && monthsStart >= 1) {
     const due = new Date(sentAtIso || new Date().toISOString());
-    due.setMonth(due.getMonth() + monthsStart);
+    due.setMonth(due.getMonth() + Math.max(1, Math.round(monthsStart)));
     due.setHours(10, 30, 0, 0);
     const timeframeLabel = String(conv.lead?.purchaseTimeframe ?? "").trim() || "a future";
     const msg =
