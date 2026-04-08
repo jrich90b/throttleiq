@@ -129,6 +129,7 @@ import { applyDraftStateInvariants } from "./domain/draftStateInvariants.js";
 import {
   DEALER_RIDE_NO_PURCHASE_SKIP_DRAFT,
   buildRouteDecisionSnapshot,
+  evaluateNoResponseFallback,
   nextActionFromState,
   reduceStaleStateForInbound,
   resolveRoutingParserDecision
@@ -17045,29 +17046,36 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       explicitAvailabilityIntentExtra: regenParserAvailabilityIntent,
       schedulingSignalsExtra: { explicit: regenParserSchedulingIntent }
     });
-    const regenNoResponseActionableContext =
-      regenParserCallbackIntent ||
-      regenNoResponseSignals.currentTurnFinanceSignal ||
-      regenNoResponseSignals.availabilityIntentOverride ||
-      regenNoResponseSignals.schedulingSignals.explicit ||
-      regenNoResponseSignals.schedulingSignals.hasDayTime ||
-      regenNoResponseSignals.schedulingSignals.hasDayOnlyAvailability ||
-      regenNoResponseSignals.schedulingSignals.hasDayOnlyRequest;
-    if (!regenNoResponseActionableContext) {
+    const regenStoredPaymentContext = getStoredPaymentBudgetContext(conv);
+    const regenNoResponseDecision = evaluateNoResponseFallback({
+      primaryIntent: regenRoutingParserDecision.intentOverride ?? "general",
+      financeSignal: regenNoResponseSignals.currentTurnFinanceSignal,
+      availabilitySignal:
+        regenNoResponseSignals.availabilityIntentOverride ||
+        regenNoResponseSignals.deterministicAvailabilityLookup ||
+        regenNoResponseSignals.availabilitySignals.inventoryCountQuestion,
+      schedulingSignal:
+        regenNoResponseSignals.schedulingSignals.explicit ||
+        regenNoResponseSignals.schedulingSignals.hasDayTime ||
+        regenNoResponseSignals.schedulingSignals.hasDayOnlyAvailability ||
+        regenNoResponseSignals.schedulingSignals.hasDayOnlyRequest,
+      callbackSignal: regenParserCallbackIntent,
+      hasMonthlyBudgetContext: regenStoredPaymentContext.monthlyBudget != null,
+      hasDownPaymentContext: regenStoredPaymentContext.downPayment != null,
+      hasTermContext: regenStoredPaymentContext.termMonths != null
+    });
+    if (regenNoResponseDecision.shouldSkipNoResponse) {
       return respondRegenerateSkipped("routing_parser_no_response");
     }
     recordRouteOutcome("regen", "routing_parser_no_response_overridden", {
       convId: conv.id,
       leadKey: conv.leadKey,
       parserReason: regenRoutingParserDecision.reason,
-      finance: regenNoResponseSignals.currentTurnFinanceSignal,
-      availability: regenNoResponseSignals.availabilityIntentOverride,
-      scheduling:
-        regenNoResponseSignals.schedulingSignals.explicit ||
-        regenNoResponseSignals.schedulingSignals.hasDayTime ||
-        regenNoResponseSignals.schedulingSignals.hasDayOnlyAvailability ||
-        regenNoResponseSignals.schedulingSignals.hasDayOnlyRequest,
-      callback: regenParserCallbackIntent
+      hasActionableFinanceContext: regenNoResponseDecision.hasActionableFinanceContext,
+      hasActionableAvailabilityContext: regenNoResponseDecision.hasActionableAvailabilityContext,
+      hasActionableSchedulingContext: regenNoResponseDecision.hasActionableSchedulingContext,
+      hasActionableCallbackContext: regenNoResponseDecision.hasActionableCallbackContext,
+      shouldSkipNoResponse: regenNoResponseDecision.shouldSkipNoResponse
     });
   }
   if (regenRoutingParserDecision.accepted && regenRoutingParserDecision.fallbackAction === "clarify") {
@@ -20993,25 +21001,29 @@ if (authToken && signature) {
     affectNeedsEmpathy: acceptedAffect?.needsEmpathy ?? null,
     affectHasHumor: acceptedAffect?.hasHumor ?? null
   });
-  const hasActionableFinanceContext =
-    routeExecPricing ||
-    paymentBudgetContext.monthlyBudget != null ||
-    paymentBudgetContext.downPayment != null ||
-    paymentBudgetContext.termMonths != null;
-  const hasActionableAvailabilityContext =
-    routeExecAvailability ||
-    availabilityPrimaryIntent ||
-    explicitAvailabilitySignalThisTurn ||
-    deterministicAvailabilityLookup ||
-    inventoryCountQuestion;
-  const hasActionableSchedulingContext =
-    routeExecScheduling ||
-    schedulingSignals.explicit ||
-    schedulingSignals.hasDayTime ||
-    schedulingSignals.hasDayOnlyAvailability ||
-    schedulingSignals.hasDayOnlyRequest;
-  const hasActionableTurnContext =
-    hasActionableFinanceContext || hasActionableAvailabilityContext || hasActionableSchedulingContext;
+  const noResponseContextDecision = evaluateNoResponseFallback({
+    primaryIntent: routeExecutionIntent,
+    financeSignal: routeSignalsFinal.currentTurnFinanceSignal,
+    availabilitySignal:
+      availabilityPrimaryIntent ||
+      explicitAvailabilitySignalThisTurn ||
+      deterministicAvailabilityLookup ||
+      inventoryCountQuestion,
+    schedulingSignal:
+      schedulingSignals.explicit ||
+      schedulingSignals.hasDayTime ||
+      schedulingSignals.hasDayOnlyAvailability ||
+      schedulingSignals.hasDayOnlyRequest,
+    callbackSignal: callbackPrimaryIntent || parserCallbackIntent,
+    hasMonthlyBudgetContext: paymentBudgetContext.monthlyBudget != null,
+    hasDownPaymentContext: paymentBudgetContext.downPayment != null,
+    hasTermContext: paymentBudgetContext.termMonths != null
+  });
+  const hasActionableFinanceContext = noResponseContextDecision.hasActionableFinanceContext;
+  const hasActionableAvailabilityContext = noResponseContextDecision.hasActionableAvailabilityContext;
+  const hasActionableSchedulingContext = noResponseContextDecision.hasActionableSchedulingContext;
+  const hasActionableCallbackContext = noResponseContextDecision.hasActionableCallbackContext;
+  const hasActionableTurnContext = noResponseContextDecision.hasActionableTurnContext;
   const corporateMisrouteTopic = getCorporateMisrouteTopic(conversationStateParse);
   if (
     event.provider === "twilio" &&
@@ -21083,7 +21095,7 @@ if (authToken && signature) {
     }
   }
   if (routingParserDecision.accepted && routingParserDecision.fallbackAction === "no_response") {
-    if (!hasActionableTurnContext) {
+    if (noResponseContextDecision.shouldSkipNoResponse) {
       const manualHandoffNoResponseQuestion =
         String(conv?.followUp?.mode ?? "").toLowerCase() === "manual_handoff" &&
         !shortAck &&
@@ -21129,7 +21141,9 @@ if (authToken && signature) {
         parserReason: routingParserDecision.reason,
         hasActionableFinanceContext,
         hasActionableAvailabilityContext,
-        hasActionableSchedulingContext
+        hasActionableSchedulingContext,
+        hasActionableCallbackContext,
+        shouldSkipNoResponse: noResponseContextDecision.shouldSkipNoResponse
       });
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
@@ -21138,7 +21152,9 @@ if (authToken && signature) {
       turnPrimaryIntent: routeExecutionIntent,
       hasActionableFinanceContext,
       hasActionableAvailabilityContext,
-      hasActionableSchedulingContext
+      hasActionableSchedulingContext,
+      hasActionableCallbackContext,
+      shouldSkipNoResponse: noResponseContextDecision.shouldSkipNoResponse
     });
   }
   if (routingParserDecision.accepted && routingParserDecision.fallbackAction === "clarify") {
@@ -24970,13 +24986,16 @@ if (authToken && signature) {
           "Happy to check inventory right now. Are you looking for a specific year, color, or trim?";
       } else if (hasActionableSchedulingContext) {
         fallbackReply = "Happy to set that up. What day and time work best for you?";
+      } else if (hasActionableCallbackContext) {
+        fallbackReply = "Got it — I can have someone call you. What day and time work best?";
       }
       logRouteOutcome("orchestrator_no_response_overridden", {
         intent: result.intent ?? "unknown",
         turnPrimaryIntent: routeExecutionIntent,
         hasActionableFinanceContext,
         hasActionableAvailabilityContext,
-        hasActionableSchedulingContext
+        hasActionableSchedulingContext,
+        hasActionableCallbackContext
       });
       if (webhookMode === "suggest") {
         appendOutbound(conv, event.to, event.from, fallbackReply, "draft_ai");
@@ -24994,7 +25013,8 @@ if (authToken && signature) {
       turnPrimaryIntent: routeExecutionIntent,
       hasActionableFinanceContext,
       hasActionableAvailabilityContext,
-      hasActionableSchedulingContext
+      hasActionableSchedulingContext,
+      hasActionableCallbackContext
     });
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);

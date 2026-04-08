@@ -51,6 +51,25 @@ export type RouteDecisionSnapshot = {
   availabilityIntentOverride: boolean;
 };
 
+export type RouteActionableContextInput = {
+  primaryIntent?: TurnPrimaryIntent | null;
+  financeSignal?: boolean;
+  availabilitySignal?: boolean;
+  schedulingSignal?: boolean;
+  callbackSignal?: boolean;
+  hasMonthlyBudgetContext?: boolean;
+  hasDownPaymentContext?: boolean;
+  hasTermContext?: boolean;
+};
+
+export type RouteActionableContextDecision = {
+  hasActionableFinanceContext: boolean;
+  hasActionableAvailabilityContext: boolean;
+  hasActionableSchedulingContext: boolean;
+  hasActionableCallbackContext: boolean;
+  hasActionableTurnContext: boolean;
+};
+
 export type RoutingParserIntent = TurnPrimaryIntent | "none";
 export type RoutingParserFallbackAction = "none" | "clarify" | "no_response";
 
@@ -74,6 +93,10 @@ export type RoutingParserDecision = {
     | "intent_override"
     | "clarify_fallback"
     | "no_response_fallback";
+};
+
+export type NoResponseFallbackDecision = RouteActionableContextDecision & {
+  shouldSkipNoResponse: boolean;
 };
 
 export type StaleStateCleanupInput = {
@@ -260,6 +283,45 @@ export function resolveRoutingParserDecision(input: RoutingParserDecisionInput):
     fallbackAction: "none",
     clarifyPrompt: null,
     reason: "no_signal"
+  };
+}
+
+export function summarizeRouteActionableContext(
+  input: RouteActionableContextInput
+): RouteActionableContextDecision {
+  const primaryIntent = input.primaryIntent ?? "general";
+  const hasActionableFinanceContext =
+    primaryIntent === "pricing_payments" ||
+    !!input.financeSignal ||
+    !!input.hasMonthlyBudgetContext ||
+    !!input.hasDownPaymentContext ||
+    !!input.hasTermContext;
+  const hasActionableAvailabilityContext =
+    primaryIntent === "availability" || !!input.availabilitySignal;
+  const hasActionableSchedulingContext =
+    primaryIntent === "scheduling" || !!input.schedulingSignal;
+  const hasActionableCallbackContext =
+    primaryIntent === "callback" || !!input.callbackSignal;
+  return {
+    hasActionableFinanceContext,
+    hasActionableAvailabilityContext,
+    hasActionableSchedulingContext,
+    hasActionableCallbackContext,
+    hasActionableTurnContext:
+      hasActionableFinanceContext ||
+      hasActionableAvailabilityContext ||
+      hasActionableSchedulingContext ||
+      hasActionableCallbackContext
+  };
+}
+
+export function evaluateNoResponseFallback(
+  input: RouteActionableContextInput
+): NoResponseFallbackDecision {
+  const actionable = summarizeRouteActionableContext(input);
+  return {
+    ...actionable,
+    shouldSkipNoResponse: !actionable.hasActionableTurnContext
   };
 }
 

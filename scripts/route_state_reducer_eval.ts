@@ -1,5 +1,6 @@
 import {
   buildRouteDecisionSnapshot,
+  evaluateNoResponseFallback,
   nextActionFromState,
   reduceStaleStateForInbound,
   resolveRoutingParserDecision,
@@ -267,6 +268,106 @@ if (routeDecisionSnapshotPassed !== routeDecisionSnapshotCases.length) {
 }
 
 console.log(`\nAll ${routeDecisionSnapshotCases.length} route-decision-snapshot checks passed.`);
+
+type NoResponseFallbackCase = {
+  id: string;
+  input: {
+    primaryIntent?: "pricing_payments" | "scheduling" | "callback" | "availability" | "general" | null;
+    financeSignal?: boolean;
+    availabilitySignal?: boolean;
+    schedulingSignal?: boolean;
+    callbackSignal?: boolean;
+    hasMonthlyBudgetContext?: boolean;
+    hasDownPaymentContext?: boolean;
+    hasTermContext?: boolean;
+  };
+  expected: {
+    shouldSkipNoResponse: boolean;
+    hasActionableFinanceContext: boolean;
+    hasActionableAvailabilityContext: boolean;
+    hasActionableSchedulingContext: boolean;
+    hasActionableCallbackContext: boolean;
+  };
+};
+
+const noResponseFallbackCases: NoResponseFallbackCase[] = [
+  {
+    id: "no_response_skips_when_general_no_context",
+    input: { primaryIntent: "general" },
+    expected: {
+      shouldSkipNoResponse: true,
+      hasActionableFinanceContext: false,
+      hasActionableAvailabilityContext: false,
+      hasActionableSchedulingContext: false,
+      hasActionableCallbackContext: false
+    }
+  },
+  {
+    id: "no_response_overridden_by_callback_context",
+    input: { primaryIntent: "general", callbackSignal: true },
+    expected: {
+      shouldSkipNoResponse: false,
+      hasActionableFinanceContext: false,
+      hasActionableAvailabilityContext: false,
+      hasActionableSchedulingContext: false,
+      hasActionableCallbackContext: true
+    }
+  },
+  {
+    id: "no_response_overridden_by_finance_context",
+    input: { primaryIntent: "general", hasDownPaymentContext: true },
+    expected: {
+      shouldSkipNoResponse: false,
+      hasActionableFinanceContext: true,
+      hasActionableAvailabilityContext: false,
+      hasActionableSchedulingContext: false,
+      hasActionableCallbackContext: false
+    }
+  },
+  {
+    id: "no_response_overridden_by_availability_signal",
+    input: { primaryIntent: "general", availabilitySignal: true },
+    expected: {
+      shouldSkipNoResponse: false,
+      hasActionableFinanceContext: false,
+      hasActionableAvailabilityContext: true,
+      hasActionableSchedulingContext: false,
+      hasActionableCallbackContext: false
+    }
+  }
+];
+
+let noResponseFallbackPassed = 0;
+for (const c of noResponseFallbackCases) {
+  const actual = evaluateNoResponseFallback(c.input);
+  const ok =
+    actual.shouldSkipNoResponse === c.expected.shouldSkipNoResponse &&
+    actual.hasActionableFinanceContext === c.expected.hasActionableFinanceContext &&
+    actual.hasActionableAvailabilityContext === c.expected.hasActionableAvailabilityContext &&
+    actual.hasActionableSchedulingContext === c.expected.hasActionableSchedulingContext &&
+    actual.hasActionableCallbackContext === c.expected.hasActionableCallbackContext;
+  if (ok) noResponseFallbackPassed += 1;
+  console.log(
+    `${ok ? "PASS" : "FAIL"} ${c.id} expected=${JSON.stringify(c.expected)} actual=${JSON.stringify({
+      shouldSkipNoResponse: actual.shouldSkipNoResponse,
+      hasActionableFinanceContext: actual.hasActionableFinanceContext,
+      hasActionableAvailabilityContext: actual.hasActionableAvailabilityContext,
+      hasActionableSchedulingContext: actual.hasActionableSchedulingContext,
+      hasActionableCallbackContext: actual.hasActionableCallbackContext
+    })}`
+  );
+}
+
+if (noResponseFallbackPassed !== noResponseFallbackCases.length) {
+  console.error(
+    `\n${
+      noResponseFallbackCases.length - noResponseFallbackPassed
+    } failures out of ${noResponseFallbackCases.length} no-response-fallback cases`
+  );
+  process.exit(1);
+}
+
+console.log(`\nAll ${noResponseFallbackCases.length} no-response-fallback checks passed.`);
 
 type StaleCase = {
   id: string;
