@@ -533,6 +533,24 @@ function extractInquiryModelHint(inquiry?: string | null): string | undefined {
   return mentions[0]?.label ? normalizeDisplayCase(mentions[0].label) : undefined;
 }
 
+function extractInquiryYearHint(inquiry?: string | null): string | undefined {
+  const raw = String(inquiry ?? "").trim();
+  if (!raw) return undefined;
+  const full = raw.match(/\b(20\d{2})\b/);
+  if (full?.[1]) return full[1];
+  const short = raw.match(
+    /\b'?(\d{2})\s+(?:(?:new|used|orange|black|white|blue|red|gray|grey|silver|vivid|dark|bright|inferno|citrus|billiard|matte|metallic)\s+){0,4}(?:harley|cvo|street|road|glide|softail|sportster|nightster|pan|fat|breakout|heritage|ultra|trike|tri|freewheeler)\b/i
+  );
+  if (!short?.[1]) return undefined;
+  const yy = Number(short[1]);
+  if (!Number.isFinite(yy)) return undefined;
+  const nowYear = new Date().getFullYear();
+  const nowYY = nowYear % 100;
+  const fullYear = yy <= nowYY + 1 ? 2000 + yy : 1900 + yy;
+  if (fullYear < 1980 || fullYear > nowYear + 1) return undefined;
+  return String(fullYear);
+}
+
 function extractDayPartRequest(text: string): { dayLabel: string; dayPart: string } | null {
   const t = String(text ?? "").toLowerCase();
   const dayMatch = t.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/);
@@ -1729,10 +1747,21 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const make = lead.vehicleMake ?? undefined;
   const inquiryVehicleHintText = [lead.comment, lead.inquiry].filter(Boolean).join(" ").trim();
   const inquiryModelHint = extractInquiryModelHint(inquiryVehicleHintText);
+  const inquiryYearHint = extractInquiryYearHint(inquiryVehicleHintText);
+  if (!lead.year && inquiryYearHint) {
+    lead.year = inquiryYearHint;
+  }
   const model = normalizeVehicleModel(
     lead.vehicleModel ?? meta.model ?? lead.vehicleDescription ?? inquiryModelHint ?? undefined,
     make ?? null
   );
+  if (!lead.vehicleCondition && lead.year) {
+    const yr = Number(lead.year);
+    const current = new Date().getFullYear();
+    if (Number.isFinite(yr) && yr > 1980 && yr <= current - 1) {
+      lead.vehicleCondition = "used";
+    }
+  }
   if (!lead.vehicleColor) {
     const inquiryColorHint = extractColorFromText(inquiryVehicleHintText);
     if (inquiryColorHint) {
