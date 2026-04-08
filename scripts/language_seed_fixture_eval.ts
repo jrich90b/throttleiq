@@ -122,7 +122,14 @@ const KNOWN_INVARIANT_REASONS = new Set<string>([
 function mapCandidateToFixture(row: AnyObj): FixtureCase | null {
   const kind = String(row?.kind ?? "").trim();
   const inboundText = normText(row?.inboundText);
-  const draftText = normText(row?.observedDraft);
+  const observedDraft = normText(row?.observedDraft);
+  const finalIfEdited = normText(row?.finalIfEdited);
+
+  let draftText = observedDraft;
+  if (kind === "manual_edit_delta" && finalIfEdited) {
+    // For manual edits, replay the final edited text as the expected draft target.
+    draftText = finalIfEdited;
+  }
   if (!inboundText || !draftText) return null;
 
   const followUpMode = String(row?.followUpMode ?? "") || null;
@@ -260,4 +267,3 @@ function run() {
 }
 
 run();
-
