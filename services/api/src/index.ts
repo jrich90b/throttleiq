@@ -17417,6 +17417,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return respondWithSmsRegeneratedDraft(reply);
   }
 
+  const regenHintSignals = resolveRoutePrioritySignals({
+    text: event.body ?? "",
+    conv,
+    lastOutboundText: String(getLastNonVoiceOutbound(conv)?.body ?? ""),
+    pricingOrPaymentsIntent: regenParserPricingIntent,
+    explicitAvailabilityIntentExtra: regenParserAvailabilityIntent,
+    schedulingSignalsExtra: { explicit: regenParserSchedulingIntent }
+  });
+
   if (event.provider === "twilio" && channel === "sms") {
     const regenPaymentBudget = resolvePaymentBudgetForConversation(conv, event.body ?? "");
     const regenDownProvided = regenPaymentBudget.downPayment != null;
@@ -17477,45 +17486,37 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       return respondWithSmsRegeneratedDraft(reply);
     }
 
-    const regenVisitSignals = resolveRoutePrioritySignals({
-      text: event.body ?? "",
-      conv,
-      lastOutboundText,
-      pricingOrPaymentsIntent: regenParserPricingIntent,
-      explicitAvailabilityIntentExtra: regenParserAvailabilityIntent,
-      schedulingSignalsExtra: { explicit: regenParserSchedulingIntent }
-    });
-    const regenSchedulingSignals = regenVisitSignals.schedulingSignals;
-	    const visitTimingIntent =
-	      regenVisitSignals.schedulePriorityOverride ||
-	      regenSchedulingSignals.hasDayOnlyRequest ||
-	      regenSchedulingSignals.softVisit;
-	    const explicitAvailabilityAskThisTurn = regenVisitSignals.availabilityIntentOverride;
-	    const financeOrRateAskThisTurn = regenVisitSignals.currentTurnFinanceSignal;
-	    const soldOrPostSale = isSoldOrPostSaleConversation(conv);
-	    const inboundExplicitModel = findMentionedModel(String(event.body ?? "").toLowerCase());
-	    const incomingInventorySignal = hasIncomingInventorySignal(String(event.body ?? ""));
-	    const genericInventoryAsk = isGenericInventoryAsk(String(event.body ?? ""));
-	    if (
-	      visitTimingIntent &&
-	      explicitAvailabilityAskThisTurn &&
-	      soldOrPostSale &&
-	      !inboundExplicitModel &&
-	      (incomingInventorySignal || genericInventoryAsk)
-	    ) {
-	      const reply = buildIncomingInventoryModelPrompt({
-	        hasHumor: !!regenAcceptedAffect?.hasHumor,
-	        incomingHint: incomingInventorySignal
-	      });
-	      return respondWithSmsRegeneratedDraft(reply);
-	    }
-	    const contextModel =
-	      inboundExplicitModel ??
-	      conv.inventoryContext?.model ??
-	      (!soldOrPostSale
-	        ? (conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null)
-	        : null);
-	    if (visitTimingIntent && contextModel && !financeOrRateAskThisTurn) {
+    const regenSchedulingSignals = regenHintSignals.schedulingSignals;
+    const visitTimingIntent =
+      regenHintSignals.schedulePriorityOverride ||
+      regenSchedulingSignals.hasDayOnlyRequest ||
+      regenSchedulingSignals.softVisit;
+    const explicitAvailabilityAskThisTurn = regenHintSignals.availabilityIntentOverride;
+    const financeOrRateAskThisTurn = regenHintSignals.currentTurnFinanceSignal;
+    const soldOrPostSale = isSoldOrPostSaleConversation(conv);
+    const inboundExplicitModel = findMentionedModel(String(event.body ?? "").toLowerCase());
+    const incomingInventorySignal = hasIncomingInventorySignal(String(event.body ?? ""));
+    const genericInventoryAsk = isGenericInventoryAsk(String(event.body ?? ""));
+    if (
+      visitTimingIntent &&
+      explicitAvailabilityAskThisTurn &&
+      soldOrPostSale &&
+      !inboundExplicitModel &&
+      (incomingInventorySignal || genericInventoryAsk)
+    ) {
+      const reply = buildIncomingInventoryModelPrompt({
+        hasHumor: !!regenAcceptedAffect?.hasHumor,
+        incomingHint: incomingInventorySignal
+      });
+      return respondWithSmsRegeneratedDraft(reply);
+    }
+    const contextModel =
+      inboundExplicitModel ??
+      conv.inventoryContext?.model ??
+      (!soldOrPostSale
+        ? (conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null)
+        : null);
+    if (visitTimingIntent && contextModel && !financeOrRateAskThisTurn) {
       const modelForLookup = canonicalizeWatchModelLabel(contextModel);
       const contextYear = conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null;
       const contextColor = sanitizeColorPhrase(
@@ -17596,14 +17597,6 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
   }
 
-  const regenHintSignals = resolveRoutePrioritySignals({
-    text: event.body ?? "",
-    conv,
-    lastOutboundText: String(getLastNonVoiceOutbound(conv)?.body ?? ""),
-    pricingOrPaymentsIntent: regenParserPricingIntent,
-    explicitAvailabilityIntentExtra: regenParserAvailabilityIntent,
-    schedulingSignalsExtra: { explicit: regenParserSchedulingIntent }
-  });
   const regenFinancePriorityHint = regenHintSignals.financePriorityOverride || regenParserPricingIntent;
   const regenCallbackRequested = !regenTextingTypoJoke && detectCallbackText(event.body ?? "");
   const regenRouteDecision = buildRouteDecisionSnapshot({
@@ -20952,6 +20945,12 @@ if (authToken && signature) {
       downPayment: paymentBudgetContext.downPayment ?? null
     });
   }
+  const routeExecutionIntent = turnPrimaryIntent;
+  const routeExecPricing = routeExecutionIntent === "pricing_payments";
+  const routeExecScheduling = routeExecutionIntent === "scheduling";
+  const routeExecAvailability = routeExecutionIntent === "availability";
+  const routeExecCallback = routeExecutionIntent === "callback";
+  const routeExecGeneral = routeExecutionIntent === "general";
   const previousPaymentContext = getStoredPaymentBudgetContext(conv);
   conv.paymentBudgetContext = {
     monthlyBudget: paymentBudgetContext.monthlyBudget ?? previousPaymentContext.monthlyBudget ?? null,
@@ -20965,8 +20964,8 @@ if (authToken && signature) {
     event.receivedAt,
     {
       hasWatchIntent: semanticWatchAction === "set_watch",
-      hasFinanceIntent: turnPrimaryIntent === "pricing_payments",
-      hasSchedulingIntent: turnPrimaryIntent === "scheduling",
+      hasFinanceIntent: routeExecPricing,
+      hasSchedulingIntent: routeExecScheduling,
       hasDepartmentIntent: !!(reducedConversationState.departmentIntent ?? semanticDepartmentIntent)
     }
   );
@@ -20977,7 +20976,7 @@ if (authToken && signature) {
   }
   logDecisionTrace("live.intent_routing", {
     inboundProvider: event.provider,
-    turnPrimaryIntent,
+    turnPrimaryIntent: routeExecutionIntent,
     parserIntentOverride: turnRouteDecision.parserIntentOverride,
     plannerPrimaryIntent: turnRouteDecision.plannerPrimaryIntent,
     financeContinuationOverrideApplied,
@@ -20995,18 +20994,18 @@ if (authToken && signature) {
     affectHasHumor: acceptedAffect?.hasHumor ?? null
   });
   const hasActionableFinanceContext =
-    turnPrimaryIntent === "pricing_payments" ||
+    routeExecPricing ||
     paymentBudgetContext.monthlyBudget != null ||
     paymentBudgetContext.downPayment != null ||
     paymentBudgetContext.termMonths != null;
   const hasActionableAvailabilityContext =
-    turnPrimaryIntent === "availability" ||
+    routeExecAvailability ||
     availabilityPrimaryIntent ||
     explicitAvailabilitySignalThisTurn ||
     deterministicAvailabilityLookup ||
     inventoryCountQuestion;
   const hasActionableSchedulingContext =
-    turnPrimaryIntent === "scheduling" ||
+    routeExecScheduling ||
     schedulingSignals.explicit ||
     schedulingSignals.hasDayTime ||
     schedulingSignals.hasDayOnlyAvailability ||
@@ -21017,7 +21016,7 @@ if (authToken && signature) {
   if (
     event.provider === "twilio" &&
     corporateMisrouteTopic &&
-    turnPrimaryIntent === "general" &&
+    routeExecGeneral &&
     !hasActionableTurnContext &&
     !reducedConversationState.departmentIntent &&
     !semanticDepartmentIntent
@@ -21041,7 +21040,7 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
   const logisticsProgressUpdate = isLogisticsProgressUpdateText(event.body ?? "");
-  if (event.provider === "twilio" && turnPrimaryIntent === "callback") {
+  if (event.provider === "twilio" && routeExecCallback) {
     const cfg = await getSchedulerConfigHot();
     const timezone = cfg.timezone || "America/New_York";
     const owner = resolveCallbackTodoOwner(conv);
@@ -21094,7 +21093,7 @@ if (authToken && signature) {
         const speaker = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
         const reply = `Got it — this is ${speaker}. I’m checking that now and will follow up shortly.`;
         logRouteOutcome("routing_parser_no_response_manual_handoff_ack", {
-          turnPrimaryIntent,
+          turnPrimaryIntent: routeExecutionIntent,
           parserReason: routingParserDecision.reason
         });
         if (webhookMode === "suggest") {
@@ -21111,7 +21110,7 @@ if (authToken && signature) {
       if (logisticsProgressUpdate) {
         const progressReply = "Thanks for the update. I’m here if you need anything.";
         logRouteOutcome("routing_parser_no_response_progress_update_ack", {
-          turnPrimaryIntent,
+          turnPrimaryIntent: routeExecutionIntent,
           parserReason: routingParserDecision.reason
         });
         if (webhookMode === "suggest") {
@@ -21126,7 +21125,7 @@ if (authToken && signature) {
         return res.status(200).type("text/xml").send(twiml);
       }
       logRouteOutcome("routing_parser_no_response", {
-        turnPrimaryIntent,
+        turnPrimaryIntent: routeExecutionIntent,
         parserReason: routingParserDecision.reason,
         hasActionableFinanceContext,
         hasActionableAvailabilityContext,
@@ -21136,7 +21135,7 @@ if (authToken && signature) {
       return res.status(200).type("text/xml").send(twiml);
     }
     logRouteOutcome("routing_parser_no_response_overridden", {
-      turnPrimaryIntent,
+      turnPrimaryIntent: routeExecutionIntent,
       hasActionableFinanceContext,
       hasActionableAvailabilityContext,
       hasActionableSchedulingContext
@@ -21160,10 +21159,10 @@ if (authToken && signature) {
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
-  if (turnPrimaryIntent === "scheduling" && getDialogState(conv) === "pricing_need_model") {
+  if (routeExecScheduling && getDialogState(conv) === "pricing_need_model") {
     setDialogState(conv, "schedule_request");
   }
-  const suppressWatchIntentThisTurn = turnPrimaryIntent !== "general";
+  const suppressWatchIntentThisTurn = !routeExecGeneral;
   if (schedulingSignals.explicit || schedulingSignals.hasDayTime) {
     if (conv.scheduleSoft) {
       conv.scheduleSoft = undefined;
@@ -21187,7 +21186,7 @@ if (authToken && signature) {
   })();
   if (
     event.provider === "twilio" &&
-    turnPrimaryIntent === "pricing_payments" &&
+    routeExecPricing &&
     !explicitAvailabilitySignalThisTurn &&
     !schedulingSignals.hasDayTime &&
     !schedulingSignals.hasDayOnlyRequest &&
@@ -21344,7 +21343,7 @@ if (authToken && signature) {
       }
     }
   }
-  if (turnPrimaryIntent === "callback" && !isScheduleDialogState(getDialogState(conv))) {
+  if (routeExecCallback && !isScheduleDialogState(getDialogState(conv))) {
     setDialogState(conv, "callback_requested");
   }
   if (
@@ -22189,15 +22188,15 @@ if (authToken && signature) {
     llmMediaIntent === "either" ||
     /\b(photo|picture|pic|image|images)\b/i.test(textLower);
   const availabilityRouteEligible =
-    turnPrimaryIntent === "availability" ||
+    routeExecAvailability ||
     deterministicAvailabilityIntentOverride ||
     explicitAvailabilitySignalThisTurn ||
     inventoryCountQuestion;
   const availabilityExplicit =
     availabilityRouteEligible &&
     !/\b(sound system|audio system|stereo|speakers?|speaker system)\b/i.test(textLower) &&
-    turnPrimaryIntent !== "pricing_payments" &&
-    turnPrimaryIntent !== "callback" &&
+    !routeExecPricing &&
+    !routeExecCallback &&
     !specsSignal;
   if (
     event.provider === "twilio" &&
@@ -22260,7 +22259,7 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
   const tradeYearCorrection =
-    isTradeLead && !availabilityExplicit && turnPrimaryIntent !== "availability"
+    isTradeLead && !availabilityExplicit && !routeExecAvailability
       ? extractTradeYearCorrection(
           textLower,
           conv.lead?.tradeVehicle?.year ?? conv.lead?.vehicle?.year ?? null
@@ -22269,7 +22268,7 @@ if (authToken && signature) {
   const tradeFollowupMessage =
     isTradeLead &&
     !availabilityExplicit &&
-    turnPrimaryIntent !== "availability" &&
+    !routeExecAvailability &&
     !isSteppingBackDispositionText(textLower) &&
     !pricingSignal &&
     (tradeYearCorrection ||
@@ -23911,7 +23910,7 @@ if (authToken && signature) {
       }
     }
     const schedulingIntent =
-      turnPrimaryIntent === "scheduling" &&
+      routeExecScheduling &&
       schedulingExplicit &&
       (ctxSuggestsScheduling || llmSuggestsScheduling || schedulingSignals.hasDayTime);
     if (schedulingIntent) {
@@ -24119,7 +24118,7 @@ if (authToken && signature) {
   }
 
   const schedulingTextForOrchestrator =
-    turnPrimaryIntent === "scheduling" &&
+    routeExecScheduling &&
     bookingIntentAccepted &&
     bookingParseText &&
     !shortAck &&
@@ -24179,7 +24178,7 @@ if (authToken && signature) {
     leadSource: conv.lead?.source ?? null,
     bucket: liveClassificationForTurn.bucket,
     cta: liveClassificationForTurn.cta,
-    primaryIntentHint: turnPrimaryIntent,
+    primaryIntentHint: routeExecutionIntent,
     availabilityIntentHint: deterministicAvailabilityIntentOverride,
     schedulingIntentHint: schedulingPrimaryIntent,
     pricingIntentHint: pricingOrPaymentsIntent,
@@ -24187,12 +24186,12 @@ if (authToken && signature) {
     lead: leadForOrchestrator,
     pricingAttempts: getPricingAttempts(conv),
     allowSchedulingOffer:
-      turnPrimaryIntent === "scheduling" &&
+      routeExecScheduling &&
       (schedulingExplicit || explicitScheduleSignal) &&
       schedulingAllowed &&
       !pricingOrPaymentsIntent,
     schedulingText: schedulingTextForOrchestrator,
-    callbackRequestedOverride: turnPrimaryIntent === "callback" ? callbackRequestedOverride : false,
+    callbackRequestedOverride: routeExecCallback ? callbackRequestedOverride : false,
     appointmentTypeOverride,
     voiceSummary: getActiveVoiceContext(conv)?.summary ?? null,
     memorySummary,
@@ -24209,7 +24208,7 @@ if (authToken && signature) {
     agentNameOverride: resolveConversationAgentName(conv, weatherProfile?.agentName ?? "Brooke")
   });
   logRouteTiming("orchestrator", orchestratorStartedAt, {
-    turnPrimaryIntent
+    turnPrimaryIntent: routeExecutionIntent
   });
   if (result.smallTalk) {
     setDialogState(conv, "small_talk");
@@ -24974,7 +24973,7 @@ if (authToken && signature) {
       }
       logRouteOutcome("orchestrator_no_response_overridden", {
         intent: result.intent ?? "unknown",
-        turnPrimaryIntent,
+        turnPrimaryIntent: routeExecutionIntent,
         hasActionableFinanceContext,
         hasActionableAvailabilityContext,
         hasActionableSchedulingContext
@@ -24992,7 +24991,7 @@ if (authToken && signature) {
     }
     logRouteOutcome("orchestrator_no_response", {
       intent: result.intent ?? "unknown",
-      turnPrimaryIntent,
+      turnPrimaryIntent: routeExecutionIntent,
       hasActionableFinanceContext,
       hasActionableAvailabilityContext,
       hasActionableSchedulingContext
@@ -25010,7 +25009,7 @@ if (authToken && signature) {
   reply = applyTradePolicy(conv, reply, lastOutboundTextFinal, result.suggestedSlots);
   reply = applyPickupPolicy(conv, reply);
   reply = applyPricingPolicy(conv, reply, lastOutboundTextFinal, String(event.body ?? ""), {
-    pricingActiveThisTurn: turnPrimaryIntent === "pricing_payments"
+    pricingActiveThisTurn: routeExecPricing
   });
   reply = applyCallbackPolicy(conv, reply, lastOutboundTextFinal);
   reply = applyServicePolicy(conv, reply, lastOutboundTextFinal, {
@@ -25032,9 +25031,9 @@ if (authToken && signature) {
     reply = lienHolderFallback;
   }
   const liveDraftInvariantHints = {
-    turnFinanceIntent: turnPrimaryIntent === "pricing_payments",
-    turnSchedulingIntent: turnPrimaryIntent === "scheduling",
-    turnAvailabilityIntent: turnPrimaryIntent === "availability",
+    turnFinanceIntent: routeExecPricing,
+    turnSchedulingIntent: routeExecScheduling,
+    turnAvailabilityIntent: routeExecAvailability,
     financeContextIntent: String(getDialogState(conv) ?? "").startsWith("pricing_"),
     shortAckIntent: shortAck
   };
