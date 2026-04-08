@@ -202,6 +202,11 @@ When changing responses:
   - `cd ~/throttleiq`
   - `DATA_DIR=/home/ubuntu/throttleiq-runtime/data CONVERSATIONS_DB_PATH=/home/ubuntu/throttleiq-runtime/data/conversations.json ROUTE_AUDIT_DIR=/home/ubuntu/throttleiq-runtime/reports/route_audit npm run route_watchdog:run -- --since-min 180 --stuck-older-sec 120 --limit 100`
 
+- Debug API endpoints for persisted route audits (survive API restart):
+  - `/debug/route-outcomes/persisted?sinceMin=180&limit=200`
+  - `/debug/decision-trace/persisted?sinceMin=180&limit=200`
+  - `/debug/route-watchdog?sinceMin=180&olderThanSec=120&limit=100`
+
 - Email env vars (set on instance shell/PM2 environment):
   - `SENDGRID_API_KEY`
   - `FEEDBACK_REPORT_EMAIL_TO` (recipient)

@@ -278,6 +278,59 @@ function routeAuditFilePath(kind: "outcomes" | "traces", rawTs?: string): string
   return path.join(ROUTE_AUDIT_DIR, `route_${kind}_${stamp}.jsonl`);
 }
 
+function routeAuditFilePathByStamp(kind: "outcomes" | "traces", stamp: string): string {
+  return path.join(ROUTE_AUDIT_DIR, `route_${kind}_${stamp}.jsonl`);
+}
+
+function routeAuditToMs(raw: unknown): number {
+  const ms = Date.parse(String(raw ?? ""));
+  return Number.isFinite(ms) ? ms : NaN;
+}
+
+function routeAuditDateStampsBetween(startMs: number, endMs: number, maxDays: number = 35): string[] {
+  const start = new Date(startMs);
+  const end = new Date(endMs);
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
+    return [routeAuditDateStamp()];
+  }
+  start.setUTCHours(0, 0, 0, 0);
+  end.setUTCHours(0, 0, 0, 0);
+  const stamps: string[] = [];
+  let guard = 0;
+  while (start.getTime() <= end.getTime() && guard < maxDays) {
+    stamps.push(routeAuditDateStamp(start.toISOString()));
+    start.setUTCDate(start.getUTCDate() + 1);
+    guard += 1;
+  }
+  if (!stamps.length) stamps.push(routeAuditDateStamp());
+  return stamps;
+}
+
+function routeAuditReadJsonl(filePath: string): Array<Record<string, unknown>> {
+  try {
+    if (!fs.existsSync(filePath)) return [];
+    const text = fs.readFileSync(filePath, "utf8");
+    return text
+      .split("\n")
+      .map(line => line.trim())
+      .filter(Boolean)
+      .map(line => {
+        try {
+          return JSON.parse(line) as Record<string, unknown>;
+        } catch {
+          return null;
+        }
+      })
+      .filter((row): row is Record<string, unknown> => Boolean(row));
+  } catch {
+    return [];
+  }
+}
+
+function routeAuditNormDigits(value: unknown): string {
+  return String(value ?? "").replace(/\D/g, "");
+}
+
 function appendRouteAuditLine(kind: "outcomes" | "traces", payload: Record<string, unknown>) {
   if (!ROUTE_AUDIT_PERSIST_ENABLED) return;
   const ts = String(payload.ts ?? new Date().toISOString());
@@ -488,6 +541,78 @@ app.get("/debug/route-outcomes/recent", (req, res) => {
   });
 });
 
+app.get("/debug/route-outcomes/persisted", (req, res) => {
+  const debugEnabled =
+    process.env.DEBUG_DECISION_TRACE === "1" || process.env.DEBUG_ROUTE_TIMING === "1";
+  if (!debugEnabled) {
+    return res.status(403).json({
+      ok: false,
+      error: "enable DEBUG_DECISION_TRACE=1 or DEBUG_ROUTE_TIMING=1"
+    });
+  }
+  const leadKeyQ = String(req.query.leadKey ?? "").trim();
+  const convIdQ = String(req.query.convId ?? "").trim();
+  const outcomeQ = String(req.query.outcome ?? "").trim().toLowerCase();
+  const scopeQ = String(req.query.scope ?? "").trim().toLowerCase();
+  const phoneQ = String(req.query.phone ?? "").replace(/\D/g, "");
+  const phoneVariants = new Set<string>();
+  if (phoneQ) {
+    phoneVariants.add(phoneQ);
+    if (phoneQ.length === 10) phoneVariants.add(`1${phoneQ}`);
+    if (phoneQ.length === 11 && phoneQ.startsWith("1")) phoneVariants.add(phoneQ.slice(1));
+  }
+  const matchesPhone = (digits: string) => {
+    if (!phoneVariants.size) return true;
+    if (!digits) return false;
+    for (const variant of phoneVariants) {
+      if (!variant) continue;
+      if (digits === variant || digits.endsWith(variant) || variant.endsWith(digits)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const sinceMinRaw = Number(req.query.sinceMin ?? 180);
+  const limitRaw = Number(req.query.limit ?? 200);
+  const sinceMs =
+    Date.now() -
+    (Number.isFinite(sinceMinRaw) && sinceMinRaw > 0 ? sinceMinRaw : 180) * 60 * 1000;
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 1000) : 200;
+  const scanLimit = Math.min(Math.max(limit * 25, 2000), 50000);
+  const stamps = routeAuditDateStampsBetween(sinceMs, Date.now());
+  const rows = stamps
+    .flatMap(stamp => routeAuditReadJsonl(routeAuditFilePathByStamp("outcomes", stamp)))
+    .filter(row => {
+      const tsMs = routeAuditToMs(row.ts);
+      if (Number.isFinite(tsMs) && tsMs < sinceMs) return false;
+      const scope = String(row.scope ?? "").toLowerCase();
+      const outcome = String(row.outcome ?? "").toLowerCase();
+      if (scopeQ && scope !== scopeQ) return false;
+      if (outcomeQ && !outcome.includes(outcomeQ)) return false;
+      const detail = (row.detail ?? {}) as Record<string, unknown>;
+      const rowLeadKey = String(detail.leadKey ?? "");
+      const rowConvId = String(detail.convId ?? "");
+      if (leadKeyQ && rowLeadKey !== leadKeyQ) return false;
+      if (convIdQ && rowConvId !== convIdQ) return false;
+      if (phoneVariants.size) {
+        const leadDigits = routeAuditNormDigits(rowLeadKey);
+        const convDigits = routeAuditNormDigits(rowConvId);
+        if (!matchesPhone(leadDigits) && !matchesPhone(convDigits)) return false;
+      }
+      return true;
+    })
+    .slice(-scanLimit)
+    .slice(-limit);
+  return res.json({
+    ok: true,
+    enabled: debugEnabled,
+    persisted: true,
+    routeAuditDir: ROUTE_AUDIT_DIR,
+    count: rows.length,
+    rows
+  });
+});
+
 app.post("/debug/decision-trace/reset", (_req, res) => {
   decisionTraceHistory.splice(0, decisionTraceHistory.length);
   return res.json({ ok: true, count: 0, rows: [] });
@@ -552,6 +677,80 @@ app.get("/debug/decision-trace/recent", (req, res) => {
   return res.json({
     ok: true,
     enabled: debugEnabled,
+    count: rows.length,
+    rows
+  });
+});
+
+app.get("/debug/decision-trace/persisted", (req, res) => {
+  const debugEnabled =
+    process.env.DEBUG_DECISION_TRACE === "1" || process.env.DEBUG_ROUTE_TIMING === "1";
+  if (!debugEnabled) {
+    return res.status(403).json({
+      ok: false,
+      error: "enable DEBUG_DECISION_TRACE=1 or DEBUG_ROUTE_TIMING=1"
+    });
+  }
+  const leadKeyQ = String(req.query.leadKey ?? "").trim();
+  const convIdQ = String(req.query.convId ?? "").trim();
+  const turnIdQ = String(req.query.turnId ?? "").trim();
+  const stageQ = String(req.query.stage ?? "").trim().toLowerCase();
+  const scopeQ = String(req.query.scope ?? "").trim().toLowerCase();
+  const phoneQ = String(req.query.phone ?? "").replace(/\D/g, "");
+  const phoneVariants = new Set<string>();
+  if (phoneQ) {
+    phoneVariants.add(phoneQ);
+    if (phoneQ.length === 10) phoneVariants.add(`1${phoneQ}`);
+    if (phoneQ.length === 11 && phoneQ.startsWith("1")) phoneVariants.add(phoneQ.slice(1));
+  }
+  const matchesPhone = (digits: string) => {
+    if (!phoneVariants.size) return true;
+    if (!digits) return false;
+    for (const variant of phoneVariants) {
+      if (!variant) continue;
+      if (digits === variant || digits.endsWith(variant) || variant.endsWith(digits)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const sinceMinRaw = Number(req.query.sinceMin ?? 180);
+  const limitRaw = Number(req.query.limit ?? 200);
+  const sinceMs =
+    Date.now() -
+    (Number.isFinite(sinceMinRaw) && sinceMinRaw > 0 ? sinceMinRaw : 180) * 60 * 1000;
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 1000) : 200;
+  const scanLimit = Math.min(Math.max(limit * 25, 2000), 50000);
+  const stamps = routeAuditDateStampsBetween(sinceMs, Date.now());
+  const rows = stamps
+    .flatMap(stamp => routeAuditReadJsonl(routeAuditFilePathByStamp("traces", stamp)))
+    .filter(row => {
+      const tsMs = routeAuditToMs(row.ts);
+      if (Number.isFinite(tsMs) && tsMs < sinceMs) return false;
+      const rowLeadKey = String(row.leadKey ?? "");
+      const rowConvId = String(row.convId ?? "");
+      const rowTurnId = String(row.turnId ?? "");
+      const rowScope = String(row.scope ?? "").toLowerCase();
+      const rowStage = String(row.stage ?? "").toLowerCase();
+      if (leadKeyQ && rowLeadKey !== leadKeyQ) return false;
+      if (convIdQ && rowConvId !== convIdQ) return false;
+      if (turnIdQ && rowTurnId !== turnIdQ) return false;
+      if (scopeQ && rowScope !== scopeQ) return false;
+      if (stageQ && !rowStage.includes(stageQ)) return false;
+      if (phoneVariants.size) {
+        const leadDigits = routeAuditNormDigits(rowLeadKey);
+        const convDigits = routeAuditNormDigits(rowConvId);
+        if (!matchesPhone(leadDigits) && !matchesPhone(convDigits)) return false;
+      }
+      return true;
+    })
+    .slice(-scanLimit)
+    .slice(-limit);
+  return res.json({
+    ok: true,
+    enabled: debugEnabled,
+    persisted: true,
+    routeAuditDir: ROUTE_AUDIT_DIR,
     count: rows.length,
     rows
   });
@@ -639,6 +838,168 @@ app.get("/debug/stuck-turns", (req, res) => {
     olderThanSec,
     count: rows.length,
     rows
+  });
+});
+
+app.get("/debug/route-watchdog", (req, res) => {
+  const debugEnabled =
+    process.env.DEBUG_DECISION_TRACE === "1" || process.env.DEBUG_ROUTE_TIMING === "1";
+  if (!debugEnabled) {
+    return res.status(403).json({
+      ok: false,
+      error: "enable DEBUG_DECISION_TRACE=1 or DEBUG_ROUTE_TIMING=1"
+    });
+  }
+  const olderThanSecRaw = Number(req.query.olderThanSec ?? 120);
+  const sinceMinRaw = Number(req.query.sinceMin ?? 180);
+  const limitRaw = Number(req.query.limit ?? 100);
+  const failOnStuckOverRaw = Number(req.query.failOnStuckOver ?? -1);
+  const failOnNoResponseOverRaw = Number(req.query.failOnNoResponseOver ?? -1);
+  const phoneQ = String(req.query.phone ?? "").replace(/\D/g, "");
+  const phoneVariants = new Set<string>();
+  if (phoneQ) {
+    phoneVariants.add(phoneQ);
+    if (phoneQ.length === 10) phoneVariants.add(`1${phoneQ}`);
+    if (phoneQ.length === 11 && phoneQ.startsWith("1")) phoneVariants.add(phoneQ.slice(1));
+  }
+  const matchesPhone = (digits: string) => {
+    if (!phoneVariants.size) return true;
+    if (!digits) return false;
+    for (const variant of phoneVariants) {
+      if (!variant) continue;
+      if (digits === variant || digits.endsWith(variant) || variant.endsWith(digits)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const olderThanSec =
+    Number.isFinite(olderThanSecRaw) && olderThanSecRaw > 0 ? olderThanSecRaw : 120;
+  const sinceMin = Number.isFinite(sinceMinRaw) && sinceMinRaw > 0 ? sinceMinRaw : 180;
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 500) : 100;
+  const nowMs = Date.now();
+  const sinceMs = nowMs - sinceMin * 60 * 1000;
+
+  const stuckRows = getAllConversations()
+    .map(conv => {
+      const msgs = Array.isArray(conv.messages) ? conv.messages : [];
+      const lastInbound = [...msgs]
+        .reverse()
+        .find(
+          m =>
+            m.direction === "in" &&
+            (m.provider === "twilio" || m.provider === "sendgrid" || m.provider === "sendgrid_adf")
+        );
+      if (!lastInbound?.at) return null;
+      const inboundAtMs = routeAuditToMs(lastInbound.at);
+      if (!Number.isFinite(inboundAtMs)) return null;
+      const hasOutboundAfter = msgs.some(
+        m =>
+          m.direction === "out" &&
+          Number.isFinite(routeAuditToMs(m.at)) &&
+          routeAuditToMs(m.at) >= inboundAtMs
+      );
+      if (hasOutboundAfter) return null;
+      const ageSec = Math.floor((nowMs - inboundAtMs) / 1000);
+      if (ageSec < olderThanSec) return null;
+      const convDigits = routeAuditNormDigits(conv.id);
+      const leadDigits = routeAuditNormDigits(conv.leadKey);
+      const leadPhoneDigits = routeAuditNormDigits(conv.lead?.phone);
+      if (
+        !matchesPhone(convDigits) &&
+        !matchesPhone(leadDigits) &&
+        !matchesPhone(leadPhoneDigits)
+      ) {
+        return null;
+      }
+      return {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        mode: conv.mode,
+        followUp: conv.followUp ?? null,
+        dialogState: conv.dialogState ?? null,
+        classification: conv.classification ?? null,
+        lastInbound: {
+          at: lastInbound.at,
+          provider: lastInbound.provider,
+          body: String(lastInbound.body ?? "").slice(0, 220)
+        },
+        ageSec
+      };
+    })
+    .filter(Boolean)
+    .sort((a: any, b: any) => b.ageSec - a.ageSec)
+    .slice(0, limit);
+
+  const stamps = routeAuditDateStampsBetween(sinceMs, nowMs);
+  const outcomeRows = stamps
+    .flatMap(stamp => routeAuditReadJsonl(routeAuditFilePathByStamp("outcomes", stamp)))
+    .filter(row => {
+      const tsMs = routeAuditToMs(row.ts);
+      if (Number.isFinite(tsMs) && tsMs < sinceMs) return false;
+      if (!phoneVariants.size) return true;
+      const detail = (row.detail ?? {}) as Record<string, unknown>;
+      const rowLeadDigits = routeAuditNormDigits(detail.leadKey);
+      const rowConvDigits = routeAuditNormDigits(detail.convId);
+      return matchesPhone(rowLeadDigits) || matchesPhone(rowConvDigits);
+    });
+
+  const outcomeCountMap = new Map<string, number>();
+  for (const row of outcomeRows) {
+    const key = String(row.outcome ?? "unknown").trim() || "unknown";
+    outcomeCountMap.set(key, (outcomeCountMap.get(key) ?? 0) + 1);
+  }
+  const topOutcomes = [...outcomeCountMap.entries()]
+    .map(([outcome, count]) => ({ outcome, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 20);
+  const noResponseOutcomeCount = outcomeRows.filter(row =>
+    String(row.outcome ?? "").toLowerCase().includes("no_response")
+  ).length;
+  const routingParserNoResponseCount = outcomeRows.filter(
+    row => String(row.outcome ?? "").toLowerCase() === "routing_parser_no_response"
+  ).length;
+
+  const failOnStuckOver =
+    Number.isFinite(failOnStuckOverRaw) && failOnStuckOverRaw >= 0 ? failOnStuckOverRaw : -1;
+  const failOnNoResponseOver =
+    Number.isFinite(failOnNoResponseOverRaw) && failOnNoResponseOverRaw >= 0
+      ? failOnNoResponseOverRaw
+      : -1;
+  const failReasons: string[] = [];
+  if (failOnStuckOver >= 0 && stuckRows.length > failOnStuckOver) {
+    failReasons.push(`stuck_turns>${failOnStuckOver}`);
+  }
+  if (failOnNoResponseOver >= 0 && noResponseOutcomeCount > failOnNoResponseOver) {
+    failReasons.push(`no_response_outcomes>${failOnNoResponseOver}`);
+  }
+
+  return res.json({
+    ok: true,
+    enabled: debugEnabled,
+    routeAuditDir: ROUTE_AUDIT_DIR,
+    window: {
+      sinceMin,
+      sinceIso: new Date(sinceMs).toISOString(),
+      nowIso: new Date(nowMs).toISOString()
+    },
+    stuckTurns: {
+      olderThanSec,
+      count: stuckRows.length,
+      rows: stuckRows
+    },
+    routeOutcomes: {
+      count: outcomeRows.length,
+      noResponseOutcomeCount,
+      routingParserNoResponseCount,
+      topOutcomes
+    },
+    thresholds: {
+      failOnStuckOver,
+      failOnNoResponseOver
+    },
+    status: failReasons.length ? "warn" : "ok",
+    failReasons
   });
 });
 
