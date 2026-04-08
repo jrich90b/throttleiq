@@ -1,8 +1,10 @@
 import {
+  buildNoResponseFallbackReply,
   buildRouteDecisionSnapshot,
   evaluateNoResponseFallback,
   nextActionFromState,
   reduceStaleStateForInbound,
+  resolveNoResponsePolicyDecision,
   resolveRoutingParserDecision,
   resolveTurnPrimaryIntent
 } from "../services/api/src/domain/routeStateReducer.ts";
@@ -368,6 +370,204 @@ if (noResponseFallbackPassed !== noResponseFallbackCases.length) {
 }
 
 console.log(`\nAll ${noResponseFallbackCases.length} no-response-fallback checks passed.`);
+
+type NoResponsePolicyCase = {
+  id: string;
+  input: {
+    hasParserNoResponse: boolean;
+    actionable: {
+      hasActionableFinanceContext: boolean;
+      hasActionableAvailabilityContext: boolean;
+      hasActionableSchedulingContext: boolean;
+      hasActionableCallbackContext: boolean;
+      hasActionableTurnContext: boolean;
+    };
+    isLogisticsProgressUpdate?: boolean;
+    isManualHandoff?: boolean;
+    manualHandoffQuestionCandidate?: boolean;
+    allowManualHandoffQuestionAck?: boolean;
+  };
+  expected: {
+    applicable: boolean;
+    action: "skip" | "override" | "ack_progress_update" | "ack_manual_handoff_question";
+    reason:
+      | "not_no_response_fallback"
+      | "actionable_context_present"
+      | "progress_update_ack"
+      | "manual_handoff_question_ack"
+      | "no_actionable_context";
+  };
+};
+
+const noResponsePolicyCases: NoResponsePolicyCase[] = [
+  {
+    id: "policy_not_applicable_without_no_response_fallback",
+    input: {
+      hasParserNoResponse: false,
+      actionable: {
+        hasActionableFinanceContext: false,
+        hasActionableAvailabilityContext: false,
+        hasActionableSchedulingContext: false,
+        hasActionableCallbackContext: false,
+        hasActionableTurnContext: false
+      }
+    },
+    expected: {
+      applicable: false,
+      action: "override",
+      reason: "not_no_response_fallback"
+    }
+  },
+  {
+    id: "policy_progress_update_ack_when_no_actionable_context",
+    input: {
+      hasParserNoResponse: true,
+      actionable: {
+        hasActionableFinanceContext: false,
+        hasActionableAvailabilityContext: false,
+        hasActionableSchedulingContext: false,
+        hasActionableCallbackContext: false,
+        hasActionableTurnContext: false
+      },
+      isLogisticsProgressUpdate: true
+    },
+    expected: {
+      applicable: true,
+      action: "ack_progress_update",
+      reason: "progress_update_ack"
+    }
+  },
+  {
+    id: "policy_manual_handoff_question_ack_when_enabled",
+    input: {
+      hasParserNoResponse: true,
+      actionable: {
+        hasActionableFinanceContext: false,
+        hasActionableAvailabilityContext: false,
+        hasActionableSchedulingContext: false,
+        hasActionableCallbackContext: false,
+        hasActionableTurnContext: false
+      },
+      isManualHandoff: true,
+      manualHandoffQuestionCandidate: true,
+      allowManualHandoffQuestionAck: true
+    },
+    expected: {
+      applicable: true,
+      action: "ack_manual_handoff_question",
+      reason: "manual_handoff_question_ack"
+    }
+  },
+  {
+    id: "policy_override_when_actionable_context_present",
+    input: {
+      hasParserNoResponse: true,
+      actionable: {
+        hasActionableFinanceContext: true,
+        hasActionableAvailabilityContext: false,
+        hasActionableSchedulingContext: false,
+        hasActionableCallbackContext: false,
+        hasActionableTurnContext: true
+      }
+    },
+    expected: {
+      applicable: true,
+      action: "override",
+      reason: "actionable_context_present"
+    }
+  }
+];
+
+let noResponsePolicyPassed = 0;
+for (const c of noResponsePolicyCases) {
+  const actual = resolveNoResponsePolicyDecision(c.input);
+  const ok =
+    actual.applicable === c.expected.applicable &&
+    actual.action === c.expected.action &&
+    actual.reason === c.expected.reason;
+  if (ok) noResponsePolicyPassed += 1;
+  console.log(
+    `${ok ? "PASS" : "FAIL"} ${c.id} expected=${JSON.stringify(c.expected)} actual=${JSON.stringify({
+      applicable: actual.applicable,
+      action: actual.action,
+      reason: actual.reason
+    })}`
+  );
+}
+
+if (noResponsePolicyPassed !== noResponsePolicyCases.length) {
+  console.error(
+    `\n${noResponsePolicyCases.length - noResponsePolicyPassed} failures out of ${noResponsePolicyCases.length} no-response-policy cases`
+  );
+  process.exit(1);
+}
+
+console.log(`\nAll ${noResponsePolicyCases.length} no-response-policy checks passed.`);
+
+type NoResponseReplyCase = {
+  id: string;
+  input: {
+    hasActionableFinanceContext: boolean;
+    hasActionableAvailabilityContext: boolean;
+    hasActionableSchedulingContext: boolean;
+    hasActionableCallbackContext: boolean;
+    hasActionableTurnContext: boolean;
+  };
+  expectedReply: string;
+};
+
+const noResponseReplyCases: NoResponseReplyCase[] = [
+  {
+    id: "reply_prefers_finance",
+    input: {
+      hasActionableFinanceContext: true,
+      hasActionableAvailabilityContext: false,
+      hasActionableSchedulingContext: false,
+      hasActionableCallbackContext: false,
+      hasActionableTurnContext: true
+    },
+    expectedReply: "Happy to help with payments. What term do you want me to run: 60, 72, or 84 months?"
+  },
+  {
+    id: "reply_prefers_availability",
+    input: {
+      hasActionableFinanceContext: false,
+      hasActionableAvailabilityContext: true,
+      hasActionableSchedulingContext: false,
+      hasActionableCallbackContext: false,
+      hasActionableTurnContext: true
+    },
+    expectedReply: "Happy to check inventory right now. Are you looking for a specific year, color, or trim?"
+  },
+  {
+    id: "reply_prefers_callback",
+    input: {
+      hasActionableFinanceContext: false,
+      hasActionableAvailabilityContext: false,
+      hasActionableSchedulingContext: false,
+      hasActionableCallbackContext: true,
+      hasActionableTurnContext: true
+    },
+    expectedReply: "Got it — I can have someone call you. What day and time work best?"
+  }
+];
+
+let noResponseReplyPassed = 0;
+for (const c of noResponseReplyCases) {
+  const actual = buildNoResponseFallbackReply(c.input);
+  const ok = actual === c.expectedReply;
+  if (ok) noResponseReplyPassed += 1;
+  console.log(`${ok ? "PASS" : "FAIL"} ${c.id} expected=${JSON.stringify(c.expectedReply)} actual=${JSON.stringify(actual)}`);
+}
+
+if (noResponseReplyPassed !== noResponseReplyCases.length) {
+  console.error(
+    `\n${noResponseReplyCases.length - noResponseReplyPassed} failures out of ${noResponseReplyCases.length} no-response-reply cases`
+  );
+  process.exit(1);
+}
+
+console.log(`\nAll ${noResponseReplyCases.length} no-response-reply checks passed.`);
 
 type StaleCase = {
   id: string;

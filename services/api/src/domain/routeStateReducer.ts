@@ -99,6 +99,32 @@ export type NoResponseFallbackDecision = RouteActionableContextDecision & {
   shouldSkipNoResponse: boolean;
 };
 
+export type NoResponsePolicyAction =
+  | "skip"
+  | "override"
+  | "ack_progress_update"
+  | "ack_manual_handoff_question";
+
+export type NoResponsePolicyInput = {
+  hasParserNoResponse: boolean;
+  actionable: RouteActionableContextDecision;
+  isLogisticsProgressUpdate?: boolean;
+  isManualHandoff?: boolean;
+  manualHandoffQuestionCandidate?: boolean;
+  allowManualHandoffQuestionAck?: boolean;
+};
+
+export type NoResponsePolicyDecision = {
+  applicable: boolean;
+  action: NoResponsePolicyAction;
+  reason:
+    | "not_no_response_fallback"
+    | "actionable_context_present"
+    | "progress_update_ack"
+    | "manual_handoff_question_ack"
+    | "no_actionable_context";
+};
+
 export type StaleStateCleanupInput = {
   followUpMode?: string | null;
   followUpReason?: string | null;
@@ -323,6 +349,64 @@ export function evaluateNoResponseFallback(
     ...actionable,
     shouldSkipNoResponse: !actionable.hasActionableTurnContext
   };
+}
+
+export function resolveNoResponsePolicyDecision(
+  input: NoResponsePolicyInput
+): NoResponsePolicyDecision {
+  if (!input.hasParserNoResponse) {
+    return {
+      applicable: false,
+      action: "override",
+      reason: "not_no_response_fallback"
+    };
+  }
+  if (input.actionable.hasActionableTurnContext) {
+    return {
+      applicable: true,
+      action: "override",
+      reason: "actionable_context_present"
+    };
+  }
+  if (input.isLogisticsProgressUpdate) {
+    return {
+      applicable: true,
+      action: "ack_progress_update",
+      reason: "progress_update_ack"
+    };
+  }
+  if (
+    input.allowManualHandoffQuestionAck &&
+    input.isManualHandoff &&
+    input.manualHandoffQuestionCandidate
+  ) {
+    return {
+      applicable: true,
+      action: "ack_manual_handoff_question",
+      reason: "manual_handoff_question_ack"
+    };
+  }
+  return {
+    applicable: true,
+    action: "skip",
+    reason: "no_actionable_context"
+  };
+}
+
+export function buildNoResponseFallbackReply(actionable: RouteActionableContextDecision): string {
+  if (actionable.hasActionableFinanceContext) {
+    return "Happy to help with payments. What term do you want me to run: 60, 72, or 84 months?";
+  }
+  if (actionable.hasActionableAvailabilityContext) {
+    return "Happy to check inventory right now. Are you looking for a specific year, color, or trim?";
+  }
+  if (actionable.hasActionableSchedulingContext) {
+    return "Happy to set that up. What day and time work best for you?";
+  }
+  if (actionable.hasActionableCallbackContext) {
+    return "Got it — I can have someone call you. What day and time work best?";
+  }
+  return "Happy to help — are you asking about availability, payments, or setting a time to come in?";
 }
 
 function normalizeLower(value: string | null | undefined): string {

@@ -128,10 +128,12 @@ import { pickRegenerateInbound } from "./domain/regenerateSelection.js";
 import { applyDraftStateInvariants } from "./domain/draftStateInvariants.js";
 import {
   DEALER_RIDE_NO_PURCHASE_SKIP_DRAFT,
+  buildNoResponseFallbackReply,
   buildRouteDecisionSnapshot,
   evaluateNoResponseFallback,
   nextActionFromState,
   reduceStaleStateForInbound,
+  resolveNoResponsePolicyDecision,
   resolveRoutingParserDecision
 } from "./domain/routeStateReducer.js";
 
@@ -294,6 +296,14 @@ type DecisionTraceEntry = {
 
 const decisionTraceHistory: DecisionTraceEntry[] = [];
 const DECISION_TRACE_HISTORY_MAX = Number(process.env.DECISION_TRACE_HISTORY_MAX ?? 3000);
+
+type RoutePolicyMode = "legacy" | "shadow" | "enforce";
+
+function getRoutePolicyMode(): RoutePolicyMode {
+  const raw = String(process.env.ROUTE_POLICY_MODE ?? "shadow").trim().toLowerCase();
+  if (raw === "legacy" || raw === "shadow" || raw === "enforce") return raw;
+  return "shadow";
+}
 
 function recordDecisionTrace(args: {
   scope: DecisionTraceScope;
@@ -17031,14 +17041,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenParserSchedulingIntent = regenRoutingIntentOverride === "scheduling";
   const regenParserCallbackIntent = regenRoutingIntentOverride === "callback";
   const regenParserAvailabilityIntent = regenRoutingIntentOverride === "availability";
+  const regenRoutePolicyMode = getRoutePolicyMode();
   if (regenRoutingParserDecision.accepted && regenRoutingParserDecision.fallbackAction === "no_response") {
-    if (isLogisticsProgressUpdateText(event.body ?? "")) {
-      const progressReply = "Thanks for the update. I’m here if you need anything.";
-      if (channel === "email") {
-        return respondWithEmailRegeneratedDraft(progressReply);
-      }
-      return respondWithSmsRegeneratedDraft(progressReply);
-    }
+    const regenLogisticsProgressUpdate = isLogisticsProgressUpdateText(event.body ?? "");
     const regenNoResponseSignals = resolveRoutePrioritySignals({
       text: event.body ?? "",
       conv,
@@ -17064,18 +17069,49 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       hasDownPaymentContext: regenStoredPaymentContext.downPayment != null,
       hasTermContext: regenStoredPaymentContext.termMonths != null
     });
-    if (regenNoResponseDecision.shouldSkipNoResponse) {
+    const regenPolicyDecision = resolveNoResponsePolicyDecision({
+      hasParserNoResponse: true,
+      actionable: regenNoResponseDecision,
+      isLogisticsProgressUpdate: regenLogisticsProgressUpdate,
+      isManualHandoff: false,
+      manualHandoffQuestionCandidate: false,
+      allowManualHandoffQuestionAck: false
+    });
+    const regenLegacyAction = regenNoResponseDecision.shouldSkipNoResponse ? "skip" : "override";
+    if (regenRoutePolicyMode !== "legacy" && regenLegacyAction !== regenPolicyDecision.action) {
+      recordRouteOutcome("regen", "routing_policy_no_response_mismatch", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        parserReason: regenRoutingParserDecision.reason,
+        mode: regenRoutePolicyMode,
+        legacyAction: regenLegacyAction,
+        policyAction: regenPolicyDecision.action,
+        policyReason: regenPolicyDecision.reason
+      });
+    }
+    const regenEffectiveAction =
+      regenRoutePolicyMode === "enforce" ? regenPolicyDecision.action : regenLegacyAction;
+    if (regenEffectiveAction === "ack_progress_update") {
+      const progressReply = "Thanks for the update. I’m here if you need anything.";
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(progressReply);
+      }
+      return respondWithSmsRegeneratedDraft(progressReply);
+    }
+    if (regenEffectiveAction === "skip") {
       return respondRegenerateSkipped("routing_parser_no_response");
     }
     recordRouteOutcome("regen", "routing_parser_no_response_overridden", {
       convId: conv.id,
       leadKey: conv.leadKey,
       parserReason: regenRoutingParserDecision.reason,
+      mode: regenRoutePolicyMode,
       hasActionableFinanceContext: regenNoResponseDecision.hasActionableFinanceContext,
       hasActionableAvailabilityContext: regenNoResponseDecision.hasActionableAvailabilityContext,
       hasActionableSchedulingContext: regenNoResponseDecision.hasActionableSchedulingContext,
       hasActionableCallbackContext: regenNoResponseDecision.hasActionableCallbackContext,
-      shouldSkipNoResponse: regenNoResponseDecision.shouldSkipNoResponse
+      shouldSkipNoResponse: regenNoResponseDecision.shouldSkipNoResponse,
+      policyReason: regenPolicyDecision.reason
     });
   }
   if (regenRoutingParserDecision.accepted && regenRoutingParserDecision.fallbackAction === "clarify") {
@@ -20954,6 +20990,7 @@ if (authToken && signature) {
     });
   }
   const routeExecutionIntent = turnPrimaryIntent;
+  const routePolicyMode = getRoutePolicyMode();
   const routeExecPricing = routeExecutionIntent === "pricing_payments";
   const routeExecScheduling = routeExecutionIntent === "scheduling";
   const routeExecAvailability = routeExecutionIntent === "availability";
@@ -21094,67 +21131,101 @@ if (authToken && signature) {
       addTodo(conv, "note", `Callback link SMS failed for ${callbackSms.ownerLabel}.`);
     }
   }
-  if (routingParserDecision.accepted && routingParserDecision.fallbackAction === "no_response") {
-    if (noResponseContextDecision.shouldSkipNoResponse) {
-      const manualHandoffNoResponseQuestion =
-        String(conv?.followUp?.mode ?? "").toLowerCase() === "manual_handoff" &&
-        !shortAck &&
-        /\?/.test(String(event.body ?? ""));
-      if (manualHandoffNoResponseQuestion) {
-        const dealerProfile = await getDealerProfileHot();
-        const speaker = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
-        const reply = `Got it — this is ${speaker}. I’m checking that now and will follow up shortly.`;
-        logRouteOutcome("routing_parser_no_response_manual_handoff_ack", {
-          turnPrimaryIntent: routeExecutionIntent,
-          parserReason: routingParserDecision.reason
-        });
-        if (webhookMode === "suggest") {
-          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-          return res.status(200).type("text/xml").send(twiml);
-        }
-        appendOutbound(conv, event.to, event.from, reply, "twilio");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-          reply
-        )}</Message>\n</Response>`;
+  const hasParserNoResponseFallback =
+    routingParserDecision.accepted && routingParserDecision.fallbackAction === "no_response";
+  if (hasParserNoResponseFallback) {
+    const manualHandoffMode = String(conv?.followUp?.mode ?? "").toLowerCase() === "manual_handoff";
+    const manualHandoffNoResponseQuestion =
+      manualHandoffMode && !shortAck && /\?/.test(String(event.body ?? ""));
+    const policyNoResponseDecision = resolveNoResponsePolicyDecision({
+      hasParserNoResponse: hasParserNoResponseFallback,
+      actionable: noResponseContextDecision,
+      isLogisticsProgressUpdate: logisticsProgressUpdate,
+      isManualHandoff: manualHandoffMode,
+      manualHandoffQuestionCandidate: manualHandoffNoResponseQuestion,
+      allowManualHandoffQuestionAck: true
+    });
+    const legacyNoResponseAction = noResponseContextDecision.shouldSkipNoResponse
+      ? manualHandoffNoResponseQuestion
+        ? "ack_manual_handoff_question"
+        : logisticsProgressUpdate
+          ? "ack_progress_update"
+          : "skip"
+      : "override";
+    if (routePolicyMode !== "legacy" && legacyNoResponseAction !== policyNoResponseDecision.action) {
+      logRouteOutcome("routing_policy_no_response_mismatch", {
+        turnPrimaryIntent: routeExecutionIntent,
+        parserReason: routingParserDecision.reason,
+        mode: routePolicyMode,
+        legacyAction: legacyNoResponseAction,
+        policyAction: policyNoResponseDecision.action,
+        policyReason: policyNoResponseDecision.reason
+      });
+    }
+    const effectiveNoResponseAction =
+      routePolicyMode === "enforce" ? policyNoResponseDecision.action : legacyNoResponseAction;
+    if (effectiveNoResponseAction === "ack_manual_handoff_question") {
+      const dealerProfile = await getDealerProfileHot();
+      const speaker = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
+      const reply = `Got it — this is ${speaker}. I’m checking that now and will follow up shortly.`;
+      logRouteOutcome("routing_parser_no_response_manual_handoff_ack", {
+        turnPrimaryIntent: routeExecutionIntent,
+        parserReason: routingParserDecision.reason,
+        mode: routePolicyMode
+      });
+      if (webhookMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
         return res.status(200).type("text/xml").send(twiml);
       }
-      if (logisticsProgressUpdate) {
-        const progressReply = "Thanks for the update. I’m here if you need anything.";
-        logRouteOutcome("routing_parser_no_response_progress_update_ack", {
-          turnPrimaryIntent: routeExecutionIntent,
-          parserReason: routingParserDecision.reason
-        });
-        if (webhookMode === "suggest") {
-          appendOutbound(conv, event.to, event.from, progressReply, "draft_ai");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-          return res.status(200).type("text/xml").send(twiml);
-        }
-        appendOutbound(conv, event.to, event.from, progressReply, "twilio");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-          progressReply
-        )}</Message>\n</Response>`;
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    if (effectiveNoResponseAction === "ack_progress_update") {
+      const progressReply = "Thanks for the update. I’m here if you need anything.";
+      logRouteOutcome("routing_parser_no_response_progress_update_ack", {
+        turnPrimaryIntent: routeExecutionIntent,
+        parserReason: routingParserDecision.reason,
+        mode: routePolicyMode
+      });
+      if (webhookMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, progressReply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
         return res.status(200).type("text/xml").send(twiml);
       }
+      appendOutbound(conv, event.to, event.from, progressReply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        progressReply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    if (effectiveNoResponseAction === "skip") {
       logRouteOutcome("routing_parser_no_response", {
         turnPrimaryIntent: routeExecutionIntent,
         parserReason: routingParserDecision.reason,
+        mode: routePolicyMode,
         hasActionableFinanceContext,
         hasActionableAvailabilityContext,
         hasActionableSchedulingContext,
         hasActionableCallbackContext,
-        shouldSkipNoResponse: noResponseContextDecision.shouldSkipNoResponse
+        shouldSkipNoResponse: noResponseContextDecision.shouldSkipNoResponse,
+        policyReason: policyNoResponseDecision.reason
       });
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
     logRouteOutcome("routing_parser_no_response_overridden", {
       turnPrimaryIntent: routeExecutionIntent,
+      mode: routePolicyMode,
       hasActionableFinanceContext,
       hasActionableAvailabilityContext,
       hasActionableSchedulingContext,
       hasActionableCallbackContext,
-      shouldSkipNoResponse: noResponseContextDecision.shouldSkipNoResponse
+      shouldSkipNoResponse: noResponseContextDecision.shouldSkipNoResponse,
+      policyReason: policyNoResponseDecision.reason
     });
   }
   if (routingParserDecision.accepted && routingParserDecision.fallbackAction === "clarify") {
@@ -24976,19 +25047,7 @@ if (authToken && signature) {
 
   if (!result.shouldRespond) {
     if (hasActionableTurnContext) {
-      let fallbackReply =
-        "Happy to help — are you asking about availability, payments, or setting a time to come in?";
-      if (hasActionableFinanceContext) {
-        fallbackReply =
-          "Happy to help with payments. What term do you want me to run: 60, 72, or 84 months?";
-      } else if (hasActionableAvailabilityContext) {
-        fallbackReply =
-          "Happy to check inventory right now. Are you looking for a specific year, color, or trim?";
-      } else if (hasActionableSchedulingContext) {
-        fallbackReply = "Happy to set that up. What day and time work best for you?";
-      } else if (hasActionableCallbackContext) {
-        fallbackReply = "Got it — I can have someone call you. What day and time work best?";
-      }
+      const fallbackReply = buildNoResponseFallbackReply(noResponseContextDecision);
       logRouteOutcome("orchestrator_no_response_overridden", {
         intent: result.intent ?? "unknown",
         turnPrimaryIntent: routeExecutionIntent,
