@@ -2209,6 +2209,15 @@ output: {"primary_intent":"pricing_payments","explicit_request":true,"fallback_a
     `EXAMPLE K2
 inbound: "I have cash. coming to look at the orange street glide tomorrow. let's make a deal"
 output: {"primary_intent":"scheduling","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.97}`,
+    `EXAMPLE K3
+inbound: "i have cash and can come in tomorrow for that 2017 orange street glide"
+output: {"primary_intent":"scheduling","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.98}`,
+    `EXAMPLE K4
+inbound: "ready to buy. i can stop by saturday morning"
+output: {"primary_intent":"scheduling","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.97}`,
+    `EXAMPLE K5
+inbound: "let's make a deal tomorrow on the street glide"
+output: {"primary_intent":"scheduling","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.96}`,
     `EXAMPLE L
 inbound: "Ok sounds great"
 output: {"primary_intent":"none","explicit_request":false,"fallback_action":"no_response","clarify_prompt":"","confidence":0.97}`
@@ -2233,6 +2242,8 @@ output: {"primary_intent":"general","explicit_request":true,"fallback_action":"n
     "- Use the latest inbound ask as source of truth even if prior turns were different.",
     "- If inbound is short acknowledgment only, use primary_intent=none and fallback_action=no_response.",
     "- Use fallback_action=clarify only when message is ambiguous and not safely routable.",
+    "- Only choose callback when the customer explicitly asks for a phone call (e.g., call me, have X call me, can you call).",
+    "- If message says cash-ready / ready to buy / make a deal and includes a visit timing cue (today/tomorrow/day/time/coming in), choose scheduling, not callback.",
     "- confidence is 0..1.",
     "",
     ...examples,
