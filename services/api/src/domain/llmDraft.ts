@@ -3409,6 +3409,65 @@ export async function summarizeVoiceTranscriptWithLLM(args: {
   transcript: string;
   lead?: Conversation["lead"];
 }): Promise<string | null> {
+  const buildFallbackSummary = (transcriptRaw: string, lead?: Conversation["lead"]): string | null => {
+    const lines = String(transcriptRaw ?? "")
+      .split(/\n+/)
+      .map(s => s.trim())
+      .filter(Boolean);
+    if (!lines.length) return null;
+
+    const stripSpeaker = (line: string) =>
+      line
+        .replace(
+          /^(customer|agent|speaker\s*\d+|[A-Za-z][A-Za-z .'-]{1,40}):\s*/i,
+          ""
+        )
+        .trim();
+    const compact = (text: string, max = 180) => {
+      const cleaned = text.replace(/\s+/g, " ").trim();
+      if (cleaned.length <= max) return cleaned;
+      return `${cleaned.slice(0, max - 1).trimEnd()}…`;
+    };
+
+    const customerLines = lines
+      .filter(line => /^customer:/i.test(line))
+      .map(stripSpeaker)
+      .filter(Boolean);
+    const allLines = lines.map(stripSpeaker).filter(Boolean);
+    const topicLine =
+      customerLines.find(line => line.length >= 18) ||
+      allLines.find(line => line.length >= 18) ||
+      "";
+
+    const textLower = String(transcriptRaw ?? "").toLowerCase();
+    const weekdayOrTimeMention =
+      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\b/i.test(textLower) ||
+      /\b\d{1,2}(:\d{2})?\s?(am|pm)\b/i.test(textLower);
+    const scheduleIntent =
+      weekdayOrTimeMention &&
+      /\b(come in|stop by|available|works|work(s)? for you|see you|saturday morning)\b/i.test(textLower);
+    const wrongDealerIntent =
+      /\b(wrong dealership|wrong dealer|mistake|accidentally|out of area|new mexico|different state)\b/i.test(
+        textLower
+      );
+
+    if (wrongDealerIntent) {
+      return "Customer said this inquiry was for a different/out-of-area dealership and is not moving forward with this store.";
+    }
+    if (scheduleIntent) {
+      return "Customer discussed bike options and indicated a plan to come in; confirm the exact visit time and next steps.";
+    }
+
+    const leadModel =
+      String(lead?.vehicle?.model ?? lead?.vehicle?.description ?? "")
+        .replace(/\s+/g, " ")
+        .trim() || "the bike";
+    if (topicLine) {
+      return `Customer discussed ${leadModel}: ${compact(topicLine)}.`;
+    }
+    return `Customer and salesperson discussed ${leadModel} and next steps.`;
+  };
+
   const voiceSummarizerEnabledRaw = String(
     process.env.LLM_VOICE_SUMMARIZER_ENABLED ?? "1"
   ).trim();
@@ -3419,10 +3478,10 @@ export async function summarizeVoiceTranscriptWithLLM(args: {
     process.env.LLM_ENABLED === "1" &&
     voiceSummarizerEnabled &&
     !!process.env.OPENAI_API_KEY;
-  if (!useLLM) return null;
 
   const raw = String(args.transcript ?? "").trim();
   if (!raw) return null;
+  if (!useLLM) return buildFallbackSummary(raw, args.lead);
 
   const model =
     process.env.OPENAI_VOICE_SUMMARIZER_MODEL ||
@@ -3490,9 +3549,9 @@ ${clipped}
     });
     const out = resp.output_text?.trim() ?? "";
     const cleaned = stripUnknownYears(out, raw);
-    return cleaned || null;
+    return cleaned || buildFallbackSummary(raw, args.lead);
   } catch {
-    return null;
+    return buildFallbackSummary(raw, args.lead);
   }
 }
 

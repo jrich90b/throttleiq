@@ -10,17 +10,23 @@ type Args = {
   dryRun: boolean;
   includeNoId: boolean;
   limit: number;
+  phoneFilter: string;
 };
 
 function parseArgs(argv: string[]): Args {
   const dryRun = argv.includes("--dry-run");
   const includeNoId = argv.includes("--include-no-id");
   const limitArg = argv.find(arg => arg.startsWith("--limit="));
+  const phoneArg = argv.find(arg => arg.startsWith("--phone="));
   const limit = limitArg ? Number(limitArg.split("=")[1]) : Number.POSITIVE_INFINITY;
+  const phoneFilter = String(phoneArg ? phoneArg.split("=")[1] : "")
+    .replace(/\D/g, "")
+    .trim();
   return {
     dryRun,
     includeNoId,
-    limit: Number.isFinite(limit) && limit > 0 ? limit : Number.POSITIVE_INFINITY
+    limit: Number.isFinite(limit) && limit > 0 ? limit : Number.POSITIVE_INFINITY,
+    phoneFilter
   };
 }
 
@@ -49,17 +55,6 @@ function isLikelyVoicemailTranscript(text: string): boolean {
 
 const args = parseArgs(process.argv.slice(2));
 
-const apiKey = process.env.OPENAI_API_KEY ?? "";
-if (!apiKey || apiKey.trim() === "..." || apiKey.trim().length < 20) {
-  console.error("OPENAI_API_KEY is missing or looks like a placeholder. Set a real key and re-run.");
-  process.exit(1);
-}
-
-if (process.env.LLM_ENABLED !== "1" || process.env.LLM_VOICE_SUMMARIZER_ENABLED !== "1") {
-  console.error("LLM_ENABLED=1 and LLM_VOICE_SUMMARIZER_ENABLED=1 are required for this backfill.");
-  process.exit(1);
-}
-
 await reloadConversationStore();
 
 const convs = getAllConversations();
@@ -70,6 +65,11 @@ let touched = 0;
 
 for (const conv of convs) {
   if (created >= args.limit) break;
+  if (args.phoneFilter) {
+    const leadDigits = String(conv?.lead?.phone ?? "").replace(/\D/g, "");
+    const keyDigits = String(conv?.leadKey ?? "").replace(/\D/g, "");
+    if (leadDigits !== args.phoneFilter && keyDigits !== args.phoneFilter) continue;
+  }
   if (!conv.messages || conv.messages.length === 0) continue;
 
   const messages = conv.messages;
@@ -177,6 +177,7 @@ console.log(
       dryRun: args.dryRun,
       includeNoId: args.includeNoId,
       limit: Number.isFinite(args.limit) ? args.limit : null,
+      phoneFilter: args.phoneFilter || null,
       processed,
       created,
       skipped,
