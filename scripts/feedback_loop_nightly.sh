@@ -11,9 +11,10 @@ CHANGED_MESSAGES_PATH="${CHANGED_MESSAGES_PATH:-$REPORT_ROOT/changed_messages_al
 CHANGED_MESSAGES_SINCE_HOURS="${CHANGED_MESSAGES_SINCE_HOURS:-24}"
 AUDIT_SINCE_HOURS="${AUDIT_SINCE_HOURS:-24}"
 EDIT_FEEDBACK_OUT_DIR="${EDIT_FEEDBACK_OUT_DIR:-$REPORT_ROOT/edit_feedback}"
+LANGUAGE_CORPUS_OUT_DIR="${LANGUAGE_CORPUS_OUT_DIR:-$REPORT_ROOT/language_corpus}"
 LOG_DIR="${LOG_DIR:-$REPORT_ROOT/feedback_loop_logs}"
 
-mkdir -p "$REPORT_ROOT" "$EDIT_FEEDBACK_OUT_DIR" "$LOG_DIR"
+mkdir -p "$REPORT_ROOT" "$EDIT_FEEDBACK_OUT_DIR" "$LANGUAGE_CORPUS_OUT_DIR" "$LOG_DIR"
 
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 AUDIT_JSON="$LOG_DIR/conversation_audit_$TS.json"
@@ -28,8 +29,9 @@ RUN_LOG="$LOG_DIR/feedback_loop_$TS.log"
   echo "[feedback-loop] CHANGED_MESSAGES_SINCE_HOURS=$CHANGED_MESSAGES_SINCE_HOURS"
   echo "[feedback-loop] AUDIT_SINCE_HOURS=$AUDIT_SINCE_HOURS"
   echo "[feedback-loop] EDIT_FEEDBACK_OUT_DIR=$EDIT_FEEDBACK_OUT_DIR"
+  echo "[feedback-loop] LANGUAGE_CORPUS_OUT_DIR=$LANGUAGE_CORPUS_OUT_DIR"
 
-  export DATA_DIR CONVERSATIONS_DB_PATH CHANGED_MESSAGES_PATH CHANGED_MESSAGES_SINCE_HOURS AUDIT_SINCE_HOURS EDIT_FEEDBACK_OUT_DIR
+  export DATA_DIR CONVERSATIONS_DB_PATH CHANGED_MESSAGES_PATH CHANGED_MESSAGES_SINCE_HOURS AUDIT_SINCE_HOURS EDIT_FEEDBACK_OUT_DIR LANGUAGE_CORPUS_OUT_DIR
 
   echo "[feedback-loop] step=export_changed_messages"
   npm run export:changed_messages
@@ -39,6 +41,12 @@ RUN_LOG="$LOG_DIR/feedback_loop_$TS.log"
 
   echo "[feedback-loop] step=edit_feedback_mine -> $MINE_LOG"
   npm run edit_feedback:mine | tee "$MINE_LOG"
+
+  echo "[feedback-loop] step=language_corpus_mine"
+  LANGUAGE_CORPUS_SINCE_HOURS="${CHANGED_MESSAGES_SINCE_HOURS}" npm run language_corpus:mine
+
+  echo "[feedback-loop] step=language_seed_eval"
+  npm run language_seed:eval
 
   if [[ -n "${FEEDBACK_REPORT_EMAIL_TO:-}" ]]; then
     echo "[feedback-loop] step=email_report -> ${FEEDBACK_REPORT_EMAIL_TO}"
