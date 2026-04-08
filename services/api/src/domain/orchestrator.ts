@@ -855,8 +855,15 @@ function detectFinanceApplyFollowUp(
 }
 
 function detectPricingOrPayment(text: string, intent?: OrchestratorResult["intent"]): boolean {
-  if (intent === "PRICING" || intent === "FINANCING") return true;
   const t = text.toLowerCase();
+  const hasHardPricingToken =
+    /(price|\botd\b|out the door|payment|monthly|down|apr|term|rate|rates|finance|financing|special|incentive|rebate|discount)/.test(
+      t
+    );
+  if (intent === "PRICING" || intent === "FINANCING") {
+    if (detectCashReadyDealIntent(t) && !hasHardPricingToken) return false;
+    return true;
+  }
   if (
     detectDealClosingIntent(t) &&
     !/(price|\botd\b|out the door|payment|monthly|down|apr|term|rate|rates)/.test(t)
@@ -872,6 +879,22 @@ function detectDealClosingIntent(text: string): boolean {
   return /\b(i have cash|cash buyer|coming to look|coming in|come in|stop by|tomorrow|today|ready to buy|ready to pull the trigger|pull the trigger|make a deal|let'?s make a deal)\b/.test(
     t
   );
+}
+
+function detectCashReadyDealIntent(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  if (detectDealsOrFinanceSpecialsQuestion(t)) return false;
+  const strongCashOrDeal =
+    /\b(i have cash|cash buyer|ready to buy|ready to pull the trigger|pull the trigger|make a deal|let'?s make a deal)\b/.test(
+      t
+    );
+  const comingToLookWithTiming =
+    /\bcoming to look\b/.test(t) &&
+    /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this weekend|weekend)\b/.test(
+      t
+    );
+  return strongCashOrDeal || comingToLookWithTiming;
 }
 
 function detectDealsOrFinanceSpecialsQuestion(text: string): boolean {
@@ -3057,6 +3080,119 @@ export async function orchestrateInbound(
       shouldRespond: true,
       draft: ack
     });
+  }
+
+  const cashReadyDealIntent = detectCashReadyDealIntent(event.body);
+  if (
+    cashReadyDealIntent &&
+    !callbackRequest &&
+    !managerRequest &&
+    !approvalStatus &&
+    !financeRequest &&
+    !depositRequest
+  ) {
+    const leadInquiry = String((ctx?.lead as any)?.inquiry ?? "").trim() || null;
+    const requestedDay = inferRequestedDay(event.body) || inferRequestedDay(leadInquiry ?? "");
+    const schedulePrompt =
+      requestedDay === "today" || requestedDay === "tomorrow"
+        ? `What time ${requestedDay} works best for you to stop in?`
+        : requestedDay
+          ? `What time on ${requestedDay.replace(/^\w/, c => c.toUpperCase())} works best for you to stop in?`
+          : "What day and time work best for you to stop in?";
+
+    try {
+      const items = await getInventoryFeed();
+      const models = Array.from(new Set(items.map(i => i.model).filter(Boolean))) as string[];
+      const modelCandidates = getModelCandidates(models);
+      const model =
+        resolveModelFromText(event.body, modelCandidates) ||
+        resolveModelFromText(leadInquiry ?? "", modelCandidates) ||
+        ctx?.lead?.vehicle?.model ||
+        deriveModelFromDescription(ctx?.lead?.vehicle?.description ?? null) ||
+        deriveModelFromDescription(leadInquiry) ||
+        null;
+      if (!model) {
+        return finalize({
+          intent: "GENERAL",
+          stage: "ENGAGED",
+          shouldRespond: true,
+          draft: `Got it — sounds good. ${schedulePrompt}`
+        });
+      }
+
+      const year =
+        deriveYearFromText(event.body) ??
+        deriveYearFromText(leadInquiry) ??
+        ctx?.lead?.vehicle?.year ??
+        deriveYearFromText(ctx?.lead?.vehicle?.description ?? null) ??
+        null;
+      const msrpColors = await getMsrpColorNames();
+      const color =
+        extractColorMention(event.body, msrpColors) ||
+        extractColorMention(leadInquiry ?? "", msrpColors) ||
+        ctx?.lead?.vehicle?.color ||
+        null;
+      const yearNum = year ? Number(year) : NaN;
+      const currentYear = new Date().getFullYear();
+      let requestedCondition =
+        detectRequestedInventoryConditionFromText(event.body) ||
+        detectRequestedInventoryConditionFromText(leadInquiry ?? "") ||
+        normalizeRequestedInventoryCondition(ctx?.lead?.vehicle?.condition ?? null);
+      if (!requestedCondition && Number.isFinite(yearNum) && yearNum > 0 && yearNum < currentYear) {
+        requestedCondition = "used";
+      }
+
+      let matches = await findInventoryMatches({ year: year ?? null, model });
+      if (requestedCondition) {
+        matches = matches.filter(m => inventoryItemMatchesRequestedCondition(m, requestedCondition));
+      }
+      if (color) {
+        const colorLower = color.toLowerCase();
+        matches = matches.filter(m => (m.color ?? "").toLowerCase().includes(colorLower));
+      }
+      const holds = await listInventoryHolds();
+      const solds = await listInventorySolds();
+      const availableMatches = matches.filter(m => {
+        const holdKey = normalizeInventoryHoldKey(m.stockId, m.vin);
+        const soldKey = normalizeInventorySoldKey(m.stockId, m.vin);
+        if (holdKey && holds?.[holdKey]) return false;
+        if (soldKey && solds?.[soldKey]) return false;
+        return true;
+      });
+
+      const conditionPrefix = formatRequestedConditionPrefix(requestedCondition);
+      const yearLabel = year ? `${year} ` : "";
+      const modelLabel = normalizeModelLabel(model);
+      const colorLabel = color ? ` in ${color}` : "";
+      const bikeLabel = `${conditionPrefix}${yearLabel}${modelLabel}${colorLabel}`.trim();
+
+      if (availableMatches.length > 0) {
+        const inventoryLine =
+          availableMatches.length === 1
+            ? `Got it — we do have ${bikeLabel} in stock.`
+            : `Got it — we have ${availableMatches.length} ${bikeLabel} options in stock.`;
+        return finalize({
+          intent: "GENERAL",
+          stage: "ENGAGED",
+          shouldRespond: true,
+          draft: `${inventoryLine} ${schedulePrompt}`.trim()
+        });
+      }
+
+      return finalize({
+        intent: "GENERAL",
+        stage: "ENGAGED",
+        shouldRespond: true,
+        draft: `Got it — I’m checking on ${bikeLabel} now and will confirm shortly. ${schedulePrompt}`.trim()
+      });
+    } catch {
+      return finalize({
+        intent: "GENERAL",
+        stage: "ENGAGED",
+        shouldRespond: true,
+        draft: `Got it — sounds good. ${schedulePrompt}`
+      });
+    }
   }
 
   if (useLLM) {
