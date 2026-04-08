@@ -27,6 +27,11 @@ function fmtCountRows(rows: AnyObj[] | undefined, key: string, valueKey = "count
     .join(", ");
 }
 
+function num(input: unknown, fallback = 0): number {
+  const n = Number(input);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 async function run() {
   // Mirror API startup behavior: load .env automatically.
   dotenvConfig();
@@ -63,12 +68,18 @@ async function run() {
   const resultsPath = path.join(outDir, "edit_replay_fixture_results.json");
   const fixturesPath = path.join(outDir, "edit_replay_fixtures.json");
   const labeledPath = path.join(outDir, "edit_feedback_labeled.json");
+  const toneOutDir =
+    process.env.TONE_QUALITY_OUT_DIR ||
+    path.resolve(path.dirname(outDir), "tone_quality");
+  const toneSummaryPath = path.join(toneOutDir, "tone_quality_summary.json");
+  const toneFailuresPath = path.join(toneOutDir, "tone_quality_failures.json");
 
   const summary = readJson(summaryPath);
   if (!summary) {
     console.error(`Summary not found or invalid JSON: ${summaryPath}`);
     process.exit(1);
   }
+  const toneSummary = readJson(toneSummaryPath);
 
   const auditPath = String(process.env.FEEDBACK_REPORT_AUDIT_PATH ?? "").trim();
   const mineLogPath = String(process.env.FEEDBACK_REPORT_MINE_LOG_PATH ?? "").trim();
@@ -93,6 +104,22 @@ async function run() {
     `Labels: ${fmtCountRows(summary.labelCounts, "label")}`,
     `Severity: ${fmtCountRows(summary.severityCounts, "severity")}`,
     "",
+    `Tone eval: ${
+      toneSummary
+        ? `avg=${num(toneSummary.avgScore).toFixed(2)} median=${num(toneSummary.medianScore).toFixed(2)} passRate=${num(
+            toneSummary.passRate
+          ).toFixed(2)}%`
+        : "not available"
+    }`,
+    `Tone volume: ${
+      toneSummary
+        ? `inbound=${num(toneSummary.totalInboundTurns)} responded=${num(toneSummary.respondedTurns)} missing=${num(
+            toneSummary.missingResponseCount
+          )}`
+        : "not available"
+    }`,
+    `Tone issues: ${toneSummary ? fmtCountRows(toneSummary.issueCounts, "issue") : "none"}`,
+    "",
     `Output directory: ${outDir}`
   ].join("\n");
 
@@ -116,6 +143,8 @@ async function run() {
 
   maybeAttach(summaryPath, "edit_feedback_summary.json");
   maybeAttach(resultsPath, "edit_replay_fixture_results.json");
+  maybeAttach(toneSummaryPath, "tone_quality_summary.json");
+  maybeAttach(toneFailuresPath, "tone_quality_failures.json");
   if (attachFull) {
     maybeAttach(fixturesPath, "edit_replay_fixtures.json");
     maybeAttach(labeledPath, "edit_feedback_labeled.json");

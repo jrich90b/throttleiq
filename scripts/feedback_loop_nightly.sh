@@ -12,9 +12,10 @@ CHANGED_MESSAGES_SINCE_HOURS="${CHANGED_MESSAGES_SINCE_HOURS:-24}"
 AUDIT_SINCE_HOURS="${AUDIT_SINCE_HOURS:-24}"
 EDIT_FEEDBACK_OUT_DIR="${EDIT_FEEDBACK_OUT_DIR:-$REPORT_ROOT/edit_feedback}"
 LANGUAGE_CORPUS_OUT_DIR="${LANGUAGE_CORPUS_OUT_DIR:-$REPORT_ROOT/language_corpus}"
+TONE_QUALITY_OUT_DIR="${TONE_QUALITY_OUT_DIR:-$REPORT_ROOT/tone_quality}"
 LOG_DIR="${LOG_DIR:-$REPORT_ROOT/feedback_loop_logs}"
 
-mkdir -p "$REPORT_ROOT" "$EDIT_FEEDBACK_OUT_DIR" "$LANGUAGE_CORPUS_OUT_DIR" "$LOG_DIR"
+mkdir -p "$REPORT_ROOT" "$EDIT_FEEDBACK_OUT_DIR" "$LANGUAGE_CORPUS_OUT_DIR" "$TONE_QUALITY_OUT_DIR" "$LOG_DIR"
 
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 AUDIT_JSON="$LOG_DIR/conversation_audit_$TS.json"
@@ -30,8 +31,9 @@ RUN_LOG="$LOG_DIR/feedback_loop_$TS.log"
   echo "[feedback-loop] AUDIT_SINCE_HOURS=$AUDIT_SINCE_HOURS"
   echo "[feedback-loop] EDIT_FEEDBACK_OUT_DIR=$EDIT_FEEDBACK_OUT_DIR"
   echo "[feedback-loop] LANGUAGE_CORPUS_OUT_DIR=$LANGUAGE_CORPUS_OUT_DIR"
+  echo "[feedback-loop] TONE_QUALITY_OUT_DIR=$TONE_QUALITY_OUT_DIR"
 
-  export DATA_DIR CONVERSATIONS_DB_PATH CHANGED_MESSAGES_PATH CHANGED_MESSAGES_SINCE_HOURS AUDIT_SINCE_HOURS EDIT_FEEDBACK_OUT_DIR LANGUAGE_CORPUS_OUT_DIR
+  export DATA_DIR CONVERSATIONS_DB_PATH CHANGED_MESSAGES_PATH CHANGED_MESSAGES_SINCE_HOURS AUDIT_SINCE_HOURS EDIT_FEEDBACK_OUT_DIR LANGUAGE_CORPUS_OUT_DIR TONE_QUALITY_OUT_DIR
 
   echo "[feedback-loop] step=export_changed_messages"
   npm run export:changed_messages
@@ -47,6 +49,9 @@ RUN_LOG="$LOG_DIR/feedback_loop_$TS.log"
 
   echo "[feedback-loop] step=language_seed_eval"
   npm run language_seed:eval
+
+  echo "[feedback-loop] step=tone_quality_eval"
+  TONE_QUALITY_SINCE_HOURS="${CHANGED_MESSAGES_SINCE_HOURS}" npm run tone_quality:eval
 
   if [[ -n "${FEEDBACK_REPORT_EMAIL_TO:-}" ]]; then
     echo "[feedback-loop] step=email_report -> ${FEEDBACK_REPORT_EMAIL_TO}"
