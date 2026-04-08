@@ -15613,6 +15613,65 @@ app.post("/conversations/:id/send", async (req, res) => {
       String(getDialogState(conv) ?? "")
         .toLowerCase()
         .startsWith("schedule");
+    const hasBookedEvent = String(conv.appointment?.bookedEventId ?? "").trim().length > 0;
+    const explicitRescheduleCue =
+      /\b(reschedule|re-?schedule|change (?:the )?time|move (?:it|me)?|another time|different time|push (?:it )?back|later time|earlier time)\b/i.test(
+        lower
+      );
+    const hasScheduleKeyword =
+      /\b(schedule|book|appointment|appt|reschedule|availability|available|stop by|stop in|come in|see you|works)\b/i.test(
+        text
+      );
+    const hasDayToken =
+      /\b(today|tomorrow|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun|next week|this week|this weekend|weekend)\b/i.test(
+        text
+      );
+    const hasTimeToken =
+      /\b(\d{1,2}(:\d{2})?\s*(am|pm)\b|morning|afternoon|evening|night|noon|midnight)\b/i.test(
+        text
+      );
+    const looksAppointmentLike = hasScheduleKeyword || hasDayToken || hasTimeToken || hasAppointmentContext;
+
+    // Hard dedupe guard for manual outbound confirmations:
+    // if an appointment event is already booked, do not mutate/rebook from
+    // "see you then / that works" type follow-up texts.
+    if (hasBookedEvent && looksAppointmentLike && !explicitRescheduleCue) {
+      recordRouteOutcome("live", "manual_outbound_schedule_noop_existing_booking", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        channel: opts?.channel ?? null
+      });
+      return;
+    }
+
+    // If a booked appointment exists and a true reschedule cue appears in manual
+    // outbound text, route to human reschedule handling instead of mutating event state here.
+    if (hasBookedEvent && explicitRescheduleCue) {
+      const timezone = schedulerTimezone;
+      let schedule = buildCallbackTodoSchedule(text, timezone);
+      if ((!schedule.dueAt || !schedule.reminderAt) && hasDayToken && !hasTimeToken) {
+        schedule = buildCallbackTodoSchedule(`${text} at 9am`, timezone);
+      }
+      const requestedLabel = schedule.dueAt ? formatSlotLocal(String(schedule.dueAt), timezone) : null;
+      const summary = requestedLabel
+        ? `Manual reschedule requested. Requested: ${requestedLabel}.`
+        : "Manual reschedule requested. Please update appointment time.";
+      const owner = conv.leadOwner
+        ? {
+            id: String(conv.leadOwner.id ?? "").trim() || undefined,
+            name: String(conv.leadOwner.name ?? "").trim() || undefined
+          }
+        : undefined;
+      addTodo(conv, "call", summary, opts?.sourceMessageId ?? undefined, owner, schedule);
+      setDialogState(conv, "schedule_request");
+      recordRouteOutcome("live", "manual_outbound_reschedule_request_todo", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        channel: opts?.channel ?? null,
+        dueAt: schedule.dueAt ?? null
+      });
+      return;
+    }
 
     let didSetAppointment = false;
     const matchedSuggested = confirmAppointmentIfMatchesSuggested(
@@ -15632,19 +15691,6 @@ app.post("/conversations/:id/send", async (req, res) => {
       process.env.LLM_ENABLED === "1" &&
       process.env.LLM_BOOKING_PARSER_ENABLED === "1" &&
       !!process.env.OPENAI_API_KEY;
-    const hasScheduleKeyword =
-      /\b(schedule|book|appointment|appt|reschedule|availability|available|stop by|stop in|come in|see you|works)\b/i.test(
-        text
-      );
-    const hasDayToken =
-      /\b(today|tomorrow|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun|next week|this week|this weekend|weekend)\b/i.test(
-        text
-      );
-    const hasTimeToken =
-      /\b(\d{1,2}(:\d{2})?\s*(am|pm)\b|morning|afternoon|evening|night|noon|midnight)\b/i.test(
-        text
-      );
-
     let bookingParse: any = null;
     if (!didSetAppointment && bookingParserEligible && (hasScheduleKeyword || hasAppointmentContext)) {
       bookingParse = await safeLlmParse("manual_outbound_booking_parser", () =>
