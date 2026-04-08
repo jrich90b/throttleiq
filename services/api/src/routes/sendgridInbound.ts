@@ -1144,6 +1144,56 @@ function normalizeAdfInquiryText(input?: string | null): string {
   return normalizedDelimiters.replace(/\s+/g, " ").trim();
 }
 
+const ADF_METADATA_MARKERS: RegExp[] = [
+  /\binventory item\s*:/i,
+  /\binventory year\s*:/i,
+  /\binventory stock id\s*:/i,
+  /\bclient_id\s*:/i,
+  /\bcan we contact you via (?:email|phone|text)\s*\?:/i,
+  /\bhdmc-campaign-tracking code\s*:/i,
+  /\blead captured date\s*:/i,
+  /\bevent name\s*:/i,
+  /\bfirst name\s*:/i,
+  /\blast name\s*:/i
+];
+
+function countAdfMetadataMarkers(text?: string | null): number {
+  const raw = String(text ?? "");
+  if (!raw) return 0;
+  return ADF_METADATA_MARKERS.reduce((count, pattern) => (pattern.test(raw) ? count + 1 : count), 0);
+}
+
+function looksLikeAdfMetadataBlob(text?: string | null): boolean {
+  const raw = String(text ?? "").trim();
+  if (!raw) return false;
+  const markerCount = countAdfMetadataMarkers(raw);
+  if (markerCount >= 2) return true;
+  if (markerCount >= 1 && raw.split(/\s+/).length > 35) return true;
+  return false;
+}
+
+function extractTrueInquiryFromAdfText(input?: string | null): string {
+  const normalized = normalizeAdfInquiryText(input);
+  if (!normalized) return "";
+  const direct =
+    normalized.match(/\byour inquiry:\s*([^>\n\r]+)/i)?.[1]?.trim() ??
+    normalized.match(/\byour inquiry:\s*([\s\S]+)$/i)?.[1]?.trim() ??
+    normalized.match(/\binquiry:\s*([^>\n\r]+)/i)?.[1]?.trim() ??
+    normalized;
+  let value = String(direct ?? "").trim();
+  if (!value) return "";
+  value = value.replace(
+    /\s*(?:can we contact you via (?:email|phone|text)\?:|client_id\s*:|hdmc-campaign-tracking code\s*:|lead captured date\s*:|event name\s*:|\/\/\/customer information\/\/\/|parts and accessories interest\s*:|biker rider\?\s*:|language\s*:|purchase timeframe\s*:|source id\s*:|inventory year\s*:|inventory stock id\s*:|vin\s*:|first name\s*:|last name\s*:|phone\s*:|email\s*:).*/i,
+    ""
+  );
+  value = value.replace(/^[>\-\s:]+/, "").trim();
+  if (!value) return "";
+  if (/^(yes|no|n\/a|na|null)$/i.test(value)) return "";
+  if (/^can we contact you via/i.test(value)) return "";
+  if (looksLikeAdfMetadataBlob(value)) return "";
+  return value;
+}
+
 function looksLikeMime(raw?: string | null): boolean {
   if (!raw) return false;
   return /(received:|arc-|dkim-|mime-version:|content-type:|content-transfer-encoding:|message-id:)/i.test(raw);
@@ -1956,10 +2006,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   const rawComment = String(lead.comment ?? "");
   const cleanedComment = normalizeAdfInquiryText(rawComment);
+  const commentInquiry = extractTrueInquiryFromAdfText(rawComment);
   const inquiryRaw = String(lead.inquiry ?? "");
   const cleanedInquiry = normalizeAdfInquiryText(inquiryRaw);
-  const combinedInquiry = [cleanedComment, cleanedInquiry].filter(Boolean).join(" ").trim();
-  const effectiveInquiry = combinedInquiry || cleanedInquiry || inquiryRaw;
+  const parsedInquiry = extractTrueInquiryFromAdfText(inquiryRaw);
+  const effectiveInquiry =
+    [parsedInquiry, commentInquiry, cleanedInquiry, cleanedComment]
+      .map(v => String(v ?? "").trim())
+      .filter(Boolean)
+      .find(v => !looksLikeAdfMetadataBlob(v)) ?? "";
   lead.inquiry = effectiveInquiry;
   const inquiryText = String(effectiveInquiry).toLowerCase();
   const inboundBody =

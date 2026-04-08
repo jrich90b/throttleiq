@@ -196,6 +196,25 @@ function parseColorTrimFromItem(item?: string) {
 function parseFromComment(comment?: string) {
   if (!comment) return {};
   const clean = stripHtml(comment);
+  const extractStructuredInquiry = (text: string): string | undefined => {
+    const raw = String(text ?? "");
+    if (!raw) return undefined;
+    const direct =
+      raw.match(/\byour inquiry:\s*([^>\n\r]+)/i)?.[1]?.trim() ??
+      raw.match(/\byour inquiry:\s*([\s\S]+)$/i)?.[1]?.trim() ??
+      raw.match(/\binquiry:\s*([^>\n\r]+)/i)?.[1]?.trim();
+    let value = String(direct ?? "").trim();
+    if (!value) return undefined;
+    value = value.replace(
+      /\s*(?:can we contact you via (?:email|phone|text)\?:|client_id\s*:|hdmc-campaign-tracking code\s*:|lead captured date\s*:|event name\s*:|\/\/\/customer information\/\/\/|parts and accessories interest\s*:|biker rider\?\s*:|language\s*:|purchase timeframe\s*:|source id\s*:|inventory year\s*:|inventory stock id\s*:|vin\s*:|first name\s*:|last name\s*:|phone\s*:|email\s*:).*/i,
+      ""
+    );
+    value = value.replace(/^[>\-\s:]+/, "").trim();
+    if (!value) return undefined;
+    if (/^(yes|no|n\/a|na|null)$/i.test(value)) return undefined;
+    if (/^can we contact you via/i.test(value)) return undefined;
+    return value;
+  };
   const parsePreferredContactMethod = (text: string): "email" | "sms" | "phone" | undefined => {
     const normalized = String(text ?? "").toLowerCase();
     if (!normalized) return undefined;
@@ -213,7 +232,7 @@ function parseFromComment(comment?: string) {
     if (/\b(phone|call|voice)\s+only\b/.test(normalized)) return "phone";
     return undefined;
   };
-  const inquiryMatch = clean.match(/your inquiry:\s*([^\n\r]+)/i);
+  const parsedInquiry = extractStructuredInquiry(clean);
   const stockMatch = clean.match(/inventory stock id:\s*([A-Z0-9-]+)/i);
   const vinMatch = clean.match(/vin:\s*([A-HJ-NPR-Z0-9]{8,17})/i);
   const yearMatch = clean.match(/inventory year:\s*(\d{4})/i);
@@ -259,7 +278,7 @@ function parseFromComment(comment?: string) {
   const mileage =
     mileageMatch?.[1] != null ? Number(mileageMatch[1].replace(/,/g, "")) : undefined;
   return {
-    inquiry: inquiryMatch?.[1]?.trim(),
+    inquiry: parsedInquiry,
     stockId: stockMatch?.[1]?.trim(),
     vin: vinMatch?.[1]?.trim(),
     year: yearMatch?.[1]?.trim() ?? modelYearMatch?.[1]?.trim(),
