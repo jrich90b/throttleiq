@@ -857,6 +857,12 @@ function detectFinanceApplyFollowUp(
 function detectPricingOrPayment(text: string, intent?: OrchestratorResult["intent"]): boolean {
   if (intent === "PRICING" || intent === "FINANCING") return true;
   const t = text.toLowerCase();
+  if (
+    detectDealClosingIntent(t) &&
+    !/(price|\botd\b|out the door|payment|monthly|down|apr|term|rate|rates)/.test(t)
+  ) {
+    return false;
+  }
   return /(price|\bdeal(?:s)?\b|discount|lowest|\botd\b|out the door|payment|monthly|down|apr|term)/.test(t);
 }
 
@@ -1018,8 +1024,22 @@ function deriveModelFromDescription(desc?: string | null): string | null {
 
 function deriveYearFromText(text?: string | null): string | null {
   if (!text) return null;
-  const m = text.match(/\b(20\d{2})\b/);
-  return m?.[1] ?? null;
+  const raw = String(text ?? "");
+  const m = raw.match(/\b(20\d{2})\b/);
+  if (m?.[1]) return m[1];
+  // Accept shorthand model-year references like "'17 orange street glide"
+  // while avoiding time-only tokens by requiring nearby motorcycle terms.
+  const short = raw.match(
+    /\b'?(\d{2})\s+(?:(?:new|used|orange|black|white|blue|red|gray|grey|silver|vivid|dark|bright|inferno|citrus|billiard|matte|metallic)\s+){0,4}(?:harley|cvo|street|road|glide|softail|sportster|nightster|pan|fat|breakout|heritage|ultra|trike|tri|freewheeler)\b/i
+  );
+  if (!short?.[1]) return null;
+  const yy = Number(short[1]);
+  if (!Number.isFinite(yy)) return null;
+  const nowYear = new Date().getFullYear();
+  const nowYY = nowYear % 100;
+  const fullYear = yy <= nowYY + 1 ? 2000 + yy : 1900 + yy;
+  if (fullYear < 1980 || fullYear > nowYear + 1) return null;
+  return String(fullYear);
 }
 
 function resolveModelFromText(
@@ -2457,13 +2477,18 @@ export async function orchestrateInbound(
       const agentName = getAgentNameFromProfile(dealerProfile, "Brooke");
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
       const financeLine = financeRequest ? buildFinanceAppLine(dealerProfile) : "";
+      const leadInquiry = String((leadForPrice as any)?.inquiry ?? "").trim() || null;
       const yearForRange =
         leadForPrice?.vehicle?.year ??
         deriveYearFromText(leadForPrice?.vehicle?.description ?? null) ??
+        deriveYearFromText(leadInquiry) ??
+        deriveYearFromText(event.body ?? null) ??
         null;
       const modelForRange =
         leadForPrice?.vehicle?.model ??
         deriveModelFromDescription(leadForPrice?.vehicle?.description ?? null) ??
+        deriveModelFromDescription(leadInquiry) ??
+        deriveModelFromDescription(event.body ?? null) ??
         null;
       const longTermInvite = wantsSoftTimeline
         ? `I know you mentioned a ${longTermTimeframe || "longer-term"} timeline — no rush at all. ` +
@@ -3050,13 +3075,18 @@ export async function orchestrateInbound(
       let priceRange: { min: number; max: number; count: number } | null = null;
       if (pricingIntent) {
         try {
+          const leadInquiry = String((ctx?.lead as any)?.inquiry ?? "").trim() || null;
           const yearForRange =
             ctx?.lead?.vehicle?.year ??
             deriveYearFromText(ctx?.lead?.vehicle?.description ?? null) ??
+            deriveYearFromText(leadInquiry) ??
+            deriveYearFromText(event.body ?? null) ??
             null;
           const modelForRange =
             ctx?.lead?.vehicle?.model ??
             deriveModelFromDescription(ctx?.lead?.vehicle?.description ?? null) ??
+            deriveModelFromDescription(leadInquiry) ??
+            deriveModelFromDescription(event.body ?? null) ??
             null;
           const stockForPrice = ctx?.lead?.vehicle?.stockId ?? stockIdFromText ?? null;
           const vinForPrice = ctx?.lead?.vehicle?.vin ?? null;

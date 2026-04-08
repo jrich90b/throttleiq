@@ -3919,6 +3919,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
   if (
     inferredBucket === "test_ride" &&
+    /\b(test ride|demo ride|ride)\b/i.test(inquiryText) &&
     typeof draft === "string" &&
     /^Hi [^—]+— /i.test(draft)
   ) {
