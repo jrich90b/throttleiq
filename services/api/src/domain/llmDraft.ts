@@ -3159,6 +3159,17 @@ export async function parseSemanticSlotsWithLLM(args: {
   const watch = args.inventoryWatch ?? null;
   const pending = args.inventoryWatchPending ?? null;
   const dialogState = String(args.dialogState ?? "").trim();
+  const voiceExamples = [
+    'input: "Customer: keep an eye out for a 2026 road glide 3 in black and text me when one hits" output: {"watch_action":"set_watch","watch":{"model":"Road Glide 3","year":"2026","color":"black","condition":"new"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
+    'input: "Customer: if a black street glide comes in let me know" output: {"watch_action":"set_watch","watch":{"model":"Street Glide","year":"","color":"black","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: do you have any black street glides in stock?" output: {"watch_action":"none","watch":{"model":"Street Glide","year":"","color":"black","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: stop the watch alerts for the road glide please" output: {"watch_action":"stop_watch","watch":{"model":"Road Glide","year":"","color":"","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: left a 1000 deposit and I am coming in saturday to finalize" output: {"watch_action":"none","watch":{"model":"","year":"","color":"","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.94}',
+    'input: "Customer: can service quote an LED headlight install?" output: {"watch_action":"none","watch":{"model":"","year":"","color":"","condition":"unknown"},"department_intent":"service","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
+    'input: "Customer: can you send a walkaround video?" output: {"watch_action":"none","watch":{"model":"","year":"","color":"","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"video","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: can I get a call instead of texts?" output: {"watch_action":"none","watch":{"model":"","year":"","color":"","condition":"unknown"},"department_intent":"none","contact_preference_intent":"call_only","media_intent":"none","service_records_intent":false,"confidence":0.93}',
+    'input: "Customer: do you have service records on that bike?" output: {"watch_action":"none","watch":{"model":"","year":"","color":"","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":true,"confidence":0.94}'
+  ];
   const prompt = [
     "You are a semantic slot parser for dealership SMS.",
     "Return only JSON that matches the provided schema.",
@@ -3197,6 +3208,8 @@ export async function parseSemanticSlotsWithLLM(args: {
     `Pending watch: ${JSON.stringify(pending ?? {})}`,
     `Dialog state: ${dialogState || "none"}`,
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    "Voice-style examples:",
+    ...voiceExamples,
     `Message: ${text}`
   ].join("\n");
 

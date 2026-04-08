@@ -17687,6 +17687,8 @@ if (authToken && signature) {
       process.env.LLM_BOOKING_PARSER_ENABLED === "1" &&
       !!process.env.OPENAI_API_KEY;
     const humanModeText = String(event.body ?? "");
+    const humanModeTextLower = humanModeText.toLowerCase();
+    const humanModeShortAck = isShortAckText(humanModeText) || isEmojiOnlyText(humanModeText);
     const humanModeHasScheduleKeyword =
       /\b(schedule|book|appointment|appt|reschedule|move|availability|available|openings?|stop by|stop in|come in|works?|what time|what times)\b/i.test(
         humanModeText
@@ -17697,6 +17699,11 @@ if (authToken && signature) {
       );
     const humanModeHasTimeToken =
       /\b(\d{1,2}(:\d{2})?\s*(am|pm)\b|morning|afternoon|evening|night|noon|midnight)\b/i.test(
+        humanModeText
+      );
+    const humanModeAffirmative =
+      humanModeHasTimeToken ||
+      /\b(yes|yep|yeah|yup|sure|confirmed|confirm|that works|works|works for me|sounds good|book it|perfect)\b/i.test(
         humanModeText
       );
     const humanModeBookingParserHint =
@@ -17775,6 +17782,204 @@ if (authToken && signature) {
           confidence: bookingConfidence,
           dueAt: todo?.dueAt ?? null
         });
+      }
+    }
+    const humanModeWatchParserEligible =
+      event.provider === "twilio" &&
+      process.env.LLM_ENABLED === "1" &&
+      process.env.LLM_SEMANTIC_SLOT_PARSER_ENABLED === "1" &&
+      !!process.env.OPENAI_API_KEY &&
+      !humanModeShortAck;
+    const humanModeWatchHint =
+      /\b(let me know|keep me posted|keep an eye out|watch for|notify me|if you get one|when you get one|as soon as one comes in)\b/i.test(
+        humanModeTextLower
+      ) ||
+      !!conv.inventoryWatchPending ||
+      !!conv.inventoryWatch;
+    if (humanModeWatchParserEligible && humanModeWatchHint) {
+      const humanModeSemanticSlotParse = await safeLlmParse("semantic_slot_parser_human_mode", () =>
+        parseSemanticSlotsWithLLM({
+          text: humanModeText,
+          history: buildHistory(conv, 12),
+          lead: conv.lead,
+          inventoryWatch: conv.inventoryWatch,
+          inventoryWatchPending: conv.inventoryWatchPending,
+          dialogState: getDialogState(conv)
+        })
+      );
+      const humanModeSemanticConfidence =
+        typeof humanModeSemanticSlotParse?.confidence === "number"
+          ? humanModeSemanticSlotParse.confidence
+          : 0;
+      const humanModeSemanticConfidenceMin = Number(process.env.LLM_SEMANTIC_SLOT_CONFIDENCE_MIN ?? 0.76);
+      const humanModeSemanticAccepted =
+        !!humanModeSemanticSlotParse &&
+        humanModeSemanticConfidence >= humanModeSemanticConfidenceMin &&
+        (humanModeSemanticSlotParse.watchAction !== "none" ||
+          !!humanModeSemanticSlotParse.watch?.model ||
+          !!humanModeSemanticSlotParse.watch?.year ||
+          !!humanModeSemanticSlotParse.watch?.color);
+      const humanModeWatchAction = humanModeSemanticAccepted
+        ? humanModeSemanticSlotParse.watchAction
+        : "none";
+      const humanModeWatch = humanModeSemanticAccepted ? humanModeSemanticSlotParse.watch : null;
+      const humanModeWatchIntent =
+        humanModeWatchAction === "set_watch" || isWatchConfirmationIntentText(humanModeText);
+      if (humanModeWatchIntent) {
+        const humanModeInventoryEntityParserEligible =
+          event.provider === "twilio" &&
+          process.env.LLM_ENABLED === "1" &&
+          process.env.LLM_INVENTORY_ENTITY_PARSER_ENABLED !== "0" &&
+          !!process.env.OPENAI_API_KEY &&
+          !humanModeShortAck;
+        const humanModeInventoryEntityParse = humanModeInventoryEntityParserEligible
+          ? await safeLlmParse("inventory_entity_parser_human_mode", () =>
+              parseInventoryEntitiesWithLLM({
+                text: humanModeText,
+                history: buildHistory(conv, 8),
+                lead: conv.lead
+              })
+            )
+          : null;
+        const humanModeInventoryEntityConfidence =
+          typeof humanModeInventoryEntityParse?.confidence === "number"
+            ? humanModeInventoryEntityParse.confidence
+            : 0;
+        const humanModeInventoryEntityConfidenceMin = Number(
+          process.env.LLM_INVENTORY_ENTITY_CONFIDENCE_MIN ?? 0.68
+        );
+        const humanModeInventoryEntityAccepted =
+          !!humanModeInventoryEntityParse &&
+          humanModeInventoryEntityConfidence >= humanModeInventoryEntityConfidenceMin;
+        const leadVehicle = conv.lead?.vehicle ?? {};
+        const leadYearNum = Number(leadVehicle.year ?? "");
+        const leadYear = Number.isFinite(leadYearNum) ? leadYearNum : undefined;
+        const llmWatchYear = Number(String(humanModeWatch?.year ?? ""));
+        const llmWatchColor = sanitizeColorPhrase(humanModeWatch?.color ?? undefined);
+        const llmWatchModel = String(humanModeWatch?.model ?? "").trim();
+        const llmWatchModelResolved = llmWatchModel
+          ? await resolveWatchModelFromText(llmWatchModel.toLowerCase(), llmWatchModel)
+          : null;
+        const resolvedModel = await resolveWatchModelFromText(
+          humanModeTextLower,
+          llmWatchModelResolved ||
+            (humanModeInventoryEntityAccepted ? humanModeInventoryEntityParse?.model : null) ||
+            leadVehicle.model ||
+            leadVehicle.description ||
+            null
+        );
+        const budgetSeed = resolveWatchBudgetPreferenceForConversation(conv, humanModeText);
+        const mergedBudget = {
+          minPrice: humanModeInventoryEntityAccepted
+            ? (humanModeInventoryEntityParse?.minPrice ?? budgetSeed.minPrice)
+            : budgetSeed.minPrice,
+          maxPrice: humanModeInventoryEntityAccepted
+            ? (humanModeInventoryEntityParse?.maxPrice ?? budgetSeed.maxPrice)
+            : budgetSeed.maxPrice,
+          monthlyBudget: humanModeInventoryEntityAccepted
+            ? (humanModeInventoryEntityParse?.monthlyBudget ?? budgetSeed.monthlyBudget)
+            : budgetSeed.monthlyBudget,
+          termMonths: budgetSeed.termMonths,
+          downPayment: humanModeInventoryEntityAccepted
+            ? (humanModeInventoryEntityParse?.downPayment ?? budgetSeed.downPayment)
+            : budgetSeed.downPayment
+        };
+        const nowIsoValue = new Date().toISOString();
+        if (!resolvedModel) {
+          conv.inventoryWatchPending = {
+            minPrice: mergedBudget.minPrice,
+            maxPrice: mergedBudget.maxPrice,
+            monthlyBudget: mergedBudget.monthlyBudget,
+            termMonths: mergedBudget.termMonths,
+            downPayment: mergedBudget.downPayment,
+            askedAt: nowIsoValue
+          };
+          setDialogState(conv, "inventory_watch_prompted");
+          recordRouteOutcome("live", "human_mode_inventory_watch_pending", {
+            convId: conv.id,
+            leadKey: conv.leadKey,
+            confidence: humanModeSemanticConfidence
+          });
+        } else {
+          const pending: InventoryWatchPending = {
+            model: resolvedModel,
+            year:
+              Number.isFinite(llmWatchYear) && llmWatchYear > 0
+                ? llmWatchYear
+                : humanModeInventoryEntityAccepted
+                  ? (humanModeInventoryEntityParse?.year ?? extractYearSingle(humanModeTextLower) ?? leadYear)
+                  : extractYearSingle(humanModeTextLower) ?? leadYear,
+            color: combineWatchColorAndFinish(
+              llmWatchColor ??
+                (humanModeInventoryEntityAccepted
+                  ? (humanModeInventoryEntityParse?.color ?? extractColorToken(humanModeTextLower))
+                  : extractColorToken(humanModeTextLower)) ??
+                leadVehicle.color ??
+                undefined,
+              extractFinishToken(humanModeTextLower)
+            ),
+            minPrice: mergedBudget.minPrice,
+            maxPrice: mergedBudget.maxPrice,
+            monthlyBudget: mergedBudget.monthlyBudget,
+            termMonths: mergedBudget.termMonths,
+            downPayment: mergedBudget.downPayment,
+            askedAt: nowIsoValue
+          };
+          let pref = parseInventoryWatchPreference(humanModeText, pending);
+          if (pref.action === "ignore" && pending.model && humanModeAffirmative) {
+            const watchColor = sanitizeColorPhrase(pending.color);
+            const watch: InventoryWatch = {
+              model: pending.model,
+              year: pending.year,
+              color: watchColor,
+              minPrice: pending.minPrice,
+              maxPrice: pending.maxPrice,
+              monthlyBudget: pending.monthlyBudget,
+              termMonths: pending.termMonths,
+              downPayment: pending.downPayment,
+              exactness: "model_only",
+              status: "active",
+              createdAt: nowIsoValue
+            };
+            if (watch.year && watch.color) watch.exactness = "exact";
+            else if (watch.year) watch.exactness = "year_model";
+            pref = { action: "set", watch };
+          }
+          if (pref.action === "set" && pref.watch) {
+            if (!pref.watch.make && leadVehicle.make) pref.watch.make = leadVehicle.make;
+            if (!pref.watch.trim && leadVehicle.trim) pref.watch.trim = leadVehicle.trim;
+            const conditionFromText = normalizeWatchCondition(humanModeTextLower);
+            if (!pref.watch.condition && conditionFromText) pref.watch.condition = conditionFromText;
+            if (!pref.watch.condition && leadVehicle.condition) {
+              pref.watch.condition = normalizeWatchCondition(leadVehicle.condition);
+            }
+            conv.inventoryWatch = pref.watch;
+            conv.inventoryWatches = [pref.watch];
+            conv.inventoryWatchPending = undefined;
+            setDialogState(conv, "inventory_watch_active");
+            setFollowUpMode(conv, "holding_inventory", "inventory_watch");
+            stopFollowUpCadence(conv, "inventory_watch");
+            recordRouteOutcome("live", "human_mode_inventory_watch_set", {
+              convId: conv.id,
+              leadKey: conv.leadKey,
+              model: pref.watch.model ?? null,
+              year: pref.watch.year ?? null,
+              color: pref.watch.color ?? null,
+              confidence: humanModeSemanticConfidence
+            });
+          } else {
+            conv.inventoryWatchPending = pending;
+            setDialogState(conv, "inventory_watch_prompted");
+            recordRouteOutcome("live", "human_mode_inventory_watch_pending", {
+              convId: conv.id,
+              leadKey: conv.leadKey,
+              model: pending.model ?? null,
+              year: pending.year ?? null,
+              color: pending.color ?? null,
+              confidence: humanModeSemanticConfidence
+            });
+          }
+        }
       }
     }
     saveConversation(conv);
