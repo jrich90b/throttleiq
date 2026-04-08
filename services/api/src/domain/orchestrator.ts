@@ -860,18 +860,32 @@ function detectPricingOrPayment(text: string, intent?: OrchestratorResult["inten
   return /(price|\bdeal(?:s)?\b|discount|lowest|\botd\b|out the door|payment|monthly|down|apr|term)/.test(t);
 }
 
+function detectDealClosingIntent(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return /\b(i have cash|cash buyer|coming to look|coming in|come in|stop by|tomorrow|today|ready to buy|ready to pull the trigger|pull the trigger|make a deal|let'?s make a deal)\b/.test(
+    t
+  );
+}
+
 function detectDealsOrFinanceSpecialsQuestion(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
+  if (detectDealClosingIntent(t)) return false;
   const specialsCue =
-    /\b(deal(?:s)?|special(?:s)?|finance special(?:s)?|promo(?:tion)?(?:s)?|offer(?:s)?|incentive(?:s)?|rebate(?:s)?|discount(?:s)?)\b/.test(
+    /\b(special(?:s)?|finance special(?:s)?|promo(?:tion)?(?:s)?|offer(?:s)?|incentive(?:s)?|rebate(?:s)?|discount(?:s)?|apr special(?:s)?|rate special(?:s)?|customer cash)\b/.test(
       t
     );
+  const dealCue = /\bdeal(?:s)?\b/.test(t);
+  const financeContext = /\b(finance|financing|apr|rate|rates|payment|payments|monthly|term|terms|loan|credit|cash\s*back|customer cash)\b/.test(
+    t
+  );
   const hardPaymentCue =
     /\b(monthly|per month|payment|payments|how much down|down payment|money down|cash down|term|60|72|84|\$\s*\d+)\b/.test(
       t
     );
-  return specialsCue && !hardPaymentCue;
+  if (hardPaymentCue) return false;
+  return specialsCue || (dealCue && financeContext);
 }
 
 function isUsedDealerTrustStatement(text: string): boolean {

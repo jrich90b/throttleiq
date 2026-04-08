@@ -1077,6 +1077,15 @@ function stripHtml(input?: string): string | undefined {
   return cleaned || undefined;
 }
 
+function normalizeAdfInquiryText(input?: string | null): string {
+  if (!input) return "";
+  const withBreaks = String(input).replace(/<\s*br\s*\/?>/gi, " ");
+  const withoutKenectTrackingLinks = withBreaks.replace(/https?:\/\/url\d+\.kenect\.com\/\S+/gi, " ");
+  const withoutHtml = withoutKenectTrackingLinks.replace(/<[^>]+>/g, " ");
+  const normalizedDelimiters = withoutHtml.replace(/\s*>\s*/g, " ");
+  return normalizedDelimiters.replace(/\s+/g, " ").trim();
+}
+
 function looksLikeMime(raw?: string | null): boolean {
   if (!raw) return false;
   return /(received:|arc-|dkim-|mime-version:|content-type:|content-transfer-encoding:|message-id:)/i.test(raw);
@@ -1866,10 +1875,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   });
 
   const rawComment = String(lead.comment ?? "");
-  const cleanedComment = rawComment.replace(/<br\s*\/?/gi, " ").replace(/\s+/g, " ").trim();
-  const inquiryRaw = lead.inquiry ?? "";
-  const combinedInquiry = [cleanedComment, inquiryRaw].filter(Boolean).join(" ").trim();
-  const effectiveInquiry = combinedInquiry || inquiryRaw;
+  const cleanedComment = normalizeAdfInquiryText(rawComment);
+  const inquiryRaw = String(lead.inquiry ?? "");
+  const cleanedInquiry = normalizeAdfInquiryText(inquiryRaw);
+  const combinedInquiry = [cleanedComment, cleanedInquiry].filter(Boolean).join(" ").trim();
+  const effectiveInquiry = combinedInquiry || cleanedInquiry || inquiryRaw;
   lead.inquiry = effectiveInquiry;
   const inquiryText = String(effectiveInquiry).toLowerCase();
   const inboundBody =

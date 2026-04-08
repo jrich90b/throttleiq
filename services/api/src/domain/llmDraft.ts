@@ -2206,6 +2206,9 @@ output: {"primary_intent":"general","explicit_request":true,"fallback_action":"n
     `EXAMPLE K
 inbound: "Any deals or finance specials right now?"
 output: {"primary_intent":"pricing_payments","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.96}`,
+    `EXAMPLE K2
+inbound: "I have cash. coming to look at the orange street glide tomorrow. let's make a deal"
+output: {"primary_intent":"scheduling","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.97}`,
     `EXAMPLE L
 inbound: "Ok sounds great"
 output: {"primary_intent":"none","explicit_request":false,"fallback_action":"no_response","clarify_prompt":"","confidence":0.97}`
@@ -2219,7 +2222,7 @@ output: {"primary_intent":"general","explicit_request":true,"fallback_action":"n
     "Return only JSON matching the schema.",
     "",
     "Choose one primary_intent:",
-    "- pricing_payments: price, payments, APR, term, down payment, deals/specials/incentives.",
+    "- pricing_payments: price, payments, APR, term, down payment, or explicit finance promos/specials/incentives.",
     "- availability: in stock, still available, colors/trims/years inventory availability.",
     "- scheduling: appointment/day/time/come in/stop by requests.",
     "- callback: customer asks for a phone call.",
