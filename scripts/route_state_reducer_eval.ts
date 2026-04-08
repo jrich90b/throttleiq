@@ -1,4 +1,5 @@
 import {
+  buildRouteDecisionSnapshot,
   nextActionFromState,
   reduceStaleStateForInbound,
   resolveRoutingParserDecision,
@@ -180,6 +181,92 @@ if (turnIntentPassed !== turnIntentCases.length) {
 }
 
 console.log(`\nAll ${turnIntentCases.length} turn-intent checks passed.`);
+
+type RouteDecisionSnapshotCase = {
+  id: string;
+  input: {
+    parserIntentOverride?: "pricing_payments" | "scheduling" | "callback" | "availability" | "general" | null;
+    hasPricingIntent?: boolean;
+    hasSchedulingIntent?: boolean;
+    hasAvailabilityIntent?: boolean;
+    callbackRequested?: boolean;
+    financePriorityOverride?: boolean;
+    schedulePriorityOverride?: boolean;
+    availabilityIntentOverride?: boolean;
+  };
+  expected: {
+    primaryIntent: "pricing_payments" | "scheduling" | "callback" | "availability" | "general";
+    parserIntentOverride: "pricing_payments" | "scheduling" | "callback" | "availability" | null;
+    plannerPrimaryIntent: "pricing_payments" | "scheduling" | "callback" | "availability" | "general";
+  };
+};
+
+const routeDecisionSnapshotCases: RouteDecisionSnapshotCase[] = [
+  {
+    id: "parser_override_wins_over_planner",
+    input: {
+      parserIntentOverride: "availability",
+      hasPricingIntent: true
+    },
+    expected: {
+      primaryIntent: "availability",
+      parserIntentOverride: "availability",
+      plannerPrimaryIntent: "pricing_payments"
+    }
+  },
+  {
+    id: "general_parser_override_does_not_override_planner",
+    input: {
+      parserIntentOverride: "general",
+      hasSchedulingIntent: true
+    },
+    expected: {
+      primaryIntent: "scheduling",
+      parserIntentOverride: null,
+      plannerPrimaryIntent: "scheduling"
+    }
+  },
+  {
+    id: "planner_finance_priority_when_no_parser_override",
+    input: {
+      hasAvailabilityIntent: true,
+      financePriorityOverride: true
+    },
+    expected: {
+      primaryIntent: "pricing_payments",
+      parserIntentOverride: null,
+      plannerPrimaryIntent: "pricing_payments"
+    }
+  }
+];
+
+let routeDecisionSnapshotPassed = 0;
+for (const c of routeDecisionSnapshotCases) {
+  const actual = buildRouteDecisionSnapshot(c.input);
+  const ok =
+    actual.primaryIntent === c.expected.primaryIntent &&
+    actual.parserIntentOverride === c.expected.parserIntentOverride &&
+    actual.plannerPrimaryIntent === c.expected.plannerPrimaryIntent;
+  if (ok) routeDecisionSnapshotPassed += 1;
+  console.log(
+    `${ok ? "PASS" : "FAIL"} ${c.id} expected=${JSON.stringify(c.expected)} actual=${JSON.stringify({
+      primaryIntent: actual.primaryIntent,
+      parserIntentOverride: actual.parserIntentOverride,
+      plannerPrimaryIntent: actual.plannerPrimaryIntent
+    })}`
+  );
+}
+
+if (routeDecisionSnapshotPassed !== routeDecisionSnapshotCases.length) {
+  console.error(
+    `\n${
+      routeDecisionSnapshotCases.length - routeDecisionSnapshotPassed
+    } failures out of ${routeDecisionSnapshotCases.length} route-decision-snapshot cases`
+  );
+  process.exit(1);
+}
+
+console.log(`\nAll ${routeDecisionSnapshotCases.length} route-decision-snapshot checks passed.`);
 
 type StaleCase = {
   id: string;

@@ -128,11 +128,10 @@ import { pickRegenerateInbound } from "./domain/regenerateSelection.js";
 import { applyDraftStateInvariants } from "./domain/draftStateInvariants.js";
 import {
   DEALER_RIDE_NO_PURCHASE_SKIP_DRAFT,
+  buildRouteDecisionSnapshot,
   nextActionFromState,
   reduceStaleStateForInbound,
-  resolveRoutingParserDecision,
-  resolveTurnPrimaryIntent,
-  type TurnPrimaryIntent
+  resolveRoutingParserDecision
 } from "./domain/routeStateReducer.js";
 
 import {
@@ -668,60 +667,6 @@ async function safeOrchestrateInbound(
       suggestedSlots: []
     };
   }
-}
-
-type RouteDecisionSnapshot = {
-  parserIntentOverride: TurnPrimaryIntent | null;
-  plannerPrimaryIntent: TurnPrimaryIntent;
-  primaryIntent: TurnPrimaryIntent;
-  pricingIntent: boolean;
-  schedulingIntent: boolean;
-  callbackIntent: boolean;
-  availabilityIntent: boolean;
-  financePriorityOverride: boolean;
-  schedulePriorityOverride: boolean;
-  availabilityIntentOverride: boolean;
-};
-
-function buildRouteDecisionSnapshot(args: {
-  parserIntentOverride?: TurnPrimaryIntent | null;
-  hasPricingIntent?: boolean;
-  hasSchedulingIntent?: boolean;
-  hasAvailabilityIntent?: boolean;
-  callbackRequested?: boolean;
-  financePriorityOverride?: boolean;
-  schedulePriorityOverride?: boolean;
-  availabilityIntentOverride?: boolean;
-}): RouteDecisionSnapshot {
-  const financePriorityOverride = !!args.financePriorityOverride;
-  const schedulePriorityOverride = !!args.schedulePriorityOverride;
-  const availabilityIntentOverride = !!args.availabilityIntentOverride;
-  const planner = resolveTurnPrimaryIntent({
-    hasPricingIntent: !!args.hasPricingIntent,
-    hasSchedulingIntent: !!args.hasSchedulingIntent,
-    hasAvailabilityIntent: !!args.hasAvailabilityIntent,
-    callbackRequested: !!args.callbackRequested,
-    financePriorityOverride,
-    schedulePriorityOverride,
-    availabilityIntentOverride
-  });
-  const parserIntentOverride =
-    args.parserIntentOverride && args.parserIntentOverride !== "general"
-      ? args.parserIntentOverride
-      : null;
-  const primaryIntent = parserIntentOverride ?? planner.primaryIntent;
-  return {
-    parserIntentOverride,
-    plannerPrimaryIntent: planner.primaryIntent,
-    primaryIntent,
-    pricingIntent: primaryIntent === "pricing_payments",
-    schedulingIntent: primaryIntent === "scheduling",
-    callbackIntent: primaryIntent === "callback",
-    availabilityIntent: primaryIntent === "availability",
-    financePriorityOverride,
-    schedulePriorityOverride,
-    availabilityIntentOverride
-  };
 }
 
 type HotCacheEntry<T> = {

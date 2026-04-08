@@ -38,6 +38,19 @@ export type TurnIntentPlannerDecision = {
   availabilityIntent: boolean;
 };
 
+export type RouteDecisionSnapshot = {
+  parserIntentOverride: TurnPrimaryIntent | null;
+  plannerPrimaryIntent: TurnPrimaryIntent;
+  primaryIntent: TurnPrimaryIntent;
+  pricingIntent: boolean;
+  schedulingIntent: boolean;
+  callbackIntent: boolean;
+  availabilityIntent: boolean;
+  financePriorityOverride: boolean;
+  schedulePriorityOverride: boolean;
+  availabilityIntentOverride: boolean;
+};
+
 export type RoutingParserIntent = TurnPrimaryIntent | "none";
 export type RoutingParserFallbackAction = "none" | "clarify" | "no_response";
 
@@ -125,6 +138,47 @@ export function resolveTurnPrimaryIntent(input: TurnIntentPlannerInput): TurnInt
     schedulingIntent,
     callbackIntent,
     availabilityIntent
+  };
+}
+
+export function buildRouteDecisionSnapshot(input: {
+  parserIntentOverride?: TurnPrimaryIntent | null;
+  hasPricingIntent?: boolean;
+  hasSchedulingIntent?: boolean;
+  hasAvailabilityIntent?: boolean;
+  callbackRequested?: boolean;
+  financePriorityOverride?: boolean;
+  schedulePriorityOverride?: boolean;
+  availabilityIntentOverride?: boolean;
+}): RouteDecisionSnapshot {
+  const financePriorityOverride = !!input.financePriorityOverride;
+  const schedulePriorityOverride = !!input.schedulePriorityOverride;
+  const availabilityIntentOverride = !!input.availabilityIntentOverride;
+  const planner = resolveTurnPrimaryIntent({
+    hasPricingIntent: !!input.hasPricingIntent,
+    hasSchedulingIntent: !!input.hasSchedulingIntent,
+    hasAvailabilityIntent: !!input.hasAvailabilityIntent,
+    callbackRequested: !!input.callbackRequested,
+    financePriorityOverride,
+    schedulePriorityOverride,
+    availabilityIntentOverride
+  });
+  const parserIntentOverride =
+    input.parserIntentOverride && input.parserIntentOverride !== "general"
+      ? input.parserIntentOverride
+      : null;
+  const primaryIntent = parserIntentOverride ?? planner.primaryIntent;
+  return {
+    parserIntentOverride,
+    plannerPrimaryIntent: planner.primaryIntent,
+    primaryIntent,
+    pricingIntent: primaryIntent === "pricing_payments",
+    schedulingIntent: primaryIntent === "scheduling",
+    callbackIntent: primaryIntent === "callback",
+    availabilityIntent: primaryIntent === "availability",
+    financePriorityOverride,
+    schedulePriorityOverride,
+    availabilityIntentOverride
   };
 }
 
