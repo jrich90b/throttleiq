@@ -190,7 +190,17 @@ When changing responses:
   1) `export:changed_messages` (auto-builds `changed_messages_all.json` from conversations)
   2) `conversation:audit` (writes JSON audit log)
   3) `edit_feedback:mine` (labels edits + generates replay fixtures/results)
-  4) Optional email report (`edit_feedback:email`) if env vars are set
+  4) `route_watchdog:run` (stuck-turn + no-response watchdog JSON)
+  5) `conversation_replay:eval` + `route_state:eval` (nightly replay/regression checks)
+  6) Optional email report (`edit_feedback:email`) if env vars are set
+
+- Route audit persistence (API runtime):
+  - `ROUTE_AUDIT_PERSIST=1` (default on)
+  - `ROUTE_AUDIT_DIR=/home/ubuntu/throttleiq-runtime/reports/route_audit` (or your runtime report path)
+
+- Run watchdog manually:
+  - `cd ~/throttleiq`
+  - `DATA_DIR=/home/ubuntu/throttleiq-runtime/data CONVERSATIONS_DB_PATH=/home/ubuntu/throttleiq-runtime/data/conversations.json ROUTE_AUDIT_DIR=/home/ubuntu/throttleiq-runtime/reports/route_audit npm run route_watchdog:run -- --since-min 180 --stuck-older-sec 120 --limit 100`
 
 - Email env vars (set on instance shell/PM2 environment):
   - `SENDGRID_API_KEY`

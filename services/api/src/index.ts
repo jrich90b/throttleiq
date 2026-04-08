@@ -257,14 +257,54 @@ const routeOutcomeHistory: Array<{
   detail?: Record<string, unknown>;
 }> = [];
 const ROUTE_OUTCOME_HISTORY_MAX = Number(process.env.ROUTE_OUTCOME_HISTORY_MAX ?? 2000);
+const ROUTE_AUDIT_PERSIST_ENABLED = process.env.ROUTE_AUDIT_PERSIST !== "0";
+const ROUTE_AUDIT_DIR =
+  process.env.ROUTE_AUDIT_DIR || path.resolve(getDataDir(), "..", "reports", "route_audit");
+const ROUTE_AUDIT_WRITE_LOG_LIMIT = Number(process.env.ROUTE_AUDIT_WRITE_LOG_LIMIT ?? 5);
+let routeAuditWriteErrors = 0;
+let routeAuditWriteQueue: Promise<void> = Promise.resolve();
+
+function routeAuditDateStamp(rawTs?: string): string {
+  const parsed = Date.parse(String(rawTs ?? ""));
+  const d = Number.isFinite(parsed) ? new Date(parsed) : new Date();
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  return `${yyyy}${mm}${dd}`;
+}
+
+function routeAuditFilePath(kind: "outcomes" | "traces", rawTs?: string): string {
+  const stamp = routeAuditDateStamp(rawTs);
+  return path.join(ROUTE_AUDIT_DIR, `route_${kind}_${stamp}.jsonl`);
+}
+
+function appendRouteAuditLine(kind: "outcomes" | "traces", payload: Record<string, unknown>) {
+  if (!ROUTE_AUDIT_PERSIST_ENABLED) return;
+  const ts = String(payload.ts ?? new Date().toISOString());
+  const filePath = routeAuditFilePath(kind, ts);
+  const line = `${JSON.stringify(payload)}\n`;
+  routeAuditWriteQueue = routeAuditWriteQueue
+    .then(async () => {
+      await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.promises.appendFile(filePath, line, "utf8");
+    })
+    .catch((err: any) => {
+      routeAuditWriteErrors += 1;
+      if (routeAuditWriteErrors <= ROUTE_AUDIT_WRITE_LOG_LIMIT) {
+        console.warn(`[route-audit] ${kind} append failed:`, err?.message ?? err);
+      }
+    });
+}
+
 function recordRouteOutcome(scope: "live" | "regen" | "manual", outcome: string, detail?: Record<string, unknown>) {
   const normalizedScope = String(scope ?? "live");
   const normalizedOutcome = String(outcome ?? "unknown").trim() || "unknown";
   const key = `${normalizedScope}:${normalizedOutcome}`;
   const count = (routeOutcomeCounters.get(key) ?? 0) + 1;
   routeOutcomeCounters.set(key, count);
+  const ts = new Date().toISOString();
   routeOutcomeHistory.push({
-    ts: new Date().toISOString(),
+    ts,
     scope,
     outcome: normalizedOutcome,
     count,
@@ -281,6 +321,13 @@ function recordRouteOutcome(scope: "live" | "regen" | "manual", outcome: string,
       ...(detail ?? {})
     });
   }
+  appendRouteAuditLine("outcomes", {
+    ts,
+    scope: normalizedScope,
+    outcome: normalizedOutcome,
+    count,
+    detail: detail ?? undefined
+  });
 }
 
 type DecisionTraceScope = "live" | "regen" | "manual";
@@ -331,6 +378,7 @@ function recordDecisionTrace(args: {
   if (process.env.DEBUG_DECISION_TRACE === "1") {
     console.log("[decision-trace]", entry);
   }
+  appendRouteAuditLine("traces", entry as unknown as Record<string, unknown>);
 }
 app.post(
   "/debug/inbound",
