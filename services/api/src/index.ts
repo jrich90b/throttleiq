@@ -7864,6 +7864,29 @@ function isGenericInventoryAsk(text: string): boolean {
   );
 }
 
+function shouldPromptModelForSoldGenericInventoryAsk(
+  conv: any,
+  text: string,
+  explicitModel?: string | null,
+  otherInventoryRequest = false
+): boolean {
+  if (!isSoldOrPostSaleConversation(conv)) return false;
+  if (String(explicitModel ?? "").trim()) return false;
+  const lower = String(text ?? "").toLowerCase();
+  if (!lower.trim()) return false;
+  const broadAnyNewAsk =
+    /\b(any\s+new\s+bikes?|anything\s+new|new\s+inventory|what(?:'s| is)\s+new|what\s+do\s+you\s+have\s+new)\b/.test(
+      lower
+    );
+  return (
+    hasIncomingInventorySignal(lower) ||
+    isGenericInventoryAsk(lower) ||
+    otherInventoryRequest ||
+    isOtherInventoryRequestText(lower) ||
+    broadAnyNewAsk
+  );
+}
+
 function buildIncomingInventoryModelPrompt(opts?: {
   hasHumor?: boolean;
   incomingHint?: boolean;
@@ -7896,7 +7919,14 @@ async function resolveDeterministicAvailabilityReply(args: {
   const genericInventoryAsk = isGenericInventoryAsk(textLower);
   const affectHasHumor = !!args.affectHasHumor;
   const modelFromText = parsedAvailability?.model ?? findMentionedModel(textLower);
-  if (!modelFromText && soldOrPostSale && (incomingInventorySignal || genericInventoryAsk || otherInventoryRequest)) {
+  if (
+    shouldPromptModelForSoldGenericInventoryAsk(
+      conv,
+      args.text,
+      modelFromText,
+      otherInventoryRequest
+    )
+  ) {
     return {
       kind: "reply",
       reply: buildIncomingInventoryModelPrompt({
@@ -17568,16 +17598,28 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const inboundExplicitModel = findMentionedModel(String(event.body ?? "").toLowerCase());
     const incomingInventorySignal = hasIncomingInventorySignal(String(event.body ?? ""));
     const genericInventoryAsk = isGenericInventoryAsk(String(event.body ?? ""));
+    const regenOtherInventoryRequest = isOtherInventoryRequestText(String(event.body ?? ""));
+    const shouldPromptModelForSoldAsk = shouldPromptModelForSoldGenericInventoryAsk(
+      conv,
+      event.body ?? "",
+      inboundExplicitModel,
+      regenOtherInventoryRequest
+    );
     if (
       visitTimingIntent &&
       explicitAvailabilityAskThisTurn &&
-      soldOrPostSale &&
-      !inboundExplicitModel &&
-      (incomingInventorySignal || genericInventoryAsk)
+      shouldPromptModelForSoldAsk
     ) {
       const reply = buildIncomingInventoryModelPrompt({
         hasHumor: !!regenAcceptedAffect?.hasHumor,
         incomingHint: incomingInventorySignal
+      });
+      return respondWithSmsRegeneratedDraft(reply);
+    }
+    if (shouldPromptModelForSoldAsk && !financeOrRateAskThisTurn) {
+      const reply = buildIncomingInventoryModelPrompt({
+        hasHumor: !!regenAcceptedAffect?.hasHumor,
+        incomingHint: incomingInventorySignal || genericInventoryAsk
       });
       return respondWithSmsRegeneratedDraft(reply);
     }
@@ -23191,7 +23233,14 @@ if (authToken && signature) {
 	        models.find(m => textLower.includes(m.toLowerCase())) ??
 	        findMentionedModel(textLower) ??
 	        null;
-	      if (!modelFromText && soldOrPostSale && (incomingInventorySignal || genericInventoryAsk || otherInventoryRequest)) {
+	      if (
+	        shouldPromptModelForSoldGenericInventoryAsk(
+	          conv,
+	          event.body ?? "",
+	          modelFromText,
+	          otherInventoryRequest
+	        )
+	      ) {
 	        const reply = buildIncomingInventoryModelPrompt({
 	          hasHumor: !!acceptedAffect?.hasHumor,
 	          incomingHint: incomingInventorySignal
