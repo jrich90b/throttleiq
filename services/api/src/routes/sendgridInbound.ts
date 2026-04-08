@@ -399,6 +399,7 @@ const MODEL_VARIANT_TOKENS = new Set([
 ]);
 
 let knownModelByKeyCache: Map<string, string> | null = null;
+let modelTokenKeyIndexCache: Map<string, Set<string>> | null = null;
 
 function tokenizeModelWords(input?: string | null): string[] {
   if (!input) return [];
@@ -463,6 +464,12 @@ function modelsLikelySameFamilyForAdfMismatch(
   if (shorterLen === 1 && (leadInInquiry || inquiryInLead)) {
     const token = leadBase.length === 1 ? leadBase[0] : inquiryBase[0];
     if (token.length >= 7) return true;
+    if (
+      isUnambiguousSingleTokenAliasForModelKey(token, leadKey) ||
+      isUnambiguousSingleTokenAliasForModelKey(token, inquiryKey)
+    ) {
+      return true;
+    }
   }
 
   return false;
@@ -483,6 +490,33 @@ function getKnownModelByKey(): Map<string, string> {
   }
   knownModelByKeyCache = byKey;
   return byKey;
+}
+
+function getModelTokenKeyIndex(): Map<string, Set<string>> {
+  if (modelTokenKeyIndexCache) return modelTokenKeyIndexCache;
+  const out = new Map<string, Set<string>>();
+  for (const key of getKnownModelByKey().keys()) {
+    for (const tok of key.split(" ").map(t => t.trim()).filter(Boolean)) {
+      const bucket = out.get(tok);
+      if (bucket) {
+        bucket.add(key);
+      } else {
+        out.set(tok, new Set([key]));
+      }
+    }
+  }
+  modelTokenKeyIndexCache = out;
+  return out;
+}
+
+function isUnambiguousSingleTokenAliasForModelKey(token: string, key: string): boolean {
+  const cleanToken = String(token ?? "").trim().toLowerCase();
+  const cleanKey = String(key ?? "").trim().toLowerCase();
+  if (!cleanToken || !cleanKey) return false;
+  const tokenIndex = getModelTokenKeyIndex();
+  const keys = tokenIndex.get(cleanToken);
+  if (!keys || keys.size !== 1) return false;
+  return keys.has(cleanKey);
 }
 
 function extractInquiryModelMentions(inquiry?: string | null): Array<{ key: string; label: string; index: number; len: number }> {
