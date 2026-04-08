@@ -141,10 +141,29 @@ function mapCandidateToFixture(row: AnyObj): FixtureCase | null {
   const expectedReason = KNOWN_INVARIANT_REASONS.has(expectedReasonRaw) ? expectedReasonRaw : undefined;
 
   let expectedAllow = true;
+  let expectedReasonLocal = expectedReason;
   if (kind === "invariant_guard_miss") {
     expectedAllow = false;
   } else if (kind === "manual_edit_delta") {
-    expectedAllow = true;
+    // Manual edits are informational examples for language/style tuning.
+    // If the edited final text violates an invariant, treat it as an expected block
+    // so seeded replay tracks router guard behavior instead of counting false failures.
+    const replayExpectation = applyDraftStateInvariants({
+      inboundText,
+      draftText,
+      followUpMode,
+      followUpReason,
+      dialogState,
+      classificationBucket,
+      classificationCta,
+      turnFinanceIntent: hasFinanceSignal(inboundText),
+      turnAvailabilityIntent: hasAvailabilitySignal(inboundText),
+      turnSchedulingIntent: hasSchedulingSignal(inboundText),
+      financeContextIntent: hasFinanceContext(dialogState ?? "", followUpReason ?? ""),
+      shortAckIntent: isShortAck(inboundText)
+    });
+    expectedAllow = replayExpectation.allow;
+    expectedReasonLocal = replayExpectation.allow ? undefined : replayExpectation.reason ?? undefined;
   } else {
     return null;
   }
@@ -158,7 +177,7 @@ function mapCandidateToFixture(row: AnyObj): FixtureCase | null {
   return {
     id: String(row?.id ?? `${kind}_${Date.now()}`),
     expectedAllow,
-    expectedReason,
+    expectedReason: expectedReasonLocal,
     input: {
       inboundText,
       draftText,
