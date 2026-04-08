@@ -5679,7 +5679,10 @@ function normalizeVoiceChannelIndex(raw: unknown): number | null {
   return null;
 }
 
-function inferVoiceChannelRoleMapping(channelTexts: Map<number, string>): {
+function inferVoiceChannelRoleMapping(
+  channelTexts: Map<number, string>,
+  opts?: { directionHint?: "inbound" | "outbound" | null }
+): {
   agentChannel: number;
   customerChannel: number;
   swapped: boolean;
@@ -5692,9 +5695,28 @@ function inferVoiceChannelRoleMapping(channelTexts: Map<number, string>): {
   const channel1Text = String(channelTexts.get(1) ?? "").trim();
   const channel0 = scoreVoiceRole(channel0Text);
   const channel1 = scoreVoiceRole(channel1Text);
+  const directionHint = opts?.directionHint ?? null;
+  const hasBoth = !!channel0Text && !!channel1Text;
+  if (hasBoth && directionHint) {
+    // Twilio dual-channel recording order is stable:
+    // - inbound call: channel 0 caller(customer), channel 1 callee(agent)
+    // - outbound call: channel 0 caller(agent), channel 1 callee(customer)
+    const hintedAgentChannel = directionHint === "inbound" ? 1 : 0;
+    const hintedCustomerChannel = hintedAgentChannel === 1 ? 0 : 1;
+    const scoreDefault = channel0.agent + channel1.customer;
+    const scoreSwapped = channel1.agent + channel0.customer;
+    return {
+      agentChannel: hintedAgentChannel,
+      customerChannel: hintedCustomerChannel,
+      swapped: hintedAgentChannel === 1,
+      scoreDefault,
+      scoreSwapped,
+      channel0,
+      channel1
+    };
+  }
   const scoreDefault = channel0.agent + channel1.customer;
   const scoreSwapped = channel1.agent + channel0.customer;
-  const hasBoth = !!channel0Text && !!channel1Text;
   const swapAdvantage = scoreSwapped - scoreDefault;
   const swapped = hasBoth && swapAdvantage >= 2;
   return {
@@ -5708,7 +5730,11 @@ function inferVoiceChannelRoleMapping(channelTexts: Map<number, string>): {
   };
 }
 
-async function transcribeRecordingMp3(buffer: Buffer, agentLabel = "Agent"): Promise<string | null> {
+async function transcribeRecordingMp3(
+  buffer: Buffer,
+  agentLabel = "Agent",
+  directionHint: "inbound" | "outbound" | null = null
+): Promise<string | null> {
   const deepgramKey = process.env.DEEPGRAM_API_KEY?.trim();
   if (deepgramKey) {
     try {
@@ -5759,8 +5785,9 @@ async function transcribeRecordingMp3(buffer: Buffer, agentLabel = "Agent"): Pro
             mergeChannelText(i, String(text));
           }
         }
-        const roleMap = inferVoiceChannelRoleMapping(channelTexts);
+        const roleMap = inferVoiceChannelRoleMapping(channelTexts, { directionHint });
         console.log("[voice] deepgram role-map", {
+          directionHint,
           agentChannel: roleMap.agentChannel,
           customerChannel: roleMap.customerChannel,
           swapped: roleMap.swapped,
@@ -25377,7 +25404,7 @@ app.post("/webhooks/twilio/voice", async (req, res) => {
 
   const leadKeyParam = leadKey || requestedCustomerPhone || inboundFromPhone || "";
   const customerForCb = requestedCustomerPhone || inboundFromPhone || "";
-  const recordingCb = `${publicBase ?? `${req.protocol}://${req.get("host")}`}/webhooks/twilio/voice/recording?leadKey=${encodeURIComponent(leadKeyParam)}${customerForCb ? `&customer=${encodeURIComponent(customerForCb)}` : ""}${callSid ? `&callSid=${encodeURIComponent(callSid)}` : ""}${agentNameRaw ? `&agentName=${encodeURIComponent(agentNameRaw)}` : ""}`;
+  const recordingCb = `${publicBase ?? `${req.protocol}://${req.get("host")}`}/webhooks/twilio/voice/recording?leadKey=${encodeURIComponent(leadKeyParam)}${customerForCb ? `&customer=${encodeURIComponent(customerForCb)}` : ""}${callSid ? `&callSid=${encodeURIComponent(callSid)}` : ""}${agentNameRaw ? `&agentName=${encodeURIComponent(agentNameRaw)}` : ""}${isInbound ? "&inbound=1" : "&inbound=0"}`;
   const statusCb = `${publicBase ?? `${req.protocol}://${req.get("host")}`}/webhooks/twilio/voice/status?leadKey=${encodeURIComponent(
     leadKeyParam
   )}${inboundFromPhone ? `&from=${encodeURIComponent(inboundFromPhone)}` : ""}${isInbound ? "&inbound=1" : ""}${callSid ? `&callSid=${encodeURIComponent(callSid)}` : ""}`;
@@ -25423,6 +25450,7 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
   const customerRaw = String(req.query?.customer ?? "").trim();
   const callbackCallSid = String(req.query?.callSid ?? "").trim();
   const agentName = String(req.query?.agentName ?? "").trim();
+  const inboundCall = String(req.query?.inbound ?? "0") === "1";
   const recordingUrl = String(req.body?.RecordingUrl ?? "").trim();
   const recordingSid = String(req.body?.RecordingSid ?? "").trim();
   const bodyCallSid = String(req.body?.CallSid ?? "").trim();
@@ -25483,7 +25511,11 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
       throw new Error(`recording fetch failed ${recResp.status}`);
     }
     const buf = Buffer.from(await recResp.arrayBuffer());
-    const transcript = await transcribeRecordingMp3(buf, agentName || "Agent");
+    const transcript = await transcribeRecordingMp3(
+      buf,
+      agentName || "Agent",
+      inboundCall ? "inbound" : "outbound"
+    );
     const transcriptText = (transcript ?? "").trim();
     const noteText = transcriptText || "Not contacted.";
     const isVoicemail = transcriptText ? isLikelyVoicemailTranscript(transcriptText) : true;

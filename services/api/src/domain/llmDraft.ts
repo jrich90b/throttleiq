@@ -3409,9 +3409,15 @@ export async function summarizeVoiceTranscriptWithLLM(args: {
   transcript: string;
   lead?: Conversation["lead"];
 }): Promise<string | null> {
+  const voiceSummarizerEnabledRaw = String(
+    process.env.LLM_VOICE_SUMMARIZER_ENABLED ?? "1"
+  ).trim();
+  const voiceSummarizerEnabled =
+    voiceSummarizerEnabledRaw !== "0" &&
+    !/^(false|off|no)$/i.test(voiceSummarizerEnabledRaw);
   const useLLM =
     process.env.LLM_ENABLED === "1" &&
-    process.env.LLM_VOICE_SUMMARIZER_ENABLED === "1" &&
+    voiceSummarizerEnabled &&
     !!process.env.OPENAI_API_KEY;
   if (!useLLM) return null;
 
