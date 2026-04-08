@@ -721,6 +721,38 @@ function inferDepartmentMentionsFromText(text: string): DepartmentRole[] {
   return found;
 }
 
+function hasExplicitDepartmentRequestFromText(text: string, role: DepartmentRole): boolean {
+  const t = String(text ?? "").trim().toLowerCase();
+  if (!t) return false;
+
+  const hasRequestSignal =
+    /\?/.test(t) ||
+    /\b(can you|could you|would you|can i|please|need|i need|i want|looking for|help|call me|text me|reach out|contact me|let me know|do you have|carry|stock|order|schedule|book|set up)\b/.test(
+      t
+    );
+
+  if (role === "service") {
+    if (!SERVICE_DEPARTMENT_RE.test(t)) return false;
+    if (
+      /\b(still have to|have to|going to|we have to|i have to|need to)\b.{0,24}\b(service|detail|inspection)\b/.test(
+        t
+      ) &&
+      !hasRequestSignal
+    ) {
+      return false;
+    }
+    return hasRequestSignal;
+  }
+
+  if (role === "parts") {
+    if (!PARTS_DEPARTMENT_RE.test(t)) return false;
+    return hasRequestSignal;
+  }
+
+  if (!APPAREL_DEPARTMENT_RE.test(t)) return false;
+  return hasRequestSignal;
+}
+
 function appendManualOutboundDepartmentSoftTags(
   conv: any,
   text: string,
@@ -5776,13 +5808,13 @@ function applyConversationStateReducer(
   const state = parsed as ConversationStateParse;
   const corporateMisrouteTopic = getCorporateMisrouteTopic(state);
   const normalizedText = String(text ?? "");
-  const lexicalDepartmentIntent = inferDepartmentFromText(normalizedText);
   const parserDepartmentIntent = state.departmentIntent !== "none" ? state.departmentIntent : null;
+  const parserDepartmentExplicitRequest =
+    !!parserDepartmentIntent && hasExplicitDepartmentRequestFromText(normalizedText, parserDepartmentIntent);
   const departmentIntentAccepted =
     !!state.explicitRequest &&
     !!parserDepartmentIntent &&
-    !!lexicalDepartmentIntent &&
-    parserDepartmentIntent === lexicalDepartmentIntent
+    parserDepartmentExplicitRequest
       ? parserDepartmentIntent
       : null;
   const departmentManualHandoffReason = (() => {
@@ -5795,6 +5827,7 @@ function applyConversationStateReducer(
   const allowDepartmentManualHandoff =
     !!state.explicitRequest &&
     !!departmentManualHandoffReason &&
+    hasExplicitDepartmentRequestFromText(normalizedText, departmentManualHandoffReason) &&
     departmentManualHandoffReason === departmentIntentAccepted;
   if (state.clearInventoryWatchPending || state.departmentIntent !== "none") {
     conv.inventoryWatchPending = undefined;
@@ -5832,13 +5865,15 @@ function resolveValidatedDepartmentIntent(args: {
   semanticIntent: DepartmentRole | null;
   text: string;
 }): DepartmentRole | null {
-  if (args.parserIntent) return args.parserIntent;
+  if (args.parserIntent && hasExplicitDepartmentRequestFromText(args.text, args.parserIntent)) {
+    return args.parserIntent;
+  }
   const semantic = args.semanticIntent;
   if (!semantic) return null;
-  const lexical = inferDepartmentFromText(args.text);
-  if (semantic === "service") return lexical === "service" ? "service" : null;
-  if (semantic === "parts") return lexical === "parts" ? "parts" : null;
-  if (semantic === "apparel") return lexical === "apparel" ? "apparel" : null;
+  if (!hasExplicitDepartmentRequestFromText(args.text, semantic)) return null;
+  if (semantic === "service") return "service";
+  if (semantic === "parts") return "parts";
+  if (semantic === "apparel") return "apparel";
   return null;
 }
 
@@ -8080,8 +8115,13 @@ async function seedInventoryWatchPendingFromReply(
   if (!isOutOfStockWatchInviteReply(reply)) return;
   if (String(conv?.followUp?.mode ?? "").toLowerCase() === "manual_handoff") return;
   const inboundText = String(event.body ?? "");
-  const inferredDept = inferDepartmentFromText(inboundText);
-  if (inferredDept === "service" || inferredDept === "parts" || inferredDept === "apparel") return;
+  if (
+    hasExplicitDepartmentRequestFromText(inboundText, "service") ||
+    hasExplicitDepartmentRequestFromText(inboundText, "parts") ||
+    hasExplicitDepartmentRequestFromText(inboundText, "apparel")
+  ) {
+    return;
+  }
   const conversationDept = getConversationDepartment(conv);
   if (conversationDept === "service" || conversationDept === "parts" || conversationDept === "apparel") return;
   if (conv.inventoryWatchPending || conv.inventoryWatch || (conv.inventoryWatches?.length ?? 0) > 0) return;
@@ -9270,7 +9310,8 @@ function applyServicePolicy(
 ): string {
   const inboundText = String(opts?.inboundText ?? "");
   const explicitServiceIntentThisTurn =
-    opts?.explicitServiceIntentThisTurn === true || SERVICE_DEPARTMENT_RE.test(inboundText);
+    opts?.explicitServiceIntentThisTurn === true ||
+    hasExplicitDepartmentRequestFromText(inboundText, "service");
   const hasActionableSalesContext =
     opts?.hasActionableFinanceContext === true ||
     opts?.hasActionableAvailabilityContext === true ||
@@ -9300,14 +9341,16 @@ function sanitizeDepartmentClassificationForTurn(
   const bucketRaw = String(conv?.classification?.bucket ?? "").toLowerCase();
   const ctaRaw = String(conv?.classification?.cta ?? "").toLowerCase();
   const followUpReasonRaw = String(conv?.followUp?.reason ?? "").toLowerCase();
-  const lexicalDepartment = inferDepartmentFromText(inboundText);
+  const explicitServiceRequest = hasExplicitDepartmentRequestFromText(inboundText, "service");
+  const explicitPartsRequest = hasExplicitDepartmentRequestFromText(inboundText, "parts");
+  const explicitApparelRequest = hasExplicitDepartmentRequestFromText(inboundText, "apparel");
   const hasExplicitDepartmentIntent =
     explicitDepartmentIntent === "service" ||
     explicitDepartmentIntent === "parts" ||
     explicitDepartmentIntent === "apparel" ||
-    lexicalDepartment === "service" ||
-    lexicalDepartment === "parts" ||
-    lexicalDepartment === "apparel";
+    explicitServiceRequest ||
+    explicitPartsRequest ||
+    explicitApparelRequest;
   if (hasExplicitDepartmentIntent) {
     return {
       bucket: conv?.classification?.bucket ?? null,

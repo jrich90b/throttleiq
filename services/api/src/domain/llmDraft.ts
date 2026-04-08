@@ -2838,8 +2838,12 @@ export async function parseConversationStateWithLLM(args: {
   const voiceExamples = [
     'input: "Customer: can service quote an LED headlight install?" output: {"state_intent":"service_request","corporate_topic":"none","department_intent":"service","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"service_request","confidence":0.97}',
     'input: "Customer: can parts order drag specialties for me?" output: {"state_intent":"parts_request","corporate_topic":"none","department_intent":"parts","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"parts_request","confidence":0.97}',
+    'input: "Customer: can service call me saturday morning around 10?" output: {"state_intent":"service_request","corporate_topic":"none","department_intent":"service","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"service_request","confidence":0.97}',
+    'input: "Customer: i need parts for my 572 fl. can someone call me saturday around ten?" output: {"state_intent":"parts_request","corporate_topic":"none","department_intent":"parts","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"parts_request","confidence":0.96}',
     'input: "Customer: keep an eye out for a black road glide and text me when one lands" output: {"state_intent":"inventory_watch","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":false,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.96}',
     'input: "Customer: tuesday around 4 works for me" output: {"state_intent":"scheduling","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.94}',
+    'input: "Customer: saturday morning works. does 9:30 work for you?" output: {"state_intent":"scheduling","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.95}',
+    'input: "Customer: we still have to service and detail the bike before delivery" output: {"state_intent":"general","corporate_topic":"none","department_intent":"none","explicit_request":false,"clear_inventory_watch_pending":false,"clear_pricing_need_model":false,"manual_handoff_reason":"none","confidence":0.9}',
     'input: "Customer: i can do 2500 down and want to stay under 500 monthly" output: {"state_intent":"pricing","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":false,"manual_handoff_reason":"none","confidence":0.95}',
     'input: "Customer: i had a bad experience at another harley dealer and need corporate to step in" output: {"state_intent":"corporate_misroute","corporate_topic":"other_dealer_experience","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.95}',
     'input: "Customer: hi i just want to let you know about an experience i had at dealership abc" output: {"state_intent":"corporate_misroute","corporate_topic":"other_dealer_experience","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.92}',
@@ -2911,8 +2915,30 @@ export async function parseConversationStateWithLLM(args: {
     (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
   if (!parsed) return null;
 
+  const textLower = text.toLowerCase();
+  const hasRequestSignal =
+    /\?/.test(text) ||
+    /\b(can you|could you|would you|can i|please|need|i need|i want|help|reach out|call me|text me|let me know|quote|how much|order|do you have|schedule)\b/.test(
+      textLower
+    );
+  const serviceCue =
+    /\b(service|inspection|oil change|maintenance|repair|service department|service writer|warranty work|headlight|tail ?light|turn signal|led|light bulb|bulb|install|replace|swap|upgrade|detail)\b/.test(
+      textLower
+    );
+  const partsCue =
+    /\b(parts? department|parts? counter|parts? desk|order (a )?part|need (a )?part|part number|oem parts?|aftermarket parts?|parts? for my|do you (have|carry|stock)\b.{0,28}\bparts?)\b/.test(
+      textLower
+    );
+  const apparelCue =
+    /\b(apparel|merch|merchandise|clothing|jacket|hoodie|t-?shirt|tee shirt|helmet|gloves?|boots?|riding gear|gear)\b/.test(
+      textLower
+    );
+  const explicitServiceRequest = serviceCue && hasRequestSignal;
+  const explicitPartsRequest = partsCue && hasRequestSignal;
+  const explicitApparelRequest = apparelCue && hasRequestSignal;
+
   const stateRaw = String(parsed.state_intent ?? "").toLowerCase();
-  const stateIntent: ConversationStateParse["stateIntent"] =
+  let stateIntent: ConversationStateParse["stateIntent"] =
     stateRaw === "finance_docs" ||
     stateRaw === "inventory_watch" ||
     stateRaw === "service_request" ||
@@ -2934,16 +2960,43 @@ export async function parseConversationStateWithLLM(args: {
       ? corporateTopicRaw
       : "none";
   const deptRaw = String(parsed.department_intent ?? "").toLowerCase();
-  const departmentIntent: ConversationStateParse["departmentIntent"] =
+  let departmentIntent: ConversationStateParse["departmentIntent"] =
     deptRaw === "service" || deptRaw === "parts" || deptRaw === "apparel" ? deptRaw : "none";
   const handoffRaw = String(parsed.manual_handoff_reason ?? "").toLowerCase();
-  const manualHandoffReason: ConversationStateParse["manualHandoffReason"] =
+  let manualHandoffReason: ConversationStateParse["manualHandoffReason"] =
     handoffRaw === "credit_app" ||
     handoffRaw === "service_request" ||
     handoffRaw === "parts_request" ||
     handoffRaw === "apparel_request"
       ? handoffRaw
       : "none";
+  if (departmentIntent === "service" && !explicitServiceRequest) {
+    departmentIntent = "none";
+  }
+  if (departmentIntent === "parts" && !explicitPartsRequest) {
+    departmentIntent = "none";
+  }
+  if (departmentIntent === "apparel" && !explicitApparelRequest) {
+    departmentIntent = "none";
+  }
+  if (manualHandoffReason === "service_request" && !explicitServiceRequest) {
+    manualHandoffReason = "none";
+  }
+  if (manualHandoffReason === "parts_request" && !explicitPartsRequest) {
+    manualHandoffReason = "none";
+  }
+  if (manualHandoffReason === "apparel_request" && !explicitApparelRequest) {
+    manualHandoffReason = "none";
+  }
+  if (stateIntent === "service_request" && !explicitServiceRequest) {
+    stateIntent = "general";
+  }
+  if (stateIntent === "parts_request" && !explicitPartsRequest) {
+    stateIntent = "general";
+  }
+  if (stateIntent === "apparel_request" && !explicitApparelRequest) {
+    stateIntent = "general";
+  }
   const confidence =
     typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
       ? Math.max(0, Math.min(1, parsed.confidence))
