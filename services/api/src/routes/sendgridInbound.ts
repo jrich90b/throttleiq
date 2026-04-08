@@ -527,6 +527,12 @@ function detectInitialAdfModelMismatch(args: {
   return { leadModel: leadModelNormalized, inquiryModel: mismatch.label };
 }
 
+function extractInquiryModelHint(inquiry?: string | null): string | undefined {
+  const mentions = extractInquiryModelMentions(inquiry);
+  if (!mentions.length) return undefined;
+  return mentions[0]?.label ? normalizeDisplayCase(mentions[0].label) : undefined;
+}
+
 function extractDayPartRequest(text: string): { dayLabel: string; dayPart: string } | null {
   const t = String(text ?? "").toLowerCase();
   const dayMatch = t.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/);
@@ -1721,10 +1727,21 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const leadSourceId = lead.leadSourceId ?? undefined;
   const timeframeInfo = parseTimeframeMonths(lead.purchaseTimeframe);
   const make = lead.vehicleMake ?? undefined;
+  const inquiryVehicleHintText = [lead.comment, lead.inquiry].filter(Boolean).join(" ").trim();
+  const inquiryModelHint = extractInquiryModelHint(inquiryVehicleHintText);
   const model = normalizeVehicleModel(
-    lead.vehicleModel ?? meta.model ?? lead.vehicleDescription ?? undefined,
+    lead.vehicleModel ?? meta.model ?? lead.vehicleDescription ?? inquiryModelHint ?? undefined,
     make ?? null
   );
+  if (!lead.vehicleColor) {
+    const inquiryColorHint = extractColorFromText(inquiryVehicleHintText);
+    if (inquiryColorHint) {
+      lead.vehicleColor = normalizeDisplayCase(inquiryColorHint);
+    }
+  }
+  if ((!lead.vehicleDescription || !String(lead.vehicleDescription).trim()) && model) {
+    lead.vehicleDescription = [lead.year, make, model].filter(Boolean).join(" ").trim();
+  }
   const isMarketplaceRelaySource =
     leadSourceLower.includes("autodealers.digital") ||
     leadSourceLower.includes("autodealersdigital.com") ||
