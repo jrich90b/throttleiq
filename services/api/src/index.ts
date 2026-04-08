@@ -11709,8 +11709,7 @@ async function processStaffAppointmentNotifications() {
         `New appointment booked`,
         `${customerName} — ${vehicle}`,
         `Type: ${apptType} | ${whenLocal}`,
-        summary ? `Notes: ${summary}` : null,
-        link ? `Outcome: ${link}` : null
+        summary ? `Notes: ${summary}` : null
       ]
         .filter(Boolean)
         .join("\n");
@@ -11727,7 +11726,15 @@ async function processStaffAppointmentNotifications() {
 
     const start = new Date(appt.whenIso);
     if (Number.isNaN(start.getTime())) continue;
-    const followAt = new Date(start.getTime() + 15 * 60 * 1000);
+    const explicitEnd = String(appt.matchedSlot?.end ?? "").trim();
+    const explicitEndAt = explicitEnd ? new Date(explicitEnd) : null;
+    const durationMinutes =
+      cfg.appointmentTypes?.[String(apptType || "inventory_visit")]?.durationMinutes ?? 60;
+    const endAt =
+      explicitEndAt && !Number.isNaN(explicitEndAt.getTime()) && explicitEndAt.getTime() > start.getTime()
+        ? explicitEndAt
+        : new Date(start.getTime() + Math.max(15, Number(durationMinutes) || 60) * 60 * 1000);
+    const followAt = new Date(endAt.getTime() + 15 * 60 * 1000);
     if (now < followAt) continue;
 
     const followText = link
