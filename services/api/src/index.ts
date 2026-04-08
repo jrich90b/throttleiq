@@ -10221,6 +10221,47 @@ function addDaysYmd(dateYmd: string, days: number) {
   ).padStart(2, "0")}`;
 }
 
+function diffDaysYmd(startYmd: string, endYmd: string): number {
+  const [sy, sm, sd] = startYmd.split("-").map(Number);
+  const [ey, em, ed] = endYmd.split("-").map(Number);
+  const start = Date.UTC(sy, sm - 1, sd);
+  const end = Date.UTC(ey, em - 1, ed);
+  return Math.floor((end - start) / (24 * 60 * 60 * 1000));
+}
+
+function preserveWordCase(replacement: string, original: string): string {
+  if (!original) return replacement;
+  if (original === original.toUpperCase()) return replacement.toUpperCase();
+  if (original[0] === original[0].toUpperCase()) {
+    return replacement.charAt(0).toUpperCase() + replacement.slice(1);
+  }
+  return replacement;
+}
+
+function rebaseRegenerateRelativeDayText(
+  text: string | null | undefined,
+  inboundAtIso: string | null | undefined,
+  timeZone: string,
+  nowDate = new Date()
+): string {
+  const raw = String(text ?? "");
+  if (!raw.trim()) return raw;
+  if (!inboundAtIso) return raw;
+  const inboundAt = new Date(inboundAtIso);
+  if (!Number.isFinite(inboundAt.getTime())) return raw;
+  const inboundYmd = ymd(zonedDateParts(inboundAt, timeZone));
+  const nowYmd = ymd(zonedDateParts(nowDate, timeZone));
+  const dayDelta = diffDaysYmd(inboundYmd, nowYmd);
+  // Only rebase "tomorrow" when regenerating the next local day.
+  if (dayDelta !== 1) return raw;
+  let out = raw;
+  out = out.replace(/\btomorrow\s+morning\b/gi, m => preserveWordCase("this morning", m));
+  out = out.replace(/\btomorrow\s+afternoon\b/gi, m => preserveWordCase("this afternoon", m));
+  out = out.replace(/\btomorrow\s+(?:evening|night)\b/gi, m => preserveWordCase("this evening", m));
+  out = out.replace(/\btomorrow\b/gi, m => preserveWordCase("today", m));
+  return out;
+}
+
 function extractWeatherFollowUpPlan(comment: string, now: Date, timeZone: string): WeatherFollowUpPlan | null {
   const t = String(comment ?? "").toLowerCase().trim();
   if (!t) return null;
@@ -16354,13 +16395,21 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       : channel === "email"
         ? "sendgrid"
         : "twilio";
+  const schedulerCfg = await getSchedulerConfigHot();
+  const regenTz = schedulerCfg.timezone || "America/New_York";
+  const inboundBodyRaw = String(inbound.body ?? "");
+  const inboundBodyRebased = rebaseRegenerateRelativeDayText(
+    inboundBodyRaw,
+    inbound.at ?? null,
+    regenTz
+  );
 
   const event: InboundMessageEvent = {
     channel,
     provider,
     from: inbound.from ?? conv.leadKey,
     to: inbound.to ?? "dealership",
-    body: String(inbound.body ?? ""),
+    body: inboundBodyRebased,
     mediaUrls:
       Array.isArray((inbound as any).mediaUrls) && (inbound as any).mediaUrls.length
         ? ((inbound as any).mediaUrls as string[])
@@ -16384,7 +16433,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   logRegenDecisionTrace("regen.pick_inbound", {
     selectedProvider: inbound?.provider ?? null,
     selectedAt: inbound?.at ?? null,
-    selectedPreview: String(inbound?.body ?? "").slice(0, 120),
+    selectedPreview: inboundBodyRebased.slice(0, 120),
+    selectedPreviewRaw: inboundBodyRaw.slice(0, 120),
+    rebasedRelativeDay: inboundBodyRaw !== inboundBodyRebased,
+    rebaseTimezone: regenTz,
     latestInboundProvider: latestInboundBeforeDraft?.provider ?? null,
     latestInboundAt: latestInboundBeforeDraft?.at ?? null,
     latestInboundIsCreditAdf,
