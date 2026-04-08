@@ -622,6 +622,117 @@ const DEFAULT_LLM_PARSER_TIMEOUT_MS = Number(process.env.LLM_PARSER_TIMEOUT_MS ?
 const DEFAULT_WEATHER_STATUS_TIMEOUT_MS = Number(process.env.WEATHER_STATUS_TIMEOUT_MS ?? 5000);
 const DEFAULT_ORCHESTRATOR_TIMEOUT_MS = Number(process.env.ORCHESTRATOR_TIMEOUT_MS ?? 15000);
 
+function fallbackModelLabelFromLead(lead: any): string {
+  const yearRaw = String(lead?.vehicle?.year ?? "").trim();
+  const year = /^\d{4}$/.test(yearRaw) ? yearRaw : "";
+  const modelRaw = String(lead?.vehicle?.model ?? lead?.vehicle?.description ?? "")
+    .replace(/\bharley[-\s]?davidson\b/gi, " ")
+    .replace(/\bother\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const model = normalizeDisplayCase(modelRaw);
+  return [year, model].filter(Boolean).join(" ").trim();
+}
+
+function fallbackRequestedDayLabel(text: string): string | null {
+  const t = String(text ?? "").toLowerCase();
+  if (/\btoday\b/.test(t)) return "today";
+  if (/\btomorrow\b/.test(t)) return "tomorrow";
+  if (/\bthis weekend\b/.test(t)) return "this weekend";
+  if (/\bnext week\b/.test(t)) return "next week";
+  const days = [
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday"
+  ];
+  for (const day of days) {
+    if (new RegExp(`\\b${day}\\b`, "i").test(t)) {
+      return day;
+    }
+  }
+  return null;
+}
+
+function buildOrchestratorFailureFallback(
+  event: InboundMessageEvent,
+  ctx: Parameters<typeof orchestrateInbound>[2]
+): OrchestratorResult {
+  const inbound = String(event.body ?? "");
+  const lower = inbound.toLowerCase();
+  const bikeLabel = fallbackModelLabelFromLead((ctx as any)?.lead);
+  const bikeRef = bikeLabel ? `the ${bikeLabel}` : "that bike";
+  const dayLabel = fallbackRequestedDayLabel(inbound);
+  const dayPrompt = dayLabel
+    ? dayLabel === "today" || dayLabel === "tomorrow"
+      ? `What time ${dayLabel} works best for you to stop in?`
+      : `What time ${dayLabel} works best for you to stop in?`
+    : "What time works best for you to stop in?";
+  const cashReadySignal =
+    /\b(i have cash|cash buyer|ready to buy|ready to pull the trigger|pull the trigger|make a deal|let'?s make a deal|coming to look|coming in)\b/i.test(
+      lower
+    );
+  const visitSignal =
+    /\b(come in|stop by|stop in|look at|check it out|visit)\b/i.test(lower) ||
+    !!dayLabel;
+  if (cashReadySignal && visitSignal) {
+    return {
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft: `Perfect — ${bikeRef} sounds good. ${dayPrompt}`,
+      suggestedSlots: []
+    };
+  }
+  const availabilitySignal =
+    /\b(do you have|have any|in stock|available|still available|availability)\b/i.test(lower);
+  if (availabilitySignal) {
+    return {
+      intent: "AVAILABILITY",
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft: `Absolutely — I can check availability on ${bikeRef} right now and confirm.`,
+      suggestedSlots: []
+    };
+  }
+  const pricingSignal =
+    /\b(price|pricing|payment|payments|monthly|apr|rate|rates|finance|financing|term|terms|down payment|money down|cash down)\b/i.test(
+      lower
+    );
+  if (pricingSignal) {
+    return {
+      intent: "PRICING",
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft:
+        "Happy to help with that — I can run payment options. What monthly payment are you trying to stay around, and about how much can you put down?",
+      suggestedSlots: []
+    };
+  }
+  const schedulingSignal =
+    /\b(schedule|book|appointment|appt|what time|what day|works for you)\b/i.test(lower) ||
+    visitSignal;
+  if (schedulingSignal) {
+    return {
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft: dayPrompt,
+      suggestedSlots: []
+    };
+  }
+  return {
+    intent: "GENERAL",
+    stage: "ENGAGED",
+    shouldRespond: true,
+    draft: "Thanks for the message — I’m checking that now and will follow up shortly.",
+    suggestedSlots: []
+  };
+}
+
 async function safeLlmParse<T>(
   label: string,
   run: () => Promise<T>,
@@ -659,13 +770,7 @@ async function safeOrchestrateInbound(
     return await withTimeout(orchestrateInbound(event, history, ctx), timeoutMs, `orchestrator.${label}`);
   } catch (err: any) {
     console.warn(`[orchestrator] ${label} failed:`, err?.message ?? err);
-    return {
-      intent: "GENERAL",
-      stage: "ENGAGED",
-      shouldRespond: true,
-      draft: "Thanks for the message — I’m checking that now and will follow up shortly.",
-      suggestedSlots: []
-    };
+    return buildOrchestratorFailureFallback(event, ctx);
   }
 }
 
