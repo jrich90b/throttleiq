@@ -131,7 +131,8 @@ import {
   nextActionFromState,
   reduceStaleStateForInbound,
   resolveRoutingParserDecision,
-  resolveTurnPrimaryIntent
+  resolveTurnPrimaryIntent,
+  type TurnPrimaryIntent
 } from "./domain/routeStateReducer.js";
 
 import {
@@ -279,6 +280,48 @@ function recordRouteOutcome(scope: "live" | "regen" | "manual", outcome: string,
     });
   }
 }
+
+type DecisionTraceScope = "live" | "regen" | "manual";
+type DecisionTraceEntry = {
+  ts: string;
+  scope: DecisionTraceScope;
+  stage: string;
+  convId?: string;
+  leadKey?: string;
+  turnId?: string;
+  detail?: Record<string, unknown>;
+};
+
+const decisionTraceHistory: DecisionTraceEntry[] = [];
+const DECISION_TRACE_HISTORY_MAX = Number(process.env.DECISION_TRACE_HISTORY_MAX ?? 3000);
+
+function recordDecisionTrace(args: {
+  scope: DecisionTraceScope;
+  stage: string;
+  convId?: string | null;
+  leadKey?: string | null;
+  turnId?: string | null;
+  detail?: Record<string, unknown>;
+}) {
+  const scope = String(args.scope ?? "live") as DecisionTraceScope;
+  const stage = String(args.stage ?? "unknown").trim() || "unknown";
+  const entry: DecisionTraceEntry = {
+    ts: new Date().toISOString(),
+    scope,
+    stage,
+    convId: args.convId ? String(args.convId) : undefined,
+    leadKey: args.leadKey ? String(args.leadKey) : undefined,
+    turnId: args.turnId ? String(args.turnId) : undefined,
+    detail: args.detail ?? undefined
+  };
+  decisionTraceHistory.push(entry);
+  if (decisionTraceHistory.length > DECISION_TRACE_HISTORY_MAX) {
+    decisionTraceHistory.splice(0, decisionTraceHistory.length - DECISION_TRACE_HISTORY_MAX);
+  }
+  if (process.env.DEBUG_DECISION_TRACE === "1") {
+    console.log("[decision-trace]", entry);
+  }
+}
 app.post(
   "/debug/inbound",
   express.raw({ type: "*/*", limit: "10mb" }),
@@ -374,6 +417,75 @@ app.get("/debug/route-outcomes/recent", (req, res) => {
       if (phoneVariants.size) {
         const leadDigits = normDigits(rowLeadKey);
         const convDigits = normDigits(rowConvId);
+        if (!matchesPhone(leadDigits) && !matchesPhone(convDigits)) return false;
+      }
+      return true;
+    })
+    .slice(-limit);
+  return res.json({
+    ok: true,
+    enabled: debugEnabled,
+    count: rows.length,
+    rows
+  });
+});
+
+app.post("/debug/decision-trace/reset", (_req, res) => {
+  decisionTraceHistory.splice(0, decisionTraceHistory.length);
+  return res.json({ ok: true, count: 0, rows: [] });
+});
+
+app.get("/debug/decision-trace/recent", (req, res) => {
+  const debugEnabled =
+    process.env.DEBUG_DECISION_TRACE === "1" || process.env.DEBUG_ROUTE_TIMING === "1";
+  if (!debugEnabled) {
+    return res.status(403).json({
+      ok: false,
+      error: "enable DEBUG_DECISION_TRACE=1 or DEBUG_ROUTE_TIMING=1"
+    });
+  }
+  const leadKeyQ = String(req.query.leadKey ?? "").trim();
+  const convIdQ = String(req.query.convId ?? "").trim();
+  const turnIdQ = String(req.query.turnId ?? "").trim();
+  const stageQ = String(req.query.stage ?? "").trim().toLowerCase();
+  const scopeQ = String(req.query.scope ?? "").trim().toLowerCase();
+  const phoneQ = String(req.query.phone ?? "").replace(/\D/g, "");
+  const phoneVariants = new Set<string>();
+  if (phoneQ) {
+    phoneVariants.add(phoneQ);
+    if (phoneQ.length === 10) phoneVariants.add(`1${phoneQ}`);
+    if (phoneQ.length === 11 && phoneQ.startsWith("1")) phoneVariants.add(phoneQ.slice(1));
+  }
+  const matchesPhone = (digits: string) => {
+    if (!phoneVariants.size) return true;
+    if (!digits) return false;
+    for (const variant of phoneVariants) {
+      if (!variant) continue;
+      if (digits === variant || digits.endsWith(variant) || variant.endsWith(digits)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const sinceMinRaw = Number(req.query.sinceMin ?? 180);
+  const limitRaw = Number(req.query.limit ?? 200);
+  const sinceMs =
+    Date.now() -
+    (Number.isFinite(sinceMinRaw) && sinceMinRaw > 0 ? sinceMinRaw : 180) * 60 * 1000;
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 1000) : 200;
+  const normDigits = (v: unknown) => String(v ?? "").replace(/\D/g, "");
+  const rows = [...decisionTraceHistory]
+    .filter(row => {
+      const ts = Date.parse(String(row.ts ?? ""));
+      if (Number.isFinite(ts) && ts < sinceMs) return false;
+      if (leadKeyQ && String(row.leadKey ?? "") !== leadKeyQ) return false;
+      if (convIdQ && String(row.convId ?? "") !== convIdQ) return false;
+      if (turnIdQ && String(row.turnId ?? "") !== turnIdQ) return false;
+      if (stageQ && !String(row.stage ?? "").toLowerCase().includes(stageQ)) return false;
+      if (scopeQ && String(row.scope ?? "").toLowerCase() !== scopeQ) return false;
+      if (phoneVariants.size) {
+        const leadDigits = normDigits(row.leadKey);
+        const convDigits = normDigits(row.convId);
         if (!matchesPhone(leadDigits) && !matchesPhone(convDigits)) return false;
       }
       return true;
@@ -556,6 +668,60 @@ async function safeOrchestrateInbound(
       suggestedSlots: []
     };
   }
+}
+
+type RouteDecisionSnapshot = {
+  parserIntentOverride: TurnPrimaryIntent | null;
+  plannerPrimaryIntent: TurnPrimaryIntent;
+  primaryIntent: TurnPrimaryIntent;
+  pricingIntent: boolean;
+  schedulingIntent: boolean;
+  callbackIntent: boolean;
+  availabilityIntent: boolean;
+  financePriorityOverride: boolean;
+  schedulePriorityOverride: boolean;
+  availabilityIntentOverride: boolean;
+};
+
+function buildRouteDecisionSnapshot(args: {
+  parserIntentOverride?: TurnPrimaryIntent | null;
+  hasPricingIntent?: boolean;
+  hasSchedulingIntent?: boolean;
+  hasAvailabilityIntent?: boolean;
+  callbackRequested?: boolean;
+  financePriorityOverride?: boolean;
+  schedulePriorityOverride?: boolean;
+  availabilityIntentOverride?: boolean;
+}): RouteDecisionSnapshot {
+  const financePriorityOverride = !!args.financePriorityOverride;
+  const schedulePriorityOverride = !!args.schedulePriorityOverride;
+  const availabilityIntentOverride = !!args.availabilityIntentOverride;
+  const planner = resolveTurnPrimaryIntent({
+    hasPricingIntent: !!args.hasPricingIntent,
+    hasSchedulingIntent: !!args.hasSchedulingIntent,
+    hasAvailabilityIntent: !!args.hasAvailabilityIntent,
+    callbackRequested: !!args.callbackRequested,
+    financePriorityOverride,
+    schedulePriorityOverride,
+    availabilityIntentOverride
+  });
+  const parserIntentOverride =
+    args.parserIntentOverride && args.parserIntentOverride !== "general"
+      ? args.parserIntentOverride
+      : null;
+  const primaryIntent = parserIntentOverride ?? planner.primaryIntent;
+  return {
+    parserIntentOverride,
+    plannerPrimaryIntent: planner.primaryIntent,
+    primaryIntent,
+    pricingIntent: primaryIntent === "pricing_payments",
+    schedulingIntent: primaryIntent === "scheduling",
+    callbackIntent: primaryIntent === "callback",
+    availabilityIntent: primaryIntent === "availability",
+    financePriorityOverride,
+    schedulePriorityOverride,
+    availabilityIntentOverride
+  };
 }
 
 type HotCacheEntry<T> = {
@@ -16229,20 +16395,6 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     messages: conv.messages ?? [],
     latestDraftAt: lastDraft?.at ?? null
   });
-  if (process.env.DEBUG_DECISION_TRACE === "1") {
-    console.log("[decision-trace]", {
-      stage: "regen.pick_inbound",
-      convId: conv.id,
-      leadKey: conv.leadKey,
-      selectedProvider: inbound?.provider ?? null,
-      selectedAt: inbound?.at ?? null,
-      selectedPreview: String(inbound?.body ?? "").slice(0, 120),
-      latestInboundProvider: latestInboundBeforeDraft?.provider ?? null,
-      latestInboundAt: latestInboundBeforeDraft?.at ?? null,
-      latestInboundIsCreditAdf,
-      latestInboundIsDlaNoPurchaseAdf
-    });
-  }
   if (!inbound?.body) {
     return res.status(400).json({ ok: false, error: "no_inbound_message" });
   }
@@ -16271,6 +16423,28 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     providerMessageId: inbound.providerMessageId ?? `regen_${Date.now()}`,
     receivedAt: inbound.at ?? new Date().toISOString()
   };
+  const regenTurnId =
+    String(event.providerMessageId ?? "").trim() ||
+    `${event.provider}:${event.receivedAt ?? new Date().toISOString()}`;
+  const logRegenDecisionTrace = (stage: string, detail?: Record<string, unknown>) => {
+    recordDecisionTrace({
+      scope: "regen",
+      stage,
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      turnId: regenTurnId,
+      detail
+    });
+  };
+  logRegenDecisionTrace("regen.pick_inbound", {
+    selectedProvider: inbound?.provider ?? null,
+    selectedAt: inbound?.at ?? null,
+    selectedPreview: String(inbound?.body ?? "").slice(0, 120),
+    latestInboundProvider: latestInboundBeforeDraft?.provider ?? null,
+    latestInboundAt: latestInboundBeforeDraft?.at ?? null,
+    latestInboundIsCreditAdf,
+    latestInboundIsDlaNoPurchaseAdf
+  });
   let regenDraftInvariantHints: {
     turnFinanceIntent?: boolean;
     turnAvailabilityIntent?: boolean;
@@ -17205,7 +17379,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   });
   const regenFinancePriorityHint = regenHintSignals.financePriorityOverride || regenParserPricingIntent;
   const regenCallbackRequested = !regenTextingTypoJoke && detectCallbackText(event.body ?? "");
-  const regenIntentPlan = resolveTurnPrimaryIntent({
+  const regenRouteDecision = buildRouteDecisionSnapshot({
+    parserIntentOverride: regenRoutingIntentOverride,
     hasPricingIntent: regenParserPricingIntent,
     hasSchedulingIntent: regenParserSchedulingIntent,
     hasAvailabilityIntent: regenParserAvailabilityIntent,
@@ -17214,12 +17389,23 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     availabilityIntentOverride: regenHintSignals.availabilityIntentOverride,
     callbackRequested: regenCallbackRequested || regenParserCallbackIntent
   });
-  const regenPrimaryIntentHint = regenRoutingIntentOverride ?? regenIntentPlan.primaryIntent;
-  const regenPricingIntentHint = regenPrimaryIntentHint === "pricing_payments";
-  const regenSchedulingIntentHint = regenPrimaryIntentHint === "scheduling";
-  const regenAvailabilityPrimaryIntentHint = regenPrimaryIntentHint === "availability";
-  const regenCallbackIntentHint =
-    regenPrimaryIntentHint === "callback" || regenIntentPlan.callbackIntent || regenParserCallbackIntent;
+  const regenPrimaryIntentHint = regenRouteDecision.primaryIntent;
+  const regenPricingIntentHint = regenRouteDecision.pricingIntent;
+  const regenSchedulingIntentHint = regenRouteDecision.schedulingIntent;
+  const regenAvailabilityPrimaryIntentHint = regenRouteDecision.availabilityIntent;
+  const regenCallbackIntentHint = regenRouteDecision.callbackIntent;
+  logRegenDecisionTrace("regen.intent_routing", {
+    turnPrimaryIntent: regenPrimaryIntentHint,
+    parserIntentOverride: regenRouteDecision.parserIntentOverride,
+    plannerPrimaryIntent: regenRouteDecision.plannerPrimaryIntent,
+    pricingIntent: regenPricingIntentHint,
+    schedulingIntent: regenSchedulingIntentHint,
+    callbackIntent: regenCallbackIntentHint,
+    availabilityIntent: regenAvailabilityPrimaryIntentHint,
+    financePriorityOverride: regenRouteDecision.financePriorityOverride,
+    schedulePriorityOverride: regenRouteDecision.schedulePriorityOverride,
+    availabilityIntentOverride: regenRouteDecision.availabilityIntentOverride
+  });
   const regenCorporateMisrouteTopic = getCorporateMisrouteTopic(regenConversationStateParse);
   if (
     regenCorporateMisrouteTopic &&
@@ -19846,7 +20032,9 @@ if (authToken && signature) {
   const shortAck = isShortAckText(inboundText) || emojiOnly;
   const recentHistory = buildHistory(conv, 6);
   const routeTimingEnabled = process.env.DEBUG_ROUTE_TIMING === "1";
-  const decisionTraceEnabled = process.env.DEBUG_DECISION_TRACE === "1";
+  const liveTurnId =
+    String(event.providerMessageId ?? "").trim() ||
+    `${event.provider}:${event.receivedAt ?? new Date().toISOString()}`;
   const logRouteTiming = (stage: string, startedAtMs: number, extra?: Record<string, unknown>) => {
     if (!routeTimingEnabled) return;
     console.log("[route-timing]", {
@@ -19858,15 +20046,18 @@ if (authToken && signature) {
     });
   };
   const logDecisionTrace = (stage: string, extra?: Record<string, unknown>) => {
-    if (!decisionTraceEnabled) return;
-    console.log("[decision-trace]", {
+    recordDecisionTrace({
+      scope: "live",
       stage,
       convId: conv.id,
       leadKey: conv.leadKey,
-      dialogState: getDialogState(conv),
-      followUpMode: conv.followUp?.mode ?? null,
-      followUpReason: conv.followUp?.reason ?? null,
-      ...(extra ?? {})
+      turnId: liveTurnId,
+      detail: {
+        dialogState: getDialogState(conv),
+        followUpMode: conv.followUp?.mode ?? null,
+        followUpReason: conv.followUp?.reason ?? null,
+        ...(extra ?? {})
+      }
     });
   };
   const logRouteOutcome = (outcome: string, extra?: Record<string, unknown>) => {
@@ -20502,7 +20693,8 @@ if (authToken && signature) {
   const deterministicAvailabilityIntentOverride = routeSignalsFinal.availabilityIntentOverride;
   const financePriorityOverride = routeSignalsFinal.financePriorityOverride;
   const schedulePriorityOverride = routeSignalsFinal.schedulePriorityOverride;
-  const turnIntentPlan = resolveTurnPrimaryIntent({
+  const turnRouteDecision = buildRouteDecisionSnapshot({
+    parserIntentOverride: routingParserIntentOverride,
     hasPricingIntent: pricingOrPaymentsIntent || parserPricingIntent,
     hasSchedulingIntent: schedulingPrimaryIntent || parserSchedulingIntent,
     hasAvailabilityIntent: availabilityPrimaryIntent || parserAvailabilityIntent,
@@ -20511,12 +20703,13 @@ if (authToken && signature) {
     schedulePriorityOverride,
     availabilityIntentOverride: deterministicAvailabilityIntentOverride
   });
-  let turnPrimaryIntent = routingParserIntentOverride ?? turnIntentPlan.primaryIntent;
+  let turnPrimaryIntent = turnRouteDecision.primaryIntent;
   const financeContinuationContext =
     hasRecentPricingPromptContext(conv) &&
     (paymentBudgetContext.monthlyBudget != null ||
       paymentBudgetContext.downPayment != null ||
       paymentBudgetContext.termMonths != null);
+  let financeContinuationOverrideApplied = false;
   if (
     turnPrimaryIntent === "general" &&
     financeContinuationContext &&
@@ -20525,6 +20718,7 @@ if (authToken && signature) {
     !callbackPrimaryIntent
   ) {
     turnPrimaryIntent = "pricing_payments";
+    financeContinuationOverrideApplied = true;
     logRouteOutcome("finance_continuation_intent_override", {
       monthlyBudget: paymentBudgetContext.monthlyBudget ?? null,
       termMonths: paymentBudgetContext.termMonths ?? null,
@@ -20557,6 +20751,9 @@ if (authToken && signature) {
   logDecisionTrace("live.intent_routing", {
     inboundProvider: event.provider,
     turnPrimaryIntent,
+    parserIntentOverride: turnRouteDecision.parserIntentOverride,
+    plannerPrimaryIntent: turnRouteDecision.plannerPrimaryIntent,
+    financeContinuationOverrideApplied,
     pricingOrPaymentsIntent,
     schedulingPrimaryIntent,
     callbackPrimaryIntent,
