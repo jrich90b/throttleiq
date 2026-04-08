@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { dataPath } from "./dataDir.js";
 
 export type DealerProfile = {
   dealerName?: string;
@@ -42,12 +42,9 @@ export type DealerProfile = {
   taxRate?: number;
 };
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// dealerProfile.ts lives in: services/api/src/domain
-// file lives in: services/api/data/dealer_profile.json
-const DEFAULT_PATH = path.resolve(__dirname, "../../data/dealer_profile.json");
+// Default to runtime data dir so profile state survives git pulls even if
+// DEALER_PROFILE_PATH is missing from process env.
+const DEFAULT_PATH = dataPath("dealer_profile.json");
 
 let cached: DealerProfile | null = null;
 let cachedPath: string | null = null;
