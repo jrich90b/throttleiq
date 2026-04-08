@@ -7800,6 +7800,45 @@ function isOtherInventoryRequestText(text: string): boolean {
   );
 }
 
+function isSoldOrPostSaleConversation(conv: any): boolean {
+  return !!(
+    conv?.closedReason === "sold" ||
+    conv?.sale?.soldAt ||
+    conv?.followUpCadence?.kind === "post_sale"
+  );
+}
+
+function hasIncomingInventorySignal(text: string): boolean {
+  const lower = String(text ?? "").toLowerCase();
+  if (!lower.trim()) return false;
+  return (
+    /\b(not\s+(?:on|in)\s+(?:the\s+)?(?:site|server|website)|not listed yet|not online yet)\b/.test(lower) ||
+    /\b(incoming|inbound|on the way|coming in|new in)\b/.test(lower)
+  );
+}
+
+function isGenericInventoryAsk(text: string): boolean {
+  const lower = String(text ?? "").toLowerCase();
+  if (!lower.trim()) return false;
+  return (
+    /\b(any|anything|what|got|have)\b[\s\S]{0,24}\b(new\s+)?(bikes?|inventory|units?)\b/.test(lower) ||
+    /\bwhat(?:'s| is)\s+new\b/.test(lower)
+  );
+}
+
+function buildIncomingInventoryModelPrompt(opts?: {
+  hasHumor?: boolean;
+  incomingHint?: boolean;
+}): string {
+  const hasHumor = !!opts?.hasHumor;
+  const incomingHint = !!opts?.incomingHint;
+  const opener = hasHumor ? "Haha — love it. " : "";
+  if (incomingHint) {
+    return `${opener}I can check what’s incoming and what hasn’t hit the site yet. What model should I look for?`;
+  }
+  return `${opener}I can check what’s new in, including bikes not on the site yet. What model should I look for?`;
+}
+
 type DeterministicAvailabilityResolution =
   | { kind: "missing_model" }
   | { kind: "reply"; reply: string; mediaUrls?: string[] };
@@ -7809,18 +7848,46 @@ async function resolveDeterministicAvailabilityReply(args: {
   text: string;
   parsedAvailability?: { model?: string | null; year?: string | number | null; color?: string | null; condition?: string | null } | null;
   otherInventoryRequest?: boolean;
+  affectHasHumor?: boolean;
 }): Promise<DeterministicAvailabilityResolution> {
   const { conv, parsedAvailability } = args;
   const textLower = String(args.text ?? "").toLowerCase();
   const otherInventoryRequest = !!args.otherInventoryRequest;
+  const soldOrPostSale = isSoldOrPostSaleConversation(conv);
+  const incomingInventorySignal = hasIncomingInventorySignal(textLower);
+  const genericInventoryAsk = isGenericInventoryAsk(textLower);
+  const affectHasHumor = !!args.affectHasHumor;
   const modelFromText = parsedAvailability?.model ?? findMentionedModel(textLower);
+  if (!modelFromText && soldOrPostSale && (incomingInventorySignal || genericInventoryAsk || otherInventoryRequest)) {
+    return {
+      kind: "reply",
+      reply: buildIncomingInventoryModelPrompt({
+        hasHumor: affectHasHumor,
+        incomingHint: incomingInventorySignal
+      })
+    };
+  }
   const priorModel =
     conv.inventoryContext?.model ??
-    conv.lead?.vehicle?.model ??
-    conv.lead?.vehicle?.description ??
+    (!soldOrPostSale
+      ? (conv.lead?.vehicle?.model ??
+        conv.lead?.vehicle?.description ??
+        null)
+      : null) ??
     null;
   const model = modelFromText ?? priorModel ?? null;
-  if (!model) return { kind: "missing_model" };
+  if (!model) {
+    if (incomingInventorySignal || genericInventoryAsk) {
+      return {
+        kind: "reply",
+        reply: buildIncomingInventoryModelPrompt({
+          hasHumor: affectHasHumor,
+          incomingHint: incomingInventorySignal
+        })
+      };
+    }
+    return { kind: "missing_model" };
+  }
   const modelForLookup = canonicalizeWatchModelLabel(model);
   const modelChanged =
     !!modelFromText &&
@@ -10960,7 +11027,14 @@ async function processDueFollowUps() {
     return first || user.name || user.email || agentName;
   };
   const normalizeModelForPostSale = (model: string) => {
-    return normalizeDisplayCase(model);
+    const raw = String(model ?? "").trim();
+    if (!raw) return "";
+    // Post-sale follow-ups should use clean model names, not parenthetical color/finish suffixes.
+    const noParenSuffix = raw
+      .replace(/\s*\([^)]*\)\s*/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return normalizeDisplayCase(noParenSuffix);
   };
   const getPostSaleModel = (conv: any) => {
     const raw = conv?.lead?.vehicle?.model ?? "";
@@ -16964,7 +17038,37 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       }
       return respondWithSmsRegeneratedDraft(progressReply);
     }
-    return respondRegenerateSkipped("routing_parser_no_response");
+    const regenNoResponseSignals = resolveRoutePrioritySignals({
+      text: event.body ?? "",
+      conv,
+      pricingOrPaymentsIntent: regenParserPricingIntent,
+      explicitAvailabilityIntentExtra: regenParserAvailabilityIntent,
+      schedulingSignalsExtra: { explicit: regenParserSchedulingIntent }
+    });
+    const regenNoResponseActionableContext =
+      regenParserCallbackIntent ||
+      regenNoResponseSignals.currentTurnFinanceSignal ||
+      regenNoResponseSignals.availabilityIntentOverride ||
+      regenNoResponseSignals.schedulingSignals.explicit ||
+      regenNoResponseSignals.schedulingSignals.hasDayTime ||
+      regenNoResponseSignals.schedulingSignals.hasDayOnlyAvailability ||
+      regenNoResponseSignals.schedulingSignals.hasDayOnlyRequest;
+    if (!regenNoResponseActionableContext) {
+      return respondRegenerateSkipped("routing_parser_no_response");
+    }
+    recordRouteOutcome("regen", "routing_parser_no_response_overridden", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      parserReason: regenRoutingParserDecision.reason,
+      finance: regenNoResponseSignals.currentTurnFinanceSignal,
+      availability: regenNoResponseSignals.availabilityIntentOverride,
+      scheduling:
+        regenNoResponseSignals.schedulingSignals.explicit ||
+        regenNoResponseSignals.schedulingSignals.hasDayTime ||
+        regenNoResponseSignals.schedulingSignals.hasDayOnlyAvailability ||
+        regenNoResponseSignals.schedulingSignals.hasDayOnlyRequest,
+      callback: regenParserCallbackIntent
+    });
   }
   if (regenRoutingParserDecision.accepted && regenRoutingParserDecision.fallbackAction === "clarify") {
     const clarifyReply =
@@ -17382,15 +17486,36 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       schedulingSignalsExtra: { explicit: regenParserSchedulingIntent }
     });
     const regenSchedulingSignals = regenVisitSignals.schedulingSignals;
-    const visitTimingIntent =
-      regenVisitSignals.schedulePriorityOverride ||
-      regenSchedulingSignals.hasDayOnlyRequest ||
-      regenSchedulingSignals.softVisit;
-    const explicitAvailabilityAskThisTurn = regenVisitSignals.availabilityIntentOverride;
-    const financeOrRateAskThisTurn = regenVisitSignals.currentTurnFinanceSignal;
-    const contextModel =
-      conv.inventoryContext?.model ?? conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null;
-    if (visitTimingIntent && contextModel && !financeOrRateAskThisTurn) {
+	    const visitTimingIntent =
+	      regenVisitSignals.schedulePriorityOverride ||
+	      regenSchedulingSignals.hasDayOnlyRequest ||
+	      regenSchedulingSignals.softVisit;
+	    const explicitAvailabilityAskThisTurn = regenVisitSignals.availabilityIntentOverride;
+	    const financeOrRateAskThisTurn = regenVisitSignals.currentTurnFinanceSignal;
+	    const soldOrPostSale = isSoldOrPostSaleConversation(conv);
+	    const inboundExplicitModel = findMentionedModel(String(event.body ?? "").toLowerCase());
+	    const incomingInventorySignal = hasIncomingInventorySignal(String(event.body ?? ""));
+	    const genericInventoryAsk = isGenericInventoryAsk(String(event.body ?? ""));
+	    if (
+	      visitTimingIntent &&
+	      explicitAvailabilityAskThisTurn &&
+	      soldOrPostSale &&
+	      !inboundExplicitModel &&
+	      (incomingInventorySignal || genericInventoryAsk)
+	    ) {
+	      const reply = buildIncomingInventoryModelPrompt({
+	        hasHumor: !!regenAcceptedAffect?.hasHumor,
+	        incomingHint: incomingInventorySignal
+	      });
+	      return respondWithSmsRegeneratedDraft(reply);
+	    }
+	    const contextModel =
+	      inboundExplicitModel ??
+	      conv.inventoryContext?.model ??
+	      (!soldOrPostSale
+	        ? (conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null)
+	        : null);
+	    if (visitTimingIntent && contextModel && !financeOrRateAskThisTurn) {
       const modelForLookup = canonicalizeWatchModelLabel(contextModel);
       const contextYear = conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null;
       const contextColor = sanitizeColorPhrase(
@@ -22063,8 +22188,13 @@ if (authToken && signature) {
     llmMediaIntent === "photos" ||
     llmMediaIntent === "either" ||
     /\b(photo|picture|pic|image|images)\b/i.test(textLower);
+  const availabilityRouteEligible =
+    turnPrimaryIntent === "availability" ||
+    deterministicAvailabilityIntentOverride ||
+    explicitAvailabilitySignalThisTurn ||
+    inventoryCountQuestion;
   const availabilityExplicit =
-    (turnPrimaryIntent === "availability" || llmAvailabilityIntent) &&
+    availabilityRouteEligible &&
     !/\b(sound system|audio system|stereo|speakers?|speaker system)\b/i.test(textLower) &&
     turnPrimaryIntent !== "pricing_payments" &&
     turnPrimaryIntent !== "callback" &&
@@ -22085,7 +22215,8 @@ if (authToken && signature) {
       conv,
       text: event.body ?? "",
       parsedAvailability: llmAvailability,
-      otherInventoryRequest
+      otherInventoryRequest,
+      affectHasHumor: !!acceptedAffect?.hasHumor
     });
     const reply =
       availabilityResolution.kind === "reply"
@@ -22882,6 +23013,7 @@ if (authToken && signature) {
   if (
     event.provider === "twilio" &&
     inventoryQuestion &&
+    availabilityRouteEligible &&
     !schedulingSignals.hasDayTime &&
     !schedulingSignals.hasDayOnlyAvailability &&
     !schedulingSignals.hasDayOnlyRequest
@@ -22923,24 +23055,47 @@ if (authToken && signature) {
       )}</Message>\n</Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
-    try {
-      const yearMatch = textLower.match(/\b(20\d{2}|19\d{2})\b/);
-      const yearFromText = yearMatch?.[1] ?? llmAvailability?.year ?? null;
-      const priorModel =
-        conv.inventoryContext?.model ??
-        conv.lead?.vehicle?.model ??
-        conv.lead?.vehicle?.description ??
-        null;
+	    try {
+	      const yearMatch = textLower.match(/\b(20\d{2}|19\d{2})\b/);
+	      const yearFromText = yearMatch?.[1] ?? llmAvailability?.year ?? null;
+	      const soldOrPostSale = isSoldOrPostSaleConversation(conv);
+	      const incomingInventorySignal = hasIncomingInventorySignal(textLower);
+	      const genericInventoryAsk = isGenericInventoryAsk(textLower);
+	      const priorModel =
+	        conv.inventoryContext?.model ??
+	        (!soldOrPostSale
+	          ? (conv.lead?.vehicle?.model ??
+	            conv.lead?.vehicle?.description ??
+	            null)
+	          : null) ??
+	        null;
       const inventoryFeedStartedAt = Date.now();
       const items = await getInventoryFeedHot();
       logRouteTiming("inventory.feed", inventoryFeedStartedAt, { itemCount: items.length });
       const models = Array.from(new Set(items.map(i => i.model).filter(Boolean))) as string[];
       models.sort((a, b) => b.length - a.length);
-      const modelFromText =
-        models.find(m => textLower.includes(m.toLowerCase())) ??
-        findMentionedModel(textLower) ??
-        null;
-      const paymentBudgetContext = resolvePaymentBudgetForConversation(conv, event.body);
+	      const modelFromText =
+	        models.find(m => textLower.includes(m.toLowerCase())) ??
+	        findMentionedModel(textLower) ??
+	        null;
+	      if (!modelFromText && soldOrPostSale && (incomingInventorySignal || genericInventoryAsk || otherInventoryRequest)) {
+	        const reply = buildIncomingInventoryModelPrompt({
+	          hasHumor: !!acceptedAffect?.hasHumor,
+	          incomingHint: incomingInventorySignal
+	        });
+	        const systemMode = webhookMode;
+	        if (systemMode === "suggest") {
+	          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+	          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+	          return res.status(200).type("text/xml").send(twiml);
+	        }
+	        appendOutbound(conv, event.to, event.from, reply, "twilio");
+	        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+	          reply
+	        )}</Message>\n</Response>`;
+	        return res.status(200).type("text/xml").send(twiml);
+	      }
+	      const paymentBudgetContext = resolvePaymentBudgetForConversation(conv, event.body);
       const monthlyBudget = paymentBudgetContext.monthlyBudget ?? null;
       const hasMonthlyBudgetTarget = monthlyBudget != null;
       const paymentTermMonths = paymentBudgetContext.termMonths ?? (hasMonthlyBudgetTarget ? 84 : 72);
