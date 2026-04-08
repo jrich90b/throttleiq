@@ -164,6 +164,30 @@ function isVoiceLike(provider?: Message["provider"]): boolean {
   return provider === "voice_call" || provider === "voice_transcript" || provider === "voice_summary";
 }
 
+function shouldUseRoleAwareHistoryLabels(conv: Conversation | null | undefined): boolean {
+  const followUpMode = String(conv?.followUp?.mode ?? "").trim().toLowerCase();
+  const convMode = String(conv?.mode ?? "").trim().toLowerCase();
+  return followUpMode === "manual_handoff" || convMode === "human";
+}
+
+function formatHistoryTurnBody(msg: Message, roleAwareLabels: boolean): string {
+  const body = String(msg.body ?? "").trim();
+  if (!body) return body;
+  if (!roleAwareLabels || msg.direction !== "out") return body;
+  const provider = String(msg.provider ?? "").trim().toLowerCase();
+  if (provider === "draft_ai") {
+    return `AI OUTBOUND: ${body}`;
+  }
+  if (provider === "twilio" || provider === "sendgrid" || provider === "human") {
+    const originalDraft = String((msg as any).originalDraftBody ?? "").trim();
+    if (originalDraft && normalizeText(originalDraft) !== normalizeText(body)) {
+      return `STAFF OUTBOUND (edited): ${body}`;
+    }
+    return `STAFF OUTBOUND: ${body}`;
+  }
+  return body;
+}
+
 function alreadyCoveredByHistory(text: string, history: HistoryTurn[]): boolean {
   const t = normalizeText(text);
   if (!t) return true;
@@ -194,6 +218,7 @@ function reduceContextSources(sources: ContextSource[]): ContextSource[] {
 }
 
 export function buildEffectiveHistory(conv: Conversation | null | undefined, limit = 20): HistoryTurn[] {
+  const roleAwareLabels = shouldUseRoleAwareHistoryLabels(conv);
   const baseHistory: HistoryTurn[] = (conv?.messages ?? [])
     .filter(
       (m: Message) =>
@@ -204,7 +229,7 @@ export function buildEffectiveHistory(conv: Conversation | null | undefined, lim
     .slice(-Math.max(1, limit))
     .map((m: Message) => ({
       direction: m.direction,
-      body: String(m.body ?? "")
+      body: formatHistoryTurnBody(m, roleAwareLabels)
     }));
 
   if (!conv) return baseHistory;

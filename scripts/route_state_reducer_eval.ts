@@ -580,12 +580,14 @@ type StaleCase = {
     hasWatchIntent?: boolean;
     hasFinanceIntent?: boolean;
     hasSchedulingIntent?: boolean;
+    hasAvailabilityIntent?: boolean;
     hasDepartmentIntent?: boolean;
   };
   expected: {
     clearInventoryWatchPending: boolean;
     setDialogStateToNone: boolean;
     clearManualAppointmentHandoff?: boolean;
+    clearManualDepartmentHandoff?: boolean;
   };
 };
 
@@ -601,7 +603,8 @@ const staleCases: StaleCase[] = [
     expected: {
       clearInventoryWatchPending: false,
       setDialogStateToNone: true,
-      clearManualAppointmentHandoff: false
+      clearManualAppointmentHandoff: false,
+      clearManualDepartmentHandoff: false
     }
   },
   {
@@ -617,7 +620,8 @@ const staleCases: StaleCase[] = [
     expected: {
       clearInventoryWatchPending: false,
       setDialogStateToNone: false,
-      clearManualAppointmentHandoff: true
+      clearManualAppointmentHandoff: true,
+      clearManualDepartmentHandoff: false
     }
   },
   {
@@ -632,7 +636,8 @@ const staleCases: StaleCase[] = [
     expected: {
       clearInventoryWatchPending: true,
       setDialogStateToNone: false,
-      clearManualAppointmentHandoff: false
+      clearManualAppointmentHandoff: false,
+      clearManualDepartmentHandoff: false
     }
   },
   {
@@ -647,7 +652,8 @@ const staleCases: StaleCase[] = [
     expected: {
       clearInventoryWatchPending: false,
       setDialogStateToNone: false,
-      clearManualAppointmentHandoff: false
+      clearManualAppointmentHandoff: false,
+      clearManualDepartmentHandoff: false
     }
   },
   {
@@ -664,7 +670,25 @@ const staleCases: StaleCase[] = [
     expected: {
       clearInventoryWatchPending: true,
       setDialogStateToNone: true,
-      clearManualAppointmentHandoff: false
+      clearManualAppointmentHandoff: false,
+      clearManualDepartmentHandoff: false
+    }
+  },
+  {
+    id: "manual_department_handoff_clears_on_scheduling_shift",
+    input: {
+      followUpMode: "manual_handoff",
+      followUpReason: "service_request",
+      dialogState: "none",
+      hasInventoryWatchPending: false,
+      hasSchedulingIntent: true,
+      hasDepartmentIntent: false
+    },
+    expected: {
+      clearInventoryWatchPending: false,
+      setDialogStateToNone: false,
+      clearManualAppointmentHandoff: false,
+      clearManualDepartmentHandoff: true
     }
   }
 ];
@@ -675,13 +699,15 @@ for (const c of staleCases) {
   const ok =
     actual.clearInventoryWatchPending === c.expected.clearInventoryWatchPending &&
     actual.setDialogStateToNone === c.expected.setDialogStateToNone &&
-    actual.clearManualAppointmentHandoff === (c.expected.clearManualAppointmentHandoff ?? false);
+    actual.clearManualAppointmentHandoff === (c.expected.clearManualAppointmentHandoff ?? false) &&
+    actual.clearManualDepartmentHandoff === (c.expected.clearManualDepartmentHandoff ?? false);
   if (ok) stalePassed += 1;
   console.log(
     `${ok ? "PASS" : "FAIL"} ${c.id} expected=${JSON.stringify(c.expected)} actual=${JSON.stringify({
       clearInventoryWatchPending: actual.clearInventoryWatchPending,
       setDialogStateToNone: actual.setDialogStateToNone,
       clearManualAppointmentHandoff: actual.clearManualAppointmentHandoff,
+      clearManualDepartmentHandoff: actual.clearManualDepartmentHandoff,
       reasons: actual.reasons
     })}`
   );

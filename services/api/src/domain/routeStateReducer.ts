@@ -134,6 +134,7 @@ export type StaleStateCleanupInput = {
   hasWatchIntent?: boolean;
   hasFinanceIntent?: boolean;
   hasSchedulingIntent?: boolean;
+  hasAvailabilityIntent?: boolean;
   hasDepartmentIntent?: boolean;
 };
 
@@ -141,6 +142,7 @@ export type StaleStateCleanupDecision = {
   clearInventoryWatchPending: boolean;
   setDialogStateToNone: boolean;
   clearManualAppointmentHandoff: boolean;
+  clearManualDepartmentHandoff: boolean;
   reasons: string[];
 };
 
@@ -420,6 +422,15 @@ function shouldKeepInventoryWatchPending(mode: string, reason: string): boolean 
   return false;
 }
 
+function isDepartmentHandoffReason(reason: string): boolean {
+  const normalized = normalizeLower(reason);
+  return (
+    normalized === "service_request" ||
+    normalized === "parts_request" ||
+    normalized === "apparel_request"
+  );
+}
+
 export function reduceStaleStateForInbound(input: StaleStateCleanupInput): StaleStateCleanupDecision {
   const mode = normalizeLower(input.followUpMode);
   const reason = normalizeLower(input.followUpReason);
@@ -428,6 +439,7 @@ export function reduceStaleStateForInbound(input: StaleStateCleanupInput): Stale
   const hasWatchIntent = !!input.hasWatchIntent;
   const hasFinanceIntent = !!input.hasFinanceIntent;
   const hasSchedulingIntent = !!input.hasSchedulingIntent;
+  const hasAvailabilityIntent = !!input.hasAvailabilityIntent;
   const hasDepartmentIntent = !!input.hasDepartmentIntent;
   const pendingAgeHoursRaw =
     typeof input.inventoryWatchPendingAgeHours === "number" ? input.inventoryWatchPendingAgeHours : NaN;
@@ -444,6 +456,7 @@ export function reduceStaleStateForInbound(input: StaleStateCleanupInput): Stale
   let clearInventoryWatchPending = false;
   let setDialogStateToNone = false;
   let clearManualAppointmentHandoff = false;
+  let clearManualDepartmentHandoff = false;
 
   if (mode === "manual_handoff" && stickyDialogStates.has(dialogState)) {
     setDialogStateToNone = true;
@@ -482,10 +495,21 @@ export function reduceStaleStateForInbound(input: StaleStateCleanupInput): Stale
     reasons.push("clear_manual_appointment_context_shift");
   }
 
+  if (
+    mode === "manual_handoff" &&
+    isDepartmentHandoffReason(reason) &&
+    !hasDepartmentIntent &&
+    (hasSchedulingIntent || hasFinanceIntent || hasWatchIntent || hasAvailabilityIntent)
+  ) {
+    clearManualDepartmentHandoff = true;
+    reasons.push("clear_manual_department_handoff_context_shift");
+  }
+
   return {
     clearInventoryWatchPending,
     setDialogStateToNone,
     clearManualAppointmentHandoff,
+    clearManualDepartmentHandoff,
     reasons
   };
 }

@@ -7742,6 +7742,15 @@ function reconcileStateFromRecentManualOutbound(
   return { changed: true, reasons };
 }
 
+function isDepartmentFollowUpReason(reason: string | null | undefined): boolean {
+  const normalized = String(reason ?? "").trim().toLowerCase();
+  return (
+    normalized === "service_request" ||
+    normalized === "parts_request" ||
+    normalized === "apparel_request"
+  );
+}
+
 function reduceStaleWorkflowStateForInbound(
   conv: any,
   inboundText: string,
@@ -7750,6 +7759,7 @@ function reduceStaleWorkflowStateForInbound(
     hasWatchIntent?: boolean;
     hasFinanceIntent?: boolean;
     hasSchedulingIntent?: boolean;
+    hasAvailabilityIntent?: boolean;
     hasDepartmentIntent?: boolean;
   }
 ): { changed: boolean; reasons: string[] } {
@@ -7766,6 +7776,7 @@ function reduceStaleWorkflowStateForInbound(
   const hasSchedulingIntent = intentHints?.hasSchedulingIntent === true;
   const hasWatchIntent = intentHints?.hasWatchIntent === true;
   const hasFinanceIntent = intentHints?.hasFinanceIntent === true;
+  const hasAvailabilityIntent = intentHints?.hasAvailabilityIntent === true;
   const hasDepartmentIntent = intentHints?.hasDepartmentIntent === true;
   const decision = reduceStaleStateForInbound({
     followUpMode: mode,
@@ -7776,6 +7787,7 @@ function reduceStaleWorkflowStateForInbound(
     hasWatchIntent,
     hasFinanceIntent,
     hasSchedulingIntent,
+    hasAvailabilityIntent,
     hasDepartmentIntent
   });
   let changed = false;
@@ -7793,6 +7805,14 @@ function reduceStaleWorkflowStateForInbound(
     String(conv.followUp?.reason ?? "").toLowerCase() === "manual_appointment"
   ) {
     setFollowUpMode(conv, "active", "manual_appointment_cleared");
+    changed = true;
+  }
+  if (
+    decision.clearManualDepartmentHandoff &&
+    String(conv.followUp?.mode ?? "").toLowerCase() === "manual_handoff" &&
+    isDepartmentFollowUpReason(conv.followUp?.reason)
+  ) {
+    setFollowUpMode(conv, "active", "manual_department_cleared");
     changed = true;
   }
   if (changed) {
@@ -17789,6 +17809,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       hasWatchIntent: false,
       hasFinanceIntent: regenPricingIntentHint,
       hasSchedulingIntent: regenSchedulingIntentHint,
+      hasAvailabilityIntent: regenAvailabilityPrimaryIntentHint,
       hasDepartmentIntent: !!regenReducedConversationState.departmentIntent
     }
   );
@@ -21093,6 +21114,7 @@ if (authToken && signature) {
       hasWatchIntent: semanticWatchAction === "set_watch",
       hasFinanceIntent: routeExecPricing,
       hasSchedulingIntent: routeExecScheduling,
+      hasAvailabilityIntent: routeExecAvailability,
       hasDepartmentIntent: !!(reducedConversationState.departmentIntent ?? semanticDepartmentIntent)
     }
   );
