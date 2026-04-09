@@ -21625,11 +21625,6 @@ if (authToken && signature) {
     availabilityIntentOverride: false
   });
   let turnPrimaryIntent = turnRouteDecision.primaryIntent;
-  const financeContinuationContext =
-    hasRecentPricingPromptContext(conv) &&
-    (paymentBudgetContext.monthlyBudget != null ||
-      paymentBudgetContext.downPayment != null ||
-      paymentBudgetContext.termMonths != null);
   const pricingContinuationInboundText = String(event.body ?? "");
   const hasExplicitFinanceLanguageThisTurn =
     isPricingText(pricingContinuationInboundText) ||
@@ -21657,26 +21652,7 @@ if (authToken && signature) {
     hasRecentPricingPromptContext(conv) &&
     isFinanceFollowUpPromptText(lastOutboundText) &&
     isFinanceFollowUpAffirmationText(event.body ?? "");
-  const financeContinuationSignalThisTurn =
-    financeContinuationAffirmativeAck ||
-    (currentTurnFinanceSignal && hasExplicitFinanceLanguageThisTurn);
-  let financeContinuationOverrideApplied = false;
-  if (
-    turnPrimaryIntent === "general" &&
-    financeContinuationContext &&
-    financeContinuationSignalThisTurn &&
-    !availabilityPrimaryIntent &&
-    !schedulingPrimaryIntent &&
-    !callbackPrimaryIntent
-  ) {
-    turnPrimaryIntent = "pricing_payments";
-    financeContinuationOverrideApplied = true;
-    logRouteOutcome("finance_continuation_intent_override", {
-      monthlyBudget: paymentBudgetContext.monthlyBudget ?? null,
-      termMonths: paymentBudgetContext.termMonths ?? null,
-      downPayment: paymentBudgetContext.downPayment ?? null
-    });
-  }
+  const financeContinuationOverrideApplied = false;
   const routeExecutionIntent = turnPrimaryIntent;
   const routePolicyMode = getRoutePolicyMode();
   const routeExecPricing = routeExecutionIntent === "pricing_payments";
@@ -21800,13 +21776,15 @@ if (authToken && signature) {
   }
   const noResponseContextDecision = evaluateNoResponseFallback({
     primaryIntent: routeExecutionIntent,
-    financeSignal: currentTurnFinanceSignal,
-    availabilitySignal: availabilityPrimaryIntent || explicitAvailabilitySignalThisTurn,
-    schedulingSignal: schedulingPrimaryIntent,
-    callbackSignal: callbackPrimaryIntent || parserCallbackIntent,
-    hasMonthlyBudgetContext: paymentBudgetContext.monthlyBudget != null,
-    hasDownPaymentContext: paymentBudgetContext.downPayment != null,
-    hasTermContext: paymentBudgetContext.termMonths != null
+    financeSignal: routeExecPricing,
+    availabilitySignal: routeExecAvailability,
+    schedulingSignal: routeExecScheduling,
+    callbackSignal: routeExecCallback,
+    hasMonthlyBudgetContext:
+      routeExecPricing && paymentBudgetContext.monthlyBudget != null,
+    hasDownPaymentContext:
+      routeExecPricing && paymentBudgetContext.downPayment != null,
+    hasTermContext: routeExecPricing && paymentBudgetContext.termMonths != null
   });
   const hasActionableFinanceContext = noResponseContextDecision.hasActionableFinanceContext;
   const hasActionableAvailabilityContext = noResponseContextDecision.hasActionableAvailabilityContext;
@@ -21907,10 +21885,10 @@ if (authToken && signature) {
       manualHandoffQuestionCandidate: manualHandoffNoResponseQuestion,
       smallTalkQuestionCandidate: noResponseSmallTalkQuestion,
       allowManualHandoffQuestionAck: true,
-      hasExplicitFinanceSignal: hasExplicitFinanceLanguageThisTurn || financeContinuationAffirmativeAck,
-      hasExplicitAvailabilitySignal: hasExplicitAvailabilityLanguageThisTurn,
-      hasExplicitSchedulingSignal: hasExplicitSchedulingLanguageThisTurn,
-      hasExplicitCallbackSignal: hasExplicitCallbackLanguageThisTurn
+      hasExplicitFinanceSignal: routeExecPricing,
+      hasExplicitAvailabilitySignal: routeExecAvailability,
+      hasExplicitSchedulingSignal: routeExecScheduling,
+      hasExplicitCallbackSignal: routeExecCallback
     });
     const legacyNoResponseAction = noResponseContextDecision.shouldSkipNoResponse
       ? manualHandoffNoResponseQuestion
@@ -25171,16 +25149,16 @@ if (authToken && signature) {
     cta: liveClassificationForTurn.cta,
     primaryIntentHint: routeExecutionIntent,
     availabilityIntentHint: routeExecAvailability,
-    schedulingIntentHint: schedulingPrimaryIntent,
-    pricingIntentHint: pricingOrPaymentsIntent,
-    financeIntentHint: pricingOrPaymentsIntent,
+    schedulingIntentHint: routeExecScheduling,
+    pricingIntentHint: routeExecPricing,
+    financeIntentHint: routeExecPricing,
     lead: leadForOrchestrator,
     pricingAttempts: getPricingAttempts(conv),
     allowSchedulingOffer:
       routeExecScheduling &&
       (schedulingExplicit || explicitScheduleSignal) &&
       schedulingAllowed &&
-      !pricingOrPaymentsIntent,
+      !routeExecPricing,
     schedulingText: schedulingTextForOrchestrator,
     callbackRequestedOverride: routeExecCallback ? callbackRequestedOverride : false,
     appointmentTypeOverride,
