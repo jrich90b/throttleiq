@@ -150,6 +150,10 @@ export function detectSchedulingSignals(text: string) {
 export function hasPrimaryIntentBeyondWatch(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
+  const productInfoIntent =
+    /\b(tell me more|know more|more about|learn more|details?|information|info|tell me about)\b/.test(
+      t
+    );
   const schedulingSignals = detectSchedulingSignals(t);
   if (
     schedulingSignals.explicit ||
@@ -162,6 +166,7 @@ export function hasPrimaryIntentBeyondWatch(text: string): boolean {
   if (/\b\d{2,3}\s*(month|months|mo)\b/.test(t)) return true;
   if (/\brun\s+(it|that|the numbers?)\s+for\s+\d{2,3}\b/.test(t)) return true;
   if (isPaymentText(t) || isDownPaymentQuestion(t)) return true;
+  if (productInfoIntent) return true;
   return (
     /\b(price|pricing|otd|monthly|apr|term|trade|trade in|appraisal|finance|financing|credit app|credit application|apply|application|schedule|book|appointment|test ride|available|availability|in stock|how many|what do you have|other options|another option|photos?|video|walkaround|specs?|engine|weight|stop in|come in|come by|stop by|look at)\b/.test(
       t

@@ -23672,18 +23672,12 @@ if (authToken && signature) {
     watchIntentText ||
     promptedWatchAffirm ||
     semanticWatchAction === "set_watch";
-  const passiveWatchIntent =
-    !!inventoryEntityModelHint &&
-    !hasPrimaryIntentBeyondWatch(String(event.body ?? "")) &&
-    !llmAvailabilityIntent &&
-    !availabilityExplicit &&
-    !inventoryCountQuestion;
   const watchIntent =
     event.provider === "twilio" &&
     !conv.inventoryWatchPending &&
     !watchHandledEarly &&
     !suppressWatchIntentThisTurn &&
-    (explicitWatchIntent || passiveWatchIntent);
+    explicitWatchIntent;
   const watchAsSideEffectOnly = watchIntent && hasPrimaryIntentBeyondWatch(String(event.body ?? ""));
   if (watchIntent) {
     if (getDialogState(conv) === "inventory_watch_active" && conv.inventoryWatch) {
@@ -23805,7 +23799,7 @@ if (authToken && signature) {
       if (
         pref.action === "ignore" &&
         pending.model &&
-        (isAffirmative(event.body) || watchIntentText || !!inventoryEntityModelHint)
+        (isAffirmative(event.body) || watchIntentText || semanticWatchAction === "set_watch")
       ) {
         const watchColor = sanitizeColorPhrase(pending.color);
         const watch: InventoryWatch = {
