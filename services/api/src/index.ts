@@ -24612,6 +24612,51 @@ if (authToken && signature) {
   logRouteTiming("orchestrator", orchestratorStartedAt, {
     turnPrimaryIntent: routeExecutionIntent
   });
+  const generalOrchestratorPricingCarryoverCandidate =
+    event.provider === "twilio" &&
+    routeExecGeneral &&
+    !hasExplicitFinanceLanguageThisTurn &&
+    !hasExplicitAvailabilityLanguageThisTurn &&
+    !schedulingSignals.hasDayTime &&
+    !schedulingSignals.hasDayOnlyRequest &&
+    !schedulingSignals.hasDayOnlyAvailability &&
+    !explicitScheduleSignal &&
+    !callbackPrimaryIntent &&
+    !parserCallbackIntent &&
+    /\?/.test(String(event.body ?? "")) &&
+    String(result.intent ?? "").toUpperCase() === "PRICING";
+  if (generalOrchestratorPricingCarryoverCandidate) {
+    const carryoverSmallTalkParse = await safeLlmParse("general_orchestrator_pricing_smalltalk", () =>
+      classifySmallTalkWithLLM({
+        text: String(event.body ?? ""),
+        history
+      })
+    );
+    const carryoverSmallTalk =
+      !!carryoverSmallTalkParse?.smallTalk &&
+      (carryoverSmallTalkParse.confidence ?? 0) >= 0.7;
+    const rewrittenDraft = carryoverSmallTalk
+      ? buildNoResponseChitChatReply({
+          includeSpeaker: false,
+          hasHumor: !!acceptedAffect?.hasHumor
+        })
+      : "Got it — are you asking about bike specs, availability, payments, or setting a time to come in?";
+    result.intent = "GENERAL";
+    result.stage = "ENGAGED";
+    result.shouldRespond = true;
+    result.suggestedSlots = [];
+    result.requestedTime = undefined;
+    result.draft = rewrittenDraft;
+    if (carryoverSmallTalk) {
+      setDialogState(conv, "small_talk");
+    } else {
+      setDialogState(conv, "clarify_schedule");
+    }
+    logRouteOutcome("general_orchestrator_pricing_rewrite", {
+      smallTalk: carryoverSmallTalk,
+      confidence: carryoverSmallTalkParse?.confidence ?? null
+    });
+  }
   if (result.smallTalk) {
     setDialogState(conv, "small_talk");
   }
