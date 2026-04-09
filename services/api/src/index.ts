@@ -8686,6 +8686,28 @@ function hasRecentPricingPromptContext(conv: any): boolean {
   return false;
 }
 
+function isFinanceFollowUpPromptText(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\?/.test(t) &&
+    /\b(monthly|payment|payments|down|down payment|money down|cash down|apr|term|60|72|84|run (?:it|that|the numbers?)|which term)\b/.test(
+      t
+    )
+  );
+}
+
+function isFinanceFollowUpAffirmationText(text: string): boolean {
+  const t = String(text ?? "").trim().toLowerCase();
+  if (!t) return false;
+  if (t.length > 80) return false;
+  if (/\?/.test(t)) return false;
+  if (/\b(thanks|thank you|thx|ty|appreciate|lol|haha|lmao|rofl)\b/.test(t)) return false;
+  return /^(yes|yep|yeah|yup|sure|sounds good|that works|works|do it|run it|go ahead|please do|let'?s do it|lets do it|book it)\b/.test(
+    t
+  );
+}
+
 function extractPaymentTermMonths(text: string): number | null {
   const t = String(text ?? "").toLowerCase();
   const termMatch = t.match(/\b(60|72|84)\s*(month|mo|mos|months|term)?\b/);
@@ -21188,10 +21210,17 @@ if (authToken && signature) {
     (paymentBudgetContext.monthlyBudget != null ||
       paymentBudgetContext.downPayment != null ||
       paymentBudgetContext.termMonths != null);
+  const financeContinuationAffirmativeAck =
+    hasRecentPricingPromptContext(conv) &&
+    isFinanceFollowUpPromptText(lastOutboundText) &&
+    isFinanceFollowUpAffirmationText(event.body ?? "");
+  const financeContinuationSignalThisTurn =
+    routeSignalsFinal.currentTurnFinanceSignal || financeContinuationAffirmativeAck;
   let financeContinuationOverrideApplied = false;
   if (
     turnPrimaryIntent === "general" &&
     financeContinuationContext &&
+    financeContinuationSignalThisTurn &&
     !availabilityPrimaryIntent &&
     !schedulingPrimaryIntent &&
     !callbackPrimaryIntent
@@ -21477,14 +21506,14 @@ if (authToken && signature) {
     const termProvided = paymentBudgetContext.termMonths != null;
     const askedFinanceFollowUpRecently =
       regexIntentFallbackEnabled &&
-      /\b(how much can you put down|how much (?:are|can) you put down|about how much down|how much down|money down|down payment|cash down|what monthly payment|what monthly|target monthly|60,?\s*72,?\s*or\s*84|60 months|72 months|84 months|which term|run (?:it|that|the numbers?)|run (?:one )?term(?: exactly)?)\b/i.test(
-        lastOutboundText
-      );
+      isFinanceFollowUpPromptText(lastOutboundText);
+    const followUpAck = isFinanceFollowUpAffirmationText(event.body ?? "");
     return (
       llmPaymentsIntent ||
       ((downPaymentProvided || monthlyBudgetProvided || termProvided) &&
-        askedFinanceFollowUpRecently) ||
-      (downPaymentProvided && monthlyBudgetProvided)
+        (routeSignalsFinal.currentTurnFinanceSignal || (askedFinanceFollowUpRecently && followUpAck))) ||
+      (downPaymentProvided && monthlyBudgetProvided && routeSignalsFinal.currentTurnFinanceSignal) ||
+      (askedFinanceFollowUpRecently && followUpAck)
     );
   })();
   if (
