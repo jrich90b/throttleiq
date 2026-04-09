@@ -12,6 +12,7 @@ import OpenAI from "openai";
 import { orchestrateInbound } from "./domain/orchestrator.js";
 import {
   classifySchedulingIntent,
+  classifySmallTalkWithLLM,
   classifyCadenceContextWithLLM,
   classifyEmpathyNeedWithLLM,
   classifyComplimentWithLLM,
@@ -1181,6 +1182,21 @@ async function safeLlmParse<T>(
     console.warn(`[llm-parse] ${label} failed:`, err?.message ?? err);
     return null;
   }
+}
+
+function buildNoResponseChitChatReply(args?: {
+  speaker?: string | null;
+  includeSpeaker?: boolean;
+  hasHumor?: boolean;
+}): string {
+  const speaker = String(args?.speaker ?? "").trim();
+  const includeSpeaker = !!args?.includeSpeaker && !!speaker;
+  const hasHumor = !!args?.hasHumor;
+  const opener = hasHumor ? "Haha I hear you" : "Good one";
+  if (includeSpeaker) {
+    return `${opener} — this is ${speaker}. I’m here if you need anything.`;
+  }
+  return `${opener} — I’m here if you need anything.`;
 }
 
 async function safeDealerWeatherStatus(
@@ -21409,10 +21425,33 @@ if (authToken && signature) {
     }
     const effectiveNoResponseAction =
       routePolicyMode === "enforce" ? policyNoResponseDecision.action : legacyNoResponseAction;
+    const noResponseInboundText = String(event.body ?? "");
+    const noResponseSmallTalkParse =
+      effectiveNoResponseAction === "override"
+        ? null
+        : await safeLlmParse("no_response_smalltalk", () =>
+            classifySmallTalkWithLLM({
+              text: noResponseInboundText,
+              history
+            })
+          );
+    const noResponseSmallTalkQuestion =
+      !!noResponseSmallTalkParse?.smallTalk &&
+      (noResponseSmallTalkParse.confidence ?? 0) >= 0.7 &&
+      /\?/.test(noResponseInboundText);
     if (effectiveNoResponseAction === "ack_manual_handoff_question") {
       const dealerProfile = await getDealerProfileHot();
       const speaker = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
-      const reply = `Got it — this is ${speaker}. I’m checking that now and will follow up shortly.`;
+      const reply = noResponseSmallTalkQuestion
+        ? buildNoResponseChitChatReply({
+            speaker,
+            includeSpeaker: true,
+            hasHumor: !!acceptedAffect?.hasHumor
+          })
+        : `Got it — this is ${speaker}. I’m checking that now and will follow up shortly.`;
+      if (noResponseSmallTalkQuestion) {
+        setDialogState(conv, "small_talk");
+      }
       logRouteOutcome("routing_parser_no_response_manual_handoff_ack", {
         turnPrimaryIntent: routeExecutionIntent,
         parserReason: routingParserDecision.reason,
@@ -21448,6 +21487,28 @@ if (authToken && signature) {
       return res.status(200).type("text/xml").send(twiml);
     }
     if (effectiveNoResponseAction === "skip") {
+      if (noResponseSmallTalkQuestion) {
+        const reply = buildNoResponseChitChatReply({
+          includeSpeaker: false,
+          hasHumor: !!acceptedAffect?.hasHumor
+        });
+        setDialogState(conv, "small_talk");
+        logRouteOutcome("routing_parser_no_response_smalltalk_ack", {
+          turnPrimaryIntent: routeExecutionIntent,
+          parserReason: routingParserDecision.reason,
+          mode: routePolicyMode
+        });
+        if (webhookMode === "suggest") {
+          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+        appendOutbound(conv, event.to, event.from, reply, "twilio");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+          reply
+        )}</Message>\n</Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
       logRouteOutcome("routing_parser_no_response", {
         turnPrimaryIntent: routeExecutionIntent,
         parserReason: routingParserDecision.reason,
