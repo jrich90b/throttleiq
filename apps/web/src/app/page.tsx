@@ -11223,8 +11223,9 @@ export default function Home() {
             ) : null}
 
             {cadenceResolveOpen ? (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-                <div className="w-full max-w-lg rounded-lg bg-white shadow-lg border p-4">
+              <div className="fixed inset-0 z-50 bg-black/40 overflow-y-auto">
+                <div className="min-h-full flex items-start sm:items-center justify-center p-2 sm:p-4">
+                <div className="w-full max-w-2xl max-h-[94dvh] overflow-y-auto rounded-lg bg-white shadow-lg border p-3 sm:p-4">
                   <div className="text-sm font-semibold">
                     {cadenceResolveMode === "watch" ? "Add vehicle watch" : "Follow-up cadence"}
                   </div>
@@ -11289,7 +11290,7 @@ export default function Home() {
                           const showCustomMakeInput = watchMakeOptions.length === 0 || !makeInOptions;
                           return (
                           <div key={`watch-${idx}`} className="border rounded p-3">
-                            <div className="grid grid-cols-2 gap-3">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                               <div>
                                 <div className="text-xs text-gray-500 mb-1">Condition</div>
                                 <select
@@ -11495,7 +11496,7 @@ export default function Home() {
                     <div className="text-xs text-red-600 mt-2">{cadenceResolveError}</div>
                   ) : null}
 
-                  <div className="mt-4 flex justify-end gap-2">
+                  <div className="mt-4 flex justify-end gap-2 sticky bottom-0 bg-white pt-3 border-t -mx-3 sm:-mx-4 px-3 sm:px-4">
                     <button
                       className="px-3 py-2 border rounded text-sm"
                       onClick={() => setCadenceResolveOpen(false)}
@@ -11511,6 +11512,7 @@ export default function Home() {
                       {cadenceResolveSaving ? "Saving…" : "Save"}
                     </button>
                   </div>
+                </div>
                 </div>
               </div>
             ) : null}
@@ -12788,7 +12790,7 @@ export default function Home() {
 
       {watchEditOpen ? (
         <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center bg-black/40 p-3 sm:p-4 overflow-y-auto">
-          <div className="w-full max-w-2xl rounded-lg bg-white shadow-lg border p-4 max-h-[calc(100vh-2rem)] sm:max-h-[90vh] overflow-y-auto">
+          <div className="w-full max-w-2xl rounded-lg bg-white shadow-lg border p-4 max-h-[94dvh] overflow-y-auto">
             <div className="text-sm font-semibold">Edit vehicle watch</div>
             <div className="mt-3 space-y-3">
               {watchEditItems.map((item, idx) => {
@@ -12801,7 +12803,7 @@ export default function Home() {
                 const showCustomMakeInput = watchMakeOptions.length === 0 || !makeInOptions;
                 return (
                 <div key={`watch-edit-${idx}`} className="border rounded p-3">
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <div className="text-xs text-gray-500 mb-1">Condition</div>
                       <select
@@ -13002,7 +13004,7 @@ export default function Home() {
               <div className="text-xs text-red-600 mt-2">{watchEditError}</div>
             ) : null}
 
-            <div className="mt-4 flex justify-end gap-2">
+            <div className="mt-4 flex justify-end gap-2 sticky bottom-0 bg-white pt-3 border-t -mx-4 px-4">
               <button
                 className="px-3 py-2 border rounded text-sm"
                 onClick={() => setWatchEditOpen(false)}
