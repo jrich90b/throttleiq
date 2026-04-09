@@ -393,6 +393,15 @@ export type AgentContextNote = {
   addressedReason?: string;
 };
 
+export type ConversationSoftTagValue = {
+  value?: string;
+  source?: string;
+  confidence?: number;
+  updatedAt: string;
+  expiresAt?: string;
+  meta?: Record<string, string | number | boolean | null>;
+};
+
 export type Conversation = {
   id: string;
   leadKey: string;
@@ -550,7 +559,7 @@ export type Conversation = {
     };
   };
   lastIntent?: {
-    name:
+      name:
       | "trade"
       | "pricing"
       | "payments"
@@ -592,6 +601,7 @@ export type Conversation = {
     reason?: string;
     messageId?: string;
   };
+  softTags?: Record<string, ConversationSoftTagValue>;
 };
 
 const conversations = new Map<string, Conversation>();
@@ -1600,6 +1610,57 @@ export function setConversationClassification(
 ): Conversation {
   conv.classification = classification;
   conv.updatedAt = nowIso();
+  scheduleSave();
+  return conv;
+}
+
+function normalizeSoftTagKey(raw: string): string {
+  return String(raw ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 64);
+}
+
+export function setConversationSoftTag(
+  conv: Conversation,
+  key: string,
+  patch: {
+    value?: string;
+    source?: string;
+    confidence?: number;
+    expiresAt?: string;
+    ttlMs?: number;
+    meta?: Record<string, string | number | boolean | null>;
+  }
+): Conversation {
+  const normalizedKey = normalizeSoftTagKey(key);
+  if (!normalizedKey) return conv;
+  const now = nowIso();
+  const current = conv.softTags?.[normalizedKey];
+  const ttlMs =
+    typeof patch.ttlMs === "number" && Number.isFinite(patch.ttlMs) && patch.ttlMs > 0
+      ? patch.ttlMs
+      : null;
+  const computedExpiry = ttlMs ? new Date(Date.now() + ttlMs).toISOString() : undefined;
+  const expiresAt = patch.expiresAt ?? computedExpiry ?? current?.expiresAt;
+  const confidence =
+    typeof patch.confidence === "number" && Number.isFinite(patch.confidence)
+      ? Math.max(0, Math.min(1, patch.confidence))
+      : current?.confidence;
+  const nextValue: ConversationSoftTagValue = {
+    value: patch.value ?? current?.value,
+    source: patch.source ?? current?.source,
+    confidence,
+    updatedAt: now,
+    expiresAt,
+    meta: patch.meta ?? current?.meta
+  };
+  conv.softTags = {
+    ...(conv.softTags ?? {}),
+    [normalizedKey]: nextValue
+  };
+  conv.updatedAt = now;
   scheduleSave();
   return conv;
 }

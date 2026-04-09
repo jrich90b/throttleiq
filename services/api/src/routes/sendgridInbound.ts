@@ -12,6 +12,7 @@ import {
   appendOutbound,
   mergeConversationLead,
   setConversationClassification,
+  setConversationSoftTag,
   updateHoldingFromInbound,
   confirmAppointmentIfMatchesSuggested,
   startFollowUpCadence,
@@ -3586,6 +3587,17 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (faqOrderIntentAccepted) {
     const inquiryCombined = `${effectiveInquiry} ${String(conv.lead?.vehicle?.model ?? "")}`.toLowerCase();
     const asksStreet750 = /\bstreet\s*750\b|\bharley\s*750\b|\b750\b/.test(inquiryCombined);
+    setConversationSoftTag(conv, "faq_order_intent", {
+      value: llmFaqTopic?.topic === "factory_order_timing" ? "factory_order_timing" : "custom_order",
+      source: "faq_parser",
+      confidence: faqConfidence,
+      ttlMs: 30 * 24 * 60 * 60 * 1000,
+      meta: {
+        explicitRequest: true,
+        asksStreet750,
+        initialAdf: true
+      }
+    });
     let ack =
       llmFaqTopic?.topic === "factory_order_timing"
         ? "Factory orders are usually around 6 to 12 weeks depending on model and build details. If you want, we can map your build and timing now."
@@ -3622,6 +3634,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (orderLexicalFallback) {
     const inquiryCombined = `${effectiveInquiry} ${String(conv.lead?.vehicle?.model ?? "")}`.toLowerCase();
     const asksStreet750 = /\bstreet\s*750\b|\bharley\s*750\b|\b750\b/.test(inquiryCombined);
+    setConversationSoftTag(conv, "faq_order_intent", {
+      value: asksStreet750 ? "street_750_order_inquiry" : "custom_order",
+      source: "faq_lexical_fallback",
+      ttlMs: 14 * 24 * 60 * 60 * 1000,
+      meta: {
+        asksStreet750,
+        initialAdf: true
+      }
+    });
     let ack =
       "Great question — we can place factory orders on current models, and factory timing is usually around 6 to 12 weeks depending on model/build. If you want, I can map options with you now.";
     if (asksStreet750) {
