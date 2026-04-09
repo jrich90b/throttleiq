@@ -47,6 +47,7 @@ import {
   parseDialogActWithLLM,
   parseInventoryEntitiesWithLLM,
   parseIntentWithLLM,
+  parseSemanticSlotsWithLLM,
   parseResponseControlWithLLM,
   parseBookingIntentWithLLM,
   parseJourneyIntentWithLLM,
@@ -1659,6 +1660,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         process.env.LLM_BOOKING_PARSER_ENABLED === "1" &&
         !!process.env.OPENAI_API_KEY;
       const bodyText = String(event.body ?? "");
+      const bodyTextLower = bodyText.toLowerCase();
       const hasScheduleKeyword =
         /\b(schedule|book|appointment|appt|reschedule|availability|available|openings?|stop by|stop in|come in|works?|what time|what times)\b/i.test(
           bodyText
@@ -1751,14 +1753,125 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           console.warn("[sendgrid inbound] human scheduling parser failed:", err?.message ?? err);
         }
       }
+      let watchHandledByParser = false;
+      const watchParserEligible =
+        process.env.LLM_ENABLED === "1" &&
+        process.env.LLM_SEMANTIC_SLOT_PARSER_ENABLED === "1" &&
+        !!process.env.OPENAI_API_KEY;
+      const watchParserHint =
+        /\b(let me know|keep me posted|keep an eye out|watch for|notify me|text me when|if you get one|when you get one|as soon as one comes in)\b/i.test(
+          bodyTextLower
+        ) ||
+        !!conv.inventoryWatchPending ||
+        !!conv.inventoryWatch;
+      if (watchParserEligible && watchParserHint) {
+        try {
+          const semantic = await parseSemanticSlotsWithLLM({
+            text: bodyText,
+            history: buildEffectiveHistory(conv, 12),
+            lead: conv.lead,
+            inventoryWatch: conv.inventoryWatch,
+            inventoryWatchPending: conv.inventoryWatchPending,
+            dialogState: String(conv?.dialogState?.name ?? "")
+          });
+          const semanticConfidence =
+            typeof semantic?.confidence === "number" ? semantic.confidence : 0;
+          const semanticConfidenceMin = Number(process.env.LLM_SEMANTIC_SLOT_CONFIDENCE_MIN ?? 0.76);
+          const semanticAccepted =
+            !!semantic &&
+            semanticConfidence >= semanticConfidenceMin &&
+            (semantic.watchAction !== "none" ||
+              !!semantic.watch?.model ||
+              !!semantic.watch?.year ||
+              !!semantic.watch?.color);
+          const watchAction = semanticAccepted ? semantic.watchAction : "none";
+          const watchIntent =
+            watchAction === "set_watch" ||
+            /\b(keep an eye out|watch for|notify me|let me know when|text me when|if you get one|when you get one|as soon as one comes in)\b/i.test(
+              bodyTextLower
+            );
+          if (watchIntent) {
+            const inventoryParserEligible =
+              process.env.LLM_ENABLED === "1" &&
+              process.env.LLM_INVENTORY_ENTITY_PARSER_ENABLED !== "0" &&
+              !!process.env.OPENAI_API_KEY;
+            const inv = inventoryParserEligible
+              ? await parseInventoryEntitiesWithLLM({
+                  text: bodyText,
+                  history: buildEffectiveHistory(conv, 8),
+                  lead: conv.lead
+                })
+              : null;
+            const invConfidence =
+              typeof inv?.confidence === "number" ? inv.confidence : 0;
+            const invConfidenceMin = Number(process.env.LLM_INVENTORY_ENTITY_CONFIDENCE_MIN ?? 0.68);
+            const invAccepted = !!inv && invConfidence >= invConfidenceMin;
+            const leadVehicle = conv.lead?.vehicle ?? {};
+            const rawModel =
+              String(semantic?.watch?.model ?? "").trim() ||
+              (invAccepted ? String(inv?.model ?? "").trim() : "") ||
+              normalizeVehicleModel(leadVehicle?.model, leadVehicle?.make) ||
+              "";
+            const model = normalizeVehicleModel(rawModel, leadVehicle?.make) || rawModel || undefined;
+            const semanticYearNum = Number(semantic?.watch?.year ?? NaN);
+            const invYearNum = Number(inv?.year ?? NaN);
+            const leadYearNum = Number(leadVehicle?.year ?? NaN);
+            const year = Number.isFinite(semanticYearNum)
+              ? semanticYearNum
+              : Number.isFinite(invYearNum)
+                ? invYearNum
+                : Number.isFinite(leadYearNum)
+                  ? leadYearNum
+                  : undefined;
+            const color = (
+              String(semantic?.watch?.color ?? "").trim() ||
+              (invAccepted ? String(inv?.color ?? "").trim() : "") ||
+              String(leadVehicle?.color ?? "").trim()
+            ) || undefined;
+            const nowIso = new Date().toISOString();
+            if (model) {
+              const watch: InventoryWatch = {
+                model,
+                status: "active",
+                createdAt: nowIso
+              };
+              if (year && Number.isFinite(Number(year))) watch.year = Number(year);
+              if (color) watch.color = color;
+              const condition = normalizeVehicleCondition(leadVehicle?.condition);
+              if (condition) watch.condition = condition;
+              if (watch.year && watch.color) watch.exactness = "exact";
+              else if (watch.year) watch.exactness = "year_model";
+              conv.inventoryWatch = watch;
+              conv.inventoryWatches = [watch];
+              conv.inventoryWatchPending = undefined;
+              conv.dialogState = { name: "inventory_watch_active", updatedAt: nowIso };
+              setFollowUpMode(conv, "holding_inventory", "inventory_watch");
+              stopFollowUpCadence(conv, "inventory_watch");
+              watchHandledByParser = true;
+            } else {
+              conv.inventoryWatchPending = {
+                year,
+                color,
+                askedAt: nowIso
+              };
+              conv.dialogState = { name: "inventory_watch_prompted", updatedAt: nowIso };
+              watchHandledByParser = true;
+            }
+          }
+        } catch (err: any) {
+          console.warn("[sendgrid inbound] human watch parser failed:", err?.message ?? err);
+        }
+      }
       addTodo(
         conv,
         "note",
         buildHumanEmailReplyTodoSummary(event.body),
         event.providerMessageId
       );
-      setFollowUpMode(conv, "manual_handoff", "human_email_reply");
-      stopFollowUpCadence(conv, "manual_handoff");
+      if (!watchHandledByParser) {
+        setFollowUpMode(conv, "manual_handoff", "human_email_reply");
+        stopFollowUpCadence(conv, "manual_handoff");
+      }
       delete conv.emailDraft;
       saveConversation(conv);
       await flushConversationStore();
@@ -2936,7 +3049,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       llmIntent.intent === "availability" &&
       llmIntent.explicitRequest === true &&
       Number(llmIntent.confidence ?? 0) >= intentConfidenceMin;
-    const hasWatchIntent = hasWatchIntentFromParser;
+    const hasWatchIntentFromText =
+      /\b(keep an eye out|watch for|please watch|notify me|let me know when|text me when)\b/.test(
+        commentLower
+      ) || /\bif one comes in\b/.test(commentLower);
+    const hasWatchIntent = hasWatchIntentFromParser || hasWatchIntentFromText;
     const wantsUsed =
       conv.lead?.vehicle?.condition === "used" ||
       /pre[-\s]?owned|used/.test(commentLower);
@@ -3181,9 +3298,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     ) {
       if (wantsUsed) {
         const usedLabel = `used ${rangeLabel}${modelLabel}`;
-        tail = hasUsedMatch
-          ? `We do have a ${usedLabel} in stock right now — want me to send details?`
-          : `I’ll keep an eye out for a ${usedLabel} and let you know if one comes in.`;
+        if (hasUsedMatch) {
+          tail = `We do have a ${usedLabel} in stock right now — want me to send details?`;
+        } else {
+          tail = hasWatchIntent
+            ? `I’ll keep an eye out for a ${usedLabel} and let you know if one comes in.`
+            : `I can help track down a ${usedLabel}. Want me to send options as they come in?`;
+        }
       } else if (wantsNew && hasWatchIntent) {
         const newLabel = `new ${rangeLabel}${modelLabel}`;
         tail = hasNewMatch
@@ -3191,7 +3312,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           : `I’ll keep an eye out for a ${newLabel} and let you know when one comes in.`;
       } else {
         const label = `${rangeLabel}${modelLabel}`;
-        tail = `I’ll keep an eye out for a ${label} and let you know if one comes in.`;
+        tail = hasWatchIntent
+          ? `I’ll keep an eye out for a ${label} and let you know if one comes in.`
+          : `I can help with details on ${label} and options when you’re ready.`;
       }
       if (walkInTestRideRequested && walkInWeatherSensitive) {
         const rideLabel = wantsUsed
@@ -3242,15 +3365,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       !!conv.hold ||
       conv.followUp?.mode === "paused_indefinite";
 
-    if (
-      modelLabel &&
-      wantsUsed &&
-      !hasUsedMatch &&
-      !(hasDealProgressSignal || hasCreditCosignerSignal)
-    ) {
+    if (modelLabel && hasWatchIntent && !(hasDealProgressSignal || hasCreditCosignerSignal)) {
+      const requestedCondition: "new" | "used" | undefined = wantsUsed
+        ? "used"
+        : wantsNew
+          ? "new"
+          : undefined;
       const watch: InventoryWatch = {
         model: modelLabel,
-        condition: "used",
+        condition: requestedCondition,
         year: singleYear,
         yearMin: yearRange?.min,
         yearMax: yearRange?.max,
@@ -3261,40 +3384,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         exactness: "model_only",
         status: "active",
         createdAt: new Date().toISOString(),
-        note: "walk_in"
-      };
-      if (watch.yearMin && watch.yearMax) {
-        watch.exactness = "model_range";
-      } else if (watch.year) {
-        watch.exactness = "year_model";
-      }
-      conv.inventoryWatch = watch;
-      conv.inventoryWatches = [watch];
-      conv.inventoryWatchPending = undefined;
-      conv.dialogState = { name: "inventory_watch_active", updatedAt: new Date().toISOString() };
-      setFollowUpMode(conv, "holding_inventory", "inventory_watch");
-      stopFollowUpCadence(conv, "inventory_watch");
-    } else if (
-      modelLabel &&
-      wantsNew &&
-      hasWatchIntent &&
-      !hasNewMatch &&
-      !(hasDealProgressSignal || hasCreditCosignerSignal)
-    ) {
-      const watch: InventoryWatch = {
-        model: modelLabel,
-        condition: "new",
-        year: singleYear,
-        yearMin: yearRange?.min,
-        yearMax: yearRange?.max,
-        color: desiredColor,
-        trim: desiredTrim,
-        minPrice: priceRange?.minPrice,
-        maxPrice: priceRange?.maxPrice,
-        exactness: "model_only",
-        status: "active",
-        createdAt: new Date().toISOString(),
-        note: "walk_in_new"
+        note: "walk_in_explicit_watch"
       };
       if (watch.yearMin && watch.yearMax) {
         watch.exactness = "model_range";
