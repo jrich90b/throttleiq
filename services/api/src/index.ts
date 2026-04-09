@@ -1190,11 +1190,11 @@ function buildNoResponseChitChatReply(args?: {
   const speaker = String(args?.speaker ?? "").trim();
   const includeSpeaker = !!args?.includeSpeaker && !!speaker;
   const hasHumor = !!args?.hasHumor;
-  const opener = hasHumor ? "Haha I hear you" : "Good one";
+  const opener = hasHumor ? "Haha, fair one" : "Totally fair";
   if (includeSpeaker) {
-    return `${opener} — this is ${speaker}. I’m here if you need anything.`;
+    return `${opener} — this is ${speaker}. Whenever you want, we can jump back into bike talk.`;
   }
-  return `${opener} — I’m here if you need anything.`;
+  return `${opener} — whenever you want, we can jump back into bike talk.`;
 }
 
 async function buildNoResponseChitChatReplyWithLLM(args: {
@@ -1203,7 +1203,7 @@ async function buildNoResponseChitChatReplyWithLLM(args: {
   includeSpeaker?: boolean;
   speaker?: string | null;
   hasHumor?: boolean;
-}): Promise<string> {
+}): Promise<{ reply: string; source: "llm" | "fallback" }> {
   const llmReply = await safeLlmParse("smalltalk_reply", () =>
     generateSmallTalkReplyWithLLM({
       text: args.text,
@@ -1212,12 +1212,15 @@ async function buildNoResponseChitChatReplyWithLLM(args: {
     })
   );
   const reply = String(llmReply?.reply ?? "").trim();
-  if (reply) return reply;
-  return buildNoResponseChitChatReply({
-    includeSpeaker: !!args.includeSpeaker,
-    speaker: args.speaker,
-    hasHumor: !!args.hasHumor
-  });
+  if (reply) return { reply, source: "llm" };
+  return {
+    reply: buildNoResponseChitChatReply({
+      includeSpeaker: !!args.includeSpeaker,
+      speaker: args.speaker,
+      hasHumor: !!args.hasHumor
+    }),
+    source: "fallback"
+  };
 }
 
 async function safeDealerWeatherStatus(
@@ -17402,17 +17405,22 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     if (regenEffectiveAction === "skip") {
       if (regenNoResponseSmallTalkQuestion) {
-        const reply = await buildNoResponseChitChatReplyWithLLM({
+        const chit = await buildNoResponseChitChatReplyWithLLM({
           text: regenNoResponseInboundText,
           history,
           includeSpeaker: false,
           hasHumor: !!regenAcceptedAffect?.hasHumor
         });
         setDialogState(conv, "small_talk");
+        recordRouteOutcome("regen", "routing_parser_no_response_smalltalk_ack", {
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          replySource: chit.source
+        });
         if (channel === "email") {
-          return respondWithEmailRegeneratedDraft(reply);
+          return respondWithEmailRegeneratedDraft(chit.reply);
         }
-        return respondWithSmsRegeneratedDraft(reply);
+        return respondWithSmsRegeneratedDraft(chit.reply);
       }
       return respondRegenerateSkipped("routing_parser_no_response");
     }
@@ -21476,22 +21484,27 @@ if (authToken && signature) {
     if (effectiveNoResponseAction === "ack_manual_handoff_question") {
       const dealerProfile = await getDealerProfileHot();
       const speaker = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
-      const reply = noResponseSmallTalkQuestion
-        ? await buildNoResponseChitChatReplyWithLLM({
-            text: noResponseInboundText,
-            history: buildHistory(conv, 8),
-            speaker,
-            includeSpeaker: true,
-            hasHumor: !!acceptedAffect?.hasHumor
-          })
-        : `Got it — this is ${speaker}. I’m checking that now and will follow up shortly.`;
+      let reply = `Got it — this is ${speaker}. I’m checking that now and will follow up shortly.`;
+      let replySource: "llm" | "fallback" | "manual_handoff" = "manual_handoff";
+      if (noResponseSmallTalkQuestion) {
+        const chit = await buildNoResponseChitChatReplyWithLLM({
+          text: noResponseInboundText,
+          history: buildHistory(conv, 8),
+          speaker,
+          includeSpeaker: true,
+          hasHumor: !!acceptedAffect?.hasHumor
+        });
+        reply = chit.reply;
+        replySource = chit.source;
+      }
       if (noResponseSmallTalkQuestion) {
         setDialogState(conv, "small_talk");
       }
       logRouteOutcome("routing_parser_no_response_manual_handoff_ack", {
         turnPrimaryIntent: routeExecutionIntent,
         parserReason: routingParserDecision.reason,
-        mode: routePolicyMode
+        mode: routePolicyMode,
+        replySource
       });
       if (webhookMode === "suggest") {
         appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -21524,7 +21537,7 @@ if (authToken && signature) {
     }
     if (effectiveNoResponseAction === "skip") {
       if (noResponseSmallTalkQuestion) {
-        const reply = await buildNoResponseChitChatReplyWithLLM({
+        const chit = await buildNoResponseChitChatReplyWithLLM({
           text: noResponseInboundText,
           history: buildHistory(conv, 8),
           includeSpeaker: false,
@@ -21534,16 +21547,17 @@ if (authToken && signature) {
         logRouteOutcome("routing_parser_no_response_smalltalk_ack", {
           turnPrimaryIntent: routeExecutionIntent,
           parserReason: routingParserDecision.reason,
-          mode: routePolicyMode
+          mode: routePolicyMode,
+          replySource: chit.source
         });
         if (webhookMode === "suggest") {
-          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+          appendOutbound(conv, event.to, event.from, chit.reply, "draft_ai");
           const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
           return res.status(200).type("text/xml").send(twiml);
         }
-        appendOutbound(conv, event.to, event.from, reply, "twilio");
+        appendOutbound(conv, event.to, event.from, chit.reply, "twilio");
         const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-          reply
+          chit.reply
         )}</Message>\n</Response>`;
         return res.status(200).type("text/xml").send(twiml);
       }
@@ -21617,7 +21631,7 @@ if (authToken && signature) {
     !!pricingContinuationSmallTalkParse?.smallTalk &&
     (pricingContinuationSmallTalkParse.confidence ?? 0) >= 0.72;
   if (pricingContinuationSmallTalk) {
-    const reply = await buildNoResponseChitChatReplyWithLLM({
+    const chit = await buildNoResponseChitChatReplyWithLLM({
       text: pricingContinuationInboundText,
       history: buildHistory(conv, 8),
       includeSpeaker: false,
@@ -21627,22 +21641,24 @@ if (authToken && signature) {
     if (routeExecGeneral) {
       logRouteOutcome("general_smalltalk_ack", {
         turnPrimaryIntent: routeExecutionIntent,
-        confidence: pricingContinuationSmallTalkParse?.confidence ?? null
+        confidence: pricingContinuationSmallTalkParse?.confidence ?? null,
+        replySource: chit.source
       });
     } else {
       logRouteOutcome("pricing_continuation_smalltalk_ack", {
         turnPrimaryIntent: routeExecutionIntent,
-        confidence: pricingContinuationSmallTalkParse?.confidence ?? null
+        confidence: pricingContinuationSmallTalkParse?.confidence ?? null,
+        replySource: chit.source
       });
     }
     if (webhookMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      appendOutbound(conv, event.to, event.from, chit.reply, "draft_ai");
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    appendOutbound(conv, event.to, event.from, chit.reply, "twilio");
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
+      chit.reply
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
@@ -24700,7 +24716,7 @@ if (authToken && signature) {
   });
   const generalGenericCheckingCandidate =
     event.provider === "twilio" &&
-    routeExecGeneral &&
+    (routeExecGeneral || routeExecPricing || routeExecAvailability) &&
     !hasExplicitFinanceLanguageThisTurn &&
     !hasExplicitAvailabilityLanguageThisTurn &&
     !schedulingSignals.hasDayTime &&
@@ -24724,14 +24740,18 @@ if (authToken && signature) {
     const genericSmallTalk =
       !!genericSmallTalkParse?.smallTalk &&
       (genericSmallTalkParse.confidence ?? 0) >= 0.7;
-    const rewrittenDraft = genericSmallTalk
-      ? await buildNoResponseChitChatReplyWithLLM({
-          text: String(event.body ?? ""),
-          history,
-          includeSpeaker: false,
-          hasHumor: !!acceptedAffect?.hasHumor
-        })
-      : "Got it — are you asking about bike specs, availability, payments, or setting a time to come in?";
+    let rewrittenDraft = "Got it — are you asking about bike specs, availability, payments, or setting a time to come in?";
+    let replySource: "llm" | "fallback" | "clarify" = "clarify";
+    if (genericSmallTalk) {
+      const chit = await buildNoResponseChitChatReplyWithLLM({
+        text: String(event.body ?? ""),
+        history,
+        includeSpeaker: false,
+        hasHumor: !!acceptedAffect?.hasHumor
+      });
+      rewrittenDraft = chit.reply;
+      replySource = chit.source;
+    }
     result.intent = "GENERAL";
     result.stage = "ENGAGED";
     result.shouldRespond = true;
@@ -24745,12 +24765,13 @@ if (authToken && signature) {
     }
     logRouteOutcome("general_generic_checking_rewrite", {
       smallTalk: genericSmallTalk,
-      confidence: genericSmallTalkParse?.confidence ?? null
+      confidence: genericSmallTalkParse?.confidence ?? null,
+      replySource
     });
   }
   const generalOrchestratorPricingCarryoverCandidate =
     event.provider === "twilio" &&
-    routeExecGeneral &&
+    (routeExecGeneral || routeExecPricing || routeExecAvailability) &&
     !hasExplicitFinanceLanguageThisTurn &&
     !hasExplicitAvailabilityLanguageThisTurn &&
     !schedulingSignals.hasDayTime &&
@@ -24771,14 +24792,18 @@ if (authToken && signature) {
     const carryoverSmallTalk =
       !!carryoverSmallTalkParse?.smallTalk &&
       (carryoverSmallTalkParse.confidence ?? 0) >= 0.7;
-    const rewrittenDraft = carryoverSmallTalk
-      ? await buildNoResponseChitChatReplyWithLLM({
-          text: String(event.body ?? ""),
-          history,
-          includeSpeaker: false,
-          hasHumor: !!acceptedAffect?.hasHumor
-        })
-      : "Got it — are you asking about bike specs, availability, payments, or setting a time to come in?";
+    let rewrittenDraft = "Got it — are you asking about bike specs, availability, payments, or setting a time to come in?";
+    let replySource: "llm" | "fallback" | "clarify" = "clarify";
+    if (carryoverSmallTalk) {
+      const chit = await buildNoResponseChitChatReplyWithLLM({
+        text: String(event.body ?? ""),
+        history,
+        includeSpeaker: false,
+        hasHumor: !!acceptedAffect?.hasHumor
+      });
+      rewrittenDraft = chit.reply;
+      replySource = chit.source;
+    }
     result.intent = "GENERAL";
     result.stage = "ENGAGED";
     result.shouldRespond = true;
@@ -24792,7 +24817,8 @@ if (authToken && signature) {
     }
     logRouteOutcome("general_orchestrator_pricing_rewrite", {
       smallTalk: carryoverSmallTalk,
-      confidence: carryoverSmallTalkParse?.confidence ?? null
+      confidence: carryoverSmallTalkParse?.confidence ?? null,
+      replySource
     });
   }
   if (result.smallTalk) {
