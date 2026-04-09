@@ -2499,7 +2499,8 @@ app.post("/debug/inbound/process", express.json(), async (req, res) => {
       primaryIntentHint: "general",
       lead: conv.lead ?? null,
       pricingAttempts: getPricingAttempts(conv),
-      allowSchedulingOffer: isExplicitScheduleIntent(body),
+      // Parser-first routing: avoid deterministic scheduling hints in debug path.
+      allowSchedulingOffer: false,
       voiceSummary: getActiveVoiceContext(conv)?.summary ?? null,
       memorySummary,
       memorySummaryShouldUpdate,
@@ -17280,6 +17281,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenParserAvailabilityIntent = regenRoutingIntentOverride === "availability";
   const regenRoutePolicyMode = getRoutePolicyMode();
   if (regenRoutingParserDecision.accepted && regenRoutingParserDecision.fallbackAction === "no_response") {
+    const regenNoResponseInboundText = String(event.body ?? "");
+    const regenNoResponseSmallTalkParse = await safeLlmParse("regen_no_response_smalltalk", () =>
+      classifySmallTalkWithLLM({
+        text: regenNoResponseInboundText,
+        history
+      })
+    );
+    const regenNoResponseSmallTalkQuestion =
+      !!regenNoResponseSmallTalkParse?.smallTalk &&
+      (regenNoResponseSmallTalkParse.confidence ?? 0) >= 0.7 &&
+      /\?/.test(regenNoResponseInboundText);
     const regenLogisticsProgressUpdate = isLogisticsProgressUpdateText(event.body ?? "");
     const regenStoredPaymentContext = getStoredPaymentBudgetContext(conv);
     const regenNoResponseDecision = evaluateNoResponseFallback({
@@ -17298,9 +17310,14 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       isLogisticsProgressUpdate: regenLogisticsProgressUpdate,
       isManualHandoff: false,
       manualHandoffQuestionCandidate: false,
+      smallTalkQuestionCandidate: regenNoResponseSmallTalkQuestion,
       allowManualHandoffQuestionAck: false
     });
-    const regenLegacyAction = regenNoResponseDecision.shouldSkipNoResponse ? "skip" : "override";
+    const regenLegacyAction = regenNoResponseDecision.shouldSkipNoResponse
+      ? "skip"
+      : regenNoResponseSmallTalkQuestion
+        ? "skip"
+        : "override";
     if (regenRoutePolicyMode !== "legacy" && regenLegacyAction !== regenPolicyDecision.action) {
       recordRouteOutcome("regen", "routing_policy_no_response_mismatch", {
         convId: conv.id,
@@ -17322,6 +17339,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       return respondWithSmsRegeneratedDraft(progressReply);
     }
     if (regenEffectiveAction === "skip") {
+      if (regenNoResponseSmallTalkQuestion) {
+        const reply = buildNoResponseChitChatReply({
+          includeSpeaker: false,
+          hasHumor: !!regenAcceptedAffect?.hasHumor
+        });
+        setDialogState(conv, "small_talk");
+        if (channel === "email") {
+          return respondWithEmailRegeneratedDraft(reply);
+        }
+        return respondWithSmsRegeneratedDraft(reply);
+      }
       return respondRegenerateSkipped("routing_parser_no_response");
     }
     recordRouteOutcome("regen", "routing_parser_no_response_overridden", {
@@ -21309,6 +21337,17 @@ if (authToken && signature) {
   const hasParserNoResponseFallback =
     routingParserDecision.accepted && routingParserDecision.fallbackAction === "no_response";
   if (hasParserNoResponseFallback) {
+    const noResponseInboundText = String(event.body ?? "");
+    const noResponseSmallTalkParse = await safeLlmParse("no_response_smalltalk", () =>
+      classifySmallTalkWithLLM({
+        text: noResponseInboundText,
+        history
+      })
+    );
+    const noResponseSmallTalkQuestion =
+      !!noResponseSmallTalkParse?.smallTalk &&
+      (noResponseSmallTalkParse.confidence ?? 0) >= 0.7 &&
+      /\?/.test(noResponseInboundText);
     const manualHandoffMode = String(conv?.followUp?.mode ?? "").toLowerCase() === "manual_handoff";
     const manualHandoffNoResponseQuestion =
       manualHandoffMode && !shortAck && /\?/.test(String(event.body ?? ""));
@@ -21318,6 +21357,7 @@ if (authToken && signature) {
       isLogisticsProgressUpdate: logisticsProgressUpdate,
       isManualHandoff: manualHandoffMode,
       manualHandoffQuestionCandidate: manualHandoffNoResponseQuestion,
+      smallTalkQuestionCandidate: noResponseSmallTalkQuestion,
       allowManualHandoffQuestionAck: true
     });
     const legacyNoResponseAction = noResponseContextDecision.shouldSkipNoResponse
@@ -21326,7 +21366,9 @@ if (authToken && signature) {
         : logisticsProgressUpdate
           ? "ack_progress_update"
           : "skip"
-      : "override";
+      : noResponseSmallTalkQuestion
+        ? "skip"
+        : "override";
     if (routePolicyMode !== "legacy" && legacyNoResponseAction !== policyNoResponseDecision.action) {
       logRouteOutcome("routing_policy_no_response_mismatch", {
         turnPrimaryIntent: routeExecutionIntent,
@@ -21339,20 +21381,6 @@ if (authToken && signature) {
     }
     const effectiveNoResponseAction =
       routePolicyMode === "enforce" ? policyNoResponseDecision.action : legacyNoResponseAction;
-    const noResponseInboundText = String(event.body ?? "");
-    const noResponseSmallTalkParse =
-      effectiveNoResponseAction === "override"
-        ? null
-        : await safeLlmParse("no_response_smalltalk", () =>
-            classifySmallTalkWithLLM({
-              text: noResponseInboundText,
-              history
-            })
-          );
-    const noResponseSmallTalkQuestion =
-      !!noResponseSmallTalkParse?.smallTalk &&
-      (noResponseSmallTalkParse.confidence ?? 0) >= 0.7 &&
-      /\?/.test(noResponseInboundText);
     if (effectiveNoResponseAction === "ack_manual_handoff_question") {
       const dealerProfile = await getDealerProfileHot();
       const speaker = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");

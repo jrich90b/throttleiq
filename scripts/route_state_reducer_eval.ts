@@ -459,6 +459,25 @@ const noResponsePolicyCases: NoResponsePolicyCase[] = [
     }
   },
   {
+    id: "policy_small_talk_question_skip_even_with_actionable_context",
+    input: {
+      hasParserNoResponse: true,
+      actionable: {
+        hasActionableFinanceContext: true,
+        hasActionableAvailabilityContext: false,
+        hasActionableSchedulingContext: false,
+        hasActionableCallbackContext: false,
+        hasActionableTurnContext: true
+      },
+      smallTalkQuestionCandidate: true
+    },
+    expected: {
+      applicable: true,
+      action: "skip",
+      reason: "small_talk_question_ack"
+    }
+  },
+  {
     id: "policy_override_when_actionable_context_present",
     input: {
       hasParserNoResponse: true,

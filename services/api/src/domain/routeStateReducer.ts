@@ -111,6 +111,7 @@ export type NoResponsePolicyInput = {
   isLogisticsProgressUpdate?: boolean;
   isManualHandoff?: boolean;
   manualHandoffQuestionCandidate?: boolean;
+  smallTalkQuestionCandidate?: boolean;
   allowManualHandoffQuestionAck?: boolean;
 };
 
@@ -119,6 +120,7 @@ export type NoResponsePolicyDecision = {
   action: NoResponsePolicyAction;
   reason:
     | "not_no_response_fallback"
+    | "small_talk_question_ack"
     | "actionable_context_present"
     | "progress_update_ack"
     | "manual_handoff_question_ack"
@@ -361,6 +363,13 @@ export function resolveNoResponsePolicyDecision(
       applicable: false,
       action: "override",
       reason: "not_no_response_fallback"
+    };
+  }
+  if (input.smallTalkQuestionCandidate) {
+    return {
+      applicable: true,
+      action: "skip",
+      reason: "small_talk_question_ack"
     };
   }
   if (input.actionable.hasActionableTurnContext) {

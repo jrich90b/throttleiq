@@ -149,6 +149,12 @@ export async function classifySmallTalkWithLLM(args: {
     "- small_talk=false if the message asks the dealership to do something or needs a concrete business answer.",
     "- small_talk=false if it mentions scheduling, pricing, payments, availability, trade-in, test ride, callback, or hours.",
     "",
+    "Examples:",
+    "- \"Did you watch the Sabres game last night?\" => small_talk=true",
+    "- \"You ready for NHL playoffs?\" => small_talk=true",
+    "- \"Do you have any black street glides in stock?\" => small_talk=false",
+    "- \"Can I come in Saturday at 9:30?\" => small_talk=false",
+    "",
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
     `Message: ${text}`
   ].join("\n");
@@ -2226,6 +2232,19 @@ output: {"primary_intent":"none","explicit_request":false,"fallback_action":"no_
     `EXAMPLE M
 inbound: "Hi Gio, I received all my paperwork yesterday. I am going to the notary/DMV this afternoon."
 output: {"primary_intent":"general","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.93}`
+    ,
+    `EXAMPLE N
+inbound: "Did you watch the Sabres game last night?"
+output: {"primary_intent":"general","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.92}`,
+    `EXAMPLE O
+inbound: "You ready for nhl playoffs?"
+output: {"primary_intent":"general","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.91}`,
+    `EXAMPLE P
+inbound: "Actually do you have any black street glides in stock?"
+output: {"primary_intent":"availability","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.97}`,
+    `EXAMPLE Q
+inbound: "Ignore payments for now — what black options do you have in stock?"
+output: {"primary_intent":"availability","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.97}`
   ];
   const prompt = [
     "You are a strict routing parser for dealership inbound messages.",
