@@ -21511,7 +21511,7 @@ if (authToken && signature) {
     );
   const pricingContinuationOffTopicCandidate =
     event.provider === "twilio" &&
-    (routeExecPricing || routeExecAvailability) &&
+    (routeExecPricing || routeExecAvailability || routeExecGeneral) &&
     !hasExplicitFinanceLanguageThisTurn &&
     !hasExplicitAvailabilityLanguageThisTurn &&
     !schedulingSignals.hasDayTime &&
@@ -21538,10 +21538,17 @@ if (authToken && signature) {
       hasHumor: !!acceptedAffect?.hasHumor
     });
     setDialogState(conv, "small_talk");
-    logRouteOutcome("pricing_continuation_smalltalk_ack", {
-      turnPrimaryIntent: routeExecutionIntent,
-      confidence: pricingContinuationSmallTalkParse?.confidence ?? null
-    });
+    if (routeExecGeneral) {
+      logRouteOutcome("general_smalltalk_ack", {
+        turnPrimaryIntent: routeExecutionIntent,
+        confidence: pricingContinuationSmallTalkParse?.confidence ?? null
+      });
+    } else {
+      logRouteOutcome("pricing_continuation_smalltalk_ack", {
+        turnPrimaryIntent: routeExecutionIntent,
+        confidence: pricingContinuationSmallTalkParse?.confidence ?? null
+      });
+    }
     if (webhookMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
