@@ -4,6 +4,32 @@ import type { Conversation } from "./conversationStore.js";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+function isGpt5Model(model: string): boolean {
+  return /^gpt-5/i.test(String(model ?? "").trim());
+}
+
+function modelSupportsTemperature(model: string): boolean {
+  return !isGpt5Model(model);
+}
+
+function optionalTemperature(model: string, temperature: number): Record<string, number> {
+  return modelSupportsTemperature(model) ? { temperature } : {};
+}
+
+function optionalReasoning(model: string): Record<string, { effort: "minimal" }> {
+  return isGpt5Model(model) ? { reasoning: { effort: "minimal" } } : {};
+}
+
+function optionalCreateTextConfig(
+  model: string
+): Record<string, { effort: "minimal" } | { verbosity: "low" }> {
+  if (!isGpt5Model(model)) return {};
+  return {
+    reasoning: { effort: "minimal" },
+    text: { verbosity: "low" }
+  };
+}
+
 export type DraftContext = {
   channel: "sms" | "email" | "facebook_messenger" | "task";
   leadSource?: string | null;
@@ -158,6 +184,11 @@ export async function classifySmallTalkWithLLM(args: {
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
     `Message: ${text}`
   ].join("\n");
+  const normalizeConfidence = (value: unknown, fallback: number = 0.8): number =>
+    typeof value === "number" && Number.isFinite(value)
+      ? Math.max(0, Math.min(1, value))
+      : fallback;
+
   try {
     const parsed = await requestStructuredJson({
       model,
@@ -167,23 +198,44 @@ export async function classifySmallTalkWithLLM(args: {
       maxOutputTokens: 120,
       debugTag: "llm-smalltalk-classifier"
     });
-    if (!parsed || typeof parsed !== "object") return null;
-    const smallTalk = !!parsed.small_talk;
-    const confidence =
-      typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
-        ? Math.max(0, Math.min(1, parsed.confidence))
-        : undefined;
-    return { smallTalk, confidence };
-  } catch {
-    return null;
-  }
+    if (parsed && typeof parsed === "object") {
+      return {
+        smallTalk: !!parsed.small_talk,
+        confidence: normalizeConfidence(parsed.confidence, 0.8)
+      };
+    }
+  } catch {}
+
+  // LLM backup classification path (still model-based, no lexical regex fallback).
+  try {
+    const fallbackResp = await client.responses.create({
+      model,
+      instructions:
+        "Classify dealership SMS. Return exactly one token: SMALL_TALK or NOT_SMALL_TALK. " +
+        "SMALL_TALK means off-topic or pleasantry with no dealership action request.",
+      input: [
+        history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+        `Message: ${text}`
+      ].join("\n"),
+      ...optionalCreateTextConfig(model),
+      ...optionalTemperature(model, 0),
+      max_output_tokens: 12
+    });
+    const out = String(fallbackResp.output_text ?? "")
+      .trim()
+      .toUpperCase();
+    if (/\bNOT[\s_-]*SMALL[\s_-]*TALK\b/.test(out)) return { smallTalk: false, confidence: 0.8 };
+    if (/\bSMALL[\s_-]*TALK\b/.test(out)) return { smallTalk: true, confidence: 0.8 };
+  } catch {}
+
+  return null;
 }
 
 export async function generateSmallTalkReplyWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
   hasHumorHint?: boolean;
-}): Promise<{ reply: string; confidence?: number } | null> {
+}): Promise<{ reply: string; confidence?: number; source?: "structured" | "freeform" } | null> {
   const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
   if (!useLLM) return null;
   const model = process.env.OPENAI_MODEL || "gpt-5-mini";
@@ -223,6 +275,57 @@ export async function generateSmallTalkReplyWithLLM(args: {
     `Humor hint: ${hasHumorHint ? "true" : "false"}`,
     `Customer message: ${text}`
   ].join("\n");
+  const genericPatterns = [
+    /\bim here if you need anything\b/,
+    /\bi am here if you need anything\b/,
+    /\bgot it\b/,
+    /\bi m checking that now\b/,
+    /\bim checking that now\b/
+  ];
+  const normalizeReply = (input: string) =>
+    String(input ?? "")
+      .trim()
+      .replace(/^["'`]+|["'`]+$/g, "")
+      .replace(/\s+/g, " ");
+  const isTooGeneric = (input: string) => {
+    const normalized = input
+      .toLowerCase()
+      .replace(/[^\w\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return genericPatterns.some(rx => rx.test(normalized));
+  };
+
+  const tryFreeformBackup = async (): Promise<string | null> => {
+    try {
+      const resp = await client.responses.create({
+        model,
+        instructions: [
+          "Write one short, natural SMS reply (max 1 sentence, <= 20 words).",
+          "The customer sent off-topic small talk/chatter.",
+          "Acknowledge casually and lightly keep the door open for bike help.",
+          "Do not say you're checking anything.",
+          "Do not use: 'I'm here if you need anything.'",
+          "Do not switch into pricing/availability/scheduling."
+        ].join(" "),
+        input: [
+          history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+          `Humor hint: ${hasHumorHint ? "true" : "false"}`,
+          `Customer message: ${text}`
+        ].join("\n"),
+        ...optionalCreateTextConfig(model),
+        ...optionalTemperature(model, 0.2),
+        max_output_tokens: 60
+      });
+      const freeform = normalizeReply(resp.output_text ?? "");
+      if (!freeform) return null;
+      if (isTooGeneric(freeform)) return null;
+      return freeform;
+    } catch {
+      return null;
+    }
+  };
+
   try {
     const parsed = await requestStructuredJson({
       model,
@@ -232,32 +335,25 @@ export async function generateSmallTalkReplyWithLLM(args: {
       maxOutputTokens: 120,
       debugTag: "llm-smalltalk-reply-generator"
     });
-    if (!parsed || typeof parsed !== "object") return null;
-    const reply = String(parsed.reply ?? "").trim();
-    if (!reply) return null;
-    const normalizedReply = reply
-      .toLowerCase()
-      .replace(/[^\w\s]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    const genericPatterns = [
-      /\bim here if you need anything\b/,
-      /\bi am here if you need anything\b/,
-      /\bgot it\b/,
-      /\bi m checking that now\b/,
-      /\bim checking that now\b/
-    ];
-    if (genericPatterns.some(rx => rx.test(normalizedReply))) {
-      return null;
+    if (parsed && typeof parsed === "object") {
+      const reply = normalizeReply(parsed.reply ?? "");
+      if (reply && !isTooGeneric(reply)) {
+        const confidence =
+          typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+            ? Math.max(0, Math.min(1, parsed.confidence))
+            : undefined;
+        return { reply, confidence, source: "structured" };
+      }
     }
-    const confidence =
-      typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
-        ? Math.max(0, Math.min(1, parsed.confidence))
-        : undefined;
-    return { reply, confidence };
   } catch {
-    return null;
+    // continue to freeform backup below
   }
+
+  const freeformReply = await tryFreeformBackup();
+  if (freeformReply) {
+    return { reply: freeformReply, confidence: 0.75, source: "freeform" };
+  }
+  return null;
 }
 
 export async function classifyEmpathyNeedWithLLM(args: {
@@ -524,7 +620,8 @@ export async function summarizeSalespersonNoteWithLLM(args: {
     const resp = await client.responses.create({
       model,
       input: prompt,
-      temperature: 0.2,
+      ...optionalCreateTextConfig(model),
+      ...optionalTemperature(model, 0.2),
       max_output_tokens: 80
     });
     const out = resp.output_text?.trim() ?? "";
@@ -1334,6 +1431,7 @@ async function requestStructuredJson(args: {
     const resp = await client.responses.parse({
       model: args.model,
       input: args.prompt,
+      ...optionalReasoning(args.model),
       max_output_tokens: args.maxOutputTokens ?? 220,
       text: {
         format: {
@@ -1373,6 +1471,7 @@ async function requestStructuredJson(args: {
     const resp = await client.responses.create({
       model: args.model,
       input: args.prompt,
+      ...optionalCreateTextConfig(args.model),
       max_output_tokens: args.maxOutputTokens ?? 220
     });
     const raw = resp.output_text?.trim() ?? "";
@@ -3648,7 +3747,8 @@ ${clipped}
       model,
       instructions,
       input,
-      temperature: 0,
+      ...optionalCreateTextConfig(model),
+      ...optionalTemperature(model, 0),
       max_output_tokens: 180
     });
     const out = resp.output_text?.trim() ?? "";
@@ -3727,7 +3827,8 @@ ${history.map(h => `${h.direction.toUpperCase()}: ${h.body}`).join("\n")}
       model,
       instructions,
       input,
-      temperature: 0,
+      ...optionalCreateTextConfig(model),
+      ...optionalTemperature(model, 0),
       max_output_tokens: 220
     });
     const out = resp.output_text?.trim() ?? "";
@@ -4137,7 +4238,8 @@ ${ctx.history.map(h => `${h.direction.toUpperCase()}: ${h.body}`).join("\n\n")}
   const response = await client.responses.create({
     model,
     instructions,
-    input
+    input,
+    ...optionalCreateTextConfig(model)
   });
 
   let draft = (response.output_text || "").trim();
