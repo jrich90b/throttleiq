@@ -9176,9 +9176,6 @@ function buildDownPaymentTermOptionsReply(opts: {
     } else {
       reply += ` To stay near ${budgetLabel}, you’d likely need more down or a lower-priced unit.`;
     }
-    reply += " Want me to run one term exactly?";
-  } else {
-    reply += " Want me to run one term exactly?";
   }
 
   if (downValue <= 0) {
