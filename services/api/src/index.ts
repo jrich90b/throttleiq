@@ -8566,25 +8566,34 @@ function buildMediaAffirmativeReply(
 ): string | null {
   const prior = String(lastOutboundText ?? "");
   const inbound = String(inboundText ?? "").trim();
-  if (!prior || !inbound) return null;
-
-  const mediaOfferPromptedByLastOutbound =
-    /\b(want|would you like|prefer)\b[\s\S]{0,80}\b(photo|photos|pic|pics|video|walkaround)\b/i.test(
-      prior
-    ) ||
-    /\b(i can send|can send)\b[\s\S]{0,80}\b(photo|photos|pic|pics|video|walkaround)\b/i.test(prior);
-  if (!mediaOfferPromptedByLastOutbound) return null;
-
-  const inboundSimpleAffirmative =
-    /^(yes|yep|yeah|ya|sure|ok|okay|sounds good|please|yes please|do it|send it|send them|both)\b/i.test(
-      inbound
-    ) || /\b(yes please|please do|send (it|them)|both)\b/i.test(inbound);
-  if (!inboundSimpleAffirmative) return null;
+  if (!inbound) return null;
 
   const inboundMediaPreferencePhoto = /\b(photo|photos|pic|pics|picture|pictures|images?)\b/i.test(inbound);
   const inboundMediaPreferenceVideo = /\b(video|walkaround|walk around|walkthrough|walk-through|clip)\b/i.test(
     inbound
   );
+  const inboundDirectMediaRequest =
+    /\b(send|text|show|share|shoot)\b[\s\S]{0,40}\b(photo|photos|pic|pics|picture|pictures|images?|video|walkaround|walk around|walkthrough|walk-through|clip)\b/i.test(
+      inbound
+    ) ||
+    /\b(can you|could you|please)\b[\s\S]{0,40}\b(photo|photos|pic|pics|picture|pictures|images?|video|walkaround|walk around|walkthrough|walk-through|clip)\b/i.test(
+      inbound
+    );
+
+  const mediaOfferPromptedByLastOutbound =
+    (!!prior &&
+    /\b(want|would you like|prefer)\b[\s\S]{0,80}\b(photo|photos|pic|pics|video|walkaround)\b/i.test(
+      prior
+    ) ||
+    /\b(i can send|can send)\b[\s\S]{0,80}\b(photo|photos|pic|pics|video|walkaround)\b/i.test(prior));
+  if (!mediaOfferPromptedByLastOutbound && !inboundDirectMediaRequest) return null;
+
+  const inboundSimpleAffirmative =
+    /^(yes|yep|yeah|ya|sure|ok|okay|sounds good|please|yes please|do it|send it|send them|both)\b/i.test(
+      inbound
+    ) || /\b(yes please|please do|send (it|them)|both)\b/i.test(inbound);
+  const allowMediaAffirmative = inboundSimpleAffirmative || inboundDirectMediaRequest;
+  if (!allowMediaAffirmative) return null;
   const inboundHasOtherPrimaryIntent =
     /\b(price|pricing|payment|monthly|apr|term|trade|appraisal|finance|schedule|appointment|test ride|available|availability|in stock|service records?|records?|mileage)\b/i.test(
       inbound
