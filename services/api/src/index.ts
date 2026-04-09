@@ -1258,6 +1258,68 @@ function resetSmallTalkStreakIfNeeded(
   setSmallTalkStreakCount(conv, 0, source, atIso);
 }
 
+function buildSmallTalkDeterministicFallbackReply(args: {
+  text: string;
+  allowBikePivot: boolean;
+  hasHumor?: boolean;
+}): string {
+  const text = String(args.text ?? "").toLowerCase();
+  const sportsLike = /\b(sabres?|nhl|playoffs?|hockey|bills?|nfl|nba|mlb|yankees?|mets?|knicks?|rangers?)\b/.test(
+    text
+  );
+  const humorLike = /\b(lol|haha|lmao|rofl)\b/.test(text) || /[😂🤣😅😆]/u.test(text) || !!args.hasHumor;
+  if (sportsLike) {
+    return args.allowBikePivot
+      ? "Haha, fair one — when you want to jump back into bikes, I’ve got you."
+      : "Haha, fair one.";
+  }
+  if (humorLike) {
+    return args.allowBikePivot
+      ? "Haha, nice — when you want to jump back into bikes, I’ve got you."
+      : "Haha, nice.";
+  }
+  return args.allowBikePivot
+    ? "Sounds good — when you want to jump back into bikes, I’ve got you."
+    : "Sounds good.";
+}
+
+async function detectSmallTalkSignalWithFallback(args: {
+  text: string;
+  history: { direction: "in" | "out"; body: string }[];
+  smallTalkTag: string;
+  chatterTag: string;
+  smallTalkMin?: number;
+  chatterMin?: number;
+}): Promise<{ smallTalk: boolean; confidence: number | null; source: "smalltalk" | "chatter" | "none" }> {
+  const smallTalkMin = Number.isFinite(Number(args.smallTalkMin)) ? Number(args.smallTalkMin) : 0.6;
+  const chatterMin = Number.isFinite(Number(args.chatterMin)) ? Number(args.chatterMin) : 0.55;
+  const smallTalkParse = await safeLlmParse(args.smallTalkTag, () =>
+    classifySmallTalkWithLLM({
+      text: args.text,
+      history: args.history
+    })
+  );
+  const smallTalkConfidence = Number(smallTalkParse?.confidence ?? 0);
+  if (smallTalkParse?.smallTalk && smallTalkConfidence >= smallTalkMin) {
+    return { smallTalk: true, confidence: smallTalkConfidence, source: "smalltalk" };
+  }
+  const chatterParse = await safeLlmParse(args.chatterTag, () =>
+    classifyBlendedChatterWithLLM({
+      text: args.text,
+      history: args.history
+    })
+  );
+  const chatterConfidence = Number(chatterParse?.confidence ?? 0);
+  if (chatterParse?.hasChatter && chatterConfidence >= chatterMin) {
+    return { smallTalk: true, confidence: chatterConfidence, source: "chatter" };
+  }
+  return {
+    smallTalk: false,
+    confidence: Number.isFinite(smallTalkConfidence) && smallTalkConfidence > 0 ? smallTalkConfidence : null,
+    source: "none"
+  };
+}
+
 async function buildNoResponseChitChatReplyWithLLM(args: {
   text: string;
   history: { direction: "in" | "out"; body: string }[];
@@ -1269,7 +1331,7 @@ async function buildNoResponseChitChatReplyWithLLM(args: {
 }): Promise<
   | {
       reply: string;
-      source: "llm_structured" | "llm_freeform";
+      source: "llm_structured" | "llm_freeform" | "fallback";
       allowBikePivot: boolean;
       smallTalkStreak: number;
     }
@@ -1286,8 +1348,25 @@ async function buildNoResponseChitChatReplyWithLLM(args: {
     })
   );
   const reply = String(llmReply?.reply ?? "").trim();
-  if (!reply) return null;
-  const source = llmReply?.source === "freeform" ? "llm_freeform" : "llm_structured";
+  if (!reply) {
+    const fallbackReply = buildSmallTalkDeterministicFallbackReply({
+      text: args.text,
+      allowBikePivot: streakState.allowBikePivot,
+      hasHumor: !!args.hasHumor
+    });
+    return {
+      reply: fallbackReply,
+      source: "fallback",
+      allowBikePivot: streakState.allowBikePivot,
+      smallTalkStreak: streakState.count
+    };
+  }
+  const source =
+    llmReply?.source === "freeform"
+      ? "llm_freeform"
+      : llmReply?.source === "structured"
+        ? "llm_structured"
+        : "fallback";
   return {
     reply,
     source,
@@ -17566,17 +17645,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       hasRecentPricingPromptContext(conv) &&
       isFinanceFollowUpPromptText(regenLastOutboundText) &&
       isFinanceFollowUpAffirmationText(regenNoResponseInboundText);
-    const regenNoResponseSmallTalkParse = await safeLlmParse("regen_no_response_smalltalk", () =>
-      classifySmallTalkWithLLM({
-        text: regenNoResponseInboundText,
-        history
-      })
-    );
-    const regenNoResponseSmallTalkQuestionLlm =
-      !!regenNoResponseSmallTalkParse?.smallTalk &&
-      (regenNoResponseSmallTalkParse.confidence ?? 0) >= 0.6 &&
-      /\?/.test(regenNoResponseInboundText);
-    const regenNoResponseSmallTalkQuestion = regenNoResponseSmallTalkQuestionLlm;
+    const regenNoResponseSmallTalkSignal = await detectSmallTalkSignalWithFallback({
+      text: regenNoResponseInboundText,
+      history,
+      smallTalkTag: "regen_no_response_smalltalk",
+      chatterTag: "regen_no_response_chatter_fallback",
+      smallTalkMin: 0.6,
+      chatterMin: 0.55
+    });
+    const regenNoResponseSmallTalkQuestion = regenNoResponseSmallTalkSignal.smallTalk;
     const regenLogisticsProgressUpdate = isLogisticsProgressUpdateText(event.body ?? "");
     const regenStoredPaymentContext = getStoredPaymentBudgetContext(conv);
     const regenNoResponseDecision = evaluateNoResponseFallback({
@@ -17642,7 +17719,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         if (!chit?.reply) {
           recordRouteOutcome("regen", "routing_parser_no_response_smalltalk_llm_unavailable", {
             convId: conv.id,
-            leadKey: conv.leadKey
+            leadKey: conv.leadKey,
+            smallTalkConfidence: regenNoResponseSmallTalkSignal.confidence,
+            smallTalkClassifySource: regenNoResponseSmallTalkSignal.source
           });
           return respondRegenerateSkipped("routing_parser_no_response");
         }
@@ -17650,6 +17729,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         recordRouteOutcome("regen", "routing_parser_no_response_smalltalk_ack", {
           convId: conv.id,
           leadKey: conv.leadKey,
+          smallTalkConfidence: regenNoResponseSmallTalkSignal.confidence,
+          smallTalkClassifySource: regenNoResponseSmallTalkSignal.source,
           replySource: chit.source
         });
         if (channel === "email") {
@@ -21673,14 +21754,15 @@ if (authToken && signature) {
     !reducedConversationState.departmentIntent &&
     !semanticDepartmentIntent;
   if (smallTalkPreemptCandidate) {
-    const smallTalkPreemptParse = await safeLlmParse("smalltalk_preempt_classifier", () =>
-      classifySmallTalkWithLLM({
-        text: String(event.body ?? ""),
-        history: buildHistory(conv, 8)
-      })
-    );
-    const smallTalkPreemptAccepted =
-      !!smallTalkPreemptParse?.smallTalk && (smallTalkPreemptParse.confidence ?? 0) >= 0.55;
+    const smallTalkPreemptSignal = await detectSmallTalkSignalWithFallback({
+      text: String(event.body ?? ""),
+      history: buildHistory(conv, 8),
+      smallTalkTag: "smalltalk_preempt_classifier",
+      chatterTag: "smalltalk_preempt_chatter_fallback",
+      smallTalkMin: 0.55,
+      chatterMin: 0.55
+    });
+    const smallTalkPreemptAccepted = smallTalkPreemptSignal.smallTalk;
     if (smallTalkPreemptAccepted) {
       const chit = await buildNoResponseChitChatReplyWithLLM({
         text: String(event.body ?? ""),
@@ -21694,7 +21776,8 @@ if (authToken && signature) {
         setDialogState(conv, "small_talk");
         logRouteOutcome("smalltalk_preempt_llm_ack", {
           turnPrimaryIntent: routeExecutionIntent,
-          confidence: smallTalkPreemptParse?.confidence ?? null,
+          confidence: smallTalkPreemptSignal.confidence,
+          classifySource: smallTalkPreemptSignal.source,
           replySource: chit.source
         });
         if (webhookMode === "suggest") {
@@ -21710,7 +21793,8 @@ if (authToken && signature) {
       }
       logRouteOutcome("smalltalk_preempt_llm_unavailable", {
         turnPrimaryIntent: routeExecutionIntent,
-        confidence: smallTalkPreemptParse?.confidence ?? null
+        confidence: smallTalkPreemptSignal.confidence,
+        classifySource: smallTalkPreemptSignal.source
       });
     }
   }
@@ -21803,17 +21887,15 @@ if (authToken && signature) {
     routingParserDecision.accepted && routingParserDecision.fallbackAction === "no_response";
   if (hasParserNoResponseFallback) {
     const noResponseInboundText = String(event.body ?? "");
-    const noResponseSmallTalkParse = await safeLlmParse("no_response_smalltalk", () =>
-      classifySmallTalkWithLLM({
-        text: noResponseInboundText,
-        history: buildHistory(conv, 8)
-      })
-    );
-    const noResponseSmallTalkQuestionLlm =
-      !!noResponseSmallTalkParse?.smallTalk &&
-      (noResponseSmallTalkParse.confidence ?? 0) >= 0.6 &&
-      /\?/.test(noResponseInboundText);
-    const noResponseSmallTalkQuestion = noResponseSmallTalkQuestionLlm;
+    const noResponseSmallTalkSignal = await detectSmallTalkSignalWithFallback({
+      text: noResponseInboundText,
+      history: buildHistory(conv, 8),
+      smallTalkTag: "no_response_smalltalk",
+      chatterTag: "no_response_chatter_fallback",
+      smallTalkMin: 0.6,
+      chatterMin: 0.55
+    });
+    const noResponseSmallTalkQuestion = noResponseSmallTalkSignal.smallTalk;
     const manualHandoffMode = String(conv?.followUp?.mode ?? "").toLowerCase() === "manual_handoff";
     const manualHandoffNoResponseQuestion =
       manualHandoffMode && !shortAck && /\?/.test(String(event.body ?? ""));
@@ -21855,7 +21937,8 @@ if (authToken && signature) {
       const dealerProfile = await getDealerProfileHot();
       const speaker = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
       let reply = `Got it — this is ${speaker}. I’m checking that now and will follow up shortly.`;
-      let replySource: "llm_structured" | "llm_freeform" | "manual_handoff" = "manual_handoff";
+      let replySource: "llm_structured" | "llm_freeform" | "fallback" | "manual_handoff" =
+        "manual_handoff";
       if (noResponseSmallTalkQuestion) {
         const chit = await buildNoResponseChitChatReplyWithLLM({
           text: noResponseInboundText,
@@ -21878,6 +21961,8 @@ if (authToken && signature) {
         turnPrimaryIntent: routeExecutionIntent,
         parserReason: routingParserDecision.reason,
         mode: routePolicyMode,
+        smallTalkConfidence: noResponseSmallTalkSignal.confidence,
+        smallTalkClassifySource: noResponseSmallTalkSignal.source,
         replySource
       });
       if (webhookMode === "suggest") {
@@ -21923,7 +22008,9 @@ if (authToken && signature) {
           logRouteOutcome("routing_parser_no_response_smalltalk_llm_unavailable", {
             turnPrimaryIntent: routeExecutionIntent,
             parserReason: routingParserDecision.reason,
-            mode: routePolicyMode
+            mode: routePolicyMode,
+            smallTalkConfidence: noResponseSmallTalkSignal.confidence,
+            smallTalkClassifySource: noResponseSmallTalkSignal.source
           });
           const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
           return res.status(200).type("text/xml").send(twiml);
@@ -21933,6 +22020,8 @@ if (authToken && signature) {
           turnPrimaryIntent: routeExecutionIntent,
           parserReason: routingParserDecision.reason,
           mode: routePolicyMode,
+          smallTalkConfidence: noResponseSmallTalkSignal.confidence,
+          smallTalkClassifySource: noResponseSmallTalkSignal.source,
           replySource: chit.source
         });
         if (webhookMode === "suggest") {
@@ -22004,18 +22093,17 @@ if (authToken && signature) {
     !callbackPrimaryIntent &&
     !parserCallbackIntent &&
     /\?/.test(pricingContinuationInboundText);
-  const pricingContinuationSmallTalkParse = pricingContinuationOffTopicCandidate
-    ? await safeLlmParse("pricing_continuation_smalltalk", () =>
-        classifySmallTalkWithLLM({
-          text: pricingContinuationInboundText,
-          history
-        })
-      )
+  const pricingContinuationSmallTalkSignal = pricingContinuationOffTopicCandidate
+    ? await detectSmallTalkSignalWithFallback({
+        text: pricingContinuationInboundText,
+        history: buildHistory(conv, 8),
+        smallTalkTag: "pricing_continuation_smalltalk",
+        chatterTag: "pricing_continuation_chatter_fallback",
+        smallTalkMin: 0.6,
+        chatterMin: 0.55
+      })
     : null;
-  const pricingContinuationSmallTalkLlm =
-    !!pricingContinuationSmallTalkParse?.smallTalk &&
-    (pricingContinuationSmallTalkParse.confidence ?? 0) >= 0.6;
-  const pricingContinuationSmallTalk = pricingContinuationSmallTalkLlm;
+  const pricingContinuationSmallTalk = !!pricingContinuationSmallTalkSignal?.smallTalk;
   if (pricingContinuationSmallTalk) {
     const chit = await buildNoResponseChitChatReplyWithLLM({
       text: pricingContinuationInboundText,
@@ -22028,7 +22116,8 @@ if (authToken && signature) {
     if (!chit?.reply) {
       logRouteOutcome("pricing_continuation_smalltalk_llm_unavailable", {
         turnPrimaryIntent: routeExecutionIntent,
-        confidence: pricingContinuationSmallTalkParse?.confidence ?? null
+        confidence: pricingContinuationSmallTalkSignal?.confidence ?? null,
+        classifySource: pricingContinuationSmallTalkSignal?.source ?? null
       });
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
@@ -22037,13 +22126,15 @@ if (authToken && signature) {
     if (routeExecGeneral) {
       logRouteOutcome("general_smalltalk_ack", {
         turnPrimaryIntent: routeExecutionIntent,
-        confidence: pricingContinuationSmallTalkParse?.confidence ?? null,
+        confidence: pricingContinuationSmallTalkSignal?.confidence ?? null,
+        classifySource: pricingContinuationSmallTalkSignal?.source ?? null,
         replySource: chit.source
       });
     } else {
       logRouteOutcome("pricing_continuation_smalltalk_ack", {
         turnPrimaryIntent: routeExecutionIntent,
-        confidence: pricingContinuationSmallTalkParse?.confidence ?? null,
+        confidence: pricingContinuationSmallTalkSignal?.confidence ?? null,
+        classifySource: pricingContinuationSmallTalkSignal?.source ?? null,
         replySource: chit.source
       });
     }
@@ -25127,18 +25218,17 @@ if (authToken && signature) {
       String(result.draft ?? "").trim()
     );
   if (generalGenericCheckingCandidate) {
-    const genericSmallTalkParse = await safeLlmParse("general_generic_checking_smalltalk", () =>
-      classifySmallTalkWithLLM({
-        text: String(event.body ?? ""),
-        history
-      })
-    );
-    const genericSmallTalkLlm =
-      !!genericSmallTalkParse?.smallTalk &&
-      (genericSmallTalkParse.confidence ?? 0) >= 0.6;
-    const genericSmallTalk = genericSmallTalkLlm;
+    const genericSmallTalkSignal = await detectSmallTalkSignalWithFallback({
+      text: String(event.body ?? ""),
+      history,
+      smallTalkTag: "general_generic_checking_smalltalk",
+      chatterTag: "general_generic_checking_chatter_fallback",
+      smallTalkMin: 0.6,
+      chatterMin: 0.55
+    });
+    const genericSmallTalk = genericSmallTalkSignal.smallTalk;
     let rewrittenDraft = "Got it — are you asking about bike specs, availability, payments, or setting a time to come in?";
-    let replySource: "llm_structured" | "llm_freeform" | "clarify" = "clarify";
+    let replySource: "llm_structured" | "llm_freeform" | "fallback" | "clarify" = "clarify";
     if (genericSmallTalk) {
       const chit = await buildNoResponseChitChatReplyWithLLM({
         text: String(event.body ?? ""),
@@ -25166,7 +25256,8 @@ if (authToken && signature) {
     }
     logRouteOutcome("general_generic_checking_rewrite", {
       smallTalk: genericSmallTalk,
-      confidence: genericSmallTalkParse?.confidence ?? null,
+      confidence: genericSmallTalkSignal.confidence,
+      classifySource: genericSmallTalkSignal.source,
       replySource
     });
   }
@@ -25184,18 +25275,17 @@ if (authToken && signature) {
     /\?/.test(String(event.body ?? "")) &&
     String(result.intent ?? "").toUpperCase() === "PRICING";
   if (generalOrchestratorPricingCarryoverCandidate) {
-    const carryoverSmallTalkParse = await safeLlmParse("general_orchestrator_pricing_smalltalk", () =>
-      classifySmallTalkWithLLM({
-        text: String(event.body ?? ""),
-        history
-      })
-    );
-    const carryoverSmallTalkLlm =
-      !!carryoverSmallTalkParse?.smallTalk &&
-      (carryoverSmallTalkParse.confidence ?? 0) >= 0.6;
-    const carryoverSmallTalk = carryoverSmallTalkLlm;
+    const carryoverSmallTalkSignal = await detectSmallTalkSignalWithFallback({
+      text: String(event.body ?? ""),
+      history,
+      smallTalkTag: "general_orchestrator_pricing_smalltalk",
+      chatterTag: "general_orchestrator_pricing_chatter_fallback",
+      smallTalkMin: 0.6,
+      chatterMin: 0.55
+    });
+    const carryoverSmallTalk = carryoverSmallTalkSignal.smallTalk;
     let rewrittenDraft = "Got it — are you asking about bike specs, availability, payments, or setting a time to come in?";
-    let replySource: "llm_structured" | "llm_freeform" | "clarify" = "clarify";
+    let replySource: "llm_structured" | "llm_freeform" | "fallback" | "clarify" = "clarify";
     if (carryoverSmallTalk) {
       const chit = await buildNoResponseChitChatReplyWithLLM({
         text: String(event.body ?? ""),
@@ -25223,7 +25313,8 @@ if (authToken && signature) {
     }
     logRouteOutcome("general_orchestrator_pricing_rewrite", {
       smallTalk: carryoverSmallTalk,
-      confidence: carryoverSmallTalkParse?.confidence ?? null,
+      confidence: carryoverSmallTalkSignal.confidence,
+      classifySource: carryoverSmallTalkSignal.source,
       replySource
     });
   }

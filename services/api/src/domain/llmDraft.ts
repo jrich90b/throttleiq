@@ -384,6 +384,8 @@ export async function generateSmallTalkReplyWithLLM(args: {
   const genericPatterns = [
     /\bim here if you need anything\b/,
     /\bi am here if you need anything\b/,
+    /\bi m here if you need anything\b/,
+    /\bhere if you need anything\b/,
     /\bgot it\b/,
     /\bi m checking that now\b/,
     /\bim checking that now\b/
@@ -522,7 +524,9 @@ export async function generateBlendedLeadInWithLLM(args: {
     return (
       /\bgot it\b/.test(normalized) ||
       /\bi m here if you need anything\b/.test(normalized) ||
+      /\bim here if you need anything\b/.test(normalized) ||
       /\bi am here if you need anything\b/.test(normalized) ||
+      /\bhere if you need anything\b/.test(normalized) ||
       /\bchecking that now\b/.test(normalized)
     );
   };
