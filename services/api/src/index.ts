@@ -8663,6 +8663,18 @@ function buildMediaAffirmativeReply(
   return `Okay — I’ll have one of the guys send a quick walkaround video of ${bikeLabel} over to you.`;
 }
 
+function isNoTradeResponseText(text: string): boolean {
+  const t = String(text ?? "").toLowerCase().trim();
+  if (!t) return false;
+  return (
+    /\bno\b[\s-]*(trade|trades?)\b/.test(t) ||
+    /\b(nope|nah)\b[\s,!.]*(trade|trades?)?\b/.test(t) ||
+    /\bwithout\b[\s-]*(a )?(trade|trades?)\b/.test(t) ||
+    /\b(don['’]?t|do not)\s+have\s+(a\s+)?trade\b/.test(t) ||
+    /\b(not)\s+(trading|trading in|doing a trade)\b/.test(t)
+  );
+}
+
 async function findAutoMediaUrlsForConversationContext(
   conv: any,
   opts?: {
@@ -17680,6 +17692,24 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         return !Number.isFinite(atMs) || atMs <= inboundAtMs;
       })
       .slice(-1)[0];
+    const lastOutboundForTrade = String(lastOutboundBeforeInbound?.body ?? "");
+    const lastOutboundAskedTradeQualifier =
+      /\bdo you have a trade\b/i.test(lastOutboundForTrade) || /\bany trade\b/i.test(lastOutboundForTrade);
+    if (lastOutboundAskedTradeQualifier && isNoTradeResponseText(event.body ?? "")) {
+      conv.lead = conv.lead ?? {};
+      conv.lead.tradeVehicle = {};
+      const paymentBudget = resolvePaymentBudgetForConversation(conv, String(event.body ?? ""));
+      const financeReply =
+        buildFinancePriorityInvariantFallbackReply(conv, String(event.body ?? ""), paymentBudget) ??
+        "Got it — no trade is totally fine. What monthly payment are you trying to stay around, and what term works best (60, 72, or 84 months)?";
+      const reply = /^no problem|^got it/i.test(financeReply)
+        ? `${financeReply}`
+        : `No problem — no trade is totally fine. ${financeReply}`;
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(reply);
+      }
+      return respondWithSmsRegeneratedDraft(reply);
+    }
     const lastOutboundForMedia = String(lastOutboundBeforeInbound?.body ?? "");
     const activeBike =
       formatModelLabel(
@@ -20480,6 +20510,7 @@ if (authToken && signature) {
     const tradeYear = extractYearSingle(inboundLower);
     const tradeModel = findMentionedModel(inboundLower);
     const tradeAffirmed = isAffirmative(inboundText) || /\b(i have|i got|i've got|ive got)\b/i.test(inboundText);
+    const tradeDeclined = isNoTradeResponseText(inboundText);
     if (tradeAffirmed) {
       conv.lead = conv.lead ?? {};
       conv.lead.tradeVehicle = conv.lead.tradeVehicle ?? {};
@@ -20499,6 +20530,28 @@ if (authToken && signature) {
       const reply = tradeModel || tradeYear
         ? `Perfect — thanks. ${tradeLabel} helps. About how many miles are on it, and is there any payoff left on it?`
         : "Perfect — thanks. What year and model is your trade, about how many miles are on it, and is there any payoff left?";
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    if (tradeDeclined) {
+      conv.lead = conv.lead ?? {};
+      conv.lead.tradeVehicle = {};
+      const paymentBudget = resolvePaymentBudgetForConversation(conv, inboundText);
+      const financeReply =
+        buildFinancePriorityInvariantFallbackReply(conv, inboundText, paymentBudget) ??
+        "Got it — no trade is totally fine. What monthly payment are you trying to stay around, and what term works best (60, 72, or 84 months)?";
+      const reply = /^no problem|^got it/i.test(financeReply)
+        ? `${financeReply}`
+        : `No problem — no trade is totally fine. ${financeReply}`;
       const systemMode = webhookMode;
       if (systemMode === "suggest") {
         appendOutbound(conv, event.to, event.from, reply, "draft_ai");
