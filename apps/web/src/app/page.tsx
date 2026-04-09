@@ -780,6 +780,7 @@ type WatchFormItem = {
   model: string;
   models?: string[];
   customModel?: string;
+  modelSearch?: string;
   trim: string;
   color: string;
   minPrice: string;
@@ -2067,7 +2068,7 @@ export default function Home() {
           minPrice: "",
           maxPrice: ""
         };
-      return [...prev, { ...base, model: "", models: [], customModel: "" }];
+      return [...prev, { ...base, model: "", models: [], customModel: "", modelSearch: "" }];
     });
   }
 
@@ -2092,7 +2093,7 @@ export default function Home() {
           minPrice: "",
           maxPrice: ""
         };
-      return [...prev, { ...base, model: "", models: [], customModel: "" }];
+      return [...prev, { ...base, model: "", models: [], customModel: "", modelSearch: "" }];
     });
   }
 
@@ -2115,6 +2116,7 @@ export default function Home() {
       model,
       models: model ? [model] : [],
       customModel: "",
+      modelSearch: "",
       trim: watch?.trim ?? "",
       color: watch?.color ?? "",
       minPrice: watch?.minPrice != null ? String(watch.minPrice) : "",
@@ -2155,7 +2157,7 @@ export default function Home() {
     });
     return Array.from(map.values()).map(item => {
       const models = getItemModels(item);
-      return { ...item, models, model: models[0] ?? item.model ?? "", customModel: "" };
+      return { ...item, models, model: models[0] ?? item.model ?? "", customModel: "", modelSearch: "" };
     });
   }
 
@@ -2235,6 +2237,12 @@ export default function Home() {
       if (key && !optionSet.has(key)) optionSet.set(key, trimmed);
     });
     return Array.from(optionSet.values()).sort((a, b) => a.localeCompare(b));
+  }
+
+  function filterWatchModelChoices(options: string[], query?: string): string[] {
+    const q = normalizeModelMatchText(query ?? "");
+    if (!q) return options;
+    return options.filter(option => normalizeModelMatchText(option).includes(q));
   }
 
   function normalizeModelMatchText(value: string): string {
@@ -11282,6 +11290,7 @@ export default function Home() {
                       <div className="mt-3 space-y-3">
                         {cadenceWatchItems.map((item, idx) => {
                           const modelOptions = getWatchModelChoices(item);
+                          const filteredModelOptions = filterWatchModelChoices(modelOptions, item.modelSearch);
                           const groupModels = getItemModels(item);
 
                           const makeOptionsLower = new Set(watchMakeOptions.map(o => o.toLowerCase()));
@@ -11314,7 +11323,8 @@ export default function Home() {
                                       year: e.target.value,
                                       model: "",
                                       models: [],
-                                      customModel: ""
+                                      customModel: "",
+                                      modelSearch: ""
                                     })
                                   }
                                 />
@@ -11331,7 +11341,8 @@ export default function Home() {
                                         make: makeInOptions ? "" : item.make,
                                         model: "",
                                         models: [],
-                                        customModel: ""
+                                        customModel: "",
+                                        modelSearch: ""
                                       });
                                       return;
                                     }
@@ -11339,7 +11350,8 @@ export default function Home() {
                                       make: value,
                                       model: "",
                                       models: [],
-                                      customModel: ""
+                                      customModel: "",
+                                      modelSearch: ""
                                     });
                                   }}
                                 >
@@ -11363,8 +11375,14 @@ export default function Home() {
                               <div>
                                 <div className="text-xs text-gray-500 mb-1">Model</div>
                                 {modelOptions.length ? (
-                                  <div className="border rounded p-2 max-h-40 overflow-auto">
-                                    {modelOptions.map(option => {
+                                  <div className="border rounded p-2 max-h-48 overflow-auto">
+                                    <input
+                                      className="border rounded px-2 py-1 text-xs w-full mb-2"
+                                      placeholder="Search models..."
+                                      value={item.modelSearch ?? ""}
+                                      onChange={e => updateWatchItem(idx, { modelSearch: e.target.value })}
+                                    />
+                                    {filteredModelOptions.length ? filteredModelOptions.map(option => {
                                       const checked = isWatchModelOptionChecked(groupModels, option);
                                       return (
                                         <label
@@ -11388,7 +11406,9 @@ export default function Home() {
                                           <span>{option}</span>
                                         </label>
                                       );
-                                    })}
+                                    }) : (
+                                      <div className="text-xs text-gray-500">No models match search.</div>
+                                    )}
                                   </div>
                                 ) : (
                                   <div className="text-xs text-gray-500">No models for that year.</div>
@@ -12795,6 +12815,7 @@ export default function Home() {
             <div className="mt-3 space-y-3">
               {watchEditItems.map((item, idx) => {
                 const modelOptions = getWatchModelChoices(item);
+                const filteredModelOptions = filterWatchModelChoices(modelOptions, item.modelSearch);
                 const groupModels = getItemModels(item);
 
                 const makeOptionsLower = new Set(watchMakeOptions.map(o => o.toLowerCase()));
@@ -12827,7 +12848,8 @@ export default function Home() {
                             year: e.target.value,
                             model: "",
                             models: [],
-                            customModel: ""
+                            customModel: "",
+                            modelSearch: ""
                           })
                         }
                       />
@@ -12844,7 +12866,8 @@ export default function Home() {
                               make: makeInOptions ? "" : item.make,
                               model: "",
                               models: [],
-                              customModel: ""
+                              customModel: "",
+                              modelSearch: ""
                             });
                             return;
                           }
@@ -12852,7 +12875,8 @@ export default function Home() {
                             make: value,
                             model: "",
                             models: [],
-                            customModel: ""
+                            customModel: "",
+                            modelSearch: ""
                           });
                         }}
                       >
@@ -12876,8 +12900,14 @@ export default function Home() {
                     <div>
                       <div className="text-xs text-gray-500 mb-1">Model</div>
                       {modelOptions.length ? (
-                        <div className="border rounded p-2 max-h-40 overflow-auto">
-                          {modelOptions.map(option => {
+                        <div className="border rounded p-2 max-h-48 overflow-auto">
+                          <input
+                            className="border rounded px-2 py-1 text-xs w-full mb-2"
+                            placeholder="Search models..."
+                            value={item.modelSearch ?? ""}
+                            onChange={e => updateWatchEditItem(idx, { modelSearch: e.target.value })}
+                          />
+                          {filteredModelOptions.length ? filteredModelOptions.map(option => {
                             const checked = isWatchModelOptionChecked(groupModels, option);
                             return (
                               <label
@@ -12901,7 +12931,9 @@ export default function Home() {
                                 <span>{option}</span>
                               </label>
                             );
-                          })}
+                          }) : (
+                            <div className="text-xs text-gray-500">No models match search.</div>
+                          )}
                         </div>
                       ) : (
                         <div className="text-xs text-gray-500">No models for that year.</div>
