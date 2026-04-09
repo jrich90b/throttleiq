@@ -21626,32 +21626,6 @@ if (authToken && signature) {
   });
   let turnPrimaryIntent = turnRouteDecision.primaryIntent;
   const pricingContinuationInboundText = String(event.body ?? "");
-  const hasExplicitFinanceLanguageThisTurn =
-    isPricingText(pricingContinuationInboundText) ||
-    isPaymentText(pricingContinuationInboundText) ||
-    isDownPaymentQuestion(pricingContinuationInboundText) ||
-    /\b(apr|interest|finance|financing|payment|payments|monthly|month|term|months|down|trade)\b/i.test(
-      pricingContinuationInboundText
-    );
-  const hasExplicitAvailabilityLanguageThisTurn =
-    /\b(do you have|have any|in stock|available|availability|stock|vin|year|color|trim|model)\b/i.test(
-      pricingContinuationInboundText
-    );
-  const hasExplicitSchedulingLanguageThisTurn =
-    explicitScheduleSignal ||
-    schedulingSignals.hasDayTime ||
-    schedulingSignals.hasDayOnlyRequest ||
-    schedulingSignals.hasDayOnlyAvailability;
-  const hasExplicitCallbackLanguageThisTurn =
-    callbackPrimaryIntent ||
-    parserCallbackIntent ||
-    /\b(call me|give me a call|can you call|please call|have .* call|reach me|contact me)\b/i.test(
-      pricingContinuationInboundText
-    );
-  const financeContinuationAffirmativeAck =
-    hasRecentPricingPromptContext(conv) &&
-    isFinanceFollowUpPromptText(lastOutboundText) &&
-    isFinanceFollowUpAffirmationText(event.body ?? "");
   const financeContinuationOverrideApplied = false;
   const routeExecutionIntent = turnPrimaryIntent;
   const routePolicyMode = getRoutePolicyMode();
@@ -21660,6 +21634,10 @@ if (authToken && signature) {
   const routeExecAvailability = routeExecutionIntent === "availability";
   const routeExecCallback = routeExecutionIntent === "callback";
   const routeExecGeneral = routeExecutionIntent === "general";
+  const hasExplicitFinanceLanguageThisTurn = routeExecPricing;
+  const hasExplicitAvailabilityLanguageThisTurn = routeExecAvailability;
+  const hasExplicitSchedulingLanguageThisTurn = routeExecScheduling;
+  const hasExplicitCallbackLanguageThisTurn = routeExecCallback;
   const actionableTurnSignals =
     routeExecPricing ||
     routeExecAvailability ||
@@ -21723,8 +21701,6 @@ if (authToken && signature) {
     event.provider === "twilio" &&
     !shortAck &&
     !isLogisticsProgressUpdateText(event.body ?? "") &&
-    !hasExplicitFinanceLanguageThisTurn &&
-    !hasExplicitAvailabilityLanguageThisTurn &&
     !hasExplicitSchedulingLanguageThisTurn &&
     !hasExplicitCallbackLanguageThisTurn &&
     !reducedConversationState.departmentIntent &&
@@ -22062,8 +22038,6 @@ if (authToken && signature) {
   const pricingContinuationOffTopicCandidate =
     event.provider === "twilio" &&
     (routeExecPricing || routeExecAvailability || routeExecGeneral) &&
-    !hasExplicitFinanceLanguageThisTurn &&
-    !hasExplicitAvailabilityLanguageThisTurn &&
     !schedulingSignals.hasDayTime &&
     !schedulingSignals.hasDayOnlyRequest &&
     !schedulingSignals.hasDayOnlyAvailability &&
@@ -25182,8 +25156,6 @@ if (authToken && signature) {
   const generalGenericCheckingCandidate =
     event.provider === "twilio" &&
     (routeExecGeneral || routeExecPricing || routeExecAvailability) &&
-    !hasExplicitFinanceLanguageThisTurn &&
-    !hasExplicitAvailabilityLanguageThisTurn &&
     !schedulingSignals.hasDayTime &&
     !schedulingSignals.hasDayOnlyRequest &&
     !schedulingSignals.hasDayOnlyAvailability &&
@@ -25242,8 +25214,6 @@ if (authToken && signature) {
   const generalOrchestratorPricingCarryoverCandidate =
     event.provider === "twilio" &&
     (routeExecGeneral || routeExecPricing || routeExecAvailability) &&
-    !hasExplicitFinanceLanguageThisTurn &&
-    !hasExplicitAvailabilityLanguageThisTurn &&
     !schedulingSignals.hasDayTime &&
     !schedulingSignals.hasDayOnlyRequest &&
     !schedulingSignals.hasDayOnlyAvailability &&
