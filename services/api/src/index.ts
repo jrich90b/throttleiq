@@ -149,10 +149,7 @@ import {
   isOtherInventoryRequestText,
   isPaymentText,
   isPricingText,
-  looksLikeTimeSelection,
-  type RoutePrioritySignals,
-  type RoutePrioritySignalsInput,
-  resolveRoutePrioritySignals
+  looksLikeTimeSelection
 } from "./domain/legacyRegexFallback.js";
 
 import {
@@ -17687,15 +17684,6 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return respondWithSmsRegeneratedDraft(reply);
   }
 
-  const regenHintSignals = resolveRoutePrioritySignals({
-    text: event.body ?? "",
-    conv,
-    lastOutboundText: String(getLastNonVoiceOutbound(conv)?.body ?? ""),
-    pricingOrPaymentsIntent: regenParserPricingIntent,
-    explicitAvailabilityIntentExtra: regenParserAvailabilityIntent,
-    schedulingSignalsExtra: { explicit: regenParserSchedulingIntent }
-  });
-
   if (event.provider === "twilio" && channel === "sms") {
     const regenPaymentBudget = resolvePaymentBudgetForConversation(conv, event.body ?? "");
     const regenDownProvided = regenPaymentBudget.downPayment != null;
@@ -17756,13 +17744,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       return respondWithSmsRegeneratedDraft(reply);
     }
 
-    const regenSchedulingSignals = regenHintSignals.schedulingSignals;
-    const visitTimingIntent =
-      regenHintSignals.schedulePriorityOverride ||
-      regenSchedulingSignals.hasDayOnlyRequest ||
-      regenSchedulingSignals.softVisit;
-    const explicitAvailabilityAskThisTurn = regenHintSignals.availabilityIntentOverride;
-    const financeOrRateAskThisTurn = regenHintSignals.currentTurnFinanceSignal;
+    const visitTimingIntent = regenParserSchedulingIntent || regenLlmExplicitScheduleIntent;
+    const explicitAvailabilityAskThisTurn = regenParserAvailabilityIntent;
+    const financeOrRateAskThisTurn = regenParserPricingIntent;
     const soldOrPostSale = isSoldOrPostSaleConversation(conv);
     const inboundExplicitModel = findMentionedModel(String(event.body ?? "").toLowerCase());
     const incomingInventorySignal = hasIncomingInventorySignal(String(event.body ?? ""));
@@ -20250,20 +20234,19 @@ if (authToken && signature) {
     regexIntentFallbackEnabled &&
     (/\b\d{2,3}\s*(month|months|mo)\b/i.test(String(event.body ?? "")) ||
       /\brun\s+(it|that|the numbers?)\s+for\s+\d{2,3}\b/i.test(String(event.body ?? "")));
-  const preParserRouteSignals = resolveRoutePrioritySignals({
-    text: event.body ?? "",
-    conv,
-    lastOutboundText,
-    explicitFinanceTermIntent: preParserExplicitFinanceTermIntent
-  });
-  const availabilitySignalsEarly = preParserRouteSignals.availabilitySignals;
-  const inventoryCountQuestion = availabilitySignalsEarly.inventoryCountQuestion;
-  const deterministicAvailabilityLookup = preParserRouteSignals.deterministicAvailabilityLookup;
-  const deterministicAvailabilityIntentBase = preParserRouteSignals.availabilityIntentOverride;
-  const otherInventoryRequest = preParserRouteSignals.otherInventoryRequest;
-  const schedulingSignalsBase = preParserRouteSignals.schedulingSignals;
-  const preParserFinanceSignal = preParserRouteSignals.currentTurnFinanceSignal;
-  const preParserSchedulingSignal = preParserRouteSignals.schedulePriorityOverride;
+  const schedulingSignalsBase = detectSchedulingSignals(event.body ?? "");
+  const inventoryCountQuestion =
+    /\bhow many\b[\w\s-]{0,30}\b(in[-\s]?stock|do you have|available|units|bikes|ones)\b/i.test(
+      textLower
+    ) || /\bhow many\s+(?:do you have|in[-\s]?stock)\b/i.test(textLower);
+  const otherInventoryRequest = isOtherInventoryRequestText(event.body ?? "");
+  const preParserFinanceSignal =
+    preParserExplicitFinanceTermIntent || isPricingText(event.body ?? "") || isPaymentText(event.body ?? "");
+  const preParserSchedulingSignal =
+    schedulingSignalsBase.explicit ||
+    schedulingSignalsBase.hasDayTime ||
+    schedulingSignalsBase.hasDayOnlyAvailability ||
+    schedulingSignalsBase.hasDayOnlyRequest;
   const preParserNonWatchPrimaryIntent = preParserFinanceSignal || preParserSchedulingSignal;
   const leadSourceText = String(conv.lead?.source ?? "").toLowerCase();
   const isTradeLead =
@@ -20802,9 +20785,7 @@ if (authToken && signature) {
     parserOnlyPricingIntent;
   const scheduleFromDialogAct = llmSchedulingIntent && !llmPricingOrPaymentsIntent;
   const explicitScheduleSignal =
-    llmExplicitScheduleIntent ||
-    scheduleFromDialogAct ||
-    (regexIntentFallbackEnabled && isExplicitScheduleIntent(event.body));
+    llmExplicitScheduleIntent || scheduleFromDialogAct;
   paymentOrPricingNoSchedule = false;
   const pricingOrPaymentsIntent = parserOnlyPricingIntent;
   if (
@@ -21235,7 +21216,6 @@ if (authToken && signature) {
     deterministicAvailabilityIntentOverride,
     financePriorityOverride,
     schedulePriorityOverride,
-    deterministicAvailabilityLookup,
     pricingHistoryBleedGuard,
     affectPrimary: acceptedAffect?.primaryAffect ?? null,
     affectNeedsEmpathy: acceptedAffect?.needsEmpathy ?? null,
