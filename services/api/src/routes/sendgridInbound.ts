@@ -1095,6 +1095,8 @@ function extractPriceRangeFromText(text?: string | null): { minPrice?: number; m
 function extractWalkInModelHint(text?: string | null): string | undefined {
   const t = String(text ?? "").toLowerCase();
   if (!t) return undefined;
+  const inquiryModelHint = extractInquiryModelHint(t);
+  if (inquiryModelHint) return inquiryModelHint;
   if (/\b(sportster|xl883c|xl\s*883|883)\b/.test(t)) return "Sportster";
   if (/\b(road glide\s*(3|iii)|fltrt)\b/.test(t)) return "Road Glide 3";
   if (/\b(street glide\s*(3|iii)|flhlt)\b/.test(t)) return "Street Glide 3 Limited";
@@ -1133,6 +1135,19 @@ function extractColorFromText(text?: string | null): string | undefined {
   }
   const m = t.match(/\bcolor\s*(?:is|:)?\s*([a-z]+)\b/);
   if (m?.[1]) return m[1];
+  return undefined;
+}
+
+function inferWalkInRequestedCondition(text?: string | null): "new" | "used" | "any" | undefined {
+  const t = String(text ?? "").toLowerCase();
+  if (!t) return undefined;
+  if (/\b(new\s+or\s+used|used\s+or\s+new)\b/.test(t)) return "any";
+  if (/\bany\b/.test(t)) return "any";
+  const hasUsed = /\b(pre[-\s]?owned|used)\b/.test(t);
+  const hasNew = /\bnew\b/.test(t);
+  if (hasUsed && hasNew) return "any";
+  if (hasUsed) return "used";
+  if (hasNew) return "new";
   return undefined;
 }
 
@@ -3040,9 +3055,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       inventoryEntityAccepted && llmInventoryEntities?.model
         ? normalizeVehicleModel(llmInventoryEntities.model, conv.lead?.vehicle?.make ?? null)
         : undefined;
+    const inquiryModelHint = extractInquiryModelHint(walkInCleanedComment);
     const modelLabel =
-      walkInModelHint ||
       parserModel ||
+      inquiryModelHint ||
+      walkInModelHint ||
       normalizeVehicleModel(String(modelRaw ?? ""), conv.lead?.vehicle?.make ?? null);
     const hasWatchIntentFromParser =
       !!llmIntent &&
@@ -3054,12 +3071,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         commentLower
       ) || /\bif one comes in\b/.test(commentLower);
     const hasWatchIntent = hasWatchIntentFromParser || hasWatchIntentFromText;
-    const wantsUsed =
-      conv.lead?.vehicle?.condition === "used" ||
-      /pre[-\s]?owned|used/.test(commentLower);
-    const wantsNew =
-      /\bnew\b/.test(commentLower) ||
-      (/looking for|interested in|want/.test(commentLower) && !wantsUsed);
+    const requestedConditionHint = inferWalkInRequestedCondition(walkInCleanedComment);
+    const wantsUsed = requestedConditionHint === "used";
+    const wantsNew = requestedConditionHint === "new";
     const parserYearRange =
       inventoryEntityAccepted &&
       llmInventoryEntities?.yearMin &&
@@ -3244,7 +3258,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         walkInDelayDays = 5;
       }
     }
-    let tail = "I’ll keep an eye out and let you know if one comes in.";
+    let tail = "Thanks for the update — I’m here if you need anything.";
     if (hasCreditCosignerSignal) {
       tail = "I saw the credit app note and I’ll have our finance team follow up about the co-signer.";
     } else if (hasDealProgressSignal) {
@@ -3365,12 +3379,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       !!conv.hold ||
       conv.followUp?.mode === "paused_indefinite";
 
+    let walkInWatchSet = false;
     if (modelLabel && hasWatchIntent && !(hasDealProgressSignal || hasCreditCosignerSignal)) {
-      const requestedCondition: "new" | "used" | undefined = wantsUsed
-        ? "used"
-        : wantsNew
-          ? "new"
-          : undefined;
+      const requestedCondition: "new" | "used" | undefined =
+        requestedConditionHint === "used"
+          ? "used"
+          : requestedConditionHint === "new"
+            ? "new"
+            : undefined;
       const watch: InventoryWatch = {
         model: modelLabel,
         condition: requestedCondition,
@@ -3397,6 +3413,33 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       conv.dialogState = { name: "inventory_watch_active", updatedAt: new Date().toISOString() };
       setFollowUpMode(conv, "holding_inventory", "inventory_watch");
       stopFollowUpCadence(conv, "inventory_watch");
+      walkInWatchSet = true;
+    } else if (hasWatchIntent && !modelLabel && !(hasDealProgressSignal || hasCreditCosignerSignal)) {
+      conv.inventoryWatchPending = {
+        year: singleYear,
+        color: desiredColor,
+        minPrice: priceRange?.minPrice,
+        maxPrice: priceRange?.maxPrice,
+        askedAt: new Date().toISOString()
+      };
+      conv.dialogState = { name: "inventory_watch_prompted", updatedAt: new Date().toISOString() };
+      setFollowUpMode(conv, "holding_inventory", "inventory_watch");
+      stopFollowUpCadence(conv, "inventory_watch");
+      walkInWatchSet = true;
+    }
+
+    if (hasWatchIntent) {
+      if (walkInWatchSet && modelLabel) {
+        const watchConditionLabel =
+          requestedConditionHint === "used"
+            ? "used "
+            : requestedConditionHint === "new"
+              ? "new "
+              : "";
+        tail = `I’ll keep an eye out for ${watchConditionLabel}${modelLabel} and let you know if one comes in.`;
+      } else if (walkInWatchSet) {
+        tail = "I’ll keep an eye out and text you as soon as a good match comes in.";
+      }
     }
 
     if (!suppressWalkInAutoAck) {

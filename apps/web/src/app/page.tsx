@@ -3762,8 +3762,14 @@ export default function Home() {
           convId: conv.id,
           leadKey: conv.leadKey,
           leadName: conv.leadName ?? null,
-          ownerId: conv.scheduler?.preferredSalespersonId ?? null,
-          ownerName: conv.scheduler?.preferredSalespersonName ?? null,
+          ownerId:
+            conv.scheduler?.preferredSalespersonId ??
+            (conv as any)?.leadOwner?.id ??
+            null,
+          ownerName:
+            conv.scheduler?.preferredSalespersonName ??
+            (conv as any)?.leadOwner?.name ??
+            null,
           watches: activeWatches
         }
       ];
@@ -12781,8 +12787,8 @@ export default function Home() {
       ) : null}
 
       {watchEditOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="w-full max-w-lg rounded-lg bg-white shadow-lg border p-4">
+        <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center bg-black/40 p-3 sm:p-4 overflow-y-auto">
+          <div className="w-full max-w-2xl rounded-lg bg-white shadow-lg border p-4 max-h-[calc(100vh-2rem)] sm:max-h-[90vh] overflow-y-auto">
             <div className="text-sm font-semibold">Edit vehicle watch</div>
             <div className="mt-3 space-y-3">
               {watchEditItems.map((item, idx) => {
