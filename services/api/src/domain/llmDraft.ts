@@ -319,6 +319,8 @@ export async function generateSmallTalkReplyWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
   hasHumorHint?: boolean;
+  allowBikePivotHint?: boolean;
+  smallTalkStreakHint?: number | null;
 }): Promise<{ reply: string; confidence?: number; source?: "structured" | "freeform" } | null> {
   const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
   if (!useLLM) return null;
@@ -326,6 +328,11 @@ export async function generateSmallTalkReplyWithLLM(args: {
   const text = String(args.text ?? "").trim();
   if (!text) return null;
   const hasHumorHint = !!args.hasHumorHint;
+  const allowBikePivotHint = args.allowBikePivotHint !== false;
+  const smallTalkStreakHint =
+    typeof args.smallTalkStreakHint === "number" && Number.isFinite(args.smallTalkStreakHint)
+      ? Math.max(0, Math.trunc(args.smallTalkStreakHint))
+      : null;
   const history = (args.history ?? []).slice(-4).map(h => `${h.direction}: ${h.body}`);
   const schema: { [key: string]: unknown } = {
     type: "object",
@@ -344,21 +351,36 @@ export async function generateSmallTalkReplyWithLLM(args: {
     "- Keep it natural, friendly, and concise (1 sentence, max ~20 words).",
     "- Sound like a real person texting, not a support bot.",
     "- Do NOT claim personal real-world experiences you cannot verify (e.g., don't say you watched a game).",
-    "- Acknowledge the message and lightly keep the door open for bike help.",
-    "- If relevant, lightly mirror their topic (e.g., game/playoffs) before pivoting back to bikes.",
+    "- Acknowledge the message with conversational tone.",
+    allowBikePivotHint
+      ? "- You MAY lightly keep the door open for bike help in the same sentence."
+      : "- Do NOT pivot back to bikes in this reply.",
+    allowBikePivotHint
+      ? "- If relevant, lightly mirror their topic (e.g., game/playoffs) before a soft bike pivot."
+      : "- Keep this as pure off-topic small-talk acknowledgment.",
     "- Do NOT switch into pricing/availability/scheduling unless asked.",
     "- Avoid stiff fallback phrases like 'I'm checking that now'.",
     "- Do NOT use phrases like 'I'm here if you need anything' or 'Got it.' as the main reply.",
     "",
     "Good examples:",
-    "- \"Haha, fair one - if you want to jump back into bikes, I can help anytime.\"",
-    "- \"Playoff energy is real - whenever you want, we can hop back into bike details.\"",
-    "- \"Great question - if you want to keep talking bikes, I’m ready.\"",
+    allowBikePivotHint
+      ? "- \"Haha, fair one - if you want to jump back into bikes, I can help anytime.\""
+      : "- \"Haha, fair one - that one had everyone talking.\"",
+    allowBikePivotHint
+      ? "- \"Playoff energy is real - whenever you want, we can hop back into bike details.\""
+      : "- \"Playoff energy is real this week.\"",
+    allowBikePivotHint
+      ? "- \"Good one - when you want to get back to bikes, I’ve got you.\""
+      : "- \"Good one - sounds like everyone was locked in.\"",
     "",
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
     `Humor hint: ${hasHumorHint ? "true" : "false"}`,
+    `Allow bike pivot in this reply: ${allowBikePivotHint ? "true" : "false"}`,
+    smallTalkStreakHint != null ? `Current small-talk streak: ${smallTalkStreakHint}` : null,
     `Customer message: ${text}`
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
   const genericPatterns = [
     /\bim here if you need anything\b/,
     /\bi am here if you need anything\b/,
@@ -387,7 +409,9 @@ export async function generateSmallTalkReplyWithLLM(args: {
         instructions: [
           "Write one short, natural SMS reply (max 1 sentence, <= 20 words).",
           "The customer sent off-topic small talk/chatter.",
-          "Acknowledge casually and lightly keep the door open for bike help.",
+          allowBikePivotHint
+            ? "Acknowledge casually and you may lightly keep the door open for bike help."
+            : "Acknowledge casually without pivoting back to bikes.",
           "Do not say you're checking anything.",
           "Do not use: 'I'm here if you need anything.'",
           "Do not switch into pricing/availability/scheduling."

@@ -212,6 +212,7 @@ import {
   addAgentContextNote,
   clearAgentContext,
   getActiveAgentContextText,
+  setConversationSoftTag,
   type Conversation,
   type InventoryWatch,
   type InventoryWatchPending,
@@ -1184,24 +1185,115 @@ async function safeLlmParse<T>(
   }
 }
 
+const SMALL_TALK_STREAK_SOFT_TAG = "smalltalk_streak";
+const SMALL_TALK_PIVOT_EVERY = (() => {
+  const value = Number(process.env.SMALL_TALK_PIVOT_EVERY ?? 3);
+  if (!Number.isFinite(value)) return 3;
+  const normalized = Math.trunc(value);
+  return normalized >= 2 ? normalized : 3;
+})();
+
+function getSmallTalkStreakCount(conv: Conversation | null | undefined): number {
+  if (!conv?.softTags) return 0;
+  const raw = conv.softTags[SMALL_TALK_STREAK_SOFT_TAG];
+  if (!raw) return 0;
+  const fromMeta =
+    typeof raw.meta === "object" && raw.meta ? Number((raw.meta as Record<string, unknown>).count) : NaN;
+  if (Number.isFinite(fromMeta) && fromMeta > 0) {
+    return Math.trunc(fromMeta);
+  }
+  const fromValue = Number(raw.value);
+  if (Number.isFinite(fromValue) && fromValue > 0) {
+    return Math.trunc(fromValue);
+  }
+  return 0;
+}
+
+function setSmallTalkStreakCount(
+  conv: Conversation | null | undefined,
+  count: number,
+  source: string,
+  atIso?: string | null
+): number {
+  const normalized = Math.max(0, Math.trunc(count));
+  if (!conv) return normalized;
+  const at = String(atIso ?? "").trim() || new Date().toISOString();
+  setConversationSoftTag(conv, SMALL_TALK_STREAK_SOFT_TAG, {
+    value: String(normalized),
+    source,
+    meta: {
+      count: normalized,
+      lastAt: at
+    }
+  });
+  return normalized;
+}
+
+function noteSmallTalkTurn(
+  conv: Conversation | null | undefined,
+  atIso?: string | null
+): { count: number; allowBikePivot: boolean } {
+  if (!conv) {
+    return { count: 0, allowBikePivot: true };
+  }
+  const nextCount = setSmallTalkStreakCount(
+    conv,
+    getSmallTalkStreakCount(conv) + 1,
+    "smalltalk_turn",
+    atIso
+  );
+  const allowBikePivot =
+    nextCount >= SMALL_TALK_PIVOT_EVERY && nextCount % SMALL_TALK_PIVOT_EVERY === 0;
+  return { count: nextCount, allowBikePivot };
+}
+
+function resetSmallTalkStreakIfNeeded(
+  conv: Conversation | null | undefined,
+  atIso?: string | null,
+  source: string = "actionable_turn"
+) {
+  if (!conv) return;
+  const current = getSmallTalkStreakCount(conv);
+  if (current <= 0) return;
+  setSmallTalkStreakCount(conv, 0, source, atIso);
+}
+
 async function buildNoResponseChitChatReplyWithLLM(args: {
   text: string;
   history: { direction: "in" | "out"; body: string }[];
   includeSpeaker?: boolean;
   speaker?: string | null;
   hasHumor?: boolean;
-}): Promise<{ reply: string; source: "llm_structured" | "llm_freeform" } | null> {
+  conv?: Conversation | null;
+  receivedAt?: string | null;
+}): Promise<
+  | {
+      reply: string;
+      source: "llm_structured" | "llm_freeform";
+      allowBikePivot: boolean;
+      smallTalkStreak: number;
+    }
+  | null
+> {
+  const streakState = noteSmallTalkTurn(args.conv, args.receivedAt);
   const llmReply = await safeLlmParse("smalltalk_reply", () =>
     generateSmallTalkReplyWithLLM({
       text: args.text,
       history: args.history,
-      hasHumorHint: !!args.hasHumor
+      hasHumorHint: !!args.hasHumor,
+      allowBikePivotHint: streakState.allowBikePivot,
+      smallTalkStreakHint: streakState.count
     })
   );
   const reply = String(llmReply?.reply ?? "").trim();
   if (!reply) return null;
   const source = llmReply?.source === "freeform" ? "llm_freeform" : "llm_structured";
-  return { reply, source };
+  return {
+    reply,
+    source,
+    allowBikePivot: streakState.allowBikePivot,
+    smallTalkStreak: streakState.count
+  };
 }
 
 async function buildBlendedLeadInWithLLM(args: {
@@ -17431,7 +17523,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
           text: regenNoResponseInboundText,
           history,
           includeSpeaker: false,
-          hasHumor: !!regenAcceptedAffect?.hasHumor
+          hasHumor: !!regenAcceptedAffect?.hasHumor,
+          conv,
+          receivedAt: event.receivedAt
         });
         if (!chit?.reply) {
           recordRouteOutcome("regen", "routing_parser_no_response_smalltalk_llm_unavailable", {
@@ -21332,6 +21426,23 @@ if (authToken && signature) {
   const routeExecAvailability = routeExecutionIntent === "availability";
   const routeExecCallback = routeExecutionIntent === "callback";
   const routeExecGeneral = routeExecutionIntent === "general";
+  const actionableTurnSignals =
+    routeExecPricing ||
+    routeExecAvailability ||
+    routeExecScheduling ||
+    routeExecCallback ||
+    pricingOrPaymentsIntent ||
+    schedulingPrimaryIntent ||
+    availabilityPrimaryIntent ||
+    callbackPrimaryIntent ||
+    parserCallbackIntent ||
+    hasExplicitFinanceLanguageThisTurn ||
+    hasExplicitAvailabilityLanguageThisTurn ||
+    hasExplicitSchedulingLanguageThisTurn ||
+    hasExplicitCallbackLanguageThisTurn;
+  if (actionableTurnSignals) {
+    resetSmallTalkStreakIfNeeded(conv, event.receivedAt, "actionable_turn");
+  }
   const previousPaymentContext = getStoredPaymentBudgetContext(conv);
   conv.paymentBudgetContext = {
     monthlyBudget: paymentBudgetContext.monthlyBudget ?? previousPaymentContext.monthlyBudget ?? null,
@@ -21398,7 +21509,9 @@ if (authToken && signature) {
         text: String(event.body ?? ""),
         history: buildHistory(conv, 8),
         includeSpeaker: false,
-        hasHumor: !!acceptedAffect?.hasHumor
+        hasHumor: !!acceptedAffect?.hasHumor,
+        conv,
+        receivedAt: event.receivedAt
       });
       if (chit?.reply) {
         setDialogState(conv, "small_talk");
@@ -21572,7 +21685,9 @@ if (authToken && signature) {
           history: buildHistory(conv, 8),
           speaker,
           includeSpeaker: true,
-          hasHumor: !!acceptedAffect?.hasHumor
+          hasHumor: !!acceptedAffect?.hasHumor,
+          conv,
+          receivedAt: event.receivedAt
         });
         if (chit?.reply) {
           reply = chit.reply;
@@ -21623,7 +21738,9 @@ if (authToken && signature) {
           text: noResponseInboundText,
           history: buildHistory(conv, 8),
           includeSpeaker: false,
-          hasHumor: !!acceptedAffect?.hasHumor
+          hasHumor: !!acceptedAffect?.hasHumor,
+          conv,
+          receivedAt: event.receivedAt
         });
         if (!chit?.reply) {
           logRouteOutcome("routing_parser_no_response_smalltalk_llm_unavailable", {
@@ -21727,7 +21844,9 @@ if (authToken && signature) {
       text: pricingContinuationInboundText,
       history: buildHistory(conv, 8),
       includeSpeaker: false,
-      hasHumor: !!acceptedAffect?.hasHumor
+      hasHumor: !!acceptedAffect?.hasHumor,
+      conv,
+      receivedAt: event.receivedAt
     });
     if (!chit?.reply) {
       logRouteOutcome("pricing_continuation_smalltalk_llm_unavailable", {
@@ -24848,7 +24967,9 @@ if (authToken && signature) {
         text: String(event.body ?? ""),
         history,
         includeSpeaker: false,
-        hasHumor: !!acceptedAffect?.hasHumor
+        hasHumor: !!acceptedAffect?.hasHumor,
+        conv,
+        receivedAt: event.receivedAt
       });
       if (chit?.reply) {
         rewrittenDraft = chit.reply;
@@ -24903,7 +25024,9 @@ if (authToken && signature) {
         text: String(event.body ?? ""),
         history,
         includeSpeaker: false,
-        hasHumor: !!acceptedAffect?.hasHumor
+        hasHumor: !!acceptedAffect?.hasHumor,
+        conv,
+        receivedAt: event.receivedAt
       });
       if (chit?.reply) {
         rewrittenDraft = chit.reply;
