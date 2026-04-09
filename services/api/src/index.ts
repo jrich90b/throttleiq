@@ -24666,6 +24666,54 @@ if (authToken && signature) {
   logRouteTiming("orchestrator", orchestratorStartedAt, {
     turnPrimaryIntent: routeExecutionIntent
   });
+  const generalGenericCheckingCandidate =
+    event.provider === "twilio" &&
+    routeExecGeneral &&
+    !hasExplicitFinanceLanguageThisTurn &&
+    !hasExplicitAvailabilityLanguageThisTurn &&
+    !schedulingSignals.hasDayTime &&
+    !schedulingSignals.hasDayOnlyRequest &&
+    !schedulingSignals.hasDayOnlyAvailability &&
+    !explicitScheduleSignal &&
+    !callbackPrimaryIntent &&
+    !parserCallbackIntent &&
+    /\?/.test(String(event.body ?? "")) &&
+    String(result.intent ?? "").toUpperCase() === "GENERAL" &&
+    /^(thanks for the message|got it — this is .+?)\b.*\bi[’']m checking that now and will follow up shortly\.?$/i.test(
+      String(result.draft ?? "").trim()
+    );
+  if (generalGenericCheckingCandidate) {
+    const genericSmallTalkParse = await safeLlmParse("general_generic_checking_smalltalk", () =>
+      classifySmallTalkWithLLM({
+        text: String(event.body ?? ""),
+        history
+      })
+    );
+    const genericSmallTalk =
+      !!genericSmallTalkParse?.smallTalk &&
+      (genericSmallTalkParse.confidence ?? 0) >= 0.7;
+    const rewrittenDraft = genericSmallTalk
+      ? buildNoResponseChitChatReply({
+          includeSpeaker: false,
+          hasHumor: !!acceptedAffect?.hasHumor
+        })
+      : "Got it — are you asking about bike specs, availability, payments, or setting a time to come in?";
+    result.intent = "GENERAL";
+    result.stage = "ENGAGED";
+    result.shouldRespond = true;
+    result.suggestedSlots = [];
+    result.requestedTime = undefined;
+    result.draft = rewrittenDraft;
+    if (genericSmallTalk) {
+      setDialogState(conv, "small_talk");
+    } else {
+      setDialogState(conv, "clarify_schedule");
+    }
+    logRouteOutcome("general_generic_checking_rewrite", {
+      smallTalk: genericSmallTalk,
+      confidence: genericSmallTalkParse?.confidence ?? null
+    });
+  }
   const generalOrchestratorPricingCarryoverCandidate =
     event.provider === "twilio" &&
     routeExecGeneral &&
