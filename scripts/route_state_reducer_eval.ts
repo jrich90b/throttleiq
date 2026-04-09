@@ -393,8 +393,10 @@ type NoResponsePolicyCase = {
     reason:
       | "not_no_response_fallback"
       | "actionable_context_present"
+      | "context_only_actionable_guard"
       | "progress_update_ack"
       | "manual_handoff_question_ack"
+      | "small_talk_question_ack"
       | "no_actionable_context";
   };
 };
@@ -491,8 +493,8 @@ const noResponsePolicyCases: NoResponsePolicyCase[] = [
     },
     expected: {
       applicable: true,
-      action: "override",
-      reason: "actionable_context_present"
+      action: "skip",
+      reason: "context_only_actionable_guard"
     }
   }
 ];

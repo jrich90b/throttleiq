@@ -17282,6 +17282,38 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenRoutePolicyMode = getRoutePolicyMode();
   if (regenRoutingParserDecision.accepted && regenRoutingParserDecision.fallbackAction === "no_response") {
     const regenNoResponseInboundText = String(event.body ?? "");
+    const regenExplicitFinanceSignal =
+      isPricingText(regenNoResponseInboundText) ||
+      isPaymentText(regenNoResponseInboundText) ||
+      isDownPaymentQuestion(regenNoResponseInboundText) ||
+      /\b(apr|interest|finance|financing|payment|payments|monthly|month|term|months|down|trade)\b/i.test(
+        regenNoResponseInboundText
+      );
+    const regenExplicitAvailabilitySignal =
+      /\b(do you have|have any|in stock|available|availability|stock|vin|year|color|trim|model)\b/i.test(
+        regenNoResponseInboundText
+      );
+    const regenExplicitSchedulingSignal =
+      /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week|this weekend|weekend|next month)\b/i.test(
+        regenNoResponseInboundText
+      ) &&
+      (/\b(at|around|between|from)\b/i.test(regenNoResponseInboundText) ||
+        /\b\d{1,2}(?::\d{2})?\s*(am|pm)?\b/i.test(regenNoResponseInboundText) ||
+        /\b(schedule|appointment|come in|stop by|visit)\b/i.test(regenNoResponseInboundText));
+    const regenExplicitCallbackSignal =
+      regenParserCallbackIntent ||
+      /\b(call me|give me a call|can you call|please call|have .* call|reach me|contact me)\b/i.test(
+        regenNoResponseInboundText
+      );
+    const regenLastOutboundText = String(
+      [...(conv.messages ?? [])]
+        .filter(m => m.direction === "out" && m.body)
+        .slice(-1)[0]?.body ?? ""
+    );
+    const regenFinanceFollowUpAffirmativeAck =
+      hasRecentPricingPromptContext(conv) &&
+      isFinanceFollowUpPromptText(regenLastOutboundText) &&
+      isFinanceFollowUpAffirmationText(regenNoResponseInboundText);
     const regenNoResponseSmallTalkParse = await safeLlmParse("regen_no_response_smalltalk", () =>
       classifySmallTalkWithLLM({
         text: regenNoResponseInboundText,
@@ -17296,10 +17328,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const regenStoredPaymentContext = getStoredPaymentBudgetContext(conv);
     const regenNoResponseDecision = evaluateNoResponseFallback({
       primaryIntent: regenRoutingParserDecision.intentOverride ?? "general",
-      financeSignal: regenParserPricingIntent,
-      availabilitySignal: regenParserAvailabilityIntent,
-      schedulingSignal: regenParserSchedulingIntent,
-      callbackSignal: regenParserCallbackIntent,
+      financeSignal:
+        regenFinanceFollowUpAffirmativeAck ||
+        (regenParserPricingIntent && regenExplicitFinanceSignal),
+      availabilitySignal: regenParserAvailabilityIntent || regenExplicitAvailabilitySignal,
+      schedulingSignal: regenParserSchedulingIntent || regenExplicitSchedulingSignal,
+      callbackSignal: regenParserCallbackIntent || regenExplicitCallbackSignal,
       hasMonthlyBudgetContext: regenStoredPaymentContext.monthlyBudget != null,
       hasDownPaymentContext: regenStoredPaymentContext.downPayment != null,
       hasTermContext: regenStoredPaymentContext.termMonths != null
@@ -17311,7 +17345,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       isManualHandoff: false,
       manualHandoffQuestionCandidate: false,
       smallTalkQuestionCandidate: regenNoResponseSmallTalkQuestion,
-      allowManualHandoffQuestionAck: false
+      allowManualHandoffQuestionAck: false,
+      hasExplicitFinanceSignal: regenExplicitFinanceSignal || regenFinanceFollowUpAffirmativeAck,
+      hasExplicitAvailabilitySignal: regenExplicitAvailabilitySignal,
+      hasExplicitSchedulingSignal: regenExplicitSchedulingSignal,
+      hasExplicitCallbackSignal: regenExplicitCallbackSignal
     });
     const regenLegacyAction = regenNoResponseDecision.shouldSkipNoResponse
       ? "skip"
@@ -17330,7 +17368,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       });
     }
     const regenEffectiveAction =
-      regenRoutePolicyMode === "enforce" ? regenPolicyDecision.action : regenLegacyAction;
+      regenRoutePolicyMode === "legacy" ? regenLegacyAction : regenPolicyDecision.action;
     if (regenEffectiveAction === "ack_progress_update") {
       const progressReply = "Thanks for the update. I’m here if you need anything.";
       if (channel === "email") {
@@ -21177,12 +21215,36 @@ if (authToken && signature) {
     (paymentBudgetContext.monthlyBudget != null ||
       paymentBudgetContext.downPayment != null ||
       paymentBudgetContext.termMonths != null);
+  const pricingContinuationInboundText = String(event.body ?? "");
+  const hasExplicitFinanceLanguageThisTurn =
+    isPricingText(pricingContinuationInboundText) ||
+    isPaymentText(pricingContinuationInboundText) ||
+    isDownPaymentQuestion(pricingContinuationInboundText) ||
+    /\b(apr|interest|finance|financing|payment|payments|monthly|month|term|months|down|trade)\b/i.test(
+      pricingContinuationInboundText
+    );
+  const hasExplicitAvailabilityLanguageThisTurn =
+    /\b(do you have|have any|in stock|available|availability|stock|vin|year|color|trim|model)\b/i.test(
+      pricingContinuationInboundText
+    );
+  const hasExplicitSchedulingLanguageThisTurn =
+    explicitScheduleSignal ||
+    schedulingSignals.hasDayTime ||
+    schedulingSignals.hasDayOnlyRequest ||
+    schedulingSignals.hasDayOnlyAvailability;
+  const hasExplicitCallbackLanguageThisTurn =
+    callbackPrimaryIntent ||
+    parserCallbackIntent ||
+    /\b(call me|give me a call|can you call|please call|have .* call|reach me|contact me)\b/i.test(
+      pricingContinuationInboundText
+    );
   const financeContinuationAffirmativeAck =
     hasRecentPricingPromptContext(conv) &&
     isFinanceFollowUpPromptText(lastOutboundText) &&
     isFinanceFollowUpAffirmationText(event.body ?? "");
   const financeContinuationSignalThisTurn =
-    currentTurnFinanceSignal || financeContinuationAffirmativeAck;
+    financeContinuationAffirmativeAck ||
+    (currentTurnFinanceSignal && hasExplicitFinanceLanguageThisTurn);
   let financeContinuationOverrideApplied = false;
   if (
     turnPrimaryIntent === "general" &&
@@ -21358,7 +21420,11 @@ if (authToken && signature) {
       isManualHandoff: manualHandoffMode,
       manualHandoffQuestionCandidate: manualHandoffNoResponseQuestion,
       smallTalkQuestionCandidate: noResponseSmallTalkQuestion,
-      allowManualHandoffQuestionAck: true
+      allowManualHandoffQuestionAck: true,
+      hasExplicitFinanceSignal: hasExplicitFinanceLanguageThisTurn || financeContinuationAffirmativeAck,
+      hasExplicitAvailabilitySignal: hasExplicitAvailabilityLanguageThisTurn,
+      hasExplicitSchedulingSignal: hasExplicitSchedulingLanguageThisTurn,
+      hasExplicitCallbackSignal: hasExplicitCallbackLanguageThisTurn
     });
     const legacyNoResponseAction = noResponseContextDecision.shouldSkipNoResponse
       ? manualHandoffNoResponseQuestion
@@ -21380,7 +21446,7 @@ if (authToken && signature) {
       });
     }
     const effectiveNoResponseAction =
-      routePolicyMode === "enforce" ? policyNoResponseDecision.action : legacyNoResponseAction;
+      routePolicyMode === "legacy" ? legacyNoResponseAction : policyNoResponseDecision.action;
     if (effectiveNoResponseAction === "ack_manual_handoff_question") {
       const dealerProfile = await getDealerProfileHot();
       const speaker = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
@@ -21497,18 +21563,6 @@ if (authToken && signature) {
   if (routeExecScheduling && getDialogState(conv) === "pricing_need_model") {
     setDialogState(conv, "schedule_request");
   }
-  const pricingContinuationInboundText = String(event.body ?? "");
-  const hasExplicitFinanceLanguageThisTurn =
-    isPricingText(pricingContinuationInboundText) ||
-    isPaymentText(pricingContinuationInboundText) ||
-    isDownPaymentQuestion(pricingContinuationInboundText) ||
-    /\b(apr|interest|finance|financing|payment|payments|monthly|month|term|months|down|trade)\b/i.test(
-      pricingContinuationInboundText
-    );
-  const hasExplicitAvailabilityLanguageThisTurn =
-    /\b(do you have|have any|in stock|available|availability|stock|vin|year|color|trim|model)\b/i.test(
-      pricingContinuationInboundText
-    );
   const pricingContinuationOffTopicCandidate =
     event.provider === "twilio" &&
     (routeExecPricing || routeExecAvailability || routeExecGeneral) &&

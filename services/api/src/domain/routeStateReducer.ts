@@ -113,6 +113,10 @@ export type NoResponsePolicyInput = {
   manualHandoffQuestionCandidate?: boolean;
   smallTalkQuestionCandidate?: boolean;
   allowManualHandoffQuestionAck?: boolean;
+  hasExplicitFinanceSignal?: boolean;
+  hasExplicitAvailabilitySignal?: boolean;
+  hasExplicitSchedulingSignal?: boolean;
+  hasExplicitCallbackSignal?: boolean;
 };
 
 export type NoResponsePolicyDecision = {
@@ -121,6 +125,7 @@ export type NoResponsePolicyDecision = {
   reason:
     | "not_no_response_fallback"
     | "small_talk_question_ack"
+    | "context_only_actionable_guard"
     | "actionable_context_present"
     | "progress_update_ack"
     | "manual_handoff_question_ack"
@@ -370,6 +375,18 @@ export function resolveNoResponsePolicyDecision(
       applicable: true,
       action: "skip",
       reason: "small_talk_question_ack"
+    };
+  }
+  const hasExplicitSignal =
+    !!input.hasExplicitFinanceSignal ||
+    !!input.hasExplicitAvailabilitySignal ||
+    !!input.hasExplicitSchedulingSignal ||
+    !!input.hasExplicitCallbackSignal;
+  if (input.actionable.hasActionableTurnContext && !hasExplicitSignal) {
+    return {
+      applicable: true,
+      action: "skip",
+      reason: "context_only_actionable_guard"
     };
   }
   if (input.actionable.hasActionableTurnContext) {
