@@ -21497,11 +21497,15 @@ if (authToken && signature) {
     /\b(apr|interest|finance|financing|payment|payments|monthly|month|term|months|down|trade)\b/i.test(
       pricingContinuationInboundText
     );
+  const hasExplicitAvailabilityLanguageThisTurn =
+    /\b(do you have|have any|in stock|available|availability|stock|vin|year|color|trim|model)\b/i.test(
+      pricingContinuationInboundText
+    );
   const pricingContinuationOffTopicCandidate =
     event.provider === "twilio" &&
-    routeExecPricing &&
+    (routeExecPricing || routeExecAvailability) &&
     !hasExplicitFinanceLanguageThisTurn &&
-    !explicitAvailabilitySignalThisTurn &&
+    !hasExplicitAvailabilityLanguageThisTurn &&
     !schedulingSignals.hasDayTime &&
     !schedulingSignals.hasDayOnlyRequest &&
     !schedulingSignals.hasDayOnlyAvailability &&
