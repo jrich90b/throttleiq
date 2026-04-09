@@ -126,7 +126,10 @@ function buildDealershipFaqReply(args: {
     case "fees_out_the_door":
       return "Great question. Out-the-door includes bike price plus tax/title/registration and dealer fees like freight/setup/doc. I can send a full OTD breakdown on your exact bike.";
     case "model_availability":
-      return "We can check exactly what’s in stock now and what’s inbound. Tell me the model/year/color you want and I’ll narrow it down.";
+      if (!isUnknownModel(modelRaw)) {
+        return `We can check exactly what’s in stock now and what’s inbound for ${bikeLabel}. Are you looking for new or used?`;
+      }
+      return "We can check exactly what’s in stock now and what’s inbound. Start with style (Grand American Touring, Cruiser, Sport, or Adventure Touring) and whether you want new or used, and I’ll narrow it down.";
     case "custom_order":
       return "Yes — we can place a factory order and spec it with genuine Harley-Davidson options. If you want, we can map your build today.";
     case "factory_order_timing":
@@ -996,6 +999,68 @@ function isUnknownModel(label?: string | null): boolean {
   return trimmed === "other" || /\bother\b/.test(trimmed) || /\bfull\s*line\b/.test(trimmed);
 }
 
+type InventoryStyleFamily = "grand_american_touring" | "cruiser" | "sport" | "adventure_touring" | "trike";
+
+function detectInventoryStyleFamily(text?: string | null): InventoryStyleFamily | null {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return null;
+  if (/\b(adventure touring|adventure|pan america|pan-am)\b/.test(t)) return "adventure_touring";
+  if (/\b(trike|tri glide|freewheeler|road glide trike|street glide trike)\b/.test(t)) return "trike";
+  if (/\b(grand american touring|touring|bagger)\b/.test(t)) return "grand_american_touring";
+  if (/\b(cruiser|softail|breakout|street bob|fat boy|fat bob|low rider|heritage)\b/.test(t)) return "cruiser";
+  if (/\b(sport|sportster|nightster|street 750|rh975|rh1250)\b/.test(t)) return "sport";
+  return null;
+}
+
+function inventoryStyleFamilyLabel(family: InventoryStyleFamily): string {
+  switch (family) {
+    case "grand_american_touring":
+      return "Grand American Touring";
+    case "cruiser":
+      return "Cruiser";
+    case "sport":
+      return "Sport";
+    case "adventure_touring":
+      return "Adventure Touring";
+    case "trike":
+      return "Trike";
+    default:
+      return "style";
+  }
+}
+
+function inventoryItemMatchesStyleFamily(item: { model?: string | null }, family: InventoryStyleFamily): boolean {
+  const m = String(item?.model ?? "").toLowerCase();
+  if (!m) return false;
+  if (family === "adventure_touring") return /\bpan america\b/.test(m);
+  if (family === "trike") return /\b(tri glide|freewheeler|road glide trike|street glide trike)\b/.test(m);
+  if (family === "grand_american_touring") {
+    return /\b(road glide|street glide|road king|electra glide|ultra|road glide limited|street glide limited)\b/.test(
+      m
+    );
+  }
+  if (family === "cruiser") {
+    return /\b(softail|fat boy|fat bob|breakout|street bob|low rider|heritage|sport glide)\b/.test(m);
+  }
+  if (family === "sport") {
+    return /\b(sportster|nightster|street 750|rh975|rh1250)\b/.test(m);
+  }
+  return false;
+}
+
+function findRecentInboundStyleFamily(
+  history?: Array<{ direction?: string | null; body?: string | null }>
+): InventoryStyleFamily | null {
+  if (!Array.isArray(history) || !history.length) return null;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const msg = history[i];
+    if (msg?.direction !== "in") continue;
+    const family = detectInventoryStyleFamily(msg?.body ?? "");
+    if (family) return family;
+  }
+  return null;
+}
+
 function buildScheduleInvite(hasConcreteInventory: boolean): string {
   if (hasConcreteInventory) {
     return "I can set up a time to stop in and check out the bike and go over options.";
@@ -1205,6 +1270,31 @@ function resolveModelFromHistory(
   for (const msg of ordered) {
     const match = resolveModelFromText(msg.body, models);
     if (match) return match;
+  }
+  return null;
+}
+
+function findRecentInboundModel(
+  history: { direction: "in" | "out"; body: string }[] | undefined,
+  models: string[]
+): string | null {
+  if (!history?.length || !models.length) return null;
+  const ordered = [...history].reverse();
+  for (const msg of ordered) {
+    if (msg.direction !== "in") continue;
+    const match = resolveModelFromText(msg.body, models);
+    if (match) return match;
+  }
+  return null;
+}
+
+function findRecentInboundYear(history: { direction: "in" | "out"; body: string }[] | undefined): string | null {
+  if (!history?.length) return null;
+  const ordered = [...history].reverse();
+  for (const msg of ordered) {
+    if (msg.direction !== "in") continue;
+    const y = deriveYearFromText(msg.body);
+    if (y) return y;
   }
   return null;
 }
@@ -2220,28 +2310,37 @@ export async function orchestrateInbound(
       const lastOutbound = [...(history ?? [])].reverse().find(h => h.direction === "out")?.body ?? "";
       const modelFromInbound = resolveModelFromText(event.body, modelCandidates);
       const modelFromLastOutbound = resolveModelFromText(lastOutbound, modelCandidates);
+      const modelFromRecentInbound = modelFromInbound ? null : findRecentInboundModel(history, modelCandidates);
       const modelFromHistory = resolveModelFromHistory(history, modelCandidates);
+      const styleFromInbound = detectInventoryStyleFamily(event.body);
+      const styleFromLastOutbound = modelFromInbound ? null : detectInventoryStyleFamily(lastOutbound);
+      const styleFromHistory =
+        modelFromInbound || modelFromLastOutbound || modelFromRecentInbound ? null : findRecentInboundStyleFamily(history);
+      const styleFamily = styleFromInbound || styleFromLastOutbound || styleFromHistory || null;
       const model =
         modelFromInbound ||
         modelFromLastOutbound ||
+        modelFromRecentInbound ||
         modelFromHistory ||
         ctx?.lead?.vehicle?.model ||
         deriveModelFromDescription(ctx?.lead?.vehicle?.description ?? null) ||
         null;
-      if (!model) {
+      if (!model && !styleFamily) {
         return finalize({
           intent: "AVAILABILITY",
           stage: "ENGAGED",
           shouldRespond: true,
-          draft: "Which model are you asking about?"
+          draft:
+            "Happy to. What style should I pull first: Grand American Touring, Cruiser, Sport, or Adventure Touring? Also, are you looking for new or used?"
         });
       }
       const yearFromInbound = deriveYearFromText(event.body);
+      const yearFromRecentInbound = yearFromInbound ? null : findRecentInboundYear(history);
       const year =
         yearFromInbound ??
         (modelFromInbound
           ? null
-          : deriveYearFromText(lastOutbound) ?? ctx?.lead?.vehicle?.year ?? null);
+          : yearFromRecentInbound ?? ctx?.lead?.vehicle?.year ?? null);
       const msrpColors = await getMsrpColorNames();
       const colorFromInbound = extractColorMention(event.body, msrpColors);
       const color =
@@ -2258,7 +2357,12 @@ export async function orchestrateInbound(
         : detectRequestedInventoryConditionFromText(lastOutbound) ||
           normalizeRequestedInventoryCondition(ctx?.lead?.vehicle?.condition ?? null);
       const requestedCondition = conditionFromInbound || conditionFromContext;
-      let matches = await findInventoryMatches({ year: year ?? null, model });
+      let matches = model
+        ? await findInventoryMatches({ year: year ?? null, model })
+        : items.filter(i => {
+            if (year && i.year !== String(year)) return false;
+            return styleFamily ? inventoryItemMatchesStyleFamily(i, styleFamily) : false;
+          });
       if (requestedCondition) {
         matches = matches.filter(m => inventoryItemMatchesRequestedCondition(m, requestedCondition));
       }
@@ -2278,18 +2382,28 @@ export async function orchestrateInbound(
       const count = availableMatches.length;
       const conditionPrefix = formatRequestedConditionPrefix(requestedCondition);
       const yearLabel = year ? `${year} ` : "";
-      const modelLabel = normalizeModelLabel(model);
+      const modelLabel = styleFamily ? inventoryStyleFamilyLabel(styleFamily) : normalizeModelLabel(model);
       const colorLabel = color ? ` in ${color}` : "";
+      const styleExamples =
+        styleFamily && count > 0
+          ? (() => {
+              const top = Array.from(
+                new Set(availableMatches.map(m => normalizeModelLabel(m.model)).filter(Boolean))
+              ).slice(0, 3);
+              return top.length ? ` Top options right now: ${top.join(", ")}.` : "";
+            })()
+          : "";
+      const conditionPrompt = !model && styleFamily && !requestedCondition ? " Are you looking for new or used?" : "";
       const preferencePrompt = buildOutOfStockPreferencePrompt({
         requestedCondition,
         color
       });
       const reply =
         count <= 0
-          ? `I’m not seeing any ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}${preferencePrompt ? ` ${preferencePrompt}` : ""}`
+          ? `I’m not seeing any ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}${preferencePrompt ? ` ${preferencePrompt}` : ""}${conditionPrompt}`
           : count === 1
-            ? `We do have 1 ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} in stock. Want photos or details?`
-            : `We have ${count} ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} in stock. Want photos or details on a specific one?`;
+            ? `We do have 1 ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} in stock. Want photos or details?${styleExamples}${conditionPrompt}`
+            : `We have ${count} ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} options in stock. Want photos or details on a specific one?${styleExamples}${conditionPrompt}`;
       return finalize({
         intent: "AVAILABILITY",
         stage: "ENGAGED",
