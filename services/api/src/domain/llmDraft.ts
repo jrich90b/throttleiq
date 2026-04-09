@@ -179,6 +179,68 @@ export async function classifySmallTalkWithLLM(args: {
   }
 }
 
+export async function generateSmallTalkReplyWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  hasHumorHint?: boolean;
+}): Promise<{ reply: string; confidence?: number } | null> {
+  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+  const hasHumorHint = !!args.hasHumorHint;
+  const history = (args.history ?? []).slice(-4).map(h => `${h.direction}: ${h.body}`);
+  const schema: { [key: string]: unknown } = {
+    type: "object",
+    additionalProperties: false,
+    required: ["reply", "confidence"],
+    properties: {
+      reply: { type: "string" },
+      confidence: { type: "number" }
+    }
+  };
+  const prompt = [
+    "You write one short SMS reply for dealership small talk/off-topic chatter.",
+    "Return only JSON that matches the schema.",
+    "",
+    "Rules:",
+    "- Keep it natural, friendly, and concise (1 sentence, max ~20 words).",
+    "- Do NOT claim personal real-world experiences you cannot verify (e.g., don't say you watched a game).",
+    "- Acknowledge the message and lightly keep door open for bike help.",
+    "- Do NOT switch into pricing/availability/scheduling unless asked.",
+    "- Avoid stiff fallback phrases like 'I'm checking that now'.",
+    "",
+    "Good examples:",
+    "- \"Haha, I heard it was a good one - I'm here whenever you want to keep talking bikes.\"",
+    "- \"Good one - I'm around if you want to jump back into bike details.\"",
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Humor hint: ${hasHumorHint ? "true" : "false"}`,
+    `Customer message: ${text}`
+  ].join("\n");
+  try {
+    const parsed = await requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "small_talk_reply_generator",
+      schema,
+      maxOutputTokens: 120,
+      debugTag: "llm-smalltalk-reply-generator"
+    });
+    if (!parsed || typeof parsed !== "object") return null;
+    const reply = String(parsed.reply ?? "").trim();
+    if (!reply) return null;
+    const confidence =
+      typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+        ? Math.max(0, Math.min(1, parsed.confidence))
+        : undefined;
+    return { reply, confidence };
+  } catch {
+    return null;
+  }
+}
+
 export async function classifyEmpathyNeedWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];

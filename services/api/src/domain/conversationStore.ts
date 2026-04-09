@@ -1508,7 +1508,7 @@ function pickLeadInVariant(text: string): string {
   if (/(i left|already left|left a deposit|just letting you know|update)/.test(t)) return "Thanks for the update.";
   if (/(can you|could you|would you|do you|is it possible)/.test(t)) return "Sure.";
   if (/(i want|i'd like|i would like|looking to|want to)/.test(t)) return "Absolutely.";
-  if (/[?]/.test(t)) return "Happy to.";
+  if (/[?]/.test(t)) return "Got it.";
   return "Sounds good.";
 }
 

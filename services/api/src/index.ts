@@ -13,6 +13,7 @@ import { orchestrateInbound } from "./domain/orchestrator.js";
 import {
   classifySchedulingIntent,
   classifySmallTalkWithLLM,
+  generateSmallTalkReplyWithLLM,
   classifyCadenceContextWithLLM,
   classifyEmpathyNeedWithLLM,
   classifyComplimentWithLLM,
@@ -1194,6 +1195,29 @@ function buildNoResponseChitChatReply(args?: {
     return `${opener} — this is ${speaker}. I’m here if you need anything.`;
   }
   return `${opener} — I’m here if you need anything.`;
+}
+
+async function buildNoResponseChitChatReplyWithLLM(args: {
+  text: string;
+  history: { direction: "in" | "out"; body: string }[];
+  includeSpeaker?: boolean;
+  speaker?: string | null;
+  hasHumor?: boolean;
+}): Promise<string> {
+  const llmReply = await safeLlmParse("smalltalk_reply", () =>
+    generateSmallTalkReplyWithLLM({
+      text: args.text,
+      history: args.history,
+      hasHumorHint: !!args.hasHumor
+    })
+  );
+  const reply = String(llmReply?.reply ?? "").trim();
+  if (reply) return reply;
+  return buildNoResponseChitChatReply({
+    includeSpeaker: !!args.includeSpeaker,
+    speaker: args.speaker,
+    hasHumor: !!args.hasHumor
+  });
 }
 
 async function safeDealerWeatherStatus(
@@ -17378,7 +17402,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     if (regenEffectiveAction === "skip") {
       if (regenNoResponseSmallTalkQuestion) {
-        const reply = buildNoResponseChitChatReply({
+        const reply = await buildNoResponseChitChatReplyWithLLM({
+          text: regenNoResponseInboundText,
+          history,
           includeSpeaker: false,
           hasHumor: !!regenAcceptedAffect?.hasHumor
         });
@@ -21403,7 +21429,7 @@ if (authToken && signature) {
     const noResponseSmallTalkParse = await safeLlmParse("no_response_smalltalk", () =>
       classifySmallTalkWithLLM({
         text: noResponseInboundText,
-        history
+        history: buildHistory(conv, 8)
       })
     );
     const noResponseSmallTalkQuestion =
@@ -21451,7 +21477,9 @@ if (authToken && signature) {
       const dealerProfile = await getDealerProfileHot();
       const speaker = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
       const reply = noResponseSmallTalkQuestion
-        ? buildNoResponseChitChatReply({
+        ? await buildNoResponseChitChatReplyWithLLM({
+            text: noResponseInboundText,
+            history: buildHistory(conv, 8),
             speaker,
             includeSpeaker: true,
             hasHumor: !!acceptedAffect?.hasHumor
@@ -21496,7 +21524,9 @@ if (authToken && signature) {
     }
     if (effectiveNoResponseAction === "skip") {
       if (noResponseSmallTalkQuestion) {
-        const reply = buildNoResponseChitChatReply({
+        const reply = await buildNoResponseChitChatReplyWithLLM({
+          text: noResponseInboundText,
+          history: buildHistory(conv, 8),
           includeSpeaker: false,
           hasHumor: !!acceptedAffect?.hasHumor
         });
@@ -21587,7 +21617,9 @@ if (authToken && signature) {
     !!pricingContinuationSmallTalkParse?.smallTalk &&
     (pricingContinuationSmallTalkParse.confidence ?? 0) >= 0.72;
   if (pricingContinuationSmallTalk) {
-    const reply = buildNoResponseChitChatReply({
+    const reply = await buildNoResponseChitChatReplyWithLLM({
+      text: pricingContinuationInboundText,
+      history: buildHistory(conv, 8),
       includeSpeaker: false,
       hasHumor: !!acceptedAffect?.hasHumor
     });
@@ -24693,7 +24725,9 @@ if (authToken && signature) {
       !!genericSmallTalkParse?.smallTalk &&
       (genericSmallTalkParse.confidence ?? 0) >= 0.7;
     const rewrittenDraft = genericSmallTalk
-      ? buildNoResponseChitChatReply({
+      ? await buildNoResponseChitChatReplyWithLLM({
+          text: String(event.body ?? ""),
+          history,
           includeSpeaker: false,
           hasHumor: !!acceptedAffect?.hasHumor
         })
@@ -24738,7 +24772,9 @@ if (authToken && signature) {
       !!carryoverSmallTalkParse?.smallTalk &&
       (carryoverSmallTalkParse.confidence ?? 0) >= 0.7;
     const rewrittenDraft = carryoverSmallTalk
-      ? buildNoResponseChitChatReply({
+      ? await buildNoResponseChitChatReplyWithLLM({
+          text: String(event.body ?? ""),
+          history,
           includeSpeaker: false,
           hasHumor: !!acceptedAffect?.hasHumor
         })
