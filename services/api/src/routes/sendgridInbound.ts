@@ -913,6 +913,20 @@ function appendFallbackEmailSignoff(body: string, profile: any): string {
   }
   return `${text}\n\nBest,\n${agent}\n${dealer}`;
 }
+
+function toEmailStyledBody(body: string, conv: any): string {
+  const raw = String(body ?? "").trim();
+  if (!raw) return raw;
+  const firstName = normalizeDisplayCase(conv?.lead?.firstName) || normalizeDisplayCase(conv?.lead?.name);
+  const greetingName = (firstName || "there").split(/\s+/)[0];
+  // Convert SMS-style greeting "Hi X — ..." into email-style "Hi X,\n\n..."
+  let text = raw.replace(/^Hi\s+([^—,\n]+)\s*[—-]\s*/i, (_m, name) => `Hi ${String(name).trim()},\n\n`);
+  // If no greeting exists, prepend one for email readability.
+  if (!/^Hi\s+[^,\n]+,\s*/i.test(text)) {
+    text = `Hi ${greetingName},\n\n${text}`;
+  }
+  return text;
+}
 import { getSystemMode } from "../domain/settingsStore.js";
 import { sendEmail } from "../domain/emailSender.js";
 import { upsertContact } from "../domain/contactsStore.js";
@@ -4226,10 +4240,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     if (emailFrom) {
       try {
         const subject = `Thanks for your inquiry at ${dealerName}`;
+        const emailBody = toEmailStyledBody(draft, conv);
         const signed =
           signature
-            ? `${draft}\n\n${signature}${dealerProfile?.logoUrl ? `\n\n${dealerProfile.logoUrl}` : ""}`
-            : appendFallbackEmailSignoff(draft, dealerProfile);
+            ? `${emailBody}\n\n${signature}${dealerProfile?.logoUrl ? `\n\n${dealerProfile.logoUrl}` : ""}`
+            : appendFallbackEmailSignoff(emailBody, dealerProfile);
         await sendEmail({
           to: emailTo!,
           subject,
