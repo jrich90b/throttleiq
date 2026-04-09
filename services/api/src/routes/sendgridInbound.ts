@@ -42,6 +42,7 @@ import { orchestrateInbound } from "../domain/orchestrator.js";
 import { buildEffectiveHistory } from "../domain/effectiveContext.js";
 import { resolveChannel, resolveLeadRule } from "../domain/leadSourceRules.js";
 import {
+  parseDealershipFaqTopicWithLLM,
   parseDialogActWithLLM,
   parseInventoryEntitiesWithLLM,
   parseIntentWithLLM,
@@ -2093,6 +2094,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     history: adfHistory,
     lead: conv.lead
   });
+  const llmFaqTopic = await parseDealershipFaqTopicWithLLM({
+    text: effectiveInquiry,
+    history: adfHistory,
+    lead: conv.lead
+  });
   const llmWalkInOutcome = await parseWalkInOutcomeWithLLM({
     text: effectiveInquiry,
     history: adfHistory,
@@ -3536,6 +3542,47 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     markPricingEscalated(conv);
     queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     maybeAddInitialCallTodo();
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      draft: ack
+    });
+  }
+
+  const faqConfidence =
+    typeof llmFaqTopic?.confidence === "number" && Number.isFinite(llmFaqTopic.confidence)
+      ? llmFaqTopic.confidence
+      : 0;
+  const faqConfidenceMin = Number(process.env.LLM_FAQ_TOPIC_CONFIDENCE_MIN ?? 0.8);
+  const faqOrderIntentAccepted =
+    isInitialAdf &&
+    !!llmFaqTopic &&
+    llmFaqTopic.explicitRequest === true &&
+    faqConfidence >= faqConfidenceMin &&
+    (llmFaqTopic.topic === "custom_order" || llmFaqTopic.topic === "factory_order_timing");
+  if (faqOrderIntentAccepted) {
+    const inquiryCombined = `${effectiveInquiry} ${String(conv.lead?.vehicle?.model ?? "")}`.toLowerCase();
+    const asksStreet750 = /\bstreet\s*750\b|\bharley\s*750\b|\b750\b/.test(inquiryCombined);
+    let ack =
+      llmFaqTopic?.topic === "factory_order_timing"
+        ? "Factory orders are usually around 6 to 12 weeks depending on model and build details. If you want, we can map your build and timing now."
+        : "Yes — we can place a factory order and spec it with genuine Harley-Davidson options. If you want, we can map your build today.";
+    if (asksStreet750) {
+      ack =
+        "Great question — Harley-Davidson no longer sells the Street 750 new, so we can’t factory-order that model. I can help with similar new options or locate pre-owned Street 750s for you. What matters most to you: price, engine size, or style?";
+    }
+    ack = await applyInitialAdfPrefix(ack);
+    queueInitialDraftForPreferredContact(ack);
+    maybeAddInitialCallTodo();
+    conv.emailDraft = ack;
     return res.status(200).json({
       ok: true,
       parsed: true,
