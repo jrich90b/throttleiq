@@ -13,7 +13,9 @@ import { orchestrateInbound } from "./domain/orchestrator.js";
 import {
   classifySchedulingIntent,
   classifySmallTalkWithLLM,
+  classifyBlendedChatterWithLLM,
   generateSmallTalkReplyWithLLM,
+  generateBlendedLeadInWithLLM,
   classifyCadenceContextWithLLM,
   classifyEmpathyNeedWithLLM,
   classifyComplimentWithLLM,
@@ -1200,6 +1202,46 @@ async function buildNoResponseChitChatReplyWithLLM(args: {
   if (!reply) return null;
   const source = llmReply?.source === "freeform" ? "llm_freeform" : "llm_structured";
   return { reply, source };
+}
+
+async function buildBlendedLeadInWithLLM(args: {
+  text: string;
+  history: { direction: "in" | "out"; body: string }[];
+  hasHumor?: boolean;
+}): Promise<{ leadIn: string; source: "llm_structured" | "llm_freeform" } | null> {
+  const llmLeadIn = await safeLlmParse("blended_lead_in", () =>
+    generateBlendedLeadInWithLLM({
+      text: args.text,
+      history: args.history,
+      hasHumorHint: !!args.hasHumor
+    })
+  );
+  const leadIn = String(llmLeadIn?.leadIn ?? "").trim();
+  if (!leadIn) return null;
+  const source = llmLeadIn?.source === "freeform" ? "llm_freeform" : "llm_structured";
+  return { leadIn, source };
+}
+
+function prependBlendedLeadIn(draftText: string, leadInText: string): string {
+  const draft = String(draftText ?? "").trim();
+  const leadIn = String(leadInText ?? "")
+    .trim()
+    .replace(/[\s–—,:;-]+$/g, "")
+    .trim();
+  if (!draft) return draft;
+  if (!leadIn) return draft;
+
+  const normalize = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/[^\w\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  if (normalize(draft).startsWith(normalize(leadIn))) {
+    return draft;
+  }
+  const leadInWithPunctuation = /[.!?]$/.test(leadIn) ? leadIn : `${leadIn}.`;
+  return `${leadInWithPunctuation} ${draft}`.trim();
 }
 
 async function safeDealerWeatherStatus(
@@ -24884,6 +24926,65 @@ if (authToken && signature) {
       confidence: carryoverSmallTalkParse?.confidence ?? null,
       replySource
     });
+  }
+  const blendedActionableIntent =
+    routeExecPricing ||
+    routeExecAvailability ||
+    routeExecScheduling ||
+    routeExecCallback ||
+    String(result.intent ?? "").toUpperCase() === "PRICING" ||
+    String(result.intent ?? "").toUpperCase() === "AVAILABILITY" ||
+    String(result.intent ?? "").toUpperCase() === "SCHEDULING" ||
+    String(result.intent ?? "").toUpperCase() === "CALLBACK";
+  const blendedExplicitActionSignal =
+    hasExplicitFinanceLanguageThisTurn ||
+    hasExplicitAvailabilityLanguageThisTurn ||
+    hasExplicitSchedulingLanguageThisTurn ||
+    hasExplicitCallbackLanguageThisTurn ||
+    pricingOrPaymentsIntent ||
+    schedulingPrimaryIntent ||
+    availabilityPrimaryIntent ||
+    callbackPrimaryIntent ||
+    parserCallbackIntent;
+  const blendedStyleCandidate =
+    event.provider === "twilio" &&
+    blendedActionableIntent &&
+    blendedExplicitActionSignal &&
+    !shortAck &&
+    !result.smallTalk &&
+    !!String(event.body ?? "").trim() &&
+    !!String(result.draft ?? "").trim();
+  if (blendedStyleCandidate) {
+    const blendedChatterParse = await safeLlmParse("blended_chatter_classifier", () =>
+      classifyBlendedChatterWithLLM({
+        text: String(event.body ?? ""),
+        history: buildHistory(conv, 8)
+      })
+    );
+    const blendedChatterAccepted =
+      !!blendedChatterParse?.hasChatter && (blendedChatterParse.confidence ?? 0) >= 0.55;
+    if (blendedChatterAccepted) {
+      const leadIn = await buildBlendedLeadInWithLLM({
+        text: String(event.body ?? ""),
+        history: buildHistory(conv, 8),
+        hasHumor: !!acceptedAffect?.hasHumor
+      });
+      if (leadIn?.leadIn) {
+        result.draft = prependBlendedLeadIn(String(result.draft ?? ""), leadIn.leadIn);
+        logRouteOutcome("blended_style_applied", {
+          intent: result.intent ?? "unknown",
+          turnPrimaryIntent: routeExecutionIntent,
+          confidence: blendedChatterParse?.confidence ?? null,
+          leadInSource: leadIn.source
+        });
+      } else {
+        logRouteOutcome("blended_style_lead_in_unavailable", {
+          intent: result.intent ?? "unknown",
+          turnPrimaryIntent: routeExecutionIntent,
+          confidence: blendedChatterParse?.confidence ?? null
+        });
+      }
+    }
   }
   if (result.smallTalk) {
     setDialogState(conv, "small_talk");

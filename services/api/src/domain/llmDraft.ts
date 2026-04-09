@@ -231,6 +231,90 @@ export async function classifySmallTalkWithLLM(args: {
   return null;
 }
 
+export async function classifyBlendedChatterWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<{ hasChatter: boolean; confidence?: number } | null> {
+  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+  const history = (args.history ?? []).slice(-4).map(h => `${h.direction}: ${h.body}`);
+  const schema: { [key: string]: unknown } = {
+    type: "object",
+    additionalProperties: false,
+    required: ["has_chatter", "confidence"],
+    properties: {
+      has_chatter: { type: "boolean" },
+      confidence: { type: "number" }
+    }
+  };
+  const prompt = [
+    "You are a classifier for dealership SMS.",
+    "Return only JSON that matches the schema.",
+    "Question: Does this message include conversational chatter/banter style, even if it also includes a real dealership ask?",
+    "",
+    "Guidelines:",
+    "- has_chatter=true when the message includes joking, banter, sports talk, or social chatter tone.",
+    "- has_chatter=true for mixed messages that include both chatter and business intent.",
+    "- has_chatter=false for purely transactional/business-only messages.",
+    "",
+    "Examples:",
+    "- \"Did you watch the Sabres game, and what are payments?\" => has_chatter=true",
+    "- \"haha can I come in Saturday at 9:30?\" => has_chatter=true",
+    "- \"What are payments with 5000 down at 72 months?\" => has_chatter=false",
+    "- \"Do you have black Street Glides in stock?\" => has_chatter=false",
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+  const normalizeConfidence = (value: unknown, fallback: number = 0.75): number =>
+    typeof value === "number" && Number.isFinite(value)
+      ? Math.max(0, Math.min(1, value))
+      : fallback;
+
+  try {
+    const parsed = await requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "blended_chatter_classifier",
+      schema,
+      maxOutputTokens: 120,
+      debugTag: "llm-blended-chatter-classifier"
+    });
+    if (parsed && typeof parsed === "object") {
+      return {
+        hasChatter: !!parsed.has_chatter,
+        confidence: normalizeConfidence(parsed.confidence, 0.75)
+      };
+    }
+  } catch {}
+
+  try {
+    const fallbackResp = await client.responses.create({
+      model,
+      instructions:
+        "Classify dealership SMS. Return exactly one token: CHATTY or NOT_CHATTY. " +
+        "CHATTY includes banter/social chatter tone, including mixed chatter + business asks.",
+      input: [
+        history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+        `Message: ${text}`
+      ].join("\n"),
+      ...optionalCreateTextConfig(model),
+      ...optionalTemperature(model, 0),
+      max_output_tokens: 12
+    });
+    const out = String(fallbackResp.output_text ?? "")
+      .trim()
+      .toUpperCase();
+    if (/\bNOT[\s_-]*CHATTY\b/.test(out)) return { hasChatter: false, confidence: 0.75 };
+    if (/\bCHATTY\b/.test(out)) return { hasChatter: true, confidence: 0.75 };
+  } catch {}
+
+  return null;
+}
+
 export async function generateSmallTalkReplyWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
@@ -353,6 +437,117 @@ export async function generateSmallTalkReplyWithLLM(args: {
   if (freeformReply) {
     return { reply: freeformReply, confidence: 0.75, source: "freeform" };
   }
+  return null;
+}
+
+export async function generateBlendedLeadInWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  hasHumorHint?: boolean;
+}): Promise<{ leadIn: string; confidence?: number; source?: "structured" | "freeform" } | null> {
+  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+  const hasHumorHint = !!args.hasHumorHint;
+  const history = (args.history ?? []).slice(-4).map(h => `${h.direction}: ${h.body}`);
+  const schema: { [key: string]: unknown } = {
+    type: "object",
+    additionalProperties: false,
+    required: ["lead_in", "confidence"],
+    properties: {
+      lead_in: { type: "string" },
+      confidence: { type: "number" }
+    }
+  };
+  const prompt = [
+    "Write a short conversational lead-in for a blended dealership SMS response.",
+    "The full message will answer the business question separately; you only write the opening phrase.",
+    "Return only JSON that matches the schema.",
+    "",
+    "Rules:",
+    "- Keep it very short (2-8 words).",
+    "- It should sound natural and human.",
+    "- Do not ask a question.",
+    "- Do not promise follow-up/checking.",
+    "- Do not mention pricing/scheduling/availability directly.",
+    "- Avoid generic phrases like 'Got it.' or 'I’m here if you need anything.'",
+    "",
+    "Good examples:",
+    "- \"Haha, fair one.\"",
+    "- \"Good one.\"",
+    "- \"Love it.\"",
+    "- \"Great question.\"",
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Humor hint: ${hasHumorHint ? "true" : "false"}`,
+    `Customer message: ${text}`
+  ].join("\n");
+  const normalizeLeadIn = (input: string) =>
+    String(input ?? "")
+      .trim()
+      .replace(/^["'`]+|["'`]+$/g, "")
+      .replace(/\s+/g, " ");
+  const isGeneric = (input: string) => {
+    const normalized = input
+      .toLowerCase()
+      .replace(/[^\w\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return (
+      /\bgot it\b/.test(normalized) ||
+      /\bi m here if you need anything\b/.test(normalized) ||
+      /\bi am here if you need anything\b/.test(normalized) ||
+      /\bchecking that now\b/.test(normalized)
+    );
+  };
+
+  try {
+    const parsed = await requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "blended_lead_in_generator",
+      schema,
+      maxOutputTokens: 80,
+      debugTag: "llm-blended-lead-in-generator"
+    });
+    if (parsed && typeof parsed === "object") {
+      const leadIn = normalizeLeadIn(parsed.lead_in ?? "");
+      if (leadIn && !isGeneric(leadIn) && !/\?/.test(leadIn)) {
+        const confidence =
+          typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+            ? Math.max(0, Math.min(1, parsed.confidence))
+            : undefined;
+        return { leadIn, confidence, source: "structured" };
+      }
+    }
+  } catch {}
+
+  try {
+    const resp = await client.responses.create({
+      model,
+      instructions: [
+        "Write one short conversational lead-in for a dealership SMS reply.",
+        "2-8 words, no question.",
+        "No checking/follow-up wording.",
+        "Avoid generic phrases like 'Got it.'"
+      ].join(" "),
+      input: [
+        history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+        `Humor hint: ${hasHumorHint ? "true" : "false"}`,
+        `Customer message: ${text}`
+      ].join("\n"),
+      ...optionalCreateTextConfig(model),
+      ...optionalTemperature(model, 0.2),
+      max_output_tokens: 40
+    });
+    const leadIn = normalizeLeadIn(resp.output_text ?? "");
+    if (leadIn && !isGeneric(leadIn) && !/\?/.test(leadIn)) {
+      return { leadIn, confidence: 0.75, source: "freeform" };
+    }
+  } catch {}
+
   return null;
 }
 
