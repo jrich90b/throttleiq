@@ -8559,6 +8559,61 @@ function buildComplimentReply(): string {
   return "Glad you like it — I can send more photos or a quick walkaround video. Anything specific you want to see?";
 }
 
+function isDirectMediaRequestText(text: string): boolean {
+  const inbound = String(text ?? "").trim();
+  if (!inbound) return false;
+  return (
+    /\b(send|text|show|share|shoot)\b[\s\S]{0,40}\b(photo|photos|pic|pics|picture|pictures|images?|video|walkaround|walk around|walkthrough|walk-through|clip)\b/i.test(
+      inbound
+    ) ||
+    /\b(can you|could you|please)\b[\s\S]{0,40}\b(photo|photos|pic|pics|picture|pictures|images?|video|walkaround|walk around|walkthrough|walk-through|clip)\b/i.test(
+      inbound
+    )
+  );
+}
+
+function areModelsLikelyEquivalentForMedia(a: string | null | undefined, b: string | null | undefined): boolean {
+  const aCanon = normalizeModelName(canonicalizeWatchModelLabel(a));
+  const bCanon = normalizeModelName(canonicalizeWatchModelLabel(b));
+  if (!aCanon || !bCanon) return false;
+  if (aCanon === bCanon || aCanon.includes(bCanon) || bCanon.includes(aCanon)) return true;
+  return modelsShareCatalogCodes(aCanon, bCanon);
+}
+
+function extractMediaRequestTarget(
+  inboundText: string,
+  conv: any
+): {
+  directMediaRequest: boolean;
+  requestedModel: string | null;
+  requestedYear: string | null;
+  requestedColor: string | null;
+  explicitDifferentBikeRequested: boolean;
+} {
+  const inbound = String(inboundText ?? "").trim();
+  const lower = inbound.toLowerCase();
+  const directMediaRequest = isDirectMediaRequestText(inbound);
+  const requestedModel = findMentionedModel(inbound) ?? null;
+  const requestedYearNum = extractYearSingle(lower);
+  const requestedYear = Number.isFinite(requestedYearNum ?? NaN) ? String(requestedYearNum) : null;
+  const requestedColor =
+    combineWatchColorAndFinish(extractColorToken(lower), extractFinishToken(lower)) ?? null;
+  const activeModel =
+    conv?.lead?.vehicle?.model ??
+    conv?.lead?.vehicle?.description ??
+    conv?.inventoryContext?.model ??
+    null;
+  const explicitDifferentBikeRequested =
+    !!requestedModel && !!activeModel && !areModelsLikelyEquivalentForMedia(requestedModel, activeModel);
+  return {
+    directMediaRequest,
+    requestedModel,
+    requestedYear,
+    requestedColor,
+    explicitDifferentBikeRequested
+  };
+}
+
 function buildMediaAffirmativeReply(
   lastOutboundText: string,
   inboundText: string,
@@ -8572,13 +8627,7 @@ function buildMediaAffirmativeReply(
   const inboundMediaPreferenceVideo = /\b(video|walkaround|walk around|walkthrough|walk-through|clip)\b/i.test(
     inbound
   );
-  const inboundDirectMediaRequest =
-    /\b(send|text|show|share|shoot)\b[\s\S]{0,40}\b(photo|photos|pic|pics|picture|pictures|images?|video|walkaround|walk around|walkthrough|walk-through|clip)\b/i.test(
-      inbound
-    ) ||
-    /\b(can you|could you|please)\b[\s\S]{0,40}\b(photo|photos|pic|pics|picture|pictures|images?|video|walkaround|walk around|walkthrough|walk-through|clip)\b/i.test(
-      inbound
-    );
+  const inboundDirectMediaRequest = isDirectMediaRequestText(inbound);
 
   const mediaOfferPromptedByLastOutbound =
     (!!prior &&
@@ -8616,22 +8665,73 @@ function buildMediaAffirmativeReply(
 
 async function findAutoMediaUrlsForConversationContext(
   conv: any,
-  opts?: { max?: number }
+  opts?: {
+    max?: number;
+    requestedModel?: string | null;
+    requestedYear?: string | null;
+    requestedColor?: string | null;
+    allowFallbackToConversationContext?: boolean;
+  }
 ): Promise<string[]> {
   const max = Math.max(1, Math.min(4, Number(opts?.max ?? 2)));
+  const allowFallbackToConversationContext = opts?.allowFallbackToConversationContext === true;
+  const alreadySent = new Set<string>();
+  for (const msg of conv?.messages ?? []) {
+    if (msg?.direction !== "out") continue;
+    if (!Array.isArray(msg?.mediaUrls)) continue;
+    for (const u of msg.mediaUrls) {
+      if (typeof u === "string" && u.trim()) alreadySent.add(u.trim());
+    }
+  }
+
+  const leadModel = String(conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description ?? "").trim() || null;
+  const explicitRequestedModel = String(opts?.requestedModel ?? "").trim() || null;
+  const explicitRequestedDifferentModel =
+    !!explicitRequestedModel && !!leadModel && !areModelsLikelyEquivalentForMedia(explicitRequestedModel, leadModel);
+
+  const exactStockId = String(conv?.lead?.vehicle?.stockId ?? conv?.hold?.stockId ?? conv?.sale?.stockId ?? "")
+    .trim();
+  const exactVin = String(conv?.lead?.vehicle?.vin ?? conv?.hold?.vin ?? conv?.sale?.vin ?? "").trim();
+  const canUseExactUnit = !explicitRequestedDifferentModel;
+  if (canUseExactUnit && (exactStockId || exactVin)) {
+    const exact = await findInventoryPrice({
+      stockId: exactStockId || null,
+      vin: exactVin || null
+    });
+    const exactImages = (exact?.item?.images ?? [])
+      .map((u: unknown) => String(u ?? "").trim())
+      .filter(u => /^https?:\/\//i.test(u));
+    if (exactImages.length) {
+      const unseen = exactImages.filter(u => !alreadySent.has(u));
+      const pool = unseen.length ? unseen : exactImages;
+      return pool.slice(0, max);
+    }
+  }
+
   const contextModel = String(
-    conv?.inventoryContext?.model ??
-      conv?.lead?.vehicle?.model ??
-      conv?.lead?.vehicle?.description ??
+    explicitRequestedModel ??
+      leadModel ??
+      (allowFallbackToConversationContext ? conv?.inventoryContext?.model : null) ??
       ""
   ).trim();
   if (!contextModel) return [];
-  const contextYearRaw = String(conv?.inventoryContext?.year ?? conv?.lead?.vehicle?.year ?? "").trim();
+  const contextYearRaw = String(
+    opts?.requestedYear ??
+      conv?.lead?.vehicle?.year ??
+      (allowFallbackToConversationContext ? conv?.inventoryContext?.year : null) ??
+      ""
+  ).trim();
   const contextYear = contextYearRaw || null;
   const requestedCondition = normalizeWatchCondition(
-    conv?.inventoryContext?.condition ?? conv?.lead?.vehicle?.condition
+    conv?.lead?.vehicle?.condition ?? (allowFallbackToConversationContext ? conv?.inventoryContext?.condition : null)
   );
-  const preferredColor = String(conv?.inventoryContext?.color ?? conv?.lead?.vehicle?.color ?? "").trim() || null;
+  const preferredColor =
+    String(
+      opts?.requestedColor ??
+        conv?.lead?.vehicle?.color ??
+        (allowFallbackToConversationContext ? conv?.inventoryContext?.color : null) ??
+        ""
+    ).trim() || null;
   const leadTrim = extractTrimToken(preferredColor);
 
   let matches = await findInventoryMatches({ year: contextYear, model: contextModel });
@@ -8666,15 +8766,6 @@ async function findAutoMediaUrlsForConversationContext(
     return key ? !holds?.[key] && !solds?.[key] : true;
   });
   if (!availableMatches.length) return [];
-
-  const alreadySent = new Set<string>();
-  for (const msg of conv?.messages ?? []) {
-    if (msg?.direction !== "out") continue;
-    if (!Array.isArray(msg?.mediaUrls)) continue;
-    for (const u of msg.mediaUrls) {
-      if (typeof u === "string" && u.trim()) alreadySent.add(u.trim());
-    }
-  }
 
   const withImages = availableMatches.filter(
     item => Array.isArray(item.images) && item.images.some((u: string) => /^https?:\/\//i.test(String(u ?? "")))
@@ -17590,16 +17681,28 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       })
       .slice(-1)[0];
     const lastOutboundForMedia = String(lastOutboundBeforeInbound?.body ?? "");
-    const bike =
+    const activeBike =
       formatModelLabel(
         conv.lead?.vehicle?.year ? String(conv.lead?.vehicle?.year) : null,
         conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null
       ) || "the bike";
-    const mediaAffirmReply = buildMediaAffirmativeReply(lastOutboundForMedia, event.body, bike);
+    const mediaTarget = extractMediaRequestTarget(event.body ?? "", conv);
+    const requestedBikeLabel =
+      mediaTarget.explicitDifferentBikeRequested &&
+      (formatModelLabel(mediaTarget.requestedYear, mediaTarget.requestedModel) ||
+        mediaTarget.requestedModel);
+    const mediaBike = requestedBikeLabel || activeBike;
+    const mediaAffirmReply = buildMediaAffirmativeReply(lastOutboundForMedia, event.body, mediaBike);
     if (mediaAffirmReply) {
-      const autoMediaUrls = await findAutoMediaUrlsForConversationContext(conv, { max: 2 });
+      const autoMediaUrls = await findAutoMediaUrlsForConversationContext(conv, {
+        max: 2,
+        requestedModel: mediaTarget.explicitDifferentBikeRequested ? mediaTarget.requestedModel : null,
+        requestedYear: mediaTarget.explicitDifferentBikeRequested ? mediaTarget.requestedYear : null,
+        requestedColor: mediaTarget.explicitDifferentBikeRequested ? mediaTarget.requestedColor : null,
+        allowFallbackToConversationContext: mediaTarget.explicitDifferentBikeRequested
+      });
       const mediaReply = autoMediaUrls.length
-        ? `Absolutely — here ${autoMediaUrls.length === 1 ? "is a photo" : "are a couple photos"} of ${bike}.`
+        ? `Absolutely — here ${autoMediaUrls.length === 1 ? "is a photo" : "are a couple photos"} of ${mediaBike}.`
         : mediaAffirmReply;
       if (!autoMediaUrls.length) {
         addMediaRequestTodoIfMissing(conv, event.body, event.providerMessageId);
@@ -20410,16 +20513,28 @@ if (authToken && signature) {
     }
   }
   if (event.provider === "twilio") {
-    const bike =
+    const activeBike =
       formatModelLabel(
         conv.lead?.vehicle?.year ? String(conv.lead?.vehicle?.year) : null,
         conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null
       ) || "the bike";
-    const mediaAffirmReply = buildMediaAffirmativeReply(lastOutboundText, inboundText, bike);
+    const mediaTarget = extractMediaRequestTarget(inboundText, conv);
+    const requestedBikeLabel =
+      mediaTarget.explicitDifferentBikeRequested &&
+      (formatModelLabel(mediaTarget.requestedYear, mediaTarget.requestedModel) ||
+        mediaTarget.requestedModel);
+    const mediaBike = requestedBikeLabel || activeBike;
+    const mediaAffirmReply = buildMediaAffirmativeReply(lastOutboundText, inboundText, mediaBike);
     if (mediaAffirmReply) {
-      const autoMediaUrls = await findAutoMediaUrlsForConversationContext(conv, { max: 2 });
+      const autoMediaUrls = await findAutoMediaUrlsForConversationContext(conv, {
+        max: 2,
+        requestedModel: mediaTarget.explicitDifferentBikeRequested ? mediaTarget.requestedModel : null,
+        requestedYear: mediaTarget.explicitDifferentBikeRequested ? mediaTarget.requestedYear : null,
+        requestedColor: mediaTarget.explicitDifferentBikeRequested ? mediaTarget.requestedColor : null,
+        allowFallbackToConversationContext: mediaTarget.explicitDifferentBikeRequested
+      });
       const mediaReply = autoMediaUrls.length
-        ? `Absolutely — here ${autoMediaUrls.length === 1 ? "is a photo" : "are a couple photos"} of ${bike}.`
+        ? `Absolutely — here ${autoMediaUrls.length === 1 ? "is a photo" : "are a couple photos"} of ${mediaBike}.`
         : mediaAffirmReply;
       if (!autoMediaUrls.length) {
         addMediaRequestTodoIfMissing(conv, event.body, event.providerMessageId);
