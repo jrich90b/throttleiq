@@ -206,14 +206,18 @@ export async function generateSmallTalkReplyWithLLM(args: {
     "",
     "Rules:",
     "- Keep it natural, friendly, and concise (1 sentence, max ~20 words).",
+    "- Sound like a real person texting, not a support bot.",
     "- Do NOT claim personal real-world experiences you cannot verify (e.g., don't say you watched a game).",
-    "- Acknowledge the message and lightly keep door open for bike help.",
+    "- Acknowledge the message and lightly keep the door open for bike help.",
+    "- If relevant, lightly mirror their topic (e.g., game/playoffs) before pivoting back to bikes.",
     "- Do NOT switch into pricing/availability/scheduling unless asked.",
     "- Avoid stiff fallback phrases like 'I'm checking that now'.",
+    "- Do NOT use phrases like 'I'm here if you need anything' or 'Got it.' as the main reply.",
     "",
     "Good examples:",
-    "- \"Haha, I heard it was a good one - I'm here whenever you want to keep talking bikes.\"",
-    "- \"Good one - I'm around if you want to jump back into bike details.\"",
+    "- \"Haha, fair one - if you want to jump back into bikes, I can help anytime.\"",
+    "- \"Playoff energy is real - whenever you want, we can hop back into bike details.\"",
+    "- \"Great question - if you want to keep talking bikes, I’m ready.\"",
     "",
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
     `Humor hint: ${hasHumorHint ? "true" : "false"}`,
@@ -231,6 +235,21 @@ export async function generateSmallTalkReplyWithLLM(args: {
     if (!parsed || typeof parsed !== "object") return null;
     const reply = String(parsed.reply ?? "").trim();
     if (!reply) return null;
+    const normalizedReply = reply
+      .toLowerCase()
+      .replace(/[^\w\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const genericPatterns = [
+      /\bim here if you need anything\b/,
+      /\bi am here if you need anything\b/,
+      /\bgot it\b/,
+      /\bi m checking that now\b/,
+      /\bim checking that now\b/
+    ];
+    if (genericPatterns.some(rx => rx.test(normalizedReply))) {
+      return null;
+    }
     const confidence =
       typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
         ? Math.max(0, Math.min(1, parsed.confidence))

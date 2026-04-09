@@ -1186,15 +1186,40 @@ function buildNoResponseChitChatReply(args?: {
   speaker?: string | null;
   includeSpeaker?: boolean;
   hasHumor?: boolean;
+  text?: string | null;
 }): string {
   const speaker = String(args?.speaker ?? "").trim();
   const includeSpeaker = !!args?.includeSpeaker && !!speaker;
   const hasHumor = !!args?.hasHumor;
+  const text = String(args?.text ?? "").toLowerCase();
+  const sportsChatter = /\b(sabres|nhl|playoffs?|game|hockey)\b/i.test(text);
   const opener = hasHumor ? "Haha, fair one" : "Totally fair";
+  const pivot = sportsChatter
+    ? "Hockey talk is always welcome — and whenever you want, we can jump back into bikes."
+    : "Whenever you want, we can jump back into bike talk.";
   if (includeSpeaker) {
-    return `${opener} — this is ${speaker}. Whenever you want, we can jump back into bike talk.`;
+    return `${opener} — this is ${speaker}. ${pivot}`;
   }
-  return `${opener} — whenever you want, we can jump back into bike talk.`;
+  return `${opener} — ${pivot}`;
+}
+
+function isLikelyOffTopicSmallTalkText(text: string): boolean {
+  const t = String(text ?? "").trim().toLowerCase();
+  if (!t) return false;
+  if (
+    /\b(sabres|nhl|playoffs?|hockey|game last night)\b/.test(t) ||
+    /\bdid you watch\b/.test(t) ||
+    /\byou ready for\b/.test(t)
+  ) {
+    return true;
+  }
+  if (/\b(how are you|how's it going|hows it going|what's up|whats up)\b/.test(t)) {
+    return true;
+  }
+  if (/\b(lol|haha|lmao|rofl)\b/.test(t) || /[😂🤣😅]/.test(t)) {
+    return true;
+  }
+  return false;
 }
 
 async function buildNoResponseChitChatReplyWithLLM(args: {
@@ -1217,7 +1242,8 @@ async function buildNoResponseChitChatReplyWithLLM(args: {
     reply: buildNoResponseChitChatReply({
       includeSpeaker: !!args.includeSpeaker,
       speaker: args.speaker,
-      hasHumor: !!args.hasHumor
+      hasHumor: !!args.hasHumor,
+      text: args.text
     }),
     source: "fallback"
   };
@@ -17347,10 +17373,16 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         history
       })
     );
-    const regenNoResponseSmallTalkQuestion =
+    const regenNoResponseSmallTalkQuestionLlm =
       !!regenNoResponseSmallTalkParse?.smallTalk &&
       (regenNoResponseSmallTalkParse.confidence ?? 0) >= 0.7 &&
       /\?/.test(regenNoResponseInboundText);
+    const regenNoResponseSmallTalkQuestionFallback =
+      !regenNoResponseSmallTalkParse &&
+      /\?/.test(regenNoResponseInboundText) &&
+      isLikelyOffTopicSmallTalkText(regenNoResponseInboundText);
+    const regenNoResponseSmallTalkQuestion =
+      regenNoResponseSmallTalkQuestionLlm || regenNoResponseSmallTalkQuestionFallback;
     const regenLogisticsProgressUpdate = isLogisticsProgressUpdateText(event.body ?? "");
     const regenStoredPaymentContext = getStoredPaymentBudgetContext(conv);
     const regenNoResponseDecision = evaluateNoResponseFallback({
@@ -17415,7 +17447,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         recordRouteOutcome("regen", "routing_parser_no_response_smalltalk_ack", {
           convId: conv.id,
           leadKey: conv.leadKey,
-          replySource: chit.source
+          replySource: chit.source,
+          smallTalkLexicalFallback: regenNoResponseSmallTalkQuestionFallback
         });
         if (channel === "email") {
           return respondWithEmailRegeneratedDraft(chit.reply);
@@ -21440,10 +21473,16 @@ if (authToken && signature) {
         history: buildHistory(conv, 8)
       })
     );
-    const noResponseSmallTalkQuestion =
+    const noResponseSmallTalkQuestionLlm =
       !!noResponseSmallTalkParse?.smallTalk &&
       (noResponseSmallTalkParse.confidence ?? 0) >= 0.7 &&
       /\?/.test(noResponseInboundText);
+    const noResponseSmallTalkQuestionFallback =
+      !noResponseSmallTalkParse &&
+      /\?/.test(noResponseInboundText) &&
+      isLikelyOffTopicSmallTalkText(noResponseInboundText);
+    const noResponseSmallTalkQuestion =
+      noResponseSmallTalkQuestionLlm || noResponseSmallTalkQuestionFallback;
     const manualHandoffMode = String(conv?.followUp?.mode ?? "").toLowerCase() === "manual_handoff";
     const manualHandoffNoResponseQuestion =
       manualHandoffMode && !shortAck && /\?/.test(String(event.body ?? ""));
@@ -21548,7 +21587,8 @@ if (authToken && signature) {
           turnPrimaryIntent: routeExecutionIntent,
           parserReason: routingParserDecision.reason,
           mode: routePolicyMode,
-          replySource: chit.source
+          replySource: chit.source,
+          smallTalkLexicalFallback: noResponseSmallTalkQuestionFallback
         });
         if (webhookMode === "suggest") {
           appendOutbound(conv, event.to, event.from, chit.reply, "draft_ai");
@@ -21627,9 +21667,13 @@ if (authToken && signature) {
         })
       )
     : null;
-  const pricingContinuationSmallTalk =
+  const pricingContinuationSmallTalkLlm =
     !!pricingContinuationSmallTalkParse?.smallTalk &&
     (pricingContinuationSmallTalkParse.confidence ?? 0) >= 0.72;
+  const pricingContinuationSmallTalkFallback =
+    !pricingContinuationSmallTalkParse && isLikelyOffTopicSmallTalkText(pricingContinuationInboundText);
+  const pricingContinuationSmallTalk =
+    pricingContinuationSmallTalkLlm || pricingContinuationSmallTalkFallback;
   if (pricingContinuationSmallTalk) {
     const chit = await buildNoResponseChitChatReplyWithLLM({
       text: pricingContinuationInboundText,
@@ -21642,13 +21686,15 @@ if (authToken && signature) {
       logRouteOutcome("general_smalltalk_ack", {
         turnPrimaryIntent: routeExecutionIntent,
         confidence: pricingContinuationSmallTalkParse?.confidence ?? null,
-        replySource: chit.source
+        replySource: chit.source,
+        smallTalkLexicalFallback: pricingContinuationSmallTalkFallback
       });
     } else {
       logRouteOutcome("pricing_continuation_smalltalk_ack", {
         turnPrimaryIntent: routeExecutionIntent,
         confidence: pricingContinuationSmallTalkParse?.confidence ?? null,
-        replySource: chit.source
+        replySource: chit.source,
+        smallTalkLexicalFallback: pricingContinuationSmallTalkFallback
       });
     }
     if (webhookMode === "suggest") {
@@ -24737,9 +24783,12 @@ if (authToken && signature) {
         history
       })
     );
-    const genericSmallTalk =
+    const genericSmallTalkLlm =
       !!genericSmallTalkParse?.smallTalk &&
       (genericSmallTalkParse.confidence ?? 0) >= 0.7;
+    const genericSmallTalkFallback =
+      !genericSmallTalkParse && isLikelyOffTopicSmallTalkText(String(event.body ?? ""));
+    const genericSmallTalk = genericSmallTalkLlm || genericSmallTalkFallback;
     let rewrittenDraft = "Got it — are you asking about bike specs, availability, payments, or setting a time to come in?";
     let replySource: "llm" | "fallback" | "clarify" = "clarify";
     if (genericSmallTalk) {
@@ -24766,7 +24815,8 @@ if (authToken && signature) {
     logRouteOutcome("general_generic_checking_rewrite", {
       smallTalk: genericSmallTalk,
       confidence: genericSmallTalkParse?.confidence ?? null,
-      replySource
+      replySource,
+      smallTalkLexicalFallback: genericSmallTalkFallback
     });
   }
   const generalOrchestratorPricingCarryoverCandidate =
@@ -24789,9 +24839,12 @@ if (authToken && signature) {
         history
       })
     );
-    const carryoverSmallTalk =
+    const carryoverSmallTalkLlm =
       !!carryoverSmallTalkParse?.smallTalk &&
       (carryoverSmallTalkParse.confidence ?? 0) >= 0.7;
+    const carryoverSmallTalkFallback =
+      !carryoverSmallTalkParse && isLikelyOffTopicSmallTalkText(String(event.body ?? ""));
+    const carryoverSmallTalk = carryoverSmallTalkLlm || carryoverSmallTalkFallback;
     let rewrittenDraft = "Got it — are you asking about bike specs, availability, payments, or setting a time to come in?";
     let replySource: "llm" | "fallback" | "clarify" = "clarify";
     if (carryoverSmallTalk) {
@@ -24818,7 +24871,8 @@ if (authToken && signature) {
     logRouteOutcome("general_orchestrator_pricing_rewrite", {
       smallTalk: carryoverSmallTalk,
       confidence: carryoverSmallTalkParse?.confidence ?? null,
-      replySource
+      replySource,
+      smallTalkLexicalFallback: carryoverSmallTalkFallback
     });
   }
   if (result.smallTalk) {
