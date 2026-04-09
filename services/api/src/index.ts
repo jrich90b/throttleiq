@@ -21555,6 +21555,58 @@ if (authToken && signature) {
   if (routeExecScheduling && getDialogState(conv) === "pricing_need_model") {
     setDialogState(conv, "schedule_request");
   }
+  const pricingContinuationInboundText = String(event.body ?? "");
+  const hasExplicitFinanceLanguageThisTurn =
+    isPricingText(pricingContinuationInboundText) ||
+    isPaymentText(pricingContinuationInboundText) ||
+    isDownPaymentQuestion(pricingContinuationInboundText) ||
+    /\b(apr|interest|finance|financing|payment|payments|monthly|month|term|months|down|trade)\b/i.test(
+      pricingContinuationInboundText
+    );
+  const pricingContinuationOffTopicCandidate =
+    event.provider === "twilio" &&
+    routeExecPricing &&
+    !hasExplicitFinanceLanguageThisTurn &&
+    !explicitAvailabilitySignalThisTurn &&
+    !schedulingSignals.hasDayTime &&
+    !schedulingSignals.hasDayOnlyRequest &&
+    !schedulingSignals.hasDayOnlyAvailability &&
+    !explicitScheduleSignal &&
+    !callbackPrimaryIntent &&
+    !parserCallbackIntent &&
+    /\?/.test(pricingContinuationInboundText);
+  const pricingContinuationSmallTalkParse = pricingContinuationOffTopicCandidate
+    ? await safeLlmParse("pricing_continuation_smalltalk", () =>
+        classifySmallTalkWithLLM({
+          text: pricingContinuationInboundText,
+          history
+        })
+      )
+    : null;
+  const pricingContinuationSmallTalk =
+    !!pricingContinuationSmallTalkParse?.smallTalk &&
+    (pricingContinuationSmallTalkParse.confidence ?? 0) >= 0.72;
+  if (pricingContinuationSmallTalk) {
+    const reply = buildNoResponseChitChatReply({
+      includeSpeaker: false,
+      hasHumor: !!acceptedAffect?.hasHumor
+    });
+    setDialogState(conv, "small_talk");
+    logRouteOutcome("pricing_continuation_smalltalk_ack", {
+      turnPrimaryIntent: routeExecutionIntent,
+      confidence: pricingContinuationSmallTalkParse?.confidence ?? null
+    });
+    if (webhookMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   const suppressWatchIntentThisTurn = !routeExecGeneral;
   if (schedulingSignals.explicit || schedulingSignals.hasDayTime) {
     if (conv.scheduleSoft) {
