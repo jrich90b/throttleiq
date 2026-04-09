@@ -3562,11 +3562,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       ? llmFaqTopic.confidence
       : 0;
   const faqConfidenceMin = Number(process.env.LLM_FAQ_TOPIC_CONFIDENCE_MIN ?? 0.8);
+  const faqOrderConfidenceMin = Number(process.env.LLM_FAQ_TOPIC_ORDER_CONFIDENCE_MIN ?? 0.7);
   const faqOrderIntentAccepted =
     isInitialAdf &&
     !!llmFaqTopic &&
     llmFaqTopic.explicitRequest === true &&
-    faqConfidence >= faqConfidenceMin &&
+    faqConfidence >= faqOrderConfidenceMin &&
     (llmFaqTopic.topic === "custom_order" || llmFaqTopic.topic === "factory_order_timing");
   if (faqOrderIntentAccepted) {
     const inquiryCombined = `${effectiveInquiry} ${String(conv.lead?.vehicle?.model ?? "")}`.toLowerCase();
@@ -3575,6 +3576,40 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       llmFaqTopic?.topic === "factory_order_timing"
         ? "Factory orders are usually around 6 to 12 weeks depending on model and build details. If you want, we can map your build and timing now."
         : "Yes — we can place a factory order and spec it with genuine Harley-Davidson options. If you want, we can map your build today.";
+    if (asksStreet750) {
+      ack =
+        "Great question — Harley-Davidson no longer sells the Street 750 new, so we can’t factory-order that model. I can help with similar new options or locate pre-owned Street 750s for you. What matters most to you: price, engine size, or style?";
+    }
+    ack = await applyInitialAdfPrefix(ack);
+    queueInitialDraftForPreferredContact(ack);
+    maybeAddInitialCallTodo();
+    conv.emailDraft = ack;
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      draft: ack
+    });
+  }
+
+  const orderLexicalFallback =
+    isInitialAdf &&
+    !faqOrderIntentAccepted &&
+    /\b(order|factory order|custom order|special order|build one|build it)\b/i.test(
+      String(effectiveInquiry ?? "")
+    );
+  if (orderLexicalFallback) {
+    const inquiryCombined = `${effectiveInquiry} ${String(conv.lead?.vehicle?.model ?? "")}`.toLowerCase();
+    const asksStreet750 = /\bstreet\s*750\b|\bharley\s*750\b|\b750\b/.test(inquiryCombined);
+    let ack =
+      "Great question — we can place factory orders on current models, and factory timing is usually around 6 to 12 weeks depending on model/build. If you want, I can map options with you now.";
     if (asksStreet750) {
       ack =
         "Great question — Harley-Davidson no longer sells the Street 750 new, so we can’t factory-order that model. I can help with similar new options or locate pre-owned Street 750s for you. What matters most to you: price, engine size, or style?";
