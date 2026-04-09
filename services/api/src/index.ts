@@ -17284,26 +17284,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenRoutePolicyMode = getRoutePolicyMode();
   if (regenRoutingParserDecision.accepted && regenRoutingParserDecision.fallbackAction === "no_response") {
     const regenLogisticsProgressUpdate = isLogisticsProgressUpdateText(event.body ?? "");
-    const regenNoResponseSignals = resolveRoutePrioritySignals({
-      text: event.body ?? "",
-      conv,
-      pricingOrPaymentsIntent: regenParserPricingIntent,
-      explicitAvailabilityIntentExtra: regenParserAvailabilityIntent,
-      schedulingSignalsExtra: { explicit: regenParserSchedulingIntent }
-    });
     const regenStoredPaymentContext = getStoredPaymentBudgetContext(conv);
     const regenNoResponseDecision = evaluateNoResponseFallback({
       primaryIntent: regenRoutingParserDecision.intentOverride ?? "general",
-      financeSignal: regenNoResponseSignals.currentTurnFinanceSignal,
-      availabilitySignal:
-        regenNoResponseSignals.availabilityIntentOverride ||
-        regenNoResponseSignals.deterministicAvailabilityLookup ||
-        regenNoResponseSignals.availabilitySignals.inventoryCountQuestion,
-      schedulingSignal:
-        regenNoResponseSignals.schedulingSignals.explicit ||
-        regenNoResponseSignals.schedulingSignals.hasDayTime ||
-        regenNoResponseSignals.schedulingSignals.hasDayOnlyAvailability ||
-        regenNoResponseSignals.schedulingSignals.hasDayOnlyRequest,
+      financeSignal: regenParserPricingIntent,
+      availabilitySignal: regenParserAvailabilityIntent,
+      schedulingSignal: regenParserSchedulingIntent,
       callbackSignal: regenParserCallbackIntent,
       hasMonthlyBudgetContext: regenStoredPaymentContext.monthlyBudget != null,
       hasDownPaymentContext: regenStoredPaymentContext.downPayment != null,
@@ -17893,17 +17879,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
   }
 
-  const regenFinancePriorityHint = regenHintSignals.financePriorityOverride || regenParserPricingIntent;
-  const regenCallbackRequested = !regenTextingTypoJoke && detectCallbackText(event.body ?? "");
+  const regenFinancePriorityHint = regenParserPricingIntent;
+  const regenCallbackRequested = !regenTextingTypoJoke && regenParserCallbackIntent;
   const regenRouteDecision = buildRouteDecisionSnapshot({
     parserIntentOverride: regenRoutingIntentOverride,
     hasPricingIntent: regenParserPricingIntent,
     hasSchedulingIntent: regenParserSchedulingIntent,
     hasAvailabilityIntent: regenParserAvailabilityIntent,
-    financePriorityOverride: regenHintSignals.financePriorityOverride || regenParserPricingIntent,
-    schedulePriorityOverride: regenHintSignals.schedulePriorityOverride || regenParserSchedulingIntent,
-    availabilityIntentOverride: regenHintSignals.availabilityIntentOverride,
-    callbackRequested: regenCallbackRequested || regenParserCallbackIntent
+    financePriorityOverride: false,
+    schedulePriorityOverride: false,
+    availabilityIntentOverride: false,
+    callbackRequested: regenCallbackRequested
   });
   const regenPrimaryIntentHint = regenRouteDecision.primaryIntent;
   const regenPricingIntentHint = regenRouteDecision.pricingIntent;
@@ -17991,7 +17977,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     pricingAttempts: getPricingAttempts(conv),
     allowSchedulingOffer: regenSchedulingIntentHint,
     callbackRequestedOverride:
-      !regenTextingTypoJoke && (regenCallbackIntentHint || regenCallbackRequested),
+      !regenTextingTypoJoke && regenCallbackIntentHint,
     voiceSummary: getActiveVoiceContext(conv)?.summary ?? null,
     memorySummary,
     memorySummaryShouldUpdate,
@@ -20584,13 +20570,8 @@ if (authToken && signature) {
       ...(extra ?? {})
     });
   };
-  const highConfidenceFinanceTurn =
-    preParserFinanceSignal &&
-    !preParserSchedulingSignal &&
-    !detectCallbackText(event.body ?? "") &&
-    !isWatchConfirmationIntentText(String(event.body ?? ""));
-  const highConfidenceSchedulingTurn =
-    preParserSchedulingSignal && !preParserFinanceSignal && !detectCallbackText(event.body ?? "");
+  const highConfidenceFinanceTurn = false;
+  const highConfidenceSchedulingTurn = false;
   const bookingParserEligible =
     event.provider === "twilio" &&
     process.env.LLM_ENABLED === "1" &&
@@ -20789,18 +20770,13 @@ if (authToken && signature) {
     (dialogActAccepted && dialogActParse?.topic === "pricing") ||
     (pricingPaymentsAccepted && pricingPaymentsParse?.intent === "pricing");
   const llmPricingOrPaymentsIntentRaw = llmPricingIntentRaw || llmPaymentsIntentRaw || parserPricingIntent;
-  const explicitFinanceTermIntent = preParserExplicitFinanceTermIntent;
-  const routeSignalsForRawPricing = resolveRoutePrioritySignals({
-    text: event.body ?? "",
-    conv,
-    lastOutboundText,
-    llmPricingOrPaymentsIntentRaw,
-    explicitFinanceTermIntent,
-    explicitAvailabilityIntentExtra: parserAvailabilityIntent,
-    schedulingSignalsExtra: { explicit: parserSchedulingIntent }
-  });
-  const explicitAvailabilitySignalThisTurn = routeSignalsForRawPricing.availabilityIntentOverride;
-  const pricingHistoryBleedGuard = routeSignalsForRawPricing.pricingHistoryBleedGuard;
+  const pricingHistoryBleedGuard =
+    hasRecentPricingPromptContext(conv) &&
+    routingParserDecision.accepted &&
+    routingParserDecision.fallbackAction === "no_response" &&
+    !parserPricingIntent &&
+    !(dialogActAccepted && dialogActParse?.topic === "pricing") &&
+    !(pricingPaymentsAccepted && pricingPaymentsParse?.intent !== "none");
   const llmPaymentsIntent = pricingHistoryBleedGuard ? false : llmPaymentsIntentRaw;
   const llmPricingIntent = pricingHistoryBleedGuard ? false : llmPricingIntentRaw;
   const llmPricingOrPaymentsIntent = pricingHistoryBleedGuard
@@ -20820,36 +20796,17 @@ if (authToken && signature) {
     return hasInsurance && hasQuoteOrRate && hasVisitTiming && !hasExplicitFinanceAsk;
   })();
   const paymentBudgetContext = resolvePaymentBudgetForConversation(conv, event.body ?? "");
-  const routeSignalsForPricing = resolveRoutePrioritySignals({
-    text: event.body ?? "",
-    conv,
-    lastOutboundText,
-    pricingOrPaymentsIntent: llmPricingOrPaymentsIntent || explicitFinanceTermIntent,
-    explicitFinanceTermIntent,
-    explicitAvailabilityIntentExtra: parserAvailabilityIntent,
-    schedulingSignalsExtra: { explicit: parserSchedulingIntent || llmExplicitScheduleIntent }
-  });
-  const financePrioritySignal = routeSignalsForPricing.financePriorityOverride;
+  const parserOnlyPricingIntent = llmPricingOrPaymentsIntent;
   const pricingSignal =
     !insuranceStatusUpdateOnly &&
-    (llmPricingOrPaymentsIntent ||
-      financePrioritySignal ||
-      (regexIntentFallbackEnabled &&
-        (isPricingText(event.body ?? "") || isPaymentText(event.body ?? ""))));
+    parserOnlyPricingIntent;
   const scheduleFromDialogAct = llmSchedulingIntent && !llmPricingOrPaymentsIntent;
   const explicitScheduleSignal =
     llmExplicitScheduleIntent ||
     scheduleFromDialogAct ||
     (regexIntentFallbackEnabled && isExplicitScheduleIntent(event.body));
-  paymentOrPricingNoSchedule =
-    pricingSignal &&
-    !llmExplicitScheduleIntent &&
-    !schedulingSignalsBase.explicit &&
-    !schedulingSignalsBase.hasDayTime &&
-    !schedulingSignalsBase.hasDayOnlyAvailability &&
-    !schedulingSignalsBase.hasDayOnlyRequest;
-  const pricingOrPaymentsIntent =
-    llmPricingOrPaymentsIntent || paymentOrPricingNoSchedule || explicitFinanceTermIntent;
+  paymentOrPricingNoSchedule = false;
+  const pricingOrPaymentsIntent = parserOnlyPricingIntent;
   if (
     getDialogState(conv) === "none" &&
     !isScheduleDialogState(getDialogState(conv)) &&
@@ -20958,8 +20915,9 @@ if (authToken && signature) {
   const callbackRequestedOverride =
     !customerWillCallIntent &&
     !textingTypoJoke &&
-    (llmCallbackRequested || detectCallbackText(event.body ?? ""));
+    llmCallbackRequested;
   const llmAvailabilityIntent = parserAvailabilityIntent || (intentAccepted && intentParse?.intent === "availability");
+  const explicitAvailabilitySignalThisTurn = llmAvailabilityIntent;
   const llmTestRideIntent = intentAccepted && intentParse?.intent === "test_ride";
   const llmAvailability = llmAvailabilityIntent ? intentParse?.availability ?? null : null;
   let mentionedUser: any | null = null;
@@ -21182,43 +21140,27 @@ if (authToken && signature) {
   }
   const schedulingExplicit = schedulingAllowed ? schedulingSignals.explicit : false;
   const schedulingPrimaryIntent =
-    schedulingSignals.explicit ||
-    schedulingSignals.hasDayTime ||
-    schedulingSignals.hasDayOnlyAvailability ||
-    schedulingSignals.hasDayOnlyRequest ||
+    bookingIntentAccepted ||
+    llmExplicitScheduleIntent ||
     llmSchedulingIntent ||
     !!llmTestRideIntent;
   const callbackPrimaryIntent =
     callbackRequestedOverride && !pricingOrPaymentsIntent && !schedulingPrimaryIntent;
   const availabilityPrimaryIntent =
     llmAvailabilityIntent && !pricingOrPaymentsIntent && !schedulingPrimaryIntent && !callbackPrimaryIntent;
-  const routeSignalsFinal = resolveRoutePrioritySignals({
-    text: event.body ?? "",
-    conv,
-    lastOutboundText,
-    pricingOrPaymentsIntent,
-    llmPricingOrPaymentsIntentRaw: llmPricingOrPaymentsIntent,
-    explicitAvailabilityIntentExtra: availabilityPrimaryIntent,
-    explicitFinanceTermIntent,
-    schedulingSignalsExtra: {
-      explicit: schedulingSignals.explicit,
-      hasDayTime: schedulingSignals.hasDayTime,
-      hasDayOnlyAvailability: schedulingSignals.hasDayOnlyAvailability,
-      hasDayOnlyRequest: schedulingSignals.hasDayOnlyRequest
-    }
-  });
-  const deterministicAvailabilityIntentOverride = routeSignalsFinal.availabilityIntentOverride;
-  const financePriorityOverride = routeSignalsFinal.financePriorityOverride;
-  const schedulePriorityOverride = routeSignalsFinal.schedulePriorityOverride;
+  const deterministicAvailabilityIntentOverride = false;
+  const financePriorityOverride = false;
+  const schedulePriorityOverride = false;
+  const currentTurnFinanceSignal = pricingOrPaymentsIntent;
   const turnRouteDecision = buildRouteDecisionSnapshot({
     parserIntentOverride: routingParserIntentOverride,
     hasPricingIntent: pricingOrPaymentsIntent || parserPricingIntent,
     hasSchedulingIntent: schedulingPrimaryIntent || parserSchedulingIntent,
     hasAvailabilityIntent: availabilityPrimaryIntent || parserAvailabilityIntent,
     callbackRequested: callbackPrimaryIntent || parserCallbackIntent,
-    financePriorityOverride,
-    schedulePriorityOverride,
-    availabilityIntentOverride: deterministicAvailabilityIntentOverride
+    financePriorityOverride: false,
+    schedulePriorityOverride: false,
+    availabilityIntentOverride: false
   });
   let turnPrimaryIntent = turnRouteDecision.primaryIntent;
   const financeContinuationContext =
@@ -21231,7 +21173,7 @@ if (authToken && signature) {
     isFinanceFollowUpPromptText(lastOutboundText) &&
     isFinanceFollowUpAffirmationText(event.body ?? "");
   const financeContinuationSignalThisTurn =
-    routeSignalsFinal.currentTurnFinanceSignal || financeContinuationAffirmativeAck;
+    currentTurnFinanceSignal || financeContinuationAffirmativeAck;
   let financeContinuationOverrideApplied = false;
   if (
     turnPrimaryIntent === "general" &&
@@ -21301,17 +21243,9 @@ if (authToken && signature) {
   });
   const noResponseContextDecision = evaluateNoResponseFallback({
     primaryIntent: routeExecutionIntent,
-    financeSignal: routeSignalsFinal.currentTurnFinanceSignal,
-    availabilitySignal:
-      availabilityPrimaryIntent ||
-      explicitAvailabilitySignalThisTurn ||
-      deterministicAvailabilityLookup ||
-      inventoryCountQuestion,
-    schedulingSignal:
-      schedulingSignals.explicit ||
-      schedulingSignals.hasDayTime ||
-      schedulingSignals.hasDayOnlyAvailability ||
-      schedulingSignals.hasDayOnlyRequest,
+    financeSignal: currentTurnFinanceSignal,
+    availabilitySignal: availabilityPrimaryIntent || explicitAvailabilitySignalThisTurn,
+    schedulingSignal: schedulingPrimaryIntent,
     callbackSignal: callbackPrimaryIntent || parserCallbackIntent,
     hasMonthlyBudgetContext: paymentBudgetContext.monthlyBudget != null,
     hasDownPaymentContext: paymentBudgetContext.downPayment != null,
@@ -21624,8 +21558,8 @@ if (authToken && signature) {
     return (
       llmPaymentsIntent ||
       ((downPaymentProvided || monthlyBudgetProvided || termProvided) &&
-        (routeSignalsFinal.currentTurnFinanceSignal || (askedFinanceFollowUpRecently && followUpAck))) ||
-      (downPaymentProvided && monthlyBudgetProvided && routeSignalsFinal.currentTurnFinanceSignal) ||
+        (currentTurnFinanceSignal || (askedFinanceFollowUpRecently && followUpAck))) ||
+      (downPaymentProvided && monthlyBudgetProvided && currentTurnFinanceSignal) ||
       (askedFinanceFollowUpRecently && followUpAck)
     );
   })();
@@ -22633,10 +22567,7 @@ if (authToken && signature) {
     llmMediaIntent === "either" ||
     /\b(photo|picture|pic|image|images)\b/i.test(textLower);
   const availabilityRouteEligible =
-    routeExecAvailability ||
-    deterministicAvailabilityIntentOverride ||
-    explicitAvailabilitySignalThisTurn ||
-    inventoryCountQuestion;
+    routeExecAvailability || explicitAvailabilitySignalThisTurn;
   const availabilityExplicit =
     availabilityRouteEligible &&
     !/\b(sound system|audio system|stereo|speakers?|speaker system)\b/i.test(textLower) &&
@@ -24631,10 +24562,10 @@ if (authToken && signature) {
     bucket: liveClassificationForTurn.bucket,
     cta: liveClassificationForTurn.cta,
     primaryIntentHint: routeExecutionIntent,
-    availabilityIntentHint: deterministicAvailabilityIntentOverride,
+    availabilityIntentHint: routeExecAvailability,
     schedulingIntentHint: schedulingPrimaryIntent,
     pricingIntentHint: pricingOrPaymentsIntent,
-    financeIntentHint: financePriorityOverride,
+    financeIntentHint: pricingOrPaymentsIntent,
     lead: leadForOrchestrator,
     pricingAttempts: getPricingAttempts(conv),
     allowSchedulingOffer:
