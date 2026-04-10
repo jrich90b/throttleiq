@@ -145,6 +145,29 @@ function cleanInboundEmailForDisplay(text?: string | null) {
   return cleaned || normalized;
 }
 
+function cleanAdfLeadForDisplay(text?: string | null) {
+  if (!text) return "";
+  const raw = String(text).replace(/\r\n/g, "\n").trim();
+  if (!raw) return "";
+  if (!/web lead\s*\(adf\)/i.test(raw)) return raw;
+
+  const inquiryIdx = raw.toLowerCase().lastIndexOf("inquiry:");
+  let inquiry = inquiryIdx >= 0 ? raw.slice(inquiryIdx + "inquiry:".length).trim() : "";
+  inquiry = inquiry
+    .replace(/\s*>\s*>+\s*/g, " ")
+    .replace(
+      /\s*(?:can we contact you via (?:email|phone|text)\?:|client_id\s*:|hdmc-campaign-tracking code\s*:|lead captured date\s*:|event name\s*:|\/\/\/customer information\/\/\/|inventory year\s*:|inventory stock id\s*:|vin\s*:|first name\s*:|last name\s*:|phone\s*:|email\s*:).*/i,
+      ""
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!inquiry) {
+    return "WEB LEAD (ADF)\nInquiry: (open View lead for full details)";
+  }
+  return `WEB LEAD (ADF)\nInquiry:\n${inquiry}`;
+}
+
 function maskBookingLink(text?: string | null) {
   if (!text) return "";
   return text.replace(BOOKING_LINK_RE, (m, label) => {
@@ -4954,7 +4977,9 @@ export default function Home() {
         const body =
           m.direction === "in" && provider === "sendgrid"
             ? cleanInboundEmailForDisplay(m.body)
-            : m.body;
+            : m.direction === "in" && provider === "sendgrid_adf"
+              ? cleanAdfLeadForDisplay(m.body)
+              : m.body;
         const summaryText = (() => {
           if (provider !== "voice_transcript") return "";
           const id = m.providerMessageId ?? "";
@@ -12040,7 +12065,9 @@ export default function Home() {
                   const messageBody =
                     m.direction === "in" && m.provider === "sendgrid"
                       ? cleanInboundEmailForDisplay(m.body)
-                      : m.body;
+                      : m.direction === "in" && m.provider === "sendgrid_adf"
+                        ? cleanAdfLeadForDisplay(m.body)
+                        : m.body;
                   const canRateMessage =
                     m.direction === "out" &&
                     (m.provider === "draft_ai" ||
