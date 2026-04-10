@@ -3834,6 +3834,12 @@ function renderFollowUpTemplate(template: string, ctx: Record<string, string>): 
   return out.replace(/\s+/g, " ").trim();
 }
 
+function isMediaOfferFollowUpText(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t) return false;
+  return /\b(photo|photos|pic|pics|picture|pictures|walkaround|walk around|video|clip)\b/.test(t);
+}
+
 function buildOutcomeContextLine(note: string): string | null {
   const text = String(note ?? "").trim();
   if (!text) return null;
@@ -12560,6 +12566,33 @@ async function processDueFollowUps() {
       message.includes("{")
     ) {
       message = renderFollowUpTemplate(message, baseCtx);
+    }
+
+    if (
+      !isPostSale &&
+      cadence.kind !== "long_term" &&
+      !isTradeNoInterest &&
+      !isSellMyBikeLead &&
+      hasSpecificFollowUpModel &&
+      isMediaOfferFollowUpText(message)
+    ) {
+      let hasMatchingInventory = await hasInventoryForModelYear({
+        model: modelName || null,
+        year: conv.lead?.vehicle?.year ?? null,
+        yearDelta: 0
+      });
+      if (!hasMatchingInventory) {
+        hasMatchingInventory = await hasInventoryForModelYear({
+          model: modelName || null,
+          year: null
+        });
+      }
+      if (!hasMatchingInventory) {
+        message = renderFollowUpTemplate(
+          "Hey {name}, quick check-in{labelClause}. I can keep an eye out and text you as soon as one comes in.",
+          baseCtx
+        );
+      }
     }
 
     const allowProactiveSchedule = shouldAllowProactiveScheduleAsk(conv, now);
