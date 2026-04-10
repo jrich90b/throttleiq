@@ -20231,8 +20231,8 @@ if (authToken && signature) {
     conv.appointment?.confirmation?.sentAt
   ) {
     const text = (event.body || "").trim().toLowerCase();
-    const isYes = /\b(yes|yep|yeah|yup|confirm|confirmed|ok|okay|sure)\b/.test(text);
-    const isNo = /\b(no|nope|nah|cancel|reschedule)\b/.test(text);
+    const isYes = /\b(y|yes|yep|yeah|yup|confirm|confirmed|ok|okay|sure)\b/.test(text);
+    const isNo = /\b(n|no|nope|nah|cancel|reschedule)\b/.test(text);
     if (isYes || isNo) {
       let tz = "America/New_York";
       conv.appointment.confirmation = {
@@ -20274,9 +20274,20 @@ if (authToken && signature) {
         } catch {}
       }
       const when = conv.appointment?.whenIso ? formatSlotLocal(conv.appointment.whenIso, tz) : null;
+      let rescheduleUrl: string | null = null;
+      if (isNo) {
+        try {
+          const profile = await getDealerProfileHot();
+          rescheduleUrl = buildBookingUrlForLead(profile?.bookingUrl, conv);
+        } catch {
+          rescheduleUrl = null;
+        }
+      }
       const reply = isYes
-        ? `Thanks — you’re all set for ${when ?? "your appointment"}. See you then.`
-        : "No problem — I’ve cancelled it. What day and time works to reschedule?";
+        ? `Great — we’ll see you then${when ? ` (${when})` : ""}.`
+        : rescheduleUrl
+          ? `No problem — I’ve cancelled it. Reschedule here: ${rescheduleUrl}`
+          : "No problem — I’ve cancelled it. What day and time works to reschedule?";
       const systemMode = webhookMode;
       if (systemMode === "suggest") {
         appendOutbound(conv, event.to, event.from, reply, "draft_ai");
