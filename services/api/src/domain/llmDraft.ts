@@ -1116,6 +1116,13 @@ export type StaffOutcomeUpdateParse = {
   confidence?: number;
 };
 
+export type FinanceOutcomeFromCallParse = {
+  outcome: "approved" | "declined" | "none";
+  explicitOutcome: boolean;
+  confidence?: number;
+  reasonText?: string | null;
+};
+
 export type SemanticSlotParse = {
   watchAction: "set_watch" | "stop_watch" | "none";
   watch?: {
@@ -1605,6 +1612,18 @@ const STAFF_OUTCOME_UPDATE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     unit_model: { type: "string" },
     unit_trim: { type: "string" },
     confidence: { type: "number", minimum: 0, maximum: 1 }
+  }
+};
+
+const FINANCE_OUTCOME_FROM_CALL_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["outcome", "explicit_outcome", "confidence", "reason_text"],
+  properties: {
+    outcome: { type: "string", enum: ["approved", "declined", "none"] },
+    explicit_outcome: { type: "boolean" },
+    confidence: { type: "number", minimum: 0, maximum: 1 },
+    reason_text: { type: "string" }
   }
 };
 
@@ -3174,6 +3193,88 @@ export async function parseStaffOutcomeUpdateWithLLM(args: {
     unitModel: cleanOptionalString(parsed.unit_model),
     unitTrim: cleanOptionalString(parsed.unit_trim),
     confidence
+  };
+}
+
+export async function parseFinanceOutcomeFromCallWithLLM(args: {
+  text: string;
+  summary?: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<FinanceOutcomeFromCallParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_FINANCE_OUTCOME_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_FINANCE_OUTCOME_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_FINANCE_OUTCOME_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_FINANCE_OUTCOME_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  const summary = String(args.summary ?? "").trim();
+  if (!text && !summary) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const prompt = [
+    "You parse dealership call transcripts/summaries for finance outcome.",
+    "Return only JSON matching the schema.",
+    "",
+    "Outcome mapping:",
+    "- approved: explicit approval/pre-approval/funded/clear to buy/approved with terms.",
+    "- declined: explicit not approved/declined/denied/couldn't approve/unable to approve.",
+    "- none: no explicit finance outcome.",
+    "",
+    "Rules:",
+    "- Do not infer outcome from generic discussion about rates/payments alone.",
+    "- 'Needs cosigner' or 'waiting on docs' is not declined by itself unless explicitly 'not approved/declined'.",
+    "- explicit_outcome=true only when clearly stated.",
+    "- reason_text should be short phrase from transcript/summary when approved/declined; else empty string.",
+    "",
+    `Known lead info: ${JSON.stringify({
+      leadRef: lead?.leadRef ?? null,
+      source: lead?.source ?? null,
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    summary ? `Call summary: ${summary}` : "Call summary: (none)",
+    text ? `Transcript excerpt: ${text}` : "Transcript excerpt: (none)"
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "finance_outcome_from_call_parser",
+      schema: FINANCE_OUTCOME_FROM_CALL_JSON_SCHEMA,
+      maxOutputTokens: 160,
+      debugTag: "llm-finance-outcome-call-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const outcomeRaw = String(parsed.outcome ?? "").toLowerCase();
+  const outcome: FinanceOutcomeFromCallParse["outcome"] =
+    outcomeRaw === "approved" || outcomeRaw === "declined" ? outcomeRaw : "none";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    outcome,
+    explicitOutcome: !!parsed.explicit_outcome,
+    confidence,
+    reasonText: cleanOptionalString(parsed.reason_text)
   };
 }
 

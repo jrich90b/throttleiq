@@ -32,6 +32,7 @@ import {
   parseResponseControlWithLLM,
   parseJourneyIntentWithLLM,
   parseConversationStateWithLLM,
+  parseFinanceOutcomeFromCallWithLLM,
   parseStaffOutcomeUpdateWithLLM,
   parseUnifiedSemanticSlotsWithLLM,
   parseSemanticSlotsWithLLM,
@@ -3295,6 +3296,108 @@ async function applyPostCallSummaryActions(opts: {
     conversationStateAccepted &&
     conversationStateParse?.stateIntent === "scheduling" &&
     conversationStateParse?.explicitRequest;
+
+  const financeContextHint =
+    conv?.classification?.bucket === "finance_prequal" ||
+    conv?.classification?.cta === "hdfs_coa" ||
+    conv?.classification?.cta === "prequalify" ||
+    /credit_app|credit_app_cosigner|financing_declined|credit_app_approved/.test(
+      String(conv?.followUp?.reason ?? "").toLowerCase()
+    ) ||
+    String(conv?.appointment?.appointmentType ?? "").toLowerCase() === "finance_discussion";
+  const financeLexicalHint = /\b(approved|not approved|declined|denied|credit app|application|finance|financing|lender|bank|cosigner|co-signer)\b/i.test(
+    `${customerText} ${summaryText}`
+  );
+  const shouldParseFinanceOutcome = financeContextHint || financeLexicalHint;
+  const financeOutcomeConfidenceMin = Number(process.env.LLM_FINANCE_OUTCOME_CONFIDENCE_MIN ?? 0.8);
+  const parsedFinanceOutcome =
+    shouldParseFinanceOutcome
+      ? await safeLlmParse("voice_finance_outcome_parser", () =>
+          parseFinanceOutcomeFromCallWithLLM({
+            text: customerText || transcriptText,
+            summary: summaryText,
+            history: parserHistory,
+            lead: conv.lead
+          })
+        )
+      : null;
+  if (
+    parsedFinanceOutcome?.explicitOutcome &&
+    (parsedFinanceOutcome.confidence ?? 0) >= financeOutcomeConfidenceMin
+  ) {
+    const outcomeStatus = parsedFinanceOutcome.outcome;
+    const reasonText = String(parsedFinanceOutcome.reasonText ?? "").trim();
+    const sourceId = String(sourceMessageId ?? "").trim() || undefined;
+    const nowIsoValue = nowIso();
+    if (outcomeStatus === "declined") {
+      const cfg = await getSchedulerConfigHot();
+      conv.followUp = {
+        mode: "active",
+        reason: "financing_declined",
+        updatedAt: nowIsoValue
+      };
+      conv.followUpCadence = {
+        status: "active",
+        anchorAt: nowIsoValue,
+        nextDueAt: computeFollowUpDueAt(nowIsoValue, FINANCE_DECLINED_DAY_OFFSETS[0], cfg.timezone),
+        stepIndex: 0,
+        kind: "long_term"
+      };
+      if (conv.appointment) {
+        conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
+        conv.appointment.staffNotify.outcome = {
+          status: "financing_declined",
+          note: reasonText || summaryText || customerText || transcriptText,
+          updatedAt: nowIsoValue
+        };
+      }
+      conv.financeOutcome = {
+        status: "declined",
+        updatedAt: nowIsoValue,
+        sourceMessageId: sourceId,
+        reasonText: reasonText || undefined
+      };
+      addTodo(
+        conv,
+        "note",
+        `Finance outcome parsed from call: not approved${reasonText ? ` (${reasonText})` : ""}.`,
+        sourceId
+      );
+      await notifyBusinessManagerFinanceOutcome(
+        conv,
+        "declined",
+        reasonText || summaryText || customerText || transcriptText
+      );
+    } else if (outcomeStatus === "approved") {
+      setFollowUpMode(conv, "manual_handoff", "credit_app_approved");
+      stopFollowUpCadence(conv, "manual_handoff");
+      if (conv.appointment) {
+        conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
+        conv.appointment.staffNotify.outcome = {
+          status: "follow_up",
+          note: `Financing approved${reasonText ? `: ${reasonText}` : ""}`,
+          updatedAt: nowIsoValue
+        };
+      }
+      conv.financeOutcome = {
+        status: "approved",
+        updatedAt: nowIsoValue,
+        sourceMessageId: sourceId,
+        reasonText: reasonText || undefined
+      };
+      addTodo(
+        conv,
+        "note",
+        `Finance outcome parsed from call: approved${reasonText ? ` (${reasonText})` : ""}.`,
+        sourceId
+      );
+      await notifyBusinessManagerFinanceOutcome(
+        conv,
+        "approved",
+        reasonText || summaryText || customerText || transcriptText
+      );
+    }
+  }
   const bookingParse = await parseBookingIntentWithLLM({
     text: customerText,
     history: parserHistory,
@@ -5875,17 +5978,21 @@ function pickUserSmsPhone(user: any): string {
   return "";
 }
 
-async function notifyBusinessManagerFinancingDeclined(conv: any, note?: string): Promise<void> {
-  const appt = conv?.appointment;
-  if (!appt) return;
-  appt.staffNotify = appt.staffNotify ?? {};
-  if (String(appt.staffNotify.financeDeclinedSentAt ?? "").trim()) return;
+async function notifyBusinessManagerFinanceOutcome(
+  conv: any,
+  status: "approved" | "declined",
+  note?: string
+): Promise<void> {
+  const appt = conv?.appointment ?? null;
+  const notifyState = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});
+  if (status === "declined" && String(notifyState.declinedSentAt ?? "").trim()) return;
+  if (status === "approved" && String(notifyState.approvedSentAt ?? "").trim()) return;
 
   const users = await listUsers();
   const byId = (id: string) =>
     users.find(u => String(u?.id ?? "").trim() === String(id ?? "").trim()) ?? null;
   const target =
-    byId(String(appt.bookedSalespersonId ?? "").trim()) ??
+    byId(String(appt?.bookedSalespersonId ?? "").trim()) ??
     byId(String(conv?.leadOwner?.id ?? "").trim()) ??
     users.find(u => String(u?.role ?? "").trim().toLowerCase() === "manager") ??
     null;
@@ -5912,26 +6019,39 @@ async function notifyBusinessManagerFinancingDeclined(conv: any, note?: string):
     "the deal";
   const nextDueIso = String(conv?.followUpCadence?.nextDueAt ?? "").trim();
   const nextDueText = nextDueIso ? formatSlotLocal(nextDueIso, cfg.timezone) : "";
-  const message = [
-    `Financing not approved: ${customerName} — ${vehicle}.`,
-    "Long-term finance cadence started (30/60/120 days).",
-    nextDueText ? `Next check-in due: ${nextDueText}.` : null,
-    note ? `Note: ${String(note).trim()}` : null
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const message =
+    status === "declined"
+      ? [
+          `Financing not approved: ${customerName} — ${vehicle}.`,
+          "Long-term finance cadence started (30/60/120 days).",
+          nextDueText ? `Next check-in due: ${nextDueText}.` : null,
+          note ? `Note: ${String(note).trim()}` : null
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : [
+          `Financing approved: ${customerName} — ${vehicle}.`,
+          note ? `Note: ${String(note).trim()}` : null
+        ]
+          .filter(Boolean)
+          .join("\n");
 
   const sent = await sendInternalSms(toNumber, message);
   addTodo(
     conv,
     "note",
     sent
-      ? `Business manager SMS sent to ${targetName}: financing not approved.`
+      ? `Business manager SMS sent to ${targetName}: financing ${status}.`
       : `Business manager SMS failed for ${targetName}: send_failed.`
   );
   if (sent) {
-    appt.staffNotify.financeDeclinedSentAt = new Date().toISOString();
+    if (status === "declined") notifyState.declinedSentAt = new Date().toISOString();
+    else notifyState.approvedSentAt = new Date().toISOString();
   }
+}
+
+async function notifyBusinessManagerFinancingDeclined(conv: any, note?: string): Promise<void> {
+  await notifyBusinessManagerFinanceOutcome(conv, "declined", note);
 }
 
 function ensureAppointmentOutcomeToken(appt: any): string {
@@ -13110,6 +13230,14 @@ async function processStaffAppointmentNotifications() {
 
     if (appt.staffNotify.outcome) continue;
     if (appt.staffNotify.followUpSentAt) continue;
+    const followUpReason = String(conv.followUp?.reason ?? "").trim().toLowerCase();
+    const isFinanceOutcomeManagedByCall =
+      String(apptType ?? "").trim().toLowerCase() === "finance_discussion" ||
+      followUpReason === "credit_app" ||
+      followUpReason === "credit_app_cosigner" ||
+      followUpReason === "credit_app_approved" ||
+      followUpReason === "financing_declined";
+    if (isFinanceOutcomeManagedByCall) continue;
 
     const start = new Date(appt.whenIso);
     if (Number.isNaN(start.getTime())) continue;

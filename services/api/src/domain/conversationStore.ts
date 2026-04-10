@@ -520,6 +520,12 @@ export type Conversation = {
   emailDraft?: string;
   contactPreference?: "call_only";
   voiceContext?: VoiceContext;
+  financeOutcome?: {
+    status: "approved" | "declined";
+    updatedAt: string;
+    sourceMessageId?: string;
+    reasonText?: string;
+  };
   memorySummary?: { text: string; updatedAt: string; messageCount: number };
   agentContext?: {
     text: string;
