@@ -10948,6 +10948,23 @@ function inferDayTokenFromSlot(text: string): string | null {
   return map[token] ?? null;
 }
 
+function inferDayTokenFromRecentTimePrompt(
+  lastOutboundText: string,
+  lastSuggestedSlots?: Array<{ startLocal?: string | null }>
+): string | null {
+  const last = String(lastOutboundText ?? "").trim();
+  if (!last) return null;
+  const askedForTime =
+    /\b(what time works best|what time were you thinking|what time on|what time works for you|what time)\b/i.test(
+      last
+    );
+  if (!askedForTime) return null;
+  const dayFromText = parseDayOfWeek(last)?.day ?? null;
+  if (dayFromText) return dayFromText;
+  const dayFromSlot = inferDayTokenFromSlot(String(lastSuggestedSlots?.[0]?.startLocal ?? ""));
+  return dayFromSlot;
+}
+
 function slotMatchesReply(slotStartLocal: string, reply: string): boolean {
   const slotToken = extractTimeToken(slotStartLocal);
   const replyToken = extractTimeToken(reply);
@@ -18449,10 +18466,31 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       const unitLabel = `${labelYear}${labelModel}${labelColor}`.trim();
       const requestedDay = parseDayOfWeek(event.body ?? "");
       const requestedDayPart = extractDayPart(event.body ?? "");
-      const requestedDayLabel = requestedDay?.day ?? "";
+      const requestedTimeToken = extractTimeToken(String(event.body ?? ""));
+      const requestedDayLabelRaw = requestedDay?.day ?? "";
+      const inferredPromptDay =
+        !requestedDayLabelRaw && requestedTimeToken
+          ? inferDayTokenFromRecentTimePrompt(lastOutboundText, conv.scheduler?.lastSuggestedSlots ?? [])
+          : null;
+      const requestedDayLabel = requestedDayLabelRaw || inferredPromptDay || "";
       const timePrompt = requestedDayPart
         ? `What time on ${requestedDayLabel} works best for you?`
-        : "What time works best for you?";
+        : requestedTimeToken
+          ? "Want me to lock that in?"
+          : "What time works best for you?";
+      if (requestedDayLabel && requestedTimeToken) {
+        const requestedTimeLabel = formatTime12h(requestedTimeToken);
+        const requestedPhrase = `${requestedDayLabel} at ${requestedTimeLabel}`;
+        const daySpecificReply =
+          availableMatches.length > 0
+            ? explicitAvailabilityAskThisTurn && !recentlyConfirmedAvailable
+              ? `Absolutely — ${unitLabel} is still available right now. ${requestedPhrase} can work. ${timePrompt}`
+              : `${requestedPhrase} can work. ${timePrompt}`
+            : explicitAvailabilityAskThisTurn
+              ? `I’ll keep an eye on ${unitLabel} and update you right away. ${requestedPhrase} can work. ${timePrompt}`
+              : `${requestedPhrase} can work. ${timePrompt}`;
+        return respondWithSmsRegeneratedDraft(daySpecificReply);
+      }
       if (requestedDayLabel) {
         const requestedPhrase = `${requestedDayLabel}${requestedDayPart ? ` ${requestedDayPart}` : ""}`;
         const daySpecificReply =
@@ -18464,6 +18502,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
               ? `I’ll keep an eye on ${unitLabel} and update you right away. ${requestedPhrase} can work to plan around. ${timePrompt}`
               : `${requestedPhrase} can work. ${timePrompt}`;
         return respondWithSmsRegeneratedDraft(daySpecificReply);
+      }
+      if (requestedTimeToken) {
+        const requestedTimeLabel = formatTime12h(requestedTimeToken);
+        const reply = `Got it — ${requestedTimeLabel} can work. Which day were you thinking?`;
+        return respondWithSmsRegeneratedDraft(reply);
       }
       const reply =
         availableMatches.length > 0
@@ -25593,6 +25636,28 @@ if (authToken && signature) {
     } else if (dayPart) {
       result.draft = `Got it — ${dayPart} can work. What time were you thinking?`;
       setDialogState(conv, "schedule_request");
+    }
+  }
+  if (!pricingOrPaymentsIntent && !result.requestedTime && schedulingAllowed) {
+    const inboundTimeToken = extractTimeToken(String(event.body ?? ""));
+    if (inboundTimeToken) {
+      const inferredPromptDay = inferDayTokenFromRecentTimePrompt(
+        String(lastOutboundText ?? ""),
+        conv.scheduler?.lastSuggestedSlots ?? []
+      );
+      if (inferredPromptDay) {
+        try {
+          const cfg = await getSchedulerConfigHot();
+          const tz = cfg.timezone || "America/New_York";
+          const parsed = parseRequestedDayTime(`${inferredPromptDay} at ${inboundTimeToken}`, tz);
+          if (parsed) {
+            result.requestedTime = parsed;
+          }
+        } catch {}
+        const requestedTimeLabel = formatTime12h(inboundTimeToken);
+        result.draft = `Got it — ${inferredPromptDay} at ${requestedTimeLabel} can work. Want me to lock that in?`;
+        setDialogState(conv, "schedule_request");
+      }
     }
   }
   if (
