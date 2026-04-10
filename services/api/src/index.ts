@@ -3374,101 +3374,165 @@ async function applyPostCallSummaryActions(opts: {
   }
 
   if (bookingIntentAccepted || llmTestRideIntent || parserSchedulingIntent) {
-    if (!conv.appointment?.bookedEventId) {
-      try {
-        const cfg = await getSchedulerConfigHot();
-        const bookingRequestedDay = String(bookingParse?.requested?.day ?? "").trim();
-        const bookingRequestedTime = String(bookingParse?.requested?.timeText ?? "").trim();
-        const bookingRequestedText = [bookingRequestedDay, bookingRequestedTime]
-          .filter(Boolean)
-          .join(" ")
-          .trim();
-        const candidateRequestedTexts = [
-          bookingRequestedText,
-          String(bookingParse?.normalizedText ?? "").trim(),
-          customerText
-        ].filter(Boolean);
-        const requested =
-          candidateRequestedTexts
-            .map(text => parseRequestedDayTime(text, cfg.timezone))
-            .find(Boolean) ?? null;
-        if (requested) {
-          const appointmentType = inferAppointmentTypeFromConv(conv) || "inventory_visit";
-          const durationMinutes = cfg.appointmentTypes?.[appointmentType]?.durationMinutes ?? 60;
-          const salespeople = cfg.salespeople ?? [];
-          const preferred = getPreferredSalespeople(cfg);
-          const primaryId = conv.appointment?.bookedSalespersonId ?? preferred[0];
-          const candidateIds = [
-            primaryId,
-            ...preferred.filter(id => id && id !== primaryId)
-          ].filter(Boolean) as string[];
-          const cal = await getAuthedCalendarClient();
-          const timeMin = new Date().toISOString();
-          const timeMax = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
-          let exactMatch: { exact: any; sp: any } | null = null;
-          for (const spId of candidateIds) {
-            const sp = salespeople.find((p: any) => p.id === spId);
-            if (!sp) continue;
-            const fb = await queryFreeBusy(cal, [sp.calendarId], timeMin, timeMax, cfg.timezone);
-            const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any[];
-            const expanded = expandBusyBlocks(busy as any, cfg.minGapBetweenAppointmentsMinutes ?? 60);
-            const exact = findExactSlotForSalesperson(
-              cfg,
-              sp.id,
-              sp.calendarId,
-              requested,
-              durationMinutes,
-              expanded
-            );
-            if (exact) {
-              exactMatch = { exact, sp };
-              break;
-            }
-          }
-          if (exactMatch) {
-            const leadName =
-              conv.lead?.name?.trim() ||
-              [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() ||
-              conv.leadKey;
-            const stockId = conv.lead?.vehicle?.stockId ?? "";
-            const summary = `Appt: ${appointmentType} – ${leadName}${stockId ? ` – ${stockId}` : ""}`;
-            const descriptionLines = [
-              `LeadKey: ${conv.leadKey ?? ""}`,
-              `Phone: ${conv.lead?.phone ?? ""}`,
-              `Email: ${conv.lead?.email ?? ""}`,
-              `FirstName: ${conv.lead?.firstName ?? ""}`,
-              `LastName: ${conv.lead?.lastName ?? ""}`,
-              `Stock: ${conv.lead?.vehicle?.stockId ?? ""}`,
-              `VIN: ${conv.lead?.vehicle?.vin ?? ""}`,
-              `Source: ${conv.lead?.source ?? ""}`,
-              `VisitType: ${appointmentType}`
-            ].filter(Boolean);
-            const colorId = getAppointmentTypeColorId(cfg, appointmentType);
-            const event = await insertEvent(
-              cal,
-              exactMatch.sp.calendarId,
-              cfg.timezone,
-              summary,
-              descriptionLines.join("\n"),
-              exactMatch.exact.start,
-              exactMatch.exact.end,
-              colorId
-            );
-            conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
-            conv.appointment.bookedEventId = event.id ?? null;
-            conv.appointment.bookedSalespersonId = exactMatch.sp.id;
-            conv.appointment.bookedSalespersonName = exactMatch.sp.name;
-            conv.appointment.bookedCalendarId = exactMatch.sp.calendarId;
-            conv.appointment.whenIso = exactMatch.exact.start;
-            conv.appointment.whenLocal = formatSlotLocal(exactMatch.exact.start, cfg.timezone);
-            conv.appointment.appointmentType = appointmentType;
-            conv.appointment.updatedAt = new Date().toISOString();
-            onAppointmentBooked(conv);
+    try {
+      const cfg = await getSchedulerConfigHot();
+      const bookingRequestedDay = String(bookingParse?.requested?.day ?? "").trim();
+      const bookingRequestedTime = String(bookingParse?.requested?.timeText ?? "").trim();
+      const bookingRequestedText = [bookingRequestedDay, bookingRequestedTime]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+      const candidateRequestedTexts = [
+        bookingRequestedText,
+        String(bookingParse?.normalizedText ?? "").trim(),
+        customerText
+      ].filter(Boolean);
+      const requested =
+        candidateRequestedTexts
+          .map(text => parseRequestedDayTime(text, cfg.timezone))
+          .find(Boolean) ?? null;
+      if (!requested) return;
+
+      const existingEventId = String(conv.appointment?.bookedEventId ?? "").trim();
+      const existingSalespersonId = String(conv.appointment?.bookedSalespersonId ?? "").trim();
+      const salespeople = cfg.salespeople ?? [];
+      const existingCalendarId =
+        String(conv.appointment?.bookedCalendarId ?? "").trim() ||
+        salespeople.find((p: any) => p.id === existingSalespersonId)?.calendarId ||
+        "";
+      const requestedAppointmentType =
+        String(conv.appointment?.appointmentType ?? "").trim() || inferAppointmentTypeFromConv(conv) || "inventory_visit";
+      const durationMinutes = cfg.appointmentTypes?.[requestedAppointmentType]?.durationMinutes ?? 60;
+      const preferredForConv = getPreferredSalespeopleForConv(cfg, conv);
+      const fallbackPreferred = getPreferredSalespeople(cfg);
+      const candidateIds = Array.from(
+        new Set(
+          [...preferredForConv, existingSalespersonId, ...fallbackPreferred]
+            .map(v => String(v ?? "").trim())
+            .filter(Boolean)
+        )
+      );
+
+      const cal = await getAuthedCalendarClient();
+      const timeMin = new Date().toISOString();
+      const timeMax = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+      let exactMatch: { exact: any; sp: any } | null = null;
+      for (const spId of candidateIds) {
+        const sp = salespeople.find((p: any) => p.id === spId);
+        if (!sp) continue;
+        const fb = await queryFreeBusy(cal, [sp.calendarId], timeMin, timeMax, cfg.timezone);
+        let busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any[];
+        if (existingEventId && existingCalendarId && sp.calendarId === existingCalendarId && conv.appointment?.whenIso) {
+          const oldStart = new Date(conv.appointment.whenIso);
+          const oldEnd = new Date(oldStart.getTime() + durationMinutes * 60_000);
+          busy = busy.filter(
+            b => !(new Date(String(b?.start ?? "")) < oldEnd && oldStart < new Date(String(b?.end ?? "")))
+          );
+        }
+        const expanded = expandBusyBlocks(busy as any, cfg.minGapBetweenAppointmentsMinutes ?? 60);
+        const exact = findExactSlotForSalesperson(
+          cfg,
+          sp.id,
+          sp.calendarId,
+          requested,
+          durationMinutes,
+          expanded
+        );
+        if (exact) {
+          exactMatch = { exact, sp };
+          break;
+        }
+      }
+
+      if (!exactMatch) return;
+
+      const leadName =
+        conv.lead?.name?.trim() ||
+        [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() ||
+        conv.leadKey;
+      const stockId = conv.lead?.vehicle?.stockId ?? "";
+      const summary = `Appt: ${requestedAppointmentType} – ${leadName}${stockId ? ` – ${stockId}` : ""}`;
+      const descriptionLines = [
+        `LeadKey: ${conv.leadKey ?? ""}`,
+        `Phone: ${conv.lead?.phone ?? ""}`,
+        `Email: ${conv.lead?.email ?? ""}`,
+        `FirstName: ${conv.lead?.firstName ?? ""}`,
+        `LastName: ${conv.lead?.lastName ?? ""}`,
+        `Stock: ${conv.lead?.vehicle?.stockId ?? ""}`,
+        `VIN: ${conv.lead?.vehicle?.vin ?? ""}`,
+        `Source: ${conv.lead?.source ?? ""}`,
+        `VisitType: ${requestedAppointmentType}`
+      ].filter(Boolean);
+      const colorId = getAppointmentTypeColorId(cfg, requestedAppointmentType);
+
+      let eventIdToPersist = existingEventId || null;
+      let eventLinkToPersist = conv.appointment?.bookedEventLink ?? null;
+      const isSameCalendarRebook =
+        !!existingEventId && !!existingCalendarId && existingCalendarId === exactMatch.sp.calendarId;
+
+      if (isSameCalendarRebook && existingEventId) {
+        const updated = await updateEventDetails(cal, exactMatch.sp.calendarId, existingEventId, cfg.timezone, {
+          startIso: exactMatch.exact.start,
+          endIso: exactMatch.exact.end,
+          summary,
+          description: descriptionLines.join("\n"),
+          colorId
+        });
+        eventIdToPersist = updated?.id ?? existingEventId;
+        eventLinkToPersist = updated?.htmlLink ?? eventLinkToPersist;
+      } else {
+        if (existingEventId && existingCalendarId) {
+          try {
+            await updateEventDetails(cal, existingCalendarId, existingEventId, cfg.timezone, {
+              status: "cancelled"
+            });
+          } catch (cancelErr: any) {
+            console.warn("[voice] post-summary cancel prior event failed:", cancelErr?.message ?? cancelErr);
           }
         }
-      } catch (err: any) {
-        console.warn("[voice] post-summary booking failed:", err?.message ?? err);
+        const created = await insertEvent(
+          cal,
+          exactMatch.sp.calendarId,
+          cfg.timezone,
+          summary,
+          descriptionLines.join("\n"),
+          exactMatch.exact.start,
+          exactMatch.exact.end,
+          colorId
+        );
+        eventIdToPersist = created?.id ?? eventIdToPersist;
+        eventLinkToPersist = created?.htmlLink ?? eventLinkToPersist;
       }
+
+      conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
+      conv.appointment.status = "confirmed";
+      conv.appointment.bookedEventId = eventIdToPersist;
+      conv.appointment.bookedEventLink = eventLinkToPersist;
+      conv.appointment.bookedSalespersonId = exactMatch.sp.id;
+      conv.appointment.bookedSalespersonName = exactMatch.sp.name;
+      conv.appointment.bookedCalendarId = exactMatch.sp.calendarId;
+      conv.appointment.whenIso = exactMatch.exact.start;
+      conv.appointment.whenText = formatSlotLocal(exactMatch.exact.start, cfg.timezone);
+      conv.appointment.whenLocal = conv.appointment.whenText;
+      conv.appointment.appointmentType = requestedAppointmentType;
+      conv.appointment.confirmedBy = "customer";
+      conv.appointment.acknowledged = true;
+      conv.appointment.reschedulePending = false;
+      conv.appointment.matchedSlot = {
+        salespersonId: exactMatch.sp.id,
+        salespersonName: exactMatch.sp.name,
+        calendarId: exactMatch.sp.calendarId,
+        start: exactMatch.exact.start,
+        end: exactMatch.exact.end,
+        startLocal: formatSlotLocal(exactMatch.exact.start, cfg.timezone),
+        endLocal: formatSlotLocal(exactMatch.exact.end, cfg.timezone),
+        appointmentType: requestedAppointmentType
+      };
+      conv.appointment.updatedAt = new Date().toISOString();
+      setPreferredSalespersonForConv(conv, exactMatch.sp, "voice_transcript_booking");
+      onAppointmentBooked(conv);
+    } catch (err: any) {
+      console.warn("[voice] post-summary booking failed:", err?.message ?? err);
     }
   }
 }
