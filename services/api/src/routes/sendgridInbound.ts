@@ -1186,7 +1186,13 @@ const ADF_METADATA_MARKERS: RegExp[] = [
   /\blead captured date\s*:/i,
   /\bevent name\s*:/i,
   /\bfirst name\s*:/i,
-  /\blast name\s*:/i
+  /\blast name\s*:/i,
+  /\bpre-inspection trade-in value estimate\b/i,
+  /\brough trade in wholesale\s*:/i,
+  /\bclean trade in wholesale\s*:/i,
+  /\baverage retail\s*:/i,
+  /\bsuggested list price\s*:/i,
+  /\bprices shown to customer\b/i
 ];
 
 function countAdfMetadataMarkers(text?: string | null): number {
@@ -1215,13 +1221,33 @@ function extractTrueInquiryFromAdfText(input?: string | null): string {
   let value = String(direct ?? "").trim();
   if (!value) return "";
   value = value.replace(
-    /\s*(?:can we contact you via (?:email|phone|text)\?:|client_id\s*:|hdmc-campaign-tracking code\s*:|lead captured date\s*:|event name\s*:|\/\/\/customer information\/\/\/|parts and accessories interest\s*:|biker rider\?\s*:|language\s*:|purchase timeframe\s*:|source id\s*:|inventory year\s*:|inventory stock id\s*:|vin\s*:|first name\s*:|last name\s*:|phone\s*:|email\s*:).*/i,
+    /\s*(?:can we contact you via (?:email|phone|text)\?:|client_id\s*:|hdmc-campaign-tracking code\s*:|lead captured date\s*:|event name\s*:|\/\/\/customer information\/\/\/|parts and accessories interest\s*:|biker rider\?\s*:|language\s*:|purchase timeframe\s*:|source id\s*:|inventory year\s*:|inventory stock id\s*:|vin\s*:|first name\s*:|last name\s*:|phone\s*:|email\s*:|pre-inspection trade-in value estimate|rough trade in wholesale\s*:|clean trade in wholesale\s*:|average retail\s*:|suggested list price\s*:|prices shown to customer).*/i,
     ""
   );
   value = value.replace(/^[>\-\s:]+/, "").trim();
   if (!value) return "";
   if (/^(yes|no|n\/a|na|null)$/i.test(value)) return "";
   if (/^can we contact you via/i.test(value)) return "";
+  if (looksLikeAdfMetadataBlob(value)) return "";
+  return value;
+}
+
+function sanitizeTradeAcceleratorInquiry(input?: string | null): string {
+  const normalized = normalizeAdfInquiryText(input);
+  if (!normalized) return "";
+  let value = normalized;
+  // Drop valuation-only payload rows emitted by Trade Accelerator.
+  value = value.replace(
+    /\b(pre-inspection trade-in value estimate|prices shown to customer|rough trade in wholesale\s*:|clean trade in wholesale\s*:|average retail\s*:|suggested list price\s*:).*/i,
+    ""
+  );
+  value = value.replace(
+    /\b(rough trade in wholesale|clean trade in wholesale|average retail|suggested list price)\s*:\s*\$?\s*[\d,]+(?:\.\d{2})?/gi,
+    " "
+  );
+  value = value.replace(/\$[\d,]+(?:\.\d{2})?/g, " ");
+  value = value.replace(/\s+/g, " ").trim();
+  if (!value) return "";
   if (looksLikeAdfMetadataBlob(value)) return "";
   return value;
 }
@@ -2148,17 +2174,26 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     lastAdfAt: new Date().toISOString()
   });
 
+  const isTradeAcceleratorLead = leadSourceLower.includes("trade accelerator");
   const rawComment = String(lead.comment ?? "");
   const cleanedComment = normalizeAdfInquiryText(rawComment);
   const commentInquiry = extractTrueInquiryFromAdfText(rawComment);
   const inquiryRaw = String(lead.inquiry ?? "");
   const cleanedInquiry = normalizeAdfInquiryText(inquiryRaw);
   const parsedInquiry = extractTrueInquiryFromAdfText(inquiryRaw);
-  const effectiveInquiry =
+  let effectiveInquiry =
     [parsedInquiry, commentInquiry, cleanedInquiry, cleanedComment]
       .map(v => String(v ?? "").trim())
       .filter(Boolean)
       .find(v => !looksLikeAdfMetadataBlob(v)) ?? "";
+  if (isTradeAcceleratorLead) {
+    const tradeInquiryCandidate =
+      [parsedInquiry, commentInquiry, cleanedInquiry, cleanedComment]
+        .map(v => String(v ?? "").trim())
+        .filter(Boolean)[0] ?? "";
+    const sanitizedTradeInquiry = sanitizeTradeAcceleratorInquiry(tradeInquiryCandidate);
+    effectiveInquiry = sanitizedTradeInquiry || "trade-in appraisal request";
+  }
   lead.inquiry = effectiveInquiry;
   const inquiryText = String(effectiveInquiry).toLowerCase();
   const inboundBody =
@@ -2180,7 +2215,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         : null,
       "",
       `Inquiry:`,
-      inquiryText
+      lead.inquiry ?? ""
     ]
       .filter(v => v !== null)
       .join("\n");
@@ -2267,7 +2302,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     llmDialogAct.topic === "pricing" &&
     llmDialogAct.explicitRequest === true &&
     Number(llmDialogAct.confidence ?? 0) >= dialogActConfidenceMin;
-  const pricingInquiryIntent = pricingInquiryIntentFromParser || isPricingPaymentInquiry(inquiryText);
+  let pricingInquiryIntent = pricingInquiryIntentFromParser || isPricingPaymentInquiry(inquiryText);
   const inventoryEntityConfidence =
     typeof llmInventoryEntities?.confidence === "number" ? llmInventoryEntities.confidence : 0;
   const inventoryEntityConfidenceMin = Number(process.env.LLM_INVENTORY_ENTITY_CONFIDENCE_MIN ?? 0.68);
@@ -2369,6 +2404,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (forcedTradeIn) {
     inferredBucket = "trade_in_sell";
     inferredCta = "value_my_trade";
+    pricingInquiryIntent = false;
   }
   if (
     pricingInquiryIntent &&
@@ -3523,6 +3559,44 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     /room58/i.test(leadSourceLower) && /(sell|sell your vehicle|sell your bike)/i.test(leadSourceLower);
   const isMarketplaceSell = /marketplace/i.test(leadSourceLower) && /sell/.test(leadSourceLower);
   const isSellLead = inferredBucket === "trade_in_sell" || inferredCta === "sell_my_bike";
+  if (isInitialAdf && isTradeAcceleratorLead && isSellLead) {
+    const profile = await getDealerProfile();
+    const dealerName = profile?.dealerName ?? "American Harley-Davidson";
+    const agentName = profile?.agentName ?? "Brooke";
+    const tradeModel = normalizeVehicleModel(
+      conv.lead?.tradeVehicle?.model ??
+        conv.lead?.tradeVehicle?.description ??
+        conv.lead?.vehicle?.model ??
+        conv.lead?.vehicle?.description ??
+        "",
+      conv.lead?.tradeVehicle?.make ?? conv.lead?.vehicle?.make ?? null
+    );
+    const tradeYear = conv.lead?.tradeVehicle?.year ?? conv.lead?.vehicle?.year ?? null;
+    const bikeLabel = [tradeYear, tradeModel].filter(Boolean).join(" ").trim() || "your bike";
+    let ack =
+      `Thanks — I got your trade-in request for ${bikeLabel}. ` +
+      `This is ${agentName} at ${dealerName}. ` +
+      "We can give you a firm number after a quick in-person appraisal. " +
+      "What day and time works best to stop in?";
+    ack = await applyInitialAdfPrefix(ack);
+    addTodo(conv, "other", event.body, event.providerMessageId);
+    queueInitialDraftForPreferredContact(ack, initialMediaUrls);
+    maybeAddInitialCallTodo();
+    conv.emailDraft = ack;
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      draft: ack
+    });
+  }
   if ((isRoom58Sell || isMarketplaceSell) && isSellLead) {
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
