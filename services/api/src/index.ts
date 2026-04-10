@@ -23449,9 +23449,6 @@ if (authToken && signature) {
     !isSteppingBackDispositionText(textLower) &&
     !pricingSignal &&
     (tradeYearCorrection ||
-      llmExplicitScheduleIntent ||
-      (bookingIntentAccepted &&
-        (bookingParse?.intent === "schedule" || bookingParse?.intent === "reschedule")) ||
       /\b(inspection|appraisal|bring (it|the bike) (in|by)|coming in|come in|stop in|call for (an )?appointment|call (to )?(set|schedule) (an )?appointment|check my schedule|i(?:'|’)ll call|i will call|let you know when i(?:'|’)m coming in|let you know when i am coming in)\b/i.test(
         textLower
       ));
