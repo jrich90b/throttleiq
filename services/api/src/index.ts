@@ -16,6 +16,7 @@ import {
   classifyBlendedChatterWithLLM,
   generateSmallTalkReplyWithLLM,
   generateBlendedLeadInWithLLM,
+  generateEmpathySupportReplyWithLLM,
   classifyCadenceContextWithLLM,
   classifyEmpathyNeedWithLLM,
   classifyComplimentWithLLM,
@@ -1283,6 +1284,10 @@ function buildSmallTalkDeterministicFallbackReply(args: {
     : "Sounds good.";
 }
 
+function buildComplaintEmpathyFallbackReply(): string {
+  return "Yeah, I hear you — that’s frustrating. A few riders have said the same thing too.";
+}
+
 async function detectSmallTalkSignalWithFallback(args: {
   text: string;
   history: { direction: "in" | "out"; body: string }[];
@@ -2479,11 +2484,9 @@ async function processInventoryWatchlist(targetConvId?: string) {
         ) {
           continue;
         }
-        // For brand-new watches (never notified), allow matching against current
-        // in-stock inventory. Otherwise only match newly-arrived units.
-        const candidateItems = (watch.lastNotifiedAt ? newItems : items).filter(i =>
-          isWatchCandidateAvailable(i)
-        );
+        // Only notify on newly-arrived inventory so a just-created watch does not
+        // immediately fire against units that were already in stock.
+        const candidateItems = newItems.filter(i => isWatchCandidateAvailable(i));
         if (!candidateItems.length) continue;
         const match = candidateItems.find(i => inventoryItemMatchesWatch(i, watch));
         if (!match) continue;
@@ -19700,9 +19703,31 @@ if (authToken && signature) {
   };
 
   const schedulingAllowed = !isServiceLead;
+  const appointmentWhenMs = new Date(String(conv.appointment?.whenIso ?? "")).getTime();
+  const isFutureBookedAppointment =
+    !!conv.appointment?.bookedEventId &&
+    (!Number.isFinite(appointmentWhenMs) || appointmentWhenMs >= Date.now() - 60 * 60 * 1000);
+  const allowPastAppointmentReschedule =
+    !!conv.appointment?.bookedEventId &&
+    !isFutureBookedAppointment &&
+    (
+      conv.appointment?.reschedulePending === true ||
+      conv.appointment?.staffNotify?.outcome?.status === "no_show"
+    );
+  const hasBookedAppointmentForReschedule =
+    !!conv.appointment?.bookedEventId && (isFutureBookedAppointment || allowPastAppointmentReschedule);
+  if (!hasBookedAppointmentForReschedule && conv.scheduler?.pendingSlot?.reschedule) {
+    conv.scheduler.pendingSlot = undefined;
+    if (conv.appointment) conv.appointment.reschedulePending = false;
+  }
 
   // Auto-reschedule if they confirmed a pending reschedule slot
-  if (schedulingAllowed && conv.appointment?.bookedEventId && conv.scheduler?.pendingSlot?.reschedule) {
+  if (
+    schedulingAllowed &&
+    conv.appointment?.bookedEventId &&
+    hasBookedAppointmentForReschedule &&
+    conv.scheduler?.pendingSlot?.reschedule
+  ) {
     if (isDeferral(event.body)) {
       conv.scheduler.pendingSlot = undefined;
     } else {
@@ -19993,6 +20018,7 @@ if (authToken && signature) {
   // 24-hour appointment confirmation replies (YES/NO)
   if (
     conv.appointment?.bookedEventId &&
+    isFutureBookedAppointment &&
     conv.appointment?.confirmation?.status === "pending" &&
     conv.appointment?.confirmation?.sentAt
   ) {
@@ -20088,7 +20114,7 @@ if (authToken && signature) {
     event.body
   );
   let requestedReschedule: ReturnType<typeof parseRequestedDayTime> | null = null;
-  if (conv.appointment?.bookedEventId) {
+  if (conv.appointment?.bookedEventId && hasBookedAppointmentForReschedule) {
     const cfg = await getSchedulerConfigHot();
     const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
     const preferredSalespeople = getPreferredSalespeopleForConv(cfg, conv);
@@ -20308,7 +20334,8 @@ if (authToken && signature) {
         );
         conv.appointment.reschedulePending = true;
         conv.appointment.updatedAt = new Date().toISOString();
-        const reply = `I can reschedule you. I have ${picked[0].startLocal} or ${picked[1].startLocal} — do any of these times work?`;
+        const repBooked = primarySp.name ? `${primarySp.name} is booked around that time.` : "That time is already booked.";
+        const reply = `${repBooked} The closest openings I have are ${picked[0].startLocal} or ${picked[1].startLocal} — do any of these times work?`;
         const systemMode = webhookMode;
         if (systemMode === "suggest") {
           appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -21697,6 +21724,49 @@ if (authToken && signature) {
     affectNeedsEmpathy: acceptedAffect?.needsEmpathy ?? null,
     affectHasHumor: acceptedAffect?.hasHumor ?? null
   });
+  const frustrationAffectSignal =
+    !!acceptedAffect?.needsEmpathy ||
+    !!acceptedAffect?.hasNegativeSentiment ||
+    acceptedAffect?.primaryAffect === "frustrated" ||
+    acceptedAffect?.primaryAffect === "angry" ||
+    acceptedAffect?.primaryAffect === "confused" ||
+    acceptedAffect?.primaryAffect === "anxious";
+  const frustrationEmpathyCandidate =
+    event.provider === "twilio" &&
+    routeExecGeneral &&
+    !shortAck &&
+    !reducedConversationState.departmentIntent &&
+    !semanticDepartmentIntent &&
+    !!dialogActParse &&
+    dialogActParse.act === "frustration" &&
+    !dialogActParse.explicitRequest &&
+    dialogActConfidence >= Math.max(0.7, dialogActConfidenceMin - 0.04) &&
+    frustrationAffectSignal;
+  if (frustrationEmpathyCandidate) {
+    const empathyReplyParse = await safeLlmParse("frustration_empathy_reply", () =>
+      generateEmpathySupportReplyWithLLM({
+        text: String(event.body ?? ""),
+        history: buildHistory(conv, 8),
+        topicHint: dialogActParse?.topic ?? null
+      })
+    );
+    const empathyReply = String(empathyReplyParse?.reply ?? "").trim() || buildComplaintEmpathyFallbackReply();
+    logRouteOutcome("frustration_empathy_ack", {
+      dialogActConfidence,
+      affectPrimary: acceptedAffect?.primaryAffect ?? null,
+      replySource: empathyReplyParse?.reply ? "llm_structured" : "fallback"
+    });
+    if (webhookMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, empathyReply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, empathyReply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      empathyReply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   const smallTalkPreemptCandidate =
     event.provider === "twilio" &&
     !shortAck &&
@@ -25988,7 +26058,18 @@ if (authToken && signature) {
           }
         }
         const lastOutboundTextOffer = getLastNonVoiceOutbound(conv)?.body ?? "";
-        let reply = `${prefix ? `${prefix} ` : ""}I have ${bestSlots[0].startLocal} or ${bestSlots[1].startLocal} — do any of these times work?`;
+        const slotRepNames = Array.from(
+          new Set(
+            bestSlots
+              .map(s => String(s?.salespersonName ?? "").trim())
+              .filter(Boolean)
+          )
+        );
+        const bookedPrefix =
+          slotRepNames.length === 1
+            ? `${slotRepNames[0]} is booked around that time. `
+            : "That time is already booked. ";
+        let reply = `${bookedPrefix}${prefix ? `${prefix} ` : ""}the closest openings I have are ${bestSlots[0].startLocal} or ${bestSlots[1].startLocal} — do any of these times work?`;
         reply = applySlotOfferPolicy(conv, reply, lastOutboundTextOffer);
         if (isSlotOfferMessage(reply)) {
           const requestedAppointmentType = String(result.requestedAppointmentType ?? "inventory_visit");
