@@ -1742,6 +1742,9 @@ export function listConversations() {
       const updatedAt = lastNonCall?.at ?? c.updatedAt;
       const leadSource = c.lead?.source ?? null;
       const inferredWalkIn = inferWalkIn(c);
+      const hasInboundTwilio = c.messages.some(
+        m => m.direction === "in" && String(m.provider ?? "").toLowerCase() === "twilio"
+      );
       return {
         id: c.id,
         leadKey: c.leadKey,
@@ -1761,6 +1764,7 @@ export function listConversations() {
         contactPreference: c.contactPreference,
         preferredContactMethod: c.lead?.preferredContactMethod ?? null,
         leadSource,
+        hasInboundTwilio,
         walkIn: inferredWalkIn ? true : null,
         engagement: c.engagement ?? null,
         classification: c.classification ?? null,
@@ -2174,6 +2178,7 @@ export const FOLLOW_UP_DAY_OFFSETS = [1, 2, 4, 6, 8, 10, 12, 14, 18, 21, 27, 35,
 export const ENGAGED_DAY_OFFSETS = FOLLOW_UP_DAY_OFFSETS;
 export const POST_SALE_DAY_OFFSETS = [1, 60, 365, 690];
 export const LONG_TERM_DAY_OFFSETS = [30, 90, 180];
+export const FINANCE_DECLINED_DAY_OFFSETS = [30, 60, 120];
 
 export function computeFollowUpDueAt(anchorAtIso: string, offsetDays: number, timeZone: string) {
   const anchor = new Date(anchorAtIso);
@@ -2349,6 +2354,8 @@ export function advanceFollowUpCadence(conv: Conversation, timeZone: string) {
   const isPostSale = conv.followUpCadence.kind === "post_sale";
   const isEngaged = conv.followUpCadence.kind === "engaged";
   const isLongTerm = conv.followUpCadence.kind === "long_term";
+  const isFinanceDeclinedLongTerm =
+    isLongTerm && String(conv.followUp?.reason ?? "").trim().toLowerCase() === "financing_declined";
   const isRideChallengeReminder = conv.followUpCadence.deferredMessage === "ride_challenge_final_mileage";
   if (isLongTerm && isRideChallengeReminder) {
     conv.followUpCadence.status = "completed";
@@ -2362,7 +2369,9 @@ export function advanceFollowUpCadence(conv: Conversation, timeZone: string) {
     : isEngaged
       ? ENGAGED_DAY_OFFSETS
       : isLongTerm
-        ? LONG_TERM_DAY_OFFSETS
+        ? isFinanceDeclinedLongTerm
+          ? FINANCE_DECLINED_DAY_OFFSETS
+          : LONG_TERM_DAY_OFFSETS
       : FOLLOW_UP_DAY_OFFSETS;
   if (nextStep >= offsets.length) {
     conv.followUpCadence.status = "completed";

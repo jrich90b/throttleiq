@@ -74,6 +74,7 @@ import { modelHasFinishOptions } from "./domain/msrpPriceList.js";
 import {
   computeFollowUpDueAt,
   computePostSaleDueAt,
+  FINANCE_DECLINED_DAY_OFFSETS,
   FOLLOW_UP_DAY_OFFSETS,
   LONG_TERM_DAY_OFFSETS,
   POST_SALE_DAY_OFFSETS,
@@ -5417,8 +5418,22 @@ async function buildLongTermFollowUp(
     conv?.appointment?.staffNotify?.outcome?.status === "financing_declined";
 
   if (financingDeclined) {
+    const step = Math.max(0, Number(conv?.followUpCadence?.stepIndex ?? 0));
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const bookedStaffFirst = normalizeDisplayCase(
+      String(conv?.appointment?.matchedSlot?.salespersonName ?? "")
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)[0] ?? ""
+    );
+    const financeSender = bookedStaffFirst || resolveConversationAgentName(conv, "our finance team");
+    const templates = [
+      `${greeting}this is ${financeSender} in finance at ${dealerName}. Just checking in — if you still want to move forward, we can revisit options like a co-signer, adjusted down payment, term, or different bike. Want me to outline the easiest path?`,
+      `${greeting}this is ${financeSender} in finance at ${dealerName}. Quick follow-up — if anything changed with your credit, down payment, or co-signer options, I can rework numbers for you.`,
+      `${greeting}this is ${financeSender} in finance at ${dealerName}. I’m still here if you want to revisit approval options, including co-signer or alternative bike/payment structures.`
+    ];
     return {
-      body: `${greeting}Quick check-in. If you want to revisit options at any point, I’m here.`
+      body: templates[Math.min(step, templates.length - 1)]
     };
   }
 
@@ -5837,6 +5852,85 @@ async function sendInternalSms(toNumber: string, body: string): Promise<boolean>
   } catch (e: any) {
     console.warn("[staff-sms] send failed:", e?.message ?? e);
     return false;
+  }
+}
+
+function pickUserSmsPhone(user: any): string {
+  if (!user || typeof user !== "object") return "";
+  const candidates = [
+    user.phone,
+    user.mobilePhone,
+    user.mobile_phone,
+    user.cellPhone,
+    user.cellphone,
+    user.cell,
+    user.mobile,
+    user.smsPhone,
+    user.sms_phone
+  ];
+  for (const raw of candidates) {
+    const normalized = normalizePhone(String(raw ?? "").trim());
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
+async function notifyBusinessManagerFinancingDeclined(conv: any, note?: string): Promise<void> {
+  const appt = conv?.appointment;
+  if (!appt) return;
+  appt.staffNotify = appt.staffNotify ?? {};
+  if (String(appt.staffNotify.financeDeclinedSentAt ?? "").trim()) return;
+
+  const users = await listUsers();
+  const byId = (id: string) =>
+    users.find(u => String(u?.id ?? "").trim() === String(id ?? "").trim()) ?? null;
+  const target =
+    byId(String(appt.bookedSalespersonId ?? "").trim()) ??
+    byId(String(conv?.leadOwner?.id ?? "").trim()) ??
+    users.find(u => String(u?.role ?? "").trim().toLowerCase() === "manager") ??
+    null;
+  if (!target) return;
+
+  const targetName =
+    String(target?.firstName ?? "").trim() || String(target?.name ?? "").trim() || "business manager";
+  const toNumber = pickUserSmsPhone(target);
+  if (!toNumber.startsWith("+")) {
+    addTodo(conv, "note", `Business manager SMS failed for ${targetName}: invalid_to_number.`);
+    return;
+  }
+
+  const cfg = await getSchedulerConfigHot();
+  const customerName =
+    [conv?.lead?.firstName, conv?.lead?.lastName].filter(Boolean).join(" ").trim() ||
+    conv?.lead?.name ||
+    conv?.leadKey ||
+    "Customer";
+  const vehicle =
+    conv?.lead?.vehicle?.model ??
+    conv?.lead?.vehicle?.description ??
+    conv?.sale?.label ??
+    "the deal";
+  const nextDueIso = String(conv?.followUpCadence?.nextDueAt ?? "").trim();
+  const nextDueText = nextDueIso ? formatSlotLocal(nextDueIso, cfg.timezone) : "";
+  const message = [
+    `Financing not approved: ${customerName} — ${vehicle}.`,
+    "Long-term finance cadence started (30/60/120 days).",
+    nextDueText ? `Next check-in due: ${nextDueText}.` : null,
+    note ? `Note: ${String(note).trim()}` : null
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const sent = await sendInternalSms(toNumber, message);
+  addTodo(
+    conv,
+    "note",
+    sent
+      ? `Business manager SMS sent to ${targetName}: financing not approved.`
+      : `Business manager SMS failed for ${targetName}: send_failed.`
+  );
+  if (sent) {
+    appt.staffNotify.financeDeclinedSentAt = new Date().toISOString();
   }
 }
 
@@ -14127,10 +14221,11 @@ app.post("/public/appointment/outcome", async (req, res) => {
     conv.followUpCadence = {
       status: "active",
       anchorAt: nowIso,
-      nextDueAt: computeFollowUpDueAt(nowIso, LONG_TERM_DAY_OFFSETS[0], cfg.timezone),
+      nextDueAt: computeFollowUpDueAt(nowIso, FINANCE_DECLINED_DAY_OFFSETS[0], cfg.timezone),
       stepIndex: 0,
       kind: "long_term"
     };
+    await notifyBusinessManagerFinancingDeclined(conv, note);
   }
 
   const outcomeTarget = getOutcomeStaffNotifyTarget(conv);
@@ -14188,10 +14283,11 @@ app.post("/public/appointment/outcome/transcribe", upload.single("audio"), async
     conv.followUpCadence = {
       status: "active",
       anchorAt: nowIso,
-      nextDueAt: computeFollowUpDueAt(nowIso, LONG_TERM_DAY_OFFSETS[0], cfg.timezone),
+      nextDueAt: computeFollowUpDueAt(nowIso, FINANCE_DECLINED_DAY_OFFSETS[0], cfg.timezone),
       stepIndex: 0,
       kind: "long_term"
     };
+    await notifyBusinessManagerFinancingDeclined(conv, transcript);
   }
 
   const outcomeTarget = getOutcomeStaffNotifyTarget(conv);

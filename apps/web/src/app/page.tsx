@@ -518,6 +518,8 @@ type ConversationListItem = {
     name?: string;
     assignedAt?: string;
   } | null;
+  leadSource?: string | null;
+  hasInboundTwilio?: boolean | null;
   leadName?: string | null;
   vehicleDescription?: string | null;
   walkIn?: boolean | null;
@@ -3986,29 +3988,19 @@ export default function Home() {
   const isSoldDealConversation = (c: ConversationListItem) =>
     (c.status === "closed" && c.closedReason === "sold") || !!c.sale?.soldAt;
 
-  const PURCHASE_INTENT_BUCKETS = new Set([
-    "inventory_interest",
-    "test_ride",
-    "trade_in_sell",
-    "finance_prequal",
-    "pricing_payments"
-  ]);
+  const PURCHASE_INTENT_BUCKETS = new Set(["inventory_interest", "test_ride", "pricing_payments"]);
   const PURCHASE_INTENT_CTAS = new Set([
     "check_availability",
     "request_a_quote",
     "schedule_test_ride",
     "value_my_trade",
     "sell_my_bike",
-    "prequalify",
     "hdfs_coa",
     "book_appointment",
     "schedule_appointment"
   ]);
   const NON_DEAL_BUCKETS = new Set(["service", "parts", "apparel"]);
   const NON_DEAL_CTAS = new Set(["service_request", "parts_request", "apparel_request"]);
-  const PURCHASE_INTENT_MESSAGE_RE =
-    /\b(buy|purchase|pricing?|payment|monthly|apr|term|quote|available|availability|in stock|stock|test ride|come in|stop by|deal|trade(?:-?in)?|cash|order|reserve|hold)\b/i;
-
   const getConversationRecencyMs = (c: ConversationListItem) => {
     const atCandidates = [c.updatedAt, c.engagement?.at];
     for (const at of atCandidates) {
@@ -4030,11 +4022,34 @@ export default function Home() {
       return true;
     }
 
-    const inboundBody =
-      c.lastMessage?.direction === "in" ? String(c.lastMessage.body ?? "").trim() : "";
-    if (inboundBody && PURCHASE_INTENT_MESSAGE_RE.test(inboundBody)) return true;
-
     return false;
+  };
+
+  const isPrequalLead = (c: ConversationListItem) => {
+    const leadSource = String(c.leadSource ?? "").trim().toLowerCase();
+    const bucket = String(c.classification?.bucket ?? "").trim().toLowerCase();
+    const cta = String(c.classification?.cta ?? "").trim().toLowerCase();
+    if (bucket === "finance_prequal" || cta === "prequalify") return true;
+    return (
+      leadSource.includes("marketplace - prequal") ||
+      leadSource.includes("prequal")
+    );
+  };
+
+  const isAdfCoaException = (c: ConversationListItem) => {
+    const leadSource = String(c.leadSource ?? "").trim().toLowerCase();
+    const bucket = String(c.classification?.bucket ?? "").trim().toLowerCase();
+    const cta = String(c.classification?.cta ?? "").trim().toLowerCase();
+    if (cta === "hdfs_coa" && bucket !== "finance_prequal") return true;
+    return leadSource.includes("hdfs coa") || leadSource.includes("coa online");
+  };
+
+  const isAdfTestRideException = (c: ConversationListItem) => {
+    const leadSource = String(c.leadSource ?? "").trim().toLowerCase();
+    const bucket = String(c.classification?.bucket ?? "").trim().toLowerCase();
+    const cta = String(c.classification?.cta ?? "").trim().toLowerCase();
+    if (bucket === "test_ride" || cta === "schedule_test_ride") return true;
+    return leadSource.includes("test ride");
   };
 
   const isHotDealConversation = (c: ConversationListItem) => {
@@ -4046,6 +4061,16 @@ export default function Home() {
     const recentAtMs = getConversationRecencyMs(c);
     if (!Number.isFinite(recentAtMs)) return false;
     if (nowMs - recentAtMs > cutoffMs) return false;
+    if (isPrequalLead(c)) return false;
+    if (isAdfCoaException(c) || isAdfTestRideException(c)) {
+      return true;
+    }
+    const twilioEngaged =
+      Boolean(c.hasInboundTwilio) ||
+      c.engagement?.source === "sms" ||
+      (Array.isArray((c as any)?.messages) &&
+        (c as any).messages.some((m: any) => m?.direction === "in" && m?.provider === "twilio"));
+    if (!twilioEngaged) return false;
     return hasPurchaseIntentSignal(c);
   };
 
@@ -7229,11 +7254,11 @@ export default function Home() {
                                     </svg>
                                   </span>
                                 ) : null}
-                                {c.engagement?.at ? (
+                                {isHotDealConversation(c) ? (
                                   <span
                                     className="text-orange-500 text-lg leading-none"
-                                    title="Engaged"
-                                    aria-label="Engaged"
+                                    title="Hot lead"
+                                    aria-label="Hot lead"
                                   >
                                     🔥
                                   </span>
@@ -10795,11 +10820,11 @@ export default function Home() {
                       [selectedConv.lead?.firstName, selectedConv.lead?.lastName].filter(Boolean).join(" ") ||
                       selectedConv.leadKey}
                   </span>
-                  {selectedConv.engagement?.at ? (
+                  {isHotDealConversation(selectedConv as unknown as ConversationListItem) ? (
                     <span
                       className="text-orange-500 text-xl leading-none"
-                      title="Engaged"
-                      aria-label="Engaged"
+                      title="Hot lead"
+                      aria-label="Hot lead"
                     >
                       🔥
                     </span>
