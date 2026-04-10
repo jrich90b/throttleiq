@@ -574,6 +574,8 @@ type ConversationListItem = {
     createdAt?: string;
     lastNotifiedAt?: string;
   } | null;
+  classification?: { bucket?: string; cta?: string } | null;
+  appointment?: { status?: string } | null;
   scheduler?: { preferredSalespersonId?: string; preferredSalespersonName?: string } | null;
   updatedAt: string;
   messageCount: number;
@@ -1028,7 +1030,7 @@ export default function Home() {
   const [watchSalespersonFilter, setWatchSalespersonFilter] = useState("all");
   const [inboxQuery, setInboxQuery] = useState("");
   const [inboxOwnerFilter, setInboxOwnerFilter] = useState("all");
-  const [inboxDealFilter, setInboxDealFilter] = useState<"all" | "pending" | "closed">("all");
+  const [inboxDealFilter, setInboxDealFilter] = useState<"all" | "hot" | "sold" | "hold">("all");
   const [todoQuery, setTodoQuery] = useState("");
   const [todoLeadOwnerFilter, setTodoLeadOwnerFilter] = useState("all");
   const [kpiOverview, setKpiOverview] = useState<KpiOverview | null>(null);
@@ -3981,17 +3983,70 @@ export default function Home() {
     c.followUp?.reason === "unit_hold" ||
     !!c.hold;
 
-  const isPendingDealConversation = (c: ConversationListItem) => {
+  const isSoldDealConversation = (c: ConversationListItem) =>
+    (c.status === "closed" && c.closedReason === "sold") || !!c.sale?.soldAt;
+
+  const PURCHASE_INTENT_BUCKETS = new Set([
+    "inventory_interest",
+    "test_ride",
+    "trade_in_sell",
+    "finance_prequal",
+    "pricing_payments"
+  ]);
+  const PURCHASE_INTENT_CTAS = new Set([
+    "check_availability",
+    "request_a_quote",
+    "schedule_test_ride",
+    "value_my_trade",
+    "sell_my_bike",
+    "prequalify",
+    "hdfs_coa",
+    "book_appointment",
+    "schedule_appointment"
+  ]);
+  const NON_DEAL_BUCKETS = new Set(["service", "parts", "apparel"]);
+  const NON_DEAL_CTAS = new Set(["service_request", "parts_request", "apparel_request"]);
+  const PURCHASE_INTENT_MESSAGE_RE =
+    /\b(buy|purchase|pricing?|payment|monthly|apr|term|quote|available|availability|in stock|stock|test ride|come in|stop by|deal|trade(?:-?in)?|cash|order|reserve|hold)\b/i;
+
+  const getConversationRecencyMs = (c: ConversationListItem) => {
+    const atCandidates = [c.updatedAt, c.engagement?.at];
+    for (const at of atCandidates) {
+      const atMs = Date.parse(String(at ?? ""));
+      if (Number.isFinite(atMs)) return atMs;
+    }
+    return NaN;
+  };
+
+  const hasPurchaseIntentSignal = (c: ConversationListItem) => {
+    const bucket = String(c.classification?.bucket ?? "").trim().toLowerCase();
+    const cta = String(c.classification?.cta ?? "").trim().toLowerCase();
+    if (NON_DEAL_BUCKETS.has(bucket) || NON_DEAL_CTAS.has(cta)) return false;
+    if (PURCHASE_INTENT_BUCKETS.has(bucket) || PURCHASE_INTENT_CTAS.has(cta)) return true;
+
+    const apptStatus = String(c.appointment?.status ?? "").trim().toLowerCase();
+    if (apptStatus && apptStatus !== "cancelled" && apptStatus !== "no_show") return true;
+    if (c.inventoryWatch || (Array.isArray(c.inventoryWatches) && c.inventoryWatches.length > 0)) {
+      return true;
+    }
+
+    const inboundBody =
+      c.lastMessage?.direction === "in" ? String(c.lastMessage.body ?? "").trim() : "";
+    if (inboundBody && PURCHASE_INTENT_MESSAGE_RE.test(inboundBody)) return true;
+
+    return false;
+  };
+
+  const isHotDealConversation = (c: ConversationListItem) => {
+    if (isSoldDealConversation(c)) return false;
+    if (isConversationOnHold(c)) return false;
     if (c.status === "closed") return false;
-    const followReason = String(c.followUp?.reason ?? "").toLowerCase();
-    const pauseReason = String(c.followUpCadence?.pauseReason ?? "").toLowerCase();
-    const hasAppointmentSignal =
-      pauseReason === "manual_appointment" ||
-      followReason.includes("appointment") ||
-      followReason === "showed" ||
-      followReason === "no_show";
-    const hasDealSignal = hasAppointmentSignal || isConversationOnHold(c) || !!c.engagement?.at;
-    return hasDealSignal;
+    const nowMs = Date.now();
+    const cutoffMs = 30 * 24 * 60 * 60 * 1000;
+    const recentAtMs = getConversationRecencyMs(c);
+    if (!Number.isFinite(recentAtMs)) return false;
+    if (nowMs - recentAtMs > cutoffMs) return false;
+    return hasPurchaseIntentSignal(c);
   };
 
   const visibleConversations = useMemo(() => {
@@ -4037,8 +4092,9 @@ export default function Home() {
       ? decodeURIComponent(inboxOwnerFilter.slice("owner:".length)).toLowerCase()
       : "";
     const rows = visibleConversations.filter(c => {
-      if (inboxDealFilter === "pending" && !isPendingDealConversation(c)) return false;
-      if (inboxDealFilter === "closed" && c.status !== "closed") return false;
+      if (inboxDealFilter === "hot" && !isHotDealConversation(c)) return false;
+      if (inboxDealFilter === "sold" && !isSoldDealConversation(c)) return false;
+      if (inboxDealFilter === "hold" && !isConversationOnHold(c)) return false;
       if (isManager && inboxOwnerFilter !== "all") {
         const leadOwner = canonicalizeOwnerName(
           String(c.leadOwner?.name ?? c.leadOwner?.id ?? "").trim(),
@@ -4096,13 +4152,15 @@ export default function Home() {
   ]);
 
   const inboxDealCounts = useMemo(() => {
-    let pending = 0;
-    let closed = 0;
+    let hot = 0;
+    let sold = 0;
+    let hold = 0;
     for (const c of visibleConversations) {
-      if (c.status === "closed") closed += 1;
-      else if (isPendingDealConversation(c)) pending += 1;
+      if (isSoldDealConversation(c)) sold += 1;
+      if (isConversationOnHold(c)) hold += 1;
+      if (isHotDealConversation(c)) hot += 1;
     }
-    return { pending, closed };
+    return { hot, sold, hold };
   }, [visibleConversations]);
 
   const groupedConversations = useMemo(() => {
@@ -7103,23 +7161,33 @@ export default function Home() {
               </button>
               <button
                 className={`px-2.5 py-1 text-xs rounded border ${
-                  inboxDealFilter === "pending"
+                  inboxDealFilter === "hot"
                     ? "bg-[var(--accent)] text-white border-[var(--accent)]"
                     : "bg-white hover:bg-[var(--surface-2)]"
                 }`}
-                onClick={() => setInboxDealFilter("pending")}
+                onClick={() => setInboxDealFilter("hot")}
               >
-                Pending deals ({inboxDealCounts.pending})
+                Hot deals ({inboxDealCounts.hot})
               </button>
               <button
                 className={`px-2.5 py-1 text-xs rounded border ${
-                  inboxDealFilter === "closed"
+                  inboxDealFilter === "hold"
                     ? "bg-[var(--accent)] text-white border-[var(--accent)]"
                     : "bg-white hover:bg-[var(--surface-2)]"
                 }`}
-                onClick={() => setInboxDealFilter("closed")}
+                onClick={() => setInboxDealFilter("hold")}
               >
-                Closed deals ({inboxDealCounts.closed})
+                Hold deals ({inboxDealCounts.hold})
+              </button>
+              <button
+                className={`px-2.5 py-1 text-xs rounded border ${
+                  inboxDealFilter === "sold"
+                    ? "bg-[var(--accent)] text-white border-[var(--accent)]"
+                    : "bg-white hover:bg-[var(--surface-2)]"
+                }`}
+                onClick={() => setInboxDealFilter("sold")}
+              >
+                Sold deals ({inboxDealCounts.sold})
               </button>
             </div>
 
