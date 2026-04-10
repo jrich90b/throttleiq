@@ -4422,6 +4422,24 @@ function findConversationByOutcomeToken(token: string): any | null {
   );
 }
 
+function findConversationByShortLinkToken(
+  token: string
+): { conv: any; entry: any } | null {
+  const normalized = normalizeShortLinkToken(token);
+  if (!normalized) return null;
+  const nowMs = Date.now();
+  for (const conv of getAllConversations()) {
+    pruneConversationShortLinks(conv, nowMs);
+    const links = Array.isArray((conv as any)?.shortLinks) ? (conv as any).shortLinks : [];
+    const hit = links.find((entry: any) => normalizeShortLinkToken(entry?.token) === normalized);
+    if (!hit) continue;
+    const expiresAtMs = Date.parse(String(hit?.expiresAt ?? ""));
+    if (Number.isFinite(expiresAtMs) && expiresAtMs <= nowMs) continue;
+    return { conv, entry: hit };
+  }
+  return null;
+}
+
 function isTestRideSeason(profile: any, now: Date): boolean {
   const enabled = profile?.followUp?.testRideEnabled;
   if (enabled === false) return false;
@@ -5572,6 +5590,12 @@ function buildStaffOutcomeLink(token: string): string | null {
   return `${base}/public/appointment/outcome?token=${encodeURIComponent(token)}`;
 }
 
+function isLeadriderHost(raw: string | undefined | null): boolean {
+  const url = parseHttpUrl(raw);
+  if (!url) return false;
+  return /(^|\.)leadrider\.ai$/i.test(String(url.hostname ?? "").toLowerCase());
+}
+
 function parseHttpUrl(raw: string | undefined | null): URL | null {
   const text = String(raw ?? "").trim();
   if (!text) return null;
@@ -5611,6 +5635,87 @@ function deriveStaffWebBaseUrl(profile?: any): string | null {
     return publicBase.toString().replace(/\/+$/, "");
   }
   return null;
+}
+
+function deriveSmsShortLinkBaseUrl(profile?: any): string | null {
+  const explicit = parseHttpUrl(process.env.SMS_LINK_BASE_URL ?? process.env.BRANDED_LINK_BASE_URL);
+  if (explicit) {
+    explicit.hash = "";
+    explicit.search = "";
+    return explicit.toString().replace(/\/+$/, "");
+  }
+
+  const website = parseHttpUrl(profile?.website);
+  if (website) {
+    website.hash = "";
+    website.search = "";
+    website.pathname = "/";
+    return website.toString().replace(/\/+$/, "");
+  }
+
+  const staffBase = deriveStaffWebBaseUrl(profile);
+  if (staffBase && !isLeadriderHost(staffBase)) {
+    return staffBase;
+  }
+  return null;
+}
+
+function normalizeShortLinkToken(raw: string): string {
+  return String(raw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-f0-9]/g, "");
+}
+
+function pruneConversationShortLinks(conv: any, nowMs = Date.now()) {
+  const links = Array.isArray((conv as any)?.shortLinks) ? (conv as any).shortLinks : [];
+  const kept = links.filter((entry: any) => {
+    const expiresAtMs = Date.parse(String(entry?.expiresAt ?? ""));
+    return Number.isFinite(expiresAtMs) ? expiresAtMs > nowMs : true;
+  });
+  (conv as any).shortLinks = kept;
+}
+
+function getOrCreateConversationShortLinkToken(
+  conv: any,
+  targetUrl: string,
+  purpose = "booking_reschedule"
+): string {
+  const ttlHoursRaw = Number(process.env.SMS_SHORT_LINK_TTL_HOURS ?? 24 * 14);
+  const ttlHours = Number.isFinite(ttlHoursRaw) && ttlHoursRaw > 0 ? ttlHoursRaw : 24 * 14;
+  const now = new Date();
+  const nowMs = now.getTime();
+  pruneConversationShortLinks(conv, nowMs);
+  const links = Array.isArray((conv as any)?.shortLinks) ? (conv as any).shortLinks : [];
+  const existing = links.find(
+    (entry: any) =>
+      String(entry?.targetUrl ?? "") === targetUrl &&
+      String(entry?.purpose ?? "") === purpose
+  );
+  if (existing?.token) return String(existing.token);
+
+  const token = crypto.randomBytes(8).toString("hex");
+  const expiresAt = new Date(nowMs + ttlHours * 60 * 60 * 1000).toISOString();
+  links.push({
+    token,
+    targetUrl,
+    purpose,
+    createdAt: now.toISOString(),
+    expiresAt
+  });
+  (conv as any).shortLinks = links;
+  return token;
+}
+
+function buildBrandedShortLinkForConv(conv: any, targetUrl: string, profile?: any): string | null {
+  const base = deriveSmsShortLinkBaseUrl(profile);
+  if (!base) return null;
+  const token = getOrCreateConversationShortLinkToken(conv, targetUrl, "booking_reschedule");
+  try {
+    return new URL(`/r/${encodeURIComponent(token)}`, base).toString();
+  } catch {
+    return null;
+  }
 }
 
 function buildCallbackCallLink(conv: any, profile?: any): string | null {
@@ -13874,6 +13979,18 @@ app.get("/public/appointment/outcome", async (req, res) => {
   return res.send(html);
 });
 
+app.get("/r/:token", async (req, res) => {
+  const token = normalizeShortLinkToken(String(req.params?.token ?? ""));
+  if (!token) return res.status(400).send("Missing link token.");
+  const hit = findConversationByShortLinkToken(token);
+  if (!hit || !hit.entry?.targetUrl) {
+    return res.status(404).send("Link expired or invalid.");
+  }
+  const target = String(hit.entry.targetUrl ?? "").trim();
+  if (!target) return res.status(404).send("Link expired or invalid.");
+  return res.redirect(target);
+});
+
 app.post("/public/appointment/outcome", async (req, res) => {
   const token = String(req.body?.token ?? "").trim();
   const outcome = String(req.body?.outcome ?? "").trim();
@@ -20278,7 +20395,15 @@ if (authToken && signature) {
       if (isNo) {
         try {
           const profile = await getDealerProfileHot();
-          rescheduleUrl = buildBookingUrlForLead(profile?.bookingUrl, conv);
+          const bookingUrl = buildBookingUrlForLead(profile?.bookingUrl, conv);
+          if (bookingUrl) {
+            const branded = buildBrandedShortLinkForConv(conv, bookingUrl, profile);
+            if (branded) {
+              rescheduleUrl = branded;
+            } else if (!isLeadriderHost(bookingUrl)) {
+              rescheduleUrl = bookingUrl;
+            }
+          }
         } catch {
           rescheduleUrl = null;
         }
