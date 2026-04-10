@@ -8049,10 +8049,10 @@ function isAckOnlyCloseTurn(text: string, lastOutboundText: string): boolean {
   return closeLikeLastOutbound;
 }
 
-function reconcileStateFromRecentManualOutbound(
+async function reconcileStateFromRecentManualOutbound(
   conv: any,
   inboundAtIso?: string
-): { changed: boolean; reasons: string[] } {
+): Promise<{ changed: boolean; reasons: string[] }> {
   if (!conv || typeof conv !== "object") return { changed: false, reasons: [] };
   const mode = String(conv.followUp?.mode ?? "").toLowerCase();
   const convMode = String(conv.mode ?? "").toLowerCase();
@@ -8072,26 +8072,67 @@ function reconcileStateFromRecentManualOutbound(
     });
   if (!lastManualOutbound?.body) return { changed: false, reasons: [] };
   const lastOutboundText = String(lastManualOutbound.body ?? "").toLowerCase();
+  const sourceProvider = lastManualOutbound.provider ?? null;
+  const sourceAt = lastManualOutbound.at ?? null;
+  const prevHints = (conv as any).manualOutboundHints ?? {};
+  const hasStablePrevHints =
+    String(prevHints.sourceProvider ?? "") === String(sourceProvider ?? "") &&
+    String(prevHints.sourceAt ?? "") === String(sourceAt ?? "") &&
+    typeof prevHints.appointmentMentioned === "boolean" &&
+    typeof prevHints.financeMentioned === "boolean";
+  if (hasStablePrevHints) return { changed: false, reasons: [] };
   const reasons: string[] = [];
 
-  const manualAppointmentCue =
+  let parserPrimaryIntent: string | null = null;
+  let parserConfidence: number | null = null;
+  let parserUsed = false;
+  const parserDecision = await safeLlmParse("manual_outbound_context_parser", () =>
+    parseRoutingDecisionWithLLM({
+      text: String(lastManualOutbound.body ?? ""),
+      history: buildHistory(conv, 6),
+      lead: conv.lead,
+      followUp: conv.followUp,
+      dialogState: getDialogState(conv),
+      classification: conv.classification
+    })
+  );
+  if (parserDecision?.primaryIntent) {
+    parserPrimaryIntent = String(parserDecision.primaryIntent ?? "").toLowerCase() || null;
+    parserConfidence =
+      typeof parserDecision.confidence === "number" && Number.isFinite(parserDecision.confidence)
+        ? parserDecision.confidence
+        : null;
+    parserUsed = true;
+    reasons.push(`manual_context_parser_intent:${parserPrimaryIntent ?? "none"}`);
+  }
+  const parserAccepted = parserUsed && (parserConfidence ?? 0) >= 0.55;
+  const parserAppointmentCue = parserAccepted && parserPrimaryIntent === "scheduling";
+  const parserFinanceCue = parserAccepted && parserPrimaryIntent === "pricing_payments";
+
+  const regexAppointmentCue =
     /\b(see you|i(?:’|')?ll be here|that works|works for me|you(?:’|')?re all set|you are all set|look forward to meeting|come in|stop by|stop in)\b/.test(
       lastOutboundText
     ) ||
     /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(lastOutboundText) ||
     /\b\d{1,2}(?::\d{2})?\s*(am|pm)\b/.test(lastOutboundText);
-  const manualFinanceCue =
+  const regexFinanceCue =
     /\b(apr|rate|monthly|payment|down payment|put down|term|months?|financing|credit)\b/.test(
       lastOutboundText
     );
+  const manualAppointmentCue = parserAccepted ? parserAppointmentCue : regexAppointmentCue;
+  const manualFinanceCue = parserAccepted ? parserFinanceCue : regexFinanceCue;
+
   const nextHints = {
     at: nowIso(),
-    sourceProvider: lastManualOutbound.provider ?? null,
-    sourceAt: lastManualOutbound.at ?? null,
+    sourceProvider,
+    sourceAt,
     appointmentMentioned: manualAppointmentCue,
-    financeMentioned: manualFinanceCue
+    financeMentioned: manualFinanceCue,
+    parserPrimaryIntent,
+    parserConfidence,
+    parserUsed,
+    parserAccepted
   };
-  const prevHints = (conv as any).manualOutboundHints ?? {};
   const changed =
     String(prevHints.sourceProvider ?? "") !== String(nextHints.sourceProvider ?? "") ||
     String(prevHints.sourceAt ?? "") !== String(nextHints.sourceAt ?? "") ||
@@ -8099,8 +8140,12 @@ function reconcileStateFromRecentManualOutbound(
     Boolean(prevHints.financeMentioned) !== Boolean(nextHints.financeMentioned);
   if (!changed) return { changed: false, reasons: [] };
   (conv as any).manualOutboundHints = nextHints;
-  if (manualAppointmentCue) reasons.push("manual_appointment_context_hint");
-  if (manualFinanceCue) reasons.push("manual_finance_context_hint");
+  if (manualAppointmentCue) {
+    reasons.push(parserAccepted ? "manual_appointment_context_hint_parser" : "manual_appointment_context_hint_regex");
+  }
+  if (manualFinanceCue) {
+    reasons.push(parserAccepted ? "manual_finance_context_hint_parser" : "manual_finance_context_hint_regex");
+  }
   return { changed: true, reasons };
 }
 
@@ -17401,7 +17446,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       cadenceRegeneratedDraft.mediaUrls
     );
   }
-  const regenManualReconcile = reconcileStateFromRecentManualOutbound(conv, event.receivedAt);
+  const regenManualReconcile = await reconcileStateFromRecentManualOutbound(conv, event.receivedAt);
   if (regenManualReconcile.changed) {
     recordRouteOutcome("regen", "manual_outbound_reconciled", {
       convId: conv.id,
@@ -18880,7 +18925,7 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
   appendInbound(conv, event);
-  const liveManualReconcile = reconcileStateFromRecentManualOutbound(conv, event.receivedAt);
+  const liveManualReconcile = await reconcileStateFromRecentManualOutbound(conv, event.receivedAt);
   if (liveManualReconcile.changed) {
     recordRouteOutcome("live", "manual_outbound_reconciled", {
       convId: conv.id,
