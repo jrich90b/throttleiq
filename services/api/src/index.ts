@@ -18476,7 +18476,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       const timePrompt = requestedDayPart
         ? `What time on ${requestedDayLabel} works best for you?`
         : requestedTimeToken
-          ? "Want me to lock that in?"
+          ? ""
           : "What time works best for you?";
       if (requestedDayLabel && requestedTimeToken) {
         const requestedTimeLabel = formatTime12h(requestedTimeToken);
@@ -18484,11 +18484,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         const daySpecificReply =
           availableMatches.length > 0
             ? explicitAvailabilityAskThisTurn && !recentlyConfirmedAvailable
-              ? `Absolutely — ${unitLabel} is still available right now. ${requestedPhrase} can work. ${timePrompt}`
-              : `${requestedPhrase} can work. ${timePrompt}`
+              ? `Absolutely — ${unitLabel} is still available right now. ${requestedPhrase} works.`
+              : `${requestedPhrase} works.`
             : explicitAvailabilityAskThisTurn
-              ? `I’ll keep an eye on ${unitLabel} and update you right away. ${requestedPhrase} can work. ${timePrompt}`
-              : `${requestedPhrase} can work. ${timePrompt}`;
+              ? `I’ll keep an eye on ${unitLabel} and update you right away. ${requestedPhrase} works.`
+              : `${requestedPhrase} works.`;
         return respondWithSmsRegeneratedDraft(daySpecificReply);
       }
       if (requestedDayLabel) {
@@ -25638,6 +25638,8 @@ if (authToken && signature) {
       setDialogState(conv, "schedule_request");
     }
   }
+  let scheduleTimeInferredFromPromptDay = false;
+  let scheduleTimeInferredFromAffirmativeRequested = false;
   if (!pricingOrPaymentsIntent && !result.requestedTime && schedulingAllowed) {
     const inboundTimeToken = extractTimeToken(String(event.body ?? ""));
     if (inboundTimeToken) {
@@ -25652,10 +25654,11 @@ if (authToken && signature) {
           const parsed = parseRequestedDayTime(`${inferredPromptDay} at ${inboundTimeToken}`, tz);
           if (parsed) {
             result.requestedTime = parsed;
+            scheduleTimeInferredFromPromptDay = true;
           }
         } catch {}
         const requestedTimeLabel = formatTime12h(inboundTimeToken);
-        result.draft = `Got it — ${inferredPromptDay} at ${requestedTimeLabel} can work. Want me to lock that in?`;
+        result.draft = `Got it — ${inferredPromptDay} at ${requestedTimeLabel} can work.`;
         setDialogState(conv, "schedule_request");
       }
     }
@@ -25678,6 +25681,7 @@ if (authToken && signature) {
         const parsed = parseRequestedDayTime(conv.scheduler.requested.timeText, tz);
         if (parsed) {
           result.requestedTime = parsed;
+          scheduleTimeInferredFromAffirmativeRequested = true;
         }
       } catch {}
     }
@@ -26027,7 +26031,11 @@ if (authToken && signature) {
             const when = formatSlotLocal(exact.start, cfg.timezone);
             const repName = sp.name ? ` with ${sp.name}` : "";
             const systemMode = webhookMode;
-            const autoBookInSuggest = systemMode === "suggest" && schedulingSignals.hasDayTime;
+            const autoBookInSuggest =
+              systemMode === "suggest" &&
+              (schedulingSignals.hasDayTime ||
+                scheduleTimeInferredFromPromptDay ||
+                scheduleTimeInferredFromAffirmativeRequested);
 
             if (systemMode === "suggest" && !autoBookInSuggest) {
               conv.scheduler = conv.scheduler ?? { updatedAt: new Date().toISOString() };
