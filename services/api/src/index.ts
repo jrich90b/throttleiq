@@ -3421,19 +3421,26 @@ async function applyPostCallSummaryActions(opts: {
       const cfg = await getSchedulerConfigHot();
       const bookingRequestedDay = String(bookingParse?.requested?.day ?? "").trim();
       const bookingRequestedTime = String(bookingParse?.requested?.timeText ?? "").trim();
-      const bookingRequestedText = [bookingRequestedDay, bookingRequestedTime]
-        .filter(Boolean)
-        .join(" ")
-        .trim();
-      const candidateRequestedTexts = [
-        bookingRequestedText,
-        String(bookingParse?.normalizedText ?? "").trim(),
-        customerText
-      ].filter(Boolean);
-      const requested =
-        candidateRequestedTexts
-          .map(text => parseRequestedDayTime(text, cfg.timezone))
-          .find(Boolean) ?? null;
+      const bookingRequestedWindow = String(bookingParse?.requested?.timeWindow ?? "")
+        .trim()
+        .toLowerCase();
+      // Voice transcripts can contain mixed speaker labels and business-hours chatter.
+      // Only auto-book on calls when parser captured an explicit customer day+time.
+      const hasExplicitDay = bookingRequestedDay.length > 0;
+      const hasExplicitTime = bookingRequestedTime.length > 0;
+      const hasExactWindow = bookingRequestedWindow === "exact";
+      if (!hasExplicitDay || !hasExplicitTime || !hasExactWindow) {
+        recordRouteOutcome("live", "voice_booking_requires_explicit_time", {
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          bookingRequestedDay,
+          bookingRequestedTime,
+          bookingRequestedWindow
+        });
+        return;
+      }
+      const bookingRequestedText = `${bookingRequestedDay} ${bookingRequestedTime}`.trim();
+      const requested = parseRequestedDayTime(bookingRequestedText, cfg.timezone);
       if (!requested) return;
 
       const existingEventId = String(conv.appointment?.bookedEventId ?? "").trim();
