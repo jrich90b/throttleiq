@@ -3328,73 +3328,12 @@ async function applyPostCallSummaryActions(opts: {
     const outcomeStatus = parsedFinanceOutcome.outcome;
     const reasonText = String(parsedFinanceOutcome.reasonText ?? "").trim();
     const sourceId = String(sourceMessageId ?? "").trim() || undefined;
-    const nowIsoValue = nowIso();
-    if (outcomeStatus === "declined") {
-      const cfg = await getSchedulerConfigHot();
-      conv.followUp = {
-        mode: "active",
-        reason: "financing_declined",
-        updatedAt: nowIsoValue
-      };
-      conv.followUpCadence = {
-        status: "active",
-        anchorAt: nowIsoValue,
-        nextDueAt: computeFollowUpDueAt(nowIsoValue, FINANCE_DECLINED_DAY_OFFSETS[0], cfg.timezone),
-        stepIndex: 0,
-        kind: "long_term"
-      };
-      if (conv.appointment) {
-        conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
-        conv.appointment.staffNotify.outcome = {
-          status: "financing_declined",
-          note: reasonText || summaryText || customerText || transcriptText,
-          updatedAt: nowIsoValue
-        };
-      }
-      conv.financeOutcome = {
-        status: "declined",
-        updatedAt: nowIsoValue,
-        sourceMessageId: sourceId,
-        reasonText: reasonText || undefined
-      };
-      addTodo(
+    if (outcomeStatus === "declined" || outcomeStatus === "approved") {
+      await applyFinanceOutcomeStatusFromSignal(
         conv,
-        "note",
-        `Finance outcome parsed from call: not approved${reasonText ? ` (${reasonText})` : ""}.`,
+        outcomeStatus,
+        reasonText || summaryText || customerText || transcriptText,
         sourceId
-      );
-      await notifyBusinessManagerFinanceOutcome(
-        conv,
-        "declined",
-        reasonText || summaryText || customerText || transcriptText
-      );
-    } else if (outcomeStatus === "approved") {
-      setFollowUpMode(conv, "manual_handoff", "credit_app_approved");
-      stopFollowUpCadence(conv, "manual_handoff");
-      if (conv.appointment) {
-        conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
-        conv.appointment.staffNotify.outcome = {
-          status: "follow_up",
-          note: `Financing approved${reasonText ? `: ${reasonText}` : ""}`,
-          updatedAt: nowIsoValue
-        };
-      }
-      conv.financeOutcome = {
-        status: "approved",
-        updatedAt: nowIsoValue,
-        sourceMessageId: sourceId,
-        reasonText: reasonText || undefined
-      };
-      addTodo(
-        conv,
-        "note",
-        `Finance outcome parsed from call: approved${reasonText ? ` (${reasonText})` : ""}.`,
-        sourceId
-      );
-      await notifyBusinessManagerFinanceOutcome(
-        conv,
-        "approved",
-        reasonText || summaryText || customerText || transcriptText
       );
     }
   }
@@ -4594,6 +4533,29 @@ function findConversationByOutcomeToken(token: string): any | null {
         c?.dealerRide?.staffNotify?.outcomeToken === token
     ) ?? null
   );
+}
+
+type StaffOutcomeTokenMatch = {
+  conv: any;
+  kind: "appointment" | "dealer_ride" | "finance";
+};
+
+function findConversationByStaffOutcomeToken(token: string): StaffOutcomeTokenMatch | null {
+  if (!token) return null;
+  const normalized = String(token).trim().toLowerCase();
+  if (!normalized) return null;
+  for (const conv of getAllConversations()) {
+    if (String(conv?.appointment?.staffNotify?.outcomeToken ?? "").trim().toLowerCase() === normalized) {
+      return { conv, kind: "appointment" };
+    }
+    if (String(conv?.dealerRide?.staffNotify?.outcomeToken ?? "").trim().toLowerCase() === normalized) {
+      return { conv, kind: "dealer_ride" };
+    }
+    if (String((conv as any)?.financeOutcomeNotify?.outcomeToken ?? "").trim().toLowerCase() === normalized) {
+      return { conv, kind: "finance" };
+    }
+  }
+  return null;
 }
 
 function findConversationByShortLinkToken(
@@ -5978,29 +5940,189 @@ function pickUserSmsPhone(user: any): string {
   return "";
 }
 
-async function notifyBusinessManagerFinanceOutcome(
-  conv: any,
-  status: "approved" | "declined",
-  note?: string
-): Promise<void> {
+async function resolveFinanceOutcomeNotifyTarget(conv: any): Promise<{
+  user: any | null;
+  name: string;
+  phone: string;
+}> {
   const appt = conv?.appointment ?? null;
-  const notifyState = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});
-  if (status === "declined" && String(notifyState.declinedSentAt ?? "").trim()) return;
-  if (status === "approved" && String(notifyState.approvedSentAt ?? "").trim()) return;
-
   const users = await listUsers();
   const byId = (id: string) =>
     users.find(u => String(u?.id ?? "").trim() === String(id ?? "").trim()) ?? null;
   const target =
     byId(String(appt?.bookedSalespersonId ?? "").trim()) ??
+    byId(String((conv as any)?.financeOutcomeNotify?.userId ?? "").trim()) ??
     byId(String(conv?.leadOwner?.id ?? "").trim()) ??
     users.find(u => String(u?.role ?? "").trim().toLowerCase() === "manager") ??
     null;
-  if (!target) return;
-
-  const targetName =
+  const name =
     String(target?.firstName ?? "").trim() || String(target?.name ?? "").trim() || "business manager";
-  const toNumber = pickUserSmsPhone(target);
+  const phone = pickUserSmsPhone(target);
+  return { user: target, name, phone };
+}
+
+function isFinanceOutcomeContextForConversation(conv: any): boolean {
+  return (
+    conv?.classification?.bucket === "finance_prequal" ||
+    conv?.classification?.cta === "hdfs_coa" ||
+    conv?.classification?.cta === "prequalify" ||
+    /credit_app|credit_app_cosigner|financing_declined|credit_app_approved/.test(
+      String(conv?.followUp?.reason ?? "").toLowerCase()
+    ) ||
+    String(conv?.appointment?.appointmentType ?? "").toLowerCase() === "finance_discussion"
+  );
+}
+
+function ensureFinanceOutcomeToken(conv: any): string {
+  const notifyState = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});
+  if (String(notifyState.outcomeToken ?? "").trim()) return String(notifyState.outcomeToken).trim();
+  notifyState.outcomeToken = crypto.randomBytes(12).toString("hex");
+  return notifyState.outcomeToken;
+}
+
+async function applyFinanceOutcomeStatusFromSignal(
+  conv: any,
+  status: "approved" | "declined",
+  note?: string,
+  sourceMessageId?: string
+): Promise<void> {
+  const nowIsoValue = nowIso();
+  const sourceId = String(sourceMessageId ?? "").trim() || undefined;
+  const reasonText = String(note ?? "").trim();
+  if (status === "declined") {
+    const cfg = await getSchedulerConfigHot();
+    conv.followUp = {
+      mode: "active",
+      reason: "financing_declined",
+      updatedAt: nowIsoValue
+    };
+    conv.followUpCadence = {
+      status: "active",
+      anchorAt: nowIsoValue,
+      nextDueAt: computeFollowUpDueAt(nowIsoValue, FINANCE_DECLINED_DAY_OFFSETS[0], cfg.timezone),
+      stepIndex: 0,
+      kind: "long_term"
+    };
+    if (conv.appointment) {
+      conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
+      conv.appointment.staffNotify.outcome = {
+        status: "financing_declined",
+        note: reasonText || undefined,
+        updatedAt: nowIsoValue
+      };
+    }
+    conv.financeOutcome = {
+      status: "declined",
+      updatedAt: nowIsoValue,
+      sourceMessageId: sourceId,
+      reasonText: reasonText || undefined
+    };
+    addTodo(
+      conv,
+      "note",
+      `Finance outcome parsed from call: not approved${reasonText ? ` (${reasonText})` : ""}.`,
+      sourceId
+    );
+    await notifyBusinessManagerFinanceOutcome(conv, "declined", reasonText || undefined);
+  } else {
+    setFollowUpMode(conv, "manual_handoff", "credit_app_approved");
+    stopFollowUpCadence(conv, "manual_handoff");
+    if (conv.appointment) {
+      conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
+      conv.appointment.staffNotify.outcome = {
+        status: "follow_up",
+        note: `Financing approved${reasonText ? `: ${reasonText}` : ""}`,
+        updatedAt: nowIsoValue
+      };
+    }
+    conv.financeOutcome = {
+      status: "approved",
+      updatedAt: nowIsoValue,
+      sourceMessageId: sourceId,
+      reasonText: reasonText || undefined
+    };
+    addTodo(
+      conv,
+      "note",
+      `Finance outcome parsed from call: approved${reasonText ? ` (${reasonText})` : ""}.`,
+      sourceId
+    );
+    await notifyBusinessManagerFinanceOutcome(conv, "approved", reasonText || undefined);
+  }
+
+  const notifyState = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});
+  notifyState.updatedAt = nowIsoValue;
+  notifyState.status = status;
+}
+
+async function maybePromptBusinessManagerFinanceOutcomeFallback(
+  conv: any,
+  opts: { sourceMessageId?: string; note?: string }
+): Promise<void> {
+  if (!isFinanceOutcomeContextForConversation(conv)) return;
+  if (String(conv?.financeOutcome?.status ?? "").trim()) return;
+  const notifyState = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});
+  const sourceId = String(opts.sourceMessageId ?? "").trim();
+  if (sourceId && String(notifyState.lastPromptSourceMessageId ?? "").trim() === sourceId) return;
+  const cooldownMinRaw = Number(process.env.FINANCE_OUTCOME_PROMPT_COOLDOWN_MIN ?? 120);
+  const cooldownMin = Number.isFinite(cooldownMinRaw) ? Math.max(15, cooldownMinRaw) : 120;
+  const lastPromptMs = Date.parse(String(notifyState.outcomePromptSentAt ?? ""));
+  if (Number.isFinite(lastPromptMs) && Date.now() - lastPromptMs < cooldownMin * 60_000) return;
+
+  const { user, name, phone } = await resolveFinanceOutcomeNotifyTarget(conv);
+  if (!user) return;
+  if (!phone.startsWith("+")) {
+    addTodo(conv, "note", `Business manager SMS failed for ${name}: invalid_to_number.`);
+    return;
+  }
+
+  const token = ensureFinanceOutcomeToken(conv);
+  const customerName =
+    [conv?.lead?.firstName, conv?.lead?.lastName].filter(Boolean).join(" ").trim() ||
+    conv?.lead?.name ||
+    conv?.leadKey ||
+    "Customer";
+  const vehicle =
+    conv?.lead?.vehicle?.model ??
+    conv?.lead?.vehicle?.description ??
+    conv?.sale?.label ??
+    "the deal";
+  const note = String(opts.note ?? "").trim();
+  const prompt = [
+    `Finance outcome needed: ${customerName} — ${vehicle}.`,
+    note ? `Context: ${note}` : null,
+    `Reply: OUTCOME ${token} APPROVED | DECLINED | PENDING.`
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const sent = await sendInternalSms(phone, prompt);
+  addTodo(
+    conv,
+    "note",
+    sent
+      ? `Business manager outcome prompt sent to ${name}.`
+      : `Business manager outcome prompt failed for ${name}: send_failed.`
+  );
+  if (sent) {
+    notifyState.outcomePromptSentAt = nowIso();
+    notifyState.lastPromptSourceMessageId = sourceId || undefined;
+    notifyState.userId = String(user?.id ?? "").trim() || notifyState.userId;
+    notifyState.phone = phone;
+    notifyState.updatedAt = nowIso();
+  }
+}
+
+async function notifyBusinessManagerFinanceOutcome(
+  conv: any,
+  status: "approved" | "declined",
+  note?: string
+): Promise<void> {
+  const notifyState = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});
+  if (status === "declined" && String(notifyState.declinedSentAt ?? "").trim()) return;
+  if (status === "approved" && String(notifyState.approvedSentAt ?? "").trim()) return;
+
+  const { user: target, name: targetName, phone: toNumber } = await resolveFinanceOutcomeNotifyTarget(conv);
+  if (!target) return;
   if (!toNumber.startsWith("+")) {
     addTodo(conv, "note", `Business manager SMS failed for ${targetName}: invalid_to_number.`);
     return;
@@ -6477,7 +6599,7 @@ function extractOutcomeTokenFromText(text: string): string | null {
 function isLikelyStaffOutcomeUpdateText(text: string): boolean {
   const source = String(text ?? "").toLowerCase();
   if (!source.trim()) return false;
-  return /\b(showed up|showed|no show|no-show|didn't show|didnt show|sold|delivered|deal done|hold|on hold|follow ?up|lost|bought elsewhere|finance(?:|d|ing) declined|not approved)\b/.test(
+  return /\b(showed up|showed|no show|no-show|didn't show|didnt show|sold|delivered|deal done|hold|on hold|follow ?up|lost|bought elsewhere|finance(?:|d|ing) declined|not approved|approved|pending)\b/.test(
     source
   );
 }
@@ -6485,6 +6607,7 @@ function isLikelyStaffOutcomeUpdateText(text: string): boolean {
 type PendingStaffOutcomeCandidate = {
   conv: any;
   token: string;
+  kind: "appointment" | "dealer_ride" | "finance";
   touchedAtMs: number;
   customerName: string;
 };
@@ -6499,35 +6622,100 @@ function findPendingStaffOutcomeCandidates(staff: any, fromPhoneRaw: string): Pe
   const nowMs = Date.now();
   const candidates: PendingStaffOutcomeCandidate[] = [];
   for (const conv of getAllConversations()) {
-    const notify = conv?.appointment?.staffNotify ?? conv?.dealerRide?.staffNotify;
-    const token = String(notify?.outcomeToken ?? "").trim().toLowerCase();
-    if (!token) continue;
-    if (notify?.outcome) continue;
-
-    const appointmentAssigneeId = String(conv?.appointment?.bookedSalespersonId ?? "").trim();
-    const notifyAssigneeId = String(notify?.userId ?? "").trim();
-    const ownerAssigneeId = String(conv?.leadOwner?.id ?? "").trim();
-    const assignedId = appointmentAssigneeId || notifyAssigneeId || ownerAssigneeId;
-    const notifyPhone = normalizePhone(String(notify?.phone ?? "").trim());
-    const idMatched = !!staffId && !!assignedId && staffId === assignedId;
-    const phoneMatched = !!fromPhone && !!notifyPhone && fromPhone === notifyPhone;
-    if (!idMatched && !phoneMatched) continue;
-
-    const touchedAtRaw =
-      String(notify?.followUpSentAt ?? "").trim() ||
-      String(notify?.bookedSentAt ?? "").trim() ||
-      String(notify?.contextUsedAt ?? "").trim() ||
-      String(conv?.updatedAt ?? "").trim() ||
-      String(conv?.createdAt ?? "").trim();
-    const touchedAtMs = Date.parse(touchedAtRaw);
-    if (!Number.isFinite(touchedAtMs)) continue;
-    if (nowMs - touchedAtMs > maxAgeMs) continue;
     const customerName =
       [conv?.lead?.firstName, conv?.lead?.lastName].filter(Boolean).join(" ").trim() ||
       conv?.lead?.name ||
       conv?.leadKey ||
       "customer";
-    candidates.push({ conv, token, touchedAtMs, customerName });
+    const ownerAssigneeId = String(conv?.leadOwner?.id ?? "").trim();
+
+    const appointmentNotify = conv?.appointment?.staffNotify ?? null;
+    if (appointmentNotify) {
+      const appointmentToken = String(appointmentNotify?.outcomeToken ?? "").trim().toLowerCase();
+      if (appointmentToken && !appointmentNotify?.outcome) {
+        const appointmentAssigneeId = String(conv?.appointment?.bookedSalespersonId ?? "").trim();
+        const notifyAssigneeId = String(appointmentNotify?.userId ?? "").trim();
+        const assignedId = appointmentAssigneeId || notifyAssigneeId || ownerAssigneeId;
+        const notifyPhone = normalizePhone(String(appointmentNotify?.phone ?? "").trim());
+        const idMatched = !!staffId && !!assignedId && staffId === assignedId;
+        const phoneMatched = !!fromPhone && !!notifyPhone && fromPhone === notifyPhone;
+        if (idMatched || phoneMatched) {
+          const touchedAtRaw =
+            String(appointmentNotify?.followUpSentAt ?? "").trim() ||
+            String(appointmentNotify?.bookedSentAt ?? "").trim() ||
+            String(appointmentNotify?.contextUsedAt ?? "").trim() ||
+            String(conv?.updatedAt ?? "").trim() ||
+            String(conv?.createdAt ?? "").trim();
+          const touchedAtMs = Date.parse(touchedAtRaw);
+          if (Number.isFinite(touchedAtMs) && nowMs - touchedAtMs <= maxAgeMs) {
+            candidates.push({
+              conv,
+              token: appointmentToken,
+              kind: "appointment",
+              touchedAtMs,
+              customerName
+            });
+          }
+        }
+      }
+    }
+
+    const dealerRideNotify = conv?.dealerRide?.staffNotify ?? null;
+    if (dealerRideNotify) {
+      const dealerRideToken = String(dealerRideNotify?.outcomeToken ?? "").trim().toLowerCase();
+      if (dealerRideToken && !dealerRideNotify?.outcome) {
+        const notifyAssigneeId = String(dealerRideNotify?.userId ?? "").trim();
+        const assignedId = notifyAssigneeId || ownerAssigneeId;
+        const notifyPhone = normalizePhone(String(dealerRideNotify?.phone ?? "").trim());
+        const idMatched = !!staffId && !!assignedId && staffId === assignedId;
+        const phoneMatched = !!fromPhone && !!notifyPhone && fromPhone === notifyPhone;
+        if (idMatched || phoneMatched) {
+          const touchedAtRaw =
+            String(dealerRideNotify?.followUpSentAt ?? "").trim() ||
+            String(dealerRideNotify?.bookedSentAt ?? "").trim() ||
+            String(dealerRideNotify?.contextUsedAt ?? "").trim() ||
+            String(conv?.updatedAt ?? "").trim() ||
+            String(conv?.createdAt ?? "").trim();
+          const touchedAtMs = Date.parse(touchedAtRaw);
+          if (Number.isFinite(touchedAtMs) && nowMs - touchedAtMs <= maxAgeMs) {
+            candidates.push({
+              conv,
+              token: dealerRideToken,
+              kind: "dealer_ride",
+              touchedAtMs,
+              customerName
+            });
+          }
+        }
+      }
+    }
+
+    const financeNotify = (conv as any)?.financeOutcomeNotify ?? null;
+    const financeToken = String(financeNotify?.outcomeToken ?? "").trim().toLowerCase();
+    if (financeToken && !String(conv?.financeOutcome?.status ?? "").trim()) {
+      const notifyAssigneeId = String(financeNotify?.userId ?? "").trim();
+      const assignedId = notifyAssigneeId || ownerAssigneeId;
+      const notifyPhone = normalizePhone(String(financeNotify?.phone ?? "").trim());
+      const idMatched = !!staffId && !!assignedId && staffId === assignedId;
+      const phoneMatched = !!fromPhone && !!notifyPhone && fromPhone === notifyPhone;
+      if (idMatched || phoneMatched) {
+        const touchedAtRaw =
+          String(financeNotify?.outcomePromptSentAt ?? "").trim() ||
+          String(financeNotify?.updatedAt ?? "").trim() ||
+          String(conv?.updatedAt ?? "").trim() ||
+          String(conv?.createdAt ?? "").trim();
+        const touchedAtMs = Date.parse(touchedAtRaw);
+        if (Number.isFinite(touchedAtMs) && nowMs - touchedAtMs <= maxAgeMs) {
+          candidates.push({
+            conv,
+            token: financeToken,
+            kind: "finance",
+            touchedAtMs,
+            customerName
+          });
+        }
+      }
+    }
   }
   candidates.sort((a, b) => b.touchedAtMs - a.touchedAtMs);
   return candidates;
@@ -6587,18 +6775,87 @@ async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
     if (!token) return { handled: false };
   }
 
-  const conv = findConversationByOutcomeToken(token);
-  if (!conv) {
+  const tokenMatch = findConversationByStaffOutcomeToken(token);
+  if (!tokenMatch?.conv) {
     return {
       handled: true,
       replyBody: "I couldn't find that outcome token. Please open the lead and resend the update."
     };
   }
+  const conv = tokenMatch.conv;
+  const tokenKind = tokenMatch.kind;
 
   const cleanedText = body
     .replace(new RegExp(`\\boutcome\\s+${token}\\b`, "i"), "")
     .replace(new RegExp(`\\b${token}\\b`, "i"), "")
     .trim();
+  const sourceMessageId = String(event.providerMessageId ?? "").trim() || undefined;
+
+  if (tokenKind === "finance") {
+    const financeParsed = await safeLlmParse("staff_finance_outcome_update_parser", () =>
+      parseFinanceOutcomeFromCallWithLLM({
+        text: cleanedText || body,
+        summary: "",
+        history: buildHistory(conv, 10),
+        lead: conv.lead
+      })
+    );
+    const financeMin = Number(process.env.LLM_FINANCE_OUTCOME_CONFIDENCE_MIN ?? 0.8);
+    const reasonText =
+      String(financeParsed?.reasonText ?? "").trim() || String(cleanedText || body).trim();
+    if (
+      financeParsed?.explicitOutcome &&
+      (financeParsed.confidence ?? 0) >= financeMin &&
+      (financeParsed.outcome === "approved" || financeParsed.outcome === "declined")
+    ) {
+      await applyFinanceOutcomeStatusFromSignal(
+        conv,
+        financeParsed.outcome,
+        reasonText,
+        sourceMessageId
+      );
+      const notifyState = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});
+      notifyState.updatedAt = nowIso();
+      notifyState.outcomePromptResolvedAt = nowIso();
+      saveConversation(conv);
+      await flushConversationStore();
+      return {
+        handled: true,
+        replyBody:
+          financeParsed.outcome === "approved"
+            ? "Saved finance outcome: APPROVED."
+            : "Saved finance outcome: DECLINED. Long-term finance cadence started."
+      };
+    }
+
+    if (
+      /\b(pending|no update|no answer|left (?:a )?voicemail|awaiting|waiting)\b/i.test(
+        cleanedText || body
+      )
+    ) {
+      const notifyState = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});
+      notifyState.updatedAt = nowIso();
+      notifyState.outcomePendingAt = nowIso();
+      addTodo(
+        conv,
+        "note",
+        `Finance outcome update by ${staff.name ?? staff.email ?? "staff"}: pending.`,
+        sourceMessageId
+      );
+      saveConversation(conv);
+      await flushConversationStore();
+      return {
+        handled: true,
+        replyBody: "Got it — marked as PENDING. Reply with APPROVED or DECLINED when you have it."
+      };
+    }
+
+    return {
+      handled: true,
+      replyBody: `Please reply with: OUTCOME ${token} APPROVED | DECLINED | PENDING.`
+    };
+  }
+
   const parsed = await parseStaffOutcomeUpdateWithLLM({
     text: cleanedText || body,
     history: buildHistory(conv, 10),
@@ -6612,7 +6869,7 @@ async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
     };
   }
 
-  const nowIso = new Date().toISOString();
+  const nowIsoValue = new Date().toISOString();
   const note = cleanedText || body;
   const unit = readOutcomeUnitFromText(cleanedText || body, parsed);
   let confirmation = "Outcome saved.";
@@ -6622,7 +6879,7 @@ async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
       conv,
       unit,
       note,
-      nowIso,
+      nowIsoValue,
       String(staff.id ?? "").trim(),
       String(staff.name ?? staff.firstName ?? "").trim()
     );
@@ -6641,7 +6898,7 @@ async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
     confirmation = "Saved NO SHOW.";
   } else if (parsed.outcome === "hold") {
-    const err = await applyOutcomeHold(conv, unit, note, nowIso);
+    const err = await applyOutcomeHold(conv, unit, note, nowIsoValue);
     if (err) {
       return { handled: true, replyBody: `Couldn't save HOLD: ${err}` };
     }
@@ -6663,9 +6920,9 @@ async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
   outcomeTarget.outcome = {
     status: parsed.outcome,
     note,
-    updatedAt: nowIso
+    updatedAt: nowIsoValue
   };
-  outcomeTarget.contextUsedAt = nowIso;
+  outcomeTarget.contextUsedAt = nowIsoValue;
   addTodo(conv, "note", `Dealer ride outcome by ${staff.name ?? staff.email ?? "staff"}: ${parsed.outcome}.`);
   saveConversation(conv);
   await flushConversationStore();
@@ -27342,6 +27599,10 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
             new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString(),
             "voicemail"
           );
+          await maybePromptBusinessManagerFinanceOutcomeFallback(conv, {
+            sourceMessageId: recordingSid || bodyCallSid || callbackCallSid || undefined,
+            note: "Voicemail/no-contact call logged with no explicit finance outcome."
+          });
         }
         if (!isVoicemail) {
           await applyPostCallSummaryActions({
