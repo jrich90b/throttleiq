@@ -17912,6 +17912,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return respondWithSmsRegeneratedDraft(clarifyReply);
   }
 
+  const regenSchedulingSignals = detectSchedulingSignals(String(event.body ?? ""));
+  const regenSchedulingLexicalIntent =
+    regenSchedulingSignals.explicit ||
+    regenSchedulingSignals.hasDayTime ||
+    regenSchedulingSignals.hasDayOnlyAvailability ||
+    regenSchedulingSignals.hasDayOnlyRequest;
+
   if (event.provider === "twilio") {
     const inboundAtMs = new Date(event.receivedAt).getTime();
     const lastOutboundBeforeInbound = [...(conv.messages ?? [])]
@@ -18339,7 +18346,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       return respondWithSmsRegeneratedDraft(reply);
     }
 
-    const visitTimingIntent = regenParserSchedulingIntent || regenLlmExplicitScheduleIntent;
+    const visitTimingIntent =
+      regenParserSchedulingIntent || regenLlmExplicitScheduleIntent || regenSchedulingLexicalIntent;
     const explicitAvailabilityAskThisTurn = regenParserAvailabilityIntent;
     const financeOrRateAskThisTurn = regenParserPricingIntent;
     const soldOrPostSale = isSoldOrPostSaleConversation(conv);
@@ -18463,7 +18471,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenRouteDecision = buildRouteDecisionSnapshot({
     parserIntentOverride: regenRoutingIntentOverride,
     hasPricingIntent: regenParserPricingIntent,
-    hasSchedulingIntent: regenParserSchedulingIntent,
+    hasSchedulingIntent: regenParserSchedulingIntent || regenSchedulingLexicalIntent,
     hasAvailabilityIntent: regenParserAvailabilityIntent,
     financePriorityOverride: false,
     schedulePriorityOverride: false,
@@ -21778,7 +21786,11 @@ if (authToken && signature) {
     bookingIntentAccepted ||
     llmExplicitScheduleIntent ||
     llmSchedulingIntent ||
-    !!llmTestRideIntent;
+    !!llmTestRideIntent ||
+    schedulingSignals.explicit ||
+    schedulingSignals.hasDayTime ||
+    schedulingSignals.hasDayOnlyAvailability ||
+    schedulingSignals.hasDayOnlyRequest;
   const callbackPrimaryIntent =
     callbackRequestedOverride && !pricingOrPaymentsIntent && !schedulingPrimaryIntent;
   const availabilityPrimaryIntent =
