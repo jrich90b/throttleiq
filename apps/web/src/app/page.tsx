@@ -1028,6 +1028,7 @@ export default function Home() {
   const [watchSalespersonFilter, setWatchSalespersonFilter] = useState("all");
   const [inboxQuery, setInboxQuery] = useState("");
   const [inboxOwnerFilter, setInboxOwnerFilter] = useState("all");
+  const [inboxDealFilter, setInboxDealFilter] = useState<"all" | "pending" | "closed">("all");
   const [todoQuery, setTodoQuery] = useState("");
   const [todoLeadOwnerFilter, setTodoLeadOwnerFilter] = useState("all");
   const [kpiOverview, setKpiOverview] = useState<KpiOverview | null>(null);
@@ -3972,6 +3973,27 @@ export default function Home() {
   const isArchivedConversation = (c: ConversationListItem) =>
     !!(c.closedReason && /archive/i.test(c.closedReason));
 
+  const isConversationOnHold = (c: ConversationListItem) =>
+    c.followUpCadence?.pauseReason === "manual_hold" ||
+    c.followUpCadence?.pauseReason === "unit_hold" ||
+    c.followUpCadence?.stopReason === "unit_hold" ||
+    c.followUp?.reason === "manual_hold" ||
+    c.followUp?.reason === "unit_hold" ||
+    !!c.hold;
+
+  const isPendingDealConversation = (c: ConversationListItem) => {
+    if (c.status === "closed") return false;
+    const followReason = String(c.followUp?.reason ?? "").toLowerCase();
+    const pauseReason = String(c.followUpCadence?.pauseReason ?? "").toLowerCase();
+    const hasAppointmentSignal =
+      pauseReason === "manual_appointment" ||
+      followReason.includes("appointment") ||
+      followReason === "showed" ||
+      followReason === "no_show";
+    const hasDealSignal = hasAppointmentSignal || isConversationOnHold(c) || !!c.engagement?.at;
+    return hasDealSignal;
+  };
+
   const visibleConversations = useMemo(() => {
     return conversations.filter(c =>
       view === "inbox" ? !isArchivedConversation(c) : isArchivedConversation(c)
@@ -4015,6 +4037,8 @@ export default function Home() {
       ? decodeURIComponent(inboxOwnerFilter.slice("owner:".length)).toLowerCase()
       : "";
     const rows = visibleConversations.filter(c => {
+      if (inboxDealFilter === "pending" && !isPendingDealConversation(c)) return false;
+      if (inboxDealFilter === "closed" && c.status !== "closed") return false;
       if (isManager && inboxOwnerFilter !== "all") {
         const leadOwner = canonicalizeOwnerName(
           String(c.leadOwner?.name ?? c.leadOwner?.id ?? "").trim(),
@@ -4065,10 +4089,21 @@ export default function Home() {
     inboxQuery,
     isManager,
     inboxOwnerFilter,
+    inboxDealFilter,
     inboxDepartmentTeamsByConv,
     canonicalizeOwnerName,
     inferOwnerDepartment
   ]);
+
+  const inboxDealCounts = useMemo(() => {
+    let pending = 0;
+    let closed = 0;
+    for (const c of visibleConversations) {
+      if (c.status === "closed") closed += 1;
+      else if (isPendingDealConversation(c)) pending += 1;
+    }
+    return { pending, closed };
+  }, [visibleConversations]);
 
   const groupedConversations = useMemo(() => {
     const groups: Array<{ label: string; items: ConversationListItem[] }> = [];
@@ -7052,6 +7087,40 @@ export default function Home() {
                   <option value="team:unassigned">Unassigned</option>
                 </select>
               ) : null}
+            </div>
+
+            <div className="mt-2 flex items-center gap-2">
+              <span className="text-xs text-gray-600">Deal status</span>
+              <button
+                className={`px-2.5 py-1 text-xs rounded border ${
+                  inboxDealFilter === "all"
+                    ? "bg-[var(--accent)] text-white border-[var(--accent)]"
+                    : "bg-white hover:bg-[var(--surface-2)]"
+                }`}
+                onClick={() => setInboxDealFilter("all")}
+              >
+                All
+              </button>
+              <button
+                className={`px-2.5 py-1 text-xs rounded border ${
+                  inboxDealFilter === "pending"
+                    ? "bg-[var(--accent)] text-white border-[var(--accent)]"
+                    : "bg-white hover:bg-[var(--surface-2)]"
+                }`}
+                onClick={() => setInboxDealFilter("pending")}
+              >
+                Pending deals ({inboxDealCounts.pending})
+              </button>
+              <button
+                className={`px-2.5 py-1 text-xs rounded border ${
+                  inboxDealFilter === "closed"
+                    ? "bg-[var(--accent)] text-white border-[var(--accent)]"
+                    : "bg-white hover:bg-[var(--surface-2)]"
+                }`}
+                onClick={() => setInboxDealFilter("closed")}
+              >
+                Closed deals ({inboxDealCounts.closed})
+              </button>
             </div>
 
             <div className="mt-3 space-y-3">
