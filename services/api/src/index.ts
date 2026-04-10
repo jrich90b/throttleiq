@@ -7219,6 +7219,17 @@ function nextWeekdayDate(base: Date, weekday: number): Date {
 
 function parseDayOfWeek(text: string): { day: string; date: Date } | null {
   const t = text.toLowerCase();
+  if (/\btoday\b/.test(t)) {
+    const d = new Date();
+    d.setHours(9, 0, 0, 0);
+    return { day: "today", date: d };
+  }
+  if (/\btomorrow\b/.test(t)) {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    d.setHours(9, 0, 0, 0);
+    return { day: "tomorrow", date: d };
+  }
   const map: Array<{ re: RegExp; idx: number; label: string }> = [
     { re: /\bmonday|mon\b/, idx: 1, label: "Monday" },
     { re: /\btuesday|tue|tues\b/, idx: 2, label: "Tuesday" },
