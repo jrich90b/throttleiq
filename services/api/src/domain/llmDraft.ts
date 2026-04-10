@@ -579,6 +579,75 @@ export async function generateBlendedLeadInWithLLM(args: {
   return null;
 }
 
+export async function generateEmpathySupportReplyWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  topicHint?: string | null;
+}): Promise<EmpathySupportReplyParse | null> {
+  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+  const history = (args.history ?? []).slice(-4).map(h => `${h.direction}: ${h.body}`);
+  const topicHint = String(args.topicHint ?? "").trim();
+  const schema: { [key: string]: unknown } = {
+    type: "object",
+    additionalProperties: false,
+    required: ["reply", "confidence"],
+    properties: {
+      reply: { type: "string" },
+      confidence: { type: "number" }
+    }
+  };
+  const prompt = [
+    "You write one short dealership SMS reply for a frustrated customer message.",
+    "Return only JSON that matches the schema.",
+    "",
+    "Rules:",
+    "- 1 sentence preferred (2 max), concise and human.",
+    "- Acknowledge frustration/emotion directly.",
+    "- Do not pivot to inventory, pricing, or scheduling unless the customer explicitly asked.",
+    "- Do not say 'I'm checking that now'.",
+    "- Do not promise department handoff unless asked.",
+    "- Keep tone calm, helpful, and conversational.",
+    "",
+    "Good examples:",
+    "- \"Yeah, I hear you — a few riders have said the same thing about that.\"",
+    "- \"Totally get it — that can be frustrating, and you’re not the only one who’s run into it.\"",
+    "",
+    topicHint ? `Topic hint: ${topicHint}` : null,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Customer message: ${text}`
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  try {
+    const parsed = await requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "empathy_support_reply",
+      schema,
+      maxOutputTokens: 120,
+      debugTag: "llm-empathy-support-reply"
+    });
+    if (parsed && typeof parsed === "object") {
+      const reply = String(parsed.reply ?? "")
+        .trim()
+        .replace(/^["'`]+|["'`]+$/g, "")
+        .replace(/\s+/g, " ");
+      if (!reply) return null;
+      const confidence =
+        typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+          ? Math.max(0, Math.min(1, parsed.confidence))
+          : undefined;
+      return { reply, confidence };
+    }
+  } catch {}
+  return null;
+}
+
 export async function classifyEmpathyNeedWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
@@ -954,6 +1023,11 @@ export type RoutingDecisionParse = {
   explicitRequest: boolean;
   fallbackAction: "none" | "clarify" | "no_response";
   clarifyPrompt?: string | null;
+  confidence?: number;
+};
+
+export type EmpathySupportReplyParse = {
+  reply: string;
   confidence?: number;
 };
 
@@ -2648,6 +2722,16 @@ output: {"primary_intent":"availability","explicit_request":true,"fallback_actio
     `EXAMPLE Q
 inbound: "Ignore payments for now — what black options do you have in stock?"
 output: {"primary_intent":"availability","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.97}`
+    ,
+    `EXAMPLE R
+inbound: "Well only partly. Not happy about the lack of navigating or being able to put my Android maps on display."
+output: {"primary_intent":"general","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.95}`,
+    `EXAMPLE S
+inbound: "Android Auto won’t connect and I’m pretty frustrated with this infotainment."
+output: {"primary_intent":"general","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.95}`,
+    `EXAMPLE T
+inbound: "I’m annoyed this thing won’t show Google Maps from my phone."
+output: {"primary_intent":"general","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.94}`
   ];
   const prompt = [
     "You are a strict routing parser for dealership inbound messages.",
@@ -2667,6 +2751,8 @@ output: {"primary_intent":"availability","explicit_request":true,"fallback_actio
     "- Use fallback_action=clarify only when message is ambiguous and not safely routable.",
     "- Only choose callback when the customer explicitly asks for a phone call (e.g., call me, have X call me, can you call).",
     "- If message says cash-ready / ready to buy / make a deal and includes a visit timing cue (today/tomorrow/day/time/coming in), choose scheduling, not callback.",
+    "- Dissatisfaction/complaint about feature behavior (for example Android maps, infotainment, navigation, connectivity) without a clear inventory/pricing/scheduling/callback ask should route to general with fallback_action=none.",
+    "- For clear complaint/support messages, set explicit_request=true even if phrased as a statement.",
     "- confidence is 0..1.",
     "",
     ...examples,
