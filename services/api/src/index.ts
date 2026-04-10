@@ -42,6 +42,7 @@ import type {
   AffectParse,
   ConversationStateParse,
   CustomerDispositionParse,
+  EmpathySupportReplyParse,
   JourneyIntentParse,
   SemanticSlotParse,
   TradePayoffParse
@@ -8112,6 +8113,101 @@ function isDepartmentFollowUpReason(reason: string | null | undefined): boolean 
   );
 }
 
+async function applyAppointmentStateFromContextNote(
+  conv: any,
+  noteText: string,
+  actorName?: string
+): Promise<{ changed: boolean; reasons: string[] }> {
+  const text = String(noteText ?? "").trim();
+  if (!text) return { changed: false, reasons: [] };
+  if (!conv?.appointment) return { changed: false, reasons: [] };
+  const hasAppointmentContext = !!(
+    conv.appointment?.bookedEventId ||
+    conv.appointment?.status === "confirmed" ||
+    conv.appointment?.reschedulePending
+  );
+  if (!hasAppointmentContext) return { changed: false, reasons: [] };
+
+  const now = nowIso();
+  let changed = false;
+  const reasons: string[] = [];
+  const note = text.slice(0, 500);
+  const history = buildHistory(conv, 8);
+
+  try {
+    const booking = await parseBookingIntentWithLLM({
+      text,
+      history,
+      appointment: conv.appointment,
+      lastSuggestedSlots: conv.scheduler?.lastSuggestedSlots
+    });
+    if (booking?.explicitRequest && (booking.intent === "cancel" || booking.intent === "reschedule")) {
+      conv.appointment.reschedulePending = true;
+      conv.appointment.updatedAt = now;
+      conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
+      conv.appointment.staffNotify.outcome = {
+        status: "follow_up",
+        note:
+          booking.intent === "cancel"
+            ? `Context note indicates cancellation: ${note}`
+            : `Context note indicates reschedule request: ${note}`,
+        updatedAt: now
+      };
+      conv.appointment.staffNotify.contextUsedAt = now;
+      setFollowUpMode(conv, "manual_handoff", "manual_appointment");
+      stopFollowUpCadence(conv, "manual_handoff");
+      stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+      changed = true;
+      reasons.push(booking.intent === "cancel" ? "context_note_cancel" : "context_note_reschedule");
+    }
+  } catch (err: any) {
+    console.log("[context-note] booking parse failed:", err?.message ?? err);
+  }
+
+  try {
+    const outcome = await parseStaffOutcomeUpdateWithLLM({
+      text,
+      history,
+      lead: conv.lead
+    });
+    if (outcome?.explicitOutcome && (outcome.confidence ?? 0) >= 0.55 && outcome.outcome !== "none") {
+      conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
+      conv.appointment.staffNotify.outcome = {
+        status: outcome.outcome,
+        note,
+        updatedAt: now
+      };
+      conv.appointment.staffNotify.contextUsedAt = now;
+      conv.appointment.updatedAt = now;
+      changed = true;
+      reasons.push(`context_note_outcome:${outcome.outcome}`);
+
+      if (outcome.outcome === "no_show") {
+        conv.appointment.reschedulePending = true;
+        setFollowUpMode(conv, "manual_handoff", "appointment_no_show");
+        stopFollowUpCadence(conv, "manual_handoff");
+        stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+      } else if (outcome.outcome === "showed_up") {
+        conv.appointment.reschedulePending = false;
+        setFollowUpMode(conv, "manual_handoff", "appointment_showed_up");
+        stopFollowUpCadence(conv, "manual_handoff");
+        stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+      }
+    }
+  } catch (err: any) {
+    console.log("[context-note] staff outcome parse failed:", err?.message ?? err);
+  }
+
+  if (changed) {
+    addTodo(
+      conv,
+      "note",
+      `Context note updated appointment state${actorName ? ` by ${actorName}` : ""}: ${reasons.join(", ")}.`
+    );
+  }
+  return { changed, reasons };
+}
+
 function reduceStaleWorkflowStateForInbound(
   conv: any,
   inboundText: string,
@@ -14458,7 +14554,7 @@ app.post("/conversations/:id/messages/:messageId/feedback", (req, res) => {
   return res.json({ ok: true, conversation: conv, message: msg });
 });
 
-app.post("/conversations/:id/agent-context", (req, res) => {
+app.post("/conversations/:id/agent-context", async (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
   const user = (req as any).user ?? null;
@@ -14505,6 +14601,11 @@ app.post("/conversations/:id/agent-context", (req, res) => {
         createdByUserId: String(user?.id ?? "").trim() || undefined,
         createdByUserName: String(user?.name ?? user?.email ?? "").trim() || undefined
       });
+      await applyAppointmentStateFromContextNote(
+        conv,
+        text,
+        String(user?.name ?? user?.email ?? "").trim() || undefined
+      );
     } catch (err: any) {
       return res.status(400).json({ ok: false, error: err?.message ?? "Failed to add context note" });
     }
@@ -21743,12 +21844,14 @@ if (authToken && signature) {
     dialogActConfidence >= Math.max(0.7, dialogActConfidenceMin - 0.04) &&
     frustrationAffectSignal;
   if (frustrationEmpathyCandidate) {
-    const empathyReplyParse = await safeLlmParse("frustration_empathy_reply", () =>
-      generateEmpathySupportReplyWithLLM({
+    const empathyReplyParse = await safeLlmParse<EmpathySupportReplyParse | null>(
+      "frustration_empathy_reply",
+      () =>
+        generateEmpathySupportReplyWithLLM({
         text: String(event.body ?? ""),
         history: buildHistory(conv, 8),
         topicHint: dialogActParse?.topic ?? null
-      })
+        })
     );
     const empathyReply = String(empathyReplyParse?.reply ?? "").trim() || buildComplaintEmpathyFallbackReply();
     logRouteOutcome("frustration_empathy_ack", {
