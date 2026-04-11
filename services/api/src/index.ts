@@ -27492,6 +27492,7 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
   const recordingUrl = String(req.body?.RecordingUrl ?? "").trim();
   const recordingSid = String(req.body?.RecordingSid ?? "").trim();
   const bodyCallSid = String(req.body?.CallSid ?? "").trim();
+  const callScopedMessageId = bodyCallSid || callbackCallSid || recordingSid || undefined;
 
   if (!recordingUrl) {
     return res.json({ ok: false, error: "missing RecordingUrl" });
@@ -27589,7 +27590,7 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
           conv.leadKey,
           summaryText,
           "voice_summary",
-          recordingSid || bodyCallSid || callbackCallSid || undefined
+          callScopedMessageId
         );
         if (isVoicemail) {
           const existing = listOpenTodos().some(
@@ -27621,14 +27622,37 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
         }
       }
 
-      appendOutbound(
-        conv,
-        "voice",
-        conv.leadKey,
-        noteText,
-        "voice_transcript",
-        recordingSid || undefined
-      );
+      const transcriptProviderId = callScopedMessageId;
+      const existingTranscript = transcriptProviderId
+        ? [...(conv.messages ?? [])]
+            .reverse()
+            .find(
+              m =>
+                m.provider === "voice_transcript" &&
+                String(m.providerMessageId ?? "").trim() === transcriptProviderId
+            )
+        : null;
+      if (existingTranscript) {
+        const current = String(existingTranscript.body ?? "").trim();
+        const incoming = String(noteText ?? "").trim();
+        if (incoming && !current.includes(incoming)) {
+          existingTranscript.body = `${current}\n${incoming}`.trim();
+          existingTranscript.at = nowIso();
+        }
+      } else {
+        conv.messages.push({
+          id: `msg_${Math.random().toString(16).slice(2)}_${Date.now()}`,
+          direction: inboundCall ? "in" : "out",
+          from: inboundCall
+            ? normalizePhone(String(req.body?.From ?? "").trim()) || customerRaw || conv.leadKey
+            : "voice",
+          to: inboundCall ? "dealership" : conv.leadKey,
+          body: noteText,
+          at: nowIso(),
+          provider: "voice_transcript",
+          providerMessageId: transcriptProviderId
+        });
+      }
       saveConversation(conv);
       await flushConversationStore();
 
