@@ -878,12 +878,23 @@ function todoRequestedCallTimeLabel(todo: TodoItem): string | null {
 
 function todoInboxSection(todo: TodoItem): TodoInboxSection {
   const explicitTaskClass = String(todo.taskClass ?? "").toLowerCase();
-  if (explicitTaskClass === "followup" || explicitTaskClass === "todo" || explicitTaskClass === "reminder") {
-    return explicitTaskClass as TodoInboxSection;
-  }
   const reason = String(todo.reason ?? "").toLowerCase();
   const summary = String(todo.summary ?? "").toLowerCase();
   const action = String(todo.action ?? "").toLowerCase();
+  const followupSignalForCall =
+    reason === "call" &&
+    (/^call customer \(follow-up\):/i.test(summary) ||
+      /^call customer \((initial reply sent|follow[- ]?up)\)/i.test(summary) ||
+      /\bfollow[- ]?up\b/i.test(summary) ||
+      /\binitial reply sent\b/i.test(summary) ||
+      /\bcadence\b/i.test(summary) ||
+      /\bfollow[- ]?up\b/i.test(action));
+  if (followupSignalForCall && explicitTaskClass !== "reminder") {
+    return "followup";
+  }
+  if (explicitTaskClass === "followup" || explicitTaskClass === "todo" || explicitTaskClass === "reminder") {
+    return explicitTaskClass as TodoInboxSection;
+  }
   const isCadenceFollowUpCall =
     reason === "call" &&
     (/^call customer \(follow-up\):/i.test(summary) ||

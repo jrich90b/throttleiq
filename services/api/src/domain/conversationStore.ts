@@ -196,7 +196,10 @@ export function inferTodoTaskClass(
   if (reason === "call") {
     const hasCadenceFollowUpSignals =
       /^call customer \(follow-up\):/i.test(String(summary ?? "")) ||
-      /\bfollow[- ]?up\b/i.test(text);
+      /^call customer \((initial reply sent|follow[- ]?up)\)/i.test(String(summary ?? "")) ||
+      /\bfollow[- ]?up\b/i.test(text) ||
+      /\binitial reply sent\b/i.test(text) ||
+      /\bcadence\b/i.test(text);
     if (hasCadenceFollowUpSignals) return "followup";
     const hasReminderSignals =
       !!String(schedule?.dueAt ?? "").trim() ||
