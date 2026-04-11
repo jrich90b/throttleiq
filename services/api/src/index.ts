@@ -34,6 +34,7 @@ import {
   parseConversationStateWithLLM,
   parseFinanceOutcomeFromCallWithLLM,
   parseStaffOutcomeUpdateWithLLM,
+  parseWalkInOutcomeWithLLM,
   parseUnifiedSemanticSlotsWithLLM,
   parseSemanticSlotsWithLLM,
   parseTradePayoffWithLLM,
@@ -46,6 +47,7 @@ import type {
   EmpathySupportReplyParse,
   JourneyIntentParse,
   SemanticSlotParse,
+  UnifiedSemanticSlotParse,
   TradePayoffParse
 } from "./domain/llmDraft.js";
 import type { InboundMessageEvent, OrchestratorResult } from "./domain/types.js";
@@ -8961,6 +8963,233 @@ async function applyAppointmentStateFromContextNote(
   return { changed, reasons };
 }
 
+function splitContextNoteSentences(text: string): string[] {
+  const source = String(text ?? "")
+    .replace(/\r/g, " ")
+    .replace(/\n+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  if (!source) return [];
+  const parts = source
+    .split(/(?<=[.!?])\s+/)
+    .map(s => s.trim())
+    .filter(Boolean);
+  return parts.length ? parts : [source];
+}
+
+function buildInventoryWatchSignature(watch: InventoryWatch | null | undefined): string {
+  if (!watch) return "";
+  return [
+    normalizeModelText(watch.model),
+    String(watch.year ?? ""),
+    String(watch.yearMin ?? ""),
+    String(watch.yearMax ?? ""),
+    normalizeWatchCondition(watch.condition),
+    normalizeModelText(watch.trim ?? ""),
+    sanitizeColorPhrase(watch.color) ?? "",
+    String(watch.minPrice ?? ""),
+    String(watch.maxPrice ?? "")
+  ].join("|");
+}
+
+function mergeInventoryWatches(
+  existing: InventoryWatch[],
+  incoming: InventoryWatch[]
+): { merged: InventoryWatch[]; added: InventoryWatch[] } {
+  const bySig = new Map<string, InventoryWatch>();
+  const added: InventoryWatch[] = [];
+  for (const watch of existing) {
+    const sig = buildInventoryWatchSignature(watch);
+    if (!sig) continue;
+    bySig.set(sig, watch);
+  }
+  for (const watch of incoming) {
+    const sig = buildInventoryWatchSignature(watch);
+    if (!sig) continue;
+    if (!bySig.has(sig)) {
+      bySig.set(sig, watch);
+      added.push(watch);
+    }
+  }
+  return { merged: Array.from(bySig.values()), added };
+}
+
+function hasLikelyFollowUpCue(text: string): boolean {
+  const source = String(text ?? "").toLowerCase();
+  if (!source.trim()) return false;
+  return (
+    /\b(follow up|follow-up|check in|check-in|circle back|touch base|call (him|her|them|back)|invite back)\b/.test(
+      source
+    ) &&
+    /\b(today|tomorrow|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun|next week|this week|next|morning|afternoon|evening|noon|\d{1,2}(?::\d{2})?\s*(am|pm)?)\b/.test(
+      source
+    )
+  );
+}
+
+async function deriveContextNoteWatches(
+  conv: any,
+  noteText: string,
+  semanticSlots?: UnifiedSemanticSlotParse | null
+): Promise<InventoryWatch[]> {
+  const note = String(noteText ?? "").trim();
+  if (!note) return [];
+  const now = nowIso();
+  const sentences = splitContextNoteSentences(note);
+  const parserRequestedWatch =
+    semanticSlots?.watchAction === "set_watch" &&
+    Number(semanticSlots?.watchConfidence ?? semanticSlots?.confidence ?? 0) >= 0.55;
+
+  const semanticModel = canonicalizeWatchModelLabel(semanticSlots?.watch?.model);
+  const semanticCondition = normalizeWatchCondition(semanticSlots?.watch?.condition);
+  const semanticColor = sanitizeColorPhrase(semanticSlots?.watch?.color);
+  const semanticYear = Number(semanticSlots?.watch?.year ?? "");
+
+  const watchSegments = sentences.filter(sentence =>
+    /\b(watch for|keep an eye out|let me know (?:if|when)|notify|text me (?:if|when)|open to watch for|looking for)\b/i.test(
+      sentence
+    )
+  );
+  const segmentsToUse = watchSegments.length ? watchSegments : parserRequestedWatch ? [note] : [];
+  if (!segmentsToUse.length) return [];
+
+  const watches: InventoryWatch[] = [];
+  for (const segment of segmentsToUse) {
+    const models = findMentionedModels(segment)
+      .map(m => canonicalizeWatchModelLabel(m))
+      .filter((m): m is string => !!m);
+    const modelSet = new Set<string>(models);
+    if (semanticModel) modelSet.add(semanticModel);
+    const fallbackModel = canonicalizeWatchModelLabel(conv?.lead?.vehicle?.model);
+    if (!modelSet.size && fallbackModel && parserRequestedWatch) modelSet.add(fallbackModel);
+    if (!modelSet.size) continue;
+
+    const yearRange = extractYearRange(segment);
+    const singleYear = !yearRange ? extractYearSingle(segment) : null;
+    const budget = extractWatchBudgetPreference(segment);
+    const segmentCondition = normalizeWatchCondition(segment);
+    const condition = segmentCondition ?? semanticCondition ?? normalizeWatchCondition(conv?.lead?.vehicle?.condition);
+    const color = sanitizeColorPhrase(extractColorMention(segment)) ?? semanticColor;
+
+    for (const model of modelSet) {
+      const watch: InventoryWatch = {
+        model,
+        year:
+          singleYear ??
+          (Number.isFinite(semanticYear) && semanticYear > 1900 ? semanticYear : undefined),
+        yearMin: yearRange?.min,
+        yearMax: yearRange?.max,
+        make: String(conv?.lead?.vehicle?.make ?? "").trim() || "Harley-Davidson",
+        condition: condition ?? undefined,
+        color: color ?? undefined,
+        minPrice: budget.minPrice,
+        maxPrice: budget.maxPrice,
+        monthlyBudget: budget.monthlyBudget,
+        termMonths: budget.termMonths,
+        downPayment: budget.downPayment,
+        exactness: "model_only",
+        status: "active",
+        createdAt: now,
+        note: "context_note_watch"
+      };
+      if (watch.yearMin && watch.yearMax) watch.exactness = "model_range";
+      else if (watch.year && watch.color) watch.exactness = "exact";
+      else if (watch.year) watch.exactness = "year_model";
+      watches.push(watch);
+    }
+  }
+
+  return watches;
+}
+
+async function applyActionStateFromContextNote(
+  conv: any,
+  noteText: string,
+  actorName?: string
+): Promise<{ changed: boolean; reasons: string[] }> {
+  const text = String(noteText ?? "").trim();
+  if (!text) return { changed: false, reasons: [] };
+  const history = buildHistory(conv, 8);
+  const reasons: string[] = [];
+  let changed = false;
+
+  const semanticSlots = await safeLlmParse("context_note_unified_semantic", () =>
+    parseUnifiedSemanticSlotsWithLLM({
+      text,
+      history,
+      lead: conv.lead
+    })
+  );
+
+  const newWatches = await deriveContextNoteWatches(conv, text, semanticSlots);
+  if (newWatches.length) {
+    const existing = Array.isArray(conv.inventoryWatches)
+      ? (conv.inventoryWatches as InventoryWatch[])
+      : conv.inventoryWatch
+        ? [conv.inventoryWatch as InventoryWatch]
+        : [];
+    const { merged, added } = mergeInventoryWatches(existing, newWatches);
+    if (added.length) {
+      conv.inventoryWatches = merged;
+      conv.inventoryWatch = merged[0];
+      conv.inventoryWatchPending = undefined;
+      setDialogState(conv, "inventory_watch_active");
+      setFollowUpMode(conv, "holding_inventory", "inventory_watch");
+      stopFollowUpCadence(conv, "inventory_watch");
+      changed = true;
+      reasons.push(
+        `context_note_watch_set:${added
+          .map(w => `${w.year ? `${w.year} ` : ""}${w.model}`.trim())
+          .join(", ")}`
+      );
+    }
+  }
+
+  const walkInOutcome = await safeLlmParse("context_note_walkin_outcome", () =>
+    parseWalkInOutcomeWithLLM({
+      text,
+      history,
+      lead: conv.lead
+    })
+  );
+  const walkInOutcomeAccepted =
+    !!walkInOutcome &&
+    walkInOutcome.explicitState === true &&
+    Number(walkInOutcome.confidence ?? 0) >= Number(process.env.LLM_WALKIN_OUTCOME_CONFIDENCE_MIN ?? 0.72);
+  const followUpWindowHint = walkInOutcomeAccepted
+    ? String(walkInOutcome?.followUpWindowText ?? "").trim()
+    : "";
+  const fallbackFollowUpWindow = hasLikelyFollowUpCue(text) ? text : "";
+  const scheduleSource = followUpWindowHint || fallbackFollowUpWindow;
+  if (scheduleSource) {
+    const cfg = await getSchedulerConfigHot();
+    const timezone = cfg.timezone || "America/New_York";
+    const owner = resolveCallbackTodoOwner(conv);
+    const callbackTodo = addOrUpdateCallbackCallTodo(conv, {
+      callbackTimeHint: followUpWindowHint || scheduleSource,
+      parseSourceText: scheduleSource,
+      owner,
+      timezone
+    });
+    if (callbackTodo) {
+      changed = true;
+      const dueLabel = callbackTodo.dueAt ? formatSlotLocal(String(callbackTodo.dueAt), timezone) : null;
+      reasons.push(
+        dueLabel ? `context_note_follow_up_scheduled:${dueLabel}` : "context_note_follow_up_added"
+      );
+    }
+  }
+
+  if (changed) {
+    addTodo(
+      conv,
+      "note",
+      `Context note applied actions${actorName ? ` by ${actorName}` : ""}: ${reasons.join(", ")}.`
+    );
+  }
+  return { changed, reasons };
+}
+
 function reduceStaleWorkflowStateForInbound(
   conv: any,
   inboundText: string,
@@ -15425,6 +15654,11 @@ app.post("/conversations/:id/agent-context", async (req, res) => {
         createdByUserName: String(user?.name ?? user?.email ?? "").trim() || undefined
       });
       await applyAppointmentStateFromContextNote(
+        conv,
+        text,
+        String(user?.name ?? user?.email ?? "").trim() || undefined
+      );
+      await applyActionStateFromContextNote(
         conv,
         text,
         String(user?.name ?? user?.email ?? "").trim() || undefined
