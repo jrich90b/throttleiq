@@ -3408,6 +3408,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       tail +
       (addendum ? ` ${addendum}` : "");
     const suppressWalkInAutoAck =
+      hasWatchIntent ||
       hasCompletedTestRideSignal ||
       hasHoldSignal ||
       hasResumeHoldSignal ||
