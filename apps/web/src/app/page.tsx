@@ -1077,6 +1077,7 @@ export default function Home() {
   const [inboxDealFilter, setInboxDealFilter] = useState<"all" | "hot" | "sold" | "hold">("all");
   const [todoQuery, setTodoQuery] = useState("");
   const [todoLeadOwnerFilter, setTodoLeadOwnerFilter] = useState("all");
+  const [todoTaskTypeFilter, setTodoTaskTypeFilter] = useState<"all" | TodoInboxSection>("all");
   const [kpiOverview, setKpiOverview] = useState<KpiOverview | null>(null);
   const [kpiLoading, setKpiLoading] = useState(false);
   const [kpiError, setKpiError] = useState<string | null>(null);
@@ -3546,10 +3547,11 @@ export default function Home() {
           return false;
         }
       }
+      if (todoTaskTypeFilter !== "all" && todoInboxSection(t) !== todoTaskTypeFilter) return false;
       if (!q) return true;
       return leadName.includes(q) || leadKey.includes(q);
     });
-  }, [todos, todoQuery, isManager, todoLeadOwnerFilter, canonicalizeOwnerName, inferOwnerDepartment, inferTodoDepartment]);
+  }, [todos, todoQuery, isManager, todoLeadOwnerFilter, todoTaskTypeFilter, canonicalizeOwnerName, inferOwnerDepartment, inferTodoDepartment]);
 
   const groupedTodos = useMemo(() => {
     const groups: Record<TodoInboxSection, TodoItem[]> = {
@@ -3562,6 +3564,27 @@ export default function Home() {
     }
     return groups;
   }, [filteredTodos]);
+
+  const todoSectionDefs = useMemo(() => {
+    if (todoTaskTypeFilter === "all") {
+      return [
+        { key: "followup", label: "Follow-ups" },
+        { key: "todo", label: "To Dos" },
+        { key: "reminder", label: "Reminders" }
+      ] as Array<{ key: TodoInboxSection; label: string }>;
+    }
+    return [
+      {
+        key: todoTaskTypeFilter,
+        label:
+          todoTaskTypeFilter === "followup"
+            ? "Follow-ups"
+            : todoTaskTypeFilter === "reminder"
+              ? "Reminders"
+              : "To Dos"
+      }
+    ] as Array<{ key: TodoInboxSection; label: string }>;
+  }, [todoTaskTypeFilter]);
 
   useEffect(() => {
     if (blockForm.salespersonId) return;
@@ -7704,17 +7727,18 @@ export default function Home() {
         {section === "todos" &&
         (authUser?.role === "manager" || authUser?.role === "salesperson" || isDepartmentUser || authUser?.permissions?.canAccessTodos) ? (
           <>
+            <div className="mt-3 text-sm font-semibold text-gray-800">To Do Inbox</div>
             <div className="mt-3 flex flex-col gap-2 md:flex-row">
               <input
                 className="w-full border rounded px-3 py-2 text-sm"
-                placeholder="Search To Dos by customer name..."
+                placeholder="Search customer..."
                 value={todoQuery}
                 onChange={e => setTodoQuery(e.target.value)}
               />
               {isManager ? (
                 <>
                   <select
-                    className="w-full md:w-36 border rounded px-3 py-2 text-sm bg-white"
+                    className="w-full md:w-44 border rounded px-3 py-2 text-sm bg-white"
                     value={todoLeadOwnerFilter}
                     onChange={e => setTodoLeadOwnerFilter(e.target.value)}
                     title="Filter by owner"
@@ -7739,13 +7763,20 @@ export default function Home() {
                   </select>
                 </>
               ) : null}
+              <select
+                className="w-full md:w-44 border rounded px-3 py-2 text-sm bg-white"
+                value={todoTaskTypeFilter}
+                onChange={e => setTodoTaskTypeFilter(e.target.value as "all" | TodoInboxSection)}
+                title="Filter by task type"
+              >
+                <option value="all">Task Type: All</option>
+                <option value="followup">Task Type: Follow-up</option>
+                <option value="todo">Task Type: To Do</option>
+                <option value="reminder">Task Type: Reminder</option>
+              </select>
             </div>
             <div className="mt-3 space-y-3">
-              {([
-                { key: "followup", label: "Follow-ups" },
-                { key: "todo", label: "To Dos" },
-                { key: "reminder", label: "Reminders" }
-              ] as Array<{ key: TodoInboxSection; label: string }>).map(sectionDef => {
+              {todoSectionDefs.map(sectionDef => {
                 const rows = groupedTodos[sectionDef.key];
                 const sectionHeaderClass =
                   sectionDef.key === "followup"
