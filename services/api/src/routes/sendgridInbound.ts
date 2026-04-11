@@ -1097,6 +1097,9 @@ function extractWalkInModelHint(text?: string | null): string | undefined {
   if (!t) return undefined;
   const inquiryModelHint = extractInquiryModelHint(t);
   if (inquiryModelHint) return inquiryModelHint;
+  if (/\biron\s*883\b/.test(t)) return "Iron 883";
+  if (/\b(883\s*roadster|roadster\s*883)\b/.test(t)) return "883 Roadster";
+  if (/\b(sportster\s*883|xl\s*883|xl883c)\b/.test(t)) return "Sportster 883";
   if (/\b(sportster|xl883c|xl\s*883|883)\b/.test(t)) return "Sportster";
   if (/\b(road glide\s*(3|iii)|fltrt)\b/.test(t)) return "Road Glide 3";
   if (/\b(street glide\s*(3|iii)|flhlt)\b/.test(t)) return "Street Glide 3 Limited";
