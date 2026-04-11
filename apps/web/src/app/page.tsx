@@ -826,6 +826,8 @@ type WatchFormItem = {
   maxPrice: string;
 };
 
+type TodoInboxSection = "followup" | "todo" | "reminder";
+
 function todoActionLabel(todo: TodoItem): string {
   const explicitAction = String(todo.action ?? "").trim();
   if (explicitAction) return explicitAction;
@@ -871,6 +873,29 @@ function todoRequestedCallTimeLabel(todo: TodoItem): string | null {
   const at = new Date(dueAt);
   if (!Number.isNaN(at.getTime())) return at.toLocaleString();
   return summaryTime || null;
+}
+
+function todoInboxSection(todo: TodoItem): TodoInboxSection {
+  const reason = String(todo.reason ?? "").toLowerCase();
+  const summary = String(todo.summary ?? "").toLowerCase();
+  const action = String(todo.action ?? "").toLowerCase();
+  const isCadenceFollowUpCall =
+    reason === "call" &&
+    (/^call customer \(follow-up\):/i.test(summary) ||
+      /\bfollow[- ]?up\b/i.test(summary) ||
+      /\bfollow[- ]?up\b/i.test(action));
+  if (isCadenceFollowUpCall) return "followup";
+
+  const isReminderCall =
+    reason === "call" &&
+    (/^call requested:/i.test(summary) ||
+      Boolean(String(todo.dueAt ?? "").trim()) ||
+      Boolean(String(todo.reminderAt ?? "").trim()) ||
+      /\brequested call time\b/i.test(summary) ||
+      /\bremind(er)?\b/i.test(summary));
+  if (isReminderCall) return "reminder";
+
+  return "todo";
 }
 
 type SuppressionItem = {
@@ -3157,7 +3182,7 @@ export default function Home() {
     section === "inbox"
       ? "Inbox"
       : section === "todos"
-        ? "To-Do Inbox"
+        ? "To Do Inbox"
         : section === "questions"
           ? "Follow-up Schedule"
         : section === "contacts"
@@ -3520,6 +3545,18 @@ export default function Home() {
       return leadName.includes(q) || leadKey.includes(q);
     });
   }, [todos, todoQuery, isManager, todoLeadOwnerFilter, canonicalizeOwnerName, inferOwnerDepartment, inferTodoDepartment]);
+
+  const groupedTodos = useMemo(() => {
+    const groups: Record<TodoInboxSection, TodoItem[]> = {
+      followup: [],
+      todo: [],
+      reminder: []
+    };
+    for (const task of filteredTodos) {
+      groups[todoInboxSection(task)].push(task);
+    }
+    return groups;
+  }, [filteredTodos]);
 
   useEffect(() => {
     if (blockForm.salespersonId) return;
@@ -5666,7 +5703,7 @@ export default function Home() {
     });
     const data = await resp.json().catch(() => null);
     if (!resp.ok || data?.ok === false) {
-      window.alert(data?.error ?? "Failed to create to-do");
+      window.alert(data?.error ?? "Failed to create To Do");
       return;
     }
     setTodoInlineOpenId(null);
@@ -6691,7 +6728,7 @@ export default function Home() {
         {(authUser?.role === "manager" || authUser?.role === "salesperson" || isDepartmentUser || authUser?.permissions?.canAccessTodos) ? (
           <button
             className={`relative w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "todos" ? "bg-white/10" : "hover:bg-white/5"}`}
-            title="To-Dos"
+            title="To Dos"
             onClick={() => goToSection("todos")}
           >
             ✅
@@ -7413,7 +7450,7 @@ export default function Home() {
                                           className="w-full border rounded px-2 py-1 text-xs mb-2 bg-white"
                                           value={todoInlineTarget}
                                           onChange={e => setTodoInlineTarget(e.target.value)}
-                                          title="Who this to-do is for"
+                                          title="Who this To Do is for"
                                         >
                                           <option value="lead_owner">Lead owner</option>
                                           {reassignSalesOwnerOptions.length ? (
@@ -7606,7 +7643,7 @@ export default function Home() {
                                           setTodoInlineTarget(isManager ? "lead_owner" : "self");
                                         }}
                                       >
-                                        Create to-do
+                                        Create To Do
                                       </button>
                                       <button
                                         className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
@@ -7665,7 +7702,7 @@ export default function Home() {
             <div className="mt-3 flex flex-col gap-2 md:flex-row">
               <input
                 className="w-full border rounded px-3 py-2 text-sm"
-                placeholder="Search To-Dos by customer name..."
+                placeholder="Search To Dos by customer name..."
                 value={todoQuery}
                 onChange={e => setTodoQuery(e.target.value)}
               />
@@ -7698,80 +7735,106 @@ export default function Home() {
                 </>
               ) : null}
             </div>
-            <div className="mt-3 border rounded-lg divide-y">
-            {filteredTodos.map(t => {
-              const reason = (t.reason ?? "").toLowerCase();
-              const isInternalNoteTodo = /(^|\\b)note(\\b|$)/.test(reason);
-              const showCallButton = !isInternalNoteTodo;
-              const actionLabel = todoActionLabel(t);
-              const requestedCallTime =
-                todoRequestedCallTimeLabel(t) || String(t.callbackTimeLabel ?? "").trim() || null;
-              const actionAlreadyHasRequestedTime = /\brequested(?::| call time:)/i.test(actionLabel);
-              const showRequestedCallTime = !!requestedCallTime && !actionAlreadyHasRequestedTime;
-              const ownerDisplay = String(t.ownerDisplayName ?? t.ownerName ?? t.leadOwnerName ?? "").trim();
-              return (
-                <div key={t.id} className="p-4 flex items-start justify-between gap-4">
-                  <div className="min-w-0 flex-1">
-                  {t.leadName ? (
-                    <>
-                      <div className="text-sm font-medium">{t.leadName}</div>
-                      <div className="text-sm text-gray-600 break-all">{t.leadKey}</div>
-                    </>
-                  ) : (
-                    <div className="text-sm font-medium break-all">{t.leadKey}</div>
-                  )}
-                  <div className="text-xs text-gray-500 mt-1">
-                    {t.reason} • {new Date(t.createdAt).toLocaleString()}
-                  </div>
-                  <div className="text-sm text-gray-700 mt-2 line-clamp-3 break-words">{t.summary}</div>
-                  <div className="text-sm font-semibold text-red-600 mt-2">
-                    Action: {actionLabel}
-                  </div>
-                  {ownerDisplay ? (
-                    <div className="text-xs text-gray-600 mt-1">Owner: {ownerDisplay}</div>
-                  ) : null}
-                  {showRequestedCallTime ? (
-                    <div className="text-xs text-gray-600 mt-1">
-                      Requested call time: {requestedCallTime}
+            <div className="mt-3 border rounded-lg">
+              {([
+                { key: "followup", label: "Follow-ups" },
+                { key: "todo", label: "To Dos" },
+                { key: "reminder", label: "Reminders" }
+              ] as Array<{ key: TodoInboxSection; label: string }>).map((sectionDef, sectionIndex) => {
+                const rows = groupedTodos[sectionDef.key];
+                if (!rows.length) return null;
+                return (
+                  <div key={sectionDef.key} className={sectionIndex > 0 ? "border-t" : ""}>
+                    <div className="px-4 py-2 border-b bg-gray-50 flex items-center justify-between">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-gray-700">
+                        {sectionDef.label}
+                      </div>
+                      <div className="text-xs text-gray-500">{rows.length}</div>
                     </div>
-                  ) : null}
-                  <button
-                    className="text-xs text-blue-600 mt-2 inline-block"
-                    onClick={() => {
-                      openConversation(t.convId);
-                    }}
-                  >
-                    Open conversation
-                  </button>
+                    {rows.map((t, rowIdx) => {
+                      const reason = (t.reason ?? "").toLowerCase();
+                      const sectionType = todoInboxSection(t);
+                      const taskLabel =
+                        sectionType === "followup" ? "Follow-up" : sectionType === "reminder" ? "Reminder" : "To Do";
+                      const isInternalNoteTodo = /(^|\\b)note(\\b|$)/.test(reason);
+                      const showCallButton = !isInternalNoteTodo;
+                      const actionLabel = todoActionLabel(t);
+                      const requestedCallTime =
+                        todoRequestedCallTimeLabel(t) || String(t.callbackTimeLabel ?? "").trim() || null;
+                      const actionAlreadyHasRequestedTime = /\brequested(?::| call time:)/i.test(actionLabel);
+                      const showRequestedCallTime = !!requestedCallTime && !actionAlreadyHasRequestedTime;
+                      const ownerDisplay = String(t.ownerDisplayName ?? t.ownerName ?? t.leadOwnerName ?? "").trim();
+                      return (
+                        <div key={t.id} className={`p-4 flex items-start justify-between gap-4 ${rowIdx > 0 ? "border-t" : ""}`}>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="inline-flex items-center rounded-full border border-gray-300 bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-700">
+                                {taskLabel}
+                              </span>
+                            </div>
+                            {t.leadName ? (
+                              <>
+                                <div className="text-sm font-medium mt-2">{t.leadName}</div>
+                                <div className="text-sm text-gray-600 break-all">{t.leadKey}</div>
+                              </>
+                            ) : (
+                              <div className="text-sm font-medium break-all mt-2">{t.leadKey}</div>
+                            )}
+                            <div className="text-xs text-gray-500 mt-1">
+                              {t.reason} • {new Date(t.createdAt).toLocaleString()}
+                            </div>
+                            <div className="text-sm text-gray-700 mt-2 line-clamp-3 break-words">{t.summary}</div>
+                            <div className="text-sm font-semibold text-red-600 mt-2">
+                              Action: {actionLabel}
+                            </div>
+                            {ownerDisplay ? (
+                              <div className="text-xs text-gray-600 mt-1">Owner: {ownerDisplay}</div>
+                            ) : null}
+                            {showRequestedCallTime ? (
+                              <div className="text-xs text-gray-600 mt-1">
+                                Requested call time: {requestedCallTime}
+                              </div>
+                            ) : null}
+                            <button
+                              className="text-xs text-blue-600 mt-2 inline-block"
+                              onClick={() => {
+                                openConversation(t.convId);
+                              }}
+                            >
+                              Open conversation
+                            </button>
+                          </div>
+                          <div className="shrink-0 flex flex-col items-end gap-2">
+                            {showCallButton ? (
+                              <button
+                                className="px-3 py-2 border rounded text-sm"
+                                onClick={() => openCallFromTodo(t)}
+                                title="Call customer"
+                              >
+                                <span className="mr-1">📞</span>
+                                Call
+                              </button>
+                            ) : null}
+                            <button
+                              className="px-3 py-2 border rounded text-sm text-gray-600"
+                              onClick={() => markTodoDone(t, "dismiss")}
+                              title="Close this To Do"
+                            >
+                              Close
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                  <div className="shrink-0 flex flex-col items-end gap-2">
-                    {showCallButton ? (
-                      <button
-                        className="px-3 py-2 border rounded text-sm"
-                        onClick={() => openCallFromTodo(t)}
-                        title="Call customer"
-                      >
-                        <span className="mr-1">📞</span>
-                        Call
-                      </button>
-                    ) : null}
-                    <button
-                      className="px-3 py-2 border rounded text-sm text-gray-600"
-                      onClick={() => markTodoDone(t, "dismiss")}
-                      title="Close this to-do"
-                    >
-                      Close
-                    </button>
-                  </div>
+                );
+              })}
+              {!loading && filteredTodos.length === 0 && (
+                <div className="p-4 text-sm text-gray-600">
+                  {todoQuery.trim() ? "No To Dos match your search." : "No open To Dos."}
                 </div>
-              );
-            })}
-            {!loading && filteredTodos.length === 0 && (
-              <div className="p-4 text-sm text-gray-600">
-                {todoQuery.trim() ? "No To-Dos match your search." : "No open To-Dos."}
-              </div>
-            )}
-          </div>
+              )}
+            </div>
           </>
         ) : null}
 
@@ -8033,7 +8096,7 @@ export default function Home() {
         {todoResolveOpen && todoResolveTarget ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
             <div className="bg-white rounded-lg shadow-lg w-full max-w-md p-4">
-              <div className="text-sm font-medium">Resolve To-Do</div>
+              <div className="text-sm font-medium">Resolve To Do</div>
               <div className="text-xs text-gray-500 mt-1">
                 Choose what should happen to follow-ups for this conversation.
               </div>

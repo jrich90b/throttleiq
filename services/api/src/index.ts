@@ -12566,6 +12566,27 @@ function deriveTodoActionLabel(todo: any, conv: any, timeZone = "America/New_Yor
   return "Follow up with the customer.";
 }
 
+function canUserAccessTodoTask(
+  user: any,
+  todo: any,
+  conv: any,
+  todoDepartment: DepartmentRole | null
+): boolean {
+  const role = String(user?.role ?? "").toLowerCase();
+  if (role === "manager") return true;
+
+  const requesterId = String(user?.id ?? "").trim();
+  const todoOwnerId = String(todo?.ownerId ?? "").trim();
+  const leadOwnerId = String(conv?.leadOwner?.id ?? "").trim();
+  const isTodoOwner = !!requesterId && !!todoOwnerId && todoOwnerId === requesterId;
+  const isLeadOwner = !!requesterId && !!leadOwnerId && leadOwnerId === requesterId;
+  const isOwner = isTodoOwner || isLeadOwner;
+  if (isOwner) return true;
+
+  if (todoDepartment && role === todoDepartment) return true;
+  return false;
+}
+
 async function processDueFollowUps() {
   const cfg = await getSchedulerConfigHot();
   if (cfg.enabled === false) return;
@@ -16589,13 +16610,6 @@ app.delete("/conversations/:id", (req, res) => {
 app.get("/todos", requirePermission("canAccessTodos"), async (req, res) => {
   try {
     const user = (req as any).user ?? null;
-    const isManager = user?.role === "manager";
-    const isSalesperson = user?.role === "salesperson";
-    const departmentRole =
-      user?.role === "service" || user?.role === "parts" || user?.role === "apparel"
-        ? (user.role as DepartmentRole)
-        : null;
-    const requesterId = String(user?.id ?? "").trim();
     const cfg = await getSchedulerConfigHot();
     const actionTimeZone = cfg.timezone || "America/New_York";
     const users = await listUsers();
@@ -16648,22 +16662,9 @@ app.get("/todos", requirePermission("canAccessTodos"), async (req, res) => {
     };
     const todos = openTodos
       .filter(t => {
-        if (isManager) return true;
         const conv = getConversation(t.convId);
         const todoDepartment = inferTodoDepartment(t, conv);
-        if (departmentRole) return todoDepartment === departmentRole;
-        if (isSalesperson) {
-          if (todoDepartment) return false;
-          const ownerId = String(t.ownerId ?? "").trim();
-          if (!ownerId) return true;
-          if (requesterId && ownerId === requesterId) return true;
-          const leadOwnerId = String(conv?.leadOwner?.id ?? "").trim();
-          return !!requesterId && !!leadOwnerId && leadOwnerId === requesterId;
-        }
-        if (todoDepartment) return false;
-        if (!requesterId) return false;
-        if (t.ownerId) return t.ownerId === requesterId;
-        return conv?.leadOwner?.id === requesterId;
+        return canUserAccessTodoTask(user, t, conv, todoDepartment);
       })
       .map(t => {
         const conv = getConversation(t.convId);
@@ -16780,41 +16781,11 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), (re
     return res.status(403).json({ ok: false, error: "forbidden" });
   }
   const existingTask = listOpenTodos().find(t => t.id === todoId && t.convId === convId);
-  if (existingTask && user?.role !== "manager") {
-    const taskDepartment = inferTodoDepartment(existingTask, convForAccess ?? getConversation(convId));
-    if (taskDepartment) {
-      if (String(user?.role ?? "").toLowerCase() !== taskDepartment) {
-        return res.status(403).json({ ok: false, error: "forbidden" });
-      }
-    } else {
-      if (user?.role === "salesperson") {
-        const requesterId = String(user?.id ?? "").trim();
-        const ownerId = String(existingTask.ownerId ?? "").trim();
-        if (!ownerId) {
-          // Unassigned sales todos are shared across all salespeople.
-        } else if (requesterId && ownerId === requesterId) {
-          // Todo explicitly assigned to this salesperson.
-        } else {
-          const convForOwner = convForAccess ?? getConversation(convId);
-          const leadOwnerId = String(convForOwner?.leadOwner?.id ?? "").trim();
-          if (!requesterId || !leadOwnerId || leadOwnerId !== requesterId) {
-            return res.status(403).json({ ok: false, error: "forbidden" });
-          }
-        }
-      } else {
-      const requesterId = String(user?.id ?? "").trim();
-      const ownerId = String(existingTask.ownerId ?? "").trim();
-      if (ownerId && ownerId !== requesterId) {
-        return res.status(403).json({ ok: false, error: "forbidden" });
-      }
-      if (!ownerId) {
-        const convForOwner = getConversation(convId);
-        const fallbackOwner = String(convForOwner?.leadOwner?.id ?? "").trim();
-        if (fallbackOwner && fallbackOwner !== requesterId) {
-          return res.status(403).json({ ok: false, error: "forbidden" });
-        }
-      }
-      }
+  if (existingTask) {
+    const convForTodo = convForAccess ?? getConversation(convId);
+    const taskDepartment = inferTodoDepartment(existingTask, convForTodo);
+    if (!canUserAccessTodoTask(user, existingTask, convForTodo, taskDepartment)) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
     }
   }
   const task = markTodoDone(convId, todoId);
