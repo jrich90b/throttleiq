@@ -1455,7 +1455,11 @@ function normalizeVehicleModel(raw?: string | null, make?: string | null): strin
   model = model.replace(/\bharley[-\s]?davidson\b/gi, "").replace(/\bh[-\s]?d\b/gi, "").trim();
   model = model.replace(/^[\s\-–—:,]+|[\s\-–—:,]+$/g, "").trim();
   const normalized = model.toLowerCase();
+  const compact = normalized.replace(/[^a-z0-9]/g, "");
   if (/^(full line|full lineup|other|unknown|null)$/.test(normalized)) {
+    return undefined;
+  }
+  if (compact === "na" || compact === "nill" || compact === "none") {
     return undefined;
   }
   // Collapse known Harley code/name aliases to one canonical label so watch matching
@@ -3107,6 +3111,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         commentLower
       ) || /\bif one comes in\b/.test(commentLower);
     const hasWatchIntent = hasWatchIntentFromParser || hasWatchIntentFromText;
+    const hasExistingWatch =
+      !!conv.inventoryWatch || (Array.isArray(conv.inventoryWatches) && conv.inventoryWatches.length > 0);
+    const lowSignalWalkInUpdate =
+      !walkInCleanedComment ||
+      /^(email updates?|email opt-?in|view lead|step\s*\d+|n\/?a|na)$/i.test(walkInCleanedComment.trim());
     const requestedConditionHint = inferWalkInRequestedCondition(walkInCleanedComment);
     const wantsUsed = requestedConditionHint === "used";
     const wantsNew = requestedConditionHint === "new";
@@ -3408,6 +3417,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       tail +
       (addendum ? ` ${addendum}` : "");
     const suppressWalkInAutoAck =
+      lowSignalWalkInUpdate ||
+      hasExistingWatch ||
+      conv.followUp?.mode === "holding_inventory" ||
       hasWatchIntent ||
       hasCompletedTestRideSignal ||
       hasHoldSignal ||
