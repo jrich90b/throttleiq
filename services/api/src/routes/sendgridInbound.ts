@@ -4507,8 +4507,37 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     /\b(not interested|not ready|not (yet|right now)|not in the market|not looking)\b/i.test(
       purchaseTimeframeRaw
     );
+  const storedMonthsStart = Number(conv.lead?.purchaseTimeframeMonthsStart);
+  const parsedTimeframe = parseTimeframeMonths(conv.lead?.purchaseTimeframe);
+  const monthsStart = Number.isFinite(storedMonthsStart) && storedMonthsStart > 0
+    ? storedMonthsStart
+    : Number(parsedTimeframe?.start ?? NaN);
+  const hasLongTermTimeframe = Number.isFinite(monthsStart) && monthsStart >= 1;
+  const hasExistingCadence =
+    conv.followUpCadence?.status === "active" || conv.followUpCadence?.status === "stopped";
+  const existingCadenceKind = String(conv.followUpCadence?.kind ?? "").toLowerCase();
+  const canRealignExistingCadenceToLongTerm =
+    hasExistingCadence &&
+    existingCadenceKind !== "post_sale" &&
+    existingCadenceKind !== "long_term" &&
+    !conv.appointment?.bookedEventId &&
+    conv.followUp?.mode !== "manual_handoff" &&
+    conv.followUp?.mode !== "paused_indefinite" &&
+    conv.classification?.bucket !== "finance_prequal" &&
+    conv.classification?.bucket !== "service" &&
+    conv.classification?.bucket !== "event_promo" &&
+    conv.classification?.cta !== "hdfs_coa" &&
+    conv.classification?.cta !== "prequalify" &&
+    !notReadyTimeframe;
+  if (canRealignExistingCadenceToLongTerm && hasLongTermTimeframe) {
+    const due = new Date();
+    due.setMonth(due.getMonth() + Math.max(1, Math.round(monthsStart)));
+    due.setHours(10, 30, 0, 0);
+    const msg = buildLongTermMessage(conv.lead?.purchaseTimeframe, conv.lead?.hasMotoLicense);
+    scheduleLongTermFollowUp(conv, due.toISOString(), msg);
+  }
   const shouldStartCadence =
-    !conv.followUpCadence?.status &&
+    !hasExistingCadence &&
     !conv.appointment?.bookedEventId &&
     conv.followUp?.mode !== "manual_handoff" &&
     conv.followUp?.mode !== "paused_indefinite" &&
@@ -4520,12 +4549,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     !notReadyTimeframe;
   if (shouldStartCadence) {
     const cfg = await getSchedulerConfig();
-    const storedMonthsStart = Number(conv.lead?.purchaseTimeframeMonthsStart);
-    const parsedTimeframe = parseTimeframeMonths(conv.lead?.purchaseTimeframe);
-    const monthsStart = Number.isFinite(storedMonthsStart) && storedMonthsStart > 0
-      ? storedMonthsStart
-      : Number(parsedTimeframe?.start ?? NaN);
-    if (Number.isFinite(monthsStart) && monthsStart >= 1) {
+    if (hasLongTermTimeframe) {
       const due = new Date();
       due.setMonth(due.getMonth() + Math.max(1, Math.round(monthsStart)));
       due.setHours(10, 30, 0, 0);

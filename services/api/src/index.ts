@@ -13643,7 +13643,6 @@ async function maybeStartCadence(conv: any, sentAtIso: string) {
   if (conv.status === "closed") return;
   if (conv.classification?.bucket === "service" || conv.classification?.cta === "service_request") return;
   if (conv.followUp?.mode === "manual_handoff" || conv.followUp?.mode === "paused_indefinite") return;
-  if (conv.followUpCadence?.status === "active" || conv.followUpCadence?.status === "stopped") return;
   const purchaseTimeframeRaw = String(conv.lead?.purchaseTimeframe ?? "").toLowerCase();
   const notReadyTimeframe =
     /\b(not interested|not ready|not (yet|right now)|not in the market|not looking)\b/i.test(
@@ -13656,6 +13655,10 @@ async function maybeStartCadence(conv: any, sentAtIso: string) {
   const monthsStart = Number.isFinite(storedMonthsStart) && storedMonthsStart > 0
     ? storedMonthsStart
     : Number(parsedTimeframe?.start ?? NaN);
+  const hasExistingCadence =
+    conv.followUpCadence?.status === "active" || conv.followUpCadence?.status === "stopped";
+  const existingCadenceKind = String(conv.followUpCadence?.kind ?? "").toLowerCase();
+  if (hasExistingCadence && (existingCadenceKind === "post_sale" || existingCadenceKind === "long_term")) return;
   if (Number.isFinite(monthsStart) && monthsStart >= 1) {
     const due = new Date(sentAtIso || new Date().toISOString());
     due.setMonth(due.getMonth() + Math.max(1, Math.round(monthsStart)));
@@ -13667,6 +13670,7 @@ async function maybeStartCadence(conv: any, sentAtIso: string) {
     scheduleLongTermFollowUp(conv, due.toISOString(), msg);
     return;
   }
+  if (hasExistingCadence) return;
   startFollowUpCadence(conv, sentAtIso, cfg.timezone);
 }
 
