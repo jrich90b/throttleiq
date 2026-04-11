@@ -7740,23 +7740,34 @@ export default function Home() {
                 </>
               ) : null}
             </div>
-            <div className="mt-3 border rounded-lg">
+            <div className="mt-3 space-y-3">
               {([
                 { key: "followup", label: "Follow-ups" },
                 { key: "todo", label: "To Dos" },
                 { key: "reminder", label: "Reminders" }
-              ] as Array<{ key: TodoInboxSection; label: string }>).map((sectionDef, sectionIndex) => {
+              ] as Array<{ key: TodoInboxSection; label: string }>).map(sectionDef => {
                 const rows = groupedTodos[sectionDef.key];
-                if (!rows.length) return null;
+                const sectionHeaderClass =
+                  sectionDef.key === "followup"
+                    ? "bg-blue-50 border-b border-blue-200"
+                    : sectionDef.key === "reminder"
+                      ? "bg-purple-50 border-b border-purple-200"
+                      : "bg-amber-50 border-b border-amber-200";
+                const sectionTitleClass =
+                  sectionDef.key === "followup"
+                    ? "text-blue-800"
+                    : sectionDef.key === "reminder"
+                      ? "text-purple-800"
+                      : "text-amber-800";
                 return (
-                  <div key={sectionDef.key} className={sectionIndex > 0 ? "border-t" : ""}>
-                    <div className="px-4 py-2 border-b bg-gray-50 flex items-center justify-between">
-                      <div className="text-xs font-semibold uppercase tracking-wide text-gray-700">
+                  <div key={sectionDef.key} className="border rounded-lg overflow-hidden">
+                    <div className={`px-4 py-2 flex items-center justify-between ${sectionHeaderClass}`}>
+                      <div className={`text-xs font-semibold uppercase tracking-wide ${sectionTitleClass}`}>
                         {sectionDef.label}
                       </div>
-                      <div className="text-xs text-gray-500">{rows.length}</div>
+                      <div className={`text-xs ${sectionTitleClass}`}>{rows.length}</div>
                     </div>
-                    {rows.map((t, rowIdx) => {
+                    {rows.length ? rows.map((t, rowIdx) => {
                       const reason = (t.reason ?? "").toLowerCase();
                       const sectionType = todoInboxSection(t);
                       const taskLabel =
@@ -7830,7 +7841,9 @@ export default function Home() {
                           </div>
                         </div>
                       );
-                    })}
+                    }) : (
+                      <div className="px-4 py-3 text-xs text-gray-500">No {sectionDef.label.toLowerCase()}.</div>
+                    )}
                   </div>
                 );
               })}
