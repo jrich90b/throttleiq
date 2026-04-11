@@ -178,7 +178,7 @@ export type TodoTask = {
   taskClass?: TodoTaskClass;
 };
 
-export type TodoTaskClass = "followup" | "todo" | "reminder";
+export type TodoTaskClass = "followup" | "appointment" | "todo" | "reminder";
 
 export type TodoScheduleOptions = {
   dueAt?: string;
@@ -193,6 +193,17 @@ export function inferTodoTaskClass(
   schedule?: TodoScheduleOptions
 ): TodoTaskClass {
   const text = String(summary ?? "").toLowerCase();
+  const hasDepartmentSignals =
+    reason === "service" ||
+    reason === "parts" ||
+    reason === "apparel" ||
+    /\b(service|parts?|apparel|motorclothes|clothing|merch)\b/.test(text);
+  const hasAppointmentSignals =
+    !hasDepartmentSignals &&
+    reason !== "note" &&
+    /\b(appointment|schedule|scheduled|book|booking|reschedule|no[\s-]?show|showed up|show up|test ride|demo ride|trade appraisal|trade[-\s]?in appraisal|appraisal request|stop in|come in|visit)\b/.test(
+      text
+    );
   if (reason === "call") {
     const hasCadenceFollowUpSignals =
       /^call customer \(follow-up\):/i.test(String(summary ?? "")) ||
@@ -208,7 +219,9 @@ export function inferTodoTaskClass(
       /\brequested call time\b/i.test(text) ||
       /\bremind(er)?\b/i.test(text);
     if (hasReminderSignals) return "reminder";
+    if (hasAppointmentSignals) return "appointment";
   }
+  if (hasAppointmentSignals) return "appointment";
   return "todo";
 }
 
@@ -1076,11 +1089,16 @@ async function loadFromDisk() {
     if (parsed?.todos?.length) {
       for (const task of parsed.todos) {
         const inferredClass = inferTodoTaskClass(task.reason, task.summary, task);
-        if (task.reason === "call") {
-          // Normalize legacy call-task classes so cadence follow-ups, reminders,
-          // and generic call todos render in the correct sections.
-          task.taskClass = inferredClass;
-        } else if (!task.taskClass) {
+        const explicitClass = String(task.taskClass ?? "").trim().toLowerCase();
+        const knownExplicitClass =
+          explicitClass === "followup" ||
+          explicitClass === "appointment" ||
+          explicitClass === "todo" ||
+          explicitClass === "reminder";
+        if (task.reason === "call" || !knownExplicitClass || explicitClass === "todo") {
+          // Normalize legacy classes (especially default "todo") so cadence
+          // follow-ups, appointment tasks, reminders, and generic todos render
+          // in the correct sections.
           task.taskClass = inferredClass;
         }
         todos.push(task);
@@ -2943,6 +2961,36 @@ export function markOpenTodosDoneForConversation(convId: string): number {
   const doneAt = nowIso();
   for (const task of todos) {
     if (task.convId !== convId || task.status !== "open") continue;
+    task.status = "done";
+    task.doneAt = doneAt;
+    count += 1;
+  }
+  if (count > 0) scheduleSave();
+  return count;
+}
+
+export function markOpenTodosDoneForConversationByClass(
+  convId: string,
+  taskClasses: TodoTaskClass[]
+): number {
+  const requested = new Set(taskClasses);
+  if (!requested.size) return 0;
+  let count = 0;
+  const doneAt = nowIso();
+  for (const task of todos) {
+    if (task.convId !== convId || task.status !== "open") continue;
+    const inferred = inferTodoTaskClass(task.reason, task.summary, task);
+    const explicit = String(task.taskClass ?? "").trim().toLowerCase();
+    const knownExplicit =
+      explicit === "followup" ||
+      explicit === "appointment" ||
+      explicit === "todo" ||
+      explicit === "reminder";
+    const klass =
+      !knownExplicit || explicit === "todo"
+        ? inferred
+        : (task.taskClass as TodoTaskClass);
+    if (!requested.has(klass)) continue;
     task.status = "done";
     task.doneAt = doneAt;
     count += 1;

@@ -195,6 +195,7 @@ import {
   markTodoDone,
   markTodoReminderSent,
   markOpenTodosDoneForConversation,
+  markOpenTodosDoneForConversationByClass,
   deleteConversation,
   setFollowUpMode,
   incrementPricingAttempt,
@@ -3188,6 +3189,9 @@ function onAppointmentBooked(conv: any) {
   }
   stopFollowUpCadence(conv, "appointment_booked");
   stopRelatedCadences(conv, "appointment_booked");
+  if (conv?.id) {
+    markOpenTodosDoneForConversationByClass(conv.id, ["appointment"]);
+  }
   if (conv) {
     conv.scheduleSoft = undefined;
   }
@@ -15211,6 +15215,9 @@ app.patch("/calendar/events/:calendarId/:eventId", requirePermission("canEditApp
         appt.bookedCalendarId = null;
         appt.matchedSlot = undefined;
         appt.reschedulePending = status === "cancelled";
+        if (conv?.id) {
+          markOpenTodosDoneForConversationByClass(conv.id, ["appointment"]);
+        }
       } else {
         if (startIso) {
           appt.status = "confirmed";
@@ -15228,6 +15235,7 @@ app.patch("/calendar/events/:calendarId/:eventId", requirePermission("canEditApp
           }
         }
         appt.reschedulePending = false;
+        onAppointmentBooked(conv);
       }
 
       appt.updatedAt = nowIso;
@@ -16747,9 +16755,9 @@ app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
   const reason = allowedReasons.includes(reasonRaw as any)
     ? (reasonRaw as any)
     : "other";
-  const allowedTaskClasses = ["followup", "todo", "reminder"] as const;
+  const allowedTaskClasses = ["followup", "appointment", "todo", "reminder"] as const;
   const taskClass = allowedTaskClasses.includes(taskClassRaw as any)
-    ? (taskClassRaw as "followup" | "todo" | "reminder")
+    ? (taskClassRaw as "followup" | "appointment" | "todo" | "reminder")
     : undefined;
   const owner =
     ownerIdRaw || ownerNameRaw

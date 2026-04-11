@@ -786,7 +786,7 @@ type TodoItem = {
   id: string;
   convId: string;
   leadKey: string;
-  taskClass?: "followup" | "todo" | "reminder" | null;
+  taskClass?: "followup" | "appointment" | "todo" | "reminder" | null;
   leadName?: string | null;
   ownerName?: string | null;
   ownerDisplayName?: string | null;
@@ -827,7 +827,7 @@ type WatchFormItem = {
   maxPrice: string;
 };
 
-type TodoInboxSection = "followup" | "todo" | "reminder";
+type TodoInboxSection = "followup" | "appointment" | "todo" | "reminder";
 
 function todoActionLabel(todo: TodoItem): string {
   const explicitAction = String(todo.action ?? "").trim();
@@ -892,7 +892,23 @@ function todoInboxSection(todo: TodoItem): TodoInboxSection {
   if (followupSignalForCall && explicitTaskClass !== "reminder") {
     return "followup";
   }
-  if (explicitTaskClass === "followup" || explicitTaskClass === "todo" || explicitTaskClass === "reminder") {
+  const appointmentSignal =
+    reason !== "service" &&
+    reason !== "parts" &&
+    reason !== "apparel" &&
+    reason !== "note" &&
+    /\b(appointment|schedule|scheduled|book|booking|reschedule|no[\s-]?show|showed up|show up|test ride|demo ride|trade appraisal|trade[-\s]?in appraisal|appraisal request|stop in|come in|visit)\b/.test(
+      `${reason} ${summary} ${action}`
+    );
+  if (appointmentSignal && explicitTaskClass !== "followup" && explicitTaskClass !== "reminder") {
+    return "appointment";
+  }
+  if (
+    explicitTaskClass === "followup" ||
+    explicitTaskClass === "appointment" ||
+    explicitTaskClass === "todo" ||
+    explicitTaskClass === "reminder"
+  ) {
     return explicitTaskClass as TodoInboxSection;
   }
   const isCadenceFollowUpCall =
@@ -3567,6 +3583,7 @@ export default function Home() {
   const groupedTodos = useMemo(() => {
     const groups: Record<TodoInboxSection, TodoItem[]> = {
       followup: [],
+      appointment: [],
       todo: [],
       reminder: []
     };
@@ -3580,6 +3597,7 @@ export default function Home() {
     if (todoTaskTypeFilter === "all") {
       return [
         { key: "followup", label: "Follow-ups" },
+        { key: "appointment", label: "Appointments" },
         { key: "todo", label: "To Dos" },
         { key: "reminder", label: "Reminders" }
       ] as Array<{ key: TodoInboxSection; label: string }>;
@@ -3590,6 +3608,8 @@ export default function Home() {
         label:
           todoTaskTypeFilter === "followup"
             ? "Follow-ups"
+            : todoTaskTypeFilter === "appointment"
+              ? "Appointments"
             : todoTaskTypeFilter === "reminder"
               ? "Reminders"
               : "To Dos"
@@ -7782,6 +7802,7 @@ export default function Home() {
               >
                 <option value="all">Task Type: All</option>
                 <option value="followup">Task Type: Follow-up</option>
+                <option value="appointment">Task Type: Appointment</option>
                 <option value="todo">Task Type: To Do</option>
                 <option value="reminder">Task Type: Reminder</option>
               </select>
@@ -7792,12 +7813,16 @@ export default function Home() {
                 const sectionHeaderClass =
                   sectionDef.key === "followup"
                     ? "bg-blue-50 border-b border-blue-200"
+                    : sectionDef.key === "appointment"
+                      ? "bg-emerald-50 border-b border-emerald-200"
                     : sectionDef.key === "reminder"
                       ? "bg-purple-50 border-b border-purple-200"
                       : "bg-amber-50 border-b border-amber-200";
                 const sectionTitleClass =
                   sectionDef.key === "followup"
                     ? "text-blue-800"
+                    : sectionDef.key === "appointment"
+                      ? "text-emerald-800"
                     : sectionDef.key === "reminder"
                       ? "text-purple-800"
                       : "text-amber-800";
@@ -7813,7 +7838,13 @@ export default function Home() {
                       const reason = (t.reason ?? "").toLowerCase();
                       const sectionType = todoInboxSection(t);
                       const taskLabel =
-                        sectionType === "followup" ? "Follow-up" : sectionType === "reminder" ? "Reminder" : "To Do";
+                        sectionType === "followup"
+                          ? "Follow-up"
+                          : sectionType === "appointment"
+                            ? "Appointment"
+                            : sectionType === "reminder"
+                              ? "Reminder"
+                              : "To Do";
                       const isInternalNoteTodo = /(^|\\b)note(\\b|$)/.test(reason);
                       const showCallButton = !isInternalNoteTodo;
                       const actionLabel = todoActionLabel(t);
