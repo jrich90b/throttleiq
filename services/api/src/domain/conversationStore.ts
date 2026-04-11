@@ -194,6 +194,10 @@ export function inferTodoTaskClass(
 ): TodoTaskClass {
   const text = String(summary ?? "").toLowerCase();
   if (reason === "call") {
+    const hasCadenceFollowUpSignals =
+      /^call customer \(follow-up\):/i.test(String(summary ?? "")) ||
+      /\bfollow[- ]?up\b/i.test(text);
+    if (hasCadenceFollowUpSignals) return "followup";
     const hasReminderSignals =
       !!String(schedule?.dueAt ?? "").trim() ||
       !!String(schedule?.reminderAt ?? "").trim() ||
@@ -201,9 +205,6 @@ export function inferTodoTaskClass(
       /\brequested call time\b/i.test(text) ||
       /\bremind(er)?\b/i.test(text);
     if (hasReminderSignals) return "reminder";
-    if (/^call customer \(follow-up\):/i.test(String(summary ?? "")) || /\bfollow[- ]?up\b/i.test(text)) {
-      return "followup";
-    }
   }
   return "todo";
 }
@@ -1071,8 +1072,13 @@ async function loadFromDisk() {
     todos.length = 0;
     if (parsed?.todos?.length) {
       for (const task of parsed.todos) {
-        if (!task.taskClass) {
-          task.taskClass = inferTodoTaskClass(task.reason, task.summary, task);
+        const inferredClass = inferTodoTaskClass(task.reason, task.summary, task);
+        if (task.reason === "call") {
+          // Normalize legacy call-task classes so cadence follow-ups, reminders,
+          // and generic call todos render in the correct sections.
+          task.taskClass = inferredClass;
+        } else if (!task.taskClass) {
+          task.taskClass = inferredClass;
         }
         todos.push(task);
       }
@@ -2795,7 +2801,11 @@ export function addTodo(
       const current = String(existing.summary ?? "").trim();
       const currentLower = current.toLowerCase();
       const incomingLower = incoming.toLowerCase();
-      if (!currentLower.includes(incomingLower)) {
+      if (incomingTaskClass === "followup") {
+        // Follow-up tasks should always reflect the latest cadence ask, not
+        // accumulate prior summaries.
+        existing.summary = incoming;
+      } else if (!currentLower.includes(incomingLower)) {
         existing.summary = current ? `${current}\n${incoming}` : incoming;
       }
     }
@@ -2803,6 +2813,9 @@ export function addTodo(
     if (ownerId) existing.ownerId = ownerId;
     if (ownerName) existing.ownerName = ownerName;
     existing.taskClass = incomingTaskClass;
+    if (incomingTaskClass === "followup") {
+      existing.createdAt = nowIso();
+    }
     if (schedule?.dueAt) {
       if (existing.dueAt && existing.dueAt !== schedule.dueAt) {
         existing.reminderSentAt = undefined;
@@ -2852,13 +2865,8 @@ export function addTodo(
 }
 
 export function addCallTodoIfMissing(conv: Conversation, summary: string): TodoTask | null {
-  const hasOpen = todos.some(t => {
-    if (t.convId !== conv.id || t.status !== "open") return false;
-    const cls = t.taskClass ?? inferTodoTaskClass(t.reason, t.summary, t);
-    if (!t.taskClass) t.taskClass = cls;
-    return cls === "followup";
-  });
-  if (hasOpen) return null;
+  // Upsert cadence follow-up tasks so we never create duplicates while still
+  // keeping the open follow-up aligned to the latest cadence step.
   return addTodo(conv, "call", summary, undefined, undefined, undefined, "followup");
 }
 
