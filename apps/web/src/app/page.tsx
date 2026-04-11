@@ -786,6 +786,7 @@ type TodoItem = {
   id: string;
   convId: string;
   leadKey: string;
+  taskClass?: "followup" | "todo" | "reminder" | null;
   leadName?: string | null;
   ownerName?: string | null;
   ownerDisplayName?: string | null;
@@ -876,6 +877,10 @@ function todoRequestedCallTimeLabel(todo: TodoItem): string | null {
 }
 
 function todoInboxSection(todo: TodoItem): TodoInboxSection {
+  const explicitTaskClass = String(todo.taskClass ?? "").toLowerCase();
+  if (explicitTaskClass === "followup" || explicitTaskClass === "todo" || explicitTaskClass === "reminder") {
+    return explicitTaskClass as TodoInboxSection;
+  }
   const reason = String(todo.reason ?? "").toLowerCase();
   const summary = String(todo.summary ?? "").toLowerCase();
   const action = String(todo.action ?? "").toLowerCase();

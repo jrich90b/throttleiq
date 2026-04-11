@@ -11,6 +11,7 @@ export async function POST(req: Request) {
   const convId = String(body?.convId ?? "").trim();
   const summary = String(body?.summary ?? "").trim();
   const reason = String(body?.reason ?? "other").trim();
+  const taskClass = String(body?.taskClass ?? "").trim().toLowerCase();
   const ownerId = String(body?.ownerId ?? "").trim();
   const ownerName = String(body?.ownerName ?? "").trim();
   if (!convId || !summary) {
@@ -24,6 +25,7 @@ export async function POST(req: Request) {
       convId,
       summary,
       reason,
+      taskClass: taskClass || undefined,
       ownerId: ownerId || undefined,
       ownerName: ownerName || undefined
     })

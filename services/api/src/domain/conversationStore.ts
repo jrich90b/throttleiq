@@ -175,7 +175,10 @@ export type TodoTask = {
   reminderAt?: string;
   reminderLeadMinutes?: number;
   reminderSentAt?: string;
+  taskClass?: TodoTaskClass;
 };
+
+export type TodoTaskClass = "followup" | "todo" | "reminder";
 
 export type TodoScheduleOptions = {
   dueAt?: string;
@@ -183,6 +186,27 @@ export type TodoScheduleOptions = {
   reminderLeadMinutes?: number;
   reminderSentAt?: string;
 };
+
+export function inferTodoTaskClass(
+  reason: TodoTask["reason"],
+  summary?: string | null,
+  schedule?: TodoScheduleOptions
+): TodoTaskClass {
+  const text = String(summary ?? "").toLowerCase();
+  if (reason === "call") {
+    const hasReminderSignals =
+      !!String(schedule?.dueAt ?? "").trim() ||
+      !!String(schedule?.reminderAt ?? "").trim() ||
+      /^call requested:/i.test(String(summary ?? "")) ||
+      /\brequested call time\b/i.test(text) ||
+      /\bremind(er)?\b/i.test(text);
+    if (hasReminderSignals) return "reminder";
+    if (/^call customer \(follow-up\):/i.test(String(summary ?? "")) || /\bfollow[- ]?up\b/i.test(text)) {
+      return "followup";
+    }
+  }
+  return "todo";
+}
 
 export type InternalQuestion = {
   id: string;
@@ -1045,7 +1069,14 @@ async function loadFromDisk() {
       indexConversationByLeadKey(c);
     }
     todos.length = 0;
-    if (parsed?.todos?.length) todos.push(...parsed.todos);
+    if (parsed?.todos?.length) {
+      for (const task of parsed.todos) {
+        if (!task.taskClass) {
+          task.taskClass = inferTodoTaskClass(task.reason, task.summary, task);
+        }
+        todos.push(task);
+      }
+    }
     questions.length = 0;
     if (parsed?.questions?.length) questions.push(...parsed.questions);
 
@@ -2720,7 +2751,8 @@ export function addTodo(
   summary: string,
   sourceMessageId?: string,
   owner?: { id?: string | null; name?: string | null },
-  schedule?: TodoScheduleOptions
+  schedule?: TodoScheduleOptions,
+  taskClass?: TodoTaskClass
 ): TodoTask | null {
   const soldContext =
     conv?.closedReason === "sold" ||
@@ -2733,7 +2765,13 @@ export function addTodo(
   const ownerNameRaw = String(owner?.name ?? conv?.leadOwner?.name ?? "").trim();
   const ownerId = ownerIdRaw || undefined;
   const ownerName = ownerNameRaw || undefined;
-  const existing = todos.find(t => t.convId === conv.id && t.status === "open");
+  const incomingTaskClass = taskClass ?? inferTodoTaskClass(reason, summary, schedule);
+  const existing = todos.find(t => {
+    if (t.convId !== conv.id || t.status !== "open") return false;
+    const existingClass = t.taskClass ?? inferTodoTaskClass(t.reason, t.summary, t);
+    if (!t.taskClass) t.taskClass = existingClass;
+    return existingClass === incomingTaskClass;
+  });
   if (existing) {
     const priorities: Record<TodoTask["reason"], number> = {
       call: 7,
@@ -2764,6 +2802,7 @@ export function addTodo(
     if (sourceMessageId) existing.sourceMessageId = sourceMessageId;
     if (ownerId) existing.ownerId = ownerId;
     if (ownerName) existing.ownerName = ownerName;
+    existing.taskClass = incomingTaskClass;
     if (schedule?.dueAt) {
       if (existing.dueAt && existing.dueAt !== schedule.dueAt) {
         existing.reminderSentAt = undefined;
@@ -2793,6 +2832,7 @@ export function addTodo(
     ownerId,
     ownerName,
     reason,
+    taskClass: incomingTaskClass,
     summary,
     sourceMessageId,
     createdAt: nowIso(),
@@ -2812,9 +2852,14 @@ export function addTodo(
 }
 
 export function addCallTodoIfMissing(conv: Conversation, summary: string): TodoTask | null {
-  const hasOpen = todos.some(t => t.convId === conv.id && t.status === "open");
+  const hasOpen = todos.some(t => {
+    if (t.convId !== conv.id || t.status !== "open") return false;
+    const cls = t.taskClass ?? inferTodoTaskClass(t.reason, t.summary, t);
+    if (!t.taskClass) t.taskClass = cls;
+    return cls === "followup";
+  });
   if (hasOpen) return null;
-  return addTodo(conv, "call", summary);
+  return addTodo(conv, "call", summary, undefined, undefined, undefined, "followup");
 }
 
 export function listOpenTodos(): TodoTask[] {

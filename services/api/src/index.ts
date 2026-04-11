@@ -16717,6 +16717,7 @@ app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
   const convId = String(req.body?.convId ?? "").trim();
   const summary = String(req.body?.summary ?? "").trim();
   const reasonRaw = String(req.body?.reason ?? "other").trim();
+  const taskClassRaw = String(req.body?.taskClass ?? "").trim().toLowerCase();
   const ownerIdRaw = String(req.body?.ownerId ?? "").trim();
   const ownerNameRaw = String(req.body?.ownerName ?? "").trim();
   if (!convId || !summary) {
@@ -16746,6 +16747,10 @@ app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
   const reason = allowedReasons.includes(reasonRaw as any)
     ? (reasonRaw as any)
     : "other";
+  const allowedTaskClasses = ["followup", "todo", "reminder"] as const;
+  const taskClass = allowedTaskClasses.includes(taskClassRaw as any)
+    ? (taskClassRaw as "followup" | "todo" | "reminder")
+    : undefined;
   const owner =
     ownerIdRaw || ownerNameRaw
       ? { id: ownerIdRaw || undefined, name: ownerNameRaw || undefined }
@@ -16759,7 +16764,9 @@ app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
     reason,
     summary,
     undefined,
-    owner
+    owner,
+    undefined,
+    taskClass
   );
   if (!task) {
     return res.status(200).json({
