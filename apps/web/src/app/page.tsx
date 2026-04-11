@@ -525,8 +525,14 @@ type ConversationListItem = {
   walkIn?: boolean | null;
   hold?: {
     key?: string;
+    onOrder?: boolean;
     stockId?: string;
     vin?: string;
+    year?: string;
+    make?: string;
+    model?: string;
+    trim?: string;
+    color?: string;
     label?: string;
     note?: string;
     until?: string | null;
@@ -644,8 +650,14 @@ type ConversationDetail = {
   walkIn?: boolean | null;
   hold?: {
     key?: string;
+    onOrder?: boolean;
     stockId?: string;
     vin?: string;
+    year?: string;
+    make?: string;
+    model?: string;
+    trim?: string;
+    color?: string;
     label?: string;
     note?: string;
     until?: string | null;
@@ -1061,6 +1073,8 @@ export default function Home() {
   const [holdInventoryLoading, setHoldInventoryLoading] = useState(false);
   const [holdSearch, setHoldSearch] = useState("");
   const [holdSelection, setHoldSelection] = useState<any | null>(null);
+  const [holdOnOrder, setHoldOnOrder] = useState(false);
+  const [holdOnOrderLabel, setHoldOnOrderLabel] = useState("");
   const [holdNote, setHoldNote] = useState("");
   const [holdError, setHoldError] = useState<string | null>(null);
   const [holdSaving, setHoldSaving] = useState(false);
@@ -1695,11 +1709,24 @@ export default function Home() {
     setHoldError(null);
     setHoldSearch("");
     setHoldSelection(null);
+    setHoldOnOrder(false);
+    setHoldOnOrderLabel("");
     setHoldModalOpen(true);
     const conv =
       selectedConv?.id === convId ? selectedConv : await fetchConversationDetail(convId);
     setHoldModalConv(conv);
     setHoldNote(conv?.hold?.note ?? "");
+    const leadVehicle = conv?.lead?.vehicle ?? {};
+    const leadLabel = [leadVehicle?.year, leadVehicle?.make, leadVehicle?.model, leadVehicle?.trim]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    const holdLabelSeed = String(conv?.hold?.label ?? leadLabel ?? "").trim();
+    const initialOnOrder =
+      !!conv?.hold?.onOrder ||
+      String(conv?.hold?.reason ?? "").toLowerCase() === "order_hold";
+    setHoldOnOrder(initialOnOrder);
+    setHoldOnOrderLabel(holdLabelSeed);
     setHoldInventoryLoading(true);
     try {
       const resp = await fetch("/api/inventory", { cache: "no-store" });
@@ -1728,22 +1755,32 @@ export default function Home() {
 
   async function submitHold(selection: any | null, action: "hold" | "hold_clear") {
     if (!holdModalConv) return;
-    if (action === "hold" && !selection) {
-      setHoldError("Please select a unit to hold.");
+    if (action === "hold" && !holdOnOrder && !selection) {
+      setHoldError("Please select a unit, or enable Bike on order.");
       return;
     }
     setHoldSaving(true);
     setHoldError(null);
     try {
+      const leadVehicle = holdModalConv?.lead?.vehicle ?? {};
+      const orderLabel = String(holdOnOrderLabel ?? "").trim();
       const holdPayload =
         action === "hold"
           ? {
-              stockId: selection?.stockId ?? "",
-              vin: selection?.vin ?? "",
-              label: [selection?.year, selection?.make, selection?.model, selection?.trim]
-                .filter(Boolean)
-                .join(" ")
-                .trim(),
+              onOrder: holdOnOrder || undefined,
+              stockId: holdOnOrder ? "" : (selection?.stockId ?? ""),
+              vin: holdOnOrder ? "" : (selection?.vin ?? ""),
+              year: holdOnOrder ? String(leadVehicle?.year ?? "").trim() : String(selection?.year ?? "").trim(),
+              make: holdOnOrder ? String(leadVehicle?.make ?? "").trim() : String(selection?.make ?? "").trim(),
+              model: holdOnOrder ? String(leadVehicle?.model ?? "").trim() : String(selection?.model ?? "").trim(),
+              trim: holdOnOrder ? String(leadVehicle?.trim ?? "").trim() : String(selection?.trim ?? "").trim(),
+              color: holdOnOrder ? String(leadVehicle?.color ?? "").trim() : String(selection?.color ?? "").trim(),
+              label: holdOnOrder
+                ? orderLabel
+                : [selection?.year, selection?.make, selection?.model, selection?.trim]
+                    .filter(Boolean)
+                    .join(" ")
+                    .trim(),
               note: holdNote?.trim() || undefined
             }
           : undefined;
@@ -3980,9 +4017,12 @@ export default function Home() {
   const isConversationOnHold = (c: ConversationListItem) =>
     c.followUpCadence?.pauseReason === "manual_hold" ||
     c.followUpCadence?.pauseReason === "unit_hold" ||
+    c.followUpCadence?.pauseReason === "order_hold" ||
     c.followUpCadence?.stopReason === "unit_hold" ||
+    c.followUpCadence?.stopReason === "order_hold" ||
     c.followUp?.reason === "manual_hold" ||
     c.followUp?.reason === "unit_hold" ||
+    c.followUp?.reason === "order_hold" ||
     !!c.hold;
 
   const isSoldDealConversation = (c: ConversationListItem) =>
@@ -7280,9 +7320,12 @@ export default function Home() {
                                   </span>
                                 ) : c.followUpCadence?.pauseReason === "manual_hold" ||
                                   c.followUpCadence?.pauseReason === "unit_hold" ||
+                                  c.followUpCadence?.pauseReason === "order_hold" ||
                                   c.followUpCadence?.stopReason === "unit_hold" ||
+                                  c.followUpCadence?.stopReason === "order_hold" ||
                                   c.followUp?.reason === "manual_hold" ||
                                   c.followUp?.reason === "unit_hold" ||
+                                  c.followUp?.reason === "order_hold" ||
                                   !!c.hold ? (
                                   <span className="text-xs px-2 py-1 rounded border bg-red-100 text-red-700 border-red-200">
                                     Hold
@@ -10833,9 +10876,12 @@ export default function Home() {
                     const isHold =
                       selectedConv.followUpCadence?.pauseReason === "manual_hold" ||
                       selectedConv.followUpCadence?.pauseReason === "unit_hold" ||
+                      selectedConv.followUpCadence?.pauseReason === "order_hold" ||
                       selectedConv.followUpCadence?.stopReason === "unit_hold" ||
+                      selectedConv.followUpCadence?.stopReason === "order_hold" ||
                       selectedConv.followUp?.reason === "manual_hold" ||
                       selectedConv.followUp?.reason === "unit_hold" ||
+                      selectedConv.followUp?.reason === "order_hold" ||
                       !!selectedConv.hold;
                     const isSold =
                       selectedConv.status === "closed" && selectedConv.closedReason === "sold";
@@ -10950,9 +10996,12 @@ export default function Home() {
                     const isHold =
                       selectedConv.followUpCadence?.pauseReason === "manual_hold" ||
                       selectedConv.followUpCadence?.pauseReason === "unit_hold" ||
+                      selectedConv.followUpCadence?.pauseReason === "order_hold" ||
                       selectedConv.followUpCadence?.stopReason === "unit_hold" ||
+                      selectedConv.followUpCadence?.stopReason === "order_hold" ||
                       selectedConv.followUp?.reason === "manual_hold" ||
                       selectedConv.followUp?.reason === "unit_hold" ||
+                      selectedConv.followUp?.reason === "order_hold" ||
                       !!selectedConv.hold;
                     const holdUntil =
                       selectedConv.hold?.until ??
@@ -11728,7 +11777,7 @@ export default function Home() {
               <div className="fixed inset-0 z-50 bg-black/40 overflow-y-auto">
                 <div className="min-h-full flex items-start sm:items-center justify-center p-2 sm:p-4">
                 <div className="w-full max-w-2xl max-h-[94vh] overflow-y-auto rounded-lg bg-white shadow-lg border p-3 sm:p-4">
-                  <div className="text-sm font-semibold">Mark unit on hold</div>
+                  <div className="text-sm font-semibold">Mark bike on hold</div>
                   <div className="text-xs text-gray-600 mt-1">
                     {holdModalConv?.lead?.name ||
                       [holdModalConv?.lead?.firstName, holdModalConv?.lead?.lastName]
@@ -11739,14 +11788,46 @@ export default function Home() {
                   </div>
                   {(holdModalConv?.hold ||
                     holdModalConv?.followUpCadence?.pauseReason === "unit_hold" ||
+                    holdModalConv?.followUpCadence?.pauseReason === "order_hold" ||
                     holdModalConv?.followUpCadence?.stopReason === "unit_hold" ||
+                    holdModalConv?.followUpCadence?.stopReason === "order_hold" ||
+                    holdModalConv?.followUp?.reason === "order_hold" ||
                     holdModalConv?.followUp?.reason === "unit_hold") ? (
                     <div className="text-xs text-gray-500 mt-2">
                       Current hold:{" "}
-                      {holdModalConv?.hold?.label ??
-                        holdModalConv?.hold?.stockId ??
-                        holdModalConv?.hold?.vin ??
-                        "Unit hold active"}
+                      {holdModalConv?.hold?.onOrder
+                        ? `Bike on order${holdModalConv?.hold?.label ? ` • ${holdModalConv.hold.label}` : ""}`
+                        : holdModalConv?.hold?.label ??
+                          holdModalConv?.hold?.stockId ??
+                          holdModalConv?.hold?.vin ??
+                          "Unit hold active"}
+                    </div>
+                  ) : null}
+
+                  <div className="mt-3">
+                    <label className="inline-flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={holdOnOrder}
+                        onChange={e => {
+                          const checked = e.target.checked;
+                          setHoldOnOrder(checked);
+                          if (checked) setHoldSelection(null);
+                        }}
+                      />
+                      <span>Bike on order (not in stock yet)</span>
+                    </label>
+                  </div>
+
+                  {holdOnOrder ? (
+                    <div className="mt-3">
+                      <div className="text-xs text-gray-500 mb-1">Bike label (optional)</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        placeholder="2026 Harley-Davidson Street Glide"
+                        value={holdOnOrderLabel}
+                        onChange={e => setHoldOnOrderLabel(e.target.value)}
+                      />
                     </div>
                   ) : null}
 
@@ -11757,11 +11838,16 @@ export default function Home() {
                       placeholder="Search by model, stock, VIN, color..."
                       value={holdSearch}
                       onChange={e => setHoldSearch(e.target.value)}
+                      disabled={holdOnOrder}
                     />
                   </div>
 
                   <div className="mt-3 max-h-64 overflow-auto border rounded">
-                    {holdInventoryLoading ? (
+                    {holdOnOrder ? (
+                      <div className="p-3 text-sm text-gray-500">
+                        Inventory selection disabled while Bike on order is enabled.
+                      </div>
+                    ) : holdInventoryLoading ? (
                       <div className="p-3 text-sm text-gray-500">Loading inventory…</div>
                     ) : holdInventoryItems.length === 0 ? (
                       <div className="p-3 text-sm text-gray-500">No inventory items found.</div>
@@ -11854,7 +11940,9 @@ export default function Home() {
 
                   <div className="mt-4 flex items-center justify-between">
                     <div className="text-xs text-gray-500">
-                      {holdSelection
+                      {holdOnOrder
+                        ? `Bike on order${holdOnOrderLabel?.trim() ? `: ${holdOnOrderLabel.trim()}` : ""}`
+                        : holdSelection
                         ? `Selected: ${[holdSelection.year, holdSelection.make, holdSelection.model, holdSelection.trim]
                             .filter(Boolean)
                             .join(" ") || holdSelection.stockId || holdSelection.vin}`
@@ -11863,7 +11951,10 @@ export default function Home() {
                     <div className="flex gap-2">
                       {holdModalConv?.hold ||
                       holdModalConv?.followUpCadence?.pauseReason === "unit_hold" ||
+                      holdModalConv?.followUpCadence?.pauseReason === "order_hold" ||
                       holdModalConv?.followUpCadence?.stopReason === "unit_hold" ||
+                      holdModalConv?.followUpCadence?.stopReason === "order_hold" ||
+                      holdModalConv?.followUp?.reason === "order_hold" ||
                       holdModalConv?.followUp?.reason === "unit_hold" ? (
                         <button
                           className="px-3 py-2 border rounded text-sm text-red-600 border-red-200 hover:bg-red-50"

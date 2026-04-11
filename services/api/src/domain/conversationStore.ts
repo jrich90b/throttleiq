@@ -425,8 +425,14 @@ export type Conversation = {
   };
   hold?: {
     key?: string;
+    onOrder?: boolean;
     stockId?: string;
     vin?: string;
+    year?: string;
+    make?: string;
+    model?: string;
+    trim?: string;
+    color?: string;
     label?: string;
     note?: string;
     until?: string;
@@ -1198,8 +1204,10 @@ export function appendInbound(conv: Conversation, evt: InboundMessageEvent) {
       closedReason === "sold" ||
       /\bhold\b/.test(closedReason) ||
       !!conv.sale?.soldAt ||
-      !!conv.hold?.key ||
-      /\b(unit_hold|manual_hold|post_sale)\b/.test(String(conv.followUp?.reason ?? "").toLowerCase());
+      !!conv.hold ||
+      /\b(unit_hold|order_hold|manual_hold|post_sale)\b/.test(
+        String(conv.followUp?.reason ?? "").toLowerCase()
+      );
     if (!stickyClosed) {
       conv.status = "open";
       conv.closedAt = undefined;

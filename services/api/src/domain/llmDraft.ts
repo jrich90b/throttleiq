@@ -1107,6 +1107,7 @@ export type StaffOutcomeUpdateParse = {
   outcome: "showed_up" | "no_show" | "sold" | "hold" | "follow_up" | "lost" | "other" | "none";
   explicitOutcome: boolean;
   followUpWindowText?: string | null;
+  unitOnOrder?: boolean;
   unitStockId?: string | null;
   unitVin?: string | null;
   unitYear?: number | null;
@@ -1592,6 +1593,7 @@ const STAFF_OUTCOME_UPDATE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     "follow_up_window_text",
     "unit_stock_id",
     "unit_vin",
+    "unit_on_order",
     "unit_year",
     "unit_make",
     "unit_model",
@@ -1607,6 +1609,7 @@ const STAFF_OUTCOME_UPDATE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     follow_up_window_text: { type: "string" },
     unit_stock_id: { type: "string" },
     unit_vin: { type: "string" },
+    unit_on_order: { type: "boolean" },
     unit_year: { type: "integer", minimum: 0, maximum: 3000 },
     unit_make: { type: "string" },
     unit_model: { type: "string" },
@@ -3130,6 +3133,7 @@ export async function parseStaffOutcomeUpdateWithLLM(args: {
     "Unit extraction:",
     "- Extract stock/VIN/year/make/model/trim only if explicitly provided in text.",
     "- Do not invent unit identifiers.",
+    "- Set unit_on_order=true when hold is for incoming/on-order/not-in-stock unit.",
     "",
     "Rules:",
     "- If sold + another state appear, choose sold.",
@@ -3183,6 +3187,7 @@ export async function parseStaffOutcomeUpdateWithLLM(args: {
     outcome,
     explicitOutcome: !!parsed.explicit_outcome,
     followUpWindowText: cleanOptionalString(parsed.follow_up_window_text),
+    unitOnOrder: typeof parsed.unit_on_order === "boolean" ? parsed.unit_on_order : undefined,
     unitStockId: cleanOptionalString(parsed.unit_stock_id),
     unitVin: cleanOptionalString(parsed.unit_vin),
     unitYear:

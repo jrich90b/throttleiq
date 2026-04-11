@@ -3055,7 +3055,7 @@ function isStickyClosedJourney(conv: Conversation | null | undefined): boolean {
     (closedReason === "sold" ||
       /\bhold\b/.test(closedReason) ||
       !!conv.sale?.soldAt ||
-      !!conv.hold?.key ||
+      !!conv.hold ||
       conv.followUpCadence?.kind === "post_sale")
   );
 }
@@ -6259,6 +6259,7 @@ function escapeHtml(input: string): string {
 }
 
 type OutcomeUnitInput = {
+  onOrder?: boolean;
   stockId?: string;
   vin?: string;
   year?: string;
@@ -6270,53 +6271,81 @@ type OutcomeUnitInput = {
 };
 
 function buildUnitLabel(unit: OutcomeUnitInput): string | undefined {
+  if (unit.label) return String(unit.label).trim() || undefined;
   const label = [unit.year, unit.make, unit.model, unit.trim].filter(Boolean).join(" ").trim();
   if (label) return label;
+  if (unit.onOrder) return "Bike on order";
   return unit.stockId || unit.vin || undefined;
 }
 
 function readOutcomeUnit(body: any): OutcomeUnitInput {
+  const stockId = String(body?.unitStockId ?? "").trim() || undefined;
+  const vin = String(body?.unitVin ?? "").trim() || undefined;
+  const year = String(body?.unitYear ?? "").trim() || undefined;
+  const make = String(body?.unitMake ?? "").trim() || undefined;
+  const model = String(body?.unitModel ?? "").trim() || undefined;
+  const trim = String(body?.unitTrim ?? "").trim() || undefined;
+  const color = String(body?.unitColor ?? "").trim() || undefined;
+  const label = String(body?.unitLabel ?? body?.label ?? "").trim() || undefined;
+  const inferredOnOrder =
+    !!body?.unitOnOrder || (!stockId && !vin && !!(label || year || make || model || trim));
   const unit: OutcomeUnitInput = {
-    stockId: String(body?.unitStockId ?? "").trim() || undefined,
-    vin: String(body?.unitVin ?? "").trim() || undefined,
-    year: String(body?.unitYear ?? "").trim() || undefined,
-    make: String(body?.unitMake ?? "").trim() || undefined,
-    model: String(body?.unitModel ?? "").trim() || undefined,
-    trim: String(body?.unitTrim ?? "").trim() || undefined,
-    color: String(body?.unitColor ?? "").trim() || undefined
+    onOrder: inferredOnOrder || undefined,
+    stockId,
+    vin,
+    year,
+    make,
+    model,
+    trim,
+    color,
+    label
   };
   unit.label = buildUnitLabel(unit);
   return unit;
 }
 
 async function applyOutcomeHold(conv: any, unit: OutcomeUnitInput, note: string | undefined, nowIso: string) {
+  const isOnOrderHold = !!unit.onOrder;
   const holdKey = normalizeInventoryHoldKey(unit.stockId, unit.vin);
-  if (!holdKey) return "Missing hold unit (stockId or VIN).";
+  if (!holdKey && !isOnOrderHold) return "Missing hold unit (stockId or VIN).";
+  const prevKey = conv.hold?.key ?? null;
+  if (prevKey && (!holdKey || prevKey !== holdKey)) {
+    await clearInventoryHold(prevKey, null);
+  }
   const createdAt = conv.hold?.createdAt ?? nowIso;
-  const holdEntry = {
-    id: holdKey,
-    stockId: unit.stockId,
-    vin: unit.vin,
-    label: unit.label,
-    note,
-    leadKey: conv.leadKey,
-    convId: conv.id,
-    createdAt,
-    updatedAt: nowIso
-  };
-  await setInventoryHold({ stockId: unit.stockId, vin: unit.vin, hold: holdEntry });
+  if (holdKey) {
+    const holdEntry = {
+      id: holdKey,
+      stockId: unit.stockId,
+      vin: unit.vin,
+      label: unit.label,
+      note,
+      leadKey: conv.leadKey,
+      convId: conv.id,
+      createdAt,
+      updatedAt: nowIso
+    };
+    await setInventoryHold({ stockId: unit.stockId, vin: unit.vin, hold: holdEntry });
+  }
   conv.hold = {
     key: holdKey,
+    onOrder: isOnOrderHold || undefined,
     stockId: unit.stockId,
     vin: unit.vin,
+    year: unit.year,
+    make: unit.make,
+    model: unit.model,
+    trim: unit.trim,
+    color: unit.color,
     label: unit.label,
     note,
-    reason: "unit_hold",
+    reason: isOnOrderHold ? "order_hold" : "unit_hold",
     createdAt,
     updatedAt: nowIso
   };
-  stopFollowUpCadence(conv, "unit_hold");
-  setFollowUpMode(conv, "paused_indefinite", "unit_hold");
+  const holdReason = isOnOrderHold ? "order_hold" : "unit_hold";
+  stopFollowUpCadence(conv, holdReason);
+  setFollowUpMode(conv, "paused_indefinite", holdReason);
   return null;
 }
 
@@ -6362,7 +6391,7 @@ async function applyOutcomeSold(
   };
   await setInventorySold({ stockId: unit.stockId, vin: unit.vin, sold: soldEntry });
   await clearInventoryHold(unit.stockId, unit.vin);
-  if (conv.hold?.key && conv.hold.key === soldKey) {
+  if (conv.hold && (conv.hold.onOrder || !conv.hold.key || conv.hold.key === soldKey)) {
     conv.hold = undefined;
   }
   setFollowUpMode(conv, "active", "post_sale");
@@ -6732,9 +6761,22 @@ function readOutcomeUnitFromText(text: string, parsed: any): OutcomeUnitInput {
   const source = String(text ?? "");
   const stockMatch = source.match(/\b([A-Z]\d{1,4}-\d{2}[A-Z]?)\b/i)?.[1] ?? "";
   const vinMatch = source.match(/\b([A-HJ-NPR-Z0-9]{17})\b/i)?.[1] ?? "";
+  const parsedStockId = String(parsed?.unitStockId ?? "").trim();
+  const parsedVin = String(parsed?.unitVin ?? "").trim();
+  const hasKeyFromTextOrParser = !!(stockMatch || vinMatch || parsedStockId || parsedVin);
+  const lexicalOnOrder =
+    /\b(on[- ]?order|ordered|incoming|in[- ]?transit|arriving|not in stock)\b/i.test(source);
+  const parsedOnOrder = !!parsed?.unitOnOrder;
+  const hasUnitMeta =
+    !!parsed?.unitYear ||
+    !!String(parsed?.unitMake ?? "").trim() ||
+    !!String(parsed?.unitModel ?? "").trim() ||
+    !!String(parsed?.unitTrim ?? "").trim();
+  const inferredOnOrder = parsedOnOrder || lexicalOnOrder || (!hasKeyFromTextOrParser && hasUnitMeta);
   const unit: OutcomeUnitInput = {
-    stockId: (parsed?.unitStockId ?? stockMatch)?.toString().trim() || undefined,
-    vin: (parsed?.unitVin ?? vinMatch)?.toString().trim() || undefined,
+    onOrder: inferredOnOrder || undefined,
+    stockId: (parsedStockId || stockMatch)?.toString().trim() || undefined,
+    vin: (parsedVin || vinMatch)?.toString().trim() || undefined,
     year:
       typeof parsed?.unitYear === "number" && Number.isFinite(parsed.unitYear)
         ? String(parsed.unitYear)
@@ -6909,7 +6951,9 @@ async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
     if (err) {
       return { handled: true, replyBody: `Couldn't save HOLD: ${err}` };
     }
-    confirmation = `Saved HOLD${unit.stockId ? ` (${unit.stockId})` : ""}.`;
+    confirmation = unit.onOrder
+      ? "Saved HOLD (bike on order)."
+      : `Saved HOLD${unit.stockId ? ` (${unit.stockId})` : ""}.`;
   } else if (parsed.outcome === "lost") {
     closeConversation(conv, "not_interested");
     setFollowUpMode(conv, "manual_handoff", "dealer_ride_lost");
@@ -15565,7 +15609,7 @@ app.post("/conversations/:id/close", async (req, res) => {
       };
       await setInventorySold({ stockId: soldStockId, vin: soldVin, sold: soldEntry });
       await clearInventoryHold(soldStockId, soldVin);
-      if (conv.hold?.key && conv.hold.key === soldKey) {
+      if (conv.hold && (conv.hold.onOrder || !conv.hold.key || conv.hold.key === soldKey)) {
         conv.hold = undefined;
       }
     }
@@ -15767,10 +15811,20 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
     const watchItemsInput = Array.isArray(watchInput?.items) ? watchInput.items : [];
     const watchNote = String(watchInput?.note ?? "").trim();
     const holdInput = req.body?.holdUnit ?? null;
+    const holdOnOrder = !!holdInput?.onOrder;
     const holdStockId = String(holdInput?.stockId ?? "").trim() || undefined;
     const holdVin = String(holdInput?.vin ?? "").trim() || undefined;
-    const holdLabel = String(holdInput?.label ?? "").trim() || undefined;
+    const holdYear = String(holdInput?.year ?? "").trim() || undefined;
+    const holdMake = String(holdInput?.make ?? "").trim() || undefined;
+    const holdModel = String(holdInput?.model ?? "").trim() || undefined;
+    const holdTrim = String(holdInput?.trim ?? "").trim() || undefined;
+    const holdColor = String(holdInput?.color ?? "").trim() || undefined;
+    const holdLabelRaw = String(holdInput?.label ?? "").trim() || undefined;
     const holdNote = String(holdInput?.note ?? "").trim() || undefined;
+    const holdLabel =
+      holdLabelRaw ||
+      [holdYear, holdMake, holdModel, holdTrim].filter(Boolean).join(" ").trim() ||
+      (holdOnOrder ? "Bike on order" : undefined);
     const nowIso = new Date().toISOString();
     const cfg = await getSchedulerConfigHot();
     const tz = cfg.timezone || "America/New_York";
@@ -15985,8 +16039,8 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
     const shouldApplyWatch = watchList.length > 0 && resolution !== "archive";
 
     const holdKey = normalizeInventoryHoldKey(holdStockId, holdVin);
-    if (resolution === "hold" && !holdKey) {
-      return res.status(400).json({ ok: false, error: "Missing hold unit (stockId or VIN)." });
+    if (resolution === "hold" && !holdKey && !holdOnOrder) {
+      return res.status(400).json({ ok: false, error: "Missing hold unit (stockId or VIN), or mark Bike on order." });
     }
 
     if (shouldApplyWatch) {
@@ -16016,51 +16070,60 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
       setFollowUpMode(conv, "manual_handoff", "manual_appointment");
       stopRelatedCadences(conv, "manual_appointment", { setMode: "manual_handoff" });
     } else if (effectiveResolution === "hold") {
-      if (!holdKey) {
-        return res.status(400).json({ ok: false, error: "Missing hold unit (stockId or VIN)." });
+      if (!holdKey && !holdOnOrder) {
+        return res.status(400).json({ ok: false, error: "Missing hold unit (stockId or VIN), or mark Bike on order." });
       }
       const prevKey = conv.hold?.key ?? null;
-      if (prevKey && prevKey !== holdKey) {
+      if (prevKey && (!holdKey || prevKey !== holdKey)) {
         await clearInventoryHold(prevKey, null);
       }
       const createdAt = conv.hold?.createdAt ?? nowIso;
-      const holdEntry = {
-        id: holdKey,
-        stockId: holdStockId,
-        vin: holdVin,
-        label: holdLabel,
-        leadKey: conv.leadKey,
-        convId: conv.id,
-        note: holdNote,
-        createdAt,
-        updatedAt: nowIso
-      };
-      await setInventoryHold({ stockId: holdStockId, vin: holdVin, hold: holdEntry });
-      conv.hold = {
-        key: holdKey,
-        stockId: holdStockId,
-        vin: holdVin,
-        label: holdLabel,
-        note: holdNote,
-        reason: "unit_hold",
-        createdAt,
-        updatedAt: nowIso
-      };
-      stopFollowUpCadence(conv, "unit_hold");
-      if (!shouldApplyWatch && conv.followUp?.mode !== "manual_handoff") {
-        setFollowUpMode(conv, "paused_indefinite", "unit_hold");
+      const holdReason = holdOnOrder ? "order_hold" : "unit_hold";
+      if (holdKey) {
+        const holdEntry = {
+          id: holdKey,
+          stockId: holdStockId,
+          vin: holdVin,
+          label: holdLabel,
+          leadKey: conv.leadKey,
+          convId: conv.id,
+          note: holdNote,
+          createdAt,
+          updatedAt: nowIso
+        };
+        await setInventoryHold({ stockId: holdStockId, vin: holdVin, hold: holdEntry });
       }
-      cadenceNotice = "Unit marked on hold.";
+      conv.hold = {
+        key: holdKey || undefined,
+        onOrder: holdOnOrder || undefined,
+        stockId: holdStockId,
+        vin: holdVin,
+        year: holdYear,
+        make: holdMake,
+        model: holdModel,
+        trim: holdTrim,
+        color: holdColor,
+        label: holdLabel,
+        note: holdNote,
+        reason: holdReason,
+        createdAt,
+        updatedAt: nowIso
+      };
+      stopFollowUpCadence(conv, holdReason);
+      if (!shouldApplyWatch && conv.followUp?.mode !== "manual_handoff") {
+        setFollowUpMode(conv, "paused_indefinite", holdReason);
+      }
+      cadenceNotice = holdOnOrder ? "Bike on order marked on hold." : "Unit marked on hold.";
     } else if (effectiveResolution === "hold_clear") {
       const clearKey = holdKey ?? conv.hold?.key ?? null;
       if (clearKey) {
         await clearInventoryHold(clearKey, null);
       }
       conv.hold = undefined;
-      if (conv.followUpCadence?.stopReason === "unit_hold") {
+      if (conv.followUpCadence?.stopReason === "unit_hold" || conv.followUpCadence?.stopReason === "order_hold") {
         conv.followUpCadence.stopReason = undefined;
       }
-      if (!shouldApplyWatch && conv.followUp?.reason === "unit_hold") {
+      if (!shouldApplyWatch && (conv.followUp?.reason === "unit_hold" || conv.followUp?.reason === "order_hold")) {
         setFollowUpMode(conv, "active", "manual_hold_clear");
       }
       applyResume(shouldApplyWatch);
