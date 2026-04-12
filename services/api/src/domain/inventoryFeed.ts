@@ -180,12 +180,11 @@ export async function hasInventoryForModelYear(opts: {
   if (!items.length) return false;
   const model = opts.model?.trim();
   if (!model) return false;
-  const target = normalizeModel(model);
   const yearNum = opts.year ? Number(opts.year) : null;
   const delta = typeof opts.yearDelta === "number" ? opts.yearDelta : 1;
   return items.some(i => {
     if (!i.model) return false;
-    if (normalizeModel(i.model) !== target) return false;
+    if (!modelMatches(i.model, model)) return false;
     if (!yearNum || !Number.isFinite(yearNum)) return true;
     const itemYear = Number(i.year);
     if (!Number.isFinite(itemYear)) return true;
