@@ -4642,9 +4642,9 @@ async function buildCadenceRegeneratedDraft(
       isPostSale: false
     });
     message = selectNonRepeatingCadenceMessage(conv, message, [
-      "Quick follow-up — I'm here if you want to revisit this.",
-      "No rush — whenever you're ready, I can help with next steps.",
-      "If timing changed, just let me know and I can adjust."
+      `Hey ${firstName}, just checking in — I'm here if you want to revisit this.`,
+      `Hey ${firstName}, just checking in — whenever you're ready, I can help with next steps.`,
+      `Hey ${firstName}, just checking in — if timing changed, just let me know and I can adjust.`
     ]);
     const contextLine = getFollowUpContextLine(conv, now);
     if (contextLine && !message.toLowerCase().includes(contextLine.toLowerCase())) {
@@ -4701,9 +4701,9 @@ async function buildCadenceRegeneratedDraft(
     isPostSale: false
   });
   message = selectNonRepeatingCadenceMessage(conv, message, [
-    "Quick follow-up — I'm here if you want to revisit this.",
-    "No rush — whenever you're ready, I can help with next steps.",
-    "If timing changed, just let me know and I can adjust."
+    `Hey ${firstName}, just checking in — I'm here if you want to revisit this.`,
+    `Hey ${firstName}, just checking in — whenever you're ready, I can help with next steps.`,
+    `Hey ${firstName}, just checking in — if timing changed, just let me know and I can adjust.`
   ]);
   const contextLine = getFollowUpContextLine(conv, now);
   if (contextLine && !message.toLowerCase().includes(contextLine.toLowerCase())) {
@@ -13995,9 +13995,9 @@ async function processDueFollowUps() {
           "No rush — if anything comes up, just reach out."
         ]
       : [
-          "Quick follow-up — I'm here if you want to revisit this.",
-          "No rush — whenever you're ready, I can help with next steps.",
-          "If timing changed, just let me know and I can adjust."
+          `Hey ${firstName}, just checking in — I'm here if you want to revisit this.`,
+          `Hey ${firstName}, just checking in — whenever you're ready, I can help with next steps.`,
+          `Hey ${firstName}, just checking in — if timing changed, just let me know and I can adjust.`
         ];
     message = selectNonRepeatingCadenceMessage(
       conv,
