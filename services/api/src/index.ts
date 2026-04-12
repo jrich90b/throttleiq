@@ -4209,6 +4209,33 @@ function renderFollowUpTemplate(template: string, ctx: Record<string, string>): 
   return out.replace(/\s+/g, " ").trim();
 }
 
+function ensureCadenceAnchorMessage(args: {
+  message: string;
+  name: string;
+  labelClause: string;
+  isPostSale?: boolean;
+}): string {
+  const msg = String(args.message ?? "").trim();
+  if (msg) return msg;
+  const ctx = {
+    name: args.name || "there",
+    labelClause: String(args.labelClause ?? "")
+  };
+  if (args.isPostSale) {
+    return renderFollowUpTemplate(
+      "Hey {name}, just checking in — I’m here if you need anything.",
+      ctx
+    );
+  }
+  if (ctx.labelClause) {
+    return renderFollowUpTemplate(
+      "Hey {name}, just checking in{labelClause}. I’m here if you need anything.",
+      ctx
+    );
+  }
+  return renderFollowUpTemplate("Hey {name}, just checking in. I’m here if you need anything.", ctx);
+}
+
 function isMediaOfferFollowUpText(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t) return false;
@@ -4584,6 +4611,12 @@ async function buildCadenceRegeneratedDraft(
   if (conv.scheduleSoft && !allowProactiveSchedule) {
     message = stripSchedulingPromptFromFollowUp(message);
   }
+  message = ensureCadenceAnchorMessage({
+    message,
+    name: firstName,
+    labelClause,
+    isPostSale: false
+  });
   const contextLine = getFollowUpContextLine(conv, now);
   if (contextLine && !message.toLowerCase().includes(contextLine.toLowerCase())) {
     message = `${message} ${contextLine}`.trim();
@@ -13865,6 +13898,12 @@ async function processDueFollowUps() {
         registerScheduleInviteSent(conv);
       }
     }
+    message = ensureCadenceAnchorMessage({
+      message,
+      name: firstName,
+      labelClause,
+      isPostSale
+    });
 
     if (!isPostSale && cadence.kind !== "long_term") {
       const contextLine = getFollowUpContextLine(conv, now);
