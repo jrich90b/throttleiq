@@ -7763,11 +7763,25 @@ export default function Home() {
                     : `Archived: ${filteredConversations.length}`}
                 </div>
                 <button
-                  className="px-3 py-2 text-xs font-semibold border border-[var(--accent)] text-[var(--accent)] rounded hover:bg-[var(--surface-2)]"
+                  className="h-9 w-9 inline-flex items-center justify-center border border-[var(--accent)] text-[var(--accent)] rounded hover:bg-[var(--surface-2)]"
                   onClick={openCompose}
                   title="Compose SMS"
+                  aria-label="Compose SMS"
                 >
-                  Compose SMS
+                  <svg
+                    viewBox="0 0 24 24"
+                    className="h-4 w-4"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M14 3h7v7" />
+                    <path d="M10 14 21 3" />
+                    <path d="M21 14v7H3V3h7" />
+                  </svg>
                 </button>
               </div>
             </div>
