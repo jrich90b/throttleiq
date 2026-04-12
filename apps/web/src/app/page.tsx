@@ -3597,9 +3597,9 @@ export default function Home() {
     if (todoTaskTypeFilter === "all") {
       return [
         { key: "followup", label: "Follow-ups" },
-        { key: "appointment", label: "Appointments" },
         { key: "todo", label: "To Dos" },
-        { key: "reminder", label: "Reminders" }
+        { key: "reminder", label: "Reminders" },
+        { key: "appointment", label: "Appointments" }
       ] as Array<{ key: TodoInboxSection; label: string }>;
     }
     return [
@@ -7802,9 +7802,9 @@ export default function Home() {
               >
                 <option value="all">Task Type: All</option>
                 <option value="followup">Task Type: Follow-up</option>
-                <option value="appointment">Task Type: Appointment</option>
                 <option value="todo">Task Type: To Do</option>
                 <option value="reminder">Task Type: Reminder</option>
+                <option value="appointment">Task Type: Appointment</option>
               </select>
             </div>
             <div className="mt-3 space-y-3">
