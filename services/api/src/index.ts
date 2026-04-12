@@ -4291,6 +4291,47 @@ function getCadenceAgentContextText(conv: any, now: Date): string {
   return text;
 }
 
+function inferCadencePersonalizationFallback(conv: any, now: Date): string | null {
+  const inbounds = (conv?.messages ?? [])
+    .filter((m: any) => m?.direction === "in" && String(m?.body ?? "").trim())
+    .slice(-40)
+    .reverse();
+  for (const m of inbounds) {
+    const body = String(m?.body ?? "").replace(/\s+/g, " ").trim();
+    if (!body) continue;
+    const lower = body.toLowerCase();
+    const atMs = Date.parse(String(m?.at ?? ""));
+    const ageDays = Number.isFinite(atMs) ? (now.getTime() - atMs) / (24 * 60 * 60 * 1000) : null;
+    const likelyPastWindow = ageDays != null && ageDays >= 10;
+
+    const trainingCityMatch = body.match(
+      /\bin\s+([A-Za-z][A-Za-z\s'.-]{1,30}?)\s+for\s+(?:\d+\s+weeks?|two\s+weeks?)\b[^.]*\btraining\b/i
+    );
+    if (trainingCityMatch) {
+      const city = normalizeDisplayCase(trainingCityMatch[1].trim());
+      if (city) {
+        return likelyPastWindow
+          ? `Hope training in ${city} went well.`
+          : `Hope training in ${city} is going smoothly.`;
+      }
+    }
+    if (/\btraining\b/.test(lower) && /\bnew job\b/.test(lower)) {
+      return likelyPastWindow
+        ? "Hope your new-job training went well."
+        : "Hope your new-job training is going smoothly.";
+    }
+    if (/\b(out of town|traveling|travelling|on a trip|in boston)\b/.test(lower)) {
+      return likelyPastWindow ? "Hope your trip went smoothly." : "Hope your trip is going smoothly.";
+    }
+    if (/\bnew job\b/.test(lower)) {
+      return likelyPastWindow
+        ? "Hope the new job is off to a good start."
+        : "Hope the new job is going well so far.";
+    }
+  }
+  return null;
+}
+
 async function getCadencePersonalizationLine(
   conv: any,
   cadence: any,
@@ -4307,7 +4348,14 @@ async function getCadencePersonalizationLine(
   const cacheKey = `${latestInboundAt}|${agentUpdatedAt}|${walkInUpdatedAt}|${voiceUpdatedAt}`;
   if (String(cadence.personalizationCacheKey ?? "") === cacheKey) {
     const cached = String(cadence.personalizationLine ?? "").trim();
-    return cached || null;
+    if (cached) return cached;
+    const fallback = inferCadencePersonalizationFallback(conv, now);
+    if (fallback) {
+      cadence.personalizationLine = fallback;
+      cadence.personalizationUpdatedAt = nowIso();
+      return fallback;
+    }
+    return null;
   }
 
   const history = buildHistory(conv, 10).slice(-10);
@@ -4344,6 +4392,9 @@ async function getCadencePersonalizationLine(
   if (line) {
     if (!/[.!?]$/.test(line)) line = `${line}.`;
     if (line.length > 140) line = `${line.slice(0, 139).trimEnd()}.`;
+  }
+  if (!line) {
+    line = inferCadencePersonalizationFallback(conv, now) ?? "";
   }
 
   cadence.personalizationCacheKey = cacheKey;
@@ -4590,6 +4641,11 @@ async function buildCadenceRegeneratedDraft(
       labelClause,
       isPostSale: false
     });
+    message = selectNonRepeatingCadenceMessage(conv, message, [
+      "Quick follow-up — I'm here if you want to revisit this.",
+      "No rush — whenever you're ready, I can help with next steps.",
+      "If timing changed, just let me know and I can adjust."
+    ]);
     const contextLine = getFollowUpContextLine(conv, now);
     if (contextLine && !message.toLowerCase().includes(contextLine.toLowerCase())) {
       message = `${message} ${contextLine}`.trim();
@@ -4598,11 +4654,6 @@ async function buildCadenceRegeneratedDraft(
     if (personalizationLine && !message.toLowerCase().includes(personalizationLine.toLowerCase())) {
       message = `${message} ${personalizationLine}`.trim();
     }
-    message = selectNonRepeatingCadenceMessage(conv, message, [
-      "Quick follow-up — I'm here if you want to revisit this.",
-      "No rush — whenever you're ready, I can help with next steps.",
-      "If timing changed, just let me know and I can adjust."
-    ]);
     return { body: message };
   }
 
@@ -4649,6 +4700,11 @@ async function buildCadenceRegeneratedDraft(
     labelClause,
     isPostSale: false
   });
+  message = selectNonRepeatingCadenceMessage(conv, message, [
+    "Quick follow-up — I'm here if you want to revisit this.",
+    "No rush — whenever you're ready, I can help with next steps.",
+    "If timing changed, just let me know and I can adjust."
+  ]);
   const contextLine = getFollowUpContextLine(conv, now);
   if (contextLine && !message.toLowerCase().includes(contextLine.toLowerCase())) {
     message = `${message} ${contextLine}`.trim();
@@ -4657,11 +4713,6 @@ async function buildCadenceRegeneratedDraft(
   if (personalizationLine && !message.toLowerCase().includes(personalizationLine.toLowerCase())) {
     message = `${message} ${personalizationLine}`.trim();
   }
-  message = selectNonRepeatingCadenceMessage(conv, message, [
-    "Quick follow-up — I'm here if you want to revisit this.",
-    "No rush — whenever you're ready, I can help with next steps.",
-    "If timing changed, just let me know and I can adjust."
-  ]);
   return { body: message };
 }
 
@@ -13937,20 +13988,6 @@ async function processDueFollowUps() {
       isPostSale
     });
 
-    if (!isPostSale && cadence.kind !== "long_term") {
-      const contextLine = getFollowUpContextLine(conv, now);
-      if (contextLine && !message.toLowerCase().includes(contextLine.toLowerCase())) {
-        message = `${message} ${contextLine}`.trim();
-        if (conv.appointment) {
-          conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
-          conv.appointment.staffNotify.contextUsedAt = nowIso();
-        }
-      }
-      const personalizationLine = await getCadencePersonalizationLine(conv, cadence, now);
-      if (personalizationLine && !message.toLowerCase().includes(personalizationLine.toLowerCase())) {
-        message = `${message} ${personalizationLine}`.trim();
-      }
-    }
     const genericCadenceNoRepeatFallbacks = isPostSale
       ? [
           "Quick follow-up — if you need anything, just let me know.",
@@ -13967,6 +14004,20 @@ async function processDueFollowUps() {
       message,
       cadenceNoRepeatFallbacks.length ? cadenceNoRepeatFallbacks : genericCadenceNoRepeatFallbacks
     );
+    if (!isPostSale && cadence.kind !== "long_term") {
+      const contextLine = getFollowUpContextLine(conv, now);
+      if (contextLine && !message.toLowerCase().includes(contextLine.toLowerCase())) {
+        message = `${message} ${contextLine}`.trim();
+        if (conv.appointment) {
+          conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
+          conv.appointment.staffNotify.contextUsedAt = nowIso();
+        }
+      }
+      const personalizationLine = await getCadencePersonalizationLine(conv, cadence, now);
+      if (personalizationLine && !message.toLowerCase().includes(personalizationLine.toLowerCase())) {
+        message = `${message} ${personalizationLine}`.trim();
+      }
+    }
 
     const emailTo = conv.lead?.email;
     const useEmail =
