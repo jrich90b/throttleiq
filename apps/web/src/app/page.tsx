@@ -7763,7 +7763,7 @@ export default function Home() {
                     : `Archived: ${filteredConversations.length}`}
                 </div>
                 <button
-                  className="h-9 w-9 inline-flex items-center justify-center border border-[var(--accent)] text-[var(--accent)] rounded hover:bg-[var(--surface-2)]"
+                  className="h-9 w-9 inline-flex items-center justify-center border-2 border-[var(--accent)] text-[var(--accent)] rounded hover:bg-[var(--surface-2)]"
                   onClick={openCompose}
                   title="Compose SMS"
                   aria-label="Compose SMS"
