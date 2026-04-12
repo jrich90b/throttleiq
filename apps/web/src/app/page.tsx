@@ -797,6 +797,8 @@ type TodoItem = {
   summary: string;
   action?: string;
   callbackTimeLabel?: string | null;
+  appointmentWhenText?: string | null;
+  appointmentWhenIso?: string | null;
   dueAt?: string | null;
   reminderAt?: string | null;
   createdAt: string;
@@ -874,6 +876,22 @@ function todoRequestedCallTimeLabel(todo: TodoItem): string | null {
   const at = new Date(dueAt);
   if (!Number.isNaN(at.getTime())) return at.toLocaleString();
   return summaryTime || null;
+}
+
+function todoAppointmentTimeLabel(todo: TodoItem): string | null {
+  const dueAt = String(todo.dueAt ?? "").trim();
+  if (dueAt) {
+    const at = new Date(dueAt);
+    if (!Number.isNaN(at.getTime())) return at.toLocaleString();
+  }
+  const whenText = String(todo.appointmentWhenText ?? "").trim();
+  if (whenText) return whenText;
+  const whenIso = String(todo.appointmentWhenIso ?? "").trim();
+  if (whenIso) {
+    const at = new Date(whenIso);
+    if (!Number.isNaN(at.getTime())) return at.toLocaleString();
+  }
+  return null;
 }
 
 function todoInboxSection(todo: TodoItem): TodoInboxSection {
@@ -8051,8 +8069,11 @@ export default function Home() {
                       const actionLabel = todoActionLabel(t);
                       const requestedCallTime =
                         todoRequestedCallTimeLabel(t) || String(t.callbackTimeLabel ?? "").trim() || null;
+                      const appointmentTime =
+                        sectionType === "appointment" ? todoAppointmentTimeLabel(t) : null;
                       const actionAlreadyHasRequestedTime = /\brequested(?::| call time:)/i.test(actionLabel);
-                      const showRequestedCallTime = !!requestedCallTime && !actionAlreadyHasRequestedTime;
+                      const showRequestedCallTime =
+                        sectionType !== "appointment" && !!requestedCallTime && !actionAlreadyHasRequestedTime;
                       const ownerDisplay = String(t.ownerDisplayName ?? t.ownerName ?? t.leadOwnerName ?? "").trim();
                       return (
                         <div key={t.id} className={`p-4 flex items-start justify-between gap-4 ${rowIdx > 0 ? "border-t" : ""}`}>
@@ -8083,6 +8104,11 @@ export default function Home() {
                             {showRequestedCallTime ? (
                               <div className="text-xs text-gray-600 mt-1">
                                 Requested call time: {requestedCallTime}
+                              </div>
+                            ) : null}
+                            {appointmentTime ? (
+                              <div className="text-xs text-gray-600 mt-1">
+                                Appointment time: {appointmentTime}
                               </div>
                             ) : null}
                             <button

@@ -16703,12 +16703,16 @@ app.get("/todos", requirePermission("canAccessTodos"), async (req, res) => {
               ? "department"
               : null;
         const callbackTimeLabel = callbackTimeByConv.get(t.convId) ?? null;
+        const appointmentWhenText = String(conv?.appointment?.whenText ?? "").trim() || null;
+        const appointmentWhenIso = String(conv?.appointment?.whenIso ?? "").trim() || null;
         const action = deriveTodoActionLabel(t, conv, actionTimeZone);
         return {
           ...t,
           leadName,
           action,
           callbackTimeLabel,
+          appointmentWhenText,
+          appointmentWhenIso,
           ownerDisplayName,
           ownerDisplayType,
           leadOwnerName,
