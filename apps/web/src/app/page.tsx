@@ -4475,8 +4475,11 @@ export default function Home() {
     }
   }, [section, filteredContactIdsKey, selectedContact?.id]);
 
-  const isArchivedConversation = (c: ConversationListItem) =>
-    !!(c.closedReason && /archive/i.test(c.closedReason));
+  const isArchivedConversation = (c: ConversationListItem) => {
+    const status = String(c.status ?? "").trim().toLowerCase();
+    if (status === "closed") return true;
+    return !!(c.closedReason && /archive/i.test(c.closedReason));
+  };
 
   const isConversationOnHold = (c: ConversationListItem) =>
     c.followUpCadence?.pauseReason === "manual_hold" ||
