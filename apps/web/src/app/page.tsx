@@ -1407,6 +1407,7 @@ export default function Home() {
   const [calendarFilterOpen, setCalendarFilterOpen] = useState(false);
   const [calendarEdit, setCalendarEdit] = useState<any | null>(null);
   const [calendarRowHeight, setCalendarRowHeight] = useState(40);
+  const [calendarNowMs, setCalendarNowMs] = useState(() => Date.now());
   const [googleStatus, setGoogleStatus] = useState<{ connected: boolean; reason?: string; error?: string } | null>(null);
   const [inventoryItems, setInventoryItems] = useState<any[]>([]);
   const [inventoryLoading, setInventoryLoading] = useState(false);
@@ -1670,6 +1671,14 @@ export default function Home() {
     window.addEventListener("resize", compute);
     return () => window.removeEventListener("resize", compute);
   }, [section, schedulerConfig?.businessHours, schedulerConfig?.timezone, calendarDate]);
+
+  useEffect(() => {
+    if (section !== "calendar" || calendarView !== "day") return;
+    const tick = () => setCalendarNowMs(Date.now());
+    tick();
+    const timer = window.setInterval(tick, 30_000);
+    return () => window.clearInterval(timer);
+  }, [section, calendarView]);
 
   async function loadConversation(id: string) {
     setDetailLoading(true);
@@ -9501,6 +9510,21 @@ export default function Home() {
                   }
                   const dayStart = new Date(calendarDate);
                   dayStart.setHours(0, 0, 0, 0);
+                  const selectedDayKey = calendarDate.toLocaleDateString("en-CA", { timeZone: tz });
+                  const nowDate = new Date(calendarNowMs);
+                  const nowDayKey = nowDate.toLocaleDateString("en-CA", { timeZone: tz });
+                  const nowMin = getTzMinutes(nowDate);
+                  const showNowLine = selectedDayKey === nowDayKey && nowMin >= openWindow && nowMin <= closeWindow;
+                  const nowLineTopPercent =
+                    showNowLine && totalMinutes > 0
+                      ? ((nowMin - openWindow) / totalMinutes) * 100
+                      : null;
+                  const nowHour = Math.floor(nowMin / 60);
+                  const nowMinute = nowMin % 60;
+                  const nowLabel = formatTimeLabel(
+                    `${String(nowHour).padStart(2, "0")}:${String(nowMinute).padStart(2, "0")}`,
+                    tz
+                  );
 
                   return (
                     <div className="space-y-3">
@@ -9608,6 +9632,20 @@ export default function Home() {
                                   applyDragAt(e.clientY);
                                 }}
                               >
+                                {showNowLine && nowLineTopPercent != null ? (
+                                  <div
+                                    className="absolute left-0 right-0 z-20 pointer-events-none"
+                                    style={{ top: `${nowLineTopPercent}%` }}
+                                  >
+                                    <div className="relative border-t-2 border-rose-500/90">
+                                      {idx === 0 ? (
+                                        <span className="absolute -top-3 -left-1 bg-white/95 border border-rose-200 rounded px-1 text-[10px] font-semibold text-rose-700">
+                                          Now {nowLabel}
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                ) : null}
                                 {events.map((ev: any) => {
                                   const start = ev.start ? new Date(ev.start) : null;
                                   const end = ev.end ? new Date(ev.end) : null;
