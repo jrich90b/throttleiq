@@ -7773,7 +7773,7 @@ export default function Home() {
                     className="h-4 w-4"
                     fill="none"
                     stroke="currentColor"
-                    strokeWidth="2"
+                    strokeWidth="2.6"
                     strokeLinecap="round"
                     strokeLinejoin="round"
                     aria-hidden="true"
