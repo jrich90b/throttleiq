@@ -818,7 +818,7 @@ export async function parseCadencePersonalizationLineWithLLM(args: {
     "",
     "Goal:",
     "- Use a concrete personal/situational detail from recent conversation/context when available.",
-    "- Example style: \"Hope training in Boston is going well.\"",
+    "- Example style: \"Hope training in Boston went well.\"",
     "",
     "Rules:",
     "- line must be a single sentence, natural tone, 4-16 words.",
@@ -826,6 +826,8 @@ export async function parseCadencePersonalizationLineWithLLM(args: {
     "- Do not invent facts.",
     "- Do not include pricing/inventory asks, links, calls-to-action, or appointment prompts.",
     "- Avoid sensitive details (medical/legal/financial specifics).",
+    "- Be tense-safe: if timing is uncertain or likely past, prefer past/neutral phrasing like \"went well\" or \"hope everything's going smoothly.\"",
+    "- Avoid assuming an ongoing event is still happening.",
     "",
     `Recent messages/context:\n${history.join("\n")}`
   ].join("\n");
