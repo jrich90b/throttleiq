@@ -1264,7 +1264,7 @@ export default function Home() {
   const [regenBusy, setRegenBusy] = useState(false);
   const [clearDraftBusy, setClearDraftBusy] = useState(false);
   const [messageFeedbackBusy, setMessageFeedbackBusy] = useState<Record<string, boolean>>({});
-  const [closeReason, setCloseReason] = useState("sold");
+  const [closeReason, setCloseReason] = useState("");
   const [soldById, setSoldById] = useState("");
   const [listActionsOpenId, setListActionsOpenId] = useState<string | null>(null);
   const [todoInlineOpenId, setTodoInlineOpenId] = useState<string | null>(null);
@@ -6013,6 +6013,10 @@ export default function Home() {
 
   async function closeConv() {
     if (!selectedConv) return;
+    if (!closeReason) {
+      window.alert("Please choose a lead update option.");
+      return;
+    }
     if (closeReason === "hold") {
       await openHoldModal(selectedConv.id);
       return;
@@ -8603,7 +8607,7 @@ export default function Home() {
                           }
                         >
                           <option value="">Select outcome…</option>
-                          <option value="sold">Sold</option>
+                          <option value="sold">Close - Sold</option>
                           <option value="hold">On hold</option>
                           <option value="undecided">Undecided</option>
                           <option value="no_show">No show</option>
@@ -8818,7 +8822,7 @@ export default function Home() {
                   >
                     <option value="showed_up">Showed up</option>
                     <option value="no_show">No show</option>
-                    <option value="sold">Sold</option>
+                    <option value="sold">Close - Sold</option>
                     <option value="hold">On hold</option>
                     <option value="financing_declined">Financing declined</option>
                     <option value="financing_needs_info">Financing needs more info</option>
@@ -13603,11 +13607,12 @@ export default function Home() {
                   value={closeReason}
                   onChange={e => setCloseReason(e.target.value)}
                 >
-                  <option value="sold">Sold</option>
-                  <option value="not_interested">Not interested</option>
-                  <option value="no_response">No response</option>
-                  <option value="hold">Hold unit</option>
-                  <option value="other">Other</option>
+                  <option value="">Update Lead...</option>
+                  <option value="sold">Close - Sold</option>
+                  <option value="hold">Hold - Unit</option>
+                  <option value="not_interested">Close - Not Interested</option>
+                  <option value="no_response">Close - No Response</option>
+                  <option value="other">Close - Other</option>
                 </select>
                 {closeReason === "sold" ? (
                   <select
