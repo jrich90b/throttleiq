@@ -799,6 +799,8 @@ type TodoItem = {
   callbackTimeLabel?: string | null;
   appointmentWhenText?: string | null;
   appointmentWhenIso?: string | null;
+  appointmentOutcomeStatus?: string | null;
+  appointmentOutcomeNote?: string | null;
   dueAt?: string | null;
   reminderAt?: string | null;
   createdAt: string;
@@ -899,6 +901,22 @@ function todoInboxSection(todo: TodoItem): TodoInboxSection {
   const reason = String(todo.reason ?? "").toLowerCase();
   const summary = String(todo.summary ?? "").toLowerCase();
   const action = String(todo.action ?? "").toLowerCase();
+  const hasAppointmentTime = !!todoAppointmentTimeLabel(todo);
+  const hasAppointmentLanguage =
+    /\b(appointment|schedule|scheduled|book|booking|reschedule|no[\s-]?show|showed up|show up|test ride|demo ride)\b/.test(
+      `${reason} ${summary} ${action}`
+    );
+  if (explicitTaskClass === "appointment") {
+    // Prevent stale legacy appointment flags from forcing non-appointment
+    // tasks into the appointment bucket.
+    if (hasAppointmentTime) return "appointment";
+  } else if (
+    explicitTaskClass === "followup" ||
+    explicitTaskClass === "todo" ||
+    explicitTaskClass === "reminder"
+  ) {
+    return explicitTaskClass as TodoInboxSection;
+  }
   const followupSignalForCall =
     reason === "call" &&
     (/^call customer \(follow-up\):/i.test(summary) ||
@@ -915,19 +933,9 @@ function todoInboxSection(todo: TodoItem): TodoInboxSection {
     reason !== "parts" &&
     reason !== "apparel" &&
     reason !== "note" &&
-    /\b(appointment|schedule|scheduled|book|booking|reschedule|no[\s-]?show|showed up|show up|test ride|demo ride|trade appraisal|trade[-\s]?in appraisal|appraisal request|stop in|come in|visit)\b/.test(
-      `${reason} ${summary} ${action}`
-    );
-  if (appointmentSignal && explicitTaskClass !== "followup" && explicitTaskClass !== "reminder") {
+    hasAppointmentLanguage;
+  if (appointmentSignal && hasAppointmentTime) {
     return "appointment";
-  }
-  if (
-    explicitTaskClass === "followup" ||
-    explicitTaskClass === "appointment" ||
-    explicitTaskClass === "todo" ||
-    explicitTaskClass === "reminder"
-  ) {
-    return explicitTaskClass as TodoInboxSection;
   }
   const isCadenceFollowUpCall =
     reason === "call" &&
@@ -1436,6 +1444,11 @@ export default function Home() {
   const [todoResolveOpen, setTodoResolveOpen] = useState(false);
   const [todoResolveTarget, setTodoResolveTarget] = useState<TodoItem | null>(null);
   const [todoResolution, setTodoResolution] = useState("resume");
+  const [appointmentCloseOpen, setAppointmentCloseOpen] = useState(false);
+  const [appointmentCloseTarget, setAppointmentCloseTarget] = useState<TodoItem | null>(null);
+  const [appointmentCloseOutcome, setAppointmentCloseOutcome] = useState("showed_up");
+  const [appointmentCloseNote, setAppointmentCloseNote] = useState("");
+  const [appointmentCloseSaving, setAppointmentCloseSaving] = useState(false);
   const [saveToast, setSaveToast] = useState<string | null>(null);
   const [callBusy, setCallBusy] = useState(false);
   const [callMethod, setCallMethod] = useState<"cell" | "extension">("cell");
@@ -4676,11 +4689,22 @@ export default function Home() {
     }
   }, [messageFilter, selectedConv?.id]);
 
-  async function markTodoDone(todo: TodoItem, resolution = "resume") {
+  async function markTodoDone(
+    todo: TodoItem,
+    resolution = "resume",
+    appointmentOutcome?: string,
+    appointmentOutcomeNote?: string
+  ) {
     await fetch("/api/todos", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ convId: todo.convId, todoId: todo.id, resolution })
+      body: JSON.stringify({
+        convId: todo.convId,
+        todoId: todo.id,
+        resolution,
+        appointmentOutcome: appointmentOutcome || undefined,
+        appointmentOutcomeNote: appointmentOutcomeNote || undefined
+      })
     });
     await load();
   }
@@ -8075,6 +8099,7 @@ export default function Home() {
                       const showRequestedCallTime =
                         sectionType !== "appointment" && !!requestedCallTime && !actionAlreadyHasRequestedTime;
                       const ownerDisplay = String(t.ownerDisplayName ?? t.ownerName ?? t.leadOwnerName ?? "").trim();
+                      const appointmentOutcomeStatus = String(t.appointmentOutcomeStatus ?? "").trim();
                       return (
                         <div key={t.id} className={`p-4 flex items-start justify-between gap-4 ${rowIdx > 0 ? "border-t" : ""}`}>
                           <div className="min-w-0 flex-1">
@@ -8111,6 +8136,11 @@ export default function Home() {
                                 Appointment time: {appointmentTime}
                               </div>
                             ) : null}
+                            {sectionType === "appointment" && appointmentOutcomeStatus ? (
+                              <div className="text-xs text-gray-600 mt-1">
+                                Outcome: {appointmentOutcomeStatus.replace(/_/g, " ")}
+                              </div>
+                            ) : null}
                             <button
                               className="text-xs text-blue-600 mt-2 inline-block"
                               onClick={() => {
@@ -8133,7 +8163,16 @@ export default function Home() {
                             ) : null}
                             <button
                               className="px-3 py-2 border rounded text-sm text-gray-600"
-                              onClick={() => markTodoDone(t, "dismiss")}
+                              onClick={() => {
+                                if (sectionType === "appointment" && !appointmentOutcomeStatus) {
+                                  setAppointmentCloseTarget(t);
+                                  setAppointmentCloseOutcome("showed_up");
+                                  setAppointmentCloseNote("");
+                                  setAppointmentCloseOpen(true);
+                                  return;
+                                }
+                                void markTodoDone(t, "dismiss");
+                              }}
                               title="Close this To Do"
                             >
                               Close
@@ -8406,6 +8445,79 @@ export default function Home() {
                     </div>
                   </div>
                 )}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {appointmentCloseOpen && appointmentCloseTarget ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+            <div className="bg-white rounded-lg shadow-lg w-full max-w-md p-4">
+              <div className="text-sm font-medium">Close Appointment Task</div>
+              <div className="text-xs text-gray-500 mt-1">
+                No appointment outcome is saved yet. Add the outcome now before closing.
+              </div>
+              <div className="mt-3 grid grid-cols-1 gap-2">
+                <label className="text-xs text-gray-600">
+                  Outcome
+                  <select
+                    className="mt-1 w-full border rounded px-3 py-2 text-sm"
+                    value={appointmentCloseOutcome}
+                    onChange={e => setAppointmentCloseOutcome(e.target.value)}
+                  >
+                    <option value="showed_up">Showed up</option>
+                    <option value="no_show">No show</option>
+                    <option value="sold">Sold</option>
+                    <option value="hold">On hold</option>
+                    <option value="financing_declined">Financing declined</option>
+                    <option value="bought_elsewhere">Bought elsewhere</option>
+                    <option value="follow_up">Follow up</option>
+                    <option value="other">Other</option>
+                  </select>
+                </label>
+                <label className="text-xs text-gray-600">
+                  Note (optional)
+                  <textarea
+                    className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[72px]"
+                    value={appointmentCloseNote}
+                    onChange={e => setAppointmentCloseNote(e.target.value)}
+                    placeholder="Add any context from the visit."
+                  />
+                </label>
+              </div>
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  className="px-3 py-2 border rounded text-sm"
+                  disabled={appointmentCloseSaving}
+                  onClick={() => {
+                    setAppointmentCloseOpen(false);
+                    setAppointmentCloseTarget(null);
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="px-3 py-2 border rounded text-sm bg-gray-900 text-white"
+                  disabled={appointmentCloseSaving}
+                  onClick={async () => {
+                    if (!appointmentCloseTarget) return;
+                    setAppointmentCloseSaving(true);
+                    try {
+                      await markTodoDone(
+                        appointmentCloseTarget,
+                        "dismiss",
+                        appointmentCloseOutcome,
+                        appointmentCloseNote
+                      );
+                      setAppointmentCloseOpen(false);
+                      setAppointmentCloseTarget(null);
+                    } finally {
+                      setAppointmentCloseSaving(false);
+                    }
+                  }}
+                >
+                  {appointmentCloseSaving ? "Saving..." : "Save & Close"}
+                </button>
               </div>
             </div>
           </div>

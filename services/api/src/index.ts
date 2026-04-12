@@ -3192,6 +3192,26 @@ function onAppointmentBooked(conv: any) {
   if (conv?.id) {
     markOpenTodosDoneForConversationByClass(conv.id, ["appointment"]);
   }
+  const apptWhenIso = String(conv?.appointment?.whenIso ?? "").trim();
+  const apptWhenText = String(conv?.appointment?.whenText ?? "").trim();
+  const apptOwnerId =
+    String(conv?.appointment?.bookedSalespersonId ?? "").trim() || String(conv?.leadOwner?.id ?? "").trim() || "";
+  const apptOwnerName =
+    String(conv?.appointment?.bookedSalespersonName ?? "").trim() ||
+    String(conv?.leadOwner?.name ?? "").trim() ||
+    "";
+  if (apptWhenIso) {
+    const summary = apptWhenText ? `Appointment scheduled for ${apptWhenText}.` : "Appointment scheduled.";
+    addTodo(
+      conv,
+      "other",
+      summary,
+      undefined,
+      apptOwnerId || apptOwnerName ? { id: apptOwnerId || undefined, name: apptOwnerName || undefined } : undefined,
+      { dueAt: apptWhenIso },
+      "appointment"
+    );
+  }
   if (conv) {
     conv.scheduleSoft = undefined;
   }
@@ -12512,9 +12532,13 @@ function deriveTodoActionLabel(todo: any, conv: any, timeZone = "America/New_Yor
   const reason = String(todo?.reason ?? "").toLowerCase();
   const summary = String(todo?.summary ?? "");
   const text = `${reason} ${summary}`.toLowerCase();
+  const explicitTaskClass = String(todo?.taskClass ?? "").trim().toLowerCase();
   const dueLabel = formatTodoCallDueAtLabel(todo?.dueAt, timeZone);
   const withDue = (label: string) =>
     dueLabel ? `${label.replace(/[. ]*$/, "")} (requested: ${dueLabel}).` : label;
+  if (explicitTaskClass === "appointment") {
+    return withDue("Appointment booked. Confirm attendance and record outcome.");
+  }
   const focusFromSummary =
     summary.match(/^call customer \(follow-up\):\s*(.+)$/i)?.[1]?.trim() ??
     summary.match(/^call requested:\s*(.+)$/i)?.[1]?.trim() ??
@@ -16705,6 +16729,8 @@ app.get("/todos", requirePermission("canAccessTodos"), async (req, res) => {
         const callbackTimeLabel = callbackTimeByConv.get(t.convId) ?? null;
         const appointmentWhenText = String(conv?.appointment?.whenText ?? "").trim() || null;
         const appointmentWhenIso = String(conv?.appointment?.whenIso ?? "").trim() || null;
+        const appointmentOutcomeStatus = String(conv?.appointment?.staffNotify?.outcome?.status ?? "").trim() || null;
+        const appointmentOutcomeNote = String(conv?.appointment?.staffNotify?.outcome?.note ?? "").trim() || null;
         const action = deriveTodoActionLabel(t, conv, actionTimeZone);
         return {
           ...t,
@@ -16713,6 +16739,8 @@ app.get("/todos", requirePermission("canAccessTodos"), async (req, res) => {
           callbackTimeLabel,
           appointmentWhenText,
           appointmentWhenIso,
+          appointmentOutcomeStatus,
+          appointmentOutcomeNote,
           ownerDisplayName,
           ownerDisplayType,
           leadOwnerName,
@@ -16831,7 +16859,7 @@ app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
   return res.json({ ok: true, todo: task, conversation: conv });
 });
 
-app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), (req, res) => {
+app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), async (req, res) => {
   const { convId, todoId } = req.params;
   const user = (req as any).user ?? null;
   const convForAccess = getConversation(convId);
@@ -16849,6 +16877,69 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), (re
   const task = markTodoDone(convId, todoId);
   const conv = getConversation(convId);
   if (conv) {
+    const appointmentOutcome = String(req.body?.appointmentOutcome ?? "").trim();
+    const appointmentOutcomeNote = String(req.body?.appointmentOutcomeNote ?? "").trim();
+    if (appointmentOutcome && conv?.appointment) {
+      const allowedOutcomes = new Set([
+        "showed_up",
+        "no_show",
+        "sold",
+        "hold",
+        "financing_declined",
+        "bought_elsewhere",
+        "follow_up",
+        "other"
+      ]);
+      if (!allowedOutcomes.has(appointmentOutcome)) {
+        return res.status(400).json({ ok: false, error: "invalid_appointment_outcome" });
+      }
+      const nowIsoValue = new Date().toISOString();
+      if (appointmentOutcome === "financing_declined") {
+        const cfg = await getSchedulerConfigHot();
+        conv.followUp = {
+          mode: "active",
+          reason: "financing_declined",
+          updatedAt: nowIsoValue
+        };
+        conv.followUpCadence = {
+          status: "active",
+          anchorAt: nowIsoValue,
+          nextDueAt: computeFollowUpDueAt(nowIsoValue, FINANCE_DECLINED_DAY_OFFSETS[0], cfg.timezone),
+          stepIndex: 0,
+          kind: "long_term"
+        };
+        await notifyBusinessManagerFinancingDeclined(conv, appointmentOutcomeNote || undefined);
+      } else if (appointmentOutcome === "sold") {
+        const soldById = conv.appointment?.bookedSalespersonId ?? conv.leadOwner?.id ?? "";
+        const soldByName = String(conv.appointment?.bookedSalespersonName ?? conv.leadOwner?.name ?? "").trim();
+        const leadVehicle = conv?.lead?.vehicle ?? {};
+        const label =
+          [leadVehicle?.year, leadVehicle?.make, leadVehicle?.model].filter(Boolean).join(" ").trim() || undefined;
+        conv.sale = {
+          soldAt: nowIsoValue,
+          soldById: soldById || undefined,
+          soldByName: soldByName || undefined,
+          stockId: String(leadVehicle?.stockId ?? "").trim() || undefined,
+          vin: String(leadVehicle?.vin ?? "").trim() || undefined,
+          label,
+          note: appointmentOutcomeNote || undefined
+        };
+        conv.status = "closed";
+        conv.closedAt = nowIsoValue;
+        conv.closedReason = "sold";
+        markOpenTodosDoneForConversation(conv.id);
+      } else if (appointmentOutcome === "hold") {
+        setFollowUpMode(conv, "paused_indefinite", "appointment_hold");
+        stopFollowUpCadence(conv, "appointment_hold");
+      }
+      conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
+      conv.appointment.staffNotify.outcome = {
+        status: appointmentOutcome as any,
+        note: appointmentOutcomeNote || undefined,
+        updatedAt: nowIsoValue
+      };
+      conv.appointment.updatedAt = nowIsoValue;
+    }
     const resolution = String(req.body?.resolution ?? "resume").trim();
     const nowIso = new Date().toISOString();
     if (resolution === "resume") {

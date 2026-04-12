@@ -30,6 +30,8 @@ export async function POST(req: Request) {
   const convId = String(body?.convId ?? "").trim();
   const todoId = String(body?.todoId ?? "").trim();
   const resolution = String(body?.resolution ?? "").trim();
+  const appointmentOutcome = String(body?.appointmentOutcome ?? "").trim();
+  const appointmentOutcomeNote = String(body?.appointmentOutcomeNote ?? "").trim();
   if (!convId || !todoId) {
     return NextResponse.json({ ok: false, error: "Missing convId/todoId" }, { status: 400 });
   }
@@ -37,7 +39,11 @@ export async function POST(req: Request) {
   const r = await apiFetch(`${base}/todos/${encodeURIComponent(convId)}/${encodeURIComponent(todoId)}/done`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ resolution })
+    body: JSON.stringify({
+      resolution,
+      appointmentOutcome: appointmentOutcome || undefined,
+      appointmentOutcomeNote: appointmentOutcomeNote || undefined
+    })
   });
   const text = await r.text();
   try {

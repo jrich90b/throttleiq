@@ -192,22 +192,32 @@ export function inferTodoTaskClass(
   summary?: string | null,
   schedule?: TodoScheduleOptions
 ): TodoTaskClass {
-  const text = String(summary ?? "").toLowerCase();
+  const summaryRaw = String(summary ?? "");
+  const text = summaryRaw.toLowerCase();
   const hasDepartmentSignals =
     reason === "service" ||
     reason === "parts" ||
     reason === "apparel" ||
     /\b(service|parts?|apparel|motorclothes|clothing|merch)\b/.test(text);
+  const hasAppointmentLanguage =
+    /\b(appointment|schedule|scheduled|book|booking|reschedule|no[\s-]?show|showed up|show up|test ride|demo ride)\b/.test(
+      text
+    );
+  const hasAppointmentTimeSignal =
+    !!String(schedule?.dueAt ?? "").trim() ||
+    !!String(schedule?.reminderAt ?? "").trim() ||
+    /\b(today|tomorrow|tonight|this\s+(?:morning|afternoon|evening)|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?|\d{1,2}:\d{2}\s*(?:am|pm)?|\d{1,2}\s*(?:am|pm))\b/.test(
+      text
+    );
   const hasAppointmentSignals =
     !hasDepartmentSignals &&
     reason !== "note" &&
-    /\b(appointment|schedule|scheduled|book|booking|reschedule|no[\s-]?show|showed up|show up|test ride|demo ride|trade appraisal|trade[-\s]?in appraisal|appraisal request|stop in|come in|visit)\b/.test(
-      text
-    );
+    hasAppointmentLanguage &&
+    hasAppointmentTimeSignal;
   if (reason === "call") {
     const hasCadenceFollowUpSignals =
-      /^call customer \(follow-up\):/i.test(String(summary ?? "")) ||
-      /^call customer \((initial reply sent|follow[- ]?up)\)/i.test(String(summary ?? "")) ||
+      /^call customer \(follow-up\):/i.test(summaryRaw) ||
+      /^call customer \((initial reply sent|follow[- ]?up)\)/i.test(summaryRaw) ||
       /\bfollow[- ]?up\b/i.test(text) ||
       /\binitial reply sent\b/i.test(text) ||
       /\bcadence\b/i.test(text);
@@ -215,7 +225,7 @@ export function inferTodoTaskClass(
     const hasReminderSignals =
       !!String(schedule?.dueAt ?? "").trim() ||
       !!String(schedule?.reminderAt ?? "").trim() ||
-      /^call requested:/i.test(String(summary ?? "")) ||
+      /^call requested:/i.test(summaryRaw) ||
       /\brequested call time\b/i.test(text) ||
       /\bremind(er)?\b/i.test(text);
     if (hasReminderSignals) return "reminder";
@@ -1088,14 +1098,19 @@ async function loadFromDisk() {
     todos.length = 0;
     if (parsed?.todos?.length) {
       for (const task of parsed.todos) {
-        const inferredClass = inferTodoTaskClass(task.reason, task.summary, task);
-        const explicitClass = String(task.taskClass ?? "").trim().toLowerCase();
-        const knownExplicitClass =
-          explicitClass === "followup" ||
-          explicitClass === "appointment" ||
+      const inferredClass = inferTodoTaskClass(task.reason, task.summary, task);
+      const explicitClass = String(task.taskClass ?? "").trim().toLowerCase();
+      const knownExplicitClass =
+        explicitClass === "followup" ||
+        explicitClass === "appointment" ||
+        explicitClass === "todo" ||
+        explicitClass === "reminder";
+        if (
+          task.reason === "call" ||
+          !knownExplicitClass ||
           explicitClass === "todo" ||
-          explicitClass === "reminder";
-        if (task.reason === "call" || !knownExplicitClass || explicitClass === "todo") {
+          (explicitClass === "appointment" && inferredClass !== "appointment")
+        ) {
           // Normalize legacy classes (especially default "todo") so cadence
           // follow-ups, appointment tasks, reminders, and generic todos render
           // in the correct sections.
@@ -2822,9 +2837,9 @@ export function addTodo(
       const current = String(existing.summary ?? "").trim();
       const currentLower = current.toLowerCase();
       const incomingLower = incoming.toLowerCase();
-      if (incomingTaskClass === "followup") {
-        // Follow-up tasks should always reflect the latest cadence ask, not
-        // accumulate prior summaries.
+      if (incomingTaskClass === "followup" || incomingTaskClass === "appointment") {
+        // Follow-up and appointment tasks should always reflect the latest
+        // actionable ask, not accumulate prior summaries.
         existing.summary = incoming;
       } else if (!currentLower.includes(incomingLower)) {
         existing.summary = current ? `${current}\n${incoming}` : incoming;
