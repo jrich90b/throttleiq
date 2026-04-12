@@ -12,11 +12,18 @@ export async function POST(req: Request) {
   const summary = String(body?.summary ?? "").trim();
   const reason = String(body?.reason ?? "other").trim();
   const taskClass = String(body?.taskClass ?? "").trim().toLowerCase();
+  const dueAt = String(body?.dueAt ?? "").trim();
+  const reminderAt = String(body?.reminderAt ?? "").trim();
+  const reminderLeadMinutesRaw = Number(body?.reminderLeadMinutes);
   const ownerId = String(body?.ownerId ?? "").trim();
   const ownerName = String(body?.ownerName ?? "").trim();
   if (!convId || !summary) {
     return NextResponse.json({ ok: false, error: "Missing convId/summary" }, { status: 400 });
   }
+  const reminderLeadMinutes =
+    Number.isFinite(reminderLeadMinutesRaw) && reminderLeadMinutesRaw > 0
+      ? Math.round(reminderLeadMinutesRaw)
+      : undefined;
 
   const r = await apiFetch(`${base}/todos`, {
     method: "POST",
@@ -26,6 +33,9 @@ export async function POST(req: Request) {
       summary,
       reason,
       taskClass: taskClass || undefined,
+      dueAt: dueAt || undefined,
+      reminderAt: reminderAt || undefined,
+      reminderLeadMinutes,
       ownerId: ownerId || undefined,
       ownerName: ownerName || undefined
     })

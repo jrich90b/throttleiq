@@ -16726,6 +16726,9 @@ app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
   const summary = String(req.body?.summary ?? "").trim();
   const reasonRaw = String(req.body?.reason ?? "other").trim();
   const taskClassRaw = String(req.body?.taskClass ?? "").trim().toLowerCase();
+  const dueAtRaw = String(req.body?.dueAt ?? "").trim();
+  const reminderAtRaw = String(req.body?.reminderAt ?? "").trim();
+  const reminderLeadMinutesRaw = Number(req.body?.reminderLeadMinutes);
   const ownerIdRaw = String(req.body?.ownerId ?? "").trim();
   const ownerNameRaw = String(req.body?.ownerName ?? "").trim();
   if (!convId || !summary) {
@@ -16759,6 +16762,42 @@ app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
   const taskClass = allowedTaskClasses.includes(taskClassRaw as any)
     ? (taskClassRaw as "followup" | "appointment" | "todo" | "reminder")
     : undefined;
+  const normalizeDateToIso = (value: string): string | null => {
+    const input = String(value ?? "").trim();
+    if (!input) return null;
+    const at = new Date(input);
+    if (Number.isNaN(at.getTime())) return null;
+    return at.toISOString();
+  };
+  const dueAtIso = normalizeDateToIso(dueAtRaw);
+  const reminderAtIsoInput = normalizeDateToIso(reminderAtRaw);
+  if ((dueAtRaw && !dueAtIso) || (reminderAtRaw && !reminderAtIsoInput)) {
+    return res.status(400).json({ ok: false, error: "Invalid dueAt/reminderAt" });
+  }
+  const reminderLeadMinutes =
+    Number.isFinite(reminderLeadMinutesRaw) && reminderLeadMinutesRaw > 0
+      ? Math.round(reminderLeadMinutesRaw)
+      : undefined;
+  let reminderAtIso = reminderAtIsoInput;
+  if (dueAtIso && !reminderAtIso) {
+    const leadMinutes = reminderLeadMinutes ?? 30;
+    reminderAtIso = new Date(new Date(dueAtIso).getTime() - leadMinutes * 60 * 1000).toISOString();
+  }
+  if (dueAtIso && reminderAtIso) {
+    const dueMs = Date.parse(dueAtIso);
+    const reminderMs = Date.parse(reminderAtIso);
+    if (Number.isFinite(dueMs) && Number.isFinite(reminderMs) && reminderMs > dueMs) {
+      reminderAtIso = dueAtIso;
+    }
+  }
+  const schedule =
+    dueAtIso || reminderAtIso
+      ? {
+          dueAt: dueAtIso || undefined,
+          reminderAt: reminderAtIso || undefined,
+          reminderLeadMinutes: reminderLeadMinutes ?? 30
+        }
+      : undefined;
   const owner =
     ownerIdRaw || ownerNameRaw
       ? { id: ownerIdRaw || undefined, name: ownerNameRaw || undefined }
@@ -16773,7 +16812,7 @@ app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
     summary,
     undefined,
     owner,
-    undefined,
+    schedule,
     taskClass
   );
   if (!task) {

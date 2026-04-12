@@ -1244,6 +1244,12 @@ export default function Home() {
   const [todoInlineOpenId, setTodoInlineOpenId] = useState<string | null>(null);
   const [todoInlineText, setTodoInlineText] = useState("");
   const [todoInlineTarget, setTodoInlineTarget] = useState<string>("lead_owner");
+  const [reminderInlineOpenId, setReminderInlineOpenId] = useState<string | null>(null);
+  const [reminderInlineText, setReminderInlineText] = useState("");
+  const [reminderInlineTarget, setReminderInlineTarget] = useState<string>("lead_owner");
+  const [reminderInlineDueAt, setReminderInlineDueAt] = useState("");
+  const [reminderInlineLeadMinutes, setReminderInlineLeadMinutes] = useState("30");
+  const [reminderInlineSaving, setReminderInlineSaving] = useState(false);
   const [contactInlineOpenId, setContactInlineOpenId] = useState<string | null>(null);
   const [contactInlineSaving, setContactInlineSaving] = useState(false);
   const [contactInlineForm, setContactInlineForm] = useState({
@@ -5675,6 +5681,11 @@ export default function Home() {
   function openReassignLeadInline(conv: ConversationListItem) {
     setTodoInlineOpenId(null);
     setTodoInlineText("");
+    setReminderInlineOpenId(null);
+    setReminderInlineText("");
+    setReminderInlineTarget(isManager ? "lead_owner" : "self");
+    setReminderInlineDueAt("");
+    setReminderInlineLeadMinutes("30");
     setContactInlineOpenId(null);
     const currentOwnerId = String(conv.leadOwner?.id ?? "").trim();
     const hasCurrentOwnerOption = reassignSalesOwnerOptions.some(o => o.id === currentOwnerId);
@@ -5772,6 +5783,83 @@ export default function Home() {
     await load();
   }
 
+  async function submitReminderInline(conv: ConversationListItem) {
+    const summary = reminderInlineText.trim();
+    if (!summary) {
+      window.alert("Please enter what to remind about.");
+      return;
+    }
+    const dueLocal = reminderInlineDueAt.trim();
+    if (!dueLocal) {
+      window.alert("Please select reminder date and time.");
+      return;
+    }
+    const dueDate = new Date(dueLocal);
+    if (Number.isNaN(dueDate.getTime())) {
+      window.alert("Invalid reminder date/time.");
+      return;
+    }
+    const reminderLeadRaw = Number(reminderInlineLeadMinutes);
+    const reminderLeadMinutes =
+      Number.isFinite(reminderLeadRaw) && reminderLeadRaw > 0 ? Math.round(reminderLeadRaw) : 30;
+    const dueAt = dueDate.toISOString();
+    const reminderAt = new Date(dueDate.getTime() - reminderLeadMinutes * 60 * 1000).toISOString();
+
+    const target = isManager ? reminderInlineTarget : "self";
+    let ownerId = "";
+    let ownerName = "";
+    if (target === "lead_owner") {
+      ownerId = String(conv.leadOwner?.id ?? "").trim();
+      ownerName = String(conv.leadOwner?.name ?? "").trim();
+    } else if (target.startsWith("owner:")) {
+      ownerId = target.slice("owner:".length).trim();
+      if (ownerId) {
+        ownerName = reassignSalesOwnerOptions.find(o => o.id === ownerId)?.name ?? "";
+      }
+    } else if (target.startsWith("department:")) {
+      const role = target.slice("department:".length).trim().toLowerCase();
+      if (role === "service" || role === "parts" || role === "apparel") {
+        ownerId = String(departmentOwnerByRole[role]?.id ?? "").trim();
+        ownerName =
+          String(departmentOwnerByRole[role]?.name ?? "").trim() ||
+          `${role[0].toUpperCase()}${role.slice(1)} Department`;
+      }
+    }
+
+    setReminderInlineSaving(true);
+    try {
+      const resp = await fetch("/api/todos/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          convId: conv.id,
+          summary,
+          reason: "call",
+          taskClass: "reminder",
+          dueAt,
+          reminderAt,
+          reminderLeadMinutes,
+          ownerId: ownerId || undefined,
+          ownerName: ownerName || undefined
+        })
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || data?.ok === false) {
+        window.alert(data?.error ?? "Failed to set reminder");
+        return;
+      }
+      setReminderInlineOpenId(null);
+      setReminderInlineText("");
+      setReminderInlineTarget(isManager ? "lead_owner" : "self");
+      setReminderInlineDueAt("");
+      setReminderInlineLeadMinutes("30");
+      setListActionsOpenId(null);
+      await load();
+    } finally {
+      setReminderInlineSaving(false);
+    }
+  }
+
   function openInlineContactFromConversation(c: ConversationListItem) {
     const linkedContact = findLinkedContactForConversation(c);
     const selectedLead = selectedConv?.id === c.id ? selectedConv.lead : null;
@@ -5800,6 +5888,11 @@ export default function Home() {
     setTodoInlineOpenId(null);
     setTodoInlineText("");
     setTodoInlineTarget(isManager ? "lead_owner" : "self");
+    setReminderInlineOpenId(null);
+    setReminderInlineText("");
+    setReminderInlineTarget(isManager ? "lead_owner" : "self");
+    setReminderInlineDueAt("");
+    setReminderInlineLeadMinutes("30");
     setContactInlineOpenId(c.id);
   }
 
@@ -7493,7 +7586,12 @@ export default function Home() {
                               {listActionsOpenId === c.id ? (
                                 <div
                                   className={`absolute right-0 mt-2 border rounded bg-white shadow z-10 ${
-                                    todoInlineOpenId === c.id || contactInlineOpenId === c.id || reassignInlineOpenId === c.id ? "w-64" : "w-40"
+                                    todoInlineOpenId === c.id ||
+                                    reminderInlineOpenId === c.id ||
+                                    contactInlineOpenId === c.id ||
+                                    reassignInlineOpenId === c.id
+                                      ? "w-72"
+                                      : "w-40"
                                   }`}
                                   data-actions-menu
                                   onClick={e => e.stopPropagation()}
@@ -7553,6 +7651,88 @@ export default function Home() {
                                           }}
                                         >
                                           Create
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : reminderInlineOpenId === c.id ? (
+                                    <div className="p-2">
+                                      <div className="text-[11px] text-gray-500 mb-1">
+                                        Set reminder
+                                      </div>
+                                      {isManager ? (
+                                        <select
+                                          className="w-full border rounded px-2 py-1 text-xs mb-2 bg-white"
+                                          value={reminderInlineTarget}
+                                          onChange={e => setReminderInlineTarget(e.target.value)}
+                                          title="Who should receive this reminder"
+                                        >
+                                          <option value="lead_owner">Lead owner</option>
+                                          {reassignSalesOwnerOptions.length ? (
+                                            <optgroup label="Salespeople">
+                                              {reassignSalesOwnerOptions.map(owner => (
+                                                <option key={`reminder-owner-${owner.id}`} value={`owner:${owner.id}`}>
+                                                  {owner.name}
+                                                </option>
+                                              ))}
+                                            </optgroup>
+                                          ) : null}
+                                          <optgroup label="Departments">
+                                            <option value="department:service">Service Department</option>
+                                            <option value="department:parts">Parts Department</option>
+                                            <option value="department:apparel">Apparel Department</option>
+                                          </optgroup>
+                                        </select>
+                                      ) : null}
+                                      <textarea
+                                        className="w-full border rounded px-2 py-1 text-xs"
+                                        rows={2}
+                                        value={reminderInlineText}
+                                        onChange={e => setReminderInlineText(e.target.value)}
+                                        placeholder="Call customer about financing update"
+                                      />
+                                      <label className="mt-2 block text-[11px] text-gray-500">
+                                        Reminder time
+                                        <input
+                                          type="datetime-local"
+                                          className="mt-1 w-full border rounded px-2 py-1 text-xs"
+                                          value={reminderInlineDueAt}
+                                          onChange={e => setReminderInlineDueAt(e.target.value)}
+                                        />
+                                      </label>
+                                      <label className="mt-2 block text-[11px] text-gray-500">
+                                        Send SMS reminder
+                                        <select
+                                          className="mt-1 w-full border rounded px-2 py-1 text-xs bg-white"
+                                          value={reminderInlineLeadMinutes}
+                                          onChange={e => setReminderInlineLeadMinutes(e.target.value)}
+                                        >
+                                          <option value="0">At reminder time</option>
+                                          <option value="15">15 min before</option>
+                                          <option value="30">30 min before</option>
+                                          <option value="60">1 hour before</option>
+                                        </select>
+                                      </label>
+                                      <div className="mt-2 flex justify-end gap-2">
+                                        <button
+                                          className="px-2 py-1 border rounded text-xs"
+                                          onClick={() => {
+                                            setReminderInlineOpenId(null);
+                                            setReminderInlineText("");
+                                            setReminderInlineTarget(isManager ? "lead_owner" : "self");
+                                            setReminderInlineDueAt("");
+                                            setReminderInlineLeadMinutes("30");
+                                          }}
+                                        >
+                                          Cancel
+                                        </button>
+                                        <button
+                                          className="px-2 py-1 border rounded text-xs"
+                                          disabled={reminderInlineSaving}
+                                          onClick={() => {
+                                            void submitReminderInline(c);
+                                          }}
+                                        >
+                                          {reminderInlineSaving ? "Saving..." : "Create"}
                                         </button>
                                       </div>
                                     </div>
@@ -7700,9 +7880,30 @@ export default function Home() {
                                           setTodoInlineOpenId(c.id);
                                           setTodoInlineText("");
                                           setTodoInlineTarget(isManager ? "lead_owner" : "self");
+                                          setReminderInlineOpenId(null);
+                                          setReminderInlineText("");
+                                          setReminderInlineTarget(isManager ? "lead_owner" : "self");
+                                          setReminderInlineDueAt("");
+                                          setReminderInlineLeadMinutes("30");
                                         }}
                                       >
                                         Create To Do
+                                      </button>
+                                      <button
+                                        className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
+                                        onClick={() => {
+                                          setContactInlineOpenId(null);
+                                          setTodoInlineOpenId(null);
+                                          setTodoInlineText("");
+                                          setTodoInlineTarget(isManager ? "lead_owner" : "self");
+                                          setReminderInlineOpenId(c.id);
+                                          setReminderInlineText("");
+                                          setReminderInlineTarget(isManager ? "lead_owner" : "self");
+                                          setReminderInlineDueAt("");
+                                          setReminderInlineLeadMinutes("30");
+                                        }}
+                                      >
+                                        Set Reminder
                                       </button>
                                       <button
                                         className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
