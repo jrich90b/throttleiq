@@ -5878,7 +5878,7 @@ export default function Home() {
           code === "not-allowed" || code === "service-not-allowed"
             ? "Microphone access is blocked. Allow microphone permission and try again."
             : code === "no-speech"
-              ? "No speech detected. Press and hold the button while talking."
+              ? "No speech detected. Tap start, speak, then tap stop."
               : code
                 ? `Voice input error: ${code}`
                 : "Voice input failed.";
@@ -11998,38 +11998,25 @@ export default function Home() {
                       agentContextSpeechListening ? "bg-emerald-50 border-emerald-300 text-emerald-800" : "bg-white"
                     }`}
                     disabled={!agentContextSpeechSupported || agentContextSaving}
-                    onPointerDown={() => {
-                      void startAgentContextSpeech();
-                    }}
-                    onPointerUp={() => stopAgentContextSpeech()}
-                    onPointerCancel={() => stopAgentContextSpeech()}
-                    onPointerLeave={() => {
-                      if (agentContextSpeechListening) stopAgentContextSpeech();
-                    }}
-                    onKeyDown={e => {
-                      if (e.key === " " || e.key === "Enter") {
-                        e.preventDefault();
-                        void startAgentContextSpeech();
-                      }
-                    }}
-                    onKeyUp={e => {
-                      if (e.key === " " || e.key === "Enter") {
-                        e.preventDefault();
+                    onClick={() => {
+                      if (agentContextSpeechListening) {
                         stopAgentContextSpeech();
+                        return;
                       }
+                      void startAgentContextSpeech();
                     }}
                     title={
                       agentContextSpeechSupported
-                        ? "Hold while speaking to fill context text."
+                        ? "Tap once to start voice input, then tap again to stop."
                         : "Voice input not supported on this browser."
                     }
                   >
-                    {agentContextSpeechListening ? "🎙️ Listening... release to stop" : "🎤 Hold to talk"}
+                    {agentContextSpeechListening ? "🎙️ Listening... tap to stop" : "🎤 Tap to talk"}
                   </button>
                   {!agentContextSpeechSupported ? (
                     <span className="text-xs text-slate-500">Voice input not supported on this browser.</span>
                   ) : (
-                    <span className="text-xs text-slate-500">Press and hold while speaking.</span>
+                    <span className="text-xs text-slate-500">Tap to start, then tap again to stop.</span>
                   )}
                 </div>
                 <label className="text-xs text-slate-600">

@@ -15118,19 +15118,54 @@ app.get("/public/appointment/outcome", async (req, res) => {
         let recorder = null;
         let chunks = [];
         let stream = null;
+        let recorderMimeType = "";
 
         async function stopRecording() {
           if (!recorder) return;
           recorder.stop();
         }
 
+        function pickRecorderMimeType() {
+          if (typeof MediaRecorder === "undefined") return "";
+          if (typeof MediaRecorder.isTypeSupported !== "function") return "";
+          const candidates = [
+            "audio/webm;codecs=opus",
+            "audio/webm",
+            "audio/mp4",
+            "audio/mpeg"
+          ];
+          for (const candidate of candidates) {
+            try {
+              if (MediaRecorder.isTypeSupported(candidate)) return candidate;
+            } catch {}
+          }
+          return "";
+        }
+
         async function startRecording() {
-          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            statusEl.textContent = "Recording not supported on this device.";
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined") {
+            statusEl.textContent = "Recording not supported on this browser. Use keyboard dictation in Notes.";
             return;
           }
-          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          recorder = new MediaRecorder(stream);
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          } catch (err) {
+            statusEl.textContent = "Microphone access is blocked. Allow mic permission and try again.";
+            return;
+          }
+          recorderMimeType = pickRecorderMimeType();
+          try {
+            recorder = recorderMimeType
+              ? new MediaRecorder(stream, { mimeType: recorderMimeType })
+              : new MediaRecorder(stream);
+          } catch (err) {
+            statusEl.textContent = "Recording is not supported on this browser/device.";
+            if (stream) {
+              stream.getTracks().forEach(t => t.stop());
+              stream = null;
+            }
+            return;
+          }
           chunks = [];
           recorder.ondataavailable = e => {
             if (e.data) chunks.push(e.data);
@@ -15138,7 +15173,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
           recorder.onstop = async () => {
             try {
               statusEl.textContent = "Transcribing…";
-              const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+              const blob = new Blob(chunks, { type: recorderMimeType || recorder.mimeType || "audio/webm" });
               const fd = new FormData();
               fd.append("token", token);
               fd.append("outcome", outcomeEl ? outcomeEl.value : "");
