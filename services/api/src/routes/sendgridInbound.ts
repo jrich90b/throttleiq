@@ -4405,21 +4405,34 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const genericModel = /^(other|full line)$/i.test(rawModelLabel);
     const nearTermWindow =
       typeof monthsStart === "number" && Number.isFinite(monthsStart) && monthsStart >= 0 && monthsStart <= 3;
+    const buildNearTermInvite = (subject: string): string => {
+      const rideLine = testRideInSeason
+        ? " If weather permits, we can line up a test ride too."
+        : "";
+      return `${subject} Want to set a time to come in and check out bikes?${rideLine}`.trim();
+    };
     if (genericModel && nearTermWindow) {
       const timeframeLabel =
         conv.lead?.purchaseTimeframe?.trim() ||
         (typeof monthsEnd === "number" && Number.isFinite(monthsEnd)
           ? `${Math.max(0, Math.round(monthsStart))}-${Math.max(Math.round(monthsStart), Math.round(monthsEnd))} months`
           : "0-3 months");
-      draft =
-        `Thanks for reaching out on Facebook. Since you’re shopping in the next ${timeframeLabel}, ` +
-        "I can send 2-3 bikes that are a good fit and price range. " +
-        "Are you leaning more Street Glide style or something lighter for a first Harley?";
+      draft = buildNearTermInvite(
+        `Thanks for reaching out on Facebook. Since you’re shopping in the next ${timeframeLabel}, I can help you narrow down a few strong options.`
+      );
       usedNearTermMetaTemplate = true;
     }
     const isFutureWindow = typeof monthsStart === "number" && monthsStart >= 4;
     const asksModel = /which model|what model|model are you interested|bike preference/i.test(draft);
     const hasSoftInvite = /\b(stop in|come in|check (it|them) out|go over options|take a look)\b/i.test(draft);
+    const shouldForceNearTermInvite = nearTermWindow && !usedNearTermMetaTemplate;
+    if (shouldForceNearTermInvite) {
+      const subject = modelLabel
+        ? `Great — I can help with ${modelLabel} options and pricing.`
+        : "Great — I can help you compare models and pricing.";
+      draft = buildNearTermInvite(subject);
+      usedNearTermMetaTemplate = true;
+    }
     if (!usedNearTermMetaTemplate && (!asksModel || !hasSoftInvite || isFutureWindow)) {
       const modelQuestion = modelLabel
         ? `Are you leaning toward a specific ${modelLabel}, or still comparing?`
