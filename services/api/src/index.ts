@@ -6999,6 +6999,17 @@ async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
     note,
     updatedAt: nowIsoValue
   };
+  if (note) {
+    try {
+      await applyActionStateFromContextNote(
+        conv,
+        note,
+        String(staff.name ?? staff.email ?? "staff")
+      );
+    } catch (err: any) {
+      console.log("[outcome-note-actions] failed:", err?.message ?? err);
+    }
+  }
   outcomeTarget.contextUsedAt = nowIsoValue;
   addTodo(conv, "note", `Dealer ride outcome by ${staff.name ?? staff.email ?? "staff"}: ${parsed.outcome}.`);
   saveConversation(conv);
@@ -14952,6 +14963,13 @@ app.post("/public/appointment/outcome", async (req, res) => {
     note: note || undefined,
     updatedAt: nowIso
   };
+  if (note) {
+    try {
+      await applyActionStateFromContextNote(conv, note, "Appointment outcome");
+    } catch (err: any) {
+      console.log("[outcome-note-actions] failed:", err?.message ?? err);
+    }
+  }
   if (conv.appointment) conv.appointment.updatedAt = new Date().toISOString();
   saveConversation(conv);
   await flushConversationStore();
@@ -15014,6 +15032,13 @@ app.post("/public/appointment/outcome/transcribe", upload.single("audio"), async
     note: transcript,
     updatedAt: nowIso
   };
+  if (transcript) {
+    try {
+      await applyActionStateFromContextNote(conv, transcript, "Appointment outcome (voice)");
+    } catch (err: any) {
+      console.log("[outcome-note-actions] failed:", err?.message ?? err);
+    }
+  }
   if (conv.appointment) conv.appointment.updatedAt = new Date().toISOString();
   saveConversation(conv);
   await flushConversationStore();
