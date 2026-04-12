@@ -7770,7 +7770,7 @@ export default function Home() {
                 >
                   <svg
                     viewBox="0 0 24 24"
-                    className="h-4 w-4"
+                    className="h-5 w-5"
                     fill="none"
                     stroke="currentColor"
                     strokeWidth="2.6"
@@ -7778,9 +7778,10 @@ export default function Home() {
                     strokeLinejoin="round"
                     aria-hidden="true"
                   >
-                    <path d="M14 3h7v7" />
-                    <path d="M10 14 21 3" />
-                    <path d="M21 14v7H3V3h7" />
+                    <path d="M4 5a2 2 0 0 1 2-2h8.5" />
+                    <path d="M4 5v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9.5" />
+                    <path d="m9 15.1 1.4 3.1 3.1-1.4 6.2-6.2a2 2 0 0 0-2.8-2.8l-6.2 6.2Z" />
+                    <path d="m15.8 8.6 2.8 2.8" />
                   </svg>
                 </button>
               </div>
