@@ -2451,6 +2451,271 @@ export default function Home() {
     return false;
   }
 
+  type WatchModelFamilyId =
+    | "trike"
+    | "tri_glide"
+    | "touring"
+    | "grand_american_touring"
+    | "softail"
+    | "dyna"
+    | "cvo"
+    | "nightster"
+    | "sport_glide"
+    | "road_glide_limited"
+    | "ultra_limited"
+    | "low_rider_s"
+    | "softail_deluxe"
+    | "deluxe"
+    | "street_glide"
+    | "road_glide"
+    | "road_king"
+    | "heritage"
+    | "sportster"
+    | "pan_america"
+    | "v_rod"
+    | "street_bob"
+    | "fat_bob"
+    | "fat_boy"
+    | "breakout"
+    | "ultra_classic"
+    | "electra_glide"
+    | "springer_softail"
+    | "wide_glide";
+
+  function tokensExactly(tokens: string[], expected: string[]): boolean {
+    if (tokens.length !== expected.length) return false;
+    return tokens.every((token, idx) => token === expected[idx]);
+  }
+
+  function detectGenericWatchFamily(tokens: string[]): WatchModelFamilyId | null {
+    if (!tokens.length) return null;
+    if (tokensExactly(tokens, ["trike"]) || tokensExactly(tokens, ["trikes"])) return "trike";
+    if (tokensExactly(tokens, ["tri", "glide"])) return "tri_glide";
+    if (tokensExactly(tokens, ["touring"])) return "touring";
+    if (tokensExactly(tokens, ["grand", "american", "touring"])) return "grand_american_touring";
+    if (tokensExactly(tokens, ["softail"])) return "softail";
+    if (tokensExactly(tokens, ["dyna"])) return "dyna";
+    if (tokensExactly(tokens, ["cvo"])) return "cvo";
+    if (tokensExactly(tokens, ["nightster"])) return "nightster";
+    if (tokensExactly(tokens, ["sport", "glide"])) return "sport_glide";
+    if (tokensExactly(tokens, ["road", "glide", "limited"])) return "road_glide_limited";
+    if (tokensExactly(tokens, ["ultra", "limited"])) return "ultra_limited";
+    if (tokensExactly(tokens, ["low", "rider", "s"])) return "low_rider_s";
+    if (tokensExactly(tokens, ["softail", "deluxe"])) return "softail_deluxe";
+    if (tokensExactly(tokens, ["deluxe"])) return "deluxe";
+    if (tokensExactly(tokens, ["street", "glide"])) return "street_glide";
+    if (tokensExactly(tokens, ["road", "glide"])) return "road_glide";
+    if (tokensExactly(tokens, ["road", "king"])) return "road_king";
+    if (
+      tokensExactly(tokens, ["heritage"]) ||
+      tokensExactly(tokens, ["heritage", "classic"]) ||
+      tokensExactly(tokens, ["heritage", "softail"]) ||
+      tokensExactly(tokens, ["heritage", "softail", "classic"])
+    ) {
+      return "heritage";
+    }
+    if (tokensExactly(tokens, ["sportster"])) return "sportster";
+    if (tokensExactly(tokens, ["pan", "america"]) || tokensExactly(tokens, ["pan", "america", "1250"])) {
+      return "pan_america";
+    }
+    if (tokensExactly(tokens, ["vrod"]) || tokensExactly(tokens, ["v", "rod"])) return "v_rod";
+    if (tokensExactly(tokens, ["street", "bob"])) return "street_bob";
+    if (tokensExactly(tokens, ["fat", "bob"])) return "fat_bob";
+    if (tokensExactly(tokens, ["fat", "boy"])) return "fat_boy";
+    if (tokensExactly(tokens, ["breakout"])) return "breakout";
+    if (tokensExactly(tokens, ["ultra", "classic"])) return "ultra_classic";
+    if (
+      tokensExactly(tokens, ["electra", "glide"]) ||
+      tokensExactly(tokens, ["electraglide"]) ||
+      tokensExactly(tokens, ["electraglide", "classic"])
+    ) {
+      return "electra_glide";
+    }
+    if (tokensExactly(tokens, ["springer", "softail"])) return "springer_softail";
+    if (tokensExactly(tokens, ["wide", "glide"])) return "wide_glide";
+    return null;
+  }
+
+  function optionMatchesWatchFamily(optionTokens: string[], familyId: WatchModelFamilyId): boolean {
+    if (!optionTokens.length) return false;
+    const optionHasTriGlide =
+      containsTokenSequence(optionTokens, ["tri", "glide"]) || optionTokens.includes("flhtcutg");
+    const optionHasRoadGlideTrike =
+      containsTokenSequence(optionTokens, ["road", "glide"]) &&
+      (optionTokens.includes("3") ||
+        optionTokens.includes("iii") ||
+        optionTokens.includes("trike") ||
+        optionTokens.includes("fltrt"));
+    const optionHasStreetGlideTrike =
+      containsTokenSequence(optionTokens, ["street", "glide"]) &&
+      (optionTokens.includes("3") ||
+        optionTokens.includes("iii") ||
+        optionTokens.includes("trike") ||
+        optionTokens.includes("flhlt"));
+    const optionHasFreewheeler = optionTokens.includes("freewheeler") || optionTokens.includes("flrt");
+    const optionHasRoadGlide = containsTokenSequence(optionTokens, ["road", "glide"]);
+    const optionHasStreetGlide = containsTokenSequence(optionTokens, ["street", "glide"]);
+    const optionHasRoadKing = containsTokenSequence(optionTokens, ["road", "king"]);
+    const optionHasElectraGlide = containsTokenSequence(optionTokens, ["electra", "glide"]);
+    const optionHasUltraClassic = containsTokenSequence(optionTokens, ["ultra", "classic"]);
+    const optionHasUltraLimited = containsTokenSequence(optionTokens, ["ultra", "limited"]);
+    const optionHasTourGlide = containsTokenSequence(optionTokens, ["tour", "glide"]);
+    const optionHasLowRider = containsTokenSequence(optionTokens, ["low", "rider"]);
+    const optionHasStreetBob = containsTokenSequence(optionTokens, ["street", "bob"]);
+    const optionHasFatBob = containsTokenSequence(optionTokens, ["fat", "bob"]);
+    const optionHasFatBoy = containsTokenSequence(optionTokens, ["fat", "boy"]);
+    const optionHasBreakout = optionTokens.includes("breakout");
+    const optionHasHeritage = optionTokens.includes("heritage");
+    const optionHasSoftail = optionTokens.includes("softail");
+    const optionHasDeluxe = optionTokens.includes("deluxe");
+    const optionHasSlim = optionTokens.includes("slim");
+    const optionHasSportGlide = containsTokenSequence(optionTokens, ["sport", "glide"]) || optionTokens.includes("flsb");
+    const optionHasSpringer = optionTokens.includes("springer");
+    const optionHasDeuce = optionTokens.includes("deuce");
+    const optionHasRocker = optionTokens.includes("rocker");
+    const optionHasCrossBones = containsTokenSequence(optionTokens, ["cross", "bones"]);
+    const optionHasBlackline = optionTokens.includes("blackline");
+    const optionHasDyna = optionTokens.includes("dyna");
+    const optionHasWideGlide = containsTokenSequence(optionTokens, ["wide", "glide"]);
+    const optionHasSwitchback = optionTokens.includes("switchback");
+    const optionHasSuperGlide =
+      (optionTokens.includes("super") && optionTokens.includes("glide")) || optionTokens.includes("fxr");
+    const optionHasCvo = optionTokens.includes("cvo");
+    const optionHasNightster = optionTokens.includes("nightster") || optionTokens.some(token => /^rh975/.test(token));
+    switch (familyId) {
+      case "trike":
+        return (
+          optionHasTriGlide ||
+          optionHasRoadGlideTrike ||
+          optionHasStreetGlideTrike ||
+          optionHasFreewheeler ||
+          optionTokens.includes("trike")
+        );
+      case "tri_glide":
+        return optionHasTriGlide;
+      case "touring":
+      case "grand_american_touring":
+        return (
+          optionHasRoadGlide ||
+          optionHasStreetGlide ||
+          optionHasRoadKing ||
+          optionHasElectraGlide ||
+          optionHasUltraClassic ||
+          optionHasUltraLimited ||
+          optionHasTourGlide
+        );
+      case "softail":
+        return (
+          optionHasSoftail ||
+          optionHasHeritage ||
+          optionHasStreetBob ||
+          optionHasFatBob ||
+          optionHasFatBoy ||
+          optionHasBreakout ||
+          optionHasLowRider ||
+          optionHasSlim ||
+          optionHasSportGlide ||
+          optionHasSpringer ||
+          optionHasDeluxe ||
+          optionHasDeuce ||
+          optionHasRocker ||
+          optionHasCrossBones ||
+          optionHasBlackline
+        );
+      case "dyna":
+        return (
+          optionHasDyna ||
+          optionHasStreetBob ||
+          optionHasFatBob ||
+          optionHasWideGlide ||
+          optionHasSwitchback ||
+          optionHasLowRider ||
+          optionHasSuperGlide
+        );
+      case "cvo":
+        return optionHasCvo;
+      case "nightster":
+        return optionHasNightster;
+      case "sport_glide":
+        return optionHasSportGlide;
+      case "road_glide_limited":
+        return (
+          containsTokenSequence(optionTokens, ["road", "glide", "limited"]) ||
+          (containsTokenSequence(optionTokens, ["road", "glide"]) && optionTokens.includes("fltrk"))
+        );
+      case "ultra_limited":
+        return (
+          containsTokenSequence(optionTokens, ["ultra", "limited"]) ||
+          containsTokenSequence(optionTokens, ["electra", "glide", "ultra", "limited"])
+        );
+      case "low_rider_s":
+        return containsTokenSequence(optionTokens, ["low", "rider", "s"]);
+      case "softail_deluxe":
+        return (
+          containsTokenSequence(optionTokens, ["softail", "deluxe"]) ||
+          optionTokens.includes("deluxe")
+        );
+      case "deluxe":
+        return optionTokens.includes("deluxe");
+      case "street_glide":
+        return containsTokenSequence(optionTokens, ["street", "glide"]);
+      case "road_glide":
+        return containsTokenSequence(optionTokens, ["road", "glide"]);
+      case "road_king":
+        return containsTokenSequence(optionTokens, ["road", "king"]);
+      case "heritage":
+        return (
+          optionTokens.includes("heritage") ||
+          containsTokenSequence(optionTokens, ["heritage", "classic"]) ||
+          containsTokenSequence(optionTokens, ["heritage", "softail"])
+        );
+      case "sportster":
+        return (
+          optionTokens.includes("sportster") ||
+          hasTokenFragment(optionTokens, "883") ||
+          optionTokens.some(token => /^rh1250/.test(token) || /^xl883/.test(token) || /^xl1200/.test(token))
+        );
+      case "pan_america":
+        return (
+          containsTokenSequence(optionTokens, ["pan", "america"]) ||
+          optionTokens.some(token => /^ra1250/.test(token))
+        );
+      case "v_rod":
+        return (
+          optionTokens.includes("vrod") ||
+          containsTokenSequence(optionTokens, ["v", "rod"]) ||
+          containsTokenSequence(optionTokens, ["night", "rod"]) ||
+          containsTokenSequence(optionTokens, ["street", "rod"]) ||
+          optionTokens.some(token => /^vrsc/.test(token))
+        );
+      case "street_bob":
+        return containsTokenSequence(optionTokens, ["street", "bob"]);
+      case "fat_bob":
+        return containsTokenSequence(optionTokens, ["fat", "bob"]);
+      case "fat_boy":
+        return containsTokenSequence(optionTokens, ["fat", "boy"]);
+      case "breakout":
+        return optionTokens.includes("breakout");
+      case "ultra_classic":
+        return (
+          containsTokenSequence(optionTokens, ["ultra", "classic"]) ||
+          containsTokenSequence(optionTokens, ["ultra", "limited"]) ||
+          (containsTokenSequence(optionTokens, ["electra", "glide"]) && optionTokens.includes("ultra"))
+        );
+      case "electra_glide":
+        return containsTokenSequence(optionTokens, ["electra", "glide"]) || optionTokens.includes("electraglide");
+      case "springer_softail":
+        return (
+          containsTokenSequence(optionTokens, ["springer", "softail"]) ||
+          (optionTokens.includes("springer") && optionTokens.includes("softail"))
+        );
+      case "wide_glide":
+        return containsTokenSequence(optionTokens, ["wide", "glide"]);
+      default:
+        return false;
+    }
+  }
+
   function isWatchModelOptionChecked(groupModels: string[], option: string): boolean {
     const normalizedOption = normalizeModelMatchText(option);
     if (!normalizedOption) return false;
@@ -2463,6 +2728,10 @@ export default function Home() {
     return selected.some(model => {
       const tokens = modelTokens(model);
       if (!tokens.length) return false;
+      const selectedGenericFamily = detectGenericWatchFamily(tokens);
+      if (selectedGenericFamily) {
+        return optionMatchesWatchFamily(optionTokens, selectedGenericFamily);
+      }
       const selectedHasSportster = tokens.includes("sportster");
       const selectedHas883 = hasTokenFragment(tokens, "883");
       const selectedIsSportster1250 = isSportster1250Variant(tokens);

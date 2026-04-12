@@ -2336,6 +2336,298 @@ function isStreetGlide3Variant(model: string | null | undefined): boolean {
   );
 }
 
+type InventoryWatchFamilyId =
+  | "trike"
+  | "tri_glide"
+  | "touring"
+  | "grand_american_touring"
+  | "softail"
+  | "dyna"
+  | "cvo"
+  | "nightster"
+  | "sport_glide"
+  | "road_glide_limited"
+  | "ultra_limited"
+  | "low_rider_s"
+  | "softail_deluxe"
+  | "deluxe"
+  | "street_glide"
+  | "road_glide"
+  | "road_king"
+  | "heritage"
+  | "sportster"
+  | "pan_america"
+  | "v_rod"
+  | "street_bob"
+  | "fat_bob"
+  | "fat_boy"
+  | "breakout"
+  | "ultra_classic"
+  | "electra_glide"
+  | "springer_softail"
+  | "wide_glide";
+
+function modelNameTokens(value: string | null | undefined): string[] {
+  return normalizeModelName(String(value ?? ""))
+    .split(" ")
+    .map(t => t.trim())
+    .filter(Boolean);
+}
+
+function stripModelMakeTokens(tokens: string[]): string[] {
+  return tokens.filter(token => token !== "harley" && token !== "davidson");
+}
+
+function containsTokenSequenceTokens(haystack: string[], needle: string[]): boolean {
+  if (!needle.length || haystack.length < needle.length) return false;
+  outer: for (let i = 0; i <= haystack.length - needle.length; i++) {
+    for (let j = 0; j < needle.length; j++) {
+      if (haystack[i + j] !== needle[j]) continue outer;
+    }
+    return true;
+  }
+  return false;
+}
+
+function tokensExactly(tokens: string[], expected: string[]): boolean {
+  if (tokens.length !== expected.length) return false;
+  return tokens.every((token, idx) => token === expected[idx]);
+}
+
+function detectGenericWatchFamilyLabel(model: string | null | undefined): InventoryWatchFamilyId | null {
+  const tokens = stripModelMakeTokens(modelNameTokens(model));
+  if (!tokens.length) return null;
+  if (tokensExactly(tokens, ["trike"]) || tokensExactly(tokens, ["trikes"])) return "trike";
+  if (tokensExactly(tokens, ["tri", "glide"])) return "tri_glide";
+  if (tokensExactly(tokens, ["touring"])) return "touring";
+  if (tokensExactly(tokens, ["grand", "american", "touring"])) return "grand_american_touring";
+  if (tokensExactly(tokens, ["softail"])) return "softail";
+  if (tokensExactly(tokens, ["dyna"])) return "dyna";
+  if (tokensExactly(tokens, ["cvo"])) return "cvo";
+  if (tokensExactly(tokens, ["nightster"])) return "nightster";
+  if (tokensExactly(tokens, ["sport", "glide"])) return "sport_glide";
+  if (tokensExactly(tokens, ["road", "glide", "limited"])) return "road_glide_limited";
+  if (tokensExactly(tokens, ["ultra", "limited"])) return "ultra_limited";
+  if (tokensExactly(tokens, ["low", "rider", "s"])) return "low_rider_s";
+  if (tokensExactly(tokens, ["softail", "deluxe"])) return "softail_deluxe";
+  if (tokensExactly(tokens, ["deluxe"])) return "deluxe";
+  if (tokensExactly(tokens, ["street", "glide"])) return "street_glide";
+  if (tokensExactly(tokens, ["road", "glide"])) return "road_glide";
+  if (tokensExactly(tokens, ["road", "king"])) return "road_king";
+  if (
+    tokensExactly(tokens, ["heritage"]) ||
+    tokensExactly(tokens, ["heritage", "classic"]) ||
+    tokensExactly(tokens, ["heritage", "softail"]) ||
+    tokensExactly(tokens, ["heritage", "softail", "classic"])
+  ) {
+    return "heritage";
+  }
+  if (tokensExactly(tokens, ["sportster"])) return "sportster";
+  if (tokensExactly(tokens, ["pan", "america"]) || tokensExactly(tokens, ["pan", "america", "1250"])) {
+    return "pan_america";
+  }
+  if (tokensExactly(tokens, ["vrod"]) || tokensExactly(tokens, ["v", "rod"])) return "v_rod";
+  if (tokensExactly(tokens, ["street", "bob"])) return "street_bob";
+  if (tokensExactly(tokens, ["fat", "bob"])) return "fat_bob";
+  if (tokensExactly(tokens, ["fat", "boy"])) return "fat_boy";
+  if (tokensExactly(tokens, ["breakout"])) return "breakout";
+  if (tokensExactly(tokens, ["ultra", "classic"])) return "ultra_classic";
+  if (
+    tokensExactly(tokens, ["electra", "glide"]) ||
+    tokensExactly(tokens, ["electraglide"]) ||
+    tokensExactly(tokens, ["electraglide", "classic"])
+  ) {
+    return "electra_glide";
+  }
+  if (tokensExactly(tokens, ["springer", "softail"])) return "springer_softail";
+  if (tokensExactly(tokens, ["wide", "glide"])) return "wide_glide";
+  return null;
+}
+
+function modelBelongsToGenericWatchFamily(
+  model: string | null | undefined,
+  familyId: InventoryWatchFamilyId
+): boolean {
+  const tokens = stripModelMakeTokens(modelNameTokens(model));
+  if (!tokens.length) return false;
+  const modelHasTriGlide =
+    containsTokenSequenceTokens(tokens, ["tri", "glide"]) || tokens.includes("flhtcutg");
+  const modelHasRoadGlideTrike =
+    containsTokenSequenceTokens(tokens, ["road", "glide"]) &&
+    (tokens.includes("3") ||
+      tokens.includes("iii") ||
+      tokens.includes("trike") ||
+      tokens.includes("fltrt"));
+  const modelHasStreetGlideTrike =
+    containsTokenSequenceTokens(tokens, ["street", "glide"]) &&
+    (tokens.includes("3") ||
+      tokens.includes("iii") ||
+      tokens.includes("trike") ||
+      tokens.includes("flhlt"));
+  const modelHasFreewheeler = tokens.includes("freewheeler") || tokens.includes("flrt");
+  const modelHasRoadGlide = containsTokenSequenceTokens(tokens, ["road", "glide"]);
+  const modelHasStreetGlide = containsTokenSequenceTokens(tokens, ["street", "glide"]);
+  const modelHasRoadKing = containsTokenSequenceTokens(tokens, ["road", "king"]);
+  const modelHasElectraGlide = containsTokenSequenceTokens(tokens, ["electra", "glide"]);
+  const modelHasUltraClassic = containsTokenSequenceTokens(tokens, ["ultra", "classic"]);
+  const modelHasUltraLimited = containsTokenSequenceTokens(tokens, ["ultra", "limited"]);
+  const modelHasTourGlide = containsTokenSequenceTokens(tokens, ["tour", "glide"]);
+  const modelHasLowRider = containsTokenSequenceTokens(tokens, ["low", "rider"]);
+  const modelHasStreetBob = containsTokenSequenceTokens(tokens, ["street", "bob"]);
+  const modelHasFatBob = containsTokenSequenceTokens(tokens, ["fat", "bob"]);
+  const modelHasFatBoy = containsTokenSequenceTokens(tokens, ["fat", "boy"]);
+  const modelHasBreakout = tokens.includes("breakout");
+  const modelHasHeritage = tokens.includes("heritage");
+  const modelHasSoftail = tokens.includes("softail");
+  const modelHasDeluxe = tokens.includes("deluxe");
+  const modelHasSlim = tokens.includes("slim");
+  const modelHasSportGlide = containsTokenSequenceTokens(tokens, ["sport", "glide"]) || tokens.includes("flsb");
+  const modelHasSpringer = tokens.includes("springer");
+  const modelHasDeuce = tokens.includes("deuce");
+  const modelHasRocker = tokens.includes("rocker");
+  const modelHasCrossBones = containsTokenSequenceTokens(tokens, ["cross", "bones"]);
+  const modelHasBlackline = tokens.includes("blackline");
+  const modelHasDyna = tokens.includes("dyna");
+  const modelHasWideGlide = containsTokenSequenceTokens(tokens, ["wide", "glide"]);
+  const modelHasSwitchback = tokens.includes("switchback");
+  const modelHasSuperGlide =
+    (tokens.includes("super") && tokens.includes("glide")) || tokens.includes("fxr");
+  const modelHasCvo = tokens.includes("cvo");
+  const modelHasNightster = tokens.includes("nightster") || tokens.some(token => /^rh975/.test(token));
+  switch (familyId) {
+    case "trike":
+      return (
+        modelHasTriGlide ||
+        modelHasRoadGlideTrike ||
+        modelHasStreetGlideTrike ||
+        modelHasFreewheeler ||
+        tokens.includes("trike")
+      );
+    case "tri_glide":
+      return modelHasTriGlide;
+    case "touring":
+    case "grand_american_touring":
+      return (
+        modelHasRoadGlide ||
+        modelHasStreetGlide ||
+        modelHasRoadKing ||
+        modelHasElectraGlide ||
+        modelHasUltraClassic ||
+        modelHasUltraLimited ||
+        modelHasTourGlide
+      );
+    case "softail":
+      return (
+        modelHasSoftail ||
+        modelHasHeritage ||
+        modelHasStreetBob ||
+        modelHasFatBob ||
+        modelHasFatBoy ||
+        modelHasBreakout ||
+        modelHasLowRider ||
+        modelHasSlim ||
+        modelHasSportGlide ||
+        modelHasSpringer ||
+        modelHasDeluxe ||
+        modelHasDeuce ||
+        modelHasRocker ||
+        modelHasCrossBones ||
+        modelHasBlackline
+      );
+    case "dyna":
+      return (
+        modelHasDyna ||
+        modelHasStreetBob ||
+        modelHasFatBob ||
+        modelHasWideGlide ||
+        modelHasSwitchback ||
+        modelHasLowRider ||
+        modelHasSuperGlide
+      );
+    case "cvo":
+      return modelHasCvo;
+    case "nightster":
+      return modelHasNightster;
+    case "sport_glide":
+      return modelHasSportGlide;
+    case "road_glide_limited":
+      return (
+        containsTokenSequenceTokens(tokens, ["road", "glide", "limited"]) ||
+        (containsTokenSequenceTokens(tokens, ["road", "glide"]) && tokens.includes("fltrk"))
+      );
+    case "ultra_limited":
+      return (
+        containsTokenSequenceTokens(tokens, ["ultra", "limited"]) ||
+        containsTokenSequenceTokens(tokens, ["electra", "glide", "ultra", "limited"])
+      );
+    case "low_rider_s":
+      return containsTokenSequenceTokens(tokens, ["low", "rider", "s"]);
+    case "softail_deluxe":
+      return (
+        containsTokenSequenceTokens(tokens, ["softail", "deluxe"]) ||
+        tokens.includes("deluxe")
+      );
+    case "deluxe":
+      return tokens.includes("deluxe");
+    case "street_glide":
+      return containsTokenSequenceTokens(tokens, ["street", "glide"]);
+    case "road_glide":
+      return containsTokenSequenceTokens(tokens, ["road", "glide"]);
+    case "road_king":
+      return containsTokenSequenceTokens(tokens, ["road", "king"]);
+    case "heritage":
+      return (
+        tokens.includes("heritage") ||
+        containsTokenSequenceTokens(tokens, ["heritage", "classic"]) ||
+        containsTokenSequenceTokens(tokens, ["heritage", "softail"])
+      );
+    case "sportster":
+      return (
+        tokens.includes("sportster") ||
+        is883ModelToken(tokens.join(" ")) ||
+        tokens.some(token => /^rh1250/.test(token) || /^xl883/.test(token) || /^xl1200/.test(token))
+      );
+    case "pan_america":
+      return (
+        containsTokenSequenceTokens(tokens, ["pan", "america"]) ||
+        tokens.some(token => /^ra1250/.test(token))
+      );
+    case "v_rod":
+      return (
+        tokens.includes("vrod") ||
+        containsTokenSequenceTokens(tokens, ["v", "rod"]) ||
+        containsTokenSequenceTokens(tokens, ["night", "rod"]) ||
+        containsTokenSequenceTokens(tokens, ["street", "rod"]) ||
+        tokens.some(token => /^vrsc/.test(token))
+      );
+    case "street_bob":
+      return containsTokenSequenceTokens(tokens, ["street", "bob"]);
+    case "fat_bob":
+      return containsTokenSequenceTokens(tokens, ["fat", "bob"]);
+    case "fat_boy":
+      return containsTokenSequenceTokens(tokens, ["fat", "boy"]);
+    case "breakout":
+      return tokens.includes("breakout");
+    case "ultra_classic":
+      return (
+        containsTokenSequenceTokens(tokens, ["ultra", "classic"]) ||
+        containsTokenSequenceTokens(tokens, ["ultra", "limited"]) ||
+        (containsTokenSequenceTokens(tokens, ["electra", "glide"]) && tokens.includes("ultra"))
+      );
+    case "electra_glide":
+      return containsTokenSequenceTokens(tokens, ["electra", "glide"]) || tokens.includes("electraglide");
+    case "springer_softail":
+      return (
+        containsTokenSequenceTokens(tokens, ["springer", "softail"]) ||
+        (tokens.includes("springer") && tokens.includes("softail"))
+      );
+    case "wide_glide":
+      return containsTokenSequenceTokens(tokens, ["wide", "glide"]);
+    default:
+      return false;
+  }
+}
+
 function canonicalizeWatchModelLabel(model: string | null | undefined): string {
   const raw = String(model ?? "").trim();
   if (!raw) return "";
@@ -2363,6 +2655,7 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
   if (!item?.model || !watch?.model) return false;
   const itemModel = normalizeModelName(String(item.model));
   const watchModel = normalizeModelName(String(watch.model));
+  const genericWatchFamily = detectGenericWatchFamilyLabel(watch.model);
   const watchIsRoadGlide3 = isRoadGlide3Variant(watchModel);
   const itemIsRoadGlide3 = isRoadGlide3Variant(itemModel);
   if (watchIsRoadGlide3 && !itemIsRoadGlide3) return false;
@@ -2371,11 +2664,12 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
   if (watchIsStreetGlide3 && !itemIsStreetGlide3) return false;
   const directMatch = itemModel.includes(watchModel) || watchModel.includes(itemModel);
   const catalogCodeMatch = modelsShareCatalogCodes(itemModel, watchModel);
-  const watchHas883 = is883ModelToken(watchModel);
   const familyMatch = (() => {
-    if (!isSportsterFamilyAlias(watchModel)) return false;
-    if (watchHas883) return is883ModelToken(itemModel);
-    return isSportsterFamilyAlias(itemModel);
+    if (genericWatchFamily) {
+      return modelBelongsToGenericWatchFamily(itemModel, genericWatchFamily);
+    }
+    if (is883ModelToken(watchModel)) return is883ModelToken(itemModel);
+    return false;
   })();
   if (!directMatch && !familyMatch && !catalogCodeMatch) return false;
   if (watch.trim) {
