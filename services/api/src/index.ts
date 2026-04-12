@@ -3621,7 +3621,7 @@ async function applyPostCallSummaryActions(opts: {
     conv?.classification?.bucket === "finance_prequal" ||
     conv?.classification?.cta === "hdfs_coa" ||
     conv?.classification?.cta === "prequalify" ||
-    /credit_app|credit_app_cosigner|financing_declined|credit_app_approved/.test(
+    /credit_app|credit_app_cosigner|credit_app_needs_info|financing_declined|credit_app_approved/.test(
       String(conv?.followUp?.reason ?? "").toLowerCase()
     ) ||
     String(conv?.appointment?.appointmentType ?? "").toLowerCase() === "finance_discussion";
@@ -3648,7 +3648,11 @@ async function applyPostCallSummaryActions(opts: {
     const outcomeStatus = parsedFinanceOutcome.outcome;
     const reasonText = String(parsedFinanceOutcome.reasonText ?? "").trim();
     const sourceId = String(sourceMessageId ?? "").trim() || undefined;
-    if (outcomeStatus === "declined" || outcomeStatus === "approved") {
+    if (
+      outcomeStatus === "declined" ||
+      outcomeStatus === "approved" ||
+      outcomeStatus === "needs_more_info"
+    ) {
       await applyFinanceOutcomeStatusFromSignal(
         conv,
         outcomeStatus,
@@ -6293,7 +6297,7 @@ function isFinanceOutcomeContextForConversation(conv: any): boolean {
     conv?.classification?.bucket === "finance_prequal" ||
     conv?.classification?.cta === "hdfs_coa" ||
     conv?.classification?.cta === "prequalify" ||
-    /credit_app|credit_app_cosigner|financing_declined|credit_app_approved/.test(
+    /credit_app|credit_app_cosigner|credit_app_needs_info|financing_declined|credit_app_approved/.test(
       String(conv?.followUp?.reason ?? "").toLowerCase()
     ) ||
     String(conv?.appointment?.appointmentType ?? "").toLowerCase() === "finance_discussion"
@@ -6309,7 +6313,7 @@ function ensureFinanceOutcomeToken(conv: any): string {
 
 async function applyFinanceOutcomeStatusFromSignal(
   conv: any,
-  status: "approved" | "declined",
+  status: "approved" | "declined" | "needs_more_info",
   note?: string,
   sourceMessageId?: string
 ): Promise<void> {
@@ -6351,6 +6355,30 @@ async function applyFinanceOutcomeStatusFromSignal(
       sourceId
     );
     await notifyBusinessManagerFinanceOutcome(conv, "declined", reasonText || undefined);
+  } else if (status === "needs_more_info") {
+    setFollowUpMode(conv, "manual_handoff", "credit_app_needs_info");
+    stopFollowUpCadence(conv, "manual_handoff");
+    if (conv.appointment) {
+      conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
+      conv.appointment.staffNotify.outcome = {
+        status: "financing_needs_info",
+        note: reasonText || undefined,
+        updatedAt: nowIsoValue
+      };
+    }
+    conv.financeOutcome = {
+      status: "needs_more_info",
+      updatedAt: nowIsoValue,
+      sourceMessageId: sourceId,
+      reasonText: reasonText || undefined
+    };
+    addTodo(
+      conv,
+      "note",
+      `Finance outcome parsed from call: needs more info${reasonText ? ` (${reasonText})` : ""}.`,
+      sourceId
+    );
+    await notifyBusinessManagerFinanceOutcome(conv, "needs_more_info", reasonText || undefined);
   } else {
     setFollowUpMode(conv, "manual_handoff", "credit_app_approved");
     stopFollowUpCadence(conv, "manual_handoff");
@@ -6418,7 +6446,7 @@ async function maybePromptBusinessManagerFinanceOutcomeFallback(
   const prompt = [
     `Finance outcome needed: ${customerName} — ${vehicle}.`,
     note ? `Context: ${note}` : null,
-    `Reply: OUTCOME ${token} APPROVED | DECLINED | PENDING.`
+    `Reply: OUTCOME ${token} APPROVED | DECLINED | NEEDS_INFO | PENDING.`
   ]
     .filter(Boolean)
     .join("\n");
@@ -6441,12 +6469,13 @@ async function maybePromptBusinessManagerFinanceOutcomeFallback(
 
 async function notifyBusinessManagerFinanceOutcome(
   conv: any,
-  status: "approved" | "declined",
+  status: "approved" | "declined" | "needs_more_info",
   note?: string
 ): Promise<void> {
   const notifyState = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});
   if (status === "declined" && String(notifyState.declinedSentAt ?? "").trim()) return;
   if (status === "approved" && String(notifyState.approvedSentAt ?? "").trim()) return;
+  if (status === "needs_more_info" && String(notifyState.needsInfoSentAt ?? "").trim()) return;
 
   const { user: target, name: targetName, phone: toNumber } = await resolveFinanceOutcomeNotifyTarget(conv);
   if (!target) return;
@@ -6478,6 +6507,14 @@ async function notifyBusinessManagerFinanceOutcome(
         ]
           .filter(Boolean)
           .join("\n")
+      : status === "needs_more_info"
+        ? [
+            `Financing needs more info: ${customerName} — ${vehicle}.`,
+            note ? `Contingency: ${String(note).trim()}` : null,
+            "Follow up with the customer on missing items (cosigner/docs/address/references) and update outcome."
+          ]
+            .filter(Boolean)
+            .join("\n")
       : [
           `Financing approved: ${customerName} — ${vehicle}.`,
           note ? `Note: ${String(note).trim()}` : null
@@ -6495,7 +6532,8 @@ async function notifyBusinessManagerFinanceOutcome(
   );
   if (sent) {
     if (status === "declined") notifyState.declinedSentAt = new Date().toISOString();
-    else notifyState.approvedSentAt = new Date().toISOString();
+    else if (status === "approved") notifyState.approvedSentAt = new Date().toISOString();
+    else notifyState.needsInfoSentAt = new Date().toISOString();
   }
 }
 
@@ -7175,7 +7213,9 @@ async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
     if (
       financeParsed?.explicitOutcome &&
       (financeParsed.confidence ?? 0) >= financeMin &&
-      (financeParsed.outcome === "approved" || financeParsed.outcome === "declined")
+      (financeParsed.outcome === "approved" ||
+        financeParsed.outcome === "declined" ||
+        financeParsed.outcome === "needs_more_info")
     ) {
       await applyFinanceOutcomeStatusFromSignal(
         conv,
@@ -7193,7 +7233,9 @@ async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
         replyBody:
           financeParsed.outcome === "approved"
             ? "Saved finance outcome: APPROVED."
-            : "Saved finance outcome: DECLINED. Long-term finance cadence started."
+            : financeParsed.outcome === "declined"
+              ? "Saved finance outcome: DECLINED. Long-term finance cadence started."
+              : "Saved finance outcome: NEEDS MORE INFO."
       };
     }
 
@@ -7221,7 +7263,7 @@ async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
 
     return {
       handled: true,
-      replyBody: `Please reply with: OUTCOME ${token} APPROVED | DECLINED | PENDING.`
+      replyBody: `Please reply with: OUTCOME ${token} APPROVED | DECLINED | NEEDS_INFO | PENDING.`
     };
   }
 
@@ -14126,6 +14168,7 @@ async function processStaffAppointmentNotifications() {
       String(apptType ?? "").trim().toLowerCase() === "finance_discussion" ||
       followUpReason === "credit_app" ||
       followUpReason === "credit_app_cosigner" ||
+      followUpReason === "credit_app_needs_info" ||
       followUpReason === "credit_app_approved" ||
       followUpReason === "financing_declined";
     if (isFinanceOutcomeManagedByCall) continue;
@@ -14826,6 +14869,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
           <option value="sold">Sold</option>
           <option value="hold">Hold</option>
           <option value="financing_declined">Financing not approved</option>
+          <option value="financing_needs_info">Financing needs more info</option>
           <option value="bought_elsewhere">Bought elsewhere</option>
           <option value="other">Other</option>
         </select>
@@ -15254,6 +15298,7 @@ app.post("/public/appointment/outcome", async (req, res) => {
     "sold",
     "hold",
     "financing_declined",
+    "financing_needs_info",
     "bought_elsewhere",
     "follow_up",
     "other"
@@ -15284,6 +15329,10 @@ app.post("/public/appointment/outcome", async (req, res) => {
       kind: "long_term"
     };
     await notifyBusinessManagerFinancingDeclined(conv, note);
+  } else if (outcome === "financing_needs_info") {
+    setFollowUpMode(conv, "manual_handoff", "credit_app_needs_info");
+    stopFollowUpCadence(conv, "manual_handoff");
+    await notifyBusinessManagerFinanceOutcome(conv, "needs_more_info", note || undefined);
   }
 
   const outcomeTarget = getOutcomeStaffNotifyTarget(conv);
@@ -15323,12 +15372,33 @@ app.post("/public/appointment/outcome/transcribe", upload.single("audio"), async
     "sold",
     "hold",
     "financing_declined",
+    "financing_needs_info",
     "bought_elsewhere",
     "follow_up",
     "other"
   ]);
   const fallbackStatus = conv.appointment?.staffNotify?.outcome?.status ?? conv.dealerRide?.staffNotify?.outcome?.status ?? "follow_up";
-  const status = allowed.has(outcomeRaw) ? outcomeRaw : fallbackStatus;
+  let status = allowed.has(outcomeRaw) ? outcomeRaw : fallbackStatus;
+  const financeOutcomeConfidenceMin = Number(process.env.LLM_FINANCE_OUTCOME_CONFIDENCE_MIN ?? 0.8);
+  const parsedFinanceOutcome = isFinanceOutcomeContextForConversation(conv)
+    ? await safeLlmParse("public_outcome_voice_finance_parser", () =>
+        parseFinanceOutcomeFromCallWithLLM({
+          text: transcript,
+          summary: "",
+          history: buildHistory(conv, 10),
+          lead: conv.lead
+        })
+      )
+    : null;
+  const financeOutcomeAccepted =
+    !!parsedFinanceOutcome?.explicitOutcome &&
+    (parsedFinanceOutcome.confidence ?? 0) >= financeOutcomeConfidenceMin &&
+    parsedFinanceOutcome.outcome !== "none";
+  if (financeOutcomeAccepted && parsedFinanceOutcome?.outcome === "declined") {
+    status = "financing_declined";
+  } else if (financeOutcomeAccepted && parsedFinanceOutcome?.outcome === "needs_more_info") {
+    status = "financing_needs_info";
+  }
   const nowIso = new Date().toISOString();
   const unit = readOutcomeUnit(req.body);
   if (status === "hold") {
@@ -15353,6 +15423,13 @@ app.post("/public/appointment/outcome/transcribe", upload.single("audio"), async
       kind: "long_term"
     };
     await notifyBusinessManagerFinancingDeclined(conv, transcript);
+  } else if (status === "financing_needs_info") {
+    setFollowUpMode(conv, "manual_handoff", "credit_app_needs_info");
+    stopFollowUpCadence(conv, "manual_handoff");
+    await notifyBusinessManagerFinanceOutcome(conv, "needs_more_info", transcript);
+  }
+  if (financeOutcomeAccepted && parsedFinanceOutcome?.outcome === "approved") {
+    await applyFinanceOutcomeStatusFromSignal(conv, "approved", transcript);
   }
 
   const outcomeTarget = getOutcomeStaffNotifyTarget(conv);
@@ -17240,6 +17317,7 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
         "sold",
         "hold",
         "financing_declined",
+        "financing_needs_info",
         "bought_elsewhere",
         "follow_up",
         "other"
@@ -17263,6 +17341,14 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
           kind: "long_term"
         };
         await notifyBusinessManagerFinancingDeclined(conv, appointmentOutcomeNote || undefined);
+      } else if (appointmentOutcome === "financing_needs_info") {
+        setFollowUpMode(conv, "manual_handoff", "credit_app_needs_info");
+        stopFollowUpCadence(conv, "manual_handoff");
+        await notifyBusinessManagerFinanceOutcome(
+          conv,
+          "needs_more_info",
+          appointmentOutcomeNote || undefined
+        );
       } else if (appointmentOutcome === "sold") {
         const soldById = conv.appointment?.bookedSalespersonId ?? conv.leadOwner?.id ?? "";
         const soldByName = String(conv.appointment?.bookedSalespersonName ?? conv.leadOwner?.name ?? "").trim();

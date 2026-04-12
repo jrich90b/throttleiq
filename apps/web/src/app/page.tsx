@@ -8804,6 +8804,7 @@ export default function Home() {
                     <option value="sold">Sold</option>
                     <option value="hold">On hold</option>
                     <option value="financing_declined">Financing declined</option>
+                    <option value="financing_needs_info">Financing needs more info</option>
                     <option value="bought_elsewhere">Bought elsewhere</option>
                     <option value="follow_up">Follow up</option>
                     <option value="other">Other</option>

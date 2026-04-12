@@ -67,6 +67,7 @@ export type AppointmentMemory = {
         | "sold"
         | "hold"
         | "financing_declined"
+        | "financing_needs_info"
         | "bought_elsewhere"
         | "follow_up"
         | "other";
@@ -578,7 +579,7 @@ export type Conversation = {
   contactPreference?: "call_only";
   voiceContext?: VoiceContext;
   financeOutcome?: {
-    status: "approved" | "declined";
+    status: "approved" | "declined" | "needs_more_info";
     updatedAt: string;
     sourceMessageId?: string;
     reasonText?: string;

@@ -1118,7 +1118,7 @@ export type StaffOutcomeUpdateParse = {
 };
 
 export type FinanceOutcomeFromCallParse = {
-  outcome: "approved" | "declined" | "none";
+  outcome: "approved" | "declined" | "needs_more_info" | "none";
   explicitOutcome: boolean;
   confidence?: number;
   reasonText?: string | null;
@@ -1623,7 +1623,7 @@ const FINANCE_OUTCOME_FROM_CALL_JSON_SCHEMA: { [key: string]: unknown } = {
   additionalProperties: false,
   required: ["outcome", "explicit_outcome", "confidence", "reason_text"],
   properties: {
-    outcome: { type: "string", enum: ["approved", "declined", "none"] },
+    outcome: { type: "string", enum: ["approved", "declined", "needs_more_info", "none"] },
     explicit_outcome: { type: "boolean" },
     confidence: { type: "number", minimum: 0, maximum: 1 },
     reason_text: { type: "string" }
@@ -3232,13 +3232,14 @@ export async function parseFinanceOutcomeFromCallWithLLM(args: {
     "Outcome mapping:",
     "- approved: explicit approval/pre-approval/funded/clear to buy/approved with terms.",
     "- declined: explicit not approved/declined/denied/couldn't approve/unable to approve.",
+    "- needs_more_info: lender needs additional contingencies (e.g., co-signer, pay stubs, references, proof/clarification of address, residence history, insurance/docs).",
     "- none: no explicit finance outcome.",
     "",
     "Rules:",
     "- Do not infer outcome from generic discussion about rates/payments alone.",
-    "- 'Needs cosigner' or 'waiting on docs' is not declined by itself unless explicitly 'not approved/declined'.",
+    "- 'Needs cosigner' or 'waiting on docs' should map to needs_more_info unless explicitly 'not approved/declined'.",
     "- explicit_outcome=true only when clearly stated.",
-    "- reason_text should be short phrase from transcript/summary when approved/declined; else empty string.",
+    "- reason_text should be short phrase from transcript/summary when approved/declined/needs_more_info; else empty string.",
     "",
     `Known lead info: ${JSON.stringify({
       leadRef: lead?.leadRef ?? null,
@@ -3269,7 +3270,9 @@ export async function parseFinanceOutcomeFromCallWithLLM(args: {
 
   const outcomeRaw = String(parsed.outcome ?? "").toLowerCase();
   const outcome: FinanceOutcomeFromCallParse["outcome"] =
-    outcomeRaw === "approved" || outcomeRaw === "declined" ? outcomeRaw : "none";
+    outcomeRaw === "approved" || outcomeRaw === "declined" || outcomeRaw === "needs_more_info"
+      ? outcomeRaw
+      : "none";
   const confidence =
     typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
       ? Math.max(0, Math.min(1, parsed.confidence))
