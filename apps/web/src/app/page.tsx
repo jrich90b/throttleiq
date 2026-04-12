@@ -2440,6 +2440,17 @@ export default function Home() {
     return hasIron;
   }
 
+  function containsTokenSequence(haystack: string[], needle: string[]): boolean {
+    if (!needle.length || haystack.length < needle.length) return false;
+    outer: for (let i = 0; i <= haystack.length - needle.length; i++) {
+      for (let j = 0; j < needle.length; j++) {
+        if (haystack[i + j] !== needle[j]) continue outer;
+      }
+      return true;
+    }
+    return false;
+  }
+
   function isWatchModelOptionChecked(groupModels: string[], option: string): boolean {
     const normalizedOption = normalizeModelMatchText(option);
     if (!normalizedOption) return false;
@@ -2485,6 +2496,16 @@ export default function Home() {
       if (selectedHasSportster) {
         if (optionIsSportster1250) return false;
         return optionHasSportster || optionHas883;
+      }
+
+      // Generic family matching:
+      // if selected model is a family label like "Fat Boy", treat model variants
+      // (e.g. Fat Boy 114, Fat Boy Lo, Fat Boy Anniversary) as selected too.
+      if (tokens.length >= 2) {
+        if (containsTokenSequence(optionTokens, tokens)) return true;
+        const selectedCollapsed = tokens.join("");
+        const optionCollapsed = optionTokens.join("");
+        if (selectedCollapsed.length >= 6 && optionCollapsed.includes(selectedCollapsed)) return true;
       }
       return false;
     });
