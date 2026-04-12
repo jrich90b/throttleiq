@@ -3913,16 +3913,16 @@ async function applyPostCallSummaryActions(opts: {
 }
 
 const FOLLOW_UP_MESSAGES = [
-  "Hey {name}, just checking in{labelClause}. Any questions I can help with?",
-  "Hey {name}, want me to send a couple fresh pics or a quick walkaround of{label}?",
-  "Hey {name}, are you still leaning toward{label}, or still comparing?",
-  "Quick check {name} — is{label} still the one you want to focus on?",
-  "If you want to see it in person{labelClause}, tell me a day that works.",
-  "No pressure {name}. I can keep an eye out{labelClause} and text you first.",
-  "If timing is tight {name}, I can work around your schedule.",
+  "Hey {name}, just checking in{labelClause}. Happy to answer anything.",
+  "Hey {name}, if it helps, I can send a couple fresh photos or a quick walkaround of{label}.",
+  "Hey {name}, are you still leaning toward{label}, or still comparing options?",
+  "Quick check, {name} — is{label} still the one you want to focus on?",
+  "If you want to see it in person{labelClause}, I can line up a time that works.",
+  "No rush, {name}. I can keep an eye out{labelClause} and text you first.",
+  "If your schedule is tight, {name}, I can work around it.",
   "Want me to lock in a quick time for you{labelClause}?",
-  "If you want to swing by{labelClause}, what day works best?",
-  "All good either way {name}. Want me to keep this open or close it out for now?"
+  "If you want to swing by{labelClause}, what day works best for you?",
+  "All good either way, {name}. Want me to keep this open or close it out for now?"
 ];
 
 type WalkInCommentFollowUpCtx = {
@@ -3993,8 +3993,8 @@ const buildWalkInCommentFollowUp = ({
 };
 
 const FOLLOW_UP_VARIANTS_WITH_SLOTS: string[] = [
-  "Hey {name}, I can do {a} or {b} if you want to stop by. Which works better?{extraLine}",
-  "Quick one {name} — I have {a} or {b} open. Want either slot?{extraLine}",
+  "Hey {name}, I can do {a} or {b} if you want to stop by. Which works better for you?{extraLine}",
+  "Quick one, {name} — I have {a} or {b} open. Want either slot?{extraLine}",
   "{name}, if you want to come in, {a} or {b} are both open. Which one should I hold?{extraLine}"
 ];
 
@@ -4007,11 +4007,11 @@ const SELL_FOLLOW_UP_VARIANTS_WITH_SLOTS: string[] = [
 const FOLLOW_UP_VARIANTS_NO_SLOTS: Record<number, string[]> = {
   0: [
     "Hey {name}, quick check-in{labelClause}. Let me know what you’re thinking.{extraLine}",
-    "Hey {name}, any questions on{label}? I’m happy to help.{extraLine}",
+    "Hey {name}, any questions on{label}? Happy to help.{extraLine}",
     "{name}, if you want to stop by{labelClause}, send me a day that works.{extraLine}"
   ],
   1: [
-    "Hey {name}, want a couple pics or a quick walkaround of{label}?",
+    "Hey {name}, want a couple photos or a quick walkaround of{label}?",
     "{name}, I can send a short video of{label} if that helps."
   ],
   2: [
@@ -4047,8 +4047,8 @@ const FOLLOW_UP_VARIANTS_NO_MODEL_NO_SLOTS: Record<number, string[]> = {
 
 const ENGAGED_FOLLOW_UP_VARIANTS_WITH_SLOTS: Record<string, string[]> = {
   general: [
-    "Hey {name}, I can do {a} or {b} if you want to stop by. Which works better?{extraLine}",
-    "Quick one {name} — I have {a} or {b} open. Want either?{extraLine}"
+    "Hey {name}, I can do {a} or {b} if you want to stop by. Which works better for you?{extraLine}",
+    "Quick one, {name} — I have {a} or {b} open. Want either?{extraLine}"
   ],
   deal_progress: [
     "Hey {name}, I can go over final numbers and your setup on the {model}. I have {a} or {b}. Want me to hold one?{extraLine}",
@@ -4717,10 +4717,10 @@ async function buildCadenceRegeneratedDraft(
 }
 
 const SELL_FOLLOW_UP_MESSAGES = [
-  "Quick check-in. If you want a fast appraisal on {bike}, I can hold a time that works for you.",
-  "If it helps, we can start with a rough number first, then confirm in person. What day works?",
-  "Still looking to sell? I can set a quick appraisal time for {bike}. What day and time works best?",
-  "No pressure. When you’re ready, I can line up an appraisal.",
+  "Hey {name}, quick check-in — if you want a fast appraisal on {bike}, I can hold a time that works.",
+  "If it helps, I can start with a rough number first, then confirm it in person. What day works best?",
+  "Still looking to sell? I can set a quick appraisal time for {bike}. What day and time works best for you?",
+  "No pressure at all. When you’re ready, I can line up an appraisal.",
   "If you want, we can go over numbers and lock a quick appraisal time.",
   "If you want to move forward, tell me a day to bring the bike in and I’ll set it up."
 ];
@@ -4759,15 +4759,15 @@ const EMAIL_FOLLOW_UP_MESSAGES: Array<(ctx: EmailFollowUpCtx) => string> = [
 const SCHEDULE_INVITE_THRESHOLD = 3;
 
 const FRESH_INFO_FOLLOW_UPS = [
-  "Hey {name}, quick update with payment numbers for{labelClause}. Want me to keep an eye on similar bikes?",
+  "Hey {name}, quick update with payment numbers for{labelClause}. Want me to keep an eye on similar bikes too?",
   "Hey {name}, I can text a quick payment breakdown for{labelClause}. Want me to keep watching while you decide?",
-  "{name}, want me to keep tabs on{labelClause}? I can send payment info and watch similar inventory."
+  "Hey {name}, want me to keep tabs on{labelClause}? I can send payment info and watch similar inventory."
 ];
 
 const SOFT_EXIT_FOLLOW_UPS = [
   "Hey {name}, all good if now isn’t the time. Want me to text you when something similar comes in?",
-  "No pressure {name}. I can text when a similar bike or price pops up. Want me to keep watching?",
-  "{name}, sounds like you want to wait. Want me to keep you posted on{labelClause}?"
+  "No pressure, {name}. I can text when a similar bike or price pops up. Want me to keep watching?",
+  "Hey {name}, sounds like you want to wait. Want me to keep you posted on{labelClause}?"
 ];
 
 function isUnknownInterestVehicle(conv: any): boolean {
@@ -6002,7 +6002,7 @@ async function buildLongTermFollowUp(
   if (privatePartySeller) {
     const step = Math.max(0, Number(conv?.followUpCadence?.stepIndex ?? 0));
     const templates = [
-      `${greeting}quick check-in — do you still have your ${sellBikeLabel}? If yes, we can do a quick evaluation and either make a purchase offer or work up trade-in value.`,
+      `${greeting}quick check-in — do you still have your ${sellBikeLabel}? If yes, we can do a quick evaluation for either a purchase offer or trade value.`,
       `${greeting}just following up on your ${sellBikeLabel}. If you're still open to it, we can set a quick appraisal for a buy offer or trade value.`,
       `${greeting}wanted to check whether you still have your ${sellBikeLabel}. We’re still interested and can evaluate it whenever it’s convenient for you.`,
       `${greeting}last check-in for now on your ${sellBikeLabel}. If you still have it and want a buy/trade evaluation, I can set that up anytime.`
@@ -6023,9 +6023,9 @@ async function buildLongTermFollowUp(
     );
     const financeSender = bookedStaffFirst || resolveConversationAgentName(conv, "our finance team");
     const templates = [
-      `${greeting}this is ${financeSender} in finance at ${dealerName}. Just checking in — if you still want to move forward, we can revisit options like a co-signer, adjusted down payment, term, or different bike. Want me to outline the easiest path?`,
+      `${greeting}this is ${financeSender} in finance at ${dealerName}. Just checking in — if you still want to move forward, we can revisit options like a co-signer, adjusted down payment, term, or a different bike. Want me to outline the easiest path?`,
       `${greeting}this is ${financeSender} in finance at ${dealerName}. Quick follow-up — if anything changed with your credit, down payment, or co-signer options, I can rework numbers for you.`,
-      `${greeting}this is ${financeSender} in finance at ${dealerName}. I’m still here if you want to revisit approval options, including co-signer or alternative bike/payment structures.`
+      `${greeting}this is ${financeSender} in finance at ${dealerName}. I’m here if you want to revisit approval options, including co-signer or alternate bike/payment structures.`
     ];
     return {
       body: templates[Math.min(step, templates.length - 1)]
@@ -6036,19 +6036,19 @@ async function buildLongTermFollowUp(
     const colorLabel = colorLabelRaw ? colorLabelRaw.charAt(0).toUpperCase() + colorLabelRaw.slice(1) : null;
     const itemLabel = colorLabel ? `${colorLabel} ${label}` : label;
     return {
-      body: `${greeting}You mentioned a ${timeframe} timeline. We have a ${itemLabel} in stock now. Want to take a look?`,
+      body: `${greeting}just checking in — since you mentioned a ${timeframe} timeline, we do have a ${itemLabel} in stock now. Want to take a look?`,
       mediaUrls: [imagePick.url]
     };
   }
 
   if (canTestRide) {
     return {
-      body: `${greeting}You mentioned a ${timeframe} timeline. I’m here when you’re ready. Just reach out when the time is right.`
+      body: `${greeting}just checking in — since you mentioned a ${timeframe} timeline, I’m here when you’re ready. Just reach out when the time is right.`
     };
   }
 
   return {
-    body: `${greeting}You mentioned a ${timeframe} timeline. I’m here when you’re ready. Just reach out when the time is right.`
+    body: `${greeting}just checking in — since you mentioned a ${timeframe} timeline, I’m here when you’re ready. Just reach out when the time is right.`
   };
 }
 
