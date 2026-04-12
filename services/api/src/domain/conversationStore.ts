@@ -2267,6 +2267,7 @@ export const ENGAGED_DAY_OFFSETS = FOLLOW_UP_DAY_OFFSETS;
 export const POST_SALE_DAY_OFFSETS = [1, 60, 365, 690];
 export const LONG_TERM_DAY_OFFSETS = [30, 90, 180];
 export const FINANCE_DECLINED_DAY_OFFSETS = [30, 60, 120];
+export const PRIVATE_PARTY_SELL_DAY_OFFSETS = [30, 60, 90, 120];
 
 export function computeFollowUpDueAt(anchorAtIso: string, offsetDays: number, timeZone: string) {
   const anchor = new Date(anchorAtIso);
@@ -2348,16 +2349,20 @@ export function startPostSaleCadence(conv: Conversation, anchorAtIso: string, ti
 export function scheduleLongTermFollowUp(
   conv: Conversation,
   dueAtIso: string,
-  message: string
+  message: string,
+  opts?: { anchorAtIso?: string; contextTag?: string }
 ) {
   if (conv.status === "closed") return;
+  const anchorAtIso = String(opts?.anchorAtIso ?? dueAtIso).trim() || dueAtIso;
   conv.followUpCadence = {
     status: "active",
-    anchorAt: dueAtIso,
+    anchorAt: anchorAtIso,
     nextDueAt: dueAtIso,
     stepIndex: 0,
     kind: "long_term",
     deferredMessage: message,
+    contextTag: opts?.contextTag,
+    contextTagUpdatedAt: opts?.contextTag ? nowIso() : undefined,
     scheduleInviteCount: 0,
     scheduleMuted: false
   };
@@ -2444,6 +2449,10 @@ export function advanceFollowUpCadence(conv: Conversation, timeZone: string) {
   const isLongTerm = conv.followUpCadence.kind === "long_term";
   const isFinanceDeclinedLongTerm =
     isLongTerm && String(conv.followUp?.reason ?? "").trim().toLowerCase() === "financing_declined";
+  const isPrivatePartySellLongTerm =
+    isLongTerm &&
+    (String(conv.followUp?.reason ?? "").trim().toLowerCase() === "private_party_seller" ||
+      String(conv.followUpCadence?.contextTag ?? "").trim().toLowerCase() === "private_party_seller");
   const isRideChallengeReminder = conv.followUpCadence.deferredMessage === "ride_challenge_final_mileage";
   if (isLongTerm && isRideChallengeReminder) {
     conv.followUpCadence.status = "completed";
@@ -2459,6 +2468,8 @@ export function advanceFollowUpCadence(conv: Conversation, timeZone: string) {
       : isLongTerm
         ? isFinanceDeclinedLongTerm
           ? FINANCE_DECLINED_DAY_OFFSETS
+          : isPrivatePartySellLongTerm
+            ? PRIVATE_PARTY_SELL_DAY_OFFSETS
           : LONG_TERM_DAY_OFFSETS
       : FOLLOW_UP_DAY_OFFSETS;
   if (nextStep >= offsets.length) {

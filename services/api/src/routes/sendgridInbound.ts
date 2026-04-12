@@ -27,6 +27,7 @@ import {
   setFollowUpMode,
   pauseFollowUpCadence,
   stopFollowUpCadence,
+  computeFollowUpDueAt,
   markPricingEscalated,
   closeConversation,
   setContactPreference,
@@ -2408,9 +2409,18 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const forcedTradeIn =
     leadSourceLower.includes("trade accelerator") ||
     /\btrade[-\s]?in\b/.test(leadSourceLower);
+  const forcedPrivatePartyMarketplaceSell =
+    /marketplace/i.test(leadSourceLower) &&
+    /(contact\s*a\s*dealer|used\s*mkt|dealer\s*portal|h-?d1)/i.test(leadSourceLower) &&
+    !/(prequal|credit|coa|finance|apply)/i.test(leadSourceLower);
   if (forcedTradeIn) {
     inferredBucket = "trade_in_sell";
     inferredCta = "value_my_trade";
+    pricingInquiryIntent = false;
+  }
+  if (forcedPrivatePartyMarketplaceSell) {
+    inferredBucket = "trade_in_sell";
+    inferredCta = "sell_my_bike";
     pricingInquiryIntent = false;
   }
   if (
@@ -3573,7 +3583,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   const isRoom58Sell =
     /room58/i.test(leadSourceLower) && /(sell|sell your vehicle|sell your bike)/i.test(leadSourceLower);
-  const isMarketplaceSell = /marketplace/i.test(leadSourceLower) && /sell/.test(leadSourceLower);
+  const isMarketplaceContactDealerSource =
+    /marketplace/i.test(leadSourceLower) &&
+    /(contact\s*a\s*dealer|used\s*mkt|dealer\s*portal|h-?d1)/i.test(leadSourceLower);
+  const isPrivatePartyMarketplaceSellLead =
+    isMarketplaceContactDealerSource && !/(prequal|credit|coa|finance|apply)/i.test(leadSourceLower);
+  const isMarketplaceSell =
+    /marketplace/i.test(leadSourceLower) &&
+    (/sell/.test(leadSourceLower) || isPrivatePartyMarketplaceSellLead);
   const isSellLead = inferredBucket === "trade_in_sell" || inferredCta === "sell_my_bike";
   if (isInitialAdf && isTradeAcceleratorLead && isSellLead) {
     const profile = await getDealerProfile();
@@ -3649,11 +3666,20 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       setFollowUpMode(conv, "paused_indefinite", "not_buying_used");
       stopFollowUpCadence(conv, "not_buying_used");
     } else {
-      ack =
-        `Thanks — I got your note about selling your ${sellLabel}. ` +
-        `This is ${agentName} at ${dealerName}. ` +
-        "We can do a quick in‑person appraisal and give you a firm offer. " +
-        "If you’re open to stopping by, what day and time works best?";
+      if (isPrivatePartyMarketplaceSellLead) {
+        ack =
+          `Thanks — I got your note about your ${sellLabel}. ` +
+          `This is ${agentName} at ${dealerName}. ` +
+          "We’re always looking for clean pre-owned motorcycles. " +
+          "If you’re open to it, we can do a quick in-person evaluation and either make a purchase offer " +
+          "or work up trade-in value. Would you be open to bringing it in?";
+      } else {
+        ack =
+          `Thanks — I got your note about selling your ${sellLabel}. ` +
+          `This is ${agentName} at ${dealerName}. ` +
+          "We can do a quick in‑person appraisal and give you a firm offer. " +
+          "If you’re open to stopping by, what day and time works best?";
+      }
       ack = await applyInitialAdfPrefix(ack);
       const bookingUrl = buildBookingUrlForLead(profile?.bookingUrl, conv);
       const bookingLine = bookingUrl
@@ -3662,11 +3688,30 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       const rawName =
         firstName || normalizeDisplayCase(conv.lead?.name) || "there";
       const name = rawName.split(" ")[0] || "there";
-      emailDraft =
-        `Hi ${name},\n\nThanks for reaching out about selling your ${sellLabel}. ` +
-        `This is ${agentName} at ${dealerName}. ` +
-        "We can do a quick in‑person appraisal and give you a firm offer. " +
-        `If you’d like to stop in, ${bookingLine}\n\nThanks,`;
+      if (isPrivatePartyMarketplaceSellLead) {
+        emailDraft =
+          `Hi ${name},\n\nThanks for reaching out about your ${sellLabel}. ` +
+          `This is ${agentName} at ${dealerName}. ` +
+          "We’re always looking for clean pre-owned motorcycles. " +
+          "If you’re open to it, we can do a quick in-person evaluation and either make a purchase offer " +
+          `or work up trade-in value. ${bookingLine}\n\nThanks,`;
+      } else {
+        emailDraft =
+          `Hi ${name},\n\nThanks for reaching out about selling your ${sellLabel}. ` +
+          `This is ${agentName} at ${dealerName}. ` +
+          "We can do a quick in‑person appraisal and give you a firm offer. " +
+          `If you’d like to stop in, ${bookingLine}\n\nThanks,`;
+      }
+      if (isPrivatePartyMarketplaceSellLead) {
+        const cfg = await getSchedulerConfig();
+        const nowIso = new Date().toISOString();
+        const firstDue = computeFollowUpDueAt(nowIso, 30, cfg.timezone);
+        scheduleLongTermFollowUp(conv, firstDue, "private_party_marketplace_seller", {
+          anchorAtIso: nowIso,
+          contextTag: "private_party_seller"
+        });
+        setFollowUpMode(conv, "active", "private_party_seller");
+      }
     }
     conv.emailDraft = emailDraft;
     const systemMode = getSystemMode();

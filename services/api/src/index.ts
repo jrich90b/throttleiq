@@ -5812,6 +5812,23 @@ async function buildLongTermFollowUp(
   const financingDeclined =
     conv?.followUp?.reason === "financing_declined" ||
     conv?.appointment?.staffNotify?.outcome?.status === "financing_declined";
+  const privatePartySeller =
+    conv?.followUp?.reason === "private_party_seller" ||
+    String(conv?.followUpCadence?.contextTag ?? "").trim().toLowerCase() === "private_party_seller";
+  const sellBikeLabel = label || "your bike";
+
+  if (privatePartySeller) {
+    const step = Math.max(0, Number(conv?.followUpCadence?.stepIndex ?? 0));
+    const templates = [
+      `${greeting}quick check-in — do you still have your ${sellBikeLabel}? If yes, we can do a quick evaluation and either make a purchase offer or work up trade-in value.`,
+      `${greeting}just following up on your ${sellBikeLabel}. If you're still open to it, we can set a quick appraisal for a buy offer or trade value.`,
+      `${greeting}wanted to check whether you still have your ${sellBikeLabel}. We’re still interested and can evaluate it whenever it’s convenient for you.`,
+      `${greeting}last check-in for now on your ${sellBikeLabel}. If you still have it and want a buy/trade evaluation, I can set that up anytime.`
+    ];
+    return {
+      body: templates[Math.min(step, templates.length - 1)]
+    };
+  }
 
   if (financingDeclined) {
     const step = Math.max(0, Number(conv?.followUpCadence?.stepIndex ?? 0));
