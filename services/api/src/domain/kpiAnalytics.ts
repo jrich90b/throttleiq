@@ -119,6 +119,7 @@ type LeadStatsRow = {
   firstCallAt: string | null;
   motorcycle: string;
   createdAtMs: number;
+  excludeFromResponseTiming: boolean;
   responded: boolean;
   responseMinutes: number | null;
   called: boolean;
@@ -355,6 +356,23 @@ function isWalkIn(conv: Conversation): boolean {
   return /traffic log pro/i.test(String(conv.lead?.source ?? ""));
 }
 
+function isDlaTestRideLead(conv: Conversation): boolean {
+  const leadSource = String(conv.lead?.source ?? "").toLowerCase();
+  if (!leadSource.includes("dealer lead app")) return false;
+
+  const bucket = String(conv.classification?.bucket ?? "").toLowerCase();
+  if (bucket === "test_ride") return true;
+
+  const walkInComment = String(conv.lead?.walkInComment ?? "");
+  if (/\b(dealer test ride|demo bikes ridden|test ride|demo ride)\b/i.test(walkInComment)) return true;
+
+  const firstAdfInbound = (conv.messages ?? []).find(
+    m => m.direction === "in" && String(m.provider ?? "").toLowerCase() === "sendgrid_adf"
+  );
+  const adfBody = String(firstAdfInbound?.body ?? "");
+  return /\b(dealer test ride|demo bikes ridden|test ride|demo ride)\b/i.test(adfBody);
+}
+
 function normalizeCondition(conv: Conversation): "new" | "used" | "unknown" {
   const raw = String(conv.lead?.vehicle?.condition ?? "").trim().toLowerCase();
   if (raw === "new") return "new";
@@ -426,6 +444,7 @@ function toLeadStats(conv: Conversation, opts: KpiOverviewOptions): LeadStatsRow
   const closedAt = toMs(conv.closedAt);
   const sold = soldAt != null;
   const closed = String(conv.status ?? "").toLowerCase() === "closed";
+  const excludeFromResponseTiming = isWalkIn(conv) || isDlaTestRideLead(conv);
 
   const responseMinutes =
     inboundAt != null && outboundAt != null
@@ -454,6 +473,7 @@ function toLeadStats(conv: Conversation, opts: KpiOverviewOptions): LeadStatsRow
     firstCallAt: callAt != null ? new Date(callAt).toISOString() : null,
     motorcycle: motorcycleLabel(conv),
     createdAtMs: createdAt ?? Date.now(),
+    excludeFromResponseTiming,
     responded: outboundAt != null,
     responseMinutes: responseMinutes != null ? Number(responseMinutes.toFixed(2)) : null,
     called: callAt != null,
@@ -487,7 +507,10 @@ export function buildKpiOverview(
     .map(conv => toLeadStats(conv, opts));
 
   const leadVolume = scoped.length;
-  const responseTimes = scoped.map(r => r.responseMinutes).filter((v): v is number => v != null);
+  const responseTimes = scoped
+    .filter(r => !r.excludeFromResponseTiming)
+    .map(r => r.responseMinutes)
+    .filter((v): v is number => v != null);
   const callTimes = scoped.map(r => r.timeToCallMinutes).filter((v): v is number => v != null);
   const closeTimes = scoped.map(r => r.timeToCloseDays).filter((v): v is number => v != null);
   const respondedCount = scoped.filter(r => r.responded).length;
