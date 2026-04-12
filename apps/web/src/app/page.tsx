@@ -4477,8 +4477,22 @@ export default function Home() {
 
   const isArchivedConversation = (c: ConversationListItem) => {
     const status = String(c.status ?? "").trim().toLowerCase();
+    const closedReason = String(c.closedReason ?? "").trim().toLowerCase();
+    const soldDeal = closedReason === "sold" || !!c.sale?.soldAt;
+    const holdDeal =
+      /\bhold\b/.test(closedReason) ||
+      c.followUpCadence?.pauseReason === "manual_hold" ||
+      c.followUpCadence?.pauseReason === "unit_hold" ||
+      c.followUpCadence?.pauseReason === "order_hold" ||
+      c.followUpCadence?.stopReason === "unit_hold" ||
+      c.followUpCadence?.stopReason === "order_hold" ||
+      c.followUp?.reason === "manual_hold" ||
+      c.followUp?.reason === "unit_hold" ||
+      c.followUp?.reason === "order_hold" ||
+      !!c.hold;
+    if (soldDeal || holdDeal) return false;
     if (status === "closed") return true;
-    return !!(c.closedReason && /archive/i.test(c.closedReason));
+    return /archive/.test(closedReason);
   };
 
   const isConversationOnHold = (c: ConversationListItem) =>
