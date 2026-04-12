@@ -8163,6 +8163,15 @@ function parseRelativeDaysOrWeeks(text: string): { count: number; unit: "days" |
   return { count, unit };
 }
 
+function computeMidWeekFollowUpDate(base: Date, weeksAhead: number): Date {
+  const d = new Date(base);
+  // Mid-week target (Wednesday 10:30) so "in N weeks" lands in the middle of that week.
+  const daysFromMonday = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - daysFromMonday + weeksAhead * 7 + 2);
+  d.setHours(10, 30, 0, 0);
+  return d;
+}
+
 function parseFutureTimeframe(text: string, base: Date): { label: string; until?: Date } | null {
   const t = text.toLowerCase();
 
@@ -8188,12 +8197,12 @@ function parseFutureTimeframe(text: string, base: Date): { label: string; until?
     const weeks = relative.count;
     return {
       label: `in ${weeks} week${weeks === 1 ? "" : "s"}`,
-      until: new Date(base.getTime() + weeks * 7 * 24 * 60 * 60 * 1000)
+      until: computeMidWeekFollowUpDate(base, weeks)
     };
   }
 
   if (/\bnext week\b/.test(t)) {
-    return { label: "next week", until: new Date(base.getTime() + 7 * 24 * 60 * 60 * 1000) };
+    return { label: "next week", until: computeMidWeekFollowUpDate(base, 1) };
   }
 
   if (/\bnext month\b/.test(t)) {
@@ -13128,12 +13137,15 @@ async function processDueFollowUps() {
 
     const relative = parseRelativeDaysOrWeeks(t);
     if (relative) {
-      const days = relative.unit === "weeks" ? relative.count * 7 : relative.count;
+      if (relative.unit === "weeks") {
+        return { until: computeMidWeekFollowUpDate(base, relative.count) };
+      }
+      const days = relative.count;
       return { until: new Date(base.getTime() + days * 24 * 60 * 60 * 1000) };
     }
 
     if (/\bnext week\b/.test(t)) {
-      return { until: new Date(base.getTime() + 7 * 24 * 60 * 60 * 1000) };
+      return { until: computeMidWeekFollowUpDate(base, 1) };
     }
     if (/\bnext month\b/.test(t)) {
       return { until: new Date(base.getTime() + 30 * 24 * 60 * 60 * 1000) };
