@@ -4540,12 +4540,15 @@ export default function Home() {
     );
   };
 
-  const isAdfCoaException = (c: ConversationListItem) => {
+  const isCoaLead = (c: ConversationListItem) => {
     const leadSource = String(c.leadSource ?? "").trim().toLowerCase();
-    const bucket = String(c.classification?.bucket ?? "").trim().toLowerCase();
     const cta = String(c.classification?.cta ?? "").trim().toLowerCase();
-    if (cta === "hdfs_coa" && bucket !== "finance_prequal") return true;
-    return leadSource.includes("hdfs coa") || leadSource.includes("coa online");
+    if (cta === "hdfs_coa") return true;
+    return (
+      leadSource.includes("hdfs coa") ||
+      leadSource.includes("coa online") ||
+      leadSource.includes("credit application")
+    );
   };
 
   const isAdfTestRideException = (c: ConversationListItem) => {
@@ -4566,7 +4569,7 @@ export default function Home() {
     if (!Number.isFinite(recentAtMs)) return false;
     if (nowMs - recentAtMs > cutoffMs) return false;
     if (isPrequalLead(c)) return false;
-    if (isAdfCoaException(c) || isAdfTestRideException(c)) {
+    if (isCoaLead(c) || isAdfTestRideException(c)) {
       return true;
     }
     const twilioEngaged =
