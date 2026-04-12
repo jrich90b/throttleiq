@@ -2430,6 +2430,16 @@ export default function Home() {
     return has1250 || hasSportsterS;
   }
 
+  function isIron883Variant(tokens: string[]): boolean {
+    const has883 = hasTokenFragment(tokens, "883");
+    if (!has883) return false;
+    const hasIron =
+      tokens.includes("iron") ||
+      hasTokenFragment(tokens, "883n") ||
+      tokens.some(token => /^xl883n/.test(token));
+    return hasIron;
+  }
+
   function isWatchModelOptionChecked(groupModels: string[], option: string): boolean {
     const normalizedOption = normalizeModelMatchText(option);
     if (!normalizedOption) return false;
@@ -2453,6 +2463,10 @@ export default function Home() {
 
       // "883" watch includes both explicit Sportster 883 and 883-coded labels.
       if (selectedHas883) {
+        const selectedWantsIron883 = isIron883Variant(tokens);
+        if (selectedWantsIron883) {
+          return optionHas883 && isIron883Variant(optionTokens);
+        }
         return optionHas883;
       }
 
