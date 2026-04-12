@@ -790,6 +790,65 @@ export async function classifyCadenceContextWithLLM(args: {
   }
 }
 
+export type CadencePersonalizationParse = {
+  line: string;
+  confidence?: number;
+};
+
+export async function parseCadencePersonalizationLineWithLLM(args: {
+  history: { direction: "in" | "out"; body: string }[];
+}): Promise<CadencePersonalizationParse | null> {
+  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  const history = (args.history ?? []).slice(-10).map(h => `${h.direction}: ${h.body}`);
+  if (!history.length) return null;
+  const schema: { [key: string]: unknown } = {
+    type: "object",
+    additionalProperties: false,
+    required: ["line", "confidence"],
+    properties: {
+      line: { type: "string" },
+      confidence: { type: "number" }
+    }
+  };
+  const prompt = [
+    "You write one optional, human, follow-up personalization line for dealership SMS.",
+    "Return only JSON matching the schema.",
+    "",
+    "Goal:",
+    "- Use a concrete personal/situational detail from recent conversation/context when available.",
+    "- Example style: \"Hope training in Boston is going well.\"",
+    "",
+    "Rules:",
+    "- line must be a single sentence, natural tone, 4-16 words.",
+    "- If no safe/relevant detail exists, return line as empty string.",
+    "- Do not invent facts.",
+    "- Do not include pricing/inventory asks, links, calls-to-action, or appointment prompts.",
+    "- Avoid sensitive details (medical/legal/financial specifics).",
+    "",
+    `Recent messages/context:\n${history.join("\n")}`
+  ].join("\n");
+  try {
+    const parsed = await requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "cadence_personalization_line",
+      schema,
+      maxOutputTokens: 80,
+      debugTag: "llm-cadence-personalization"
+    });
+    const line = String(parsed?.line ?? "").replace(/\s+/g, " ").trim();
+    const confidence =
+      typeof parsed?.confidence === "number" && Number.isFinite(parsed.confidence)
+        ? Math.max(0, Math.min(1, parsed.confidence))
+        : undefined;
+    return { line, confidence };
+  } catch {
+    return null;
+  }
+}
+
 export async function parseAffectWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];

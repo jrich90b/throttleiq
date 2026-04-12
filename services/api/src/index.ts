@@ -18,6 +18,7 @@ import {
   generateBlendedLeadInWithLLM,
   generateEmpathySupportReplyWithLLM,
   classifyCadenceContextWithLLM,
+  parseCadencePersonalizationLineWithLLM,
   classifyEmpathyNeedWithLLM,
   classifyComplimentWithLLM,
   parseAffectWithLLM,
@@ -4263,6 +4264,51 @@ function getCadenceAgentContextText(conv: any, now: Date): string {
   return text;
 }
 
+async function getCadencePersonalizationLine(
+  conv: any,
+  cadence: any,
+  now: Date
+): Promise<string | null> {
+  if (!conv || !cadence) return null;
+  const latestInbound = [...(conv.messages ?? [])]
+    .reverse()
+    .find((m: any) => m?.direction === "in" && String(m?.body ?? "").trim());
+  const latestInboundAt = String(latestInbound?.at ?? "").trim();
+  const agentUpdatedAt = String(conv?.agentContext?.updatedAt ?? "").trim();
+  const walkInUpdatedAt = String(conv?.lead?.walkInCommentCapturedAt ?? "").trim();
+  const voiceUpdatedAt = String(conv?.voiceContext?.updatedAt ?? conv?.voiceContext?.createdAt ?? "").trim();
+  const cacheKey = `${latestInboundAt}|${agentUpdatedAt}|${walkInUpdatedAt}|${voiceUpdatedAt}`;
+  if (String(cadence.personalizationCacheKey ?? "") === cacheKey) {
+    const cached = String(cadence.personalizationLine ?? "").trim();
+    return cached || null;
+  }
+
+  const history = buildHistory(conv, 10).slice(-10);
+  if (!history.length) {
+    cadence.personalizationCacheKey = cacheKey;
+    cadence.personalizationLine = "";
+    cadence.personalizationUpdatedAt = nowIso();
+    return null;
+  }
+
+  const parsed = await parseCadencePersonalizationLineWithLLM({ history });
+  const minConfidence = Number(process.env.LLM_CADENCE_PERSONALIZATION_CONFIDENCE_MIN ?? 0.7);
+  let line = String(parsed?.line ?? "").replace(/\s+/g, " ").trim();
+  const confidence = typeof parsed?.confidence === "number" ? parsed.confidence : null;
+  if (line && confidence != null && confidence < minConfidence) {
+    line = "";
+  }
+  if (line) {
+    if (!/[.!?]$/.test(line)) line = `${line}.`;
+    if (line.length > 140) line = `${line.slice(0, 139).trimEnd()}.`;
+  }
+
+  cadence.personalizationCacheKey = cacheKey;
+  cadence.personalizationLine = line;
+  cadence.personalizationUpdatedAt = nowIso();
+  return line || null;
+}
+
 function inferCadenceTagFromAgentContext(conv: any): string | null {
   const text = getCadenceAgentContextText(conv, new Date()).toLowerCase();
   if (!text) return null;
@@ -4525,6 +4571,10 @@ async function buildCadenceRegeneratedDraft(
   const contextLine = getFollowUpContextLine(conv, now);
   if (contextLine && !message.toLowerCase().includes(contextLine.toLowerCase())) {
     message = `${message} ${contextLine}`.trim();
+  }
+  const personalizationLine = await getCadencePersonalizationLine(conv, cadence, now);
+  if (personalizationLine && !message.toLowerCase().includes(personalizationLine.toLowerCase())) {
+    message = `${message} ${personalizationLine}`.trim();
   }
   message = selectNonRepeatingCadenceMessage(conv, message, [
     "Quick follow-up — I'm here if you want to revisit this.",
@@ -13808,6 +13858,10 @@ async function processDueFollowUps() {
           conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
           conv.appointment.staffNotify.contextUsedAt = nowIso();
         }
+      }
+      const personalizationLine = await getCadencePersonalizationLine(conv, cadence, now);
+      if (personalizationLine && !message.toLowerCase().includes(personalizationLine.toLowerCase())) {
+        message = `${message} ${personalizationLine}`.trim();
       }
     }
     const genericCadenceNoRepeatFallbacks = isPostSale
