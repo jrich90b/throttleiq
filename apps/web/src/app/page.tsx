@@ -2007,11 +2007,38 @@ export default function Home() {
       if (!resp.ok || data?.ok === false) {
         throw new Error(data?.error ?? "Failed to mark sold");
       }
-      if (selectedConv?.id === soldModalConv.id && data?.conversation) {
-        setSelectedConv(data.conversation);
+      if (data?.conversation) {
+        const conv = data.conversation as ConversationDetail & { messages?: Message[] };
+        if (selectedConv?.id === conv.id) {
+          setSelectedConv(conv);
+        }
+        setConversations(prev =>
+          prev.map(c => {
+            if (c.id !== conv.id) return c;
+            const last = Array.isArray(conv.messages) ? conv.messages[conv.messages.length - 1] : null;
+            return {
+              ...c,
+              status: conv.status ?? c.status,
+              closedReason: conv.closedReason ?? c.closedReason,
+              sale: conv.sale ?? c.sale,
+              hold: conv.hold ?? c.hold,
+              followUp: conv.followUp ?? c.followUp,
+              followUpCadence: conv.followUpCadence ?? c.followUpCadence,
+              updatedAt: conv.updatedAt ?? c.updatedAt,
+              messageCount: Array.isArray(conv.messages) ? conv.messages.length : c.messageCount,
+              lastMessage: last
+                ? {
+                    direction: last.direction,
+                    body: last.body,
+                    provider: last.provider
+                  }
+                : c.lastMessage ?? null
+            };
+          })
+        );
       }
       setSoldModalOpen(false);
-      void load();
+      await load();
     } catch (err: any) {
       setSoldError(err?.message ?? "Failed to mark sold");
     } finally {
