@@ -8607,7 +8607,7 @@ export default function Home() {
                           }
                         >
                           <option value="">Select outcome…</option>
-                          <option value="sold">Close - Sold</option>
+                          <option value="sold">Sold</option>
                           <option value="hold">On hold</option>
                           <option value="undecided">Undecided</option>
                           <option value="no_show">No show</option>
@@ -8822,7 +8822,7 @@ export default function Home() {
                   >
                     <option value="showed_up">Showed up</option>
                     <option value="no_show">No show</option>
-                    <option value="sold">Close - Sold</option>
+                    <option value="sold">Sold</option>
                     <option value="hold">On hold</option>
                     <option value="financing_declined">Financing declined</option>
                     <option value="financing_needs_info">Financing needs more info</option>
@@ -13608,7 +13608,7 @@ export default function Home() {
                   onChange={e => setCloseReason(e.target.value)}
                 >
                   <option value="">Update Lead...</option>
-                  <option value="sold">Close - Sold</option>
+                  <option value="sold">Sold</option>
                   <option value="hold">Hold - Unit</option>
                   <option value="not_interested">Close - Not Interested</option>
                   <option value="no_response">Close - No Response</option>
