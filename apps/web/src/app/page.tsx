@@ -3583,7 +3583,7 @@ export default function Home() {
     section === "inbox"
       ? "Inbox"
       : section === "todos"
-        ? "To Do Inbox"
+        ? "Task Inbox"
         : section === "questions"
           ? "Follow-up Schedule"
         : section === "contacts"
@@ -8356,7 +8356,7 @@ export default function Home() {
         {section === "todos" &&
         (authUser?.role === "manager" || authUser?.role === "salesperson" || isDepartmentUser || authUser?.permissions?.canAccessTodos) ? (
           <>
-            <div className="mt-3 text-sm font-semibold text-gray-800">To Do Inbox</div>
+            <div className="mt-3 text-sm font-semibold text-gray-800">Task Inbox</div>
             <div className="mt-3 space-y-2">
               <input
                 className="w-full border rounded px-3 py-2 text-sm"
