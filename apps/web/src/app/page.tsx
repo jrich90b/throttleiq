@@ -8357,15 +8357,15 @@ export default function Home() {
         (authUser?.role === "manager" || authUser?.role === "salesperson" || isDepartmentUser || authUser?.permissions?.canAccessTodos) ? (
           <>
             <div className="mt-3 text-sm font-semibold text-gray-800">To Do Inbox</div>
-            <div className="mt-3 flex flex-col gap-2 md:flex-row">
+            <div className="mt-3 space-y-2">
               <input
                 className="w-full border rounded px-3 py-2 text-sm"
                 placeholder="Search customer..."
                 value={todoQuery}
                 onChange={e => setTodoQuery(e.target.value)}
               />
-              {isManager ? (
-                <>
+              <div className="flex flex-col gap-2 md:flex-row">
+                {isManager ? (
                   <select
                     className="w-full md:w-44 border rounded px-3 py-2 text-sm bg-white"
                     value={todoLeadOwnerFilter}
@@ -8383,27 +8383,27 @@ export default function Home() {
                       </optgroup>
                     ) : null}
                     <optgroup label="Departments">
-                    <option value="team:sales">Sales (Lead Owner)</option>
-                    <option value="team:service">Service (Department)</option>
-                    <option value="team:parts">Parts (Department)</option>
-                    <option value="team:apparel">Apparel (Department)</option>
+                      <option value="team:sales">Sales (Lead Owner)</option>
+                      <option value="team:service">Service (Department)</option>
+                      <option value="team:parts">Parts (Department)</option>
+                      <option value="team:apparel">Apparel (Department)</option>
                     </optgroup>
                     <option value="team:unassigned">Unassigned</option>
                   </select>
-                </>
-              ) : null}
-              <select
-                className="w-full md:w-44 border rounded px-3 py-2 text-sm bg-white"
-                value={todoTaskTypeFilter}
-                onChange={e => setTodoTaskTypeFilter(e.target.value as "all" | TodoInboxSection)}
-                title="Filter by task type"
-              >
-                <option value="all">Task Type: All</option>
-                <option value="followup">Task Type: Follow-up</option>
-                <option value="todo">Task Type: To Do</option>
-                <option value="reminder">Task Type: Reminder</option>
-                <option value="appointment">Task Type: Appointment</option>
-              </select>
+                ) : null}
+                <select
+                  className="w-full md:w-44 border rounded px-3 py-2 text-sm bg-white"
+                  value={todoTaskTypeFilter}
+                  onChange={e => setTodoTaskTypeFilter(e.target.value as "all" | TodoInboxSection)}
+                  title="Filter by task type"
+                >
+                  <option value="all">Task Type: All</option>
+                  <option value="followup">Task Type: Follow-up</option>
+                  <option value="todo">Task Type: To Do</option>
+                  <option value="reminder">Task Type: Reminder</option>
+                  <option value="appointment">Task Type: Appointment</option>
+                </select>
+              </div>
             </div>
             <div className="mt-3 space-y-3">
               {todoSectionDefs.map(sectionDef => {
