@@ -4508,7 +4508,6 @@ async function buildCadenceRegeneratedDraft(
         : null;
   if (lastSentStepRaw == null || !Number.isFinite(lastSentStepRaw)) return null;
   const lastSentStep = Math.max(0, Math.floor(lastSentStepRaw));
-  if (lastSentStep !== 0) return null;
   if (cadence.kind === "post_sale" || cadence.kind === "long_term") return null;
 
   const draftAtMs = new Date(String(lastDraft.at ?? "")).getTime();
@@ -4571,7 +4570,41 @@ async function buildCadenceRegeneratedDraft(
     !isSellMyBikeLead &&
     (hasAgentContextForCadence || !!walkInComment || !!conv.engagement?.at) &&
     contextTag !== "scheduling";
-  if (!shouldPreferContextualStep0NoSlots) return null;
+  const allowProactiveSchedule = shouldAllowProactiveScheduleAsk(conv, now);
+  if (!shouldPreferContextualStep0NoSlots) {
+    let message = String(lastDraft?.body ?? "").trim();
+    if (!message) {
+      const fallbackTemplate =
+        FOLLOW_UP_MESSAGES[Math.min(lastSentStep, FOLLOW_UP_MESSAGES.length - 1)] ??
+        FOLLOW_UP_MESSAGES[FOLLOW_UP_MESSAGES.length - 1];
+      message = renderFollowUpTemplate(fallbackTemplate, baseCtx);
+    } else if (message.includes("{")) {
+      message = renderFollowUpTemplate(message, baseCtx);
+    }
+    if (conv.scheduleSoft && !allowProactiveSchedule) {
+      message = stripSchedulingPromptFromFollowUp(message);
+    }
+    message = ensureCadenceAnchorMessage({
+      message,
+      name: firstName,
+      labelClause,
+      isPostSale: false
+    });
+    const contextLine = getFollowUpContextLine(conv, now);
+    if (contextLine && !message.toLowerCase().includes(contextLine.toLowerCase())) {
+      message = `${message} ${contextLine}`.trim();
+    }
+    const personalizationLine = await getCadencePersonalizationLine(conv, cadence, now);
+    if (personalizationLine && !message.toLowerCase().includes(personalizationLine.toLowerCase())) {
+      message = `${message} ${personalizationLine}`.trim();
+    }
+    message = selectNonRepeatingCadenceMessage(conv, message, [
+      "Quick follow-up — I'm here if you want to revisit this.",
+      "No rush — whenever you're ready, I can help with next steps.",
+      "If timing changed, just let me know and I can adjust."
+    ]);
+    return { body: message };
+  }
 
   let message: string;
   if (!conv.lead?.walkInCommentUsedAt && walkInComment) {
@@ -4607,7 +4640,6 @@ async function buildCadenceRegeneratedDraft(
       : fallback;
   }
 
-  const allowProactiveSchedule = shouldAllowProactiveScheduleAsk(conv, now);
   if (conv.scheduleSoft && !allowProactiveSchedule) {
     message = stripSchedulingPromptFromFollowUp(message);
   }
