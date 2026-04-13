@@ -1107,6 +1107,52 @@ function extractWalkInModelHint(text?: string | null): string | undefined {
   return undefined;
 }
 
+function extractWatchDirectiveSegment(text?: string | null): string {
+  const source = String(text ?? "");
+  if (!source) return "";
+  const m = source.match(
+    /\b(?:watch for|keep an eye out for|please watch for|open to watch for|watch)\b([\s\S]*?)(?=(?:\b(?:step\s*\d+|email opt-?in|view lead)\b|[.;]|$))/i
+  );
+  return String(m?.[1] ?? "").replace(/\s+/g, " ").trim();
+}
+
+function extractWatchDirectiveModelHint(text?: string | null): string | undefined {
+  const segment = extractWatchDirectiveSegment(text);
+  if (!segment) return undefined;
+  const segmentLower = segment.toLowerCase();
+  const inquiryModelHint = extractInquiryModelHint(segmentLower);
+  if (inquiryModelHint) return inquiryModelHint;
+  const walkInModelHint = extractWalkInModelHint(segmentLower);
+  if (walkInModelHint) return walkInModelHint;
+  if (/\b(?:touring|bagger)\b/.test(segmentLower)) return "Touring";
+  if (/\b(?:trike|trikes)\b/.test(segmentLower)) return "Trike";
+  if (/\b(?:tri[\s-]?glide)\b/.test(segmentLower)) return "Tri Glide Ultra";
+  if (/\b(?:road\s+glide)\b/.test(segmentLower)) return "Road Glide";
+  if (/\b(?:street\s+glide)\b/.test(segmentLower)) return "Street Glide";
+  if (/\b(?:road\s+king)\b/.test(segmentLower)) return "Road King";
+  if (/\b(?:softail)\b/.test(segmentLower)) return "Softail";
+  if (/\b(?:sportster)\b/.test(segmentLower)) return "Sportster";
+  return undefined;
+}
+
+function extractWalkInReminderRequest(text?: string | null): { timeHint: string; actionNote: string } | null {
+  const raw = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (!raw) return null;
+  const explicit = raw.match(/\bremind me\b\s+(.+?)\s+\bto\b\s+(.+?)(?:[.;]|$)/i);
+  if (explicit) {
+    const timeHint = String(explicit[1] ?? "").trim();
+    const actionNote = String(explicit[2] ?? "")
+      .replace(/\b(?:also|and)\b[\s\S]*$/i, "")
+      .trim();
+    if (timeHint && actionNote) return { timeHint, actionNote };
+  }
+  const fallback = raw.match(/\bremind me\b\s+(.+?)(?:[.;]|$)/i);
+  if (!fallback) return null;
+  const timeHint = String(fallback[1] ?? "").trim();
+  if (!timeHint) return null;
+  return { timeHint, actionNote: "follow up with customer" };
+}
+
 function extractTrimFromText(text?: string | null): string | undefined {
   if (!text) return undefined;
   const t = String(text).toLowerCase();
@@ -3109,7 +3155,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         ? normalizeVehicleModel(llmInventoryEntities.model, conv.lead?.vehicle?.make ?? null)
         : undefined;
     const inquiryModelHint = extractInquiryModelHint(walkInCleanedComment);
+    const watchDirectiveModelHint = extractWatchDirectiveModelHint(walkInCleanedComment);
     const modelLabel =
+      watchDirectiveModelHint ||
       parserModel ||
       inquiryModelHint ||
       walkInModelHint ||
@@ -3124,14 +3172,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         commentLower
       ) || /\bif one comes in\b/.test(commentLower);
     const hasWatchIntent = hasWatchIntentFromParser || hasWatchIntentFromText;
-    const hasExistingWatch =
-      !!conv.inventoryWatch || (Array.isArray(conv.inventoryWatches) && conv.inventoryWatches.length > 0);
     const lowSignalWalkInUpdate =
       !walkInCleanedComment ||
       /^(email updates?|email opt-?in|view lead|step\s*\d+|n\/?a|na)$/i.test(walkInCleanedComment.trim());
     const requestedConditionHint = inferWalkInRequestedCondition(walkInCleanedComment);
     const wantsUsed = requestedConditionHint === "used";
     const wantsNew = requestedConditionHint === "new";
+    const walkInReminderRequest = extractWalkInReminderRequest(walkInCleanedComment);
     const parserYearRange =
       inventoryEntityAccepted &&
       llmInventoryEntities?.yearMin &&
@@ -3224,9 +3271,53 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         event.providerMessageId
       );
     }
-
     const hasDealProgressSignal =
       hasDepositSignal || hasSoldSignal || hasDealFinalizingSignal;
+    if (walkInReminderRequest && !(hasCreditCosignerSignal || hasDealProgressSignal)) {
+      const callbackCfg = await getSchedulerConfig();
+      const callbackTz = callbackCfg.timezone || "America/New_York";
+      let reminderSchedule = buildCallbackTodoSchedule(walkInReminderRequest.timeHint, callbackTz);
+      if (reminderSchedule.dueAt) {
+        const dueAtMs = Date.parse(reminderSchedule.dueAt);
+        if (Number.isFinite(dueAtMs) && dueAtMs < Date.now() - 60_000) {
+          const adjustedHint = walkInReminderRequest.timeHint.replace(
+            /\b(\d{1,2})[\/\-](\d{1,2})[\/\-]\d{2,4}\b/g,
+            (_m, mm, dd) => {
+              const now = new Date();
+              let targetYear = now.getFullYear();
+              const month = Number(mm);
+              const day = Number(dd);
+              if (
+                Number.isFinite(month) &&
+                Number.isFinite(day) &&
+                month >= 1 &&
+                month <= 12 &&
+                day >= 1 &&
+                day <= 31
+              ) {
+                const thisYear = new Date(Date.UTC(targetYear, month - 1, day, 12, 0, 0, 0));
+                if (thisYear.getTime() < now.getTime() - 24 * 60 * 60 * 1000) {
+                  targetYear += 1;
+                }
+              }
+              return `${mm}/${dd}/${targetYear}`;
+            }
+          );
+          const adjusted = buildCallbackTodoSchedule(adjustedHint, callbackTz);
+          if (adjusted.dueAt && adjusted.reminderAt) reminderSchedule = adjusted;
+        }
+      }
+      const reminderSummary = `Reminder requested: ${walkInReminderRequest.actionNote}.`;
+      addTodo(
+        conv,
+        "other",
+        reminderSummary,
+        event.providerMessageId,
+        undefined,
+        reminderSchedule,
+        "reminder"
+      );
+    }
     if (hasCreditCosignerSignal) {
       conv.dialogState = { name: "payments_handoff", updatedAt: new Date().toISOString() };
       addTodo(conv, "approval", event.body ?? walkInCleanedComment, event.providerMessageId);
@@ -3431,9 +3522,6 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       (addendum ? ` ${addendum}` : "");
     const suppressWalkInAutoAck =
       lowSignalWalkInUpdate ||
-      hasExistingWatch ||
-      conv.followUp?.mode === "holding_inventory" ||
-      hasWatchIntent ||
       hasCompletedTestRideSignal ||
       hasHoldSignal ||
       hasResumeHoldSignal ||
