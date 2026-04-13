@@ -7182,7 +7182,12 @@ function isCustomerReturningCallPhrase(text: string | null | undefined): boolean
     /\bcall(?:ing)?\s+you\s+back\b/.test(source) ||
     /\b(?:i(?:'m| am)\s+)?trying\s+to\s+give\s+you\s+(?:a\s+)?call\s*back\b/.test(source) ||
     /\bgive\s+you\s+(?:a\s+)?call\s*back\b/.test(source) ||
-    /\b(?:i(?:'ll| will)\s+)?call\s+you\s+back\b/.test(source)
+    /\b(?:i(?:'ll| will)\s+)?call\s+you\s+back\b/.test(source) ||
+    /\b(?:i(?:'ll| will)\s+)?give\s+you\s+(?:a\s+)?shout\b/.test(source) ||
+    /\blet\s+me\s+give\s+you\s+(?:a\s+)?shout\b/.test(source) ||
+    /\blet\s+me\s+(?:call|text|reach)\s+you\b/.test(source) ||
+    /\b(?:i(?:'ll| will)\s+)?(?:call|text|reach)\s+you\s+(?:in\s+(?:a\s+)?bit|later)\b/.test(source) ||
+    /\btalk\s+to\s+you\s+(?:in\s+(?:a\s+)?bit|later)\b/.test(source)
   );
 }
 
