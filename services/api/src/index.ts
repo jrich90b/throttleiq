@@ -4300,6 +4300,51 @@ async function buildEarlyCadencePromotionOverride(args: {
   return `Hey ${name}, quick check-in on the ${modelLabel}. If you want, stop in and we can go over pricing and what we can do for you.`;
 }
 
+async function buildCadenceLeadUnitAvailabilityOverride(args: {
+  conv: any;
+  name: string;
+}): Promise<string | null> {
+  const conv = args.conv;
+  if (!conv) return null;
+  const cadenceKind = String(conv?.followUpCadence?.kind ?? "").trim().toLowerCase();
+  if (cadenceKind === "long_term" || cadenceKind === "post_sale") return null;
+
+  const stockId =
+    String(conv?.lead?.vehicle?.stockId ?? conv?.lead?.vehicle?.stock ?? conv?.lead?.stockId ?? "")
+      .trim() || null;
+  const vin = String(conv?.lead?.vehicle?.vin ?? conv?.lead?.vin ?? "").trim() || null;
+  if (!stockId && !vin) return null;
+
+  const holds = await listInventoryHolds();
+  const solds = await listInventorySolds();
+  const soldKey = normalizeInventorySoldKey(stockId, vin);
+  const holdKey = normalizeInventoryHoldKey(stockId, vin);
+  const sold = soldKey ? solds?.[soldKey] : null;
+  const hold = holdKey ? holds?.[holdKey] : null;
+  const exact = await findInventoryPrice({ stockId, vin });
+  if (!sold && !hold && exact?.item) return null;
+
+  const firstName = normalizeDisplayCase(args.name || "there");
+  const modelLabel =
+    formatModelLabelForFollowUp(conv?.lead?.vehicle?.year ?? null, conv?.lead?.vehicle?.model ?? null) ||
+    formatModelToken(conv?.lead?.vehicle?.model) ||
+    "";
+  const watchLabel = modelLabel ? `another ${modelLabel}` : "another one";
+  const unitLabel =
+    sold?.label ??
+    hold?.label ??
+    modelLabel ??
+    (stockId ? `stock ${stockId}` : vin ? `VIN ${vin}` : "");
+  const unitText = unitLabel ? `the ${unitLabel}` : "that bike";
+  const statusText = sold
+    ? "is no longer available"
+    : hold
+      ? "is currently on hold and may no longer be available"
+      : "is no longer available";
+
+  return `Hey ${firstName}, quick update — ${unitText} ${statusText}. If you want, stop in to check out other options, or I can keep an eye out for ${watchLabel} and text you first.`;
+}
+
 function ensureCadenceAnchorMessage(args: {
   message: string;
   name: string;
@@ -4711,6 +4756,13 @@ async function buildCadenceRegeneratedDraft(
     modelYear,
     trade: tradeName
   };
+  const leadUnitAvailabilityOverride = await buildCadenceLeadUnitAvailabilityOverride({
+    conv,
+    name: firstName
+  });
+  if (leadUnitAvailabilityOverride) {
+    return { body: leadUnitAvailabilityOverride };
+  }
 
   const engagedKind = cadence.kind === "engaged" || (!!(conv.engagement?.at || hasAgentContextForCadence));
   const contextTag = engagedKind ? await resolveCadenceContextTag(conv, cadence) : null;
@@ -13797,6 +13849,10 @@ async function processDueFollowUps() {
       }
       return isEngagedCadence ? engagedNoSlotMap[step] ?? [] : FOLLOW_UP_VARIANTS_NO_SLOTS[step] ?? [];
     };
+    const leadUnitAvailabilityOverride = await buildCadenceLeadUnitAvailabilityOverride({
+      conv,
+      name: firstName
+    });
     let message = FOLLOW_UP_MESSAGES[cadence.stepIndex] ?? FOLLOW_UP_MESSAGES[FOLLOW_UP_MESSAGES.length - 1];
     let cadenceNoRepeatFallbacks: string[] = [];
     let mediaUrls: string[] | undefined;
@@ -14009,7 +14065,11 @@ async function processDueFollowUps() {
       mediaUrls = late.mediaUrls;
       }
     }
-    if (canUseWalkInComment) {
+    if (leadUnitAvailabilityOverride) {
+      message = leadUnitAvailabilityOverride;
+      mediaUrls = undefined;
+    }
+    if (!leadUnitAvailabilityOverride && canUseWalkInComment) {
       message = buildWalkInCommentFollowUp({
         name: firstName,
         agent: agentName,
@@ -14024,6 +14084,7 @@ async function processDueFollowUps() {
       saveConversation(conv);
     }
     if (
+      !leadUnitAvailabilityOverride &&
       !isPostSale &&
       cadence.kind !== "long_term" &&
       !isTradeNoInterest &&
@@ -14033,7 +14094,7 @@ async function processDueFollowUps() {
       message = renderFollowUpTemplate(message, baseCtx);
     }
 
-    if (!isPostSale && cadence.kind !== "long_term") {
+    if (!leadUnitAvailabilityOverride && !isPostSale && cadence.kind !== "long_term") {
       const promotionOverride = await buildEarlyCadencePromotionOverride({
         conv,
         name: firstName,
@@ -14045,6 +14106,7 @@ async function processDueFollowUps() {
     }
 
     if (
+      !leadUnitAvailabilityOverride &&
       !isPostSale &&
       cadence.kind !== "long_term" &&
       !isTradeNoInterest &&
@@ -14072,7 +14134,7 @@ async function processDueFollowUps() {
     }
 
     const allowProactiveSchedule = shouldAllowProactiveScheduleAsk(conv, now);
-    if (conv.followUpCadence?.scheduleMuted) {
+    if (!leadUnitAvailabilityOverride && conv.followUpCadence?.scheduleMuted) {
       const baseCtx = {
         name: firstName,
         agent: agentName,
@@ -14110,19 +14172,21 @@ async function processDueFollowUps() {
       ? [
           "Quick follow-up — if you need anything, just let me know.",
           "Checking in again — I'm here anytime you need help.",
-          "No rush — if anything comes up, just reach out."
-        ]
+        "No rush — if anything comes up, just reach out."
+      ]
       : [
           `Hey ${firstName}, just checking in — I'm here if you want to revisit this.`,
           `Hey ${firstName}, just checking in — whenever you're ready, I can help with next steps.`,
           `Hey ${firstName}, just checking in — if timing changed, just let me know and I can adjust.`
         ];
-    message = selectNonRepeatingCadenceMessage(
-      conv,
-      message,
-      cadenceNoRepeatFallbacks.length ? cadenceNoRepeatFallbacks : genericCadenceNoRepeatFallbacks
-    );
-    if (!isPostSale && cadence.kind !== "long_term") {
+    if (!leadUnitAvailabilityOverride) {
+      message = selectNonRepeatingCadenceMessage(
+        conv,
+        message,
+        cadenceNoRepeatFallbacks.length ? cadenceNoRepeatFallbacks : genericCadenceNoRepeatFallbacks
+      );
+    }
+    if (!leadUnitAvailabilityOverride && !isPostSale && cadence.kind !== "long_term") {
       const contextLine = getFollowUpContextLine(conv, now);
       if (contextLine && !message.toLowerCase().includes(contextLine.toLowerCase())) {
         message = `${message} ${contextLine}`.trim();
