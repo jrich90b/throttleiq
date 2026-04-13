@@ -3924,7 +3924,7 @@ const FOLLOW_UP_MESSAGES = [
   "Hey {name}, just checking in{labelClause}. Happy to answer anything.",
   "Hey {name}, if it helps, I can send a couple fresh photos or a quick walkaround of{label}.",
   "Hey {name}, are you still leaning toward{label}, or still comparing options?",
-  "Quick check, {name} — is{label} still the one you want to focus on?",
+  "Quick check, {name} — are you still shopping{labelClause}, or comparing a few options?",
   "If you want to see it in person{labelClause}, I can line up a time that works.",
   "No rush, {name}. I can keep an eye out{labelClause} and text you first.",
   "If your schedule is tight, {name}, I can work around it.",
@@ -4395,6 +4395,13 @@ async function getCadencePersonalizationLine(
         .replace(/\bis going well\b/gi, "went well")
         .replace(/\bare going well\b/gi, "went well")
         .replace(/\bgoing well\b/gi, "went well");
+    }
+  }
+  if (line) {
+    if (
+      /\b(meta\s*promo|promo\s*offer|caught your eye|seemed helpful)\b/i.test(line)
+    ) {
+      line = "";
     }
   }
   if (line) {
