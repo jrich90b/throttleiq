@@ -115,7 +115,7 @@ import {
   getInventoryFeed,
   hasInventoryForModelYear
 } from "./domain/inventoryFeed.js";
-import { listInventoryNotes, setInventoryNote } from "./domain/inventoryNotes.js";
+import { getInventoryNote, listInventoryNotes, setInventoryNote } from "./domain/inventoryNotes.js";
 import {
   listInventoryHolds,
   getInventoryHold,
@@ -4217,6 +4217,89 @@ function renderFollowUpTemplate(template: string, ctx: Record<string, string>): 
   return out.replace(/\s+/g, " ").trim();
 }
 
+function isUnknownCadenceModel(model: string | null | undefined): boolean {
+  const text = String(model ?? "").trim().toLowerCase();
+  if (!text) return true;
+  return /\b(other|full line|unknown|n\/a|na)\b/.test(text);
+}
+
+function resolveCadencePromotionModel(conv: any): { model: string | null; year: string | null } {
+  const leadYear = String(conv?.lead?.vehicle?.year ?? "").trim() || null;
+  const contextYear = String(conv?.inventoryContext?.year ?? "").trim() || null;
+  const leadModel = String(conv?.lead?.vehicle?.model ?? "").trim();
+  if (leadModel && !isUnknownCadenceModel(leadModel)) {
+    return { model: formatModelToken(leadModel), year: leadYear };
+  }
+  const contextModel = String(conv?.inventoryContext?.model ?? "").trim();
+  if (contextModel && !isUnknownCadenceModel(contextModel)) {
+    return { model: formatModelToken(contextModel), year: contextYear || leadYear };
+  }
+
+  const recentInbounds = (conv?.messages ?? [])
+    .filter((m: any) => m?.direction === "in" && String(m?.body ?? "").trim())
+    .slice(-14)
+    .reverse();
+  for (const inbound of recentInbounds) {
+    const body = String(inbound?.body ?? "").trim();
+    if (!body) continue;
+    const modelFromText = findMentionedModel(body);
+    if (modelFromText && !isUnknownCadenceModel(modelFromText)) {
+      const yearFromText = extractYearSingle(body);
+      return {
+        model: formatModelToken(modelFromText),
+        year: yearFromText ? String(yearFromText) : contextYear || leadYear
+      };
+    }
+  }
+
+  const leadDescription = String(conv?.lead?.vehicle?.description ?? "").trim();
+  const modelFromDescription = leadDescription ? findMentionedModel(leadDescription) : null;
+  if (modelFromDescription && !isUnknownCadenceModel(modelFromDescription)) {
+    return { model: formatModelToken(modelFromDescription), year: leadYear };
+  }
+
+  return { model: null, year: contextYear || leadYear };
+}
+
+async function buildEarlyCadencePromotionOverride(args: {
+  conv: any;
+  name: string;
+  stepIndex: number;
+}): Promise<string | null> {
+  const conv = args.conv;
+  const cadence = conv?.followUpCadence;
+  if (!cadence) return null;
+  if (!Number.isFinite(args.stepIndex) || args.stepIndex < 0 || args.stepIndex > 1) return null;
+  if (cadence.kind === "long_term" || cadence.kind === "post_sale") return null;
+  if (isTradeAcceleratorLead(conv) || isSellLead(conv) || conv?.classification?.bucket === "trade_in_sell") return null;
+
+  const name = normalizeDisplayCase(args.name || "there");
+  const { model, year } = resolveCadencePromotionModel(conv);
+  if (!model) {
+    return `Hey ${name}, quick check-in — which bike are you most interested in right now? I can check current promotions, and we can go over pricing and options when you stop in.`;
+  }
+
+  let matches = await findInventoryMatches({ year: year ?? null, model });
+  if (!matches.length && year) {
+    matches = await findInventoryMatches({ year: null, model });
+  }
+
+  const noteSet = new Set<string>();
+  for (const item of matches.slice(0, 5)) {
+    const note = await getInventoryNote(item?.stockId ?? null, item?.vin ?? null);
+    const cleaned = String(note ?? "").replace(/\s+/g, " ").trim();
+    if (cleaned) noteSet.add(cleaned);
+    if (noteSet.size >= 2) break;
+  }
+  const notes = Array.from(noteSet);
+  const modelLabel = formatModelLabel(year, model);
+  if (notes.length) {
+    const promoLine = notes.length === 1 ? notes[0] : `${notes[0]} and ${notes[1]}`;
+    return `Hey ${name}, quick check-in on the ${modelLabel}. Right now there’s ${promoLine}. Want to stop in so we can go over pricing and options?`;
+  }
+  return `Hey ${name}, quick check-in on the ${modelLabel}. If you want, stop in and we can go over pricing and what we can do for you.`;
+}
+
 function ensureCadenceAnchorMessage(args: {
   message: string;
   name: string;
@@ -4704,6 +4787,15 @@ async function buildCadenceRegeneratedDraft(
           baseCtx
         )
       : fallback;
+  }
+
+  const promotionOverride = await buildEarlyCadencePromotionOverride({
+    conv,
+    name: firstName,
+    stepIndex: lastSentStep
+  });
+  if (promotionOverride) {
+    message = promotionOverride;
   }
 
   if (conv.scheduleSoft && !allowProactiveSchedule) {
@@ -13939,6 +14031,17 @@ async function processDueFollowUps() {
       message.includes("{")
     ) {
       message = renderFollowUpTemplate(message, baseCtx);
+    }
+
+    if (!isPostSale && cadence.kind !== "long_term") {
+      const promotionOverride = await buildEarlyCadencePromotionOverride({
+        conv,
+        name: firstName,
+        stepIndex: Number(cadence.stepIndex ?? 0)
+      });
+      if (promotionOverride) {
+        message = promotionOverride;
+      }
     }
 
     if (
