@@ -28910,14 +28910,21 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
           callScopedMessageId
         );
         if (isVoicemail) {
-          const existing = listOpenTodos().some(
-            t => t.convId === conv.id && t.status === "open" && t.reason === "call"
-          );
-          if (!existing) {
-            const label = customerRaw
-              ? `Voicemail from ${customerRaw}`
-              : "Voicemail received — call back.";
-            addTodo(conv, "call", label, recordingSid || bodyCallSid || callbackCallSid || undefined);
+          if (inboundCall) {
+            const existing = listOpenTodos().some(
+              t => t.convId === conv.id && t.status === "open" && t.reason === "call"
+            );
+            if (!existing) {
+              const label = customerRaw
+                ? `Voicemail from ${customerRaw}`
+                : "Voicemail received — call back.";
+              addTodo(conv, "call", label, recordingSid || bodyCallSid || callbackCallSid || undefined);
+            }
+          } else {
+            recordRouteOutcome("manual", "voicemail_call_todo_suppressed_outbound", {
+              convId: conv.id,
+              leadKey: conv.leadKey
+            });
           }
           pauseFollowUpCadence(
             conv,
