@@ -3693,7 +3693,18 @@ async function applyPostCallSummaryActions(opts: {
     setDialogState(conv, "test_ride_init");
   }
 
-  const callbackRequested = llmCallbackRequested;
+  const callbackSourceText = `${customerText}\n${summaryText}`.trim();
+  const isReturnCallContext =
+    /\b(returning|returned)\s+your\s+call\b/i.test(callbackSourceText) ||
+    /\bcall(?:ing)?\s+you\s+back\b/i.test(callbackSourceText) ||
+    /\bcalled\s+you\s+back\b/i.test(callbackSourceText);
+  const hasExplicitFutureCallbackAsk =
+    /\b(call me back|give me a call|can you call me|could you call me|reach me|call after|call at|call later|text me when|follow up with me)\b/i.test(
+      callbackSourceText
+    ) ||
+    /\b(when|what)\s+(time|day)\s+(can|should)\s+you\s+call\b/i.test(callbackSourceText);
+  const callbackRequested =
+    llmCallbackRequested && !(isReturnCallContext && !hasExplicitFutureCallbackAsk);
   if (callbackRequested) {
     const cfg = await getSchedulerConfigHot();
     const timezone = cfg.timezone || "America/New_York";
