@@ -3694,17 +3694,10 @@ async function applyPostCallSummaryActions(opts: {
   }
 
   const callbackSourceText = `${customerText}\n${summaryText}`.trim();
-  const isReturnCallContext =
-    /\b(returning|returned)\s+your\s+call\b/i.test(callbackSourceText) ||
-    /\bcall(?:ing)?\s+you\s+back\b/i.test(callbackSourceText) ||
-    /\bcalled\s+you\s+back\b/i.test(callbackSourceText);
-  const hasExplicitFutureCallbackAsk =
-    /\b(call me back|give me a call|can you call me|could you call me|reach me|call after|call at|call later|text me when|follow up with me)\b/i.test(
-      callbackSourceText
-    ) ||
-    /\b(when|what)\s+(time|day)\s+(can|should)\s+you\s+call\b/i.test(callbackSourceText);
+  const isReturnCallContext = isCustomerReturningCallPhrase(callbackSourceText);
+  const futureCallbackAsk = hasExplicitFutureCallbackAsk(callbackSourceText);
   const callbackRequested =
-    llmCallbackRequested && !(isReturnCallContext && !hasExplicitFutureCallbackAsk);
+    llmCallbackRequested && !(isReturnCallContext && !futureCallbackAsk);
   if (callbackRequested) {
     const cfg = await getSchedulerConfigHot();
     const timezone = cfg.timezone || "America/New_York";
@@ -7179,6 +7172,29 @@ function getCallbackReminderLeadMinutes(): number {
 function buildCallbackTodoSummary(timeHint?: string | null): string {
   const hint = String(timeHint ?? "").trim();
   return hint ? `Call requested: ${hint}.` : "Call requested.";
+}
+
+function isCustomerReturningCallPhrase(text: string | null | undefined): boolean {
+  const source = String(text ?? "").trim().toLowerCase();
+  if (!source) return false;
+  return (
+    /\b(returning|returned)\s+your\s+call\b/.test(source) ||
+    /\bcall(?:ing)?\s+you\s+back\b/.test(source) ||
+    /\b(?:i(?:'m| am)\s+)?trying\s+to\s+give\s+you\s+(?:a\s+)?call\s*back\b/.test(source) ||
+    /\bgive\s+you\s+(?:a\s+)?call\s*back\b/.test(source) ||
+    /\b(?:i(?:'ll| will)\s+)?call\s+you\s+back\b/.test(source)
+  );
+}
+
+function hasExplicitFutureCallbackAsk(text: string | null | undefined): boolean {
+  const source = String(text ?? "").trim().toLowerCase();
+  if (!source) return false;
+  return (
+    /\b(call me back|give me a call|can you call me|could you call me|reach me|call after|call at|call later|text me when|follow up with me)\b/.test(
+      source
+    ) ||
+    /\b(when|what)\s+(time|day)\s+(can|should)\s+you\s+call\b/.test(source)
+  );
 }
 
 function buildCallbackTodoSchedule(
@@ -24089,45 +24105,53 @@ if (authToken && signature) {
   }
   const logisticsProgressUpdate = isLogisticsProgressUpdateText(event.body ?? "");
   if (event.provider === "twilio" && routeExecCallback) {
-    const cfg = await getSchedulerConfigHot();
-    const timezone = cfg.timezone || "America/New_York";
-    const owner = resolveCallbackTodoOwner(conv);
-    const callbackTodo = addOrUpdateCallbackCallTodo(conv, {
-      sourceMessageId: event.providerMessageId,
-      callbackTimeHint: intentParse?.callback?.timeText ?? "",
-      parseSourceText: event.body ?? "",
-      owner,
-      timezone
-    });
-    if (callbackTodo?.dueAt && callbackTodo?.reminderAt) {
-      logRouteOutcome("callback_call_todo_scheduled", {
-        dueAt: callbackTodo.dueAt,
-        reminderAt: callbackTodo.reminderAt,
-        ownerId: callbackTodo.ownerId ?? null,
-        ownerName: callbackTodo.ownerName ?? null
+    const callbackText = String(event.body ?? "");
+    if (isCustomerReturningCallPhrase(callbackText) && !hasExplicitFutureCallbackAsk(callbackText)) {
+      logRouteOutcome("callback_call_todo_suppressed_returning_call", {
+        convId: conv.id,
+        leadKey: conv.leadKey
       });
     } else {
-      logRouteOutcome("callback_call_todo_created", {
-        ownerId: callbackTodo?.ownerId ?? null,
-        ownerName: callbackTodo?.ownerName ?? null
+      const cfg = await getSchedulerConfigHot();
+      const timezone = cfg.timezone || "America/New_York";
+      const owner = resolveCallbackTodoOwner(conv);
+      const callbackTodo = addOrUpdateCallbackCallTodo(conv, {
+        sourceMessageId: event.providerMessageId,
+        callbackTimeHint: intentParse?.callback?.timeText ?? "",
+        parseSourceText: event.body ?? "",
+        owner,
+        timezone
       });
-    }
-    const callbackSms = await sendImmediateCallbackLinkSms({
-      conv,
-      todo: callbackTodo,
-      users: usersForMentions,
-      timezone
-    });
-    logRouteOutcome(
-      callbackSms.sent ? "callback_link_sms_sent" : "callback_link_sms_failed",
-      {
-        owner: callbackSms.ownerLabel,
-        source: "callback_intent",
-        dueAt: callbackTodo?.dueAt ?? null
+      if (callbackTodo?.dueAt && callbackTodo?.reminderAt) {
+        logRouteOutcome("callback_call_todo_scheduled", {
+          dueAt: callbackTodo.dueAt,
+          reminderAt: callbackTodo.reminderAt,
+          ownerId: callbackTodo.ownerId ?? null,
+          ownerName: callbackTodo.ownerName ?? null
+        });
+      } else {
+        logRouteOutcome("callback_call_todo_created", {
+          ownerId: callbackTodo?.ownerId ?? null,
+          ownerName: callbackTodo?.ownerName ?? null
+        });
       }
-    );
-    if (!callbackSms.sent) {
-      addTodo(conv, "note", `Callback link SMS failed for ${callbackSms.ownerLabel}.`);
+      const callbackSms = await sendImmediateCallbackLinkSms({
+        conv,
+        todo: callbackTodo,
+        users: usersForMentions,
+        timezone
+      });
+      logRouteOutcome(
+        callbackSms.sent ? "callback_link_sms_sent" : "callback_link_sms_failed",
+        {
+          owner: callbackSms.ownerLabel,
+          source: "callback_intent",
+          dueAt: callbackTodo?.dueAt ?? null
+        }
+      );
+      if (!callbackSms.sent) {
+        addTodo(conv, "note", `Callback link SMS failed for ${callbackSms.ownerLabel}.`);
+      }
     }
   }
   const hasParserNoResponseFallback =
