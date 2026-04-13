@@ -1350,6 +1350,14 @@ async function buildNoResponseChitChatReplyWithLLM(args: {
   | null
 > {
   const streakState = noteSmallTalkTurn(args.conv, args.receivedAt);
+  if (isEmojiOnlyText(args.text ?? "")) {
+    return {
+      reply: "Thanks for the update. I’m here if you need anything.",
+      source: "fallback",
+      allowBikePivot: false,
+      smallTalkStreak: streakState.count
+    };
+  }
   const llmReply = await safeLlmParse("smalltalk_reply", () =>
     generateSmallTalkReplyWithLLM({
       text: args.text,

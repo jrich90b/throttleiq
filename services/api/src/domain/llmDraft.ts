@@ -352,6 +352,7 @@ export async function generateSmallTalkReplyWithLLM(args: {
     "- Sound like a real person texting, not a support bot.",
     "- Do NOT claim personal real-world experiences you cannot verify (e.g., don't say you watched a game).",
     "- Acknowledge the message with conversational tone.",
+    "- Do NOT mention emojis, reactions, or 'thumbs up' explicitly.",
     allowBikePivotHint
       ? "- You MAY lightly keep the door open for bike help in the same sentence."
       : "- Do NOT pivot back to bikes in this reply.",
@@ -414,6 +415,7 @@ export async function generateSmallTalkReplyWithLLM(args: {
           allowBikePivotHint
             ? "Acknowledge casually and you may lightly keep the door open for bike help."
             : "Acknowledge casually without pivoting back to bikes.",
+          "Do not mention emojis, reactions, or 'thumbs up'.",
           "Do not say you're checking anything.",
           "Do not use: 'I'm here if you need anything.'",
           "Do not switch into pricing/availability/scheduling."
