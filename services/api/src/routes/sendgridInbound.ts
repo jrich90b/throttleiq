@@ -1153,6 +1153,20 @@ function extractWalkInReminderRequest(text?: string | null): { timeHint: string;
   return { timeHint, actionNote: "follow up with customer" };
 }
 
+function formatWatchModelForMessage(model?: string | null): string {
+  const raw = String(model ?? "").replace(/\s+/g, " ").trim();
+  if (!raw) return "bike";
+  if (/\b(bike|motorcycle)\b/i.test(raw)) return raw;
+  if (
+    /^(touring|bagger|cruiser|sportster|sport|adventure(?:\s+touring)?|trike|trikes|softail|dyna|cvo)$/i.test(
+      raw
+    )
+  ) {
+    return `${raw} bike`;
+  }
+  return raw;
+}
+
 function extractTrimFromText(text?: string | null): string | undefined {
   if (!text) return undefined;
   const t = String(text).toLowerCase();
@@ -3460,7 +3474,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       !hasResumeHoldSignal
     ) {
       if (wantsUsed) {
-        const usedLabel = `used ${rangeLabel}${modelLabel}`;
+        const usedLabel = `used ${rangeLabel}${formatWatchModelForMessage(modelLabel)}`;
         if (hasUsedMatch) {
           tail = `We do have a ${usedLabel} in stock right now — want me to send details?`;
         } else {
@@ -3469,29 +3483,29 @@ export async function handleSendgridInbound(req: Request, res: Response) {
             : `I can help track down a ${usedLabel}. Want me to send options as they come in?`;
         }
       } else if (wantsNew && hasWatchIntent) {
-        const newLabel = `new ${rangeLabel}${modelLabel}`;
+        const newLabel = `new ${rangeLabel}${formatWatchModelForMessage(modelLabel)}`;
         tail = hasNewMatch
           ? `We do have a ${newLabel} in stock right now — want me to send details?`
           : `I’ll keep an eye out for a ${newLabel} and let you know when one comes in.`;
       } else {
-        const label = `${rangeLabel}${modelLabel}`;
+        const label = `${rangeLabel}${formatWatchModelForMessage(modelLabel)}`;
         tail = hasWatchIntent
           ? `I’ll keep an eye out for a ${label} and let you know if one comes in.`
           : `I can help with details on ${label} and options when you’re ready.`;
       }
       if (walkInTestRideRequested && walkInWeatherSensitive) {
         const rideLabel = wantsUsed
-          ? `used ${rangeLabel}${modelLabel}`
+          ? `used ${rangeLabel}${formatWatchModelForMessage(modelLabel)}`
           : wantsNew
-            ? `new ${rangeLabel}${modelLabel}`
-            : `${rangeLabel}${modelLabel}`;
+            ? `new ${rangeLabel}${formatWatchModelForMessage(modelLabel)}`
+            : `${rangeLabel}${formatWatchModelForMessage(modelLabel)}`;
         tail = `I’ll reach back when the weather looks better and we can line up your test ride on ${rideLabel}.`;
       } else if (walkInTestRideRequested && walkInHasNextWeekWindow) {
         const rideLabel = wantsUsed
-          ? `used ${rangeLabel}${modelLabel}`
+          ? `used ${rangeLabel}${formatWatchModelForMessage(modelLabel)}`
           : wantsNew
-            ? `new ${rangeLabel}${modelLabel}`
-            : `${rangeLabel}${modelLabel}`;
+            ? `new ${rangeLabel}${formatWatchModelForMessage(modelLabel)}`
+            : `${rangeLabel}${formatWatchModelForMessage(modelLabel)}`;
         tail = `I’ll check back next week and we can line up your test ride on ${rideLabel}.`;
       }
     }
@@ -3586,7 +3600,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
             : requestedConditionHint === "new"
               ? "new "
               : "";
-        tail = `I’ll keep an eye out for ${watchConditionLabel}${modelLabel} and let you know if one comes in.`;
+        tail = `I’ll keep an eye out for ${watchConditionLabel}${formatWatchModelForMessage(modelLabel)} and let you know if one comes in.`;
       } else if (walkInWatchSet) {
         tail = "I’ll keep an eye out and text you as soon as a good match comes in.";
       }
