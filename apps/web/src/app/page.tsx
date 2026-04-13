@@ -1584,12 +1584,13 @@ export default function Home() {
       setNeedsBootstrap(false);
       setAuthUser(authJson?.user ?? null);
 
-      const [s, c, contactsResp, contactListsResp, modelsResp] = await Promise.all([
+      const [s, c, contactsResp, contactListsResp, modelsResp, usersResp] = await Promise.all([
         fetch("/api/settings", { cache: "no-store" }),
         fetch("/api/conversations", { cache: "no-store" }),
         fetch("/api/contacts", { cache: "no-store" }),
         fetch("/api/contacts/lists", { cache: "no-store" }),
-        fetch("/api/models-by-year", { cache: "no-store" })
+        fetch("/api/models-by-year", { cache: "no-store" }),
+        fetch("/api/users", { cache: "no-store" })
       ]);
       const [t, q, sup, googleResp] = await Promise.all([
         fetch("/api/todos", { cache: "no-store" }),
@@ -1603,6 +1604,7 @@ export default function Home() {
       const contactsJson = await contactsResp.json().catch(() => null);
       const contactListsJson = await contactListsResp.json().catch(() => null);
       const modelsJson = await modelsResp.json().catch(() => null);
+      const usersJson = await usersResp.json().catch(() => null);
       const todosResp = await t.json().catch(() => null);
       const questionsResp = await q.json().catch(() => null);
       const suppressionsResp = await sup.json().catch(() => null);
@@ -1626,6 +1628,9 @@ export default function Home() {
 
       if (modelsJson?.ok && modelsJson?.modelsByYear) {
         setModelsByYear(modelsJson.modelsByYear as Record<string, string[]>);
+      }
+      if (usersResp.ok && usersJson?.ok && Array.isArray(usersJson.users)) {
+        setUsersList(usersJson.users.map(normalizeUserRow));
       }
       setContacts((contactsJson?.contacts as ContactItem[]) ?? []);
       setContactLists((contactListsJson?.lists as ContactListItem[]) ?? []);
@@ -3726,7 +3731,8 @@ export default function Home() {
     const options = (usersList ?? [])
       .filter((u: any) => {
         const role = String(u?.role ?? "").trim().toLowerCase();
-        return role === "salesperson" || role === "manager";
+        if (role === "service" || role === "parts" || role === "apparel") return false;
+        return true;
       })
       .map((u: any) => {
         const name =
@@ -3740,6 +3746,20 @@ export default function Home() {
         };
       })
       .filter((u: any) => !!u.id && !!u.name);
+    for (const conv of conversations ?? []) {
+      const ownerId = String(conv?.leadOwner?.id ?? "").trim();
+      const ownerName = String(conv?.leadOwner?.name ?? "").trim();
+      if (!ownerId || !ownerName) continue;
+      const lowered = ownerName.toLowerCase();
+      if (
+        lowered.includes("service department") ||
+        lowered.includes("parts department") ||
+        lowered.includes("apparel department")
+      ) {
+        continue;
+      }
+      options.push({ id: ownerId, name: ownerName });
+    }
     const deduped = new Map<string, { id: string; name: string }>();
     for (const item of options) {
       if (!deduped.has(item.id)) deduped.set(item.id, item);
@@ -3747,7 +3767,7 @@ export default function Home() {
     return Array.from(deduped.values()).sort((a, b) =>
       a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true })
     );
-  }, [usersList]);
+  }, [usersList, conversations]);
 
   const departmentOwnerByRole = useMemo(() => {
     const empty = {
