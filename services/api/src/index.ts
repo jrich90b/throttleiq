@@ -17499,7 +17499,18 @@ app.get("/todos", requirePermission("canAccessTodos"), async (req, res) => {
       if (!id) return null;
       return userNameById.get(id) ?? null;
     };
-    const openTodos = listOpenTodos();
+    let openTodos = listOpenTodos();
+    const staleTodos = openTodos.filter(t => {
+      const taskConv = getConversation(t.convId);
+      if (!taskConv) return true;
+      return taskConv.status === "closed";
+    });
+    if (staleTodos.length) {
+      for (const stale of staleTodos) {
+        markTodoDone(stale.convId, stale.id);
+      }
+      openTodos = listOpenTodos();
+    }
     const callbackTimeByConv = new Map<string, string>();
     for (const todo of openTodos) {
       if (todo.status !== "open" || String(todo.reason ?? "").toLowerCase() !== "call") continue;
