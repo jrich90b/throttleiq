@@ -4329,7 +4329,7 @@ async function buildCadenceLeadUnitAvailabilityOverride(args: {
     formatModelLabelForFollowUp(conv?.lead?.vehicle?.year ?? null, conv?.lead?.vehicle?.model ?? null) ||
     formatModelToken(conv?.lead?.vehicle?.model) ||
     "";
-  const watchLabel = modelLabel ? `another ${modelLabel}` : "another one";
+  const watchLabel = modelLabel ? `another ${modelLabel}` : "one like it";
   const unitLabel =
     sold?.label ??
     hold?.label ??
@@ -4341,8 +4341,10 @@ async function buildCadenceLeadUnitAvailabilityOverride(args: {
     : hold
       ? "is currently on hold and may no longer be available"
       : "is no longer available";
-
-  return `Hey ${firstName}, quick update — ${unitText} ${statusText}. If you want, stop in to check out other options, or I can keep an eye out for ${watchLabel} and text you first.`;
+  if (modelLabel) {
+    return `Hey ${firstName}, quick update — ${unitText} ${statusText}. If you want, I can show you similar options in stock, or I can keep an eye out for ${watchLabel} and text you first.`;
+  }
+  return `Hey ${firstName}, quick update — ${unitText} ${statusText}. If you want, I can send a short list of options that fit what you’re after, or keep an eye out and text you first when a match comes in.`;
 }
 
 function ensureCadenceAnchorMessage(args: {
