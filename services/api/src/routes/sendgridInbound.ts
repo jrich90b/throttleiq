@@ -3186,6 +3186,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         commentLower
       ) || /\bif one comes in\b/.test(commentLower);
     const hasWatchIntent = hasWatchIntentFromParser || hasWatchIntentFromText;
+    const pricingFollowupIntentFromParser = pricingInquiryIntentFromParser;
+    const pricingFollowupIntentFromText =
+      /\b(follow up|follow-up|check in|circle back|touch base)\b[\s\S]{0,40}\b(pricing|price|numbers?)\b/i.test(
+        walkInCleanedComment
+      ) ||
+      /\b(pricing|price|numbers?)\b[\s\S]{0,40}\b(follow up|follow-up|check in|circle back|touch base)\b/i.test(
+        walkInCleanedComment
+      );
+    const hasPricingFollowupIntent = pricingFollowupIntentFromParser || pricingFollowupIntentFromText;
     const lowSignalWalkInUpdate =
       !walkInCleanedComment ||
       /^(email updates?|email opt-?in|view lead|step\s*\d+|n\/?a|na)$/i.test(walkInCleanedComment.trim());
@@ -3450,6 +3459,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       tail = "Understood — I marked this lead on hold and paused automated follow-up.";
     } else if (hasResumeHoldSignal) {
       tail = "Sounds good — I cleared the hold and reactivated follow-up.";
+    } else if (hasPricingFollowupIntent) {
+      tail = "I’ll follow up with pricing details and next steps.";
     }
     const walkInTestRideRequested =
       walkInOutcomeAccepted && !!llmWalkInOutcome?.testRideRequested;
