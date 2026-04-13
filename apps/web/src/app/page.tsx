@@ -245,6 +245,19 @@ function normalizeWatchCondition(raw?: string | null): string {
   return t;
 }
 
+function isGenericWatchModelPlaceholder(raw?: string | null): boolean {
+  const text = String(raw ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9/]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return false;
+  if (text === "harley davidson") return true;
+  if (/^(?:harley davidson )?(?:full line|other|unknown|none)$/.test(text)) return true;
+  if (/^(?:n\/a|na)$/.test(text)) return true;
+  return false;
+}
+
 function formatCadenceDate(iso: string) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
@@ -1785,13 +1798,15 @@ export default function Home() {
       );
     }
     const vehicle = conv?.lead?.vehicle;
+    const seedModelRaw = String(vehicle?.model ?? vehicle?.description ?? "").trim();
+    const seedModel = isGenericWatchModelPlaceholder(seedModelRaw) ? "" : seedModelRaw;
     return [
       {
         condition: normalizeWatchCondition(vehicle?.condition),
         year: vehicle?.year ?? "",
         make: vehicle?.make ?? "",
-        model: vehicle?.model ?? vehicle?.description ?? "",
-        models: vehicle?.model || vehicle?.description ? [String(vehicle?.model ?? vehicle?.description)] : [],
+        model: seedModel,
+        models: seedModel ? [seedModel] : [],
         trim: vehicle?.trim ?? "",
         color: vehicle?.color ?? "",
         minPrice: "",
@@ -2309,7 +2324,8 @@ export default function Home() {
         ? `${watch.yearMin}-${watch.yearMax}`
         : watch?.yearMin ?? watch?.yearMax ?? "") ??
       "";
-    const model = watch?.model ?? "";
+    const modelRaw = String(watch?.model ?? "").trim();
+    const model = isGenericWatchModelPlaceholder(modelRaw) ? "" : modelRaw;
     return {
       condition: watch?.condition ?? "",
       year: yearText ? String(yearText) : "",
@@ -2327,7 +2343,14 @@ export default function Home() {
 
   function getItemModels(item: WatchFormItem): string[] {
     const raw = item.models && item.models.length ? item.models : item.model ? [item.model] : [];
-    return Array.from(new Set(raw.map(m => m.trim()).filter(Boolean)));
+    return Array.from(
+      new Set(
+        raw
+          .map(m => m.trim())
+          .filter(Boolean)
+          .filter(m => !isGenericWatchModelPlaceholder(m))
+      )
+    );
   }
 
   function groupWatchesToFormItems(watches: any[]): WatchFormItem[] {
