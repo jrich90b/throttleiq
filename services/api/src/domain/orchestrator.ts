@@ -921,6 +921,29 @@ function detectDealsOrFinanceSpecialsQuestion(text: string): boolean {
   return specialsCue || (dealCue && financeContext);
 }
 
+function normalizeSearchHost(value: string | null | undefined): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .replace(/\/.*$/, "");
+}
+
+function collectReferenceSearchHosts(profile: any): string[] {
+  const hosts: string[] = [];
+  const website = normalizeSearchHost(profile?.website ?? "");
+  if (website) hosts.push(website);
+  const refs = Array.isArray(profile?.webSearch?.referenceUrls)
+    ? profile.webSearch.referenceUrls
+    : [];
+  for (const ref of refs) {
+    const host = normalizeSearchHost(ref);
+    if (host) hosts.push(host);
+  }
+  return Array.from(new Set(hosts));
+}
+
 function isUsedDealerTrustStatement(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   const mentionsUsed = /\b(used|pre[-\s]?owned)\b/.test(t);
@@ -2734,33 +2757,46 @@ export async function orchestrateInbound(
         const yearLabel = yearForRange ? `${yearForRange} ` : "";
         const scopeLabel = `${yearLabel}${modelLabel}`.trim();
         const makeFromLead = String(leadForPrice?.vehicle?.make ?? "").trim();
-        const inventoryMakes = Array.from(
-          new Set(
-            (await getInventoryFeed())
-              .map(i => String(i.make ?? "").trim())
-              .filter(Boolean)
-          )
-        );
-        const makeFromText = resolveMakeFromText(event.body, inventoryMakes);
+        let makeFromText = "";
+        if (!makeFromLead) {
+          const inventoryMakes = Array.from(
+            new Set(
+              (await getInventoryFeed())
+                .map(i => String(i.make ?? "").trim())
+                .filter(Boolean)
+            )
+          );
+          makeFromText = resolveMakeFromText(event.body, inventoryMakes) || "";
+        }
         const makeForQuery = makeFromLead || makeFromText || "";
         let specialsWebLine = "";
         let topHitUrl = "";
         if (isWebFallbackEnabled()) {
-          const specialsQuery = hasSpecificScope && scopeLabel
+          const baseQuery = hasSpecificScope && scopeLabel
             ? `${scopeLabel} finance specials`
             : makeForQuery
               ? `${makeForQuery} finance specials`
               : "motorcycle finance specials";
-          const specialsSearch = await searchGoogleCse({
-            query: specialsQuery,
-            profile: dealerProfile,
-            maxResults: 2,
-            timeoutMs: 2500
-          });
-          const topHit = specialsSearch?.hits?.[0] ?? null;
-          if (topHit?.url) {
-            topHitUrl = topHit.url;
-            specialsWebLine = `Current published offers are listed here: ${topHit.url}. `;
+          const siteHosts = collectReferenceSearchHosts(dealerProfile).slice(0, 5);
+          const cseQueries = [
+            baseQuery,
+            ...siteHosts.map(host => `site:${host} ${baseQuery}`),
+            ...(baseQuery === "motorcycle finance specials" ? ["harley-davidson finance specials"] : [])
+          ].filter(Boolean);
+          const dedupedQueries = Array.from(new Set(cseQueries.map(q => String(q).trim()).filter(Boolean)));
+          for (const query of dedupedQueries) {
+            const specialsSearch = await searchGoogleCse({
+              query,
+              profile: dealerProfile,
+              maxResults: 2,
+              timeoutMs: 2500
+            });
+            const topHit = specialsSearch?.hits?.[0] ?? null;
+            if (topHit?.url) {
+              topHitUrl = topHit.url;
+              specialsWebLine = `Current published offers are listed here: ${topHit.url}. `;
+              break;
+            }
           }
         }
         const noteLine = inventoryNote ? `Right now there’s ${inventoryNote} available. ` : "";
