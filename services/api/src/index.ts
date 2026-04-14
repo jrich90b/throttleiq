@@ -10523,7 +10523,7 @@ async function resolveDeterministicAvailabilityReply(args: {
     } else {
       reply = `Yes — we have ${count} other ${inventoryLabel} units in stock. ${multiListText} ${
         hasMoreMatches ? "I can send more options too." : ""
-      } Which one should I send photos of?`;
+      }`;
     }
   } else {
     if (count <= 0) {
@@ -10539,13 +10539,13 @@ async function resolveDeterministicAvailabilityReply(args: {
     } else {
       reply = `We have ${count} ${inventoryLabel} units in stock right now. ${multiListText} ${
         hasMoreMatches ? "I can send more options too." : ""
-      } Which one should I send photos of?`;
+      }`;
     }
   }
   if (extraMediaUrls.length) {
     reply += ` Here ${extraMediaUrls.length === 1 ? "is" : "are"} photo${extraMediaUrls.length === 1 ? "" : "s"}.`;
   } else if (photoRequestedLocal && count > 1) {
-    reply += " Tell me which one and I’ll send photos right away.";
+    reply += " The links above include photos.";
   } else if (photoRequestedLocal && count === 1) {
     reply += " I can have one of the guys send photos over by text.";
   }
