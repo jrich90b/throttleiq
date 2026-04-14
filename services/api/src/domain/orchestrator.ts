@@ -2615,6 +2615,8 @@ export async function orchestrateInbound(
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
       const financeLine = financeRequest ? buildFinanceAppLine(dealerProfile) : "";
       const leadInquiry = String((leadForPrice as any)?.inquiry ?? "").trim() || null;
+      const pricingModelCandidates = getModelCandidates([]);
+      const modelFromInboundText = resolveModelFromText(event.body, pricingModelCandidates);
       const yearForRange =
         leadForPrice?.vehicle?.year ??
         deriveYearFromText(leadForPrice?.vehicle?.description ?? null) ??
@@ -2625,7 +2627,7 @@ export async function orchestrateInbound(
         leadForPrice?.vehicle?.model ??
         deriveModelFromDescription(leadForPrice?.vehicle?.description ?? null) ??
         deriveModelFromDescription(leadInquiry) ??
-        deriveModelFromDescription(event.body ?? null) ??
+        modelFromInboundText ??
         null;
       const longTermInvite = wantsSoftTimeline
         ? `I know you mentioned a ${longTermTimeframe || "longer-term"} timeline — no rush at all. ` +
@@ -2699,9 +2701,8 @@ export async function orchestrateInbound(
               : msrpLookup?.rangeForTrim ?? msrpLookup?.rangeForColor ?? msrpLookup?.range ?? null;
 
       if (specialsQuestion) {
-        const modelLabel = modelForRange && !isUnknownModel(modelForRange)
-          ? normalizeModelLabel(modelForRange)
-          : "that bike";
+        const hasSpecificScope = !!(modelForRange && !isUnknownModel(modelForRange));
+        const modelLabel = hasSpecificScope ? normalizeModelLabel(modelForRange) : "";
         const yearLabel = yearForRange ? `${yearForRange} ` : "";
         const scopeLabel = `${yearLabel}${modelLabel}`.trim();
         const noteLine = inventoryNote ? `Right now there’s ${inventoryNote} available. ` : "";
@@ -2709,8 +2710,9 @@ export async function orchestrateInbound(
           paymentRange != null
             ? "If you want, I can run 60/72/84-month options and show the strongest program available right now."
             : "If you want, I can check current programs and share what applies right now.";
+        const scopeClause = hasSpecificScope && scopeLabel ? ` on the ${scopeLabel}` : "";
         const draft =
-          `Good question — yes, we can check current finance programs and specials on the ${scopeLabel}. ` +
+          `Great question — we can check current finance programs and specials${scopeClause}. ` +
           `${noteLine}Programs vary by approval tier and term. ${prompt}`;
         return finalize({
           intent,
@@ -3326,6 +3328,8 @@ export async function orchestrateInbound(
       if (pricingIntent) {
         try {
           const leadInquiry = String((ctx?.lead as any)?.inquiry ?? "").trim() || null;
+          const pricingModelCandidates = getModelCandidates([]);
+          const modelFromInboundText = resolveModelFromText(event.body, pricingModelCandidates);
           const yearForRange =
             ctx?.lead?.vehicle?.year ??
             deriveYearFromText(ctx?.lead?.vehicle?.description ?? null) ??
@@ -3336,7 +3340,7 @@ export async function orchestrateInbound(
             ctx?.lead?.vehicle?.model ??
             deriveModelFromDescription(ctx?.lead?.vehicle?.description ?? null) ??
             deriveModelFromDescription(leadInquiry) ??
-            deriveModelFromDescription(event.body ?? null) ??
+            modelFromInboundText ??
             null;
           const stockForPrice = ctx?.lead?.vehicle?.stockId ?? stockIdFromText ?? null;
           const vinForPrice = ctx?.lead?.vehicle?.vin ?? null;
