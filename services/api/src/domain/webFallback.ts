@@ -13,8 +13,8 @@ export type WebSearchHit = {
 };
 
 export type WebSearchResult = {
-  provider: "google_cse";
-  cx: string;
+  provider: "vertex_search";
+  engine?: string;
   query: string;
   hits: WebSearchHit[];
 };
@@ -82,8 +82,8 @@ function domainAllowed(hostname: string, allowlist: string[]): boolean {
   return allowlist.some(domain => host === domain || host.endsWith(`.${domain}`));
 }
 
-function parseCxMap(): Record<string, string> {
-  const raw = String(process.env.GOOGLE_CSE_CX_BY_HOST_JSON ?? "").trim();
+function parseEngineMap(): Record<string, string> {
+  const raw = String(process.env.VERTEX_SEARCH_ENGINE_BY_HOST_JSON ?? "").trim();
   if (!raw) return {};
   try {
     const parsed = JSON.parse(raw);
@@ -120,12 +120,144 @@ export function isWebFallbackCandidateQuestion(text: string | null | undefined):
   return value.includes("?");
 }
 
-export function resolveGoogleCseCx(profile?: DealerProfileLike | null): string {
-  const mapped = parseCxMap();
+export function resolveVertexSearchEngine(profile?: DealerProfileLike | null): string {
+  const mapped = parseEngineMap();
   const dealerHost = getDealerWebsiteHost(profile);
   if (dealerHost && mapped[dealerHost]) return mapped[dealerHost];
-  const defaultCx = String(process.env.GOOGLE_CSE_DEFAULT_CX ?? "").trim();
-  return defaultCx;
+  return String(process.env.VERTEX_SEARCH_ENGINE_ID ?? "").trim();
+}
+
+function parseVertexSnippet(result: any): string {
+  const snippetCandidates = [
+    result?.snippet,
+    result?.document?.snippet,
+    result?.chunk?.content,
+    result?.extractiveSegments?.[0]?.content,
+    result?.extractiveAnswers?.[0]?.content,
+    result?.document?.derivedStructData?.snippet,
+    result?.document?.derivedStructData?.description,
+    result?.document?.structData?.snippet,
+    result?.document?.structData?.description
+  ];
+  for (const value of snippetCandidates) {
+    const text = String(value ?? "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function parseVertexTitle(result: any): string {
+  const titleCandidates = [
+    result?.document?.derivedStructData?.title,
+    result?.document?.structData?.title,
+    result?.document?.title,
+    result?.document?.name,
+    result?.title
+  ];
+  for (const value of titleCandidates) {
+    const text = String(value ?? "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function parseVertexUrl(result: any): string {
+  const urlCandidates = [
+    result?.document?.derivedStructData?.link,
+    result?.document?.derivedStructData?.url,
+    result?.document?.structData?.link,
+    result?.document?.structData?.url,
+    result?.document?.uri,
+    result?.uri,
+    result?.link,
+    result?.url
+  ];
+  for (const value of urlCandidates) {
+    const text = String(value ?? "").trim();
+    if (!text) continue;
+    const parsed = parseHttpUrl(text);
+    if (parsed?.toString()) return parsed.toString();
+  }
+  return "";
+}
+
+async function searchVertexSearchLite(args: {
+  query: string;
+  profile?: DealerProfileLike | null;
+  maxResults?: number;
+  timeoutMs?: number;
+}): Promise<WebSearchResult | null> {
+  const query = String(args.query ?? "").trim();
+  if (!query) return null;
+  const apiKey = String(process.env.VERTEX_SEARCH_API_KEY ?? "").trim();
+  if (!apiKey) return null;
+  const projectId = String(process.env.VERTEX_SEARCH_PROJECT_ID ?? process.env.GOOGLE_CLOUD_PROJECT ?? "").trim();
+  const engineId = resolveVertexSearchEngine(args.profile);
+  if (!projectId || !engineId) return null;
+  const location = String(process.env.VERTEX_SEARCH_LOCATION ?? "global").trim() || "global";
+  const collection =
+    String(process.env.VERTEX_SEARCH_COLLECTION ?? "default_collection").trim() || "default_collection";
+  const servingConfig =
+    String(process.env.VERTEX_SEARCH_SERVING_CONFIG ?? "default_search").trim() || "default_search";
+  const timeoutMs = Math.max(1000, Number(args.timeoutMs ?? process.env.WEB_FALLBACK_TIMEOUT_MS ?? 3500));
+  const maxResults = Math.max(
+    1,
+    Math.min(10, Number(args.maxResults ?? process.env.WEB_FALLBACK_MAX_RESULTS ?? 3))
+  );
+  const allowlist = getAllowlistedDomains(args.profile);
+  const endpoint = new URL(
+    `https://discoveryengine.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(
+      location
+    )}/collections/${encodeURIComponent(collection)}/engines/${encodeURIComponent(
+      engineId
+    )}/servingConfigs/${encodeURIComponent(servingConfig)}:searchLite`
+  );
+  endpoint.searchParams.set("key", apiKey);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch(endpoint.toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        query,
+        pageSize: maxResults,
+        userPseudoId: `wf-${Date.now().toString(36)}`
+      })
+    });
+    if (!resp.ok) return null;
+    const data: any = await resp.json().catch(() => null);
+    const items = Array.isArray(data?.results) ? data.results : [];
+    const hits: WebSearchHit[] = [];
+    for (const item of items) {
+      const url = parseVertexUrl(item);
+      const parsed = parseHttpUrl(url);
+      if (!parsed?.hostname) continue;
+      if (!domainAllowed(parsed.hostname, allowlist)) continue;
+      const title = parseVertexTitle(item);
+      const snippet = parseVertexSnippet(item);
+      hits.push({
+        title: title || normalizeHost(parsed.hostname),
+        snippet,
+        url: parsed.toString(),
+        domain: normalizeHost(parsed.hostname)
+      });
+      if (hits.length >= maxResults) break;
+    }
+    if (!hits.length) return null;
+    return {
+      provider: "vertex_search",
+      engine: engineId,
+      query,
+      hits
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function searchGoogleCse(args: {
@@ -135,55 +267,6 @@ export async function searchGoogleCse(args: {
   timeoutMs?: number;
 }): Promise<WebSearchResult | null> {
   if (!isWebFallbackEnabled()) return null;
-  const query = String(args.query ?? "").trim();
-  if (!query) return null;
-  const apiKey = String(process.env.GOOGLE_CSE_API_KEY ?? "").trim();
-  const cx = resolveGoogleCseCx(args.profile);
-  if (!apiKey || !cx) return null;
-  const timeoutMs = Math.max(1000, Number(args.timeoutMs ?? process.env.WEB_FALLBACK_TIMEOUT_MS ?? 3500));
-  const maxResults = Math.max(
-    1,
-    Math.min(10, Number(args.maxResults ?? process.env.WEB_FALLBACK_MAX_RESULTS ?? 3))
-  );
-  const allowlist = getAllowlistedDomains(args.profile);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const url = new URL("https://www.googleapis.com/customsearch/v1");
-    url.searchParams.set("key", apiKey);
-    url.searchParams.set("cx", cx);
-    url.searchParams.set("q", query);
-    url.searchParams.set("num", String(maxResults));
-    const resp = await fetch(url.toString(), { signal: controller.signal });
-    if (!resp.ok) return null;
-    const data: any = await resp.json().catch(() => null);
-    const items = Array.isArray(data?.items) ? data.items : [];
-    const hits: WebSearchHit[] = [];
-    for (const item of items) {
-      const link = String(item?.link ?? "").trim();
-      const title = String(item?.title ?? "").trim();
-      const snippet = String(item?.snippet ?? "").trim();
-      const parsed = parseHttpUrl(link);
-      if (!parsed?.hostname) continue;
-      if (!domainAllowed(parsed.hostname, allowlist)) continue;
-      hits.push({
-        title,
-        snippet,
-        url: parsed.toString(),
-        domain: normalizeHost(parsed.hostname)
-      });
-      if (hits.length >= maxResults) break;
-    }
-    if (!hits.length) return null;
-    return {
-      provider: "google_cse",
-      cx,
-      query,
-      hits
-    };
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
+  // Backward-compatible function name; implementation is Vertex-only.
+  return searchVertexSearchLite(args);
 }
