@@ -5944,6 +5944,74 @@ function findMentionedModels(text: string): string[] {
   return found;
 }
 
+type AvailabilityPreferenceHint = {
+  model?: string | null;
+  year?: string | number | null;
+  color?: string | null;
+  condition?: string | null;
+};
+
+function isGenericAvailabilityModelLabel(model: string | null | undefined): boolean {
+  const t = normalizeModelText(model ?? "");
+  if (!t) return true;
+  return (
+    /\b(other|full line|unknown|n\/a|na)\b/.test(t) ||
+    t === "harley davidson" ||
+    t === "harleydavidson"
+  );
+}
+
+function isAvailabilityPreferencePromptText(text: string): boolean {
+  const lower = String(text ?? "").toLowerCase();
+  if (!lower.trim()) return false;
+  const asksCondition =
+    /\b(new|used|either|both|pre[-\s]?owned|preowned)\b/.test(lower);
+  const asksModelChoice =
+    /\b(leaning|prefer|which|model|bike|style|road glide|street glide)\b/.test(lower);
+  return asksCondition && asksModelChoice && /[?]|(?:what|which|prefer|leaning|also)/.test(lower);
+}
+
+function buildAvailabilityPreferenceReplyHint(args: {
+  inboundText: string;
+  lastOutboundText: string;
+  parserAvailability?: {
+    model?: string | null;
+    year?: string | number | null;
+    color?: string | null;
+    condition?: string | null;
+  } | null;
+  shortlistPromptActive?: boolean;
+}): AvailabilityPreferenceHint | null {
+  const inboundText = String(args.inboundText ?? "");
+  const inboundLower = inboundText.toLowerCase();
+  const parserAvailability = args.parserAvailability ?? null;
+  const parserModelRaw = String(parserAvailability?.model ?? "").trim();
+  const parserModel = isGenericAvailabilityModelLabel(parserModelRaw) ? "" : parserModelRaw;
+  const modelFromText = findMentionedModel(inboundText);
+  const model = modelFromText || parserModel || "";
+  if (!model) return null;
+  const promptAsked =
+    !!args.shortlistPromptActive || isAvailabilityPreferencePromptText(args.lastOutboundText);
+  if (!promptAsked) return null;
+  const yearFromText = extractYearSingle(inboundLower);
+  const colorFromText = sanitizeColorPhrase(extractColorToken(inboundLower));
+  const conditionFromParser = normalizeWatchCondition(parserAvailability?.condition ?? null);
+  const conditionFromText = normalizeWatchCondition(inboundLower);
+  const shouldCarryParserYear = !modelFromText && !!parserModel;
+  const hint: AvailabilityPreferenceHint = {
+    model,
+    year:
+      yearFromText != null
+        ? yearFromText
+        : shouldCarryParserYear && parserAvailability?.year != null
+          ? parserAvailability.year
+          : null,
+    color: parserAvailability?.color ?? colorFromText ?? null,
+    condition: conditionFromParser ?? conditionFromText ?? null
+  };
+  return hint;
+}
+
 async function canOfferTestRideForLead(lead: any, dealerProfile: any): Promise<boolean> {
   const hasLicense = lead?.hasMotoLicense;
   if (hasLicense === false) return false;
@@ -10228,7 +10296,11 @@ async function resolveDeterministicAvailabilityReply(args: {
   const incomingInventorySignal = hasIncomingInventorySignal(textLower);
   const genericInventoryAsk = isGenericInventoryAsk(textLower);
   const affectHasHumor = !!args.affectHasHumor;
-  const modelFromText = parsedAvailability?.model ?? findMentionedModel(textLower);
+  const explicitModelFromText = findMentionedModel(textLower);
+  const parsedModel = String(parsedAvailability?.model ?? "").trim();
+  const modelFromText =
+    explicitModelFromText ??
+    (parsedModel && !isGenericAvailabilityModelLabel(parsedModel) ? parsedModel : null);
   if (
     shouldPromptModelForSoldGenericInventoryAsk(
       conv,
@@ -10271,10 +10343,12 @@ async function resolveDeterministicAvailabilityReply(args: {
     !!modelFromText &&
     !!priorModel &&
     normalizeModelText(modelFromText) !== normalizeModelText(priorModel);
+  const yearFromInboundText = extractYearSingle(textLower)?.toString() ?? null;
   const yearFromText =
-    parsedAvailability?.year != null
+    yearFromInboundText ??
+    (!explicitModelFromText && parsedAvailability?.year != null
       ? String(parsedAvailability.year)
-      : (extractYearSingle(textLower)?.toString() ?? null);
+      : null);
   const colorFromParser = sanitizeColorPhrase(extractColorToken(textLower));
   const colorFromLlm = sanitizeColorPhrase(parsedAvailability?.color ?? null);
   const colorFromText = pickMostSpecificColor(colorFromLlm, colorFromParser);
@@ -19663,7 +19737,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const lower = regenShortListInboundText.toLowerCase();
     const hasSelection = /\b(first|second|earlier|later)\b/i.test(lower);
     const hasConfirm =
-      /\b(yes|yep|yeah|yup|sure|confirmed|confirm|that works|works|works for me|sounds good|book it|perfect)\b/i.test(
+      /\b(yes|yep|yeah|yup|ok|okay|alright|all right|sure|confirmed|confirm|that works|works|works for me|sounds good|book it|perfect)\b/i.test(
         lower
       );
     return hasSelection || hasConfirm;
@@ -20633,7 +20707,14 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
 
     const visitTimingIntent =
       regenParserSchedulingIntent || regenLlmExplicitScheduleIntent || regenSchedulingLexicalIntent;
-    const explicitAvailabilityAskThisTurn = regenParserAvailabilityIntent;
+    const regenAvailabilityPreferenceHint = buildAvailabilityPreferenceReplyHint({
+      inboundText: event.body ?? "",
+      lastOutboundText,
+      parserAvailability: null,
+      shortlistPromptActive: hasActivePendingShortListPrompt(conv)
+    });
+    const explicitAvailabilityAskThisTurn =
+      regenParserAvailabilityIntent || !!regenAvailabilityPreferenceHint;
     const financeOrRateAskThisTurn = regenParserPricingIntent;
     const soldOrPostSale = isSoldOrPostSaleConversation(conv);
     const inboundExplicitModel = findMentionedModel(String(event.body ?? "").toLowerCase());
@@ -20663,6 +20744,25 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         incomingHint: incomingInventorySignal || genericInventoryAsk
       });
       return respondWithSmsRegeneratedDraft(reply);
+    }
+    if (
+      explicitAvailabilityAskThisTurn &&
+      !visitTimingIntent &&
+      !financeOrRateAskThisTurn
+    ) {
+      const availabilityResolution = await resolveDeterministicAvailabilityReply({
+        conv,
+        text: event.body ?? "",
+        parsedAvailability: regenAvailabilityPreferenceHint,
+        otherInventoryRequest: regenOtherInventoryRequest,
+        affectHasHumor: !!regenAcceptedAffect?.hasHumor
+      });
+      if (availabilityResolution.kind === "reply") {
+        return respondWithSmsRegeneratedDraft(
+          availabilityResolution.reply,
+          availabilityResolution.mediaUrls
+        );
+      }
     }
     const contextModel =
       inboundExplicitModel ??
@@ -21333,7 +21433,7 @@ if (authToken && signature) {
       );
     const humanModeAffirmative =
       humanModeHasTimeToken ||
-      /\b(yes|yep|yeah|yup|sure|confirmed|confirm|that works|works|works for me|sounds good|book it|perfect)\b/i.test(
+      /\b(yes|yep|yeah|yup|ok|okay|alright|all right|sure|confirmed|confirm|that works|works|works for me|sounds good|book it|perfect)\b/i.test(
         humanModeText
       );
     const humanModeBookingParserHint =
@@ -22161,7 +22261,7 @@ if (authToken && signature) {
     if (isDeferral(t)) return false;
     const hasSelection = /\b(first|second|earlier|later)\b/i.test(lower);
     const hasConfirm =
-      /\b(yes|yep|yeah|yup|sure|confirmed|confirm|that works|works|works for me|sounds good|book it|perfect)\b/i.test(
+      /\b(yes|yep|yeah|yup|ok|okay|alright|all right|sure|confirmed|confirm|that works|works|works for me|sounds good|book it|perfect)\b/i.test(
         lower
       );
     return hasSelection || hasConfirm;
@@ -25764,8 +25864,15 @@ if (authToken && signature) {
     llmMediaIntent === "photos" ||
     llmMediaIntent === "either" ||
     /\b(photo|picture|pic|image|images)\b/i.test(textLower);
+  const availabilityPreferenceHint = buildAvailabilityPreferenceReplyHint({
+    inboundText: event.body ?? "",
+    lastOutboundText,
+    parserAvailability: llmAvailability,
+    shortlistPromptActive: hasActivePendingShortListPrompt(conv)
+  });
+  const availabilityPreferenceReply = !!availabilityPreferenceHint;
   const availabilityRouteEligible =
-    routeExecAvailability || explicitAvailabilitySignalThisTurn;
+    routeExecAvailability || explicitAvailabilitySignalThisTurn || availabilityPreferenceReply;
   const availabilityExplicit =
     availabilityRouteEligible &&
     !/\b(sound system|audio system|stereo|speakers?|speaker system)\b/i.test(textLower) &&
@@ -25787,7 +25894,7 @@ if (authToken && signature) {
     const availabilityResolution = await resolveDeterministicAvailabilityReply({
       conv,
       text: event.body ?? "",
-      parsedAvailability: llmAvailability,
+      parsedAvailability: availabilityPreferenceHint ?? llmAvailability,
       otherInventoryRequest,
       affectHasHumor: !!acceptedAffect?.hasHumor
     });
