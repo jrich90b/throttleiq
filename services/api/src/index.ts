@@ -16420,6 +16420,10 @@ app.put("/dealer-profile", requireManager, async (req, res) => {
     buying: {
       ...(current?.buying ?? {}),
       ...(incoming?.buying ?? {})
+    },
+    webSearch: {
+      ...(current?.webSearch ?? {}),
+      ...(incoming?.webSearch ?? {})
     }
   };
   const saved = await saveDealerProfile(merged);

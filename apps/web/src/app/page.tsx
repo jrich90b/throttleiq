@@ -1368,6 +1368,7 @@ export default function Home() {
     weatherColdThresholdF: "50",
     weatherForecastHours: "48",
     buyingUsedBikesEnabled: true,
+    webSearchReferenceUrls: [] as string[],
     taxRate: "8"
   });
   const [dealerHours, setDealerHours] = useState<Record<string, { open: string | null; close: string | null }>>(
@@ -3224,6 +3225,12 @@ export default function Home() {
         const forecastHours = weather.forecastHours ?? 48;
         const buyingUsedEnabled = buying.usedBikesEnabled !== false;
         const taxRate = profile.taxRate ?? 8;
+        const webSearch = profile.webSearch ?? {};
+        const webSearchReferenceUrls = Array.isArray(webSearch.referenceUrls)
+          ? webSearch.referenceUrls
+              .map((v: any) => String(v ?? "").trim())
+              .filter(Boolean)
+          : [];
         const followUpMonths = Array.isArray(followUp.testRideMonths) ? followUp.testRideMonths : [4, 5, 6, 7, 8, 9, 10];
         setDealerProfile(profile);
         setDealerProfileForm({
@@ -3255,6 +3262,7 @@ export default function Home() {
           weatherColdThresholdF: String(coldThreshold),
           weatherForecastHours: String(forecastHours),
           buyingUsedBikesEnabled: buyingUsedEnabled,
+          webSearchReferenceUrls,
           taxRate: String(taxRate)
         });
         setDealerHours(profile.hours ?? {});
@@ -6638,6 +6646,11 @@ export default function Home() {
         },
         buying: {
           usedBikesEnabled: !!dealerProfileForm.buyingUsedBikesEnabled
+        },
+        webSearch: {
+          referenceUrls: (dealerProfileForm.webSearchReferenceUrls ?? [])
+            .map(v => String(v ?? "").trim())
+            .filter(Boolean)
         },
         taxRate: Number(dealerProfileForm.taxRate) || 0
       };
@@ -10299,6 +10312,61 @@ export default function Home() {
                     value={dealerProfileForm.website}
                     onChange={e => setDealerProfileForm({ ...dealerProfileForm, website: e.target.value })}
                   />
+                  <div className="col-span-2 border rounded p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs text-gray-600">
+                        Web search reference pages/domains (manufacturer + help docs)
+                      </div>
+                      <button
+                        type="button"
+                        className="px-2 py-1 border rounded text-xs"
+                        onClick={() =>
+                          setDealerProfileForm(prev => ({
+                            ...prev,
+                            webSearchReferenceUrls: [...(prev.webSearchReferenceUrls ?? []), ""]
+                          }))
+                        }
+                      >
+                        Add
+                      </button>
+                    </div>
+                    {(dealerProfileForm.webSearchReferenceUrls ?? []).length === 0 ? (
+                      <div className="text-xs text-gray-500">
+                        Add one or more URLs/domains (example: `https://www.harley-davidson.com` or
+                        `triumphmotorcycles.com`).
+                      </div>
+                    ) : null}
+                    {(dealerProfileForm.webSearchReferenceUrls ?? []).map((url, idx) => (
+                      <div key={`web-ref-${idx}`} className="flex items-center gap-2">
+                        <input
+                          className="border rounded px-3 py-2 text-sm flex-1"
+                          placeholder="https://manufacturer.com/support"
+                          value={url}
+                          onChange={e =>
+                            setDealerProfileForm(prev => {
+                              const next = [...(prev.webSearchReferenceUrls ?? [])];
+                              next[idx] = e.target.value;
+                              return { ...prev, webSearchReferenceUrls: next };
+                            })
+                          }
+                        />
+                        <button
+                          type="button"
+                          className="px-2 py-1 border rounded text-xs"
+                          onClick={() =>
+                            setDealerProfileForm(prev => ({
+                              ...prev,
+                              webSearchReferenceUrls: (prev.webSearchReferenceUrls ?? []).filter(
+                                (_v, i) => i !== idx
+                              )
+                            }))
+                          }
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                   <div className="flex items-center gap-2">
                     <input
                       className="border rounded px-3 py-2 text-sm flex-1"

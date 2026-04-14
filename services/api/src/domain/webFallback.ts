@@ -1,5 +1,8 @@
 type DealerProfileLike = {
   website?: string | null;
+  webSearch?: {
+    referenceUrls?: string[] | null;
+  } | null;
 };
 
 export type WebSearchHit = {
@@ -45,6 +48,14 @@ function parseCsv(value: string | null | undefined): string[] {
     .filter(Boolean);
 }
 
+function normalizeReferenceHost(value: string | null | undefined): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const parsed = parseHttpUrl(raw);
+  if (parsed?.hostname) return normalizeHost(parsed.hostname);
+  return normalizeHost(raw);
+}
+
 function getDealerWebsiteHost(profile?: DealerProfileLike | null): string {
   const fromProfile = parseHttpUrl(profile?.website ?? null);
   if (fromProfile?.hostname) return normalizeHost(fromProfile.hostname);
@@ -54,9 +65,14 @@ function getDealerWebsiteHost(profile?: DealerProfileLike | null): string {
 function getAllowlistedDomains(profile?: DealerProfileLike | null): string[] {
   const fromEnv = parseCsv(process.env.WEB_FALLBACK_ALLOWLIST_DOMAINS);
   const dealerHost = getDealerWebsiteHost(profile);
+  const fromProfileRefs = Array.isArray(profile?.webSearch?.referenceUrls)
+    ? profile!.webSearch!.referenceUrls!
+        .map(v => normalizeReferenceHost(v))
+        .filter(Boolean)
+    : [];
   const base = dealerHost ? [dealerHost] : [];
   const defaults = ["harley-davidson.com"];
-  return [...new Set([...fromEnv, ...base, ...defaults])];
+  return [...new Set([...fromEnv, ...base, ...fromProfileRefs, ...defaults])];
 }
 
 function domainAllowed(hostname: string, allowlist: string[]): boolean {
@@ -171,4 +187,3 @@ export async function searchGoogleCse(args: {
     clearTimeout(timer);
   }
 }
-

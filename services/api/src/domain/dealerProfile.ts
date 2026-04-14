@@ -39,6 +39,9 @@ export type DealerProfile = {
   buying?: {
     usedBikesEnabled?: boolean;
   };
+  webSearch?: {
+    referenceUrls?: string[];
+  };
   taxRate?: number;
 };
 
