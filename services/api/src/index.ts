@@ -10466,6 +10466,15 @@ async function resolveDeterministicAvailabilityReply(args: {
       )
     : availableMatches;
   const count = availableMatchesForCount.length;
+  const validInventoryUrl = (value: string | null | undefined): string | null => {
+    const raw = String(value ?? "").trim();
+    return /^https?:\/\//i.test(raw) ? raw : null;
+  };
+  const formatInventoryLine = (item: any): string => {
+    const detail = formatBudgetInventoryOption(item);
+    const url = validInventoryUrl(item?.url);
+    return url ? `${detail} — ${url}` : detail;
+  };
   const sentMediaUrls = new Set<string>();
   for (const msg of conv.messages ?? []) {
     if (msg.direction !== "out") continue;
@@ -10474,20 +10483,21 @@ async function resolveDeterministicAvailabilityReply(args: {
       if (typeof url === "string" && url) sentMediaUrls.add(url);
     }
   }
-  const hasSentPhoto = sentMediaUrls.size > 0;
-  const remainingWithImages = availableMatchesForCount.filter(item =>
-    Array.isArray(item.images) &&
-    item.images.length &&
-    !item.images.some((u: string) => sentMediaUrls.has(u))
-  );
+  const singleMatch = count === 1 ? availableMatchesForCount[0] : null;
+  const singleMatchPhoto =
+    singleMatch && Array.isArray(singleMatch.images)
+      ? singleMatch.images.find(
+          (u: string) => /^https?:\/\//i.test(String(u ?? "")) && !sentMediaUrls.has(String(u ?? ""))
+        ) ?? null
+      : null;
+  const multiList = count > 1 ? availableMatchesForCount.slice(0, 3) : [];
+  const multiListText = multiList.length
+    ? `Top options: ${multiList.map((item, idx) => `${idx + 1}) ${formatInventoryLine(item)}`).join(" | ")}`
+    : "";
+  const hasMoreMatches = count > multiList.length;
   const photoRequestedLocal = /\b(photo|picture|pic|image|images)\b/i.test(textLower);
   const extraMediaUrls =
-    count > 1 && (photoRequestedLocal || hasSentPhoto)
-      ? remainingWithImages
-          .slice(0, 2)
-          .map(item => item.images?.find((u: string) => /^https?:\/\//i.test(u)) ?? null)
-          .filter((u: string | null): u is string => !!u)
-      : [];
+    count === 1 && singleMatchPhoto ? [singleMatchPhoto] : [];
   const includePhotosInReply = extraMediaUrls.length > 0;
   const conditionLabel = formatRequestedConditionLabel(condition);
   const yearText = year ? `${year} ` : "";
@@ -10511,7 +10521,9 @@ async function resolveDeterministicAvailabilityReply(args: {
     } else if (count === 1) {
       reply = `Yes — we have one other ${inventoryLabel} in stock. ${paintTrimPrompt}`;
     } else {
-      reply = `Yes — we have ${count} other ${inventoryLabel} units in stock. ${paintTrimPrompt}`;
+      reply = `Yes — we have ${count} other ${inventoryLabel} units in stock. ${multiListText} ${
+        hasMoreMatches ? "I can send more options too." : ""
+      } Which one should I send photos of?`;
     }
   } else {
     if (count <= 0) {
@@ -10519,22 +10531,22 @@ async function resolveDeterministicAvailabilityReply(args: {
         noStockColorFinishPrompt ? ` ${noStockColorFinishPrompt}` : ""
       }`;
     } else if (count === 1) {
-      const inStockSingleCta = includePhotosInReply
-        ? "Want to come check it out?"
-        : "Want to come check it out, or want a couple photos first?";
+      const singleLine = singleMatch ? formatInventoryLine(singleMatch) : "";
+      const inStockSingleCta = "Want to come check it out?";
       reply = hasPriorSpecificInventoryMention
-        ? `That’s the only ${inventoryLabel} we have in stock right now. ${inStockSingleCta}`
-        : `Yes — we have one ${inventoryLabel} in stock right now. ${inStockSingleCta}`;
+        ? `That’s the only ${inventoryLabel} we have in stock right now: ${singleLine}. ${inStockSingleCta}`
+        : `Yes — we have one ${inventoryLabel} in stock right now: ${singleLine}. ${inStockSingleCta}`;
     } else {
-      const inStockMultiCta = includePhotosInReply
-        ? "Want to come check one out?"
-        : "Want to come check one out, or want a couple photos first?";
-      reply = `We have ${count} ${inventoryLabel} units in stock right now. ${inStockMultiCta}`;
+      reply = `We have ${count} ${inventoryLabel} units in stock right now. ${multiListText} ${
+        hasMoreMatches ? "I can send more options too." : ""
+      } Which one should I send photos of?`;
     }
   }
   if (extraMediaUrls.length) {
     reply += ` Here ${extraMediaUrls.length === 1 ? "is" : "are"} photo${extraMediaUrls.length === 1 ? "" : "s"}.`;
-  } else if (photoRequestedLocal && count > 0) {
+  } else if (photoRequestedLocal && count > 1) {
+    reply += " Tell me which one and I’ll send photos right away.";
+  } else if (photoRequestedLocal && count === 1) {
     reply += " I can have one of the guys send photos over by text.";
   }
   return { kind: "reply", reply, mediaUrls: extraMediaUrls.length ? extraMediaUrls : undefined };
