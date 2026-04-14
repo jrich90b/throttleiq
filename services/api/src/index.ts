@@ -4349,7 +4349,7 @@ async function buildEarlyCadencePromotionOverride(args: {
   const name = normalizeDisplayCase(args.name || "there");
   const { model, year } = resolveCadencePromotionModel(conv);
   if (!model) {
-    return `Hey ${name}, quick check-in — which bike are you most interested in right now? I can check current promotions, and we can go over pricing and options when you stop in.`;
+    return `Hey ${name}, happy to send a short list. Are you leaning Grand American Touring, Cruiser, Sport, Adventure Touring, or Trike? Also, do you want new, used, or both, and what budget should I target?`;
   }
 
   let matches = await findInventoryMatches({ year: year ?? null, model });
@@ -4371,6 +4371,15 @@ async function buildEarlyCadencePromotionOverride(args: {
     return `Hey ${name}, quick check-in on the ${modelLabel}. Right now there’s ${promoLine}. Want to stop in so we can go over pricing and options?`;
   }
   return `Hey ${name}, quick check-in on the ${modelLabel}. If you want, stop in and we can go over pricing and what we can do for you.`;
+}
+
+function isCadencePreferenceClarifierMessage(message: string): boolean {
+  const text = String(message ?? "").toLowerCase().trim();
+  if (!text || !/\?/.test(text)) return false;
+  return (
+    /\b(which bike are you most interested|which style|leaning (?:more )?toward|short list)\b/.test(text) ||
+    /\b(grand american touring|cruiser|sport|adventure touring|trike)\b/.test(text)
+  );
 }
 
 async function buildCadenceLeadUnitAvailabilityOverride(args: {
@@ -4875,9 +4884,11 @@ async function buildCadenceRegeneratedDraft(
     if (contextLine && !message.toLowerCase().includes(contextLine.toLowerCase())) {
       message = `${message} ${contextLine}`.trim();
     }
-    const personalizationLine = await getCadencePersonalizationLine(conv, cadence, now);
-    if (personalizationLine && !message.toLowerCase().includes(personalizationLine.toLowerCase())) {
-      message = `${message} ${personalizationLine}`.trim();
+    if (!isCadencePreferenceClarifierMessage(message)) {
+      const personalizationLine = await getCadencePersonalizationLine(conv, cadence, now);
+      if (personalizationLine && !message.toLowerCase().includes(personalizationLine.toLowerCase())) {
+        message = `${message} ${personalizationLine}`.trim();
+      }
     }
     return { body: message };
   }
@@ -4943,9 +4954,11 @@ async function buildCadenceRegeneratedDraft(
   if (contextLine && !message.toLowerCase().includes(contextLine.toLowerCase())) {
     message = `${message} ${contextLine}`.trim();
   }
-  const personalizationLine = await getCadencePersonalizationLine(conv, cadence, now);
-  if (personalizationLine && !message.toLowerCase().includes(personalizationLine.toLowerCase())) {
-    message = `${message} ${personalizationLine}`.trim();
+  if (!isCadencePreferenceClarifierMessage(message)) {
+    const personalizationLine = await getCadencePersonalizationLine(conv, cadence, now);
+    if (personalizationLine && !message.toLowerCase().includes(personalizationLine.toLowerCase())) {
+      message = `${message} ${personalizationLine}`.trim();
+    }
   }
   return { body: message };
 }
@@ -14298,9 +14311,11 @@ async function processDueFollowUps() {
           conv.appointment.staffNotify.contextUsedAt = nowIso();
         }
       }
-      const personalizationLine = await getCadencePersonalizationLine(conv, cadence, now);
-      if (personalizationLine && !message.toLowerCase().includes(personalizationLine.toLowerCase())) {
-        message = `${message} ${personalizationLine}`.trim();
+      if (!isCadencePreferenceClarifierMessage(message)) {
+        const personalizationLine = await getCadencePersonalizationLine(conv, cadence, now);
+        if (personalizationLine && !message.toLowerCase().includes(personalizationLine.toLowerCase())) {
+          message = `${message} ${personalizationLine}`.trim();
+        }
       }
     }
 
@@ -24991,6 +25006,40 @@ if (authToken && signature) {
     }
     appendOutbound(conv, event.to, event.from, reply, "twilio");
     const twiml = `<?xml version="1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+
+  const lastAskedShortList =
+    /\b(want me to send|i can send)\b[\s\S]{0,80}\b(short list|couple models?|list of bikes?|options that fit)\b/i.test(
+      lastOutboundText
+    );
+  if (event.provider === "twilio" && lastAskedShortList && isAffirmative(event.body)) {
+    const inboundText = String(event.body ?? "").trim();
+    const hasStyleHint =
+      /\b(touring|bagger|cruiser|sport|sportster|adventure|pan america|trike|tri glide|freewheeler)\b/i.test(
+        inboundText
+      );
+    const hasConditionHint = /\b(new|used|pre[-\s]?owned|preowned|both)\b/i.test(inboundText);
+    const hasBudgetHint = /\$\s*\d|\bunder\b|\bover\b|\baround\b|\babout\b|\bmax(?:imum)?\b/i.test(inboundText);
+    let reply = "";
+    if (hasStyleHint && (hasConditionHint || hasBudgetHint)) {
+      reply = "Perfect — any must-have model or color before I pull the short list?";
+    } else if (hasStyleHint) {
+      reply = "Perfect — do you want new, used, or both, and what budget should I target?";
+    } else {
+      reply =
+        "Perfect — happy to. Are you leaning Grand American Touring, Cruiser, Sport, Adventure Touring, or Trike? Also, do you want new, used, or both, and what budget should I target?";
+    }
+    setDialogState(conv, "inventory_init");
+    if (webhookMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
       reply
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
