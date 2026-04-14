@@ -16370,6 +16370,22 @@ app.post("/dealer-profile/logo", requireManager, upload.single("file"), async (r
 app.put("/dealer-profile", requireManager, async (req, res) => {
   console.log("[dealer-profile] save start");
   const incoming = { ...(req.body ?? {}) } as Record<string, any>;
+  const current = (await getDealerProfileHot()) ?? {};
+  const sanitizeReferenceUrls = (value: unknown): string[] => {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const raw of value) {
+      const url = String(raw ?? "").trim();
+      if (!url) continue;
+      const key = url.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(url);
+    }
+    return out;
+  };
+  const currentReferenceUrls = sanitizeReferenceUrls(current?.webSearch?.referenceUrls);
   const bookingUrlRaw = String(incoming.bookingUrl ?? "").trim();
   if (bookingUrlRaw) {
     try {
@@ -16389,7 +16405,26 @@ app.put("/dealer-profile", requireManager, async (req, res) => {
       delete incoming.bookingUrl;
     }
   }
-  const current = (await getDealerProfileHot()) ?? {};
+  const incomingWebSearch =
+    incoming?.webSearch && typeof incoming.webSearch === "object" ? incoming.webSearch : null;
+  if (incomingWebSearch) {
+    const incomingReferenceUrls = sanitizeReferenceUrls(incomingWebSearch.referenceUrls);
+    const clearRequested = incomingWebSearch.clearReferenceUrls === true;
+    // Guardrail: avoid accidental wipes from partial/empty settings payloads.
+    // To intentionally clear all references, send `webSearch.clearReferenceUrls = true`.
+    if (!clearRequested && incomingReferenceUrls.length === 0 && currentReferenceUrls.length > 0) {
+      incoming.webSearch = {
+        ...incomingWebSearch,
+        referenceUrls: currentReferenceUrls
+      };
+      console.log("[dealer-profile] preserved existing webSearch.referenceUrls (empty incoming payload)");
+    } else {
+      incoming.webSearch = {
+        ...incomingWebSearch,
+        referenceUrls: incomingReferenceUrls
+      };
+    }
+  }
   const merged = {
     ...current,
     ...incoming,
