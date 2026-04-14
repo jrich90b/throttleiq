@@ -1204,6 +1204,24 @@ function resolveModelsFromText(
   return Array.from(new Set(matches));
 }
 
+function resolveMakeFromText(
+  text: string | null | undefined,
+  makes: string[]
+): string | null {
+  const t = normalizeModelMatchText(text);
+  if (!t || !makes.length) return null;
+  const sorted = [...makes]
+    .map(m => String(m ?? "").trim())
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+  for (const make of sorted) {
+    const key = normalizeModelMatchText(make);
+    if (!key) continue;
+    if (t.includes(key)) return make;
+  }
+  return null;
+}
+
 function extractMonthlyBudget(text?: string | null): number | null {
   if (!text) return null;
   const t = String(text);
@@ -2716,17 +2734,22 @@ export async function orchestrateInbound(
         const yearLabel = yearForRange ? `${yearForRange} ` : "";
         const scopeLabel = `${yearLabel}${modelLabel}`.trim();
         const makeFromLead = String(leadForPrice?.vehicle?.make ?? "").trim();
-        const makeFromText = /\btriumph\b/i.test(event.body)
-          ? "Triumph"
-          : /\bharley\b|\bharley[- ]?davidson\b/i.test(event.body)
-            ? "Harley-Davidson"
-            : "";
-        const makeForQuery = makeFromLead || makeFromText || "motorcycle";
+        const inventoryMakes = Array.from(
+          new Set(
+            (await getInventoryFeed())
+              .map(i => String(i.make ?? "").trim())
+              .filter(Boolean)
+          )
+        );
+        const makeFromText = resolveMakeFromText(event.body, inventoryMakes);
+        const makeForQuery = makeFromLead || makeFromText || "";
         let specialsWebLine = "";
         if (isWebFallbackEnabled()) {
           const specialsQuery = hasSpecificScope && scopeLabel
             ? `${scopeLabel} finance specials`
-            : `${makeForQuery} finance specials`;
+            : makeForQuery
+              ? `${makeForQuery} finance specials`
+              : "motorcycle finance specials";
           const specialsSearch = await searchGoogleCse({
             query: specialsQuery,
             profile: dealerProfile,
