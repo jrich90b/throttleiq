@@ -1314,6 +1314,35 @@ function normalizeInboundDedupBody(input: string): string {
     .toLowerCase();
 }
 
+const PENDING_SHORTLIST_SOFT_TAG = "pending_shortlist_prompt";
+const PENDING_SHORTLIST_TTL_MS = 72 * 60 * 60 * 1000;
+
+function outboundAsksForShortList(body: string): boolean {
+  const text = String(body ?? "").trim();
+  if (!text) return false;
+  return /\b(want me to send|i can send|happy to send)\b[\s\S]{0,100}\b(short list|couple models?|list of bikes?|options that fit)\b/i.test(
+    text
+  );
+}
+
+function markPendingShortListPrompt(conv: Conversation, source: string): void {
+  const now = nowIso();
+  const expiresAt = new Date(Date.now() + PENDING_SHORTLIST_TTL_MS).toISOString();
+  conv.softTags = {
+    ...(conv.softTags ?? {}),
+    [PENDING_SHORTLIST_SOFT_TAG]: {
+      value: "1",
+      source,
+      updatedAt: now,
+      expiresAt,
+      meta: {
+        askedAt: now,
+        ttlMs: PENDING_SHORTLIST_TTL_MS
+      }
+    }
+  };
+}
+
 export function isDuplicateInboundEvent(
   conv: Conversation,
   evt: InboundMessageEvent,
@@ -1392,10 +1421,16 @@ export function appendOutbound(
     (String(from ?? "").includes("@") || String(to ?? "").includes("@"))
   ) {
     conv.emailDraft = tonedBody;
+    if (outboundAsksForShortList(tonedBody)) {
+      markPendingShortListPrompt(conv, `outbound_${provider}`);
+    }
     consumeAgentContextIfNeeded(conv, "outbound_email_draft");
     conv.updatedAt = nowIso();
     scheduleSave();
     return;
+  }
+  if (outboundAsksForShortList(tonedBody)) {
+    markPendingShortListPrompt(conv, `outbound_${provider}`);
   }
   conv.messages.push({
     id: makeId("msg"),

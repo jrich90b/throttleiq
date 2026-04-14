@@ -1202,6 +1202,7 @@ async function safeLlmParse<T>(
 }
 
 const SMALL_TALK_STREAK_SOFT_TAG = "smalltalk_streak";
+const PENDING_SHORTLIST_SOFT_TAG = "pending_shortlist_prompt";
 const SMALL_TALK_PIVOT_EVERY = (() => {
   const value = Number(process.env.SMALL_TALK_PIVOT_EVERY ?? 3);
   if (!Number.isFinite(value)) return 3;
@@ -1261,6 +1262,34 @@ function noteSmallTalkTurn(
   const allowBikePivot =
     nextCount >= SMALL_TALK_PIVOT_EVERY && nextCount % SMALL_TALK_PIVOT_EVERY === 0;
   return { count: nextCount, allowBikePivot };
+}
+
+function hasActivePendingShortListPrompt(conv: Conversation | null | undefined): boolean {
+  if (!conv?.softTags) return false;
+  const raw = conv.softTags[PENDING_SHORTLIST_SOFT_TAG];
+  if (!raw) return false;
+  const expiresAtMs = Date.parse(String(raw.expiresAt ?? ""));
+  if (Number.isFinite(expiresAtMs) && expiresAtMs <= Date.now()) return false;
+  const value = String(raw.value ?? "1").trim().toLowerCase();
+  if (!value) return true;
+  if (["0", "false", "done", "resolved", "expired"].includes(value)) return false;
+  return true;
+}
+
+function clearPendingShortListPrompt(
+  conv: Conversation | null | undefined,
+  source: string
+): void {
+  if (!conv) return;
+  setConversationSoftTag(conv, PENDING_SHORTLIST_SOFT_TAG, {
+    value: "resolved",
+    source,
+    expiresAt: new Date(Date.now() - 1000).toISOString(),
+    meta: {
+      resolvedAt: new Date().toISOString(),
+      reason: source
+    }
+  });
 }
 
 function resetSmallTalkStreakIfNeeded(
@@ -25015,14 +25044,21 @@ if (authToken && signature) {
     /\b(want me to send|i can send)\b[\s\S]{0,80}\b(short list|couple models?|list of bikes?|options that fit)\b/i.test(
       lastOutboundText
     );
-  if (event.provider === "twilio" && lastAskedShortList && isAffirmative(event.body)) {
-    const inboundText = String(event.body ?? "").trim();
-    const hasStyleHint =
-      /\b(touring|bagger|cruiser|sport|sportster|adventure|pan america|trike|tri glide|freewheeler)\b/i.test(
-        inboundText
-      );
-    const hasConditionHint = /\b(new|used|pre[-\s]?owned|preowned|both)\b/i.test(inboundText);
-    const hasBudgetHint = /\$\s*\d|\bunder\b|\bover\b|\baround\b|\babout\b|\bmax(?:imum)?\b/i.test(inboundText);
+  const shortListInboundText = String(event.body ?? "").trim();
+  const hasStyleHint =
+    /\b(touring|bagger|cruiser|sport|sportster|adventure|pan america|trike|tri glide|freewheeler)\b/i.test(
+      shortListInboundText
+    );
+  const hasConditionHint = /\b(new|used|pre[-\s]?owned|preowned|both)\b/i.test(shortListInboundText);
+  const hasBudgetHint =
+    /\$\s*\d|\bunder\b|\bover\b|\baround\b|\babout\b|\bmax(?:imum)?\b/i.test(shortListInboundText);
+  const hasPreferenceHint = hasStyleHint || hasConditionHint || hasBudgetHint;
+  const shortlistPromptInContext = lastAskedShortList || hasActivePendingShortListPrompt(conv);
+  if (
+    event.provider === "twilio" &&
+    shortlistPromptInContext &&
+    (isAffirmative(event.body) || hasPreferenceHint)
+  ) {
     let reply = "";
     if (hasStyleHint && (hasConditionHint || hasBudgetHint)) {
       reply = "Perfect — any must-have model or color before I pull the short list?";
@@ -25033,6 +25069,7 @@ if (authToken && signature) {
         "Perfect — happy to. Are you leaning Grand American Touring, Cruiser, Sport, Adventure Touring, or Trike? Also, do you want new, used, or both, and what budget should I target?";
     }
     setDialogState(conv, "inventory_init");
+    clearPendingShortListPrompt(conv, "shortlist_reply_handled");
     if (webhookMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
