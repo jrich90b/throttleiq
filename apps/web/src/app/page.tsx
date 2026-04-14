@@ -217,6 +217,28 @@ function escapeHtml(text: string): string {
 }
 
 const CADENCE_ALERT_WINDOW_HOURS = 24;
+const COMMON_REFERENCE_SITES: Array<{ label: string; value: string }> = [
+  { label: "Harley-Davidson", value: "https://www.harley-davidson.com" },
+  { label: "LiveWire", value: "https://www.livewire.com" },
+  { label: "Triumph", value: "https://www.triumphmotorcycles.com" },
+  { label: "Indian", value: "https://www.indianmotorcycle.com" },
+  { label: "Honda Powersports", value: "https://powersports.honda.com" },
+  { label: "Yamaha Motorsports", value: "https://www.yamahamotorsports.com" },
+  { label: "Kawasaki", value: "https://www.kawasaki.com" },
+  { label: "Suzuki Cycles", value: "https://suzukicycles.com" },
+  { label: "Ducati", value: "https://www.ducati.com" },
+  { label: "KTM", value: "https://www.ktm.com" },
+  { label: "BMW Motorrad", value: "https://www.bmw-motorrad.com" },
+  { label: "Can-Am", value: "https://can-am.brp.com" },
+  { label: "Sea-Doo", value: "https://sea-doo.brp.com" },
+  { label: "Polaris", value: "https://www.polaris.com" },
+  { label: "CFMOTO", value: "https://www.cfmotousa.com" },
+  { label: "Aprilia", value: "https://www.aprilia.com" },
+  { label: "Moto Guzzi", value: "https://www.motoguzzi.com" },
+  { label: "Vespa", value: "https://www.vespa.com" },
+  { label: "Piaggio", value: "https://www.piaggio.com" },
+  { label: "Zero Motorcycles", value: "https://www.zeromotorcycles.com" }
+];
 
 const CALENDAR_COLORS = [
   { id: "1", label: "White", bg: "#FFFFFF", border: "#D1D5DB", text: "#111827" },
@@ -1371,6 +1393,7 @@ export default function Home() {
     webSearchReferenceUrls: [] as string[],
     taxRate: "8"
   });
+  const [selectedReferenceSite, setSelectedReferenceSite] = useState("");
   const [dealerHours, setDealerHours] = useState<Record<string, { open: string | null; close: string | null }>>(
     {}
   );
@@ -10328,6 +10351,42 @@ export default function Home() {
                         }
                       >
                         Add
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <select
+                        className="border rounded px-3 py-2 text-sm flex-1"
+                        value={selectedReferenceSite}
+                        onChange={e => setSelectedReferenceSite(e.target.value)}
+                      >
+                        <option value="">Common manufacturer/reference sites</option>
+                        {COMMON_REFERENCE_SITES.map(site => (
+                          <option key={site.value} value={site.value}>
+                            {site.label}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="px-2 py-1 border rounded text-xs disabled:opacity-50"
+                        disabled={!selectedReferenceSite}
+                        onClick={() => {
+                          const selected = String(selectedReferenceSite ?? "").trim();
+                          if (!selected) return;
+                          setDealerProfileForm(prev => {
+                            const existing = (prev.webSearchReferenceUrls ?? []).map(v =>
+                              String(v ?? "").trim().toLowerCase()
+                            );
+                            if (existing.includes(selected.toLowerCase())) return prev;
+                            return {
+                              ...prev,
+                              webSearchReferenceUrls: [...(prev.webSearchReferenceUrls ?? []), selected]
+                            };
+                          });
+                          setSelectedReferenceSite("");
+                        }}
+                      >
+                        Add selected
                       </button>
                     </div>
                     {(dealerProfileForm.webSearchReferenceUrls ?? []).length === 0 ? (
