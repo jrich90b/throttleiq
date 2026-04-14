@@ -2643,7 +2643,16 @@ export async function orchestrateInbound(
         model: modelForRange
       });
       let price = priceLookup?.price ?? null;
-      const inventoryNote = await getInventoryNote(stockForPrice, vinForPrice);
+      let inventoryNote = await getInventoryNote(stockForPrice, vinForPrice);
+      if (!inventoryNote && modelForRange && !isUnknownModel(modelForRange)) {
+        const noteItem =
+          priceLookup?.item ??
+          (await findInventoryMatches({ year: yearForRange, model: modelForRange }))[0] ??
+          null;
+        if (noteItem) {
+          inventoryNote = await getInventoryNote(noteItem.stockId ?? null, noteItem.vin ?? null);
+        }
+      }
       const range =
         yearForRange && modelForRange ? await findPriceRange({ year: yearForRange, model: modelForRange }) : null;
       if (!stockForPrice && !vinForPrice && range?.count && range.count > 1) {
