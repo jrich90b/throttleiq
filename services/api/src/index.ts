@@ -10562,6 +10562,33 @@ function referencesSpecificInventoryUnit(text: string): boolean {
   );
 }
 
+function isRegenerateInboundActionableForRouting(text: string): boolean {
+  const raw = String(text ?? "");
+  const lower = raw.toLowerCase();
+  if (!lower.trim()) return false;
+  if (findMentionedModel(raw)) return true;
+  if (normalizeWatchCondition(lower)) return true;
+  if (hasIncomingInventorySignal(lower) || isGenericInventoryAsk(lower) || isOtherInventoryRequestText(lower)) {
+    return true;
+  }
+  const pricingSignal =
+    /\b(price|pricing|payment|payments|monthly|apr|rate|rates|finance|financing|term|terms|down payment|money down|cash down)\b/i.test(
+      lower
+    );
+  if (pricingSignal) return true;
+  const schedulingSignal =
+    /\b(schedule|book|appointment|appt|what time|what day|works for you|come in|stop by|stop in|today|tomorrow|this week|next week)\b/i.test(
+      lower
+    );
+  if (schedulingSignal) return true;
+  if (/\b(call me|give me a call|can you call|please call|have .* call|reach me|contact me)\b/i.test(raw)) {
+    return true;
+  }
+  if (extractYearSingle(lower) != null) return true;
+  if (parseDayOfWeek(raw) || extractTimeToken(raw)) return true;
+  return false;
+}
+
 type CustomerDispositionDecision = {
   reason: "customer_sell_on_own" | "customer_keep_current_bike" | "customer_stepping_back";
   state: "customer_sell_on_own" | "customer_keep_current_bike" | "customer_stepping_back";
@@ -19784,7 +19811,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
 
   const dealerProfile = await getDealerProfileHot();
   const cadenceRegeneratedDraft = await buildCadenceRegeneratedDraft(conv, dealerProfile, lastDraft);
-  if (cadenceRegeneratedDraft?.body) {
+  const skipCadenceContextualRegenerate =
+    event.provider === "twilio" &&
+    channel === "sms" &&
+    isRegenerateInboundActionableForRouting(event.body ?? "");
+  if (cadenceRegeneratedDraft?.body && !skipCadenceContextualRegenerate) {
     recordRouteOutcome("regen", "cadence_contextual_regenerated", {
       convId: conv.id,
       leadKey: conv.leadKey
