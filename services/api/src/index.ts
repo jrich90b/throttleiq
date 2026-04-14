@@ -19635,6 +19635,67 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     });
     return res.json({ ok: true, conversation: conv, draft: invariant.draftText });
   };
+
+  const regenInboundAtMs = new Date(event.receivedAt).getTime();
+  const regenLastOutboundBeforeInbound = [...(conv.messages ?? [])]
+    .filter(m => m.direction === "out" && m.body)
+    .filter(m => {
+      if (!Number.isFinite(regenInboundAtMs)) return true;
+      const atMs = new Date(m.at ?? "").getTime();
+      return !Number.isFinite(atMs) || atMs <= regenInboundAtMs;
+    })
+    .slice(-1)[0];
+  const regenLastOutboundText = String(regenLastOutboundBeforeInbound?.body ?? "");
+  const regenLastAskedShortList =
+    /\b(want me to send|i can send|happy to send)\b[\s\S]{0,100}\b(short list|couple models?|list of bikes?|options that fit)\b/i.test(
+      regenLastOutboundText
+    );
+  const regenShortListInboundText = String(event.body ?? "").trim();
+  const regenHasStyleHint =
+    /\b(touring|bagger|cruiser|sport|sportster|adventure|pan america|trike|tri glide|freewheeler)\b/i.test(
+      regenShortListInboundText
+    );
+  const regenHasConditionHint = /\b(new|used|pre[-\s]?owned|preowned|both)\b/i.test(regenShortListInboundText);
+  const regenHasBudgetHint =
+    /\$\s*\d|\bunder\b|\bover\b|\baround\b|\babout\b|\bmax(?:imum)?\b/i.test(regenShortListInboundText);
+  const regenHasPreferenceHint = regenHasStyleHint || regenHasConditionHint || regenHasBudgetHint;
+  const regenIsAffirmative = (() => {
+    const lower = regenShortListInboundText.toLowerCase();
+    const hasSelection = /\b(first|second|earlier|later)\b/i.test(lower);
+    const hasConfirm =
+      /\b(yes|yep|yeah|yup|sure|confirmed|confirm|that works|works|works for me|sounds good|book it|perfect)\b/i.test(
+        lower
+      );
+    return hasSelection || hasConfirm;
+  })();
+  const regenShortListPromptInContext =
+    regenLastAskedShortList || hasActivePendingShortListPrompt(conv);
+  if (
+    event.provider === "twilio" &&
+    regenShortListPromptInContext &&
+    (regenIsAffirmative || regenHasPreferenceHint)
+  ) {
+    let reply = "";
+    if (regenHasStyleHint && (regenHasConditionHint || regenHasBudgetHint)) {
+      reply = "Perfect — any must-have model or color before I pull the short list?";
+    } else if (regenHasStyleHint) {
+      reply = "Perfect — do you want new, used, or both, and what budget should I target?";
+    } else {
+      reply =
+        "Perfect — happy to. Are you leaning Grand American Touring, Cruiser, Sport, Adventure Touring, or Trike? Also, do you want new, used, or both, and what budget should I target?";
+    }
+    setDialogState(conv, "inventory_init");
+    clearPendingShortListPrompt(conv, "regen_shortlist_reply_handled");
+    recordRouteOutcome("regen", "shortlist_affirmative_clarifier", {
+      convId: conv.id,
+      leadKey: conv.leadKey
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply);
+  }
+
   const dealerProfile = await getDealerProfileHot();
   const cadenceRegeneratedDraft = await buildCadenceRegeneratedDraft(conv, dealerProfile, lastDraft);
   if (cadenceRegeneratedDraft?.body) {
