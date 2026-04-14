@@ -14693,9 +14693,22 @@ function parseTimeframeMonthsFromLabel(raw?: string | null): { start?: number; e
       return { start: Math.min(a, b), end: Math.max(a, b) };
     }
   }
+  const bareRange = text.match(/\b(\d+)\s*[-to]+\s*(\d+)\b/);
+  if (bareRange) {
+    const a = Number(bareRange[1]);
+    const b = Number(bareRange[2]);
+    if (Number.isFinite(a) && Number.isFinite(b)) {
+      return { start: Math.min(a, b), end: Math.max(a, b) };
+    }
+  }
   const single = text.match(/(\d+)\s*month/);
   if (single) {
     const a = Number(single[1]);
+    if (Number.isFinite(a)) return { start: a };
+  }
+  const bareSingle = text.match(/\b(\d+)\b/);
+  if (bareSingle) {
+    const a = Number(bareSingle[1]);
     if (Number.isFinite(a)) return { start: a };
   }
   return null;
