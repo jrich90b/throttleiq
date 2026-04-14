@@ -2744,6 +2744,7 @@ export async function orchestrateInbound(
         const makeFromText = resolveMakeFromText(event.body, inventoryMakes);
         const makeForQuery = makeFromLead || makeFromText || "";
         let specialsWebLine = "";
+        let topHitUrl = "";
         if (isWebFallbackEnabled()) {
           const specialsQuery = hasSpecificScope && scopeLabel
             ? `${scopeLabel} finance specials`
@@ -2758,17 +2759,33 @@ export async function orchestrateInbound(
           });
           const topHit = specialsSearch?.hits?.[0] ?? null;
           if (topHit?.url) {
+            topHitUrl = topHit.url;
             specialsWebLine = `Current published offers are listed here: ${topHit.url}. `;
           }
         }
         const noteLine = inventoryNote ? `Right now there’s ${inventoryNote} available. ` : "";
+        const scopeClause = hasSpecificScope && scopeLabel ? ` on the ${scopeLabel}` : "";
+        const hasConcreteSpecials = !!topHitUrl || !!inventoryNote;
+        if (!hasConcreteSpecials) {
+          const ack =
+            `Great question — I don’t want to guess on finance specials${scopeClause}. ` +
+            `I’ll have our finance manager pull today’s programs and share exact options.`;
+          return finalize({
+            intent,
+            stage: "ENGAGED",
+            shouldRespond: true,
+            draft: ack,
+            pricingAttempted,
+            paymentsAnswered: true,
+            handoff: { required: true, reason: "payments", ack }
+          });
+        }
         const prompt =
           paymentRange != null
             ? "If you want, I can run 60/72/84-month options and show the strongest program available right now."
-            : "If you want, I can check current programs and share what applies right now.";
-        const scopeClause = hasSpecificScope && scopeLabel ? ` on the ${scopeLabel}` : "";
+            : "If you want, I can run options once you confirm the exact bike and term.";
         const draft =
-          `Great question — we can check current finance programs and specials${scopeClause}. ` +
+          `Great question — here are current finance specials${scopeClause}. ` +
           `${specialsWebLine}${noteLine}Programs vary by approval tier and term. ${prompt}`;
         return finalize({
           intent,
