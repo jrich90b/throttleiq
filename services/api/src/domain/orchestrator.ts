@@ -2202,6 +2202,7 @@ export async function orchestrateInbound(
     useLLM &&
     intent === "GENERAL" &&
     ambiguousFlow &&
+    !specialsQuestion &&
     !depositRequest &&
     !callbackRequest;
   if (faqLayerEligible) {
