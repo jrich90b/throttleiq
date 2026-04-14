@@ -17,6 +17,7 @@ import {
   generateSmallTalkReplyWithLLM,
   generateBlendedLeadInWithLLM,
   generateEmpathySupportReplyWithLLM,
+  generateWebFallbackReplyWithLLM,
   classifyCadenceContextWithLLM,
   parseCadencePersonalizationLineWithLLM,
   classifyEmpathyNeedWithLLM,
@@ -46,6 +47,7 @@ import type {
   ConversationStateParse,
   CustomerDispositionParse,
   EmpathySupportReplyParse,
+  WebFallbackReplyParse,
   JourneyIntentParse,
   SemanticSlotParse,
   UnifiedSemanticSlotParse,
@@ -63,6 +65,12 @@ import {
   getDealerDailyForecast,
   getDealerDailyForecasts
 } from "./domain/weather.js";
+import {
+  isWebFallbackCandidateQuestion,
+  isWebFallbackDraftOnly,
+  isWebFallbackEnabled,
+  searchGoogleCse
+} from "./domain/webFallback.js";
 import type { DailyForecast } from "./domain/weather.js";
 import { resolveTownNearestDealer, formatTownLabel } from "./domain/geo.js";
 import { getDataDir } from "./domain/dataDir.js";
@@ -1411,6 +1419,67 @@ async function buildBlendedLeadInWithLLM(args: {
   if (!leadIn) return null;
   const source = llmLeadIn?.source === "freeform" ? "llm_freeform" : "llm_structured";
   return { leadIn, source };
+}
+
+async function buildNoResponseWebFallbackReply(args: {
+  text: string;
+  history: { direction: "in" | "out"; body: string }[];
+  conv: Conversation | null | undefined;
+}): Promise<
+  | {
+      reply: string;
+      provider: string;
+      hitCount: number;
+      confidence: number | null;
+      draftOnly: boolean;
+      answerable: boolean;
+      needsFollowUp: boolean;
+    }
+  | null
+> {
+  const question = String(args.text ?? "").trim();
+  if (!question) return null;
+  if (!isWebFallbackEnabled()) return null;
+  if (!isWebFallbackCandidateQuestion(question)) return null;
+  const dealerProfile = await getDealerProfileHot();
+  const searchResult = await searchGoogleCse({
+    query: question,
+    profile: dealerProfile
+  });
+  if (!searchResult?.hits?.length) return null;
+  const webReplyParse: WebFallbackReplyParse | null = await safeLlmParse("web_fallback_reply", () =>
+    generateWebFallbackReplyWithLLM({
+      question,
+      results: searchResult.hits.map(h => ({
+        title: h.title,
+        snippet: h.snippet,
+        url: h.url
+      })),
+      history: args.history
+    })
+  );
+  if (!webReplyParse) return null;
+  const reply = String(webReplyParse.reply ?? "")
+    .trim()
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .replace(/\s+/g, " ");
+  if (!reply) return null;
+  const confidence =
+    typeof webReplyParse.confidence === "number" && Number.isFinite(webReplyParse.confidence)
+      ? webReplyParse.confidence
+      : null;
+  const confidenceMin = Number(process.env.WEB_FALLBACK_CONFIDENCE_MIN ?? 0.58);
+  if (!webReplyParse.answerable) return null;
+  if (confidence != null && confidence < confidenceMin) return null;
+  return {
+    reply,
+    provider: searchResult.provider,
+    hitCount: searchResult.hits.length,
+    confidence,
+    draftOnly: isWebFallbackDraftOnly(),
+    answerable: webReplyParse.answerable,
+    needsFollowUp: !!webReplyParse.needsFollowUp
+  };
 }
 
 function prependBlendedLeadIn(draftText: string, leadInText: string): string {
@@ -19939,6 +20008,26 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         }
         return respondWithSmsRegeneratedDraft(chit.reply);
       }
+      const regenWebFallbackReply = await buildNoResponseWebFallbackReply({
+        text: regenNoResponseInboundText,
+        history,
+        conv
+      });
+      if (regenWebFallbackReply?.reply) {
+        recordRouteOutcome("regen", "routing_parser_no_response_web_fallback", {
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          provider: regenWebFallbackReply.provider,
+          hitCount: regenWebFallbackReply.hitCount,
+          confidence: regenWebFallbackReply.confidence,
+          answerable: regenWebFallbackReply.answerable,
+          needsFollowUp: regenWebFallbackReply.needsFollowUp
+        });
+        if (channel === "email") {
+          return respondWithEmailRegeneratedDraft(regenWebFallbackReply.reply);
+        }
+        return respondWithSmsRegeneratedDraft(regenWebFallbackReply.reply);
+      }
       return respondRegenerateSkipped("routing_parser_no_response");
     }
     recordRouteOutcome("regen", "routing_parser_no_response_overridden", {
@@ -24321,6 +24410,34 @@ if (authToken && signature) {
         appendOutbound(conv, event.to, event.from, chit.reply, "twilio");
         const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
           chit.reply
+        )}</Message>\n</Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      const webFallbackReply = await buildNoResponseWebFallbackReply({
+        text: noResponseInboundText,
+        history: buildHistory(conv, 8),
+        conv
+      });
+      if (webFallbackReply?.reply) {
+        logRouteOutcome("routing_parser_no_response_web_fallback", {
+          turnPrimaryIntent: routeExecutionIntent,
+          parserReason: routingParserDecision.reason,
+          mode: routePolicyMode,
+          provider: webFallbackReply.provider,
+          hitCount: webFallbackReply.hitCount,
+          confidence: webFallbackReply.confidence,
+          draftOnly: webFallbackReply.draftOnly,
+          answerable: webFallbackReply.answerable,
+          needsFollowUp: webFallbackReply.needsFollowUp
+        });
+        if (webhookMode === "suggest" || webFallbackReply.draftOnly) {
+          appendOutbound(conv, event.to, event.from, webFallbackReply.reply, "draft_ai");
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+        appendOutbound(conv, event.to, event.from, webFallbackReply.reply, "twilio");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+          webFallbackReply.reply
         )}</Message>\n</Response>`;
         return res.status(200).type("text/xml").send(twiml);
       }

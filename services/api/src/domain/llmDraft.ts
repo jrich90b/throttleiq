@@ -650,6 +650,85 @@ export async function generateEmpathySupportReplyWithLLM(args: {
   return null;
 }
 
+export async function generateWebFallbackReplyWithLLM(args: {
+  question: string;
+  results: { title: string; snippet: string; url: string }[];
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<WebFallbackReplyParse | null> {
+  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  const question = String(args.question ?? "").trim();
+  if (!question) return null;
+  const results = (args.results ?? [])
+    .slice(0, 5)
+    .map((r, idx) => {
+      const title = String(r?.title ?? "").trim();
+      const snippet = String(r?.snippet ?? "").trim();
+      const url = String(r?.url ?? "").trim();
+      return `${idx + 1}. ${title}\nSnippet: ${snippet}\nURL: ${url}`;
+    })
+    .filter(Boolean);
+  if (!results.length) return null;
+  const history = (args.history ?? []).slice(-4).map(h => `${h.direction}: ${h.body}`);
+  const schema: { [key: string]: unknown } = {
+    type: "object",
+    additionalProperties: false,
+    required: ["reply", "answerable", "needs_follow_up", "confidence"],
+    properties: {
+      reply: { type: "string" },
+      answerable: { type: "boolean" },
+      needs_follow_up: { type: "boolean" },
+      confidence: { type: "number" }
+    }
+  };
+  const prompt = [
+    "You write one concise dealership SMS answer using ONLY the provided search snippets.",
+    "Return only JSON that matches the schema.",
+    "",
+    "Rules:",
+    "- If snippets are insufficient or uncertain, set answerable=false and needs_follow_up=true.",
+    "- If answerable=true, provide a direct helpful answer in 1-2 short sentences.",
+    "- Keep tone conversational and human.",
+    "- Do not mention internal tools, confidence, or uncertainty percentages.",
+    "- Do not invent facts beyond snippets.",
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Customer question: ${question}`,
+    "Search snippets:",
+    results.join("\n\n")
+  ].join("\n");
+
+  try {
+    const parsed = await requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "web_fallback_reply",
+      schema,
+      maxOutputTokens: 220,
+      debugTag: "llm-web-fallback-reply"
+    });
+    if (!parsed || typeof parsed !== "object") return null;
+    const reply = String(parsed.reply ?? "")
+      .trim()
+      .replace(/^["'`]+|["'`]+$/g, "")
+      .replace(/\s+/g, " ");
+    if (!reply) return null;
+    const confidence =
+      typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+        ? Math.max(0, Math.min(1, parsed.confidence))
+        : undefined;
+    return {
+      reply,
+      answerable: !!parsed.answerable,
+      needsFollowUp: !!parsed.needs_follow_up,
+      confidence
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function classifyEmpathyNeedWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
@@ -1091,6 +1170,13 @@ export type RoutingDecisionParse = {
 
 export type EmpathySupportReplyParse = {
   reply: string;
+  confidence?: number;
+};
+
+export type WebFallbackReplyParse = {
+  reply: string;
+  answerable: boolean;
+  needsFollowUp: boolean;
   confidence?: number;
 };
 
