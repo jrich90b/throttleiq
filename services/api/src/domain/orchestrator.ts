@@ -23,6 +23,7 @@ import { findMsrpPricing, getMsrpColorNames } from "./msrpPriceList.js";
 import { getInventoryNote } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
 import { getAllModels, isModelInRecentYears } from "./modelsByYear.js";
+import { isWebFallbackEnabled, searchGoogleCse } from "./webFallback.js";
 import type { FinanceDocsState, LeadProfile, TradePayoffState } from "./conversationStore.js";
 import { parsePreferredDateTime, parseRequestedDayTime } from "./conversationStore.js";
 import { getSchedulerConfig, dayKey, getPreferredSalespeople } from "./schedulerConfig.js";
@@ -2714,6 +2715,29 @@ export async function orchestrateInbound(
         const modelLabel = hasSpecificScope ? normalizeModelLabel(modelForRange) : "";
         const yearLabel = yearForRange ? `${yearForRange} ` : "";
         const scopeLabel = `${yearLabel}${modelLabel}`.trim();
+        const makeFromLead = String(leadForPrice?.vehicle?.make ?? "").trim();
+        const makeFromText = /\btriumph\b/i.test(event.body)
+          ? "Triumph"
+          : /\bharley\b|\bharley[- ]?davidson\b/i.test(event.body)
+            ? "Harley-Davidson"
+            : "";
+        const makeForQuery = makeFromLead || makeFromText || "motorcycle";
+        let specialsWebLine = "";
+        if (isWebFallbackEnabled()) {
+          const specialsQuery = hasSpecificScope && scopeLabel
+            ? `${scopeLabel} finance specials`
+            : `${makeForQuery} finance specials`;
+          const specialsSearch = await searchGoogleCse({
+            query: specialsQuery,
+            profile: dealerProfile,
+            maxResults: 2,
+            timeoutMs: 2500
+          });
+          const topHit = specialsSearch?.hits?.[0] ?? null;
+          if (topHit?.url) {
+            specialsWebLine = `Current published offers are listed here: ${topHit.url}. `;
+          }
+        }
         const noteLine = inventoryNote ? `Right now there’s ${inventoryNote} available. ` : "";
         const prompt =
           paymentRange != null
@@ -2722,7 +2746,7 @@ export async function orchestrateInbound(
         const scopeClause = hasSpecificScope && scopeLabel ? ` on the ${scopeLabel}` : "";
         const draft =
           `Great question — we can check current finance programs and specials${scopeClause}. ` +
-          `${noteLine}Programs vary by approval tier and term. ${prompt}`;
+          `${specialsWebLine}${noteLine}Programs vary by approval tier and term. ${prompt}`;
         return finalize({
           intent,
           stage: "ENGAGED",
