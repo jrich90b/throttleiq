@@ -1851,6 +1851,107 @@ export function inferWalkIn(conv: Conversation): boolean {
   return sourceMatch;
 }
 
+function isConversationOnHoldForHot(conv: Conversation): boolean {
+  return (
+    conv.followUpCadence?.pauseReason === "manual_hold" ||
+    conv.followUpCadence?.pauseReason === "unit_hold" ||
+    conv.followUpCadence?.pauseReason === "order_hold" ||
+    conv.followUpCadence?.stopReason === "unit_hold" ||
+    conv.followUpCadence?.stopReason === "order_hold" ||
+    conv.followUp?.reason === "manual_hold" ||
+    conv.followUp?.reason === "unit_hold" ||
+    conv.followUp?.reason === "order_hold" ||
+    !!conv.hold
+  );
+}
+
+function isSoldConversationForHot(conv: Conversation): boolean {
+  return (conv.status === "closed" && conv.closedReason === "sold") || !!conv.sale?.soldAt;
+}
+
+function computeStickyHotDealSignal(conv: Conversation, hasInboundTwilio: boolean): boolean {
+  if (isSoldConversationForHot(conv)) return false;
+  if (isConversationOnHoldForHot(conv)) return false;
+  if (String(conv.status ?? "").trim().toLowerCase() === "closed") return false;
+
+  const leadSource = String(conv.lead?.source ?? "").trim().toLowerCase();
+  const bucket = String(conv.classification?.bucket ?? "").trim().toLowerCase();
+  const cta = String(conv.classification?.cta ?? "").trim().toLowerCase();
+  const engagementReason = String(conv.engagement?.reason ?? "").trim().toLowerCase();
+
+  const isPrequal =
+    bucket === "finance_prequal" ||
+    cta === "prequalify" ||
+    leadSource.includes("marketplace - prequal") ||
+    leadSource.includes("prequal");
+  if (isPrequal) return false;
+
+  const isCoa =
+    cta === "hdfs_coa" ||
+    leadSource.includes("hdfs coa") ||
+    leadSource.includes("coa online") ||
+    leadSource.includes("credit application");
+  const isAdfTestRide =
+    bucket === "test_ride" || cta === "schedule_test_ride" || leadSource.includes("test ride");
+  if (isCoa || isAdfTestRide) return true;
+
+  const purchaseBuckets = new Set(["inventory_interest", "test_ride", "pricing_payments"]);
+  const purchaseCtas = new Set([
+    "check_availability",
+    "request_a_quote",
+    "schedule_test_ride",
+    "value_my_trade",
+    "sell_my_bike",
+    "hdfs_coa",
+    "book_appointment",
+    "schedule_appointment"
+  ]);
+  const nonDealBuckets = new Set(["service", "parts", "apparel"]);
+  const nonDealCtas = new Set(["service_request", "parts_request", "apparel_request"]);
+  if (nonDealBuckets.has(bucket) || nonDealCtas.has(cta)) return false;
+  if (purchaseBuckets.has(bucket) || purchaseCtas.has(cta)) return true;
+
+  if (
+    engagementReason === "purchase" ||
+    engagementReason === "schedule" ||
+    engagementReason === "trade" ||
+    engagementReason === "finance" ||
+    engagementReason === "pricing" ||
+    engagementReason === "availability"
+  ) {
+    return true;
+  }
+
+  const apptStatus = String(conv.appointment?.status ?? "").trim().toLowerCase();
+  if (apptStatus && apptStatus !== "cancelled" && apptStatus !== "no_show") return true;
+  if (conv.inventoryWatch || (Array.isArray(conv.inventoryWatches) && conv.inventoryWatches.length > 0)) {
+    return true;
+  }
+  if (!hasInboundTwilio) return false;
+
+  const hasInventoryListSignal = conv.messages.some(m => {
+    const body = String(m?.body ?? "").trim().toLowerCase();
+    if (!body) return false;
+    return (
+      /\btop options:\b/.test(body) ||
+      /\bwe have\s+\d+\s+(?:new|used|pre[-\s]?owned)?[\s\S]{0,80}\bin stock\b/.test(body) ||
+      /\bhttps?:\/\/\S*\/inventory\/\S+/i.test(body)
+    );
+  });
+  if (hasInventoryListSignal) return true;
+
+  const hasInboundPurchaseLanguage = conv.messages.some(m => {
+    if (m?.direction !== "in") return false;
+    if (String(m?.provider ?? "").toLowerCase() !== "twilio") return false;
+    const body = String(m?.body ?? "").trim().toLowerCase();
+    if (!body) return false;
+    return /\b(road glide|street glide|touring|cruiser|trike|used|new|in stock|available|payment|monthly|apr|down payment|trade|appointment|schedule|come in|stop by|test ride)\b/.test(
+      body
+    );
+  });
+  return hasInboundPurchaseLanguage;
+}
+
 export function listConversations() {
 
   function pendingDraftInfo(c: Conversation) {
@@ -1880,6 +1981,7 @@ export function listConversations() {
       const hasInboundTwilio = c.messages.some(
         m => m.direction === "in" && String(m.provider ?? "").toLowerCase() === "twilio"
       );
+      const hotDealSticky = computeStickyHotDealSignal(c, hasInboundTwilio);
       return {
         id: c.id,
         leadKey: c.leadKey,
@@ -1900,6 +2002,7 @@ export function listConversations() {
         preferredContactMethod: c.lead?.preferredContactMethod ?? null,
         leadSource,
         hasInboundTwilio,
+        hotDealSticky,
         walkIn: inferredWalkIn ? true : null,
         engagement: c.engagement ?? null,
         classification: c.classification ?? null,
@@ -2960,6 +3063,22 @@ export function addTodo(
 }
 
 export function addCallTodoIfMissing(conv: Conversation, summary: string): TodoTask | null {
+  const bucket = String((conv as any)?.classification?.bucket ?? "").trim().toLowerCase();
+  const cta = String((conv as any)?.classification?.cta ?? "").trim().toLowerCase();
+  const followUpReason = String((conv as any)?.followUp?.reason ?? "").trim().toLowerCase();
+  const isFinancePrequalOrCreditApp =
+    bucket === "finance_prequal" ||
+    cta === "hdfs_coa" ||
+    cta === "prequalify" ||
+    /credit_app|credit_app_cosigner|credit_app_needs_info|credit_app_approved|financing_declined/.test(
+      followUpReason
+    );
+  if (isFinancePrequalOrCreditApp) {
+    // Finance pre-approval / credit-app flows should only surface a single
+    // approval To Do, not an additional cadence follow-up task.
+    return null;
+  }
+
   // Upsert cadence follow-up tasks so we never create duplicates while still
   // keeping the open follow-up aligned to the latest cadence step.
   return addTodo(conv, "call", summary, undefined, undefined, undefined, "followup");

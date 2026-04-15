@@ -555,6 +555,7 @@ type ConversationListItem = {
   } | null;
   leadSource?: string | null;
   hasInboundTwilio?: boolean | null;
+  hotDealSticky?: boolean | null;
   leadName?: string | null;
   vehicleDescription?: string | null;
   walkIn?: boolean | null;
@@ -4839,6 +4840,7 @@ export default function Home() {
     if (!Number.isFinite(recentAtMs)) return false;
     if (nowMs - recentAtMs > cutoffMs) return false;
     if (isPrequalLead(c)) return false;
+    if (Boolean(c.hotDealSticky)) return true;
     if (isCoaLead(c) || isAdfTestRideException(c)) {
       return true;
     }
