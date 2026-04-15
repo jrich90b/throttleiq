@@ -2929,6 +2929,22 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       conv.dealerRide.staffNotify.followUpSentAt =
         conv.dealerRide.staffNotify.followUpSentAt ?? new Date().toISOString();
     }
+    const profile = await getDealerProfile();
+    const dealerName = profile?.dealerName ?? "American Harley-Davidson";
+    const agentName = profile?.agentName ?? "Alexandra";
+    const firstName = normalizeDisplayCase(conv.lead?.firstName);
+    const customerAck =
+      `${firstName ? `Hi ${firstName} — ` : "Hi — "}This is ${agentName} at ${dealerName}. ` +
+      "Thanks again for coming in for the test ride. " +
+      "If any questions come up or you’d like to discuss options further, just text me anytime.";
+    const preferredMethod = String(conv.lead?.preferredContactMethod ?? "").trim().toLowerCase();
+    if (preferredMethod === "email") {
+      conv.emailDraft = customerAck;
+    } else if (preferredMethod === "phone") {
+      addCallTodoIfMissing(conv, "Preferred contact method is phone. Call customer (no auto text/email).");
+    } else {
+      appendOutbound(conv, "dealership", leadKey, customerAck, "draft_ai");
+    }
     setFollowUpMode(conv, "manual_handoff", "dealer_ride_no_purchase");
     stopFollowUpCadence(conv, "manual_handoff");
     return res.status(200).json({
@@ -2943,6 +2959,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       intent: "GENERAL",
       stage: "ENGAGED",
       note: "dealer_ride_no_purchase_manual_handoff",
+      draft: customerAck,
       staffSms
     });
   }

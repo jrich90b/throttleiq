@@ -4300,6 +4300,16 @@ export default function Home() {
       ) ?? null
     );
   }, [conversations, selectedId, selectedConv?.id, selectedConv?.leadKey]);
+  const isNoCustomerReplyManualHandoff = (followUp?: { mode?: string; reason?: string } | null) => {
+    const mode = String(followUp?.mode ?? "").trim().toLowerCase();
+    const reason = String(followUp?.reason ?? "").trim().toLowerCase();
+    if (mode !== "manual_handoff") return false;
+    return (
+      reason.includes("dealer_ride_no_purchase") ||
+      reason === "call_only" ||
+      reason === "marketplace_relay"
+    );
+  };
   const inboundProcessing = useMemo(() => {
     if (!selectedConv || mode !== "suggest" || selectedConv.mode === "human") return false;
     const messages = selectedConv.messages ?? [];
@@ -4312,6 +4322,12 @@ export default function Home() {
           (m.provider === "twilio" || m.provider === "sendgrid" || m.provider === "sendgrid_adf")
       );
     if (!lastInbound?.at) return false;
+    if (
+      String(lastInbound.provider ?? "").toLowerCase() === "sendgrid_adf" &&
+      isNoCustomerReplyManualHandoff(selectedConv.followUp ?? null)
+    ) {
+      return false;
+    }
     if (isShortAckNoActionText(lastInbound.body ?? "")) return false;
     const lastInboundAt = new Date(lastInbound.at).getTime();
     if (!Number.isFinite(lastInboundAt)) return false;
@@ -4328,6 +4344,12 @@ export default function Home() {
     if (selectedConv?.mode === "human") return false;
     if (!selectedListItem) return false;
     if (selectedListItem.lastMessage?.direction !== "in") return false;
+    if (
+      String(selectedListItem.lastMessage?.provider ?? "").toLowerCase() === "sendgrid_adf" &&
+      isNoCustomerReplyManualHandoff(selectedListItem.followUp ?? null)
+    ) {
+      return false;
+    }
     if (isShortAckNoActionText(selectedListItem.lastMessage?.body ?? "")) return false;
     const listUpdatedAt = Date.parse(String(selectedListItem.updatedAt ?? ""));
     const detailUpdatedAt = Date.parse(String(selectedConv?.updatedAt ?? ""));
