@@ -4498,7 +4498,11 @@ function isUnknownCadenceModel(model: string | null | undefined): boolean {
   return /\b(other|full line|unknown|n\/a|na)\b/.test(text);
 }
 
-function resolveCadencePromotionModel(conv: any): { model: string | null; year: string | null } {
+function resolveCadencePreferredModelContext(conv: any): {
+  model: string | null;
+  year: string | null;
+  condition: "new" | "used" | undefined;
+} {
   const leadYear = String(conv?.lead?.vehicle?.year ?? "").trim() || null;
   const contextYear = String(conv?.inventoryContext?.year ?? "").trim() || null;
   const leadModel = String(conv?.lead?.vehicle?.model ?? "").trim();
@@ -4565,7 +4569,12 @@ function resolveCadencePromotionModel(conv: any): { model: string | null; year: 
     year = null;
   }
 
-  return { model, year };
+  return { model, year, condition };
+}
+
+function resolveCadencePromotionModel(conv: any): { model: string | null; year: string | null } {
+  const preferred = resolveCadencePreferredModelContext(conv);
+  return { model: preferred.model, year: preferred.year };
 }
 
 async function buildEarlyCadencePromotionOverride(args: {
@@ -5042,16 +5051,19 @@ async function buildCadenceRegeneratedDraft(
   const now = new Date();
   const walkInComment = String(conv.lead?.walkInComment ?? "").trim();
   const hasAgentContextForCadence = !!getActiveAgentContextText(conv).trim();
+  const cadenceModelPref = resolveCadencePreferredModelContext(conv);
+  const followUpModel = cadenceModelPref.model;
+  const followUpYear = cadenceModelPref.year;
   const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
   const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "our team");
-  const hasSpecificFollowUpModel = !isUnknownInterestVehicle(conv);
+  const hasSpecificFollowUpModel = !!(followUpModel && !isUnknownCadenceModel(followUpModel));
   const followUpLabel = hasSpecificFollowUpModel
-    ? formatModelLabelForFollowUp(conv.lead?.vehicle?.year ?? null, conv.lead?.vehicle?.model ?? null)
+    ? formatModelLabelForFollowUp(followUpYear, followUpModel)
     : "";
   const labelClause = followUpLabel ? ` about ${followUpLabel}` : "";
   const labelWithThe = followUpLabel ? ` ${followUpLabel}` : " a model";
-  const modelName = formatModelToken(conv.lead?.vehicle?.model);
-  const modelYear = conv.lead?.vehicle?.year ? `${conv.lead?.vehicle?.year} ${modelName}` : modelName;
+  const modelName = formatModelToken(followUpModel);
+  const modelYear = followUpYear ? `${followUpYear} ${modelName}` : modelName;
   const tradeVehicle = conv?.lead?.tradeVehicle ?? null;
   const tradeLabel =
     tradeVehicle && (tradeVehicle.model || tradeVehicle.description) ? getSellBikeLabel(conv) : "";
@@ -14591,9 +14603,12 @@ async function processDueFollowUps() {
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "our team");
     const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
-    const hasSpecificFollowUpModel = !isUnknownInterestVehicle(conv);
+    const cadenceModelPref = resolveCadencePreferredModelContext(conv);
+    const followUpModel = cadenceModelPref.model;
+    const followUpYear = cadenceModelPref.year;
+    const hasSpecificFollowUpModel = !!(followUpModel && !isUnknownCadenceModel(followUpModel));
     const followUpLabel = hasSpecificFollowUpModel
-      ? formatModelLabelForFollowUp(conv.lead?.vehicle?.year ?? null, conv.lead?.vehicle?.model ?? null)
+      ? formatModelLabelForFollowUp(followUpYear, followUpModel)
       : "";
     const labelClause = followUpLabel ? ` about ${followUpLabel}` : "";
     const labelWithThe = followUpLabel ? ` ${followUpLabel}` : " a model";
@@ -14602,10 +14617,8 @@ async function processDueFollowUps() {
       tradeVehicle && (tradeVehicle.model || tradeVehicle.description)
         ? getSellBikeLabel(conv)
         : "";
-    const modelName = formatModelToken(conv.lead?.vehicle?.model);
-    const modelYear = conv.lead?.vehicle?.year
-      ? `${conv.lead?.vehicle?.year} ${modelName}`
-      : modelName;
+    const modelName = formatModelToken(followUpModel);
+    const modelYear = followUpYear ? `${followUpYear} ${modelName}` : modelName;
     const tradeName = normalizeDisplayCase(tradeVehicle?.model) || tradeLabel || "your trade";
     const pricingLine =
       getPricingAttempts(conv) > 0 ? " If you want me to run numbers, just say the word." : "";
