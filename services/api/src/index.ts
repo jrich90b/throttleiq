@@ -4502,38 +4502,70 @@ function resolveCadencePromotionModel(conv: any): { model: string | null; year: 
   const leadYear = String(conv?.lead?.vehicle?.year ?? "").trim() || null;
   const contextYear = String(conv?.inventoryContext?.year ?? "").trim() || null;
   const leadModel = String(conv?.lead?.vehicle?.model ?? "").trim();
-  if (leadModel && !isUnknownCadenceModel(leadModel)) {
-    return { model: formatModelToken(leadModel), year: leadYear };
-  }
   const contextModel = String(conv?.inventoryContext?.model ?? "").trim();
-  if (contextModel && !isUnknownCadenceModel(contextModel)) {
-    return { model: formatModelToken(contextModel), year: contextYear || leadYear };
-  }
+  const leadCondition = normalizeWatchCondition(conv?.lead?.vehicle?.condition ?? null);
+  const contextCondition = normalizeWatchCondition(conv?.inventoryContext?.condition ?? null);
 
   const recentInbounds = (conv?.messages ?? [])
     .filter((m: any) => m?.direction === "in" && String(m?.body ?? "").trim())
-    .slice(-14)
+    .slice(-20)
     .reverse();
+  let inboundModel: string | null = null;
+  let inboundYear: string | null = null;
+  let inboundCondition: "new" | "used" | undefined;
   for (const inbound of recentInbounds) {
     const body = String(inbound?.body ?? "").trim();
     if (!body) continue;
-    const modelFromText = findMentionedModel(body);
-    if (modelFromText && !isUnknownCadenceModel(modelFromText)) {
+    if (!inboundModel) {
+      const modelFromText = findMentionedModel(body);
+      if (modelFromText && !isUnknownCadenceModel(modelFromText)) {
+        inboundModel = modelFromText;
+      }
+    }
+    if (!inboundYear) {
       const yearFromText = extractYearSingle(body);
-      return {
-        model: formatModelToken(modelFromText),
-        year: yearFromText ? String(yearFromText) : contextYear || leadYear
-      };
+      if (yearFromText) inboundYear = String(yearFromText);
+    }
+    if (!inboundCondition) {
+      const conditionFromText = normalizeWatchCondition(body);
+      if (conditionFromText) inboundCondition = conditionFromText;
+    }
+    if (inboundModel && inboundYear && inboundCondition) break;
+  }
+
+  let model: string | null = null;
+  let year: string | null = null;
+  let condition: "new" | "used" | undefined = inboundCondition ?? contextCondition ?? leadCondition;
+  let source: "inbound" | "context" | "lead" | "description" | null = null;
+
+  if (inboundModel && !isUnknownCadenceModel(inboundModel)) {
+    model = formatModelToken(inboundModel);
+    source = "inbound";
+    year = inboundYear ?? contextYear ?? leadYear;
+  } else if (contextModel && !isUnknownCadenceModel(contextModel)) {
+    model = formatModelToken(contextModel);
+    source = "context";
+    year = contextYear ?? leadYear;
+  } else if (leadModel && !isUnknownCadenceModel(leadModel)) {
+    model = formatModelToken(leadModel);
+    source = "lead";
+    year = leadYear;
+  } else {
+    const leadDescription = String(conv?.lead?.vehicle?.description ?? "").trim();
+    const modelFromDescription = leadDescription ? findMentionedModel(leadDescription) : null;
+    if (modelFromDescription && !isUnknownCadenceModel(modelFromDescription)) {
+      model = formatModelToken(modelFromDescription);
+      source = "description";
+      year = leadYear;
     }
   }
 
-  const leadDescription = String(conv?.lead?.vehicle?.description ?? "").trim();
-  const modelFromDescription = leadDescription ? findMentionedModel(leadDescription) : null;
-  if (modelFromDescription && !isUnknownCadenceModel(modelFromDescription)) {
-    return { model: formatModelToken(modelFromDescription), year: leadYear };
+  if (condition === "used" && !inboundYear) {
+    // Prevent stale lead-year bleed for used-bike follow-ups unless the customer gave a year.
+    year = null;
   }
 
-  return { model: null, year: contextYear || leadYear };
+  return { model, year };
 }
 
 async function buildEarlyCadencePromotionOverride(args: {
