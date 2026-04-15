@@ -16558,6 +16558,9 @@ app.post("/public/appointment/outcome", async (req, res) => {
     secondaryStatus: normalizedOutcome.secondaryStatus,
     source: "public_outcome_form"
   });
+  if (conv?.id) {
+    markOpenTodosDoneForConversationByClass(conv.id, ["appointment"]);
+  }
   if (conv.appointment) conv.appointment.updatedAt = new Date().toISOString();
   saveConversation(conv);
   await flushConversationStore();
@@ -16668,6 +16671,9 @@ app.post("/public/appointment/outcome/transcribe", upload.single("audio"), async
     secondaryStatus,
     source: "public_outcome_voice"
   });
+  if (conv?.id) {
+    markOpenTodosDoneForConversationByClass(conv.id, ["appointment"]);
+  }
   if (conv.appointment) conv.appointment.updatedAt = new Date().toISOString();
   saveConversation(conv);
   await flushConversationStore();
