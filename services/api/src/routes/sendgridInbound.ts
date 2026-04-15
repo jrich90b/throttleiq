@@ -2931,10 +2931,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
-    const agentName = profile?.agentName ?? "Alexandra";
+    const ownerDisplayRaw =
+      String(owner?.firstName ?? "").trim() ||
+      String(owner?.name ?? "").trim() ||
+      String(conv.leadOwner?.name ?? "").trim() ||
+      String(profile?.agentName ?? "Alexandra").trim();
+    const ownerDisplay = normalizeDisplayCase(ownerDisplayRaw);
+    const ownerFirst = normalizeDisplayCase(ownerDisplay.split(/\s+/).filter(Boolean)[0] ?? ownerDisplay);
     const firstName = normalizeDisplayCase(conv.lead?.firstName);
     const customerAck =
-      `${firstName ? `Hi ${firstName} — ` : "Hi — "}This is ${agentName} at ${dealerName}. ` +
+      `${firstName ? `Hi ${firstName} — ` : "Hi — "}This is ${ownerFirst} at ${dealerName}. ` +
       "Thanks again for coming in for the test ride. " +
       "If any questions come up or you’d like to discuss options further, just text me anytime.";
     const preferredMethod = String(conv.lead?.preferredContactMethod ?? "").trim().toLowerCase();
