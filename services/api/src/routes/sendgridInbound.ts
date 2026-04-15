@@ -68,6 +68,8 @@ import { getDealerProfile } from "../domain/dealerProfile.js";
 import { getInventoryNote } from "../domain/inventoryNotes.js";
 import { getInventoryFeed, hasInventoryForModelYear, findInventoryMatches } from "../domain/inventoryFeed.js";
 import { resolveInventoryUrlByStock } from "../domain/inventoryUrlResolver.js";
+import { listInventoryHolds, normalizeInventoryHoldKey } from "../domain/inventoryHolds.js";
+import { listInventorySolds, normalizeInventorySoldKey } from "../domain/inventorySolds.js";
 import { getAllModels } from "../domain/modelsByYear.js";
 import { shouldRouteRoom58PriceHandoff } from "../domain/adfPolicy.js";
 import { isResponseControlParserAccepted } from "../domain/transitionSafety.js";
@@ -756,7 +758,7 @@ function formatModelLabel(year?: string | null, model?: string | null): string |
 
 async function getLeadInventoryMatchStatus(
   conv: any
-): Promise<"in_stock" | "not_found" | "unknown"> {
+): Promise<"in_stock" | "on_hold" | "sold" | "not_found" | "unknown"> {
   try {
     const modelRaw =
       conv?.lead?.vehicle?.model ??
@@ -767,22 +769,42 @@ async function getLeadInventoryMatchStatus(
     if (isGenericLeadModel(modelText)) return "unknown";
     const items = await getInventoryFeed();
     if (!items.length) return "unknown";
+    const [holds, solds] = await Promise.all([listInventoryHolds(), listInventorySolds()]);
+    const getStoredStatus = (stockId?: string | null, vin?: string | null): "on_hold" | "sold" | null => {
+      const soldKey = normalizeInventorySoldKey(stockId, vin);
+      if (soldKey && solds?.[soldKey]) return "sold";
+      const holdKey = normalizeInventoryHoldKey(stockId, vin);
+      if (holdKey && holds?.[holdKey]) return "on_hold";
+      return null;
+    };
 
     const leadStock = String(conv?.lead?.vehicle?.stockId ?? "").trim().toLowerCase();
     const leadVin = String(conv?.lead?.vehicle?.vin ?? "").trim().toLowerCase();
     if (leadStock || leadVin) {
+      const storedStatus = getStoredStatus(leadStock, leadVin);
+      if (storedStatus) return storedStatus;
       const direct = items.find(
         i =>
           (leadStock && (i.stockId ?? "").toLowerCase() === leadStock) ||
           (leadVin && (i.vin ?? "").toLowerCase() === leadVin)
       );
-      if (direct) return "in_stock";
+      if (direct) {
+        const directStored = getStoredStatus(direct.stockId, direct.vin);
+        if (directStored) return directStored;
+        return "in_stock";
+      }
       if (leadStock) {
         try {
           const resolved = await resolveInventoryUrlByStock(leadStock);
-          if (resolved.ok) return "in_stock";
+          if (resolved.ok) {
+            const resolvedStored = getStoredStatus(leadStock, leadVin);
+            if (resolvedStored) return resolvedStored;
+            return "in_stock";
+          }
         } catch {}
       }
+      if (conv?.hold) return "on_hold";
+      if (conv?.sale) return "sold";
       return "not_found";
     }
 
@@ -798,14 +820,32 @@ async function getLeadInventoryMatchStatus(
       if (yearText) return String(item.year ?? "").trim() === yearText;
       return true;
     });
-    return matches.length ? "in_stock" : "not_found";
+    if (!matches.length) return "not_found";
+    let hasHold = false;
+    let hasSold = false;
+    const hasAvailable = matches.some(item => {
+      const state = getStoredStatus(item.stockId, item.vin);
+      if (state === "sold") {
+        hasSold = true;
+        return false;
+      }
+      if (state === "on_hold") {
+        hasHold = true;
+        return false;
+      }
+      return true;
+    });
+    if (hasAvailable) return "in_stock";
+    if (hasHold) return "on_hold";
+    if (hasSold) return "sold";
+    return "not_found";
   } catch {
     return "unknown";
   }
 }
 
 function buildInitialAvailabilityLine(
-  status: "in_stock" | "not_found" | "unknown",
+  status: "in_stock" | "on_hold" | "sold" | "not_found" | "unknown",
   conv: any
 ): string | null {
   if (status === "unknown") return null;
@@ -816,6 +856,12 @@ function buildInitialAvailabilityLine(
   if (!modelLabel) return null;
   if (status === "in_stock") {
     return `I saw you wanted to learn more about the ${modelLabel}. Are you interested in checking it out?`;
+  }
+  if (status === "on_hold") {
+    return `I saw you wanted to learn more about the ${modelLabel}. That unit is currently on hold. If it frees up, I can text you first.`;
+  }
+  if (status === "sold") {
+    return `I saw you wanted to learn more about the ${modelLabel}. That unit is no longer available, but I can help you find similar options.`;
   }
   return `I’m not seeing a ${modelLabel} in stock right now. If you want to stop in, I can go over options, or I can keep an eye out for you.`;
 }
@@ -4483,6 +4529,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const dayPhrase = `${inquiryDayPart.dayLabel} ${inquiryDayPart.dayPart}`;
     if (initialAvailability === "in_stock") {
       draft = `Thanks — yes, it’s still available. If you want to come by ${dayPhrase}, what time works best?`;
+    } else if (initialAvailability === "on_hold") {
+      draft = `Thanks — that unit is currently on hold. If it frees up, I can text you right away. If you still want to come by ${dayPhrase}, what time works best?`;
+    } else if (initialAvailability === "sold") {
+      draft = `Thanks — that specific unit is no longer available, but I can help with similar options. If you still want to come by ${dayPhrase}, what time works best?`;
     } else if (initialAvailability === "not_found") {
       draft = `Thanks — I’m not seeing that in stock right now, but I can double‑check. If you still want to come by ${dayPhrase}, what time works best?`;
     } else {
@@ -4525,6 +4575,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       draft =
         `Thanks for your inquiry about the ${bikeLabel}. ` +
         `If you’d like to stop in and check it out, just say the word.${questionTail ? " Any specific questions I can answer?" : ""}`;
+    } else if (initialAvailability === "on_hold") {
+      draft =
+        `Thanks for your inquiry about the ${bikeLabel}. ` +
+        "That unit is currently on hold, but I can text you first if it frees up.";
+    } else if (initialAvailability === "sold") {
+      draft =
+        `Thanks for your inquiry about the ${bikeLabel}. ` +
+        "That unit is no longer available, but I can help with similar options if you want.";
     } else if (!hasIdentifiers) {
       draft = `Thanks — I saw you wanted to learn more about the ${bikeLabel}.${isRequestDetails ? " Any specific questions about the bike?" : ""} I’m here to help.`;
       suppressAvailabilityAppend = true;
