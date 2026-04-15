@@ -1292,6 +1292,84 @@ function clearPendingShortListPrompt(
   });
 }
 
+function resolveKnownModelContextForShortList(conv: any): string | null {
+  const directCandidates = [
+    String(conv?.inventoryContext?.model ?? "").trim(),
+    String(conv?.lead?.vehicle?.model ?? "").trim(),
+    String(conv?.lead?.vehicle?.description ?? "").trim()
+  ].filter(Boolean);
+  for (const candidate of directCandidates) {
+    const parsed = findMentionedModel(candidate) ?? candidate;
+    if (parsed && !isUnknownCadenceModel(parsed)) {
+      return formatModelToken(parsed);
+    }
+  }
+  const recentInbound = (conv?.messages ?? [])
+    .filter((m: any) => m?.direction === "in" && String(m?.body ?? "").trim())
+    .slice(-20)
+    .reverse();
+  for (const msg of recentInbound) {
+    const model = findMentionedModel(String(msg?.body ?? "").trim());
+    if (model && !isUnknownCadenceModel(model)) {
+      return formatModelToken(model);
+    }
+  }
+  return null;
+}
+
+function buildShortListClarifierReply(conv: any, inboundText: string): {
+  reply: string;
+  hasPreferenceHint: boolean;
+} {
+  const text = String(inboundText ?? "").trim();
+  const hasStyleHint =
+    /\b(touring|bagger|cruiser|sport|sportster|adventure|pan america|trike|tri glide|freewheeler)\b/i.test(
+      text
+    );
+  const hasConditionHint = /\b(new|used|pre[-\s]?owned|preowned|both)\b/i.test(text);
+  const hasBudgetHint =
+    /\$\s*\d|\bunder\b|\bover\b|\baround\b|\babout\b|\bmax(?:imum)?\b/i.test(text);
+  const modelFromInbound = findMentionedModel(text);
+  const knownModelContext = resolveKnownModelContextForShortList(conv);
+  const hasModelContext = !!(modelFromInbound || knownModelContext);
+  const needsFamily = !hasModelContext && !hasStyleHint;
+  const needsCondition = !hasConditionHint;
+  const needsBudget = !hasBudgetHint;
+  const hasPreferenceHint = hasStyleHint || hasConditionHint || hasBudgetHint || !!modelFromInbound;
+
+  if (needsFamily && needsCondition) {
+    return {
+      hasPreferenceHint,
+      reply:
+        "Perfect — happy to. Are you leaning Grand American Touring, Cruiser, Sport, Adventure Touring, or Trike? Also, do you want new, used, or both, and what budget should I target?"
+    };
+  }
+  if (needsFamily) {
+    return {
+      hasPreferenceHint,
+      reply: needsBudget
+        ? "Perfect — which family are you leaning toward (Grand American Touring, Cruiser, Sport, Adventure Touring, or Trike), and what budget should I target?"
+        : "Perfect — which family are you leaning toward (Grand American Touring, Cruiser, Sport, Adventure Touring, or Trike)?"
+    };
+  }
+  if (needsCondition) {
+    return {
+      hasPreferenceHint,
+      reply: "Perfect — do you want new, used, or both, and what budget should I target?"
+    };
+  }
+  if (needsBudget) {
+    return {
+      hasPreferenceHint,
+      reply: "Perfect — any budget range I should target before I pull the short list?"
+    };
+  }
+  return {
+    hasPreferenceHint,
+    reply: "Perfect — any must-have model or color before I pull the short list?"
+  };
+}
+
 function resetSmallTalkStreakIfNeeded(
   conv: Conversation | null | undefined,
   atIso?: string | null,
@@ -7417,6 +7495,26 @@ function buildDefaultCallbackFallbackSchedule(
   const parsed = parseRequestedDayTime("tomorrow at 9am", timezone);
   if (!parsed) return {};
   const dueAtDate = localPartsToUtcDate(timezone, parsed);
+  const dueAtMs = dueAtDate.getTime();
+  if (!Number.isFinite(dueAtMs)) return {};
+  const reminderLeadMinutes = getCallbackReminderLeadMinutes();
+  const reminderAt = new Date(dueAtMs - reminderLeadMinutes * 60_000);
+  return {
+    dueAt: dueAtDate.toISOString(),
+    reminderAt: reminderAt.toISOString(),
+    reminderLeadMinutes
+  };
+}
+
+function buildAppointmentTodoSchedule(
+  parseSourceText: string | null | undefined,
+  timezone: string
+): { dueAt?: string; reminderAt?: string; reminderLeadMinutes?: number } {
+  const source = String(parseSourceText ?? "").trim();
+  if (!source) return {};
+  const requested = parseRequestedDayTime(source, timezone);
+  if (!requested) return {};
+  const dueAtDate = localPartsToUtcDate(timezone, requested);
   const dueAtMs = dueAtDate.getTime();
   if (!Number.isFinite(dueAtMs)) return {};
   const reminderLeadMinutes = getCallbackReminderLeadMinutes();
@@ -19068,14 +19166,13 @@ app.post("/conversations/:id/send", async (req, res) => {
     // outbound text, route to human reschedule handling instead of mutating event state here.
     if (hasBookedEvent && explicitRescheduleCue) {
       const timezone = schedulerTimezone;
-      let schedule = buildCallbackTodoSchedule(text, timezone);
-      if ((!schedule.dueAt || !schedule.reminderAt) && hasDayToken && !hasTimeToken) {
-        schedule = buildCallbackTodoSchedule(`${text} at 9am`, timezone);
-      }
+      const schedule = buildAppointmentTodoSchedule(text, timezone);
       const requestedLabel = schedule.dueAt ? formatSlotLocal(String(schedule.dueAt), timezone) : null;
       const summary = requestedLabel
         ? `Manual reschedule requested. Requested: ${requestedLabel}.`
-        : "Manual reschedule requested. Please update appointment time.";
+        : hasDayToken && !hasTimeToken
+          ? "Manual reschedule requested. Customer shared the day but not a time yet."
+          : "Manual reschedule requested. Please update appointment time.";
       const owner = conv.leadOwner
         ? {
             id: String(conv.leadOwner.id ?? "").trim() || undefined,
@@ -19140,12 +19237,6 @@ app.post("/conversations/:id/send", async (req, res) => {
     const parseSource = normalizedText || text;
 
     let requested = parseRequestedDayTime(parseSource, schedulerTimezone);
-    if (!requested && bookingAccepted && hasDayToken && !hasTimeToken) {
-      requested = parseRequestedDayTime(`${parseSource} at 9am`, schedulerTimezone);
-    }
-    if (!requested && hasAppointmentContext && hasDayToken && !hasTimeToken) {
-      requested = parseRequestedDayTime(`${text} at 9am`, schedulerTimezone);
-    }
 
     const confirmCue =
       /\b(works|see you|all set|confirmed|booked|sounds good|perfect|that works|can work)\b/i.test(
@@ -19764,14 +19855,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       regenLastOutboundText
     );
   const regenShortListInboundText = String(event.body ?? "").trim();
-  const regenHasStyleHint =
-    /\b(touring|bagger|cruiser|sport|sportster|adventure|pan america|trike|tri glide|freewheeler)\b/i.test(
-      regenShortListInboundText
-    );
-  const regenHasConditionHint = /\b(new|used|pre[-\s]?owned|preowned|both)\b/i.test(regenShortListInboundText);
-  const regenHasBudgetHint =
-    /\$\s*\d|\bunder\b|\bover\b|\baround\b|\babout\b|\bmax(?:imum)?\b/i.test(regenShortListInboundText);
-  const regenHasPreferenceHint = regenHasStyleHint || regenHasConditionHint || regenHasBudgetHint;
+  const regenShortListClarifier = buildShortListClarifierReply(conv, regenShortListInboundText);
   const regenIsAffirmative = (() => {
     const lower = regenShortListInboundText.toLowerCase();
     const hasSelection = /\b(first|second|earlier|later)\b/i.test(lower);
@@ -19786,17 +19870,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (
     event.provider === "twilio" &&
     regenShortListPromptInContext &&
-    (regenIsAffirmative || regenHasPreferenceHint)
+    (regenIsAffirmative || regenShortListClarifier.hasPreferenceHint)
   ) {
-    let reply = "";
-    if (regenHasStyleHint && (regenHasConditionHint || regenHasBudgetHint)) {
-      reply = "Perfect — any must-have model or color before I pull the short list?";
-    } else if (regenHasStyleHint) {
-      reply = "Perfect — do you want new, used, or both, and what budget should I target?";
-    } else {
-      reply =
-        "Perfect — happy to. Are you leaning Grand American Touring, Cruiser, Sport, Adventure Touring, or Trike? Also, do you want new, used, or both, and what budget should I target?";
-    }
+    const reply = regenShortListClarifier.reply;
     setDialogState(conv, "inventory_init");
     clearPendingShortListPrompt(conv, "regen_shortlist_reply_handled");
     recordRouteOutcome("regen", "shortlist_affirmative_clarifier", {
@@ -21516,11 +21592,7 @@ if (authToken && signature) {
               .join(" ")
         ).trim();
         const rawTimePhrase = normalizedText || humanModeText;
-        let schedule = buildCallbackTodoSchedule(rawTimePhrase, timezone);
-        const hasDayWithoutTime = humanModeHasDayToken && !humanModeHasTimeToken;
-        if ((!schedule.dueAt || !schedule.reminderAt) && hasDayWithoutTime) {
-          schedule = buildCallbackTodoSchedule(`${rawTimePhrase} at 9am`, timezone);
-        }
+        const schedule = buildAppointmentTodoSchedule(rawTimePhrase, timezone);
         const requestedLabel = schedule.dueAt ? formatSlotLocal(String(schedule.dueAt), timezone) : null;
         const intentLabel =
           humanBookingParse.intent === "reschedule"
@@ -21530,9 +21602,11 @@ if (authToken && signature) {
               : "Appointment requested.";
         const summary = requestedLabel
           ? `${intentLabel} Requested time: ${requestedLabel}.`
-          : normalizedText
-            ? `${intentLabel} Requested: ${normalizedText}.`
-            : intentLabel;
+          : humanModeHasDayToken && !humanModeHasTimeToken
+            ? `${intentLabel} Customer shared a day but not a time yet.`
+            : normalizedText
+              ? `${intentLabel} Requested: ${normalizedText}.`
+              : intentLabel;
         const owner = conv.leadOwner
           ? {
               id: String(conv.leadOwner.id ?? "").trim() || undefined,
@@ -25249,29 +25323,14 @@ if (authToken && signature) {
       lastOutboundText
     );
   const shortListInboundText = String(event.body ?? "").trim();
-  const hasStyleHint =
-    /\b(touring|bagger|cruiser|sport|sportster|adventure|pan america|trike|tri glide|freewheeler)\b/i.test(
-      shortListInboundText
-    );
-  const hasConditionHint = /\b(new|used|pre[-\s]?owned|preowned|both)\b/i.test(shortListInboundText);
-  const hasBudgetHint =
-    /\$\s*\d|\bunder\b|\bover\b|\baround\b|\babout\b|\bmax(?:imum)?\b/i.test(shortListInboundText);
-  const hasPreferenceHint = hasStyleHint || hasConditionHint || hasBudgetHint;
+  const shortListClarifier = buildShortListClarifierReply(conv, shortListInboundText);
   const shortlistPromptInContext = lastAskedShortList || hasActivePendingShortListPrompt(conv);
   if (
     event.provider === "twilio" &&
     shortlistPromptInContext &&
-    (isAffirmative(event.body) || hasPreferenceHint)
+    (isAffirmative(event.body) || shortListClarifier.hasPreferenceHint)
   ) {
-    let reply = "";
-    if (hasStyleHint && (hasConditionHint || hasBudgetHint)) {
-      reply = "Perfect — any must-have model or color before I pull the short list?";
-    } else if (hasStyleHint) {
-      reply = "Perfect — do you want new, used, or both, and what budget should I target?";
-    } else {
-      reply =
-        "Perfect — happy to. Are you leaning Grand American Touring, Cruiser, Sport, Adventure Touring, or Trike? Also, do you want new, used, or both, and what budget should I target?";
-    }
+    const reply = shortListClarifier.reply;
     setDialogState(conv, "inventory_init");
     clearPendingShortListPrompt(conv, "shortlist_reply_handled");
     if (webhookMode === "suggest") {
