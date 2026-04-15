@@ -20571,11 +20571,22 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const cadenceRegeneratedDraft = await buildCadenceRegeneratedDraft(conv, dealerProfile, lastDraft);
   const cadenceLastSentAtMs = new Date(String(conv?.followUpCadence?.lastSentAt ?? "")).getTime();
   const lastDraftAtMs = new Date(String(lastDraft?.at ?? "")).getTime();
-  const regenerateFromCadenceDraft =
-    !!cadenceRegeneratedDraft?.body &&
+  const selectedInboundAtMs = new Date(String(inbound?.at ?? "")).getTime();
+  const cadenceStatePresent =
+    !!conv?.followUpCadence &&
+    typeof conv.followUpCadence.lastSentStep === "number" &&
+    Number.isFinite(conv.followUpCadence.lastSentStep);
+  const cadenceDraftTimestampMatch =
     Number.isFinite(cadenceLastSentAtMs) &&
     Number.isFinite(lastDraftAtMs) &&
     Math.abs(lastDraftAtMs - cadenceLastSentAtMs) <= 5 * 60 * 1000;
+  const cadenceInboundBeforeSend =
+    Number.isFinite(cadenceLastSentAtMs) &&
+    Number.isFinite(selectedInboundAtMs) &&
+    selectedInboundAtMs <= cadenceLastSentAtMs;
+  const regenerateFromCadenceDraft =
+    !!cadenceRegeneratedDraft?.body &&
+    (cadenceDraftTimestampMatch || (cadenceStatePresent && cadenceInboundBeforeSend));
   const skipCadenceContextualRegenerate =
     event.provider === "twilio" &&
     channel === "sms" &&
