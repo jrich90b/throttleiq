@@ -4702,7 +4702,7 @@ function ensureCadenceAnchorMessage(args: {
 function buildCadenceCheckInFallbacks(name: string, labelClause?: string): string[] {
   const cleanName = normalizeDisplayCase(name || "there");
   const clause = String(labelClause ?? "").trim();
-  const about = clause ? `${clause}` : "";
+  const about = clause ? ` ${clause.replace(/^\s+/, "")}` : "";
   return [
     `Hey ${cleanName}, quick check${about} — did you get my last message? If you’re free, you’re welcome to stop in and we can see what we can do for you.`,
     `Hey ${cleanName}, just following up${about}. If you want, come by and we can go over bikes and options in person.`,
