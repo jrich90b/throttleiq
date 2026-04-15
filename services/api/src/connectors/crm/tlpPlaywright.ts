@@ -328,9 +328,59 @@ async function openDealershipVisitByRef(page: Page, leadRef: string, step: StepF
     if (!jsClicked) throw new Error("lead: dealership visit menu item not found");
   }
 
-  const delivered = page.locator("text=/9[-\\s]*Delivered/i").first();
-  await step("visit: wait 9-Delivered", async () => {
-    await delivered.waitFor({ state: "visible", timeout: DEFAULT_TIMEOUT_MS });
+  await step("visit: wait delivered form", async () => {
+    const deliveredControl = await findVisibleDeliveredControl(page);
+    if (deliveredControl) return;
+    // Fallback readiness gate when TLP renders steps via hidden select options.
+    await page.locator("text=/Purchaser/i").first().waitFor({ state: "visible", timeout: DEFAULT_TIMEOUT_MS });
+  });
+}
+
+async function findVisibleDeliveredControl(page: Page) {
+  const selectors = [
+    'button:has-text("9-Delivered")',
+    'a:has-text("9-Delivered")',
+    'li:has-text("9-Delivered")',
+    '[role="button"]:has-text("9-Delivered")',
+    '.btn:has-text("9-Delivered")'
+  ];
+  for (const selector of selectors) {
+    const locator = page.locator(selector).first();
+    try {
+      await locator.waitFor({ state: "visible", timeout: 1200 });
+      return locator;
+    } catch {
+      // try next
+    }
+  }
+  const generic = page
+    .locator("button, a, li, div, span")
+    .filter({ hasText: /9[-\s]*Delivered/i })
+    .first();
+  try {
+    await generic.waitFor({ state: "visible", timeout: 1200 });
+    return generic;
+  } catch {
+    return null;
+  }
+}
+
+async function selectDeliveredViaHiddenSelect(page: Page) {
+  return await page.evaluate(() => {
+    const isDeliveredOption = (opt: any) =>
+      String(opt?.value || "").trim().toLowerCase() === "s9" ||
+      /9[\s-]*delivered/i.test(String(opt?.textContent || ""));
+    const selects = Array.from((globalThis as any).document?.querySelectorAll?.("select") ?? []);
+    for (const select of selects) {
+      const options = Array.from((select as any)?.querySelectorAll?.("option") ?? []);
+      const delivered = options.find(isDeliveredOption);
+      if (!delivered) continue;
+      (select as any).value = String((delivered as any).value || "s9");
+      (select as any).dispatchEvent(new Event("input", { bubbles: true }));
+      (select as any).dispatchEvent(new Event("change", { bubbles: true }));
+      return true;
+    }
+    return false;
   });
 }
 
@@ -650,9 +700,16 @@ async function markDeliveredStep(
 ) {
   await fillDealershipVisitDeliveredDetails(page, step, details);
 
-  const delivered = page.locator("text=/9[-\\s]*Delivered/i").first();
-  await step("visit: click 9-Delivered", async () => {
-    await delivered.click({ force: true });
+  await step("visit: set 9-Delivered", async () => {
+    const deliveredControl = await findVisibleDeliveredControl(page);
+    if (deliveredControl) {
+      await deliveredControl.click({ force: true });
+      return;
+    }
+    const setByHiddenSelect = await selectDeliveredViaHiddenSelect(page);
+    if (!setByHiddenSelect) {
+      throw new Error("visit: could not set 9-Delivered (control/select not found)");
+    }
   });
 
   await fillComments(page, note, step);
