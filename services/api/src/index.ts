@@ -10949,13 +10949,16 @@ async function resolveDeterministicAvailabilityReply(args: {
     !modelChanged &&
     !!explicitCondition &&
     ((!!priorCondition && explicitCondition !== priorCondition) || conditionSearchRequest);
+  const suppressYearFromUsedPreference = explicitCondition === "used" && !yearFromText;
   const priorYear =
-    !modelChanged && !resetContextForCondition
+    !modelChanged && !resetContextForCondition && !suppressYearFromUsedPreference
       ? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null
       : null;
   const year =
-    yearFromText ??
-    (!modelChanged && !resetContextForCondition
+    suppressYearFromUsedPreference
+      ? null
+      : yearFromText ??
+        (!modelChanged && !resetContextForCondition
       ? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null
       : null);
   const colorCandidate =
@@ -10989,7 +10992,7 @@ async function resolveDeterministicAvailabilityReply(args: {
     conv.inventoryContext = {
       model: model ?? conv.inventoryContext?.model,
       year:
-        (modelChanged || resetContextForCondition) && !yearFromText
+        ((modelChanged || resetContextForCondition || suppressYearFromUsedPreference) && !yearFromText)
           ? undefined
           : year ?? conv.inventoryContext?.year,
       condition:
@@ -27604,12 +27607,15 @@ if (authToken && signature) {
         !modelChanged &&
         !!explicitCondition &&
         ((!!priorCondition && explicitCondition !== priorCondition) || conditionSearchRequest);
+      const suppressYearFromUsedPreference = explicitCondition === "used" && !yearFromText;
       const priorYear =
-        !modelChanged && !resetContextForCondition
+        !modelChanged && !resetContextForCondition && !suppressYearFromUsedPreference
           ? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null
           : null;
       const year =
-        yearFromText ??
+        suppressYearFromUsedPreference
+          ? null
+          : yearFromText ??
         (!modelChanged && !resetContextForCondition
           ? conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null
           : null);
@@ -27665,7 +27671,7 @@ if (authToken && signature) {
         conv.inventoryContext = {
           model: model ?? conv.inventoryContext?.model,
           year:
-            (modelChanged || resetContextForCondition) && !yearFromText
+            ((modelChanged || resetContextForCondition || suppressYearFromUsedPreference) && !yearFromText)
               ? undefined
               : year ?? conv.inventoryContext?.year,
           condition:
