@@ -20569,10 +20569,18 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
 
   const dealerProfile = await getDealerProfileHot();
   const cadenceRegeneratedDraft = await buildCadenceRegeneratedDraft(conv, dealerProfile, lastDraft);
+  const cadenceLastSentAtMs = new Date(String(conv?.followUpCadence?.lastSentAt ?? "")).getTime();
+  const lastDraftAtMs = new Date(String(lastDraft?.at ?? "")).getTime();
+  const regenerateFromCadenceDraft =
+    !!cadenceRegeneratedDraft?.body &&
+    Number.isFinite(cadenceLastSentAtMs) &&
+    Number.isFinite(lastDraftAtMs) &&
+    Math.abs(lastDraftAtMs - cadenceLastSentAtMs) <= 5 * 60 * 1000;
   const skipCadenceContextualRegenerate =
     event.provider === "twilio" &&
     channel === "sms" &&
-    isRegenerateInboundActionableForRouting(event.body ?? "");
+    isRegenerateInboundActionableForRouting(event.body ?? "") &&
+    !regenerateFromCadenceDraft;
   if (cadenceRegeneratedDraft?.body && !skipCadenceContextualRegenerate) {
     recordRouteOutcome("regen", "cadence_contextual_regenerated", {
       convId: conv.id,
