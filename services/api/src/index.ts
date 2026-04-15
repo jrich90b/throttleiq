@@ -15249,6 +15249,17 @@ async function processStaffAppointmentNotifications() {
       continue;
     }
 
+    if (eventChanged) {
+      if (appt.staffNotify.followUpSentAt) {
+        appt.staffNotify.followUpSentAt = undefined;
+        changed = true;
+      }
+      if (appt.staffNotify.outcome) {
+        appt.staffNotify.outcome = undefined;
+        changed = true;
+      }
+    }
+
     if (!appt.staffNotify.bookedSentAt || eventChanged) {
       const bookedText = [
         `New appointment booked`,
@@ -15267,7 +15278,6 @@ async function processStaffAppointmentNotifications() {
     }
 
     if (appt.staffNotify.outcome) continue;
-    if (appt.staffNotify.followUpSentAt) continue;
     const followUpReason = String(conv.followUp?.reason ?? "").trim().toLowerCase();
     const isFinanceOutcomeManagedByCall =
       String(apptType ?? "").trim().toLowerCase() === "finance_discussion" ||
@@ -15276,7 +15286,6 @@ async function processStaffAppointmentNotifications() {
       followUpReason === "credit_app_needs_info" ||
       followUpReason === "credit_app_approved" ||
       followUpReason === "financing_declined";
-    if (isFinanceOutcomeManagedByCall) continue;
 
     const start = new Date(appt.whenIso);
     if (Number.isNaN(start.getTime())) continue;
@@ -15290,6 +15299,30 @@ async function processStaffAppointmentNotifications() {
         : new Date(start.getTime() + Math.max(15, Number(durationMinutes) || 60) * 60 * 1000);
     const followAt = new Date(endAt.getTime() + 15 * 60 * 1000);
     if (now < followAt) continue;
+
+    if (isFinanceOutcomeManagedByCall) {
+      if (String(conv?.financeOutcome?.status ?? "").trim()) continue;
+      const financeDelayMinRaw = Number(process.env.FINANCE_APPOINTMENT_OUTCOME_SMS_DELAY_MIN ?? 120);
+      const financeDelayMin = Number.isFinite(financeDelayMinRaw) ? Math.max(0, financeDelayMinRaw) : 120;
+      const financePromptAt = new Date(followAt.getTime() + financeDelayMin * 60 * 1000);
+      if (now < financePromptAt) continue;
+      const financePromptSourceMessageId = `appointment:${String(appt.bookedEventId ?? "").trim()}`;
+      const previousPromptAt = String((conv as any)?.financeOutcomeNotify?.outcomePromptSentAt ?? "").trim();
+      await maybePromptBusinessManagerFinanceOutcomeFallback(conv, {
+        sourceMessageId: financePromptSourceMessageId,
+        note: `Appointment follow-up pending finance outcome (${whenLocal}).`
+      });
+      const notifyState = (conv as any)?.financeOutcomeNotify ?? {};
+      const promptAt = String(notifyState.outcomePromptSentAt ?? "").trim();
+      const promptSourceId = String(notifyState.lastPromptSourceMessageId ?? "").trim();
+      if (promptAt && promptAt !== previousPromptAt && promptSourceId === financePromptSourceMessageId) {
+        appt.staffNotify.followUpSentAt = promptAt;
+        changed = true;
+      }
+      continue;
+    }
+
+    if (appt.staffNotify.followUpSentAt) continue;
 
     const followText = link
       ? [
