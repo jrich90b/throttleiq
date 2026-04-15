@@ -243,7 +243,11 @@ import {
   removeSuppression
 } from "./domain/suppressionStore.js";
 import { buildKpiOverview } from "./domain/kpiAnalytics.js";
-import { tlpLogCustomerContact, tlpMarkDealershipVisitDelivered } from "./connectors/crm/tlpPlaywright.js";
+import {
+  tlpLogCustomerContact,
+  tlpMarkDealershipVisitDelivered,
+  type TlpDealershipVisitDeliveredDetails
+} from "./connectors/crm/tlpPlaywright.js";
 import { listContacts, upsertContact, updateContact, deleteContact } from "./domain/contactsStore.js";
 import {
   listContactLists,
@@ -7477,6 +7481,126 @@ function buildUnitLabel(unit: OutcomeUnitInput): string | undefined {
   return unit.stockId || unit.vin || undefined;
 }
 
+function firstNonEmptyText(values: unknown[]): string | undefined {
+  for (const value of values) {
+    const text = String(value ?? "").trim();
+    if (text) return text;
+  }
+  return undefined;
+}
+
+function normalizeTlpPhone(raw: unknown): string | undefined {
+  const digits = String(raw ?? "").replace(/\D/g, "");
+  if (!digits) return undefined;
+  if (digits.length === 11 && digits.startsWith("1")) return digits.slice(1);
+  return digits;
+}
+
+function inferConditionFromStockId(stockId: string | undefined): string | undefined {
+  const normalized = String(stockId ?? "").trim().toUpperCase();
+  if (!normalized) return undefined;
+  if (/^U[\d-]/.test(normalized)) return "USED";
+  if (/^[NTS][\d-]/.test(normalized)) return "NEW";
+  return undefined;
+}
+
+function normalizeConditionLabel(value: string | undefined): string | undefined {
+  const source = String(value ?? "").trim().toLowerCase();
+  if (!source) return undefined;
+  if (source.includes("used")) return "USED";
+  if (source.includes("new")) return "NEW";
+  return undefined;
+}
+
+function inferManufacturerFromTexts(texts: Array<string | undefined>): string | undefined {
+  const source = texts
+    .map(v => String(v ?? "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  if (!source) return undefined;
+  if (source.includes("harley")) return "Harley-Davidson";
+  if (source.includes("triumph")) return "Triumph";
+  if (source.includes("honda")) return "Honda";
+  if (source.includes("yamaha")) return "Yamaha";
+  if (source.includes("kawasaki")) return "Kawasaki";
+  if (source.includes("indian")) return "Indian";
+  if (source.includes("bmw")) return "BMW";
+  if (source.includes("ducati")) return "Ducati";
+  return undefined;
+}
+
+function parseLeadNameParts(lead: any): { firstName?: string; lastName?: string } {
+  const firstName = String(lead?.firstName ?? "").trim();
+  const lastName = String(lead?.lastName ?? "").trim();
+  if (firstName || lastName) {
+    return { firstName: firstName || undefined, lastName: lastName || undefined };
+  }
+  const fullName =
+    firstNonEmptyText([lead?.name, [lead?.firstName, lead?.lastName].filter(Boolean).join(" ").trim()]) ?? "";
+  if (!fullName) return {};
+  const parts = fullName.split(/\s+/).filter(Boolean);
+  if (!parts.length) return {};
+  if (parts.length === 1) return { firstName: parts[0] };
+  return { firstName: parts[0], lastName: parts.slice(1).join(" ") };
+}
+
+function buildTlpDeliveredDetails(
+  conv: any,
+  unit: OutcomeUnitInput,
+  salespersonName: string
+): TlpDealershipVisitDeliveredDetails {
+  const lead = conv?.lead ?? {};
+  const leadVehicle = lead?.vehicle ?? {};
+  const leadName = parseLeadNameParts(lead);
+  const stockId = firstNonEmptyText([unit.stockId, conv?.sale?.stockId, leadVehicle?.stockId]);
+  const vin = firstNonEmptyText([unit.vin, conv?.sale?.vin, leadVehicle?.vin]);
+  const description = firstNonEmptyText([leadVehicle?.description, unit?.label, conv?.sale?.label]);
+
+  const details: TlpDealershipVisitDeliveredDetails = {
+    firstName: firstNonEmptyText([leadName.firstName, lead?.firstName]),
+    lastName: firstNonEmptyText([leadName.lastName, lead?.lastName]),
+    phone: normalizeTlpPhone(firstNonEmptyText([lead?.phone, conv?.leadKey])),
+    email: firstNonEmptyText([lead?.email]),
+    condition: firstNonEmptyText([
+      normalizeConditionLabel(unit?.onOrder ? "new" : undefined),
+      normalizeConditionLabel(String(leadVehicle?.condition ?? "")),
+      normalizeConditionLabel(String(unit?.label ?? "")),
+      inferConditionFromStockId(stockId)
+    ]),
+    year: firstNonEmptyText([unit?.year, leadVehicle?.year]),
+    manufacturer: firstNonEmptyText([
+      unit?.make,
+      leadVehicle?.make,
+      inferManufacturerFromTexts([description, unit?.model, unit?.trim, leadVehicle?.model])
+    ]),
+    model: firstNonEmptyText([unit?.model, leadVehicle?.model]),
+    stockId,
+    vin,
+    salespersonName: firstNonEmptyText([salespersonName, conv?.leadOwner?.name]),
+    productCategoryValue: "MOTORCYCLES"
+  };
+
+  // Prune empty strings so Playwright helpers can skip cleanly.
+  for (const [key, value] of Object.entries(details)) {
+    if (!String(value ?? "").trim()) delete (details as any)[key];
+  }
+  return details;
+}
+
+function buildTlpDeliveredNote(unit: OutcomeUnitInput, soldBy: string, note?: string): string {
+  const soldUnit = unit?.label || unit?.stockId || unit?.vin || "unit";
+  const noteText = String(note ?? "").replace(/\s+/g, " ").trim();
+  const clippedNote = noteText ? (noteText.length > 500 ? `${noteText.slice(0, 497)}...` : noteText) : "";
+  return [
+    `Sold/Delivered: ${soldUnit}.`,
+    soldBy ? `Salesperson: ${soldBy}.` : null,
+    clippedNote ? `Notes: ${clippedNote}` : null
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 function readOutcomeUnit(body: any): OutcomeUnitInput {
   const stockId = String(body?.unitStockId ?? "").trim() || undefined;
   const vin = String(body?.unitVin ?? "").trim() || undefined;
@@ -7598,9 +7722,9 @@ async function applyOutcomeSold(
   if (conv.lead?.leadRef) {
     try {
       const soldBy = conv.sale?.soldByName || conv.sale?.soldById || "Unknown";
-      const soldUnit = conv.sale?.label || conv.sale?.stockId || conv.sale?.vin || "unit";
-      const tlpNote = `Sold/Delivered: ${soldUnit}. Salesperson: ${soldBy}.`;
-      await tlpMarkDealershipVisitDelivered({ leadRef: conv.lead.leadRef, note: tlpNote });
+      const tlpDetails = buildTlpDeliveredDetails(conv, unit, soldBy);
+      const tlpNote = buildTlpDeliveredNote(unit, soldBy, note);
+      await tlpMarkDealershipVisitDelivered({ leadRef: conv.lead.leadRef, note: tlpNote, details: tlpDetails });
     } catch (err: any) {
       const msg = `TLP delivered step failed for leadRef ${conv.lead.leadRef}. Retry in TLP or update manually.`;
       addInternalQuestion(conv.id, conv.leadKey, msg);
@@ -17446,9 +17570,20 @@ app.post("/conversations/:id/close", async (req, res) => {
     if (conv.lead?.leadRef) {
       try {
         const soldBy = conv.sale?.soldByName || conv.sale?.soldById || "Unknown";
-        const soldUnit = conv.sale?.label || conv.sale?.stockId || conv.sale?.vin || "unit";
-        const note = `Sold/Delivered: ${soldUnit}. Salesperson: ${soldBy}.`;
-        await tlpMarkDealershipVisitDelivered({ leadRef: conv.lead.leadRef, note });
+        const soldUnit: OutcomeUnitInput = {
+          stockId: soldStockId,
+          vin: soldVin,
+          year: firstNonEmptyText([soldInput?.year, soldInput?.unitYear, conv?.lead?.vehicle?.year]),
+          make: firstNonEmptyText([soldInput?.make, soldInput?.unitMake, conv?.lead?.vehicle?.make]),
+          model: firstNonEmptyText([soldInput?.model, soldInput?.unitModel, conv?.lead?.vehicle?.model]),
+          trim: firstNonEmptyText([soldInput?.trim, soldInput?.unitTrim]),
+          color: firstNonEmptyText([soldInput?.color, soldInput?.unitColor, conv?.lead?.vehicle?.color]),
+          label: soldLabel
+        };
+        soldUnit.label = buildUnitLabel(soldUnit);
+        const tlpDetails = buildTlpDeliveredDetails(conv, soldUnit, soldBy);
+        const note = buildTlpDeliveredNote(soldUnit, soldBy, soldNote);
+        await tlpMarkDealershipVisitDelivered({ leadRef: conv.lead.leadRef, note, details: tlpDetails });
       } catch (err: any) {
         const msg = `TLP delivered step failed for leadRef ${conv.lead.leadRef}. Retry in TLP or update manually.`;
         addInternalQuestion(conv.id, conv.leadKey, msg);

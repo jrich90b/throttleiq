@@ -4115,6 +4115,12 @@ export default function Home() {
     );
   }, [conversations, todos, usersList, canonicalizeOwnerName, inferOwnerDepartment]);
 
+  const conversationsById = useMemo(() => {
+    const byId = new Map<string, ConversationListItem>();
+    for (const c of conversations) byId.set(c.id, c);
+    return byId;
+  }, [conversations]);
+
   const filteredTodos = useMemo(() => {
     const q = todoQuery.trim().toLowerCase();
     const ownerNameFilter = todoLeadOwnerFilter.startsWith("owner:")
@@ -8677,6 +8683,8 @@ export default function Home() {
                       <div className={`text-xs ${sectionTitleClass}`}>{rows.length}</div>
                     </div>
                     {rows.length ? rows.map((t, rowIdx) => {
+                      const rowConv = conversationsById.get(t.convId);
+                      const isHotTaskLead = rowConv ? isHotDealConversation(rowConv) : false;
                       const reason = (t.reason ?? "").toLowerCase();
                       const sectionType = todoInboxSection(t);
                       const taskLabel =
@@ -8716,11 +8724,21 @@ export default function Home() {
                             </div>
                             {t.leadName ? (
                               <>
-                                <div className="text-sm font-medium mt-2">{t.leadName}</div>
+                                <div className="text-sm font-medium mt-2 flex items-center gap-1">
+                                  {t.leadName}
+                                  {isHotTaskLead ? (
+                                    <span title="Hot deal" aria-label="Hot deal">🔥</span>
+                                  ) : null}
+                                </div>
                                 <div className="text-sm text-gray-600 break-all">{t.leadKey}</div>
                               </>
                             ) : (
-                              <div className="text-sm font-medium break-all mt-2">{t.leadKey}</div>
+                              <div className="text-sm font-medium break-all mt-2 flex items-center gap-1">
+                                {t.leadKey}
+                                {isHotTaskLead ? (
+                                  <span title="Hot deal" aria-label="Hot deal">🔥</span>
+                                ) : null}
+                              </div>
                             )}
                             <div className="text-xs text-gray-500 mt-1">
                               {t.reason} • {new Date(t.createdAt).toLocaleString()}
@@ -8747,6 +8765,65 @@ export default function Home() {
                                 Outcome: {appointmentOutcomeLabel}
                               </div>
                             ) : null}
+                            {reassignInlineOpenId === t.convId && rowConv ? (
+                              <div className="mt-3 border rounded p-2 bg-gray-50">
+                                <div className="text-[11px] text-gray-500 mb-1">Reassign lead</div>
+                                <select
+                                  className="w-full border rounded px-2 py-1 text-xs bg-white"
+                                  value={reassignInlineTarget}
+                                  onChange={e => setReassignInlineTarget(e.target.value)}
+                                >
+                                  {reassignSalesOwnerOptions.length ? (
+                                    <optgroup label="Salespeople">
+                                      {reassignSalesOwnerOptions.map(owner => (
+                                        <option key={`task-reassign-owner-${owner.id}`} value={`owner:${owner.id}`}>
+                                          {owner.name}
+                                        </option>
+                                      ))}
+                                    </optgroup>
+                                  ) : null}
+                                  <optgroup label="Departments">
+                                    <option value="department:service">Service</option>
+                                    <option value="department:parts">Parts</option>
+                                    <option value="department:apparel">Apparel</option>
+                                  </optgroup>
+                                </select>
+                                {reassignInlineTarget.startsWith("department:") ? (
+                                  <textarea
+                                    className="w-full border rounded px-2 py-1 text-xs mt-2 bg-white"
+                                    rows={3}
+                                    value={reassignInlineSummary}
+                                    onChange={e => setReassignInlineSummary(e.target.value)}
+                                    placeholder="Optional note for department"
+                                  />
+                                ) : (
+                                  <div className="mt-2 text-[11px] text-gray-500">
+                                    This will reassign lead owner only.
+                                  </div>
+                                )}
+                                <div className="mt-2 flex justify-end gap-2">
+                                  <button
+                                    className="px-2 py-1 border rounded text-xs"
+                                    onClick={() => {
+                                      setReassignInlineOpenId(null);
+                                      setReassignInlineTarget("department:service");
+                                      setReassignInlineSummary("");
+                                    }}
+                                  >
+                                    Cancel
+                                  </button>
+                                  <button
+                                    className="px-2 py-1 border rounded text-xs"
+                                    disabled={reassignInlineSaving}
+                                    onClick={() => {
+                                      void reassignLeadInline(rowConv);
+                                    }}
+                                  >
+                                    {reassignInlineSaving ? "Saving..." : "Save"}
+                                  </button>
+                                </div>
+                              </div>
+                            ) : null}
                             <button
                               className="text-xs text-blue-600 mt-2 inline-block"
                               onClick={() => {
@@ -8757,6 +8834,17 @@ export default function Home() {
                             </button>
                           </div>
                           <div className="shrink-0 flex flex-col items-end gap-2">
+                            {(authUser?.role === "manager" || authUser?.permissions?.canAccessTodos) && rowConv ? (
+                              <button
+                                className="px-3 py-2 border rounded text-sm"
+                                onClick={() => {
+                                  openReassignLeadInline(rowConv);
+                                }}
+                                title="Reassign lead"
+                              >
+                                Reassign
+                              </button>
+                            ) : null}
                             {showCallButton ? (
                               <button
                                 className="px-3 py-2 border rounded text-sm"

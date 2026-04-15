@@ -10,6 +10,27 @@ export type TlpLogCustomerContactArgs = {
   contactedValue?: "YES" | "NO"; // default: "YES"
 };
 
+export type TlpDealershipVisitDeliveredDetails = {
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  email?: string;
+  condition?: string;
+  year?: string;
+  manufacturer?: string;
+  model?: string;
+  stockId?: string;
+  vin?: string;
+  salespersonName?: string;
+  productCategoryValue?: string;
+};
+
+export type TlpDealershipVisitDeliveredArgs = {
+  leadRef: string;
+  note: string;
+  details?: TlpDealershipVisitDeliveredDetails;
+};
+
 function env(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env var: ${name}`);
@@ -313,7 +334,322 @@ async function openDealershipVisitByRef(page: Page, leadRef: string, step: StepF
   });
 }
 
-async function markDeliveredStep(page: Page, step: StepFn, note: string) {
+async function firstVisibleLocator(page: Page, selectors: string[]) {
+  for (const selector of selectors) {
+    const locator = page.locator(selector).first();
+    try {
+      await locator.waitFor({ state: "visible", timeout: 1200 });
+      return locator;
+    } catch {
+      // keep trying
+    }
+  }
+  return null;
+}
+
+function normalizeTextToken(value: string) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ");
+}
+
+async function bestEffortFillText(
+  page: Page,
+  step: StepFn,
+  label: string,
+  value: string | undefined,
+  selectors: string[]
+) {
+  const text = String(value ?? "").trim();
+  if (!text) return false;
+  const field = await firstVisibleLocator(page, selectors);
+  if (!field) return false;
+  await step(`visit: fill ${label}`, async () => {
+    await field.click({ force: true });
+    await field.fill(text);
+  });
+  return true;
+}
+
+async function bestEffortSelect(
+  page: Page,
+  step: StepFn,
+  label: string,
+  value: string | undefined,
+  selectors: string[]
+) {
+  const text = String(value ?? "").trim();
+  if (!text) return false;
+  const field = await firstVisibleLocator(page, selectors);
+  if (!field) return false;
+
+  const handled = await step(`visit: select ${label}`, async () => {
+    const tag = (await field.evaluate((el: any) => String(el?.tagName ?? "").toLowerCase()).catch(() => "")) || "";
+    if (tag === "select") {
+      const exact = await field
+        .selectOption({ label: text })
+        .then(() => true)
+        .catch(() => false);
+      if (exact) return true;
+      const normalizedTarget = normalizeTextToken(text);
+      return await field.evaluate((el: any, target) => {
+        const select = el as any;
+        const norm = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+        const option: any =
+          Array.from(select.options ?? []).find((o: any) => norm(o?.textContent || "") === target) ??
+          Array.from(select.options ?? []).find((o: any) => norm(o?.textContent || "").includes(target));
+        if (!option) return false;
+        select.value = option.value;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }, normalizedTarget);
+    }
+
+    await field.click({ force: true });
+    const menuOption = page
+      .locator("li, div[role='option'], span, a")
+      .filter({ hasText: new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") })
+      .first();
+    await menuOption.waitFor({ state: "visible", timeout: SHORT_TIMEOUT_MS });
+    await menuOption.click({ force: true });
+    return true;
+  });
+  return !!handled;
+}
+
+async function bestEffortCheckFieldByText(
+  page: Page,
+  step: StepFn,
+  labelText: string
+) {
+  const escaped = labelText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regex = new RegExp(escaped, "i");
+
+  const labelCheckbox = page.locator("label").filter({ hasText: regex }).locator("input[type='checkbox']").first();
+  try {
+    await labelCheckbox.waitFor({ state: "visible", timeout: 1200 });
+    const checked = await labelCheckbox.isChecked().catch(() => false);
+    if (!checked) {
+      await step(`visit: check ${labelText}`, async () => {
+        await labelCheckbox.check({ force: true });
+      });
+    }
+    return true;
+  } catch {
+    // continue to fallback
+  }
+
+  const clicked = await page.evaluate((label) => {
+    const norm = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const target = norm(label);
+    const root = (globalThis as any).document;
+    const nodes = Array.from(root?.querySelectorAll?.("label, div, span, td, li") ?? []);
+    for (const node of nodes) {
+      const text = norm((node as any)?.textContent || "");
+      if (!text || !text.includes(target)) continue;
+      const scope =
+        (node as any)?.closest?.("tr, li, div, section, fieldset, td") ||
+        (node as any)?.parentElement ||
+        node;
+      const checkbox =
+        (scope as any)?.querySelector?.("input[type='checkbox']") ||
+        (node as any)?.querySelector?.("input[type='checkbox']");
+      if (!checkbox) continue;
+      const input = checkbox as any;
+      if (!input.checked) {
+        (checkbox as any).click();
+      }
+      return true;
+    }
+    return false;
+  }, labelText);
+
+  if (clicked) {
+    await step(`visit: check ${labelText} (fallback)`, async () => {
+      // noop step for traceability
+    });
+  }
+  return clicked;
+}
+
+async function requireCheckedFieldByText(
+  page: Page,
+  step: StepFn,
+  labelText: string
+): Promise<void> {
+  const ok = await bestEffortCheckFieldByText(page, step, labelText);
+  if (!ok) {
+    throw new Error(`visit: required checkbox "${labelText}" not found`);
+  }
+}
+
+async function requireFilledText(
+  page: Page,
+  step: StepFn,
+  label: string,
+  value: string | undefined,
+  selectors: string[]
+): Promise<void> {
+  const text = String(value ?? "").trim();
+  if (!text) return;
+  const ok = await bestEffortFillText(page, step, label, text, selectors);
+  if (!ok) {
+    throw new Error(`visit: required text field "${label}" not found`);
+  }
+}
+
+async function requireSelectedValue(
+  page: Page,
+  step: StepFn,
+  label: string,
+  value: string | undefined,
+  selectors: string[]
+): Promise<void> {
+  const text = String(value ?? "").trim();
+  if (!text) return;
+  const ok = await bestEffortSelect(page, step, label, text, selectors);
+  if (!ok) {
+    throw new Error(`visit: required select field "${label}" not found`);
+  }
+}
+
+function normalizeVehicleCondition(value: string | undefined): string | undefined {
+  const v = String(value ?? "").trim().toLowerCase();
+  if (!v) return undefined;
+  if (v.includes("used") || v === "u") return "USED";
+  if (v.includes("new") || v === "n") return "NEW";
+  return undefined;
+}
+
+async function fillDealershipVisitDeliveredDetails(
+  page: Page,
+  step: StepFn,
+  details: TlpDealershipVisitDeliveredDetails | undefined
+) {
+  if (!details) return;
+
+  await requireCheckedFieldByText(page, step, "First Name");
+  await requireCheckedFieldByText(page, step, "Last Name");
+  await requireCheckedFieldByText(page, step, "Phone");
+  await requireCheckedFieldByText(page, step, "Email");
+
+  await requireFilledText(page, step, "first name", details.firstName, [
+    "#TLPLOG_first_name",
+    "#first_name",
+    "input[name='first_name']",
+    "input[name*='first']"
+  ]);
+  await requireFilledText(page, step, "last name", details.lastName, [
+    "#TLPLOG_last_name",
+    "#last_name",
+    "input[name='last_name']",
+    "input[name*='last']"
+  ]);
+  await requireFilledText(page, step, "phone", details.phone, [
+    "#TLPLOG_phone",
+    "#phone",
+    "input[name='phone']",
+    "input[name*='phone']"
+  ]);
+  await requireFilledText(page, step, "email", details.email, [
+    "#TLPLOG_email",
+    "#email",
+    "input[name='email']",
+    "input[type='email']"
+  ]);
+
+  const condition = normalizeVehicleCondition(details.condition);
+  await requireSelectedValue(page, step, "condition", condition, [
+    "#TLPLOG_new_used",
+    "#TLPLOG_vehicle_condition",
+    "#TLPLOG_product_condition",
+    "#TLPLOG_condition",
+    "#vehicle_condition",
+    "select[name*='new_used']",
+    "select[name*='newused']",
+    "select[name*='condition']"
+  ]);
+
+  const yearSelected = await bestEffortSelect(page, step, "year", details.year, [
+    "#TLPLOG_vehicle_year",
+    "#TLPLOG_year",
+    "#TLPLOG_model_year",
+    "#vehicle_year",
+    "select[name*='year']"
+  ]);
+  if (!yearSelected) {
+    const yearFilled = await bestEffortFillText(page, step, "year", details.year, [
+      "#TLPLOG_vehicle_year",
+      "#TLPLOG_year",
+      "#TLPLOG_model_year",
+      "#vehicle_year",
+      "input[name*='year']"
+    ]);
+    if (String(details.year ?? "").trim() && !yearFilled) {
+      throw new Error("visit: required year field not found");
+    }
+  }
+
+  await requireSelectedValue(page, step, "manufacturer", details.manufacturer, [
+    "#TLPLOG_vehicle_make",
+    "#TLPLOG_make",
+    "#TLPLOG_manufacturer",
+    "#vehicle_make",
+    "select[name*='make']",
+    "select[name*='manufacturer']"
+  ]);
+
+  await requireSelectedValue(page, step, "product category", details.productCategoryValue ?? "MOTORCYCLES", [
+    "#TLPLOG_product_category",
+    "#product_category",
+    "select[name*='product_category']",
+    "select[name*='category']"
+  ]);
+
+  await requireSelectedValue(page, step, "model", details.model, [
+    "#TLPLOG_vehicle_model",
+    "#TLPLOG_model",
+    "#TLPLOG_motorcycle_model",
+    "#TLPLOG_product_model",
+    "#vehicle_model",
+    "select[name*='model']",
+    "input[name*='model']"
+  ]);
+
+  await bestEffortFillText(page, step, "stock", details.stockId, [
+    "#TLPLOG_stock",
+    "#TLPLOG_stock_id",
+    "#TLPLOG_stock_number",
+    "#stock",
+    "input[name*='stock']"
+  ]);
+
+  await bestEffortFillText(page, step, "vin", details.vin, [
+    "#TLPLOG_vin",
+    "#TLPLOG_vehicle_vin",
+    "#vin",
+    "input[name*='vin']"
+  ]);
+
+  await requireSelectedValue(page, step, "salesperson", details.salespersonName, [
+    "#TLPLOG_salesperson",
+    "#TLPLOG_salesman",
+    "#salesperson",
+    "select[name*='salesperson']",
+    "select[name*='salesman']",
+    "select[name*='owner']"
+  ]);
+}
+
+async function markDeliveredStep(
+  page: Page,
+  step: StepFn,
+  note: string,
+  details?: TlpDealershipVisitDeliveredDetails
+) {
+  await fillDealershipVisitDeliveredDetails(page, step, details);
+
   const delivered = page.locator("text=/9[-\\s]*Delivered/i").first();
   await step("visit: click 9-Delivered", async () => {
     await delivered.click({ force: true });
@@ -449,7 +785,7 @@ export async function tlpLogCustomerContact(args: TlpLogCustomerContactArgs): Pr
   });
 }
 
-export async function tlpMarkDealershipVisitDelivered(args: { leadRef: string; note: string }): Promise<void> {
+export async function tlpMarkDealershipVisitDelivered(args: TlpDealershipVisitDeliveredArgs): Promise<void> {
   await withBrowser(async (browser) => {
     const context = await browser.newContext({
       viewport: { width: 1440, height: 900 },
@@ -473,7 +809,7 @@ export async function tlpMarkDealershipVisitDelivered(args: { leadRef: string; n
     try {
       await loginTlp(page, step);
       await openDealershipVisitByRef(page, args.leadRef, step);
-      await markDeliveredStep(page, step, args.note);
+      await markDeliveredStep(page, step, args.note, args.details);
       await context.close();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
