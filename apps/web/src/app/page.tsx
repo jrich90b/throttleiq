@@ -4619,12 +4619,29 @@ export default function Home() {
     const cta = String(c.classification?.cta ?? "").trim().toLowerCase();
     if (NON_DEAL_BUCKETS.has(bucket) || NON_DEAL_CTAS.has(cta)) return false;
     if (PURCHASE_INTENT_BUCKETS.has(bucket) || PURCHASE_INTENT_CTAS.has(cta)) return true;
+    const engagementReason = String(c.engagement?.reason ?? "").trim().toLowerCase();
+    if (
+      engagementReason === "purchase" ||
+      engagementReason === "schedule" ||
+      engagementReason === "trade" ||
+      engagementReason === "finance" ||
+      engagementReason === "pricing" ||
+      engagementReason === "availability"
+    ) {
+      return true;
+    }
 
     const apptStatus = String(c.appointment?.status ?? "").trim().toLowerCase();
     if (apptStatus && apptStatus !== "cancelled" && apptStatus !== "no_show") return true;
     if (c.inventoryWatch || (Array.isArray(c.inventoryWatches) && c.inventoryWatches.length > 0)) {
       return true;
     }
+    const lastText = String(c.lastMessage?.body ?? "").trim().toLowerCase();
+    const hasInventoryListSignal =
+      /\btop options:\b/.test(lastText) ||
+      /\bwe have\s+\d+\s+(?:new|used|pre[-\s]?owned)?[\s\S]{0,80}\bin stock\b/.test(lastText) ||
+      /\bhttps?:\/\/\S*\/inventory\/\S+/i.test(lastText);
+    if (hasInventoryListSignal) return true;
 
     return false;
   };
