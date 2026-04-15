@@ -2857,14 +2857,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       }
     }
   }
+  const parserNoPurchaseSignal =
+    journeyIntentAccepted &&
+    llmJourneyIntent?.journeyIntent === "none" &&
+    /not interested in purchasing at this time|not looking to buy|no plans to buy|not buying/i.test(inquiryText);
   const isNoPurchaseNow =
     /not interested in purchasing at this time/.test(timeframeLower) ||
     /purchase timeframe:\s*i am not interested in purchasing at this time/.test(inquiryText) ||
     /do you expect to make a motorcycle purchase in the near future\?\s*no/.test(inquiryText) ||
     /not interested in purchasing at this time/.test(inquiryText) ||
-    (journeyIntentAccepted &&
-      llmJourneyIntent?.journeyIntent !== "sale_trade" &&
-      /purchase timeframe|not interested in purchasing/i.test(inquiryText));
+    parserNoPurchaseSignal;
   if (isDealerRideEventLead && isNoPurchaseNow) {
     conv.dialogState = { name: "test_ride_booked", updatedAt: new Date().toISOString() };
     addCallTodoIfMissing(
