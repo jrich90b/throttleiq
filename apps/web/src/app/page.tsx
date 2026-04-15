@@ -12278,7 +12278,10 @@ export default function Home() {
                       [selectedConv.lead?.firstName, selectedConv.lead?.lastName].filter(Boolean).join(" ") ||
                       selectedConv.leadKey}
                   </span>
-                  {isHotDealConversation(selectedConv as unknown as ConversationListItem) ? (
+                  {isHotDealConversation(
+                    (selectedListItem ??
+                      (selectedConv as unknown as ConversationListItem)) as ConversationListItem
+                  ) ? (
                     <span
                       className="text-orange-500 text-xl leading-none"
                       title="Hot lead"
