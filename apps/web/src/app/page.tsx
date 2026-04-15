@@ -868,6 +868,34 @@ type WatchFormItem = {
 
 type TodoInboxSection = "followup" | "appointment" | "todo" | "reminder";
 
+const APPOINTMENT_SECONDARY_OPTIONS_BY_PRIMARY: Record<
+  "showed" | "did_not_show" | "cancelled",
+  Array<{ value: string; label: string }>
+> = {
+  showed: [
+    { value: "needs_follow_up", label: "Needs follow up" },
+    { value: "sold", label: "Sold" },
+    { value: "hold", label: "Hold" },
+    { value: "finance_not_approved", label: "Finance not approved" },
+    { value: "finance_needs_info", label: "Finance needs more info" },
+    { value: "not_ready", label: "Not ready" },
+    { value: "lost", label: "Lost / bought elsewhere" },
+    { value: "other", label: "Other" }
+  ],
+  did_not_show: [
+    { value: "needs_follow_up", label: "Needs follow up" },
+    { value: "lost", label: "Lost / bought elsewhere" },
+    { value: "not_ready", label: "Not ready" },
+    { value: "other", label: "Other" }
+  ],
+  cancelled: [
+    { value: "needs_follow_up", label: "Needs follow up" },
+    { value: "lost", label: "Lost / bought elsewhere" },
+    { value: "not_ready", label: "Not ready" },
+    { value: "other", label: "Other" }
+  ]
+};
+
 function todoActionLabel(todo: TodoItem): string {
   const explicitAction = String(todo.action ?? "").trim();
   if (explicitAction) return explicitAction;
@@ -1484,7 +1512,10 @@ export default function Home() {
   const [todoResolution, setTodoResolution] = useState("resume");
   const [appointmentCloseOpen, setAppointmentCloseOpen] = useState(false);
   const [appointmentCloseTarget, setAppointmentCloseTarget] = useState<TodoItem | null>(null);
-  const [appointmentCloseOutcome, setAppointmentCloseOutcome] = useState("showed_up");
+  const [appointmentClosePrimaryOutcome, setAppointmentClosePrimaryOutcome] = useState<
+    "showed" | "did_not_show" | "cancelled"
+  >("showed");
+  const [appointmentCloseSecondaryOutcome, setAppointmentCloseSecondaryOutcome] = useState("needs_follow_up");
   const [appointmentCloseNote, setAppointmentCloseNote] = useState("");
   const [appointmentCloseSaving, setAppointmentCloseSaving] = useState(false);
   const [saveToast, setSaveToast] = useState<string | null>(null);
@@ -5144,7 +5175,9 @@ export default function Home() {
     todo: TodoItem,
     resolution = "resume",
     appointmentOutcome?: string,
-    appointmentOutcomeNote?: string
+    appointmentOutcomeNote?: string,
+    appointmentPrimaryOutcome?: string,
+    appointmentSecondaryOutcome?: string
   ) {
     await fetch("/api/todos", {
       method: "POST",
@@ -5154,7 +5187,9 @@ export default function Home() {
         todoId: todo.id,
         resolution,
         appointmentOutcome: appointmentOutcome || undefined,
-        appointmentOutcomeNote: appointmentOutcomeNote || undefined
+        appointmentOutcomeNote: appointmentOutcomeNote || undefined,
+        appointmentPrimaryOutcome: appointmentPrimaryOutcome || undefined,
+        appointmentSecondaryOutcome: appointmentSecondaryOutcome || undefined
       })
     });
     await load();
@@ -8641,7 +8676,8 @@ export default function Home() {
                               onClick={() => {
                                 if (sectionType === "appointment" && !appointmentOutcomeStatus) {
                                   setAppointmentCloseTarget(t);
-                                  setAppointmentCloseOutcome("showed_up");
+                                  setAppointmentClosePrimaryOutcome("showed");
+                                  setAppointmentCloseSecondaryOutcome("needs_follow_up");
                                   setAppointmentCloseNote("");
                                   setAppointmentCloseOpen(true);
                                   return;
@@ -8934,21 +8970,35 @@ export default function Home() {
               </div>
               <div className="mt-3 grid grid-cols-1 gap-2">
                 <label className="text-xs text-gray-600">
-                  Outcome
+                  Attendance
                   <select
                     className="mt-1 w-full border rounded px-3 py-2 text-sm"
-                    value={appointmentCloseOutcome}
-                    onChange={e => setAppointmentCloseOutcome(e.target.value)}
+                    value={appointmentClosePrimaryOutcome}
+                    onChange={e => {
+                      const nextPrimary = (e.target.value as "showed" | "did_not_show" | "cancelled") || "showed";
+                      setAppointmentClosePrimaryOutcome(nextPrimary);
+                      const options = APPOINTMENT_SECONDARY_OPTIONS_BY_PRIMARY[nextPrimary] ?? [];
+                      const hasCurrent = options.some(opt => opt.value === appointmentCloseSecondaryOutcome);
+                      if (!hasCurrent) setAppointmentCloseSecondaryOutcome(options[0]?.value ?? "needs_follow_up");
+                    }}
                   >
-                    <option value="showed_up">Showed up</option>
-                    <option value="no_show">No show</option>
-                    <option value="sold">Sold</option>
-                    <option value="hold">On hold</option>
-                    <option value="financing_declined">Financing declined</option>
-                    <option value="financing_needs_info">Financing needs more info</option>
-                    <option value="bought_elsewhere">Bought elsewhere</option>
-                    <option value="follow_up">Follow up</option>
-                    <option value="other">Other</option>
+                    <option value="showed">Showed</option>
+                    <option value="did_not_show">Did not show</option>
+                    <option value="cancelled">Cancelled</option>
+                  </select>
+                </label>
+                <label className="text-xs text-gray-600">
+                  Disposition
+                  <select
+                    className="mt-1 w-full border rounded px-3 py-2 text-sm"
+                    value={appointmentCloseSecondaryOutcome}
+                    onChange={e => setAppointmentCloseSecondaryOutcome(e.target.value)}
+                  >
+                    {(APPOINTMENT_SECONDARY_OPTIONS_BY_PRIMARY[appointmentClosePrimaryOutcome] ?? []).map(opt => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
                   </select>
                 </label>
                 <label className="text-xs text-gray-600">
@@ -8982,8 +9032,10 @@ export default function Home() {
                       await markTodoDone(
                         appointmentCloseTarget,
                         "dismiss",
-                        appointmentCloseOutcome,
-                        appointmentCloseNote
+                        undefined,
+                        appointmentCloseNote,
+                        appointmentClosePrimaryOutcome,
+                        appointmentCloseSecondaryOutcome
                       );
                       setAppointmentCloseOpen(false);
                       setAppointmentCloseTarget(null);

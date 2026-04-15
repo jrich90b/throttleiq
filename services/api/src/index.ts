@@ -7237,6 +7237,226 @@ function escapeHtml(input: string): string {
   });
 }
 
+type AppointmentPrimaryOutcome = "showed" | "did_not_show" | "cancelled";
+type AppointmentSecondaryOutcome =
+  | "sold"
+  | "hold"
+  | "needs_follow_up"
+  | "lost"
+  | "finance_not_approved"
+  | "finance_needs_info"
+  | "not_ready"
+  | "other";
+type LegacyAppointmentOutcomeStatus =
+  | "showed_up"
+  | "no_show"
+  | "cancelled"
+  | "sold"
+  | "hold"
+  | "financing_declined"
+  | "financing_needs_info"
+  | "bought_elsewhere"
+  | "lost"
+  | "follow_up"
+  | "other";
+
+const APPOINTMENT_SECONDARY_OPTIONS: Record<AppointmentPrimaryOutcome, Set<AppointmentSecondaryOutcome>> = {
+  showed: new Set([
+    "sold",
+    "hold",
+    "needs_follow_up",
+    "lost",
+    "finance_not_approved",
+    "finance_needs_info",
+    "not_ready",
+    "other"
+  ]),
+  did_not_show: new Set(["needs_follow_up", "lost", "not_ready", "other"]),
+  cancelled: new Set(["needs_follow_up", "lost", "not_ready", "other"])
+};
+
+function normalizeAppointmentPrimaryOutcome(raw: string): AppointmentPrimaryOutcome | null {
+  const value = String(raw ?? "").trim().toLowerCase();
+  if (!value) return null;
+  if (value === "showed" || value === "showed_up") return "showed";
+  if (value === "did_not_show" || value === "no_show") return "did_not_show";
+  if (value === "cancelled" || value === "canceled") return "cancelled";
+  return null;
+}
+
+function normalizeAppointmentSecondaryOutcome(raw: string): AppointmentSecondaryOutcome | null {
+  const value = String(raw ?? "").trim().toLowerCase();
+  if (!value) return null;
+  if (value === "sold") return "sold";
+  if (value === "hold") return "hold";
+  if (value === "needs_follow_up" || value === "follow_up") return "needs_follow_up";
+  if (value === "lost" || value === "bought_elsewhere") return "lost";
+  if (value === "finance_not_approved" || value === "financing_declined") return "finance_not_approved";
+  if (value === "finance_needs_info" || value === "financing_needs_info") return "finance_needs_info";
+  if (value === "not_ready") return "not_ready";
+  if (value === "other") return "other";
+  return null;
+}
+
+function mapLegacyAppointmentOutcome(
+  statusRaw: string
+): { primaryStatus: AppointmentPrimaryOutcome; secondaryStatus: AppointmentSecondaryOutcome; legacyStatus: LegacyAppointmentOutcomeStatus } {
+  const status = String(statusRaw ?? "").trim().toLowerCase();
+  if (status === "sold") {
+    return { primaryStatus: "showed", secondaryStatus: "sold", legacyStatus: "sold" };
+  }
+  if (status === "hold") {
+    return { primaryStatus: "showed", secondaryStatus: "hold", legacyStatus: "hold" };
+  }
+  if (status === "financing_declined") {
+    return { primaryStatus: "showed", secondaryStatus: "finance_not_approved", legacyStatus: "financing_declined" };
+  }
+  if (status === "financing_needs_info") {
+    return { primaryStatus: "showed", secondaryStatus: "finance_needs_info", legacyStatus: "financing_needs_info" };
+  }
+  if (status === "bought_elsewhere" || status === "lost") {
+    return { primaryStatus: "showed", secondaryStatus: "lost", legacyStatus: status === "lost" ? "lost" : "bought_elsewhere" };
+  }
+  if (status === "other") {
+    return { primaryStatus: "showed", secondaryStatus: "other", legacyStatus: "other" };
+  }
+  if (status === "cancelled" || status === "canceled") {
+    return { primaryStatus: "cancelled", secondaryStatus: "needs_follow_up", legacyStatus: "cancelled" };
+  }
+  if (status === "no_show") {
+    return { primaryStatus: "did_not_show", secondaryStatus: "needs_follow_up", legacyStatus: "no_show" };
+  }
+  if (status === "showed_up") {
+    return { primaryStatus: "showed", secondaryStatus: "needs_follow_up", legacyStatus: "showed_up" };
+  }
+  return { primaryStatus: "showed", secondaryStatus: "needs_follow_up", legacyStatus: "follow_up" };
+}
+
+function mapPrimarySecondaryToLegacy(
+  primaryStatus: AppointmentPrimaryOutcome,
+  secondaryStatus: AppointmentSecondaryOutcome
+): LegacyAppointmentOutcomeStatus {
+  if (primaryStatus === "did_not_show") return "no_show";
+  if (primaryStatus === "cancelled") return "cancelled";
+  if (secondaryStatus === "sold") return "sold";
+  if (secondaryStatus === "hold") return "hold";
+  if (secondaryStatus === "finance_not_approved") return "financing_declined";
+  if (secondaryStatus === "finance_needs_info") return "financing_needs_info";
+  if (secondaryStatus === "lost") return "bought_elsewhere";
+  if (secondaryStatus === "other") return "other";
+  return "follow_up";
+}
+
+function normalizeAppointmentOutcomeInput(args: {
+  legacyOutcome?: string;
+  primaryOutcome?: string;
+  secondaryOutcome?: string;
+}): {
+  ok: boolean;
+  error?: string;
+  primaryStatus?: AppointmentPrimaryOutcome;
+  secondaryStatus?: AppointmentSecondaryOutcome;
+  legacyStatus?: LegacyAppointmentOutcomeStatus;
+} {
+  const primaryStatus = normalizeAppointmentPrimaryOutcome(args.primaryOutcome ?? "");
+  const secondaryStatus = normalizeAppointmentSecondaryOutcome(args.secondaryOutcome ?? "");
+  if (primaryStatus) {
+    const finalSecondary = secondaryStatus ?? "needs_follow_up";
+    const allowed = APPOINTMENT_SECONDARY_OPTIONS[primaryStatus];
+    if (!allowed?.has(finalSecondary)) {
+      return { ok: false, error: "invalid_secondary_outcome_for_primary" };
+    }
+    return {
+      ok: true,
+      primaryStatus,
+      secondaryStatus: finalSecondary,
+      legacyStatus: mapPrimarySecondaryToLegacy(primaryStatus, finalSecondary)
+    };
+  }
+
+  const legacy = mapLegacyAppointmentOutcome(args.legacyOutcome ?? "");
+  if (!legacy.legacyStatus) return { ok: false, error: "invalid_appointment_outcome" };
+  return {
+    ok: true,
+    primaryStatus: legacy.primaryStatus,
+    secondaryStatus: legacy.secondaryStatus,
+    legacyStatus: legacy.legacyStatus
+  };
+}
+
+async function maybeQueueAppointmentOutcomeRescheduleDraft(args: {
+  conv: any;
+  primaryStatus?: AppointmentPrimaryOutcome;
+  secondaryStatus?: AppointmentSecondaryOutcome;
+  source?: string;
+}): Promise<{ queued: boolean; reason?: string; reply?: string }> {
+  const conv = args.conv;
+  const primaryStatus = args.primaryStatus ?? null;
+  const secondaryStatus = args.secondaryStatus ?? null;
+  if (!conv || !primaryStatus || !secondaryStatus) {
+    return { queued: false, reason: "missing_outcome" };
+  }
+  if (secondaryStatus !== "needs_follow_up") {
+    return { queued: false, reason: "secondary_not_follow_up" };
+  }
+  if (primaryStatus !== "did_not_show" && primaryStatus !== "cancelled") {
+    return { queued: false, reason: "primary_not_reschedule_candidate" };
+  }
+
+  const toNumber = normalizePhone(conv?.lead?.phone ?? conv?.leadKey ?? "");
+  if (!toNumber.startsWith("+")) {
+    return { queued: false, reason: "missing_phone" };
+  }
+
+  let rescheduleUrl: string | null = null;
+  try {
+    const profile = await getDealerProfileHot();
+    const bookingUrl = buildBookingUrlForLead(profile?.bookingUrl, conv);
+    if (bookingUrl) {
+      const branded = buildBrandedShortLinkForConv(conv, bookingUrl, profile);
+      if (branded) {
+        rescheduleUrl = branded;
+      } else if (!isLeadriderHost(bookingUrl)) {
+        rescheduleUrl = bookingUrl;
+      }
+    }
+  } catch {
+    rescheduleUrl = null;
+  }
+
+  const reply =
+    primaryStatus === "cancelled"
+      ? rescheduleUrl
+        ? `No problem — we can get you rescheduled. Reschedule here: ${rescheduleUrl}`
+        : "No problem — we can get you rescheduled. What day and time works best?"
+      : rescheduleUrl
+        ? `No worries — let’s get you back on the schedule. Reschedule here: ${rescheduleUrl}`
+        : "No worries — let’s get you back on the schedule. What day and time works best?";
+
+  if (
+    isRecentDuplicateOutbound(conv, toNumber, reply, {
+      providers: ["draft_ai", "twilio", "human"],
+      windowMs: 30 * 60 * 1000
+    })
+  ) {
+    return { queued: false, reason: "duplicate" };
+  }
+
+  appendOutbound(conv, "salesperson", toNumber, reply, "draft_ai");
+  if (conv?.appointment) {
+    conv.appointment.reschedulePending = true;
+    conv.appointment.updatedAt = new Date().toISOString();
+  }
+  recordRouteOutcome("live", "appointment_outcome_reschedule_draft", {
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    source: args.source ?? "unknown",
+    primaryStatus,
+    secondaryStatus
+  });
+  return { queued: true, reply };
+}
+
 type OutcomeUnitInput = {
   onOrder?: boolean;
   stockId?: string;
@@ -15635,18 +15855,14 @@ app.get("/public/appointment/outcome", async (req, res) => {
     <div class="card">
       <form id="outcome-form" method="POST" action="/public/appointment/outcome">
         <input type="hidden" name="token" value="${escapeHtml(token)}" />
-        <label>Outcome</label>
-        <select name="outcome">
-          <option value="follow_up">Needs follow up</option>
-          <option value="showed_up">Showed up</option>
-          <option value="no_show">No show</option>
-          <option value="sold">Sold</option>
-          <option value="hold">Hold</option>
-          <option value="financing_declined">Financing not approved</option>
-          <option value="financing_needs_info">Financing needs more info</option>
-          <option value="bought_elsewhere">Bought elsewhere</option>
-          <option value="other">Other</option>
+        <label>Attendance</label>
+        <select name="primaryOutcome" id="primary-outcome">
+          <option value="showed">Showed</option>
+          <option value="did_not_show">Did not show</option>
+          <option value="cancelled">Cancelled</option>
         </select>
+        <label>Disposition</label>
+        <select name="secondaryOutcome" id="secondary-outcome"></select>
         <div id="unit-section">
           <label>Unit (optional)</label>
           <div style="display:flex; gap:8px; align-items:center;">
@@ -15697,7 +15913,32 @@ app.get("/public/appointment/outcome", async (req, res) => {
         const recBtn = document.getElementById("rec-btn");
         const statusEl = document.getElementById("rec-status");
         const noteEl = document.getElementById("note-field");
-        const outcomeEl = document.querySelector("select[name='outcome']");
+        const primaryOutcomeEl = document.getElementById("primary-outcome");
+        const secondaryOutcomeEl = document.getElementById("secondary-outcome");
+        const secondaryOptionsByPrimary = {
+          showed: [
+            { value: "needs_follow_up", label: "Needs follow up" },
+            { value: "sold", label: "Sold" },
+            { value: "hold", label: "Hold" },
+            { value: "finance_not_approved", label: "Finance not approved" },
+            { value: "finance_needs_info", label: "Finance needs more info" },
+            { value: "not_ready", label: "Not ready" },
+            { value: "lost", label: "Lost / bought elsewhere" },
+            { value: "other", label: "Other" }
+          ],
+          did_not_show: [
+            { value: "needs_follow_up", label: "Needs follow up" },
+            { value: "lost", label: "Lost / bought elsewhere" },
+            { value: "not_ready", label: "Not ready" },
+            { value: "other", label: "Other" }
+          ],
+          cancelled: [
+            { value: "needs_follow_up", label: "Needs follow up" },
+            { value: "lost", label: "Lost / bought elsewhere" },
+            { value: "not_ready", label: "Not ready" },
+            { value: "other", label: "Other" }
+          ]
+        };
         const outcomeForm = document.getElementById("outcome-form");
         const unitSection = document.getElementById("unit-section");
         const unitModal = document.getElementById("unit-modal");
@@ -15815,8 +16056,29 @@ app.get("/public/appointment/outcome", async (req, res) => {
             return hay.includes(query);
           });
         }
+        function selectedPrimaryOutcome() {
+          return primaryOutcomeEl ? String(primaryOutcomeEl.value || "") : "showed";
+        }
+        function selectedSecondaryOutcome() {
+          return secondaryOutcomeEl ? String(secondaryOutcomeEl.value || "") : "needs_follow_up";
+        }
+        function renderSecondaryOptions() {
+          if (!secondaryOutcomeEl) return;
+          const primary = selectedPrimaryOutcome();
+          const options = secondaryOptionsByPrimary[primary] || secondaryOptionsByPrimary.showed;
+          const prev = selectedSecondaryOutcome();
+          secondaryOutcomeEl.innerHTML = "";
+          options.forEach(opt => {
+            const el = document.createElement("option");
+            el.value = opt.value;
+            el.textContent = opt.label;
+            secondaryOutcomeEl.appendChild(el);
+          });
+          const hasPrev = options.some(opt => opt.value === prev);
+          secondaryOutcomeEl.value = hasPrev ? prev : (options[0] ? options[0].value : "needs_follow_up");
+        }
         function isUnitOutcome() {
-          const status = outcomeEl ? outcomeEl.value : "";
+          const status = selectedSecondaryOutcome();
           return status === "sold" || status === "hold";
         }
         function toggleUnitSection() {
@@ -15908,21 +16170,31 @@ app.get("/public/appointment/outcome", async (req, res) => {
             renderInventory(list, "");
           });
         }
-        if (outcomeEl) {
-          outcomeEl.addEventListener("change", () => {
+        if (primaryOutcomeEl) {
+          primaryOutcomeEl.addEventListener("change", () => {
+            renderSecondaryOptions();
             toggleUnitSection();
             if (isUnitOutcome()) {
               ensureInventoryLoaded();
             }
           });
         }
+        if (secondaryOutcomeEl) {
+          secondaryOutcomeEl.addEventListener("change", () => {
+            toggleUnitSection();
+            if (isUnitOutcome()) {
+              ensureInventoryLoaded();
+            }
+          });
+        }
+        renderSecondaryOptions();
         toggleUnitSection();
         if (isUnitOutcome()) {
           ensureInventoryLoaded();
         }
-        if (outcomeForm && outcomeEl) {
+        if (outcomeForm) {
           outcomeForm.addEventListener("submit", e => {
-            const status = outcomeEl.value || "";
+            const status = selectedSecondaryOutcome();
             const requiresUnit = status === "sold" || status === "hold";
             const hasId = ((unitStock && unitStock.value) || (unitVin && unitVin.value) || "").trim();
             if (requiresUnit && !hasId) {
@@ -15994,7 +16266,8 @@ app.get("/public/appointment/outcome", async (req, res) => {
               const blob = new Blob(chunks, { type: recorderMimeType || recorder.mimeType || "audio/webm" });
               const fd = new FormData();
               fd.append("token", token);
-              fd.append("outcome", outcomeEl ? outcomeEl.value : "");
+              fd.append("primaryOutcome", selectedPrimaryOutcome());
+              fd.append("secondaryOutcome", selectedSecondaryOutcome());
               fd.append("unitYear", unitYear ? unitYear.value : "");
               fd.append("unitMake", unitMake ? unitMake.value : "");
               fd.append("unitModel", unitModel ? unitModel.value : "");
@@ -16060,24 +16333,22 @@ app.get("/r/:token", async (req, res) => {
 
 app.post("/public/appointment/outcome", async (req, res) => {
   const token = String(req.body?.token ?? "").trim();
-  const outcome = String(req.body?.outcome ?? "").trim();
+  const legacyOutcomeRaw = String(req.body?.outcome ?? "").trim();
+  const primaryOutcomeRaw = String(req.body?.primaryOutcome ?? "").trim();
+  const secondaryOutcomeRaw = String(req.body?.secondaryOutcome ?? "").trim();
   const note = String(req.body?.note ?? "").trim();
-  if (!token || !outcome) return res.status(400).send("Missing data");
+  if (!token) return res.status(400).send("Missing data");
   const conv = findConversationByOutcomeToken(token);
   if (!conv) return res.status(404).send("Not found");
-
-  const allowed = new Set([
-    "showed_up",
-    "no_show",
-    "sold",
-    "hold",
-    "financing_declined",
-    "financing_needs_info",
-    "bought_elsewhere",
-    "follow_up",
-    "other"
-  ]);
-  if (!allowed.has(outcome)) return res.status(400).send("Invalid outcome");
+  const normalizedOutcome = normalizeAppointmentOutcomeInput({
+    legacyOutcome: legacyOutcomeRaw,
+    primaryOutcome: primaryOutcomeRaw,
+    secondaryOutcome: secondaryOutcomeRaw
+  });
+  if (!normalizedOutcome.ok || !normalizedOutcome.legacyStatus) {
+    return res.status(400).send("Invalid outcome");
+  }
+  const outcome = normalizedOutcome.legacyStatus;
 
   const nowIso = new Date().toISOString();
   const unit = readOutcomeUnit(req.body);
@@ -16112,6 +16383,8 @@ app.post("/public/appointment/outcome", async (req, res) => {
   const outcomeTarget = getOutcomeStaffNotifyTarget(conv);
   outcomeTarget.outcome = {
     status: outcome as any,
+    primaryStatus: normalizedOutcome.primaryStatus,
+    secondaryStatus: normalizedOutcome.secondaryStatus,
     note: note || undefined,
     updatedAt: nowIso
   };
@@ -16122,6 +16395,12 @@ app.post("/public/appointment/outcome", async (req, res) => {
       console.log("[outcome-note-actions] failed:", err?.message ?? err);
     }
   }
+  await maybeQueueAppointmentOutcomeRescheduleDraft({
+    conv,
+    primaryStatus: normalizedOutcome.primaryStatus,
+    secondaryStatus: normalizedOutcome.secondaryStatus,
+    source: "public_outcome_form"
+  });
   if (conv.appointment) conv.appointment.updatedAt = new Date().toISOString();
   saveConversation(conv);
   await flushConversationStore();
@@ -16130,7 +16409,9 @@ app.post("/public/appointment/outcome", async (req, res) => {
 
 app.post("/public/appointment/outcome/transcribe", upload.single("audio"), async (req, res) => {
   const token = String(req.body?.token ?? "").trim();
-  const outcomeRaw = String(req.body?.outcome ?? "").trim();
+  const legacyOutcomeRaw = String(req.body?.outcome ?? "").trim();
+  const primaryOutcomeRaw = String(req.body?.primaryOutcome ?? "").trim();
+  const secondaryOutcomeRaw = String(req.body?.secondaryOutcome ?? "").trim();
   if (!token) return res.status(400).json({ ok: false, error: "Missing token" });
   const conv = findConversationByOutcomeToken(token);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
@@ -16140,19 +16421,18 @@ app.post("/public/appointment/outcome/transcribe", upload.single("audio"), async
   const transcript = await transcribeAudioBuffer(file.buffer, file.mimetype);
   if (!transcript) return res.status(500).json({ ok: false, error: "Transcription failed" });
 
-  const allowed = new Set([
-    "showed_up",
-    "no_show",
-    "sold",
-    "hold",
-    "financing_declined",
-    "financing_needs_info",
-    "bought_elsewhere",
-    "follow_up",
-    "other"
-  ]);
-  const fallbackStatus = conv.appointment?.staffNotify?.outcome?.status ?? conv.dealerRide?.staffNotify?.outcome?.status ?? "follow_up";
-  let status = allowed.has(outcomeRaw) ? outcomeRaw : fallbackStatus;
+  const fallbackStatusRaw =
+    conv.appointment?.staffNotify?.outcome?.status ??
+    conv.dealerRide?.staffNotify?.outcome?.status ??
+    "follow_up";
+  const normalizedOutcome = normalizeAppointmentOutcomeInput({
+    legacyOutcome: legacyOutcomeRaw || String(fallbackStatusRaw ?? ""),
+    primaryOutcome: primaryOutcomeRaw,
+    secondaryOutcome: secondaryOutcomeRaw
+  });
+  let status: LegacyAppointmentOutcomeStatus = normalizedOutcome.legacyStatus ?? "follow_up";
+  let primaryStatus: AppointmentPrimaryOutcome = normalizedOutcome.primaryStatus ?? "showed";
+  let secondaryStatus: AppointmentSecondaryOutcome = normalizedOutcome.secondaryStatus ?? "needs_follow_up";
   const financeOutcomeConfidenceMin = Number(process.env.LLM_FINANCE_OUTCOME_CONFIDENCE_MIN ?? 0.8);
   const parsedFinanceOutcome = isFinanceOutcomeContextForConversation(conv)
     ? await safeLlmParse("public_outcome_voice_finance_parser", () =>
@@ -16170,8 +16450,12 @@ app.post("/public/appointment/outcome/transcribe", upload.single("audio"), async
     parsedFinanceOutcome.outcome !== "none";
   if (financeOutcomeAccepted && parsedFinanceOutcome?.outcome === "declined") {
     status = "financing_declined";
+    primaryStatus = "showed";
+    secondaryStatus = "finance_not_approved";
   } else if (financeOutcomeAccepted && parsedFinanceOutcome?.outcome === "needs_more_info") {
     status = "financing_needs_info";
+    primaryStatus = "showed";
+    secondaryStatus = "finance_needs_info";
   }
   const nowIso = new Date().toISOString();
   const unit = readOutcomeUnit(req.body);
@@ -16209,6 +16493,8 @@ app.post("/public/appointment/outcome/transcribe", upload.single("audio"), async
   const outcomeTarget = getOutcomeStaffNotifyTarget(conv);
   outcomeTarget.outcome = {
     status: status as any,
+    primaryStatus,
+    secondaryStatus,
     note: transcript,
     updatedAt: nowIso
   };
@@ -16219,10 +16505,16 @@ app.post("/public/appointment/outcome/transcribe", upload.single("audio"), async
       console.log("[outcome-note-actions] failed:", err?.message ?? err);
     }
   }
+  await maybeQueueAppointmentOutcomeRescheduleDraft({
+    conv,
+    primaryStatus,
+    secondaryStatus,
+    source: "public_outcome_voice"
+  });
   if (conv.appointment) conv.appointment.updatedAt = new Date().toISOString();
   saveConversation(conv);
   await flushConversationStore();
-  return res.json({ ok: true, transcript, status });
+  return res.json({ ok: true, transcript, status, primaryStatus, secondaryStatus });
 });
 
 
@@ -18133,24 +18425,21 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
   const conv = getConversation(convId);
   if (conv) {
     const appointmentOutcome = String(req.body?.appointmentOutcome ?? "").trim();
+    const appointmentPrimaryOutcome = String(req.body?.appointmentPrimaryOutcome ?? "").trim();
+    const appointmentSecondaryOutcome = String(req.body?.appointmentSecondaryOutcome ?? "").trim();
     const appointmentOutcomeNote = String(req.body?.appointmentOutcomeNote ?? "").trim();
-    if (appointmentOutcome && conv?.appointment) {
-      const allowedOutcomes = new Set([
-        "showed_up",
-        "no_show",
-        "sold",
-        "hold",
-        "financing_declined",
-        "financing_needs_info",
-        "bought_elsewhere",
-        "follow_up",
-        "other"
-      ]);
-      if (!allowedOutcomes.has(appointmentOutcome)) {
+    if ((appointmentOutcome || appointmentPrimaryOutcome || appointmentSecondaryOutcome) && conv?.appointment) {
+      const normalizedOutcome = normalizeAppointmentOutcomeInput({
+        legacyOutcome: appointmentOutcome,
+        primaryOutcome: appointmentPrimaryOutcome,
+        secondaryOutcome: appointmentSecondaryOutcome
+      });
+      if (!normalizedOutcome.ok || !normalizedOutcome.legacyStatus) {
         return res.status(400).json({ ok: false, error: "invalid_appointment_outcome" });
       }
+      const appointmentOutcomeStatus = normalizedOutcome.legacyStatus;
       const nowIsoValue = new Date().toISOString();
-      if (appointmentOutcome === "financing_declined") {
+      if (appointmentOutcomeStatus === "financing_declined") {
         const cfg = await getSchedulerConfigHot();
         conv.followUp = {
           mode: "active",
@@ -18165,7 +18454,7 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
           kind: "long_term"
         };
         await notifyBusinessManagerFinancingDeclined(conv, appointmentOutcomeNote || undefined);
-      } else if (appointmentOutcome === "financing_needs_info") {
+      } else if (appointmentOutcomeStatus === "financing_needs_info") {
         setFollowUpMode(conv, "manual_handoff", "credit_app_needs_info");
         stopFollowUpCadence(conv, "manual_handoff");
         await notifyBusinessManagerFinanceOutcome(
@@ -18173,7 +18462,7 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
           "needs_more_info",
           appointmentOutcomeNote || undefined
         );
-      } else if (appointmentOutcome === "sold") {
+      } else if (appointmentOutcomeStatus === "sold") {
         const soldById = conv.appointment?.bookedSalespersonId ?? conv.leadOwner?.id ?? "";
         const soldByName = String(conv.appointment?.bookedSalespersonName ?? conv.leadOwner?.name ?? "").trim();
         const leadVehicle = conv?.lead?.vehicle ?? {};
@@ -18192,16 +18481,24 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
         conv.closedAt = nowIsoValue;
         conv.closedReason = "sold";
         markOpenTodosDoneForConversation(conv.id);
-      } else if (appointmentOutcome === "hold") {
+      } else if (appointmentOutcomeStatus === "hold") {
         setFollowUpMode(conv, "paused_indefinite", "appointment_hold");
         stopFollowUpCadence(conv, "appointment_hold");
       }
       conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
       conv.appointment.staffNotify.outcome = {
-        status: appointmentOutcome as any,
+        status: appointmentOutcomeStatus as any,
+        primaryStatus: normalizedOutcome.primaryStatus,
+        secondaryStatus: normalizedOutcome.secondaryStatus,
         note: appointmentOutcomeNote || undefined,
         updatedAt: nowIsoValue
       };
+      await maybeQueueAppointmentOutcomeRescheduleDraft({
+        conv,
+        primaryStatus: normalizedOutcome.primaryStatus,
+        secondaryStatus: normalizedOutcome.secondaryStatus,
+        source: "todo_done_modal"
+      });
       conv.appointment.updatedAt = nowIsoValue;
     }
     const resolution = String(req.body?.resolution ?? "resume").trim();

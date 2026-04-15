@@ -64,12 +64,24 @@ export type AppointmentMemory = {
       status:
         | "showed_up"
         | "no_show"
+        | "cancelled"
         | "sold"
         | "hold"
         | "financing_declined"
         | "financing_needs_info"
         | "bought_elsewhere"
+        | "lost"
         | "follow_up"
+        | "other";
+      primaryStatus?: "showed" | "did_not_show" | "cancelled";
+      secondaryStatus?:
+        | "sold"
+        | "hold"
+        | "needs_follow_up"
+        | "lost"
+        | "finance_not_approved"
+        | "finance_needs_info"
+        | "not_ready"
         | "other";
       note?: string;
       updatedAt: string;
