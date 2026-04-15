@@ -1459,6 +1459,11 @@ export default function Home() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [needsBootstrap, setNeedsBootstrap] = useState(false);
   const [loginForm, setLoginForm] = useState({ email: "", password: "", name: "" });
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotBusy, setForgotBusy] = useState(false);
+  const [forgotError, setForgotError] = useState<string | null>(null);
+  const [forgotMessage, setForgotMessage] = useState<string | null>(null);
   const [usersList, setUsersList] = useState<any[]>([]);
   const [userForm, setUserForm] = useState({
     email: "",
@@ -7180,6 +7185,31 @@ export default function Home() {
     }
   }
 
+  async function submitForgotPassword() {
+    setForgotError(null);
+    setForgotMessage(null);
+    const email = String(forgotEmail || loginForm.email || "").trim();
+    if (!email) {
+      setForgotError("Enter your email address.");
+      return;
+    }
+    setForgotBusy(true);
+    try {
+      const resp = await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email })
+      });
+      const json = await resp.json();
+      if (!resp.ok) throw new Error(json?.error ?? "Failed to request reset link");
+      setForgotMessage(json?.message ?? "If that account exists, a reset link has been sent.");
+    } catch (err: any) {
+      setForgotError(err?.message ?? "Failed to request reset link");
+    } finally {
+      setForgotBusy(false);
+    }
+  }
+
   async function saveCalendarEdit() {
     if (!calendarEdit?.calendarId) {
       setSaveToast("Missing calendar owner.");
@@ -7446,6 +7476,42 @@ export default function Home() {
             value={loginForm.password}
             onChange={e => setLoginForm({ ...loginForm, password: e.target.value })}
           />
+          {!needsBootstrap ? (
+            <button
+              className="text-xs underline"
+              type="button"
+              onClick={() => {
+                const nextOpen = !forgotOpen;
+                setForgotOpen(nextOpen);
+                setForgotError(null);
+                setForgotMessage(null);
+                if (nextOpen && !forgotEmail && loginForm.email) setForgotEmail(loginForm.email);
+              }}
+            >
+              Forgot password?
+            </button>
+          ) : null}
+          {forgotOpen && !needsBootstrap ? (
+            <div className="border rounded p-3 space-y-2 bg-gray-50">
+              <div className="text-xs font-medium">Reset password by email</div>
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="Email"
+                value={forgotEmail}
+                onChange={e => setForgotEmail(e.target.value)}
+              />
+              <button
+                className="px-3 py-2 border rounded text-sm bg-white"
+                type="button"
+                onClick={submitForgotPassword}
+                disabled={forgotBusy}
+              >
+                {forgotBusy ? "Sending..." : "Send reset link"}
+              </button>
+              {forgotError ? <div className="text-xs text-red-600">{forgotError}</div> : null}
+              {forgotMessage ? <div className="text-xs text-green-700">{forgotMessage}</div> : null}
+            </div>
+          ) : null}
           {authError ? <div className="text-xs text-red-600">{authError}</div> : null}
           <button
             className="w-full px-3 py-2 border rounded text-sm"

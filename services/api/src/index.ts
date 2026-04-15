@@ -269,6 +269,8 @@ import {
   createSession,
   getSession,
   deleteSession,
+  createPasswordResetForEmail,
+  resetPasswordWithToken,
   getUserById,
   hasAnyUsers
 } from "./domain/userStore.js";
@@ -1726,6 +1728,8 @@ function isPublicPath(pathname: string): boolean {
     pathname.startsWith("/integrations/google") ||
     pathname.startsWith("/debug/inbound") ||
     pathname.startsWith("/auth/login") ||
+    pathname.startsWith("/auth/forgot-password") ||
+    pathname.startsWith("/auth/reset-password") ||
     pathname.startsWith("/auth/me")
   );
 }
@@ -2178,6 +2182,14 @@ function getEmailConfig(profile: any) {
     (profile?.replyToEmail ?? process.env.SENDGRID_REPLY_TO ?? "").trim() || undefined;
   const signature = String(profile?.emailSignature ?? "").trim() || undefined;
   return { from, replyTo, signature };
+}
+
+function buildPasswordResetLink(profile: any, token: string): string | null {
+  const tokenText = String(token ?? "").trim();
+  if (!tokenText) return null;
+  const base = deriveStaffWebBaseUrl(profile);
+  if (!base) return null;
+  return `${base}/reset-password?token=${encodeURIComponent(tokenText)}`;
 }
 
 function appendFallbackEmailSignoff(body: string, dealerProfile: any): string {
@@ -3319,6 +3331,85 @@ app.post("/auth/login", async (req, res) => {
       permissions: user.permissions
     }
   });
+});
+
+app.post("/auth/forgot-password", async (req, res) => {
+  if (AUTH_DISABLED) return res.json({ ok: true });
+  const email = String(req.body?.email ?? "").trim().toLowerCase();
+  if (!email) return res.status(400).json({ ok: false, error: "Missing email" });
+  try {
+    const { user, token, expiresAt } = await createPasswordResetForEmail(email);
+    if (user && token) {
+      const profile = await getDealerProfileHot();
+      const emailCfg = getEmailConfig(profile);
+      const from =
+        emailCfg.from ||
+        String(process.env.NOTIFICATION_FROM_EMAIL ?? "").trim() ||
+        String(process.env.SENDGRID_FROM_EMAIL ?? "").trim() ||
+        undefined;
+      const resetLink = buildPasswordResetLink(profile, token);
+      if (!from || !resetLink) {
+        console.warn("[auth] forgot-password email skipped: missing from/reset link", {
+          hasFrom: !!from,
+          hasResetLink: !!resetLink
+        });
+      } else {
+        const dealerName = String(profile?.dealerName ?? "").trim() || "American Harley-Davidson";
+        const name =
+          String(user.firstName ?? "").trim() ||
+          String(user.name ?? "").trim() ||
+          String(user.email ?? "").trim();
+        const expiresText = expiresAt
+          ? new Date(expiresAt).toLocaleString("en-US", { timeZone: "America/New_York" })
+          : "";
+        const subject = `${dealerName}: Reset your password`;
+        const text =
+          `Hi ${name},\n\n` +
+          "We received a request to reset your password.\n\n" +
+          `Reset your password here: ${resetLink}\n\n` +
+          (expiresText ? `This link expires at ${expiresText} ET.\n\n` : "") +
+          "If you did not request this, you can ignore this email.";
+        await sendEmail({
+          to: user.email,
+          from,
+          subject,
+          text,
+          replyTo: emailCfg.replyTo
+        });
+      }
+    }
+    return res.json({
+      ok: true,
+      message: "If that account exists, a reset link has been sent."
+    });
+  } catch (err: any) {
+    console.warn("[auth] forgot-password failed:", err?.message ?? err);
+    return res.json({
+      ok: true,
+      message: "If that account exists, a reset link has been sent."
+    });
+  }
+});
+
+app.post("/auth/reset-password", async (req, res) => {
+  if (AUTH_DISABLED) return res.json({ ok: true });
+  const token = String(req.body?.token ?? "").trim();
+  const password = String(req.body?.password ?? "");
+  if (!token || !password) {
+    return res.status(400).json({ ok: false, error: "Missing token/password" });
+  }
+  if (password.length < 8) {
+    return res.status(400).json({ ok: false, error: "Password must be at least 8 characters" });
+  }
+  try {
+    const updated = await resetPasswordWithToken(token, password);
+    if (!updated) {
+      return res.status(400).json({ ok: false, error: "Invalid or expired reset token" });
+    }
+    return res.json({ ok: true });
+  } catch (err: any) {
+    return res.status(500).json({ ok: false, error: err?.message ?? "Failed to reset password" });
+  }
 });
 
 app.post("/auth/logout", async (req, res) => {
