@@ -542,7 +542,9 @@ async function requireFilledText(
   selectors: string[]
 ): Promise<void> {
   const text = String(value ?? "").trim();
-  if (!text) return;
+  if (!text) {
+    throw new Error(`visit: required text value missing for "${label}"`);
+  }
   const ok = await bestEffortFillText(page, step, label, text, selectors);
   if (!ok) {
     throw new Error(`visit: required text field "${label}" not found`);
@@ -557,7 +559,9 @@ async function requireSelectedValue(
   selectors: string[]
 ): Promise<void> {
   const text = String(value ?? "").trim();
-  if (!text) return;
+  if (!text) {
+    throw new Error(`visit: required select value missing for "${label}"`);
+  }
   const ok = await bestEffortSelect(page, step, label, text, selectors);
   if (!ok) {
     throw new Error(`visit: required select field "${label}" not found`);
@@ -621,7 +625,12 @@ async function fillDealershipVisitDeliveredDetails(
     "select[name*='condition']"
   ]);
 
-  const yearSelected = await bestEffortSelect(page, step, "year", details.year, [
+  const yearText = String(details.year ?? "").trim();
+  if (!yearText) {
+    throw new Error('visit: required text value missing for "year"');
+  }
+
+  const yearSelected = await bestEffortSelect(page, step, "year", yearText, [
     "#TLPLOG_vehicle_year",
     "#TLPLOG_year",
     "#TLPLOG_model_year",
@@ -629,14 +638,14 @@ async function fillDealershipVisitDeliveredDetails(
     "select[name*='year']"
   ]);
   if (!yearSelected) {
-    const yearFilled = await bestEffortFillText(page, step, "year", details.year, [
+    const yearFilled = await bestEffortFillText(page, step, "year", yearText, [
       "#TLPLOG_vehicle_year",
       "#TLPLOG_year",
       "#TLPLOG_model_year",
       "#vehicle_year",
       "input[name*='year']"
     ]);
-    if (String(details.year ?? "").trim() && !yearFilled) {
+    if (!yearFilled) {
       throw new Error("visit: required year field not found");
     }
   }
