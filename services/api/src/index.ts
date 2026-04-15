@@ -4699,6 +4699,17 @@ function ensureCadenceAnchorMessage(args: {
   return renderFollowUpTemplate("Hey {name}, just checking in. I’m here if you need anything.", ctx);
 }
 
+function buildCadenceCheckInFallbacks(name: string, labelClause?: string): string[] {
+  const cleanName = normalizeDisplayCase(name || "there");
+  const clause = String(labelClause ?? "").trim();
+  const about = clause ? `${clause}` : "";
+  return [
+    `Hey ${cleanName}, quick check${about} — did you get my last message? If you’re free, you’re welcome to stop in and we can see what we can do for you.`,
+    `Hey ${cleanName}, just following up${about}. If you want, come by and we can go over bikes and options in person.`,
+    `Hey ${cleanName}, checking back in${about}. If this week is better, stop in and we can review options and numbers together.`
+  ];
+}
+
 function isMediaOfferFollowUpText(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t) return false;
@@ -5121,11 +5132,11 @@ async function buildCadenceRegeneratedDraft(
       labelClause,
       isPostSale: false
     });
-    message = selectNonRepeatingCadenceMessage(conv, message, [
-      `Hey ${firstName}, just checking in — I'm here if you want to revisit this.`,
-      `Hey ${firstName}, just checking in — whenever you're ready, I can help with next steps.`,
-      `Hey ${firstName}, just checking in — if timing changed, just let me know and I can adjust.`
-    ]);
+    message = selectNonRepeatingCadenceMessage(
+      conv,
+      message,
+      buildCadenceCheckInFallbacks(firstName, labelClause)
+    );
     const contextLine = getFollowUpContextLine(conv, now);
     if (contextLine && !message.toLowerCase().includes(contextLine.toLowerCase())) {
       message = `${message} ${contextLine}`.trim();
@@ -5191,11 +5202,11 @@ async function buildCadenceRegeneratedDraft(
     labelClause,
     isPostSale: false
   });
-  message = selectNonRepeatingCadenceMessage(conv, message, [
-    `Hey ${firstName}, just checking in — I'm here if you want to revisit this.`,
-    `Hey ${firstName}, just checking in — whenever you're ready, I can help with next steps.`,
-    `Hey ${firstName}, just checking in — if timing changed, just let me know and I can adjust.`
-  ]);
+  message = selectNonRepeatingCadenceMessage(
+    conv,
+    message,
+    buildCadenceCheckInFallbacks(firstName, labelClause)
+  );
   const contextLine = getFollowUpContextLine(conv, now);
   if (contextLine && !message.toLowerCase().includes(contextLine.toLowerCase())) {
     message = `${message} ${contextLine}`.trim();
@@ -15014,9 +15025,7 @@ async function processDueFollowUps() {
         "No rush — if anything comes up, just reach out."
       ]
       : [
-          `Hey ${firstName}, just checking in — I'm here if you want to revisit this.`,
-          `Hey ${firstName}, just checking in — whenever you're ready, I can help with next steps.`,
-          `Hey ${firstName}, just checking in — if timing changed, just let me know and I can adjust.`
+          ...buildCadenceCheckInFallbacks(firstName, labelClause)
         ];
     if (!leadUnitAvailabilityOverride) {
       message = selectNonRepeatingCadenceMessage(
