@@ -18277,6 +18277,10 @@ app.get("/todos", requirePermission("canAccessTodos"), async (req, res) => {
         const appointmentWhenText = String(conv?.appointment?.whenText ?? "").trim() || null;
         const appointmentWhenIso = String(conv?.appointment?.whenIso ?? "").trim() || null;
         const appointmentOutcomeStatus = String(conv?.appointment?.staffNotify?.outcome?.status ?? "").trim() || null;
+        const appointmentOutcomePrimaryStatus =
+          String(conv?.appointment?.staffNotify?.outcome?.primaryStatus ?? "").trim() || null;
+        const appointmentOutcomeSecondaryStatus =
+          String(conv?.appointment?.staffNotify?.outcome?.secondaryStatus ?? "").trim() || null;
         const appointmentOutcomeNote = String(conv?.appointment?.staffNotify?.outcome?.note ?? "").trim() || null;
         const action = deriveTodoActionLabel(t, conv, actionTimeZone);
         return {
@@ -18287,6 +18291,8 @@ app.get("/todos", requirePermission("canAccessTodos"), async (req, res) => {
           appointmentWhenText,
           appointmentWhenIso,
           appointmentOutcomeStatus,
+          appointmentOutcomePrimaryStatus,
+          appointmentOutcomeSecondaryStatus,
           appointmentOutcomeNote,
           ownerDisplayName,
           ownerDisplayType,

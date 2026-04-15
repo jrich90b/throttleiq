@@ -793,6 +793,16 @@ type ConversationDetail = {
     staffNotify?: {
       outcome?: {
         status?: string;
+        primaryStatus?: "showed" | "did_not_show" | "cancelled";
+        secondaryStatus?:
+          | "sold"
+          | "hold"
+          | "needs_follow_up"
+          | "lost"
+          | "finance_not_approved"
+          | "finance_needs_info"
+          | "not_ready"
+          | "other";
         note?: string;
         updatedAt?: string;
       };
@@ -835,6 +845,8 @@ type TodoItem = {
   appointmentWhenText?: string | null;
   appointmentWhenIso?: string | null;
   appointmentOutcomeStatus?: string | null;
+  appointmentOutcomePrimaryStatus?: string | null;
+  appointmentOutcomeSecondaryStatus?: string | null;
   appointmentOutcomeNote?: string | null;
   dueAt?: string | null;
   reminderAt?: string | null;
@@ -895,6 +907,83 @@ const APPOINTMENT_SECONDARY_OPTIONS_BY_PRIMARY: Record<
     { value: "other", label: "Other" }
   ]
 };
+
+const APPOINTMENT_PRIMARY_LABELS: Record<"showed" | "did_not_show" | "cancelled", string> = {
+  showed: "Showed",
+  did_not_show: "Did not show",
+  cancelled: "Cancelled"
+};
+
+const APPOINTMENT_SECONDARY_LABELS: Record<string, string> = {
+  sold: "Sold",
+  hold: "Hold",
+  needs_follow_up: "Needs follow up",
+  lost: "Lost / bought elsewhere",
+  finance_not_approved: "Finance not approved",
+  finance_needs_info: "Finance needs more info",
+  not_ready: "Not ready",
+  other: "Other"
+};
+
+function normalizeAppointmentPrimaryValue(raw?: string | null): "showed" | "did_not_show" | "cancelled" | null {
+  const value = String(raw ?? "").trim().toLowerCase();
+  if (!value) return null;
+  if (value === "showed" || value === "showed_up") return "showed";
+  if (value === "did_not_show" || value === "no_show") return "did_not_show";
+  if (value === "cancelled" || value === "canceled") return "cancelled";
+  return null;
+}
+
+function normalizeAppointmentSecondaryValue(raw?: string | null): string | null {
+  const value = String(raw ?? "").trim().toLowerCase();
+  if (!value) return null;
+  if (value === "follow_up") return "needs_follow_up";
+  if (value === "bought_elsewhere") return "lost";
+  if (value === "financing_declined") return "finance_not_approved";
+  if (value === "financing_needs_info") return "finance_needs_info";
+  return value;
+}
+
+function mapLegacyAppointmentOutcomeToPair(legacyRaw?: string | null): {
+  primary: "showed" | "did_not_show" | "cancelled";
+  secondary: string;
+} | null {
+  const legacy = String(legacyRaw ?? "").trim().toLowerCase();
+  if (!legacy) return null;
+  if (legacy === "sold") return { primary: "showed", secondary: "sold" };
+  if (legacy === "hold") return { primary: "showed", secondary: "hold" };
+  if (legacy === "financing_declined") return { primary: "showed", secondary: "finance_not_approved" };
+  if (legacy === "financing_needs_info") return { primary: "showed", secondary: "finance_needs_info" };
+  if (legacy === "lost" || legacy === "bought_elsewhere") return { primary: "showed", secondary: "lost" };
+  if (legacy === "other") return { primary: "showed", secondary: "other" };
+  if (legacy === "cancelled" || legacy === "canceled") return { primary: "cancelled", secondary: "needs_follow_up" };
+  if (legacy === "no_show") return { primary: "did_not_show", secondary: "needs_follow_up" };
+  if (legacy === "showed_up" || legacy === "follow_up") return { primary: "showed", secondary: "needs_follow_up" };
+  return null;
+}
+
+function formatAppointmentOutcomeDisplay(args: {
+  primary?: string | null;
+  secondary?: string | null;
+  legacy?: string | null;
+}): string | null {
+  const normalizedPrimary = normalizeAppointmentPrimaryValue(args.primary);
+  const normalizedSecondary = normalizeAppointmentSecondaryValue(args.secondary);
+  if (normalizedPrimary && normalizedSecondary) {
+    const primaryLabel = APPOINTMENT_PRIMARY_LABELS[normalizedPrimary] ?? "Showed";
+    const secondaryLabel =
+      APPOINTMENT_SECONDARY_LABELS[normalizedSecondary] ??
+      normalizedSecondary.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    return `${primaryLabel} • ${secondaryLabel}`;
+  }
+  const legacyPair = mapLegacyAppointmentOutcomeToPair(args.legacy);
+  if (!legacyPair) return null;
+  const primaryLabel = APPOINTMENT_PRIMARY_LABELS[legacyPair.primary] ?? "Showed";
+  const secondaryLabel =
+    APPOINTMENT_SECONDARY_LABELS[legacyPair.secondary] ??
+    legacyPair.secondary.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+  return `${primaryLabel} • ${secondaryLabel}`;
+}
 
 function todoActionLabel(todo: TodoItem): string {
   const explicitAction = String(todo.action ?? "").trim();
@@ -8610,6 +8699,13 @@ export default function Home() {
                         sectionType !== "appointment" && !!requestedCallTime && !actionAlreadyHasRequestedTime;
                       const ownerDisplay = String(t.ownerDisplayName ?? t.ownerName ?? t.leadOwnerName ?? "").trim();
                       const appointmentOutcomeStatus = String(t.appointmentOutcomeStatus ?? "").trim();
+                      const appointmentOutcomePrimaryStatus = String(t.appointmentOutcomePrimaryStatus ?? "").trim();
+                      const appointmentOutcomeSecondaryStatus = String(t.appointmentOutcomeSecondaryStatus ?? "").trim();
+                      const appointmentOutcomeLabel = formatAppointmentOutcomeDisplay({
+                        primary: appointmentOutcomePrimaryStatus || null,
+                        secondary: appointmentOutcomeSecondaryStatus || null,
+                        legacy: appointmentOutcomeStatus || null
+                      });
                       return (
                         <div key={t.id} className={`p-4 flex items-start justify-between gap-4 ${rowIdx > 0 ? "border-t" : ""}`}>
                           <div className="min-w-0 flex-1">
@@ -8646,9 +8742,9 @@ export default function Home() {
                                 Appointment time: {appointmentTime}
                               </div>
                             ) : null}
-                            {sectionType === "appointment" && appointmentOutcomeStatus ? (
+                            {sectionType === "appointment" && appointmentOutcomeLabel ? (
                               <div className="text-xs text-gray-600 mt-1">
-                                Outcome: {appointmentOutcomeStatus.replace(/_/g, " ")}
+                                Outcome: {appointmentOutcomeLabel}
                               </div>
                             ) : null}
                             <button
@@ -8674,7 +8770,7 @@ export default function Home() {
                             <button
                               className="px-3 py-2 border rounded text-sm text-gray-600"
                               onClick={() => {
-                                if (sectionType === "appointment" && !appointmentOutcomeStatus) {
+                                if (sectionType === "appointment" && !appointmentOutcomeLabel) {
                                   setAppointmentCloseTarget(t);
                                   setAppointmentClosePrimaryOutcome("showed");
                                   setAppointmentCloseSecondaryOutcome("needs_follow_up");
@@ -12088,6 +12184,16 @@ export default function Home() {
                     ) : null}
                   </div>
                 ) : null}
+                {(() => {
+                  const outcome = selectedConv.appointment?.staffNotify?.outcome;
+                  const outcomeLabel = formatAppointmentOutcomeDisplay({
+                    primary: outcome?.primaryStatus ?? null,
+                    secondary: outcome?.secondaryStatus ?? null,
+                    legacy: outcome?.status ?? null
+                  });
+                  if (!outcomeLabel) return null;
+                  return <div className="text-xs text-gray-600 mt-1">Outcome: {outcomeLabel}</div>;
+                })()}
                 {(() => {
                   const outcome = selectedConv.appointment?.staffNotify?.outcome;
                   if (!outcome?.note) return null;
