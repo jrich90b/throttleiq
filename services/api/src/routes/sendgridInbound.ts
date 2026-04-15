@@ -308,6 +308,47 @@ function ensureDealerRideOutcomeToken(conv: any): string {
   return token;
 }
 
+function isDealerLeadAppAdfBody(body: string | null | undefined): boolean {
+  return /event name:\s*dealer test ride|demo bikes ridden|dealer lead app/i.test(String(body ?? ""));
+}
+
+function getDlaAutoReplyRepeatMinDays(): number {
+  const raw = Number(process.env.DLA_AUTO_REPLY_REPEAT_MIN_DAYS ?? 183);
+  if (!Number.isFinite(raw) || raw <= 0) return 183;
+  return Math.max(30, Math.round(raw));
+}
+
+function shouldSendDealerLeadCustomerReply(
+  conv: any,
+  event: InboundMessageEvent
+): { allow: boolean; reason: string; lastAt?: string; gapDays?: number } {
+  const messages = Array.isArray(conv?.messages) ? conv.messages : [];
+  if (!messages.length) return { allow: true, reason: "first_dla_in_thread" };
+  const priorInboundDla = messages
+    .slice(0, -1)
+    .filter(
+      (m: any) =>
+        m &&
+        m.direction === "in" &&
+        String(m.provider ?? "").toLowerCase() === "sendgrid_adf" &&
+        isDealerLeadAppAdfBody(String(m.body ?? ""))
+    );
+  if (!priorInboundDla.length) return { allow: true, reason: "first_dla_in_thread" };
+  const last = priorInboundDla[priorInboundDla.length - 1];
+  const lastMs = new Date(String(last?.at ?? "")).getTime();
+  const currentMs = new Date(String(event.receivedAt ?? "")).getTime();
+  const minGapDays = getDlaAutoReplyRepeatMinDays();
+  const minGapMs = minGapDays * 24 * 60 * 60 * 1000;
+  if (!Number.isFinite(lastMs) || !Number.isFinite(currentMs)) {
+    return { allow: false, reason: "dla_recent_repeat_unknown_time", lastAt: String(last?.at ?? "") || undefined };
+  }
+  const gapDays = (currentMs - lastMs) / (24 * 60 * 60 * 1000);
+  if (currentMs - lastMs >= minGapMs) {
+    return { allow: true, reason: "dla_repeat_after_gap", lastAt: String(last?.at ?? "") || undefined, gapDays };
+  }
+  return { allow: false, reason: "dla_recent_repeat", lastAt: String(last?.at ?? "") || undefined, gapDays };
+}
+
 function isStickyClosedJourney(conv: any): boolean {
   const closedReason = String(conv?.closedReason ?? "").toLowerCase();
   return (
@@ -2943,16 +2984,26 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       `${firstName ? `Hi ${firstName} — ` : "Hi — "}This is ${ownerFirst} at ${dealerName}. ` +
       "Thanks again for coming in for the test ride. " +
       "If any questions come up or you’d like to discuss options further, just text me anytime.";
-    const preferredMethod = String(conv.lead?.preferredContactMethod ?? "").trim().toLowerCase();
-    if (preferredMethod === "email") {
-      conv.emailDraft = customerAck;
-    } else if (preferredMethod === "phone") {
-      addCallTodoIfMissing(conv, "Preferred contact method is phone. Call customer (no auto text/email).");
+    const shouldSendCustomerReply = shouldSendDealerLeadCustomerReply(conv, event);
+    if (shouldSendCustomerReply.allow) {
+      const preferredMethod = String(conv.lead?.preferredContactMethod ?? "").trim().toLowerCase();
+      if (preferredMethod === "email") {
+        conv.emailDraft = customerAck;
+      } else if (preferredMethod === "phone") {
+        addCallTodoIfMissing(conv, "Preferred contact method is phone. Call customer (no auto text/email).");
+      } else {
+        appendOutbound(conv, "dealership", leadKey, customerAck, "draft_ai");
+      }
     } else {
-      appendOutbound(conv, "dealership", leadKey, customerAck, "draft_ai");
+      addTodo(
+        conv,
+        "note",
+        `Suppressed repeat Dealer Lead App customer auto-reply (${shouldSendCustomerReply.reason}).`
+      );
     }
     setFollowUpMode(conv, "manual_handoff", "dealer_ride_no_purchase");
     stopFollowUpCadence(conv, "manual_handoff");
+    const shouldIncludeDraft = shouldSendCustomerReply.allow;
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -2965,7 +3016,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       intent: "GENERAL",
       stage: "ENGAGED",
       note: "dealer_ride_no_purchase_manual_handoff",
-      draft: customerAck,
+      draft: shouldIncludeDraft ? customerAck : undefined,
       staffSms
     });
   }
