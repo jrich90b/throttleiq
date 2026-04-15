@@ -19681,6 +19681,72 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!text) return;
 
     const lower = text.toLowerCase();
+    const explicitWatchVerb =
+      /\b(keep (?:an|any) eye out|watch for|let you know (?:if|when)|text you (?:if|when|as soon as)|notify you (?:if|when))\b/i.test(
+        lower
+      ) ||
+      (/\b(i(?:'|’)ll|i will|we(?:'|’)ll|we will)\b/i.test(lower) &&
+        /\b(let you know|text you|notify you)\b/i.test(lower));
+    const inventoryAvailabilityCue =
+      /\b(comes in|lands|in stock|available|availability|pre[- ]?owned|used|new|bike|model|road glide|street glide|road king|sportster|softail|breakout|touring|trike|pan america|nightster)\b/i.test(
+        lower
+      );
+    const outboundWatchCue = explicitWatchVerb && inventoryAvailabilityCue;
+    const watchParserEligible =
+      process.env.LLM_ENABLED === "1" &&
+      process.env.LLM_UNIFIED_SLOT_PARSER_ENABLED === "1" &&
+      !!process.env.OPENAI_API_KEY;
+    if (outboundWatchCue && watchParserEligible) {
+      const outboundSemanticSlots = await safeLlmParse("manual_outbound_watch_parser", () =>
+        parseUnifiedSemanticSlotsWithLLM({
+          text,
+          history: buildHistory(conv, 8),
+          lead: conv.lead,
+          inventoryWatch: conv.inventoryWatch,
+          inventoryWatchPending: conv.inventoryWatchPending,
+          tradePayoff: conv.tradePayoff,
+          dialogState: getDialogState(conv)
+        })
+      );
+      const outboundWatchConfidence =
+        typeof outboundSemanticSlots?.watchConfidence === "number"
+          ? outboundSemanticSlots.watchConfidence
+          : typeof outboundSemanticSlots?.confidence === "number"
+            ? outboundSemanticSlots.confidence
+            : 0;
+      const outboundWatchConfidenceMin = Number(process.env.LLM_SEMANTIC_SLOT_CONFIDENCE_MIN ?? 0.76);
+      const outboundWatchAccepted =
+        outboundSemanticSlots?.watchAction === "set_watch" &&
+        outboundWatchConfidence >= outboundWatchConfidenceMin;
+      if (outboundWatchAccepted) {
+        const watches = await deriveContextNoteWatches(conv, text, outboundSemanticSlots);
+        if (watches.length) {
+          const existing = Array.isArray(conv.inventoryWatches)
+            ? (conv.inventoryWatches as InventoryWatch[])
+            : conv.inventoryWatch
+              ? [conv.inventoryWatch as InventoryWatch]
+              : [];
+          const { merged, added } = mergeInventoryWatches(existing, watches);
+          if (added.length) {
+            conv.inventoryWatches = merged;
+            conv.inventoryWatch = merged[0];
+            conv.inventoryWatchPending = undefined;
+            setDialogState(conv, "inventory_watch_active");
+            setFollowUpMode(conv, "holding_inventory", "inventory_watch");
+            stopFollowUpCadence(conv, "inventory_watch");
+            recordRouteOutcome("live", "manual_outbound_watch_set", {
+              convId: conv.id,
+              leadKey: conv.leadKey,
+              channel: opts?.channel ?? null,
+              added: added.length,
+              confidence: outboundWatchConfidence
+            });
+            return;
+          }
+        }
+      }
+    }
+
     const asksForTimeChoice =
       /\b(what time|what day|which day|which time|works best|what works|do any of these times work|let me know what time)\b/i.test(
         lower
