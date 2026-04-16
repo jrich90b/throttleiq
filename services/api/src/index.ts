@@ -1641,6 +1641,131 @@ async function buildNoResponseWebFallbackReply(args: {
   };
 }
 
+function isInventoryBrowseLinkRequest(text: string | null | undefined): boolean {
+  const t = String(text ?? "").trim().toLowerCase();
+  if (!t) return false;
+  const hasInventoryNoun = /\b(inventory|bikes?|units?|selection|what do you have)\b/.test(t);
+  const hasBrowseVerb = /\b(link|url|site|website|browse|see|view|check|look at|send)\b/.test(t);
+  if (hasInventoryNoun && hasBrowseVerb) return true;
+  if (/\b(send|share)\b[\s\S]{0,24}\b(inventory|bikes?|units?)\b/.test(t)) return true;
+  if (/\b(link|url)\b[\s\S]{0,24}\b(inventory|bikes?|units?)\b/.test(t)) return true;
+  return false;
+}
+
+function normalizeHttpUrl(raw: string | null | undefined): string | null {
+  const value = String(raw ?? "").trim();
+  if (!value) return null;
+  try {
+    const u = new URL(value);
+    const proto = String(u.protocol ?? "").toLowerCase();
+    if (proto !== "http:" && proto !== "https:") return null;
+    u.hash = "";
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
+function inventoryListUrlsFromEnv(): string[] {
+  const raw = String(process.env.INVENTORY_LIST_URLS ?? "").trim();
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map(v => normalizeHttpUrl(v))
+    .filter((v): v is string => !!v);
+}
+
+function deriveInventoryConditionUrl(rawUrl: string, condition: "new" | "used" | "all"): string {
+  try {
+    const u = new URL(rawUrl);
+    if (u.searchParams.has("search_text")) u.searchParams.delete("search_text");
+    u.searchParams.set("condition", condition);
+    if (u.searchParams.has("page")) u.searchParams.delete("page");
+    return u.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
+async function buildInventoryBrowseReply(args: {
+  text: string;
+  profile?: DealerProfileSnapshot | null;
+}): Promise<{
+  reply: string;
+  newUrl: string | null;
+  usedUrl: string | null;
+  source: "profile_env" | "web_search";
+}> {
+  const newCandidates = new Set<string>();
+  const usedCandidates = new Set<string>();
+  const allCandidates = new Set<string>();
+  const profile = args.profile ?? null;
+  const fromProfileWebsite = normalizeHttpUrl(profile?.website ?? null);
+  if (fromProfileWebsite) allCandidates.add(fromProfileWebsite);
+  const fromUsedProfile =
+    normalizeHttpUrl((profile as any)?.usedInventoryUrl ?? null) ??
+    normalizeHttpUrl((profile as any)?.preownedInventoryUrl ?? null);
+  if (fromUsedProfile) usedCandidates.add(fromUsedProfile);
+
+  for (const listUrl of inventoryListUrlsFromEnv()) {
+    allCandidates.add(deriveInventoryConditionUrl(listUrl, "all"));
+    newCandidates.add(deriveInventoryConditionUrl(listUrl, "new"));
+    usedCandidates.add(deriveInventoryConditionUrl(listUrl, "used"));
+  }
+
+  let source: "profile_env" | "web_search" = "profile_env";
+
+  const pickFirst = (set: Set<string>): string | null => {
+    for (const v of set) return v;
+    return null;
+  };
+
+  let newUrl = pickFirst(newCandidates) ?? pickFirst(allCandidates);
+  let usedUrl = pickFirst(usedCandidates) ?? pickFirst(allCandidates);
+
+  if ((!newUrl || !usedUrl) && isWebFallbackEnabled()) {
+    const host = String(fromProfileWebsite ?? "").trim();
+    const hostQuery = host ? `site:${new URL(host).hostname} ` : "";
+    const [newSearch, usedSearch] = await Promise.all([
+      searchGoogleCse({
+        query: `${hostQuery}new motorcycle inventory`.trim(),
+        profile
+      }),
+      searchGoogleCse({
+        query: `${hostQuery}used motorcycle inventory`.trim(),
+        profile
+      })
+    ]);
+    const searchedNew = normalizeHttpUrl(newSearch?.hits?.[0]?.url ?? null);
+    const searchedUsed = normalizeHttpUrl(usedSearch?.hits?.[0]?.url ?? null);
+    if (!newUrl && searchedNew) newUrl = searchedNew;
+    if (!usedUrl && searchedUsed) usedUrl = searchedUsed;
+    if (searchedNew || searchedUsed) source = "web_search";
+  }
+
+  const firstAvailable = newUrl ?? usedUrl ?? pickFirst(allCandidates);
+  if (!newUrl && firstAvailable) newUrl = firstAvailable;
+  if (!usedUrl && firstAvailable) usedUrl = firstAvailable;
+
+  let reply = "";
+  if (newUrl && usedUrl) {
+    reply =
+      `Absolutely — here are quick inventory links:\n` +
+      `New: ${newUrl}\n` +
+      `Used: ${usedUrl}\n` +
+      `If you want, tell me model + budget and I’ll text 2–3 matches.`;
+  } else if (firstAvailable) {
+    reply =
+      `Absolutely — here’s our inventory link: ${firstAvailable}\n` +
+      `If you want, tell me model + budget and I’ll text 2–3 matches.`;
+  } else {
+    reply =
+      "Absolutely — I can send inventory options directly. Tell me new/used, model, and budget, and I’ll text 2–3 matches.";
+  }
+
+  return { reply, newUrl, usedUrl, source };
+}
+
 function prependBlendedLeadIn(draftText: string, leadInText: string): string {
   const draft = String(draftText ?? "").trim();
   const leadIn = String(leadInText ?? "")
@@ -20669,6 +20794,25 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     });
     return res.json({ ok: true, conversation: conv, draft: invariant.draftText });
   };
+  if (event.provider === "twilio" && isInventoryBrowseLinkRequest(String(event.body ?? ""))) {
+    const dealerProfile = await getDealerProfileHot();
+    const inventoryBrowse = await buildInventoryBrowseReply({
+      text: String(event.body ?? ""),
+      profile: dealerProfile
+    });
+    setDialogState(conv, "inventory_init");
+    recordRouteOutcome("regen", "inventory_browse_links", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      source: inventoryBrowse.source,
+      hasNewUrl: !!inventoryBrowse.newUrl,
+      hasUsedUrl: !!inventoryBrowse.usedUrl
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(inventoryBrowse.reply);
+    }
+    return respondWithSmsRegeneratedDraft(inventoryBrowse.reply);
+  }
 
   const regenInboundAtMs = new Date(event.receivedAt).getTime();
   const regenLastOutboundBeforeInbound = [...(conv.messages ?? [])]
@@ -25461,6 +25605,31 @@ if (authToken && signature) {
     affectNeedsEmpathy: acceptedAffect?.needsEmpathy ?? null,
     affectHasHumor: acceptedAffect?.hasHumor ?? null
   });
+  const inventoryBrowseLinkIntent =
+    event.provider === "twilio" && isInventoryBrowseLinkRequest(String(event.body ?? ""));
+  if (inventoryBrowseLinkIntent) {
+    const dealerProfile = await getDealerProfileHot();
+    const inventoryBrowse = await buildInventoryBrowseReply({
+      text: String(event.body ?? ""),
+      profile: dealerProfile
+    });
+    setDialogState(conv, "inventory_init");
+    logRouteOutcome("inventory_browse_links", {
+      source: inventoryBrowse.source,
+      hasNewUrl: !!inventoryBrowse.newUrl,
+      hasUsedUrl: !!inventoryBrowse.usedUrl
+    });
+    if (webhookMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, inventoryBrowse.reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, inventoryBrowse.reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      inventoryBrowse.reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   const frustrationAffectSignal =
     !!acceptedAffect?.needsEmpathy ||
     !!acceptedAffect?.hasNegativeSentiment ||
