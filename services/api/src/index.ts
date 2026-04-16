@@ -11893,6 +11893,20 @@ function parseTradeTargetValueRequest(text: string): { amount: number; raw: stri
   return { amount: fallbackAmount, raw: String(fallbackToken[1]).trim() };
 }
 
+function isTradeTargetRemotePrecheckText(text: string): boolean {
+  const source = String(text ?? "").toLowerCase();
+  if (!source) return false;
+  return (
+    /\bwon['’]?t\s+make\s+sense\b/.test(source) ||
+    /\b(?:do\s*not|don['’]?t)\s+waste\b/.test(source) ||
+    /\bnot\s+at\s+that\s+number\b/.test(source) ||
+    /\bif\s+i['’]?m\s+not\s+at\b/.test(source) ||
+    /\bbefore\s+i\s+come\s+in\b/.test(source) ||
+    /\bwithout\s+coming\s+in\b/.test(source) ||
+    /\bbefore\s+coming\s+in\b/.test(source)
+  );
+}
+
 function conversationHasInboundMediaContext(conv: any): boolean {
   const msgs = Array.isArray(conv?.messages) ? conv.messages : [];
   for (let i = msgs.length - 1; i >= 0 && i >= msgs.length - 25; i -= 1) {
@@ -20943,6 +20957,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       : null;
   if (event.provider === "twilio" && regenIsTradeLead && regenTradeTargetValueRequest) {
     const targetValue = `$${regenTradeTargetValueRequest.amount.toLocaleString("en-US")}`;
+    const regenRemotePrecheckOnly = isTradeTargetRemotePrecheckText(event.body ?? "");
     recordRouteOutcome("regen", "trade_target_value_detected", {
       convId: conv.id,
       leadKey: conv.leadKey,
@@ -20950,19 +20965,25 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       source: regenUnifiedTradeTargetValueRequest ? "llm_slot" : "deterministic_fallback"
     });
     const hasInboundMedia = conversationHasInboundMediaContext(conv);
-    const photoAsk = hasInboundMedia
+    const remoteReply = hasInboundMedia
+      ? `Totally fair — if you need to be around ${targetValue}, I can give you an honest preliminary range first so you can decide if it makes sense to move forward.`
+      : `Totally fair — if you need to be around ${targetValue}, text me a few clear photos, exact mileage, and VIN and I can give you an honest preliminary range first so you can decide if it makes sense to move forward.`;
+    const handoffPhotoAsk = hasInboundMedia
       ? ""
       : " If you can text a few clear photos plus mileage, we can tighten that range before you come in.";
-    const reply = `Totally fair — if you need to be around ${targetValue}, the best next step is a quick in-person appraisal so we don’t waste your time.${photoAsk} I’ll have our sales team follow up with options.`;
-    addTodo(
-      conv,
-      "call",
-      `Trade value target request: customer says they need around ${targetValue}.`,
-      event.providerMessageId
-    );
-    setFollowUpMode(conv, "manual_handoff", "trade_value_target");
-    stopFollowUpCadence(conv, "manual_handoff");
-    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    const handoffReply = `Totally fair — if you need to be around ${targetValue}, the best next step is a quick in-person appraisal so we don’t waste your time.${handoffPhotoAsk} I’ll have our sales team follow up with options.`;
+    const reply = regenRemotePrecheckOnly ? remoteReply : handoffReply;
+    if (!regenRemotePrecheckOnly) {
+      addTodo(
+        conv,
+        "call",
+        `Trade value target request: customer says they need around ${targetValue}.`,
+        event.providerMessageId
+      );
+      setFollowUpMode(conv, "manual_handoff", "trade_value_target");
+      stopFollowUpCadence(conv, "manual_handoff");
+      stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    }
     if (!isTradeDialogState(getDialogState(conv))) {
       setDialogState(conv, "trade_cash");
     }
@@ -24561,6 +24582,7 @@ if (authToken && signature) {
   }
   if (event.provider === "twilio" && isTradeLead && tradeTargetValueRequest) {
     const targetValue = `$${tradeTargetValueRequest.amount.toLocaleString("en-US")}`;
+    const remotePrecheckOnly = isTradeTargetRemotePrecheckText(event.body ?? "");
     recordRouteOutcome("live", "trade_target_value_detected", {
       convId: conv.id,
       leadKey: conv.leadKey,
@@ -24568,19 +24590,25 @@ if (authToken && signature) {
       source: unifiedTradeTargetValueRequest ? "llm_slot" : "deterministic_fallback"
     });
     const hasInboundMedia = conversationHasInboundMediaContext(conv);
-    const photoAsk = hasInboundMedia
+    const remoteReply = hasInboundMedia
+      ? `Totally fair — if you need to be around ${targetValue}, I can give you an honest preliminary range first so you can decide if it makes sense to move forward.`
+      : `Totally fair — if you need to be around ${targetValue}, text me a few clear photos, exact mileage, and VIN and I can give you an honest preliminary range first so you can decide if it makes sense to move forward.`;
+    const handoffPhotoAsk = hasInboundMedia
       ? ""
       : " If you can text a few clear photos plus mileage, we can tighten that range before you come in.";
-    const reply = `Totally fair — if you need to be around ${targetValue}, the best next step is a quick in-person appraisal so we don’t waste your time.${photoAsk} I’ll have our sales team follow up with options.`;
-    addTodo(
-      conv,
-      "call",
-      `Trade value target request: customer says they need around ${targetValue}.`,
-      event.providerMessageId
-    );
-    setFollowUpMode(conv, "manual_handoff", "trade_value_target");
-    stopFollowUpCadence(conv, "manual_handoff");
-    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    const handoffReply = `Totally fair — if you need to be around ${targetValue}, the best next step is a quick in-person appraisal so we don’t waste your time.${handoffPhotoAsk} I’ll have our sales team follow up with options.`;
+    const reply = remotePrecheckOnly ? remoteReply : handoffReply;
+    if (!remotePrecheckOnly) {
+      addTodo(
+        conv,
+        "call",
+        `Trade value target request: customer says they need around ${targetValue}.`,
+        event.providerMessageId
+      );
+      setFollowUpMode(conv, "manual_handoff", "trade_value_target");
+      stopFollowUpCadence(conv, "manual_handoff");
+      stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    }
     if (!isTradeDialogState(getDialogState(conv))) {
       setDialogState(conv, "trade_cash");
     }
