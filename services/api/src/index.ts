@@ -1298,6 +1298,25 @@ function clearPendingShortListPrompt(
   });
 }
 
+function markPendingShortListPrompt(
+  conv: Conversation | null | undefined,
+  source: string,
+  atIso?: string | null
+): void {
+  if (!conv) return;
+  const nowMs = Date.now();
+  const nowIso = String(atIso ?? "").trim() || new Date(nowMs).toISOString();
+  const expiresAt = new Date(nowMs + 7 * 24 * 60 * 60 * 1000).toISOString();
+  setConversationSoftTag(conv, PENDING_SHORTLIST_SOFT_TAG, {
+    value: "active",
+    source,
+    expiresAt,
+    meta: {
+      setAt: nowIso
+    }
+  });
+}
+
 function resolveKnownModelContextForShortList(conv: any): string | null {
   const directCandidates = [
     String(conv?.inventoryContext?.model ?? "").trim(),
@@ -1331,7 +1350,11 @@ function buildShortListClarifierReply(conv: any, inboundText: string): {
   const hasStyleHint =
     /\b(touring|bagger|cruiser|sport|sportster|adventure|pan america|trike|tri glide|freewheeler)\b/i.test(
       text
-    );
+    ) ||
+    /\b(crotch\s*rocket|sport\s*bike)\b/i.test(text) ||
+    /\bsit\s+back\b/i.test(text) ||
+    /\b(relaxed|comfortable)\s+(ride|riding|bike)\b/i.test(text) ||
+    /\bopposite\b[\s\S]{0,24}\b(crotch\s*rocket|sport\s*bike)\b/i.test(text);
   const hasConditionHint = /\b(new|used|pre[-\s]?owned|preowned|both)\b/i.test(text);
   const hasBudgetHint =
     /\$\s*\d|\bunder\b|\bover\b|\baround\b|\babout\b|\bmax(?:imum)?\b/i.test(text);
@@ -1373,6 +1396,29 @@ function buildShortListClarifierReply(conv: any, inboundText: string): {
   return {
     hasPreferenceHint,
     reply: "Perfect — any must-have model or color before I pull the short list?"
+  };
+}
+
+function buildActionableStylePreferenceReply(args: {
+  conv: Conversation | null | undefined;
+  inboundText: string;
+}): { reply: string; family: "cruiser" } | null {
+  const text = String(args.inboundText ?? "").trim();
+  if (!text) return null;
+  const lower = text.toLowerCase();
+  const cruiserPreference =
+    /\bcruiser\b/.test(lower) ||
+    /\b(crotch\s*rocket|sport\s*bike)\b/.test(lower) ||
+    /\bsit\s+back\b/.test(lower) ||
+    /\b(relaxed|comfortable)\s+(ride|riding|bike)\b/.test(lower) ||
+    /\bopposite\b[\s\S]{0,24}\b(crotch\s*rocket|sport\s*bike)\b/.test(lower);
+  if (!cruiserPreference) return null;
+  const clarifier = buildShortListClarifierReply(args.conv, `${text} cruiser`);
+  const followUp = clarifier.reply.replace(/^Perfect\s*—\s*/i, "").trim();
+  if (!followUp) return null;
+  return {
+    family: "cruiser",
+    reply: `Love it — cruiser sounds like the move. ${followUp}`
   };
 }
 
@@ -9402,6 +9448,17 @@ function parseFutureTimeframe(text: string, base: Date): { label: string; until?
   }
 
   return null;
+}
+
+function isShortFutureTimeframeLabel(label: string | null | undefined): boolean {
+  const normalized = String(label ?? "")
+    .trim()
+    .toLowerCase();
+  if (!normalized) return false;
+  if (normalized === "next week") return true;
+  if (/^in\s+\d+\s+day(?:s)?$/.test(normalized)) return true;
+  if (/^in\s+\d+\s+week(?:s)?$/.test(normalized)) return true;
+  return false;
 }
 
 function extractDayPart(text: string): string | null {
@@ -21189,6 +21246,24 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     if (regenEffectiveAction === "skip") {
       if (regenNoResponseSmallTalkQuestion) {
+        const regenStyleReply = buildActionableStylePreferenceReply({
+          conv,
+          inboundText: regenNoResponseInboundText
+        });
+        if (regenStyleReply?.reply) {
+          resetSmallTalkStreakIfNeeded(conv, event.receivedAt, "style_preference_regen");
+          setDialogState(conv, "inventory_init");
+          markPendingShortListPrompt(conv, "style_preference_discovery_regen", event.receivedAt);
+          recordRouteOutcome("regen", "style_preference_discovery_prompt", {
+            convId: conv.id,
+            leadKey: conv.leadKey,
+            family: regenStyleReply.family
+          });
+          if (channel === "email") {
+            return respondWithEmailRegeneratedDraft(regenStyleReply.reply);
+          }
+          return respondWithSmsRegeneratedDraft(regenStyleReply.reply);
+        }
         const chit = await buildNoResponseChitChatReplyWithLLM({
           text: regenNoResponseInboundText,
           history,
@@ -25439,6 +25514,36 @@ if (authToken && signature) {
     !hasExplicitCallbackLanguageThisTurn &&
     !reducedConversationState.departmentIntent &&
     !semanticDepartmentIntent;
+  const stylePreferenceReply =
+    smallTalkPreemptCandidate &&
+    routeExecGeneral &&
+    !routeExecPricing &&
+    !routeExecAvailability &&
+    !routeExecScheduling &&
+    !routeExecCallback
+      ? buildActionableStylePreferenceReply({
+          conv,
+          inboundText: String(event.body ?? "")
+        })
+      : null;
+  if (stylePreferenceReply?.reply) {
+    resetSmallTalkStreakIfNeeded(conv, event.receivedAt, "style_preference");
+    setDialogState(conv, "inventory_init");
+    markPendingShortListPrompt(conv, "style_preference_discovery", event.receivedAt);
+    logRouteOutcome("style_preference_discovery_prompt", {
+      family: stylePreferenceReply.family
+    });
+    if (webhookMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, stylePreferenceReply.reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, stylePreferenceReply.reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      stylePreferenceReply.reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (smallTalkPreemptCandidate) {
     const smallTalkPreemptSignal = await detectSmallTalkSignalWithFallback({
       text: String(event.body ?? ""),
@@ -25692,6 +25797,28 @@ if (authToken && signature) {
     }
     if (effectiveNoResponseAction === "skip") {
       if (noResponseSmallTalkQuestion) {
+        const noResponseStyleReply = buildActionableStylePreferenceReply({
+          conv,
+          inboundText: noResponseInboundText
+        });
+        if (noResponseStyleReply?.reply) {
+          resetSmallTalkStreakIfNeeded(conv, event.receivedAt, "style_preference_no_response");
+          setDialogState(conv, "inventory_init");
+          markPendingShortListPrompt(conv, "style_preference_discovery", event.receivedAt);
+          logRouteOutcome("style_preference_discovery_prompt", {
+            family: noResponseStyleReply.family
+          });
+          if (webhookMode === "suggest") {
+            appendOutbound(conv, event.to, event.from, noResponseStyleReply.reply, "draft_ai");
+            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+            return res.status(200).type("text/xml").send(twiml);
+          }
+          appendOutbound(conv, event.to, event.from, noResponseStyleReply.reply, "twilio");
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+            noResponseStyleReply.reply
+          )}</Message>\n</Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
         const chit = await buildNoResponseChitChatReplyWithLLM({
           text: noResponseInboundText,
           history: buildHistory(conv, 8),
@@ -26309,12 +26436,24 @@ if (authToken && signature) {
     const futureFromReply = parseFutureTimeframe(String(event.body ?? ""), new Date());
       if (futureFromReply?.until) {
         const untilIso = futureFromReply.until.toISOString();
-        if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
-          scheduleLongTermFollowUp(conv, untilIso, "customer_reminder");
+        const shortFuture = isShortFutureTimeframeLabel(futureFromReply.label);
+        if (shortFuture) {
+          if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
+            const cfg = await getSchedulerConfigHot();
+            startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
+          }
+          pauseFollowUpCadence(conv, untilIso, "customer_reminder_short");
         } else {
-          pauseFollowUpCadence(conv, untilIso, "customer_reminder");
+          if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
+            scheduleLongTermFollowUp(conv, untilIso, "customer_reminder");
+          } else {
+            pauseFollowUpCadence(conv, untilIso, "customer_reminder");
+          }
         }
-        if (conv.followUp?.mode !== "holding_inventory" && conv.followUp?.mode !== "manual_handoff") {
+        if (
+          conv.followUp?.mode !== "holding_inventory" &&
+          conv.followUp?.mode !== "manual_handoff"
+        ) {
           setFollowUpMode(conv, "active", "customer_reminder");
           setDialogState(conv, "followup_resumed");
         }
@@ -26387,10 +26526,19 @@ if (authToken && signature) {
     if (future.label) conv.lead.purchaseTimeframe = future.label;
     if (future.until) {
       const untilIso = future.until.toISOString();
-      if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
-        scheduleLongTermFollowUp(conv, untilIso, "future_timeframe");
+      const shortFuture = isShortFutureTimeframeLabel(future.label);
+      if (shortFuture) {
+        if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
+          const cfg = await getSchedulerConfigHot();
+          startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
+        }
+        pauseFollowUpCadence(conv, untilIso, "future_timeframe_short");
       } else {
-        pauseFollowUpCadence(conv, untilIso, "future_timeframe");
+        if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
+          scheduleLongTermFollowUp(conv, untilIso, "future_timeframe");
+        } else {
+          pauseFollowUpCadence(conv, untilIso, "future_timeframe");
+        }
       }
       if (conv.followUp?.mode !== "holding_inventory" && conv.followUp?.mode !== "manual_handoff") {
         setFollowUpMode(conv, "active", "future_timeframe");
