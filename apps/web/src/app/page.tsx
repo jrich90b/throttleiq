@@ -11844,232 +11844,245 @@ export default function Home() {
                 </div>
               </div>
             ) : (
-              <div className="border rounded-lg p-4 space-y-4">
+              <div className="border rounded-lg p-4 space-y-6">
                 <div className="text-lg font-semibold">Scheduling</div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <div className="text-xs text-gray-500 mb-1">Time zone</div>
-                    <select
-                      className="border rounded px-3 py-2 text-sm w-full"
-                      value={schedulerForm.timezone}
-                      onChange={e => setSchedulerForm({ ...schedulerForm, timezone: e.target.value })}
-                    >
-                      {timeZones.map(tz => (
-                        <option key={tz} value={tz}>
-                          {tz}
-                        </option>
-                      ))}
-                    </select>
+                <div className="border rounded-lg p-3 space-y-3">
+                  <div className="text-sm font-semibold">Core Settings</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">Time zone</div>
+                      <select
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={schedulerForm.timezone}
+                        onChange={e => setSchedulerForm({ ...schedulerForm, timezone: e.target.value })}
+                      >
+                        {timeZones.map(tz => (
+                          <option key={tz} value={tz}>
+                            {tz}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">Assignment mode</div>
+                      <select
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={schedulerForm.assignmentMode}
+                        onChange={e => setSchedulerForm({ ...schedulerForm, assignmentMode: e.target.value })}
+                      >
+                        <option value="preferred">Preferred order</option>
+                        <option value="round_robin">Round robin</option>
+                      </select>
+                    </label>
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">Min lead time (hours)</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={schedulerForm.minLeadTimeHours}
+                        onChange={e => setSchedulerForm({ ...schedulerForm, minLeadTimeHours: e.target.value })}
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">Min gap (minutes)</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={schedulerForm.minGapBetweenAppointmentsMinutes}
+                        onChange={e =>
+                          setSchedulerForm({ ...schedulerForm, minGapBetweenAppointmentsMinutes: e.target.value })
+                        }
+                      />
+                    </label>
                   </div>
-                  <div>
-                    <div className="text-xs text-gray-500 mb-1">Assignment mode</div>
-                    <select
-                      className="border rounded px-3 py-2 text-sm w-full"
-                      value={schedulerForm.assignmentMode}
-                      onChange={e => setSchedulerForm({ ...schedulerForm, assignmentMode: e.target.value })}
-                    >
-                      <option value="preferred">Preferred order</option>
-                      <option value="round_robin">Round robin</option>
-                    </select>
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-500 mb-1">Min lead time (hours)</div>
-                    <input
-                      className="border rounded px-3 py-2 text-sm w-full"
-                      value={schedulerForm.minLeadTimeHours}
-                      onChange={e => setSchedulerForm({ ...schedulerForm, minLeadTimeHours: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-500 mb-1">Min gap (minutes)</div>
-                    <input
-                      className="border rounded px-3 py-2 text-sm w-full"
-                      value={schedulerForm.minGapBetweenAppointmentsMinutes}
-                      onChange={e =>
-                        setSchedulerForm({ ...schedulerForm, minGapBetweenAppointmentsMinutes: e.target.value })
-                      }
-                    />
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">Weekday earliest</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={schedulerForm.weekdayEarliest}
+                        onChange={e => setSchedulerForm({ ...schedulerForm, weekdayEarliest: e.target.value })}
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">Weekday latest</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={schedulerForm.weekdayLatest}
+                        onChange={e => setSchedulerForm({ ...schedulerForm, weekdayLatest: e.target.value })}
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">Saturday earliest</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={schedulerForm.saturdayEarliest}
+                        onChange={e => setSchedulerForm({ ...schedulerForm, saturdayEarliest: e.target.value })}
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">Saturday latest</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={schedulerForm.saturdayLatest}
+                        onChange={e => setSchedulerForm({ ...schedulerForm, saturdayLatest: e.target.value })}
+                      />
+                    </label>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <div className="text-xs text-gray-500 mb-1">Weekday earliest</div>
-                    <input
-                      className="border rounded px-3 py-2 text-sm w-full"
-                      value={schedulerForm.weekdayEarliest}
-                      onChange={e => setSchedulerForm({ ...schedulerForm, weekdayEarliest: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-500 mb-1">Weekday latest</div>
-                    <input
-                      className="border rounded px-3 py-2 text-sm w-full"
-                      value={schedulerForm.weekdayLatest}
-                      onChange={e => setSchedulerForm({ ...schedulerForm, weekdayLatest: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-500 mb-1">Saturday earliest</div>
-                    <input
-                      className="border rounded px-3 py-2 text-sm w-full"
-                      value={schedulerForm.saturdayEarliest}
-                      onChange={e => setSchedulerForm({ ...schedulerForm, saturdayEarliest: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-500 mb-1">Saturday latest</div>
-                    <input
-                      className="border rounded px-3 py-2 text-sm w-full"
-                      value={schedulerForm.saturdayLatest}
-                      onChange={e => setSchedulerForm({ ...schedulerForm, saturdayLatest: e.target.value })}
-                    />
-                  </div>
-                </div>
+
                 {schedulerForm.assignmentMode === "preferred" ? (
-                  <div>
-                    <div className="text-sm font-medium mb-2">Preferred salesperson order</div>
+                  <div className="border rounded-lg p-3 space-y-3">
+                    <div className="text-sm font-semibold">Preferred Salesperson Order</div>
                     <div className="space-y-2">
                       {preferredOrder
                         .map(id => salespeopleList.find(sp => sp.id === id))
                         .filter(Boolean)
                         .map((sp: any, idx: number) => (
-                        <div key={sp.id} className="flex items-center gap-2">
-                          <div className="flex-1 border rounded px-3 py-2 text-sm bg-white">
-                            {sp.name} <span className="text-xs text-gray-500">({sp.id.slice(0, 6)})</span>
+                          <div key={sp.id} className="flex items-center gap-2">
+                            <div className="flex-1 border rounded px-3 py-2 text-sm bg-white">
+                              {sp.name} <span className="text-xs text-gray-500">({sp.id.slice(0, 6)})</span>
+                            </div>
+                            <div className="flex flex-col">
+                              {idx > 0 ? (
+                                <button
+                                  className="px-2 py-1 border rounded text-xs"
+                                  type="button"
+                                  onClick={() => {
+                                    const ids = [...preferredOrder];
+                                    const i = ids.indexOf(sp.id);
+                                    if (i <= 0) return;
+                                    [ids[i - 1], ids[i]] = [ids[i], ids[i - 1]];
+                                    setPreferredOrderIds(ids);
+                                  }}
+                                >
+                                  ↑
+                                </button>
+                              ) : null}
+                              {idx < preferredOrder.length - 1 ? (
+                                <button
+                                  className={`${idx > 0 ? "mt-1 " : ""}px-2 py-1 border rounded text-xs`}
+                                  type="button"
+                                  onClick={() => {
+                                    const ids = [...preferredOrder];
+                                    const i = ids.indexOf(sp.id);
+                                    if (i === -1 || i >= ids.length - 1) return;
+                                    [ids[i + 1], ids[i]] = [ids[i], ids[i + 1]];
+                                    setPreferredOrderIds(ids);
+                                  }}
+                                >
+                                  ↓
+                                </button>
+                              ) : null}
+                            </div>
                           </div>
-                          <div className="flex flex-col">
-                            {idx > 0 ? (
-                              <button
-                                className="px-2 py-1 border rounded text-xs"
-                                type="button"
-                                onClick={() => {
-                                  const ids = [...preferredOrder];
-                                  const i = ids.indexOf(sp.id);
-                                  if (i <= 0) return;
-                                  [ids[i - 1], ids[i]] = [ids[i], ids[i - 1]];
-                                  setPreferredOrderIds(ids);
-                                }}
-                              >
-                                ↑
-                              </button>
-                            ) : null}
-                            {idx < preferredOrder.length - 1 ? (
-                              <button
-                                className={`${idx > 0 ? "mt-1 " : ""}px-2 py-1 border rounded text-xs`}
-                                type="button"
-                                onClick={() => {
-                                  const ids = [...preferredOrder];
-                                  const i = ids.indexOf(sp.id);
-                                  if (i === -1 || i >= ids.length - 1) return;
-                                  [ids[i + 1], ids[i]] = [ids[i], ids[i + 1]];
-                                  setPreferredOrderIds(ids);
-                                }}
-                              >
-                                ↓
-                              </button>
-                            ) : null}
-                          </div>
-                        </div>
-                      ))}
+                        ))}
                     </div>
                   </div>
                 ) : null}
-                <div>
-                  <div className="text-sm font-medium mb-2">Appointment types</div>
+
+                <div className="border rounded-lg p-3 space-y-3">
+                  <div className="text-sm font-semibold">Appointment Types</div>
                   <div className="space-y-2">
                     {appointmentTypesList.map((row, idx) => (
-                      <div key={`${row.key}-${idx}`} className="flex flex-wrap gap-2 items-center">
-                        <input
-                          className="border rounded px-2 py-1 text-sm flex-[2] min-w-[180px]"
-                          placeholder="Type key (e.g., inventory_visit)"
-                          value={row.key}
-                          onChange={e => {
-                            const next = [...appointmentTypesList];
-                            next[idx] = { ...row, key: e.target.value };
-                            setAppointmentTypesList(next);
-                          }}
-                        />
-                        <input
-                          className="border rounded px-2 py-1 text-sm w-32"
-                          placeholder="Duration (minutes)"
-                          value={row.durationMinutes}
-                          onChange={e => {
-                            const next = [...appointmentTypesList];
-                            next[idx] = { ...row, durationMinutes: e.target.value };
-                            setAppointmentTypesList(next);
-                          }}
-                        />
-                        <div className="flex items-center gap-2 relative">
-                          {(() => {
-                            const color = getCalendarColor(row.colorId);
-                            return (
-                              <div
-                                className="w-4 h-4 rounded border"
-                                style={{
-                                  backgroundColor: color?.bg ?? "#FFFFFF",
-                                  borderColor: color?.border ?? "#D1D5DB"
-                                }}
-                              />
-                            );
-                          })()}
-                          <details className="relative">
-                            <summary className="list-none border rounded px-2 py-1 text-sm cursor-pointer bg-white flex items-center gap-2">
-                              {(() => {
-                                const color = getCalendarColor(row.colorId);
-                                return (
-                                  <>
-                                    <span
-                                      className="inline-block w-3 h-3 rounded border"
-                                      style={{
-                                        backgroundColor: color?.bg ?? "#FFFFFF",
-                                        borderColor: color?.border ?? "#D1D5DB"
-                                      }}
-                                    />
-                                    <span>{color?.label ?? "No color"}</span>
-                                  </>
-                                );
-                              })()}
-                            </summary>
-                            <div className="absolute z-10 mt-1 w-44 rounded border bg-white shadow">
-                              <button
-                                className="w-full px-2 py-1 text-sm text-left hover:bg-gray-100 flex items-center gap-2"
-                                onClick={e => {
-                                  const next = [...appointmentTypesList];
-                                  next[idx] = { ...row, colorId: "" };
-                                  setAppointmentTypesList(next);
-                                  (e.currentTarget.closest("details") as HTMLDetailsElement | null)?.removeAttribute(
-                                    "open"
+                      <div key={`${row.key}-${idx}`} className="grid grid-cols-1 md:grid-cols-[2fr_140px_180px_auto] gap-2 items-center">
+                        <label className="space-y-1">
+                          <div className="text-xs text-gray-600">Type key</div>
+                          <input
+                            className="border rounded px-2 py-1 text-sm w-full"
+                            placeholder="inventory_visit"
+                            value={row.key}
+                            onChange={e => {
+                              const next = [...appointmentTypesList];
+                              next[idx] = { ...row, key: e.target.value };
+                              setAppointmentTypesList(next);
+                            }}
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <div className="text-xs text-gray-600">Duration (minutes)</div>
+                          <input
+                            className="border rounded px-2 py-1 text-sm w-full"
+                            value={row.durationMinutes}
+                            onChange={e => {
+                              const next = [...appointmentTypesList];
+                              next[idx] = { ...row, durationMinutes: e.target.value };
+                              setAppointmentTypesList(next);
+                            }}
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <div className="text-xs text-gray-600">Calendar color</div>
+                          <div className="flex items-center gap-2 relative">
+                            {(() => {
+                              const color = getCalendarColor(row.colorId);
+                              return (
+                                <div
+                                  className="w-4 h-4 rounded border"
+                                  style={{
+                                    backgroundColor: color?.bg ?? "#FFFFFF",
+                                    borderColor: color?.border ?? "#D1D5DB"
+                                  }}
+                                />
+                              );
+                            })()}
+                            <details className="relative">
+                              <summary className="list-none border rounded px-2 py-1 text-sm cursor-pointer bg-white flex items-center gap-2">
+                                {(() => {
+                                  const color = getCalendarColor(row.colorId);
+                                  return (
+                                    <>
+                                      <span
+                                        className="inline-block w-3 h-3 rounded border"
+                                        style={{
+                                          backgroundColor: color?.bg ?? "#FFFFFF",
+                                          borderColor: color?.border ?? "#D1D5DB"
+                                        }}
+                                      />
+                                      <span>{color?.label ?? "No color"}</span>
+                                    </>
                                   );
-                                }}
-                              >
-                                <span className="inline-block w-3 h-3 rounded border bg-white border-gray-300" />
-                                No color
-                              </button>
-                              {CALENDAR_COLORS.map(c => (
+                                })()}
+                              </summary>
+                              <div className="absolute z-10 mt-1 w-44 rounded border bg-white shadow">
                                 <button
-                                  key={c.id}
                                   className="w-full px-2 py-1 text-sm text-left hover:bg-gray-100 flex items-center gap-2"
                                   onClick={e => {
                                     const next = [...appointmentTypesList];
-                                    next[idx] = { ...row, colorId: c.id };
+                                    next[idx] = { ...row, colorId: "" };
                                     setAppointmentTypesList(next);
                                     (e.currentTarget.closest("details") as HTMLDetailsElement | null)?.removeAttribute(
                                       "open"
                                     );
                                   }}
                                 >
-                                  <span
-                                    className="inline-block w-3 h-3 rounded border"
-                                    style={{ backgroundColor: c.bg, borderColor: c.border }}
-                                  />
-                                  <span>{c.label}</span>
+                                  <span className="inline-block w-3 h-3 rounded border bg-white border-gray-300" />
+                                  No color
                                 </button>
-                              ))}
-                            </div>
-                          </details>
-                        </div>
+                                {CALENDAR_COLORS.map(c => (
+                                  <button
+                                    key={c.id}
+                                    className="w-full px-2 py-1 text-sm text-left hover:bg-gray-100 flex items-center gap-2"
+                                    onClick={e => {
+                                      const next = [...appointmentTypesList];
+                                      next[idx] = { ...row, colorId: c.id };
+                                      setAppointmentTypesList(next);
+                                      (e.currentTarget.closest("details") as HTMLDetailsElement | null)?.removeAttribute(
+                                        "open"
+                                      );
+                                    }}
+                                  >
+                                    <span
+                                      className="inline-block w-3 h-3 rounded border"
+                                      style={{ backgroundColor: c.bg, borderColor: c.border }}
+                                    />
+                                    <span>{c.label}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            </details>
+                          </div>
+                        </label>
                         <button
-                          className="px-2 py-1 border rounded text-xs text-red-600"
+                          className="px-2 py-1 border rounded text-xs text-red-600 self-end md:self-auto"
                           onClick={() => setAppointmentTypesList(prev => prev.filter((_, i) => i !== idx))}
                         >
                           Remove
@@ -12108,8 +12121,14 @@ export default function Home() {
                     </div>
                   </div>
                 </div>
-                <div>
-                  <div className="text-sm font-medium mb-2">Business hours</div>
+
+                <div className="border rounded-lg p-3 space-y-3">
+                  <div className="text-sm font-semibold">Business Hours</div>
+                  <div className="grid grid-cols-3 gap-2 text-xs font-medium text-gray-600 px-1 mb-1">
+                    <div>Day</div>
+                    <div>Open</div>
+                    <div>Close</div>
+                  </div>
                   <div className="space-y-2">
                     {days.map(day => {
                       const current = schedulerHours?.[day] ?? { open: null, close: null };
