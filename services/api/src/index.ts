@@ -3196,9 +3196,11 @@ async function processInventoryWatchlist(targetConvId?: string) {
       const colorText = color ? ` in ${color}` : "";
       const matchedKey = inventoryKey(matchedItem);
       const isNewArrival = matchedKey ? newItemKeys.has(matchedKey) : false;
+      const leadFirstName = normalizeDisplayCase(String(conv.lead?.firstName ?? "").split(/\s+/)[0] ?? "");
+      const opener = leadFirstName ? `Hey ${leadFirstName}, good news` : "Good news";
       const reply = isNewArrival
-        ? `Good news — we just got ${name}${colorText} in stock. Want details or a time to check it out?`
-        : `Good news — we have ${name}${colorText} in stock right now. Want details or a time to check it out?`;
+        ? `${opener} — we just got ${name}${colorText} in stock. Want details or a time to check it out?`
+        : `${opener} — we have ${name}${colorText} in stock right now. Want details or a time to check it out?`;
       const imageUrl =
         Array.isArray(matchedItem.images) && matchedItem.images.length
           ? matchedItem.images[0]
