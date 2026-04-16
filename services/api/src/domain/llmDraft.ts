@@ -348,7 +348,7 @@ export async function generateSmallTalkReplyWithLLM(args: {
     "Return only JSON that matches the schema.",
     "",
     "Rules:",
-    "- Keep it natural, friendly, and concise (1 sentence, max ~20 words).",
+    "- Keep it natural, friendly, and concise (1 sentence, max ~10 words).",
     "- Sound like a real person texting, not a support bot.",
     "- Do NOT claim personal real-world experiences you cannot verify (e.g., don't say you watched a game).",
     "- Acknowledge the message with conversational tone.",
@@ -396,6 +396,25 @@ export async function generateSmallTalkReplyWithLLM(args: {
       .trim()
       .replace(/^["'`]+|["'`]+$/g, "")
       .replace(/\s+/g, " ");
+  const toShortOneLiner = (input: string, maxWords = 10): string => {
+    const normalized = normalizeReply(input);
+    if (!normalized) return "";
+    let sentence = normalized;
+    const sentenceSplit = sentence.split(/(?<=[.!?])\s+/).filter(Boolean);
+    if (sentenceSplit.length) sentence = sentenceSplit[0];
+    // Trim common trailing filler so the line stays punchy and conversational.
+    sentence = sentence
+      .replace(/\bfor\s+(?:easy|comfortable|comfort|long|longer|daily)\b[^.!?]*$/i, "")
+      .replace(/\band\s+(?:comfort|easy rides?)\b[^.!?]*$/i, "")
+      .trim();
+    if (!sentence) return "";
+    const words = sentence.split(/\s+/).filter(Boolean);
+    if (words.length > maxWords) {
+      sentence = words.slice(0, maxWords).join(" ");
+      sentence = sentence.replace(/[,\-:;]+$/g, "").trim();
+    }
+    return sentence;
+  };
   const isTooGeneric = (input: string) => {
     const normalized = input
       .toLowerCase()
@@ -429,7 +448,7 @@ export async function generateSmallTalkReplyWithLLM(args: {
         ...optionalTemperature(model, 0.2),
         max_output_tokens: 60
       });
-      const freeform = normalizeReply(resp.output_text ?? "");
+      const freeform = toShortOneLiner(resp.output_text ?? "");
       if (!freeform) return null;
       if (isTooGeneric(freeform)) return null;
       return freeform;
@@ -448,7 +467,7 @@ export async function generateSmallTalkReplyWithLLM(args: {
       debugTag: "llm-smalltalk-reply-generator"
     });
     if (parsed && typeof parsed === "object") {
-      const reply = normalizeReply(parsed.reply ?? "");
+      const reply = toShortOneLiner(parsed.reply ?? "");
       if (reply && !isTooGeneric(reply)) {
         const confidence =
           typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
