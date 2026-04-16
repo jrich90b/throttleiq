@@ -1843,11 +1843,12 @@ export function getLatestPendingDraft(conv: Conversation): Message | null {
 
 export function inferWalkIn(conv: Conversation): boolean {
   if (conv.lead?.walkIn) return true;
-  const leadSource = conv.lead?.source ?? "";
+  const leadSource = String(conv.lead?.source ?? "");
   const adfBody =
     conv.messages.find(m => m.provider === "sendgrid_adf" && typeof m.body === "string")?.body ?? "";
   const sourceMatch =
-    /traffic log pro/i.test(leadSource) || /source:\s*traffic log pro/i.test(adfBody);
+    /traffic log pro|walk[\s_-]*in|dealer lead app/i.test(leadSource) ||
+    /source:\s*(traffic log pro|walk[\s_-]*in|dealer lead app)/i.test(adfBody);
   return sourceMatch;
 }
 
