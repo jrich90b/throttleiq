@@ -3430,6 +3430,7 @@ app.get("/users", requirePermission("canEditAppointments"), async (_req, res) =>
       name: u.name,
       firstName: u.firstName,
       lastName: u.lastName,
+      emailSignature: u.emailSignature,
       role: u.role,
       includeInSchedule: u.includeInSchedule,
       calendarId: u.calendarId,
@@ -3455,6 +3456,7 @@ app.post("/users", async (req, res) => {
   const lastName = String(req.body?.lastName ?? "").trim();
   const nameRaw = String(req.body?.name ?? "").trim();
   const name = [firstName, lastName].filter(Boolean).join(" ").trim() || nameRaw;
+  const emailSignature = String(req.body?.emailSignature ?? "").trim();
   const calendarId = String(req.body?.calendarId ?? "").trim();
   const phone = String(req.body?.phone ?? "").trim();
   const extension = String(req.body?.extension ?? "").trim();
@@ -3470,6 +3472,7 @@ app.post("/users", async (req, res) => {
       name,
       firstName,
       lastName,
+      emailSignature,
       includeInSchedule,
       calendarId,
       phone,
@@ -3485,6 +3488,7 @@ app.post("/users", async (req, res) => {
         name: user.name,
         firstName: user.firstName,
         lastName: user.lastName,
+        emailSignature: user.emailSignature,
         role: user.role,
         includeInSchedule: user.includeInSchedule,
         calendarId: user.calendarId,
@@ -3514,6 +3518,7 @@ app.put("/users/:id", requireManager, async (req, res) => {
       name: req.body?.name,
       firstName: req.body?.firstName,
       lastName: req.body?.lastName,
+      emailSignature: req.body?.emailSignature,
       includeInSchedule: req.body?.includeInSchedule,
       calendarId: req.body?.calendarId,
       phone: req.body?.phone,
@@ -3529,6 +3534,7 @@ app.put("/users/:id", requireManager, async (req, res) => {
         name: user.name,
         firstName: user.firstName,
         lastName: user.lastName,
+        emailSignature: user.emailSignature,
         role: user.role,
         includeInSchedule: user.includeInSchedule,
         calendarId: user.calendarId,
@@ -11857,6 +11863,48 @@ function parsePriceTokenForWatch(raw: string): number | null {
   return Math.round(value);
 }
 
+function parseTradeTargetValueRequest(text: string): { amount: number; raw: string } | null {
+  const source = String(text ?? "").trim();
+  if (!source) return null;
+  const valueTokenPattern =
+    /(\$?\s*\d{1,3}(?:,\d{3})*|\$?\s*\d+(?:\.\d+)?\s*(?:k|grand)|\d+(?:\.\d+)?\s*(?:k|grand))/i;
+  const anchoredPatterns = [
+    /\b(?:am\s*i\s*(?:anywhere\s*)?close\s*to|close\s*to)\s*(\$?\s*\d{1,3}(?:,\d{3})*|\$?\s*\d+(?:\.\d+)?\s*(?:k|grand)|\d+(?:\.\d+)?\s*(?:k|grand))\b/i,
+    /\b(?:i\s*would\s*need|i(?:'|’)d\s*need|i\s*need|would\s*need)\s*(\$?\s*\d{1,3}(?:,\d{3})*|\$?\s*\d+(?:\.\d+)?\s*(?:k|grand)|\d+(?:\.\d+)?\s*(?:k|grand))\b/i,
+    /\b(?:i\s*(?:would\s*)?have\s*to\s*be\s*at|have\s*to\s*be\s*at)\s*(\$?\s*\d{1,3}(?:,\d{3})*|\$?\s*\d+(?:\.\d+)?\s*(?:k|grand)|\d+(?:\.\d+)?\s*(?:k|grand))\b/i,
+    /\b(?:i\s*(?:would\s*)?have\s*to\s*get|have\s*to\s*get)(?:\s*(?:at|for\s*my\s*bike))?\s*(\$?\s*\d{1,3}(?:,\d{3})*|\$?\s*\d+(?:\.\d+)?\s*(?:k|grand)|\d+(?:\.\d+)?\s*(?:k|grand))\b/i,
+    /\b(?:get(?:ting)?\s*(?:at|for)\s*my\s*bike)\s*(\$?\s*\d{1,3}(?:,\d{3})*|\$?\s*\d+(?:\.\d+)?\s*(?:k|grand)|\d+(?:\.\d+)?\s*(?:k|grand))\b/i
+  ];
+  for (const pattern of anchoredPatterns) {
+    const match = source.match(pattern);
+    if (!match?.[1]) continue;
+    const amount = parsePriceTokenForWatch(match[1]);
+    if (amount != null) return { amount, raw: String(match[1]).trim() };
+  }
+  const hasTargetLanguage =
+    /\b(close\s*to|would\s*need|i\s*need|need\s*to\s*be\s*at|have\s*to\s*be\s*at|would\s*have\s*to\s*be\s*at|have\s*to\s*get|would\s*have\s*to\s*get|get\s*for\s*my\s*bike)\b/i.test(
+      source
+    );
+  if (!hasTargetLanguage) return null;
+  const fallbackToken = source.match(valueTokenPattern);
+  if (!fallbackToken?.[1]) return null;
+  const fallbackAmount = parsePriceTokenForWatch(fallbackToken[1]);
+  if (fallbackAmount == null) return null;
+  return { amount: fallbackAmount, raw: String(fallbackToken[1]).trim() };
+}
+
+function conversationHasInboundMediaContext(conv: any): boolean {
+  const msgs = Array.isArray(conv?.messages) ? conv.messages : [];
+  for (let i = msgs.length - 1; i >= 0 && i >= msgs.length - 25; i -= 1) {
+    const m = msgs[i];
+    if (!m || m.direction !== "in") continue;
+    if (Array.isArray(m.mediaUrls) && m.mediaUrls.length > 0) return true;
+    const body = String(m.body ?? "");
+    if (/\bhttps?:\/\/\S+\.(?:jpe?g|png|webp|gif|mp4|mov)\b/i.test(body)) return true;
+  }
+  return false;
+}
+
 function parseBudgetMoneyInput(raw: unknown): number | undefined {
   const text = String(raw ?? "").trim();
   if (!text) return undefined;
@@ -20100,6 +20148,8 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
     const dealerProfile = await getDealerProfileHot();
     const { from: emailFrom, replyTo: emailReplyTo, signature } = getEmailConfig(dealerProfile);
+    const actorSignature = String((req as any)?.user?.emailSignature ?? "").trim() || undefined;
+    const effectiveSignature = actorSignature || signature;
     const replyTo = maybeTagReplyTo(emailReplyTo, conv);
     if (!emailFrom) {
       return res.status(400).json({
@@ -20123,8 +20173,8 @@ app.post("/conversations/:id/send", async (req, res) => {
       }))
       .filter(att => att.content.length > 0);
     const signed =
-      !skipEmailSignature && signature
-        ? `${body}\n\n${signature}${dealerProfile?.logoUrl ? `\n\n${dealerProfile.logoUrl}` : ""}`
+      !skipEmailSignature && effectiveSignature
+        ? `${body}\n\n${effectiveSignature}${dealerProfile?.logoUrl ? `\n\n${dealerProfile.logoUrl}` : ""}`
         : body;
     if (isManualDuplicateOutbound(emailTo!, signed, ["sendgrid", "human", "draft_ai"])) {
       return res.json({
@@ -24173,6 +24223,33 @@ if (authToken && signature) {
     /trade[-\s]?in|trade accelerator/.test(leadSourceText) ||
     conv.classification?.cta === "sell_my_bike" ||
     conv.classification?.bucket === "trade_in_sell";
+  const unifiedTradeTargetAmount = Number(unifiedSemanticSlotParse?.tradeTargetValue?.amount);
+  const unifiedTradeTargetConfidence =
+    typeof unifiedSemanticSlotParse?.tradeTargetConfidence === "number"
+      ? unifiedSemanticSlotParse.tradeTargetConfidence
+      : typeof unifiedSemanticSlotParse?.confidence === "number"
+        ? unifiedSemanticSlotParse.confidence
+        : 0;
+  const unifiedTradeTargetConfidenceMin = Number(
+    process.env.LLM_TRADE_TARGET_VALUE_CONFIDENCE_MIN ?? 0.7
+  );
+  const unifiedTradeTargetValueRequest =
+    event.provider === "twilio" &&
+    isTradeLead &&
+    Number.isFinite(unifiedTradeTargetAmount) &&
+    unifiedTradeTargetAmount > 0 &&
+    unifiedTradeTargetConfidence >= unifiedTradeTargetConfidenceMin
+      ? {
+          amount: Math.round(unifiedTradeTargetAmount),
+          raw:
+            String(unifiedSemanticSlotParse?.tradeTargetValue?.raw ?? "").trim() ||
+            `$${Math.round(unifiedTradeTargetAmount).toLocaleString("en-US")}`
+        }
+      : null;
+  const tradeTargetValueRequest =
+    event.provider === "twilio" && isTradeLead
+      ? unifiedTradeTargetValueRequest ?? parseTradeTargetValueRequest(event.body ?? "")
+      : null;
   const isSellMyBikeLead = /sell my bike/.test(leadSourceText) || conv.classification?.cta === "sell_my_bike";
   const inventoryEntityParserEligible =
     event.provider === "twilio" &&
@@ -24418,6 +24495,43 @@ if (authToken && signature) {
   }
   if (event.provider === "twilio" && isTradeLead && detectPhoneNumbersIntent(event.body ?? "")) {
     addTodo(conv, "call", "Customer wants a rough trade idea over the phone.", event.providerMessageId);
+  }
+  if (event.provider === "twilio" && isTradeLead && tradeTargetValueRequest) {
+    const targetValue = `$${tradeTargetValueRequest.amount.toLocaleString("en-US")}`;
+    recordRouteOutcome("live", "trade_target_value_detected", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      amount: tradeTargetValueRequest.amount,
+      source: unifiedTradeTargetValueRequest ? "llm_slot" : "deterministic_fallback"
+    });
+    const hasInboundMedia = conversationHasInboundMediaContext(conv);
+    const photoAsk = hasInboundMedia
+      ? ""
+      : " If you can text a few clear photos plus mileage, we can tighten that range before you come in.";
+    const reply = `Totally fair — if you need to be around ${targetValue}, the best next step is a quick in-person appraisal so we don’t waste your time.${photoAsk} I’ll have our sales team follow up with options.`;
+    addTodo(
+      conv,
+      "call",
+      `Trade value target request: customer says they need around ${targetValue}.`,
+      event.providerMessageId
+    );
+    setFollowUpMode(conv, "manual_handoff", "trade_value_target");
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    if (!isTradeDialogState(getDialogState(conv))) {
+      setDialogState(conv, "trade_cash");
+    }
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
   }
   if (isTradeLead && conv.lead) {
     const parsedSellOption = parseSellOptionFromText(event.body ?? "");

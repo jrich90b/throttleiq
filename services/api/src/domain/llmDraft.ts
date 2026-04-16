@@ -1125,6 +1125,13 @@ export type TradePayoffParse = {
   confidence?: number;
 };
 
+export type TradeTargetValueParse = {
+  hasTargetValue: boolean;
+  amount?: number | null;
+  rawText?: string | null;
+  confidence?: number;
+};
+
 export type ResponseControlParse = {
   intent: "opt_out" | "not_interested" | "schedule_request" | "compliment_only" | "none";
   explicitRequest: boolean;
@@ -1303,8 +1310,13 @@ export type UnifiedSemanticSlotParse = {
   payoffStatus: "unknown" | "no_lien" | "has_lien";
   needsLienHolderInfo: boolean;
   providesLienHolderInfo: boolean;
+  tradeTargetValue?: {
+    amount: number;
+    raw?: string | null;
+  } | null;
   watchConfidence?: number;
   payoffConfidence?: number;
+  tradeTargetConfidence?: number;
   confidence?: number;
 };
 
@@ -1565,6 +1577,18 @@ const TRADE_PAYOFF_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     },
     needs_lien_holder_info: { type: "boolean" },
     provides_lien_holder_info: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const TRADE_TARGET_VALUE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["has_target_value", "amount", "raw_text", "confidence"],
+  properties: {
+    has_target_value: { type: "boolean" },
+    amount: { type: "number" },
+    raw_text: { type: "string" },
     confidence: { type: "number" }
   }
 };
@@ -2592,6 +2616,120 @@ export async function parseTradePayoffWithLLM(args: {
     payoffStatus,
     needsLienHolderInfo,
     providesLienHolderInfo,
+    confidence
+  };
+}
+
+export async function parseTradeTargetValueWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<TradeTargetValueParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    (process.env.LLM_TRADE_TARGET_VALUE_PARSER_ENABLED === "1" ||
+      process.env.LLM_UNIFIED_SLOT_PARSER_ENABLED === "1") &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_TRADE_TARGET_VALUE_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_TRADE_TARGET_VALUE_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_TRADE_TARGET_VALUE_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const prompt = [
+    "You are a parser for trade-in target value requests in dealership SMS.",
+    "Return only JSON that matches the provided schema.",
+    "",
+    "Goal:",
+    "- Detect when customer states a specific trade value target for their bike.",
+    "",
+    "Examples that SHOULD set has_target_value=true:",
+    "- \"am i anywhere close to 7k\"",
+    "- \"I would need 7000 for my bike\"",
+    "- \"if i'm not at 7,000 it won't make sense\"",
+    "- \"i'd have to get at least $8,500\"",
+    "",
+    "Examples that SHOULD set has_target_value=false:",
+    "- \"what can you give me for my bike?\" (no concrete number)",
+    "- \"i want top dollar\" (no concrete number)",
+    "- unrelated pricing/payment questions for the bike they're buying.",
+    "",
+    "Rules:",
+    "- amount must be numeric dollars when present (convert shorthand like 7k -> 7000).",
+    "- raw_text should contain the customer phrase indicating their target.",
+    "- If no clear target amount is present, use has_target_value=false and amount=0.",
+    "- confidence is 0..1.",
+    "",
+    `Known lead info: ${JSON.stringify({
+      vehicle: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      tradeVehicle: lead?.tradeVehicle?.model ?? null,
+      leadSource: lead?.source ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> => {
+    return requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "trade_target_value_parser",
+      schema: TRADE_TARGET_VALUE_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 160,
+      debugTag: "llm-trade-target-value-parser",
+      debug
+    });
+  };
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const hasTargetValue = !!parsed.has_target_value;
+  const parsedAmount = Number(parsed.amount);
+  const amount =
+    Number.isFinite(parsedAmount) && parsedAmount > 0 ? Math.round(parsedAmount) : null;
+  const rawText = cleanOptionalString(parsed.raw_text);
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  const textLower = text.toLowerCase();
+  const hasTradeContextCue =
+    /\b(trade|bike|for it|for my bike|value|offer|appraisal)\b/.test(textLower) ||
+    /\b(won't make sense|waste (our|both of our) time)\b/.test(textLower);
+  const hasAmountCue =
+    /\$\s*\d[\d,]*(?:\.\d+)?\b/.test(textLower) ||
+    /\b\d[\d,]*(?:\.\d+)?\s*k\b/.test(textLower) ||
+    /\b\d{3,6}\b/.test(textLower);
+  const hasTargetLanguageCue =
+    /\b(close to|around|about|at least|need|have to be|would have to get|get at|be at|if i'm not at|if im not at)\b/.test(
+      textLower
+    );
+
+  if (!hasTradeContextCue || !hasAmountCue || (!hasTargetLanguageCue && !hasTargetValue)) {
+    return {
+      hasTargetValue: false,
+      amount: null,
+      rawText: null,
+      confidence
+    };
+  }
+
+  return {
+    hasTargetValue: hasTargetValue && !!amount,
+    amount: hasTargetValue && amount ? amount : null,
+    rawText,
     confidence
   };
 }
@@ -3916,7 +4054,7 @@ export async function parseUnifiedSemanticSlotsWithLLM(args: {
     !!process.env.OPENAI_API_KEY;
   if (!useLLM) return null;
 
-  const [semantic, trade] = await Promise.all([
+  const [semantic, trade, tradeTarget] = await Promise.all([
     parseSemanticSlotsWithLLM({
       text: args.text,
       history: args.history,
@@ -3930,9 +4068,14 @@ export async function parseUnifiedSemanticSlotsWithLLM(args: {
       history: args.history,
       lead: args.lead,
       tradePayoff: args.tradePayoff
+    }),
+    parseTradeTargetValueWithLLM({
+      text: args.text,
+      history: args.history,
+      lead: args.lead
     })
   ]);
-  if (!semantic && !trade) return null;
+  if (!semantic && !trade && !tradeTarget) return null;
 
   const watchConfidence =
     typeof semantic?.confidence === "number" && Number.isFinite(semantic.confidence)
@@ -3942,14 +4085,20 @@ export async function parseUnifiedSemanticSlotsWithLLM(args: {
     typeof trade?.confidence === "number" && Number.isFinite(trade.confidence)
       ? Math.max(0, Math.min(1, trade.confidence))
       : undefined;
-  const confidence =
-    typeof watchConfidence === "number" && typeof payoffConfidence === "number"
-      ? Math.min(watchConfidence, payoffConfidence)
-      : typeof watchConfidence === "number"
-        ? watchConfidence
-        : typeof payoffConfidence === "number"
-          ? payoffConfidence
-          : undefined;
+  const tradeTargetConfidence =
+    typeof tradeTarget?.confidence === "number" && Number.isFinite(tradeTarget.confidence)
+      ? Math.max(0, Math.min(1, tradeTarget.confidence))
+      : undefined;
+  const confidenceCandidates = [watchConfidence, payoffConfidence, tradeTargetConfidence].filter(
+    (value): value is number => typeof value === "number"
+  );
+  const confidence = confidenceCandidates.length
+    ? Math.min(...confidenceCandidates)
+    : undefined;
+  const tradeTargetAmount =
+    tradeTarget?.hasTargetValue && Number.isFinite(Number(tradeTarget.amount))
+      ? Math.round(Number(tradeTarget.amount))
+      : null;
 
   return {
     watchAction: semantic?.watchAction ?? "none",
@@ -3961,8 +4110,15 @@ export async function parseUnifiedSemanticSlotsWithLLM(args: {
     payoffStatus: trade?.payoffStatus ?? "unknown",
     needsLienHolderInfo: !!trade?.needsLienHolderInfo,
     providesLienHolderInfo: !!trade?.providesLienHolderInfo,
+    tradeTargetValue: tradeTargetAmount
+      ? {
+          amount: tradeTargetAmount,
+          raw: tradeTarget?.rawText ?? null
+        }
+      : null,
     watchConfidence,
     payoffConfidence,
+    tradeTargetConfidence,
     confidence
   };
 }
