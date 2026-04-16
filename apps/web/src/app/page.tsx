@@ -10658,59 +10658,80 @@ export default function Home() {
               <div className="text-sm text-red-600">{settingsError}</div>
             ) : null}
             {settingsTab === "dealer" ? (
-              <div className="border rounded-lg p-4 space-y-4">
+              <div className="border rounded-lg p-4 space-y-6">
                 <div className="text-lg font-semibold">Dealer Profile</div>
-                <div className="grid grid-cols-2 gap-3">
-                  <input
-                    className="border rounded px-3 py-2 text-sm"
-                    placeholder="Dealer name"
-                    value={dealerProfileForm.dealerName}
-                    onChange={e => setDealerProfileForm({ ...dealerProfileForm, dealerName: e.target.value })}
-                  />
-                  <input
-                    className="border rounded px-3 py-2 text-sm"
-                    placeholder="Agent name"
-                    value={dealerProfileForm.agentName}
-                    onChange={e => setDealerProfileForm({ ...dealerProfileForm, agentName: e.target.value })}
-                  />
-                  <select
-                    className="border rounded px-3 py-2 text-sm"
-                    value={dealerProfileForm.crmProvider}
-                    onChange={e => setDealerProfileForm({ ...dealerProfileForm, crmProvider: e.target.value })}
-                  >
-                    <option value="">CRM provider (optional)</option>
-                    <option value="tlp">TLP</option>
-                    <option value="vin">VIN</option>
-                    <option value="elead">eLead</option>
-                    <option value="dealersocket">DealerSocket</option>
-                    <option value="adf">Generic ADF</option>
-                  </select>
-                  <select
-                    className="border rounded px-3 py-2 text-sm"
-                    value={dealerProfileForm.websiteProvider}
-                    onChange={e => setDealerProfileForm({ ...dealerProfileForm, websiteProvider: e.target.value })}
-                  >
-                    <option value="">Website provider (optional)</option>
-                    <option value="dx1">DX1</option>
-                    <option value="foxdealer">Fox Dealer</option>
-                    <option value="room58">Room 58</option>
-                    <option value="dealerspike">Dealer Spike</option>
-                    <option value="dealereprocess">Dealer eProcess</option>
-                    <option value="motive">Motive</option>
-                  </select>
-                  <input
-                    className="border rounded px-3 py-2 text-sm"
-                    placeholder="Phone"
-                    value={dealerProfileForm.phone}
-                    onChange={e => setDealerProfileForm({ ...dealerProfileForm, phone: e.target.value })}
-                  />
-                  <input
-                    className="border rounded px-3 py-2 text-sm"
-                    placeholder="Website"
-                    value={dealerProfileForm.website}
-                    onChange={e => setDealerProfileForm({ ...dealerProfileForm, website: e.target.value })}
-                  />
-                  <div className="col-span-2 border rounded p-3 space-y-2">
+                <div className="border rounded-lg p-3 space-y-3">
+                  <div className="text-sm font-semibold">Basic Information</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">Dealer name</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={dealerProfileForm.dealerName}
+                        onChange={e => setDealerProfileForm({ ...dealerProfileForm, dealerName: e.target.value })}
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">Default agent name</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={dealerProfileForm.agentName}
+                        onChange={e => setDealerProfileForm({ ...dealerProfileForm, agentName: e.target.value })}
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">CRM provider (optional)</div>
+                      <select
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={dealerProfileForm.crmProvider}
+                        onChange={e => setDealerProfileForm({ ...dealerProfileForm, crmProvider: e.target.value })}
+                      >
+                        <option value="">Select CRM provider</option>
+                        <option value="tlp">TLP</option>
+                        <option value="vin">VIN</option>
+                        <option value="elead">eLead</option>
+                        <option value="dealersocket">DealerSocket</option>
+                        <option value="adf">Generic ADF</option>
+                      </select>
+                    </label>
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">Website provider (optional)</div>
+                      <select
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={dealerProfileForm.websiteProvider}
+                        onChange={e => setDealerProfileForm({ ...dealerProfileForm, websiteProvider: e.target.value })}
+                      >
+                        <option value="">Select website provider</option>
+                        <option value="dx1">DX1</option>
+                        <option value="foxdealer">Fox Dealer</option>
+                        <option value="room58">Room 58</option>
+                        <option value="dealerspike">Dealer Spike</option>
+                        <option value="dealereprocess">Dealer eProcess</option>
+                        <option value="motive">Motive</option>
+                      </select>
+                    </label>
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">Primary phone</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={dealerProfileForm.phone}
+                        onChange={e => setDealerProfileForm({ ...dealerProfileForm, phone: e.target.value })}
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">Website URL</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={dealerProfileForm.website}
+                        onChange={e => setDealerProfileForm({ ...dealerProfileForm, website: e.target.value })}
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                <div className="border rounded-lg p-3 space-y-3">
+                  <div className="text-sm font-semibold">Search & Links</div>
+                  <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <div className="text-xs text-gray-600">
                         Web search reference pages/domains (manufacturer + help docs)
@@ -10774,7 +10795,6 @@ export default function Home() {
                       <div key={`web-ref-${idx}`} className="flex items-center gap-2">
                         <input
                           className="border rounded px-3 py-2 text-sm flex-1"
-                          placeholder="https://manufacturer.com/support"
                           value={url}
                           onChange={e =>
                             setDealerProfileForm(prev => {
@@ -10801,269 +10821,329 @@ export default function Home() {
                       </div>
                     ))}
                   </div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      className="border rounded px-3 py-2 text-sm flex-1"
-                      placeholder="Booking token (public)"
-                      value={dealerProfileForm.bookingToken}
-                      onChange={e => setDealerProfileForm({ ...dealerProfileForm, bookingToken: e.target.value })}
-                    />
-                    <button
-                      className="px-3 py-2 border rounded text-sm"
-                      type="button"
-                      onClick={() => {
-                        const token =
-                          (typeof window !== "undefined" && window.crypto?.randomUUID?.()) ||
-                          Math.random().toString(36).slice(2);
-                        setDealerProfileForm(prev => ({ ...prev, bookingToken: token }));
-                      }}
-                    >
-                      Generate
-                    </button>
-                  </div>
-                  <input
-                    className="border rounded px-3 py-2 text-sm"
-                    placeholder="Booking link (for email follow-ups)"
-                    value={dealerProfileForm.bookingUrl}
-                    onChange={e => setDealerProfileForm({ ...dealerProfileForm, bookingUrl: e.target.value })}
-                  />
-                  <input
-                    className="border rounded px-3 py-2 text-sm"
-                    placeholder="Credit app URL (financing)"
-                    value={dealerProfileForm.creditAppUrl}
-                    onChange={e => setDealerProfileForm({ ...dealerProfileForm, creditAppUrl: e.target.value })}
-                  />
-                  <textarea
-                    className="border rounded px-3 py-2 text-sm col-span-2 min-h-[80px]"
-                    placeholder="Lien holder / payoff response (used when customer asks for lien holder details)"
-                    value={dealerProfileForm.lienHolderResponse}
-                    onChange={e =>
-                      setDealerProfileForm({ ...dealerProfileForm, lienHolderResponse: e.target.value })
-                    }
-                  />
-                  <input
-                    className="border rounded px-3 py-2 text-sm"
-                    placeholder="From email (outbound)"
-                    value={dealerProfileForm.fromEmail}
-                    onChange={e => setDealerProfileForm({ ...dealerProfileForm, fromEmail: e.target.value })}
-                  />
-                  <input
-                    className="border rounded px-3 py-2 text-sm"
-                    placeholder="Reply-to email (optional)"
-                    value={dealerProfileForm.replyToEmail}
-                    onChange={e => setDealerProfileForm({ ...dealerProfileForm, replyToEmail: e.target.value })}
-                  />
-                  <textarea
-                    className="border rounded px-3 py-2 text-sm col-span-2 min-h-[90px]"
-                    placeholder="Email signature (optional)"
-                    value={dealerProfileForm.emailSignature}
-                    onChange={e =>
-                      setDealerProfileForm({ ...dealerProfileForm, emailSignature: e.target.value })
-                    }
-                  />
-                  <div className="col-span-2 border rounded p-3">
-                    <div className="text-xs text-gray-600 mb-2">Logo (email signature)</div>
-                    {dealerProfileForm.logoUrl ? (
-                      <div className="flex items-center gap-3 mb-2">
-                        <img
-                          src={dealerProfileForm.logoUrl}
-                          alt="Dealer logo"
-                          className="h-12 object-contain border rounded bg-white"
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">Booking token (public)</div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          className="border rounded px-3 py-2 text-sm flex-1"
+                          value={dealerProfileForm.bookingToken}
+                          onChange={e => setDealerProfileForm({ ...dealerProfileForm, bookingToken: e.target.value })}
                         />
                         <button
-                          className="px-2 py-1 border rounded text-xs"
-                          onClick={() => setDealerProfileForm({ ...dealerProfileForm, logoUrl: "" })}
+                          className="px-3 py-2 border rounded text-sm"
+                          type="button"
+                          onClick={() => {
+                            const token =
+                              (typeof window !== "undefined" && window.crypto?.randomUUID?.()) ||
+                              Math.random().toString(36).slice(2);
+                            setDealerProfileForm(prev => ({ ...prev, bookingToken: token }));
+                          }}
                         >
-                          Remove
+                          Generate
                         </button>
                       </div>
-                    ) : null}
-                    <label className="inline-flex items-center gap-2 px-3 py-2 border rounded text-sm cursor-pointer hover:bg-gray-50">
-                      <span>Upload logo</span>
+                    </label>
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">Booking link (email follow-ups)</div>
                       <input
-                        className="hidden"
-                        type="file"
-                        accept="image/*"
-                        onChange={async e => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-                        const fd = new FormData();
-                        fd.append("file", file);
-                        const resp = await fetch("/api/dealer-profile/logo", {
-                          method: "POST",
-                          body: fd
-                        });
-                          const payload = await resp.json().catch(() => null);
-                          if (resp.ok && payload?.profile) {
-                            setDealerProfileForm(prev => ({
-                              ...prev,
-                              logoUrl: payload.profile.logoUrl ?? payload.url ?? ""
-                            }));
-                          }
-                        }}
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={dealerProfileForm.bookingUrl}
+                        onChange={e => setDealerProfileForm({ ...dealerProfileForm, bookingUrl: e.target.value })}
+                      />
+                    </label>
+                    <label className="space-y-1 md:col-span-2">
+                      <div className="text-xs text-gray-600">Credit app URL (financing)</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={dealerProfileForm.creditAppUrl}
+                        onChange={e => setDealerProfileForm({ ...dealerProfileForm, creditAppUrl: e.target.value })}
+                      />
+                    </label>
+                    <label className="space-y-1 md:col-span-2">
+                      <div className="text-xs text-gray-600">
+                        Lien holder / payoff response (used when customer asks for lien holder details)
+                      </div>
+                      <textarea
+                        className="border rounded px-3 py-2 text-sm w-full min-h-[80px]"
+                        value={dealerProfileForm.lienHolderResponse}
+                        onChange={e =>
+                          setDealerProfileForm({ ...dealerProfileForm, lienHolderResponse: e.target.value })
+                        }
                       />
                     </label>
                   </div>
-                  <input
-                    className="border rounded px-3 py-2 text-sm col-span-2"
-                    placeholder="Address line 1"
-                    value={dealerProfileForm.addressLine1}
-                    onChange={e => setDealerProfileForm({ ...dealerProfileForm, addressLine1: e.target.value })}
-                  />
-                  <input
-                    className="border rounded px-3 py-2 text-sm"
-                    placeholder="City"
-                    value={dealerProfileForm.city}
-                    onChange={e => setDealerProfileForm({ ...dealerProfileForm, city: e.target.value })}
-                  />
-                  <input
-                    className="border rounded px-3 py-2 text-sm"
-                    placeholder="State"
-                    value={dealerProfileForm.state}
-                    onChange={e => setDealerProfileForm({ ...dealerProfileForm, state: e.target.value })}
-                  />
-                  <input
-                    className="border rounded px-3 py-2 text-sm"
-                    placeholder="Zip"
-                    value={dealerProfileForm.zip}
-                    onChange={e => setDealerProfileForm({ ...dealerProfileForm, zip: e.target.value })}
-                  />
                 </div>
-                <div>
-                  <div className="text-sm font-medium mb-2">Business hours</div>
-                  <div className="space-y-2">
-                    {days.map(day => {
-                      const current = dealerHours?.[day] ?? { open: null, close: null };
-                      return (
-                        <div key={day} className="grid grid-cols-3 gap-2 items-center text-sm">
-                          <div className="capitalize">{day}</div>
-                          <select
-                            className="border rounded px-2 py-1 text-sm"
-                            value={current.open ?? ""}
-                            onChange={e => updateHours(setDealerHours, day, "open", e.target.value)}
-                          >
-                            <option value="">Closed</option>
-                            {timeOptions.map(t => (
-                              <option key={`open-${day}-${t}`} value={t}>
-                                {formatTimeLabel(t, schedulerForm.timezone)}
-                              </option>
-                            ))}
-                          </select>
-                          <select
-                            className="border rounded px-2 py-1 text-sm"
-                            value={current.close ?? ""}
-                            onChange={e => updateHours(setDealerHours, day, "close", e.target.value)}
-                          >
-                            <option value="">Closed</option>
-                            {timeOptions.map(t => (
-                              <option key={`close-${day}-${t}`} value={t}>
-                                {formatTimeLabel(t, schedulerForm.timezone)}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-sm font-medium mb-2">Follow-up: Test Ride</div>
-                  <label className="flex items-center gap-2 text-sm mb-3">
-                    <input
-                      type="checkbox"
-                      checked={!!dealerProfileForm.testRideEnabled}
-                      onChange={e =>
-                        setDealerProfileForm({ ...dealerProfileForm, testRideEnabled: e.target.checked })
-                      }
-                    />
-                    Enable test ride follow-ups
-                  </label>
-                  <div className="text-xs text-gray-500 mb-2">Months to offer test rides</div>
-                  <div className="grid grid-cols-6 gap-2 text-sm">
-                    {followUpMonths.map(m => {
-                      const checked = (dealerProfileForm.testRideMonths ?? []).includes(m.value);
-                      return (
-                        <label key={`month-${m.value}`} className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            disabled={!dealerProfileForm.testRideEnabled}
-                            onChange={e => {
-                              const next = new Set(dealerProfileForm.testRideMonths ?? []);
-                              if (e.target.checked) next.add(m.value);
-                              else next.delete(m.value);
-                              setDealerProfileForm({
-                                ...dealerProfileForm,
-                                testRideMonths: Array.from(next).sort((a, b) => a - b)
-                              });
-                            }}
+
+                <div className="border rounded-lg p-3 space-y-3">
+                  <div className="text-sm font-semibold">Email & Branding</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">From email (outbound)</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={dealerProfileForm.fromEmail}
+                        onChange={e => setDealerProfileForm({ ...dealerProfileForm, fromEmail: e.target.value })}
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">Reply-to email (optional)</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={dealerProfileForm.replyToEmail}
+                        onChange={e => setDealerProfileForm({ ...dealerProfileForm, replyToEmail: e.target.value })}
+                      />
+                    </label>
+                    <label className="space-y-1 md:col-span-2">
+                      <div className="text-xs text-gray-600">Email signature (optional)</div>
+                      <textarea
+                        className="border rounded px-3 py-2 text-sm w-full min-h-[90px]"
+                        value={dealerProfileForm.emailSignature}
+                        onChange={e =>
+                          setDealerProfileForm({ ...dealerProfileForm, emailSignature: e.target.value })
+                        }
+                      />
+                    </label>
+                    <div className="md:col-span-2 border rounded p-3">
+                      <div className="text-xs text-gray-600 mb-2">Logo (email signature)</div>
+                      {dealerProfileForm.logoUrl ? (
+                        <div className="flex items-center gap-3 mb-2">
+                          <img
+                            src={dealerProfileForm.logoUrl}
+                            alt="Dealer logo"
+                            className="h-12 object-contain border rounded bg-white"
                           />
-                          {m.label}
-                        </label>
-                      );
-                    })}
+                          <button
+                            className="px-2 py-1 border rounded text-xs"
+                            onClick={() => setDealerProfileForm({ ...dealerProfileForm, logoUrl: "" })}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ) : null}
+                      <label className="inline-flex items-center gap-2 px-3 py-2 border rounded text-sm cursor-pointer hover:bg-gray-50">
+                        <span>Upload logo</span>
+                        <input
+                          className="hidden"
+                          type="file"
+                          accept="image/*"
+                          onChange={async e => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            const fd = new FormData();
+                            fd.append("file", file);
+                            const resp = await fetch("/api/dealer-profile/logo", {
+                              method: "POST",
+                              body: fd
+                            });
+                            const payload = await resp.json().catch(() => null);
+                            if (resp.ok && payload?.profile) {
+                              setDealerProfileForm(prev => ({
+                                ...prev,
+                                logoUrl: payload.profile.logoUrl ?? payload.url ?? ""
+                              }));
+                            }
+                          }}
+                        />
+                      </label>
+                    </div>
                   </div>
                 </div>
-                <div>
-                  <div className="text-sm font-medium mb-2">Weather & Pickup</div>
-                  <div className="grid grid-cols-3 gap-2 text-sm">
-                    <input
-                      className="border rounded px-3 py-2 text-sm"
-                      placeholder="Pickup radius (miles)"
-                      value={dealerProfileForm.weatherPickupRadiusMiles}
-                      onChange={e =>
-                        setDealerProfileForm({ ...dealerProfileForm, weatherPickupRadiusMiles: e.target.value })
-                      }
-                    />
-                    <input
-                      className="border rounded px-3 py-2 text-sm"
-                      placeholder="Cold threshold (°F)"
-                      value={dealerProfileForm.weatherColdThresholdF}
-                      onChange={e =>
-                        setDealerProfileForm({ ...dealerProfileForm, weatherColdThresholdF: e.target.value })
-                      }
-                    />
-                    <input
-                      className="border rounded px-3 py-2 text-sm"
-                      placeholder="Forecast window (hours)"
-                      value={dealerProfileForm.weatherForecastHours}
-                      onChange={e =>
-                        setDealerProfileForm({ ...dealerProfileForm, weatherForecastHours: e.target.value })
-                      }
-                    />
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    Used to decide when to offer pickup or delay test rides (snow or &lt; threshold).
-                  </div>
-                </div>
-                <div>
-                  <div className="text-sm font-medium mb-2">Pricing Defaults</div>
-                  <div className="grid grid-cols-2 gap-2 text-sm">
-                    <input
-                      className="border rounded px-3 py-2 text-sm"
-                      placeholder="Default tax rate (%)"
-                      value={dealerProfileForm.taxRate}
-                      onChange={e =>
-                        setDealerProfileForm({ ...dealerProfileForm, taxRate: e.target.value })
-                      }
-                    />
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    Used for ballpark payment estimates when county tax is unknown.
+
+                <div className="border rounded-lg p-3 space-y-3">
+                  <div className="text-sm font-semibold">Address</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <label className="space-y-1 md:col-span-2">
+                      <div className="text-xs text-gray-600">Address line 1</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={dealerProfileForm.addressLine1}
+                        onChange={e => setDealerProfileForm({ ...dealerProfileForm, addressLine1: e.target.value })}
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">City</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={dealerProfileForm.city}
+                        onChange={e => setDealerProfileForm({ ...dealerProfileForm, city: e.target.value })}
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">State</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={dealerProfileForm.state}
+                        onChange={e => setDealerProfileForm({ ...dealerProfileForm, state: e.target.value })}
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">Zip</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={dealerProfileForm.zip}
+                        onChange={e => setDealerProfileForm({ ...dealerProfileForm, zip: e.target.value })}
+                      />
+                    </label>
                   </div>
                 </div>
-                <div>
-                  <div className="text-sm font-medium mb-2">Buying Used Bikes</div>
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={!!dealerProfileForm.buyingUsedBikesEnabled}
-                      onChange={e =>
-                        setDealerProfileForm({ ...dealerProfileForm, buyingUsedBikesEnabled: e.target.checked })
-                      }
-                    />
-                    Currently buying used bikes (Sell Your Bike leads)
-                  </label>
+
+                <div className="border rounded-lg p-3 space-y-4">
+                  <div className="text-sm font-semibold">Operations</div>
+                  <div>
+                    <div className="text-sm font-medium mb-2">Business hours</div>
+                    <div className="grid grid-cols-3 gap-2 text-xs font-medium text-gray-600 px-1 mb-1">
+                      <div>Day</div>
+                      <div>Open</div>
+                      <div>Close</div>
+                    </div>
+                    <div className="space-y-2">
+                      {days.map(day => {
+                        const current = dealerHours?.[day] ?? { open: null, close: null };
+                        return (
+                          <div key={day} className="grid grid-cols-3 gap-2 items-center text-sm">
+                            <div className="capitalize">{day}</div>
+                            <select
+                              className="border rounded px-2 py-1 text-sm"
+                              value={current.open ?? ""}
+                              onChange={e => updateHours(setDealerHours, day, "open", e.target.value)}
+                            >
+                              <option value="">Closed</option>
+                              {timeOptions.map(t => (
+                                <option key={`open-${day}-${t}`} value={t}>
+                                  {formatTimeLabel(t, schedulerForm.timezone)}
+                                </option>
+                              ))}
+                            </select>
+                            <select
+                              className="border rounded px-2 py-1 text-sm"
+                              value={current.close ?? ""}
+                              onChange={e => updateHours(setDealerHours, day, "close", e.target.value)}
+                            >
+                              <option value="">Closed</option>
+                              {timeOptions.map(t => (
+                                <option key={`close-${day}-${t}`} value={t}>
+                                  {formatTimeLabel(t, schedulerForm.timezone)}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-sm font-medium mb-2">Follow-up: Test Ride</div>
+                    <label className="flex items-center gap-2 text-sm mb-3">
+                      <input
+                        type="checkbox"
+                        checked={!!dealerProfileForm.testRideEnabled}
+                        onChange={e =>
+                          setDealerProfileForm({ ...dealerProfileForm, testRideEnabled: e.target.checked })
+                        }
+                      />
+                      Enable test ride follow-ups
+                    </label>
+                    <div className="text-xs text-gray-500 mb-2">Months to offer test rides</div>
+                    <div className="grid grid-cols-4 md:grid-cols-6 gap-2 text-sm">
+                      {followUpMonths.map(m => {
+                        const checked = (dealerProfileForm.testRideMonths ?? []).includes(m.value);
+                        return (
+                          <label key={`month-${m.value}`} className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={!dealerProfileForm.testRideEnabled}
+                              onChange={e => {
+                                const next = new Set(dealerProfileForm.testRideMonths ?? []);
+                                if (e.target.checked) next.add(m.value);
+                                else next.delete(m.value);
+                                setDealerProfileForm({
+                                  ...dealerProfileForm,
+                                  testRideMonths: Array.from(next).sort((a, b) => a - b)
+                                });
+                              }}
+                            />
+                            {m.label}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-sm font-medium mb-2">Weather & Pickup</div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
+                      <label className="space-y-1">
+                        <div className="text-xs text-gray-600">Pickup radius (miles)</div>
+                        <input
+                          className="border rounded px-3 py-2 text-sm w-full"
+                          value={dealerProfileForm.weatherPickupRadiusMiles}
+                          onChange={e =>
+                            setDealerProfileForm({ ...dealerProfileForm, weatherPickupRadiusMiles: e.target.value })
+                          }
+                        />
+                      </label>
+                      <label className="space-y-1">
+                        <div className="text-xs text-gray-600">Cold threshold (°F)</div>
+                        <input
+                          className="border rounded px-3 py-2 text-sm w-full"
+                          value={dealerProfileForm.weatherColdThresholdF}
+                          onChange={e =>
+                            setDealerProfileForm({ ...dealerProfileForm, weatherColdThresholdF: e.target.value })
+                          }
+                        />
+                      </label>
+                      <label className="space-y-1">
+                        <div className="text-xs text-gray-600">Forecast window (hours)</div>
+                        <input
+                          className="border rounded px-3 py-2 text-sm w-full"
+                          value={dealerProfileForm.weatherForecastHours}
+                          onChange={e =>
+                            setDealerProfileForm({ ...dealerProfileForm, weatherForecastHours: e.target.value })
+                          }
+                        />
+                      </label>
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      Used to decide when to offer pickup or delay test rides (snow or &lt; threshold).
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-sm font-medium mb-2">Pricing Defaults</div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                      <label className="space-y-1">
+                        <div className="text-xs text-gray-600">Default tax rate (%)</div>
+                        <input
+                          className="border rounded px-3 py-2 text-sm w-full"
+                          value={dealerProfileForm.taxRate}
+                          onChange={e =>
+                            setDealerProfileForm({ ...dealerProfileForm, taxRate: e.target.value })
+                          }
+                        />
+                      </label>
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      Used for ballpark payment estimates when county tax is unknown.
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-sm font-medium mb-2">Buying Used Bikes</div>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={!!dealerProfileForm.buyingUsedBikesEnabled}
+                        onChange={e =>
+                          setDealerProfileForm({ ...dealerProfileForm, buyingUsedBikesEnabled: e.target.checked })
+                        }
+                      />
+                      Currently buying used bikes (Sell Your Bike leads)
+                    </label>
+                  </div>
                 </div>
                 <div>
                   <button
