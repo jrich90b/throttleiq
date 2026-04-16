@@ -1869,6 +1869,42 @@ function isSoldConversationForHot(conv: Conversation): boolean {
   return (conv.status === "closed" && conv.closedReason === "sold") || !!conv.sale?.soldAt;
 }
 
+function hasDirectCustomerEngagementForHot(conv: Conversation, hasInboundTwilio: boolean): boolean {
+  if (hasInboundTwilio) return true;
+  if (String(conv.engagement?.source ?? "").toLowerCase() === "call" && conv.engagement?.at) return true;
+  const hasInboundVoiceTranscript = (conv.messages ?? []).some(m => {
+    if (m?.direction !== "in") return false;
+    const provider = String(m?.provider ?? "").toLowerCase();
+    return provider === "voice_transcript" || provider === "call_transcript";
+  });
+  if (hasInboundVoiceTranscript) return true;
+  return false;
+}
+
+function hasActionableAdfInquiryHotIntent(conv: Conversation): boolean {
+  const adfMessages = (conv.messages ?? []).filter(
+    m => m?.direction === "in" && String(m?.provider ?? "").toLowerCase() === "sendgrid_adf"
+  );
+  if (!adfMessages.length) return false;
+  const strongIntentPattern =
+    /\b(ready to (buy|pull the trigger)|let'?s make a deal|i have cash|cash buyer|coming to look|coming in|come in|can i come in|want to come in|stop in|swing by|be there|today works|tomorrow works|test ride|schedule|appointment|book(?:\s+an?)?\s+appointment|in stock|availability|pricing|payments?|finance specials?|trade[-\s]?in|watch for|interested in buying|looking to buy|want to buy)\b/i;
+  const nearTermPurchasePattern =
+    /\bpurchase timeframe:\s*(0-3 months|yes,\s*in less than 3 months|yes,\s*in less than a month)\b/i;
+  const uninterestedPattern =
+    /\b(i am not interested in purchasing at this time|not interested in purchasing|not interested)\b/i;
+  for (const m of adfMessages) {
+    const body = String(m?.body ?? "");
+    if (!body) continue;
+    const inquiryIdx = body.toLowerCase().lastIndexOf("inquiry:");
+    const inquiryText = (inquiryIdx >= 0 ? body.slice(inquiryIdx + "inquiry:".length) : body).trim();
+    if (!inquiryText) continue;
+    if (uninterestedPattern.test(inquiryText)) continue;
+    if (strongIntentPattern.test(inquiryText)) return true;
+    if (nearTermPurchasePattern.test(inquiryText)) return true;
+  }
+  return false;
+}
+
 function computeStickyHotDealSignal(conv: Conversation, hasInboundTwilio: boolean): boolean {
   if (isSoldConversationForHot(conv)) return false;
   if (isConversationOnHoldForHot(conv)) return false;
@@ -1891,9 +1927,13 @@ function computeStickyHotDealSignal(conv: Conversation, hasInboundTwilio: boolea
     leadSource.includes("hdfs coa") ||
     leadSource.includes("coa online") ||
     leadSource.includes("credit application");
-  const isAdfTestRide =
-    bucket === "test_ride" || cta === "schedule_test_ride" || leadSource.includes("test ride");
-  if (isCoa || isAdfTestRide) return true;
+  if (isCoa) return true;
+
+  const hasDirectEngagement = hasDirectCustomerEngagementForHot(conv, hasInboundTwilio);
+  if (!hasDirectEngagement) {
+    if (hasActionableAdfInquiryHotIntent(conv)) return true;
+    return false;
+  }
 
   const purchaseBuckets = new Set(["inventory_interest", "test_ride", "pricing_payments"]);
   const purchaseCtas = new Set([
@@ -2014,14 +2054,11 @@ function computeLastHotSignalAtMs(conv: Conversation, hasInboundTwilio: boolean)
   const leadSource = String(conv.lead?.source ?? "").trim().toLowerCase();
   const bucket = String(conv.classification?.bucket ?? "").trim().toLowerCase();
   const cta = String(conv.classification?.cta ?? "").trim().toLowerCase();
-  const isCoaOrTestRideLead =
+  const isCoaLead =
     cta === "hdfs_coa" ||
-    cta === "schedule_test_ride" ||
-    bucket === "test_ride" ||
     leadSource.includes("hdfs coa") ||
     leadSource.includes("coa online") ||
-    leadSource.includes("credit application") ||
-    leadSource.includes("test ride");
+    leadSource.includes("credit application");
 
   const inboundPurchaseLexical =
     /\b(road glide|street glide|touring|cruiser|trike|used|new|in stock|available|payment|monthly|apr|down payment|trade|appointment|schedule|come in|stop by|test ride|pricing|price|quote|finance)\b/i;
@@ -2036,7 +2073,7 @@ function computeLastHotSignalAtMs(conv: Conversation, hasInboundTwilio: boolean)
       if (inboundPurchaseLexical.test(body)) keep(m.at);
       continue;
     }
-    if (provider === "sendgrid_adf" && isCoaOrTestRideLead) {
+    if (provider === "sendgrid_adf" && isCoaLead) {
       keep(m.at);
     }
   }
