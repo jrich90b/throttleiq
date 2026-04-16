@@ -4548,6 +4548,10 @@ const ENGAGED_FOLLOW_UP_VARIANTS_WITH_SLOTS: Record<string, string[]> = {
     "Hey {name}, if you want to go over payments, I have {a} or {b} open. Which works better?{extraLine}",
     "{name}, I can walk through payment options at {a} or {b}. Which one works best?{extraLine}"
   ],
+  finance_docs: [
+    "Hey {name}, quick check-in — how are you making out with the remaining application documents? If easier, I can do {a} or {b} and help you finish it up.",
+    "{name}, if it helps, we can knock out the remaining docs/references at {a} or {b}. Which works better?"
+  ],
   inventory: [
     "Hey {name}, if you want to see{label}, I have {a} or {b} open. Which works better?{extraLine}",
     "{name}, want to stop by for the {model}? I can do {a} or {b}.{extraLine}"
@@ -4623,6 +4627,20 @@ const ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS: Record<string, Record<number, string[
     ],
     2: [
       "Quick check {name} — still looking at payments or holding off for now?"
+    ]
+  },
+  finance_docs: {
+    0: [
+      "Hey {name}, quick check-in — how are you making out with the remaining documents for your application?",
+      "{name}, just checking in — were you able to gather the remaining items (docs/references) yet?"
+    ],
+    1: [
+      "If it helps, I can text a quick checklist of what’s still needed.",
+      "Want me to resend the short checklist for the remaining application items?"
+    ],
+    2: [
+      "Quick check {name} — want me to keep this open while you finish those documents?",
+      "{name}, still planning to finish the pending application items, or should I pause this for now?"
     ]
   },
   inventory: {
@@ -5086,6 +5104,13 @@ function inferCadenceTagFromAgentContext(conv: any): string | null {
   const text = getCadenceAgentContextText(conv, new Date()).toLowerCase();
   if (!text) return null;
   if (
+    /\b(docs?|documents?|paperwork|references?|pay\s*stubs?|proof of (income|residence|address|insurance)|co-?signer|cosigner|contingenc(?:y|ies)|needs more info|pending)\b/.test(
+      text
+    )
+  ) {
+    return "finance_docs";
+  }
+  if (
     /\b(left|put)\b[^.]{0,40}\bdeposit\b/.test(text) ||
     /\bdealer\s*trade\b/.test(text) ||
     /\b(parts?|accessor(y|ies)|setup|go over numbers|finalize|coming in|come in|ready to buy|pull trigger)\b/.test(text)
@@ -5093,6 +5118,38 @@ function inferCadenceTagFromAgentContext(conv: any): string | null {
     return "deal_progress";
   }
   return null;
+}
+
+function hasCadenceFinanceDocsSignal(conv: any): boolean {
+  if (!conv) return false;
+  const followUpReason = String(conv?.followUp?.reason ?? "").trim().toLowerCase();
+  if (
+    /\b(credit_app_needs_info|finance_needs_info|financing_needs_info|credit_app_cosigner)\b/.test(
+      followUpReason
+    )
+  ) {
+    return true;
+  }
+  if (String(conv?.financeOutcome?.status ?? "").trim().toLowerCase() === "needs_more_info") return true;
+  if (String(conv?.financeDocs?.status ?? "").trim().toLowerCase() === "pending") return true;
+
+  const agentContext = getCadenceAgentContextText(conv, new Date()).toLowerCase();
+  const walkInComment = String(conv?.lead?.walkInComment ?? "").toLowerCase();
+  const recentHistory = buildHistory(conv, 12)
+    .slice(-8)
+    .map(h => String(h.body ?? "").toLowerCase())
+    .join(" ");
+  const text = `${agentContext} ${walkInComment} ${recentHistory}`.trim();
+  if (!text) return false;
+  const hasDocTerm =
+    /\b(docs?|documents?|paperwork|references?|pay\s*stubs?|proof of (income|residence|address|insurance)|co-?signer|cosigner|binder|insurance card)\b/.test(
+      text
+    );
+  const hasPendingTerm =
+    /\b(need|needs|needed|pending|missing|waiting on|still need|provide|send|text|upload|submit|bring)\b/.test(
+      text
+    );
+  return hasDocTerm && hasPendingTerm;
 }
 
 function mapDialogStateToCadenceTag(name: DialogStateName): string | null {
@@ -5184,6 +5241,11 @@ async function resolveCadenceContextTag(conv: any, cadence: any): Promise<string
   const cachedAt = cadence?.contextTagUpdatedAt ? new Date(cadence.contextTagUpdatedAt) : null;
   if (cached && cachedAt && Date.now() - cachedAt.getTime() < 24 * 60 * 60 * 1000) {
     return cached;
+  }
+  if (hasCadenceFinanceDocsSignal(conv)) {
+    cadence.contextTag = "finance_docs";
+    cadence.contextTagUpdatedAt = nowIso();
+    return "finance_docs";
   }
   const fromAgentContext = inferCadenceTagFromAgentContext(conv);
   if (fromAgentContext) {
@@ -14937,6 +14999,7 @@ async function processDueFollowUps() {
     };
     const walkInComment = String(conv.lead?.walkInComment ?? "").trim();
     const walkInCommentLabel = labelWithThe.trim() || "a model";
+    const hasFinanceDocsCadenceSignal = hasCadenceFinanceDocsSignal(conv);
     const canUseWalkInComment =
       !isPostSale &&
       cadence.stepIndex === 0 &&
@@ -14950,7 +15013,7 @@ async function processDueFollowUps() {
       !isPostSale &&
       !isTradeNoInterest &&
       !isSellMyBikeLead &&
-      (conv.engagement?.at || hasAgentContextForCadence) &&
+      (conv.engagement?.at || hasAgentContextForCadence || hasFinanceDocsCadenceSignal) &&
       cadence.kind !== "engaged"
     ) {
       cadence.kind = "engaged";
@@ -14965,7 +15028,7 @@ async function processDueFollowUps() {
       cadence.kind !== "long_term" &&
       !isTradeNoInterest &&
       !isSellMyBikeLead &&
-      (hasAgentContextForCadence || !!walkInComment || !!conv.engagement?.at) &&
+      (hasAgentContextForCadence || !!walkInComment || !!conv.engagement?.at || hasFinanceDocsCadenceSignal) &&
       contextTag !== "scheduling";
     const engagedNoSlotMap =
       (contextTag && ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS[contextTag]) ||

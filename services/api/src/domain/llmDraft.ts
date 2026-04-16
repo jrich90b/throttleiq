@@ -853,7 +853,7 @@ export async function classifyCadenceContextWithLLM(args: {
     properties: {
       label: {
         type: "string",
-        enum: ["trade", "pricing", "payments", "inventory", "scheduling", "general"]
+        enum: ["trade", "pricing", "payments", "finance_docs", "inventory", "scheduling", "general"]
       },
       confidence: { type: "number" }
     }
@@ -861,12 +861,13 @@ export async function classifyCadenceContextWithLLM(args: {
   const prompt = [
     "You are a classifier for dealership follow-up context.",
     "Return only JSON that matches the schema.",
-    "label must be one of: trade, pricing, payments, inventory, scheduling, general.",
+    "label must be one of: trade, pricing, payments, finance_docs, inventory, scheduling, general.",
     "",
     "Guidelines:",
     "- trade: trade-in, appraisal, sell my bike, cash offer, payoff/lien.",
     "- pricing: MSRP, price, OTD, quote, rebates.",
     "- payments: monthly payment, APR, term, down payment, financing numbers.",
+    "- finance_docs: lender contingencies / pending docs (references, pay stubs, proof of residence, co-signer, missing paperwork).",
     "- inventory: availability, in stock, model/trim/color/finish questions.",
     "- scheduling: appointment time, stop in, visit, test ride scheduling.",
     "- general: none of the above.",
@@ -883,7 +884,8 @@ export async function classifyCadenceContextWithLLM(args: {
       debugTag: "llm-cadence-context-classifier"
     });
     const label = String(parsed?.label ?? "").toLowerCase().trim();
-    if (["trade", "pricing", "payments", "inventory", "scheduling", "general"].includes(label)) return label;
+    if (["trade", "pricing", "payments", "finance_docs", "inventory", "scheduling", "general"].includes(label))
+      return label;
     return null;
   } catch {
     return null;
