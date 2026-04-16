@@ -20908,6 +20908,69 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (regenTradePayoffAccepted) {
     applyTradePayoffParseToConversation(conv, regenTradePayoffParse);
   }
+  const regenLeadSourceText = String(conv.lead?.source ?? "").toLowerCase();
+  const regenIsTradeLead =
+    /sell my bike/.test(regenLeadSourceText) ||
+    /trade[-\s]?in|trade accelerator/.test(regenLeadSourceText) ||
+    conv.classification?.cta === "sell_my_bike" ||
+    conv.classification?.bucket === "trade_in_sell";
+  const regenUnifiedTradeTargetAmount = Number(regenUnifiedSlotParse?.tradeTargetValue?.amount);
+  const regenUnifiedTradeTargetConfidence =
+    typeof regenUnifiedSlotParse?.tradeTargetConfidence === "number"
+      ? regenUnifiedSlotParse.tradeTargetConfidence
+      : typeof regenUnifiedSlotParse?.confidence === "number"
+        ? regenUnifiedSlotParse.confidence
+        : 0;
+  const regenUnifiedTradeTargetConfidenceMin = Number(
+    process.env.LLM_TRADE_TARGET_VALUE_CONFIDENCE_MIN ?? 0.7
+  );
+  const regenUnifiedTradeTargetValueRequest =
+    event.provider === "twilio" &&
+    regenIsTradeLead &&
+    Number.isFinite(regenUnifiedTradeTargetAmount) &&
+    regenUnifiedTradeTargetAmount > 0 &&
+    regenUnifiedTradeTargetConfidence >= regenUnifiedTradeTargetConfidenceMin
+      ? {
+          amount: Math.round(regenUnifiedTradeTargetAmount),
+          raw:
+            String(regenUnifiedSlotParse?.tradeTargetValue?.raw ?? "").trim() ||
+            `$${Math.round(regenUnifiedTradeTargetAmount).toLocaleString("en-US")}`
+        }
+      : null;
+  const regenTradeTargetValueRequest =
+    event.provider === "twilio" && regenIsTradeLead
+      ? regenUnifiedTradeTargetValueRequest ?? parseTradeTargetValueRequest(event.body ?? "")
+      : null;
+  if (event.provider === "twilio" && regenIsTradeLead && regenTradeTargetValueRequest) {
+    const targetValue = `$${regenTradeTargetValueRequest.amount.toLocaleString("en-US")}`;
+    recordRouteOutcome("regen", "trade_target_value_detected", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      amount: regenTradeTargetValueRequest.amount,
+      source: regenUnifiedTradeTargetValueRequest ? "llm_slot" : "deterministic_fallback"
+    });
+    const hasInboundMedia = conversationHasInboundMediaContext(conv);
+    const photoAsk = hasInboundMedia
+      ? ""
+      : " If you can text a few clear photos plus mileage, we can tighten that range before you come in.";
+    const reply = `Totally fair — if you need to be around ${targetValue}, the best next step is a quick in-person appraisal so we don’t waste your time.${photoAsk} I’ll have our sales team follow up with options.`;
+    addTodo(
+      conv,
+      "call",
+      `Trade value target request: customer says they need around ${targetValue}.`,
+      event.providerMessageId
+    );
+    setFollowUpMode(conv, "manual_handoff", "trade_value_target");
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    if (!isTradeDialogState(getDialogState(conv))) {
+      setDialogState(conv, "trade_cash");
+    }
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply);
+  }
   const regenNeedsLienHolderInfo = !!(
     regenTradePayoffAccepted && regenTradePayoffParse?.needsLienHolderInfo
   );
