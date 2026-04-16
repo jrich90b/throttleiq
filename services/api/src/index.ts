@@ -1753,14 +1753,14 @@ async function buildInventoryBrowseReply(args: {
       `Absolutely — here are quick inventory links:\n` +
       `New: ${newUrl}\n` +
       `Used: ${usedUrl}\n` +
-      `If you want, tell me model + budget and I’ll text 2–3 matches.`;
+      `If you want, I can also check bikes at the dealership that may not be listed online yet.`;
   } else if (firstAvailable) {
     reply =
       `Absolutely — here’s our inventory link: ${firstAvailable}\n` +
-      `If you want, tell me model + budget and I’ll text 2–3 matches.`;
+      `If you want, I can also check bikes at the dealership that may not be listed online yet.`;
   } else {
     reply =
-      "Absolutely — I can send inventory options directly. Tell me new/used, model, and budget, and I’ll text 2–3 matches.";
+      "Absolutely — I can send inventory options directly. I can also check bikes at the dealership that may not be listed online yet.";
   }
 
   return { reply, newUrl, usedUrl, source };
