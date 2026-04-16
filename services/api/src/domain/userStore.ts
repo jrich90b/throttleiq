@@ -47,6 +47,7 @@ export type UserRecord = {
   name?: string;
   firstName?: string;
   lastName?: string;
+  emailSignature?: string;
   role: UserRole;
   includeInSchedule?: boolean;
   calendarId?: string;
@@ -149,6 +150,7 @@ export async function createUser(input: {
   name?: string;
   firstName?: string;
   lastName?: string;
+  emailSignature?: string;
   includeInSchedule?: boolean;
   calendarId?: string;
   phone?: string;
@@ -186,6 +188,7 @@ export async function createUser(input: {
     name: input.name?.trim() || undefined,
     firstName: input.firstName?.trim() || undefined,
     lastName: input.lastName?.trim() || undefined,
+    emailSignature: input.emailSignature?.trim() || undefined,
     role: input.role,
     includeInSchedule,
     calendarId: input.calendarId?.trim() || undefined,
@@ -209,6 +212,7 @@ export async function updateUser(
     name: string;
     firstName: string;
     lastName: string;
+    emailSignature: string;
     includeInSchedule: boolean;
     calendarId: string;
     phone: string;
@@ -253,6 +257,8 @@ export async function updateUser(
     name: patch.name?.trim() || existing.name,
     firstName: patch.firstName?.trim() || existing.firstName,
     lastName: patch.lastName?.trim() || existing.lastName,
+    emailSignature:
+      patch.emailSignature == null ? existing.emailSignature : patch.emailSignature.trim() || undefined,
     role: nextRole,
     includeInSchedule,
     calendarId: patch.calendarId?.trim() || undefined,
