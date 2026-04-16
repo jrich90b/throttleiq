@@ -2769,6 +2769,40 @@ function tokensExactly(tokens: string[], expected: string[]): boolean {
 function detectGenericWatchFamilyLabel(model: string | null | undefined): InventoryWatchFamilyId | null {
   const tokens = stripModelMakeTokens(modelNameTokens(model));
   if (!tokens.length) return null;
+  const joined = tokens.join(" ");
+  const hasSeq = (needle: string[]) => containsTokenSequenceTokens(tokens, needle);
+  // Prefer specific model families first (contains-match), so labels like
+  // "Softail Breakout" or "Breakout 114" stay anchored to Breakout.
+  if (hasSeq(["road", "glide", "limited"])) return "road_glide_limited";
+  if (hasSeq(["ultra", "limited"])) return "ultra_limited";
+  if (hasSeq(["softail", "deluxe"])) return "softail_deluxe";
+  if (hasSeq(["springer", "softail"])) return "springer_softail";
+  if (hasSeq(["street", "bob"])) return "street_bob";
+  if (hasSeq(["fat", "bob"])) return "fat_bob";
+  if (hasSeq(["fat", "boy"])) return "fat_boy";
+  if (tokens.includes("breakout")) return "breakout";
+  if (hasSeq(["ultra", "classic"])) return "ultra_classic";
+  if (hasSeq(["electra", "glide"]) || tokens.includes("electraglide")) return "electra_glide";
+  if (hasSeq(["wide", "glide"])) return "wide_glide";
+  if (hasSeq(["low", "rider", "s"])) return "low_rider_s";
+  if (hasSeq(["sport", "glide"])) return "sport_glide";
+  if (hasSeq(["road", "king"])) return "road_king";
+  if (hasSeq(["road", "glide"])) return "road_glide";
+  if (hasSeq(["street", "glide"])) return "street_glide";
+  if (
+    hasSeq(["heritage"]) ||
+    hasSeq(["heritage", "classic"]) ||
+    hasSeq(["heritage", "softail"]) ||
+    hasSeq(["heritage", "softail", "classic"])
+  ) {
+    return "heritage";
+  }
+  if (tokens.includes("sportster") || is883ModelToken(joined)) return "sportster";
+  if (hasSeq(["pan", "america"]) || hasSeq(["pan", "america", "1250"])) return "pan_america";
+  if (tokens.includes("vrod") || hasSeq(["v", "rod"])) return "v_rod";
+  if (tokens.includes("nightster") || tokens.some(token => /^rh975/.test(token))) return "nightster";
+
+  // Broad umbrella families stay exact-only to avoid overmatching.
   if (tokensExactly(tokens, ["trike"]) || tokensExactly(tokens, ["trikes"])) return "trike";
   if (tokensExactly(tokens, ["tri", "glide"])) return "tri_glide";
   if (tokensExactly(tokens, ["touring"])) return "touring";
@@ -2776,44 +2810,17 @@ function detectGenericWatchFamilyLabel(model: string | null | undefined): Invent
   if (tokensExactly(tokens, ["softail"])) return "softail";
   if (tokensExactly(tokens, ["dyna"])) return "dyna";
   if (tokensExactly(tokens, ["cvo"])) return "cvo";
-  if (tokensExactly(tokens, ["nightster"])) return "nightster";
-  if (tokensExactly(tokens, ["sport", "glide"])) return "sport_glide";
-  if (tokensExactly(tokens, ["road", "glide", "limited"])) return "road_glide_limited";
-  if (tokensExactly(tokens, ["ultra", "limited"])) return "ultra_limited";
-  if (tokensExactly(tokens, ["low", "rider", "s"])) return "low_rider_s";
-  if (tokensExactly(tokens, ["softail", "deluxe"])) return "softail_deluxe";
   if (tokensExactly(tokens, ["deluxe"])) return "deluxe";
-  if (tokensExactly(tokens, ["street", "glide"])) return "street_glide";
-  if (tokensExactly(tokens, ["road", "glide"])) return "road_glide";
-  if (tokensExactly(tokens, ["road", "king"])) return "road_king";
-  if (
-    tokensExactly(tokens, ["heritage"]) ||
-    tokensExactly(tokens, ["heritage", "classic"]) ||
-    tokensExactly(tokens, ["heritage", "softail"]) ||
-    tokensExactly(tokens, ["heritage", "softail", "classic"])
-  ) {
-    return "heritage";
-  }
-  if (tokensExactly(tokens, ["sportster"])) return "sportster";
-  if (tokensExactly(tokens, ["pan", "america"]) || tokensExactly(tokens, ["pan", "america", "1250"])) {
-    return "pan_america";
-  }
-  if (tokensExactly(tokens, ["vrod"]) || tokensExactly(tokens, ["v", "rod"])) return "v_rod";
-  if (tokensExactly(tokens, ["street", "bob"])) return "street_bob";
-  if (tokensExactly(tokens, ["fat", "bob"])) return "fat_bob";
-  if (tokensExactly(tokens, ["fat", "boy"])) return "fat_boy";
-  if (tokensExactly(tokens, ["breakout"])) return "breakout";
-  if (tokensExactly(tokens, ["ultra", "classic"])) return "ultra_classic";
-  if (
-    tokensExactly(tokens, ["electra", "glide"]) ||
-    tokensExactly(tokens, ["electraglide"]) ||
-    tokensExactly(tokens, ["electraglide", "classic"])
-  ) {
-    return "electra_glide";
-  }
-  if (tokensExactly(tokens, ["springer", "softail"])) return "springer_softail";
-  if (tokensExactly(tokens, ["wide", "glide"])) return "wide_glide";
   return null;
+}
+
+function modelTextLooksLikeCatalogCode(model: string | null | undefined): boolean {
+  const raw = String(model ?? "").trim().toUpperCase();
+  if (!raw) return false;
+  const parts = raw.split(/\s+/).filter(Boolean);
+  if (!parts.length || parts.length > 2) return false;
+  if (!parts.every(part => /^[A-Z0-9_-]{3,}$/.test(part))) return false;
+  return parts.some(part => /\d/.test(part));
 }
 
 function modelBelongsToGenericWatchFamily(
@@ -3037,12 +3044,24 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
   const directMatch = itemModel.includes(watchModel) || watchModel.includes(itemModel);
   const catalogCodeMatch = modelsShareCatalogCodes(itemModel, watchModel);
   const familyMatch = (() => {
+    if (is883ModelToken(watchModel)) return is883ModelToken(itemModel);
     if (genericWatchFamily) {
       return modelBelongsToGenericWatchFamily(itemModel, genericWatchFamily);
     }
-    if (is883ModelToken(watchModel)) return is883ModelToken(itemModel);
     return false;
   })();
+  const itemModelIsCodeOnly = modelTextLooksLikeCatalogCode(item.model);
+  if (
+    genericWatchFamily &&
+    !familyMatch &&
+    !directMatch &&
+    catalogCodeMatch &&
+    !itemModelIsCodeOnly
+  ) {
+    // Prevent broad catalog-code alias overlaps (e.g. Softail umbrella terms)
+    // from matching a different specific model.
+    return false;
+  }
   if (!directMatch && !familyMatch && !catalogCodeMatch) return false;
   if (watch.trim) {
     const trimToken = normalizeModelName(String(watch.trim));
