@@ -10732,30 +10732,16 @@ export default function Home() {
                 <div className="border rounded-lg p-3 space-y-3">
                   <div className="text-sm font-semibold">Search & Links</div>
                   <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="text-xs text-gray-600">
-                        Web search reference pages/domains (manufacturer + help docs)
-                      </div>
-                      <button
-                        type="button"
-                        className="px-2 py-1 border rounded text-xs"
-                        onClick={() =>
-                          setDealerProfileForm(prev => ({
-                            ...prev,
-                            webSearchReferenceUrls: [...(prev.webSearchReferenceUrls ?? []), ""]
-                          }))
-                        }
-                      >
-                        Add
-                      </button>
+                    <div className="text-xs text-gray-600">
+                      Web search reference pages/domains (manufacturer + help docs)
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <select
-                        className="border rounded px-3 py-2 text-sm flex-1"
+                        className="border rounded px-3 py-2 text-sm flex-1 min-w-[220px]"
                         value={selectedReferenceSite}
                         onChange={e => setSelectedReferenceSite(e.target.value)}
                       >
-                        <option value="">Common manufacturer/reference sites</option>
+                        <option value="">Choose a common manufacturer/reference site</option>
                         {COMMON_REFERENCE_SITES.map(site => (
                           <option key={site.value} value={site.value}>
                             {site.label}
@@ -10782,7 +10768,19 @@ export default function Home() {
                           setSelectedReferenceSite("");
                         }}
                       >
-                        Add selected
+                        Add common site
+                      </button>
+                      <button
+                        type="button"
+                        className="px-2 py-1 border rounded text-xs"
+                        onClick={() =>
+                          setDealerProfileForm(prev => ({
+                            ...prev,
+                            webSearchReferenceUrls: [...(prev.webSearchReferenceUrls ?? []), ""]
+                          }))
+                        }
+                      >
+                        Add custom URL
                       </button>
                     </div>
                     {(dealerProfileForm.webSearchReferenceUrls ?? []).length === 0 ? (
