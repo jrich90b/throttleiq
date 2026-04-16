@@ -1952,6 +1952,126 @@ function computeStickyHotDealSignal(conv: Conversation, hasInboundTwilio: boolea
   return hasInboundPurchaseLanguage;
 }
 
+function parseAtMs(value: unknown): number {
+  const ms = Date.parse(String(value ?? ""));
+  return Number.isFinite(ms) ? ms : NaN;
+}
+
+function hasNotInterestedSignalForHeat(conv: Conversation): boolean {
+  const closeReason = String(conv.closedReason ?? "").trim().toLowerCase();
+  const cadenceStop = String(conv.followUpCadence?.stopReason ?? "").trim().toLowerCase();
+  const followUpReason = String(conv.followUp?.reason ?? "").trim().toLowerCase();
+  const reasonText = `${closeReason} ${cadenceStop} ${followUpReason}`;
+  if (/\b(not[_\s-]?interested|bought[_\s-]?elsewhere|lost|do[_\s-]?not[_\s-]?contact)\b/.test(reasonText)) {
+    return true;
+  }
+  const latestInbound = [...(conv.messages ?? [])]
+    .reverse()
+    .find(
+      m => m?.direction === "in" && (String(m?.provider ?? "").toLowerCase() === "twilio")
+    );
+  if (!latestInbound?.body) return false;
+  const text = String(latestInbound.body).toLowerCase();
+  return /\b(not interested|no longer interested|already bought|bought elsewhere|take me off|remove me|stop texting|do not text)\b/.test(
+    text
+  );
+}
+
+function computeLastHotSignalAtMs(conv: Conversation, hasInboundTwilio: boolean): number {
+  let best = NaN;
+  const keep = (at: unknown) => {
+    const ms = parseAtMs(at);
+    if (!Number.isFinite(ms)) return;
+    if (!Number.isFinite(best) || ms > best) best = ms;
+  };
+
+  const engagementReason = String(conv.engagement?.reason ?? "").trim().toLowerCase();
+  if (
+    engagementReason === "purchase" ||
+    engagementReason === "schedule" ||
+    engagementReason === "trade" ||
+    engagementReason === "finance" ||
+    engagementReason === "pricing" ||
+    engagementReason === "availability"
+  ) {
+    keep(conv.engagement?.at);
+  }
+
+  const apptStatus = String(conv.appointment?.status ?? "").trim().toLowerCase();
+  if (apptStatus && apptStatus !== "cancelled" && apptStatus !== "no_show") {
+    keep(conv.appointment?.updatedAt);
+    keep(conv.appointment?.whenIso);
+  }
+
+  const addWatchHotTime = (watch: any) => {
+    if (!watch) return;
+    keep(watch.lastNotifiedAt);
+    keep(watch.createdAt);
+  };
+  addWatchHotTime(conv.inventoryWatch);
+  for (const watch of conv.inventoryWatches ?? []) addWatchHotTime(watch);
+
+  const leadSource = String(conv.lead?.source ?? "").trim().toLowerCase();
+  const bucket = String(conv.classification?.bucket ?? "").trim().toLowerCase();
+  const cta = String(conv.classification?.cta ?? "").trim().toLowerCase();
+  const isCoaOrTestRideLead =
+    cta === "hdfs_coa" ||
+    cta === "schedule_test_ride" ||
+    bucket === "test_ride" ||
+    leadSource.includes("hdfs coa") ||
+    leadSource.includes("coa online") ||
+    leadSource.includes("credit application") ||
+    leadSource.includes("test ride");
+
+  const inboundPurchaseLexical =
+    /\b(road glide|street glide|touring|cruiser|trike|used|new|in stock|available|payment|monthly|apr|down payment|trade|appointment|schedule|come in|stop by|test ride|pricing|price|quote|finance)\b/i;
+  const inboundNotInterested =
+    /\b(not interested|no longer interested|already bought|bought elsewhere|take me off|remove me|stop texting|do not text)\b/i;
+  for (const m of conv.messages ?? []) {
+    if (m?.direction !== "in") continue;
+    const provider = String(m?.provider ?? "").toLowerCase();
+    const body = String(m?.body ?? "");
+    if (provider === "twilio") {
+      if (inboundNotInterested.test(body)) continue;
+      if (inboundPurchaseLexical.test(body)) keep(m.at);
+      continue;
+    }
+    if (provider === "sendgrid_adf" && isCoaOrTestRideLead) {
+      keep(m.at);
+    }
+  }
+
+  if (!Number.isFinite(best) && hasInboundTwilio) {
+    const latestInboundTwilio = [...(conv.messages ?? [])]
+      .reverse()
+      .find(m => m?.direction === "in" && String(m?.provider ?? "").toLowerCase() === "twilio");
+    if (latestInboundTwilio) keep(latestInboundTwilio.at);
+  }
+
+  return best;
+}
+
+function computeDealTemperature(
+  conv: Conversation,
+  hasInboundTwilio: boolean,
+  hotDealSticky: boolean
+): "hot" | "warm" | "cold" | null {
+  if (!hotDealSticky) return null;
+  if (isSoldConversationForHot(conv)) return null;
+  if (isConversationOnHoldForHot(conv)) return null;
+  if (String(conv.status ?? "").trim().toLowerCase() === "closed") return null;
+  if (hasNotInterestedSignalForHeat(conv)) return null;
+
+  const lastHotAtMs = computeLastHotSignalAtMs(conv, hasInboundTwilio);
+  if (!Number.isFinite(lastHotAtMs)) return "hot";
+  const ageMs = Date.now() - lastHotAtMs;
+  const warmCutoffMs = 60 * 24 * 60 * 60 * 1000;
+  const coldCutoffMs = 120 * 24 * 60 * 60 * 1000;
+  if (ageMs <= warmCutoffMs) return "hot";
+  if (ageMs <= coldCutoffMs) return "warm";
+  return "cold";
+}
+
 export function listConversations() {
 
   function pendingDraftInfo(c: Conversation) {
@@ -1982,6 +2102,7 @@ export function listConversations() {
         m => m.direction === "in" && String(m.provider ?? "").toLowerCase() === "twilio"
       );
       const hotDealSticky = computeStickyHotDealSignal(c, hasInboundTwilio);
+      const dealTemperature = computeDealTemperature(c, hasInboundTwilio, hotDealSticky);
       return {
         id: c.id,
         leadKey: c.leadKey,
@@ -2003,6 +2124,7 @@ export function listConversations() {
         leadSource,
         hasInboundTwilio,
         hotDealSticky,
+        dealTemperature,
         walkIn: inferredWalkIn ? true : null,
         engagement: c.engagement ?? null,
         classification: c.classification ?? null,

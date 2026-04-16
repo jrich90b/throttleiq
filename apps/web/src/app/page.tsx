@@ -556,6 +556,7 @@ type ConversationListItem = {
   leadSource?: string | null;
   hasInboundTwilio?: boolean | null;
   hotDealSticky?: boolean | null;
+  dealTemperature?: "hot" | "warm" | "cold" | null;
   leadName?: string | null;
   vehicleDescription?: string | null;
   walkIn?: boolean | null;
@@ -4831,6 +4832,9 @@ export default function Home() {
   };
 
   const isHotDealConversation = (c: ConversationListItem) => {
+    const explicitTemperature = String(c.dealTemperature ?? "").trim().toLowerCase();
+    if (explicitTemperature === "hot") return true;
+    if (explicitTemperature === "warm" || explicitTemperature === "cold") return false;
     if (isSoldDealConversation(c)) return false;
     if (isConversationOnHold(c)) return false;
     if (c.status === "closed") return false;
@@ -4851,6 +4855,41 @@ export default function Home() {
         (c as any).messages.some((m: any) => m?.direction === "in" && m?.provider === "twilio"));
     if (!twilioEngaged) return false;
     return hasPurchaseIntentSignal(c);
+  };
+
+  const getDealTemperature = (c: ConversationListItem | null | undefined): "hot" | "warm" | "cold" | null => {
+    if (!c) return null;
+    const explicitTemperature = String(c.dealTemperature ?? "").trim().toLowerCase();
+    if (explicitTemperature === "hot" || explicitTemperature === "warm" || explicitTemperature === "cold") {
+      return explicitTemperature as "hot" | "warm" | "cold";
+    }
+    return isHotDealConversation(c) ? "hot" : null;
+  };
+
+  const renderDealTemperatureIcon = (
+    temperature: "hot" | "warm" | "cold" | null,
+    sizeClass = "text-lg"
+  ) => {
+    if (!temperature) return null;
+    if (temperature === "hot") {
+      return (
+        <span className={`text-orange-500 leading-none ${sizeClass}`} title="Hot deal" aria-label="Hot deal">
+          🔥
+        </span>
+      );
+    }
+    if (temperature === "warm") {
+      return (
+        <span className={`text-amber-500 leading-none ${sizeClass}`} title="Warm deal" aria-label="Warm deal">
+          ♨️
+        </span>
+      );
+    }
+    return (
+      <span className={`text-sky-500 leading-none ${sizeClass}`} title="Cold deal" aria-label="Cold deal">
+        ❄️
+      </span>
+    );
   };
 
   const visibleConversations = useMemo(() => {
@@ -8220,15 +8259,7 @@ export default function Home() {
                                     </svg>
                                   </span>
                                 ) : null}
-                                {isHotDealConversation(c) ? (
-                                  <span
-                                    className="text-orange-500 text-lg leading-none"
-                                    title="Hot lead"
-                                    aria-label="Hot lead"
-                                  >
-                                    🔥
-                                  </span>
-                                ) : null}
+                                {renderDealTemperatureIcon(getDealTemperature(c), "text-lg")}
                                 {c.contactPreference === "call_only" ? (
                                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
                                     Prefers Call
@@ -8774,7 +8805,6 @@ export default function Home() {
                     </div>
                     {rows.length ? rows.map((t, rowIdx) => {
                       const rowConv = conversationsById.get(t.convId);
-                      const isHotTaskLead = rowConv ? isHotDealConversation(rowConv) : false;
                       const reason = (t.reason ?? "").toLowerCase();
                       const sectionType = todoInboxSection(t);
                       const taskLabel =
@@ -8816,18 +8846,20 @@ export default function Home() {
                               <>
                                 <div className="text-sm font-medium mt-2 flex items-center gap-1">
                                   {t.leadName}
-                                  {isHotTaskLead ? (
-                                    <span title="Hot deal" aria-label="Hot deal">🔥</span>
-                                  ) : null}
+                                  {renderDealTemperatureIcon(
+                                    rowConv ? getDealTemperature(rowConv) : null,
+                                    "text-base"
+                                  )}
                                 </div>
                                 <div className="text-sm text-gray-600 break-all">{t.leadKey}</div>
                               </>
                             ) : (
                               <div className="text-sm font-medium break-all mt-2 flex items-center gap-1">
                                 {t.leadKey}
-                                {isHotTaskLead ? (
-                                  <span title="Hot deal" aria-label="Hot deal">🔥</span>
-                                ) : null}
+                                {renderDealTemperatureIcon(
+                                  rowConv ? getDealTemperature(rowConv) : null,
+                                  "text-base"
+                                )}
                               </div>
                             )}
                             <div className="text-xs text-gray-500 mt-1">
@@ -12278,18 +12310,13 @@ export default function Home() {
                       [selectedConv.lead?.firstName, selectedConv.lead?.lastName].filter(Boolean).join(" ") ||
                       selectedConv.leadKey}
                   </span>
-                  {isHotDealConversation(
-                    (selectedListItem ??
-                      (selectedConv as unknown as ConversationListItem)) as ConversationListItem
-                  ) ? (
-                    <span
-                      className="text-orange-500 text-xl leading-none"
-                      title="Hot lead"
-                      aria-label="Hot lead"
-                    >
-                      🔥
-                    </span>
-                  ) : null}
+                  {renderDealTemperatureIcon(
+                    getDealTemperature(
+                      (selectedListItem ??
+                        (selectedConv as unknown as ConversationListItem)) as ConversationListItem
+                    ),
+                    "text-xl"
+                  )}
                   {(() => {
                     const isHold =
                       selectedConv.followUpCadence?.pauseReason === "manual_hold" ||
