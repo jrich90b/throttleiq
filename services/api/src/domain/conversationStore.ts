@@ -1844,10 +1844,16 @@ export function getLatestPendingDraft(conv: Conversation): Message | null {
 export function inferWalkIn(conv: Conversation): boolean {
   if (conv.lead?.walkIn) return true;
   const leadSource = String(conv.lead?.source ?? "");
+  const legacyLeadSource = String((conv as any)?.leadSource ?? "");
+  const bucket = String(conv.classification?.bucket ?? "").toLowerCase();
+  const ruleName = String(conv.classification?.ruleName ?? "").toLowerCase();
+  if (bucket === "in_store") return true;
+  if (ruleName.includes("dealer_lead_app")) return true;
   const adfBody =
     conv.messages.find(m => m.provider === "sendgrid_adf" && typeof m.body === "string")?.body ?? "";
   const sourceMatch =
     /traffic log pro|walk[\s_-]*in|dealer lead app/i.test(leadSource) ||
+    /traffic log pro|walk[\s_-]*in|dealer lead app/i.test(legacyLeadSource) ||
     /source:\s*(traffic log pro|walk[\s_-]*in|dealer lead app)/i.test(adfBody);
   return sourceMatch;
 }
