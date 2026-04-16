@@ -11907,6 +11907,24 @@ function isTradeTargetRemotePrecheckText(text: string): boolean {
   );
 }
 
+function findRecentInboundTradeTargetValue(
+  conv: any,
+  opts?: { maxInboundMessages?: number }
+): { amount: number; raw: string } | null {
+  const msgs = Array.isArray(conv?.messages) ? conv.messages : [];
+  const maxInboundMessages = Number(opts?.maxInboundMessages ?? 6);
+  let scannedInbound = 0;
+  for (let i = msgs.length - 1; i >= 0; i -= 1) {
+    const m = msgs[i];
+    if (!m || m.direction !== "in") continue;
+    scannedInbound += 1;
+    const parsed = parseTradeTargetValueRequest(String(m.body ?? ""));
+    if (parsed) return parsed;
+    if (scannedInbound >= maxInboundMessages) break;
+  }
+  return null;
+}
+
 function conversationHasInboundMediaContext(conv: any): boolean {
   const msgs = Array.isArray(conv?.messages) ? conv.messages : [];
   for (let i = msgs.length - 1; i >= 0 && i >= msgs.length - 25; i -= 1) {
@@ -20951,9 +20969,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
             `$${Math.round(regenUnifiedTradeTargetAmount).toLocaleString("en-US")}`
         }
       : null;
+  const regenTradeTargetContinuation =
+    isTradeTargetRemotePrecheckText(event.body ?? "") || /\bthat\s+(?:number|amount)\b/i.test(String(event.body ?? ""));
+  const regenRecentTradeTargetValueRequest =
+    event.provider === "twilio" && regenIsTradeLead && regenTradeTargetContinuation
+      ? findRecentInboundTradeTargetValue(conv)
+      : null;
   const regenTradeTargetValueRequest =
     event.provider === "twilio" && regenIsTradeLead
-      ? regenUnifiedTradeTargetValueRequest ?? parseTradeTargetValueRequest(event.body ?? "")
+      ? regenUnifiedTradeTargetValueRequest ??
+        parseTradeTargetValueRequest(event.body ?? "") ??
+        regenRecentTradeTargetValueRequest
       : null;
   if (event.provider === "twilio" && regenIsTradeLead && regenTradeTargetValueRequest) {
     const targetValue = `$${regenTradeTargetValueRequest.amount.toLocaleString("en-US")}`;
@@ -20962,7 +20988,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       convId: conv.id,
       leadKey: conv.leadKey,
       amount: regenTradeTargetValueRequest.amount,
-      source: regenUnifiedTradeTargetValueRequest ? "llm_slot" : "deterministic_fallback"
+      source: regenUnifiedTradeTargetValueRequest
+        ? "llm_slot"
+        : regenRecentTradeTargetValueRequest
+          ? "context_recent_inbound"
+          : "deterministic_fallback"
     });
     const hasInboundMedia = conversationHasInboundMediaContext(conv);
     const remoteReply = hasInboundMedia
@@ -24330,9 +24360,17 @@ if (authToken && signature) {
             `$${Math.round(unifiedTradeTargetAmount).toLocaleString("en-US")}`
         }
       : null;
+  const tradeTargetContinuation =
+    isTradeTargetRemotePrecheckText(event.body ?? "") || /\bthat\s+(?:number|amount)\b/i.test(String(event.body ?? ""));
+  const recentTradeTargetValueRequest =
+    event.provider === "twilio" && isTradeLead && tradeTargetContinuation
+      ? findRecentInboundTradeTargetValue(conv)
+      : null;
   const tradeTargetValueRequest =
     event.provider === "twilio" && isTradeLead
-      ? unifiedTradeTargetValueRequest ?? parseTradeTargetValueRequest(event.body ?? "")
+      ? unifiedTradeTargetValueRequest ??
+        parseTradeTargetValueRequest(event.body ?? "") ??
+        recentTradeTargetValueRequest
       : null;
   const isSellMyBikeLead = /sell my bike/.test(leadSourceText) || conv.classification?.cta === "sell_my_bike";
   const inventoryEntityParserEligible =
@@ -24587,7 +24625,11 @@ if (authToken && signature) {
       convId: conv.id,
       leadKey: conv.leadKey,
       amount: tradeTargetValueRequest.amount,
-      source: unifiedTradeTargetValueRequest ? "llm_slot" : "deterministic_fallback"
+      source: unifiedTradeTargetValueRequest
+        ? "llm_slot"
+        : recentTradeTargetValueRequest
+          ? "context_recent_inbound"
+          : "deterministic_fallback"
     });
     const hasInboundMedia = conversationHasInboundMediaContext(conv);
     const remoteReply = hasInboundMedia
