@@ -10146,10 +10146,10 @@ export default function Home() {
                 </div>
 
                 <label className="block text-xs text-gray-600">
-                  Campaign description
+                  Campaign description (optional)
                   <textarea
                     className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[100px]"
-                    placeholder="Describe promo/event context and offer intent..."
+                    placeholder="Optional: add extra context. Prompt + website/reference data can be enough."
                     value={campaignForm.description}
                     onChange={e => setCampaignForm(prev => ({ ...prev, description: e.target.value }))}
                   />

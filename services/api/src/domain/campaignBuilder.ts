@@ -45,6 +45,7 @@ export type GenerateCampaignInput = {
 
 export type GenerateCampaignOutput = {
   status: "generated";
+  inspirationImageUrls?: string[];
   smsBody?: string;
   emailSubject?: string;
   emailBodyText?: string;
@@ -52,6 +53,14 @@ export type GenerateCampaignOutput = {
   sourceHits: CampaignSourceHit[];
   generatedBy: CampaignEntry["generatedBy"];
   metadata: Record<string, unknown>;
+};
+
+type DealerBrandContext = {
+  websiteUrl?: string;
+  title?: string;
+  description?: string;
+  logoImageUrls?: string[];
+  imageUrls?: string[];
 };
 
 function normalizeText(value: unknown): string {
@@ -67,6 +76,182 @@ function normalizeUrls(values: unknown): string[] {
         .filter(Boolean)
     )
   );
+}
+
+function normalizeHttpUrl(raw: string | null | undefined, base?: string): string {
+  const value = normalizeText(raw);
+  if (!value) return "";
+  try {
+    return base ? new URL(value, base).toString() : new URL(value).toString();
+  } catch {
+    return "";
+  }
+}
+
+function likelyImageUrl(url: string): boolean {
+  const value = normalizeText(url).toLowerCase();
+  if (!value) return false;
+  if (value.startsWith("data:")) return false;
+  try {
+    const parsed = new URL(value);
+    const path = `${parsed.pathname}${parsed.search}`.toLowerCase();
+    return /\.(jpg|jpeg|png|webp|gif|bmp|svg)(\?|$)/i.test(path) || /image|img|photo|media/.test(path);
+  } catch {
+    return false;
+  }
+}
+
+function extractImageUrlsFromHtml(html: string, pageUrl: string): string[] {
+  const out: string[] = [];
+  const add = (candidate: string) => {
+    const normalized = normalizeHttpUrl(candidate, pageUrl);
+    if (!normalized) return;
+    if (!likelyImageUrl(normalized)) return;
+    if (out.includes(normalized)) return;
+    out.push(normalized);
+  };
+
+  const patterns = [
+    /<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image|twitter:image:src)["'][^>]*content=["']([^"']+)["'][^>]*>/gi,
+    /<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:image|twitter:image|twitter:image:src)["'][^>]*>/gi,
+    /<link[^>]+rel=["'][^"']*image_src[^"']*["'][^>]*href=["']([^"']+)["'][^>]*>/gi,
+    /<img[^>]+src=["']([^"']+)["'][^>]*>/gi
+  ];
+
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null = null;
+    while ((match = pattern.exec(html))) {
+      add(String(match[1] ?? ""));
+      if (out.length >= 24) break;
+    }
+    if (out.length >= 24) break;
+  }
+  return out;
+}
+
+function extractTitleFromHtml(html: string): string {
+  const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  return normalizeText(match?.[1] ?? "").replace(/\s+/g, " ").trim();
+}
+
+function extractMetaFromHtml(html: string, keys: string[]): string {
+  for (const key of keys) {
+    const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const patterns = [
+      new RegExp(
+        `<meta[^>]+(?:name|property)=["']${escaped}["'][^>]*content=["']([^"']+)["'][^>]*>`,
+        "i"
+      ),
+      new RegExp(
+        `<meta[^>]+content=["']([^"']+)["'][^>]+(?:name|property)=["']${escaped}["'][^>]*>`,
+        "i"
+      )
+    ];
+    for (const pattern of patterns) {
+      const match = html.match(pattern);
+      const value = normalizeText(match?.[1] ?? "");
+      if (value) return value;
+    }
+  }
+  return "";
+}
+
+function pickLogoishImages(urls: string[]): string[] {
+  const ranked = urls
+    .map(url => {
+      const lower = url.toLowerCase();
+      const score =
+        (lower.includes("logo") ? 5 : 0) +
+        (lower.includes("brand") ? 3 : 0) +
+        (lower.includes("header") ? 2 : 0) -
+        (lower.includes("icon") ? 1 : 0);
+      return { url, score };
+    })
+    .sort((a, b) => b.score - a.score);
+  return Array.from(new Set(ranked.map(row => row.url))).slice(0, 4);
+}
+
+async function fetchDealerBrandContext(profile?: DealerProfile | null): Promise<DealerBrandContext> {
+  const websiteUrl = normalizeHttpUrl(profile?.website ?? "");
+  if (!websiteUrl) return {};
+  const timeoutMs = Math.max(1000, Number(process.env.CAMPAIGN_BRAND_FETCH_TIMEOUT_MS ?? 2200));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch(websiteUrl, {
+      method: "GET",
+      headers: {
+        accept: "text/html,application/xhtml+xml",
+        "user-agent": "Mozilla/5.0 (compatible; ThrottleIQCampaignBot/1.0)"
+      },
+      signal: controller.signal
+    });
+    const contentType = String(resp.headers.get("content-type") ?? "").toLowerCase();
+    if (!resp.ok || !contentType.includes("text/html")) {
+      return { websiteUrl };
+    }
+    const html = await resp.text();
+    const title = extractTitleFromHtml(html);
+    const description =
+      extractMetaFromHtml(html, ["description", "og:description", "twitter:description"]) || undefined;
+    const imageUrls = extractImageUrlsFromHtml(html, websiteUrl).slice(0, 10);
+    const logoImageUrls = pickLogoishImages(imageUrls);
+    return {
+      websiteUrl,
+      title: title || undefined,
+      description,
+      logoImageUrls,
+      imageUrls
+    };
+  } catch {
+    return { websiteUrl };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function collectImageCandidatesFromHits(
+  sourceHits: CampaignSourceHit[],
+  opts?: { maxImages?: number; timeoutMs?: number }
+): Promise<string[]> {
+  const maxImages = Math.max(1, Math.min(12, Number(opts?.maxImages ?? 6)));
+  const timeoutMs = Math.max(800, Number(opts?.timeoutMs ?? process.env.CAMPAIGN_IMAGE_FETCH_TIMEOUT_MS ?? 1800));
+  const pages = sourceHits
+    .map(hit => normalizeHttpUrl(hit.url))
+    .filter(Boolean)
+    .slice(0, 4);
+  if (!pages.length) return [];
+
+  const found: string[] = [];
+  for (const pageUrl of pages) {
+    if (found.length >= maxImages) break;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const resp = await fetch(pageUrl, {
+        method: "GET",
+        headers: {
+          accept: "text/html,application/xhtml+xml",
+          "user-agent": "Mozilla/5.0 (compatible; ThrottleIQCampaignBot/1.0)"
+        },
+        signal: controller.signal
+      });
+      const contentType = String(resp.headers.get("content-type") ?? "").toLowerCase();
+      if (!resp.ok || !contentType.includes("text/html")) continue;
+      const html = await resp.text();
+      const images = extractImageUrlsFromHtml(html, pageUrl);
+      for (const imageUrl of images) {
+        if (found.includes(imageUrl)) continue;
+        found.push(imageUrl);
+        if (found.length >= maxImages) break;
+      }
+    } catch {
+      // ignore page fetch errors; continue with other sources
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return found;
 }
 
 function safeParseJson(raw: string): any | null {
@@ -120,9 +305,9 @@ function toSourceHits(result: Awaited<ReturnType<typeof searchGoogleCse>>): Camp
 
 function buildSearchQuery(input: GenerateCampaignInput): string {
   const parts = [
-    normalizeText(input.description),
     normalizeText(input.prompt),
     normalizeText(input.name),
+    normalizeText(input.description),
     ...input.tags.map(tag => TAG_SEARCH_HINTS[tag] ?? "")
   ]
     .map(v => v.trim())
@@ -135,6 +320,19 @@ function buildSearchQuery(input: GenerateCampaignInput): string {
   if (input.tags.includes("parts")) return "motorcycle parts specials";
   if (input.tags.includes("apparel")) return "motorcycle apparel promotion";
   return "motorcycle dealer promotion";
+}
+
+function deriveTopicFromSourceHits(sourceHits: CampaignSourceHit[]): string {
+  for (const hit of sourceHits) {
+    const title = normalizeText(hit.title);
+    if (title && title.length <= 140) return title;
+    const snippet = normalizeText(hit.snippet);
+    if (snippet) {
+      const firstSentence = snippet.split(/[.!?]/)[0]?.trim() || "";
+      if (firstSentence) return firstSentence.slice(0, 160);
+    }
+  }
+  return "";
 }
 
 function escapeHtml(text: string): string {
@@ -170,11 +368,18 @@ function textToHtml(text: string, sourceHits: CampaignSourceHit[]): string {
 function buildTemplateOutput(
   input: GenerateCampaignInput,
   sourceHits: CampaignSourceHit[],
-  searchQuery: string
+  searchQuery: string,
+  resolvedInspirationImageUrls: string[],
+  brandContext?: DealerBrandContext
 ): GenerateCampaignOutput {
   const dealerName = normalizeText(input.dealerProfile?.dealerName) || "our dealership";
   const tagLabels = input.tags.map(tag => TAG_LABELS[tag]).join(", ") || "General";
-  const topic = normalizeText(input.description) || normalizeText(input.prompt) || normalizeText(input.name) || "current offers";
+  const topic =
+    deriveTopicFromSourceHits(sourceHits) ||
+    normalizeText(input.prompt) ||
+    normalizeText(input.name) ||
+    normalizeText(input.description) ||
+    "current offers";
   const referenceLine = sourceHits[0]?.url
     ? `You can review details here: ${sourceHits[0].url}`
     : "Reply here and I can share details that fit what you're shopping for.";
@@ -195,6 +400,7 @@ function buildTemplateOutput(
 
   return {
     status: "generated",
+    inspirationImageUrls: resolvedInspirationImageUrls,
     smsBody,
     emailSubject,
     emailBodyText,
@@ -204,7 +410,8 @@ function buildTemplateOutput(
     metadata: {
       searchQuery,
       sourceCount: sourceHits.length,
-      generator: "template"
+      generator: "template",
+      brandWebsite: brandContext?.websiteUrl ?? null
     }
   };
 }
@@ -213,6 +420,8 @@ async function tryGenerateWithLlm(args: {
   input: GenerateCampaignInput;
   sourceHits: CampaignSourceHit[];
   searchQuery: string;
+  resolvedInspirationImageUrls: string[];
+  brandContext?: DealerBrandContext;
 }): Promise<GenerateCampaignOutput | null> {
   if (process.env.LLM_ENABLED !== "1" || !process.env.OPENAI_API_KEY) return null;
   const model = process.env.OPENAI_MODEL || "gpt-5-mini";
@@ -221,6 +430,10 @@ async function tryGenerateWithLlm(args: {
   const phone = normalizeText(args.input.dealerProfile?.phone);
   const bookingUrl = normalizeText(args.input.dealerProfile?.bookingUrl);
   const tags = args.input.tags.map(tag => TAG_LABELS[tag]).join(", ") || "General";
+  const brandWebsite = normalizeText(args.brandContext?.websiteUrl);
+  const brandTitle = normalizeText(args.brandContext?.title);
+  const brandDescription = normalizeText(args.brandContext?.description);
+  const brandLogoUrls = normalizeUrls(args.brandContext?.logoImageUrls).slice(0, 3);
   const sourceBlock = args.sourceHits.length
     ? args.sourceHits
         .slice(0, 6)
@@ -244,20 +457,26 @@ async function tryGenerateWithLlm(args: {
     "Return only JSON that matches the schema.",
     "Tone: dealership-friendly, human, concise, no hypey spam language.",
     "Do not invent promo details not grounded in the provided context/reference list.",
+    "When description is empty or generic, derive specifics from the reference hits and dealer website context.",
+    "Do not require the user to provide manual description details if references already include them.",
     "If details are uncertain, say programs vary by approval/term and invite reply.",
     "No emojis unless explicitly in prompt.",
     "",
     `Dealer: ${dealerName}`,
     `Website: ${website || "(not provided)"}`,
+    `Brand website (must align to this): ${brandWebsite || website || "(not provided)"}`,
+    `Brand page title: ${brandTitle || "(none)"}`,
+    `Brand page description: ${brandDescription || "(none)"}`,
+    `Brand logo/hero images: ${brandLogoUrls.join(", ") || "(none)"}`,
     `Phone: ${phone || "(not provided)"}`,
     `Booking URL: ${bookingUrl || "(not provided)"}`,
     `Build mode: ${args.input.buildMode}`,
     `Channel: ${args.input.channel}`,
     `Tags: ${tags}`,
     `Campaign name: ${normalizeText(args.input.name) || "(untitled)"}`,
-    `Description: ${normalizeText(args.input.description) || "(none)"}`,
+    `Description (optional): ${normalizeText(args.input.description) || "(none)"}`,
     `Prompt: ${normalizeText(args.input.prompt) || "(none)"}`,
-    `Inspiration images: ${normalizeUrls(args.input.inspirationImageUrls).join(", ") || "(none)"}`,
+    `Inspiration images: ${normalizeUrls(args.resolvedInspirationImageUrls).join(", ") || "(none)"}`,
     `Asset images: ${normalizeUrls(args.input.assetImageUrls).join(", ") || "(none)"}`,
     `Web search query: ${args.searchQuery}`,
     "",
@@ -299,6 +518,7 @@ async function tryGenerateWithLlm(args: {
       if (smsBody || emailSubject || emailBodyText) {
         return {
           status: "generated",
+          inspirationImageUrls: args.resolvedInspirationImageUrls,
           smsBody: smsBody || undefined,
           emailSubject: emailSubject || undefined,
           emailBodyText: emailBodyText || undefined,
@@ -309,7 +529,8 @@ async function tryGenerateWithLlm(args: {
             searchQuery: args.searchQuery,
             sourceCount: args.sourceHits.length,
             generator: "llm_fallback",
-            model
+            model,
+            brandWebsite: brandWebsite || website || null
           }
         };
       }
@@ -335,6 +556,7 @@ async function tryGenerateWithLlm(args: {
       if (smsBody || emailSubject || emailBodyText) {
         return {
           status: "generated",
+          inspirationImageUrls: args.resolvedInspirationImageUrls,
           smsBody: smsBody || undefined,
           emailSubject: emailSubject || undefined,
           emailBodyText: emailBodyText || undefined,
@@ -345,7 +567,8 @@ async function tryGenerateWithLlm(args: {
             searchQuery: args.searchQuery,
             sourceCount: args.sourceHits.length,
             generator: "llm_fallback",
-            model
+            model,
+            brandWebsite: brandWebsite || website || null
           }
         };
       }
@@ -358,6 +581,7 @@ async function tryGenerateWithLlm(args: {
 }
 
 export async function generateCampaignContent(input: GenerateCampaignInput): Promise<GenerateCampaignOutput> {
+  const brandContext = await fetchDealerBrandContext(input.dealerProfile ?? null);
   const searchQuery = buildSearchQuery(input);
   const searchResult = searchQuery
     ? await searchGoogleCse({
@@ -367,9 +591,31 @@ export async function generateCampaignContent(input: GenerateCampaignInput): Pro
       })
     : null;
   const sourceHits = toSourceHits(searchResult);
+  const userProvidedInspiration = normalizeUrls(input.inspirationImageUrls);
+  const websiteDiscoveredInspiration = normalizeUrls(brandContext.imageUrls).slice(
+    0,
+    Math.max(1, Number(process.env.CAMPAIGN_BRAND_IMAGE_MAX ?? 4))
+  );
+  const autoDiscoveredInspiration = userProvidedInspiration.length
+    ? []
+    : await collectImageCandidatesFromHits(sourceHits, {
+        maxImages: Number(process.env.CAMPAIGN_AUTO_IMAGE_MAX ?? 6)
+      });
+  const resolvedInspirationImageUrls = userProvidedInspiration.length
+    ? userProvidedInspiration
+    : Array.from(new Set([...websiteDiscoveredInspiration, ...autoDiscoveredInspiration])).slice(
+        0,
+        Math.max(1, Number(process.env.CAMPAIGN_FINAL_IMAGE_MAX ?? 6))
+      );
 
-  const llm = await tryGenerateWithLlm({ input, sourceHits, searchQuery });
+  const llm = await tryGenerateWithLlm({
+    input,
+    sourceHits,
+    searchQuery,
+    resolvedInspirationImageUrls,
+    brandContext
+  });
   if (llm) return llm;
 
-  return buildTemplateOutput(input, sourceHits, searchQuery);
+  return buildTemplateOutput(input, sourceHits, searchQuery, resolvedInspirationImageUrls, brandContext);
 }
