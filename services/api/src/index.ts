@@ -19716,6 +19716,7 @@ function buildCampaignImagePrompt(args: {
   tags: CampaignTag[];
   dealerProfile?: Awaited<ReturnType<typeof getDealerProfile>>;
   sourceHits?: Array<{ title?: string; snippet?: string; url?: string }>;
+  referenceImageUrls?: string[];
 }): string {
   const dealerName = String(args.dealerProfile?.dealerName ?? "").trim() || "the dealership";
   const website = String(args.dealerProfile?.website ?? "").trim();
@@ -19742,6 +19743,11 @@ function buildCampaignImagePrompt(args: {
     )
     .join("\n");
   const referenceBlock = references || "(none)";
+  const hasPlacePhotos = Array.isArray(args.referenceImageUrls)
+    ? args.referenceImageUrls.some(url =>
+        /campaign_place_|googleapis\.com\/v1\/places|places\.googleapis\.com/i.test(String(url ?? ""))
+      )
+    : false;
   const tagSet = new Set(args.tags ?? []);
   const suppressFinanceTrade =
     (tagSet.has("parts") || tagSet.has("apparel") || tagSet.has("service")) &&
@@ -19781,6 +19787,14 @@ function buildCampaignImagePrompt(args: {
           "- Keep the creative focused on the selected campaign tags only."
         ]
     : ["Hard guardrail: keep visuals and any text strictly aligned with selected campaign tags."];
+  const placePhotoGuardrails = hasPlacePhotos
+    ? [
+        "Dealership fidelity guardrails (critical):",
+        "- Use the attached dealership photo references as the visual source of truth.",
+        "- Keep storefront/building style and dealership branding recognizable to the same store.",
+        "- Do NOT replace with a generic or different dealership facade."
+      ]
+    : [];
   return [
     "Create a single high-quality dealership campaign hero image.",
     "Style: premium, modern motorcycle dealership marketing visual.",
@@ -19793,6 +19807,7 @@ function buildCampaignImagePrompt(args: {
     `Campaign: ${String(args.name ?? "").trim() || "(untitled)"}`,
     `Direction: ${primary}`,
     ...tagGuardrails,
+    ...(placePhotoGuardrails.length ? ["", ...placePhotoGuardrails] : []),
     ...(outputGuardrails.length ? ["", ...outputGuardrails] : []),
     "",
     "Reference context (for factual alignment):",
@@ -20937,22 +20952,33 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
         `nano target ${target}`
       );
       const generatedImageUrlNano = generatedImageNano?.url ?? null;
+      const hasReferenceAnchors = targetReferenceImageUrls.length > 0;
+      const allowReflessOpenAiFallback =
+        String(process.env.CAMPAIGN_ALLOW_REFERENCELESS_OPENAI_FALLBACK ?? "0").trim() === "1";
+      const canUseOpenAiFallback = !hasReferenceAnchors || allowReflessOpenAiFallback;
       const generatedImageUrl: string | null =
         generatedImageUrlNano ||
-        (await runCampaignTaskWithTimeout(
-          generateCampaignImageWithOpenAI({
-            name,
-            channel,
-            assetTargets: targetAssetTargets,
-            prompt: targetPrompt,
-            description: targetDescription,
-            tags,
-            dealerProfile,
-            sourceHits: generated.sourceHits
-          }),
-          perTargetTimeoutMs,
-          `openai target ${target}`
-        ));
+        (canUseOpenAiFallback
+          ? await runCampaignTaskWithTimeout(
+              generateCampaignImageWithOpenAI({
+                name,
+                channel,
+                assetTargets: targetAssetTargets,
+                prompt: targetPrompt,
+                description: targetDescription,
+                tags,
+                dealerProfile,
+                sourceHits: generated.sourceHits
+              }),
+              perTargetTimeoutMs,
+              `openai target ${target}`
+            )
+          : null);
+      if (!generatedImageUrlNano && !canUseOpenAiFallback) {
+        console.warn(
+          `[campaign] skipping openai fallback for target ${target} because reference-anchored generation is required`
+        );
+      }
       if (!generatedImageUrl) return null;
 
       const targetAssets = await runCampaignTaskWithTimeout(
