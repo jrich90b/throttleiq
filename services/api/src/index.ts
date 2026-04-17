@@ -20174,12 +20174,12 @@ async function normalizeCampaignImageForProfile(
   if (profile === "email") return normalizeCampaignImageForEmail(buffer);
   if (profile === "facebook_post") {
     return normalizeCampaignImageForExactFrame(buffer, campaignFacebookPostWidth(), campaignFacebookPostHeight(), {
-      fit: "contain"
+      fit: "auto"
     });
   }
   if (profile === "instagram_post") {
     return normalizeCampaignImageForExactFrame(buffer, campaignInstagramPostWidth(), campaignInstagramPostHeight(), {
-      fit: "contain"
+      fit: "auto"
     });
   }
   if (profile === "instagram_story") {
@@ -20187,7 +20187,7 @@ async function normalizeCampaignImageForProfile(
       buffer,
       campaignInstagramStoryWidth(),
       campaignInstagramStoryHeight(),
-      { fit: "contain" }
+      { fit: "auto" }
     );
   }
   if (profile === "web_banner") {
