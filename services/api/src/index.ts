@@ -20109,16 +20109,21 @@ async function normalizeCampaignImageForProfile(
 }> {
   if (profile === "email") return normalizeCampaignImageForEmail(buffer);
   if (profile === "facebook_post") {
-    return normalizeCampaignImageForExactFrame(buffer, campaignFacebookPostWidth(), campaignFacebookPostHeight());
+    return normalizeCampaignImageForExactFrame(buffer, campaignFacebookPostWidth(), campaignFacebookPostHeight(), {
+      fit: "contain"
+    });
   }
   if (profile === "instagram_post") {
-    return normalizeCampaignImageForExactFrame(buffer, campaignInstagramPostWidth(), campaignInstagramPostHeight());
+    return normalizeCampaignImageForExactFrame(buffer, campaignInstagramPostWidth(), campaignInstagramPostHeight(), {
+      fit: "contain"
+    });
   }
   if (profile === "instagram_story") {
     return normalizeCampaignImageForExactFrame(
       buffer,
       campaignInstagramStoryWidth(),
-      campaignInstagramStoryHeight()
+      campaignInstagramStoryHeight(),
+      { fit: "contain" }
     );
   }
   if (profile === "web_banner") {
@@ -20766,35 +20771,59 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       ...(assetImageUrls ?? [])
     ]);
     const uniqueTargets = Array.from(new Set(assetTargets));
+    const styleLockAnchorTarget =
+      preferredCampaignGenerationTarget(uniqueTargets, channel) ?? uniqueTargets[0] ?? "sms";
+    const orderedTargets: CampaignAssetTarget[] = [
+      styleLockAnchorTarget,
+      ...uniqueTargets.filter(target => target !== styleLockAnchorTarget)
+    ];
     const generatorsUsed = new Set<"nano_banana_vertex" | "openai_fallback">();
     let totalReferenceCount = 0;
-    for (const target of uniqueTargets) {
+    let styleLockReferenceUrl: string | null = null;
+    for (const target of orderedTargets) {
       const targetAssetTargets: CampaignAssetTarget[] = [target];
+      const targetLabel = campaignAssetTargetLabel(target);
+      const styleLockDirective: string | undefined = styleLockReferenceUrl
+        ? `Style-lock requirement: match the same campaign theme, color palette, brand look, and message hierarchy as the reference image while adapting composition to ${targetLabel}. Keep headline/offer intent consistent across all outputs.`
+        : undefined;
+      const targetPrompt: string | undefined =
+        [prompt, styleLockDirective]
+          .filter((value): value is string => Boolean(String(value ?? "").trim()))
+          .join("\n\n") || undefined;
+      const targetDescription: string | undefined =
+        [description, styleLockDirective]
+          .filter((value): value is string => Boolean(String(value ?? "").trim()))
+          .join("\n\n") || undefined;
+      const targetReferenceImageUrls = normalizeCampaignUrlArray([
+        ...referenceImageUrls,
+        ...(styleLockReferenceUrl ? [styleLockReferenceUrl] : [])
+      ]);
       const generatedImageNano = await generateCampaignImageWithNanoBanana({
         name,
         channel,
         assetTargets: targetAssetTargets,
-        prompt,
-        description,
+        prompt: targetPrompt,
+        description: targetDescription,
         tags,
         dealerProfile,
         sourceHits: generated.sourceHits,
-        referenceImageUrls
+        referenceImageUrls: targetReferenceImageUrls
       });
       const generatedImageUrlNano = generatedImageNano?.url ?? null;
-      const generatedImageUrl =
+      const generatedImageUrl: string | null =
         generatedImageUrlNano ||
         (await generateCampaignImageWithOpenAI({
           name,
           channel,
           assetTargets: targetAssetTargets,
-          prompt,
-          description,
+          prompt: targetPrompt,
+          description: targetDescription,
           tags,
           dealerProfile,
           sourceHits: generated.sourceHits
         }));
       if (!generatedImageUrl) continue;
+      if (!styleLockReferenceUrl) styleLockReferenceUrl = generatedImageUrl;
 
       const targetAssets = await buildCampaignGeneratedAssetsFromSource({
         sourceImageUrl: generatedImageUrl,
@@ -20836,7 +20865,9 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
           imageOutputProfiles,
           imagePreviewTarget: preferredAsset?.target ?? imageOutputProfiles[0],
           imageGeneratedAt: new Date().toISOString(),
-          imageReferenceCount: totalReferenceCount
+          imageReferenceCount: totalReferenceCount,
+          styleLockAnchorTarget,
+          styleLockEnabled: uniqueTargets.length > 1
         },
         generatedBy: generatorsUsed.has("nano_banana_vertex") ? "nano_banana" : generated.generatedBy
       };
