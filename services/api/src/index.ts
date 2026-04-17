@@ -20926,7 +20926,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     ];
     const generatorsUsed = new Set<"nano_banana_vertex" | "openai_fallback">();
     let totalReferenceCount = 0;
-    const perTargetTimeoutMs = Math.max(15_000, Number(process.env.CAMPAIGN_PER_TARGET_TIMEOUT_MS ?? 90_000));
+    const perTargetTimeoutMs = Math.max(15_000, Number(process.env.CAMPAIGN_PER_TARGET_TIMEOUT_MS ?? 120_000));
     type TargetRenderResult = {
       target: CampaignAssetTarget;
       sourceImageUrl: string;
@@ -21031,7 +21031,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     }
 
     const remainingTargets = orderedTargets.filter(target => target !== styleLockAnchorTarget);
-    const renderConcurrency = Math.max(1, Math.min(4, Number(process.env.CAMPAIGN_TARGET_RENDER_CONCURRENCY ?? 2)));
+    const renderConcurrency = Math.max(1, Math.min(4, Number(process.env.CAMPAIGN_TARGET_RENDER_CONCURRENCY ?? 1)));
     const remainingResults: Array<TargetRenderResult | null> = [];
     for (let i = 0; i < remainingTargets.length; i += renderConcurrency) {
       const batch = remainingTargets.slice(i, i + renderConcurrency);
@@ -21159,25 +21159,34 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     }
   }
 
+  const imageWarnings: string[] = [];
   if (shouldAttemptImageFallback && imageTargetsRequested && !generatedAssets.length) {
-    return res.status(502).json({
-      ok: false,
-      error:
-        "Campaign image generation failed for all selected targets. Please retry, or generate fewer targets first (for example SMS + Email)."
-    });
+    imageWarnings.push(
+      "Campaign image generation failed for all selected targets. Text drafts were generated; please retry image generation."
+    );
   }
-
   if (shouldAttemptImageFallback && imageTargetsRequested && missingRequestedAssetTargets.length) {
-    return res.status(502).json({
-      ok: false,
-      error: `Campaign image generation was incomplete. Missing outputs: ${missingRequestedAssetTargets
+    imageWarnings.push(
+      `Campaign image generation was incomplete. Missing outputs: ${missingRequestedAssetTargets
         .map(target => campaignAssetTargetLabel(target))
-        .join(", ")}. Please retry.`
-    });
+        .join(", ")}.`
+    );
+  }
+  const imageGenerationWarning = imageWarnings.join(" ").trim() || undefined;
+  if (imageGenerationWarning) {
+    effectiveGenerated = {
+      ...effectiveGenerated,
+      metadata: {
+        ...(effectiveGenerated.metadata ?? {}),
+        imageGenerationWarning,
+        requestedAssetTargets: Array.from(new Set(assetTargets)),
+        missingAssetTargets: missingRequestedAssetTargets
+      }
+    };
   }
 
   if (!save) {
-    return res.json({ ok: true, generated: effectiveGenerated });
+    return res.json({ ok: true, generated: effectiveGenerated, warning: imageGenerationWarning });
   }
 
   const existingCampaign = campaignId ? getCampaign(campaignId) : null;
@@ -21208,7 +21217,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
 
   const campaign = campaignId ? updateCampaign(campaignId, payload as any) : createCampaign(payload);
   if (!campaign) return res.status(404).json({ ok: false, error: "Campaign not found" });
-  return res.json({ ok: true, campaign, generated: effectiveGenerated });
+  return res.json({ ok: true, campaign, generated: effectiveGenerated, warning: imageGenerationWarning });
 });
 
 app.get("/contacts", (_req, res) => {
