@@ -20253,6 +20253,11 @@ async function runCampaignTaskWithTimeout<T>(
   }
 }
 
+function waitMs(ms: number): Promise<void> {
+  const safe = Math.max(0, Number(ms || 0));
+  return new Promise(resolve => setTimeout(resolve, safe));
+}
+
 function extractInlineImageFromVertexResponse(payload: any): { b64: string; mimeType?: string } | null {
   const candidates = Array.isArray(payload?.candidates) ? payload.candidates : [];
   for (const candidate of candidates) {
@@ -20425,55 +20430,69 @@ async function generateCampaignImageWithNanoBanana(args: {
       5_000,
       Number(process.env.CAMPAIGN_NANO_BANANA_REQUEST_TIMEOUT_MS ?? 45_000)
     );
+    const maxAttempts = Math.max(1, Number(process.env.CAMPAIGN_NANO_BANANA_RETRY_ATTEMPTS ?? 3));
+    const baseBackoffMs = Math.max(250, Number(process.env.CAMPAIGN_NANO_BANANA_RETRY_BACKOFF_MS ?? 2500));
     const referenceParts = await buildNanoBananaReferenceParts(args.referenceImageUrls);
     const parts = [{ text: imagePrompt }, ...referenceParts];
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), requestTimeoutMs);
-    const resp = await (async () => {
-      try {
-        return await fetch(endpoint, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json"
-          },
-          signal: controller.signal,
-          body: JSON.stringify({
-            contents: [
-              {
-                role: "user",
-                parts
-              }
-            ],
-            generationConfig
-          })
-        });
-      } finally {
-        clearTimeout(timer);
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), requestTimeoutMs);
+      const resp = await (async () => {
+        try {
+          return await fetch(endpoint, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "Content-Type": "application/json"
+            },
+            signal: controller.signal,
+            body: JSON.stringify({
+              contents: [
+                {
+                  role: "user",
+                  parts
+                }
+              ],
+              generationConfig
+            })
+          });
+        } finally {
+          clearTimeout(timer);
+        }
+      })();
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => "");
+        if (resp.status === 429 && attempt < maxAttempts) {
+          const jitter = Math.floor(Math.random() * 500);
+          const delay = baseBackoffMs * Math.pow(2, attempt - 1) + jitter;
+          console.warn(
+            `[campaign] nano banana vertex rate limited (429), retry ${attempt}/${maxAttempts} in ${delay}ms`
+          );
+          await waitMs(delay);
+          continue;
+        }
+        console.warn("[campaign] nano banana vertex failed:", resp.status, body.slice(0, 500));
+        return null;
       }
-    })();
-    if (!resp.ok) {
-      const body = await resp.text().catch(() => "");
-      console.warn("[campaign] nano banana vertex failed:", resp.status, body.slice(0, 500));
-      return null;
+      const payload = await resp.json().catch(() => null);
+      const inline = extractInlineImageFromVertexResponse(payload);
+      if (!inline?.b64) return null;
+      const rawBuffer = Buffer.from(inline.b64, "base64");
+      if (!rawBuffer.length) return null;
+      const buffer = rawBuffer;
+      const ext = extensionForMimeType(inline.mimeType);
+      const fileName = `campaign_nano_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
+      const dir = path.resolve(getDataDir(), "uploads", "campaigns");
+      await fs.promises.mkdir(dir, { recursive: true });
+      const dest = path.join(dir, fileName);
+      await fs.promises.writeFile(dest, buffer);
+      const publicBase = process.env.PUBLIC_BASE_URL ?? "";
+      const url = publicBase
+        ? `${publicBase.replace(/\/$/, "")}/uploads/campaigns/${fileName}`
+        : `/uploads/campaigns/${fileName}`;
+      return { url, referenceCount: referenceParts.length };
     }
-    const payload = await resp.json().catch(() => null);
-    const inline = extractInlineImageFromVertexResponse(payload);
-    if (!inline?.b64) return null;
-    const rawBuffer = Buffer.from(inline.b64, "base64");
-    if (!rawBuffer.length) return null;
-    const buffer = rawBuffer;
-    const ext = extensionForMimeType(inline.mimeType);
-    const fileName = `campaign_nano_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
-    const dir = path.resolve(getDataDir(), "uploads", "campaigns");
-    await fs.promises.mkdir(dir, { recursive: true });
-    const dest = path.join(dir, fileName);
-    await fs.promises.writeFile(dest, buffer);
-    const publicBase = process.env.PUBLIC_BASE_URL ?? "";
-    const url = publicBase
-      ? `${publicBase.replace(/\/$/, "")}/uploads/campaigns/${fileName}`
-      : `/uploads/campaigns/${fileName}`;
-    return { url, referenceCount: referenceParts.length };
+    return null;
   } catch (err: any) {
     console.warn("[campaign] nano banana vertex exception:", err?.message ?? err);
     return null;
@@ -20910,9 +20929,13 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     }
 
     const remainingTargets = orderedTargets.filter(target => target !== styleLockAnchorTarget);
-    const remainingResults = await Promise.all(
-      remainingTargets.map(target => renderTarget(target, styleLockReferenceUrl))
-    );
+    const renderConcurrency = Math.max(1, Math.min(4, Number(process.env.CAMPAIGN_TARGET_RENDER_CONCURRENCY ?? 2)));
+    const remainingResults: Array<TargetRenderResult | null> = [];
+    for (let i = 0; i < remainingTargets.length; i += renderConcurrency) {
+      const batch = remainingTargets.slice(i, i + renderConcurrency);
+      const batchResults = await Promise.all(batch.map(target => renderTarget(target, styleLockReferenceUrl)));
+      remainingResults.push(...batchResults);
+    }
     for (const result of remainingResults) {
       if (!result) continue;
       generatedAssets.push(...result.assets);
