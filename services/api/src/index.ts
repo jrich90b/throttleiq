@@ -20410,10 +20410,8 @@ async function generateCampaignImageWithNanoBanana(args: {
     if (!inline?.b64) return null;
     const rawBuffer = Buffer.from(inline.b64, "base64");
     if (!rawBuffer.length) return null;
-    const profile = campaignImageOutputProfileForChannel(args.channel);
-    const normalized = await normalizeCampaignImageForProfile(rawBuffer, profile).catch(() => null);
-    const buffer = normalized?.buffer ?? rawBuffer;
-    const ext = normalized?.ext ?? extensionForMimeType(inline.mimeType);
+    const buffer = rawBuffer;
+    const ext = extensionForMimeType(inline.mimeType);
     const fileName = `campaign_nano_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
     const dir = path.resolve(getDataDir(), "uploads", "campaigns");
     await fs.promises.mkdir(dir, { recursive: true });
@@ -20484,15 +20482,11 @@ async function generateCampaignImageWithOpenAI(args: {
       }
     }
     if (!buffer || !buffer.length) return null;
-    const profile = campaignImageOutputProfileForChannel(args.channel);
-    const normalized = await normalizeCampaignImageForProfile(buffer, profile).catch(() => null);
-    const finalBuffer = normalized?.buffer ?? buffer;
-    const finalExt = normalized?.ext ?? ext;
-    const fileName = `campaign_ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${finalExt}`;
+    const fileName = `campaign_ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
     const dir = path.resolve(getDataDir(), "uploads", "campaigns");
     await fs.promises.mkdir(dir, { recursive: true });
     const dest = path.join(dir, fileName);
-    await fs.promises.writeFile(dest, finalBuffer);
+    await fs.promises.writeFile(dest, buffer);
     const publicBase = process.env.PUBLIC_BASE_URL ?? "";
     return publicBase
       ? `${publicBase.replace(/\/$/, "")}/uploads/campaigns/${fileName}`
