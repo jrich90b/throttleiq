@@ -10204,67 +10204,99 @@ export default function Home() {
                 />
               </label>
 
-              <details className="border rounded-lg p-3 bg-gray-50">
-                <summary className="text-xs font-semibold text-gray-700 cursor-pointer">
-                  Optional inputs (reference images, design assets, briefs)
-                </summary>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
-                  <label className="block text-xs text-gray-600">
-                    Reference images (URLs)
-                    <textarea
-                      className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[92px] font-mono"
-                      value={campaignForm.inspirationImageUrlsText}
-                      onChange={e => setCampaignForm(prev => ({ ...prev, inspirationImageUrlsText: e.target.value }))}
-                    />
-                    <label
-                      className={`mt-2 inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
-                        campaignInspirationUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-white"
-                      }`}
-                    >
-                      <span>{campaignInspirationUploadBusy ? "Uploading..." : "Upload refs"}</span>
-                      <input
-                        className="hidden"
-                        type="file"
-                        accept="image/*"
-                        multiple
-                        disabled={campaignInspirationUploadBusy}
-                        onChange={async e => {
-                          const inputEl = e.currentTarget;
-                          await handleCampaignInspirationUploads(inputEl.files);
-                          inputEl.value = "";
-                        }}
+              {campaignForm.buildMode === "design_from_scratch" ? (
+                <details className="border rounded-lg p-3 bg-gray-50">
+                  <summary className="text-xs font-semibold text-gray-700 cursor-pointer">
+                    Optional creative inputs (refs, assets, briefs)
+                  </summary>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+                    <label className="block text-xs text-gray-600">
+                      Reference images (URLs)
+                      <textarea
+                        className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[92px] font-mono"
+                        value={campaignForm.inspirationImageUrlsText}
+                        onChange={e => setCampaignForm(prev => ({ ...prev, inspirationImageUrlsText: e.target.value }))}
                       />
+                      <label
+                        className={`mt-2 inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
+                          campaignInspirationUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-white"
+                        }`}
+                      >
+                        <span>{campaignInspirationUploadBusy ? "Uploading..." : "Upload refs"}</span>
+                        <input
+                          className="hidden"
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          disabled={campaignInspirationUploadBusy}
+                          onChange={async e => {
+                            const inputEl = e.currentTarget;
+                            await handleCampaignInspirationUploads(inputEl.files);
+                            inputEl.value = "";
+                          }}
+                        />
+                      </label>
                     </label>
-                  </label>
 
-                  <label className="block text-xs text-gray-600">
-                    Design images (URLs)
-                    <textarea
-                      className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[92px] font-mono"
-                      value={campaignForm.assetImageUrlsText}
-                      onChange={e => setCampaignForm(prev => ({ ...prev, assetImageUrlsText: e.target.value }))}
-                    />
-                    <label
-                      className={`mt-2 inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
-                        campaignAssetUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-white"
-                      }`}
-                    >
-                      <span>{campaignAssetUploadBusy ? "Uploading..." : "Upload design imgs"}</span>
-                      <input
-                        className="hidden"
-                        type="file"
-                        accept="image/*"
-                        multiple
-                        disabled={campaignAssetUploadBusy}
-                        onChange={async e => {
-                          const inputEl = e.currentTarget;
-                          await handleCampaignAssetUploads(inputEl.files);
-                          inputEl.value = "";
-                        }}
+                    <label className="block text-xs text-gray-600">
+                      Design images (URLs)
+                      <textarea
+                        className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[92px] font-mono"
+                        value={campaignForm.assetImageUrlsText}
+                        onChange={e => setCampaignForm(prev => ({ ...prev, assetImageUrlsText: e.target.value }))}
                       />
+                      <label
+                        className={`mt-2 inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
+                          campaignAssetUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-white"
+                        }`}
+                      >
+                        <span>{campaignAssetUploadBusy ? "Uploading..." : "Upload design imgs"}</span>
+                        <input
+                          className="hidden"
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          disabled={campaignAssetUploadBusy}
+                          onChange={async e => {
+                            const inputEl = e.currentTarget;
+                            await handleCampaignAssetUploads(inputEl.files);
+                            inputEl.value = "";
+                          }}
+                        />
+                      </label>
                     </label>
-                  </label>
 
+                    <label className="block text-xs text-gray-600">
+                      Brief files (PDF/text/doc)
+                      <textarea
+                        className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[92px] font-mono"
+                        value={campaignForm.briefDocumentUrlsText}
+                        onChange={e => setCampaignForm(prev => ({ ...prev, briefDocumentUrlsText: e.target.value }))}
+                      />
+                      <label
+                        className={`mt-2 inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
+                          campaignBriefUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-white"
+                        }`}
+                      >
+                        <span>{campaignBriefUploadBusy ? "Uploading..." : "Upload brief"}</span>
+                        <input
+                          className="hidden"
+                          type="file"
+                          accept=".pdf,.txt,.md,.csv,.json,.html,.doc,.docx,application/pdf,text/plain,text/markdown,text/csv,application/json,text/html,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                          multiple
+                          disabled={campaignBriefUploadBusy}
+                          onChange={async e => {
+                            const inputEl = e.currentTarget;
+                            await handleCampaignBriefUploads(inputEl.files);
+                            inputEl.value = "";
+                          }}
+                        />
+                      </label>
+                    </label>
+                  </div>
+                </details>
+              ) : (
+                <div className="border rounded-lg p-3 bg-gray-50 space-y-3">
                   <label className="block text-xs text-gray-600">
                     Brief files (PDF/text/doc)
                     <textarea
@@ -10292,8 +10324,71 @@ export default function Home() {
                       />
                     </label>
                   </label>
+
+                  <details className="border rounded p-2.5 bg-white">
+                    <summary className="text-xs font-semibold text-gray-700 cursor-pointer">
+                      Advanced overrides (optional refs/assets)
+                    </summary>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+                      <label className="block text-xs text-gray-600">
+                        Reference images (URLs)
+                        <textarea
+                          className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[92px] font-mono"
+                          value={campaignForm.inspirationImageUrlsText}
+                          onChange={e => setCampaignForm(prev => ({ ...prev, inspirationImageUrlsText: e.target.value }))}
+                        />
+                        <label
+                          className={`mt-2 inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
+                            campaignInspirationUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-gray-50"
+                          }`}
+                        >
+                          <span>{campaignInspirationUploadBusy ? "Uploading..." : "Upload refs"}</span>
+                          <input
+                            className="hidden"
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            disabled={campaignInspirationUploadBusy}
+                            onChange={async e => {
+                              const inputEl = e.currentTarget;
+                              await handleCampaignInspirationUploads(inputEl.files);
+                              inputEl.value = "";
+                            }}
+                          />
+                        </label>
+                      </label>
+
+                      <label className="block text-xs text-gray-600">
+                        Design images (URLs)
+                        <textarea
+                          className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[92px] font-mono"
+                          value={campaignForm.assetImageUrlsText}
+                          onChange={e => setCampaignForm(prev => ({ ...prev, assetImageUrlsText: e.target.value }))}
+                        />
+                        <label
+                          className={`mt-2 inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
+                            campaignAssetUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-gray-50"
+                          }`}
+                        >
+                          <span>{campaignAssetUploadBusy ? "Uploading..." : "Upload design imgs"}</span>
+                          <input
+                            className="hidden"
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            disabled={campaignAssetUploadBusy}
+                            onChange={async e => {
+                              const inputEl = e.currentTarget;
+                              await handleCampaignAssetUploads(inputEl.files);
+                              inputEl.value = "";
+                            }}
+                          />
+                        </label>
+                      </label>
+                    </div>
+                  </details>
                 </div>
-              </details>
+              )}
 
               <div className="flex flex-wrap items-center gap-2">
                 <button
