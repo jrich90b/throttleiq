@@ -20012,7 +20012,7 @@ async function normalizeCampaignImageForExactFrame(
     maxBytes?: number;
     initialQuality?: number;
     minQuality?: number;
-    fit?: "auto" | "contain" | "cover";
+    fit?: "auto" | "contain" | "cover" | "contain_blur";
   }
 ): Promise<{
   buffer: Buffer;
@@ -20032,7 +20032,13 @@ async function normalizeCampaignImageForExactFrame(
   const targetAspect = width / Math.max(1, height);
   const requestedFit = opts?.fit ?? "auto";
   let effectiveFit: "contain" | "cover" | "contain_blur" =
-    requestedFit === "contain" ? "contain" : requestedFit === "cover" ? "cover" : "cover";
+    requestedFit === "contain_blur"
+      ? "contain_blur"
+      : requestedFit === "contain"
+        ? "contain"
+        : requestedFit === "cover"
+          ? "cover"
+          : "cover";
   if (requestedFit === "auto") {
     if (sourceAspect && Number.isFinite(sourceAspect) && sourceAspect > 0) {
       const aspectDelta = Math.max(sourceAspect / targetAspect, targetAspect / sourceAspect);
@@ -20113,11 +20119,14 @@ async function normalizeCampaignImageForProfile(
     );
   }
   if (profile === "web_banner") {
+    const bannerFitSetting = campaignWebBannerResizeFit(dealerProfile);
+    // Banner-safe default: avoid edge crop unless user explicitly chooses "cover".
+    const bannerFit: "cover" | "contain_blur" = bannerFitSetting === "cover" ? "cover" : "contain_blur";
     return normalizeCampaignImageForExactFrame(
       buffer,
       campaignWebBannerWidth(dealerProfile),
       campaignWebBannerHeight(dealerProfile),
-      { fit: campaignWebBannerResizeFit(dealerProfile) }
+      { fit: bannerFit }
     );
   }
   return normalizeCampaignImageForMms(buffer);
