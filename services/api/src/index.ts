@@ -20041,8 +20041,11 @@ async function normalizeCampaignImageForExactFrame(
           : "cover";
   if (requestedFit === "auto") {
     if (sourceAspect && Number.isFinite(sourceAspect) && sourceAspect > 0) {
-      const aspectDelta = Math.max(sourceAspect / targetAspect, targetAspect / sourceAspect);
-      effectiveFit = aspectDelta >= 1.45 ? "contain_blur" : "cover";
+      // Prefer full-frame cover by default.
+      // Only switch to contain_blur when source is substantially narrower/taller than target,
+      // because that case would otherwise crop too aggressively.
+      const narrowVsTarget = sourceAspect / targetAspect;
+      effectiveFit = narrowVsTarget < 0.88 ? "contain_blur" : "cover";
     } else {
       effectiveFit = "cover";
     }
@@ -20120,8 +20123,8 @@ async function normalizeCampaignImageForProfile(
   }
   if (profile === "web_banner") {
     const bannerFitSetting = campaignWebBannerResizeFit(dealerProfile);
-    // Banner-safe default: avoid edge crop unless user explicitly chooses "cover".
-    const bannerFit: "cover" | "contain_blur" = bannerFitSetting === "cover" ? "cover" : "contain_blur";
+    const bannerFit: "auto" | "cover" | "contain_blur" =
+      bannerFitSetting === "cover" ? "cover" : bannerFitSetting === "contain" ? "contain_blur" : "auto";
     return normalizeCampaignImageForExactFrame(
       buffer,
       campaignWebBannerWidth(dealerProfile),
