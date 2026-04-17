@@ -21048,6 +21048,42 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       }
     }
 
+    // Last-resort path: if all target renders failed (commonly due upstream 429/timeouts),
+    // generate one OpenAI anchor image and fan it out to all requested target frames so
+    // campaign generation doesn't hard-fail for the user.
+    if (!generatedAssets.length) {
+      const emergencyAnchorUrl = await runCampaignTaskWithTimeout(
+        generateCampaignImageWithOpenAI({
+          name,
+          channel,
+          assetTargets: [styleLockAnchorTarget],
+          prompt,
+          description,
+          tags,
+          dealerProfile,
+          sourceHits: generated.sourceHits
+        }),
+        Math.max(perTargetTimeoutMs, 120_000),
+        "openai emergency anchor"
+      );
+      if (emergencyAnchorUrl) {
+        const emergencyAssets = await runCampaignTaskWithTimeout(
+          buildCampaignGeneratedAssetsFromSource({
+            sourceImageUrl: emergencyAnchorUrl,
+            targets: uniqueTargets,
+            dealerProfile
+          }),
+          Math.max(perTargetTimeoutMs, 120_000),
+          "normalize emergency anchor targets"
+        );
+        if (emergencyAssets?.length) {
+          generatedAssets.push(...emergencyAssets);
+          generatorsUsed.add("openai_fallback");
+          styleLockReferenceUrl = emergencyAnchorUrl;
+        }
+      }
+    }
+
     const computeMissingTargets = (): CampaignAssetTarget[] => {
       const generatedTargetSet = new Set(
         (generatedAssets ?? [])
