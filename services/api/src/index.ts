@@ -19751,7 +19751,7 @@ async function normalizeCampaignImageForMms(buffer: Buffer): Promise<{
   const render = async (q: number) =>
     sharp(buffer, { failOn: "none", animated: false })
       .rotate()
-      .resize(width, height, { fit: "cover", position: "centre" })
+      .resize(campaignImageResizeOptions(width, height))
       .jpeg({ quality: q, mozjpeg: true, chromaSubsampling: "4:2:0" })
       .toBuffer();
 
@@ -19891,6 +19891,25 @@ function campaignSocialMinQuality(): number {
   return Math.max(40, Math.min(90, Number(process.env.CAMPAIGN_SOCIAL_IMAGE_MIN_QUALITY ?? 58)));
 }
 
+function campaignImageResizeFit(): "contain" | "cover" {
+  const raw = String(process.env.CAMPAIGN_IMAGE_RESIZE_FIT ?? "contain")
+    .trim()
+    .toLowerCase();
+  return raw === "cover" ? "cover" : "contain";
+}
+
+function campaignImageResizeOptions(width: number, height: number) {
+  const fit = campaignImageResizeFit();
+  if (fit === "cover") return { width, height, fit: "cover" as const, position: "centre" as const };
+  return {
+    width,
+    height,
+    fit: "contain" as const,
+    position: "centre" as const,
+    background: { r: 255, g: 255, b: 255, alpha: 1 }
+  };
+}
+
 async function normalizeCampaignImageForExactFrame(
   buffer: Buffer,
   width: number,
@@ -19910,7 +19929,7 @@ async function normalizeCampaignImageForExactFrame(
   const render = async (q: number) =>
     sharp(buffer, { failOn: "none", animated: false })
       .rotate()
-      .resize(width, height, { fit: "cover", position: "centre" })
+      .resize(campaignImageResizeOptions(width, height))
       .jpeg({ quality: q, mozjpeg: true, chromaSubsampling: "4:2:0" })
       .toBuffer();
   let out = await render(quality);
