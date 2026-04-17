@@ -19608,6 +19608,24 @@ function chooseCampaignPreviewAsset(
   return rows[0] ?? null;
 }
 
+function preferredCampaignPreviewTargets(
+  assetTargets: CampaignAssetTarget[] | null | undefined,
+  channel: CampaignChannel
+): CampaignAssetTarget[] {
+  const available = Array.isArray(assetTargets) ? assetTargets : [];
+  if (!available.length) return [];
+  const ordered = Array.from(new Set(available));
+  const preference =
+    channel === "sms"
+      ? (["sms", "web_banner", "email", "facebook_post", "instagram_post", "instagram_story"] as CampaignAssetTarget[])
+      : channel === "email"
+        ? (["email", "web_banner", "sms", "facebook_post", "instagram_post", "instagram_story"] as CampaignAssetTarget[])
+        : (["sms", "email", "web_banner", "facebook_post", "instagram_post", "instagram_story"] as CampaignAssetTarget[]);
+  const preferred = preference.filter(target => ordered.includes(target));
+  const remainder = ordered.filter(target => !preferred.includes(target));
+  return [...preferred, ...remainder];
+}
+
 function normalizeCampaignTags(raw: unknown): CampaignTag[] {
   if (!Array.isArray(raw)) return [];
   return Array.from(
@@ -19791,7 +19809,13 @@ async function normalizeCampaignImageForMms(buffer: Buffer): Promise<{
   const render = async (q: number) =>
     sharp(buffer, { failOn: "none", animated: false })
       .rotate()
-      .resize(campaignImageResizeOptions(width, height))
+      .resize({
+        width,
+        height,
+        fit: "contain",
+        position: "centre",
+        background: { r: 255, g: 255, b: 255, alpha: 1 }
+      })
       .jpeg({ quality: q, mozjpeg: true, chromaSubsampling: "4:2:0" })
       .toBuffer();
 
@@ -19942,11 +19966,19 @@ function campaignImageResizeFit(): "contain" | "cover" {
   return raw === "cover" ? "cover" : "contain";
 }
 
-function campaignWebBannerResizeFit(): "contain" | "cover" {
-  const raw = String(process.env.CAMPAIGN_WEB_BANNER_RESIZE_FIT ?? "cover")
+function campaignWebBannerResizeFit(
+  profile?: Awaited<ReturnType<typeof getDealerProfile>>
+): "auto" | "contain" | "cover" {
+  const fromProfile = String((profile as any)?.campaign?.webBannerFit ?? "").trim().toLowerCase();
+  const fromLegacy = String((profile as any)?.webBannerFit ?? "").trim().toLowerCase();
+  const preferred = fromProfile || fromLegacy;
+  if (preferred === "auto" || preferred === "contain" || preferred === "cover") return preferred;
+  const raw = String(process.env.CAMPAIGN_WEB_BANNER_RESIZE_FIT ?? "auto")
     .trim()
     .toLowerCase();
-  return raw === "contain" ? "contain" : "cover";
+  if (raw === "contain") return "contain";
+  if (raw === "cover") return "cover";
+  return "auto";
 }
 
 function campaignImageResizeOptions(width: number, height: number, fitOverride?: "contain" | "cover") {
@@ -19969,7 +20001,7 @@ async function normalizeCampaignImageForExactFrame(
     maxBytes?: number;
     initialQuality?: number;
     minQuality?: number;
-    fit?: "contain" | "cover";
+    fit?: "auto" | "contain" | "cover";
   }
 ): Promise<{
   buffer: Buffer;
@@ -19982,12 +20014,51 @@ async function normalizeCampaignImageForExactFrame(
   const maxBytes = Math.max(200_000, Number(opts?.maxBytes ?? campaignSocialMaxBytes()));
   let quality = Math.max(40, Math.min(95, Number(opts?.initialQuality ?? campaignSocialInitialQuality())));
   const minQuality = Math.max(35, Math.min(90, Number(opts?.minQuality ?? campaignSocialMinQuality())));
+  const sourceMeta = await sharp(buffer, { failOn: "none", animated: false }).metadata().catch(() => null);
+  const sourceW = Number(sourceMeta?.width ?? 0);
+  const sourceH = Number(sourceMeta?.height ?? 0);
+  const sourceAspect = sourceW > 0 && sourceH > 0 ? sourceW / sourceH : null;
+  const targetAspect = width / Math.max(1, height);
+  let effectiveFit: "contain" | "cover" | "contain_blur" =
+    opts?.fit === "contain" ? "contain" : opts?.fit === "cover" ? "cover" : "cover";
+  if (opts?.fit === "auto") {
+    if (sourceAspect && Number.isFinite(sourceAspect) && sourceAspect > 0) {
+      const aspectDelta = Math.max(sourceAspect / targetAspect, targetAspect / sourceAspect);
+      effectiveFit = aspectDelta >= 1.45 ? "contain_blur" : "cover";
+    } else {
+      effectiveFit = "cover";
+    }
+  }
+
   const render = async (q: number) =>
-    sharp(buffer, { failOn: "none", animated: false })
-      .rotate()
-      .resize(campaignImageResizeOptions(width, height, opts?.fit))
-      .jpeg({ quality: q, mozjpeg: true, chromaSubsampling: "4:2:0" })
-      .toBuffer();
+    (async () => {
+      if (effectiveFit === "contain_blur") {
+        const rotated = sharp(buffer, { failOn: "none", animated: false }).rotate();
+        const bg = await rotated
+          .clone()
+          .resize(width, height, { fit: "cover", position: "centre" })
+          .blur(18)
+          .modulate({ brightness: 0.8, saturation: 0.95 })
+          .toBuffer();
+        const fg = await rotated
+          .clone()
+          .resize(width, height, {
+            fit: "contain",
+            position: "centre",
+            background: { r: 0, g: 0, b: 0, alpha: 0 }
+          })
+          .toBuffer();
+        return sharp(bg)
+          .composite([{ input: fg, blend: "over" }])
+          .jpeg({ quality: q, mozjpeg: true, chromaSubsampling: "4:2:0" })
+          .toBuffer();
+      }
+      return sharp(buffer, { failOn: "none", animated: false })
+        .rotate()
+        .resize(campaignImageResizeOptions(width, height, effectiveFit))
+        .jpeg({ quality: q, mozjpeg: true, chromaSubsampling: "4:2:0" })
+        .toBuffer();
+    })();
   let out = await render(quality);
   while (out.length > maxBytes && quality > minQuality) {
     quality = Math.max(minQuality, quality - 5);
@@ -20034,7 +20105,7 @@ async function normalizeCampaignImageForProfile(
       buffer,
       campaignWebBannerWidth(dealerProfile),
       campaignWebBannerHeight(dealerProfile),
-      { fit: campaignWebBannerResizeFit() }
+      { fit: campaignWebBannerResizeFit(dealerProfile) }
     );
   }
   return normalizeCampaignImageForMms(buffer);
@@ -20709,9 +20780,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       const imageOutputProfiles = generatedAssets.length
         ? generatedAssets.map(asset => asset.target)
         : [campaignImageOutputProfileForChannel(channel)];
-      const preferredTargetsForPreview: CampaignAssetTarget[] = assetTargets.includes("web_banner")
-        ? ["web_banner", ...assetTargets.filter(target => target !== "web_banner")]
-        : assetTargets;
+      const preferredTargetsForPreview = preferredCampaignPreviewTargets(assetTargets, channel);
       const preferredAsset = chooseCampaignPreviewAsset(generatedAssets, preferredTargetsForPreview);
       generatedFinalImageUrl = preferredAsset?.url ?? generatedImageUrl;
       effectiveGenerated = {
