@@ -19569,6 +19569,52 @@ app.get("/campaigns", requireManager, (_req, res) => {
   return res.json({ ok: true, campaigns: listCampaigns() });
 });
 
+app.post("/campaigns/media", requireManager, upload.single("file"), async (req, res) => {
+  if (!req.file) return res.status(400).json({ ok: false, error: "missing file" });
+
+  const mime = String(req.file.mimetype ?? "").toLowerCase();
+  if (!mime.startsWith("image/")) {
+    return res.status(400).json({ ok: false, error: "only image files are allowed" });
+  }
+  const maxBytes = 25 * 1024 * 1024;
+  if (Number(req.file.size ?? 0) > maxBytes) {
+    return res.status(400).json({ ok: false, error: "file too large (max 25MB)" });
+  }
+
+  const extFromOriginal = path.extname(req.file.originalname || "").toLowerCase();
+  const extFromMime =
+    mime === "image/jpeg"
+      ? ".jpg"
+      : mime === "image/png"
+        ? ".png"
+        : mime === "image/webp"
+          ? ".webp"
+          : mime === "image/gif"
+            ? ".gif"
+            : mime === "image/svg+xml"
+              ? ".svg"
+              : "";
+  const ext = extFromOriginal || extFromMime || ".jpg";
+  const fileName = `campaign_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
+  const dir = path.resolve(getDataDir(), "uploads", "campaigns");
+  await fs.promises.mkdir(dir, { recursive: true });
+  const dest = path.join(dir, fileName);
+  await fs.promises.writeFile(dest, req.file.buffer);
+
+  const publicBase = process.env.PUBLIC_BASE_URL ?? "";
+  const url = publicBase
+    ? `${publicBase.replace(/\/$/, "")}/uploads/campaigns/${fileName}`
+    : `/uploads/campaigns/${fileName}`;
+
+  return res.json({
+    ok: true,
+    url,
+    name: req.file.originalname || fileName,
+    type: mime || "application/octet-stream",
+    size: Number(req.file.size ?? 0)
+  });
+});
+
 app.post("/campaigns", requireManager, (req, res) => {
   const user = (req as any).user ?? null;
   const name = String(req.body?.name ?? "").trim();

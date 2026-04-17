@@ -1393,6 +1393,7 @@ export default function Home() {
   const [campaignLoading, setCampaignLoading] = useState(false);
   const [campaignSaving, setCampaignSaving] = useState(false);
   const [campaignGenerating, setCampaignGenerating] = useState(false);
+  const [campaignUploadBusy, setCampaignUploadBusy] = useState(false);
   const [campaignError, setCampaignError] = useState<string | null>(null);
   const [campaignSelectedId, setCampaignSelectedId] = useState("");
   const [campaignForm, setCampaignForm] = useState({ ...EMPTY_CAMPAIGN_FORM });
@@ -1874,6 +1875,44 @@ export default function Home() {
     setCampaignSelectedId("");
     applyCampaignToForm(null);
     setCampaignError(null);
+  }
+
+  async function handleCampaignInspirationUploads(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setCampaignUploadBusy(true);
+    setCampaignError(null);
+    try {
+      const urlsToAppend: string[] = [];
+      for (const file of Array.from(files)) {
+        if (!String(file.type ?? "").startsWith("image/")) {
+          window.alert(`"${file.name}" must be an image file.`);
+          continue;
+        }
+        const fd = new FormData();
+        fd.append("file", file);
+        const resp = await fetch("/api/campaigns/media", {
+          method: "POST",
+          body: fd
+        });
+        const payload = await resp.json().catch(() => null);
+        if (!resp.ok || !payload?.url) {
+          window.alert(payload?.error ?? `Failed to upload "${file.name}".`);
+          continue;
+        }
+        urlsToAppend.push(String(payload.url));
+      }
+      if (urlsToAppend.length) {
+        setCampaignForm(prev => {
+          const existing = parseCampaignUrlsText(prev.inspirationImageUrlsText);
+          const next = Array.from(new Set([...existing, ...urlsToAppend]));
+          return { ...prev, inspirationImageUrlsText: next.join("\n") };
+        });
+      }
+    } catch (err: any) {
+      setCampaignError(err?.message ?? "Failed to upload inspiration image");
+    } finally {
+      setCampaignUploadBusy(false);
+    }
   }
 
   async function loadCampaigns(preferredId?: string) {
@@ -9993,7 +10032,7 @@ export default function Home() {
               <div>
                 <h2 className="text-xl font-semibold">Campaign Studio</h2>
                 <p className="text-xs text-gray-500 mt-1">
-                  Build SMS/email campaign drafts with prompt + reference URLs.
+                  Build SMS/email campaign drafts with prompt + reference URLs or uploaded inspiration images.
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -10135,6 +10174,30 @@ export default function Home() {
                       setCampaignForm(prev => ({ ...prev, inspirationImageUrlsText: e.target.value }))
                     }
                   />
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <label
+                      className={`inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
+                        campaignUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-gray-50"
+                      }`}
+                    >
+                      <span>{campaignUploadBusy ? "Uploading..." : "Upload inspiration image(s)"}</span>
+                      <input
+                        className="hidden"
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        disabled={campaignUploadBusy}
+                        onChange={async e => {
+                          const files = e.currentTarget.files;
+                          await handleCampaignInspirationUploads(files);
+                          e.currentTarget.value = "";
+                        }}
+                      />
+                    </label>
+                    <div className="text-[11px] text-gray-500">
+                      Uploads are appended to the URL list above.
+                    </div>
+                  </div>
                 </label>
 
                 <label className="block text-xs text-gray-600">
