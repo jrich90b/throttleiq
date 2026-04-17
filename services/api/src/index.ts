@@ -19578,6 +19578,22 @@ function campaignAssetTargetLabel(target: CampaignAssetTarget): string {
   return target;
 }
 
+function preferredCampaignGenerationTarget(
+  assetTargets: CampaignAssetTarget[] | null | undefined,
+  channel: CampaignChannel
+): CampaignAssetTarget | null {
+  const list = Array.isArray(assetTargets) ? assetTargets : [];
+  if (!list.length) return null;
+  if (list.includes("web_banner")) return "web_banner";
+  if (channel === "sms" && list.includes("sms")) return "sms";
+  if (channel === "email" && list.includes("email")) return "email";
+  if (channel === "both") {
+    if (list.includes("sms")) return "sms";
+    if (list.includes("email")) return "email";
+  }
+  return list[0] ?? null;
+}
+
 function chooseCampaignPreviewAsset(
   assets: CampaignGeneratedAsset[],
   preferredTargets: CampaignAssetTarget[]
@@ -19637,6 +19653,8 @@ function campaignCreatorDisplayName(user: any): string | undefined {
 
 function buildCampaignImagePrompt(args: {
   name: string;
+  channel: CampaignChannel;
+  assetTargets?: CampaignAssetTarget[];
   prompt?: string;
   description?: string;
   tags: CampaignTag[];
@@ -19664,6 +19682,19 @@ function buildCampaignImagePrompt(args: {
     (tagSet.has("parts") || tagSet.has("apparel") || tagSet.has("service")) &&
     !tagSet.has("financing") &&
     !tagSet.has("sales");
+  const preferredTarget = preferredCampaignGenerationTarget(args.assetTargets, args.channel);
+  const outputGuardrails: string[] = [];
+  if (preferredTarget === "web_banner") {
+    const bannerW = campaignWebBannerWidth(args.dealerProfile);
+    const bannerH = campaignWebBannerHeight(args.dealerProfile);
+    const ratio = (bannerW / Math.max(1, bannerH)).toFixed(3);
+    outputGuardrails.push(
+      "Output framing requirements (critical):",
+      `- Compose as a wide horizontal web banner at ${bannerW}x${bannerH} (~${ratio}:1).`,
+      "- Fill the frame edge-to-edge (no borders, no letterboxing, no padding).",
+      "- Keep all essential text/logo/CTA inside a center safe area (~70% width, ~80% height) to avoid edge loss."
+    );
+  }
   const tagGuardrails = suppressFinanceTrade
     ? [
         "Hard guardrails:",
@@ -19684,6 +19715,7 @@ function buildCampaignImagePrompt(args: {
     `Campaign: ${String(args.name ?? "").trim() || "(untitled)"}`,
     `Direction: ${primary}`,
     ...tagGuardrails,
+    ...(outputGuardrails.length ? ["", ...outputGuardrails] : []),
     "",
     "Reference context (for factual alignment):",
     referenceBlock
@@ -20233,6 +20265,7 @@ async function buildNanoBananaReferenceParts(rawUrls: string[] | null | undefine
 async function generateCampaignImageWithNanoBanana(args: {
   name: string;
   channel: CampaignChannel;
+  assetTargets?: CampaignAssetTarget[];
   prompt?: string;
   description?: string;
   tags: CampaignTag[];
@@ -20317,6 +20350,7 @@ async function generateCampaignImageWithNanoBanana(args: {
 async function generateCampaignImageWithOpenAI(args: {
   name: string;
   channel: CampaignChannel;
+  assetTargets?: CampaignAssetTarget[];
   prompt?: string;
   description?: string;
   tags: CampaignTag[];
@@ -20645,6 +20679,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     const generatedImageNano = await generateCampaignImageWithNanoBanana({
       name,
       channel,
+      assetTargets,
       prompt,
       description,
       tags,
@@ -20658,6 +20693,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       (await generateCampaignImageWithOpenAI({
         name,
         channel,
+        assetTargets,
         prompt,
         description,
         tags,
