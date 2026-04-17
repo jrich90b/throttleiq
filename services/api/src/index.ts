@@ -20827,6 +20827,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
   const imageTargetsRequested = Array.isArray(assetTargets) && assetTargets.length > 0;
   let generatedFinalImageUrl: string | undefined;
   let generatedAssets: CampaignGeneratedAsset[] = [];
+  let missingRequestedAssetTargets: CampaignAssetTarget[] = [];
   if (shouldAttemptImageFallback) {
     const referenceImageUrls = normalizeCampaignUrlArray([
       ...(generated.inspirationImageUrls ?? []),
@@ -20948,7 +20949,47 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       generatedAssets.push(...result.assets);
       generatorsUsed.add(result.usedGenerator);
       totalReferenceCount += result.referenceCount;
+      if (!styleLockReferenceUrl) {
+        styleLockReferenceUrl = result.sourceImageUrl;
+      }
     }
+
+    const computeMissingTargets = (): CampaignAssetTarget[] => {
+      const generatedTargetSet = new Set(
+        (generatedAssets ?? [])
+          .map(asset => String(asset?.target ?? "").trim())
+          .filter(Boolean)
+      );
+      return uniqueTargets.filter(target => !generatedTargetSet.has(target));
+    };
+
+    // If one or more requested targets fail (rate limits/timeouts), synthesize the missing
+    // outputs from the style-lock source image so checked targets don't silently disappear.
+    let missingTargets = computeMissingTargets();
+    if (missingTargets.length && styleLockReferenceUrl) {
+      const normalizedFallbackAssets = await runCampaignTaskWithTimeout(
+        buildCampaignGeneratedAssetsFromSource({
+          sourceImageUrl: styleLockReferenceUrl,
+          targets: missingTargets,
+          dealerProfile
+        }),
+        perTargetTimeoutMs,
+        "normalize missing targets from style lock source"
+      );
+      if (normalizedFallbackAssets?.length) {
+        const existingTargets = new Set(
+          generatedAssets.map(asset => String(asset?.target ?? "").trim()).filter(Boolean)
+        );
+        for (const asset of normalizedFallbackAssets) {
+          const target = String(asset?.target ?? "").trim();
+          if (!target || existingTargets.has(target)) continue;
+          generatedAssets.push(asset);
+          existingTargets.add(target);
+        }
+      }
+      missingTargets = computeMissingTargets();
+    }
+    missingRequestedAssetTargets = missingTargets.slice();
 
     if (generatedAssets.length) {
       const imageOutputProfiles = generatedAssets.length
@@ -20976,7 +21017,12 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
           imageGeneratedAt: new Date().toISOString(),
           imageReferenceCount: totalReferenceCount,
           styleLockAnchorTarget,
-          styleLockEnabled: uniqueTargets.length > 1
+          styleLockEnabled: uniqueTargets.length > 1,
+          requestedAssetTargets: uniqueTargets,
+          generatedAssetTargets: Array.from(
+            new Set(generatedAssets.map(asset => String(asset?.target ?? "").trim()).filter(Boolean))
+          ),
+          missingAssetTargets: missingTargets
         },
         generatedBy: generatorsUsed.has("nano_banana_vertex") ? "nano_banana" : generated.generatedBy
       };
@@ -20988,6 +21034,15 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       ok: false,
       error:
         "Campaign image generation failed for all selected targets. Please retry, or generate fewer targets first (for example SMS + Email)."
+    });
+  }
+
+  if (shouldAttemptImageFallback && imageTargetsRequested && missingRequestedAssetTargets.length) {
+    return res.status(502).json({
+      ok: false,
+      error: `Campaign image generation was incomplete. Missing outputs: ${missingRequestedAssetTargets
+        .map(target => campaignAssetTargetLabel(target))
+        .join(", ")}. Please retry.`
     });
   }
 
