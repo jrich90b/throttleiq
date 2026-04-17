@@ -1322,12 +1322,6 @@ const CAMPAIGN_ASSET_TARGET_OPTIONS: Array<{ value: CampaignAssetTarget; label: 
   { value: "web_banner", label: "Web banner" }
 ];
 
-function defaultCampaignAssetTargetsForChannel(channel: CampaignChannel): CampaignAssetTarget[] {
-  if (channel === "sms") return ["sms"];
-  if (channel === "email") return ["email"];
-  return ["sms", "email"];
-}
-
 const CAMPAIGN_TAG_OPTIONS: Array<{ value: CampaignTag; label: string }> = [
   { value: "sales", label: "Sales" },
   { value: "parts", label: "Parts" },
@@ -1386,7 +1380,7 @@ const EMPTY_CAMPAIGN_FORM = {
   buildMode: "design_from_scratch" as CampaignBuildMode,
   channel: "both" as CampaignChannel,
   tags: [] as CampaignTag[],
-  assetTargets: defaultCampaignAssetTargetsForChannel("both"),
+  assetTargets: [] as CampaignAssetTarget[],
   prompt: "",
   description: "",
   inspirationImageUrlsText: "",
@@ -1489,10 +1483,6 @@ export default function Home() {
         .filter(looksLikeCampaignImageUrl)
         .slice(0, 8),
     [campaignForm.assetImageUrlsText]
-  );
-  const campaignRequiredAssetTargets = useMemo(
-    () => new Set(defaultCampaignAssetTargetsForChannel(campaignForm.channel)),
-    [campaignForm.channel]
   );
   const cadenceResolveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [watchEditOpen, setWatchEditOpen] = useState(false);
@@ -1959,7 +1949,7 @@ export default function Home() {
           .filter(v => validTargets.has(v as CampaignAssetTarget))
           .map(v => v as CampaignAssetTarget) as CampaignAssetTarget[])
       : [];
-    const normalizedTargets = assetTargets.length ? assetTargets : defaultCampaignAssetTargetsForChannel(channel);
+    const normalizedTargets = assetTargets;
     const generatedAssets: CampaignGeneratedAsset[] = Array.isArray(entry.generatedAssets)
       ? entry.generatedAssets
           .filter(asset => !!asset?.url && validTargets.has(String(asset?.target ?? "").trim() as CampaignAssetTarget))
@@ -10284,17 +10274,7 @@ export default function Home() {
                         channel:
                           e.target.value === "sms" || e.target.value === "email" || e.target.value === "both"
                             ? (e.target.value as CampaignChannel)
-                            : "both",
-                        assetTargets: Array.from(
-                          new Set<CampaignAssetTarget>([
-                            ...((Array.isArray(prev.assetTargets) ? prev.assetTargets : []) as CampaignAssetTarget[]),
-                            ...defaultCampaignAssetTargetsForChannel(
-                              e.target.value === "sms" || e.target.value === "email" || e.target.value === "both"
-                                ? (e.target.value as CampaignChannel)
-                                : "both"
-                            )
-                          ])
-                        )
+                            : "both"
                       }))
                     }
                   >
@@ -10336,18 +10316,16 @@ export default function Home() {
                 <div className="flex flex-wrap gap-2">
                   {CAMPAIGN_ASSET_TARGET_OPTIONS.map(opt => {
                     const isChecked = (campaignForm.assetTargets ?? []).includes(opt.value);
-                    const isRequired = campaignRequiredAssetTargets.has(opt.value);
                     return (
                       <label
                         key={`campaign-asset-target-${opt.value}`}
                         className={`inline-flex items-center gap-2 border rounded px-2.5 py-1.5 text-xs ${
                           isChecked ? "bg-white border-gray-400" : "bg-gray-100 border-gray-300"
-                        } ${isRequired ? "opacity-90" : "cursor-pointer"}`}
+                        } cursor-pointer`}
                       >
                         <input
                           type="checkbox"
                           checked={isChecked}
-                          disabled={isRequired}
                           onChange={() =>
                             setCampaignForm(prev => {
                               const current = new Set<CampaignAssetTarget>(
@@ -10355,8 +10333,6 @@ export default function Home() {
                               );
                               if (current.has(opt.value)) current.delete(opt.value);
                               else current.add(opt.value);
-                              const required = defaultCampaignAssetTargetsForChannel(prev.channel);
-                              required.forEach(value => current.add(value));
                               return {
                                 ...prev,
                                 assetTargets: Array.from(current)
@@ -10365,7 +10341,6 @@ export default function Home() {
                           }
                         />
                         <span>{opt.label}</span>
-                        {isRequired ? <span className="text-[10px] text-gray-500">(required)</span> : null}
                       </label>
                     );
                   })}

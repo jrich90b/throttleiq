@@ -19553,17 +19553,11 @@ function normalizeCampaignChannel(raw: unknown): CampaignChannel {
   return CAMPAIGN_CHANNELS.has(value as CampaignChannel) ? (value as CampaignChannel) : "both";
 }
 
-function defaultCampaignAssetTargetsForChannel(channel: CampaignChannel): CampaignAssetTarget[] {
-  if (channel === "sms") return ["sms"];
-  if (channel === "email") return ["email"];
-  return ["sms", "email"];
-}
-
 function normalizeCampaignAssetTargets(
   raw: unknown,
-  channel: CampaignChannel
+  _channel: CampaignChannel
 ): CampaignAssetTarget[] {
-  if (!Array.isArray(raw)) return defaultCampaignAssetTargetsForChannel(channel);
+  if (!Array.isArray(raw)) return [];
   const normalized = Array.from(
     new Set(
       raw
@@ -19571,7 +19565,7 @@ function normalizeCampaignAssetTargets(
         .filter(v => CAMPAIGN_ASSET_TARGETS.has(v as CampaignAssetTarget))
     )
   ) as CampaignAssetTarget[];
-  return normalized.length ? normalized : defaultCampaignAssetTargetsForChannel(channel);
+  return normalized;
 }
 
 function campaignAssetTargetLabel(target: CampaignAssetTarget): string {
