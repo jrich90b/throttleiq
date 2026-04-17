@@ -272,6 +272,13 @@ import {
   type CampaignTag
 } from "./domain/campaignStore.js";
 import { generateCampaignContent } from "./domain/campaignBuilder.js";
+import {
+  clearMetaIntegrationRecord,
+  getMetaIntegrationRecord,
+  getMetaIntegrationStatus,
+  saveMetaIntegrationRecord,
+  type MetaPageSnapshot
+} from "./domain/metaIntegration.js";
 import { isLikelyVoicemailTranscript, maybeMarkEngagedFromCall } from "./domain/engagement.js";
 
 import { getSystemMode, setSystemMode, type SystemMode } from "./domain/settingsStore.js";
@@ -1914,6 +1921,7 @@ function isPublicPath(pathname: string): boolean {
     pathname.startsWith("/public/appointment") ||
     pathname.startsWith("/public/inventory") ||
     pathname.startsWith("/integrations/google") ||
+    pathname.startsWith("/integrations/meta/callback") ||
     pathname.startsWith("/debug/inbound") ||
     pathname.startsWith("/auth/login") ||
     pathname.startsWith("/auth/forgot-password") ||
@@ -15961,6 +15969,453 @@ async function maybeStartCadence(conv: any, sentAtIso: string) {
   if (hasExistingCadence) return;
   startFollowUpCadence(conv, sentAtIso, cfg.timezone);
 }
+
+const META_GRAPH_VERSION = String(process.env.META_GRAPH_VERSION ?? "v23.0").trim() || "v23.0";
+const META_OAUTH_SCOPES = [
+  "pages_show_list",
+  "pages_read_engagement",
+  "pages_manage_posts",
+  "instagram_basic",
+  "instagram_content_publish"
+];
+const META_STATE_MAX_AGE_MS = 15 * 60 * 1000;
+
+function getMetaAppCredentials() {
+  const appId = String(process.env.META_APP_ID ?? "").trim();
+  const appSecret = String(process.env.META_APP_SECRET ?? "").trim();
+  return { appId, appSecret };
+}
+
+function getMetaRedirectUri() {
+  const configured = String(process.env.META_REDIRECT_URI ?? "").trim();
+  if (configured) return configured;
+  const publicBase = String(process.env.PUBLIC_BASE_URL ?? "").trim().replace(/\/$/, "");
+  if (!publicBase) return "";
+  return `${publicBase}/integrations/meta/callback`;
+}
+
+function getMetaStateSecret() {
+  const configured = String(process.env.META_OAUTH_STATE_SECRET ?? "").trim();
+  if (configured) return configured;
+  const sessionSecret = String(process.env.SESSION_SECRET ?? "").trim();
+  if (sessionSecret) return sessionSecret;
+  return "meta_oauth_state_secret";
+}
+
+function buildMetaOAuthState(preferredPageId?: string) {
+  const payload = JSON.stringify({
+    ts: Date.now(),
+    nonce: crypto.randomBytes(12).toString("hex"),
+    preferredPageId: String(preferredPageId ?? "").trim() || undefined
+  });
+  const body = Buffer.from(payload, "utf8").toString("base64url");
+  const sig = crypto.createHmac("sha256", getMetaStateSecret()).update(body).digest("hex");
+  return `${body}.${sig}`;
+}
+
+function parseMetaOAuthState(stateRaw: string): { ok: true; preferredPageId?: string } | { ok: false; error: string } {
+  const state = String(stateRaw ?? "").trim();
+  if (!state) return { ok: false, error: "missing_state" };
+  const idx = state.lastIndexOf(".");
+  if (idx <= 0) return { ok: false, error: "invalid_state" };
+  const body = state.slice(0, idx);
+  const sig = state.slice(idx + 1);
+  const expected = crypto.createHmac("sha256", getMetaStateSecret()).update(body).digest("hex");
+  const sigBuf = Buffer.from(sig, "utf8");
+  const expBuf = Buffer.from(expected, "utf8");
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+    return { ok: false, error: "invalid_state_signature" };
+  }
+  try {
+    const parsed = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as any;
+    const ts = Number(parsed?.ts);
+    if (!Number.isFinite(ts) || Math.abs(Date.now() - ts) > META_STATE_MAX_AGE_MS) {
+      return { ok: false, error: "expired_state" };
+    }
+    return {
+      ok: true,
+      preferredPageId: String(parsed?.preferredPageId ?? "").trim() || undefined
+    };
+  } catch {
+    return { ok: false, error: "invalid_state_payload" };
+  }
+}
+
+function metaGraphApiUrl(pathname: string) {
+  const path = pathname.startsWith("/") ? pathname : `/${pathname}`;
+  return `https://graph.facebook.com/${META_GRAPH_VERSION}${path}`;
+}
+
+async function fetchMetaGraphJson<T = any>(
+  pathname: string,
+  opts?: {
+    method?: "GET" | "POST";
+    query?: Record<string, string | number | undefined | null>;
+    form?: Record<string, string | number | undefined | null>;
+  }
+): Promise<{ ok: true; status: number; data: T } | { ok: false; status: number; error: string; data?: any }> {
+  const method = opts?.method ?? "GET";
+  const query = new URLSearchParams();
+  if (opts?.query) {
+    for (const [k, v] of Object.entries(opts.query)) {
+      if (v === undefined || v === null) continue;
+      query.set(k, String(v));
+    }
+  }
+  const url = `${metaGraphApiUrl(pathname)}${query.toString() ? `?${query.toString()}` : ""}`;
+  let init: RequestInit = { method };
+  if (method === "POST") {
+    const body = new URLSearchParams();
+    for (const [k, v] of Object.entries(opts?.form ?? {})) {
+      if (v === undefined || v === null) continue;
+      body.set(k, String(v));
+    }
+    init = {
+      method,
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body
+    };
+  }
+  const resp = await fetch(url, init);
+  const text = await resp.text();
+  let json: any = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    json = null;
+  }
+  if (!resp.ok || json?.error) {
+    const errMsg =
+      String(json?.error?.message ?? "").trim() ||
+      `${resp.status} ${resp.statusText}`.trim() ||
+      "Meta Graph request failed";
+    return { ok: false, status: resp.status, error: errMsg, data: json };
+  }
+  return { ok: true, status: resp.status, data: (json ?? {}) as T };
+}
+
+function toAbsolutePublicMediaUrl(rawUrl: string): string {
+  const input = String(rawUrl ?? "").trim();
+  if (!input) return "";
+  if (/^https?:\/\//i.test(input)) return input;
+  const publicBase = String(process.env.PUBLIC_BASE_URL ?? "").trim().replace(/\/$/, "");
+  if (!publicBase) return "";
+  const normalizedPath = input.startsWith("/") ? input : `/${input}`;
+  return `${publicBase}${normalizedPath}`;
+}
+
+function chooseCampaignPublishAsset(
+  campaign: any,
+  preferredTargets: CampaignAssetTarget[]
+): { url: string; target?: CampaignAssetTarget } | null {
+  const generatedAssets: Array<{ url?: string; target?: string }> = Array.isArray(campaign?.generatedAssets)
+    ? campaign.generatedAssets
+    : [];
+  for (const target of preferredTargets) {
+    const hit = generatedAssets.find(
+      asset => String(asset?.target ?? "").trim() === target && String(asset?.url ?? "").trim()
+    );
+    if (hit) {
+      return {
+        url: String(hit.url ?? "").trim(),
+        target
+      };
+    }
+  }
+  const finalImageUrl = String(campaign?.finalImageUrl ?? "").trim();
+  if (finalImageUrl) return { url: finalImageUrl };
+  const first = generatedAssets.find(asset => String(asset?.url ?? "").trim());
+  if (first) {
+    return {
+      url: String(first?.url ?? "").trim(),
+      target: (String(first?.target ?? "").trim() as CampaignAssetTarget) || undefined
+    };
+  }
+  return null;
+}
+
+function withCampaignPublishMetadata(
+  campaign: any,
+  entry: Record<string, unknown>
+): Record<string, unknown> {
+  const nowIso = new Date().toISOString();
+  const prevMeta =
+    campaign?.metadata && typeof campaign.metadata === "object" ? (campaign.metadata as Record<string, unknown>) : {};
+  const prevHistory = Array.isArray(prevMeta.publishHistory)
+    ? (prevMeta.publishHistory as Array<Record<string, unknown>>)
+    : [];
+  const nextHistory = [...prevHistory.slice(-49), entry];
+  return {
+    ...prevMeta,
+    publishHistory: nextHistory,
+    lastPublishedAt: nowIso,
+    lastPublishedPlatform: String(entry.platform ?? "").trim() || undefined
+  };
+}
+
+app.get("/integrations/meta/start", requireManager, async (_req, res) => {
+  const { appId, appSecret } = getMetaAppCredentials();
+  const redirectUri = getMetaRedirectUri();
+  if (!appId || !appSecret) {
+    return res.status(500).json({ ok: false, error: "Meta app credentials are not configured" });
+  }
+  if (!redirectUri) {
+    return res.status(500).json({ ok: false, error: "Meta redirect URI is not configured" });
+  }
+  const existing = await getMetaIntegrationRecord();
+  const state = buildMetaOAuthState(existing?.pageId);
+  const url = new URL("https://www.facebook.com/v23.0/dialog/oauth");
+  url.searchParams.set("client_id", appId);
+  url.searchParams.set("redirect_uri", redirectUri);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("scope", META_OAUTH_SCOPES.join(","));
+  url.searchParams.set("state", state);
+  return res.json({ ok: true, url: url.toString() });
+});
+
+app.get("/integrations/meta/status", requireManager, async (_req, res) => {
+  const status = await getMetaIntegrationStatus();
+  return res.json({ ok: true, ...status });
+});
+
+app.post("/integrations/meta/disconnect", requireManager, async (_req, res) => {
+  await clearMetaIntegrationRecord();
+  return res.json({ ok: true, disconnected: true });
+});
+
+app.get("/integrations/meta/callback", async (req, res) => {
+  const code = String(req.query.code ?? "").trim();
+  if (!code) return res.status(400).send("Missing code");
+
+  const stateParsed = parseMetaOAuthState(String(req.query.state ?? ""));
+  if (!stateParsed.ok) {
+    return res.status(400).send(`Invalid OAuth state (${stateParsed.error}). Please retry connect.`);
+  }
+  const preferredPageId = stateParsed.preferredPageId;
+
+  const { appId, appSecret } = getMetaAppCredentials();
+  const redirectUri = getMetaRedirectUri();
+  if (!appId || !appSecret || !redirectUri) {
+    return res.status(500).send("Meta integration is not configured on this server.");
+  }
+
+  const shortTokenResp = await fetchMetaGraphJson<{ access_token?: string }>("/oauth/access_token", {
+    method: "GET",
+    query: {
+      client_id: appId,
+      client_secret: appSecret,
+      redirect_uri: redirectUri,
+      code
+    }
+  });
+  if (!shortTokenResp.ok) {
+    return res.status(502).send(`Meta token exchange failed: ${shortTokenResp.error}`);
+  }
+  const shortToken = String(shortTokenResp.data?.access_token ?? "").trim();
+  if (!shortToken) {
+    return res.status(502).send("Meta token exchange returned no access token.");
+  }
+
+  const longTokenResp = await fetchMetaGraphJson<{ access_token?: string }>("/oauth/access_token", {
+    method: "GET",
+    query: {
+      grant_type: "fb_exchange_token",
+      client_id: appId,
+      client_secret: appSecret,
+      fb_exchange_token: shortToken
+    }
+  });
+  const userAccessToken =
+    longTokenResp.ok && String(longTokenResp.data?.access_token ?? "").trim()
+      ? String(longTokenResp.data?.access_token ?? "").trim()
+      : shortToken;
+
+  const pagesResp = await fetchMetaGraphJson<{
+    data?: Array<{
+      id?: string;
+      name?: string;
+      access_token?: string;
+      instagram_business_account?: { id?: string; username?: string };
+    }>;
+  }>("/me/accounts", {
+    method: "GET",
+    query: {
+      access_token: userAccessToken,
+      fields: "id,name,access_token,instagram_business_account{id,username}",
+      limit: 200
+    }
+  });
+  if (!pagesResp.ok) {
+    return res.status(502).send(`Meta page lookup failed: ${pagesResp.error}`);
+  }
+
+  const pagesRaw = Array.isArray(pagesResp.data?.data) ? pagesResp.data?.data ?? [] : [];
+  const pages = pagesRaw
+    .map(page => {
+      const pageId = String(page?.id ?? "").trim();
+      const pageToken = String(page?.access_token ?? "").trim();
+      if (!pageId || !pageToken) return null;
+      const igId = String(page?.instagram_business_account?.id ?? "").trim() || undefined;
+      const igUsername = String(page?.instagram_business_account?.username ?? "").trim() || undefined;
+      return {
+        id: pageId,
+        name: String(page?.name ?? "").trim() || "Facebook Page",
+        pageAccessToken: pageToken,
+        instagramBusinessAccountId: igId,
+        instagramBusinessAccountUsername: igUsername
+      };
+    })
+    .filter((row): row is NonNullable<typeof row> => Boolean(row));
+
+  if (!pages.length) {
+    return res
+      .status(400)
+      .send("Connected Meta account has no accessible Facebook pages. Add page permissions and retry.");
+  }
+
+  const selected =
+    pages.find(p => p.id === preferredPageId) ??
+    pages.find(p => !!p.instagramBusinessAccountId) ??
+    pages[0];
+  const availablePages: MetaPageSnapshot[] = pages.map(p => ({
+    id: p.id,
+    name: p.name,
+    hasInstagram: Boolean(p.instagramBusinessAccountId),
+    instagramBusinessAccountId: p.instagramBusinessAccountId,
+    instagramBusinessAccountUsername: p.instagramBusinessAccountUsername
+  }));
+  const nowIso = new Date().toISOString();
+  await saveMetaIntegrationRecord({
+    connectedAt: nowIso,
+    updatedAt: nowIso,
+    userAccessToken,
+    pageId: selected.id,
+    pageName: selected.name,
+    pageAccessToken: selected.pageAccessToken,
+    instagramBusinessAccountId: selected.instagramBusinessAccountId,
+    instagramBusinessAccountUsername: selected.instagramBusinessAccountUsername,
+    availablePages
+  });
+
+  return res.send("Meta connected successfully. You can close this tab and return to Campaign Studio.");
+});
+
+app.post("/campaigns/:id/publish/facebook", requireManager, async (req, res) => {
+  const campaign = getCampaign(String(req.params.id ?? "").trim());
+  if (!campaign) return res.status(404).json({ ok: false, error: "Campaign not found" });
+
+  const integration = await getMetaIntegrationRecord();
+  if (!integration) return res.status(400).json({ ok: false, error: "Meta is not connected" });
+
+  const requestedTarget = String(req.body?.assetTarget ?? "").trim() as CampaignAssetTarget;
+  const preferredTargets: CampaignAssetTarget[] = requestedTarget
+    ? [requestedTarget, "facebook_post", "sms", "email", "instagram_post", "instagram_story", "web_banner"]
+    : ["facebook_post", "sms", "email", "instagram_post", "instagram_story", "web_banner"];
+  const selectedAsset = chooseCampaignPublishAsset(campaign, preferredTargets);
+  if (!selectedAsset?.url) return res.status(400).json({ ok: false, error: "Campaign has no image asset to publish" });
+
+  const imageUrl = toAbsolutePublicMediaUrl(selectedAsset.url);
+  if (!/^https?:\/\//i.test(imageUrl)) {
+    return res.status(400).json({ ok: false, error: "Image URL is not publicly accessible" });
+  }
+  const caption = String(req.body?.caption ?? "").trim();
+  const postResp = await fetchMetaGraphJson<{ id?: string; post_id?: string }>(`/${integration.pageId}/photos`, {
+    method: "POST",
+    form: {
+      access_token: integration.pageAccessToken,
+      url: imageUrl,
+      caption: caption || undefined,
+      published: "true"
+    }
+  });
+  if (!postResp.ok) {
+    return res.status(502).json({ ok: false, error: `Facebook publish failed: ${postResp.error}` });
+  }
+  const postId = String(postResp.data?.post_id ?? postResp.data?.id ?? "").trim() || undefined;
+  const updated = updateCampaign(campaign.id, {
+    metadata: withCampaignPublishMetadata(campaign, {
+      platform: "facebook",
+      publishedAt: new Date().toISOString(),
+      postId,
+      pageId: integration.pageId,
+      pageName: integration.pageName,
+      assetTarget: selectedAsset.target,
+      assetUrl: imageUrl
+    })
+  });
+  return res.json({ ok: true, postId, pageId: integration.pageId, campaign: updated ?? campaign });
+});
+
+app.post("/campaigns/:id/publish/instagram", requireManager, async (req, res) => {
+  const campaign = getCampaign(String(req.params.id ?? "").trim());
+  if (!campaign) return res.status(404).json({ ok: false, error: "Campaign not found" });
+
+  const integration = await getMetaIntegrationRecord();
+  if (!integration) return res.status(400).json({ ok: false, error: "Meta is not connected" });
+  const igUserId = String(integration.instagramBusinessAccountId ?? "").trim();
+  if (!igUserId) {
+    return res.status(400).json({ ok: false, error: "Connected Meta page does not have an Instagram business account" });
+  }
+
+  const requestedTarget = String(req.body?.assetTarget ?? "").trim() as CampaignAssetTarget;
+  const preferredTargets: CampaignAssetTarget[] = requestedTarget
+    ? [requestedTarget, "instagram_post", "instagram_story", "facebook_post", "sms", "email", "web_banner"]
+    : ["instagram_post", "instagram_story", "facebook_post", "sms", "email", "web_banner"];
+  const selectedAsset = chooseCampaignPublishAsset(campaign, preferredTargets);
+  if (!selectedAsset?.url) return res.status(400).json({ ok: false, error: "Campaign has no image asset to publish" });
+
+  const imageUrl = toAbsolutePublicMediaUrl(selectedAsset.url);
+  if (!/^https?:\/\//i.test(imageUrl)) {
+    return res.status(400).json({ ok: false, error: "Image URL is not publicly accessible" });
+  }
+  const caption = String(req.body?.caption ?? "").trim();
+  const isStory =
+    String(req.body?.mediaType ?? "").trim().toLowerCase() === "story" ||
+    selectedAsset.target === "instagram_story";
+
+  const mediaResp = await fetchMetaGraphJson<{ id?: string }>(`/${igUserId}/media`, {
+    method: "POST",
+    form: {
+      access_token: integration.pageAccessToken,
+      image_url: imageUrl,
+      caption: isStory ? undefined : caption || undefined,
+      media_type: isStory ? "STORIES" : undefined
+    }
+  });
+  if (!mediaResp.ok) {
+    return res.status(502).json({ ok: false, error: `Instagram media creation failed: ${mediaResp.error}` });
+  }
+  const creationId = String(mediaResp.data?.id ?? "").trim();
+  if (!creationId) {
+    return res.status(502).json({ ok: false, error: "Instagram media creation returned no creation ID" });
+  }
+
+  const publishResp = await fetchMetaGraphJson<{ id?: string }>(`/${igUserId}/media_publish`, {
+    method: "POST",
+    form: {
+      access_token: integration.pageAccessToken,
+      creation_id: creationId
+    }
+  });
+  if (!publishResp.ok) {
+    return res.status(502).json({ ok: false, error: `Instagram publish failed: ${publishResp.error}` });
+  }
+  const mediaId = String(publishResp.data?.id ?? "").trim() || undefined;
+  const updated = updateCampaign(campaign.id, {
+    metadata: withCampaignPublishMetadata(campaign, {
+      platform: "instagram",
+      publishedAt: new Date().toISOString(),
+      mediaId,
+      creationId,
+      igUserId,
+      igUsername: integration.instagramBusinessAccountUsername,
+      assetTarget: selectedAsset.target,
+      assetUrl: imageUrl,
+      mediaType: isStory ? "story" : "feed"
+    })
+  });
+  return res.json({ ok: true, mediaId, igUserId, campaign: updated ?? campaign });
+});
 
 app.get("/integrations/google/start", async (_req, res) => {
   const oauth2 = getOAuthClient();

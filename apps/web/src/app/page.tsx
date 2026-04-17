@@ -1313,6 +1313,28 @@ type CampaignEntry = {
   updatedAt?: string;
 };
 
+type MetaPageStatus = {
+  id: string;
+  name: string;
+  hasInstagram: boolean;
+  instagramBusinessAccountId?: string;
+  instagramBusinessAccountUsername?: string;
+};
+
+type MetaIntegrationStatus = {
+  connected: boolean;
+  connectedAt?: string;
+  updatedAt?: string;
+  pageId?: string;
+  pageName?: string;
+  hasInstagram?: boolean;
+  instagramBusinessAccountId?: string;
+  instagramBusinessAccountUsername?: string;
+  availablePages?: MetaPageStatus[];
+  reason?: string;
+  error?: string;
+};
+
 const CAMPAIGN_ASSET_TARGET_OPTIONS: Array<{ value: CampaignAssetTarget; label: string }> = [
   { value: "sms", label: "SMS" },
   { value: "email", label: "Email" },
@@ -1478,6 +1500,15 @@ export default function Home() {
   const [campaignInspirationUploadBusy, setCampaignInspirationUploadBusy] = useState(false);
   const [campaignAssetUploadBusy, setCampaignAssetUploadBusy] = useState(false);
   const [campaignBriefUploadBusy, setCampaignBriefUploadBusy] = useState(false);
+  const [metaStatus, setMetaStatus] = useState<MetaIntegrationStatus | null>(null);
+  const [metaLoading, setMetaLoading] = useState(false);
+  const [metaActionBusy, setMetaActionBusy] = useState(false);
+  const [metaError, setMetaError] = useState<string | null>(null);
+  const [campaignPublishCaption, setCampaignPublishCaption] = useState("");
+  const [campaignPublishAssetTarget, setCampaignPublishAssetTarget] = useState<"auto" | CampaignAssetTarget>("auto");
+  const [campaignPublishingPlatform, setCampaignPublishingPlatform] = useState<
+    "" | "facebook" | "instagram" | "instagram_story"
+  >("");
   const [campaignError, setCampaignError] = useState<string | null>(null);
   const [campaignSelectedId, setCampaignSelectedId] = useState("");
   const [campaignForm, setCampaignForm] = useState({ ...EMPTY_CAMPAIGN_FORM });
@@ -1508,6 +1539,22 @@ export default function Home() {
     () => deriveCampaignChannelFromTargets(campaignForm.assetTargets),
     [campaignForm.assetTargets]
   );
+  const campaignHasPublishAsset = campaignGeneratedAssets.length > 0 || Boolean(campaignFinalImageUrl);
+  const canPublishCampaign = Boolean(metaStatus?.connected && campaignSelectedId && campaignHasPublishAsset);
+  const campaignPublishTargetOptions = useMemo(() => {
+    const seen = new Set<CampaignAssetTarget>();
+    const out: Array<{ value: CampaignAssetTarget; label: string }> = [];
+    for (const asset of campaignGeneratedAssets) {
+      const target = String(asset?.target ?? "").trim() as CampaignAssetTarget;
+      if (!target || seen.has(target)) continue;
+      seen.add(target);
+      out.push({
+        value: target,
+        label: campaignAssetDisplayLabel(asset)
+      });
+    }
+    return out;
+  }, [campaignGeneratedAssets]);
   const cadenceResolveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [watchEditOpen, setWatchEditOpen] = useState(false);
   const [watchEditConvId, setWatchEditConvId] = useState<string | null>(null);
@@ -1955,6 +2002,8 @@ export default function Home() {
       setCampaignGeneratedAt("");
       setCampaignFinalImageUrl("");
       setCampaignGeneratedAssets([]);
+      setCampaignPublishCaption("");
+      setCampaignPublishAssetTarget("auto");
       return;
     }
     const buildMode: CampaignBuildMode =
@@ -2007,6 +2056,8 @@ export default function Home() {
     setCampaignGeneratedAt(String(entry.updatedAt ?? entry.createdAt ?? ""));
     setCampaignGeneratedAssets(generatedAssets);
     setCampaignFinalImageUrl(String(entry.finalImageUrl ?? "").trim() || generatedAssets[0]?.url || "");
+    setCampaignPublishCaption(String(entry.smsBody ?? "").trim());
+    setCampaignPublishAssetTarget("auto");
   }
 
   function resetCampaignDraft() {
@@ -2122,6 +2173,140 @@ export default function Home() {
       setCampaignError(err?.message ?? "Failed to upload brief file");
     } finally {
       setCampaignBriefUploadBusy(false);
+    }
+  }
+
+  async function loadMetaStatus() {
+    if (!isManager) return;
+    setMetaLoading(true);
+    setMetaError(null);
+    try {
+      const resp = await fetch("/api/meta/status", { cache: "no-store" });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.ok) {
+        throw new Error(data?.error ?? "Failed to load Meta status");
+      }
+      setMetaStatus({
+        connected: data.connected === true,
+        connectedAt: data.connectedAt,
+        updatedAt: data.updatedAt,
+        pageId: data.pageId,
+        pageName: data.pageName,
+        hasInstagram: data.hasInstagram,
+        instagramBusinessAccountId: data.instagramBusinessAccountId,
+        instagramBusinessAccountUsername: data.instagramBusinessAccountUsername,
+        availablePages: Array.isArray(data.availablePages) ? data.availablePages : []
+      });
+    } catch (err: any) {
+      setMetaStatus(null);
+      setMetaError(err?.message ?? "Failed to load Meta status");
+    } finally {
+      setMetaLoading(false);
+    }
+  }
+
+  async function startMetaConnect() {
+    if (!isManager) return;
+    setMetaActionBusy(true);
+    setMetaError(null);
+    try {
+      const resp = await fetch("/api/meta/start", { cache: "no-store" });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.ok || !data?.url) {
+        throw new Error(data?.error ?? "Failed to start Meta connect");
+      }
+      const targetUrl = String(data.url ?? "").trim();
+      if (!targetUrl) throw new Error("Meta connect URL missing");
+      const popup = window.open(targetUrl, "_blank", "noopener,noreferrer");
+      if (!popup) {
+        window.location.href = targetUrl;
+      } else {
+        setSaveToast("Complete Meta login in the new tab, then click Refresh Meta.");
+      }
+    } catch (err: any) {
+      setMetaError(err?.message ?? "Failed to start Meta connect");
+    } finally {
+      setMetaActionBusy(false);
+    }
+  }
+
+  async function disconnectMeta() {
+    if (!isManager) return;
+    setMetaActionBusy(true);
+    setMetaError(null);
+    try {
+      const resp = await fetch("/api/meta/disconnect", {
+        method: "POST"
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.ok) {
+        throw new Error(data?.error ?? "Failed to disconnect Meta");
+      }
+      setMetaStatus({ connected: false });
+      setSaveToast("Meta disconnected");
+    } catch (err: any) {
+      setMetaError(err?.message ?? "Failed to disconnect Meta");
+    } finally {
+      setMetaActionBusy(false);
+    }
+  }
+
+  async function publishCampaign(
+    platform: "facebook" | "instagram" | "instagram_story"
+  ) {
+    const campaignId = String(campaignSelectedId ?? "").trim();
+    if (!campaignId) {
+      setCampaignError("Select or save a campaign first.");
+      return;
+    }
+    setCampaignError(null);
+    setMetaError(null);
+    setCampaignPublishingPlatform(platform);
+    try {
+      const endpoint =
+        platform === "facebook"
+          ? `/api/campaigns/${encodeURIComponent(campaignId)}/publish/facebook`
+          : `/api/campaigns/${encodeURIComponent(campaignId)}/publish/instagram`;
+      const body: Record<string, unknown> = {};
+      const caption = String(campaignPublishCaption ?? "").trim();
+      if (caption) body.caption = caption;
+      if (campaignPublishAssetTarget !== "auto") body.assetTarget = campaignPublishAssetTarget;
+      if (platform === "instagram_story") body.mediaType = "story";
+      const resp = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.ok) {
+        throw new Error(data?.error ?? "Failed to publish campaign");
+      }
+      const saved = (data?.campaign as CampaignEntry | undefined) ?? null;
+      if (saved) {
+        setCampaigns(prev => {
+          const idx = prev.findIndex(row => row.id === saved.id);
+          const next = idx >= 0 ? prev.map(row => (row.id === saved.id ? saved : row)) : [saved, ...prev];
+          return next.sort((a, b) => {
+            const aAt = new Date(String(a.updatedAt ?? a.createdAt ?? "")).getTime();
+            const bAt = new Date(String(b.updatedAt ?? b.createdAt ?? "")).getTime();
+            return bAt - aAt;
+          });
+        });
+        setCampaignSelectedId(saved.id);
+        applyCampaignToForm(saved);
+      }
+      const label =
+        platform === "facebook"
+          ? "Published to Facebook"
+          : platform === "instagram_story"
+            ? "Published to Instagram Story"
+            : "Published to Instagram";
+      setSaveToast(label);
+      await loadMetaStatus();
+    } catch (err: any) {
+      setCampaignError(err?.message ?? "Failed to publish campaign");
+    } finally {
+      setCampaignPublishingPlatform("");
     }
   }
 
@@ -4480,6 +4665,7 @@ export default function Home() {
   useEffect(() => {
     if (!isManager || section !== "campaigns") return;
     void loadCampaigns();
+    void loadMetaStatus();
   }, [section, isManager]);
 
   function openConversation(id: string) {
@@ -10341,6 +10527,149 @@ export default function Home() {
                 {campaignError}
               </div>
             ) : null}
+            {metaError ? (
+              <div className="border border-red-200 rounded px-3 py-2 text-sm text-red-700 bg-red-50">
+                {metaError}
+              </div>
+            ) : null}
+
+            <div className="border rounded-xl bg-white p-4 md:p-5 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <div className="text-sm font-semibold">Meta publishing</div>
+                  <div className="text-[11px] text-gray-500 mt-1">
+                    Connect Facebook/Instagram once, then publish selected campaign assets.
+                  </div>
+                </div>
+                <div className="text-xs">
+                  {metaLoading ? (
+                    <span className="px-2 py-1 rounded border bg-gray-50 text-gray-600">Checking...</span>
+                  ) : metaStatus?.connected ? (
+                    <span className="px-2 py-1 rounded border border-green-200 bg-green-50 text-green-700">
+                      Connected
+                    </span>
+                  ) : (
+                    <span className="px-2 py-1 rounded border border-gray-300 bg-gray-50 text-gray-600">
+                      Not connected
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {metaStatus?.connected ? (
+                <div className="text-xs text-gray-600">
+                  <div>
+                    Page: <span className="font-medium text-gray-800">{metaStatus.pageName || metaStatus.pageId}</span>
+                  </div>
+                  <div className="mt-1">
+                    Instagram:{" "}
+                    <span className="font-medium text-gray-800">
+                      {metaStatus.instagramBusinessAccountUsername
+                        ? `@${metaStatus.instagramBusinessAccountUsername}`
+                        : metaStatus.hasInstagram
+                          ? "Connected"
+                          : "Not linked to page"}
+                    </span>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
+                  onClick={() => {
+                    void startMetaConnect();
+                  }}
+                  disabled={metaActionBusy}
+                >
+                  {metaActionBusy ? "Opening..." : "Connect Meta"}
+                </button>
+                <button
+                  className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
+                  onClick={() => {
+                    void loadMetaStatus();
+                  }}
+                  disabled={metaLoading || metaActionBusy}
+                >
+                  Refresh Meta
+                </button>
+                <button
+                  className="px-3 py-2 border rounded text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
+                  onClick={() => {
+                    void disconnectMeta();
+                  }}
+                  disabled={metaActionBusy || !metaStatus?.connected}
+                >
+                  Disconnect
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <label className="text-xs text-gray-600">
+                  Caption
+                  <textarea
+                    className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[88px]"
+                    placeholder="Caption used for Facebook/Instagram publish."
+                    value={campaignPublishCaption}
+                    onChange={e => setCampaignPublishCaption(e.target.value)}
+                  />
+                </label>
+                <label className="text-xs text-gray-600">
+                  Publish asset
+                  <select
+                    className="mt-1 w-full border rounded px-3 py-2 text-sm bg-white"
+                    value={campaignPublishAssetTarget}
+                    onChange={e =>
+                      setCampaignPublishAssetTarget(
+                        e.target.value === "auto" ? "auto" : (e.target.value as CampaignAssetTarget)
+                      )
+                    }
+                  >
+                    <option value="auto">Auto-pick best asset</option>
+                    {campaignPublishTargetOptions.map(opt => (
+                      <option key={`publish-asset-${opt.value}`} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="text-[11px] text-gray-500 mt-1">
+                    {campaignHasPublishAsset
+                      ? "Generated assets found for this campaign."
+                      : "Generate campaign assets before publishing."}
+                  </div>
+                </label>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-white border-[var(--accent)] hover:brightness-95 disabled:opacity-60"
+                  disabled={!canPublishCampaign || campaignPublishingPlatform !== ""}
+                  onClick={() => {
+                    void publishCampaign("facebook");
+                  }}
+                >
+                  {campaignPublishingPlatform === "facebook" ? "Publishing..." : "Publish Facebook"}
+                </button>
+                <button
+                  className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-white border-[var(--accent)] hover:brightness-95 disabled:opacity-60"
+                  disabled={!canPublishCampaign || campaignPublishingPlatform !== ""}
+                  onClick={() => {
+                    void publishCampaign("instagram");
+                  }}
+                >
+                  {campaignPublishingPlatform === "instagram" ? "Publishing..." : "Publish Instagram"}
+                </button>
+                <button
+                  className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
+                  disabled={!canPublishCampaign || campaignPublishingPlatform !== ""}
+                  onClick={() => {
+                    void publishCampaign("instagram_story");
+                  }}
+                >
+                  {campaignPublishingPlatform === "instagram_story" ? "Publishing..." : "Publish Instagram Story"}
+                </button>
+              </div>
+            </div>
 
             <div className="border rounded-xl bg-white p-4 md:p-5 space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
