@@ -19910,8 +19910,15 @@ function campaignImageResizeFit(): "contain" | "cover" {
   return raw === "cover" ? "cover" : "contain";
 }
 
-function campaignImageResizeOptions(width: number, height: number) {
-  const fit = campaignImageResizeFit();
+function campaignWebBannerResizeFit(): "contain" | "cover" {
+  const raw = String(process.env.CAMPAIGN_WEB_BANNER_RESIZE_FIT ?? "cover")
+    .trim()
+    .toLowerCase();
+  return raw === "contain" ? "contain" : "cover";
+}
+
+function campaignImageResizeOptions(width: number, height: number, fitOverride?: "contain" | "cover") {
+  const fit = fitOverride ?? campaignImageResizeFit();
   if (fit === "cover") return { width, height, fit: "cover" as const, position: "centre" as const };
   return {
     width,
@@ -19926,7 +19933,12 @@ async function normalizeCampaignImageForExactFrame(
   buffer: Buffer,
   width: number,
   height: number,
-  opts?: { maxBytes?: number; initialQuality?: number; minQuality?: number }
+  opts?: {
+    maxBytes?: number;
+    initialQuality?: number;
+    minQuality?: number;
+    fit?: "contain" | "cover";
+  }
 ): Promise<{
   buffer: Buffer;
   mimeType: "image/jpeg";
@@ -19941,7 +19953,7 @@ async function normalizeCampaignImageForExactFrame(
   const render = async (q: number) =>
     sharp(buffer, { failOn: "none", animated: false })
       .rotate()
-      .resize(campaignImageResizeOptions(width, height))
+      .resize(campaignImageResizeOptions(width, height, opts?.fit))
       .jpeg({ quality: q, mozjpeg: true, chromaSubsampling: "4:2:0" })
       .toBuffer();
   let out = await render(quality);
@@ -19989,7 +20001,8 @@ async function normalizeCampaignImageForProfile(
     return normalizeCampaignImageForExactFrame(
       buffer,
       campaignWebBannerWidth(dealerProfile),
-      campaignWebBannerHeight(dealerProfile)
+      campaignWebBannerHeight(dealerProfile),
+      { fit: campaignWebBannerResizeFit() }
     );
   }
   return normalizeCampaignImageForMms(buffer);
