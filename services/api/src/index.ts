@@ -20119,12 +20119,32 @@ async function normalizeCampaignImageForExactFrame(
     (async () => {
       if (effectiveFit === "contain_blur") {
         const rotated = sharp(buffer, { failOn: "none", animated: false }).rotate();
-        const bg = await rotated
-          .clone()
-          .resize(width, height, { fit: "cover", position: "centre" })
-          .blur(18)
-          .modulate({ brightness: 0.8, saturation: 0.95 })
-          .toBuffer();
+        let sampled = { r: 24, g: 24, b: 24 };
+        try {
+          const avg = await rotated
+            .clone()
+            .resize(1, 1, { fit: "fill" })
+            .removeAlpha()
+            .raw()
+            .toBuffer();
+          if (avg.length >= 3) {
+            sampled = {
+              r: Number(avg[0] ?? 24),
+              g: Number(avg[1] ?? 24),
+              b: Number(avg[2] ?? 24)
+            };
+          }
+        } catch {
+          sampled = { r: 24, g: 24, b: 24 };
+        }
+        const bg = await sharp({
+          create: {
+            width,
+            height,
+            channels: 3,
+            background: sampled
+          }
+        }).toBuffer();
         const fg = await rotated
           .clone()
           .resize(width, height, {
@@ -20174,12 +20194,12 @@ async function normalizeCampaignImageForProfile(
   if (profile === "email") return normalizeCampaignImageForEmail(buffer);
   if (profile === "facebook_post") {
     return normalizeCampaignImageForExactFrame(buffer, campaignFacebookPostWidth(), campaignFacebookPostHeight(), {
-      fit: "auto"
+      fit: "contain_blur"
     });
   }
   if (profile === "instagram_post") {
     return normalizeCampaignImageForExactFrame(buffer, campaignInstagramPostWidth(), campaignInstagramPostHeight(), {
-      fit: "auto"
+      fit: "contain_blur"
     });
   }
   if (profile === "instagram_story") {
@@ -20187,13 +20207,13 @@ async function normalizeCampaignImageForProfile(
       buffer,
       campaignInstagramStoryWidth(),
       campaignInstagramStoryHeight(),
-      { fit: "auto" }
+      { fit: "contain_blur" }
     );
   }
   if (profile === "web_banner") {
     const bannerFitSetting = campaignWebBannerResizeFit(dealerProfile);
     const bannerFit: "auto" | "cover" | "contain_blur" =
-      bannerFitSetting === "cover" ? "cover" : bannerFitSetting === "contain" ? "contain_blur" : "auto";
+      bannerFitSetting === "cover" ? "cover" : "contain_blur";
     return normalizeCampaignImageForExactFrame(
       buffer,
       campaignWebBannerWidth(dealerProfile),
