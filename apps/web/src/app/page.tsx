@@ -1332,6 +1332,15 @@ const CAMPAIGN_TAG_OPTIONS: Array<{ value: CampaignTag; label: string }> = [
   { value: "dealer_event", label: "Dealer event" }
 ];
 
+function campaignAssetDisplayLabel(asset: CampaignGeneratedAsset): string {
+  const base =
+    String(asset.label ?? "").trim() ||
+    CAMPAIGN_ASSET_TARGET_OPTIONS.find(opt => opt.value === asset.target)?.label ||
+    asset.target;
+  const dim = asset.width && asset.height ? `${asset.width}x${asset.height}` : "";
+  return dim ? `${base} (${dim})` : base;
+}
+
 function campaignUrlsToText(values?: string[] | null): string {
   return Array.isArray(values) ? values.filter(Boolean).join("\n") : "";
 }
@@ -1466,6 +1475,8 @@ export default function Home() {
   const [campaignGeneratedAt, setCampaignGeneratedAt] = useState<string>("");
   const [campaignFinalImageUrl, setCampaignFinalImageUrl] = useState<string>("");
   const [campaignGeneratedAssets, setCampaignGeneratedAssets] = useState<CampaignGeneratedAsset[]>([]);
+  const [campaignPreviewAUrl, setCampaignPreviewAUrl] = useState<string>("");
+  const [campaignPreviewBUrl, setCampaignPreviewBUrl] = useState<string>("");
   const campaignInspirationPreviewUrls = useMemo(
     () =>
       parseCampaignUrlsText(campaignForm.inspirationImageUrlsText)
@@ -1484,6 +1495,16 @@ export default function Home() {
         .slice(0, 8),
     [campaignForm.assetImageUrlsText]
   );
+  useEffect(() => {
+    const urls = campaignGeneratedAssets
+      .map(asset => String(asset.url ?? "").trim())
+      .filter(Boolean);
+    setCampaignPreviewAUrl(prev => (prev && urls.includes(prev) ? prev : urls[0] ?? ""));
+    setCampaignPreviewBUrl(prev => {
+      if (prev && urls.includes(prev) && prev !== (urls[0] ?? "")) return prev;
+      return urls.find(url => url !== (urls[0] ?? "")) ?? "";
+    });
+  }, [campaignGeneratedAssets]);
   const cadenceResolveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [watchEditOpen, setWatchEditOpen] = useState(false);
   const [watchEditConvId, setWatchEditConvId] = useState<string | null>(null);
@@ -10488,8 +10509,67 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="border rounded-lg p-3 bg-gray-50">
-                {campaignFinalImageUrl ? (
+              <div className="border rounded-lg p-3 bg-gray-50 space-y-3">
+                {campaignGeneratedAssets.length ? (
+                  <>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      <label className="text-xs text-gray-600">
+                        Preview A
+                        <select
+                          className="mt-1 w-full border rounded px-2 py-1.5 text-xs bg-white"
+                          value={campaignPreviewAUrl}
+                          onChange={e => {
+                            const next = String(e.target.value ?? "");
+                            setCampaignPreviewAUrl(next);
+                            if (next && next === campaignPreviewBUrl) setCampaignPreviewBUrl("");
+                          }}
+                        >
+                          <option value="">Select file...</option>
+                          {campaignGeneratedAssets.map((asset, idx) => (
+                            <option key={`campaign-preview-a-${idx}`} value={asset.url}>
+                              {campaignAssetDisplayLabel(asset)}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="text-xs text-gray-600">
+                        Preview B
+                        <select
+                          className="mt-1 w-full border rounded px-2 py-1.5 text-xs bg-white"
+                          value={campaignPreviewBUrl}
+                          onChange={e => setCampaignPreviewBUrl(String(e.target.value ?? ""))}
+                        >
+                          <option value="">None</option>
+                          {campaignGeneratedAssets.map((asset, idx) => (
+                            <option key={`campaign-preview-b-${idx}`} value={asset.url}>
+                              {campaignAssetDisplayLabel(asset)}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+
+                    <div className={`grid grid-cols-1 ${campaignPreviewBUrl ? "md:grid-cols-2" : ""} gap-3`}>
+                      {[campaignPreviewAUrl, campaignPreviewBUrl].filter(Boolean).map((url, idx) => (
+                        <a
+                          key={`campaign-preview-image-${idx}`}
+                          href={url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block border rounded overflow-hidden bg-white"
+                          title={url}
+                        >
+                          <img
+                            src={url}
+                            alt={idx === 0 ? "Campaign preview A" : "Campaign preview B"}
+                            className="w-full max-h-[440px] object-contain bg-white"
+                            loading="lazy"
+                          />
+                        </a>
+                      ))}
+                    </div>
+                  </>
+                ) : campaignFinalImageUrl ? (
                   <a
                     href={campaignFinalImageUrl}
                     target="_blank"
@@ -10516,13 +10596,8 @@ export default function Home() {
                   <div className="text-xs font-semibold text-gray-700">Generated files</div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                     {campaignGeneratedAssets.map((asset, idx) => {
-                      const label =
-                        String(asset.label ?? "").trim() ||
-                        CAMPAIGN_ASSET_TARGET_OPTIONS.find(opt => opt.value === asset.target)?.label ||
-                        asset.target;
-                      const dim =
-                        asset.width && asset.height ? `${asset.width}x${asset.height}` : null;
-                      const meta = [dim, asset.mimeType].filter(Boolean).join(" • ");
+                      const label = campaignAssetDisplayLabel(asset);
+                      const meta = [asset.mimeType].filter(Boolean).join(" • ");
                       return (
                         <div key={`campaign-generated-asset-${asset.target}-${idx}`} className="border rounded px-3 py-2 bg-gray-50">
                           <div className="text-xs font-semibold">{label}</div>
