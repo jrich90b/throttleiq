@@ -10830,63 +10830,40 @@ export default function Home() {
 
               <div className="border rounded-lg p-3 bg-gray-50 space-y-3">
                 <div className="text-xs font-semibold text-gray-700">3) Generate assets</div>
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
-                  {campaignSelectedTargetsOrdered.map(target => {
-                    const label = CAMPAIGN_ASSET_TARGET_OPTIONS.find(opt => opt.value === target)?.label ?? target;
-                    const statusRow = campaignAssetGenerationStatus[target];
-                    const statusRaw = String(statusRow?.status ?? "").trim().toLowerCase();
-                    const hasAsset = campaignGeneratedAssetTargetSet.has(target);
-                    const status: "ready" | "pending" | "failed" =
-                      statusRaw === "failed" ? "failed" : hasAsset || statusRaw === "ready" ? "ready" : "pending";
-                    const badgeClass =
-                      status === "ready"
-                        ? "border-green-300 bg-green-50 text-green-700"
-                        : status === "failed"
-                          ? "border-red-300 bg-red-50 text-red-700"
-                          : "border-amber-300 bg-amber-50 text-amber-700";
-                    return (
-                      <button
-                        key={`campaign-target-status-${target}`}
-                        type="button"
-                        className={`text-left border rounded px-2.5 py-2 bg-white hover:bg-gray-50 ${
-                          campaignTargetToGenerate === target ? "ring-2 ring-[var(--accent)]" : ""
-                        }`}
-                        onClick={() => setCampaignTargetToGenerate(target)}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="text-xs font-medium">{label}</div>
-                          <span className={`text-[10px] px-2 py-0.5 rounded border ${badgeClass}`}>
-                            {status === "ready" ? "Ready" : status === "failed" ? "Failed" : "Pending"}
-                          </span>
-                        </div>
-                        {statusRow?.error && status === "failed" ? (
-                          <div className="text-[10px] text-red-600 mt-1 line-clamp-2">{statusRow.error}</div>
-                        ) : null}
-                      </button>
-                    );
-                  })}
-                </div>
+                {(() => {
+                  const activeTarget = campaignSelectedTargetsOrdered[0] ?? campaignTargetToGenerate;
+                  const label = activeTarget
+                    ? CAMPAIGN_ASSET_TARGET_OPTIONS.find(opt => opt.value === activeTarget)?.label ?? activeTarget
+                    : "No output selected";
+                  const statusRow = activeTarget ? campaignAssetGenerationStatus[activeTarget] : null;
+                  const statusRaw = String(statusRow?.status ?? "").trim().toLowerCase();
+                  const hasAsset = activeTarget ? campaignGeneratedAssetTargetSet.has(activeTarget) : false;
+                  const status: "ready" | "pending" | "failed" =
+                    statusRaw === "failed" ? "failed" : hasAsset || statusRaw === "ready" ? "ready" : "pending";
+                  const badgeClass =
+                    status === "ready"
+                      ? "border-green-300 bg-green-50 text-green-700"
+                      : status === "failed"
+                        ? "border-red-300 bg-red-50 text-red-700"
+                        : "border-amber-300 bg-amber-50 text-amber-700";
+                  return (
+                    <div className="border rounded px-3 py-2 bg-white">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-xs text-gray-600">Output</div>
+                        <span className={`text-[10px] px-2 py-0.5 rounded border ${badgeClass}`}>
+                          {status === "ready" ? "Ready" : status === "failed" ? "Failed" : "Pending"}
+                        </span>
+                      </div>
+                      <div className="text-sm font-semibold mt-1">{label}</div>
+                      <div className="text-[11px] text-gray-500 mt-1">Change output format in Step 2.</div>
+                      {statusRow?.error && status === "failed" ? (
+                        <div className="text-[11px] text-red-600 mt-1 line-clamp-2">{statusRow.error}</div>
+                      ) : null}
+                    </div>
+                  );
+                })()}
 
-                <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto_auto] gap-2 items-end">
-                  <label className="text-xs text-gray-600">
-                    Selected output
-                    <select
-                      className="mt-1 w-full border rounded px-3 py-2 text-sm bg-white"
-                      value={campaignSelectedTargetsOrdered.length ? campaignTargetToGenerate : ""}
-                      onChange={e => setCampaignTargetToGenerate(e.target.value as CampaignAssetTarget)}
-                      disabled={!campaignSelectedTargetsOrdered.length}
-                    >
-                      {campaignSelectedTargetsOrdered.length ? (
-                        campaignSelectedTargetsOrdered.map(target => (
-                          <option key={`campaign-generate-target-${target}`} value={target}>
-                            {CAMPAIGN_ASSET_TARGET_OPTIONS.find(opt => opt.value === target)?.label ?? target}
-                          </option>
-                        ))
-                      ) : (
-                        <option value="">No targets selected</option>
-                      )}
-                    </select>
-                  </label>
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     className="px-3 py-2 border rounded text-sm bg-gray-900 text-white hover:bg-black disabled:opacity-60"
                     onClick={() => {
@@ -10915,21 +10892,8 @@ export default function Home() {
                     {campaignSaving ? "Saving..." : "Save Draft"}
                   </button>
                 </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
-                  onClick={() => {
-                    const nextTarget = campaignNextPendingTarget ?? campaignTargetToGenerate;
-                    void generateCampaign({ target: nextTarget, replaceTarget: true });
-                  }}
-                  disabled={campaignGenerating || campaignSaving || !campaignHasAnyTarget}
-                >
-                  {campaignGenerating ? "Running..." : "Generate Next Missing"}
-                </button>
                 <div className="text-[11px] text-gray-500">
-                  One output is generated at a time. You can retry failed ones without replacing the rest.
+                  Generate creates/updates the selected output. Redo retries the same output.
                 </div>
               </div>
             </div>
