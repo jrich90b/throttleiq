@@ -7,8 +7,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "API_BASE_URL not set" }, { status: 500 });
   }
 
+  const incomingUrl = new URL(req.url);
+  const query = incomingUrl.search ? incomingUrl.search : "";
   const body = await req.formData();
-  const r = await apiFetch(`${base}/campaigns/media`, {
+  const r = await apiFetch(`${base}/campaigns/media${query}`, {
     method: "POST",
     body
   });

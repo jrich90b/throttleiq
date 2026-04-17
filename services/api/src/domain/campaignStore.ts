@@ -4,6 +4,13 @@ import { dataPath } from "./dataDir.js";
 export type CampaignChannel = "sms" | "email" | "both";
 export type CampaignStatus = "draft" | "generated";
 export type CampaignBuildMode = "design_from_scratch" | "web_search_design";
+export type CampaignAssetTarget =
+  | "sms"
+  | "email"
+  | "facebook_post"
+  | "instagram_post"
+  | "instagram_story"
+  | "web_banner";
 export type CampaignTag =
   | "sales"
   | "parts"
@@ -20,6 +27,18 @@ export type CampaignSourceHit = {
   domain?: string;
 };
 
+export type CampaignGeneratedAsset = {
+  id?: string;
+  target: CampaignAssetTarget;
+  label?: string;
+  url: string;
+  mimeType?: string;
+  width?: number;
+  height?: number;
+  bytes?: number;
+  createdAt?: string;
+};
+
 export type CampaignEntry = {
   id: string;
   name: string;
@@ -27,6 +46,7 @@ export type CampaignEntry = {
   buildMode: CampaignBuildMode;
   channel: CampaignChannel;
   tags: CampaignTag[];
+  assetTargets?: CampaignAssetTarget[];
   prompt?: string;
   description?: string;
   inspirationImageUrls?: string[];
@@ -37,6 +57,7 @@ export type CampaignEntry = {
   emailBodyText?: string;
   emailBodyHtml?: string;
   finalImageUrl?: string;
+  generatedAssets?: CampaignGeneratedAsset[];
   sourceHits?: CampaignSourceHit[];
   metadata?: Record<string, unknown>;
   createdByUserId?: string;
@@ -52,6 +73,15 @@ const DB_PATH = process.env.CAMPAIGNS_DB_PATH
 
 const campaigns = new Map<string, CampaignEntry>();
 let saveTimer: NodeJS.Timeout | null = null;
+
+const CAMPAIGN_ASSET_TARGET_SET = new Set<CampaignAssetTarget>([
+  "sms",
+  "email",
+  "facebook_post",
+  "instagram_post",
+  "instagram_story",
+  "web_banner"
+]);
 
 function nowIso() {
   return new Date().toISOString();
@@ -80,31 +110,10 @@ function scheduleSave() {
   }, 200);
 }
 
-async function loadFromDisk() {
-  try {
-    const raw = await fs.readFile(DB_PATH, "utf8");
-    const parsed = JSON.parse(raw) as { campaigns?: CampaignEntry[] };
-    campaigns.clear();
-    for (const row of parsed?.campaigns ?? []) {
-      if (!row?.id) continue;
-      const normalized: CampaignEntry = {
-        ...row,
-        buildMode: normalizeBuildMode((row as any)?.buildMode),
-        tags: uniqTags(Array.isArray((row as any)?.tags) ? ((row as any).tags as CampaignTag[]) : []),
-        inspirationImageUrls: uniqUrls((row as any)?.inspirationImageUrls),
-        assetImageUrls: uniqUrls((row as any)?.assetImageUrls),
-        briefDocumentUrls: uniqUrls((row as any)?.briefDocumentUrls)
-      };
-      campaigns.set(row.id, normalized);
-    }
-  } catch (err: any) {
-    if (err?.code === "ENOENT") {
-      await saveToDisk();
-    }
-  }
+function normalizeChannel(raw: unknown): CampaignChannel {
+  const value = String(raw ?? "").trim();
+  return value === "sms" || value === "email" || value === "both" ? value : "both";
 }
-
-void loadFromDisk();
 
 function uniqTags(tags?: CampaignTag[]): CampaignTag[] {
   return Array.from(new Set((tags ?? []).filter(Boolean)));
@@ -120,6 +129,47 @@ function uniqUrls(urls?: string[]): string[] {
   );
 }
 
+function defaultAssetTargetsForChannel(channel: CampaignChannel): CampaignAssetTarget[] {
+  if (channel === "sms") return ["sms"];
+  if (channel === "email") return ["email"];
+  return ["sms", "email"];
+}
+
+function normalizeAssetTargets(raw: unknown, fallbackChannel: CampaignChannel): CampaignAssetTarget[] {
+  const values = Array.isArray(raw)
+    ? raw
+        .map(v => String(v ?? "").trim())
+        .filter(v => CAMPAIGN_ASSET_TARGET_SET.has(v as CampaignAssetTarget))
+    : [];
+  const uniq = Array.from(new Set(values)) as CampaignAssetTarget[];
+  return uniq.length ? uniq : defaultAssetTargetsForChannel(fallbackChannel);
+}
+
+function normalizeGeneratedAssets(raw: unknown): CampaignGeneratedAsset[] {
+  if (!Array.isArray(raw)) return [];
+  const out: CampaignGeneratedAsset[] = [];
+  for (const row of raw) {
+    const targetRaw = String((row as any)?.target ?? "").trim();
+    const url = String((row as any)?.url ?? "").trim();
+    if (!CAMPAIGN_ASSET_TARGET_SET.has(targetRaw as CampaignAssetTarget) || !url) continue;
+    const widthNum = Number((row as any)?.width);
+    const heightNum = Number((row as any)?.height);
+    const bytesNum = Number((row as any)?.bytes);
+    out.push({
+      id: String((row as any)?.id ?? "").trim() || undefined,
+      target: targetRaw as CampaignAssetTarget,
+      label: String((row as any)?.label ?? "").trim() || undefined,
+      url,
+      mimeType: String((row as any)?.mimeType ?? "").trim() || undefined,
+      width: Number.isFinite(widthNum) && widthNum > 0 ? Math.round(widthNum) : undefined,
+      height: Number.isFinite(heightNum) && heightNum > 0 ? Math.round(heightNum) : undefined,
+      bytes: Number.isFinite(bytesNum) && bytesNum > 0 ? Math.round(bytesNum) : undefined,
+      createdAt: String((row as any)?.createdAt ?? "").trim() || undefined
+    });
+  }
+  return out.slice(0, 24);
+}
+
 function normalizeBuildMode(raw: unknown): CampaignBuildMode {
   const mode = String(raw ?? "").trim();
   if (mode === "web_search_design" || mode === "promotion_event_prompt") {
@@ -127,6 +177,40 @@ function normalizeBuildMode(raw: unknown): CampaignBuildMode {
   }
   return "design_from_scratch";
 }
+
+async function loadFromDisk() {
+  try {
+    const raw = await fs.readFile(DB_PATH, "utf8");
+    const parsed = JSON.parse(raw) as { campaigns?: CampaignEntry[] };
+    campaigns.clear();
+    for (const row of parsed?.campaigns ?? []) {
+      if (!row?.id) continue;
+      const channel = normalizeChannel((row as any)?.channel);
+      const generatedAssets = normalizeGeneratedAssets((row as any)?.generatedAssets);
+      const normalized: CampaignEntry = {
+        ...row,
+        channel,
+        buildMode: normalizeBuildMode((row as any)?.buildMode),
+        tags: uniqTags(Array.isArray((row as any)?.tags) ? ((row as any).tags as CampaignTag[]) : []),
+        assetTargets: normalizeAssetTargets((row as any)?.assetTargets, channel),
+        inspirationImageUrls: uniqUrls((row as any)?.inspirationImageUrls),
+        assetImageUrls: uniqUrls((row as any)?.assetImageUrls),
+        briefDocumentUrls: uniqUrls((row as any)?.briefDocumentUrls),
+        generatedAssets
+      };
+      if (!normalized.finalImageUrl && generatedAssets.length) {
+        normalized.finalImageUrl = generatedAssets[0]?.url;
+      }
+      campaigns.set(row.id, normalized);
+    }
+  } catch (err: any) {
+    if (err?.code === "ENOENT") {
+      await saveToDisk();
+    }
+  }
+}
+
+void loadFromDisk();
 
 export function listCampaigns(): CampaignEntry[] {
   return Array.from(campaigns.values()).sort(
@@ -144,6 +228,7 @@ export function createCampaign(input: {
   buildMode?: CampaignBuildMode;
   channel?: CampaignChannel;
   tags?: CampaignTag[];
+  assetTargets?: CampaignAssetTarget[];
   prompt?: string;
   description?: string;
   inspirationImageUrls?: string[];
@@ -154,6 +239,7 @@ export function createCampaign(input: {
   emailBodyText?: string;
   emailBodyHtml?: string;
   finalImageUrl?: string;
+  generatedAssets?: CampaignGeneratedAsset[];
   sourceHits?: CampaignSourceHit[];
   metadata?: Record<string, unknown>;
   createdByUserId?: string;
@@ -161,13 +247,16 @@ export function createCampaign(input: {
   generatedBy?: CampaignEntry["generatedBy"];
 }): CampaignEntry {
   const now = nowIso();
+  const channel = normalizeChannel(input.channel);
+  const generatedAssets = normalizeGeneratedAssets(input.generatedAssets);
   const entry: CampaignEntry = {
     id: makeId(),
     name: String(input.name ?? "").trim() || "Untitled campaign",
     status: input.status ?? "draft",
     buildMode: normalizeBuildMode(input.buildMode),
-    channel: input.channel ?? "both",
+    channel,
     tags: uniqTags(input.tags),
+    assetTargets: normalizeAssetTargets(input.assetTargets, channel),
     prompt: String(input.prompt ?? "").trim() || undefined,
     description: String(input.description ?? "").trim() || undefined,
     inspirationImageUrls: uniqUrls(input.inspirationImageUrls),
@@ -177,7 +266,8 @@ export function createCampaign(input: {
     emailSubject: String(input.emailSubject ?? "").trim() || undefined,
     emailBodyText: String(input.emailBodyText ?? "").trim() || undefined,
     emailBodyHtml: String(input.emailBodyHtml ?? "").trim() || undefined,
-    finalImageUrl: String(input.finalImageUrl ?? "").trim() || undefined,
+    finalImageUrl: String(input.finalImageUrl ?? "").trim() || generatedAssets[0]?.url || undefined,
+    generatedAssets,
     sourceHits: Array.isArray(input.sourceHits) ? input.sourceHits.slice(0, 12) : [],
     metadata:
       input.metadata && typeof input.metadata === "object"
@@ -200,6 +290,11 @@ export function updateCampaign(
 ): CampaignEntry | null {
   const existing = campaigns.get(id);
   if (!existing) return null;
+  const channel = patch?.channel !== undefined ? normalizeChannel(patch.channel) : normalizeChannel(existing.channel);
+  const generatedAssets =
+    patch?.generatedAssets !== undefined
+      ? normalizeGeneratedAssets(patch.generatedAssets)
+      : normalizeGeneratedAssets(existing.generatedAssets);
   const next: CampaignEntry = {
     ...existing,
     ...(patch ?? {}),
@@ -207,9 +302,14 @@ export function updateCampaign(
       patch?.name !== undefined
         ? String(patch.name ?? "").trim() || existing.name
         : existing.name,
+    channel,
     tags: patch?.tags ? uniqTags(patch.tags as CampaignTag[]) : existing.tags ?? [],
     buildMode:
       patch?.buildMode !== undefined ? normalizeBuildMode(patch.buildMode) : normalizeBuildMode(existing.buildMode),
+    assetTargets:
+      patch?.assetTargets !== undefined
+        ? normalizeAssetTargets(patch.assetTargets, channel)
+        : normalizeAssetTargets(existing.assetTargets, channel),
     inspirationImageUrls:
       patch?.inspirationImageUrls !== undefined
         ? uniqUrls(patch.inspirationImageUrls as string[])
@@ -245,7 +345,8 @@ export function updateCampaign(
     finalImageUrl:
       patch?.finalImageUrl !== undefined
         ? String(patch.finalImageUrl ?? "").trim() || undefined
-        : existing.finalImageUrl,
+        : existing.finalImageUrl || generatedAssets[0]?.url,
+    generatedAssets,
     sourceHits:
       patch?.sourceHits !== undefined
         ? (Array.isArray(patch.sourceHits) ? patch.sourceHits.slice(0, 12) : [])

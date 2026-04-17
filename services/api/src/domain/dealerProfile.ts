@@ -42,6 +42,10 @@ export type DealerProfile = {
   webSearch?: {
     referenceUrls?: string[];
   };
+  campaign?: {
+    webBannerWidth?: number;
+    webBannerHeight?: number;
+  };
   taxRate?: number;
 };
 

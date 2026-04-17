@@ -266,6 +266,8 @@ import {
   updateCampaign,
   type CampaignBuildMode,
   type CampaignChannel,
+  type CampaignAssetTarget,
+  type CampaignGeneratedAsset,
   type CampaignTag
 } from "./domain/campaignStore.js";
 import { generateCampaignContent } from "./domain/campaignBuilder.js";
@@ -17677,6 +17679,10 @@ app.put("/dealer-profile", requireManager, async (req, res) => {
     webSearch: {
       ...(current?.webSearch ?? {}),
       ...(incoming?.webSearch ?? {})
+    },
+    campaign: {
+      ...(current?.campaign ?? {}),
+      ...(incoming?.campaign ?? {})
     }
   };
   const saved = await saveDealerProfile(merged);
@@ -19515,6 +19521,14 @@ const CAMPAIGN_BUILD_MODES = new Set<CampaignBuildMode>([
   "web_search_design"
 ]);
 const CAMPAIGN_CHANNELS = new Set<CampaignChannel>(["sms", "email", "both"]);
+const CAMPAIGN_ASSET_TARGETS = new Set<CampaignAssetTarget>([
+  "sms",
+  "email",
+  "facebook_post",
+  "instagram_post",
+  "instagram_story",
+  "web_banner"
+]);
 const CAMPAIGN_TAGS: CampaignTag[] = [
   "sales",
   "parts",
@@ -19537,6 +19551,37 @@ function normalizeCampaignBuildMode(raw: unknown): CampaignBuildMode {
 function normalizeCampaignChannel(raw: unknown): CampaignChannel {
   const value = String(raw ?? "").trim();
   return CAMPAIGN_CHANNELS.has(value as CampaignChannel) ? (value as CampaignChannel) : "both";
+}
+
+function defaultCampaignAssetTargetsForChannel(channel: CampaignChannel): CampaignAssetTarget[] {
+  if (channel === "sms") return ["sms"];
+  if (channel === "email") return ["email"];
+  return ["sms", "email"];
+}
+
+function normalizeCampaignAssetTargets(
+  raw: unknown,
+  channel: CampaignChannel
+): CampaignAssetTarget[] {
+  if (!Array.isArray(raw)) return defaultCampaignAssetTargetsForChannel(channel);
+  const normalized = Array.from(
+    new Set(
+      raw
+        .map(v => String(v ?? "").trim())
+        .filter(v => CAMPAIGN_ASSET_TARGETS.has(v as CampaignAssetTarget))
+    )
+  ) as CampaignAssetTarget[];
+  return normalized.length ? normalized : defaultCampaignAssetTargetsForChannel(channel);
+}
+
+function campaignAssetTargetLabel(target: CampaignAssetTarget): string {
+  if (target === "sms") return "SMS";
+  if (target === "email") return "Email";
+  if (target === "facebook_post") return "Facebook post";
+  if (target === "instagram_post") return "Instagram post";
+  if (target === "instagram_story") return "Instagram story";
+  if (target === "web_banner") return "Web banner";
+  return target;
 }
 
 function normalizeCampaignTags(raw: unknown): CampaignTag[] {
@@ -19763,7 +19808,13 @@ async function normalizeCampaignImageForEmail(buffer: Buffer): Promise<{
   };
 }
 
-type CampaignImageOutputProfile = "sms" | "email";
+type CampaignImageOutputProfile =
+  | "sms"
+  | "email"
+  | "facebook_post"
+  | "instagram_post"
+  | "instagram_story"
+  | "web_banner";
 
 function campaignImageOutputProfileForChannel(channel: CampaignChannel): CampaignImageOutputProfile {
   if (channel === "email") return "email";
@@ -19776,9 +19827,75 @@ function campaignImageOutputProfileForChannel(channel: CampaignChannel): Campaig
   return "sms";
 }
 
-async function normalizeCampaignImageForProfile(
+function campaignImageOutputProfileForAssetTarget(target: CampaignAssetTarget): CampaignImageOutputProfile {
+  if (target === "sms") return "sms";
+  if (target === "email") return "email";
+  if (target === "facebook_post") return "facebook_post";
+  if (target === "instagram_post") return "instagram_post";
+  if (target === "instagram_story") return "instagram_story";
+  return "web_banner";
+}
+
+function campaignFacebookPostWidth(): number {
+  return Math.max(640, Math.min(4096, Number(process.env.CAMPAIGN_FACEBOOK_POST_WIDTH ?? 1080)));
+}
+
+function campaignFacebookPostHeight(): number {
+  return Math.max(640, Math.min(4096, Number(process.env.CAMPAIGN_FACEBOOK_POST_HEIGHT ?? 1080)));
+}
+
+function campaignInstagramPostWidth(): number {
+  return Math.max(640, Math.min(4096, Number(process.env.CAMPAIGN_INSTAGRAM_POST_WIDTH ?? 1080)));
+}
+
+function campaignInstagramPostHeight(): number {
+  return Math.max(640, Math.min(4096, Number(process.env.CAMPAIGN_INSTAGRAM_POST_HEIGHT ?? 1350)));
+}
+
+function campaignInstagramStoryWidth(): number {
+  return Math.max(640, Math.min(4096, Number(process.env.CAMPAIGN_INSTAGRAM_STORY_WIDTH ?? 1080)));
+}
+
+function campaignInstagramStoryHeight(): number {
+  return Math.max(960, Math.min(6144, Number(process.env.CAMPAIGN_INSTAGRAM_STORY_HEIGHT ?? 1920)));
+}
+
+function campaignWebBannerWidth(profile?: Awaited<ReturnType<typeof getDealerProfile>>): number {
+  const fromProfile = Number((profile as any)?.campaign?.webBannerWidth);
+  if (Number.isFinite(fromProfile) && fromProfile >= 640 && fromProfile <= 6000) {
+    return Math.round(fromProfile);
+  }
+  return Math.max(640, Math.min(6000, Number(process.env.CAMPAIGN_WEB_BANNER_WIDTH ?? 1920)));
+}
+
+function campaignWebBannerHeight(profile?: Awaited<ReturnType<typeof getDealerProfile>>): number {
+  const fromProfile = Number((profile as any)?.campaign?.webBannerHeight);
+  if (Number.isFinite(fromProfile) && fromProfile >= 120 && fromProfile <= 3000) {
+    return Math.round(fromProfile);
+  }
+  return Math.max(120, Math.min(3000, Number(process.env.CAMPAIGN_WEB_BANNER_HEIGHT ?? 600)));
+}
+
+function campaignSocialMaxBytes(): number {
+  return Math.max(
+    250_000,
+    Math.min(8_000_000, Number(process.env.CAMPAIGN_SOCIAL_IMAGE_MAX_BYTES ?? 1_800_000))
+  );
+}
+
+function campaignSocialInitialQuality(): number {
+  return Math.max(55, Math.min(95, Number(process.env.CAMPAIGN_SOCIAL_IMAGE_QUALITY ?? 84)));
+}
+
+function campaignSocialMinQuality(): number {
+  return Math.max(40, Math.min(90, Number(process.env.CAMPAIGN_SOCIAL_IMAGE_MIN_QUALITY ?? 58)));
+}
+
+async function normalizeCampaignImageForExactFrame(
   buffer: Buffer,
-  profile: CampaignImageOutputProfile
+  width: number,
+  height: number,
+  opts?: { maxBytes?: number; initialQuality?: number; minQuality?: number }
 ): Promise<{
   buffer: Buffer;
   mimeType: "image/jpeg";
@@ -19787,9 +19904,155 @@ async function normalizeCampaignImageForProfile(
   height: number;
   quality: number;
 }> {
-  return profile === "email"
-    ? normalizeCampaignImageForEmail(buffer)
-    : normalizeCampaignImageForMms(buffer);
+  const maxBytes = Math.max(200_000, Number(opts?.maxBytes ?? campaignSocialMaxBytes()));
+  let quality = Math.max(40, Math.min(95, Number(opts?.initialQuality ?? campaignSocialInitialQuality())));
+  const minQuality = Math.max(35, Math.min(90, Number(opts?.minQuality ?? campaignSocialMinQuality())));
+  const render = async (q: number) =>
+    sharp(buffer, { failOn: "none", animated: false })
+      .rotate()
+      .resize(width, height, { fit: "cover", position: "centre" })
+      .jpeg({ quality: q, mozjpeg: true, chromaSubsampling: "4:2:0" })
+      .toBuffer();
+  let out = await render(quality);
+  while (out.length > maxBytes && quality > minQuality) {
+    quality = Math.max(minQuality, quality - 5);
+    out = await render(quality);
+  }
+  return {
+    buffer: out,
+    mimeType: "image/jpeg",
+    ext: ".jpg",
+    width,
+    height,
+    quality
+  };
+}
+
+async function normalizeCampaignImageForProfile(
+  buffer: Buffer,
+  profile: CampaignImageOutputProfile,
+  dealerProfile?: Awaited<ReturnType<typeof getDealerProfile>>
+): Promise<{
+  buffer: Buffer;
+  mimeType: "image/jpeg";
+  ext: ".jpg";
+  width: number;
+  height: number;
+  quality: number;
+}> {
+  if (profile === "email") return normalizeCampaignImageForEmail(buffer);
+  if (profile === "facebook_post") {
+    return normalizeCampaignImageForExactFrame(buffer, campaignFacebookPostWidth(), campaignFacebookPostHeight());
+  }
+  if (profile === "instagram_post") {
+    return normalizeCampaignImageForExactFrame(buffer, campaignInstagramPostWidth(), campaignInstagramPostHeight());
+  }
+  if (profile === "instagram_story") {
+    return normalizeCampaignImageForExactFrame(
+      buffer,
+      campaignInstagramStoryWidth(),
+      campaignInstagramStoryHeight()
+    );
+  }
+  if (profile === "web_banner") {
+    return normalizeCampaignImageForExactFrame(
+      buffer,
+      campaignWebBannerWidth(dealerProfile),
+      campaignWebBannerHeight(dealerProfile)
+    );
+  }
+  return normalizeCampaignImageForMms(buffer);
+}
+
+async function saveCampaignGeneratedImage(
+  normalized: {
+    buffer: Buffer;
+    mimeType: string;
+    ext: string;
+    width: number;
+    height: number;
+  },
+  filePrefix: string
+): Promise<{ url: string; mimeType: string; width: number; height: number; bytes: number }> {
+  const fileName = `${filePrefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${normalized.ext}`;
+  const dir = path.resolve(getDataDir(), "uploads", "campaigns");
+  await fs.promises.mkdir(dir, { recursive: true });
+  const dest = path.join(dir, fileName);
+  await fs.promises.writeFile(dest, normalized.buffer);
+  const publicBase = process.env.PUBLIC_BASE_URL ?? "";
+  const url = publicBase
+    ? `${publicBase.replace(/\/$/, "")}/uploads/campaigns/${fileName}`
+    : `/uploads/campaigns/${fileName}`;
+  return {
+    url,
+    mimeType: normalized.mimeType,
+    width: normalized.width,
+    height: normalized.height,
+    bytes: Number(normalized.buffer.length ?? 0)
+  };
+}
+
+async function readCampaignImageBufferFromUrl(urlRaw: string): Promise<Buffer | null> {
+  const trimmed = String(urlRaw ?? "").trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("/uploads/")) {
+    const localPath = path.resolve(getDataDir(), trimmed.replace(/^\/+/, ""));
+    try {
+      return await fs.promises.readFile(localPath);
+    } catch {
+      return null;
+    }
+  }
+  const publicBase = String(process.env.PUBLIC_BASE_URL ?? "").trim().replace(/\/$/, "");
+  if (publicBase && trimmed.startsWith(`${publicBase}/uploads/`)) {
+    const relative = trimmed.slice(publicBase.length).replace(/^\/+/, "");
+    const localPath = path.resolve(getDataDir(), relative);
+    try {
+      return await fs.promises.readFile(localPath);
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const resp = await fetch(trimmed);
+    if (!resp.ok) return null;
+    const arr = await resp.arrayBuffer();
+    return arr.byteLength ? Buffer.from(arr) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function buildCampaignGeneratedAssetsFromSource(args: {
+  sourceImageUrl: string;
+  targets: CampaignAssetTarget[];
+  dealerProfile?: Awaited<ReturnType<typeof getDealerProfile>>;
+}): Promise<CampaignGeneratedAsset[]> {
+  const sourceBuffer = await readCampaignImageBufferFromUrl(args.sourceImageUrl);
+  if (!sourceBuffer || !sourceBuffer.length) return [];
+  const uniqueTargets = Array.from(new Set(args.targets ?? []));
+  const out: CampaignGeneratedAsset[] = [];
+  for (const target of uniqueTargets) {
+    try {
+      const profile = campaignImageOutputProfileForAssetTarget(target);
+      const normalized = await normalizeCampaignImageForProfile(sourceBuffer, profile, args.dealerProfile);
+      const saved = await saveCampaignGeneratedImage(normalized, `campaign_${target}`);
+      out.push({
+        id: `${target}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        target,
+        label: campaignAssetTargetLabel(target),
+        url: saved.url,
+        mimeType: saved.mimeType,
+        width: saved.width,
+        height: saved.height,
+        bytes: saved.bytes,
+        createdAt: new Date().toISOString()
+      });
+    } catch (err: any) {
+      console.warn(`[campaign] asset normalize failed (${target}):`, err?.message ?? err);
+    }
+  }
+  return out;
 }
 
 function extractInlineImageFromVertexResponse(payload: any): { b64: string; mimeType?: string } | null {
@@ -20100,11 +20363,22 @@ app.post("/campaigns/media", requireManager, upload.single("file"), async (req, 
     .toLowerCase();
   const channelRaw = String(req.query?.channel ?? "").trim();
   const channel = normalizeCampaignChannel(channelRaw);
+  const profileSet = new Set<CampaignImageOutputProfile>([
+    "sms",
+    "email",
+    "facebook_post",
+    "instagram_post",
+    "instagram_story",
+    "web_banner"
+  ]);
   const profile: CampaignImageOutputProfile =
-    profileRaw === "email" || profileRaw === "sms"
+    profileSet.has(profileRaw as CampaignImageOutputProfile)
       ? (profileRaw as CampaignImageOutputProfile)
       : campaignImageOutputProfileForChannel(channel);
-  const normalized = await normalizeCampaignImageForProfile(req.file.buffer, profile).catch(() => null);
+  const dealerProfile = profile === "web_banner" ? await getDealerProfileHot() : undefined;
+  const normalized = await normalizeCampaignImageForProfile(req.file.buffer, profile, dealerProfile).catch(
+    () => null
+  );
   const outputBuffer = normalized?.buffer ?? req.file.buffer;
   const outMime = normalized?.mimeType || mime || "application/octet-stream";
   const ext = normalized?.ext ?? ".jpg";
@@ -20196,12 +20470,14 @@ app.post("/campaigns", requireManager, (req, res) => {
   if (!name) return res.status(400).json({ ok: false, error: "Missing campaign name" });
   const statusRaw = String(req.body?.status ?? "draft").trim().toLowerCase();
   const status = statusRaw === "generated" ? "generated" : "draft";
+  const channel = normalizeCampaignChannel(req.body?.channel);
   const created = createCampaign({
     name,
     status,
     buildMode: normalizeCampaignBuildMode(req.body?.buildMode),
-    channel: normalizeCampaignChannel(req.body?.channel),
+    channel,
     tags: normalizeCampaignTags(req.body?.tags),
+    assetTargets: normalizeCampaignAssetTargets(req.body?.assetTargets, channel),
     prompt: req.body?.prompt,
     description: req.body?.description,
     inspirationImageUrls: normalizeCampaignUrlArray(req.body?.inspirationImageUrls),
@@ -20212,6 +20488,7 @@ app.post("/campaigns", requireManager, (req, res) => {
     emailBodyText: req.body?.emailBodyText,
     emailBodyHtml: req.body?.emailBodyHtml,
     finalImageUrl: req.body?.finalImageUrl,
+    generatedAssets: Array.isArray(req.body?.generatedAssets) ? req.body.generatedAssets : undefined,
     metadata:
       req.body?.metadata && typeof req.body.metadata === "object"
         ? req.body.metadata
@@ -20238,6 +20515,7 @@ app.patch("/campaigns/:id", requireManager, (req, res) => {
   if (req.body?.buildMode !== undefined) patch.buildMode = normalizeCampaignBuildMode(req.body.buildMode);
   if (req.body?.channel !== undefined) patch.channel = normalizeCampaignChannel(req.body.channel);
   if (req.body?.tags !== undefined) patch.tags = normalizeCampaignTags(req.body.tags);
+  if (req.body?.assetTargets !== undefined) patch.assetTargets = req.body.assetTargets;
   if (req.body?.prompt !== undefined) patch.prompt = req.body.prompt;
   if (req.body?.description !== undefined) patch.description = req.body.description;
   if (req.body?.inspirationImageUrls !== undefined) {
@@ -20254,6 +20532,9 @@ app.patch("/campaigns/:id", requireManager, (req, res) => {
   if (req.body?.emailBodyText !== undefined) patch.emailBodyText = req.body.emailBodyText;
   if (req.body?.emailBodyHtml !== undefined) patch.emailBodyHtml = req.body.emailBodyHtml;
   if (req.body?.finalImageUrl !== undefined) patch.finalImageUrl = req.body.finalImageUrl;
+  if (req.body?.generatedAssets !== undefined && Array.isArray(req.body.generatedAssets)) {
+    patch.generatedAssets = req.body.generatedAssets;
+  }
   if (req.body?.sourceHits !== undefined && Array.isArray(req.body.sourceHits)) patch.sourceHits = req.body.sourceHits;
   if (req.body?.metadata !== undefined && req.body?.metadata && typeof req.body.metadata === "object") {
     patch.metadata = req.body.metadata;
@@ -20283,6 +20564,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
 
   const buildMode = normalizeCampaignBuildMode(req.body?.buildMode);
   const channel = normalizeCampaignChannel(req.body?.channel);
+  const assetTargets = normalizeCampaignAssetTargets(req.body?.assetTargets, channel);
   const tags = normalizeCampaignTags(req.body?.tags);
   const prompt = String(req.body?.prompt ?? "").trim() || undefined;
   const description = String(req.body?.description ?? "").trim() || undefined;
@@ -20305,9 +20587,11 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     dealerProfile
   });
 
-  let effectiveGenerated = generated;
+  let effectiveGenerated: typeof generated & { generatedAssets?: CampaignGeneratedAsset[]; finalImageUrl?: string } =
+    generated;
   const shouldAttemptImageFallback = req.body?.generateImage !== false;
   let generatedFinalImageUrl: string | undefined;
+  let generatedAssets: CampaignGeneratedAsset[] = [];
   if (shouldAttemptImageFallback) {
     const referenceImageUrls = normalizeCampaignUrlArray([
       ...(generated.inspirationImageUrls ?? []),
@@ -20337,14 +20621,24 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
         sourceHits: generated.sourceHits
       }));
     if (generatedImageUrl) {
-      const imageOutputProfile = campaignImageOutputProfileForChannel(channel);
-      generatedFinalImageUrl = generatedImageUrl;
+      generatedAssets = await buildCampaignGeneratedAssetsFromSource({
+        sourceImageUrl: generatedImageUrl,
+        targets: assetTargets,
+        dealerProfile
+      });
+      const imageOutputProfiles = generatedAssets.length
+        ? generatedAssets.map(asset => asset.target)
+        : [campaignImageOutputProfileForChannel(channel)];
+      generatedFinalImageUrl = generatedAssets[0]?.url ?? generatedImageUrl;
       effectiveGenerated = {
         ...generated,
+        finalImageUrl: generatedFinalImageUrl,
+        generatedAssets,
         metadata: {
           ...(generated.metadata ?? {}),
           imageGenerator: generatedImageUrlNano ? "nano_banana_vertex" : "openai_fallback",
-          imageOutputProfile,
+          imageOutputProfile: imageOutputProfiles[0],
+          imageOutputProfiles,
           imageGeneratedAt: new Date().toISOString(),
           imageReferenceCount: generatedImageNano?.referenceCount ?? 0
         },
@@ -20363,11 +20657,13 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     status: generated.status,
     buildMode,
     channel,
+    assetTargets,
     tags,
     prompt,
     description,
     inspirationImageUrls,
     finalImageUrl: generatedFinalImageUrl || existingCampaign?.finalImageUrl,
+    generatedAssets: generatedAssets.length ? generatedAssets : undefined,
     assetImageUrls,
     briefDocumentUrls,
     smsBody: effectiveGenerated.smsBody,

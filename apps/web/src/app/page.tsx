@@ -1252,6 +1252,13 @@ type KpiOverview = {
 
 type CampaignBuildMode = "design_from_scratch" | "web_search_design";
 type CampaignChannel = "sms" | "email" | "both";
+type CampaignAssetTarget =
+  | "sms"
+  | "email"
+  | "facebook_post"
+  | "instagram_post"
+  | "instagram_story"
+  | "web_banner";
 type CampaignTag =
   | "sales"
   | "parts"
@@ -1268,6 +1275,18 @@ type CampaignSourceHit = {
   domain?: string;
 };
 
+type CampaignGeneratedAsset = {
+  id?: string;
+  target: CampaignAssetTarget;
+  label?: string;
+  url: string;
+  mimeType?: string;
+  width?: number;
+  height?: number;
+  bytes?: number;
+  createdAt?: string;
+};
+
 type CampaignEntry = {
   id: string;
   name: string;
@@ -1275,6 +1294,7 @@ type CampaignEntry = {
   buildMode: CampaignBuildMode;
   channel: CampaignChannel;
   tags: CampaignTag[];
+  assetTargets?: CampaignAssetTarget[];
   prompt?: string;
   description?: string;
   inspirationImageUrls?: string[];
@@ -1285,12 +1305,28 @@ type CampaignEntry = {
   emailBodyText?: string;
   emailBodyHtml?: string;
   finalImageUrl?: string;
+  generatedAssets?: CampaignGeneratedAsset[];
   sourceHits?: CampaignSourceHit[];
   metadata?: Record<string, unknown>;
   generatedBy?: "nano_banana" | "llm_fallback" | "template";
   createdAt?: string;
   updatedAt?: string;
 };
+
+const CAMPAIGN_ASSET_TARGET_OPTIONS: Array<{ value: CampaignAssetTarget; label: string }> = [
+  { value: "sms", label: "SMS" },
+  { value: "email", label: "Email" },
+  { value: "facebook_post", label: "Facebook post" },
+  { value: "instagram_post", label: "Instagram post" },
+  { value: "instagram_story", label: "Instagram story" },
+  { value: "web_banner", label: "Web banner" }
+];
+
+function defaultCampaignAssetTargetsForChannel(channel: CampaignChannel): CampaignAssetTarget[] {
+  if (channel === "sms") return ["sms"];
+  if (channel === "email") return ["email"];
+  return ["sms", "email"];
+}
 
 const CAMPAIGN_TAG_OPTIONS: Array<{ value: CampaignTag; label: string }> = [
   { value: "sales", label: "Sales" },
@@ -1350,6 +1386,7 @@ const EMPTY_CAMPAIGN_FORM = {
   buildMode: "design_from_scratch" as CampaignBuildMode,
   channel: "both" as CampaignChannel,
   tags: [] as CampaignTag[],
+  assetTargets: defaultCampaignAssetTargetsForChannel("both"),
   prompt: "",
   description: "",
   inspirationImageUrlsText: "",
@@ -1434,6 +1471,7 @@ export default function Home() {
   const [campaignGeneratedBy, setCampaignGeneratedBy] = useState<string>("");
   const [campaignGeneratedAt, setCampaignGeneratedAt] = useState<string>("");
   const [campaignFinalImageUrl, setCampaignFinalImageUrl] = useState<string>("");
+  const [campaignGeneratedAssets, setCampaignGeneratedAssets] = useState<CampaignGeneratedAsset[]>([]);
   const campaignInspirationPreviewUrls = useMemo(
     () =>
       parseCampaignUrlsText(campaignForm.inspirationImageUrlsText)
@@ -1451,6 +1489,10 @@ export default function Home() {
         .filter(looksLikeCampaignImageUrl)
         .slice(0, 8),
     [campaignForm.assetImageUrlsText]
+  );
+  const campaignRequiredAssetTargets = useMemo(
+    () => new Set(defaultCampaignAssetTargetsForChannel(campaignForm.channel)),
+    [campaignForm.channel]
   );
   const cadenceResolveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [watchEditOpen, setWatchEditOpen] = useState(false);
@@ -1673,6 +1715,8 @@ export default function Home() {
     weatherForecastHours: "48",
     buyingUsedBikesEnabled: true,
     webSearchReferenceUrls: [] as string[],
+    campaignWebBannerWidth: "1200",
+    campaignWebBannerHeight: "628",
     taxRate: "8"
   });
   const [selectedReferenceSite, setSelectedReferenceSite] = useState("");
@@ -1886,12 +1930,14 @@ export default function Home() {
 
   function applyCampaignToForm(entry: CampaignEntry | null) {
     const validTags = new Set<CampaignTag>(CAMPAIGN_TAG_OPTIONS.map(opt => opt.value));
+    const validTargets = new Set<CampaignAssetTarget>(CAMPAIGN_ASSET_TARGET_OPTIONS.map(opt => opt.value));
     if (!entry) {
       setCampaignForm({ ...EMPTY_CAMPAIGN_FORM });
       setCampaignSourceHits([]);
       setCampaignGeneratedBy("");
       setCampaignGeneratedAt("");
       setCampaignFinalImageUrl("");
+      setCampaignGeneratedAssets([]);
       return;
     }
     const buildMode: CampaignBuildMode =
@@ -1907,11 +1953,28 @@ export default function Home() {
           .filter(tag => validTags.has(tag as CampaignTag))
           .map(tag => tag as CampaignTag) as CampaignTag[])
       : [];
+    const assetTargets: CampaignAssetTarget[] = Array.isArray(entry.assetTargets)
+      ? (entry.assetTargets
+          .map(v => String(v ?? "").trim())
+          .filter(v => validTargets.has(v as CampaignAssetTarget))
+          .map(v => v as CampaignAssetTarget) as CampaignAssetTarget[])
+      : [];
+    const normalizedTargets = assetTargets.length ? assetTargets : defaultCampaignAssetTargetsForChannel(channel);
+    const generatedAssets: CampaignGeneratedAsset[] = Array.isArray(entry.generatedAssets)
+      ? entry.generatedAssets
+          .filter(asset => !!asset?.url && validTargets.has(String(asset?.target ?? "").trim() as CampaignAssetTarget))
+          .map(asset => ({
+            ...asset,
+            target: String(asset?.target ?? "").trim() as CampaignAssetTarget,
+            url: String(asset?.url ?? "").trim()
+          }))
+      : [];
     setCampaignForm({
       name: String(entry.name ?? "").trim(),
       buildMode,
       channel,
       tags,
+      assetTargets: normalizedTargets,
       prompt: String(entry.prompt ?? ""),
       description: String(entry.description ?? ""),
       inspirationImageUrlsText: campaignUrlsToText(entry.inspirationImageUrls),
@@ -1925,7 +1988,8 @@ export default function Home() {
     setCampaignSourceHits(Array.isArray(entry.sourceHits) ? entry.sourceHits : []);
     setCampaignGeneratedBy(String(entry.generatedBy ?? ""));
     setCampaignGeneratedAt(String(entry.updatedAt ?? entry.createdAt ?? ""));
-    setCampaignFinalImageUrl(String(entry.finalImageUrl ?? "").trim());
+    setCampaignGeneratedAssets(generatedAssets);
+    setCampaignFinalImageUrl(String(entry.finalImageUrl ?? "").trim() || generatedAssets[0]?.url || "");
   }
 
   function resetCampaignDraft() {
@@ -1937,7 +2001,16 @@ export default function Home() {
   async function uploadCampaignFiles(
     files: FileList | null,
     endpoint: string,
-    opts?: { channel?: CampaignChannel; profile?: "sms" | "email" }
+    opts?: {
+      channel?: CampaignChannel;
+      profile?:
+        | "sms"
+        | "email"
+        | "facebook_post"
+        | "instagram_post"
+        | "instagram_story"
+        | "web_banner";
+    }
   ): Promise<string[]> {
     if (!files || files.length === 0) return [];
     const urlsToAppend: string[] = [];
@@ -2078,6 +2151,7 @@ export default function Home() {
         buildMode: campaignForm.buildMode,
         channel: campaignForm.channel,
         tags: campaignForm.tags,
+        assetTargets: campaignForm.assetTargets,
         prompt: String(campaignForm.prompt ?? "").trim() || undefined,
         description: String(campaignForm.description ?? "").trim() || undefined,
         inspirationImageUrls: isScratchBuild ? parseCampaignUrlsText(campaignForm.inspirationImageUrlsText) : [],
@@ -2138,6 +2212,7 @@ export default function Home() {
         buildMode: campaignForm.buildMode,
         channel: campaignForm.channel,
         tags: campaignForm.tags,
+        assetTargets: campaignForm.assetTargets,
         prompt: String(campaignForm.prompt ?? "").trim() || undefined,
         description: String(campaignForm.description ?? "").trim() || undefined,
         inspirationImageUrls: isScratchBuild ? parseCampaignUrlsText(campaignForm.inspirationImageUrlsText) : [],
@@ -2168,6 +2243,9 @@ export default function Home() {
           });
         });
       } else if (generated) {
+        const generatedAssets: CampaignGeneratedAsset[] = Array.isArray(generated?.generatedAssets)
+          ? generated.generatedAssets
+          : [];
         setCampaignForm(prev => ({
           ...prev,
           smsBody: String(generated?.smsBody ?? ""),
@@ -2178,7 +2256,10 @@ export default function Home() {
         setCampaignSourceHits(Array.isArray(generated?.sourceHits) ? generated.sourceHits : []);
         setCampaignGeneratedBy(String(generated?.generatedBy ?? ""));
         setCampaignGeneratedAt(new Date().toISOString());
-        setCampaignFinalImageUrl(String(generated?.finalImageUrl ?? "").trim());
+        setCampaignGeneratedAssets(generatedAssets);
+        setCampaignFinalImageUrl(
+          String(generated?.finalImageUrl ?? "").trim() || String(generatedAssets[0]?.url ?? "").trim()
+        );
       }
       setSaveToast("Campaign generated");
     } catch (err: any) {
@@ -3854,6 +3935,9 @@ export default function Home() {
               .map((v: any) => String(v ?? "").trim())
               .filter(Boolean)
           : [];
+        const campaign = profile.campaign ?? {};
+        const campaignWebBannerWidth = Number(campaign.webBannerWidth);
+        const campaignWebBannerHeight = Number(campaign.webBannerHeight);
         const followUpMonths = Array.isArray(followUp.testRideMonths) ? followUp.testRideMonths : [4, 5, 6, 7, 8, 9, 10];
         setDealerProfile(profile);
         setDealerProfileForm({
@@ -3886,6 +3970,14 @@ export default function Home() {
           weatherForecastHours: String(forecastHours),
           buyingUsedBikesEnabled: buyingUsedEnabled,
           webSearchReferenceUrls,
+          campaignWebBannerWidth:
+            Number.isFinite(campaignWebBannerWidth) && campaignWebBannerWidth > 0
+              ? String(campaignWebBannerWidth)
+              : "1200",
+          campaignWebBannerHeight:
+            Number.isFinite(campaignWebBannerHeight) && campaignWebBannerHeight > 0
+              ? String(campaignWebBannerHeight)
+              : "628",
           taxRate: String(taxRate)
         });
         setDealerHours(profile.hours ?? {});
@@ -7440,6 +7532,10 @@ export default function Home() {
             .map(v => String(v ?? "").trim())
             .filter(Boolean)
         },
+        campaign: {
+          webBannerWidth: Math.max(1, Number(dealerProfileForm.campaignWebBannerWidth) || 1200),
+          webBannerHeight: Math.max(1, Number(dealerProfileForm.campaignWebBannerHeight) || 628)
+        },
         taxRate: Number(dealerProfileForm.taxRate) || 0
       };
       const resp = await fetch("/api/dealer-profile", {
@@ -10188,7 +10284,17 @@ export default function Home() {
                         channel:
                           e.target.value === "sms" || e.target.value === "email" || e.target.value === "both"
                             ? (e.target.value as CampaignChannel)
-                            : "both"
+                            : "both",
+                        assetTargets: Array.from(
+                          new Set<CampaignAssetTarget>([
+                            ...((Array.isArray(prev.assetTargets) ? prev.assetTargets : []) as CampaignAssetTarget[]),
+                            ...defaultCampaignAssetTargetsForChannel(
+                              e.target.value === "sms" || e.target.value === "email" || e.target.value === "both"
+                                ? (e.target.value as CampaignChannel)
+                                : "both"
+                            )
+                          ])
+                        )
                       }))
                     }
                   >
@@ -10224,6 +10330,50 @@ export default function Home() {
                   onChange={e => setCampaignForm(prev => ({ ...prev, prompt: e.target.value }))}
                 />
               </label>
+
+              <div className="border rounded-lg p-3 bg-gray-50 space-y-2">
+                <div className="text-xs font-semibold text-gray-700">Output files</div>
+                <div className="flex flex-wrap gap-2">
+                  {CAMPAIGN_ASSET_TARGET_OPTIONS.map(opt => {
+                    const isChecked = (campaignForm.assetTargets ?? []).includes(opt.value);
+                    const isRequired = campaignRequiredAssetTargets.has(opt.value);
+                    return (
+                      <label
+                        key={`campaign-asset-target-${opt.value}`}
+                        className={`inline-flex items-center gap-2 border rounded px-2.5 py-1.5 text-xs ${
+                          isChecked ? "bg-white border-gray-400" : "bg-gray-100 border-gray-300"
+                        } ${isRequired ? "opacity-90" : "cursor-pointer"}`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          disabled={isRequired}
+                          onChange={() =>
+                            setCampaignForm(prev => {
+                              const current = new Set<CampaignAssetTarget>(
+                                (Array.isArray(prev.assetTargets) ? prev.assetTargets : []) as CampaignAssetTarget[]
+                              );
+                              if (current.has(opt.value)) current.delete(opt.value);
+                              else current.add(opt.value);
+                              const required = defaultCampaignAssetTargetsForChannel(prev.channel);
+                              required.forEach(value => current.add(value));
+                              return {
+                                ...prev,
+                                assetTargets: Array.from(current)
+                              };
+                            })
+                          }
+                        />
+                        <span>{opt.label}</span>
+                        {isRequired ? <span className="text-[10px] text-gray-500">(required)</span> : null}
+                      </label>
+                    );
+                  })}
+                </div>
+                <div className="text-[11px] text-gray-500">
+                  SMS/Email outputs are send-eligible. Facebook/Instagram/Web banner outputs are download-only.
+                </div>
+              </div>
 
               <div className="border rounded-lg p-3 bg-gray-50 space-y-3">
                 <div className="flex flex-wrap items-center gap-2">
@@ -10385,6 +10535,46 @@ export default function Home() {
                   </div>
                 )}
               </div>
+
+              {campaignGeneratedAssets.length ? (
+                <div className="space-y-2">
+                  <div className="text-xs font-semibold text-gray-700">Generated files</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {campaignGeneratedAssets.map((asset, idx) => {
+                      const label =
+                        String(asset.label ?? "").trim() ||
+                        CAMPAIGN_ASSET_TARGET_OPTIONS.find(opt => opt.value === asset.target)?.label ||
+                        asset.target;
+                      const dim =
+                        asset.width && asset.height ? `${asset.width}x${asset.height}` : null;
+                      const meta = [dim, asset.mimeType].filter(Boolean).join(" • ");
+                      return (
+                        <div key={`campaign-generated-asset-${asset.target}-${idx}`} className="border rounded px-3 py-2 bg-gray-50">
+                          <div className="text-xs font-semibold">{label}</div>
+                          {meta ? <div className="text-[11px] text-gray-500 mt-0.5">{meta}</div> : null}
+                          <div className="flex items-center gap-2 mt-2">
+                            <a
+                              className="px-2 py-1 border rounded text-xs hover:bg-white"
+                              href={asset.url}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Open
+                            </a>
+                            <a
+                              className="px-2 py-1 border rounded text-xs hover:bg-white"
+                              href={asset.url}
+                              download
+                            >
+                              Download
+                            </a>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
 
               {campaignForm.channel !== "email" ? (
                 <label className="block text-xs text-gray-600">
@@ -11776,6 +11966,33 @@ export default function Home() {
                         </button>
                       </div>
                     ))}
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">Web banner width (px)</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        type="number"
+                        min={1}
+                        value={dealerProfileForm.campaignWebBannerWidth}
+                        onChange={e =>
+                          setDealerProfileForm({ ...dealerProfileForm, campaignWebBannerWidth: e.target.value })
+                        }
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">Web banner height (px)</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        type="number"
+                        min={1}
+                        value={dealerProfileForm.campaignWebBannerHeight}
+                        onChange={e =>
+                          setDealerProfileForm({ ...dealerProfileForm, campaignWebBannerHeight: e.target.value })
+                        }
+                      />
+                    </label>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
