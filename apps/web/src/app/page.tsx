@@ -10374,66 +10374,74 @@ export default function Home() {
                 )}
               </div>
 
-              <label className="block text-xs text-gray-600">
-                SMS draft
-                <textarea
-                  className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[90px]"
-                  value={campaignForm.smsBody}
-                  onChange={e => setCampaignForm(prev => ({ ...prev, smsBody: e.target.value }))}
-                />
-              </label>
-
-              <label className="block text-xs text-gray-600">
-                Email subject
-                <input
-                  className="mt-1 w-full border rounded px-3 py-2 text-sm"
-                  value={campaignForm.emailSubject}
-                  onChange={e => setCampaignForm(prev => ({ ...prev, emailSubject: e.target.value }))}
-                />
-              </label>
-
-              <label className="block text-xs text-gray-600">
-                Email draft
-                <textarea
-                  className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[160px]"
-                  value={campaignForm.emailBodyText}
-                  onChange={e => setCampaignForm(prev => ({ ...prev, emailBodyText: e.target.value }))}
-                />
-              </label>
-
-              <details className="border rounded p-3 bg-gray-50">
-                <summary className="text-xs font-semibold text-gray-700 cursor-pointer">Advanced HTML + References</summary>
-                <label className="block text-xs text-gray-600 mt-3">
-                  Email body (HTML)
+              {campaignForm.channel !== "email" ? (
+                <label className="block text-xs text-gray-600">
+                  SMS draft
                   <textarea
-                    className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[160px] font-mono"
-                    value={campaignForm.emailBodyHtml}
-                    onChange={e => setCampaignForm(prev => ({ ...prev, emailBodyHtml: e.target.value }))}
+                    className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[90px]"
+                    value={campaignForm.smsBody}
+                    onChange={e => setCampaignForm(prev => ({ ...prev, smsBody: e.target.value }))}
                   />
                 </label>
-                <div className="mt-3">
-                  <div className="text-xs font-semibold text-gray-700 mb-2">Reference hits</div>
-                  {campaignSourceHits.length ? (
-                    <div className="space-y-2 max-h-[220px] overflow-y-auto">
-                      {campaignSourceHits.map((hit, idx) => (
-                        <div key={`campaign-hit-${idx}`} className="text-xs">
-                          <a
-                            href={hit.url || "#"}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-blue-700 hover:underline font-medium"
-                          >
-                            {hit.title || hit.domain || hit.url || `Reference ${idx + 1}`}
-                          </a>
-                          {hit.snippet ? <div className="text-gray-600 mt-0.5">{hit.snippet}</div> : null}
+              ) : null}
+
+              {campaignForm.channel !== "sms" ? (
+                <>
+                  <label className="block text-xs text-gray-600">
+                    Email subject
+                    <input
+                      className="mt-1 w-full border rounded px-3 py-2 text-sm"
+                      value={campaignForm.emailSubject}
+                      onChange={e => setCampaignForm(prev => ({ ...prev, emailSubject: e.target.value }))}
+                    />
+                  </label>
+
+                  <label className="block text-xs text-gray-600">
+                    Email draft
+                    <textarea
+                      className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[160px]"
+                      value={campaignForm.emailBodyText}
+                      onChange={e => setCampaignForm(prev => ({ ...prev, emailBodyText: e.target.value }))}
+                    />
+                  </label>
+
+                  <details className="border rounded p-3 bg-gray-50">
+                    <summary className="text-xs font-semibold text-gray-700 cursor-pointer">
+                      Advanced HTML + References
+                    </summary>
+                    <label className="block text-xs text-gray-600 mt-3">
+                      Email body (HTML)
+                      <textarea
+                        className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[160px] font-mono"
+                        value={campaignForm.emailBodyHtml}
+                        onChange={e => setCampaignForm(prev => ({ ...prev, emailBodyHtml: e.target.value }))}
+                      />
+                    </label>
+                    <div className="mt-3">
+                      <div className="text-xs font-semibold text-gray-700 mb-2">Reference hits</div>
+                      {campaignSourceHits.length ? (
+                        <div className="space-y-2 max-h-[220px] overflow-y-auto">
+                          {campaignSourceHits.map((hit, idx) => (
+                            <div key={`campaign-hit-${idx}`} className="text-xs">
+                              <a
+                                href={hit.url || "#"}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-700 hover:underline font-medium"
+                              >
+                                {hit.title || hit.domain || hit.url || `Reference ${idx + 1}`}
+                              </a>
+                              {hit.snippet ? <div className="text-gray-600 mt-0.5">{hit.snippet}</div> : null}
+                            </div>
+                          ))}
                         </div>
-                      ))}
+                      ) : (
+                        <div className="text-xs text-gray-500">No references yet.</div>
+                      )}
                     </div>
-                  ) : (
-                    <div className="text-xs text-gray-500">No references yet.</div>
-                  )}
-                </div>
-              </details>
+                  </details>
+                </>
+              ) : null}
             </div>
           </div>
         ) : section === "kpi" ? (
