@@ -19565,6 +19565,114 @@ function campaignCreatorDisplayName(user: any): string | undefined {
   return email || undefined;
 }
 
+function buildCampaignImagePrompt(args: {
+  name: string;
+  prompt?: string;
+  description?: string;
+  tags: CampaignTag[];
+  dealerProfile?: Awaited<ReturnType<typeof getDealerProfile>>;
+  sourceHits?: Array<{ title?: string; snippet?: string; url?: string }>;
+}): string {
+  const dealerName = String(args.dealerProfile?.dealerName ?? "").trim() || "the dealership";
+  const website = String(args.dealerProfile?.website ?? "").trim();
+  const tagLine = args.tags.length ? args.tags.join(", ") : "sales";
+  const primary =
+    String(args.prompt ?? "").trim() ||
+    String(args.description ?? "").trim() ||
+    String(args.name ?? "").trim() ||
+    "motorcycle promotion";
+  const references = (args.sourceHits ?? [])
+    .slice(0, 4)
+    .map(
+      (hit, idx) =>
+        `${idx + 1}) ${String(hit?.title ?? "").trim()} | ${String(hit?.snippet ?? "").trim()} | ${String(hit?.url ?? "").trim()}`
+    )
+    .join("\n");
+  const referenceBlock = references || "(none)";
+  return [
+    "Create a single high-quality dealership campaign hero image.",
+    "Style: premium, modern motorcycle dealership marketing visual.",
+    "No watermarks. No excessive text. No tiny unreadable text blocks.",
+    "Keep composition clean and mobile-friendly.",
+    "",
+    `Dealer: ${dealerName}`,
+    `Website: ${website || "(not provided)"}`,
+    `Tags: ${tagLine}`,
+    `Campaign: ${String(args.name ?? "").trim() || "(untitled)"}`,
+    `Direction: ${primary}`,
+    "",
+    "Reference context (for factual alignment):",
+    referenceBlock
+  ].join("\n");
+}
+
+async function generateCampaignImageWithOpenAI(args: {
+  name: string;
+  prompt?: string;
+  description?: string;
+  tags: CampaignTag[];
+  dealerProfile?: Awaited<ReturnType<typeof getDealerProfile>>;
+  sourceHits?: Array<{ title?: string; snippet?: string; url?: string }>;
+}): Promise<string | null> {
+  if (String(process.env.CAMPAIGN_OPENAI_IMAGE_FALLBACK_ENABLED ?? "1") === "0") return null;
+  const apiKey = String(process.env.OPENAI_API_KEY ?? "").trim();
+  if (!apiKey) return null;
+  const model = String(process.env.CAMPAIGN_OPENAI_IMAGE_MODEL ?? "gpt-image-1").trim();
+  const rawSize = String(process.env.CAMPAIGN_OPENAI_IMAGE_SIZE ?? "1024x1024").trim();
+  const allowedSizes = new Set([
+    "auto",
+    "256x256",
+    "512x512",
+    "1024x1024",
+    "1536x1024",
+    "1024x1536",
+    "1792x1024",
+    "1024x1792"
+  ]);
+  const size = allowedSizes.has(rawSize) ? (rawSize as any) : ("1024x1024" as any);
+  const imagePrompt = buildCampaignImagePrompt(args);
+  try {
+    const client = new OpenAI({ apiKey });
+    const imgResp: any = await client.images.generate({
+      model,
+      prompt: imagePrompt,
+      size
+    });
+    const first = Array.isArray(imgResp?.data) ? imgResp.data[0] : null;
+    let buffer: Buffer | null = null;
+    let ext = ".png";
+    if (first?.b64_json) {
+      buffer = Buffer.from(String(first.b64_json), "base64");
+    } else if (first?.url) {
+      const url = String(first.url).trim();
+      if (url) {
+        const resp = await fetch(url);
+        if (resp.ok) {
+          const arr = await resp.arrayBuffer();
+          buffer = Buffer.from(arr);
+          const ctype = String(resp.headers.get("content-type") ?? "").toLowerCase();
+          if (ctype.includes("jpeg")) ext = ".jpg";
+          else if (ctype.includes("webp")) ext = ".webp";
+          else if (ctype.includes("gif")) ext = ".gif";
+        }
+      }
+    }
+    if (!buffer || !buffer.length) return null;
+    const fileName = `campaign_ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
+    const dir = path.resolve(getDataDir(), "uploads", "campaigns");
+    await fs.promises.mkdir(dir, { recursive: true });
+    const dest = path.join(dir, fileName);
+    await fs.promises.writeFile(dest, buffer);
+    const publicBase = process.env.PUBLIC_BASE_URL ?? "";
+    return publicBase
+      ? `${publicBase.replace(/\/$/, "")}/uploads/campaigns/${fileName}`
+      : `/uploads/campaigns/${fileName}`;
+  } catch (err: any) {
+    console.warn("[campaign] openai image fallback failed:", err?.message ?? err);
+    return null;
+  }
+}
+
 app.get("/campaigns", requireManager, (_req, res) => {
   return res.json({ ok: true, campaigns: listCampaigns() });
 });
@@ -19722,8 +19830,36 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     dealerProfile
   });
 
+  let effectiveGenerated = generated;
+  const userProvidedInspiration = Array.isArray(inspirationImageUrls) && inspirationImageUrls.length > 0;
+  const shouldAttemptImageFallback = req.body?.generateImage !== false && !userProvidedInspiration;
+  if (shouldAttemptImageFallback) {
+    const generatedImageUrl = await generateCampaignImageWithOpenAI({
+      name,
+      prompt,
+      description,
+      tags,
+      dealerProfile,
+      sourceHits: generated.sourceHits
+    });
+    if (generatedImageUrl) {
+      const mergedInspiration = Array.from(
+        new Set([generatedImageUrl, ...(generated.inspirationImageUrls ?? [])])
+      );
+      effectiveGenerated = {
+        ...generated,
+        inspirationImageUrls: mergedInspiration,
+        metadata: {
+          ...(generated.metadata ?? {}),
+          imageGenerator: "openai_fallback",
+          imageGeneratedAt: new Date().toISOString()
+        }
+      };
+    }
+  }
+
   if (!save) {
-    return res.json({ ok: true, generated });
+    return res.json({ ok: true, generated: effectiveGenerated });
   }
 
   const payload = {
@@ -19734,22 +19870,25 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     tags,
     prompt,
     description,
-    inspirationImageUrls,
+    inspirationImageUrls:
+      Array.isArray(effectiveGenerated.inspirationImageUrls) && effectiveGenerated.inspirationImageUrls.length
+        ? effectiveGenerated.inspirationImageUrls
+        : inspirationImageUrls,
     assetImageUrls,
-    smsBody: generated.smsBody,
-    emailSubject: generated.emailSubject,
-    emailBodyText: generated.emailBodyText,
-    emailBodyHtml: generated.emailBodyHtml,
-    sourceHits: generated.sourceHits,
-    metadata: generated.metadata,
-    generatedBy: generated.generatedBy,
+    smsBody: effectiveGenerated.smsBody,
+    emailSubject: effectiveGenerated.emailSubject,
+    emailBodyText: effectiveGenerated.emailBodyText,
+    emailBodyHtml: effectiveGenerated.emailBodyHtml,
+    sourceHits: effectiveGenerated.sourceHits,
+    metadata: effectiveGenerated.metadata,
+    generatedBy: effectiveGenerated.generatedBy,
     createdByUserId: user?.id,
     createdByUserName: campaignCreatorDisplayName(user)
   } as const;
 
   const campaign = campaignId ? updateCampaign(campaignId, payload as any) : createCampaign(payload);
   if (!campaign) return res.status(404).json({ ok: false, error: "Campaign not found" });
-  return res.json({ ok: true, campaign, generated });
+  return res.json({ ok: true, campaign, generated: effectiveGenerated });
 });
 
 app.get("/contacts", (_req, res) => {
