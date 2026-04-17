@@ -19549,11 +19549,23 @@ function normalizeCampaignTags(raw: unknown): CampaignTag[] {
 
 function normalizeCampaignUrlArray(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
+  const extracted: string[] = [];
+  for (const value of raw) {
+    const text = String(value ?? "").trim();
+    if (!text) continue;
+    const matches = text.match(/https?:\/\/[^\s<>"'`]+/gi);
+    if (matches && matches.length) {
+      for (const match of matches) {
+        const cleaned = String(match ?? "").trim().replace(/[),.;!?]+$/g, "");
+        if (cleaned) extracted.push(cleaned);
+      }
+      continue;
+    }
+    extracted.push(text);
+  }
   return Array.from(
     new Set(
-      raw
-        .map(v => String(v ?? "").trim())
-        .filter(Boolean)
+      extracted.map(v => String(v ?? "").trim()).filter(Boolean)
     )
   );
 }

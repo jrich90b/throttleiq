@@ -1304,11 +1304,39 @@ function campaignUrlsToText(values?: string[] | null): string {
   return Array.isArray(values) ? values.filter(Boolean).join("\n") : "";
 }
 
+function extractUrlsFromCampaignText(raw: string): string[] {
+  const normalized = String(raw ?? "").trim();
+  if (!normalized) return [];
+  const matches = normalized.match(/https?:\/\/[^\s<>"'`]+/gi) ?? [];
+  if (matches.length) {
+    return matches
+      .map(v => v.trim().replace(/[),.;!?]+$/g, ""))
+      .filter(Boolean);
+  }
+  return normalized
+    .split(/\n+/)
+    .map(v => v.trim())
+    .filter(Boolean);
+}
+
+function looksLikeCampaignImageUrl(raw: string): boolean {
+  const url = String(raw ?? "").trim();
+  if (!url) return false;
+  const lower = url.toLowerCase();
+  if (lower.includes("/uploads/campaigns/")) return true;
+  try {
+    const parsed = new URL(url);
+    const pathname = String(parsed.pathname ?? "").toLowerCase();
+    return /\.(png|jpe?g|webp|gif|avif|bmp|svg)$/i.test(pathname);
+  } catch {
+    return false;
+  }
+}
+
 function parseCampaignUrlsText(raw: string): string[] {
   return Array.from(
     new Set(
-      String(raw ?? "")
-        .split(/\n+/)
+      extractUrlsFromCampaignText(raw)
         .map(v => v.trim())
         .filter(Boolean)
     )
@@ -1400,6 +1428,13 @@ export default function Home() {
   const [campaignSourceHits, setCampaignSourceHits] = useState<CampaignSourceHit[]>([]);
   const [campaignGeneratedBy, setCampaignGeneratedBy] = useState<string>("");
   const [campaignGeneratedAt, setCampaignGeneratedAt] = useState<string>("");
+  const campaignInspirationPreviewUrls = useMemo(
+    () =>
+      parseCampaignUrlsText(campaignForm.inspirationImageUrlsText)
+        .filter(looksLikeCampaignImageUrl)
+        .slice(0, 8),
+    [campaignForm.inspirationImageUrlsText]
+  );
   const cadenceResolveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [watchEditOpen, setWatchEditOpen] = useState(false);
   const [watchEditConvId, setWatchEditConvId] = useState<string | null>(null);
@@ -10198,6 +10233,40 @@ export default function Home() {
                       Uploads are appended to the URL list above.
                     </div>
                   </div>
+                  {campaignInspirationPreviewUrls.length ? (
+                    <div className="mt-3 grid grid-cols-2 md:grid-cols-3 gap-2">
+                      {campaignInspirationPreviewUrls.map((url, idx) => (
+                        <a
+                          key={`campaign-inspiration-preview-${idx}`}
+                          href={url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block border rounded overflow-hidden bg-gray-50"
+                          title={url}
+                        >
+                          <img
+                            src={url}
+                            alt={`Inspiration ${idx + 1}`}
+                            className="w-full h-24 object-cover"
+                            loading="lazy"
+                            onError={e => {
+                              const target = e.currentTarget;
+                              const wrapper = target.parentElement;
+                              if (!wrapper) return;
+                              target.style.display = "none";
+                              if (!wrapper.querySelector(".campaign-preview-fallback")) {
+                                const fallback = document.createElement("div");
+                                fallback.className =
+                                  "campaign-preview-fallback text-[11px] text-gray-500 p-2 break-all";
+                                fallback.textContent = url;
+                                wrapper.appendChild(fallback);
+                              }
+                            }}
+                          />
+                        </a>
+                      ))}
+                    </div>
+                  ) : null}
                 </label>
 
                 <label className="block text-xs text-gray-600">
