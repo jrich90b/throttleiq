@@ -10628,7 +10628,7 @@ export default function Home() {
             <div>
               <h2 className="text-xl font-semibold">Campaign Studio</h2>
               <p className="text-xs text-gray-500 mt-1">
-                Simple flow: write prompt, generate, review image first, then edit SMS/email drafts below.
+                1) Set up campaign, 2) generate assets, 3) review drafts, 4) optionally publish to Meta.
               </p>
             </div>
 
@@ -10642,147 +10642,8 @@ export default function Home() {
                 {metaError}
               </div>
             ) : null}
-            {campaignWantsSocial ? (
-              <div className="border rounded-xl bg-white p-4 md:p-5 space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <div className="text-sm font-semibold">Meta publishing</div>
-                    <div className="text-[11px] text-gray-500 mt-1">
-                      Connect Facebook/Instagram once, then publish selected campaign assets.
-                    </div>
-                  </div>
-                  <div className="text-xs">
-                    {metaLoading ? (
-                      <span className="px-2 py-1 rounded border bg-gray-50 text-gray-600">Checking...</span>
-                    ) : metaStatus?.connected ? (
-                      <span className="px-2 py-1 rounded border border-green-200 bg-green-50 text-green-700">
-                        Connected
-                      </span>
-                    ) : (
-                      <span className="px-2 py-1 rounded border border-gray-300 bg-gray-50 text-gray-600">
-                        Not connected
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {metaStatus?.connected ? (
-                  <div className="text-xs text-gray-600">
-                    <div>
-                      Page: <span className="font-medium text-gray-800">{metaStatus.pageName || metaStatus.pageId}</span>
-                    </div>
-                    <div className="mt-1">
-                      Instagram:{" "}
-                      <span className="font-medium text-gray-800">
-                        {metaStatus.instagramBusinessAccountUsername
-                          ? `@${metaStatus.instagramBusinessAccountUsername}`
-                          : metaStatus.hasInstagram
-                            ? "Connected"
-                            : "Not linked to page"}
-                      </span>
-                    </div>
-                  </div>
-                ) : null}
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
-                    onClick={() => {
-                      void startMetaConnect();
-                    }}
-                    disabled={metaActionBusy}
-                  >
-                    {metaActionBusy ? "Opening..." : "Connect Meta"}
-                  </button>
-                  <button
-                    className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
-                    onClick={() => {
-                      void loadMetaStatus();
-                    }}
-                    disabled={metaLoading || metaActionBusy}
-                  >
-                    Refresh Meta
-                  </button>
-                  <button
-                    className="px-3 py-2 border rounded text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
-                    onClick={() => {
-                      void disconnectMeta();
-                    }}
-                    disabled={metaActionBusy || !metaStatus?.connected}
-                  >
-                    Disconnect
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <label className="text-xs text-gray-600">
-                    Caption
-                    <textarea
-                      className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[88px]"
-                      placeholder="Caption used for Facebook/Instagram publish."
-                      value={campaignPublishCaption}
-                      onChange={e => setCampaignPublishCaption(e.target.value)}
-                    />
-                  </label>
-                  <label className="text-xs text-gray-600">
-                    Publish asset
-                    <select
-                      className="mt-1 w-full border rounded px-3 py-2 text-sm bg-white"
-                      value={campaignPublishAssetTarget}
-                      onChange={e =>
-                        setCampaignPublishAssetTarget(
-                          e.target.value === "auto" ? "auto" : (e.target.value as CampaignAssetTarget)
-                        )
-                      }
-                    >
-                      <option value="auto">Auto-pick best asset</option>
-                      {campaignPublishTargetOptions.map(opt => (
-                        <option key={`publish-asset-${opt.value}`} value={opt.value}>
-                          {opt.label}
-                        </option>
-                      ))}
-                    </select>
-                    <div className="text-[11px] text-gray-500 mt-1">
-                      {campaignHasPublishAsset
-                        ? "Generated assets found for this campaign."
-                        : "Generate campaign assets before publishing."}
-                    </div>
-                  </label>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-white border-[var(--accent)] hover:brightness-95 disabled:opacity-60"
-                    disabled={!canPublishCampaign || campaignPublishingPlatform !== ""}
-                    onClick={() => {
-                      void publishCampaign("facebook");
-                    }}
-                  >
-                    {campaignPublishingPlatform === "facebook" ? "Publishing..." : "Publish Facebook"}
-                  </button>
-                  <button
-                    className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-white border-[var(--accent)] hover:brightness-95 disabled:opacity-60"
-                    disabled={!canPublishCampaign || campaignPublishingPlatform !== ""}
-                    onClick={() => {
-                      void publishCampaign("instagram");
-                    }}
-                  >
-                    {campaignPublishingPlatform === "instagram" ? "Publishing..." : "Publish Instagram"}
-                  </button>
-                  <button
-                    className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
-                    disabled={!canPublishCampaign || campaignPublishingPlatform !== ""}
-                    onClick={() => {
-                      void publishCampaign("instagram_story");
-                    }}
-                  >
-                    {campaignPublishingPlatform === "instagram_story" ? "Publishing..." : "Publish Instagram Story"}
-                  </button>
-                </div>
-              </div>
-            ) : null}
-
             <div className="border rounded-xl bg-white p-4 md:p-5 space-y-4">
+              <div className="text-xs font-semibold text-gray-700">1) Campaign setup</div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <label className="text-xs text-gray-600">
                   Campaign name
@@ -10822,7 +10683,7 @@ export default function Home() {
               </label>
 
               <div className="border rounded-lg p-3 bg-gray-50 space-y-2">
-                <div className="text-xs font-semibold text-gray-700">Output files</div>
+                <div className="text-xs font-semibold text-gray-700">2) Output formats</div>
                 <div className="flex flex-wrap gap-2">
                   {CAMPAIGN_ASSET_TARGET_OPTIONS.map(opt => {
                     const isChecked = (campaignForm.assetTargets ?? []).includes(opt.value);
@@ -10874,7 +10735,7 @@ export default function Home() {
 
               <div className="border rounded-lg p-3 bg-gray-50 space-y-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <div className="text-xs font-semibold text-gray-700">Brief files (PDF/text/doc)</div>
+                  <div className="text-xs font-semibold text-gray-700">Optional reference material</div>
                   <label
                     className={`inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
                       campaignBriefUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-white"
@@ -10971,7 +10832,7 @@ export default function Home() {
               </div>
 
               <div className="border rounded-lg p-3 bg-gray-50 space-y-3">
-                <div className="text-xs font-semibold text-gray-700">Generation progress</div>
+                <div className="text-xs font-semibold text-gray-700">3) Generate assets</div>
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
                   {campaignSelectedTargetsOrdered.map(target => {
                     const label = CAMPAIGN_ASSET_TARGET_OPTIONS.find(opt => opt.value === target)?.label ?? target;
@@ -11011,7 +10872,7 @@ export default function Home() {
 
                 <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto_auto] gap-2 items-end">
                   <label className="text-xs text-gray-600">
-                    Generate target
+                    Selected output
                     <select
                       className="mt-1 w-full border rounded px-3 py-2 text-sm bg-white"
                       value={campaignSelectedTargetsOrdered.length ? campaignTargetToGenerate : ""}
@@ -11071,7 +10932,7 @@ export default function Home() {
                   {campaignGenerating ? "Running..." : "Generate Next Missing"}
                 </button>
                 <div className="text-[11px] text-gray-500">
-                  Generates one output at a time into this campaign. Retry failed targets without replacing others.
+                  One output is generated at a time. You can retry failed ones without replacing the rest.
                 </div>
               </div>
             </div>
@@ -11168,6 +11029,149 @@ export default function Home() {
                     })}
                   </div>
                 </div>
+              ) : null}
+
+              {campaignWantsSocial ? (
+                <details className="border rounded-lg p-3 bg-gray-50" open={false}>
+                  <summary className="text-xs font-semibold text-gray-700 cursor-pointer">
+                    4) Publish to Facebook / Instagram (optional)
+                  </summary>
+                  <div className="mt-3 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-[11px] text-gray-500">
+                        Connect once, then publish generated assets.
+                      </div>
+                      <div className="text-xs">
+                        {metaLoading ? (
+                          <span className="px-2 py-1 rounded border bg-gray-50 text-gray-600">Checking...</span>
+                        ) : metaStatus?.connected ? (
+                          <span className="px-2 py-1 rounded border border-green-200 bg-green-50 text-green-700">
+                            Connected
+                          </span>
+                        ) : (
+                          <span className="px-2 py-1 rounded border border-gray-300 bg-gray-50 text-gray-600">
+                            Not connected
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {metaStatus?.connected ? (
+                      <div className="text-xs text-gray-600">
+                        <div>
+                          Page:{" "}
+                          <span className="font-medium text-gray-800">{metaStatus.pageName || metaStatus.pageId}</span>
+                        </div>
+                        <div className="mt-1">
+                          Instagram:{" "}
+                          <span className="font-medium text-gray-800">
+                            {metaStatus.instagramBusinessAccountUsername
+                              ? `@${metaStatus.instagramBusinessAccountUsername}`
+                              : metaStatus.hasInstagram
+                                ? "Connected"
+                                : "Not linked to page"}
+                          </span>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
+                        onClick={() => {
+                          void startMetaConnect();
+                        }}
+                        disabled={metaActionBusy}
+                      >
+                        {metaActionBusy ? "Opening..." : "Connect Meta"}
+                      </button>
+                      <button
+                        className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
+                        onClick={() => {
+                          void loadMetaStatus();
+                        }}
+                        disabled={metaLoading || metaActionBusy}
+                      >
+                        Refresh Meta
+                      </button>
+                      <button
+                        className="px-3 py-2 border rounded text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
+                        onClick={() => {
+                          void disconnectMeta();
+                        }}
+                        disabled={metaActionBusy || !metaStatus?.connected}
+                      >
+                        Disconnect
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <label className="text-xs text-gray-600">
+                        Caption
+                        <textarea
+                          className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[88px]"
+                          placeholder="Caption used for Facebook/Instagram publish."
+                          value={campaignPublishCaption}
+                          onChange={e => setCampaignPublishCaption(e.target.value)}
+                        />
+                      </label>
+                      <label className="text-xs text-gray-600">
+                        Publish asset
+                        <select
+                          className="mt-1 w-full border rounded px-3 py-2 text-sm bg-white"
+                          value={campaignPublishAssetTarget}
+                          onChange={e =>
+                            setCampaignPublishAssetTarget(
+                              e.target.value === "auto" ? "auto" : (e.target.value as CampaignAssetTarget)
+                            )
+                          }
+                        >
+                          <option value="auto">Auto-pick best asset</option>
+                          {campaignPublishTargetOptions.map(opt => (
+                            <option key={`publish-asset-${opt.value}`} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="text-[11px] text-gray-500 mt-1">
+                          {campaignHasPublishAsset
+                            ? "Generated assets found for this campaign."
+                            : "Generate campaign assets before publishing."}
+                        </div>
+                      </label>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-white border-[var(--accent)] hover:brightness-95 disabled:opacity-60"
+                        disabled={!canPublishCampaign || campaignPublishingPlatform !== ""}
+                        onClick={() => {
+                          void publishCampaign("facebook");
+                        }}
+                      >
+                        {campaignPublishingPlatform === "facebook" ? "Publishing..." : "Publish Facebook"}
+                      </button>
+                      <button
+                        className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-white border-[var(--accent)] hover:brightness-95 disabled:opacity-60"
+                        disabled={!canPublishCampaign || campaignPublishingPlatform !== ""}
+                        onClick={() => {
+                          void publishCampaign("instagram");
+                        }}
+                      >
+                        {campaignPublishingPlatform === "instagram" ? "Publishing..." : "Publish Instagram"}
+                      </button>
+                      <button
+                        className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
+                        disabled={!canPublishCampaign || campaignPublishingPlatform !== ""}
+                        onClick={() => {
+                          void publishCampaign("instagram_story");
+                        }}
+                      >
+                        {campaignPublishingPlatform === "instagram_story" ? "Publishing..." : "Publish Instagram Story"}
+                      </button>
+                    </div>
+                  </div>
+                </details>
               ) : null}
 
               {campaignWantsSms ? (
