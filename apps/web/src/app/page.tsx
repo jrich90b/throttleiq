@@ -1445,6 +1445,13 @@ export default function Home() {
     () => parseCampaignUrlsText(campaignForm.briefDocumentUrlsText).slice(0, 8),
     [campaignForm.briefDocumentUrlsText]
   );
+  const campaignAssetPreviewUrls = useMemo(
+    () =>
+      parseCampaignUrlsText(campaignForm.assetImageUrlsText)
+        .filter(looksLikeCampaignImageUrl)
+        .slice(0, 8),
+    [campaignForm.assetImageUrlsText]
+  );
   const cadenceResolveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [watchEditOpen, setWatchEditOpen] = useState(false);
   const [watchEditConvId, setWatchEditConvId] = useState<string | null>(null);
@@ -10204,21 +10211,55 @@ export default function Home() {
                 />
               </label>
 
-              {campaignForm.buildMode === "design_from_scratch" ? (
-                <details className="border rounded-lg p-3 bg-gray-50">
-                  <summary className="text-xs font-semibold text-gray-700 cursor-pointer">
-                    Optional creative inputs (refs, assets, briefs)
-                  </summary>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
-                    <label className="block text-xs text-gray-600">
-                      Reference images (URLs)
-                      <textarea
-                        className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[92px] font-mono"
-                        value={campaignForm.inspirationImageUrlsText}
-                        onChange={e => setCampaignForm(prev => ({ ...prev, inspirationImageUrlsText: e.target.value }))}
-                      />
+              <div className="border rounded-lg p-3 bg-gray-50 space-y-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="text-xs font-semibold text-gray-700">Brief files (PDF/text/doc)</div>
+                  <label
+                    className={`inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
+                      campaignBriefUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-white"
+                    }`}
+                  >
+                    <span>{campaignBriefUploadBusy ? "Uploading..." : "Upload brief"}</span>
+                    <input
+                      className="hidden"
+                      type="file"
+                      accept=".pdf,.txt,.md,.csv,.json,.html,.doc,.docx,application/pdf,text/plain,text/markdown,text/csv,application/json,text/html,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                      multiple
+                      disabled={campaignBriefUploadBusy}
+                      onChange={async e => {
+                        const inputEl = e.currentTarget;
+                        await handleCampaignBriefUploads(inputEl.files);
+                        inputEl.value = "";
+                      }}
+                    />
+                  </label>
+                </div>
+
+                {campaignBriefPreviewUrls.length ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {campaignBriefPreviewUrls.map((url, idx) => {
+                      const label = String(url).split("/").pop() || `brief-${idx + 1}`;
+                      return (
+                        <a
+                          key={`campaign-brief-${idx}`}
+                          href={url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[11px] px-2 py-1 border rounded bg-white hover:bg-gray-100 text-gray-700 truncate max-w-[260px]"
+                          title={url}
+                        >
+                          {label}
+                        </a>
+                      );
+                    })}
+                  </div>
+                ) : null}
+
+                {campaignForm.buildMode === "design_from_scratch" ? (
+                  <>
+                    <div className="flex flex-wrap items-center gap-2">
                       <label
-                        className={`mt-2 inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
+                        className={`inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
                           campaignInspirationUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-white"
                         }`}
                       >
@@ -10236,17 +10277,8 @@ export default function Home() {
                           }}
                         />
                       </label>
-                    </label>
-
-                    <label className="block text-xs text-gray-600">
-                      Design images (URLs)
-                      <textarea
-                        className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[92px] font-mono"
-                        value={campaignForm.assetImageUrlsText}
-                        onChange={e => setCampaignForm(prev => ({ ...prev, assetImageUrlsText: e.target.value }))}
-                      />
                       <label
-                        className={`mt-2 inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
+                        className={`inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
                           campaignAssetUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-white"
                         }`}
                       >
@@ -10264,131 +10296,71 @@ export default function Home() {
                           }}
                         />
                       </label>
-                    </label>
+                    </div>
 
-                    <label className="block text-xs text-gray-600">
-                      Brief files (PDF/text/doc)
-                      <textarea
-                        className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[92px] font-mono"
-                        value={campaignForm.briefDocumentUrlsText}
-                        onChange={e => setCampaignForm(prev => ({ ...prev, briefDocumentUrlsText: e.target.value }))}
-                      />
-                      <label
-                        className={`mt-2 inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
-                          campaignBriefUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-white"
-                        }`}
-                      >
-                        <span>{campaignBriefUploadBusy ? "Uploading..." : "Upload brief"}</span>
-                        <input
-                          className="hidden"
-                          type="file"
-                          accept=".pdf,.txt,.md,.csv,.json,.html,.doc,.docx,application/pdf,text/plain,text/markdown,text/csv,application/json,text/html,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                          multiple
-                          disabled={campaignBriefUploadBusy}
-                          onChange={async e => {
-                            const inputEl = e.currentTarget;
-                            await handleCampaignBriefUploads(inputEl.files);
-                            inputEl.value = "";
-                          }}
-                        />
-                      </label>
-                    </label>
-                  </div>
-                </details>
-              ) : (
-                <div className="border rounded-lg p-3 bg-gray-50 space-y-3">
-                  <label className="block text-xs text-gray-600">
-                    Brief files (PDF/text/doc)
-                    <textarea
-                      className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[92px] font-mono"
-                      value={campaignForm.briefDocumentUrlsText}
-                      onChange={e => setCampaignForm(prev => ({ ...prev, briefDocumentUrlsText: e.target.value }))}
-                    />
-                    <label
-                      className={`mt-2 inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
-                        campaignBriefUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-white"
-                      }`}
-                    >
-                      <span>{campaignBriefUploadBusy ? "Uploading..." : "Upload brief"}</span>
-                      <input
-                        className="hidden"
-                        type="file"
-                        accept=".pdf,.txt,.md,.csv,.json,.html,.doc,.docx,application/pdf,text/plain,text/markdown,text/csv,application/json,text/html,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                        multiple
-                        disabled={campaignBriefUploadBusy}
-                        onChange={async e => {
-                          const inputEl = e.currentTarget;
-                          await handleCampaignBriefUploads(inputEl.files);
-                          inputEl.value = "";
-                        }}
-                      />
-                    </label>
-                  </label>
-
+                    {(campaignInspirationPreviewUrls.length || campaignAssetPreviewUrls.length) ? (
+                      <div className="text-[11px] text-gray-600">
+                        {campaignInspirationPreviewUrls.length ? `${campaignInspirationPreviewUrls.length} ref image(s)` : ""}
+                        {campaignInspirationPreviewUrls.length && campaignAssetPreviewUrls.length ? " • " : ""}
+                        {campaignAssetPreviewUrls.length ? `${campaignAssetPreviewUrls.length} design image(s)` : ""}
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
                   <details className="border rounded p-2.5 bg-white">
                     <summary className="text-xs font-semibold text-gray-700 cursor-pointer">
                       Advanced overrides (optional refs/assets)
                     </summary>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
-                      <label className="block text-xs text-gray-600">
-                        Reference images (URLs)
-                        <textarea
-                          className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[92px] font-mono"
-                          value={campaignForm.inspirationImageUrlsText}
-                          onChange={e => setCampaignForm(prev => ({ ...prev, inspirationImageUrlsText: e.target.value }))}
+                    <div className="flex flex-wrap items-center gap-2 mt-3">
+                      <label
+                        className={`inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
+                          campaignInspirationUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-gray-50"
+                        }`}
+                      >
+                        <span>{campaignInspirationUploadBusy ? "Uploading..." : "Upload refs"}</span>
+                        <input
+                          className="hidden"
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          disabled={campaignInspirationUploadBusy}
+                          onChange={async e => {
+                            const inputEl = e.currentTarget;
+                            await handleCampaignInspirationUploads(inputEl.files);
+                            inputEl.value = "";
+                          }}
                         />
-                        <label
-                          className={`mt-2 inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
-                            campaignInspirationUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-gray-50"
-                          }`}
-                        >
-                          <span>{campaignInspirationUploadBusy ? "Uploading..." : "Upload refs"}</span>
-                          <input
-                            className="hidden"
-                            type="file"
-                            accept="image/*"
-                            multiple
-                            disabled={campaignInspirationUploadBusy}
-                            onChange={async e => {
-                              const inputEl = e.currentTarget;
-                              await handleCampaignInspirationUploads(inputEl.files);
-                              inputEl.value = "";
-                            }}
-                          />
-                        </label>
                       </label>
-
-                      <label className="block text-xs text-gray-600">
-                        Design images (URLs)
-                        <textarea
-                          className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[92px] font-mono"
-                          value={campaignForm.assetImageUrlsText}
-                          onChange={e => setCampaignForm(prev => ({ ...prev, assetImageUrlsText: e.target.value }))}
+                      <label
+                        className={`inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
+                          campaignAssetUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-gray-50"
+                        }`}
+                      >
+                        <span>{campaignAssetUploadBusy ? "Uploading..." : "Upload design imgs"}</span>
+                        <input
+                          className="hidden"
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          disabled={campaignAssetUploadBusy}
+                          onChange={async e => {
+                            const inputEl = e.currentTarget;
+                            await handleCampaignAssetUploads(inputEl.files);
+                            inputEl.value = "";
+                          }}
                         />
-                        <label
-                          className={`mt-2 inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
-                            campaignAssetUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-gray-50"
-                          }`}
-                        >
-                          <span>{campaignAssetUploadBusy ? "Uploading..." : "Upload design imgs"}</span>
-                          <input
-                            className="hidden"
-                            type="file"
-                            accept="image/*"
-                            multiple
-                            disabled={campaignAssetUploadBusy}
-                            onChange={async e => {
-                              const inputEl = e.currentTarget;
-                              await handleCampaignAssetUploads(inputEl.files);
-                              inputEl.value = "";
-                            }}
-                          />
-                        </label>
                       </label>
                     </div>
+                    {(campaignInspirationPreviewUrls.length || campaignAssetPreviewUrls.length) ? (
+                      <div className="text-[11px] text-gray-600 mt-2">
+                        {campaignInspirationPreviewUrls.length ? `${campaignInspirationPreviewUrls.length} ref image(s)` : ""}
+                        {campaignInspirationPreviewUrls.length && campaignAssetPreviewUrls.length ? " • " : ""}
+                        {campaignAssetPreviewUrls.length ? `${campaignAssetPreviewUrls.length} design image(s)` : ""}
+                      </div>
+                    ) : null}
                   </details>
-                </div>
-              )}
+                )}
+              </div>
 
               <div className="flex flex-wrap items-center gap-2">
                 <button
@@ -10417,13 +10389,6 @@ export default function Home() {
                   disabled={campaignSaving || campaignGenerating}
                 >
                   {campaignSaving ? "Saving..." : "Save Draft"}
-                </button>
-                <button
-                  className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
-                  onClick={resetCampaignDraft}
-                  disabled={campaignGenerating || campaignSaving}
-                >
-                  New
                 </button>
               </div>
             </div>
