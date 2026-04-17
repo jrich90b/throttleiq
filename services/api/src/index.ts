@@ -21703,20 +21703,23 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     }
   }
 
-  const imageWarnings: string[] = [];
-  if (shouldAttemptImageFallback && imageTargetsRequested && !generatedAssets.length) {
-    imageWarnings.push(
-      "Campaign image generation failed for all selected targets. Text drafts were generated; please retry image generation."
-    );
-  }
-  if (shouldAttemptImageFallback && imageTargetsRequested && missingRequestedAssetTargets.length) {
-    imageWarnings.push(
-      `Campaign image generation was incomplete. Missing outputs: ${missingRequestedAssetTargets
+  let imageGenerationWarning: string | undefined;
+  if (shouldAttemptImageFallback && imageTargetsRequested) {
+    if (!generatedAssets.length) {
+      if (requestedAssetTargets.length === 1) {
+        imageGenerationWarning = `Image generation failed for ${campaignAssetTargetLabel(
+          requestedAssetTargets[0]
+        )}. Text drafts were generated; please retry image generation.`;
+      } else {
+        imageGenerationWarning =
+          "Campaign image generation failed for the selected outputs. Text drafts were generated; please retry image generation.";
+      }
+    } else if (missingRequestedAssetTargets.length) {
+      imageGenerationWarning = `Campaign image generation was incomplete. Missing outputs: ${missingRequestedAssetTargets
         .map(target => campaignAssetTargetLabel(target))
-        .join(", ")}.`
-    );
+        .join(", ")}.`;
+    }
   }
-  const imageGenerationWarning = imageWarnings.join(" ").trim() || undefined;
   const successfulTargetsFromRun = new Set<CampaignAssetTarget>(
     generatedAssets
       .map(asset => normalizeSingleCampaignAssetTarget(asset?.target))
