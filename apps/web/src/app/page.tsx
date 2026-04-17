@@ -1283,6 +1283,7 @@ type CampaignEntry = {
   emailSubject?: string;
   emailBodyText?: string;
   emailBodyHtml?: string;
+  finalImageUrl?: string;
   sourceHits?: CampaignSourceHit[];
   metadata?: Record<string, unknown>;
   generatedBy?: "nano_banana" | "llm_fallback" | "template";
@@ -1428,6 +1429,7 @@ export default function Home() {
   const [campaignSourceHits, setCampaignSourceHits] = useState<CampaignSourceHit[]>([]);
   const [campaignGeneratedBy, setCampaignGeneratedBy] = useState<string>("");
   const [campaignGeneratedAt, setCampaignGeneratedAt] = useState<string>("");
+  const [campaignFinalImageUrl, setCampaignFinalImageUrl] = useState<string>("");
   const campaignInspirationPreviewUrls = useMemo(
     () =>
       parseCampaignUrlsText(campaignForm.inspirationImageUrlsText)
@@ -1874,6 +1876,7 @@ export default function Home() {
       setCampaignSourceHits([]);
       setCampaignGeneratedBy("");
       setCampaignGeneratedAt("");
+      setCampaignFinalImageUrl("");
       return;
     }
     const buildMode: CampaignBuildMode =
@@ -1904,6 +1907,7 @@ export default function Home() {
     setCampaignSourceHits(Array.isArray(entry.sourceHits) ? entry.sourceHits : []);
     setCampaignGeneratedBy(String(entry.generatedBy ?? ""));
     setCampaignGeneratedAt(String(entry.updatedAt ?? entry.createdAt ?? ""));
+    setCampaignFinalImageUrl(String(entry.finalImageUrl ?? "").trim());
   }
 
   function resetCampaignDraft() {
@@ -2089,6 +2093,7 @@ export default function Home() {
         setCampaignSourceHits(Array.isArray(generated?.sourceHits) ? generated.sourceHits : []);
         setCampaignGeneratedBy(String(generated?.generatedBy ?? ""));
         setCampaignGeneratedAt(new Date().toISOString());
+        setCampaignFinalImageUrl(String(generated?.finalImageUrl ?? "").trim());
       }
       setSaveToast("Campaign generated");
     } catch (err: any) {
@@ -10286,6 +10291,30 @@ export default function Home() {
                     {campaignGeneratedBy ? `Source: ${campaignGeneratedBy}` : "Source: N/A"}
                     {campaignGeneratedAt ? ` • ${new Date(campaignGeneratedAt).toLocaleString()}` : ""}
                   </div>
+                </div>
+
+                <div className="border rounded p-3 bg-gray-50">
+                  <div className="text-xs font-semibold text-gray-700 mb-2">Final generated creative</div>
+                  {campaignFinalImageUrl ? (
+                    <a
+                      href={campaignFinalImageUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block border rounded overflow-hidden bg-white"
+                      title={campaignFinalImageUrl}
+                    >
+                      <img
+                        src={campaignFinalImageUrl}
+                        alt="Final generated campaign creative"
+                        className="w-full max-h-72 object-contain bg-white"
+                        loading="lazy"
+                      />
+                    </a>
+                  ) : (
+                    <div className="text-[11px] text-gray-500">
+                      No final generated image yet. Click Generate Copy to produce one.
+                    </div>
+                  )}
                 </div>
 
                 <label className="block text-xs text-gray-600">

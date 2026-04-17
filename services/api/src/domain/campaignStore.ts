@@ -35,6 +35,7 @@ export type CampaignEntry = {
   emailSubject?: string;
   emailBodyText?: string;
   emailBodyHtml?: string;
+  finalImageUrl?: string;
   sourceHits?: CampaignSourceHit[];
   metadata?: Record<string, unknown>;
   createdByUserId?: string;
@@ -134,6 +135,7 @@ export function createCampaign(input: {
   emailSubject?: string;
   emailBodyText?: string;
   emailBodyHtml?: string;
+  finalImageUrl?: string;
   sourceHits?: CampaignSourceHit[];
   metadata?: Record<string, unknown>;
   createdByUserId?: string;
@@ -156,6 +158,7 @@ export function createCampaign(input: {
     emailSubject: String(input.emailSubject ?? "").trim() || undefined,
     emailBodyText: String(input.emailBodyText ?? "").trim() || undefined,
     emailBodyHtml: String(input.emailBodyHtml ?? "").trim() || undefined,
+    finalImageUrl: String(input.finalImageUrl ?? "").trim() || undefined,
     sourceHits: Array.isArray(input.sourceHits) ? input.sourceHits.slice(0, 12) : [],
     metadata:
       input.metadata && typeof input.metadata === "object"
@@ -214,6 +217,10 @@ export function updateCampaign(
       patch?.emailBodyHtml !== undefined
         ? String(patch.emailBodyHtml ?? "").trim() || undefined
         : existing.emailBodyHtml,
+    finalImageUrl:
+      patch?.finalImageUrl !== undefined
+        ? String(patch.finalImageUrl ?? "").trim() || undefined
+        : existing.finalImageUrl,
     sourceHits:
       patch?.sourceHits !== undefined
         ? (Array.isArray(patch.sourceHits) ? patch.sourceHits.slice(0, 12) : [])

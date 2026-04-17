@@ -19757,6 +19757,7 @@ app.post("/campaigns", requireManager, (req, res) => {
     emailSubject: req.body?.emailSubject,
     emailBodyText: req.body?.emailBodyText,
     emailBodyHtml: req.body?.emailBodyHtml,
+    finalImageUrl: req.body?.finalImageUrl,
     metadata:
       req.body?.metadata && typeof req.body.metadata === "object"
         ? req.body.metadata
@@ -19795,6 +19796,7 @@ app.patch("/campaigns/:id", requireManager, (req, res) => {
   if (req.body?.emailSubject !== undefined) patch.emailSubject = req.body.emailSubject;
   if (req.body?.emailBodyText !== undefined) patch.emailBodyText = req.body.emailBodyText;
   if (req.body?.emailBodyHtml !== undefined) patch.emailBodyHtml = req.body.emailBodyHtml;
+  if (req.body?.finalImageUrl !== undefined) patch.finalImageUrl = req.body.finalImageUrl;
   if (req.body?.sourceHits !== undefined && Array.isArray(req.body.sourceHits)) patch.sourceHits = req.body.sourceHits;
   if (req.body?.metadata !== undefined && req.body?.metadata && typeof req.body.metadata === "object") {
     patch.metadata = req.body.metadata;
@@ -19847,6 +19849,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
   let effectiveGenerated = generated;
   const userProvidedInspiration = Array.isArray(inspirationImageUrls) && inspirationImageUrls.length > 0;
   const shouldAttemptImageFallback = req.body?.generateImage !== false && !userProvidedInspiration;
+  let generatedFinalImageUrl: string | undefined;
   if (shouldAttemptImageFallback) {
     const generatedImageUrl = await generateCampaignImageWithOpenAI({
       name,
@@ -19857,12 +19860,9 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       sourceHits: generated.sourceHits
     });
     if (generatedImageUrl) {
-      const mergedInspiration = Array.from(
-        new Set([generatedImageUrl, ...(generated.inspirationImageUrls ?? [])])
-      );
+      generatedFinalImageUrl = generatedImageUrl;
       effectiveGenerated = {
         ...generated,
-        inspirationImageUrls: mergedInspiration,
         metadata: {
           ...(generated.metadata ?? {}),
           imageGenerator: "openai_fallback",
@@ -19876,6 +19876,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     return res.json({ ok: true, generated: effectiveGenerated });
   }
 
+  const existingCampaign = campaignId ? getCampaign(campaignId) : null;
   const payload = {
     name,
     status: generated.status,
@@ -19884,10 +19885,8 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     tags,
     prompt,
     description,
-    inspirationImageUrls:
-      Array.isArray(effectiveGenerated.inspirationImageUrls) && effectiveGenerated.inspirationImageUrls.length
-        ? effectiveGenerated.inspirationImageUrls
-        : inspirationImageUrls,
+    inspirationImageUrls,
+    finalImageUrl: generatedFinalImageUrl || existingCampaign?.finalImageUrl,
     assetImageUrls,
     smsBody: effectiveGenerated.smsBody,
     emailSubject: effectiveGenerated.emailSubject,
