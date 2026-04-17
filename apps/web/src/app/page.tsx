@@ -1287,6 +1287,16 @@ type CampaignGeneratedAsset = {
   createdAt?: string;
 };
 
+type CampaignAssetGenerationStatus = "pending" | "ready" | "failed";
+type CampaignAssetGenerationEntry = {
+  status: CampaignAssetGenerationStatus;
+  updatedAt?: string;
+  error?: string;
+  attemptCount?: number;
+  lastGeneratedAt?: string;
+};
+type CampaignAssetGenerationMap = Partial<Record<CampaignAssetTarget, CampaignAssetGenerationEntry>>;
+
 type CampaignEntry = {
   id: string;
   name: string;
@@ -1306,6 +1316,7 @@ type CampaignEntry = {
   emailBodyHtml?: string;
   finalImageUrl?: string;
   generatedAssets?: CampaignGeneratedAsset[];
+  assetGenerationStatus?: CampaignAssetGenerationMap;
   sourceHits?: CampaignSourceHit[];
   metadata?: Record<string, unknown>;
   generatedBy?: "nano_banana" | "llm_fallback" | "template";
@@ -1361,6 +1372,32 @@ function campaignAssetDisplayLabel(asset: CampaignGeneratedAsset): string {
     asset.target;
   const dim = asset.width && asset.height ? `${asset.width}x${asset.height}` : "";
   return dim ? `${base} (${dim})` : base;
+}
+
+function normalizeCampaignAssetGenerationMap(raw: unknown): CampaignAssetGenerationMap {
+  const out: CampaignAssetGenerationMap = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const [targetRaw, rowRaw] of Object.entries(raw as Record<string, unknown>)) {
+    const target = String(targetRaw ?? "").trim() as CampaignAssetTarget;
+    if (!CAMPAIGN_ASSET_TARGET_OPTIONS.some(opt => opt.value === target)) continue;
+    if (!rowRaw || typeof rowRaw !== "object") continue;
+    const statusRaw = String((rowRaw as any)?.status ?? "").trim().toLowerCase();
+    const status: CampaignAssetGenerationStatus =
+      statusRaw === "ready" || statusRaw === "failed" || statusRaw === "pending"
+        ? (statusRaw as CampaignAssetGenerationStatus)
+        : "pending";
+    out[target] = {
+      status,
+      updatedAt: String((rowRaw as any)?.updatedAt ?? "").trim() || undefined,
+      error: String((rowRaw as any)?.error ?? "").trim() || undefined,
+      attemptCount:
+        Number.isFinite(Number((rowRaw as any)?.attemptCount)) && Number((rowRaw as any)?.attemptCount) > 0
+          ? Math.round(Number((rowRaw as any)?.attemptCount))
+          : undefined,
+      lastGeneratedAt: String((rowRaw as any)?.lastGeneratedAt ?? "").trim() || undefined
+    };
+  }
+  return out;
 }
 
 function campaignUrlsToText(values?: string[] | null): string {
@@ -1517,6 +1554,7 @@ export default function Home() {
   const [campaignGeneratedAt, setCampaignGeneratedAt] = useState<string>("");
   const [campaignFinalImageUrl, setCampaignFinalImageUrl] = useState<string>("");
   const [campaignGeneratedAssets, setCampaignGeneratedAssets] = useState<CampaignGeneratedAsset[]>([]);
+  const [campaignTargetToGenerate, setCampaignTargetToGenerate] = useState<CampaignAssetTarget>("sms");
   const campaignInspirationPreviewUrls = useMemo(
     () =>
       parseCampaignUrlsText(campaignForm.inspirationImageUrlsText)
@@ -1543,6 +1581,32 @@ export default function Home() {
     () => new Set<CampaignAssetTarget>(Array.isArray(campaignForm.assetTargets) ? campaignForm.assetTargets : []),
     [campaignForm.assetTargets]
   );
+  const campaignSelectedTargetsOrdered = useMemo(
+    () =>
+      CAMPAIGN_ASSET_TARGET_OPTIONS.map(opt => opt.value).filter(target =>
+        (campaignForm.assetTargets ?? []).includes(target)
+      ),
+    [campaignForm.assetTargets]
+  );
+  const campaignSelectedEntry = useMemo(
+    () => campaigns.find(row => row.id === campaignSelectedId) ?? null,
+    [campaigns, campaignSelectedId]
+  );
+  const campaignAssetGenerationStatus = useMemo(() => {
+    const fromEntry = normalizeCampaignAssetGenerationMap(campaignSelectedEntry?.assetGenerationStatus);
+    if (Object.keys(fromEntry).length) return fromEntry;
+    const meta = (campaignSelectedEntry?.metadata as any)?.assetGenerationStatus;
+    return normalizeCampaignAssetGenerationMap(meta);
+  }, [campaignSelectedEntry]);
+  const campaignGeneratedAssetTargetSet = useMemo(
+    () =>
+      new Set<CampaignAssetTarget>(
+        (campaignGeneratedAssets ?? [])
+          .map(asset => String(asset?.target ?? "").trim() as CampaignAssetTarget)
+          .filter(Boolean)
+      ),
+    [campaignGeneratedAssets]
+  );
   const campaignWantsSms = campaignSelectedTargets.has("sms");
   const campaignWantsEmail = campaignSelectedTargets.has("email");
   const campaignWantsSocial =
@@ -1568,6 +1632,16 @@ export default function Home() {
     }
     return out;
   }, [campaignGeneratedAssets]);
+  const campaignNextPendingTarget = useMemo(() => {
+    const selected = campaignSelectedTargetsOrdered;
+    if (!selected.length) return null;
+    const firstPending = selected.find(target => {
+      const status = String(campaignAssetGenerationStatus[target]?.status ?? "").trim().toLowerCase();
+      if (status === "pending" || status === "failed") return true;
+      return !campaignGeneratedAssetTargetSet.has(target);
+    });
+    return firstPending ?? selected[0] ?? null;
+  }, [campaignAssetGenerationStatus, campaignGeneratedAssetTargetSet, campaignSelectedTargetsOrdered]);
   const cadenceResolveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [watchEditOpen, setWatchEditOpen] = useState(false);
   const [watchEditConvId, setWatchEditConvId] = useState<string | null>(null);
@@ -1979,6 +2053,17 @@ export default function Home() {
       if (kpiCallOwnerFilter !== "all") setKpiCallOwnerFilter("all");
     }
   }, [kpiCallOwnerFilter, kpiCallOwnerOptions]);
+
+  useEffect(() => {
+    if (!campaignSelectedTargetsOrdered.length) {
+      if (campaignTargetToGenerate !== "sms") setCampaignTargetToGenerate("sms");
+      return;
+    }
+    if (!campaignSelectedTargetsOrdered.includes(campaignTargetToGenerate)) {
+      const next = campaignNextPendingTarget ?? campaignSelectedTargetsOrdered[0];
+      if (next && next !== campaignTargetToGenerate) setCampaignTargetToGenerate(next);
+    }
+  }, [campaignNextPendingTarget, campaignSelectedTargetsOrdered, campaignTargetToGenerate]);
 
   async function loadKpiOverview() {
     if (!isManager) return;
@@ -2437,10 +2522,20 @@ export default function Home() {
     }
   }
 
-  async function generateCampaign() {
+  async function generateCampaign(opts?: { target?: CampaignAssetTarget | null; replaceTarget?: boolean }) {
     const name = String(campaignForm.name ?? "").trim();
     if (!name) {
       setCampaignError("Campaign name is required.");
+      return;
+    }
+    const selectedTargets = campaignSelectedTargetsOrdered;
+    if (!selectedTargets.length) {
+      setCampaignError("Select at least one output file before generating.");
+      return;
+    }
+    const target = (opts?.target ?? campaignTargetToGenerate) as CampaignAssetTarget;
+    if (!target || !selectedTargets.includes(target)) {
+      setCampaignError("Pick an output target to generate.");
       return;
     }
     const isScratchBuild = campaignForm.buildMode === "design_from_scratch";
@@ -2455,6 +2550,8 @@ export default function Home() {
         channel: campaignEffectiveChannel,
         tags: campaignForm.tags,
         assetTargets: campaignForm.assetTargets,
+        singleTarget: target,
+        replaceTarget: opts?.replaceTarget !== false,
         prompt: String(campaignForm.prompt ?? "").trim() || undefined,
         description: String(campaignForm.description ?? "").trim() || undefined,
         inspirationImageUrls: isScratchBuild ? parseCampaignUrlsText(campaignForm.inspirationImageUrlsText) : [],
@@ -2503,7 +2600,7 @@ export default function Home() {
           String(generated?.finalImageUrl ?? "").trim() || String(generatedAssets[0]?.url ?? "").trim()
         );
       }
-      setSaveToast("Campaign generated");
+      setSaveToast(`${CAMPAIGN_ASSET_TARGET_OPTIONS.find(opt => opt.value === target)?.label ?? "Asset"} generated`);
     } catch (err: any) {
       setCampaignError(err?.message ?? "Failed to generate campaign");
     } finally {
@@ -10873,34 +10970,109 @@ export default function Home() {
                 ) : null}
               </div>
 
+              <div className="border rounded-lg p-3 bg-gray-50 space-y-3">
+                <div className="text-xs font-semibold text-gray-700">Generation progress</div>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
+                  {campaignSelectedTargetsOrdered.map(target => {
+                    const label = CAMPAIGN_ASSET_TARGET_OPTIONS.find(opt => opt.value === target)?.label ?? target;
+                    const statusRow = campaignAssetGenerationStatus[target];
+                    const statusRaw = String(statusRow?.status ?? "").trim().toLowerCase();
+                    const hasAsset = campaignGeneratedAssetTargetSet.has(target);
+                    const status: "ready" | "pending" | "failed" =
+                      statusRaw === "failed" ? "failed" : hasAsset || statusRaw === "ready" ? "ready" : "pending";
+                    const badgeClass =
+                      status === "ready"
+                        ? "border-green-300 bg-green-50 text-green-700"
+                        : status === "failed"
+                          ? "border-red-300 bg-red-50 text-red-700"
+                          : "border-amber-300 bg-amber-50 text-amber-700";
+                    return (
+                      <button
+                        key={`campaign-target-status-${target}`}
+                        type="button"
+                        className={`text-left border rounded px-2.5 py-2 bg-white hover:bg-gray-50 ${
+                          campaignTargetToGenerate === target ? "ring-2 ring-[var(--accent)]" : ""
+                        }`}
+                        onClick={() => setCampaignTargetToGenerate(target)}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-xs font-medium">{label}</div>
+                          <span className={`text-[10px] px-2 py-0.5 rounded border ${badgeClass}`}>
+                            {status === "ready" ? "Ready" : status === "failed" ? "Failed" : "Pending"}
+                          </span>
+                        </div>
+                        {statusRow?.error && status === "failed" ? (
+                          <div className="text-[10px] text-red-600 mt-1 line-clamp-2">{statusRow.error}</div>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto_auto] gap-2 items-end">
+                  <label className="text-xs text-gray-600">
+                    Generate target
+                    <select
+                      className="mt-1 w-full border rounded px-3 py-2 text-sm bg-white"
+                      value={campaignSelectedTargetsOrdered.length ? campaignTargetToGenerate : ""}
+                      onChange={e => setCampaignTargetToGenerate(e.target.value as CampaignAssetTarget)}
+                      disabled={!campaignSelectedTargetsOrdered.length}
+                    >
+                      {campaignSelectedTargetsOrdered.length ? (
+                        campaignSelectedTargetsOrdered.map(target => (
+                          <option key={`campaign-generate-target-${target}`} value={target}>
+                            {CAMPAIGN_ASSET_TARGET_OPTIONS.find(opt => opt.value === target)?.label ?? target}
+                          </option>
+                        ))
+                      ) : (
+                        <option value="">No targets selected</option>
+                      )}
+                    </select>
+                  </label>
+                  <button
+                    className="px-3 py-2 border rounded text-sm bg-gray-900 text-white hover:bg-black disabled:opacity-60"
+                    onClick={() => {
+                      void generateCampaign({ target: campaignTargetToGenerate, replaceTarget: true });
+                    }}
+                    disabled={campaignGenerating || campaignSaving || !campaignHasAnyTarget}
+                  >
+                    {campaignGenerating ? "Generating..." : "Generate"}
+                  </button>
+                  <button
+                    className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
+                    onClick={() => {
+                      void generateCampaign({ target: campaignTargetToGenerate, replaceTarget: true });
+                    }}
+                    disabled={campaignGenerating || campaignSaving || !campaignForm.name.trim() || !campaignHasAnyTarget}
+                  >
+                    {campaignGenerating ? "Redoing..." : "Redo"}
+                  </button>
+                  <button
+                    className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
+                    onClick={() => {
+                      void saveCampaignDraft();
+                    }}
+                    disabled={campaignSaving || campaignGenerating}
+                  >
+                    {campaignSaving ? "Saving..." : "Save Draft"}
+                  </button>
+                </div>
+              </div>
+
               <div className="flex flex-wrap items-center gap-2">
                 <button
-                  className="px-3 py-2 border rounded text-sm bg-gray-900 text-white hover:bg-black disabled:opacity-60"
+                  className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
                   onClick={() => {
-                    void generateCampaign();
+                    const nextTarget = campaignNextPendingTarget ?? campaignTargetToGenerate;
+                    void generateCampaign({ target: nextTarget, replaceTarget: true });
                   }}
                   disabled={campaignGenerating || campaignSaving || !campaignHasAnyTarget}
                 >
-                  {campaignGenerating ? "Generating..." : "Generate"}
+                  {campaignGenerating ? "Running..." : "Generate Next Missing"}
                 </button>
-                <button
-                  className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
-                  onClick={() => {
-                    void generateCampaign();
-                  }}
-                  disabled={campaignGenerating || campaignSaving || !campaignForm.name.trim() || !campaignHasAnyTarget}
-                >
-                  {campaignGenerating ? "Redoing..." : "Redo"}
-                </button>
-                <button
-                  className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
-                  onClick={() => {
-                    void saveCampaignDraft();
-                  }}
-                  disabled={campaignSaving || campaignGenerating}
-                >
-                  {campaignSaving ? "Saving..." : "Save Draft"}
-                </button>
+                <div className="text-[11px] text-gray-500">
+                  Generates one output at a time into this campaign. Retry failed targets without replacing others.
+                </div>
               </div>
             </div>
 

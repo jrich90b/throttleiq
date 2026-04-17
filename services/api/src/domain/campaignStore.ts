@@ -39,6 +39,16 @@ export type CampaignGeneratedAsset = {
   createdAt?: string;
 };
 
+export type CampaignAssetGenerationStatus = "pending" | "ready" | "failed";
+export type CampaignAssetGenerationEntry = {
+  status: CampaignAssetGenerationStatus;
+  updatedAt: string;
+  error?: string;
+  attemptCount?: number;
+  lastGeneratedAt?: string;
+};
+export type CampaignAssetGenerationMap = Partial<Record<CampaignAssetTarget, CampaignAssetGenerationEntry>>;
+
 export type CampaignEntry = {
   id: string;
   name: string;
@@ -58,6 +68,7 @@ export type CampaignEntry = {
   emailBodyHtml?: string;
   finalImageUrl?: string;
   generatedAssets?: CampaignGeneratedAsset[];
+  assetGenerationStatus?: CampaignAssetGenerationMap;
   sourceHits?: CampaignSourceHit[];
   metadata?: Record<string, unknown>;
   createdByUserId?: string;
@@ -170,6 +181,32 @@ function normalizeGeneratedAssets(raw: unknown): CampaignGeneratedAsset[] {
   return out.slice(0, 24);
 }
 
+function normalizeAssetGenerationStatus(raw: unknown): CampaignAssetGenerationMap {
+  const out: CampaignAssetGenerationMap = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const [targetRaw, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!CAMPAIGN_ASSET_TARGET_SET.has(targetRaw as CampaignAssetTarget)) continue;
+    if (!value || typeof value !== "object") continue;
+    const statusRaw = String((value as any)?.status ?? "").trim().toLowerCase();
+    const status: CampaignAssetGenerationStatus =
+      statusRaw === "ready" || statusRaw === "failed" || statusRaw === "pending"
+        ? (statusRaw as CampaignAssetGenerationStatus)
+        : "pending";
+    const updatedAt = String((value as any)?.updatedAt ?? "").trim();
+    const error = String((value as any)?.error ?? "").trim() || undefined;
+    const attemptCountNum = Number((value as any)?.attemptCount);
+    const lastGeneratedAt = String((value as any)?.lastGeneratedAt ?? "").trim() || undefined;
+    out[targetRaw as CampaignAssetTarget] = {
+      status,
+      updatedAt: updatedAt || new Date().toISOString(),
+      error,
+      attemptCount: Number.isFinite(attemptCountNum) && attemptCountNum > 0 ? Math.round(attemptCountNum) : undefined,
+      lastGeneratedAt
+    };
+  }
+  return out;
+}
+
 function normalizeBuildMode(raw: unknown): CampaignBuildMode {
   const mode = String(raw ?? "").trim();
   if (mode === "web_search_design" || mode === "promotion_event_prompt") {
@@ -196,7 +233,8 @@ async function loadFromDisk() {
         inspirationImageUrls: uniqUrls((row as any)?.inspirationImageUrls),
         assetImageUrls: uniqUrls((row as any)?.assetImageUrls),
         briefDocumentUrls: uniqUrls((row as any)?.briefDocumentUrls),
-        generatedAssets
+        generatedAssets,
+        assetGenerationStatus: normalizeAssetGenerationStatus((row as any)?.assetGenerationStatus)
       };
       if (!normalized.finalImageUrl && generatedAssets.length) {
         normalized.finalImageUrl = generatedAssets[0]?.url;
@@ -240,6 +278,7 @@ export function createCampaign(input: {
   emailBodyHtml?: string;
   finalImageUrl?: string;
   generatedAssets?: CampaignGeneratedAsset[];
+  assetGenerationStatus?: CampaignAssetGenerationMap;
   sourceHits?: CampaignSourceHit[];
   metadata?: Record<string, unknown>;
   createdByUserId?: string;
@@ -249,6 +288,7 @@ export function createCampaign(input: {
   const now = nowIso();
   const channel = normalizeChannel(input.channel);
   const generatedAssets = normalizeGeneratedAssets(input.generatedAssets);
+  const assetGenerationStatus = normalizeAssetGenerationStatus(input.assetGenerationStatus);
   const entry: CampaignEntry = {
     id: makeId(),
     name: String(input.name ?? "").trim() || "Untitled campaign",
@@ -268,6 +308,7 @@ export function createCampaign(input: {
     emailBodyHtml: String(input.emailBodyHtml ?? "").trim() || undefined,
     finalImageUrl: String(input.finalImageUrl ?? "").trim() || generatedAssets[0]?.url || undefined,
     generatedAssets,
+    assetGenerationStatus,
     sourceHits: Array.isArray(input.sourceHits) ? input.sourceHits.slice(0, 12) : [],
     metadata:
       input.metadata && typeof input.metadata === "object"
@@ -295,6 +336,10 @@ export function updateCampaign(
     patch?.generatedAssets !== undefined
       ? normalizeGeneratedAssets(patch.generatedAssets)
       : normalizeGeneratedAssets(existing.generatedAssets);
+  const assetGenerationStatus =
+    patch?.assetGenerationStatus !== undefined
+      ? normalizeAssetGenerationStatus(patch.assetGenerationStatus)
+      : normalizeAssetGenerationStatus(existing.assetGenerationStatus);
   const next: CampaignEntry = {
     ...existing,
     ...(patch ?? {}),
@@ -347,6 +392,7 @@ export function updateCampaign(
         ? String(patch.finalImageUrl ?? "").trim() || undefined
         : existing.finalImageUrl || generatedAssets[0]?.url,
     generatedAssets,
+    assetGenerationStatus,
     sourceHits:
       patch?.sourceHits !== undefined
         ? (Array.isArray(patch.sourceHits) ? patch.sourceHits.slice(0, 12) : [])

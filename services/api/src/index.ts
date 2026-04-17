@@ -268,6 +268,7 @@ import {
   type CampaignBuildMode,
   type CampaignChannel,
   type CampaignAssetTarget,
+  type CampaignAssetGenerationMap,
   type CampaignGeneratedAsset,
   type CampaignTag
 } from "./domain/campaignStore.js";
@@ -20044,6 +20045,88 @@ function normalizeCampaignAssetTargets(
   return normalized;
 }
 
+function normalizeSingleCampaignAssetTarget(raw: unknown): CampaignAssetTarget | null {
+  const value = String(raw ?? "").trim();
+  if (!value) return null;
+  return CAMPAIGN_ASSET_TARGETS.has(value as CampaignAssetTarget) ? (value as CampaignAssetTarget) : null;
+}
+
+function uniqCampaignAssetTargets(values: CampaignAssetTarget[] | null | undefined): CampaignAssetTarget[] {
+  return Array.from(new Set((values ?? []).filter(Boolean)));
+}
+
+function mergeCampaignGeneratedAssetsByTarget(args: {
+  existing?: CampaignGeneratedAsset[] | null;
+  incoming?: CampaignGeneratedAsset[] | null;
+  replaceTargets?: CampaignAssetTarget[] | null;
+}): CampaignGeneratedAsset[] {
+  const existing = Array.isArray(args.existing) ? args.existing.filter(row => !!row?.url) : [];
+  const incoming = Array.isArray(args.incoming) ? args.incoming.filter(row => !!row?.url) : [];
+  const replaceSet = new Set((args.replaceTargets ?? []).filter(Boolean));
+  const kept = existing.filter(row => !replaceSet.has(row.target));
+  const latestByTarget = new Map<CampaignAssetTarget, CampaignGeneratedAsset>();
+  for (const row of incoming) {
+    latestByTarget.set(row.target, row);
+  }
+  return [...kept, ...Array.from(latestByTarget.values())];
+}
+
+function normalizeCampaignAssetGenerationStatusMap(raw: unknown): CampaignAssetGenerationMap {
+  const out: CampaignAssetGenerationMap = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const [targetRaw, rowRaw] of Object.entries(raw as Record<string, unknown>)) {
+    if (!CAMPAIGN_ASSET_TARGETS.has(targetRaw as CampaignAssetTarget)) continue;
+    if (!rowRaw || typeof rowRaw !== "object") continue;
+    const statusRaw = String((rowRaw as any)?.status ?? "").trim().toLowerCase();
+    const status = statusRaw === "ready" || statusRaw === "failed" || statusRaw === "pending" ? statusRaw : "pending";
+    const updatedAt = String((rowRaw as any)?.updatedAt ?? "").trim();
+    const error = String((rowRaw as any)?.error ?? "").trim() || undefined;
+    const attemptCountNum = Number((rowRaw as any)?.attemptCount);
+    const lastGeneratedAt = String((rowRaw as any)?.lastGeneratedAt ?? "").trim() || undefined;
+    out[targetRaw as CampaignAssetTarget] = {
+      status,
+      updatedAt: updatedAt || new Date().toISOString(),
+      error,
+      attemptCount: Number.isFinite(attemptCountNum) && attemptCountNum > 0 ? Math.round(attemptCountNum) : undefined,
+      lastGeneratedAt
+    };
+  }
+  return out;
+}
+
+function applyCampaignAssetGenerationAttempt(args: {
+  existing?: CampaignAssetGenerationMap | null;
+  attemptedTargets: CampaignAssetTarget[];
+  successfulTargets: Set<CampaignAssetTarget>;
+  errorText?: string;
+}): CampaignAssetGenerationMap {
+  const next: CampaignAssetGenerationMap = {
+    ...normalizeCampaignAssetGenerationStatusMap(args.existing)
+  };
+  if (!args.attemptedTargets.length) return next;
+  const now = new Date().toISOString();
+  for (const target of uniqCampaignAssetTargets(args.attemptedTargets)) {
+    const prev = next[target];
+    const attempts = Math.max(0, Number(prev?.attemptCount ?? 0)) + 1;
+    if (args.successfulTargets.has(target)) {
+      next[target] = {
+        status: "ready",
+        updatedAt: now,
+        attemptCount: attempts,
+        lastGeneratedAt: now
+      };
+    } else {
+      next[target] = {
+        status: "failed",
+        updatedAt: now,
+        attemptCount: attempts,
+        error: args.errorText || "Generation failed. Retry this target."
+      };
+    }
+  }
+  return next;
+}
+
 function campaignAssetTargetLabel(target: CampaignAssetTarget): string {
   if (target === "sms") return "SMS";
   if (target === "email") return "Email";
@@ -21330,13 +21413,19 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
   if (!name) return res.status(400).json({ ok: false, error: "Missing campaign name" });
 
   const campaignId = String(req.body?.campaignId ?? "").trim() || null;
-  if (campaignId && !getCampaign(campaignId)) {
+  const existingCampaign = campaignId ? getCampaign(campaignId) : null;
+  if (campaignId && !existingCampaign) {
     return res.status(404).json({ ok: false, error: "Campaign not found" });
   }
 
   const buildMode = normalizeCampaignBuildMode(req.body?.buildMode);
   const channel = normalizeCampaignChannel(req.body?.channel);
   const assetTargets = normalizeCampaignAssetTargets(req.body?.assetTargets, channel);
+  const singleTarget =
+    normalizeSingleCampaignAssetTarget(req.body?.singleTarget) ??
+    normalizeSingleCampaignAssetTarget(req.body?.target) ??
+    normalizeSingleCampaignAssetTarget(req.body?.assetTarget);
+  const requestedAssetTargets = singleTarget ? [singleTarget] : uniqCampaignAssetTargets(assetTargets);
   const tags = normalizeCampaignTags(req.body?.tags);
   const prompt = String(req.body?.prompt ?? "").trim() || undefined;
   const description = String(req.body?.description ?? "").trim() || undefined;
@@ -21362,17 +21451,17 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
   let effectiveGenerated: typeof generated & { generatedAssets?: CampaignGeneratedAsset[]; finalImageUrl?: string } =
     generated;
   const shouldAttemptImageFallback = req.body?.generateImage !== false;
-  const imageTargetsRequested = Array.isArray(assetTargets) && assetTargets.length > 0;
+  const imageTargetsRequested = requestedAssetTargets.length > 0;
   let generatedFinalImageUrl: string | undefined;
   let generatedAssets: CampaignGeneratedAsset[] = [];
   let missingRequestedAssetTargets: CampaignAssetTarget[] = [];
-  if (shouldAttemptImageFallback) {
+  if (shouldAttemptImageFallback && imageTargetsRequested) {
     const referenceImageUrls = normalizeCampaignUrlArray([
       ...(generated.inspirationImageUrls ?? []),
       ...(inspirationImageUrls ?? []),
       ...(assetImageUrls ?? [])
     ]);
-    const uniqueTargets = Array.from(new Set(assetTargets));
+    const uniqueTargets = requestedAssetTargets.slice();
     const styleLockAnchorTarget =
       preferredCampaignGenerationTarget(uniqueTargets, channel) ?? uniqueTargets[0] ?? "sms";
     const orderedTargets: CampaignAssetTarget[] = [
@@ -21628,23 +21717,59 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     );
   }
   const imageGenerationWarning = imageWarnings.join(" ").trim() || undefined;
+  const successfulTargetsFromRun = new Set<CampaignAssetTarget>(
+    generatedAssets
+      .map(asset => normalizeSingleCampaignAssetTarget(asset?.target))
+      .filter((target): target is CampaignAssetTarget => Boolean(target))
+  );
+  const mergedGeneratedAssets = mergeCampaignGeneratedAssetsByTarget({
+    existing: existingCampaign?.generatedAssets,
+    incoming: generatedAssets,
+    replaceTargets: requestedAssetTargets
+  });
+  const mergedPreviewTargetOrder = preferredCampaignPreviewTargets(assetTargets, channel);
+  const mergedPreviewAsset = chooseCampaignPreviewAsset(mergedGeneratedAssets, mergedPreviewTargetOrder);
+  const mergedFinalImageUrl =
+    String(generatedFinalImageUrl ?? "").trim() ||
+    String(mergedPreviewAsset?.url ?? "").trim() ||
+    String(existingCampaign?.finalImageUrl ?? "").trim() ||
+    undefined;
+  const assetGenerationStatus: CampaignAssetGenerationMap =
+    shouldAttemptImageFallback && requestedAssetTargets.length
+      ? applyCampaignAssetGenerationAttempt({
+          existing: existingCampaign?.assetGenerationStatus,
+          attemptedTargets: requestedAssetTargets,
+          successfulTargets: successfulTargetsFromRun,
+          errorText: imageGenerationWarning
+        })
+      : normalizeCampaignAssetGenerationStatusMap(existingCampaign?.assetGenerationStatus);
   if (imageGenerationWarning) {
     effectiveGenerated = {
       ...effectiveGenerated,
       metadata: {
         ...(effectiveGenerated.metadata ?? {}),
         imageGenerationWarning,
-        requestedAssetTargets: Array.from(new Set(assetTargets)),
+        requestedAssetTargets: requestedAssetTargets.slice(),
         missingAssetTargets: missingRequestedAssetTargets
       }
     };
   }
+  effectiveGenerated = {
+    ...effectiveGenerated,
+    finalImageUrl: mergedFinalImageUrl,
+    generatedAssets: mergedGeneratedAssets,
+    metadata: {
+      ...(effectiveGenerated.metadata ?? {}),
+      requestedAssetTargets: requestedAssetTargets.slice(),
+      singleTarget: singleTarget ?? undefined,
+      assetGenerationStatus
+    }
+  };
 
   if (!save) {
     return res.json({ ok: true, generated: effectiveGenerated, warning: imageGenerationWarning });
   }
 
-  const existingCampaign = campaignId ? getCampaign(campaignId) : null;
   const payload = {
     name,
     status: generated.status,
@@ -21655,8 +21780,9 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     prompt,
     description,
     inspirationImageUrls,
-    finalImageUrl: generatedFinalImageUrl || existingCampaign?.finalImageUrl,
-    generatedAssets: generatedAssets.length ? generatedAssets : undefined,
+    finalImageUrl: mergedFinalImageUrl || existingCampaign?.finalImageUrl,
+    generatedAssets: mergedGeneratedAssets.length ? mergedGeneratedAssets : undefined,
+    assetGenerationStatus,
     assetImageUrls,
     briefDocumentUrls,
     smsBody: effectiveGenerated.smsBody,
