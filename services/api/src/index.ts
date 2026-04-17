@@ -19605,6 +19605,19 @@ function buildCampaignImagePrompt(args: {
     )
     .join("\n");
   const referenceBlock = references || "(none)";
+  const tagSet = new Set(args.tags ?? []);
+  const suppressFinanceTrade =
+    (tagSet.has("parts") || tagSet.has("apparel") || tagSet.has("service")) &&
+    !tagSet.has("financing") &&
+    !tagSet.has("sales");
+  const tagGuardrails = suppressFinanceTrade
+    ? [
+        "Hard guardrails:",
+        "- Do NOT include trade-in language or buttons (e.g., 'Value Your Trade').",
+        "- Do NOT include financing/APR/credit/payment claims or badges.",
+        "- Keep the creative focused on the selected campaign tags only."
+      ]
+    : ["Hard guardrail: keep visuals and any text strictly aligned with selected campaign tags."];
   return [
     "Create a single high-quality dealership campaign hero image.",
     "Style: premium, modern motorcycle dealership marketing visual.",
@@ -19616,6 +19629,7 @@ function buildCampaignImagePrompt(args: {
     `Tags: ${tagLine}`,
     `Campaign: ${String(args.name ?? "").trim() || "(untitled)"}`,
     `Direction: ${primary}`,
+    ...tagGuardrails,
     "",
     "Reference context (for factual alignment):",
     referenceBlock

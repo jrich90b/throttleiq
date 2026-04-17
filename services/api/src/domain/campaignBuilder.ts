@@ -34,6 +34,13 @@ const TAG_LABELS: Record<CampaignTag, string> = {
   dealer_event: "Dealer Event"
 };
 
+const FINANCE_TRADE_TERMS_RE =
+  /\b(financ(?:e|ing|ed)?|apr|credit|payment|cash\s*back|customer\s*cash|trade(?:\s|-)?in|value\s+your\s+trade)\b/i;
+const PARTS_APPAREL_TERMS_RE =
+  /\b(parts?|accessor(?:y|ies)|gear|apparel|helmet|jacket|gloves?|riding\s+gear|motorclothes?)\b/i;
+const SERVICE_TERMS_RE =
+  /\b(service|maintenance|repair|shop|oil\s*change|inspection|diagnostic|tires?|brakes?)\b/i;
+
 export type GenerateCampaignInput = {
   name: string;
   buildMode: CampaignBuildMode;
@@ -115,6 +122,71 @@ function normalizeWhitespace(text: string): string {
   return String(text ?? "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function tagsSet(tags: CampaignTag[]): Set<CampaignTag> {
+  return new Set(tags ?? []);
+}
+
+function shouldSuppressFinanceTradeByTags(tags: CampaignTag[]): boolean {
+  const set = tagsSet(tags);
+  const operationalFocus = set.has("parts") || set.has("apparel") || set.has("service");
+  return operationalFocus && !set.has("financing") && !set.has("sales");
+}
+
+function textForHit(hit: CampaignSourceHit): string {
+  return normalizeWhitespace(
+    [hit.title, hit.snippet, hit.url, hit.domain]
+      .map(v => String(v ?? ""))
+      .join(" ")
+      .toLowerCase()
+  );
+}
+
+function filterSourceHitsByTags(sourceHits: CampaignSourceHit[], tags: CampaignTag[]): CampaignSourceHit[] {
+  if (!Array.isArray(sourceHits) || !sourceHits.length) return [];
+  let rows = sourceHits.slice();
+
+  if (shouldSuppressFinanceTradeByTags(tags)) {
+    rows = rows.filter(hit => !FINANCE_TRADE_TERMS_RE.test(textForHit(hit)));
+  }
+
+  const set = tagsSet(tags);
+  const requirePartsApparel = (set.has("parts") || set.has("apparel")) && !set.has("sales") && !set.has("financing");
+  const requireService = set.has("service") && !set.has("sales") && !set.has("financing");
+
+  if (requirePartsApparel) {
+    const narrowed = rows.filter(hit => PARTS_APPAREL_TERMS_RE.test(textForHit(hit)));
+    if (narrowed.length) rows = narrowed;
+  } else if (requireService) {
+    const narrowed = rows.filter(hit => SERVICE_TERMS_RE.test(textForHit(hit)));
+    if (narrowed.length) rows = narrowed;
+  }
+
+  return rows;
+}
+
+function filterImageUrlsByTags(urls: string[], tags: CampaignTag[]): string[] {
+  let rows = normalizeUrls(urls);
+  if (!rows.length) return rows;
+
+  const set = tagsSet(tags);
+  const blockFinanceTrade = shouldSuppressFinanceTradeByTags(tags);
+  if (blockFinanceTrade) {
+    rows = rows.filter(url => !FINANCE_TRADE_TERMS_RE.test(String(url ?? "").toLowerCase()));
+  }
+
+  const requirePartsApparel = (set.has("parts") || set.has("apparel")) && !set.has("sales") && !set.has("financing");
+  const requireService = set.has("service") && !set.has("sales") && !set.has("financing");
+  if (requirePartsApparel) {
+    const narrowed = rows.filter(url => PARTS_APPAREL_TERMS_RE.test(String(url ?? "").toLowerCase()));
+    if (narrowed.length) rows = narrowed;
+  } else if (requireService) {
+    const narrowed = rows.filter(url => SERVICE_TERMS_RE.test(String(url ?? "").toLowerCase()));
+    if (narrowed.length) rows = narrowed;
+  }
+
+  return rows;
 }
 
 type BriefDocContext = {
@@ -413,7 +485,10 @@ function buildSearchQuery(input: GenerateCampaignInput): string {
     .map(v => v.trim())
     .filter(Boolean);
 
-  const base = parts.join(" ").slice(0, 420).trim();
+  let base = parts.join(" ").slice(0, 420).trim();
+  if (shouldSuppressFinanceTradeByTags(input.tags)) {
+    base = `${base} -trade -trade-in -financing -apr -credit -payment -cash`.trim();
+  }
   if (base) return base;
   if (input.tags.includes("financing")) return "motorcycle financing specials";
   if (input.tags.includes("service")) return "motorcycle service offers";
@@ -569,6 +644,9 @@ async function tryGenerateWithLlm(args: {
     "When description is empty or generic, derive specifics from the reference hits and dealer website context.",
     "Do not require the user to provide manual description details if references already include them.",
     "If details are uncertain, say programs vary by approval/term and invite reply.",
+    shouldSuppressFinanceTradeByTags(args.input.tags)
+      ? "Hard guardrail: do NOT mention financing/APR/credit/payments/trade-in/value-your-trade language."
+      : "Hard guardrail: keep copy aligned to selected tags and avoid unrelated offer categories.",
     "No emojis unless explicitly in prompt.",
     "",
     `Dealer: ${dealerName}`,
@@ -712,16 +790,22 @@ export async function generateCampaignContent(input: GenerateCampaignInput): Pro
           maxResults: 6
         })
       : null;
-  const sourceHits = toSourceHits(searchResult);
+  const sourceHits = filterSourceHitsByTags(toSourceHits(searchResult), input.tags);
   const userProvidedInspiration = normalizeUrls(input.inspirationImageUrls);
   const websiteDiscoveredInspiration = shouldRunWebSearch
-    ? normalizeUrls(brandContext.imageUrls).slice(0, Math.max(1, Number(process.env.CAMPAIGN_BRAND_IMAGE_MAX ?? 4)))
+    ? filterImageUrlsByTags(
+        normalizeUrls(brandContext.imageUrls).slice(0, Math.max(1, Number(process.env.CAMPAIGN_BRAND_IMAGE_MAX ?? 4))),
+        input.tags
+      )
     : [];
   const autoDiscoveredInspiration =
     shouldRunWebSearch && !userProvidedInspiration.length
-      ? await collectImageCandidatesFromHits(sourceHits, {
-          maxImages: Number(process.env.CAMPAIGN_AUTO_IMAGE_MAX ?? 6)
-        })
+      ? filterImageUrlsByTags(
+          await collectImageCandidatesFromHits(sourceHits, {
+            maxImages: Number(process.env.CAMPAIGN_AUTO_IMAGE_MAX ?? 6)
+          }),
+          input.tags
+        )
       : [];
   const resolvedInspirationImageUrls = userProvidedInspiration.length
     ? userProvidedInspiration
