@@ -1238,6 +1238,86 @@ type KpiOverview = {
   }>;
 };
 
+type CampaignBuildMode = "design_from_scratch" | "promotion_event_prompt";
+type CampaignChannel = "sms" | "email" | "both";
+type CampaignTag =
+  | "sales"
+  | "parts"
+  | "apparel"
+  | "service"
+  | "financing"
+  | "national_campaign"
+  | "dealer_event";
+
+type CampaignSourceHit = {
+  title?: string;
+  snippet?: string;
+  url?: string;
+  domain?: string;
+};
+
+type CampaignEntry = {
+  id: string;
+  name: string;
+  status?: "draft" | "generated";
+  buildMode: CampaignBuildMode;
+  channel: CampaignChannel;
+  tags: CampaignTag[];
+  prompt?: string;
+  description?: string;
+  inspirationImageUrls?: string[];
+  assetImageUrls?: string[];
+  smsBody?: string;
+  emailSubject?: string;
+  emailBodyText?: string;
+  emailBodyHtml?: string;
+  sourceHits?: CampaignSourceHit[];
+  metadata?: Record<string, unknown>;
+  generatedBy?: "nano_banana" | "llm_fallback" | "template";
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+const CAMPAIGN_TAG_OPTIONS: Array<{ value: CampaignTag; label: string }> = [
+  { value: "sales", label: "Sales" },
+  { value: "parts", label: "Parts" },
+  { value: "apparel", label: "Apparel" },
+  { value: "service", label: "Service" },
+  { value: "financing", label: "Financing" },
+  { value: "national_campaign", label: "National campaign" },
+  { value: "dealer_event", label: "Dealer event" }
+];
+
+function campaignUrlsToText(values?: string[] | null): string {
+  return Array.isArray(values) ? values.filter(Boolean).join("\n") : "";
+}
+
+function parseCampaignUrlsText(raw: string): string[] {
+  return Array.from(
+    new Set(
+      String(raw ?? "")
+        .split(/\n+/)
+        .map(v => v.trim())
+        .filter(Boolean)
+    )
+  );
+}
+
+const EMPTY_CAMPAIGN_FORM = {
+  name: "",
+  buildMode: "design_from_scratch" as CampaignBuildMode,
+  channel: "both" as CampaignChannel,
+  tags: [] as CampaignTag[],
+  prompt: "",
+  description: "",
+  inspirationImageUrlsText: "",
+  assetImageUrlsText: "",
+  smsBody: "",
+  emailSubject: "",
+  emailBodyText: "",
+  emailBodyHtml: ""
+};
+
 export default function Home() {
   const [mode, setMode] = useState<SystemMode>("suggest");
   const [conversations, setConversations] = useState<ConversationListItem[]>([]);
@@ -1258,6 +1338,7 @@ export default function Home() {
     | "contacts"
     | "watches"
     | "inventory"
+    | "campaigns"
     | "kpi"
     | "settings"
     | "calendar"
@@ -1295,6 +1376,16 @@ export default function Home() {
   const [kpiCallOwnerFilter, setKpiCallOwnerFilter] = useState("all");
   const [kpiFrom, setKpiFrom] = useState<string>("");
   const [kpiTo, setKpiTo] = useState<string>("");
+  const [campaigns, setCampaigns] = useState<CampaignEntry[]>([]);
+  const [campaignLoading, setCampaignLoading] = useState(false);
+  const [campaignSaving, setCampaignSaving] = useState(false);
+  const [campaignGenerating, setCampaignGenerating] = useState(false);
+  const [campaignError, setCampaignError] = useState<string | null>(null);
+  const [campaignSelectedId, setCampaignSelectedId] = useState("");
+  const [campaignForm, setCampaignForm] = useState({ ...EMPTY_CAMPAIGN_FORM });
+  const [campaignSourceHits, setCampaignSourceHits] = useState<CampaignSourceHit[]>([]);
+  const [campaignGeneratedBy, setCampaignGeneratedBy] = useState<string>("");
+  const [campaignGeneratedAt, setCampaignGeneratedAt] = useState<string>("");
   const cadenceResolveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [watchEditOpen, setWatchEditOpen] = useState(false);
   const [watchEditConvId, setWatchEditConvId] = useState<string | null>(null);
@@ -1473,6 +1564,7 @@ export default function Home() {
     name: "",
     firstName: "",
     lastName: "",
+    emailSignature: "",
     phone: "",
     extension: "",
     role: "salesperson",
@@ -1723,6 +1815,199 @@ export default function Home() {
       setKpiError(err?.message ?? "Failed to load KPI overview");
     } finally {
       setKpiLoading(false);
+    }
+  }
+
+  function applyCampaignToForm(entry: CampaignEntry | null) {
+    const validTags = new Set<CampaignTag>(CAMPAIGN_TAG_OPTIONS.map(opt => opt.value));
+    if (!entry) {
+      setCampaignForm({ ...EMPTY_CAMPAIGN_FORM });
+      setCampaignSourceHits([]);
+      setCampaignGeneratedBy("");
+      setCampaignGeneratedAt("");
+      return;
+    }
+    const buildMode: CampaignBuildMode =
+      entry.buildMode === "promotion_event_prompt" ? "promotion_event_prompt" : "design_from_scratch";
+    const channel: CampaignChannel =
+      entry.channel === "sms" || entry.channel === "email" || entry.channel === "both"
+        ? entry.channel
+        : "both";
+    const tags: CampaignTag[] = Array.isArray(entry.tags)
+      ? (entry.tags
+          .filter(tag => validTags.has(tag as CampaignTag))
+          .map(tag => tag as CampaignTag) as CampaignTag[])
+      : [];
+    setCampaignForm({
+      name: String(entry.name ?? "").trim(),
+      buildMode,
+      channel,
+      tags,
+      prompt: String(entry.prompt ?? ""),
+      description: String(entry.description ?? ""),
+      inspirationImageUrlsText: campaignUrlsToText(entry.inspirationImageUrls),
+      assetImageUrlsText: campaignUrlsToText(entry.assetImageUrls),
+      smsBody: String(entry.smsBody ?? ""),
+      emailSubject: String(entry.emailSubject ?? ""),
+      emailBodyText: String(entry.emailBodyText ?? ""),
+      emailBodyHtml: String(entry.emailBodyHtml ?? "")
+    });
+    setCampaignSourceHits(Array.isArray(entry.sourceHits) ? entry.sourceHits : []);
+    setCampaignGeneratedBy(String(entry.generatedBy ?? ""));
+    setCampaignGeneratedAt(String(entry.updatedAt ?? entry.createdAt ?? ""));
+  }
+
+  function resetCampaignDraft() {
+    setCampaignSelectedId("");
+    applyCampaignToForm(null);
+    setCampaignError(null);
+  }
+
+  async function loadCampaigns(preferredId?: string) {
+    if (!isManager) return;
+    setCampaignLoading(true);
+    setCampaignError(null);
+    try {
+      const resp = await fetch("/api/campaigns", { cache: "no-store" });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.ok) {
+        throw new Error(data?.error ?? "Failed to load campaigns");
+      }
+      const rows = Array.isArray(data?.campaigns) ? (data.campaigns as CampaignEntry[]) : [];
+      setCampaigns(rows);
+      if (!rows.length) {
+        resetCampaignDraft();
+        return;
+      }
+      const targetId = String(preferredId ?? campaignSelectedId ?? "").trim();
+      const selected = rows.find(row => row.id === targetId) ?? rows[0];
+      setCampaignSelectedId(selected.id);
+      applyCampaignToForm(selected);
+    } catch (err: any) {
+      setCampaignError(err?.message ?? "Failed to load campaigns");
+    } finally {
+      setCampaignLoading(false);
+    }
+  }
+
+  async function saveCampaignDraft() {
+    const name = String(campaignForm.name ?? "").trim();
+    if (!name) {
+      setCampaignError("Campaign name is required.");
+      return;
+    }
+    setCampaignSaving(true);
+    setCampaignError(null);
+    try {
+      const payload = {
+        name,
+        status: "draft",
+        buildMode: campaignForm.buildMode,
+        channel: campaignForm.channel,
+        tags: campaignForm.tags,
+        prompt: String(campaignForm.prompt ?? "").trim() || undefined,
+        description: String(campaignForm.description ?? "").trim() || undefined,
+        inspirationImageUrls: parseCampaignUrlsText(campaignForm.inspirationImageUrlsText),
+        assetImageUrls: parseCampaignUrlsText(campaignForm.assetImageUrlsText),
+        smsBody: String(campaignForm.smsBody ?? "").trim() || undefined,
+        emailSubject: String(campaignForm.emailSubject ?? "").trim() || undefined,
+        emailBodyText: String(campaignForm.emailBodyText ?? "").trim() || undefined,
+        emailBodyHtml: String(campaignForm.emailBodyHtml ?? "").trim() || undefined
+      };
+      const endpoint = campaignSelectedId
+        ? `/api/campaigns/${encodeURIComponent(campaignSelectedId)}`
+        : "/api/campaigns";
+      const method = campaignSelectedId ? "PATCH" : "POST";
+      const resp = await fetch(endpoint, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.ok || !data?.campaign) {
+        throw new Error(data?.error ?? "Failed to save campaign");
+      }
+      const saved = data.campaign as CampaignEntry;
+      setCampaignSelectedId(saved.id);
+      applyCampaignToForm(saved);
+      setCampaigns(prev => {
+        const idx = prev.findIndex(row => row.id === saved.id);
+        const next = idx >= 0 ? prev.map(row => (row.id === saved.id ? saved : row)) : [saved, ...prev];
+        return next.sort((a, b) => {
+          const aAt = new Date(String(a.updatedAt ?? a.createdAt ?? "")).getTime();
+          const bAt = new Date(String(b.updatedAt ?? b.createdAt ?? "")).getTime();
+          return bAt - aAt;
+        });
+      });
+      setSaveToast("Campaign saved");
+    } catch (err: any) {
+      setCampaignError(err?.message ?? "Failed to save campaign");
+    } finally {
+      setCampaignSaving(false);
+    }
+  }
+
+  async function generateCampaign() {
+    const name = String(campaignForm.name ?? "").trim();
+    if (!name) {
+      setCampaignError("Campaign name is required.");
+      return;
+    }
+    setCampaignGenerating(true);
+    setCampaignError(null);
+    try {
+      const payload = {
+        campaignId: campaignSelectedId || undefined,
+        save: true,
+        name,
+        buildMode: campaignForm.buildMode,
+        channel: campaignForm.channel,
+        tags: campaignForm.tags,
+        prompt: String(campaignForm.prompt ?? "").trim() || undefined,
+        description: String(campaignForm.description ?? "").trim() || undefined,
+        inspirationImageUrls: parseCampaignUrlsText(campaignForm.inspirationImageUrlsText),
+        assetImageUrls: parseCampaignUrlsText(campaignForm.assetImageUrlsText)
+      };
+      const resp = await fetch("/api/campaigns/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.ok) {
+        throw new Error(data?.error ?? "Failed to generate campaign");
+      }
+      const saved = (data?.campaign as CampaignEntry | undefined) ?? null;
+      const generated = (data?.generated as any) ?? null;
+      if (saved) {
+        setCampaignSelectedId(saved.id);
+        applyCampaignToForm(saved);
+        setCampaigns(prev => {
+          const idx = prev.findIndex(row => row.id === saved.id);
+          const next = idx >= 0 ? prev.map(row => (row.id === saved.id ? saved : row)) : [saved, ...prev];
+          return next.sort((a, b) => {
+            const aAt = new Date(String(a.updatedAt ?? a.createdAt ?? "")).getTime();
+            const bAt = new Date(String(b.updatedAt ?? b.createdAt ?? "")).getTime();
+            return bAt - aAt;
+          });
+        });
+      } else if (generated) {
+        setCampaignForm(prev => ({
+          ...prev,
+          smsBody: String(generated?.smsBody ?? ""),
+          emailSubject: String(generated?.emailSubject ?? ""),
+          emailBodyText: String(generated?.emailBodyText ?? ""),
+          emailBodyHtml: String(generated?.emailBodyHtml ?? "")
+        }));
+        setCampaignSourceHits(Array.isArray(generated?.sourceHits) ? generated.sourceHits : []);
+        setCampaignGeneratedBy(String(generated?.generatedBy ?? ""));
+        setCampaignGeneratedAt(new Date().toISOString());
+      }
+      setSaveToast("Campaign generated");
+    } catch (err: any) {
+      setCampaignError(err?.message ?? "Failed to generate campaign");
+    } finally {
+      setCampaignGenerating(false);
     }
   }
 
@@ -2217,6 +2502,9 @@ export default function Home() {
           })
         );
       }
+      setSaveToast("Saved");
+      setCloseReason("");
+      setSoldById("");
       setSoldModalOpen(false);
       await load();
     } catch (err: any) {
@@ -3194,6 +3482,7 @@ export default function Home() {
       "contacts",
       "watches",
       "inventory",
+      "campaigns",
       "settings",
       "calendar"
     ]);
@@ -3206,10 +3495,17 @@ export default function Home() {
         | "contacts"
         | "watches"
         | "inventory"
+        | "campaigns"
         | "settings"
         | "calendar";
       setSection(next);
-      if (next === "calendar" || next === "settings" || next === "inventory" || next === "suppressions") {
+      if (
+        next === "calendar" ||
+        next === "settings" ||
+        next === "inventory" ||
+        next === "suppressions" ||
+        next === "campaigns"
+      ) {
         setMobilePanel("detail");
       } else {
         setMobilePanel("list");
@@ -3787,6 +4083,8 @@ export default function Home() {
             ? "Inventory"
             : section === "watches"
               ? "Vehicle Watches"
+              : section === "campaigns"
+                ? "Campaign Studio"
               : section === "kpi"
                 ? "KPI Overview"
               : section === "calendar"
@@ -3807,6 +4105,8 @@ export default function Home() {
             ? `${inventoryItems.length} bikes`
             : section === "watches"
               ? `${visibleWatchItems.length} active`
+              : section === "campaigns"
+                ? `${campaigns.length} campaigns`
               : section === "kpi"
                 ? "Manager analytics"
               : section === "calendar"
@@ -3825,6 +4125,7 @@ export default function Home() {
       section === "settings" ||
       section === "inventory" ||
       section === "suppressions" ||
+      section === "campaigns" ||
       section === "kpi"
     ) {
       setMobilePanel("detail");
@@ -3842,7 +4143,7 @@ export default function Home() {
   }, [isDepartmentUser, section]);
 
   useEffect(() => {
-    if (section === "kpi" && !isManager) {
+    if ((section === "kpi" || section === "campaigns") && !isManager) {
       setSection("inbox");
       setMobilePanel("list");
     }
@@ -3852,6 +4153,11 @@ export default function Home() {
     if (!isManager || section !== "kpi") return;
     void loadKpiOverview();
   }, [section, isManager, kpiSourceFilter, kpiLeadTypeFilter, kpiLeadScopeFilter, kpiOwnerFilter, kpiFrom, kpiTo]);
+
+  useEffect(() => {
+    if (!isManager || section !== "campaigns") return;
+    void loadCampaigns();
+  }, [section, isManager]);
 
   function openConversation(id: string) {
     setSelectedId(id);
@@ -3867,6 +4173,7 @@ export default function Home() {
       | "contacts"
       | "watches"
       | "inventory"
+      | "campaigns"
       | "kpi"
       | "settings"
       | "calendar"
@@ -3879,6 +4186,7 @@ export default function Home() {
       target === "settings" ||
       target === "inventory" ||
       target === "suppressions" ||
+      target === "campaigns" ||
       target === "kpi"
     ) {
       setMobilePanel("detail");
@@ -7164,6 +7472,7 @@ export default function Home() {
         name: "",
         firstName: "",
         lastName: "",
+        emailSignature: "",
         phone: "",
         extension: "",
         role: "salesperson",
@@ -7704,6 +8013,15 @@ export default function Home() {
         ) : null}
         {!isDepartmentUser && authUser?.role === "manager" ? (
           <button
+            className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "campaigns" ? "bg-white/10" : "hover:bg-white/5"}`}
+            title="Campaign Studio"
+            onClick={() => goToSection("campaigns")}
+          >
+            📣
+          </button>
+        ) : null}
+        {!isDepartmentUser && authUser?.role === "manager" ? (
+          <button
             className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "kpi" ? "bg-white/10" : "hover:bg-white/5"}`}
             title="KPI Overview"
             onClick={() => goToSection("kpi")}
@@ -7983,6 +8301,65 @@ export default function Home() {
                         </button>
                       </div>
                     </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        ) : section === "campaigns" ? (
+          <div className="mt-4 space-y-3">
+            <div className="flex gap-2">
+              <button
+                className="flex-1 px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)]"
+                onClick={() => resetCampaignDraft()}
+                disabled={campaignSaving || campaignGenerating}
+              >
+                New campaign
+              </button>
+              <button
+                className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)]"
+                onClick={() => {
+                  void loadCampaigns();
+                }}
+                disabled={campaignLoading}
+              >
+                Refresh
+              </button>
+            </div>
+            {campaignError ? <div className="text-xs text-red-600">{campaignError}</div> : null}
+            {campaignLoading ? (
+              <div className="text-sm text-gray-500">Loading campaigns...</div>
+            ) : campaigns.length === 0 ? (
+              <div className="text-sm text-gray-500 border rounded p-3 bg-[var(--surface-2)]">
+                No campaigns yet. Create a draft to get started.
+              </div>
+            ) : (
+              <div className="border rounded-lg divide-y bg-[var(--surface)] max-h-[55vh] overflow-y-auto">
+                {campaigns.map(item => {
+                  const selected = campaignSelectedId === item.id;
+                  const status = String(item.status ?? "draft").toLowerCase() === "generated" ? "Generated" : "Draft";
+                  const updated = item.updatedAt || item.createdAt;
+                  const tags = Array.isArray(item.tags) ? item.tags : [];
+                  return (
+                    <button
+                      key={item.id}
+                      className={`w-full text-left p-3 hover:bg-[var(--surface-2)] ${selected ? "bg-[var(--surface-2)]" : ""}`}
+                      onClick={() => {
+                        setCampaignSelectedId(item.id);
+                        applyCampaignToForm(item);
+                      }}
+                    >
+                      <div className="text-sm font-medium truncate">{item.name || "Untitled campaign"}</div>
+                      <div className="text-[11px] text-gray-500 mt-1">
+                        {status}
+                        {updated ? ` • ${new Date(updated).toLocaleString()}` : ""}
+                      </div>
+                      {tags.length ? (
+                        <div className="text-[11px] text-gray-600 mt-1 truncate">
+                          {tags.join(" • ")}
+                        </div>
+                      ) : null}
+                    </button>
                   );
                 })}
               </div>
@@ -9498,7 +9875,237 @@ export default function Home() {
           section === "calendar" ? "p-2 overflow-hidden" : "p-6 overflow-y-auto"
         } ${isConversationSection && mobilePanel === "list" ? "hidden md:block" : ""}`}
       >
-        {section === "kpi" ? (
+        {section === "campaigns" ? (
+          <div className="space-y-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-semibold">Campaign Studio</h2>
+                <p className="text-xs text-gray-500 mt-1">
+                  Build SMS/email campaign drafts with prompt + reference URLs.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
+                  onClick={() => {
+                    void saveCampaignDraft();
+                  }}
+                  disabled={campaignSaving || campaignGenerating}
+                >
+                  {campaignSaving ? "Saving..." : "Save Draft"}
+                </button>
+                <button
+                  className="px-3 py-2 border rounded text-sm bg-gray-900 text-white hover:bg-black disabled:opacity-60"
+                  onClick={() => {
+                    void generateCampaign();
+                  }}
+                  disabled={campaignGenerating || campaignSaving}
+                >
+                  {campaignGenerating ? "Generating..." : "Generate Copy"}
+                </button>
+              </div>
+            </div>
+
+            {campaignError ? (
+              <div className="border border-red-200 rounded px-3 py-2 text-sm text-red-700 bg-red-50">
+                {campaignError}
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+              <div className="border rounded-lg bg-white p-4 space-y-4">
+                <div>
+                  <label className="text-xs text-gray-600">Campaign name</label>
+                  <input
+                    className="mt-1 w-full border rounded px-3 py-2 text-sm"
+                    placeholder="Spring service promo"
+                    value={campaignForm.name}
+                    onChange={e => setCampaignForm(prev => ({ ...prev, name: e.target.value }))}
+                  />
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <label className="text-xs text-gray-600">
+                    Build mode
+                    <select
+                      className="mt-1 w-full border rounded px-3 py-2 text-sm bg-white"
+                      value={campaignForm.buildMode}
+                      onChange={e =>
+                        setCampaignForm(prev => ({
+                          ...prev,
+                          buildMode:
+                            e.target.value === "promotion_event_prompt"
+                              ? "promotion_event_prompt"
+                              : "design_from_scratch"
+                        }))
+                      }
+                    >
+                      <option value="design_from_scratch">Design from scratch</option>
+                      <option value="promotion_event_prompt">Promotion/event prompt</option>
+                    </select>
+                  </label>
+                  <label className="text-xs text-gray-600">
+                    Channel
+                    <select
+                      className="mt-1 w-full border rounded px-3 py-2 text-sm bg-white"
+                      value={campaignForm.channel}
+                      onChange={e =>
+                        setCampaignForm(prev => ({
+                          ...prev,
+                          channel:
+                            e.target.value === "sms" || e.target.value === "email" || e.target.value === "both"
+                              ? (e.target.value as CampaignChannel)
+                              : "both"
+                        }))
+                      }
+                    >
+                      <option value="both">SMS + Email</option>
+                      <option value="sms">SMS only</option>
+                      <option value="email">Email only</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div>
+                  <div className="text-xs text-gray-600 mb-2">Tags</div>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                    {CAMPAIGN_TAG_OPTIONS.map(opt => {
+                      const checked = campaignForm.tags.includes(opt.value);
+                      return (
+                        <label
+                          key={`campaign-tag-${opt.value}`}
+                          className="flex items-center gap-2 text-xs border rounded px-2 py-1.5 bg-gray-50"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={e =>
+                              setCampaignForm(prev => {
+                                const next = e.target.checked
+                                  ? Array.from(new Set<CampaignTag>([...prev.tags, opt.value]))
+                                  : prev.tags.filter(tag => tag !== opt.value);
+                                return { ...prev, tags: next };
+                              })
+                            }
+                          />
+                          <span>{opt.label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <label className="block text-xs text-gray-600">
+                  Campaign description
+                  <textarea
+                    className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[100px]"
+                    placeholder="Describe promo/event context and offer intent..."
+                    value={campaignForm.description}
+                    onChange={e => setCampaignForm(prev => ({ ...prev, description: e.target.value }))}
+                  />
+                </label>
+
+                <label className="block text-xs text-gray-600">
+                  Prompt / creative direction
+                  <textarea
+                    className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[100px]"
+                    placeholder="Use urgent but friendly tone, highlight weekend event..."
+                    value={campaignForm.prompt}
+                    onChange={e => setCampaignForm(prev => ({ ...prev, prompt: e.target.value }))}
+                  />
+                </label>
+
+                <label className="block text-xs text-gray-600">
+                  Inspiration image URLs (one per line)
+                  <textarea
+                    className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[80px] font-mono"
+                    value={campaignForm.inspirationImageUrlsText}
+                    onChange={e =>
+                      setCampaignForm(prev => ({ ...prev, inspirationImageUrlsText: e.target.value }))
+                    }
+                  />
+                </label>
+
+                <label className="block text-xs text-gray-600">
+                  Asset image URLs (one per line)
+                  <textarea
+                    className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[80px] font-mono"
+                    value={campaignForm.assetImageUrlsText}
+                    onChange={e => setCampaignForm(prev => ({ ...prev, assetImageUrlsText: e.target.value }))}
+                  />
+                </label>
+              </div>
+
+              <div className="border rounded-lg bg-white p-4 space-y-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-sm font-semibold">Generated Copy</div>
+                  <div className="text-[11px] text-gray-500 text-right">
+                    {campaignGeneratedBy ? `Source: ${campaignGeneratedBy}` : "Source: N/A"}
+                    {campaignGeneratedAt ? ` • ${new Date(campaignGeneratedAt).toLocaleString()}` : ""}
+                  </div>
+                </div>
+
+                <label className="block text-xs text-gray-600">
+                  SMS body
+                  <textarea
+                    className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[90px]"
+                    value={campaignForm.smsBody}
+                    onChange={e => setCampaignForm(prev => ({ ...prev, smsBody: e.target.value }))}
+                  />
+                </label>
+
+                <label className="block text-xs text-gray-600">
+                  Email subject
+                  <input
+                    className="mt-1 w-full border rounded px-3 py-2 text-sm"
+                    value={campaignForm.emailSubject}
+                    onChange={e => setCampaignForm(prev => ({ ...prev, emailSubject: e.target.value }))}
+                  />
+                </label>
+
+                <label className="block text-xs text-gray-600">
+                  Email body (text)
+                  <textarea
+                    className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[160px]"
+                    value={campaignForm.emailBodyText}
+                    onChange={e => setCampaignForm(prev => ({ ...prev, emailBodyText: e.target.value }))}
+                  />
+                </label>
+
+                <label className="block text-xs text-gray-600">
+                  Email body (HTML)
+                  <textarea
+                    className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[160px] font-mono"
+                    value={campaignForm.emailBodyHtml}
+                    onChange={e => setCampaignForm(prev => ({ ...prev, emailBodyHtml: e.target.value }))}
+                  />
+                </label>
+
+                <div className="border rounded p-3 bg-gray-50">
+                  <div className="text-xs font-semibold text-gray-700 mb-2">Reference hits</div>
+                  {campaignSourceHits.length ? (
+                    <div className="space-y-2 max-h-[240px] overflow-y-auto">
+                      {campaignSourceHits.map((hit, idx) => (
+                        <div key={`campaign-hit-${idx}`} className="text-xs">
+                          <a
+                            href={hit.url || "#"}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-700 hover:underline font-medium"
+                          >
+                            {hit.title || hit.domain || hit.url || `Reference ${idx + 1}`}
+                          </a>
+                          {hit.snippet ? <div className="text-gray-600 mt-0.5">{hit.snippet}</div> : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-gray-500">No references yet. Generate copy to fetch sources.</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : section === "kpi" ? (
           <div className="space-y-5">
             <div className="flex items-center justify-between">
               <div>
@@ -11223,58 +11830,68 @@ export default function Home() {
                             .filter(u => u.id === editingUserId)
                             .map(user => (
                               <div key={user.id} className="space-y-2">
-                                <div className="grid grid-cols-2 gap-2">
-                                  <input
-                                    className="border rounded px-2 py-1 text-sm"
-                                    value={user.firstName ?? ""}
-                                    placeholder="First name"
-                                    onChange={e =>
-                                      setUsersList(prev =>
-                                        prev.map(u =>
-                                          u.id === user.id ? { ...u, firstName: e.target.value } : u
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                  <div className="md:col-span-2 text-sm font-medium">Basic Info</div>
+                                  <label className="space-y-1">
+                                    <div className="text-xs text-gray-600">First name</div>
+                                    <input
+                                      className="border rounded px-2 py-1 text-sm w-full"
+                                      value={user.firstName ?? ""}
+                                      onChange={e =>
+                                        setUsersList(prev =>
+                                          prev.map(u =>
+                                            u.id === user.id ? { ...u, firstName: e.target.value } : u
+                                          )
                                         )
-                                      )
-                                    }
-                                  />
-                                  <input
-                                    className="border rounded px-2 py-1 text-sm"
-                                    value={user.lastName ?? ""}
-                                    placeholder="Last name"
-                                    onChange={e =>
-                                      setUsersList(prev =>
-                                        prev.map(u =>
-                                          u.id === user.id ? { ...u, lastName: e.target.value } : u
+                                      }
+                                    />
+                                  </label>
+                                  <label className="space-y-1">
+                                    <div className="text-xs text-gray-600">Last name</div>
+                                    <input
+                                      className="border rounded px-2 py-1 text-sm w-full"
+                                      value={user.lastName ?? ""}
+                                      onChange={e =>
+                                        setUsersList(prev =>
+                                          prev.map(u =>
+                                            u.id === user.id ? { ...u, lastName: e.target.value } : u
+                                          )
                                         )
-                                      )
-                                    }
-                                  />
-                                  <input
-                                    className="border rounded px-2 py-1 text-sm"
-                                    value={user.email ?? ""}
-                                    placeholder="Email"
-                                    onChange={e =>
-                                      setUsersList(prev =>
-                                        prev.map(u => (u.id === user.id ? { ...u, email: e.target.value } : u))
-                                      )
-                                    }
-                                  />
-                                  <select
-                                    className="border rounded px-2 py-1 text-sm"
-                                    value={user.role ?? "salesperson"}
-                                    onChange={e =>
-                                      setUsersList(prev =>
-                                        prev.map(u => (u.id === user.id ? { ...u, role: e.target.value } : u))
-                                      )
-                                    }
-                                  >
-                                    <option value="salesperson">Salesperson</option>
-                                    <option value="manager">Manager</option>
-                                    <option value="service">Service</option>
-                                    <option value="parts">Parts</option>
-                                    <option value="apparel">Apparel</option>
-                                  </select>
+                                      }
+                                    />
+                                  </label>
+                                  <label className="space-y-1">
+                                    <div className="text-xs text-gray-600">Email</div>
+                                    <input
+                                      className="border rounded px-2 py-1 text-sm w-full"
+                                      value={user.email ?? ""}
+                                      onChange={e =>
+                                        setUsersList(prev =>
+                                          prev.map(u => (u.id === user.id ? { ...u, email: e.target.value } : u))
+                                        )
+                                      }
+                                    />
+                                  </label>
+                                  <label className="space-y-1">
+                                    <div className="text-xs text-gray-600">Role</div>
+                                    <select
+                                      className="border rounded px-2 py-1 text-sm w-full"
+                                      value={user.role ?? "salesperson"}
+                                      onChange={e =>
+                                        setUsersList(prev =>
+                                          prev.map(u => (u.id === user.id ? { ...u, role: e.target.value } : u))
+                                        )
+                                      }
+                                    >
+                                      <option value="salesperson">Salesperson</option>
+                                      <option value="manager">Manager</option>
+                                      <option value="service">Service</option>
+                                      <option value="parts">Parts</option>
+                                      <option value="apparel">Apparel</option>
+                                    </select>
+                                  </label>
                                   {user.role === "manager" ? (
-                                    <label className="col-span-2 flex items-center gap-2 text-xs">
+                                    <label className="md:col-span-2 flex items-center gap-2 text-xs">
                                       <input
                                         type="checkbox"
                                         checked={!!user.includeInSchedule}
@@ -11289,17 +11906,22 @@ export default function Home() {
                                       Include on schedule (show in booking dropdowns)
                                     </label>
                                   ) : null}
-                                  <input
-                                    className="border rounded px-2 py-1 text-sm"
-                                    placeholder="Calendar ID"
-                                    value={user.calendarId ?? ""}
-                                    onChange={e =>
-                                      setUsersList(prev =>
-                                        prev.map(u => (u.id === user.id ? { ...u, calendarId: e.target.value } : u))
-                                      )
-                                    }
-                                  />
-                                  <div className="col-span-2 text-xs text-gray-500 -mt-1">
+                                  <div className="md:col-span-2 border-t pt-2 text-sm font-medium">
+                                    Contact & Scheduling
+                                  </div>
+                                  <label className="space-y-1">
+                                    <div className="text-xs text-gray-600">Calendar ID</div>
+                                    <input
+                                      className="border rounded px-2 py-1 text-sm w-full"
+                                      value={user.calendarId ?? ""}
+                                      onChange={e =>
+                                        setUsersList(prev =>
+                                          prev.map(u => (u.id === user.id ? { ...u, calendarId: e.target.value } : u))
+                                        )
+                                      }
+                                    />
+                                  </label>
+                                  <div className="md:col-span-2 text-xs text-gray-500 -mt-1">
                                     Calendar ID is required to show on the schedule.
                                   </div>
                                   <div>
@@ -11315,6 +11937,25 @@ export default function Home() {
                                       }
                                     />
                                   </div>
+                                  <div className="md:col-span-2 border-t pt-2 text-sm font-medium">
+                                    Email Signature
+                                  </div>
+                                  <label className="md:col-span-2 space-y-1">
+                                    <div className="text-xs text-gray-600">
+                                      Salesperson email signature (used for manual emails)
+                                    </div>
+                                    <textarea
+                                      className="border rounded px-2 py-1 text-sm w-full h-24"
+                                      value={String(user.emailSignature ?? "")}
+                                      onChange={e =>
+                                        setUsersList(prev =>
+                                          prev.map(u =>
+                                            u.id === user.id ? { ...u, emailSignature: e.target.value } : u
+                                          )
+                                        )
+                                      }
+                                    />
+                                  </label>
                                   <div>
                                     <div className="text-xs text-gray-500 mb-1">Extension / dial digits</div>
                                     <input
@@ -11328,19 +11969,23 @@ export default function Home() {
                                       }
                                     />
                                   </div>
-                                  <input
-                                    className="border rounded px-2 py-1 text-sm col-span-2"
-                                    placeholder="Set new password"
-                                    type="password"
-                                    value={userPasswords[user.id] ?? ""}
-                                    onChange={e =>
-                                      setUserPasswords(prev => ({
-                                        ...prev,
-                                        [user.id]: e.target.value
-                                      }))
-                                    }
-                                  />
-                                  <div className="col-span-2 grid grid-cols-2 gap-2 text-xs">
+                                  <div className="md:col-span-2 border-t pt-2 text-sm font-medium">Security</div>
+                                  <label className="md:col-span-2 space-y-1">
+                                    <div className="text-xs text-gray-600">Set new password</div>
+                                    <input
+                                      className="border rounded px-2 py-1 text-sm w-full"
+                                      type="password"
+                                      value={userPasswords[user.id] ?? ""}
+                                      onChange={e =>
+                                        setUserPasswords(prev => ({
+                                          ...prev,
+                                          [user.id]: e.target.value
+                                        }))
+                                      }
+                                    />
+                                  </label>
+                                  <div className="md:col-span-2 border-t pt-2 text-sm font-medium">Permissions</div>
+                                  <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
                                     <label className="flex items-center gap-2">
                                       <input
                                         type="checkbox"
@@ -11445,6 +12090,7 @@ export default function Home() {
                                         name: fullName || user.name,
                                         firstName: user.firstName,
                                         lastName: user.lastName,
+                                        emailSignature: user.emailSignature,
                                         role: user.role,
                                         includeInSchedule: user.includeInSchedule,
                                         calendarId: user.calendarId,
@@ -11504,143 +12150,93 @@ export default function Home() {
                               </div>
                             ))
                         : (
-                          <div className="space-y-2">
+                          <div className="space-y-3">
                             <div className="text-xs text-gray-500">
                               Save the user to set availability blocks.
                             </div>
-                          <div className="grid grid-cols-2 gap-3">
-                            <input
-                              className="border rounded px-3 py-2 text-sm"
-                              placeholder="First name"
-                              value={userForm.firstName}
-                              onChange={e => setUserForm({ ...userForm, firstName: e.target.value })}
-                              />
-                            <input
-                              className="border rounded px-3 py-2 text-sm"
-                              placeholder="Last name"
-                              value={userForm.lastName}
-                              onChange={e => setUserForm({ ...userForm, lastName: e.target.value })}
-                              />
-                              <input
-                                className="border rounded px-3 py-2 text-sm"
-                                placeholder="Email"
-                                value={userForm.email}
-                                onChange={e => setUserForm({ ...userForm, email: e.target.value })}
-                              />
-                              <div>
-                                <div className="text-xs text-gray-500 mb-1">Phone (for calls)</div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              <div className="md:col-span-2 text-sm font-medium">Basic Info</div>
+                              <label className="space-y-1">
+                                <div className="text-xs text-gray-600">First name</div>
                                 <input
                                   className="border rounded px-3 py-2 text-sm w-full"
-                                  placeholder="Phone (for calls)"
-                                  value={(userForm as any).phone ?? ""}
+                                  value={userForm.firstName}
+                                  onChange={e => setUserForm({ ...userForm, firstName: e.target.value })}
+                                />
+                              </label>
+                              <label className="space-y-1">
+                                <div className="text-xs text-gray-600">Last name</div>
+                                <input
+                                  className="border rounded px-3 py-2 text-sm w-full"
+                                  value={userForm.lastName}
+                                  onChange={e => setUserForm({ ...userForm, lastName: e.target.value })}
+                                />
+                              </label>
+                              <label className="space-y-1">
+                                <div className="text-xs text-gray-600">Email</div>
+                                <input
+                                  className="border rounded px-3 py-2 text-sm w-full"
+                                  value={userForm.email}
+                                  onChange={e => setUserForm({ ...userForm, email: e.target.value })}
+                                />
+                              </label>
+                              <label className="space-y-1">
+                                <div className="text-xs text-gray-600">Role</div>
+                                <select
+                                  className="border rounded px-3 py-2 text-sm w-full"
+                                  value={userForm.role}
+                                  onChange={e => setUserForm({ ...userForm, role: e.target.value })}
+                                >
+                                  <option value="salesperson">Salesperson</option>
+                                  <option value="manager">Manager</option>
+                                  <option value="service">Service</option>
+                                  <option value="parts">Parts</option>
+                                  <option value="apparel">Apparel</option>
+                                </select>
+                              </label>
+                              {userForm.role === "manager" ? (
+                                <label className="md:col-span-2 flex items-center gap-2 text-xs">
+                                  <input
+                                    type="checkbox"
+                                    checked={!!userForm.includeInSchedule}
+                                    onChange={e =>
+                                      setUserForm({ ...userForm, includeInSchedule: e.target.checked })
+                                    }
+                                  />
+                                  Include on schedule (show in booking dropdowns)
+                                </label>
+                              ) : null}
+
+                              <div className="md:col-span-2 border-t pt-2 text-sm font-medium">
+                                Contact & Scheduling
+                              </div>
+                              <label className="space-y-1">
+                                <div className="text-xs text-gray-600">Phone (for calls)</div>
+                                <input
+                                  className="border rounded px-3 py-2 text-sm w-full"
+                                  value={String((userForm as any).phone ?? "")}
                                   onChange={e => setUserForm({ ...userForm, phone: e.target.value })}
                                 />
-                              </div>
-                              <div>
-                                <div className="text-xs text-gray-500 mb-1">Extension / dial digits</div>
+                              </label>
+                              <label className="space-y-1">
+                                <div className="text-xs text-gray-600">Extension / dial digits</div>
                                 <input
                                   className="border rounded px-3 py-2 text-sm w-full"
-                                  placeholder="Extension / dial digits"
-                                  value={(userForm as any).extension ?? ""}
+                                  value={String((userForm as any).extension ?? "")}
                                   onChange={e => setUserForm({ ...userForm, extension: e.target.value })}
                                 />
-                              </div>
-                              <input
-                                className="border rounded px-3 py-2 text-sm"
-                                placeholder="Password"
-                                type="password"
-                                value={userForm.password}
-                                onChange={e => setUserForm({ ...userForm, password: e.target.value })}
-                              />
-                            <select
-                              className="border rounded px-3 py-2 text-sm"
-                              value={userForm.role}
-                              onChange={e => setUserForm({ ...userForm, role: e.target.value })}
-                            >
-                              <option value="salesperson">Salesperson</option>
-                              <option value="manager">Manager</option>
-                              <option value="service">Service</option>
-                              <option value="parts">Parts</option>
-                              <option value="apparel">Apparel</option>
-                            </select>
-                            {userForm.role === "manager" ? (
-                              <label className="col-span-2 flex items-center gap-2 text-xs">
-                                <input
-                                  type="checkbox"
-                                  checked={!!userForm.includeInSchedule}
-                                  onChange={e =>
-                                    setUserForm({ ...userForm, includeInSchedule: e.target.checked })
-                                  }
-                                />
-                                Include on schedule (show in booking dropdowns)
                               </label>
-                            ) : null}
-                            <div className="col-span-2 grid grid-cols-2 gap-2 text-xs">
-                              <label className="flex items-center gap-2">
-                                <input
-                                  type="checkbox"
-                                  checked={!!userForm.permissions?.canEditAppointments}
-                                  onChange={e =>
-                                    setUserForm({
-                                      ...userForm,
-                                      permissions: { ...userForm.permissions, canEditAppointments: e.target.checked }
-                                    })
-                                  }
-                                />
-                                Edit appointments
-                              </label>
-                              <label className="flex items-center gap-2">
-                                <input
-                                  type="checkbox"
-                                  checked={!!userForm.permissions?.canToggleHumanOverride}
-                                  onChange={e =>
-                                    setUserForm({
-                                      ...userForm,
-                                      permissions: { ...userForm.permissions, canToggleHumanOverride: e.target.checked }
-                                    })
-                                  }
-                                />
-                                Human override
-                              </label>
-                              <label className="flex items-center gap-2">
-                                <input
-                                  type="checkbox"
-                                  checked={!!userForm.permissions?.canAccessTodos}
-                                  onChange={e =>
-                                    setUserForm({
-                                      ...userForm,
-                                      permissions: { ...userForm.permissions, canAccessTodos: e.target.checked }
-                                    })
-                                  }
-                                />
-                                To‑Do inbox
-                              </label>
-                              <label className="flex items-center gap-2">
-                                <input
-                                  type="checkbox"
-                                  checked={!!userForm.permissions?.canAccessSuppressions}
-                                  onChange={e =>
-                                    setUserForm({
-                                      ...userForm,
-                                      permissions: { ...userForm.permissions, canAccessSuppressions: e.target.checked }
-                                    })
-                                  }
-                                />
-                                Suppression list
-                              </label>
-                            </div>
-                              <div className="col-span-2 flex gap-2">
-                                <div className="flex-1">
-                                  <div className="text-xs text-gray-500 mb-1">Calendar ID</div>
+                              <div className="md:col-span-2 flex gap-2">
+                                <div className="flex-1 space-y-1">
+                                  <div className="text-xs text-gray-600">Calendar ID</div>
                                   <input
                                     className="border rounded px-3 py-2 text-sm w-full"
-                                    placeholder="Calendar ID"
                                     value={userForm.calendarId}
                                     onChange={e => setUserForm({ ...userForm, calendarId: e.target.value })}
                                   />
                                 </div>
                                 <button
-                                  className="px-3 py-2 border rounded text-sm"
+                                  className="px-3 py-2 border rounded text-sm self-end"
                                   disabled={
                                     creatingCalendar ||
                                     !(
@@ -11677,6 +12273,85 @@ export default function Home() {
                                 >
                                   {creatingCalendar ? "Creating…" : "Create calendar"}
                                 </button>
+                              </div>
+
+                              <div className="md:col-span-2 border-t pt-2 text-sm font-medium">Email Signature</div>
+                              <label className="md:col-span-2 space-y-1">
+                                <div className="text-xs text-gray-600">
+                                  Salesperson email signature (used for manual emails)
+                                </div>
+                                <textarea
+                                  className="border rounded px-3 py-2 text-sm w-full h-24"
+                                  value={userForm.emailSignature}
+                                  onChange={e => setUserForm({ ...userForm, emailSignature: e.target.value })}
+                                />
+                              </label>
+
+                              <div className="md:col-span-2 border-t pt-2 text-sm font-medium">Security</div>
+                              <label className="md:col-span-2 space-y-1">
+                                <div className="text-xs text-gray-600">Password</div>
+                                <input
+                                  className="border rounded px-3 py-2 text-sm w-full"
+                                  type="password"
+                                  value={userForm.password}
+                                  onChange={e => setUserForm({ ...userForm, password: e.target.value })}
+                                />
+                              </label>
+
+                              <div className="md:col-span-2 border-t pt-2 text-sm font-medium">Permissions</div>
+                              <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                                <label className="flex items-center gap-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={!!userForm.permissions?.canEditAppointments}
+                                    onChange={e =>
+                                      setUserForm({
+                                        ...userForm,
+                                        permissions: { ...userForm.permissions, canEditAppointments: e.target.checked }
+                                      })
+                                    }
+                                  />
+                                  Edit appointments
+                                </label>
+                                <label className="flex items-center gap-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={!!userForm.permissions?.canToggleHumanOverride}
+                                    onChange={e =>
+                                      setUserForm({
+                                        ...userForm,
+                                        permissions: { ...userForm.permissions, canToggleHumanOverride: e.target.checked }
+                                      })
+                                    }
+                                  />
+                                  Human override
+                                </label>
+                                <label className="flex items-center gap-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={!!userForm.permissions?.canAccessTodos}
+                                    onChange={e =>
+                                      setUserForm({
+                                        ...userForm,
+                                        permissions: { ...userForm.permissions, canAccessTodos: e.target.checked }
+                                      })
+                                    }
+                                  />
+                                  To‑Do inbox
+                                </label>
+                                <label className="flex items-center gap-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={!!userForm.permissions?.canAccessSuppressions}
+                                    onChange={e =>
+                                      setUserForm({
+                                        ...userForm,
+                                        permissions: { ...userForm.permissions, canAccessSuppressions: e.target.checked }
+                                      })
+                                    }
+                                  />
+                                  Suppression list
+                                </label>
                               </div>
                             </div>
                             <div className="flex gap-2">

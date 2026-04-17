@@ -257,6 +257,16 @@ import {
   addContactsToList,
   deleteContactList
 } from "./domain/contactListsStore.js";
+import {
+  listCampaigns,
+  getCampaign,
+  createCampaign,
+  updateCampaign,
+  type CampaignBuildMode,
+  type CampaignChannel,
+  type CampaignTag
+} from "./domain/campaignStore.js";
+import { generateCampaignContent } from "./domain/campaignBuilder.js";
 import { isLikelyVoicemailTranscript, maybeMarkEngagedFromCall } from "./domain/engagement.js";
 
 import { getSystemMode, setSystemMode, type SystemMode } from "./domain/settingsStore.js";
@@ -19456,6 +19466,206 @@ function resolveContactIdsForList(list: any, contacts: any[]): string[] {
     new Set([...explicitIds, ...filteredIds].filter(id => byId.has(id)))
   );
 }
+
+const CAMPAIGN_BUILD_MODES = new Set<CampaignBuildMode>([
+  "design_from_scratch",
+  "promotion_event_prompt"
+]);
+const CAMPAIGN_CHANNELS = new Set<CampaignChannel>(["sms", "email", "both"]);
+const CAMPAIGN_TAGS: CampaignTag[] = [
+  "sales",
+  "parts",
+  "apparel",
+  "service",
+  "financing",
+  "national_campaign",
+  "dealer_event"
+];
+const CAMPAIGN_TAG_SET = new Set<CampaignTag>(CAMPAIGN_TAGS);
+
+function normalizeCampaignBuildMode(raw: unknown): CampaignBuildMode {
+  const value = String(raw ?? "").trim();
+  return CAMPAIGN_BUILD_MODES.has(value as CampaignBuildMode)
+    ? (value as CampaignBuildMode)
+    : "design_from_scratch";
+}
+
+function normalizeCampaignChannel(raw: unknown): CampaignChannel {
+  const value = String(raw ?? "").trim();
+  return CAMPAIGN_CHANNELS.has(value as CampaignChannel) ? (value as CampaignChannel) : "both";
+}
+
+function normalizeCampaignTags(raw: unknown): CampaignTag[] {
+  if (!Array.isArray(raw)) return [];
+  return Array.from(
+    new Set(
+      raw
+        .map(v => String(v ?? "").trim())
+        .filter(v => CAMPAIGN_TAG_SET.has(v as CampaignTag))
+    )
+  ) as CampaignTag[];
+}
+
+function normalizeCampaignUrlArray(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return Array.from(
+    new Set(
+      raw
+        .map(v => String(v ?? "").trim())
+        .filter(Boolean)
+    )
+  );
+}
+
+function campaignCreatorDisplayName(user: any): string | undefined {
+  const fullName = [user?.firstName, user?.lastName].filter(Boolean).join(" ").trim();
+  if (fullName) return fullName;
+  const name = String(user?.name ?? "").trim();
+  if (name) return name;
+  const email = String(user?.email ?? "").trim();
+  return email || undefined;
+}
+
+app.get("/campaigns", requireManager, (_req, res) => {
+  return res.json({ ok: true, campaigns: listCampaigns() });
+});
+
+app.post("/campaigns", requireManager, (req, res) => {
+  const user = (req as any).user ?? null;
+  const name = String(req.body?.name ?? "").trim();
+  if (!name) return res.status(400).json({ ok: false, error: "Missing campaign name" });
+  const statusRaw = String(req.body?.status ?? "draft").trim().toLowerCase();
+  const status = statusRaw === "generated" ? "generated" : "draft";
+  const created = createCampaign({
+    name,
+    status,
+    buildMode: normalizeCampaignBuildMode(req.body?.buildMode),
+    channel: normalizeCampaignChannel(req.body?.channel),
+    tags: normalizeCampaignTags(req.body?.tags),
+    prompt: req.body?.prompt,
+    description: req.body?.description,
+    inspirationImageUrls: normalizeCampaignUrlArray(req.body?.inspirationImageUrls),
+    assetImageUrls: normalizeCampaignUrlArray(req.body?.assetImageUrls),
+    smsBody: req.body?.smsBody,
+    emailSubject: req.body?.emailSubject,
+    emailBodyText: req.body?.emailBodyText,
+    emailBodyHtml: req.body?.emailBodyHtml,
+    metadata:
+      req.body?.metadata && typeof req.body.metadata === "object"
+        ? req.body.metadata
+        : undefined,
+    createdByUserId: user?.id,
+    createdByUserName: campaignCreatorDisplayName(user),
+    generatedBy:
+      req.body?.generatedBy === "nano_banana" ||
+      req.body?.generatedBy === "llm_fallback" ||
+      req.body?.generatedBy === "template"
+        ? req.body.generatedBy
+        : undefined
+  });
+  return res.json({ ok: true, campaign: created });
+});
+
+app.patch("/campaigns/:id", requireManager, (req, res) => {
+  const patch: Record<string, unknown> = {};
+  if (req.body?.name !== undefined) patch.name = String(req.body.name ?? "").trim();
+  if (req.body?.status !== undefined) {
+    const statusRaw = String(req.body.status ?? "").trim().toLowerCase();
+    patch.status = statusRaw === "generated" ? "generated" : "draft";
+  }
+  if (req.body?.buildMode !== undefined) patch.buildMode = normalizeCampaignBuildMode(req.body.buildMode);
+  if (req.body?.channel !== undefined) patch.channel = normalizeCampaignChannel(req.body.channel);
+  if (req.body?.tags !== undefined) patch.tags = normalizeCampaignTags(req.body.tags);
+  if (req.body?.prompt !== undefined) patch.prompt = req.body.prompt;
+  if (req.body?.description !== undefined) patch.description = req.body.description;
+  if (req.body?.inspirationImageUrls !== undefined) {
+    patch.inspirationImageUrls = normalizeCampaignUrlArray(req.body.inspirationImageUrls);
+  }
+  if (req.body?.assetImageUrls !== undefined) {
+    patch.assetImageUrls = normalizeCampaignUrlArray(req.body.assetImageUrls);
+  }
+  if (req.body?.smsBody !== undefined) patch.smsBody = req.body.smsBody;
+  if (req.body?.emailSubject !== undefined) patch.emailSubject = req.body.emailSubject;
+  if (req.body?.emailBodyText !== undefined) patch.emailBodyText = req.body.emailBodyText;
+  if (req.body?.emailBodyHtml !== undefined) patch.emailBodyHtml = req.body.emailBodyHtml;
+  if (req.body?.sourceHits !== undefined && Array.isArray(req.body.sourceHits)) patch.sourceHits = req.body.sourceHits;
+  if (req.body?.metadata !== undefined && req.body?.metadata && typeof req.body.metadata === "object") {
+    patch.metadata = req.body.metadata;
+  }
+  if (
+    req.body?.generatedBy !== undefined &&
+    (req.body.generatedBy === "nano_banana" ||
+      req.body.generatedBy === "llm_fallback" ||
+      req.body.generatedBy === "template")
+  ) {
+    patch.generatedBy = req.body.generatedBy;
+  }
+  const updated = updateCampaign(req.params.id, patch);
+  if (!updated) return res.status(404).json({ ok: false, error: "Campaign not found" });
+  return res.json({ ok: true, campaign: updated });
+});
+
+app.post("/campaigns/generate", requireManager, async (req, res) => {
+  const user = (req as any).user ?? null;
+  const name = String(req.body?.name ?? "").trim();
+  if (!name) return res.status(400).json({ ok: false, error: "Missing campaign name" });
+
+  const campaignId = String(req.body?.campaignId ?? "").trim() || null;
+  if (campaignId && !getCampaign(campaignId)) {
+    return res.status(404).json({ ok: false, error: "Campaign not found" });
+  }
+
+  const buildMode = normalizeCampaignBuildMode(req.body?.buildMode);
+  const channel = normalizeCampaignChannel(req.body?.channel);
+  const tags = normalizeCampaignTags(req.body?.tags);
+  const prompt = String(req.body?.prompt ?? "").trim() || undefined;
+  const description = String(req.body?.description ?? "").trim() || undefined;
+  const inspirationImageUrls = normalizeCampaignUrlArray(req.body?.inspirationImageUrls);
+  const assetImageUrls = normalizeCampaignUrlArray(req.body?.assetImageUrls);
+  const save = req.body?.save !== false;
+
+  const dealerProfile = await getDealerProfile();
+  const generated = await generateCampaignContent({
+    name,
+    buildMode,
+    channel,
+    tags,
+    prompt,
+    description,
+    inspirationImageUrls,
+    assetImageUrls,
+    dealerProfile
+  });
+
+  if (!save) {
+    return res.json({ ok: true, generated });
+  }
+
+  const payload = {
+    name,
+    status: generated.status,
+    buildMode,
+    channel,
+    tags,
+    prompt,
+    description,
+    inspirationImageUrls,
+    assetImageUrls,
+    smsBody: generated.smsBody,
+    emailSubject: generated.emailSubject,
+    emailBodyText: generated.emailBodyText,
+    emailBodyHtml: generated.emailBodyHtml,
+    sourceHits: generated.sourceHits,
+    metadata: generated.metadata,
+    generatedBy: generated.generatedBy,
+    createdByUserId: user?.id,
+    createdByUserName: campaignCreatorDisplayName(user)
+  } as const;
+
+  const campaign = campaignId ? updateCampaign(campaignId, payload as any) : createCampaign(payload);
+  if (!campaign) return res.status(404).json({ ok: false, error: "Campaign not found" });
+  return res.json({ ok: true, campaign, generated });
+});
 
 app.get("/contacts", (_req, res) => {
   const contacts = buildContactsView();
