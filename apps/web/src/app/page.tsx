@@ -10131,15 +10131,189 @@ export default function Home() {
         } ${isConversationSection && mobilePanel === "list" ? "hidden md:block" : ""}`}
       >
         {section === "campaigns" ? (
-          <div className="space-y-5">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-xl font-semibold">Campaign Studio</h2>
-                <p className="text-xs text-gray-500 mt-1">
-                  Build campaigns from prompt + references + assets + briefs, or run web-search design from dealer profile sites.
-                </p>
+          <div className="max-w-4xl mx-auto space-y-4">
+            <div>
+              <h2 className="text-xl font-semibold">Campaign Studio</h2>
+              <p className="text-xs text-gray-500 mt-1">
+                Simple flow: write prompt, generate, review image first, then edit SMS/email drafts below.
+              </p>
+            </div>
+
+            {campaignError ? (
+              <div className="border border-red-200 rounded px-3 py-2 text-sm text-red-700 bg-red-50">
+                {campaignError}
               </div>
-              <div className="flex items-center gap-2">
+            ) : null}
+
+            <div className="border rounded-xl bg-white p-4 md:p-5 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <label className="text-xs text-gray-600">
+                  Campaign name
+                  <input
+                    className="mt-1 w-full border rounded px-3 py-2 text-sm"
+                    placeholder="Weekend spring sales event"
+                    value={campaignForm.name}
+                    onChange={e => setCampaignForm(prev => ({ ...prev, name: e.target.value }))}
+                  />
+                </label>
+                <label className="text-xs text-gray-600">
+                  Channel
+                  <select
+                    className="mt-1 w-full border rounded px-3 py-2 text-sm bg-white"
+                    value={campaignForm.channel}
+                    onChange={e =>
+                      setCampaignForm(prev => ({
+                        ...prev,
+                        channel:
+                          e.target.value === "sms" || e.target.value === "email" || e.target.value === "both"
+                            ? (e.target.value as CampaignChannel)
+                            : "both"
+                      }))
+                    }
+                  >
+                    <option value="both">SMS + Email</option>
+                    <option value="sms">SMS only</option>
+                    <option value="email">Email only</option>
+                  </select>
+                </label>
+                <label className="text-xs text-gray-600">
+                  Build mode
+                  <select
+                    className="mt-1 w-full border rounded px-3 py-2 text-sm bg-white"
+                    value={campaignForm.buildMode}
+                    onChange={e =>
+                      setCampaignForm(prev => ({
+                        ...prev,
+                        buildMode: e.target.value === "web_search_design" ? "web_search_design" : "design_from_scratch"
+                      }))
+                    }
+                  >
+                    <option value="design_from_scratch">Start from scratch</option>
+                    <option value="web_search_design">Web search design</option>
+                  </select>
+                </label>
+              </div>
+
+              <label className="block text-xs text-gray-600">
+                Prompt
+                <textarea
+                  className="mt-1 w-full border rounded-xl px-3 py-3 text-sm min-h-[120px]"
+                  placeholder="Describe the promotion/event and what creative to generate."
+                  value={campaignForm.prompt}
+                  onChange={e => setCampaignForm(prev => ({ ...prev, prompt: e.target.value }))}
+                />
+              </label>
+
+              <details className="border rounded-lg p-3 bg-gray-50">
+                <summary className="text-xs font-semibold text-gray-700 cursor-pointer">
+                  Optional inputs (reference images, design assets, briefs)
+                </summary>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+                  <label className="block text-xs text-gray-600">
+                    Reference images (URLs)
+                    <textarea
+                      className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[92px] font-mono"
+                      value={campaignForm.inspirationImageUrlsText}
+                      onChange={e => setCampaignForm(prev => ({ ...prev, inspirationImageUrlsText: e.target.value }))}
+                    />
+                    <label
+                      className={`mt-2 inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
+                        campaignInspirationUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-white"
+                      }`}
+                    >
+                      <span>{campaignInspirationUploadBusy ? "Uploading..." : "Upload refs"}</span>
+                      <input
+                        className="hidden"
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        disabled={campaignInspirationUploadBusy}
+                        onChange={async e => {
+                          const inputEl = e.currentTarget;
+                          await handleCampaignInspirationUploads(inputEl.files);
+                          inputEl.value = "";
+                        }}
+                      />
+                    </label>
+                  </label>
+
+                  <label className="block text-xs text-gray-600">
+                    Design images (URLs)
+                    <textarea
+                      className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[92px] font-mono"
+                      value={campaignForm.assetImageUrlsText}
+                      onChange={e => setCampaignForm(prev => ({ ...prev, assetImageUrlsText: e.target.value }))}
+                    />
+                    <label
+                      className={`mt-2 inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
+                        campaignAssetUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-white"
+                      }`}
+                    >
+                      <span>{campaignAssetUploadBusy ? "Uploading..." : "Upload design imgs"}</span>
+                      <input
+                        className="hidden"
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        disabled={campaignAssetUploadBusy}
+                        onChange={async e => {
+                          const inputEl = e.currentTarget;
+                          await handleCampaignAssetUploads(inputEl.files);
+                          inputEl.value = "";
+                        }}
+                      />
+                    </label>
+                  </label>
+
+                  <label className="block text-xs text-gray-600">
+                    Brief files (PDF/text/doc)
+                    <textarea
+                      className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[92px] font-mono"
+                      value={campaignForm.briefDocumentUrlsText}
+                      onChange={e => setCampaignForm(prev => ({ ...prev, briefDocumentUrlsText: e.target.value }))}
+                    />
+                    <label
+                      className={`mt-2 inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
+                        campaignBriefUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-white"
+                      }`}
+                    >
+                      <span>{campaignBriefUploadBusy ? "Uploading..." : "Upload brief"}</span>
+                      <input
+                        className="hidden"
+                        type="file"
+                        accept=".pdf,.txt,.md,.csv,.json,.html,.doc,.docx,application/pdf,text/plain,text/markdown,text/csv,application/json,text/html,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        multiple
+                        disabled={campaignBriefUploadBusy}
+                        onChange={async e => {
+                          const inputEl = e.currentTarget;
+                          await handleCampaignBriefUploads(inputEl.files);
+                          inputEl.value = "";
+                        }}
+                      />
+                    </label>
+                  </label>
+                </div>
+              </details>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  className="px-3 py-2 border rounded text-sm bg-gray-900 text-white hover:bg-black disabled:opacity-60"
+                  onClick={() => {
+                    void generateCampaign();
+                  }}
+                  disabled={campaignGenerating || campaignSaving}
+                >
+                  {campaignGenerating ? "Generating..." : "Generate"}
+                </button>
+                <button
+                  className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
+                  onClick={() => {
+                    void generateCampaign();
+                  }}
+                  disabled={campaignGenerating || campaignSaving || !campaignForm.name.trim()}
+                >
+                  {campaignGenerating ? "Redoing..." : "Redo"}
+                </button>
                 <button
                   className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
                   onClick={() => {
@@ -10150,344 +10324,77 @@ export default function Home() {
                   {campaignSaving ? "Saving..." : "Save Draft"}
                 </button>
                 <button
-                  className="px-3 py-2 border rounded text-sm bg-gray-900 text-white hover:bg-black disabled:opacity-60"
-                  onClick={() => {
-                    void generateCampaign();
-                  }}
+                  className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
+                  onClick={resetCampaignDraft}
                   disabled={campaignGenerating || campaignSaving}
                 >
-                  {campaignGenerating ? "Generating..." : "Generate Copy"}
+                  New
                 </button>
               </div>
             </div>
 
-            {campaignError ? (
-              <div className="border border-red-200 rounded px-3 py-2 text-sm text-red-700 bg-red-50">
-                {campaignError}
-              </div>
-            ) : null}
-
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-              <div className="border rounded-lg bg-white p-4 space-y-4">
-                <div>
-                  <label className="text-xs text-gray-600">Campaign name</label>
-                  <input
-                    className="mt-1 w-full border rounded px-3 py-2 text-sm"
-                    placeholder="Spring service promo"
-                    value={campaignForm.name}
-                    onChange={e => setCampaignForm(prev => ({ ...prev, name: e.target.value }))}
-                  />
+            <div className="border rounded-xl bg-white p-4 md:p-5 space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-semibold">Generated Output</div>
+                <div className="text-[11px] text-gray-500 text-right">
+                  {campaignGeneratedBy ? `Source: ${campaignGeneratedBy}` : "Source: N/A"}
+                  {campaignGeneratedAt ? ` • ${new Date(campaignGeneratedAt).toLocaleString()}` : ""}
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <label className="text-xs text-gray-600">
-                    Build mode
-                    <select
-                      className="mt-1 w-full border rounded px-3 py-2 text-sm bg-white"
-                      value={campaignForm.buildMode}
-                      onChange={e =>
-                        setCampaignForm(prev => ({
-                          ...prev,
-                          buildMode: e.target.value === "web_search_design" ? "web_search_design" : "design_from_scratch"
-                        }))
-                      }
-                    >
-                      <option value="design_from_scratch">Start from scratch</option>
-                      <option value="web_search_design">Web search design</option>
-                    </select>
-                  </label>
-                  <label className="text-xs text-gray-600">
-                    Channel
-                    <select
-                      className="mt-1 w-full border rounded px-3 py-2 text-sm bg-white"
-                      value={campaignForm.channel}
-                      onChange={e =>
-                        setCampaignForm(prev => ({
-                          ...prev,
-                          channel:
-                            e.target.value === "sms" || e.target.value === "email" || e.target.value === "both"
-                              ? (e.target.value as CampaignChannel)
-                              : "both"
-                        }))
-                      }
-                    >
-                      <option value="both">SMS + Email</option>
-                      <option value="sms">SMS only</option>
-                      <option value="email">Email only</option>
-                    </select>
-                  </label>
-                </div>
-                <div className="text-[11px] text-gray-500 -mt-1">
-                  {campaignForm.buildMode === "web_search_design"
-                    ? "Web search design uses websites from Dealer Profile + your prompt to pull context automatically."
-                    : "Start from scratch uses your prompt, reference images, design assets, and brief files."}
-                </div>
-
-                <div>
-                  <div className="text-xs text-gray-600 mb-2">Tags</div>
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                    {CAMPAIGN_TAG_OPTIONS.map(opt => {
-                      const checked = campaignForm.tags.includes(opt.value);
-                      return (
-                        <label
-                          key={`campaign-tag-${opt.value}`}
-                          className="flex items-center gap-2 text-xs border rounded px-2 py-1.5 bg-gray-50"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={e =>
-                              setCampaignForm(prev => {
-                                const next = e.target.checked
-                                  ? Array.from(new Set<CampaignTag>([...prev.tags, opt.value]))
-                                  : prev.tags.filter(tag => tag !== opt.value);
-                                return { ...prev, tags: next };
-                              })
-                            }
-                          />
-                          <span>{opt.label}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <label className="block text-xs text-gray-600">
-                  Campaign description (optional)
-                  <textarea
-                    className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[100px]"
-                    placeholder="Optional: add extra context. Prompt + website/reference data can be enough."
-                    value={campaignForm.description}
-                    onChange={e => setCampaignForm(prev => ({ ...prev, description: e.target.value }))}
-                  />
-                </label>
-
-                <label className="block text-xs text-gray-600">
-                  Prompt / creative direction
-                  <textarea
-                    className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[100px]"
-                    placeholder="Use urgent but friendly tone, highlight weekend event..."
-                    value={campaignForm.prompt}
-                    onChange={e => setCampaignForm(prev => ({ ...prev, prompt: e.target.value }))}
-                  />
-                </label>
-
-                <label className="block text-xs text-gray-600">
-                  Inspiration image URLs (one per line)
-                  <textarea
-                    className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[80px] font-mono"
-                    value={campaignForm.inspirationImageUrlsText}
-                    onChange={e =>
-                      setCampaignForm(prev => ({ ...prev, inspirationImageUrlsText: e.target.value }))
-                    }
-                  />
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <label
-                      className={`inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
-                        campaignInspirationUploadBusy
-                          ? "opacity-60 cursor-not-allowed"
-                          : "cursor-pointer hover:bg-gray-50"
-                      }`}
-                    >
-                      <span>{campaignInspirationUploadBusy ? "Uploading..." : "Upload inspiration image(s)"}</span>
-                      <input
-                        className="hidden"
-                        type="file"
-                        accept="image/*"
-                        multiple
-                        disabled={campaignInspirationUploadBusy}
-                        onChange={async e => {
-                          const inputEl = e.currentTarget;
-                          const files = inputEl.files;
-                          await handleCampaignInspirationUploads(files);
-                          inputEl.value = "";
-                        }}
-                      />
-                    </label>
-                    <div className="text-[11px] text-gray-500">
-                      Uploads are appended to the URL list above.
-                    </div>
-                  </div>
-                  {campaignInspirationPreviewUrls.length ? (
-                    <div className="mt-3 grid grid-cols-2 md:grid-cols-3 gap-2">
-                      {campaignInspirationPreviewUrls.map((url, idx) => (
-                        <a
-                          key={`campaign-inspiration-preview-${idx}`}
-                          href={url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="block border rounded overflow-hidden bg-gray-50"
-                          title={url}
-                        >
-                          <img
-                            src={url}
-                            alt={`Inspiration ${idx + 1}`}
-                            className="w-full h-24 object-cover"
-                            loading="lazy"
-                            onError={e => {
-                              const target = e.currentTarget;
-                              const wrapper = target.parentElement;
-                              if (!wrapper) return;
-                              target.style.display = "none";
-                              if (!wrapper.querySelector(".campaign-preview-fallback")) {
-                                const fallback = document.createElement("div");
-                                fallback.className =
-                                  "campaign-preview-fallback text-[11px] text-gray-500 p-2 break-all";
-                                fallback.textContent = url;
-                                wrapper.appendChild(fallback);
-                              }
-                            }}
-                          />
-                        </a>
-                      ))}
-                    </div>
-                  ) : null}
-                </label>
-
-                <label className="block text-xs text-gray-600">
-                  Design asset image URLs (one per line)
-                  <textarea
-                    className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[80px] font-mono"
-                    value={campaignForm.assetImageUrlsText}
-                    onChange={e => setCampaignForm(prev => ({ ...prev, assetImageUrlsText: e.target.value }))}
-                  />
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <label
-                      className={`inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
-                        campaignAssetUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-gray-50"
-                      }`}
-                    >
-                      <span>{campaignAssetUploadBusy ? "Uploading..." : "Upload design image(s)"}</span>
-                      <input
-                        className="hidden"
-                        type="file"
-                        accept="image/*"
-                        multiple
-                        disabled={campaignAssetUploadBusy}
-                        onChange={async e => {
-                          const inputEl = e.currentTarget;
-                          const files = inputEl.files;
-                          await handleCampaignAssetUploads(files);
-                          inputEl.value = "";
-                        }}
-                      />
-                    </label>
-                    <div className="text-[11px] text-gray-500">
-                      Design assets are images to include in the final creative.
-                    </div>
-                  </div>
-                </label>
-
-                <label className="block text-xs text-gray-600">
-                  Promotion/event brief files (PDF/text/doc) or URLs
-                  <textarea
-                    className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[80px] font-mono"
-                    value={campaignForm.briefDocumentUrlsText}
-                    onChange={e => setCampaignForm(prev => ({ ...prev, briefDocumentUrlsText: e.target.value }))}
-                  />
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <label
-                      className={`inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
-                        campaignBriefUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-gray-50"
-                      }`}
-                    >
-                      <span>{campaignBriefUploadBusy ? "Uploading..." : "Upload brief file(s)"}</span>
-                      <input
-                        className="hidden"
-                        type="file"
-                        accept=".pdf,.txt,.md,.csv,.json,.html,.doc,.docx,application/pdf,text/plain,text/markdown,text/csv,application/json,text/html,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                        multiple
-                        disabled={campaignBriefUploadBusy}
-                        onChange={async e => {
-                          const inputEl = e.currentTarget;
-                          const files = inputEl.files;
-                          await handleCampaignBriefUploads(files);
-                          inputEl.value = "";
-                        }}
-                      />
-                    </label>
-                    <div className="text-[11px] text-gray-500">
-                      Add promotion flyers, event sheets, or notes for copy grounding.
-                    </div>
-                  </div>
-                  {campaignBriefPreviewUrls.length ? (
-                    <div className="mt-2 space-y-1">
-                      {campaignBriefPreviewUrls.map((url, idx) => (
-                        <a
-                          key={`campaign-brief-preview-${idx}`}
-                          href={url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="block text-[11px] text-blue-700 hover:underline break-all"
-                        >
-                          {url}
-                        </a>
-                      ))}
-                    </div>
-                  ) : null}
-                </label>
               </div>
 
-              <div className="border rounded-lg bg-white p-4 space-y-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm font-semibold">Generated Copy</div>
-                  <div className="text-[11px] text-gray-500 text-right">
-                    {campaignGeneratedBy ? `Source: ${campaignGeneratedBy}` : "Source: N/A"}
-                    {campaignGeneratedAt ? ` • ${new Date(campaignGeneratedAt).toLocaleString()}` : ""}
+              <div className="border rounded-lg p-3 bg-gray-50">
+                {campaignFinalImageUrl ? (
+                  <a
+                    href={campaignFinalImageUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block border rounded overflow-hidden bg-white"
+                    title={campaignFinalImageUrl}
+                  >
+                    <img
+                      src={campaignFinalImageUrl}
+                      alt="Final generated campaign creative"
+                      className="w-full max-h-[440px] object-contain bg-white"
+                      loading="lazy"
+                    />
+                  </a>
+                ) : (
+                  <div className="text-sm text-gray-500 py-10 text-center">
+                    Generate to preview your final image here.
                   </div>
-                </div>
+                )}
+              </div>
 
-                <div className="border rounded p-3 bg-gray-50">
-                  <div className="text-xs font-semibold text-gray-700 mb-2">Final generated creative</div>
-                  {campaignFinalImageUrl ? (
-                    <a
-                      href={campaignFinalImageUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="block border rounded overflow-hidden bg-white"
-                      title={campaignFinalImageUrl}
-                    >
-                      <img
-                        src={campaignFinalImageUrl}
-                        alt="Final generated campaign creative"
-                        className="w-full max-h-72 object-contain bg-white"
-                        loading="lazy"
-                      />
-                    </a>
-                  ) : (
-                    <div className="text-[11px] text-gray-500">
-                      No final generated image yet. Click Generate Copy to produce one.
-                    </div>
-                  )}
-                </div>
+              <label className="block text-xs text-gray-600">
+                SMS draft
+                <textarea
+                  className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[90px]"
+                  value={campaignForm.smsBody}
+                  onChange={e => setCampaignForm(prev => ({ ...prev, smsBody: e.target.value }))}
+                />
+              </label>
 
-                <label className="block text-xs text-gray-600">
-                  SMS body
-                  <textarea
-                    className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[90px]"
-                    value={campaignForm.smsBody}
-                    onChange={e => setCampaignForm(prev => ({ ...prev, smsBody: e.target.value }))}
-                  />
-                </label>
+              <label className="block text-xs text-gray-600">
+                Email subject
+                <input
+                  className="mt-1 w-full border rounded px-3 py-2 text-sm"
+                  value={campaignForm.emailSubject}
+                  onChange={e => setCampaignForm(prev => ({ ...prev, emailSubject: e.target.value }))}
+                />
+              </label>
 
-                <label className="block text-xs text-gray-600">
-                  Email subject
-                  <input
-                    className="mt-1 w-full border rounded px-3 py-2 text-sm"
-                    value={campaignForm.emailSubject}
-                    onChange={e => setCampaignForm(prev => ({ ...prev, emailSubject: e.target.value }))}
-                  />
-                </label>
+              <label className="block text-xs text-gray-600">
+                Email draft
+                <textarea
+                  className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[160px]"
+                  value={campaignForm.emailBodyText}
+                  onChange={e => setCampaignForm(prev => ({ ...prev, emailBodyText: e.target.value }))}
+                />
+              </label>
 
-                <label className="block text-xs text-gray-600">
-                  Email body (text)
-                  <textarea
-                    className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[160px]"
-                    value={campaignForm.emailBodyText}
-                    onChange={e => setCampaignForm(prev => ({ ...prev, emailBodyText: e.target.value }))}
-                  />
-                </label>
-
-                <label className="block text-xs text-gray-600">
+              <details className="border rounded p-3 bg-gray-50">
+                <summary className="text-xs font-semibold text-gray-700 cursor-pointer">Advanced HTML + References</summary>
+                <label className="block text-xs text-gray-600 mt-3">
                   Email body (HTML)
                   <textarea
                     className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[160px] font-mono"
@@ -10495,11 +10402,10 @@ export default function Home() {
                     onChange={e => setCampaignForm(prev => ({ ...prev, emailBodyHtml: e.target.value }))}
                   />
                 </label>
-
-                <div className="border rounded p-3 bg-gray-50">
+                <div className="mt-3">
                   <div className="text-xs font-semibold text-gray-700 mb-2">Reference hits</div>
                   {campaignSourceHits.length ? (
-                    <div className="space-y-2 max-h-[240px] overflow-y-auto">
+                    <div className="space-y-2 max-h-[220px] overflow-y-auto">
                       {campaignSourceHits.map((hit, idx) => (
                         <div key={`campaign-hit-${idx}`} className="text-xs">
                           <a
@@ -10515,10 +10421,10 @@ export default function Home() {
                       ))}
                     </div>
                   ) : (
-                    <div className="text-xs text-gray-500">No references yet. Generate copy to fetch sources.</div>
+                    <div className="text-xs text-gray-500">No references yet.</div>
                   )}
                 </div>
-              </div>
+              </details>
             </div>
           </div>
         ) : section === "kpi" ? (
