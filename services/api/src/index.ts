@@ -9,6 +9,7 @@ import * as os from "node:os";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import OpenAI from "openai";
+import { google } from "googleapis";
 import { orchestrateInbound } from "./domain/orchestrator.js";
 import {
   classifySchedulingIntent,
@@ -19621,6 +19622,119 @@ function buildCampaignImagePrompt(args: {
   ].join("\n");
 }
 
+function extensionForMimeType(mimeType: string | null | undefined): string {
+  const mime = String(mimeType ?? "").trim().toLowerCase();
+  if (mime.includes("jpeg") || mime.includes("jpg")) return ".jpg";
+  if (mime.includes("webp")) return ".webp";
+  if (mime.includes("gif")) return ".gif";
+  if (mime.includes("svg")) return ".svg";
+  return ".png";
+}
+
+function extractInlineImageFromVertexResponse(payload: any): { b64: string; mimeType?: string } | null {
+  const candidates = Array.isArray(payload?.candidates) ? payload.candidates : [];
+  for (const candidate of candidates) {
+    const parts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
+    for (const part of parts) {
+      const inlineData = part?.inlineData ?? part?.inline_data ?? null;
+      const b64 = String(inlineData?.data ?? "").trim();
+      if (!b64) continue;
+      const mimeType = String(inlineData?.mimeType ?? inlineData?.mime_type ?? "").trim() || undefined;
+      return { b64, mimeType };
+    }
+  }
+  return null;
+}
+
+async function getVertexAccessToken(): Promise<string | null> {
+  try {
+    const auth = new google.auth.GoogleAuth({
+      scopes: ["https://www.googleapis.com/auth/cloud-platform"]
+    });
+    const token = await auth.getAccessToken();
+    return String(token ?? "").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function generateCampaignImageWithNanoBanana(args: {
+  name: string;
+  prompt?: string;
+  description?: string;
+  tags: CampaignTag[];
+  dealerProfile?: Awaited<ReturnType<typeof getDealerProfile>>;
+  sourceHits?: Array<{ title?: string; snippet?: string; url?: string }>;
+}): Promise<string | null> {
+  if (String(process.env.CAMPAIGN_NANO_BANANA_ENABLED ?? "1") === "0") return null;
+
+  const projectId = String(process.env.GOOGLE_CLOUD_PROJECT ?? process.env.VERTEX_SEARCH_PROJECT_ID ?? "").trim();
+  const location = String(process.env.CAMPAIGN_NANO_BANANA_LOCATION ?? process.env.GOOGLE_CLOUD_LOCATION ?? "global").trim() || "global";
+  const model = String(process.env.CAMPAIGN_NANO_BANANA_MODEL ?? "gemini-3-pro-image-preview").trim();
+  if (!projectId || !model) return null;
+
+  const accessToken = await getVertexAccessToken();
+  if (!accessToken) return null;
+
+  const imagePrompt = buildCampaignImagePrompt(args);
+  const host = location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`;
+  const endpoint = `https://${host}/v1/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(
+    location
+  )}/publishers/google/models/${encodeURIComponent(model)}:generateContent`;
+
+  const generationConfig: Record<string, unknown> = {
+    responseModalities: ["TEXT", "IMAGE"],
+    maxOutputTokens: Math.max(256, Number(process.env.CAMPAIGN_NANO_BANANA_MAX_OUTPUT_TOKENS ?? 1024))
+  };
+
+  const tempRaw = String(process.env.CAMPAIGN_NANO_BANANA_TEMPERATURE ?? "").trim();
+  const tempNum = Number(tempRaw);
+  if (tempRaw && Number.isFinite(tempNum)) generationConfig.temperature = tempNum;
+
+  try {
+    const resp = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: imagePrompt }]
+          }
+        ],
+        generationConfig
+      })
+    });
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => "");
+      console.warn("[campaign] nano banana vertex failed:", resp.status, body.slice(0, 500));
+      return null;
+    }
+    const payload = await resp.json().catch(() => null);
+    const inline = extractInlineImageFromVertexResponse(payload);
+    if (!inline?.b64) return null;
+    const buffer = Buffer.from(inline.b64, "base64");
+    if (!buffer.length) return null;
+
+    const ext = extensionForMimeType(inline.mimeType);
+    const fileName = `campaign_nano_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
+    const dir = path.resolve(getDataDir(), "uploads", "campaigns");
+    await fs.promises.mkdir(dir, { recursive: true });
+    const dest = path.join(dir, fileName);
+    await fs.promises.writeFile(dest, buffer);
+    const publicBase = process.env.PUBLIC_BASE_URL ?? "";
+    return publicBase
+      ? `${publicBase.replace(/\/$/, "")}/uploads/campaigns/${fileName}`
+      : `/uploads/campaigns/${fileName}`;
+  } catch (err: any) {
+    console.warn("[campaign] nano banana vertex exception:", err?.message ?? err);
+    return null;
+  }
+}
+
 async function generateCampaignImageWithOpenAI(args: {
   name: string;
   prompt?: string;
@@ -19919,7 +20033,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
   const shouldAttemptImageFallback = req.body?.generateImage !== false;
   let generatedFinalImageUrl: string | undefined;
   if (shouldAttemptImageFallback) {
-    const generatedImageUrl = await generateCampaignImageWithOpenAI({
+    const generatedImageUrlNano = await generateCampaignImageWithNanoBanana({
       name,
       prompt,
       description,
@@ -19927,15 +20041,26 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       dealerProfile,
       sourceHits: generated.sourceHits
     });
+    const generatedImageUrl =
+      generatedImageUrlNano ||
+      (await generateCampaignImageWithOpenAI({
+        name,
+        prompt,
+        description,
+        tags,
+        dealerProfile,
+        sourceHits: generated.sourceHits
+      }));
     if (generatedImageUrl) {
       generatedFinalImageUrl = generatedImageUrl;
       effectiveGenerated = {
         ...generated,
         metadata: {
           ...(generated.metadata ?? {}),
-          imageGenerator: "openai_fallback",
+          imageGenerator: generatedImageUrlNano ? "nano_banana_vertex" : "openai_fallback",
           imageGeneratedAt: new Date().toISOString()
-        }
+        },
+        generatedBy: generatedImageUrlNano ? "nano_banana" : generated.generatedBy
       };
     }
   }
