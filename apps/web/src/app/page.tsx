@@ -2056,6 +2056,7 @@ export default function Home() {
       setCampaignError("Campaign name is required.");
       return;
     }
+    const isScratchBuild = campaignForm.buildMode === "design_from_scratch";
     setCampaignSaving(true);
     setCampaignError(null);
     try {
@@ -2067,8 +2068,8 @@ export default function Home() {
         tags: campaignForm.tags,
         prompt: String(campaignForm.prompt ?? "").trim() || undefined,
         description: String(campaignForm.description ?? "").trim() || undefined,
-        inspirationImageUrls: parseCampaignUrlsText(campaignForm.inspirationImageUrlsText),
-        assetImageUrls: parseCampaignUrlsText(campaignForm.assetImageUrlsText),
+        inspirationImageUrls: isScratchBuild ? parseCampaignUrlsText(campaignForm.inspirationImageUrlsText) : [],
+        assetImageUrls: isScratchBuild ? parseCampaignUrlsText(campaignForm.assetImageUrlsText) : [],
         briefDocumentUrls: parseCampaignUrlsText(campaignForm.briefDocumentUrlsText),
         smsBody: String(campaignForm.smsBody ?? "").trim() || undefined,
         emailSubject: String(campaignForm.emailSubject ?? "").trim() || undefined,
@@ -2114,6 +2115,7 @@ export default function Home() {
       setCampaignError("Campaign name is required.");
       return;
     }
+    const isScratchBuild = campaignForm.buildMode === "design_from_scratch";
     setCampaignGenerating(true);
     setCampaignError(null);
     try {
@@ -2126,8 +2128,8 @@ export default function Home() {
         tags: campaignForm.tags,
         prompt: String(campaignForm.prompt ?? "").trim() || undefined,
         description: String(campaignForm.description ?? "").trim() || undefined,
-        inspirationImageUrls: parseCampaignUrlsText(campaignForm.inspirationImageUrlsText),
-        assetImageUrls: parseCampaignUrlsText(campaignForm.assetImageUrlsText),
+        inspirationImageUrls: isScratchBuild ? parseCampaignUrlsText(campaignForm.inspirationImageUrlsText) : [],
+        assetImageUrls: isScratchBuild ? parseCampaignUrlsText(campaignForm.assetImageUrlsText) : [],
         briefDocumentUrls: parseCampaignUrlsText(campaignForm.briefDocumentUrlsText)
       };
       const resp = await fetch("/api/campaigns/generate", {
@@ -10306,60 +10308,7 @@ export default function Home() {
                       </div>
                     ) : null}
                   </>
-                ) : (
-                  <details className="border rounded p-2.5 bg-white">
-                    <summary className="text-xs font-semibold text-gray-700 cursor-pointer">
-                      Advanced overrides (optional refs/assets)
-                    </summary>
-                    <div className="flex flex-wrap items-center gap-2 mt-3">
-                      <label
-                        className={`inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
-                          campaignInspirationUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-gray-50"
-                        }`}
-                      >
-                        <span>{campaignInspirationUploadBusy ? "Uploading..." : "Upload refs"}</span>
-                        <input
-                          className="hidden"
-                          type="file"
-                          accept="image/*"
-                          multiple
-                          disabled={campaignInspirationUploadBusy}
-                          onChange={async e => {
-                            const inputEl = e.currentTarget;
-                            await handleCampaignInspirationUploads(inputEl.files);
-                            inputEl.value = "";
-                          }}
-                        />
-                      </label>
-                      <label
-                        className={`inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
-                          campaignAssetUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-gray-50"
-                        }`}
-                      >
-                        <span>{campaignAssetUploadBusy ? "Uploading..." : "Upload design imgs"}</span>
-                        <input
-                          className="hidden"
-                          type="file"
-                          accept="image/*"
-                          multiple
-                          disabled={campaignAssetUploadBusy}
-                          onChange={async e => {
-                            const inputEl = e.currentTarget;
-                            await handleCampaignAssetUploads(inputEl.files);
-                            inputEl.value = "";
-                          }}
-                        />
-                      </label>
-                    </div>
-                    {(campaignInspirationPreviewUrls.length || campaignAssetPreviewUrls.length) ? (
-                      <div className="text-[11px] text-gray-600 mt-2">
-                        {campaignInspirationPreviewUrls.length ? `${campaignInspirationPreviewUrls.length} ref image(s)` : ""}
-                        {campaignInspirationPreviewUrls.length && campaignAssetPreviewUrls.length ? " • " : ""}
-                        {campaignAssetPreviewUrls.length ? `${campaignAssetPreviewUrls.length} design image(s)` : ""}
-                      </div>
-                    ) : null}
-                  </details>
-                )}
+                ) : null}
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
