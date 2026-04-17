@@ -197,9 +197,9 @@ async function saveCampaignExternalImage(buffer: Buffer, contentType: string, pr
 
 async function fetchGooglePlacePhotos(
   profile?: DealerProfile | null,
-  opts?: { maxPhotos?: number; timeoutMs?: number }
+  opts?: { maxPhotos?: number; timeoutMs?: number; force?: boolean }
 ): Promise<GooglePlacePhotoResult> {
-  const enabled = profile?.webSearch?.useGooglePlacePhotos === true;
+  const enabled = opts?.force === true || profile?.webSearch?.useGooglePlacePhotos === true;
   if (!enabled) return { photoUrls: [] };
   const apiKey = normalizeText(process.env.GOOGLE_PLACES_API_KEY);
   if (!apiKey) return { photoUrls: [], error: "google_places_api_key_missing" };
@@ -1056,9 +1056,14 @@ export async function generateCampaignContent(input: GenerateCampaignInput): Pro
   const brandContext = await fetchDealerBrandContext(input.dealerProfile ?? null);
   const briefContexts = await collectBriefContexts(normalizeUrls(input.briefDocumentUrls));
   const shouldRunWebSearch = input.buildMode === "web_search_design";
+  const userProvidedInspiration = normalizeUrls(input.inspirationImageUrls);
+  const userProvidedAssetImages = normalizeUrls(input.assetImageUrls);
+  const hasUserReferenceOverride = userProvidedInspiration.length > 0 || userProvidedAssetImages.length > 0;
+  const forcePlacePhotos = input.tags.includes("dealer_event") && !hasUserReferenceOverride;
   const googlePlacePhotos = shouldRunWebSearch
     ? await fetchGooglePlacePhotos(input.dealerProfile ?? null, {
-        maxPhotos: Number(process.env.CAMPAIGN_GOOGLE_PLACE_PHOTO_MAX ?? 4)
+        maxPhotos: Number(process.env.CAMPAIGN_GOOGLE_PLACE_PHOTO_MAX ?? 4),
+        force: forcePlacePhotos
       })
     : { photoUrls: [] as string[] };
   const searchQuery = shouldRunWebSearch ? buildSearchQuery(input) : "";
@@ -1071,7 +1076,6 @@ export async function generateCampaignContent(input: GenerateCampaignInput): Pro
         })
       : null;
   const sourceHits = filterSourceHitsByTags(toSourceHits(searchResult), input.tags, suppressTradeOnly);
-  const userProvidedInspiration = normalizeUrls(input.inspirationImageUrls);
   const placeDiscoveredInspiration = shouldRunWebSearch
     ? filterImageUrlsByTags(googlePlacePhotos.photoUrls, input.tags, suppressTradeOnly)
     : [];
@@ -1115,6 +1119,10 @@ export async function generateCampaignContent(input: GenerateCampaignInput): Pro
       googlePlacePhotos,
       placeDiscoveredInspiration.length
     );
+    withPlacesMeta.metadata = {
+      ...(withPlacesMeta.metadata ?? {}),
+      googlePlaceForcedForDealerEvent: forcePlacePhotos
+    };
     return suppressTradeOnly
       ? applyNoTradeLanguageGuard(withPlacesMeta, input.dealerProfile?.dealerName)
       : withPlacesMeta;
@@ -1133,6 +1141,10 @@ export async function generateCampaignContent(input: GenerateCampaignInput): Pro
     googlePlacePhotos,
     placeDiscoveredInspiration.length
   );
+  withPlacesMeta.metadata = {
+    ...(withPlacesMeta.metadata ?? {}),
+    googlePlaceForcedForDealerEvent: forcePlacePhotos
+  };
   return suppressTradeOnly
     ? applyNoTradeLanguageGuard(withPlacesMeta, input.dealerProfile?.dealerName)
     : withPlacesMeta;
