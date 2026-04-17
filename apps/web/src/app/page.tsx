@@ -2123,7 +2123,8 @@ export default function Home() {
           .filter(v => validTargets.has(v as CampaignAssetTarget))
           .map(v => v as CampaignAssetTarget) as CampaignAssetTarget[])
       : [];
-    const normalizedTargets = assetTargets;
+    // UI now enforces one output target at a time for a simpler workflow.
+    const normalizedTargets = assetTargets.length ? [assetTargets[0]] : [];
     const generatedAssets: CampaignGeneratedAsset[] = Array.isArray(entry.generatedAssets)
       ? entry.generatedAssets
           .filter(asset => !!asset?.url && validTargets.has(String(asset?.target ?? "").trim() as CampaignAssetTarget))
@@ -10683,7 +10684,7 @@ export default function Home() {
               </label>
 
               <div className="border rounded-lg p-3 bg-gray-50 space-y-2">
-                <div className="text-xs font-semibold text-gray-700">2) Output formats</div>
+                <div className="text-xs font-semibold text-gray-700">2) Output format (one at a time)</div>
                 <div className="flex flex-wrap gap-2">
                   {CAMPAIGN_ASSET_TARGET_OPTIONS.map(opt => {
                     const isChecked = (campaignForm.assetTargets ?? []).includes(opt.value);
@@ -10695,18 +10696,14 @@ export default function Home() {
                         } cursor-pointer`}
                       >
                         <input
-                          type="checkbox"
+                          type="radio"
+                          name="campaign-output-target"
                           checked={isChecked}
                           onChange={() =>
                             setCampaignForm(prev => {
-                              const current = new Set<CampaignAssetTarget>(
-                                (Array.isArray(prev.assetTargets) ? prev.assetTargets : []) as CampaignAssetTarget[]
-                              );
-                              if (current.has(opt.value)) current.delete(opt.value);
-                              else current.add(opt.value);
                               return {
                                 ...prev,
-                                assetTargets: Array.from(current)
+                                assetTargets: [opt.value]
                               };
                             })
                           }
@@ -10717,14 +10714,14 @@ export default function Home() {
                   })}
                 </div>
                 <div className="text-[11px] text-gray-500">
-                  SMS/Email outputs are send-eligible. Facebook/Instagram/Web banner outputs are download-only.
+                  Select one output format, generate it, then switch formats if you want more versions.
                 </div>
                 <div className="text-[11px] text-gray-500">
                   Web banner uses Dealer Profile size (
                   {Math.max(1, Number(dealerProfileForm.campaignWebBannerWidth) || 1200)}x
                   {Math.max(1, Number(dealerProfileForm.campaignWebBannerHeight) || 628)}), fit mode:{" "}
                   <span className="font-semibold">{dealerProfileForm.campaignWebBannerFit}</span>. Select{" "}
-                  <span className="font-semibold">Web banner</span> in Output files to generate that exact frame.
+                  <span className="font-semibold">Web banner</span> as the selected output format to generate that exact frame.
                 </div>
                 {!campaignHasAnyTarget ? (
                   <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
