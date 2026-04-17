@@ -20814,10 +20814,28 @@ async function readCampaignImageBufferFromUrl(urlRaw: string): Promise<Buffer | 
   try {
     const resp = await fetch(trimmed);
     if (!resp.ok) return null;
+    const contentType = String(resp.headers.get("content-type") ?? "")
+      .toLowerCase()
+      .split(";")[0]
+      .trim();
+    const looksLikeImage = contentType.startsWith("image/") || !!inferMimeTypeFromPathOrUrl(trimmed);
+    if (!looksLikeImage) return null;
     const arr = await resp.arrayBuffer();
     return arr.byteLength ? Buffer.from(arr) : null;
   } catch {
     return null;
+  }
+}
+
+async function isDecodableImageBuffer(buffer: Buffer | null | undefined): Promise<boolean> {
+  if (!buffer || !buffer.length) return false;
+  try {
+    const meta = await sharp(buffer, { failOn: "none", animated: false }).metadata();
+    const width = Number(meta?.width ?? 0);
+    const height = Number(meta?.height ?? 0);
+    return Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0;
+  } catch {
+    return false;
   }
 }
 
@@ -20828,6 +20846,10 @@ async function buildCampaignGeneratedAssetsFromSource(args: {
 }): Promise<CampaignGeneratedAsset[]> {
   const sourceBuffer = await readCampaignImageBufferFromUrl(args.sourceImageUrl);
   if (!sourceBuffer || !sourceBuffer.length) return [];
+  if (!(await isDecodableImageBuffer(sourceBuffer))) {
+    console.warn("[campaign] source image is not decodable; skipping asset normalization");
+    return [];
+  }
   const uniqueTargets = Array.from(new Set(args.targets ?? []));
   const out: CampaignGeneratedAsset[] = [];
   for (const target of uniqueTargets) {
@@ -21102,6 +21124,10 @@ async function generateCampaignImageWithNanoBanana(args: {
       const rawBuffer = Buffer.from(inline.b64, "base64");
       if (!rawBuffer.length) return null;
       const buffer = rawBuffer;
+      if (!(await isDecodableImageBuffer(buffer))) {
+        console.warn("[campaign] nano banana returned non-decodable image payload");
+        return null;
+      }
       const ext = extensionForMimeType(inline.mimeType);
       const fileName = `campaign_nano_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
       const dir = path.resolve(getDataDir(), "uploads", "campaigns");
@@ -21166,9 +21192,12 @@ async function generateCampaignImageWithOpenAI(args: {
       if (url) {
         const resp = await fetch(url);
         if (resp.ok) {
+          const ctype = String(resp.headers.get("content-type") ?? "").toLowerCase();
+          if (ctype && !ctype.includes("image")) {
+            return null;
+          }
           const arr = await resp.arrayBuffer();
           buffer = Buffer.from(arr);
-          const ctype = String(resp.headers.get("content-type") ?? "").toLowerCase();
           if (ctype.includes("jpeg")) ext = ".jpg";
           else if (ctype.includes("webp")) ext = ".webp";
           else if (ctype.includes("gif")) ext = ".gif";
@@ -21176,6 +21205,9 @@ async function generateCampaignImageWithOpenAI(args: {
       }
     }
     if (!buffer || !buffer.length) return null;
+    if (!(await isDecodableImageBuffer(buffer))) {
+      return null;
+    }
     const fileName = `campaign_ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
     const dir = path.resolve(getDataDir(), "uploads", "campaigns");
     await fs.promises.mkdir(dir, { recursive: true });
