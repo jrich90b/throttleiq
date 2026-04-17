@@ -17948,6 +17948,38 @@ app.post("/conversations/:id/mode", requirePermission("canToggleHumanOverride"),
   return res.json({ ok: true, conversation: conv });
 });
 
+function hasInboundCampaignReplyAfter(conv: Conversation, afterIso?: string): boolean {
+  const afterMs = Date.parse(String(afterIso ?? ""));
+  const hasAfterCutoff = Number.isFinite(afterMs);
+  for (const msg of conv.messages ?? []) {
+    if (msg?.direction !== "in") continue;
+    const provider = String(msg?.provider ?? "").toLowerCase();
+    if (provider === "sendgrid_adf") continue;
+    if (hasAfterCutoff) {
+      const atMs = Date.parse(String(msg?.at ?? ""));
+      if (!Number.isFinite(atMs) || atMs <= afterMs) continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+function maybeMarkCampaignThreadPassed(
+  conv: Conversation,
+  passedTo: "sales" | "service" | "parts" | "apparel" | "financing" | "general"
+): boolean {
+  const campaignThread = (conv as any)?.campaignThread;
+  if (!campaignThread || String(campaignThread.status ?? "").toLowerCase() !== "campaign") return false;
+  if (!hasInboundCampaignReplyAfter(conv, String(campaignThread.firstSentAt ?? ""))) return false;
+  (conv as any).campaignThread = {
+    ...campaignThread,
+    status: "passed",
+    passedAt: new Date().toISOString(),
+    passedTo
+  };
+  return true;
+}
+
 app.post("/conversations/:id/department", requirePermission("canAccessTodos"), (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
@@ -17994,6 +18026,7 @@ app.post("/conversations/:id/department", requirePermission("canAccessTodos"), (
   setFollowUpMode(conv, "manual_handoff", `${department}_request`);
   stopFollowUpCadence(conv, "manual_handoff");
   stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+  maybeMarkCampaignThreadPassed(conv, department);
   saveConversation(conv);
   return res.json({ ok: true, conversation: conv });
 });
@@ -18032,6 +18065,12 @@ app.post("/conversations/:id/lead-owner", requirePermission("canAccessTodos"), a
     name: ownerName,
     assignedAt: new Date().toISOString()
   };
+  const ownerRole = String(owner?.role ?? "").trim().toLowerCase();
+  const passTarget =
+    ownerRole === "service" || ownerRole === "parts" || ownerRole === "apparel"
+      ? (ownerRole as "service" | "parts" | "apparel")
+      : "sales";
+  maybeMarkCampaignThreadPassed(conv, passTarget);
   conv.updatedAt = new Date().toISOString();
   saveConversation(conv);
   return res.json({ ok: true, conversation: conv });
@@ -19792,6 +19831,8 @@ app.post("/contacts/import", requireManager, (req, res) => {
 app.post("/contacts/broadcast", requireManager, async (req, res) => {
   const listId = String(req.body?.listId ?? "").trim();
   const message = String(req.body?.message ?? "").trim();
+  const campaignId = String(req.body?.campaignId ?? "").trim() || undefined;
+  const campaignName = String(req.body?.campaignName ?? "").trim() || undefined;
   if (!listId) return res.status(400).json({ ok: false, error: "Missing listId" });
   if (!message) return res.status(400).json({ ok: false, error: "Missing message" });
 
@@ -19832,6 +19873,11 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
         body: message
       });
       const leadKey = String(contact.leadKey ?? contact.conversationId ?? phone);
+      const existingConv = getConversation(leadKey);
+      const existingIsOpen =
+        !!existingConv && String(existingConv.status ?? "open").toLowerCase() !== "closed";
+      const existingIsCampaignThread =
+        String((existingConv as any)?.campaignThread?.status ?? "").toLowerCase() === "campaign";
       const conv = upsertConversationByLeadKey(leadKey, "suggest");
       updateConversationContact(conv, {
         firstName: contact.firstName,
@@ -19841,6 +19887,21 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
         email: contact.email
       });
       appendOutbound(conv, from, phone, message, "twilio", out.sid ?? undefined);
+      const shouldRouteToCampaigns = !existingIsOpen || existingIsCampaignThread;
+      if (shouldRouteToCampaigns) {
+        const nowIso = new Date().toISOString();
+        const currentThread = (conv as any).campaignThread ?? {};
+        (conv as any).campaignThread = {
+          ...currentThread,
+          status: "campaign",
+          campaignId: campaignId ?? currentThread.campaignId ?? undefined,
+          campaignName: campaignName ?? currentThread.campaignName ?? (String(list?.name ?? "").trim() || undefined),
+          listId,
+          listName: String(list?.name ?? "").trim() || currentThread.listName || undefined,
+          firstSentAt: String(currentThread.firstSentAt ?? "").trim() || nowIso,
+          lastSentAt: nowIso
+        };
+      }
       conv.updatedAt = new Date().toISOString();
       saveConversation(conv);
       sent.push({ id: String(contact.id), phone, sid: out.sid });

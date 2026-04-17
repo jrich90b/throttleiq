@@ -538,6 +538,18 @@ export type Conversation = {
     updatedAt: string;
     skipNextCheckin?: boolean;
   };
+  campaignThread?: {
+    status: "campaign" | "passed";
+    campaignId?: string;
+    campaignName?: string;
+    listId?: string;
+    listName?: string;
+    firstSentAt?: string;
+    lastSentAt?: string;
+    replySeenAt?: string;
+    passedAt?: string;
+    passedTo?: "sales" | "service" | "parts" | "apparel" | "financing" | "general";
+  };
   scheduler?: SchedulerMemory;
   followUpCadence?: FollowUpCadence;
   objections?: ObjectionState;
@@ -2253,6 +2265,7 @@ export function listConversations() {
         hasInboundTwilio,
         hotDealSticky,
         dealTemperature,
+        campaignThread: c.campaignThread ?? null,
         walkIn: inferredWalkIn ? true : null,
         engagement: c.engagement ?? null,
         classification: c.classification ?? null,

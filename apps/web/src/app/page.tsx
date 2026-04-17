@@ -554,6 +554,18 @@ type ConversationListItem = {
     assignedAt?: string;
   } | null;
   leadSource?: string | null;
+  campaignThread?: {
+    status?: "campaign" | "passed";
+    campaignId?: string;
+    campaignName?: string;
+    listId?: string;
+    listName?: string;
+    firstSentAt?: string;
+    lastSentAt?: string;
+    replySeenAt?: string;
+    passedAt?: string;
+    passedTo?: "sales" | "service" | "parts" | "apparel" | "financing" | "general";
+  } | null;
   hasInboundTwilio?: boolean | null;
   hotDealSticky?: boolean | null;
   dealTemperature?: "hot" | "warm" | "cold" | null;
@@ -1329,7 +1341,7 @@ export default function Home() {
   const [contacts, setContacts] = useState<ContactItem[]>([]);
   const [newSuppression, setNewSuppression] = useState("");
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<"inbox" | "archive">("inbox");
+  const [view, setView] = useState<"inbox" | "campaigns" | "archive">("inbox");
   const [section, setSection] = useState<
     | "inbox"
     | "todos"
@@ -1363,6 +1375,7 @@ export default function Home() {
   const [inboxQuery, setInboxQuery] = useState("");
   const [inboxOwnerFilter, setInboxOwnerFilter] = useState("all");
   const [inboxDealFilter, setInboxDealFilter] = useState<"all" | "hot" | "sold" | "hold">("all");
+  const [campaignInboxExpanded, setCampaignInboxExpanded] = useState<Record<string, boolean>>({});
   const [todoQuery, setTodoQuery] = useState("");
   const [todoLeadOwnerFilter, setTodoLeadOwnerFilter] = useState("all");
   const [todoTaskTypeFilter, setTodoTaskTypeFilter] = useState<"all" | TodoInboxSection>("all");
@@ -5200,11 +5213,20 @@ export default function Home() {
     );
   };
 
+  const isCampaignConversation = useCallback((c: ConversationListItem | null | undefined) => {
+    if (!c) return false;
+    return String(c.campaignThread?.status ?? "").trim().toLowerCase() === "campaign";
+  }, []);
+
   const visibleConversations = useMemo(() => {
-    return conversations.filter(c =>
-      view === "inbox" ? !isArchivedConversation(c) : isArchivedConversation(c)
-    );
-  }, [conversations, view]);
+    return conversations.filter(c => {
+      const archived = isArchivedConversation(c);
+      const campaignOnly = isCampaignConversation(c);
+      if (view === "archive") return archived;
+      if (view === "campaigns") return !archived && campaignOnly;
+      return !archived && !campaignOnly;
+    });
+  }, [conversations, view, isCampaignConversation]);
 
   const inboxDepartmentTeamsByConv = useMemo(() => {
     const out = new Map<string, Set<string>>();
@@ -5315,7 +5337,55 @@ export default function Home() {
   }, [visibleConversations]);
 
   const groupedConversations = useMemo(() => {
-    const groups: Array<{ label: string; items: ConversationListItem[] }> = [];
+    if (view === "campaigns") {
+      const byKey = new Map<
+        string,
+        { key: string; label: string; items: ConversationListItem[]; latestUpdatedMs: number }
+      >();
+      for (const c of filteredConversations) {
+        const thread = c.campaignThread ?? null;
+        const campaignId = String(thread?.campaignId ?? "").trim();
+        const campaignName =
+          String(thread?.campaignName ?? "").trim() ||
+          String(thread?.listName ?? "").trim() ||
+          "Unlabeled campaign";
+        const key =
+          campaignId ||
+          String(thread?.listId ?? "").trim() ||
+          `campaign_name:${campaignName.toLowerCase()}`;
+        const updatedMs = Date.parse(String(c.updatedAt ?? "")) || 0;
+        const existing = byKey.get(key);
+        if (!existing) {
+          byKey.set(key, {
+            key,
+            label: campaignName,
+            items: [c],
+            latestUpdatedMs: updatedMs
+          });
+          continue;
+        }
+        existing.items.push(c);
+        existing.latestUpdatedMs = Math.max(existing.latestUpdatedMs, updatedMs);
+      }
+      return Array.from(byKey.values())
+        .map(group => ({
+          key: group.key,
+          label: group.label,
+          items: group.items.sort((a, b) => {
+            const aMs = Date.parse(String(a.updatedAt ?? "")) || 0;
+            const bMs = Date.parse(String(b.updatedAt ?? "")) || 0;
+            return bMs - aMs;
+          }),
+          isCampaignGroup: true
+        }))
+        .sort((a, b) => {
+          const aMs = Date.parse(String(a.items[0]?.updatedAt ?? "")) || 0;
+          const bMs = Date.parse(String(b.items[0]?.updatedAt ?? "")) || 0;
+          return bMs - aMs;
+        });
+    }
+
+    const groups: Array<{ key: string; label: string; items: ConversationListItem[]; isCampaignGroup: false }> = [];
     let lastLabel = "";
     for (const c of filteredConversations) {
       const label = new Date(c.updatedAt).toLocaleDateString("en-US", {
@@ -5325,14 +5395,14 @@ export default function Home() {
         day: "numeric"
       });
       if (label !== lastLabel) {
-        groups.push({ label, items: [c] });
+        groups.push({ key: label, label, items: [c], isCampaignGroup: false });
         lastLabel = label;
       } else {
         groups[groups.length - 1].items.push(c);
       }
     }
     return groups;
-  }, [filteredConversations]);
+  }, [filteredConversations, view]);
 
   const contactLookup = useMemo(() => {
     const byConversationId = new Map<string, ContactItem>();
@@ -7122,12 +7192,20 @@ export default function Home() {
     setBroadcastBusy(true);
     setBroadcastResult(null);
     try {
+      const selectedCampaign = campaigns.find(c => c.id === campaignSelectedId) ?? null;
+      const campaignName =
+        String(selectedCampaign?.name ?? "").trim() ||
+        campaignForm.name.trim() ||
+        String(selectedContactList?.name ?? "").trim() ||
+        undefined;
       const resp = await fetch("/api/contacts/broadcast", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           listId: selectedContactListId,
-          message
+          message,
+          campaignId: selectedCampaign?.id || undefined,
+          campaignName
         })
       });
       const payload = await resp.json().catch(() => null);
@@ -8482,6 +8560,12 @@ export default function Home() {
                   Inbox
                 </button>
                 <button
+                  className={`px-3 py-2 border border-[var(--border)] rounded cursor-pointer ${view === "campaigns" ? "font-semibold bg-[var(--accent)] text-white border-[var(--accent)]" : "hover:bg-[var(--surface-2)]"}`}
+                  onClick={() => setView("campaigns")}
+                >
+                  Campaigns
+                </button>
+                <button
                   className={`px-3 py-2 border border-[var(--border)] rounded cursor-pointer ${view === "archive" ? "font-semibold bg-[var(--accent)] text-white border-[var(--accent)]" : "hover:bg-[var(--surface-2)]"}`}
                   onClick={() => setView("archive")}
                 >
@@ -8492,7 +8576,9 @@ export default function Home() {
                 <div className="text-xs text-[var(--palette-graphite)]">
                   {view === "inbox"
                     ? `Open: ${filteredConversations.length}`
-                    : `Archived: ${filteredConversations.length}`}
+                    : view === "campaigns"
+                      ? `Campaign leads: ${filteredConversations.length}`
+                      : `Archived: ${filteredConversations.length}`}
                 </div>
                 <button
                   className="h-9 w-9 inline-flex items-center justify-center border-2 border-[var(--accent)] text-[var(--accent)] rounded hover:bg-[var(--surface-2)]"
@@ -8599,11 +8685,33 @@ export default function Home() {
             </div>
 
             <div className="mt-3 space-y-3">
-              {groupedConversations.map(group => (
-                <div key={group.label}>
-                  <div className="px-1 pb-1 text-xs font-semibold text-[var(--accent)] border-b border-[var(--border)]">
-                    {group.label}
-                  </div>
+              {groupedConversations.map(group => {
+                const expanded = group.isCampaignGroup
+                  ? (campaignInboxExpanded[group.key] ?? true)
+                  : true;
+                return (
+                <div key={group.key}>
+                  {group.isCampaignGroup ? (
+                    <button
+                      className="w-full px-1 pb-1 text-xs font-semibold text-[var(--accent)] border-b border-[var(--border)] flex items-center justify-between gap-2"
+                      onClick={() =>
+                        setCampaignInboxExpanded(prev => ({
+                          ...prev,
+                          [group.key]: !expanded
+                        }))
+                      }
+                    >
+                      <span className="truncate text-left">{group.label}</span>
+                      <span className="shrink-0">
+                        {group.items.length} {(group.items.length === 1 ? "lead" : "leads")} {expanded ? "▾" : "▸"}
+                      </span>
+                    </button>
+                  ) : (
+                    <div className="px-1 pb-1 text-xs font-semibold text-[var(--accent)] border-b border-[var(--border)]">
+                      {group.label}
+                    </div>
+                  )}
+                  {expanded ? (
                   <div className="mt-2 border border-[var(--border)] rounded-lg divide-y bg-[var(--surface)]">
                     {group.items.map(c => (
                       <div key={c.id} className="flex items-stretch">
@@ -9085,8 +9193,10 @@ export default function Home() {
                       </div>
                     ))}
                   </div>
+                  ) : null}
                 </div>
-              ))}
+                );
+              })}
 
               {!loading && filteredConversations.length === 0 && (
                 <div className="p-4 text-sm text-gray-600 border rounded-lg">
@@ -9094,7 +9204,9 @@ export default function Home() {
                     ? "No conversations match your search."
                     : view === "inbox"
                       ? "No open conversations."
-                      : "No archived conversations."}
+                      : view === "campaigns"
+                        ? "No campaign threads."
+                        : "No archived conversations."}
                 </div>
               )}
             </div>
