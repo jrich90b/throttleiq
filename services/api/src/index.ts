@@ -19578,6 +19578,20 @@ function campaignAssetTargetLabel(target: CampaignAssetTarget): string {
   return target;
 }
 
+function chooseCampaignPreviewAsset(
+  assets: CampaignGeneratedAsset[],
+  preferredTargets: CampaignAssetTarget[]
+): CampaignGeneratedAsset | null {
+  if (!Array.isArray(assets) || !assets.length) return null;
+  const rows = assets.filter(row => !!row?.url);
+  if (!rows.length) return null;
+  for (const target of preferredTargets) {
+    const match = rows.find(row => row.target === target);
+    if (match) return match;
+  }
+  return rows[0] ?? null;
+}
+
 function normalizeCampaignTags(raw: unknown): CampaignTag[] {
   if (!Array.isArray(raw)) return [];
   return Array.from(
@@ -19856,16 +19870,20 @@ function campaignInstagramStoryHeight(): number {
 
 function campaignWebBannerWidth(profile?: Awaited<ReturnType<typeof getDealerProfile>>): number {
   const fromProfile = Number((profile as any)?.campaign?.webBannerWidth);
-  if (Number.isFinite(fromProfile) && fromProfile >= 640 && fromProfile <= 6000) {
-    return Math.round(fromProfile);
+  const fromLegacy = Number((profile as any)?.webBannerWidth);
+  const candidate = Number.isFinite(fromProfile) ? fromProfile : fromLegacy;
+  if (Number.isFinite(candidate) && candidate >= 640 && candidate <= 6000) {
+    return Math.round(candidate);
   }
   return Math.max(640, Math.min(6000, Number(process.env.CAMPAIGN_WEB_BANNER_WIDTH ?? 1920)));
 }
 
 function campaignWebBannerHeight(profile?: Awaited<ReturnType<typeof getDealerProfile>>): number {
   const fromProfile = Number((profile as any)?.campaign?.webBannerHeight);
-  if (Number.isFinite(fromProfile) && fromProfile >= 120 && fromProfile <= 3000) {
-    return Math.round(fromProfile);
+  const fromLegacy = Number((profile as any)?.webBannerHeight);
+  const candidate = Number.isFinite(fromProfile) ? fromProfile : fromLegacy;
+  if (Number.isFinite(candidate) && candidate >= 120 && candidate <= 3000) {
+    return Math.round(candidate);
   }
   return Math.max(120, Math.min(3000, Number(process.env.CAMPAIGN_WEB_BANNER_HEIGHT ?? 600)));
 }
@@ -20642,7 +20660,11 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       const imageOutputProfiles = generatedAssets.length
         ? generatedAssets.map(asset => asset.target)
         : [campaignImageOutputProfileForChannel(channel)];
-      generatedFinalImageUrl = generatedAssets[0]?.url ?? generatedImageUrl;
+      const preferredTargetsForPreview: CampaignAssetTarget[] = assetTargets.includes("web_banner")
+        ? ["web_banner", ...assetTargets.filter(target => target !== "web_banner")]
+        : assetTargets;
+      const preferredAsset = chooseCampaignPreviewAsset(generatedAssets, preferredTargetsForPreview);
+      generatedFinalImageUrl = preferredAsset?.url ?? generatedImageUrl;
       effectiveGenerated = {
         ...generated,
         finalImageUrl: generatedFinalImageUrl,
@@ -20652,6 +20674,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
           imageGenerator: generatedImageUrlNano ? "nano_banana_vertex" : "openai_fallback",
           imageOutputProfile: imageOutputProfiles[0],
           imageOutputProfiles,
+          imagePreviewTarget: preferredAsset?.target ?? imageOutputProfiles[0],
           imageGeneratedAt: new Date().toISOString(),
           imageReferenceCount: generatedImageNano?.referenceCount ?? 0
         },

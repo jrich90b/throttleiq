@@ -10357,6 +10357,12 @@ export default function Home() {
                 <div className="text-[11px] text-gray-500">
                   SMS/Email outputs are send-eligible. Facebook/Instagram/Web banner outputs are download-only.
                 </div>
+                <div className="text-[11px] text-gray-500">
+                  Web banner uses Dealer Profile size (
+                  {Math.max(1, Number(dealerProfileForm.campaignWebBannerWidth) || 1200)}x
+                  {Math.max(1, Number(dealerProfileForm.campaignWebBannerHeight) || 628)}). Select{" "}
+                  <span className="font-semibold">Web banner</span> in Output files to generate that exact frame.
+                </div>
               </div>
 
               <div className="border rounded-lg p-3 bg-gray-50 space-y-3">
