@@ -1901,6 +1901,8 @@ async function getInventoryFeedHot(): Promise<InventoryFeedSnapshot> {
 function isPublicPath(pathname: string): boolean {
   return (
     pathname === "/health" ||
+    pathname === "/uploads" ||
+    pathname.startsWith("/uploads/") ||
     pathname.startsWith("/webhooks/twilio") ||
     pathname.startsWith("/crm/leads/adf/sendgrid") ||
     pathname.startsWith("/public/booking") ||
