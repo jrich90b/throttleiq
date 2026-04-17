@@ -19584,13 +19584,17 @@ function preferredCampaignGenerationTarget(
 ): CampaignAssetTarget | null {
   const list = Array.isArray(assetTargets) ? assetTargets : [];
   if (!list.length) return null;
-  if (list.includes("web_banner")) return "web_banner";
+  if (list.length === 1) return list[0] ?? null;
   if (channel === "sms" && list.includes("sms")) return "sms";
   if (channel === "email" && list.includes("email")) return "email";
   if (channel === "both") {
     if (list.includes("sms")) return "sms";
     if (list.includes("email")) return "email";
   }
+  if (list.includes("instagram_post")) return "instagram_post";
+  if (list.includes("facebook_post")) return "facebook_post";
+  if (list.includes("instagram_story")) return "instagram_story";
+  if (list.includes("web_banner")) return "web_banner";
   return list[0] ?? null;
 }
 
@@ -19701,8 +19705,9 @@ function buildCampaignImagePrompt(args: {
     !tagSet.has("financing") &&
     !tagSet.has("sales");
   const preferredTarget = preferredCampaignGenerationTarget(args.assetTargets, args.channel);
+  const selectedTargetCount = Array.isArray(args.assetTargets) ? args.assetTargets.length : 0;
   const outputGuardrails: string[] = [];
-  if (preferredTarget === "web_banner") {
+  if (preferredTarget === "web_banner" && selectedTargetCount <= 1) {
     const bannerW = campaignWebBannerWidth(args.dealerProfile);
     const bannerH = campaignWebBannerHeight(args.dealerProfile);
     const ratio = (bannerW / Math.max(1, bannerH)).toFixed(3);
@@ -19711,6 +19716,12 @@ function buildCampaignImagePrompt(args: {
       `- Compose as a wide horizontal web banner at ${bannerW}x${bannerH} (~${ratio}:1).`,
       "- Fill the frame edge-to-edge (no borders, no letterboxing, no padding).",
       "- Keep all essential text/logo/CTA inside a center safe area (~70% width, ~80% height) to avoid edge loss."
+    );
+  } else if (selectedTargetCount > 1) {
+    outputGuardrails.push(
+      "Cross-channel framing requirements (critical):",
+      "- Compose with a strong centered subject and keep key text/logo/CTA inside a generous central safe area.",
+      "- Avoid placing important text near edges so social, SMS, and banner variants remain readable after resizing."
     );
   }
   const tagGuardrails = suppressFinanceTrade
@@ -20019,9 +20030,10 @@ async function normalizeCampaignImageForExactFrame(
   const sourceH = Number(sourceMeta?.height ?? 0);
   const sourceAspect = sourceW > 0 && sourceH > 0 ? sourceW / sourceH : null;
   const targetAspect = width / Math.max(1, height);
+  const requestedFit = opts?.fit ?? "auto";
   let effectiveFit: "contain" | "cover" | "contain_blur" =
-    opts?.fit === "contain" ? "contain" : opts?.fit === "cover" ? "cover" : "cover";
-  if (opts?.fit === "auto") {
+    requestedFit === "contain" ? "contain" : requestedFit === "cover" ? "cover" : "cover";
+  if (requestedFit === "auto") {
     if (sourceAspect && Number.isFinite(sourceAspect) && sourceAspect > 0) {
       const aspectDelta = Math.max(sourceAspect / targetAspect, targetAspect / sourceAspect);
       effectiveFit = aspectDelta >= 1.45 ? "contain_blur" : "cover";
