@@ -19658,6 +19658,110 @@ async function getVertexAccessToken(): Promise<string | null> {
   }
 }
 
+function inferMimeTypeFromPathOrUrl(raw: string): string | null {
+  const lower = String(raw ?? "").trim().toLowerCase();
+  if (!lower) return null;
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".gif")) return "image/gif";
+  if (lower.endsWith(".heic")) return "image/heic";
+  if (lower.endsWith(".heif")) return "image/heif";
+  if (lower.endsWith(".svg")) return "image/svg+xml";
+  return null;
+}
+
+async function buildNanoBananaReferenceParts(rawUrls: string[] | null | undefined): Promise<any[]> {
+  const urls = normalizeCampaignUrlArray(rawUrls ?? []);
+  if (!urls.length) return [];
+
+  const maxRefs = Math.max(0, Math.min(14, Number(process.env.CAMPAIGN_NANO_BANANA_MAX_REFS ?? 4)));
+  if (!maxRefs) return [];
+  const maxBytesPerImage = Math.max(
+    256 * 1024,
+    Math.min(50 * 1024 * 1024, Number(process.env.CAMPAIGN_NANO_BANANA_MAX_REF_BYTES ?? 10 * 1024 * 1024))
+  );
+  const timeoutMs = Math.max(1000, Number(process.env.CAMPAIGN_NANO_BANANA_REF_TIMEOUT_MS ?? 5000));
+
+  const allowedMime = new Set([
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    "image/heic",
+    "image/heif"
+  ]);
+
+  const out: any[] = [];
+  const seen = new Set<string>();
+
+  for (const raw of urls) {
+    if (out.length >= maxRefs) break;
+    const trimmed = String(raw ?? "").trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+
+    // Support local campaign uploads when URLs are stored as relative paths.
+    if (trimmed.startsWith("/uploads/")) {
+      try {
+        const rel = trimmed.replace(/^\/+/, "");
+        const localPath = path.resolve(getDataDir(), rel);
+        const stat = await fs.promises.stat(localPath).catch(() => null);
+        if (!stat || !stat.isFile() || stat.size <= 0 || stat.size > maxBytesPerImage) continue;
+        const inferred = inferMimeTypeFromPathOrUrl(localPath) ?? "image/jpeg";
+        if (!allowedMime.has(inferred)) continue;
+        const buffer = await fs.promises.readFile(localPath);
+        if (!buffer.length || buffer.length > maxBytesPerImage) continue;
+        out.push({
+          inlineData: {
+            mimeType: inferred,
+            data: buffer.toString("base64")
+          }
+        });
+      } catch {
+        // ignore local ref failures
+      }
+      continue;
+    }
+
+    const normalized = normalizeHttpUrl(trimmed);
+    if (!normalized) continue;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const resp = await fetch(normalized, {
+        method: "GET",
+        headers: {
+          accept: "image/*",
+          "user-agent": "Mozilla/5.0 (compatible; ThrottleIQCampaignBot/1.0)"
+        },
+        signal: controller.signal
+      });
+      if (!resp.ok) continue;
+      const contentLengthRaw = String(resp.headers.get("content-length") ?? "").trim();
+      const contentLength = Number(contentLengthRaw);
+      if (Number.isFinite(contentLength) && contentLength > maxBytesPerImage) continue;
+      const ctypeRaw = String(resp.headers.get("content-type") ?? "").toLowerCase();
+      const ctype = ctypeRaw.split(";")[0].trim() || inferMimeTypeFromPathOrUrl(normalized) || "";
+      if (!allowedMime.has(ctype)) continue;
+      const arr = await resp.arrayBuffer();
+      if (!arr.byteLength || arr.byteLength > maxBytesPerImage) continue;
+      out.push({
+        inlineData: {
+          mimeType: ctype,
+          data: Buffer.from(arr).toString("base64")
+        }
+      });
+    } catch {
+      // ignore remote ref failures
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  return out;
+}
+
 async function generateCampaignImageWithNanoBanana(args: {
   name: string;
   prompt?: string;
@@ -19665,7 +19769,8 @@ async function generateCampaignImageWithNanoBanana(args: {
   tags: CampaignTag[];
   dealerProfile?: Awaited<ReturnType<typeof getDealerProfile>>;
   sourceHits?: Array<{ title?: string; snippet?: string; url?: string }>;
-}): Promise<string | null> {
+  referenceImageUrls?: string[];
+}): Promise<{ url: string; referenceCount: number } | null> {
   if (String(process.env.CAMPAIGN_NANO_BANANA_ENABLED ?? "1") === "0") return null;
 
   const projectId = String(process.env.GOOGLE_CLOUD_PROJECT ?? process.env.VERTEX_SEARCH_PROJECT_ID ?? "").trim();
@@ -19692,6 +19797,8 @@ async function generateCampaignImageWithNanoBanana(args: {
   if (tempRaw && Number.isFinite(tempNum)) generationConfig.temperature = tempNum;
 
   try {
+    const referenceParts = await buildNanoBananaReferenceParts(args.referenceImageUrls);
+    const parts = [{ text: imagePrompt }, ...referenceParts];
     const resp = await fetch(endpoint, {
       method: "POST",
       headers: {
@@ -19702,7 +19809,7 @@ async function generateCampaignImageWithNanoBanana(args: {
         contents: [
           {
             role: "user",
-            parts: [{ text: imagePrompt }]
+            parts
           }
         ],
         generationConfig
@@ -19726,9 +19833,10 @@ async function generateCampaignImageWithNanoBanana(args: {
     const dest = path.join(dir, fileName);
     await fs.promises.writeFile(dest, buffer);
     const publicBase = process.env.PUBLIC_BASE_URL ?? "";
-    return publicBase
+    const url = publicBase
       ? `${publicBase.replace(/\/$/, "")}/uploads/campaigns/${fileName}`
       : `/uploads/campaigns/${fileName}`;
+    return { url, referenceCount: referenceParts.length };
   } catch (err: any) {
     console.warn("[campaign] nano banana vertex exception:", err?.message ?? err);
     return null;
@@ -20033,14 +20141,21 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
   const shouldAttemptImageFallback = req.body?.generateImage !== false;
   let generatedFinalImageUrl: string | undefined;
   if (shouldAttemptImageFallback) {
-    const generatedImageUrlNano = await generateCampaignImageWithNanoBanana({
+    const referenceImageUrls = normalizeCampaignUrlArray([
+      ...(generated.inspirationImageUrls ?? []),
+      ...(inspirationImageUrls ?? []),
+      ...(assetImageUrls ?? [])
+    ]);
+    const generatedImageNano = await generateCampaignImageWithNanoBanana({
       name,
       prompt,
       description,
       tags,
       dealerProfile,
-      sourceHits: generated.sourceHits
+      sourceHits: generated.sourceHits,
+      referenceImageUrls
     });
+    const generatedImageUrlNano = generatedImageNano?.url ?? null;
     const generatedImageUrl =
       generatedImageUrlNano ||
       (await generateCampaignImageWithOpenAI({
@@ -20058,7 +20173,8 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
         metadata: {
           ...(generated.metadata ?? {}),
           imageGenerator: generatedImageUrlNano ? "nano_banana_vertex" : "openai_fallback",
-          imageGeneratedAt: new Date().toISOString()
+          imageGeneratedAt: new Date().toISOString(),
+          imageReferenceCount: generatedImageNano?.referenceCount ?? 0
         },
         generatedBy: generatedImageUrlNano ? "nano_banana" : generated.generatedBy
       };
