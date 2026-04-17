@@ -2116,6 +2116,90 @@ function computeDealTemperature(
   return "cold";
 }
 
+function normalizeModelInterestText(value?: string | null): string {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isGenericModelInterest(value?: string | null): boolean {
+  const raw = normalizeModelInterestText(value);
+  if (!raw) return true;
+  const normalized = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  if (!normalized) return true;
+  if (/^\d{4}$/.test(normalized)) return true;
+  if (normalized === "new" || normalized === "used") return true;
+  const generic = new Set([
+    "other",
+    "full line",
+    "unknown",
+    "n a",
+    "na",
+    "harley davidson",
+    "harley davidson other",
+    "harley davidson full line"
+  ]);
+  if (generic.has(normalized)) return true;
+  if (normalized.endsWith(" other")) return true;
+  return false;
+}
+
+function toModelConditionLabel(value?: string | null): string {
+  const normalized = String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  if (!normalized || normalized === "any" || normalized === "unknown") return "";
+  if (normalized.includes("used") || normalized.includes("pre owned") || normalized.includes("preowned")) {
+    return "Used";
+  }
+  if (normalized.includes("new")) return "New";
+  return "";
+}
+
+function latestModelInterestLabel(conv: Conversation): string | null {
+  const contextModel = normalizeModelInterestText(conv.inventoryContext?.model);
+  const lastActiveWatchModel = normalizeModelInterestText(
+    [...(conv.inventoryWatches ?? [])]
+      .reverse()
+      .find(w => (w?.status ?? "active") !== "paused" && !isGenericModelInterest(w?.model))?.model ??
+      (conv.inventoryWatch && (conv.inventoryWatch.status ?? "active") !== "paused"
+        ? conv.inventoryWatch.model
+        : "")
+  );
+  const leadModel = normalizeModelInterestText(conv.lead?.vehicle?.model);
+  const leadDescription = normalizeModelInterestText(conv.lead?.vehicle?.description);
+
+  const model =
+    !isGenericModelInterest(contextModel)
+      ? contextModel
+      : !isGenericModelInterest(lastActiveWatchModel)
+        ? lastActiveWatchModel
+        : !isGenericModelInterest(leadModel)
+          ? leadModel
+          : "";
+
+  if (model) {
+    const conditionLabel =
+      toModelConditionLabel(conv.inventoryContext?.condition) ||
+      toModelConditionLabel(
+        [...(conv.inventoryWatches ?? [])]
+          .reverse()
+          .find(w => (w?.status ?? "active") !== "paused" && !isGenericModelInterest(w?.model))?.condition ??
+          conv.inventoryWatch?.condition
+      ) ||
+      toModelConditionLabel(conv.lead?.vehicle?.condition);
+    return `${conditionLabel ? `${conditionLabel} ` : ""}${model}`.trim();
+  }
+
+  if (!isGenericModelInterest(leadDescription)) return leadDescription;
+  if (!isGenericModelInterest(leadModel)) return leadModel;
+  return null;
+}
+
 export function listConversations() {
 
   function pendingDraftInfo(c: Conversation) {
@@ -2162,7 +2246,7 @@ export function listConversations() {
           c.lead?.name?.trim() ||
           [c.lead?.firstName, c.lead?.lastName].filter(Boolean).join(" ").trim() ||
           null,
-        vehicleDescription: c.lead?.vehicle?.description ?? null,
+        vehicleDescription: latestModelInterestLabel(c),
         contactPreference: c.contactPreference,
         preferredContactMethod: c.lead?.preferredContactMethod ?? null,
         leadSource,
