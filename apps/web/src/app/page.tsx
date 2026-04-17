@@ -1250,7 +1250,7 @@ type KpiOverview = {
   }>;
 };
 
-type CampaignBuildMode = "design_from_scratch" | "promotion_event_prompt";
+type CampaignBuildMode = "design_from_scratch" | "web_search_design";
 type CampaignChannel = "sms" | "email" | "both";
 type CampaignTag =
   | "sales"
@@ -1279,6 +1279,7 @@ type CampaignEntry = {
   description?: string;
   inspirationImageUrls?: string[];
   assetImageUrls?: string[];
+  briefDocumentUrls?: string[];
   smsBody?: string;
   emailSubject?: string;
   emailBodyText?: string;
@@ -1353,6 +1354,7 @@ const EMPTY_CAMPAIGN_FORM = {
   description: "",
   inspirationImageUrlsText: "",
   assetImageUrlsText: "",
+  briefDocumentUrlsText: "",
   smsBody: "",
   emailSubject: "",
   emailBodyText: "",
@@ -1422,7 +1424,9 @@ export default function Home() {
   const [campaignLoading, setCampaignLoading] = useState(false);
   const [campaignSaving, setCampaignSaving] = useState(false);
   const [campaignGenerating, setCampaignGenerating] = useState(false);
-  const [campaignUploadBusy, setCampaignUploadBusy] = useState(false);
+  const [campaignInspirationUploadBusy, setCampaignInspirationUploadBusy] = useState(false);
+  const [campaignAssetUploadBusy, setCampaignAssetUploadBusy] = useState(false);
+  const [campaignBriefUploadBusy, setCampaignBriefUploadBusy] = useState(false);
   const [campaignError, setCampaignError] = useState<string | null>(null);
   const [campaignSelectedId, setCampaignSelectedId] = useState("");
   const [campaignForm, setCampaignForm] = useState({ ...EMPTY_CAMPAIGN_FORM });
@@ -1436,6 +1440,10 @@ export default function Home() {
         .filter(looksLikeCampaignImageUrl)
         .slice(0, 8),
     [campaignForm.inspirationImageUrlsText]
+  );
+  const campaignBriefPreviewUrls = useMemo(
+    () => parseCampaignUrlsText(campaignForm.briefDocumentUrlsText).slice(0, 8),
+    [campaignForm.briefDocumentUrlsText]
   );
   const cadenceResolveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [watchEditOpen, setWatchEditOpen] = useState(false);
@@ -1880,7 +1888,9 @@ export default function Home() {
       return;
     }
     const buildMode: CampaignBuildMode =
-      entry.buildMode === "promotion_event_prompt" ? "promotion_event_prompt" : "design_from_scratch";
+      entry.buildMode === "web_search_design" || (entry.buildMode as any) === "promotion_event_prompt"
+        ? "web_search_design"
+        : "design_from_scratch";
     const channel: CampaignChannel =
       entry.channel === "sms" || entry.channel === "email" || entry.channel === "both"
         ? entry.channel
@@ -1899,6 +1909,7 @@ export default function Home() {
       description: String(entry.description ?? ""),
       inspirationImageUrlsText: campaignUrlsToText(entry.inspirationImageUrls),
       assetImageUrlsText: campaignUrlsToText(entry.assetImageUrls),
+      briefDocumentUrlsText: campaignUrlsToText(entry.briefDocumentUrls),
       smsBody: String(entry.smsBody ?? ""),
       emailSubject: String(entry.emailSubject ?? ""),
       emailBodyText: String(entry.emailBodyText ?? ""),
@@ -1916,41 +1927,92 @@ export default function Home() {
     setCampaignError(null);
   }
 
+  async function uploadCampaignFiles(files: FileList | null, endpoint: string): Promise<string[]> {
+    if (!files || files.length === 0) return [];
+    const urlsToAppend: string[] = [];
+    for (const file of Array.from(files)) {
+      const fd = new FormData();
+      fd.append("file", file);
+      const resp = await fetch(endpoint, {
+        method: "POST",
+        body: fd
+      });
+      const payload = await resp.json().catch(() => null);
+      if (!resp.ok || !payload?.url) {
+        window.alert(payload?.error ?? `Failed to upload "${file.name}".`);
+        continue;
+      }
+      urlsToAppend.push(String(payload.url));
+    }
+    return urlsToAppend;
+  }
+
   async function handleCampaignInspirationUploads(files: FileList | null) {
     if (!files || files.length === 0) return;
-    setCampaignUploadBusy(true);
+    setCampaignInspirationUploadBusy(true);
     setCampaignError(null);
     try {
-      const urlsToAppend: string[] = [];
       for (const file of Array.from(files)) {
         if (!String(file.type ?? "").startsWith("image/")) {
           window.alert(`"${file.name}" must be an image file.`);
-          continue;
+          return;
         }
-        const fd = new FormData();
-        fd.append("file", file);
-        const resp = await fetch("/api/campaigns/media", {
-          method: "POST",
-          body: fd
-        });
-        const payload = await resp.json().catch(() => null);
-        if (!resp.ok || !payload?.url) {
-          window.alert(payload?.error ?? `Failed to upload "${file.name}".`);
-          continue;
-        }
-        urlsToAppend.push(String(payload.url));
       }
-      if (urlsToAppend.length) {
-        setCampaignForm(prev => {
-          const existing = parseCampaignUrlsText(prev.inspirationImageUrlsText);
-          const next = Array.from(new Set([...existing, ...urlsToAppend]));
-          return { ...prev, inspirationImageUrlsText: next.join("\n") };
-        });
-      }
+      const urlsToAppend = await uploadCampaignFiles(files, "/api/campaigns/media");
+      if (!urlsToAppend.length) return;
+      setCampaignForm(prev => {
+        const existing = parseCampaignUrlsText(prev.inspirationImageUrlsText);
+        const next = Array.from(new Set([...existing, ...urlsToAppend]));
+        return { ...prev, inspirationImageUrlsText: next.join("\n") };
+      });
     } catch (err: any) {
       setCampaignError(err?.message ?? "Failed to upload inspiration image");
     } finally {
-      setCampaignUploadBusy(false);
+      setCampaignInspirationUploadBusy(false);
+    }
+  }
+
+  async function handleCampaignAssetUploads(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setCampaignAssetUploadBusy(true);
+    setCampaignError(null);
+    try {
+      for (const file of Array.from(files)) {
+        if (!String(file.type ?? "").startsWith("image/")) {
+          window.alert(`"${file.name}" must be an image file.`);
+          return;
+        }
+      }
+      const urlsToAppend = await uploadCampaignFiles(files, "/api/campaigns/media");
+      if (!urlsToAppend.length) return;
+      setCampaignForm(prev => {
+        const existing = parseCampaignUrlsText(prev.assetImageUrlsText);
+        const next = Array.from(new Set([...existing, ...urlsToAppend]));
+        return { ...prev, assetImageUrlsText: next.join("\n") };
+      });
+    } catch (err: any) {
+      setCampaignError(err?.message ?? "Failed to upload asset image");
+    } finally {
+      setCampaignAssetUploadBusy(false);
+    }
+  }
+
+  async function handleCampaignBriefUploads(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setCampaignBriefUploadBusy(true);
+    setCampaignError(null);
+    try {
+      const urlsToAppend = await uploadCampaignFiles(files, "/api/campaigns/briefs");
+      if (!urlsToAppend.length) return;
+      setCampaignForm(prev => {
+        const existing = parseCampaignUrlsText(prev.briefDocumentUrlsText);
+        const next = Array.from(new Set([...existing, ...urlsToAppend]));
+        return { ...prev, briefDocumentUrlsText: next.join("\n") };
+      });
+    } catch (err: any) {
+      setCampaignError(err?.message ?? "Failed to upload brief file");
+    } finally {
+      setCampaignBriefUploadBusy(false);
     }
   }
 
@@ -2000,6 +2062,7 @@ export default function Home() {
         description: String(campaignForm.description ?? "").trim() || undefined,
         inspirationImageUrls: parseCampaignUrlsText(campaignForm.inspirationImageUrlsText),
         assetImageUrls: parseCampaignUrlsText(campaignForm.assetImageUrlsText),
+        briefDocumentUrls: parseCampaignUrlsText(campaignForm.briefDocumentUrlsText),
         smsBody: String(campaignForm.smsBody ?? "").trim() || undefined,
         emailSubject: String(campaignForm.emailSubject ?? "").trim() || undefined,
         emailBodyText: String(campaignForm.emailBodyText ?? "").trim() || undefined,
@@ -2057,7 +2120,8 @@ export default function Home() {
         prompt: String(campaignForm.prompt ?? "").trim() || undefined,
         description: String(campaignForm.description ?? "").trim() || undefined,
         inspirationImageUrls: parseCampaignUrlsText(campaignForm.inspirationImageUrlsText),
-        assetImageUrls: parseCampaignUrlsText(campaignForm.assetImageUrlsText)
+        assetImageUrls: parseCampaignUrlsText(campaignForm.assetImageUrlsText),
+        briefDocumentUrls: parseCampaignUrlsText(campaignForm.briefDocumentUrlsText)
       };
       const resp = await fetch("/api/campaigns/generate", {
         method: "POST",
@@ -10072,7 +10136,7 @@ export default function Home() {
               <div>
                 <h2 className="text-xl font-semibold">Campaign Studio</h2>
                 <p className="text-xs text-gray-500 mt-1">
-                  Build SMS/email campaign drafts with prompt + reference URLs or uploaded inspiration images.
+                  Build campaigns from prompt + references + assets + briefs, or run web-search design from dealer profile sites.
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -10123,15 +10187,12 @@ export default function Home() {
                       onChange={e =>
                         setCampaignForm(prev => ({
                           ...prev,
-                          buildMode:
-                            e.target.value === "promotion_event_prompt"
-                              ? "promotion_event_prompt"
-                              : "design_from_scratch"
+                          buildMode: e.target.value === "web_search_design" ? "web_search_design" : "design_from_scratch"
                         }))
                       }
                     >
-                      <option value="design_from_scratch">Design from scratch</option>
-                      <option value="promotion_event_prompt">Promotion/event prompt</option>
+                      <option value="design_from_scratch">Start from scratch</option>
+                      <option value="web_search_design">Web search design</option>
                     </select>
                   </label>
                   <label className="text-xs text-gray-600">
@@ -10154,6 +10215,11 @@ export default function Home() {
                       <option value="email">Email only</option>
                     </select>
                   </label>
+                </div>
+                <div className="text-[11px] text-gray-500 -mt-1">
+                  {campaignForm.buildMode === "web_search_design"
+                    ? "Web search design uses websites from Dealer Profile + your prompt to pull context automatically."
+                    : "Start from scratch uses your prompt, reference images, design assets, and brief files."}
                 </div>
 
                 <div>
@@ -10217,16 +10283,18 @@ export default function Home() {
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <label
                       className={`inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
-                        campaignUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-gray-50"
+                        campaignInspirationUploadBusy
+                          ? "opacity-60 cursor-not-allowed"
+                          : "cursor-pointer hover:bg-gray-50"
                       }`}
                     >
-                      <span>{campaignUploadBusy ? "Uploading..." : "Upload inspiration image(s)"}</span>
+                      <span>{campaignInspirationUploadBusy ? "Uploading..." : "Upload inspiration image(s)"}</span>
                       <input
                         className="hidden"
                         type="file"
                         accept="image/*"
                         multiple
-                        disabled={campaignUploadBusy}
+                        disabled={campaignInspirationUploadBusy}
                         onChange={async e => {
                           const inputEl = e.currentTarget;
                           const files = inputEl.files;
@@ -10276,12 +10344,86 @@ export default function Home() {
                 </label>
 
                 <label className="block text-xs text-gray-600">
-                  Asset image URLs (one per line)
+                  Design asset image URLs (one per line)
                   <textarea
                     className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[80px] font-mono"
                     value={campaignForm.assetImageUrlsText}
                     onChange={e => setCampaignForm(prev => ({ ...prev, assetImageUrlsText: e.target.value }))}
                   />
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <label
+                      className={`inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
+                        campaignAssetUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-gray-50"
+                      }`}
+                    >
+                      <span>{campaignAssetUploadBusy ? "Uploading..." : "Upload design image(s)"}</span>
+                      <input
+                        className="hidden"
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        disabled={campaignAssetUploadBusy}
+                        onChange={async e => {
+                          const inputEl = e.currentTarget;
+                          const files = inputEl.files;
+                          await handleCampaignAssetUploads(files);
+                          inputEl.value = "";
+                        }}
+                      />
+                    </label>
+                    <div className="text-[11px] text-gray-500">
+                      Design assets are images to include in the final creative.
+                    </div>
+                  </div>
+                </label>
+
+                <label className="block text-xs text-gray-600">
+                  Promotion/event brief files (PDF/text/doc) or URLs
+                  <textarea
+                    className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[80px] font-mono"
+                    value={campaignForm.briefDocumentUrlsText}
+                    onChange={e => setCampaignForm(prev => ({ ...prev, briefDocumentUrlsText: e.target.value }))}
+                  />
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <label
+                      className={`inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
+                        campaignBriefUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-gray-50"
+                      }`}
+                    >
+                      <span>{campaignBriefUploadBusy ? "Uploading..." : "Upload brief file(s)"}</span>
+                      <input
+                        className="hidden"
+                        type="file"
+                        accept=".pdf,.txt,.md,.csv,.json,.html,.doc,.docx,application/pdf,text/plain,text/markdown,text/csv,application/json,text/html,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        multiple
+                        disabled={campaignBriefUploadBusy}
+                        onChange={async e => {
+                          const inputEl = e.currentTarget;
+                          const files = inputEl.files;
+                          await handleCampaignBriefUploads(files);
+                          inputEl.value = "";
+                        }}
+                      />
+                    </label>
+                    <div className="text-[11px] text-gray-500">
+                      Add promotion flyers, event sheets, or notes for copy grounding.
+                    </div>
+                  </div>
+                  {campaignBriefPreviewUrls.length ? (
+                    <div className="mt-2 space-y-1">
+                      {campaignBriefPreviewUrls.map((url, idx) => (
+                        <a
+                          key={`campaign-brief-preview-${idx}`}
+                          href={url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block text-[11px] text-blue-700 hover:underline break-all"
+                        >
+                          {url}
+                        </a>
+                      ))}
+                    </div>
+                  ) : null}
                 </label>
               </div>
 

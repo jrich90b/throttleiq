@@ -3,7 +3,7 @@ import { dataPath } from "./dataDir.js";
 
 export type CampaignChannel = "sms" | "email" | "both";
 export type CampaignStatus = "draft" | "generated";
-export type CampaignBuildMode = "design_from_scratch" | "promotion_event_prompt";
+export type CampaignBuildMode = "design_from_scratch" | "web_search_design";
 export type CampaignTag =
   | "sales"
   | "parts"
@@ -31,6 +31,7 @@ export type CampaignEntry = {
   description?: string;
   inspirationImageUrls?: string[];
   assetImageUrls?: string[];
+  briefDocumentUrls?: string[];
   smsBody?: string;
   emailSubject?: string;
   emailBodyText?: string;
@@ -86,7 +87,15 @@ async function loadFromDisk() {
     campaigns.clear();
     for (const row of parsed?.campaigns ?? []) {
       if (!row?.id) continue;
-      campaigns.set(row.id, row);
+      const normalized: CampaignEntry = {
+        ...row,
+        buildMode: normalizeBuildMode((row as any)?.buildMode),
+        tags: uniqTags(Array.isArray((row as any)?.tags) ? ((row as any).tags as CampaignTag[]) : []),
+        inspirationImageUrls: uniqUrls((row as any)?.inspirationImageUrls),
+        assetImageUrls: uniqUrls((row as any)?.assetImageUrls),
+        briefDocumentUrls: uniqUrls((row as any)?.briefDocumentUrls)
+      };
+      campaigns.set(row.id, normalized);
     }
   } catch (err: any) {
     if (err?.code === "ENOENT") {
@@ -111,6 +120,14 @@ function uniqUrls(urls?: string[]): string[] {
   );
 }
 
+function normalizeBuildMode(raw: unknown): CampaignBuildMode {
+  const mode = String(raw ?? "").trim();
+  if (mode === "web_search_design" || mode === "promotion_event_prompt") {
+    return "web_search_design";
+  }
+  return "design_from_scratch";
+}
+
 export function listCampaigns(): CampaignEntry[] {
   return Array.from(campaigns.values()).sort(
     (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
@@ -131,6 +148,7 @@ export function createCampaign(input: {
   description?: string;
   inspirationImageUrls?: string[];
   assetImageUrls?: string[];
+  briefDocumentUrls?: string[];
   smsBody?: string;
   emailSubject?: string;
   emailBodyText?: string;
@@ -147,13 +165,14 @@ export function createCampaign(input: {
     id: makeId(),
     name: String(input.name ?? "").trim() || "Untitled campaign",
     status: input.status ?? "draft",
-    buildMode: input.buildMode ?? "design_from_scratch",
+    buildMode: normalizeBuildMode(input.buildMode),
     channel: input.channel ?? "both",
     tags: uniqTags(input.tags),
     prompt: String(input.prompt ?? "").trim() || undefined,
     description: String(input.description ?? "").trim() || undefined,
     inspirationImageUrls: uniqUrls(input.inspirationImageUrls),
     assetImageUrls: uniqUrls(input.assetImageUrls),
+    briefDocumentUrls: uniqUrls(input.briefDocumentUrls),
     smsBody: String(input.smsBody ?? "").trim() || undefined,
     emailSubject: String(input.emailSubject ?? "").trim() || undefined,
     emailBodyText: String(input.emailBodyText ?? "").trim() || undefined,
@@ -189,6 +208,8 @@ export function updateCampaign(
         ? String(patch.name ?? "").trim() || existing.name
         : existing.name,
     tags: patch?.tags ? uniqTags(patch.tags as CampaignTag[]) : existing.tags ?? [],
+    buildMode:
+      patch?.buildMode !== undefined ? normalizeBuildMode(patch.buildMode) : normalizeBuildMode(existing.buildMode),
     inspirationImageUrls:
       patch?.inspirationImageUrls !== undefined
         ? uniqUrls(patch.inspirationImageUrls as string[])
@@ -197,6 +218,10 @@ export function updateCampaign(
       patch?.assetImageUrls !== undefined
         ? uniqUrls(patch.assetImageUrls as string[])
         : existing.assetImageUrls ?? [],
+    briefDocumentUrls:
+      patch?.briefDocumentUrls !== undefined
+        ? uniqUrls(patch.briefDocumentUrls as string[])
+        : existing.briefDocumentUrls ?? [],
     prompt:
       patch?.prompt !== undefined ? String(patch.prompt ?? "").trim() || undefined : existing.prompt,
     description:

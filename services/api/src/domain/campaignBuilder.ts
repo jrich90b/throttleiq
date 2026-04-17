@@ -1,3 +1,5 @@
+import { promises as fs } from "node:fs";
+import * as path from "node:path";
 import OpenAI from "openai";
 import type {
   CampaignBuildMode,
@@ -7,6 +9,7 @@ import type {
   CampaignTag
 } from "./campaignStore.js";
 import type { DealerProfile } from "./dealerProfile.js";
+import { getDataDir } from "./dataDir.js";
 import { searchGoogleCse } from "./webFallback.js";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -40,6 +43,7 @@ export type GenerateCampaignInput = {
   description?: string;
   inspirationImageUrls?: string[];
   assetImageUrls?: string[];
+  briefDocumentUrls?: string[];
   dealerProfile?: DealerProfile | null;
 };
 
@@ -86,6 +90,102 @@ function normalizeHttpUrl(raw: string | null | undefined, base?: string): string
   } catch {
     return "";
   }
+}
+
+function localCampaignUploadPathForUrl(url: string): string {
+  const value = normalizeText(url);
+  if (!value) return "";
+  let pathname = "";
+  if (value.startsWith("/uploads/")) {
+    pathname = value;
+  } else {
+    try {
+      const parsed = new URL(value);
+      pathname = String(parsed.pathname ?? "");
+    } catch {
+      return "";
+    }
+  }
+  if (!pathname.startsWith("/uploads/")) return "";
+  const rel = pathname.replace(/^\/uploads\//, "");
+  return path.resolve(getDataDir(), "uploads", rel);
+}
+
+function normalizeWhitespace(text: string): string {
+  return String(text ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+type BriefDocContext = {
+  url: string;
+  type: "text" | "pdf" | "binary" | "missing";
+  excerpt: string;
+};
+
+async function readBriefContextFromUrl(url: string): Promise<BriefDocContext> {
+  const filePath = localCampaignUploadPathForUrl(url);
+  if (!filePath) {
+    return {
+      url,
+      type: "missing",
+      excerpt: "File is external; content not extracted. Use URL for reference."
+    };
+  }
+  const ext = path.extname(filePath).toLowerCase();
+  try {
+    const buffer = await fs.readFile(filePath);
+    if (!buffer.length) {
+      return { url, type: "missing", excerpt: "File was empty." };
+    }
+    if (ext === ".pdf") {
+      return {
+        url,
+        type: "pdf",
+        excerpt: "PDF uploaded. Use file as promotion/event source of truth."
+      };
+    }
+    const textExt = new Set([
+      ".txt",
+      ".md",
+      ".markdown",
+      ".csv",
+      ".json",
+      ".yaml",
+      ".yml",
+      ".html",
+      ".htm"
+    ]);
+    if (textExt.has(ext)) {
+      const raw = buffer.toString("utf8");
+      const excerpt = normalizeWhitespace(raw).slice(0, 900);
+      return {
+        url,
+        type: "text",
+        excerpt: excerpt || "Text file uploaded (empty after normalization)."
+      };
+    }
+    return {
+      url,
+      type: "binary",
+      excerpt: "File uploaded. Treat as supporting campaign brief context."
+    };
+  } catch {
+    return {
+      url,
+      type: "missing",
+      excerpt: "Uploaded file could not be read from storage."
+    };
+  }
+}
+
+async function collectBriefContexts(urls: string[]): Promise<BriefDocContext[]> {
+  const targets = normalizeUrls(urls).slice(0, 6);
+  const out: BriefDocContext[] = [];
+  for (const url of targets) {
+    out.push(await readBriefContextFromUrl(url));
+  }
+  return out;
 }
 
 function likelyImageUrl(url: string): boolean {
@@ -370,7 +470,8 @@ function buildTemplateOutput(
   sourceHits: CampaignSourceHit[],
   searchQuery: string,
   resolvedInspirationImageUrls: string[],
-  brandContext?: DealerBrandContext
+  brandContext?: DealerBrandContext,
+  briefContexts?: BriefDocContext[]
 ): GenerateCampaignOutput {
   const dealerName = normalizeText(input.dealerProfile?.dealerName) || "our dealership";
   const tagLabels = input.tags.map(tag => TAG_LABELS[tag]).join(", ") || "General";
@@ -408,8 +509,11 @@ function buildTemplateOutput(
     sourceHits,
     generatedBy: "template",
     metadata: {
+      buildMode: input.buildMode,
       searchQuery,
       sourceCount: sourceHits.length,
+      briefDocumentCount: normalizeUrls(input.briefDocumentUrls).length,
+      briefExtractedCount: (briefContexts ?? []).filter(row => row.type === "text").length,
       generator: "template",
       brandWebsite: brandContext?.websiteUrl ?? null
     }
@@ -422,6 +526,7 @@ async function tryGenerateWithLlm(args: {
   searchQuery: string;
   resolvedInspirationImageUrls: string[];
   brandContext?: DealerBrandContext;
+  briefContexts?: BriefDocContext[];
 }): Promise<GenerateCampaignOutput | null> {
   if (process.env.LLM_ENABLED !== "1" || !process.env.OPENAI_API_KEY) return null;
   const model = process.env.OPENAI_MODEL || "gpt-5-mini";
@@ -434,6 +539,10 @@ async function tryGenerateWithLlm(args: {
   const brandTitle = normalizeText(args.brandContext?.title);
   const brandDescription = normalizeText(args.brandContext?.description);
   const brandLogoUrls = normalizeUrls(args.brandContext?.logoImageUrls).slice(0, 3);
+  const briefUrls = normalizeUrls(args.input.briefDocumentUrls).slice(0, 6);
+  const briefBlock = (args.briefContexts ?? [])
+    .map((doc, idx) => `${idx + 1}. ${doc.url}\nType: ${doc.type}\nExtracted: ${doc.excerpt}`)
+    .join("\n\n");
   const sourceBlock = args.sourceHits.length
     ? args.sourceHits
         .slice(0, 6)
@@ -478,7 +587,11 @@ async function tryGenerateWithLlm(args: {
     `Prompt: ${normalizeText(args.input.prompt) || "(none)"}`,
     `Inspiration images: ${normalizeUrls(args.resolvedInspirationImageUrls).join(", ") || "(none)"}`,
     `Asset images: ${normalizeUrls(args.input.assetImageUrls).join(", ") || "(none)"}`,
+    `Brief document URLs: ${briefUrls.join(", ") || "(none)"}`,
     `Web search query: ${args.searchQuery}`,
+    "",
+    "Brief file excerpts:",
+    briefBlock || "(No brief files provided)",
     "",
     "Reference hits:",
     sourceBlock,
@@ -526,8 +639,11 @@ async function tryGenerateWithLlm(args: {
           sourceHits: args.sourceHits,
           generatedBy: "llm_fallback",
           metadata: {
+            buildMode: args.input.buildMode,
             searchQuery: args.searchQuery,
             sourceCount: args.sourceHits.length,
+            briefDocumentCount: briefUrls.length,
+            briefExtractedCount: (args.briefContexts ?? []).filter(row => row.type === "text").length,
             generator: "llm_fallback",
             model,
             brandWebsite: brandWebsite || website || null
@@ -564,8 +680,11 @@ async function tryGenerateWithLlm(args: {
           sourceHits: args.sourceHits,
           generatedBy: "llm_fallback",
           metadata: {
+            buildMode: args.input.buildMode,
             searchQuery: args.searchQuery,
             sourceCount: args.sourceHits.length,
+            briefDocumentCount: briefUrls.length,
+            briefExtractedCount: (args.briefContexts ?? []).filter(row => row.type === "text").length,
             generator: "llm_fallback",
             model,
             brandWebsite: brandWebsite || website || null
@@ -582,25 +701,28 @@ async function tryGenerateWithLlm(args: {
 
 export async function generateCampaignContent(input: GenerateCampaignInput): Promise<GenerateCampaignOutput> {
   const brandContext = await fetchDealerBrandContext(input.dealerProfile ?? null);
-  const searchQuery = buildSearchQuery(input);
-  const searchResult = searchQuery
-    ? await searchGoogleCse({
-        query: searchQuery,
-        profile: input.dealerProfile ?? undefined,
-        maxResults: 6
-      })
-    : null;
+  const briefContexts = await collectBriefContexts(normalizeUrls(input.briefDocumentUrls));
+  const shouldRunWebSearch = input.buildMode === "web_search_design";
+  const searchQuery = shouldRunWebSearch ? buildSearchQuery(input) : "";
+  const searchResult =
+    shouldRunWebSearch && searchQuery
+      ? await searchGoogleCse({
+          query: searchQuery,
+          profile: input.dealerProfile ?? undefined,
+          maxResults: 6
+        })
+      : null;
   const sourceHits = toSourceHits(searchResult);
   const userProvidedInspiration = normalizeUrls(input.inspirationImageUrls);
-  const websiteDiscoveredInspiration = normalizeUrls(brandContext.imageUrls).slice(
-    0,
-    Math.max(1, Number(process.env.CAMPAIGN_BRAND_IMAGE_MAX ?? 4))
-  );
-  const autoDiscoveredInspiration = userProvidedInspiration.length
-    ? []
-    : await collectImageCandidatesFromHits(sourceHits, {
-        maxImages: Number(process.env.CAMPAIGN_AUTO_IMAGE_MAX ?? 6)
-      });
+  const websiteDiscoveredInspiration = shouldRunWebSearch
+    ? normalizeUrls(brandContext.imageUrls).slice(0, Math.max(1, Number(process.env.CAMPAIGN_BRAND_IMAGE_MAX ?? 4)))
+    : [];
+  const autoDiscoveredInspiration =
+    shouldRunWebSearch && !userProvidedInspiration.length
+      ? await collectImageCandidatesFromHits(sourceHits, {
+          maxImages: Number(process.env.CAMPAIGN_AUTO_IMAGE_MAX ?? 6)
+        })
+      : [];
   const resolvedInspirationImageUrls = userProvidedInspiration.length
     ? userProvidedInspiration
     : Array.from(new Set([...websiteDiscoveredInspiration, ...autoDiscoveredInspiration])).slice(
@@ -613,9 +735,17 @@ export async function generateCampaignContent(input: GenerateCampaignInput): Pro
     sourceHits,
     searchQuery,
     resolvedInspirationImageUrls,
-    brandContext
+    brandContext,
+    briefContexts
   });
   if (llm) return llm;
 
-  return buildTemplateOutput(input, sourceHits, searchQuery, resolvedInspirationImageUrls, brandContext);
+  return buildTemplateOutput(
+    input,
+    sourceHits,
+    searchQuery,
+    resolvedInspirationImageUrls,
+    brandContext,
+    briefContexts
+  );
 }

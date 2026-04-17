@@ -19510,7 +19510,7 @@ function resolveContactIdsForList(list: any, contacts: any[]): string[] {
 
 const CAMPAIGN_BUILD_MODES = new Set<CampaignBuildMode>([
   "design_from_scratch",
-  "promotion_event_prompt"
+  "web_search_design"
 ]);
 const CAMPAIGN_CHANNELS = new Set<CampaignChannel>(["sms", "email", "both"]);
 const CAMPAIGN_TAGS: CampaignTag[] = [
@@ -19526,6 +19526,7 @@ const CAMPAIGN_TAG_SET = new Set<CampaignTag>(CAMPAIGN_TAGS);
 
 function normalizeCampaignBuildMode(raw: unknown): CampaignBuildMode {
   const value = String(raw ?? "").trim();
+  if (value === "promotion_event_prompt") return "web_search_design";
   return CAMPAIGN_BUILD_MODES.has(value as CampaignBuildMode)
     ? (value as CampaignBuildMode)
     : "design_from_scratch";
@@ -19737,6 +19738,68 @@ app.post("/campaigns/media", requireManager, upload.single("file"), async (req, 
   });
 });
 
+app.post("/campaigns/briefs", requireManager, upload.single("file"), async (req, res) => {
+  if (!req.file) return res.status(400).json({ ok: false, error: "missing file" });
+
+  const mime = String(req.file.mimetype ?? "").toLowerCase();
+  const allowed = new Set([
+    "application/pdf",
+    "text/plain",
+    "text/markdown",
+    "text/csv",
+    "application/json",
+    "text/html",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/msword"
+  ]);
+  if (!allowed.has(mime)) {
+    return res.status(400).json({ ok: false, error: "unsupported file type (pdf/text/doc)" });
+  }
+  const maxBytes = 50 * 1024 * 1024;
+  if (Number(req.file.size ?? 0) > maxBytes) {
+    return res.status(400).json({ ok: false, error: "file too large (max 50MB)" });
+  }
+
+  const extFromOriginal = path.extname(req.file.originalname || "").toLowerCase();
+  const extFromMime =
+    mime === "application/pdf"
+      ? ".pdf"
+      : mime === "text/plain"
+        ? ".txt"
+        : mime === "text/markdown"
+          ? ".md"
+          : mime === "text/csv"
+            ? ".csv"
+            : mime === "application/json"
+              ? ".json"
+              : mime === "text/html"
+                ? ".html"
+                : mime === "application/msword"
+                  ? ".doc"
+                  : mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    ? ".docx"
+                    : "";
+  const ext = extFromOriginal || extFromMime || ".pdf";
+  const fileName = `campaign_brief_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
+  const dir = path.resolve(getDataDir(), "uploads", "campaigns");
+  await fs.promises.mkdir(dir, { recursive: true });
+  const dest = path.join(dir, fileName);
+  await fs.promises.writeFile(dest, req.file.buffer);
+
+  const publicBase = process.env.PUBLIC_BASE_URL ?? "";
+  const url = publicBase
+    ? `${publicBase.replace(/\/$/, "")}/uploads/campaigns/${fileName}`
+    : `/uploads/campaigns/${fileName}`;
+
+  return res.json({
+    ok: true,
+    url,
+    name: req.file.originalname || fileName,
+    type: mime || "application/octet-stream",
+    size: Number(req.file.size ?? 0)
+  });
+});
+
 app.post("/campaigns", requireManager, (req, res) => {
   const user = (req as any).user ?? null;
   const name = String(req.body?.name ?? "").trim();
@@ -19753,6 +19816,7 @@ app.post("/campaigns", requireManager, (req, res) => {
     description: req.body?.description,
     inspirationImageUrls: normalizeCampaignUrlArray(req.body?.inspirationImageUrls),
     assetImageUrls: normalizeCampaignUrlArray(req.body?.assetImageUrls),
+    briefDocumentUrls: normalizeCampaignUrlArray(req.body?.briefDocumentUrls),
     smsBody: req.body?.smsBody,
     emailSubject: req.body?.emailSubject,
     emailBodyText: req.body?.emailBodyText,
@@ -19791,6 +19855,9 @@ app.patch("/campaigns/:id", requireManager, (req, res) => {
   }
   if (req.body?.assetImageUrls !== undefined) {
     patch.assetImageUrls = normalizeCampaignUrlArray(req.body.assetImageUrls);
+  }
+  if (req.body?.briefDocumentUrls !== undefined) {
+    patch.briefDocumentUrls = normalizeCampaignUrlArray(req.body.briefDocumentUrls);
   }
   if (req.body?.smsBody !== undefined) patch.smsBody = req.body.smsBody;
   if (req.body?.emailSubject !== undefined) patch.emailSubject = req.body.emailSubject;
@@ -19831,6 +19898,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
   const description = String(req.body?.description ?? "").trim() || undefined;
   const inspirationImageUrls = normalizeCampaignUrlArray(req.body?.inspirationImageUrls);
   const assetImageUrls = normalizeCampaignUrlArray(req.body?.assetImageUrls);
+  const briefDocumentUrls = normalizeCampaignUrlArray(req.body?.briefDocumentUrls);
   const save = req.body?.save !== false;
 
   const dealerProfile = await getDealerProfile();
@@ -19843,6 +19911,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     description,
     inspirationImageUrls,
     assetImageUrls,
+    briefDocumentUrls,
     dealerProfile
   });
 
@@ -19887,6 +19956,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     inspirationImageUrls,
     finalImageUrl: generatedFinalImageUrl || existingCampaign?.finalImageUrl,
     assetImageUrls,
+    briefDocumentUrls,
     smsBody: effectiveGenerated.smsBody,
     emailSubject: effectiveGenerated.emailSubject,
     emailBodyText: effectiveGenerated.emailBodyText,
