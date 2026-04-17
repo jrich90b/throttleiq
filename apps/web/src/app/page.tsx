@@ -1934,13 +1934,21 @@ export default function Home() {
     setCampaignError(null);
   }
 
-  async function uploadCampaignFiles(files: FileList | null, endpoint: string): Promise<string[]> {
+  async function uploadCampaignFiles(
+    files: FileList | null,
+    endpoint: string,
+    opts?: { channel?: CampaignChannel; profile?: "sms" | "email" }
+  ): Promise<string[]> {
     if (!files || files.length === 0) return [];
     const urlsToAppend: string[] = [];
+    const params = new URLSearchParams();
+    if (opts?.profile) params.set("profile", opts.profile);
+    else if (opts?.channel) params.set("channel", opts.channel);
+    const requestEndpoint = params.toString() ? `${endpoint}?${params.toString()}` : endpoint;
     for (const file of Array.from(files)) {
       const fd = new FormData();
       fd.append("file", file);
-      const resp = await fetch(endpoint, {
+      const resp = await fetch(requestEndpoint, {
         method: "POST",
         body: fd
       });
@@ -1965,7 +1973,9 @@ export default function Home() {
           return;
         }
       }
-      const urlsToAppend = await uploadCampaignFiles(files, "/api/campaigns/media");
+      const urlsToAppend = await uploadCampaignFiles(files, "/api/campaigns/media", {
+        channel: campaignForm.channel
+      });
       if (!urlsToAppend.length) return;
       setCampaignForm(prev => {
         const existing = parseCampaignUrlsText(prev.inspirationImageUrlsText);
@@ -1990,7 +2000,9 @@ export default function Home() {
           return;
         }
       }
-      const urlsToAppend = await uploadCampaignFiles(files, "/api/campaigns/media");
+      const urlsToAppend = await uploadCampaignFiles(files, "/api/campaigns/media", {
+        channel: campaignForm.channel
+      });
       if (!urlsToAppend.length) return;
       setCampaignForm(prev => {
         const existing = parseCampaignUrlsText(prev.assetImageUrlsText);

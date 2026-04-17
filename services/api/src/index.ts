@@ -19666,6 +19666,29 @@ function campaignMmsMinQuality(): number {
   return Math.max(40, Math.min(90, Number(process.env.CAMPAIGN_MMS_IMAGE_MIN_QUALITY ?? 55)));
 }
 
+function campaignEmailWidth(): number {
+  return Math.max(480, Math.min(2400, Number(process.env.CAMPAIGN_EMAIL_IMAGE_WIDTH ?? 1200)));
+}
+
+function campaignEmailMaxHeight(): number {
+  return Math.max(480, Math.min(6000, Number(process.env.CAMPAIGN_EMAIL_IMAGE_MAX_HEIGHT ?? 2600)));
+}
+
+function campaignEmailMaxBytes(): number {
+  return Math.max(
+    200_000,
+    Math.min(8_000_000, Number(process.env.CAMPAIGN_EMAIL_IMAGE_MAX_BYTES ?? 1_500_000))
+  );
+}
+
+function campaignEmailInitialQuality(): number {
+  return Math.max(55, Math.min(95, Number(process.env.CAMPAIGN_EMAIL_IMAGE_QUALITY ?? 84)));
+}
+
+function campaignEmailMinQuality(): number {
+  return Math.max(40, Math.min(90, Number(process.env.CAMPAIGN_EMAIL_IMAGE_MIN_QUALITY ?? 60)));
+}
+
 async function normalizeCampaignImageForMms(buffer: Buffer): Promise<{
   buffer: Buffer;
   mimeType: "image/jpeg";
@@ -19701,6 +19724,72 @@ async function normalizeCampaignImageForMms(buffer: Buffer): Promise<{
     height,
     quality
   };
+}
+
+async function normalizeCampaignImageForEmail(buffer: Buffer): Promise<{
+  buffer: Buffer;
+  mimeType: "image/jpeg";
+  ext: ".jpg";
+  width: number;
+  height: number;
+  quality: number;
+}> {
+  const width = campaignEmailWidth();
+  const maxHeight = campaignEmailMaxHeight();
+  const maxBytes = campaignEmailMaxBytes();
+  let quality = campaignEmailInitialQuality();
+  const minQuality = campaignEmailMinQuality();
+
+  const render = async (q: number) =>
+    sharp(buffer, { failOn: "none", animated: false })
+      .rotate()
+      .resize(width, maxHeight, { fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: q, mozjpeg: true, chromaSubsampling: "4:2:0" })
+      .toBuffer({ resolveWithObject: true });
+
+  let rendered = await render(quality);
+  while (rendered.data.length > maxBytes && quality > minQuality) {
+    quality = Math.max(minQuality, quality - 5);
+    rendered = await render(quality);
+  }
+
+  return {
+    buffer: rendered.data,
+    mimeType: "image/jpeg",
+    ext: ".jpg",
+    width: Number(rendered.info?.width ?? 0) || width,
+    height: Number(rendered.info?.height ?? 0) || Math.min(maxHeight, width),
+    quality
+  };
+}
+
+type CampaignImageOutputProfile = "sms" | "email";
+
+function campaignImageOutputProfileForChannel(channel: CampaignChannel): CampaignImageOutputProfile {
+  if (channel === "email") return "email";
+  if (channel === "both") {
+    const bothProfile = String(process.env.CAMPAIGN_BOTH_IMAGE_PROFILE ?? "sms")
+      .trim()
+      .toLowerCase();
+    if (bothProfile === "email") return "email";
+  }
+  return "sms";
+}
+
+async function normalizeCampaignImageForProfile(
+  buffer: Buffer,
+  profile: CampaignImageOutputProfile
+): Promise<{
+  buffer: Buffer;
+  mimeType: "image/jpeg";
+  ext: ".jpg";
+  width: number;
+  height: number;
+  quality: number;
+}> {
+  return profile === "email"
+    ? normalizeCampaignImageForEmail(buffer)
+    : normalizeCampaignImageForMms(buffer);
 }
 
 function extractInlineImageFromVertexResponse(payload: any): { b64: string; mimeType?: string } | null {
@@ -19836,6 +19925,7 @@ async function buildNanoBananaReferenceParts(rawUrls: string[] | null | undefine
 
 async function generateCampaignImageWithNanoBanana(args: {
   name: string;
+  channel: CampaignChannel;
   prompt?: string;
   description?: string;
   tags: CampaignTag[];
@@ -19897,7 +19987,8 @@ async function generateCampaignImageWithNanoBanana(args: {
     if (!inline?.b64) return null;
     const rawBuffer = Buffer.from(inline.b64, "base64");
     if (!rawBuffer.length) return null;
-    const normalized = await normalizeCampaignImageForMms(rawBuffer).catch(() => null);
+    const profile = campaignImageOutputProfileForChannel(args.channel);
+    const normalized = await normalizeCampaignImageForProfile(rawBuffer, profile).catch(() => null);
     const buffer = normalized?.buffer ?? rawBuffer;
     const ext = normalized?.ext ?? extensionForMimeType(inline.mimeType);
     const fileName = `campaign_nano_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
@@ -19918,6 +20009,7 @@ async function generateCampaignImageWithNanoBanana(args: {
 
 async function generateCampaignImageWithOpenAI(args: {
   name: string;
+  channel: CampaignChannel;
   prompt?: string;
   description?: string;
   tags: CampaignTag[];
@@ -19968,7 +20060,8 @@ async function generateCampaignImageWithOpenAI(args: {
       }
     }
     if (!buffer || !buffer.length) return null;
-    const normalized = await normalizeCampaignImageForMms(buffer).catch(() => null);
+    const profile = campaignImageOutputProfileForChannel(args.channel);
+    const normalized = await normalizeCampaignImageForProfile(buffer, profile).catch(() => null);
     const finalBuffer = normalized?.buffer ?? buffer;
     const finalExt = normalized?.ext ?? ext;
     const fileName = `campaign_ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${finalExt}`;
@@ -20002,7 +20095,16 @@ app.post("/campaigns/media", requireManager, upload.single("file"), async (req, 
     return res.status(400).json({ ok: false, error: "file too large (max 25MB)" });
   }
 
-  const normalized = await normalizeCampaignImageForMms(req.file.buffer).catch(() => null);
+  const profileRaw = String(req.query?.profile ?? "")
+    .trim()
+    .toLowerCase();
+  const channelRaw = String(req.query?.channel ?? "").trim();
+  const channel = normalizeCampaignChannel(channelRaw);
+  const profile: CampaignImageOutputProfile =
+    profileRaw === "email" || profileRaw === "sms"
+      ? (profileRaw as CampaignImageOutputProfile)
+      : campaignImageOutputProfileForChannel(channel);
+  const normalized = await normalizeCampaignImageForProfile(req.file.buffer, profile).catch(() => null);
   const outputBuffer = normalized?.buffer ?? req.file.buffer;
   const outMime = normalized?.mimeType || mime || "application/octet-stream";
   const ext = normalized?.ext ?? ".jpg";
@@ -20214,6 +20316,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     ]);
     const generatedImageNano = await generateCampaignImageWithNanoBanana({
       name,
+      channel,
       prompt,
       description,
       tags,
@@ -20226,6 +20329,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       generatedImageUrlNano ||
       (await generateCampaignImageWithOpenAI({
         name,
+        channel,
         prompt,
         description,
         tags,
@@ -20233,12 +20337,14 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
         sourceHits: generated.sourceHits
       }));
     if (generatedImageUrl) {
+      const imageOutputProfile = campaignImageOutputProfileForChannel(channel);
       generatedFinalImageUrl = generatedImageUrl;
       effectiveGenerated = {
         ...generated,
         metadata: {
           ...(generated.metadata ?? {}),
           imageGenerator: generatedImageUrlNano ? "nano_banana_vertex" : "openai_fallback",
+          imageOutputProfile,
           imageGeneratedAt: new Date().toISOString(),
           imageReferenceCount: generatedImageNano?.referenceCount ?? 0
         },
