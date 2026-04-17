@@ -19847,8 +19847,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
   });
 
   let effectiveGenerated = generated;
-  const userProvidedInspiration = Array.isArray(inspirationImageUrls) && inspirationImageUrls.length > 0;
-  const shouldAttemptImageFallback = req.body?.generateImage !== false && !userProvidedInspiration;
+  const shouldAttemptImageFallback = req.body?.generateImage !== false;
   let generatedFinalImageUrl: string | undefined;
   if (shouldAttemptImageFallback) {
     const generatedImageUrl = await generateCampaignImageWithOpenAI({
