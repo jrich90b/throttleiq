@@ -20231,6 +20231,28 @@ async function buildCampaignGeneratedAssetsFromSource(args: {
   return out;
 }
 
+async function runCampaignTaskWithTimeout<T>(
+  task: Promise<T>,
+  timeoutMs: number,
+  label: string
+): Promise<T | null> {
+  const safeMs = Math.max(1_000, Number(timeoutMs || 0));
+  let timer: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race<T>([
+      task,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${safeMs}ms`)), safeMs);
+      })
+    ]);
+  } catch (err: any) {
+    console.warn(`[campaign] ${label} failed:`, err?.message ?? err);
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function extractInlineImageFromVertexResponse(payload: any): { b64: string; mimeType?: string } | null {
   const candidates = Array.isArray(payload?.candidates) ? payload.candidates : [];
   for (const candidate of candidates) {
@@ -20399,24 +20421,37 @@ async function generateCampaignImageWithNanoBanana(args: {
   if (tempRaw && Number.isFinite(tempNum)) generationConfig.temperature = tempNum;
 
   try {
+    const requestTimeoutMs = Math.max(
+      5_000,
+      Number(process.env.CAMPAIGN_NANO_BANANA_REQUEST_TIMEOUT_MS ?? 45_000)
+    );
     const referenceParts = await buildNanoBananaReferenceParts(args.referenceImageUrls);
     const parts = [{ text: imagePrompt }, ...referenceParts];
-    const resp = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: "user",
-            parts
-          }
-        ],
-        generationConfig
-      })
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), requestTimeoutMs);
+    const resp = await (async () => {
+      try {
+        return await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json"
+          },
+          signal: controller.signal,
+          body: JSON.stringify({
+            contents: [
+              {
+                role: "user",
+                parts
+              }
+            ],
+            generationConfig
+          })
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+    })();
     if (!resp.ok) {
       const body = await resp.text().catch(() => "");
       console.warn("[campaign] nano banana vertex failed:", resp.status, body.slice(0, 500));
@@ -20473,7 +20508,8 @@ async function generateCampaignImageWithOpenAI(args: {
   const size = allowedSizes.has(rawSize) ? (rawSize as any) : ("1024x1024" as any);
   const imagePrompt = buildCampaignImagePrompt(args);
   try {
-    const client = new OpenAI({ apiKey });
+    const timeoutMs = Math.max(5_000, Number(process.env.CAMPAIGN_OPENAI_IMAGE_TIMEOUT_MS ?? 45_000));
+    const client = new OpenAI({ apiKey, timeout: timeoutMs });
     const imgResp: any = await client.images.generate({
       model,
       prompt: imagePrompt,
@@ -20762,6 +20798,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
   let effectiveGenerated: typeof generated & { generatedAssets?: CampaignGeneratedAsset[]; finalImageUrl?: string } =
     generated;
   const shouldAttemptImageFallback = req.body?.generateImage !== false;
+  const imageTargetsRequested = Array.isArray(assetTargets) && assetTargets.length > 0;
   let generatedFinalImageUrl: string | undefined;
   let generatedAssets: CampaignGeneratedAsset[] = [];
   if (shouldAttemptImageFallback) {
@@ -20779,11 +20816,22 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     ];
     const generatorsUsed = new Set<"nano_banana_vertex" | "openai_fallback">();
     let totalReferenceCount = 0;
-    let styleLockReferenceUrl: string | null = null;
-    for (const target of orderedTargets) {
+    const perTargetTimeoutMs = Math.max(15_000, Number(process.env.CAMPAIGN_PER_TARGET_TIMEOUT_MS ?? 90_000));
+    type TargetRenderResult = {
+      target: CampaignAssetTarget;
+      sourceImageUrl: string;
+      assets: CampaignGeneratedAsset[];
+      usedGenerator: "nano_banana_vertex" | "openai_fallback";
+      referenceCount: number;
+    };
+
+    const renderTarget = async (
+      target: CampaignAssetTarget,
+      styleLockRefUrl: string | null
+    ): Promise<TargetRenderResult | null> => {
       const targetAssetTargets: CampaignAssetTarget[] = [target];
       const targetLabel = campaignAssetTargetLabel(target);
-      const styleLockDirective: string | undefined = styleLockReferenceUrl
+      const styleLockDirective: string | undefined = styleLockRefUrl
         ? `Style-lock requirement: match the same campaign theme, color palette, brand look, and message hierarchy as the reference image while adapting composition to ${targetLabel}. Keep headline/offer intent consistent across all outputs.`
         : undefined;
       const targetPrompt: string | undefined =
@@ -20796,23 +20844,10 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
           .join("\n\n") || undefined;
       const targetReferenceImageUrls = normalizeCampaignUrlArray([
         ...referenceImageUrls,
-        ...(styleLockReferenceUrl ? [styleLockReferenceUrl] : [])
+        ...(styleLockRefUrl ? [styleLockRefUrl] : [])
       ]);
-      const generatedImageNano = await generateCampaignImageWithNanoBanana({
-        name,
-        channel,
-        assetTargets: targetAssetTargets,
-        prompt: targetPrompt,
-        description: targetDescription,
-        tags,
-        dealerProfile,
-        sourceHits: generated.sourceHits,
-        referenceImageUrls: targetReferenceImageUrls
-      });
-      const generatedImageUrlNano = generatedImageNano?.url ?? null;
-      const generatedImageUrl: string | null =
-        generatedImageUrlNano ||
-        (await generateCampaignImageWithOpenAI({
+      const generatedImageNano = await runCampaignTaskWithTimeout(
+        generateCampaignImageWithNanoBanana({
           name,
           channel,
           assetTargets: targetAssetTargets,
@@ -20820,25 +20855,69 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
           description: targetDescription,
           tags,
           dealerProfile,
-          sourceHits: generated.sourceHits
-        }));
-      if (!generatedImageUrl) continue;
-      if (!styleLockReferenceUrl) styleLockReferenceUrl = generatedImageUrl;
+          sourceHits: generated.sourceHits,
+          referenceImageUrls: targetReferenceImageUrls
+        }),
+        perTargetTimeoutMs,
+        `nano target ${target}`
+      );
+      const generatedImageUrlNano = generatedImageNano?.url ?? null;
+      const generatedImageUrl: string | null =
+        generatedImageUrlNano ||
+        (await runCampaignTaskWithTimeout(
+          generateCampaignImageWithOpenAI({
+            name,
+            channel,
+            assetTargets: targetAssetTargets,
+            prompt: targetPrompt,
+            description: targetDescription,
+            tags,
+            dealerProfile,
+            sourceHits: generated.sourceHits
+          }),
+          perTargetTimeoutMs,
+          `openai target ${target}`
+        ));
+      if (!generatedImageUrl) return null;
 
-      const targetAssets = await buildCampaignGeneratedAssetsFromSource({
+      const targetAssets = await runCampaignTaskWithTimeout(
+        buildCampaignGeneratedAssetsFromSource({
+          sourceImageUrl: generatedImageUrl,
+          targets: targetAssetTargets,
+          dealerProfile
+        }),
+        perTargetTimeoutMs,
+        `normalize target ${target}`
+      );
+      if (!targetAssets?.length) return null;
+
+      return {
+        target,
         sourceImageUrl: generatedImageUrl,
-        targets: targetAssetTargets,
-        dealerProfile
-      });
-      if (!targetAssets.length) continue;
+        assets: targetAssets,
+        usedGenerator: generatedImageUrlNano ? "nano_banana_vertex" : "openai_fallback",
+        referenceCount: generatedImageNano?.referenceCount ?? 0
+      };
+    };
 
-      generatedAssets.push(...targetAssets);
-      if (generatedImageUrlNano) {
-        generatorsUsed.add("nano_banana_vertex");
-        totalReferenceCount += generatedImageNano?.referenceCount ?? 0;
-      } else {
-        generatorsUsed.add("openai_fallback");
-      }
+    let styleLockReferenceUrl: string | null = null;
+    const anchorResult = await renderTarget(styleLockAnchorTarget, null);
+    if (anchorResult) {
+      generatedAssets.push(...anchorResult.assets);
+      generatorsUsed.add(anchorResult.usedGenerator);
+      totalReferenceCount += anchorResult.referenceCount;
+      styleLockReferenceUrl = anchorResult.sourceImageUrl;
+    }
+
+    const remainingTargets = orderedTargets.filter(target => target !== styleLockAnchorTarget);
+    const remainingResults = await Promise.all(
+      remainingTargets.map(target => renderTarget(target, styleLockReferenceUrl))
+    );
+    for (const result of remainingResults) {
+      if (!result) continue;
+      generatedAssets.push(...result.assets);
+      generatorsUsed.add(result.usedGenerator);
+      totalReferenceCount += result.referenceCount;
     }
 
     if (generatedAssets.length) {
@@ -20872,6 +20951,14 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
         generatedBy: generatorsUsed.has("nano_banana_vertex") ? "nano_banana" : generated.generatedBy
       };
     }
+  }
+
+  if (shouldAttemptImageFallback && imageTargetsRequested && !generatedAssets.length) {
+    return res.status(502).json({
+      ok: false,
+      error:
+        "Campaign image generation failed for all selected targets. Please retry, or generate fewer targets first (for example SMS + Email)."
+    });
   }
 
   if (!save) {
