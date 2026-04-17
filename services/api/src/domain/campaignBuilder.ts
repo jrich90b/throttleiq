@@ -36,6 +36,8 @@ const TAG_LABELS: Record<CampaignTag, string> = {
 
 const FINANCE_TRADE_TERMS_RE =
   /\b(financ(?:e|ing|ed)?|apr|credit|payment|cash\s*back|customer\s*cash|trade(?:\s|-)?in|value\s+your\s+trade)\b/i;
+const TRADE_ONLY_TERMS_RE =
+  /\b(value\s*(?:your|my)\s*trade|trade(?:\s*-\s*in|\s+in)?|trade\s+value|trade\s+appraisal|appraisal|sell\s+my\s+bike|cash\s+offer)\b/i;
 const PARTS_APPAREL_TERMS_RE =
   /\b(parts?|accessor(?:y|ies)|gear|apparel|helmet|jacket|gloves?|riding\s+gear|motorclothes?)\b/i;
 const SERVICE_TERMS_RE =
@@ -72,6 +74,13 @@ type DealerBrandContext = {
   description?: string;
   logoImageUrls?: string[];
   imageUrls?: string[];
+};
+
+type GooglePlacePhotoResult = {
+  placeId?: string;
+  source?: "profile_place_id" | "text_search";
+  photoUrls: string[];
+  error?: string;
 };
 
 function normalizeText(value: unknown): string {
@@ -118,6 +127,197 @@ function localCampaignUploadPathForUrl(url: string): string {
   return path.resolve(getDataDir(), "uploads", rel);
 }
 
+function normalizeGooglePlaceId(value: unknown): string {
+  const raw = normalizeText(value);
+  if (!raw) return "";
+  const match = raw.match(/places\/([^/?#]+)/i);
+  return match?.[1] ? String(match[1]).trim() : raw;
+}
+
+function campaignUploadsDir(): string {
+  return path.resolve(getDataDir(), "uploads", "campaigns");
+}
+
+function campaignPublicUploadUrl(fileName: string): string {
+  const publicBase = normalizeText(process.env.PUBLIC_BASE_URL);
+  return publicBase
+    ? `${publicBase.replace(/\/$/, "")}/uploads/campaigns/${fileName}`
+    : `/uploads/campaigns/${fileName}`;
+}
+
+function extensionForImageContentType(contentType: string): string {
+  const lower = String(contentType ?? "").toLowerCase();
+  if (lower.includes("png")) return ".png";
+  if (lower.includes("webp")) return ".webp";
+  if (lower.includes("gif")) return ".gif";
+  if (lower.includes("bmp")) return ".bmp";
+  if (lower.includes("heic")) return ".heic";
+  if (lower.includes("heif")) return ".heif";
+  if (lower.includes("jpeg") || lower.includes("jpg")) return ".jpg";
+  return ".jpg";
+}
+
+function parseHostFromUrl(raw: unknown): string {
+  const value = normalizeText(raw);
+  if (!value) return "";
+  try {
+    return new URL(value).hostname.replace(/^www\./i, "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function buildGooglePlaceTextQuery(profile?: DealerProfile | null): string {
+  const dealerName = normalizeText(profile?.dealerName);
+  const line1 = normalizeText(profile?.address?.line1);
+  const city = normalizeText(profile?.address?.city);
+  const state = normalizeText(profile?.address?.state);
+  const websiteHost = parseHostFromUrl(profile?.website);
+  const parts = [dealerName, line1, [city, state].filter(Boolean).join(", "), websiteHost]
+    .map(v => normalizeWhitespace(v))
+    .filter(Boolean);
+  if (!parts.length) return "";
+  return parts.join(" ");
+}
+
+async function saveCampaignExternalImage(buffer: Buffer, contentType: string, prefix: string): Promise<string | null> {
+  if (!buffer.length) return null;
+  if (buffer.length > 12 * 1024 * 1024) return null;
+  const ext = extensionForImageContentType(contentType);
+  const fileName = `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
+  const dir = campaignUploadsDir();
+  try {
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, fileName), buffer);
+    return campaignPublicUploadUrl(fileName);
+  } catch {
+    return null;
+  }
+}
+
+async function fetchGooglePlacePhotos(
+  profile?: DealerProfile | null,
+  opts?: { maxPhotos?: number; timeoutMs?: number }
+): Promise<GooglePlacePhotoResult> {
+  const enabled = profile?.webSearch?.useGooglePlacePhotos === true;
+  if (!enabled) return { photoUrls: [] };
+  const apiKey = normalizeText(process.env.GOOGLE_PLACES_API_KEY);
+  if (!apiKey) return { photoUrls: [], error: "google_places_api_key_missing" };
+
+  const maxPhotos = Math.max(1, Math.min(8, Number(opts?.maxPhotos ?? process.env.CAMPAIGN_GOOGLE_PLACE_PHOTO_MAX ?? 4)));
+  const timeoutMs = Math.max(1200, Number(opts?.timeoutMs ?? process.env.CAMPAIGN_GOOGLE_PLACE_TIMEOUT_MS ?? 3800));
+  const photoUrls: string[] = [];
+  let placeId = normalizeGooglePlaceId(profile?.webSearch?.googlePlaceId);
+  let source: GooglePlacePhotoResult["source"] | undefined = placeId ? "profile_place_id" : undefined;
+
+  const runJsonRequest = async (
+    url: string,
+    fieldMask: string,
+    body?: Record<string, unknown>
+  ): Promise<any | null> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const resp = await fetch(url, {
+        method: body ? "POST" : "GET",
+        headers: {
+          "content-type": "application/json",
+          "x-goog-api-key": apiKey,
+          "x-goog-fieldmask": fieldMask
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal
+      });
+      if (!resp.ok) return null;
+      return await resp.json().catch(() => null);
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  if (!placeId) {
+    const textQuery = buildGooglePlaceTextQuery(profile);
+    if (textQuery) {
+      const searchPayload = await runJsonRequest(
+        "https://places.googleapis.com/v1/places:searchText",
+        "places.id,places.name,places.displayName,places.photos.name",
+        {
+          textQuery,
+          maxResultCount: 1
+        }
+      );
+      const candidate = Array.isArray(searchPayload?.places) ? searchPayload.places[0] : null;
+      const byName = normalizeGooglePlaceId(candidate?.name);
+      const byId = normalizeGooglePlaceId(candidate?.id);
+      placeId = byId || byName;
+      if (placeId) source = "text_search";
+    }
+  }
+
+  if (!placeId) return { photoUrls: [], error: "google_place_id_unresolved" };
+
+  const detailsPayload = await runJsonRequest(
+    `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`,
+    "id,name,displayName,photos.name"
+  );
+  const photoNames = Array.isArray(detailsPayload?.photos)
+    ? detailsPayload.photos
+        .map((row: any) => normalizeText(row?.name))
+        .filter(Boolean)
+        .slice(0, maxPhotos)
+    : [];
+  if (!photoNames.length) {
+    return { placeId, source, photoUrls: [], error: "google_place_has_no_photos" };
+  }
+
+  for (const photoName of photoNames) {
+    if (photoUrls.length >= maxPhotos) break;
+    const mediaUrl = `https://places.googleapis.com/v1/${photoName}/media?maxWidthPx=1600&key=${encodeURIComponent(apiKey)}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const resp = await fetch(mediaUrl, {
+        method: "GET",
+        redirect: "follow",
+        signal: controller.signal
+      });
+      if (!resp.ok) continue;
+      const contentType = String(resp.headers.get("content-type") ?? "").toLowerCase();
+      if (!contentType.includes("image")) continue;
+      const bytes = Buffer.from(await resp.arrayBuffer());
+      const saved = await saveCampaignExternalImage(bytes, contentType, "campaign_place");
+      if (saved && !photoUrls.includes(saved)) {
+        photoUrls.push(saved);
+      }
+    } catch {
+      // ignore single-photo failures
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  return { placeId, source, photoUrls };
+}
+
+function applyGooglePlaceMetadata(
+  output: GenerateCampaignOutput,
+  placePhotos: GooglePlacePhotoResult,
+  usedPhotoCount: number
+): GenerateCampaignOutput {
+  return {
+    ...output,
+    metadata: {
+      ...(output.metadata ?? {}),
+      googlePlacePhotoCount: usedPhotoCount,
+      googlePlacePhotoSource: placePhotos.source ?? null,
+      googlePlaceId: placePhotos.placeId ?? null,
+      googlePlaceError: placePhotos.error ?? null
+    }
+  };
+}
+
 function normalizeWhitespace(text: string): string {
   return String(text ?? "")
     .replace(/\s+/g, " ")
@@ -134,6 +334,21 @@ function shouldSuppressFinanceTradeByTags(tags: CampaignTag[]): boolean {
   return operationalFocus && !set.has("financing") && !set.has("sales");
 }
 
+function hasExplicitTradeRequest(input: GenerateCampaignInput): boolean {
+  const joined = normalizeWhitespace(
+    [input.name, input.prompt, input.description]
+      .map(v => String(v ?? ""))
+      .join(" ")
+      .toLowerCase()
+  );
+  if (!joined) return false;
+  return TRADE_ONLY_TERMS_RE.test(joined);
+}
+
+function shouldSuppressTradeByInput(input: GenerateCampaignInput): boolean {
+  return !hasExplicitTradeRequest(input);
+}
+
 function textForHit(hit: CampaignSourceHit): string {
   return normalizeWhitespace(
     [hit.title, hit.snippet, hit.url, hit.domain]
@@ -143,9 +358,17 @@ function textForHit(hit: CampaignSourceHit): string {
   );
 }
 
-function filterSourceHitsByTags(sourceHits: CampaignSourceHit[], tags: CampaignTag[]): CampaignSourceHit[] {
+function filterSourceHitsByTags(
+  sourceHits: CampaignSourceHit[],
+  tags: CampaignTag[],
+  suppressTradeOnly: boolean
+): CampaignSourceHit[] {
   if (!Array.isArray(sourceHits) || !sourceHits.length) return [];
   let rows = sourceHits.slice();
+
+  if (suppressTradeOnly) {
+    rows = rows.filter(hit => !TRADE_ONLY_TERMS_RE.test(textForHit(hit)));
+  }
 
   if (shouldSuppressFinanceTradeByTags(tags)) {
     rows = rows.filter(hit => !FINANCE_TRADE_TERMS_RE.test(textForHit(hit)));
@@ -166,9 +389,13 @@ function filterSourceHitsByTags(sourceHits: CampaignSourceHit[], tags: CampaignT
   return rows;
 }
 
-function filterImageUrlsByTags(urls: string[], tags: CampaignTag[]): string[] {
+function filterImageUrlsByTags(urls: string[], tags: CampaignTag[], suppressTradeOnly: boolean): string[] {
   let rows = normalizeUrls(urls);
   if (!rows.length) return rows;
+
+  if (suppressTradeOnly) {
+    rows = rows.filter(url => !TRADE_ONLY_TERMS_RE.test(String(url ?? "").toLowerCase()));
+  }
 
   const set = tagsSet(tags);
   const blockFinanceTrade = shouldSuppressFinanceTradeByTags(tags);
@@ -187,6 +414,47 @@ function filterImageUrlsByTags(urls: string[], tags: CampaignTag[]): string[] {
   }
 
   return rows;
+}
+
+function stripTradeLanguage(text: string): string {
+  const raw = String(text ?? "").trim();
+  if (!raw) return "";
+  const lines = raw
+    .split(/\n+/)
+    .map(line => line.trim())
+    .filter(Boolean);
+  const keptLines = lines.filter(line => !TRADE_ONLY_TERMS_RE.test(line));
+  let compact = keptLines.join("\n").trim();
+  if (!compact && TRADE_ONLY_TERMS_RE.test(raw)) return "";
+  if (TRADE_ONLY_TERMS_RE.test(compact)) {
+    const sentences = compact
+      .split(/(?<=[.!?])\s+/)
+      .map(s => s.trim())
+      .filter(Boolean)
+      .filter(s => !TRADE_ONLY_TERMS_RE.test(s));
+    compact = sentences.join(" ").trim();
+  }
+  return compact;
+}
+
+function applyNoTradeLanguageGuard(
+  output: GenerateCampaignOutput,
+  dealerNameRaw: string | null | undefined
+): GenerateCampaignOutput {
+  const dealerName = normalizeText(dealerNameRaw) || "our dealership";
+  const smsFallback = `Quick update from ${dealerName}: Reply here and I can share current details.`;
+  const emailSubjectFallback = `${dealerName} | Current update`;
+  const emailBodyFallback = `Hi there,\n\nQuick update from ${dealerName}. Reply here and I can share current details.`;
+  const smsBody = stripTradeLanguage(String(output.smsBody ?? "")) || smsFallback;
+  const emailSubject = stripTradeLanguage(String(output.emailSubject ?? "")) || emailSubjectFallback;
+  const emailBodyText = stripTradeLanguage(String(output.emailBodyText ?? "")) || emailBodyFallback;
+  return {
+    ...output,
+    smsBody,
+    emailSubject,
+    emailBodyText,
+    emailBodyHtml: textToHtml(emailBodyText, output.sourceHits ?? [])
+  };
 }
 
 type BriefDocContext = {
@@ -486,8 +754,11 @@ function buildSearchQuery(input: GenerateCampaignInput): string {
     .filter(Boolean);
 
   let base = parts.join(" ").slice(0, 420).trim();
+  const suppressTradeOnly = shouldSuppressTradeByInput(input);
   if (shouldSuppressFinanceTradeByTags(input.tags)) {
     base = `${base} -trade -trade-in -financing -apr -credit -payment -cash`.trim();
+  } else if (suppressTradeOnly) {
+    base = `${base} -trade -trade-in -"value your trade" -appraisal`.trim();
   }
   if (base) return base;
   if (input.tags.includes("financing")) return "motorcycle financing specials";
@@ -610,6 +881,7 @@ async function tryGenerateWithLlm(args: {
   const phone = normalizeText(args.input.dealerProfile?.phone);
   const bookingUrl = normalizeText(args.input.dealerProfile?.bookingUrl);
   const tags = args.input.tags.map(tag => TAG_LABELS[tag]).join(", ") || "General";
+  const suppressTradeOnly = shouldSuppressTradeByInput(args.input);
   const brandWebsite = normalizeText(args.brandContext?.websiteUrl);
   const brandTitle = normalizeText(args.brandContext?.title);
   const brandDescription = normalizeText(args.brandContext?.description);
@@ -646,6 +918,8 @@ async function tryGenerateWithLlm(args: {
     "If details are uncertain, say programs vary by approval/term and invite reply.",
     shouldSuppressFinanceTradeByTags(args.input.tags)
       ? "Hard guardrail: do NOT mention financing/APR/credit/payments/trade-in/value-your-trade language."
+      : suppressTradeOnly
+        ? "Hard guardrail: do NOT mention trade/trade-in/value-your-trade/appraisal language."
       : "Hard guardrail: keep copy aligned to selected tags and avoid unrelated offer categories.",
     "No emojis unless explicitly in prompt.",
     "",
@@ -778,9 +1052,15 @@ async function tryGenerateWithLlm(args: {
 }
 
 export async function generateCampaignContent(input: GenerateCampaignInput): Promise<GenerateCampaignOutput> {
+  const suppressTradeOnly = shouldSuppressTradeByInput(input);
   const brandContext = await fetchDealerBrandContext(input.dealerProfile ?? null);
   const briefContexts = await collectBriefContexts(normalizeUrls(input.briefDocumentUrls));
   const shouldRunWebSearch = input.buildMode === "web_search_design";
+  const googlePlacePhotos = shouldRunWebSearch
+    ? await fetchGooglePlacePhotos(input.dealerProfile ?? null, {
+        maxPhotos: Number(process.env.CAMPAIGN_GOOGLE_PLACE_PHOTO_MAX ?? 4)
+      })
+    : { photoUrls: [] as string[] };
   const searchQuery = shouldRunWebSearch ? buildSearchQuery(input) : "";
   const searchResult =
     shouldRunWebSearch && searchQuery
@@ -790,12 +1070,16 @@ export async function generateCampaignContent(input: GenerateCampaignInput): Pro
           maxResults: 6
         })
       : null;
-  const sourceHits = filterSourceHitsByTags(toSourceHits(searchResult), input.tags);
+  const sourceHits = filterSourceHitsByTags(toSourceHits(searchResult), input.tags, suppressTradeOnly);
   const userProvidedInspiration = normalizeUrls(input.inspirationImageUrls);
+  const placeDiscoveredInspiration = shouldRunWebSearch
+    ? filterImageUrlsByTags(googlePlacePhotos.photoUrls, input.tags, suppressTradeOnly)
+    : [];
   const websiteDiscoveredInspiration = shouldRunWebSearch
     ? filterImageUrlsByTags(
         normalizeUrls(brandContext.imageUrls).slice(0, Math.max(1, Number(process.env.CAMPAIGN_BRAND_IMAGE_MAX ?? 4))),
-        input.tags
+        input.tags,
+        suppressTradeOnly
       )
     : [];
   const autoDiscoveredInspiration =
@@ -804,12 +1088,15 @@ export async function generateCampaignContent(input: GenerateCampaignInput): Pro
           await collectImageCandidatesFromHits(sourceHits, {
             maxImages: Number(process.env.CAMPAIGN_AUTO_IMAGE_MAX ?? 6)
           }),
-          input.tags
+          input.tags,
+          suppressTradeOnly
         )
       : [];
   const resolvedInspirationImageUrls = userProvidedInspiration.length
     ? userProvidedInspiration
-    : Array.from(new Set([...websiteDiscoveredInspiration, ...autoDiscoveredInspiration])).slice(
+    : Array.from(
+        new Set([...placeDiscoveredInspiration, ...websiteDiscoveredInspiration, ...autoDiscoveredInspiration])
+      ).slice(
         0,
         Math.max(1, Number(process.env.CAMPAIGN_FINAL_IMAGE_MAX ?? 6))
       );
@@ -822,9 +1109,18 @@ export async function generateCampaignContent(input: GenerateCampaignInput): Pro
     brandContext,
     briefContexts
   });
-  if (llm) return llm;
+  if (llm) {
+    const withPlacesMeta = applyGooglePlaceMetadata(
+      llm,
+      googlePlacePhotos,
+      placeDiscoveredInspiration.length
+    );
+    return suppressTradeOnly
+      ? applyNoTradeLanguageGuard(withPlacesMeta, input.dealerProfile?.dealerName)
+      : withPlacesMeta;
+  }
 
-  return buildTemplateOutput(
+  const template = buildTemplateOutput(
     input,
     sourceHits,
     searchQuery,
@@ -832,4 +1128,12 @@ export async function generateCampaignContent(input: GenerateCampaignInput): Pro
     brandContext,
     briefContexts
   );
+  const withPlacesMeta = applyGooglePlaceMetadata(
+    template,
+    googlePlacePhotos,
+    placeDiscoveredInspiration.length
+  );
+  return suppressTradeOnly
+    ? applyNoTradeLanguageGuard(withPlacesMeta, input.dealerProfile?.dealerName)
+    : withPlacesMeta;
 }

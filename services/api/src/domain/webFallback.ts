@@ -2,6 +2,8 @@ type DealerProfileLike = {
   website?: string | null;
   webSearch?: {
     referenceUrls?: string[] | null;
+    useGooglePlacePhotos?: boolean | null;
+    googlePlaceId?: string | null;
   } | null;
 };
 

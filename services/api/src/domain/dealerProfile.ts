@@ -41,10 +41,13 @@ export type DealerProfile = {
   };
   webSearch?: {
     referenceUrls?: string[];
+    useGooglePlacePhotos?: boolean;
+    googlePlaceId?: string;
   };
   campaign?: {
     webBannerWidth?: number;
     webBannerHeight?: number;
+    webBannerFit?: "auto" | "cover" | "contain";
   };
   taxRate?: number;
 };

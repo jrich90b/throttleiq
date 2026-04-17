@@ -17630,19 +17630,39 @@ app.put("/dealer-profile", requireManager, async (req, res) => {
     incoming?.webSearch && typeof incoming.webSearch === "object" ? incoming.webSearch : null;
   if (incomingWebSearch) {
     const incomingReferenceUrls = sanitizeReferenceUrls(incomingWebSearch.referenceUrls);
+    const incomingUseGooglePlacePhotos =
+      incomingWebSearch.useGooglePlacePhotos === undefined
+        ? undefined
+        : incomingWebSearch.useGooglePlacePhotos === true;
+    const incomingGooglePlaceIdRaw =
+      incomingWebSearch.googlePlaceId === undefined
+        ? undefined
+        : String(incomingWebSearch.googlePlaceId ?? "").trim();
+    const incomingGooglePlaceId =
+      incomingGooglePlaceIdRaw === undefined
+        ? undefined
+        : incomingGooglePlaceIdRaw.replace(/^places\//i, "");
     const clearRequested = incomingWebSearch.clearReferenceUrls === true;
     // Guardrail: avoid accidental wipes from partial/empty settings payloads.
     // To intentionally clear all references, send `webSearch.clearReferenceUrls = true`.
     if (!clearRequested && incomingReferenceUrls.length === 0 && currentReferenceUrls.length > 0) {
       incoming.webSearch = {
         ...incomingWebSearch,
-        referenceUrls: currentReferenceUrls
+        referenceUrls: currentReferenceUrls,
+        ...(incomingUseGooglePlacePhotos !== undefined
+          ? { useGooglePlacePhotos: incomingUseGooglePlacePhotos }
+          : {}),
+        ...(incomingGooglePlaceId !== undefined ? { googlePlaceId: incomingGooglePlaceId } : {})
       };
       console.log("[dealer-profile] preserved existing webSearch.referenceUrls (empty incoming payload)");
     } else {
       incoming.webSearch = {
         ...incomingWebSearch,
-        referenceUrls: incomingReferenceUrls
+        referenceUrls: incomingReferenceUrls,
+        ...(incomingUseGooglePlacePhotos !== undefined
+          ? { useGooglePlacePhotos: incomingUseGooglePlacePhotos }
+          : {}),
+        ...(incomingGooglePlaceId !== undefined ? { googlePlaceId: incomingGooglePlaceId } : {})
       };
     }
   }
@@ -19674,6 +19694,19 @@ function campaignCreatorDisplayName(user: any): string | undefined {
   return email || undefined;
 }
 
+const CAMPAIGN_TRADE_ONLY_TERMS_RE =
+  /\b(value\s*(?:your|my)\s*trade|trade(?:\s*-\s*in|\s+in)?|trade\s+value|trade\s+appraisal|appraisal|sell\s+my\s+bike|cash\s+offer)\b/i;
+
+function campaignHasExplicitTradeRequest(args: { name?: string; prompt?: string; description?: string }): boolean {
+  const joined = [args.name, args.prompt, args.description]
+    .map(v => String(v ?? "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  if (!joined) return false;
+  return CAMPAIGN_TRADE_ONLY_TERMS_RE.test(joined);
+}
+
 function buildCampaignImagePrompt(args: {
   name: string;
   channel: CampaignChannel;
@@ -19692,7 +19725,16 @@ function buildCampaignImagePrompt(args: {
     String(args.description ?? "").trim() ||
     String(args.name ?? "").trim() ||
     "motorcycle promotion";
-  const references = (args.sourceHits ?? [])
+  const suppressTradeOnly = !campaignHasExplicitTradeRequest(args);
+  const promptSourceHits = suppressTradeOnly
+    ? (args.sourceHits ?? []).filter(hit => {
+        const text = [hit?.title, hit?.snippet, hit?.url]
+          .map(v => String(v ?? "").toLowerCase())
+          .join(" ");
+        return !CAMPAIGN_TRADE_ONLY_TERMS_RE.test(text);
+      })
+    : (args.sourceHits ?? []);
+  const references = promptSourceHits
     .slice(0, 4)
     .map(
       (hit, idx) =>
@@ -19732,6 +19774,12 @@ function buildCampaignImagePrompt(args: {
         "- Do NOT include financing/APR/credit/payment claims or badges.",
         "- Keep the creative focused on the selected campaign tags only."
       ]
+    : suppressTradeOnly
+      ? [
+          "Hard guardrails:",
+          "- Do NOT include trade-in language or buttons (e.g., 'Value Your Trade').",
+          "- Keep the creative focused on the selected campaign tags only."
+        ]
     : ["Hard guardrail: keep visuals and any text strictly aligned with selected campaign tags."];
   return [
     "Create a single high-quality dealership campaign hero image.",

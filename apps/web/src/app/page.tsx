@@ -1729,6 +1729,8 @@ export default function Home() {
     weatherForecastHours: "48",
     buyingUsedBikesEnabled: true,
     webSearchReferenceUrls: [] as string[],
+    webSearchUseGooglePlacePhotos: false,
+    webSearchGooglePlaceId: "",
     campaignWebBannerWidth: "1200",
     campaignWebBannerHeight: "628",
     campaignWebBannerFit: "auto" as "auto" | "cover" | "contain",
@@ -3977,6 +3979,8 @@ export default function Home() {
               .map((v: any) => String(v ?? "").trim())
               .filter(Boolean)
           : [];
+        const webSearchUseGooglePlacePhotos = webSearch.useGooglePlacePhotos === true;
+        const webSearchGooglePlaceId = String(webSearch.googlePlaceId ?? "").trim();
         const campaign = profile.campaign ?? {};
         const campaignWebBannerWidth = Number(campaign.webBannerWidth);
         const campaignWebBannerHeight = Number(campaign.webBannerHeight);
@@ -4017,6 +4021,8 @@ export default function Home() {
           weatherForecastHours: String(forecastHours),
           buyingUsedBikesEnabled: buyingUsedEnabled,
           webSearchReferenceUrls,
+          webSearchUseGooglePlacePhotos,
+          webSearchGooglePlaceId,
           campaignWebBannerWidth:
             Number.isFinite(campaignWebBannerWidth) && campaignWebBannerWidth > 0
               ? String(campaignWebBannerWidth)
@@ -7578,7 +7584,9 @@ export default function Home() {
         webSearch: {
           referenceUrls: (dealerProfileForm.webSearchReferenceUrls ?? [])
             .map(v => String(v ?? "").trim())
-            .filter(Boolean)
+            .filter(Boolean),
+          useGooglePlacePhotos: !!dealerProfileForm.webSearchUseGooglePlacePhotos,
+          googlePlaceId: String(dealerProfileForm.webSearchGooglePlaceId ?? "").trim()
         },
         campaign: {
           webBannerWidth: Math.max(1, Number(dealerProfileForm.campaignWebBannerWidth) || 1200),
@@ -11946,6 +11954,38 @@ export default function Home() {
                 <div className="border rounded-lg p-3 space-y-3">
                   <div className="text-sm font-semibold">Search & Links</div>
                   <div className="space-y-2">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <div className="text-xs text-gray-600">Google place photos for campaigns</div>
+                        <label className="inline-flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={dealerProfileForm.webSearchUseGooglePlacePhotos}
+                            onChange={e =>
+                              setDealerProfileForm({
+                                ...dealerProfileForm,
+                                webSearchUseGooglePlacePhotos: e.target.checked
+                              })
+                            }
+                          />
+                          <span>Use Google Business Profile photos as campaign inspiration</span>
+                        </label>
+                      </div>
+                      <label className="space-y-1">
+                        <div className="text-xs text-gray-600">Google place ID (optional)</div>
+                        <input
+                          className="border rounded px-3 py-2 text-sm w-full"
+                          placeholder="ex: ChIJN1t_tDeuEmsRUsoyG83frY4"
+                          value={dealerProfileForm.webSearchGooglePlaceId}
+                          onChange={e =>
+                            setDealerProfileForm({
+                              ...dealerProfileForm,
+                              webSearchGooglePlaceId: e.target.value
+                            })
+                          }
+                        />
+                      </label>
+                    </div>
                     <div className="text-xs text-gray-600">
                       Web search reference pages/domains (manufacturer + help docs)
                     </div>
