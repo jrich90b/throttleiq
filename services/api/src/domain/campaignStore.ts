@@ -357,3 +357,9 @@ export function updateCampaign(
   scheduleSave();
   return next;
 }
+
+export function deleteCampaign(id: string): boolean {
+  const existed = campaigns.delete(id);
+  if (existed) scheduleSave();
+  return existed;
+}

@@ -264,6 +264,7 @@ import {
   getCampaign,
   createCampaign,
   updateCampaign,
+  deleteCampaign,
   type CampaignBuildMode,
   type CampaignChannel,
   type CampaignAssetTarget,
@@ -20777,6 +20778,12 @@ app.patch("/campaigns/:id", requireManager, (req, res) => {
   const updated = updateCampaign(req.params.id, patch);
   if (!updated) return res.status(404).json({ ok: false, error: "Campaign not found" });
   return res.json({ ok: true, campaign: updated });
+});
+
+app.delete("/campaigns/:id", requireManager, (req, res) => {
+  const ok = deleteCampaign(req.params.id);
+  if (!ok) return res.status(404).json({ ok: false, error: "Campaign not found" });
+  return res.json({ ok: true });
 });
 
 app.post("/campaigns/generate", requireManager, async (req, res) => {

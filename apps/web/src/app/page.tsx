@@ -1384,6 +1384,16 @@ function parseCampaignUrlsText(raw: string): string[] {
   );
 }
 
+function deriveCampaignChannelFromTargets(targets: CampaignAssetTarget[] | null | undefined): CampaignChannel {
+  const set = new Set<CampaignAssetTarget>(Array.isArray(targets) ? targets : []);
+  const hasSms = set.has("sms");
+  const hasEmail = set.has("email");
+  if (hasSms && hasEmail) return "both";
+  if (hasEmail) return "email";
+  if (hasSms) return "sms";
+  return "both";
+}
+
 const EMPTY_CAMPAIGN_FORM = {
   name: "",
   buildMode: "design_from_scratch" as CampaignBuildMode,
@@ -1464,6 +1474,7 @@ export default function Home() {
   const [campaignLoading, setCampaignLoading] = useState(false);
   const [campaignSaving, setCampaignSaving] = useState(false);
   const [campaignGenerating, setCampaignGenerating] = useState(false);
+  const [campaignDeletingId, setCampaignDeletingId] = useState("");
   const [campaignInspirationUploadBusy, setCampaignInspirationUploadBusy] = useState(false);
   const [campaignAssetUploadBusy, setCampaignAssetUploadBusy] = useState(false);
   const [campaignBriefUploadBusy, setCampaignBriefUploadBusy] = useState(false);
@@ -1492,6 +1503,10 @@ export default function Home() {
         .filter(looksLikeCampaignImageUrl)
         .slice(0, 8),
     [campaignForm.assetImageUrlsText]
+  );
+  const campaignEffectiveChannel = useMemo(
+    () => deriveCampaignChannelFromTargets(campaignForm.assetTargets),
+    [campaignForm.assetTargets]
   );
   const cadenceResolveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [watchEditOpen, setWatchEditOpen] = useState(false);
@@ -1716,6 +1731,7 @@ export default function Home() {
     webSearchReferenceUrls: [] as string[],
     campaignWebBannerWidth: "1200",
     campaignWebBannerHeight: "628",
+    campaignWebBannerFit: "auto" as "auto" | "cover" | "contain",
     taxRate: "8"
   });
   const [selectedReferenceSite, setSelectedReferenceSite] = useState("");
@@ -2046,7 +2062,7 @@ export default function Home() {
         }
       }
       const urlsToAppend = await uploadCampaignFiles(files, "/api/campaigns/media", {
-        channel: campaignForm.channel
+        channel: campaignEffectiveChannel
       });
       if (!urlsToAppend.length) return;
       setCampaignForm(prev => {
@@ -2073,7 +2089,7 @@ export default function Home() {
         }
       }
       const urlsToAppend = await uploadCampaignFiles(files, "/api/campaigns/media", {
-        channel: campaignForm.channel
+        channel: campaignEffectiveChannel
       });
       if (!urlsToAppend.length) return;
       setCampaignForm(prev => {
@@ -2148,7 +2164,7 @@ export default function Home() {
         name,
         status: "draft",
         buildMode: campaignForm.buildMode,
-        channel: campaignForm.channel,
+        channel: campaignEffectiveChannel,
         tags: campaignForm.tags,
         assetTargets: campaignForm.assetTargets,
         prompt: String(campaignForm.prompt ?? "").trim() || undefined,
@@ -2194,6 +2210,33 @@ export default function Home() {
     }
   }
 
+  async function deleteCampaignById(id: string) {
+    const target = campaigns.find(row => row.id === id) ?? null;
+    const displayName = String(target?.name ?? "this campaign").trim() || "this campaign";
+    const okToDelete = window.confirm(`Delete "${displayName}"? This cannot be undone.`);
+    if (!okToDelete) return;
+    setCampaignDeletingId(id);
+    setCampaignError(null);
+    try {
+      const resp = await fetch(`/api/campaigns/${encodeURIComponent(id)}`, {
+        method: "DELETE"
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.ok) {
+        throw new Error(data?.error ?? "Failed to delete campaign");
+      }
+      if (campaignSelectedId === id) {
+        setCampaignSelectedId("");
+      }
+      await loadCampaigns();
+      setSaveToast("Campaign deleted");
+    } catch (err: any) {
+      setCampaignError(err?.message ?? "Failed to delete campaign");
+    } finally {
+      setCampaignDeletingId("");
+    }
+  }
+
   async function generateCampaign() {
     const name = String(campaignForm.name ?? "").trim();
     if (!name) {
@@ -2209,7 +2252,7 @@ export default function Home() {
         save: true,
         name,
         buildMode: campaignForm.buildMode,
-        channel: campaignForm.channel,
+        channel: campaignEffectiveChannel,
         tags: campaignForm.tags,
         assetTargets: campaignForm.assetTargets,
         prompt: String(campaignForm.prompt ?? "").trim() || undefined,
@@ -3937,6 +3980,11 @@ export default function Home() {
         const campaign = profile.campaign ?? {};
         const campaignWebBannerWidth = Number(campaign.webBannerWidth);
         const campaignWebBannerHeight = Number(campaign.webBannerHeight);
+        const campaignWebBannerFitRaw = String(campaign.webBannerFit ?? "").trim().toLowerCase();
+        const campaignWebBannerFit =
+          campaignWebBannerFitRaw === "contain" || campaignWebBannerFitRaw === "cover"
+            ? campaignWebBannerFitRaw
+            : "auto";
         const followUpMonths = Array.isArray(followUp.testRideMonths) ? followUp.testRideMonths : [4, 5, 6, 7, 8, 9, 10];
         setDealerProfile(profile);
         setDealerProfileForm({
@@ -3977,6 +4025,7 @@ export default function Home() {
             Number.isFinite(campaignWebBannerHeight) && campaignWebBannerHeight > 0
               ? String(campaignWebBannerHeight)
               : "628",
+          campaignWebBannerFit: campaignWebBannerFit as "auto" | "cover" | "contain",
           taxRate: String(taxRate)
         });
         setDealerHours(profile.hours ?? {});
@@ -7533,7 +7582,12 @@ export default function Home() {
         },
         campaign: {
           webBannerWidth: Math.max(1, Number(dealerProfileForm.campaignWebBannerWidth) || 1200),
-          webBannerHeight: Math.max(1, Number(dealerProfileForm.campaignWebBannerHeight) || 628)
+          webBannerHeight: Math.max(1, Number(dealerProfileForm.campaignWebBannerHeight) || 628),
+          webBannerFit:
+            dealerProfileForm.campaignWebBannerFit === "contain" ||
+            dealerProfileForm.campaignWebBannerFit === "cover"
+              ? dealerProfileForm.campaignWebBannerFit
+              : "auto"
         },
         taxRate: Number(dealerProfileForm.taxRate) || 0
       };
@@ -8678,25 +8732,44 @@ export default function Home() {
                   const updated = item.updatedAt || item.createdAt;
                   const tags = Array.isArray(item.tags) ? item.tags : [];
                   return (
-                    <button
+                    <div
                       key={item.id}
-                      className={`w-full text-left p-3 hover:bg-[var(--surface-2)] ${selected ? "bg-[var(--surface-2)]" : ""}`}
-                      onClick={() => {
-                        setCampaignSelectedId(item.id);
-                        applyCampaignToForm(item);
-                      }}
+                      className={`flex items-stretch ${selected ? "bg-[var(--surface-2)]" : ""}`}
                     >
-                      <div className="text-sm font-medium truncate">{item.name || "Untitled campaign"}</div>
-                      <div className="text-[11px] text-gray-500 mt-1">
-                        {status}
-                        {updated ? ` • ${new Date(updated).toLocaleString()}` : ""}
-                      </div>
-                      {tags.length ? (
-                        <div className="text-[11px] text-gray-600 mt-1 truncate">
-                          {tags.join(" • ")}
+                      <button
+                        className="flex-1 w-full text-left p-3 hover:bg-[var(--surface-2)]"
+                        onClick={() => {
+                          setCampaignSelectedId(item.id);
+                          applyCampaignToForm(item);
+                        }}
+                      >
+                        <div className="text-sm font-medium truncate">{item.name || "Untitled campaign"}</div>
+                        <div className="text-[11px] text-gray-500 mt-1">
+                          {status}
+                          {updated ? ` • ${new Date(updated).toLocaleString()}` : ""}
                         </div>
-                      ) : null}
-                    </button>
+                        {tags.length ? (
+                          <div className="text-[11px] text-gray-600 mt-1 truncate">
+                            {tags.join(" • ")}
+                          </div>
+                        ) : null}
+                      </button>
+                      <button
+                        className="w-10 h-10 text-xs border-l text-red-600 hover:text-red-700 hover:bg-red-50 disabled:opacity-60"
+                        title="Delete campaign"
+                        disabled={
+                          campaignDeletingId === item.id ||
+                          campaignSaving ||
+                          campaignGenerating
+                        }
+                        onClick={e => {
+                          e.stopPropagation();
+                          void deleteCampaignById(item.id);
+                        }}
+                      >
+                        {campaignDeletingId === item.id ? "…" : "🗑️"}
+                      </button>
+                    </div>
                   );
                 })}
               </div>
@@ -10262,7 +10335,7 @@ export default function Home() {
             ) : null}
 
             <div className="border rounded-xl bg-white p-4 md:p-5 space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <label className="text-xs text-gray-600">
                   Campaign name
                   <input
@@ -10271,26 +10344,6 @@ export default function Home() {
                     value={campaignForm.name}
                     onChange={e => setCampaignForm(prev => ({ ...prev, name: e.target.value }))}
                   />
-                </label>
-                <label className="text-xs text-gray-600">
-                  Channel
-                  <select
-                    className="mt-1 w-full border rounded px-3 py-2 text-sm bg-white"
-                    value={campaignForm.channel}
-                    onChange={e =>
-                      setCampaignForm(prev => ({
-                        ...prev,
-                        channel:
-                          e.target.value === "sms" || e.target.value === "email" || e.target.value === "both"
-                            ? (e.target.value as CampaignChannel)
-                            : "both"
-                      }))
-                    }
-                  >
-                    <option value="both">SMS + Email</option>
-                    <option value="sms">SMS only</option>
-                    <option value="email">Email only</option>
-                  </select>
                 </label>
                 <label className="text-xs text-gray-600">
                   Build mode
@@ -10360,7 +10413,8 @@ export default function Home() {
                 <div className="text-[11px] text-gray-500">
                   Web banner uses Dealer Profile size (
                   {Math.max(1, Number(dealerProfileForm.campaignWebBannerWidth) || 1200)}x
-                  {Math.max(1, Number(dealerProfileForm.campaignWebBannerHeight) || 628)}). Select{" "}
+                  {Math.max(1, Number(dealerProfileForm.campaignWebBannerHeight) || 628)}), fit mode:{" "}
+                  <span className="font-semibold">{dealerProfileForm.campaignWebBannerFit}</span>. Select{" "}
                   <span className="font-semibold">Web banner</span> in Output files to generate that exact frame.
                 </div>
               </div>
@@ -10548,6 +10602,9 @@ export default function Home() {
                     Generate to preview your final image here.
                   </div>
                 )}
+                <div className="text-[11px] text-gray-500">
+                  Preview is scaled to fit this panel. Download/Open uses the native file size shown in Generated files.
+                </div>
               </div>
 
               {campaignGeneratedAssets.length ? (
@@ -10585,7 +10642,7 @@ export default function Home() {
                 </div>
               ) : null}
 
-              {campaignForm.channel !== "email" ? (
+              {campaignEffectiveChannel !== "email" ? (
                 <label className="block text-xs text-gray-600">
                   SMS draft
                   <textarea
@@ -10596,7 +10653,7 @@ export default function Home() {
                 </label>
               ) : null}
 
-              {campaignForm.channel !== "sms" ? (
+              {campaignEffectiveChannel !== "sms" ? (
                 <>
                   <label className="block text-xs text-gray-600">
                     Email subject
@@ -12001,6 +12058,26 @@ export default function Home() {
                           setDealerProfileForm({ ...dealerProfileForm, campaignWebBannerHeight: e.target.value })
                         }
                       />
+                    </label>
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">Web banner fit</div>
+                      <select
+                        className="border rounded px-3 py-2 text-sm w-full bg-white"
+                        value={dealerProfileForm.campaignWebBannerFit}
+                        onChange={e =>
+                          setDealerProfileForm({
+                            ...dealerProfileForm,
+                            campaignWebBannerFit:
+                              e.target.value === "contain" || e.target.value === "cover"
+                                ? e.target.value
+                                : "auto"
+                          })
+                        }
+                      >
+                        <option value="auto">Auto (recommended)</option>
+                        <option value="cover">Cover (full-bleed)</option>
+                        <option value="contain">Contain (no crop)</option>
+                      </select>
                     </label>
                   </div>
 
