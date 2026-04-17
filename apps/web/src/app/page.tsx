@@ -10228,9 +10228,10 @@ export default function Home() {
                         multiple
                         disabled={campaignUploadBusy}
                         onChange={async e => {
-                          const files = e.currentTarget.files;
+                          const inputEl = e.currentTarget;
+                          const files = inputEl.files;
                           await handleCampaignInspirationUploads(files);
-                          e.currentTarget.value = "";
+                          inputEl.value = "";
                         }}
                       />
                     </label>
@@ -13328,10 +13329,11 @@ export default function Home() {
                   accept=".csv,text/csv"
                   className="hidden"
                   onChange={async e => {
+                    const inputEl = e.currentTarget;
                     const file = e.target.files?.[0];
                     if (!file) return;
                     await importContactsCsv(file);
-                    e.currentTarget.value = "";
+                    inputEl.value = "";
                   }}
                 />
               </div>
