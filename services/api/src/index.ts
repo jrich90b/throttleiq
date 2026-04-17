@@ -10,6 +10,7 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import OpenAI from "openai";
 import { google } from "googleapis";
+import sharp from "sharp";
 import { orchestrateInbound } from "./domain/orchestrator.js";
 import {
   classifySchedulingIntent,
@@ -19645,6 +19646,63 @@ function extensionForMimeType(mimeType: string | null | undefined): string {
   return ".png";
 }
 
+function campaignMmsWidth(): number {
+  return Math.max(320, Math.min(2048, Number(process.env.CAMPAIGN_MMS_IMAGE_WIDTH ?? 1080)));
+}
+
+function campaignMmsHeight(): number {
+  return Math.max(320, Math.min(3072, Number(process.env.CAMPAIGN_MMS_IMAGE_HEIGHT ?? 1350)));
+}
+
+function campaignMmsMaxBytes(): number {
+  return Math.max(120_000, Math.min(4_500_000, Number(process.env.CAMPAIGN_MMS_IMAGE_MAX_BYTES ?? 800_000)));
+}
+
+function campaignMmsInitialQuality(): number {
+  return Math.max(55, Math.min(95, Number(process.env.CAMPAIGN_MMS_IMAGE_QUALITY ?? 82)));
+}
+
+function campaignMmsMinQuality(): number {
+  return Math.max(40, Math.min(90, Number(process.env.CAMPAIGN_MMS_IMAGE_MIN_QUALITY ?? 55)));
+}
+
+async function normalizeCampaignImageForMms(buffer: Buffer): Promise<{
+  buffer: Buffer;
+  mimeType: "image/jpeg";
+  ext: ".jpg";
+  width: number;
+  height: number;
+  quality: number;
+}> {
+  const width = campaignMmsWidth();
+  const height = campaignMmsHeight();
+  const maxBytes = campaignMmsMaxBytes();
+  let quality = campaignMmsInitialQuality();
+  const minQuality = campaignMmsMinQuality();
+
+  const render = async (q: number) =>
+    sharp(buffer, { failOn: "none", animated: false })
+      .rotate()
+      .resize(width, height, { fit: "cover", position: "centre" })
+      .jpeg({ quality: q, mozjpeg: true, chromaSubsampling: "4:2:0" })
+      .toBuffer();
+
+  let out = await render(quality);
+  while (out.length > maxBytes && quality > minQuality) {
+    quality = Math.max(minQuality, quality - 5);
+    out = await render(quality);
+  }
+
+  return {
+    buffer: out,
+    mimeType: "image/jpeg",
+    ext: ".jpg",
+    width,
+    height,
+    quality
+  };
+}
+
 function extractInlineImageFromVertexResponse(payload: any): { b64: string; mimeType?: string } | null {
   const candidates = Array.isArray(payload?.candidates) ? payload.candidates : [];
   for (const candidate of candidates) {
@@ -19837,10 +19895,11 @@ async function generateCampaignImageWithNanoBanana(args: {
     const payload = await resp.json().catch(() => null);
     const inline = extractInlineImageFromVertexResponse(payload);
     if (!inline?.b64) return null;
-    const buffer = Buffer.from(inline.b64, "base64");
-    if (!buffer.length) return null;
-
-    const ext = extensionForMimeType(inline.mimeType);
+    const rawBuffer = Buffer.from(inline.b64, "base64");
+    if (!rawBuffer.length) return null;
+    const normalized = await normalizeCampaignImageForMms(rawBuffer).catch(() => null);
+    const buffer = normalized?.buffer ?? rawBuffer;
+    const ext = normalized?.ext ?? extensionForMimeType(inline.mimeType);
     const fileName = `campaign_nano_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
     const dir = path.resolve(getDataDir(), "uploads", "campaigns");
     await fs.promises.mkdir(dir, { recursive: true });
@@ -19909,11 +19968,14 @@ async function generateCampaignImageWithOpenAI(args: {
       }
     }
     if (!buffer || !buffer.length) return null;
-    const fileName = `campaign_ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
+    const normalized = await normalizeCampaignImageForMms(buffer).catch(() => null);
+    const finalBuffer = normalized?.buffer ?? buffer;
+    const finalExt = normalized?.ext ?? ext;
+    const fileName = `campaign_ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${finalExt}`;
     const dir = path.resolve(getDataDir(), "uploads", "campaigns");
     await fs.promises.mkdir(dir, { recursive: true });
     const dest = path.join(dir, fileName);
-    await fs.promises.writeFile(dest, buffer);
+    await fs.promises.writeFile(dest, finalBuffer);
     const publicBase = process.env.PUBLIC_BASE_URL ?? "";
     return publicBase
       ? `${publicBase.replace(/\/$/, "")}/uploads/campaigns/${fileName}`
@@ -19940,25 +20002,15 @@ app.post("/campaigns/media", requireManager, upload.single("file"), async (req, 
     return res.status(400).json({ ok: false, error: "file too large (max 25MB)" });
   }
 
-  const extFromOriginal = path.extname(req.file.originalname || "").toLowerCase();
-  const extFromMime =
-    mime === "image/jpeg"
-      ? ".jpg"
-      : mime === "image/png"
-        ? ".png"
-        : mime === "image/webp"
-          ? ".webp"
-          : mime === "image/gif"
-            ? ".gif"
-            : mime === "image/svg+xml"
-              ? ".svg"
-              : "";
-  const ext = extFromOriginal || extFromMime || ".jpg";
+  const normalized = await normalizeCampaignImageForMms(req.file.buffer).catch(() => null);
+  const outputBuffer = normalized?.buffer ?? req.file.buffer;
+  const outMime = normalized?.mimeType || mime || "application/octet-stream";
+  const ext = normalized?.ext ?? ".jpg";
   const fileName = `campaign_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
   const dir = path.resolve(getDataDir(), "uploads", "campaigns");
   await fs.promises.mkdir(dir, { recursive: true });
   const dest = path.join(dir, fileName);
-  await fs.promises.writeFile(dest, req.file.buffer);
+  await fs.promises.writeFile(dest, outputBuffer);
 
   const publicBase = process.env.PUBLIC_BASE_URL ?? "";
   const url = publicBase
@@ -19969,8 +20021,8 @@ app.post("/campaigns/media", requireManager, upload.single("file"), async (req, 
     ok: true,
     url,
     name: req.file.originalname || fileName,
-    type: mime || "application/octet-stream",
-    size: Number(req.file.size ?? 0)
+    type: outMime,
+    size: Number(outputBuffer.length ?? req.file.size ?? 0)
   });
 });
 

@@ -17,6 +17,7 @@
     "libphonenumber-js": "^1.12.38",
     "multer": "^2.0.2",
     "openai": "^6.21.0",
+    "sharp": "^0.34.5",
     "twilio": "^4.0.0"
   },
   "devDependencies": {
