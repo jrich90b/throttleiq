@@ -20765,56 +20765,80 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       ...(inspirationImageUrls ?? []),
       ...(assetImageUrls ?? [])
     ]);
-    const generatedImageNano = await generateCampaignImageWithNanoBanana({
-      name,
-      channel,
-      assetTargets,
-      prompt,
-      description,
-      tags,
-      dealerProfile,
-      sourceHits: generated.sourceHits,
-      referenceImageUrls
-    });
-    const generatedImageUrlNano = generatedImageNano?.url ?? null;
-    const generatedImageUrl =
-      generatedImageUrlNano ||
-      (await generateCampaignImageWithOpenAI({
+    const uniqueTargets = Array.from(new Set(assetTargets));
+    const generatorsUsed = new Set<"nano_banana_vertex" | "openai_fallback">();
+    let totalReferenceCount = 0;
+    for (const target of uniqueTargets) {
+      const targetAssetTargets: CampaignAssetTarget[] = [target];
+      const generatedImageNano = await generateCampaignImageWithNanoBanana({
         name,
         channel,
-        assetTargets,
+        assetTargets: targetAssetTargets,
         prompt,
         description,
         tags,
         dealerProfile,
-        sourceHits: generated.sourceHits
-      }));
-    if (generatedImageUrl) {
-      generatedAssets = await buildCampaignGeneratedAssetsFromSource({
+        sourceHits: generated.sourceHits,
+        referenceImageUrls
+      });
+      const generatedImageUrlNano = generatedImageNano?.url ?? null;
+      const generatedImageUrl =
+        generatedImageUrlNano ||
+        (await generateCampaignImageWithOpenAI({
+          name,
+          channel,
+          assetTargets: targetAssetTargets,
+          prompt,
+          description,
+          tags,
+          dealerProfile,
+          sourceHits: generated.sourceHits
+        }));
+      if (!generatedImageUrl) continue;
+
+      const targetAssets = await buildCampaignGeneratedAssetsFromSource({
         sourceImageUrl: generatedImageUrl,
-        targets: assetTargets,
+        targets: targetAssetTargets,
         dealerProfile
       });
+      if (!targetAssets.length) continue;
+
+      generatedAssets.push(...targetAssets);
+      if (generatedImageUrlNano) {
+        generatorsUsed.add("nano_banana_vertex");
+        totalReferenceCount += generatedImageNano?.referenceCount ?? 0;
+      } else {
+        generatorsUsed.add("openai_fallback");
+      }
+    }
+
+    if (generatedAssets.length) {
       const imageOutputProfiles = generatedAssets.length
         ? generatedAssets.map(asset => asset.target)
         : [campaignImageOutputProfileForChannel(channel)];
       const preferredTargetsForPreview = preferredCampaignPreviewTargets(assetTargets, channel);
       const preferredAsset = chooseCampaignPreviewAsset(generatedAssets, preferredTargetsForPreview);
-      generatedFinalImageUrl = preferredAsset?.url ?? generatedImageUrl;
+      generatedFinalImageUrl = preferredAsset?.url ?? generatedAssets[0]?.url;
+      const imageGenerator =
+        generatorsUsed.size > 1
+          ? "mixed"
+          : generatorsUsed.has("nano_banana_vertex")
+            ? "nano_banana_vertex"
+            : "openai_fallback";
       effectiveGenerated = {
         ...generated,
         finalImageUrl: generatedFinalImageUrl,
         generatedAssets,
         metadata: {
           ...(generated.metadata ?? {}),
-          imageGenerator: generatedImageUrlNano ? "nano_banana_vertex" : "openai_fallback",
+          imageGenerator,
           imageOutputProfile: imageOutputProfiles[0],
           imageOutputProfiles,
           imagePreviewTarget: preferredAsset?.target ?? imageOutputProfiles[0],
           imageGeneratedAt: new Date().toISOString(),
-          imageReferenceCount: generatedImageNano?.referenceCount ?? 0
+          imageReferenceCount: totalReferenceCount
         },
-        generatedBy: generatedImageUrlNano ? "nano_banana" : generated.generatedBy
+        generatedBy: generatorsUsed.has("nano_banana_vertex") ? "nano_banana" : generated.generatedBy
       };
     }
   }
