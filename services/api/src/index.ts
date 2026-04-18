@@ -3100,7 +3100,7 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
   }
   const watchCondition = normalizeWatchCondition(watch.condition);
   if (watchCondition) {
-    const itemCondition = normalizeWatchCondition(item.condition);
+    const itemCondition = normalizeWatchCondition(item.condition) ?? inferInventoryItemCondition(item);
     if (!itemCondition || itemCondition !== watchCondition) return false;
   }
   if (watch.year && String(item.year) !== String(watch.year)) return false;
@@ -3298,12 +3298,20 @@ setInterval(() => {
 setTimeout(() => {
   void processInventoryWatchlist();
   void processInventoryHolds();
-}, 60_000);
+}, (() => {
+  const raw = Number(process.env.INVENTORY_WATCH_BOOT_DELAY_MS ?? 60_000);
+  if (!Number.isFinite(raw)) return 60_000;
+  return Math.max(10_000, Math.floor(raw));
+})());
 
 setInterval(() => {
   void processInventoryWatchlist();
   void processInventoryHolds();
-}, 24 * 60 * 60 * 1000);
+}, (() => {
+  const raw = Number(process.env.INVENTORY_WATCH_POLL_MS ?? 5 * 60 * 1000);
+  if (!Number.isFinite(raw)) return 5 * 60 * 1000;
+  return Math.max(60_000, Math.floor(raw));
+})());
 
 app.get("/health", (_req, res) => {
   res.json({
