@@ -1702,6 +1702,8 @@ export default function Home() {
   const [metaActionBusy, setMetaActionBusy] = useState(false);
   const [metaError, setMetaError] = useState<string | null>(null);
   const [campaignQueueActionBusyKey, setCampaignQueueActionBusyKey] = useState("");
+  const [campaignQueueSendDialogCampaignId, setCampaignQueueSendDialogCampaignId] = useState("");
+  const [campaignQueueSendDialogListId, setCampaignQueueSendDialogListId] = useState("all");
   const [campaignQueuePublishDialogCampaignId, setCampaignQueuePublishDialogCampaignId] = useState("");
   const [campaignQueuePublishCaptionByTarget, setCampaignQueuePublishCaptionByTarget] = useState<
     Partial<Record<CampaignAssetTarget, string>>
@@ -1773,6 +1775,14 @@ export default function Home() {
   const campaignQueuePublishDialogEntry = useMemo(
     () => campaigns.find(row => row.id === campaignQueuePublishDialogCampaignId) ?? null,
     [campaigns, campaignQueuePublishDialogCampaignId]
+  );
+  const campaignQueueSendDialogEntry = useMemo(
+    () => campaigns.find(row => row.id === campaignQueueSendDialogCampaignId) ?? null,
+    [campaigns, campaignQueueSendDialogCampaignId]
+  );
+  const campaignQueueSendDialogTargets = useMemo(
+    () => campaignQueuedAssetTargetsForQueue(campaignQueueSendDialogEntry, "send"),
+    [campaignQueueSendDialogEntry]
   );
   const campaignQueuePublishDialogTargets = useMemo(
     () => campaignQueuedAssetTargetsForQueue(campaignQueuePublishDialogEntry, "post"),
@@ -2569,38 +2579,65 @@ export default function Home() {
     void loadMetaStatus();
   }
 
+  function openSendQueueSendDialog(entry: CampaignEntry) {
+    openCampaignFromQueue(entry, "send", { toast: false });
+    setCampaignQueueSendDialogCampaignId(entry.id);
+    setCampaignQueueSendDialogListId(selectedContactListId || "all");
+  }
+
+  function closeSendQueueSendDialog() {
+    setCampaignQueueSendDialogCampaignId("");
+    setCampaignQueueSendDialogListId("all");
+    setCampaignQueueActionBusyKey("");
+  }
+
   function closePostQueuePublishDialog() {
     setCampaignQueuePublishDialogCampaignId("");
     setCampaignQueuePublishCaptionByTarget({});
     setCampaignQueueActionBusyKey("");
   }
 
-  async function sendQueuedCampaignNow(entry: CampaignEntry) {
+  async function sendQueuedCampaignAssetNow(entry: CampaignEntry, target: CampaignAssetTarget) {
     const campaignId = String(entry.id ?? "").trim();
     if (!campaignId) return;
-    const busyKey = `send:${campaignId}`;
+    const busyKey = `send:${campaignId}:${target}`;
     setCampaignQueueActionBusyKey(busyKey);
     setCampaignError(null);
     try {
       const sendTargets = campaignQueuedAssetTargetsForQueue(entry, "send");
-      if (!sendTargets.includes("sms")) {
-        throw new Error("Send now currently supports queued SMS assets.");
+      if (!sendTargets.includes(target)) {
+        throw new Error("This send asset is no longer queued.");
       }
-      const listId = String(selectedContactListId ?? "").trim();
-      if (!listId || listId === "all") {
-        goToSection("contacts");
-        throw new Error("Select a contact group in Contacts first, then click Send now again.");
+      const listIdRaw = String(campaignQueueSendDialogListId ?? "").trim();
+      const sendToAll = listIdRaw === "all";
+      const listId = !sendToAll ? listIdRaw : "";
+      if (!sendToAll && !listId) {
+        throw new Error("Select a recipient group or choose All contacts.");
       }
       const message = String(entry.smsBody ?? "").trim();
-      if (!message) {
-        throw new Error("This campaign has no SMS draft to send.");
+      const emailSubject = String(entry.emailSubject ?? "").trim();
+      const emailBodyText = String(entry.emailBodyText ?? "").trim();
+      const emailBodyHtml = String(entry.emailBodyHtml ?? "").trim();
+      if (target === "sms" && !message) throw new Error("This campaign has no SMS draft to send.");
+      if (target === "email" && !emailBodyText && !emailBodyHtml) {
+        throw new Error("This campaign has no email draft to send.");
+      }
+      if (target === "email" && !emailSubject) {
+        throw new Error("This campaign email has no subject.");
       }
       const resp = await fetch("/api/contacts/broadcast", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          listId,
-          message,
+          channel: target === "email" ? "email" : "sms",
+          ...(sendToAll ? { sendToAll: true } : { listId }),
+          ...(target === "email"
+            ? {
+                subject: emailSubject,
+                emailBodyText: emailBodyText || undefined,
+                emailBodyHtml: emailBodyHtml || undefined
+              }
+            : { message }),
           campaignId,
           campaignName: String(entry.name ?? "").trim() || undefined
         })
@@ -2613,7 +2650,7 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          target: "sms",
+          target,
           queue: "send",
           action: "dequeue"
         })
@@ -2631,10 +2668,14 @@ export default function Home() {
           });
         });
         if (campaignSelectedId === saved.id) applyCampaignToForm(saved);
+        if (!campaignIsQueued(saved, "send")) {
+          closeSendQueueSendDialog();
+        }
       } else {
         await loadCampaigns(campaignId);
       }
-      setSaveToast(`Sent ${data.sent ?? 0}/${data.attempted ?? 0} from "${entry.name || "campaign"}"`);
+      const label = target === "email" ? "Email sent" : "SMS sent";
+      setSaveToast(`${label}: ${data.sent ?? 0}/${data.attempted ?? 0} from "${entry.name || "campaign"}"`);
     } catch (err: any) {
       setCampaignError(err?.message ?? "Failed to send queued campaign");
     } finally {
@@ -9474,7 +9515,7 @@ export default function Home() {
                 <div className="px-3 py-2 text-xs font-semibold border-b">Send Queue</div>
                 <div className="divide-y max-h-32 overflow-y-auto">
                   {campaignSendQueue.map(item => {
-                    const actionBusy = campaignQueueActionBusyKey === `send:${item.id}`;
+                    const actionBusy = campaignQueueActionBusyKey.startsWith(`send:${item.id}:`);
                     return (
                       <div key={`send-queue-${item.id}`} className="flex items-stretch">
                         <button
@@ -9495,11 +9536,11 @@ export default function Home() {
                           className="px-2 text-[10px] border-l text-[var(--accent)] hover:bg-[var(--surface-2)] disabled:opacity-60"
                           disabled={Boolean(campaignQueueActionBusyKey) || actionBusy || campaignGenerating || campaignSaving}
                           onClick={() => {
-                            void sendQueuedCampaignNow(item);
+                            openSendQueueSendDialog(item);
                           }}
-                          title="Send now without opening campaign first"
+                          title="Open queued send window"
                         >
-                          {actionBusy ? "Sending..." : "Send now"}
+                          {actionBusy ? "Sending..." : "Send…"}
                         </button>
                       </div>
                     );
@@ -16950,6 +16991,125 @@ export default function Home() {
                 {composeSending ? "Sending…" : composeSmsAttachmentsBusy ? "Processing…" : "Send SMS"}
               </button>
             </div>
+          </div>
+        </div>
+      ) : null}
+
+      {campaignQueueSendDialogCampaignId ? (
+        <div className="fixed inset-0 z-[70] flex items-start sm:items-center justify-center bg-black/40 p-3 sm:p-4 overflow-y-auto">
+          <div className="w-full max-w-5xl rounded-lg bg-white shadow-lg border p-4 max-h-[94dvh] overflow-y-auto">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold">Send queued campaign assets</div>
+                <div className="text-xs text-gray-500">
+                  {campaignQueueSendDialogEntry?.name || "Selected campaign"}
+                </div>
+              </div>
+              <button
+                className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)]"
+                onClick={closeSendQueueSendDialog}
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-3 border rounded-lg p-3 bg-gray-50">
+              <div className="text-xs text-gray-600 mb-2">Choose recipients for this send.</div>
+              <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                <label className="text-xs text-gray-600 min-w-[90px]">Recipients</label>
+                <select
+                  className="border rounded px-3 py-2 text-sm flex-1 bg-white"
+                  value={campaignQueueSendDialogListId}
+                  onChange={e => setCampaignQueueSendDialogListId(e.target.value)}
+                >
+                  <option value="all">All contacts</option>
+                  {contactLists.map(list => (
+                    <option key={`queue-send-list-${list.id}`} value={list.id}>
+                      {list.name}
+                      {Number.isFinite(Number(list.contactCount)) ? ` (${Number(list.contactCount)})` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {!campaignQueueSendDialogEntry ? (
+              <div className="mt-3 text-sm text-gray-600 border rounded p-3 bg-[var(--surface-2)]">
+                Campaign not found. Refresh and try again.
+              </div>
+            ) : campaignQueueSendDialogTargets.length === 0 ? (
+              <div className="mt-3 text-sm text-gray-600 border rounded p-3 bg-[var(--surface-2)]">
+                No queued send assets found for this campaign.
+              </div>
+            ) : (
+              <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                {campaignQueueSendDialogTargets.map((target, idx) => {
+                  const isSms = target === "sms";
+                  const isEmail = target === "email";
+                  const busyKey = `send:${campaignQueueSendDialogEntry.id}:${target}`;
+                  const isBusy = campaignQueueActionBusyKey === busyKey;
+                  const asset = campaignFindGeneratedAsset(campaignQueueSendDialogEntry, target);
+                  const smsBody = String(campaignQueueSendDialogEntry.smsBody ?? "").trim();
+                  const emailSubject = String(campaignQueueSendDialogEntry.emailSubject ?? "").trim();
+                  const emailBody =
+                    String(campaignQueueSendDialogEntry.emailBodyText ?? "").trim() ||
+                    String(campaignQueueSendDialogEntry.emailBodyHtml ?? "").trim();
+                  const draftPreview = isSms ? smsBody : isEmail ? emailBody : "";
+                  return (
+                    <div
+                      key={`queue-send-asset-${target}-${idx}`}
+                      className="border rounded-lg bg-white p-3 space-y-3 flex flex-col"
+                    >
+                      <div className="text-xs font-semibold text-gray-700">
+                        {CAMPAIGN_ASSET_TARGET_OPTIONS.find(opt => opt.value === target)?.label ?? target}
+                      </div>
+                      {asset?.url ? (
+                        <a
+                          href={asset.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block border rounded overflow-hidden bg-gray-50"
+                        >
+                          <img
+                            src={asset.url}
+                            alt={campaignAssetDisplayLabel(asset)}
+                            className="w-full max-h-[300px] object-contain bg-white"
+                            loading="lazy"
+                          />
+                        </a>
+                      ) : null}
+                      {isEmail ? (
+                        <div className="space-y-2">
+                          <div className="text-xs text-gray-600">
+                            Subject:{" "}
+                            <span className="font-medium text-gray-800">{emailSubject || "(missing subject)"}</span>
+                          </div>
+                          <div className="text-xs text-gray-600 border rounded p-2 max-h-32 overflow-auto whitespace-pre-wrap">
+                            {draftPreview || "No email draft content."}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-xs text-gray-600 border rounded p-2 max-h-32 overflow-auto whitespace-pre-wrap">
+                          {draftPreview || "No SMS draft content."}
+                        </div>
+                      )}
+                      <div className="flex flex-wrap items-center gap-2 mt-auto">
+                        <button
+                          className="px-3 py-2 border rounded text-xs bg-[var(--accent)] text-white border-[var(--accent)] hover:brightness-95 disabled:opacity-60"
+                          disabled={Boolean(campaignQueueActionBusyKey)}
+                          onClick={() => {
+                            void sendQueuedCampaignAssetNow(campaignQueueSendDialogEntry, target);
+                          }}
+                        >
+                          {isBusy ? "Sending..." : isEmail ? "Send Email" : "Send SMS"}
+                        </button>
+                      </div>
+                      {isBusy ? <div className="text-[11px] text-gray-500">Sending selected asset…</div> : null}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       ) : null}

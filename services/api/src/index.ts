@@ -22232,50 +22232,106 @@ app.post("/contacts/import", requireManager, (req, res) => {
 });
 
 app.post("/contacts/broadcast", requireManager, async (req, res) => {
+  const channel = String(req.body?.channel ?? "sms").trim().toLowerCase() === "email" ? "email" : "sms";
+  const sendToAll = req.body?.sendToAll === true;
   const listId = String(req.body?.listId ?? "").trim();
   const message = String(req.body?.message ?? "").trim();
+  const subject = String(req.body?.subject ?? "").trim();
+  const emailBodyText = String(req.body?.emailBodyText ?? "").trim();
+  const emailBodyHtml = String(req.body?.emailBodyHtml ?? "").trim();
   const campaignId = String(req.body?.campaignId ?? "").trim() || undefined;
   const campaignName = String(req.body?.campaignName ?? "").trim() || undefined;
-  if (!listId) return res.status(400).json({ ok: false, error: "Missing listId" });
-  if (!message) return res.status(400).json({ ok: false, error: "Missing message" });
+  if (!sendToAll && !listId) return res.status(400).json({ ok: false, error: "Missing listId" });
+  if (channel === "sms" && !message) return res.status(400).json({ ok: false, error: "Missing message" });
+  if (channel === "email" && !subject) return res.status(400).json({ ok: false, error: "Missing subject" });
+  if (channel === "email" && !emailBodyText && !emailBodyHtml) {
+    return res.status(400).json({ ok: false, error: "Missing emailBodyText/emailBodyHtml" });
+  }
 
-  const list = getContactList(listId);
-  if (!list) return res.status(404).json({ ok: false, error: "List not found" });
+  let list: any = null;
+  if (!sendToAll) {
+    list = getContactList(listId);
+    if (!list) return res.status(404).json({ ok: false, error: "List not found" });
+  }
 
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-  const fromRaw = String(process.env.TWILIO_FROM_NUMBER ?? "").trim();
-  const from = normalizePhone(fromRaw);
-  if (!accountSid || !authToken || !from || !from.startsWith("+")) {
-    return res.status(500).json({ ok: false, error: "Twilio not configured" });
+  let twilioClient: ReturnType<typeof twilio> | null = null;
+  let smsFrom = "";
+  if (channel === "sms") {
+    const accountSid = process.env.TWILIO_ACCOUNT_SID;
+    const authToken = process.env.TWILIO_AUTH_TOKEN;
+    const fromRaw = String(process.env.TWILIO_FROM_NUMBER ?? "").trim();
+    const from = normalizePhone(fromRaw);
+    if (!accountSid || !authToken || !from || !from.startsWith("+")) {
+      return res.status(500).json({ ok: false, error: "Twilio not configured" });
+    }
+    twilioClient = twilio(accountSid, authToken);
+    smsFrom = from;
+  }
+
+  let emailFrom = "";
+  let emailReplyTo = "";
+  if (channel === "email") {
+    const profile = await getDealerProfileHot();
+    const emailCfg = getEmailConfig(profile);
+    emailFrom = String(emailCfg.from ?? "").trim();
+    emailReplyTo = String(emailCfg.replyTo ?? "").trim();
+    if (!emailFrom) {
+      return res.status(500).json({ ok: false, error: "SendGrid from email not configured" });
+    }
   }
 
   const contacts = buildContactsView();
-  const recipientIds = resolveContactIdsForList(list, contacts);
-  const recipients = contacts.filter(c => recipientIds.includes(String(c.id)));
-  const twilioClient = twilio(accountSid, authToken);
+  const recipientIds = sendToAll ? [] : resolveContactIdsForList(list, contacts);
+  const recipients = sendToAll ? contacts : contacts.filter(c => recipientIds.includes(String(c.id)));
 
-  const sent: Array<{ id: string; phone: string; sid?: string }> = [];
+  const sent: Array<{ id: string; phone?: string; email?: string; sid?: string }> = [];
   const skipped: Array<{ id: string; reason: string }> = [];
   const failed: Array<{ id: string; error: string }> = [];
+  const fallbackEmailText =
+    emailBodyText ||
+    emailBodyHtml
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(p|div|li|h[1-6])>/gi, "\n")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
 
   for (const contact of recipients) {
-    const phone = normalizePhone(String(contact.phone ?? "").trim());
-    if (!phone || !phone.startsWith("+")) {
-      skipped.push({ id: String(contact.id), reason: "missing_phone" });
-      continue;
-    }
-    if (isSuppressed(phone)) {
-      skipped.push({ id: String(contact.id), reason: "suppressed" });
-      continue;
-    }
     try {
-      const out = await twilioClient.messages.create({
-        from,
-        to: phone,
-        body: message
-      });
-      const leadKey = String(contact.leadKey ?? contact.conversationId ?? phone);
+      const phone = normalizePhone(String(contact.phone ?? "").trim());
+      const email = String(contact.email ?? "").trim();
+      let sid: string | undefined;
+      if (channel === "sms") {
+        if (!phone || !phone.startsWith("+")) {
+          skipped.push({ id: String(contact.id), reason: "missing_phone" });
+          continue;
+        }
+        if (isSuppressed(phone)) {
+          skipped.push({ id: String(contact.id), reason: "suppressed" });
+          continue;
+        }
+        const out = await twilioClient!.messages.create({
+          from: smsFrom,
+          to: phone,
+          body: message
+        });
+        sid = out.sid ?? undefined;
+      } else {
+        if (!email || !email.includes("@")) {
+          skipped.push({ id: String(contact.id), reason: "missing_email" });
+          continue;
+        }
+        await sendEmail({
+          to: email,
+          from: emailFrom,
+          replyTo: emailReplyTo || undefined,
+          subject,
+          text: fallbackEmailText,
+          html: emailBodyHtml || undefined
+        });
+      }
+      const leadKey = String(contact.leadKey ?? contact.conversationId ?? (phone || email));
       const existingConv = getConversation(leadKey);
       const existingIsOpen =
         !!existingConv && String(existingConv.status ?? "open").toLowerCase() !== "closed";
@@ -22287,9 +22343,17 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
         lastName: contact.lastName,
         name: contact.name,
         phone,
-        email: contact.email
+        email
       });
-      appendOutbound(conv, from, phone, message, "twilio", out.sid ?? undefined);
+      const outboundBody = channel === "email" ? fallbackEmailText : message;
+      appendOutbound(
+        conv,
+        channel === "email" ? emailFrom : smsFrom,
+        channel === "email" ? email : phone,
+        outboundBody,
+        channel === "email" ? "sendgrid" : "twilio",
+        sid
+      );
       const shouldRouteToCampaigns = !existingIsOpen || existingIsCampaignThread;
       if (shouldRouteToCampaigns) {
         const nowIso = new Date().toISOString();
@@ -22299,15 +22363,18 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
           status: "campaign",
           campaignId: campaignId ?? currentThread.campaignId ?? undefined,
           campaignName: campaignName ?? currentThread.campaignName ?? (String(list?.name ?? "").trim() || undefined),
-          listId,
-          listName: String(list?.name ?? "").trim() || currentThread.listName || undefined,
+          listId: sendToAll ? "all" : listId,
+          listName:
+            sendToAll
+              ? "All contacts"
+              : String(list?.name ?? "").trim() || currentThread.listName || undefined,
           firstSentAt: String(currentThread.firstSentAt ?? "").trim() || nowIso,
           lastSentAt: nowIso
         };
       }
       conv.updatedAt = new Date().toISOString();
       saveConversation(conv);
-      sent.push({ id: String(contact.id), phone, sid: out.sid });
+      sent.push({ id: String(contact.id), phone: phone || undefined, email: email || undefined, sid });
     } catch (err: any) {
       failed.push({ id: String(contact.id), error: err?.message ?? "send_failed" });
     }
@@ -22319,7 +22386,9 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
 
   return res.json({
     ok: true,
-    listId,
+    channel,
+    listId: sendToAll ? "all" : listId,
+    sendToAll,
     attempted: recipients.length,
     sent: sent.length,
     skipped: skipped.length,
