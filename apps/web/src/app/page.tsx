@@ -17061,7 +17061,10 @@ export default function Home() {
                     : "";
                   const isBusy = busyKey ? campaignQueueActionBusyKey === busyKey : false;
                   return (
-                    <div key={`queue-publish-asset-${target}-${idx}`} className="border rounded-lg bg-white p-3 space-y-3">
+                    <div
+                      key={`queue-publish-asset-${target}-${idx}`}
+                      className="border rounded-lg bg-white p-3 space-y-3 flex flex-col"
+                    >
                       <div className="text-xs font-semibold text-gray-700">{campaignAssetDisplayLabel(asset)}</div>
                       <a
                         href={asset.url}
@@ -17088,8 +17091,10 @@ export default function Home() {
                             }}
                           />
                         </label>
-                      ) : null}
-                      <div className="flex flex-wrap items-center gap-2">
+                      ) : (
+                        <div className="min-h-[122px]" aria-hidden />
+                      )}
+                      <div className="flex flex-wrap items-center gap-2 mt-auto">
                         <button
                           className="px-3 py-2 border rounded text-xs bg-[var(--accent)] text-white border-[var(--accent)] hover:brightness-95 disabled:opacity-60"
                           disabled={!metaStatus?.connected || Boolean(campaignQueueActionBusyKey) || !publishPlatform}
