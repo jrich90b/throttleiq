@@ -1570,6 +1570,30 @@ function campaignQueuedAtIso(entry: CampaignEntry | null | undefined, queue: Cam
   return String(entry?.updatedAt ?? entry?.createdAt ?? "").trim();
 }
 
+function campaignAutoPublishCaption(entry: CampaignEntry | null | undefined): string {
+  if (!entry) return "";
+  const meta = entry.metadata && typeof entry.metadata === "object" ? (entry.metadata as Record<string, unknown>) : null;
+  const explicit =
+    String(meta?.socialCaption ?? meta?.caption ?? "").trim() ||
+    String(meta?.publishCaption ?? "").trim();
+  if (explicit) return explicit.slice(0, 1800);
+
+  const sms = String(entry.smsBody ?? "").trim();
+  if (sms) return sms.slice(0, 1800);
+
+  const emailText = String(entry.emailBodyText ?? "").trim();
+  if (emailText) {
+    const firstParagraph = emailText.split(/\n\s*\n/).map(v => v.trim()).find(Boolean) ?? emailText;
+    return firstParagraph.slice(0, 1800);
+  }
+
+  const description = String(entry.description ?? "").trim();
+  if (description) return description.slice(0, 1800);
+
+  const fallbackName = String(entry.name ?? "").trim();
+  return fallbackName ? `${fallbackName} — message us for details.` : "";
+}
+
 const EMPTY_CAMPAIGN_FORM = {
   name: "",
   buildMode: "design_from_scratch" as CampaignBuildMode,
@@ -2699,6 +2723,11 @@ export default function Home() {
       const body: Record<string, unknown> = {};
       if (preferredTarget) body.assetTarget = preferredTarget;
       if (platform === "instagram_story") body.mediaType = "story";
+      const manualCaption =
+        campaignSelectedId === campaignId ? String(campaignPublishCaption ?? "").trim() : "";
+      const autoCaption = campaignAutoPublishCaption(entry);
+      const captionToUse = manualCaption || autoCaption;
+      if (captionToUse && platform !== "instagram_story") body.caption = captionToUse;
       const resp = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
