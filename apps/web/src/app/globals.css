@@ -49,7 +49,7 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  font-family: var(--font-body), var(--font-geist-sans), system-ui, sans-serif;
 }
 
 a {
@@ -86,11 +86,10 @@ input[type="reset"],
 .lr-campaign-theme .lr-campaign-content,
 .lr-campaign-theme .lr-campaign-list {
   font-family:
+    var(--font-body),
     "Avenir Next",
-    "SF Pro Display",
+    "SF Pro Text",
     "Segoe UI",
-    "Inter Tight",
-    var(--font-geist-sans),
     system-ui,
     sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -100,21 +99,28 @@ input[type="reset"],
 .lr-campaign-theme .lr-campaign-sidebar h1,
 .lr-campaign-theme .lr-campaign-content h2 {
   font-family:
+    var(--font-display),
     "Avenir Next",
     "SF Pro Display",
-    "Inter Tight",
-    var(--font-geist-sans),
     system-ui,
     sans-serif;
-  font-weight: 700;
-  letter-spacing: 0.012em;
+  font-weight: 680;
+  letter-spacing: 0.01em;
+  line-height: 1.08;
+  color: #f4f8ff;
 }
 
 .lr-campaign-theme .lr-campaign-panel > .text-xs.font-semibold,
 .lr-campaign-theme .lr-campaign-subpanel > .text-xs.font-semibold {
-  letter-spacing: 0.045em;
+  font-family:
+    var(--font-display),
+    "Avenir Next",
+    "SF Pro Display",
+    system-ui,
+    sans-serif;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  font-weight: 650;
+  font-weight: 620;
   color: #e4ecfb !important;
 }
 
@@ -167,9 +173,15 @@ input[type="reset"],
 }
 
 .lr-campaign-theme .lr-campaign-list .lr-campaign-list-row-title {
+  font-family:
+    var(--font-display),
+    "Avenir Next",
+    "SF Pro Display",
+    system-ui,
+    sans-serif;
   color: #f2f6ff !important;
-  font-weight: 650;
-  letter-spacing: 0.012em;
+  font-weight: 640;
+  letter-spacing: 0.014em;
 }
 
 .lr-campaign-theme .lr-campaign-list .lr-campaign-list-row-meta {
