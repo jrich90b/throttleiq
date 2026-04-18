@@ -20354,6 +20354,43 @@ function buildCampaignImagePrompt(args: {
       "- Fill the frame edge-to-edge (no borders, no letterboxing, no padding).",
       "- Keep all essential text/logo/CTA inside a center safe area (~70% width, ~80% height) to avoid edge loss."
     );
+  } else if (selectedTargetCount <= 1 && preferredTarget) {
+    const socialDims: Record<
+      CampaignAssetTarget,
+      { width: number; height: number; label: string }
+    > = {
+      sms: { width: campaignMmsWidth(), height: campaignMmsHeight(), label: "SMS" },
+      email: { width: campaignEmailWidth(), height: campaignEmailWidth(), label: "Email" },
+      facebook_post: {
+        width: campaignFacebookPostWidth(),
+        height: campaignFacebookPostHeight(),
+        label: "Facebook post"
+      },
+      instagram_post: {
+        width: campaignInstagramPostWidth(),
+        height: campaignInstagramPostHeight(),
+        label: "Instagram post"
+      },
+      instagram_story: {
+        width: campaignInstagramStoryWidth(),
+        height: campaignInstagramStoryHeight(),
+        label: "Instagram story"
+      },
+      web_banner: {
+        width: campaignWebBannerWidth(args.dealerProfile),
+        height: campaignWebBannerHeight(args.dealerProfile),
+        label: "Web banner"
+      }
+    };
+    const frame = socialDims[preferredTarget];
+    const ratio = (frame.width / Math.max(1, frame.height)).toFixed(3);
+    outputGuardrails.push(
+      "Output framing requirements (critical):",
+      `- Compose exactly for ${frame.label} at ${frame.width}x${frame.height} (~${ratio}:1).`,
+      "- Fill the full canvas edge-to-edge.",
+      "- Do NOT include any border, frame, gutter, white strip, or letterboxing.",
+      "- Keep key text/logo/CTA fully inside the live image area."
+    );
   } else if (selectedTargetCount > 1) {
     outputGuardrails.push(
       "Cross-channel framing requirements (critical):",
@@ -20756,6 +20793,123 @@ async function normalizeCampaignImageForExactFrame(
   };
 }
 
+async function trimNeutralEdgeBars(buffer: Buffer): Promise<Buffer> {
+  const meta = await sharp(buffer, { failOn: "none", animated: false }).metadata().catch(() => null);
+  const srcW = Number(meta?.width ?? 0);
+  const srcH = Number(meta?.height ?? 0);
+  if (!Number.isFinite(srcW) || !Number.isFinite(srcH) || srcW < 80 || srcH < 80) return buffer;
+
+  const maxDim = 512;
+  const sample = await sharp(buffer, { failOn: "none", animated: false })
+    .rotate()
+    .resize({
+      width: srcW >= srcH ? maxDim : undefined,
+      height: srcH > srcW ? maxDim : undefined,
+      fit: "inside",
+      withoutEnlargement: true
+    })
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true })
+    .catch(() => null);
+  if (!sample?.data || !sample.info) return buffer;
+  const sw = Number(sample.info.width ?? 0);
+  const sh = Number(sample.info.height ?? 0);
+  const ch = Number(sample.info.channels ?? 3);
+  if (!sw || !sh || ch < 3) return buffer;
+
+  const data = sample.data;
+  const idx = (x: number, y: number) => (y * sw + x) * ch;
+
+  const isFlatNeutralRow = (y: number) => {
+    let minR = 255, minG = 255, minB = 255;
+    let maxR = 0, maxG = 0, maxB = 0;
+    let lumSum = 0;
+    let lumSq = 0;
+    for (let x = 0; x < sw; x++) {
+      const i = idx(x, y);
+      const r = data[i] ?? 0;
+      const g = data[i + 1] ?? 0;
+      const b = data[i + 2] ?? 0;
+      if (r < minR) minR = r;
+      if (g < minG) minG = g;
+      if (b < minB) minB = b;
+      if (r > maxR) maxR = r;
+      if (g > maxG) maxG = g;
+      if (b > maxB) maxB = b;
+      const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      lumSum += lum;
+      lumSq += lum * lum;
+    }
+    const mean = lumSum / sw;
+    const variance = Math.max(0, lumSq / sw - mean * mean);
+    const std = Math.sqrt(variance);
+    const chroma = Math.max(maxR - minR, maxG - minG, maxB - minB);
+    return chroma <= 20 && std <= 14;
+  };
+
+  const isFlatNeutralCol = (x: number) => {
+    let minR = 255, minG = 255, minB = 255;
+    let maxR = 0, maxG = 0, maxB = 0;
+    let lumSum = 0;
+    let lumSq = 0;
+    for (let y = 0; y < sh; y++) {
+      const i = idx(x, y);
+      const r = data[i] ?? 0;
+      const g = data[i + 1] ?? 0;
+      const b = data[i + 2] ?? 0;
+      if (r < minR) minR = r;
+      if (g < minG) minG = g;
+      if (b < minB) minB = b;
+      if (r > maxR) maxR = r;
+      if (g > maxG) maxG = g;
+      if (b > maxB) maxB = b;
+      const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      lumSum += lum;
+      lumSq += lum * lum;
+    }
+    const mean = lumSum / sh;
+    const variance = Math.max(0, lumSq / sh - mean * mean);
+    const std = Math.sqrt(variance);
+    const chroma = Math.max(maxR - minR, maxG - minG, maxB - minB);
+    return chroma <= 20 && std <= 14;
+  };
+
+  const maxRowTrim = Math.floor(sh * 0.35);
+  const maxColTrim = Math.floor(sw * 0.35);
+  let top = 0;
+  while (top < maxRowTrim && top < sh && isFlatNeutralRow(top)) top++;
+  let bottom = 0;
+  while (bottom < maxRowTrim && bottom < sh && isFlatNeutralRow(sh - 1 - bottom)) bottom++;
+  let left = 0;
+  while (left < maxColTrim && left < sw && isFlatNeutralCol(left)) left++;
+  let right = 0;
+  while (right < maxColTrim && right < sw && isFlatNeutralCol(sw - 1 - right)) right++;
+
+  const minRowTrim = Math.max(6, Math.floor(sh * 0.012));
+  const minColTrim = Math.max(6, Math.floor(sw * 0.012));
+  if (top < minRowTrim) top = 0;
+  if (bottom < minRowTrim) bottom = 0;
+  if (left < minColTrim) left = 0;
+  if (right < minColTrim) right = 0;
+  if (!top && !bottom && !left && !right) return buffer;
+
+  const cropTop = Math.round((top / sh) * srcH);
+  const cropBottom = Math.round((bottom / sh) * srcH);
+  const cropLeft = Math.round((left / sw) * srcW);
+  const cropRight = Math.round((right / sw) * srcW);
+  const outW = srcW - cropLeft - cropRight;
+  const outH = srcH - cropTop - cropBottom;
+  if (outW < Math.floor(srcW * 0.6) || outH < Math.floor(srcH * 0.6)) return buffer;
+
+  return sharp(buffer, { failOn: "none", animated: false })
+    .rotate()
+    .extract({ left: Math.max(0, cropLeft), top: Math.max(0, cropTop), width: outW, height: outH })
+    .jpeg({ quality: 95, mozjpeg: true, chromaSubsampling: "4:2:0" })
+    .toBuffer()
+    .catch(() => buffer);
+}
+
 async function normalizeCampaignImageForProfile(
   buffer: Buffer,
   profile: CampaignImageOutputProfile,
@@ -20901,12 +21055,13 @@ async function buildCampaignGeneratedAssetsFromSource(args: {
     console.warn("[campaign] source image coercion failed; skipping asset normalization:", err?.message ?? err);
     return [];
   }
+  const trimmedBuffer = await trimNeutralEdgeBars(workingSourceBuffer).catch(() => workingSourceBuffer);
   const uniqueTargets = Array.from(new Set(args.targets ?? []));
   const out: CampaignGeneratedAsset[] = [];
   for (const target of uniqueTargets) {
     try {
       const profile = campaignImageOutputProfileForAssetTarget(target);
-      const normalized = await normalizeCampaignImageForProfile(workingSourceBuffer, profile, args.dealerProfile);
+      const normalized = await normalizeCampaignImageForProfile(trimmedBuffer, profile, args.dealerProfile);
       const saved = await saveCampaignGeneratedImage(normalized, `campaign_${target}`);
       out.push({
         id: `${target}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
