@@ -1665,6 +1665,7 @@ export default function Home() {
   const [campaignPublishingPlatform, setCampaignPublishingPlatform] = useState<
     "" | "facebook" | "instagram" | "instagram_story"
   >("");
+  const [campaignQueueActionBusyKey, setCampaignQueueActionBusyKey] = useState("");
   const [campaignError, setCampaignError] = useState<string | null>(null);
   const [campaignSelectedId, setCampaignSelectedId] = useState("");
   const [campaignListFilter, setCampaignListFilter] = useState<"all" | CampaignQueueKind>("all");
@@ -2591,6 +2592,166 @@ export default function Home() {
     }
   }
 
+  function openCampaignFromQueue(entry: CampaignEntry, queue: CampaignQueueKind, opts?: { toast?: boolean }) {
+    goToSection("campaigns");
+    setCampaignListFilter(queue);
+    setCampaignSelectedId(entry.id);
+    applyCampaignToForm(entry);
+    if (opts?.toast !== false) {
+      setSaveToast(queue === "send" ? "Viewing Send Queue" : "Viewing Post Queue");
+    }
+  }
+
+  async function sendQueuedCampaignNow(entry: CampaignEntry) {
+    const campaignId = String(entry.id ?? "").trim();
+    if (!campaignId) return;
+    const busyKey = `send:${campaignId}`;
+    setCampaignQueueActionBusyKey(busyKey);
+    setCampaignError(null);
+    try {
+      const sendTargets = campaignQueuedAssetTargetsForQueue(entry, "send");
+      if (!sendTargets.includes("sms")) {
+        throw new Error("Send now currently supports queued SMS assets.");
+      }
+      const listId = String(selectedContactListId ?? "").trim();
+      if (!listId || listId === "all") {
+        goToSection("contacts");
+        throw new Error("Select a contact group in Contacts first, then click Send now again.");
+      }
+      const message = String(entry.smsBody ?? "").trim();
+      if (!message) {
+        throw new Error("This campaign has no SMS draft to send.");
+      }
+      const resp = await fetch("/api/contacts/broadcast", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          listId,
+          message,
+          campaignId,
+          campaignName: String(entry.name ?? "").trim() || undefined
+        })
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.ok) {
+        throw new Error(data?.error ?? "Failed to send campaign");
+      }
+      const dequeueResp = await fetch(`/api/campaigns/${encodeURIComponent(campaignId)}/queue`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          target: "sms",
+          queue: "send",
+          action: "dequeue"
+        })
+      });
+      const dequeueData = await dequeueResp.json().catch(() => null);
+      if (dequeueResp.ok && dequeueData?.ok && dequeueData?.campaign) {
+        const saved = dequeueData.campaign as CampaignEntry;
+        setCampaigns(prev => {
+          const idx = prev.findIndex(row => row.id === saved.id);
+          const next = idx >= 0 ? prev.map(row => (row.id === saved.id ? saved : row)) : [saved, ...prev];
+          return next.sort((a, b) => {
+            const aAt = new Date(String(a.updatedAt ?? a.createdAt ?? "")).getTime();
+            const bAt = new Date(String(b.updatedAt ?? b.createdAt ?? "")).getTime();
+            return bAt - aAt;
+          });
+        });
+        if (campaignSelectedId === saved.id) applyCampaignToForm(saved);
+      } else {
+        await loadCampaigns(campaignId);
+      }
+      setSaveToast(`Sent ${data.sent ?? 0}/${data.attempted ?? 0} from "${entry.name || "campaign"}"`);
+    } catch (err: any) {
+      setCampaignError(err?.message ?? "Failed to send queued campaign");
+    } finally {
+      setCampaignQueueActionBusyKey("");
+    }
+  }
+
+  async function publishQueuedCampaignNow(entry: CampaignEntry) {
+    const campaignId = String(entry.id ?? "").trim();
+    if (!campaignId) return;
+    const busyKey = `post:${campaignId}`;
+    setCampaignQueueActionBusyKey(busyKey);
+    setCampaignError(null);
+    try {
+      const postTargets = campaignQueuedAssetTargetsForQueue(entry, "post");
+      if (!postTargets.length) throw new Error("No queued post assets for this campaign.");
+      const hasFacebook = postTargets.includes("facebook_post");
+      const hasInstagramPost = postTargets.includes("instagram_post");
+      const hasInstagramStory = postTargets.includes("instagram_story");
+      const platform: "facebook" | "instagram" | "instagram_story" = hasFacebook
+        ? "facebook"
+        : hasInstagramStory && !hasInstagramPost
+          ? "instagram_story"
+          : "instagram";
+      const preferredTarget: CampaignAssetTarget | undefined =
+        platform === "facebook"
+          ? (hasFacebook ? "facebook_post" : postTargets[0])
+          : platform === "instagram_story"
+            ? (hasInstagramStory ? "instagram_story" : postTargets[0])
+            : (hasInstagramPost ? "instagram_post" : postTargets[0]);
+      const endpoint =
+        platform === "facebook"
+          ? `/api/campaigns/${encodeURIComponent(campaignId)}/publish/facebook`
+          : `/api/campaigns/${encodeURIComponent(campaignId)}/publish/instagram`;
+      const body: Record<string, unknown> = {};
+      if (preferredTarget) body.assetTarget = preferredTarget;
+      if (platform === "instagram_story") body.mediaType = "story";
+      const resp = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.ok) {
+        throw new Error(data?.error ?? "Failed to publish campaign");
+      }
+      const dequeueTarget = preferredTarget ?? postTargets[0] ?? null;
+      if (dequeueTarget) {
+        const dequeueResp = await fetch(`/api/campaigns/${encodeURIComponent(campaignId)}/queue`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            target: dequeueTarget,
+            queue: "post",
+            action: "dequeue"
+          })
+        });
+        const dequeueData = await dequeueResp.json().catch(() => null);
+        if (dequeueResp.ok && dequeueData?.ok && dequeueData?.campaign) {
+          const saved = dequeueData.campaign as CampaignEntry;
+          setCampaigns(prev => {
+            const idx = prev.findIndex(row => row.id === saved.id);
+            const next = idx >= 0 ? prev.map(row => (row.id === saved.id ? saved : row)) : [saved, ...prev];
+            return next.sort((a, b) => {
+              const aAt = new Date(String(a.updatedAt ?? a.createdAt ?? "")).getTime();
+              const bAt = new Date(String(b.updatedAt ?? b.createdAt ?? "")).getTime();
+              return bAt - aAt;
+            });
+          });
+          if (campaignSelectedId === saved.id) applyCampaignToForm(saved);
+        } else {
+          await loadCampaigns(campaignId);
+        }
+      } else {
+        await loadCampaigns(campaignId);
+      }
+      const label =
+        platform === "facebook"
+          ? "Published to Facebook"
+          : platform === "instagram_story"
+            ? "Published to Instagram Story"
+            : "Published to Instagram";
+      setSaveToast(`${label}: ${entry.name || "campaign"}`);
+    } catch (err: any) {
+      setCampaignError(err?.message ?? "Failed to publish queued campaign");
+    } finally {
+      setCampaignQueueActionBusyKey("");
+    }
+  }
+
   async function loadCampaigns(preferredId?: string) {
     if (!isManager) return;
     setCampaignLoading(true);
@@ -2679,6 +2840,7 @@ export default function Home() {
   }
 
   function openQueuedCampaign(queue: CampaignQueueKind) {
+    goToSection("campaigns");
     setCampaignListFilter(queue);
     const list = queue === "send" ? campaignSendQueue : campaignPostQueue;
     const first = list[0];
@@ -2686,9 +2848,7 @@ export default function Home() {
       setSaveToast(queue === "send" ? "Send Queue is empty" : "Post Queue is empty");
       return;
     }
-    setCampaignSelectedId(first.id);
-    applyCampaignToForm(first);
-    setSaveToast(queue === "send" ? "Viewing Send Queue" : "Viewing Post Queue");
+    openCampaignFromQueue(first, queue);
   }
 
   async function deleteCampaignById(id: string) {
@@ -9340,26 +9500,37 @@ export default function Home() {
               <div className="border rounded-lg bg-[var(--surface)]">
                 <div className="px-3 py-2 text-xs font-semibold border-b">Send Queue</div>
                 <div className="divide-y max-h-32 overflow-y-auto">
-                  {campaignSendQueue.map(item => (
-                    <button
-                      key={`send-queue-${item.id}`}
-                      className={`w-full text-left px-3 py-2 text-xs hover:bg-[var(--surface-2)] ${
-                        campaignSelectedId === item.id ? "bg-[var(--surface-2)]" : ""
-                      }`}
-                      onClick={() => {
-                        setCampaignSelectedId(item.id);
-                        applyCampaignToForm(item);
-                      }}
-                    >
-                      <div className="font-medium truncate">{item.name || "Untitled campaign"}</div>
-                      <div className="text-[10px] text-gray-500">
-                        Queued{" "}
-                        {campaignQueueEntry(item, "send")?.queuedAt
-                          ? new Date(String(campaignQueueEntry(item, "send")?.queuedAt)).toLocaleString()
-                          : "recently"}
+                  {campaignSendQueue.map(item => {
+                    const actionBusy = campaignQueueActionBusyKey === `send:${item.id}`;
+                    return (
+                      <div key={`send-queue-${item.id}`} className="flex items-stretch">
+                        <button
+                          className={`flex-1 text-left px-3 py-2 text-xs hover:bg-[var(--surface-2)] ${
+                            campaignSelectedId === item.id ? "bg-[var(--surface-2)]" : ""
+                          }`}
+                          onClick={() => openCampaignFromQueue(item, "send", { toast: false })}
+                        >
+                          <div className="font-medium truncate">{item.name || "Untitled campaign"}</div>
+                          <div className="text-[10px] text-gray-500">
+                            Queued{" "}
+                            {campaignQueueEntry(item, "send")?.queuedAt
+                              ? new Date(String(campaignQueueEntry(item, "send")?.queuedAt)).toLocaleString()
+                              : "recently"}
+                          </div>
+                        </button>
+                        <button
+                          className="px-2 text-[10px] border-l text-[var(--accent)] hover:bg-[var(--surface-2)] disabled:opacity-60"
+                          disabled={Boolean(campaignQueueActionBusyKey) || actionBusy || campaignGenerating || campaignSaving}
+                          onClick={() => {
+                            void sendQueuedCampaignNow(item);
+                          }}
+                          title="Send now without opening campaign first"
+                        >
+                          {actionBusy ? "Sending..." : "Send now"}
+                        </button>
                       </div>
-                    </button>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             ) : null}
@@ -9367,26 +9538,37 @@ export default function Home() {
               <div className="border rounded-lg bg-[var(--surface)]">
                 <div className="px-3 py-2 text-xs font-semibold border-b">Post Queue</div>
                 <div className="divide-y max-h-32 overflow-y-auto">
-                  {campaignPostQueue.map(item => (
-                    <button
-                      key={`post-queue-${item.id}`}
-                      className={`w-full text-left px-3 py-2 text-xs hover:bg-[var(--surface-2)] ${
-                        campaignSelectedId === item.id ? "bg-[var(--surface-2)]" : ""
-                      }`}
-                      onClick={() => {
-                        setCampaignSelectedId(item.id);
-                        applyCampaignToForm(item);
-                      }}
-                    >
-                      <div className="font-medium truncate">{item.name || "Untitled campaign"}</div>
-                      <div className="text-[10px] text-gray-500">
-                        Queued{" "}
-                        {campaignQueueEntry(item, "post")?.queuedAt
-                          ? new Date(String(campaignQueueEntry(item, "post")?.queuedAt)).toLocaleString()
-                          : "recently"}
+                  {campaignPostQueue.map(item => {
+                    const actionBusy = campaignQueueActionBusyKey === `post:${item.id}`;
+                    return (
+                      <div key={`post-queue-${item.id}`} className="flex items-stretch">
+                        <button
+                          className={`flex-1 text-left px-3 py-2 text-xs hover:bg-[var(--surface-2)] ${
+                            campaignSelectedId === item.id ? "bg-[var(--surface-2)]" : ""
+                          }`}
+                          onClick={() => openCampaignFromQueue(item, "post", { toast: false })}
+                        >
+                          <div className="font-medium truncate">{item.name || "Untitled campaign"}</div>
+                          <div className="text-[10px] text-gray-500">
+                            Queued{" "}
+                            {campaignQueueEntry(item, "post")?.queuedAt
+                              ? new Date(String(campaignQueueEntry(item, "post")?.queuedAt)).toLocaleString()
+                              : "recently"}
+                          </div>
+                        </button>
+                        <button
+                          className="px-2 text-[10px] border-l text-[var(--accent)] hover:bg-[var(--surface-2)] disabled:opacity-60"
+                          disabled={Boolean(campaignQueueActionBusyKey) || actionBusy || campaignGenerating || campaignSaving}
+                          onClick={() => {
+                            void publishQueuedCampaignNow(item);
+                          }}
+                          title="Publish now without opening campaign first"
+                        >
+                          {actionBusy ? "Publishing..." : "Publish now"}
+                        </button>
                       </div>
-                    </button>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             ) : null}
