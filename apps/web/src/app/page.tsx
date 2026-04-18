@@ -1287,6 +1287,8 @@ type CampaignGeneratedAsset = {
   createdAt?: string;
 };
 
+type CampaignQueueKind = "send" | "post";
+
 type CampaignAssetGenerationStatus = "pending" | "ready" | "failed";
 type CampaignAssetGenerationEntry = {
   status: CampaignAssetGenerationStatus;
@@ -1453,6 +1455,31 @@ function deriveCampaignChannelFromTargets(targets: CampaignAssetTarget[] | null 
   return "both";
 }
 
+function campaignQueueEntry(
+  entry: CampaignEntry | null | undefined,
+  queue: CampaignQueueKind
+): Record<string, unknown> | null {
+  const meta = entry?.metadata;
+  if (!meta || typeof meta !== "object") return null;
+  const queueRoot = (meta as any)?.queue;
+  if (!queueRoot || typeof queueRoot !== "object") return null;
+  const row = (queueRoot as any)?.[queue];
+  if (!row || typeof row !== "object") return null;
+  return row as Record<string, unknown>;
+}
+
+function campaignIsQueued(entry: CampaignEntry | null | undefined, queue: CampaignQueueKind): boolean {
+  const row = campaignQueueEntry(entry, queue);
+  return String(row?.status ?? "").trim().toLowerCase() === "queued";
+}
+
+function campaignQueuedAtIso(entry: CampaignEntry | null | undefined, queue: CampaignQueueKind): string {
+  const row = campaignQueueEntry(entry, queue);
+  const iso = String(row?.queuedAt ?? row?.updatedAt ?? "").trim();
+  if (iso) return iso;
+  return String(entry?.updatedAt ?? entry?.createdAt ?? "").trim();
+}
+
 const EMPTY_CAMPAIGN_FORM = {
   name: "",
   buildMode: "design_from_scratch" as CampaignBuildMode,
@@ -1533,6 +1560,7 @@ export default function Home() {
   const [campaignLoading, setCampaignLoading] = useState(false);
   const [campaignSaving, setCampaignSaving] = useState(false);
   const [campaignGenerating, setCampaignGenerating] = useState(false);
+  const [campaignQueueBusy, setCampaignQueueBusy] = useState<CampaignQueueKind | "">("");
   const [campaignDeletingId, setCampaignDeletingId] = useState("");
   const [campaignInspirationUploadBusy, setCampaignInspirationUploadBusy] = useState(false);
   const [campaignAssetUploadBusy, setCampaignAssetUploadBusy] = useState(false);
@@ -1591,6 +1619,34 @@ export default function Home() {
   const campaignSelectedEntry = useMemo(
     () => campaigns.find(row => row.id === campaignSelectedId) ?? null,
     [campaigns, campaignSelectedId]
+  );
+  const campaignSelectedInSendQueue = useMemo(
+    () => campaignIsQueued(campaignSelectedEntry, "send"),
+    [campaignSelectedEntry]
+  );
+  const campaignSelectedInPostQueue = useMemo(
+    () => campaignIsQueued(campaignSelectedEntry, "post"),
+    [campaignSelectedEntry]
+  );
+  const campaignSendQueue = useMemo(
+    () =>
+      campaigns
+        .filter(row => campaignIsQueued(row, "send"))
+        .sort(
+          (a, b) =>
+            new Date(campaignQueuedAtIso(b, "send")).getTime() - new Date(campaignQueuedAtIso(a, "send")).getTime()
+        ),
+    [campaigns]
+  );
+  const campaignPostQueue = useMemo(
+    () =>
+      campaigns
+        .filter(row => campaignIsQueued(row, "post"))
+        .sort(
+          (a, b) =>
+            new Date(campaignQueuedAtIso(b, "post")).getTime() - new Date(campaignQueuedAtIso(a, "post")).getTime()
+        ),
+    [campaigns]
   );
   const campaignAssetGenerationStatus = useMemo(() => {
     const fromEntry = normalizeCampaignAssetGenerationMap(campaignSelectedEntry?.assetGenerationStatus);
@@ -2520,6 +2576,54 @@ export default function Home() {
       setCampaignError(err?.message ?? "Failed to delete campaign");
     } finally {
       setCampaignDeletingId("");
+    }
+  }
+
+  async function setCampaignQueue(queue: CampaignQueueKind, shouldQueue: boolean) {
+    const id = String(campaignSelectedId ?? "").trim();
+    if (!id) {
+      setCampaignError("Save the campaign first, then add it to a queue.");
+      return;
+    }
+    setCampaignQueueBusy(queue);
+    setCampaignError(null);
+    try {
+      const resp = await fetch(`/api/campaigns/${encodeURIComponent(id)}/queue`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          queue,
+          action: shouldQueue ? "queue" : "dequeue"
+        })
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.ok || !data?.campaign) {
+        throw new Error(data?.error ?? "Failed to update campaign queue");
+      }
+      const saved = data.campaign as CampaignEntry;
+      setCampaigns(prev => {
+        const idx = prev.findIndex(row => row.id === saved.id);
+        const next = idx >= 0 ? prev.map(row => (row.id === saved.id ? saved : row)) : [saved, ...prev];
+        return next.sort((a, b) => {
+          const aAt = new Date(String(a.updatedAt ?? a.createdAt ?? "")).getTime();
+          const bAt = new Date(String(b.updatedAt ?? b.createdAt ?? "")).getTime();
+          return bAt - aAt;
+        });
+      });
+      if (campaignSelectedId === saved.id) applyCampaignToForm(saved);
+      setSaveToast(
+        shouldQueue
+          ? queue === "send"
+            ? "Saved to Send Queue"
+            : "Saved to Post Queue"
+          : queue === "send"
+            ? "Removed from Send Queue"
+            : "Removed from Post Queue"
+      );
+    } catch (err: any) {
+      setCampaignError(err?.message ?? "Failed to update campaign queue");
+    } finally {
+      setCampaignQueueBusy("");
     }
   }
 
@@ -9023,6 +9127,70 @@ export default function Home() {
               </button>
             </div>
             {campaignError ? <div className="text-xs text-red-600">{campaignError}</div> : null}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="border rounded p-2 bg-[var(--surface-2)]">
+                <div className="text-[11px] text-gray-500">Send Queue</div>
+                <div className="text-sm font-semibold">{campaignSendQueue.length}</div>
+              </div>
+              <div className="border rounded p-2 bg-[var(--surface-2)]">
+                <div className="text-[11px] text-gray-500">Post Queue</div>
+                <div className="text-sm font-semibold">{campaignPostQueue.length}</div>
+              </div>
+            </div>
+            {campaignSendQueue.length ? (
+              <div className="border rounded-lg bg-[var(--surface)]">
+                <div className="px-3 py-2 text-xs font-semibold border-b">Send Queue</div>
+                <div className="divide-y max-h-32 overflow-y-auto">
+                  {campaignSendQueue.map(item => (
+                    <button
+                      key={`send-queue-${item.id}`}
+                      className={`w-full text-left px-3 py-2 text-xs hover:bg-[var(--surface-2)] ${
+                        campaignSelectedId === item.id ? "bg-[var(--surface-2)]" : ""
+                      }`}
+                      onClick={() => {
+                        setCampaignSelectedId(item.id);
+                        applyCampaignToForm(item);
+                      }}
+                    >
+                      <div className="font-medium truncate">{item.name || "Untitled campaign"}</div>
+                      <div className="text-[10px] text-gray-500">
+                        Queued{" "}
+                        {campaignQueueEntry(item, "send")?.queuedAt
+                          ? new Date(String(campaignQueueEntry(item, "send")?.queuedAt)).toLocaleString()
+                          : "recently"}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {campaignPostQueue.length ? (
+              <div className="border rounded-lg bg-[var(--surface)]">
+                <div className="px-3 py-2 text-xs font-semibold border-b">Post Queue</div>
+                <div className="divide-y max-h-32 overflow-y-auto">
+                  {campaignPostQueue.map(item => (
+                    <button
+                      key={`post-queue-${item.id}`}
+                      className={`w-full text-left px-3 py-2 text-xs hover:bg-[var(--surface-2)] ${
+                        campaignSelectedId === item.id ? "bg-[var(--surface-2)]" : ""
+                      }`}
+                      onClick={() => {
+                        setCampaignSelectedId(item.id);
+                        applyCampaignToForm(item);
+                      }}
+                    >
+                      <div className="font-medium truncate">{item.name || "Untitled campaign"}</div>
+                      <div className="text-[10px] text-gray-500">
+                        Queued{" "}
+                        {campaignQueueEntry(item, "post")?.queuedAt
+                          ? new Date(String(campaignQueueEntry(item, "post")?.queuedAt)).toLocaleString()
+                          : "recently"}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {campaignLoading ? (
               <div className="text-sm text-gray-500">Loading campaigns...</div>
             ) : campaigns.length === 0 ? (
@@ -9036,6 +9204,8 @@ export default function Home() {
                   const status = String(item.status ?? "draft").toLowerCase() === "generated" ? "Generated" : "Draft";
                   const updated = item.updatedAt || item.createdAt;
                   const tags = Array.isArray(item.tags) ? item.tags : [];
+                  const inSendQueue = campaignIsQueued(item, "send");
+                  const inPostQueue = campaignIsQueued(item, "post");
                   return (
                     <div
                       key={item.id}
@@ -9056,6 +9226,13 @@ export default function Home() {
                         {tags.length ? (
                           <div className="text-[11px] text-gray-600 mt-1 truncate">
                             {tags.join(" • ")}
+                          </div>
+                        ) : null}
+                        {inSendQueue || inPostQueue ? (
+                          <div className="text-[11px] text-gray-600 mt-1 truncate">
+                            {inSendQueue ? "In Send Queue" : ""}
+                            {inSendQueue && inPostQueue ? " • " : ""}
+                            {inPostQueue ? "In Post Queue" : ""}
                           </div>
                         ) : null}
                       </button>
@@ -10894,6 +11071,42 @@ export default function Home() {
                 </div>
                 <div className="text-[11px] text-gray-500">
                   Generate creates/updates the selected output. Redo retries the same output.
+                </div>
+                <div className="pt-1 border-t border-gray-200 space-y-2">
+                  <div className="text-xs font-semibold text-gray-700">Queue this campaign</div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
+                      disabled={campaignQueueBusy !== "" || !campaignSelectedId}
+                      onClick={() => {
+                        void setCampaignQueue("send", !campaignSelectedInSendQueue);
+                      }}
+                    >
+                      {campaignQueueBusy === "send"
+                        ? "Saving..."
+                        : campaignSelectedInSendQueue
+                          ? "Remove from Send Queue"
+                          : "Save to Send Queue"}
+                    </button>
+                    <button
+                      className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
+                      disabled={campaignQueueBusy !== "" || !campaignSelectedId}
+                      onClick={() => {
+                        void setCampaignQueue("post", !campaignSelectedInPostQueue);
+                      }}
+                    >
+                      {campaignQueueBusy === "post"
+                        ? "Saving..."
+                        : campaignSelectedInPostQueue
+                          ? "Remove from Post Queue"
+                          : "Save to Post Queue"}
+                    </button>
+                  </div>
+                  {!campaignSelectedId ? (
+                    <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                      Save Draft first to enable queue actions.
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>

@@ -16154,6 +16154,56 @@ function withCampaignPublishMetadata(
   };
 }
 
+type CampaignQueueKind = "send" | "post";
+type CampaignQueueAction = "queue" | "dequeue";
+
+function withCampaignQueueMetadata(
+  campaign: any,
+  args: { queue: CampaignQueueKind; action: CampaignQueueAction; user: any }
+): Record<string, unknown> {
+  const nowIso = new Date().toISOString();
+  const prevMeta =
+    campaign?.metadata && typeof campaign.metadata === "object" ? (campaign.metadata as Record<string, unknown>) : {};
+  const prevQueue =
+    prevMeta.queue && typeof prevMeta.queue === "object" ? (prevMeta.queue as Record<string, unknown>) : {};
+  const actorName = campaignCreatorDisplayName(args.user);
+  const prevHistory = Array.isArray(prevMeta.queueHistory)
+    ? (prevMeta.queueHistory as Array<Record<string, unknown>>)
+    : [];
+  const historyEntry: Record<string, unknown> = {
+    queue: args.queue,
+    action: args.action,
+    at: nowIso
+  };
+  if (args.user?.id) historyEntry.userId = String(args.user.id);
+  if (actorName) historyEntry.userName = actorName;
+  const nextHistory = [...prevHistory.slice(-49), historyEntry];
+  const queueEntry =
+    args.action === "queue"
+      ? {
+          status: "queued",
+          queuedAt: nowIso,
+          queuedByUserId: args.user?.id ? String(args.user.id) : undefined,
+          queuedByUserName: actorName || undefined,
+          updatedAt: nowIso
+        }
+      : {
+          status: "none",
+          clearedAt: nowIso,
+          clearedByUserId: args.user?.id ? String(args.user.id) : undefined,
+          clearedByUserName: actorName || undefined,
+          updatedAt: nowIso
+        };
+  return {
+    ...prevMeta,
+    queue: {
+      ...prevQueue,
+      [args.queue]: queueEntry
+    },
+    queueHistory: nextHistory
+  };
+}
+
 app.get("/integrations/meta/start", requireManager, async (_req, res) => {
   const { appId, appSecret } = getMetaAppCredentials();
   const redirectUri = getMetaRedirectUri();
@@ -21430,6 +21480,23 @@ app.patch("/campaigns/:id", requireManager, (req, res) => {
     patch.generatedBy = req.body.generatedBy;
   }
   const updated = updateCampaign(req.params.id, patch);
+  if (!updated) return res.status(404).json({ ok: false, error: "Campaign not found" });
+  return res.json({ ok: true, campaign: updated });
+});
+
+app.post("/campaigns/:id/queue", requireManager, (req, res) => {
+  const campaign = getCampaign(String(req.params.id ?? "").trim());
+  if (!campaign) return res.status(404).json({ ok: false, error: "Campaign not found" });
+  const queueRaw = String(req.body?.queue ?? "").trim().toLowerCase();
+  const actionRaw = String(req.body?.action ?? "queue").trim().toLowerCase();
+  const queue: CampaignQueueKind | null = queueRaw === "send" || queueRaw === "post" ? queueRaw : null;
+  const action: CampaignQueueAction | null = actionRaw === "queue" || actionRaw === "dequeue" ? actionRaw : null;
+  if (!queue) return res.status(400).json({ ok: false, error: "Invalid queue. Use 'send' or 'post'" });
+  if (!action) return res.status(400).json({ ok: false, error: "Invalid action. Use 'queue' or 'dequeue'" });
+  const user = (req as any).user ?? null;
+  const updated = updateCampaign(campaign.id, {
+    metadata: withCampaignQueueMetadata(campaign, { queue, action, user })
+  });
   if (!updated) return res.status(404).json({ ok: false, error: "Campaign not found" });
   return res.json({ ok: true, campaign: updated });
 });
