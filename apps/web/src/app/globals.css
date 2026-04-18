@@ -82,6 +82,42 @@ input[type="reset"],
   --foreground: var(--lr-text);
 }
 
+.lr-campaign-theme .lr-campaign-sidebar,
+.lr-campaign-theme .lr-campaign-content,
+.lr-campaign-theme .lr-campaign-list {
+  font-family:
+    "Avenir Next",
+    "SF Pro Display",
+    "Segoe UI",
+    "Inter Tight",
+    var(--font-geist-sans),
+    system-ui,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.lr-campaign-theme .lr-campaign-sidebar h1,
+.lr-campaign-theme .lr-campaign-content h2 {
+  font-family:
+    "Avenir Next",
+    "SF Pro Display",
+    "Inter Tight",
+    var(--font-geist-sans),
+    system-ui,
+    sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.012em;
+}
+
+.lr-campaign-theme .lr-campaign-panel > .text-xs.font-semibold,
+.lr-campaign-theme .lr-campaign-subpanel > .text-xs.font-semibold {
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+  font-weight: 650;
+  color: #e4ecfb !important;
+}
+
 .lr-campaign-theme .lr-campaign-sidebar {
   background:
     radial-gradient(1200px 400px at 20% -10%, rgba(251, 127, 4, 0.12), transparent 50%),
@@ -132,6 +168,8 @@ input[type="reset"],
 
 .lr-campaign-theme .lr-campaign-list .lr-campaign-list-row-title {
   color: #f2f6ff !important;
+  font-weight: 650;
+  letter-spacing: 0.012em;
 }
 
 .lr-campaign-theme .lr-campaign-list .lr-campaign-list-row-meta {
