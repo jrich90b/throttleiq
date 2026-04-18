@@ -20850,12 +20850,24 @@ async function buildCampaignGeneratedAssetsFromSource(args: {
     console.warn("[campaign] source image is not decodable; skipping asset normalization");
     return [];
   }
+  // Coerce once into a stable JPEG so downstream per-target transforms don't fail on odd codecs/containers.
+  let workingSourceBuffer: Buffer = sourceBuffer;
+  try {
+    const coerced = await sharp(sourceBuffer, { failOn: "none", animated: false })
+      .rotate()
+      .jpeg({ quality: 95, mozjpeg: true, chromaSubsampling: "4:2:0" })
+      .toBuffer();
+    if (coerced?.length) workingSourceBuffer = coerced;
+  } catch (err: any) {
+    console.warn("[campaign] source image coercion failed; skipping asset normalization:", err?.message ?? err);
+    return [];
+  }
   const uniqueTargets = Array.from(new Set(args.targets ?? []));
   const out: CampaignGeneratedAsset[] = [];
   for (const target of uniqueTargets) {
     try {
       const profile = campaignImageOutputProfileForAssetTarget(target);
-      const normalized = await normalizeCampaignImageForProfile(sourceBuffer, profile, args.dealerProfile);
+      const normalized = await normalizeCampaignImageForProfile(workingSourceBuffer, profile, args.dealerProfile);
       const saved = await saveCampaignGeneratedImage(normalized, `campaign_${target}`);
       out.push({
         id: `${target}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
