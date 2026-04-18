@@ -1618,6 +1618,7 @@ export default function Home() {
   const [campaignFinalImageUrl, setCampaignFinalImageUrl] = useState<string>("");
   const [campaignGeneratedAssets, setCampaignGeneratedAssets] = useState<CampaignGeneratedAsset[]>([]);
   const [campaignTargetToGenerate, setCampaignTargetToGenerate] = useState<CampaignAssetTarget>("sms");
+  const [campaignEditFromCurrentImage, setCampaignEditFromCurrentImage] = useState(false);
   const campaignInspirationPreviewUrls = useMemo(
     () =>
       parseCampaignUrlsText(campaignForm.inspirationImageUrlsText)
@@ -1651,6 +1652,22 @@ export default function Home() {
       ),
     [campaignForm.assetTargets]
   );
+  const campaignActiveTarget = useMemo<CampaignAssetTarget>(
+    () => campaignSelectedTargetsOrdered[0] ?? campaignTargetToGenerate,
+    [campaignSelectedTargetsOrdered, campaignTargetToGenerate]
+  );
+  const campaignCurrentBaseImageUrl = useMemo(() => {
+    const byTarget = (campaignGeneratedAssets ?? []).find(
+      row => String(row.target ?? "").trim() === campaignActiveTarget
+    );
+    if (String(byTarget?.url ?? "").trim()) return String(byTarget?.url ?? "").trim();
+    if ((campaignGeneratedAssets ?? []).length === 1) {
+      const first = String(campaignGeneratedAssets[0]?.url ?? "").trim();
+      if (first) return first;
+    }
+    return String(campaignFinalImageUrl ?? "").trim();
+  }, [campaignGeneratedAssets, campaignActiveTarget, campaignFinalImageUrl]);
+  const campaignHasCurrentBaseImage = Boolean(campaignCurrentBaseImageUrl);
   const campaignSelectedEntry = useMemo(
     () => campaigns.find(row => row.id === campaignSelectedId) ?? null,
     [campaigns, campaignSelectedId]
@@ -2716,7 +2733,11 @@ export default function Home() {
     }
   }
 
-  async function generateCampaign(opts?: { target?: CampaignAssetTarget | null; replaceTarget?: boolean }) {
+  async function generateCampaign(opts?: {
+    target?: CampaignAssetTarget | null;
+    replaceTarget?: boolean;
+    editFromCurrent?: boolean;
+  }) {
     const name = String(campaignForm.name ?? "").trim();
     if (!name) {
       setCampaignError("Campaign name is required.");
@@ -2732,7 +2753,35 @@ export default function Home() {
       setCampaignError("Pick an output target to generate.");
       return;
     }
+    const editFromCurrent = Boolean(opts?.editFromCurrent);
+    const currentTargetAssetUrl = (() => {
+      const byTarget = (campaignGeneratedAssets ?? []).find(
+        row => String(row?.target ?? "").trim() === target
+      );
+      if (String(byTarget?.url ?? "").trim()) return String(byTarget?.url ?? "").trim();
+      if ((campaignGeneratedAssets ?? []).length === 1) {
+        const single = String(campaignGeneratedAssets[0]?.url ?? "").trim();
+        if (single) return single;
+      }
+      return String(campaignFinalImageUrl ?? "").trim();
+    })();
+    if (editFromCurrent && !currentTargetAssetUrl) {
+      setCampaignError("No current generated image found for this output. Generate once first, then apply edits.");
+      return;
+    }
     const isScratchBuild = campaignForm.buildMode === "design_from_scratch";
+    const baseInspirationImageUrls = parseCampaignUrlsText(campaignForm.inspirationImageUrlsText);
+    const inspirationImageUrls = isScratchBuild || editFromCurrent
+      ? Array.from(
+          new Set(
+            [
+              ...(editFromCurrent && currentTargetAssetUrl ? [currentTargetAssetUrl] : []),
+              ...baseInspirationImageUrls
+            ].filter(Boolean)
+          )
+        )
+      : [];
+    const assetImageUrls = isScratchBuild ? parseCampaignUrlsText(campaignForm.assetImageUrlsText) : [];
     setCampaignGenerating(true);
     setCampaignError(null);
     try {
@@ -2748,8 +2797,8 @@ export default function Home() {
         replaceTarget: opts?.replaceTarget !== false,
         prompt: String(campaignForm.prompt ?? "").trim() || undefined,
         description: String(campaignForm.description ?? "").trim() || undefined,
-        inspirationImageUrls: isScratchBuild ? parseCampaignUrlsText(campaignForm.inspirationImageUrlsText) : [],
-        assetImageUrls: isScratchBuild ? parseCampaignUrlsText(campaignForm.assetImageUrlsText) : [],
+        inspirationImageUrls,
+        assetImageUrls,
         briefDocumentUrls: parseCampaignUrlsText(campaignForm.briefDocumentUrlsText)
       };
       const resp = await fetch("/api/campaigns/generate", {
@@ -11097,13 +11146,12 @@ export default function Home() {
               <div className="border rounded-lg p-3 bg-gray-50 space-y-3">
                 <div className="text-xs font-semibold text-gray-700">3) Generate assets</div>
                 {(() => {
-                  const activeTarget = campaignSelectedTargetsOrdered[0] ?? campaignTargetToGenerate;
-                  const label = activeTarget
-                    ? CAMPAIGN_ASSET_TARGET_OPTIONS.find(opt => opt.value === activeTarget)?.label ?? activeTarget
+                  const label = campaignActiveTarget
+                    ? CAMPAIGN_ASSET_TARGET_OPTIONS.find(opt => opt.value === campaignActiveTarget)?.label ?? campaignActiveTarget
                     : "No output selected";
-                  const statusRow = activeTarget ? campaignAssetGenerationStatus[activeTarget] : null;
+                  const statusRow = campaignActiveTarget ? campaignAssetGenerationStatus[campaignActiveTarget] : null;
                   const statusRaw = String(statusRow?.status ?? "").trim().toLowerCase();
-                  const hasAsset = activeTarget ? campaignGeneratedAssetTargetSet.has(activeTarget) : false;
+                  const hasAsset = campaignActiveTarget ? campaignGeneratedAssetTargetSet.has(campaignActiveTarget) : false;
                   const status: "ready" | "pending" | "failed" =
                     statusRaw === "failed" ? "failed" : hasAsset || statusRaw === "ready" ? "ready" : "pending";
                   const badgeClass =
@@ -11133,7 +11181,11 @@ export default function Home() {
                   <button
                     className="px-3 py-2 border rounded text-sm bg-gray-900 text-white hover:bg-black disabled:opacity-60"
                     onClick={() => {
-                      void generateCampaign({ target: campaignTargetToGenerate, replaceTarget: true });
+                      void generateCampaign({
+                        target: campaignActiveTarget,
+                        replaceTarget: true,
+                        editFromCurrent: campaignEditFromCurrentImage
+                      });
                     }}
                     disabled={campaignGenerating || campaignSaving || !campaignHasAnyTarget}
                   >
@@ -11142,7 +11194,11 @@ export default function Home() {
                   <button
                     className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
                     onClick={() => {
-                      void generateCampaign({ target: campaignTargetToGenerate, replaceTarget: true });
+                      void generateCampaign({
+                        target: campaignActiveTarget,
+                        replaceTarget: true,
+                        editFromCurrent: campaignEditFromCurrentImage
+                      });
                     }}
                     disabled={campaignGenerating || campaignSaving || !campaignForm.name.trim() || !campaignHasAnyTarget}
                   >
@@ -11158,6 +11214,28 @@ export default function Home() {
                     {campaignSaving ? "Saving..." : "Save Draft"}
                   </button>
                 </div>
+                <label className="inline-flex items-center gap-2 text-xs text-gray-700">
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5"
+                    checked={campaignEditFromCurrentImage}
+                    onChange={e => setCampaignEditFromCurrentImage(e.target.checked)}
+                    disabled={campaignGenerating || !campaignHasAnyTarget || !campaignHasCurrentBaseImage}
+                  />
+                  <span>
+                    Keep current image as base (edit mode)
+                  </span>
+                </label>
+                {campaignEditFromCurrentImage ? (
+                  <div className="text-[11px] text-gray-600">
+                    Edits the current {CAMPAIGN_ASSET_TARGET_OPTIONS.find(opt => opt.value === campaignActiveTarget)?.label ?? "output"} using your prompt (for example date/text tweaks).
+                  </div>
+                ) : null}
+                {!campaignHasCurrentBaseImage ? (
+                  <div className="text-[11px] text-gray-500">
+                    Generate this output once first to enable edit mode.
+                  </div>
+                ) : null}
                 <div className="text-[11px] text-gray-500">
                   Generate creates/updates the selected output. Redo retries the same output.
                 </div>
