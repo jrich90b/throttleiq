@@ -71,7 +71,8 @@ input[type="reset"],
   --lr-surface-2: #141f32;
   --lr-border: rgba(255, 255, 255, 0.13);
   --lr-text: #e7edf8;
-  --lr-muted: #9ea9bc;
+  --lr-muted: #bbc8dd;
+  --lr-muted-strong: #dbe6f7;
   --lr-accent: #fb7f04;
   --lr-accent-soft: rgba(251, 127, 4, 0.18);
 }
@@ -102,6 +103,13 @@ input[type="reset"],
 .lr-campaign-theme .lr-campaign-list .text-gray-600,
 .lr-campaign-theme .lr-campaign-list .text-gray-700 {
   color: var(--lr-muted) !important;
+}
+
+.lr-campaign-theme .lr-campaign-content .text-gray-800,
+.lr-campaign-theme .lr-campaign-content .text-gray-900,
+.lr-campaign-theme .lr-campaign-list .text-gray-800,
+.lr-campaign-theme .lr-campaign-list .text-gray-900 {
+  color: var(--lr-muted-strong) !important;
 }
 
 .lr-campaign-theme .lr-campaign-panel,
