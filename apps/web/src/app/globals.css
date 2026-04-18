@@ -63,3 +63,131 @@ input[type="reset"],
 [role="button"] {
   cursor: pointer;
 }
+
+.lr-campaign-theme {
+  --lr-bg: #070b12;
+  --lr-bg-soft: #0d131f;
+  --lr-surface: #0f1827;
+  --lr-surface-2: #141f32;
+  --lr-border: rgba(255, 255, 255, 0.13);
+  --lr-text: #e7edf8;
+  --lr-muted: #9ea9bc;
+  --lr-accent: #fb7f04;
+  --lr-accent-soft: rgba(251, 127, 4, 0.18);
+}
+
+.lr-campaign-theme .lr-campaign-sidebar {
+  background:
+    radial-gradient(1200px 400px at 20% -10%, rgba(251, 127, 4, 0.12), transparent 50%),
+    linear-gradient(180deg, #0b101a 0%, #090d14 100%) !important;
+  border-right-color: var(--lr-border) !important;
+}
+
+.lr-campaign-theme .lr-campaign-main {
+  background:
+    radial-gradient(900px 380px at 75% -10%, rgba(251, 127, 4, 0.16), transparent 55%),
+    radial-gradient(800px 360px at 10% -20%, rgba(63, 126, 255, 0.14), transparent 55%),
+    linear-gradient(180deg, #090d14 0%, #070b12 100%) !important;
+}
+
+.lr-campaign-theme .lr-campaign-content,
+.lr-campaign-theme .lr-campaign-list {
+  color: var(--lr-text);
+}
+
+.lr-campaign-theme .lr-campaign-content .text-gray-500,
+.lr-campaign-theme .lr-campaign-content .text-gray-600,
+.lr-campaign-theme .lr-campaign-content .text-gray-700,
+.lr-campaign-theme .lr-campaign-list .text-gray-500,
+.lr-campaign-theme .lr-campaign-list .text-gray-600,
+.lr-campaign-theme .lr-campaign-list .text-gray-700 {
+  color: var(--lr-muted) !important;
+}
+
+.lr-campaign-theme .lr-campaign-panel,
+.lr-campaign-theme .lr-campaign-subpanel,
+.lr-campaign-theme .lr-campaign-list .border {
+  background: linear-gradient(180deg, rgba(15, 24, 39, 0.95), rgba(11, 18, 30, 0.95)) !important;
+  border-color: var(--lr-border) !important;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+}
+
+.lr-campaign-theme .lr-campaign-list .divide-y > * + * {
+  border-top-color: var(--lr-border) !important;
+}
+
+.lr-campaign-theme .lr-campaign-list .hover\:bg-\[var\(--surface-2\)\]:hover,
+.lr-campaign-theme .lr-campaign-list .hover\:bg-\[var\(--surface\)\]:hover {
+  background-color: rgba(255, 255, 255, 0.04) !important;
+}
+
+.lr-campaign-theme .lr-campaign-content input,
+.lr-campaign-theme .lr-campaign-content select,
+.lr-campaign-theme .lr-campaign-content textarea,
+.lr-campaign-theme .lr-campaign-list input,
+.lr-campaign-theme .lr-campaign-list select,
+.lr-campaign-theme .lr-campaign-list textarea {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border-color: var(--lr-border) !important;
+  color: var(--lr-text) !important;
+}
+
+.lr-campaign-theme .lr-campaign-content input::placeholder,
+.lr-campaign-theme .lr-campaign-content textarea::placeholder,
+.lr-campaign-theme .lr-campaign-list input::placeholder,
+.lr-campaign-theme .lr-campaign-list textarea::placeholder {
+  color: #8b97ac;
+}
+
+.lr-campaign-theme .lr-campaign-content .lr-campaign-btn,
+.lr-campaign-theme .lr-campaign-content .lr-campaign-list button,
+.lr-campaign-theme .lr-campaign-sidebar button {
+  border-color: var(--lr-border);
+}
+
+.lr-campaign-theme .lr-campaign-content .lr-campaign-btn-primary {
+  background: linear-gradient(180deg, #ff9229, #fb7f04) !important;
+  border-color: #fb7f04 !important;
+  color: #101522 !important;
+  font-weight: 600;
+}
+
+.lr-campaign-theme .lr-campaign-alert {
+  background: rgba(220, 38, 38, 0.12) !important;
+  border-color: rgba(248, 113, 113, 0.35) !important;
+}
+
+.lr-campaign-theme .lr-campaign-content a.border,
+.lr-campaign-theme .lr-campaign-content .border.rounded,
+.lr-campaign-theme .lr-campaign-content .border.rounded-lg,
+.lr-campaign-theme .lr-campaign-content .border.rounded-xl {
+  border-color: var(--lr-border) !important;
+}
+
+.lr-campaign-dialog {
+  background:
+    radial-gradient(640px 280px at 80% -10%, rgba(251, 127, 4, 0.15), transparent 55%),
+    linear-gradient(180deg, #0f1827, #0a111d) !important;
+  border-color: var(--lr-border) !important;
+  color: var(--lr-text) !important;
+}
+
+.lr-campaign-dialog .text-gray-500,
+.lr-campaign-dialog .text-gray-600,
+.lr-campaign-dialog .text-gray-700 {
+  color: var(--lr-muted) !important;
+}
+
+.lr-campaign-dialog .border,
+.lr-campaign-dialog input,
+.lr-campaign-dialog select,
+.lr-campaign-dialog textarea {
+  border-color: var(--lr-border) !important;
+}
+
+.lr-campaign-dialog input,
+.lr-campaign-dialog select,
+.lr-campaign-dialog textarea {
+  background: rgba(255, 255, 255, 0.03) !important;
+  color: var(--lr-text) !important;
+}

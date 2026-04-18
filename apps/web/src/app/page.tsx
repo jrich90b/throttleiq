@@ -9055,7 +9055,12 @@ export default function Home() {
   }
 
   return (
-    <main className="h-screen flex flex-col md:flex-row bg-[var(--background)] text-[var(--foreground)]">
+    <main
+      className={`h-screen flex flex-col md:flex-row bg-[var(--background)] text-[var(--foreground)] ${
+        section === "campaigns" ? "lr-campaign-theme" : ""
+      }`}
+      data-campaign-theme={section === "campaigns" ? "true" : "false"}
+    >
       {saveToast ? (
         <div className="fixed top-4 right-4 z-[60] px-3 py-2 rounded border bg-white text-sm shadow">
           {saveToast}
@@ -9302,7 +9307,10 @@ export default function Home() {
       <section
         className={`w-full ${
           section === "contacts" ? "md:w-[620px]" : "md:w-96"
-        } border-r border-[var(--border)] bg-[var(--surface)] p-4 overflow-y-auto shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${section === "calendar" ? "hidden" : ""} ${isConversationSection && mobilePanel === "detail" ? "hidden md:block" : ""}`}
+        } border-r border-[var(--border)] bg-[var(--surface)] p-4 overflow-y-auto shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${
+          section === "campaigns" ? "lr-campaign-sidebar" : ""
+        } ${section === "calendar" ? "hidden" : ""} ${isConversationSection && mobilePanel === "detail" ? "hidden md:block" : ""}`}
+        data-campaign-sidebar={section === "campaigns" ? "true" : "false"}
       >
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -9465,7 +9473,7 @@ export default function Home() {
             )}
           </div>
         ) : section === "campaigns" ? (
-          <div className="mt-4 space-y-3">
+          <div className="mt-4 space-y-3 lr-campaign-list">
             <div className="flex gap-2">
               <button
                 className="flex-1 px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)]"
@@ -11234,12 +11242,17 @@ export default function Home() {
       </section>
 
       <section
-        className={`flex-1 bg-[var(--surface)] shadow-[inset_0_1px_0_rgba(255,255,255,0.6)] ${
+        className={`flex-1 ${
+          section === "campaigns"
+            ? "bg-[#090d14] shadow-none lr-campaign-main"
+            : "bg-[var(--surface)] shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]"
+        } ${
           section === "calendar" ? "p-2 overflow-hidden" : "p-6 overflow-y-auto"
         } ${isConversationSection && mobilePanel === "list" ? "hidden md:block" : ""}`}
+        data-campaign-main={section === "campaigns" ? "true" : "false"}
       >
         {section === "campaigns" ? (
-          <div className="max-w-4xl mx-auto space-y-4">
+          <div className="max-w-4xl mx-auto space-y-4 lr-campaign-content">
             <div>
               <h2 className="text-xl font-semibold">Campaign Studio</h2>
               <p className="text-xs text-gray-500 mt-1">
@@ -11248,16 +11261,16 @@ export default function Home() {
             </div>
 
             {campaignError ? (
-              <div className="border border-red-200 rounded px-3 py-2 text-sm text-red-700 bg-red-50">
+              <div className="border border-red-200 rounded px-3 py-2 text-sm text-red-700 bg-red-50 lr-campaign-alert">
                 {campaignError}
               </div>
             ) : null}
             {metaError ? (
-              <div className="border border-red-200 rounded px-3 py-2 text-sm text-red-700 bg-red-50">
+              <div className="border border-red-200 rounded px-3 py-2 text-sm text-red-700 bg-red-50 lr-campaign-alert">
                 {metaError}
               </div>
             ) : null}
-            <div className="border rounded-xl bg-white p-4 md:p-5 space-y-4">
+            <div className="border rounded-xl bg-white p-4 md:p-5 space-y-4 lr-campaign-panel">
               <div className="text-xs font-semibold text-gray-700">1) Campaign setup</div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <label className="text-xs text-gray-600">
@@ -11297,7 +11310,7 @@ export default function Home() {
                 />
               </label>
 
-              <div className="border rounded-lg p-3 bg-gray-50 space-y-2">
+              <div className="border rounded-lg p-3 bg-gray-50 space-y-2 lr-campaign-subpanel">
                 <div className="text-xs font-semibold text-gray-700">2) Output format (one at a time)</div>
                 <div className="flex flex-wrap gap-2">
                   {CAMPAIGN_ASSET_TARGET_OPTIONS.map(opt => {
@@ -11344,7 +11357,7 @@ export default function Home() {
                 ) : null}
               </div>
 
-              <div className="border rounded-lg p-3 bg-gray-50 space-y-3">
+              <div className="border rounded-lg p-3 bg-gray-50 space-y-3 lr-campaign-subpanel">
                 <div className="flex flex-wrap items-center gap-2">
                   <div className="text-xs font-semibold text-gray-700">Optional reference material</div>
                   <label
@@ -11442,7 +11455,7 @@ export default function Home() {
                 ) : null}
               </div>
 
-              <div className="border rounded-lg p-3 bg-gray-50 space-y-3">
+              <div className="border rounded-lg p-3 bg-gray-50 space-y-3 lr-campaign-subpanel">
                 <div className="text-xs font-semibold text-gray-700">3) Generate assets</div>
                 {(() => {
                   const label = campaignActiveTarget
@@ -11478,7 +11491,7 @@ export default function Home() {
 
                 <div className="flex flex-wrap items-center gap-2">
                   <button
-                    className="px-3 py-2 border rounded text-sm bg-gray-900 text-white hover:bg-black disabled:opacity-60"
+                    className="px-3 py-2 border rounded text-sm bg-gray-900 text-white hover:bg-black disabled:opacity-60 lr-campaign-btn-primary"
                     onClick={() => {
                       void generateCampaign({
                         target: campaignActiveTarget,
@@ -11491,7 +11504,7 @@ export default function Home() {
                     {campaignGenerating ? "Generating..." : "Generate"}
                   </button>
                   <button
-                    className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
+                    className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60 lr-campaign-btn"
                     onClick={() => {
                       void generateCampaign({
                         target: campaignActiveTarget,
@@ -11504,7 +11517,7 @@ export default function Home() {
                     {campaignGenerating ? "Redoing..." : "Redo"}
                   </button>
                   <button
-                    className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
+                    className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60 lr-campaign-btn"
                     onClick={() => {
                       void saveCampaignDraft();
                     }}
@@ -11544,7 +11557,7 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="border rounded-xl bg-white p-4 md:p-5 space-y-4">
+            <div className="border rounded-xl bg-white p-4 md:p-5 space-y-4 lr-campaign-panel">
               <div className="flex items-center justify-between gap-3">
                 <div className="text-sm font-semibold">Generated Output</div>
                 <div className="text-[11px] text-gray-500 text-right">
@@ -11553,7 +11566,7 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="border rounded-lg p-3 bg-gray-50 space-y-3">
+              <div className="border rounded-lg p-3 bg-gray-50 space-y-3 lr-campaign-subpanel">
                 {campaignGeneratedAssets.length ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {campaignGeneratedAssets.map((asset, idx) => {
@@ -17020,7 +17033,7 @@ export default function Home() {
 
       {campaignQueueSendDialogCampaignId ? (
         <div className="fixed inset-0 z-[70] flex items-start sm:items-center justify-center bg-black/40 p-3 sm:p-4 overflow-y-auto">
-          <div className="w-full max-w-5xl rounded-lg bg-white shadow-lg border p-4 max-h-[94dvh] overflow-y-auto">
+          <div className="w-full max-w-5xl rounded-lg bg-white shadow-lg border p-4 max-h-[94dvh] overflow-y-auto lr-campaign-dialog">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-semibold">Send queued campaign assets</div>
@@ -17139,7 +17152,7 @@ export default function Home() {
 
       {campaignQueuePublishDialogCampaignId ? (
         <div className="fixed inset-0 z-[70] flex items-start sm:items-center justify-center bg-black/40 p-3 sm:p-4 overflow-y-auto">
-          <div className="w-full max-w-5xl rounded-lg bg-white shadow-lg border p-4 max-h-[94dvh] overflow-y-auto">
+          <div className="w-full max-w-5xl rounded-lg bg-white shadow-lg border p-4 max-h-[94dvh] overflow-y-auto lr-campaign-dialog">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-semibold">Publish queued post assets</div>
