@@ -17036,13 +17036,30 @@ export default function Home() {
               <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
                 {campaignQueuePublishDialogAssets.map((asset, idx) => {
                   const target = asset.target;
+                  const publishPlatform: "facebook" | "instagram" | "instagram_story" | null =
+                    target === "facebook_post"
+                      ? "facebook"
+                      : target === "instagram_post"
+                        ? "instagram"
+                        : target === "instagram_story"
+                          ? "instagram_story"
+                          : null;
+                  const publishLabel =
+                    publishPlatform === "facebook"
+                      ? "Publish Facebook Post"
+                      : publishPlatform === "instagram"
+                        ? "Publish Instagram Post"
+                        : publishPlatform === "instagram_story"
+                          ? "Publish Instagram Story"
+                          : "Unsupported post asset";
+                  const captionEnabled = publishPlatform !== "instagram_story";
                   const captionValue =
                     String(campaignQueuePublishCaptionByTarget[target] ?? "").trim() ||
                     campaignAutoPublishCaption(campaignQueuePublishDialogEntry);
-                  const busyFacebook = campaignQueueActionBusyKey === `post:${campaignQueuePublishDialogEntry.id}:${target}:facebook`;
-                  const busyInstagram = campaignQueueActionBusyKey === `post:${campaignQueuePublishDialogEntry.id}:${target}:instagram`;
-                  const busyStory = campaignQueueActionBusyKey === `post:${campaignQueuePublishDialogEntry.id}:${target}:instagram_story`;
-                  const isBusy = busyFacebook || busyInstagram || busyStory;
+                  const busyKey = publishPlatform
+                    ? `post:${campaignQueuePublishDialogEntry.id}:${target}:${publishPlatform}`
+                    : "";
+                  const isBusy = busyKey ? campaignQueueActionBusyKey === busyKey : false;
                   return (
                     <div key={`queue-publish-asset-${target}-${idx}`} className="border rounded-lg bg-white p-3 space-y-3">
                       <div className="text-xs font-semibold text-gray-700">{campaignAssetDisplayLabel(asset)}</div>
@@ -17059,44 +17076,29 @@ export default function Home() {
                           loading="lazy"
                         />
                       </a>
-                      <label className="block text-xs text-gray-600">
-                        Caption
-                        <textarea
-                          className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[88px]"
-                          value={captionValue}
-                          onChange={e => {
-                            const next = e.target.value;
-                            setCampaignQueuePublishCaptionByTarget(prev => ({ ...prev, [target]: next }));
-                          }}
-                        />
-                      </label>
+                      {captionEnabled ? (
+                        <label className="block text-xs text-gray-600">
+                          Caption
+                          <textarea
+                            className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[88px]"
+                            value={captionValue}
+                            onChange={e => {
+                              const next = e.target.value;
+                              setCampaignQueuePublishCaptionByTarget(prev => ({ ...prev, [target]: next }));
+                            }}
+                          />
+                        </label>
+                      ) : null}
                       <div className="flex flex-wrap items-center gap-2">
                         <button
                           className="px-3 py-2 border rounded text-xs bg-[var(--accent)] text-white border-[var(--accent)] hover:brightness-95 disabled:opacity-60"
-                          disabled={!metaStatus?.connected || Boolean(campaignQueueActionBusyKey)}
+                          disabled={!metaStatus?.connected || Boolean(campaignQueueActionBusyKey) || !publishPlatform}
                           onClick={() => {
-                            void publishQueuedCampaignAssetNow(campaignQueuePublishDialogEntry, target, "facebook");
+                            if (!publishPlatform) return;
+                            void publishQueuedCampaignAssetNow(campaignQueuePublishDialogEntry, target, publishPlatform);
                           }}
                         >
-                          {busyFacebook ? "Publishing..." : "Publish Facebook"}
-                        </button>
-                        <button
-                          className="px-3 py-2 border rounded text-xs bg-[var(--accent)] text-white border-[var(--accent)] hover:brightness-95 disabled:opacity-60"
-                          disabled={!metaStatus?.connected || Boolean(campaignQueueActionBusyKey)}
-                          onClick={() => {
-                            void publishQueuedCampaignAssetNow(campaignQueuePublishDialogEntry, target, "instagram");
-                          }}
-                        >
-                          {busyInstagram ? "Publishing..." : "Publish Instagram"}
-                        </button>
-                        <button
-                          className="px-3 py-2 border rounded text-xs hover:bg-[var(--surface-2)] disabled:opacity-60"
-                          disabled={!metaStatus?.connected || Boolean(campaignQueueActionBusyKey)}
-                          onClick={() => {
-                            void publishQueuedCampaignAssetNow(campaignQueuePublishDialogEntry, target, "instagram_story");
-                          }}
-                        >
-                          {busyStory ? "Publishing..." : "Publish Instagram Story"}
+                          {isBusy ? "Publishing..." : publishLabel}
                         </button>
                       </div>
                       {isBusy ? (
