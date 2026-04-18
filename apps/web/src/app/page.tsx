@@ -1570,6 +1570,23 @@ function campaignQueuedAtIso(entry: CampaignEntry | null | undefined, queue: Cam
   return String(entry?.updatedAt ?? entry?.createdAt ?? "").trim();
 }
 
+function campaignFindGeneratedAsset(
+  entry: CampaignEntry | null | undefined,
+  target: CampaignAssetTarget
+): CampaignGeneratedAsset | null {
+  if (!entry) return null;
+  const assets = Array.isArray(entry.generatedAssets) ? entry.generatedAssets : [];
+  const exact = assets.find(row => String(row?.target ?? "").trim() === target && String(row?.url ?? "").trim());
+  if (exact) return exact;
+  const fallbackUrl = String(entry.finalImageUrl ?? "").trim();
+  if (!fallbackUrl) return null;
+  return {
+    target,
+    label: CAMPAIGN_ASSET_TARGET_OPTIONS.find(opt => opt.value === target)?.label ?? target,
+    url: fallbackUrl
+  };
+}
+
 function campaignAutoPublishCaption(entry: CampaignEntry | null | undefined): string {
   if (!entry) return "";
   const meta = entry.metadata && typeof entry.metadata === "object" ? (entry.metadata as Record<string, unknown>) : null;
@@ -1684,12 +1701,11 @@ export default function Home() {
   const [metaLoading, setMetaLoading] = useState(false);
   const [metaActionBusy, setMetaActionBusy] = useState(false);
   const [metaError, setMetaError] = useState<string | null>(null);
-  const [campaignPublishCaption, setCampaignPublishCaption] = useState("");
-  const [campaignPublishAssetTarget, setCampaignPublishAssetTarget] = useState<"auto" | CampaignAssetTarget>("auto");
-  const [campaignPublishingPlatform, setCampaignPublishingPlatform] = useState<
-    "" | "facebook" | "instagram" | "instagram_story"
-  >("");
   const [campaignQueueActionBusyKey, setCampaignQueueActionBusyKey] = useState("");
+  const [campaignQueuePublishDialogCampaignId, setCampaignQueuePublishDialogCampaignId] = useState("");
+  const [campaignQueuePublishCaptionByTarget, setCampaignQueuePublishCaptionByTarget] = useState<
+    Partial<Record<CampaignAssetTarget, string>>
+  >({});
   const [campaignError, setCampaignError] = useState<string | null>(null);
   const [campaignSelectedId, setCampaignSelectedId] = useState("");
   const [campaignListFilter, setCampaignListFilter] = useState<"all" | CampaignQueueKind>("all");
@@ -1754,9 +1770,20 @@ export default function Home() {
     () => campaigns.find(row => row.id === campaignSelectedId) ?? null,
     [campaigns, campaignSelectedId]
   );
-  const campaignSelectedInPostQueue = useMemo(
-    () => campaignIsQueued(campaignSelectedEntry, "post"),
-    [campaignSelectedEntry]
+  const campaignQueuePublishDialogEntry = useMemo(
+    () => campaigns.find(row => row.id === campaignQueuePublishDialogCampaignId) ?? null,
+    [campaigns, campaignQueuePublishDialogCampaignId]
+  );
+  const campaignQueuePublishDialogTargets = useMemo(
+    () => campaignQueuedAssetTargetsForQueue(campaignQueuePublishDialogEntry, "post"),
+    [campaignQueuePublishDialogEntry]
+  );
+  const campaignQueuePublishDialogAssets = useMemo(
+    () =>
+      campaignQueuePublishDialogTargets
+        .map(target => campaignFindGeneratedAsset(campaignQueuePublishDialogEntry, target))
+        .filter((row): row is CampaignGeneratedAsset => Boolean(row?.url)),
+    [campaignQueuePublishDialogEntry, campaignQueuePublishDialogTargets]
   );
   const campaignSendQueue = useMemo(
     () =>
@@ -1805,40 +1832,7 @@ export default function Home() {
   );
   const campaignWantsSms = campaignSelectedTargets.has("sms");
   const campaignWantsEmail = campaignSelectedTargets.has("email");
-  const campaignWantsSocial =
-    campaignSelectedTargets.has("facebook_post") ||
-    campaignSelectedTargets.has("instagram_post") ||
-    campaignSelectedTargets.has("instagram_story");
   const campaignHasAnyTarget = campaignSelectedTargets.size > 0;
-  const campaignHasPublishAsset = campaignGeneratedAssets.length > 0 || Boolean(campaignFinalImageUrl);
-  const campaignSelectedQueuedPostTargets = useMemo(
-    () => campaignQueuedAssetTargetsForQueue(campaignSelectedEntry, "post"),
-    [campaignSelectedEntry]
-  );
-  const campaignSelectedQueuedPostTargetSet = useMemo(
-    () => new Set<CampaignAssetTarget>(campaignSelectedQueuedPostTargets),
-    [campaignSelectedQueuedPostTargets]
-  );
-  const campaignHasQueuedPostAsset = campaignSelectedQueuedPostTargets.length > 0;
-  const canPublishCampaign = Boolean(
-    campaignSelectedInPostQueue && metaStatus?.connected && campaignSelectedId && campaignHasPublishAsset && campaignHasQueuedPostAsset
-  );
-  const campaignPublishTargetOptions = useMemo(() => {
-    const restrictToQueued = campaignSelectedQueuedPostTargetSet.size > 0;
-    const seen = new Set<CampaignAssetTarget>();
-    const out: Array<{ value: CampaignAssetTarget; label: string }> = [];
-    for (const asset of campaignGeneratedAssets) {
-      const target = String(asset?.target ?? "").trim() as CampaignAssetTarget;
-      if (!target || seen.has(target)) continue;
-      if (restrictToQueued && !campaignSelectedQueuedPostTargetSet.has(target)) continue;
-      seen.add(target);
-      out.push({
-        value: target,
-        label: campaignAssetDisplayLabel(asset)
-      });
-    }
-    return out;
-  }, [campaignGeneratedAssets, campaignSelectedQueuedPostTargetSet]);
   const campaignNextPendingTarget = useMemo(() => {
     const selected = campaignSelectedTargetsOrdered;
     if (!selected.length) return null;
@@ -2307,8 +2301,6 @@ export default function Home() {
       setCampaignGeneratedAt("");
       setCampaignFinalImageUrl("");
       setCampaignGeneratedAssets([]);
-      setCampaignPublishCaption("");
-      setCampaignPublishAssetTarget("auto");
       return;
     }
     const buildMode: CampaignBuildMode =
@@ -2362,8 +2354,6 @@ export default function Home() {
     setCampaignGeneratedAt(String(entry.updatedAt ?? entry.createdAt ?? ""));
     setCampaignGeneratedAssets(generatedAssets);
     setCampaignFinalImageUrl(String(entry.finalImageUrl ?? "").trim() || generatedAssets[0]?.url || "");
-    setCampaignPublishCaption(String(entry.smsBody ?? "").trim());
-    setCampaignPublishAssetTarget("auto");
   }
 
   function resetCampaignDraft() {
@@ -2557,65 +2547,6 @@ export default function Home() {
     }
   }
 
-  async function publishCampaign(
-    platform: "facebook" | "instagram" | "instagram_story"
-  ) {
-    const campaignId = String(campaignSelectedId ?? "").trim();
-    if (!campaignId) {
-      setCampaignError("Select or save a campaign first.");
-      return;
-    }
-    setCampaignError(null);
-    setMetaError(null);
-    setCampaignPublishingPlatform(platform);
-    try {
-      const endpoint =
-        platform === "facebook"
-          ? `/api/campaigns/${encodeURIComponent(campaignId)}/publish/facebook`
-          : `/api/campaigns/${encodeURIComponent(campaignId)}/publish/instagram`;
-      const body: Record<string, unknown> = {};
-      const caption = String(campaignPublishCaption ?? "").trim();
-      if (caption) body.caption = caption;
-      if (campaignPublishAssetTarget !== "auto") body.assetTarget = campaignPublishAssetTarget;
-      if (platform === "instagram_story") body.mediaType = "story";
-      const resp = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      });
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok || !data?.ok) {
-        throw new Error(data?.error ?? "Failed to publish campaign");
-      }
-      const saved = (data?.campaign as CampaignEntry | undefined) ?? null;
-      if (saved) {
-        setCampaigns(prev => {
-          const idx = prev.findIndex(row => row.id === saved.id);
-          const next = idx >= 0 ? prev.map(row => (row.id === saved.id ? saved : row)) : [saved, ...prev];
-          return next.sort((a, b) => {
-            const aAt = new Date(String(a.updatedAt ?? a.createdAt ?? "")).getTime();
-            const bAt = new Date(String(b.updatedAt ?? b.createdAt ?? "")).getTime();
-            return bAt - aAt;
-          });
-        });
-        setCampaignSelectedId(saved.id);
-        applyCampaignToForm(saved);
-      }
-      const label =
-        platform === "facebook"
-          ? "Published to Facebook"
-          : platform === "instagram_story"
-            ? "Published to Instagram Story"
-            : "Published to Instagram";
-      setSaveToast(label);
-      await loadMetaStatus();
-    } catch (err: any) {
-      setCampaignError(err?.message ?? "Failed to publish campaign");
-    } finally {
-      setCampaignPublishingPlatform("");
-    }
-  }
-
   function openCampaignFromQueue(entry: CampaignEntry, queue: CampaignQueueKind, opts?: { toast?: boolean }) {
     goToSection("campaigns");
     setCampaignListFilter(queue);
@@ -2624,6 +2555,24 @@ export default function Home() {
     if (opts?.toast !== false) {
       setSaveToast(queue === "send" ? "Viewing Send Queue" : "Viewing Post Queue");
     }
+  }
+
+  function openPostQueuePublishDialog(entry: CampaignEntry) {
+    openCampaignFromQueue(entry, "post", { toast: false });
+    const autoCaption = campaignAutoPublishCaption(entry);
+    const captions: Partial<Record<CampaignAssetTarget, string>> = {};
+    for (const target of campaignQueuedAssetTargetsForQueue(entry, "post")) {
+      captions[target] = autoCaption;
+    }
+    setCampaignQueuePublishCaptionByTarget(captions);
+    setCampaignQueuePublishDialogCampaignId(entry.id);
+    void loadMetaStatus();
+  }
+
+  function closePostQueuePublishDialog() {
+    setCampaignQueuePublishDialogCampaignId("");
+    setCampaignQueuePublishCaptionByTarget({});
+    setCampaignQueueActionBusyKey("");
   }
 
   async function sendQueuedCampaignNow(entry: CampaignEntry) {
@@ -2693,40 +2642,31 @@ export default function Home() {
     }
   }
 
-  async function publishQueuedCampaignNow(entry: CampaignEntry) {
+  async function publishQueuedCampaignAssetNow(
+    entry: CampaignEntry,
+    target: CampaignAssetTarget,
+    platform: "facebook" | "instagram" | "instagram_story"
+  ) {
     const campaignId = String(entry.id ?? "").trim();
     if (!campaignId) return;
-    const busyKey = `post:${campaignId}`;
+    const busyKey = `post:${campaignId}:${target}:${platform}`;
     setCampaignQueueActionBusyKey(busyKey);
     setCampaignError(null);
+    setMetaError(null);
     try {
       const postTargets = campaignQueuedAssetTargetsForQueue(entry, "post");
-      if (!postTargets.length) throw new Error("No queued post assets for this campaign.");
-      const hasFacebook = postTargets.includes("facebook_post");
-      const hasInstagramPost = postTargets.includes("instagram_post");
-      const hasInstagramStory = postTargets.includes("instagram_story");
-      const platform: "facebook" | "instagram" | "instagram_story" = hasFacebook
-        ? "facebook"
-        : hasInstagramStory && !hasInstagramPost
-          ? "instagram_story"
-          : "instagram";
-      const preferredTarget: CampaignAssetTarget | undefined =
-        platform === "facebook"
-          ? (hasFacebook ? "facebook_post" : postTargets[0])
-          : platform === "instagram_story"
-            ? (hasInstagramStory ? "instagram_story" : postTargets[0])
-            : (hasInstagramPost ? "instagram_post" : postTargets[0]);
+      if (!postTargets.includes(target)) {
+        throw new Error("This asset is no longer queued for post.");
+      }
       const endpoint =
         platform === "facebook"
           ? `/api/campaigns/${encodeURIComponent(campaignId)}/publish/facebook`
           : `/api/campaigns/${encodeURIComponent(campaignId)}/publish/instagram`;
       const body: Record<string, unknown> = {};
-      if (preferredTarget) body.assetTarget = preferredTarget;
+      body.assetTarget = target;
       if (platform === "instagram_story") body.mediaType = "story";
-      const manualCaption =
-        campaignSelectedId === campaignId ? String(campaignPublishCaption ?? "").trim() : "";
-      const autoCaption = campaignAutoPublishCaption(entry);
-      const captionToUse = manualCaption || autoCaption;
+      const manualCaption = String(campaignQueuePublishCaptionByTarget[target] ?? "").trim();
+      const captionToUse = manualCaption || campaignAutoPublishCaption(entry);
       if (captionToUse && platform !== "instagram_story") body.caption = captionToUse;
       const resp = await fetch(endpoint, {
         method: "POST",
@@ -2737,43 +2677,47 @@ export default function Home() {
       if (!resp.ok || !data?.ok) {
         throw new Error(data?.error ?? "Failed to publish campaign");
       }
-      const dequeueTarget = preferredTarget ?? postTargets[0] ?? null;
-      if (dequeueTarget) {
-        const dequeueResp = await fetch(`/api/campaigns/${encodeURIComponent(campaignId)}/queue`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            target: dequeueTarget,
-            queue: "post",
-            action: "dequeue"
-          })
-        });
-        const dequeueData = await dequeueResp.json().catch(() => null);
-        if (dequeueResp.ok && dequeueData?.ok && dequeueData?.campaign) {
-          const saved = dequeueData.campaign as CampaignEntry;
-          setCampaigns(prev => {
-            const idx = prev.findIndex(row => row.id === saved.id);
-            const next = idx >= 0 ? prev.map(row => (row.id === saved.id ? saved : row)) : [saved, ...prev];
-            return next.sort((a, b) => {
-              const aAt = new Date(String(a.updatedAt ?? a.createdAt ?? "")).getTime();
-              const bAt = new Date(String(b.updatedAt ?? b.createdAt ?? "")).getTime();
-              return bAt - aAt;
-            });
+      const dequeueResp = await fetch(`/api/campaigns/${encodeURIComponent(campaignId)}/queue`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          target,
+          queue: "post",
+          action: "dequeue"
+        })
+      });
+      const dequeueData = await dequeueResp.json().catch(() => null);
+      if (dequeueResp.ok && dequeueData?.ok && dequeueData?.campaign) {
+        const saved = dequeueData.campaign as CampaignEntry;
+        setCampaigns(prev => {
+          const idx = prev.findIndex(row => row.id === saved.id);
+          const next = idx >= 0 ? prev.map(row => (row.id === saved.id ? saved : row)) : [saved, ...prev];
+          return next.sort((a, b) => {
+            const aAt = new Date(String(a.updatedAt ?? a.createdAt ?? "")).getTime();
+            const bAt = new Date(String(b.updatedAt ?? b.createdAt ?? "")).getTime();
+            return bAt - aAt;
           });
-          if (campaignSelectedId === saved.id) applyCampaignToForm(saved);
-        } else {
-          await loadCampaigns(campaignId);
+        });
+        if (campaignSelectedId === saved.id) applyCampaignToForm(saved);
+        if (!campaignIsQueued(saved, "post")) {
+          closePostQueuePublishDialog();
         }
       } else {
         await loadCampaigns(campaignId);
       }
+      setCampaignQueuePublishCaptionByTarget(prev => {
+        const next = { ...prev };
+        delete next[target];
+        return next;
+      });
       const label =
         platform === "facebook"
           ? "Published to Facebook"
           : platform === "instagram_story"
             ? "Published to Instagram Story"
             : "Published to Instagram";
-      setSaveToast(`${label}: ${entry.name || "campaign"}`);
+      setSaveToast(`${label}: ${entry.name || "campaign"} (${campaignAssetDisplayLabel({ target, url: "" })})`);
+      await loadMetaStatus();
     } catch (err: any) {
       setCampaignError(err?.message ?? "Failed to publish queued campaign");
     } finally {
@@ -9568,7 +9512,7 @@ export default function Home() {
                 <div className="px-3 py-2 text-xs font-semibold border-b">Post Queue</div>
                 <div className="divide-y max-h-32 overflow-y-auto">
                   {campaignPostQueue.map(item => {
-                    const actionBusy = campaignQueueActionBusyKey === `post:${item.id}`;
+                    const actionBusy = campaignQueueActionBusyKey.startsWith(`post:${item.id}:`);
                     return (
                       <div key={`post-queue-${item.id}`} className="flex items-stretch">
                         <button
@@ -9589,11 +9533,11 @@ export default function Home() {
                           className="px-2 text-[10px] border-l text-[var(--accent)] hover:bg-[var(--surface-2)] disabled:opacity-60"
                           disabled={Boolean(campaignQueueActionBusyKey) || actionBusy || campaignGenerating || campaignSaving}
                           onClick={() => {
-                            void publishQueuedCampaignNow(item);
+                            openPostQueuePublishDialog(item);
                           }}
-                          title="Publish now without opening campaign first"
+                          title="Open queued post publish window"
                         >
-                          {actionBusy ? "Publishing..." : "Publish now"}
+                          {actionBusy ? "Publishing..." : "Post…"}
                         </button>
                       </div>
                     );
@@ -11660,156 +11604,6 @@ export default function Home() {
                     })}
                   </div>
                 </div>
-              ) : null}
-
-              {campaignWantsSocial && !campaignSelectedInPostQueue ? (
-                <div className="text-[11px] text-gray-600 border rounded px-3 py-2 bg-gray-50">
-                  To publish on Facebook/Instagram, first queue at least one social file with{" "}
-                  <span className="font-semibold">Queue for Post</span> in Generated files.
-                </div>
-              ) : null}
-
-              {campaignSelectedInPostQueue ? (
-                <details className="border rounded-lg p-3 bg-gray-50" open={false}>
-                  <summary className="text-xs font-semibold text-gray-700 cursor-pointer">
-                    4) Publish queued post assets (optional)
-                  </summary>
-                  <div className="mt-3 space-y-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="text-[11px] text-gray-500">
-                        Connect once, then publish assets queued for Post.
-                      </div>
-                      <div className="text-xs">
-                        {metaLoading ? (
-                          <span className="px-2 py-1 rounded border bg-gray-50 text-gray-600">Checking...</span>
-                        ) : metaStatus?.connected ? (
-                          <span className="px-2 py-1 rounded border border-green-200 bg-green-50 text-green-700">
-                            Connected
-                          </span>
-                        ) : (
-                          <span className="px-2 py-1 rounded border border-gray-300 bg-gray-50 text-gray-600">
-                            Not connected
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {metaStatus?.connected ? (
-                      <div className="text-xs text-gray-600">
-                        <div>
-                          Page:{" "}
-                          <span className="font-medium text-gray-800">{metaStatus.pageName || metaStatus.pageId}</span>
-                        </div>
-                        <div className="mt-1">
-                          Instagram:{" "}
-                          <span className="font-medium text-gray-800">
-                            {metaStatus.instagramBusinessAccountUsername
-                              ? `@${metaStatus.instagramBusinessAccountUsername}`
-                              : metaStatus.hasInstagram
-                                ? "Connected"
-                                : "Not linked to page"}
-                          </span>
-                        </div>
-                      </div>
-                    ) : null}
-
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
-                        onClick={() => {
-                          void startMetaConnect();
-                        }}
-                        disabled={metaActionBusy}
-                      >
-                        {metaActionBusy ? "Opening..." : "Connect Meta"}
-                      </button>
-                      <button
-                        className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
-                        onClick={() => {
-                          void loadMetaStatus();
-                        }}
-                        disabled={metaLoading || metaActionBusy}
-                      >
-                        Refresh Meta
-                      </button>
-                      <button
-                        className="px-3 py-2 border rounded text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
-                        onClick={() => {
-                          void disconnectMeta();
-                        }}
-                        disabled={metaActionBusy || !metaStatus?.connected}
-                      >
-                        Disconnect
-                      </button>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      <label className="text-xs text-gray-600">
-                        Caption
-                        <textarea
-                          className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[88px]"
-                          placeholder="Caption used for Facebook/Instagram publish."
-                          value={campaignPublishCaption}
-                          onChange={e => setCampaignPublishCaption(e.target.value)}
-                        />
-                      </label>
-                      <label className="text-xs text-gray-600">
-                        Publish asset
-                        <select
-                          className="mt-1 w-full border rounded px-3 py-2 text-sm bg-white"
-                          value={campaignPublishAssetTarget}
-                          onChange={e =>
-                            setCampaignPublishAssetTarget(
-                              e.target.value === "auto" ? "auto" : (e.target.value as CampaignAssetTarget)
-                            )
-                          }
-                        >
-                          <option value="auto">Auto-pick best asset</option>
-                          {campaignPublishTargetOptions.map(opt => (
-                            <option key={`publish-asset-${opt.value}`} value={opt.value}>
-                              {opt.label}
-                            </option>
-                          ))}
-                        </select>
-                        <div className="text-[11px] text-gray-500 mt-1">
-                          {campaignHasQueuedPostAsset
-                            ? "Queued post assets found for this campaign."
-                            : "Queue at least one social asset as Post before publishing."}
-                        </div>
-                      </label>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-white border-[var(--accent)] hover:brightness-95 disabled:opacity-60"
-                        disabled={!canPublishCampaign || campaignPublishingPlatform !== ""}
-                        onClick={() => {
-                          void publishCampaign("facebook");
-                        }}
-                      >
-                        {campaignPublishingPlatform === "facebook" ? "Publishing..." : "Publish Facebook"}
-                      </button>
-                      <button
-                        className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-white border-[var(--accent)] hover:brightness-95 disabled:opacity-60"
-                        disabled={!canPublishCampaign || campaignPublishingPlatform !== ""}
-                        onClick={() => {
-                          void publishCampaign("instagram");
-                        }}
-                      >
-                        {campaignPublishingPlatform === "instagram" ? "Publishing..." : "Publish Instagram"}
-                      </button>
-                      <button
-                        className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
-                        disabled={!canPublishCampaign || campaignPublishingPlatform !== ""}
-                        onClick={() => {
-                          void publishCampaign("instagram_story");
-                        }}
-                      >
-                        {campaignPublishingPlatform === "instagram_story" ? "Publishing..." : "Publish Instagram Story"}
-                      </button>
-                    </div>
-                  </div>
-                </details>
               ) : null}
 
               {campaignWantsSms ? (
@@ -17156,6 +16950,163 @@ export default function Home() {
                 {composeSending ? "Sending…" : composeSmsAttachmentsBusy ? "Processing…" : "Send SMS"}
               </button>
             </div>
+          </div>
+        </div>
+      ) : null}
+
+      {campaignQueuePublishDialogCampaignId ? (
+        <div className="fixed inset-0 z-[70] flex items-start sm:items-center justify-center bg-black/40 p-3 sm:p-4 overflow-y-auto">
+          <div className="w-full max-w-5xl rounded-lg bg-white shadow-lg border p-4 max-h-[94dvh] overflow-y-auto">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold">Publish queued post assets</div>
+                <div className="text-xs text-gray-500">
+                  {campaignQueuePublishDialogEntry?.name || "Selected campaign"}
+                </div>
+              </div>
+              <button
+                className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)]"
+                onClick={closePostQueuePublishDialog}
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-3 border rounded-lg p-3 bg-gray-50">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs text-gray-600">
+                  Connect once, then publish assets queued for Post.
+                </div>
+                <div className="text-xs">
+                  {metaLoading ? (
+                    <span className="px-2 py-1 rounded border bg-gray-50 text-gray-600">Checking...</span>
+                  ) : metaStatus?.connected ? (
+                    <span className="px-2 py-1 rounded border border-green-200 bg-green-50 text-green-700">
+                      Connected
+                    </span>
+                  ) : (
+                    <span className="px-2 py-1 rounded border border-gray-300 bg-gray-50 text-gray-600">
+                      Not connected
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 mt-2">
+                <button
+                  className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
+                  onClick={() => {
+                    void startMetaConnect();
+                  }}
+                  disabled={metaActionBusy}
+                >
+                  {metaActionBusy ? "Opening..." : "Connect Meta"}
+                </button>
+                <button
+                  className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
+                  onClick={() => {
+                    void loadMetaStatus();
+                  }}
+                  disabled={metaLoading || metaActionBusy}
+                >
+                  Refresh Meta
+                </button>
+                <button
+                  className="px-3 py-2 border rounded text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
+                  onClick={() => {
+                    void disconnectMeta();
+                  }}
+                  disabled={metaActionBusy || !metaStatus?.connected}
+                >
+                  Disconnect
+                </button>
+              </div>
+              {metaError ? <div className="text-xs text-red-600 mt-2">{metaError}</div> : null}
+            </div>
+
+            {!campaignQueuePublishDialogEntry ? (
+              <div className="mt-3 text-sm text-gray-600 border rounded p-3 bg-[var(--surface-2)]">
+                Campaign not found. Refresh and try again.
+              </div>
+            ) : campaignQueuePublishDialogAssets.length === 0 ? (
+              <div className="mt-3 text-sm text-gray-600 border rounded p-3 bg-[var(--surface-2)]">
+                No queued post assets found for this campaign.
+              </div>
+            ) : (
+              <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                {campaignQueuePublishDialogAssets.map((asset, idx) => {
+                  const target = asset.target;
+                  const captionValue =
+                    String(campaignQueuePublishCaptionByTarget[target] ?? "").trim() ||
+                    campaignAutoPublishCaption(campaignQueuePublishDialogEntry);
+                  const busyFacebook = campaignQueueActionBusyKey === `post:${campaignQueuePublishDialogEntry.id}:${target}:facebook`;
+                  const busyInstagram = campaignQueueActionBusyKey === `post:${campaignQueuePublishDialogEntry.id}:${target}:instagram`;
+                  const busyStory = campaignQueueActionBusyKey === `post:${campaignQueuePublishDialogEntry.id}:${target}:instagram_story`;
+                  const isBusy = busyFacebook || busyInstagram || busyStory;
+                  return (
+                    <div key={`queue-publish-asset-${target}-${idx}`} className="border rounded-lg bg-white p-3 space-y-3">
+                      <div className="text-xs font-semibold text-gray-700">{campaignAssetDisplayLabel(asset)}</div>
+                      <a
+                        href={asset.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block border rounded overflow-hidden bg-gray-50"
+                      >
+                        <img
+                          src={asset.url}
+                          alt={campaignAssetDisplayLabel(asset)}
+                          className="w-full max-h-[340px] object-contain bg-white"
+                          loading="lazy"
+                        />
+                      </a>
+                      <label className="block text-xs text-gray-600">
+                        Caption
+                        <textarea
+                          className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[88px]"
+                          value={captionValue}
+                          onChange={e => {
+                            const next = e.target.value;
+                            setCampaignQueuePublishCaptionByTarget(prev => ({ ...prev, [target]: next }));
+                          }}
+                        />
+                      </label>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          className="px-3 py-2 border rounded text-xs bg-[var(--accent)] text-white border-[var(--accent)] hover:brightness-95 disabled:opacity-60"
+                          disabled={!metaStatus?.connected || Boolean(campaignQueueActionBusyKey)}
+                          onClick={() => {
+                            void publishQueuedCampaignAssetNow(campaignQueuePublishDialogEntry, target, "facebook");
+                          }}
+                        >
+                          {busyFacebook ? "Publishing..." : "Publish Facebook"}
+                        </button>
+                        <button
+                          className="px-3 py-2 border rounded text-xs bg-[var(--accent)] text-white border-[var(--accent)] hover:brightness-95 disabled:opacity-60"
+                          disabled={!metaStatus?.connected || Boolean(campaignQueueActionBusyKey)}
+                          onClick={() => {
+                            void publishQueuedCampaignAssetNow(campaignQueuePublishDialogEntry, target, "instagram");
+                          }}
+                        >
+                          {busyInstagram ? "Publishing..." : "Publish Instagram"}
+                        </button>
+                        <button
+                          className="px-3 py-2 border rounded text-xs hover:bg-[var(--surface-2)] disabled:opacity-60"
+                          disabled={!metaStatus?.connected || Boolean(campaignQueueActionBusyKey)}
+                          onClick={() => {
+                            void publishQueuedCampaignAssetNow(campaignQueuePublishDialogEntry, target, "instagram_story");
+                          }}
+                        >
+                          {busyStory ? "Publishing..." : "Publish Instagram Story"}
+                        </button>
+                      </div>
+                      {isBusy ? (
+                        <div className="text-[11px] text-gray-500">Publishing selected asset…</div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       ) : null}
