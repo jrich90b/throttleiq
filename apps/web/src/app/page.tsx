@@ -1468,6 +1468,39 @@ function campaignQueueEntry(
   return row as Record<string, unknown>;
 }
 
+function campaignQueueKindForAssetTarget(target: CampaignAssetTarget): CampaignQueueKind | null {
+  if (target === "sms" || target === "email") return "send";
+  if (target === "facebook_post" || target === "instagram_post" || target === "instagram_story") {
+    return "post";
+  }
+  return null;
+}
+
+function campaignAssetQueueEntry(
+  entry: CampaignEntry | null | undefined,
+  target: CampaignAssetTarget
+): Record<string, unknown> | null {
+  const meta = entry?.metadata;
+  if (!meta || typeof meta !== "object") return null;
+  const root = (meta as any)?.assetQueue;
+  if (!root || typeof root !== "object") return null;
+  const row = (root as any)?.[target];
+  if (!row || typeof row !== "object") return null;
+  return row as Record<string, unknown>;
+}
+
+function campaignAssetIsQueued(entry: CampaignEntry | null | undefined, target: CampaignAssetTarget): boolean {
+  const row = campaignAssetQueueEntry(entry, target);
+  return String(row?.status ?? "").trim().toLowerCase() === "queued";
+}
+
+function campaignAssetQueuedAtIso(entry: CampaignEntry | null | undefined, target: CampaignAssetTarget): string {
+  const row = campaignAssetQueueEntry(entry, target);
+  const iso = String(row?.queuedAt ?? row?.updatedAt ?? "").trim();
+  if (iso) return iso;
+  return String(entry?.updatedAt ?? entry?.createdAt ?? "").trim();
+}
+
 function campaignIsQueued(entry: CampaignEntry | null | undefined, queue: CampaignQueueKind): boolean {
   const row = campaignQueueEntry(entry, queue);
   return String(row?.status ?? "").trim().toLowerCase() === "queued";
@@ -1561,6 +1594,8 @@ export default function Home() {
   const [campaignSaving, setCampaignSaving] = useState(false);
   const [campaignGenerating, setCampaignGenerating] = useState(false);
   const [campaignQueueBusy, setCampaignQueueBusy] = useState<CampaignQueueKind | "">("");
+  const [campaignAssetQueueBusyTarget, setCampaignAssetQueueBusyTarget] =
+    useState<CampaignAssetTarget | "">("");
   const [campaignDeletingId, setCampaignDeletingId] = useState("");
   const [campaignInspirationUploadBusy, setCampaignInspirationUploadBusy] = useState(false);
   const [campaignAssetUploadBusy, setCampaignAssetUploadBusy] = useState(false);
@@ -2624,6 +2659,60 @@ export default function Home() {
       setCampaignError(err?.message ?? "Failed to update campaign queue");
     } finally {
       setCampaignQueueBusy("");
+    }
+  }
+
+  async function setCampaignAssetQueue(target: CampaignAssetTarget, shouldQueue: boolean) {
+    const id = String(campaignSelectedId ?? "").trim();
+    if (!id) {
+      setCampaignError("Save the campaign first, then queue generated files.");
+      return;
+    }
+    const queue = campaignQueueKindForAssetTarget(target);
+    if (!queue) {
+      setCampaignError("This output type is download-only and cannot be queued.");
+      return;
+    }
+    setCampaignAssetQueueBusyTarget(target);
+    setCampaignError(null);
+    try {
+      const resp = await fetch(`/api/campaigns/${encodeURIComponent(id)}/queue`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          target,
+          queue,
+          action: shouldQueue ? "queue" : "dequeue"
+        })
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.ok || !data?.campaign) {
+        throw new Error(data?.error ?? "Failed to update generated file queue");
+      }
+      const saved = data.campaign as CampaignEntry;
+      setCampaigns(prev => {
+        const idx = prev.findIndex(row => row.id === saved.id);
+        const next = idx >= 0 ? prev.map(row => (row.id === saved.id ? saved : row)) : [saved, ...prev];
+        return next.sort((a, b) => {
+          const aAt = new Date(String(a.updatedAt ?? a.createdAt ?? "")).getTime();
+          const bAt = new Date(String(b.updatedAt ?? b.createdAt ?? "")).getTime();
+          return bAt - aAt;
+        });
+      });
+      if (campaignSelectedId === saved.id) applyCampaignToForm(saved);
+      const targetLabel =
+        CAMPAIGN_ASSET_TARGET_OPTIONS.find(opt => opt.value === target)?.label ?? campaignAssetDisplayLabel({ target, url: "" });
+      setSaveToast(
+        shouldQueue
+          ? queue === "send"
+            ? `${targetLabel} queued for send`
+            : `${targetLabel} queued for post`
+          : `${targetLabel} removed from queue`
+      );
+    } catch (err: any) {
+      setCampaignError(err?.message ?? "Failed to update generated file queue");
+    } finally {
+      setCampaignAssetQueueBusyTarget("");
     }
   }
 
@@ -11177,10 +11266,42 @@ export default function Home() {
                     {campaignGeneratedAssets.map((asset, idx) => {
                       const label = campaignAssetDisplayLabel(asset);
                       const meta = [asset.mimeType].filter(Boolean).join(" • ");
+                      const queueKind = campaignQueueKindForAssetTarget(asset.target);
+                      const queueable = Boolean(queueKind);
+                      const queued = queueable ? campaignAssetIsQueued(campaignSelectedEntry, asset.target) : false;
+                      const queuedAtIso = queueable ? campaignAssetQueuedAtIso(campaignSelectedEntry, asset.target) : "";
+                      const queueBusy = campaignAssetQueueBusyTarget === asset.target;
+                      const queueLabel =
+                        queueKind === "send"
+                          ? "Queue for Send"
+                          : queueKind === "post"
+                            ? "Queue for Post"
+                            : "Download only";
                       return (
                         <div key={`campaign-generated-asset-${asset.target}-${idx}`} className="border rounded px-3 py-2 bg-gray-50">
                           <div className="text-xs font-semibold">{label}</div>
                           {meta ? <div className="text-[11px] text-gray-500 mt-0.5">{meta}</div> : null}
+                          {queueable ? (
+                            <label className="flex items-center gap-2 mt-2 text-xs text-gray-700">
+                              <input
+                                type="checkbox"
+                                className="h-3.5 w-3.5"
+                                checked={queued}
+                                disabled={!campaignSelectedId || queueBusy}
+                                onChange={e => {
+                                  void setCampaignAssetQueue(asset.target, e.target.checked);
+                                }}
+                              />
+                              <span>{queueBusy ? "Saving..." : queueLabel}</span>
+                            </label>
+                          ) : (
+                            <div className="text-[11px] text-gray-500 mt-2">{queueLabel}</div>
+                          )}
+                          {queueable && queued ? (
+                            <div className="text-[11px] text-green-700 mt-1">
+                              Queued {queuedAtIso ? new Date(queuedAtIso).toLocaleString() : "now"}
+                            </div>
+                          ) : null}
                           <div className="flex items-center gap-2 mt-2">
                             <a
                               className="px-2 py-1 border rounded text-xs hover:bg-white"

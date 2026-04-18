@@ -16157,9 +16157,22 @@ function withCampaignPublishMetadata(
 type CampaignQueueKind = "send" | "post";
 type CampaignQueueAction = "queue" | "dequeue";
 
+function campaignQueueKindForAssetTarget(target: CampaignAssetTarget): CampaignQueueKind | null {
+  if (target === "sms" || target === "email") return "send";
+  if (target === "facebook_post" || target === "instagram_post" || target === "instagram_story") {
+    return "post";
+  }
+  return null;
+}
+
 function withCampaignQueueMetadata(
   campaign: any,
-  args: { queue: CampaignQueueKind; action: CampaignQueueAction; user: any }
+  args: {
+    queue: CampaignQueueKind;
+    action: CampaignQueueAction;
+    user: any;
+    target?: CampaignAssetTarget | null;
+  }
 ): Record<string, unknown> {
   const nowIso = new Date().toISOString();
   const prevMeta =
@@ -16194,6 +16207,29 @@ function withCampaignQueueMetadata(
           clearedByUserName: actorName || undefined,
           updatedAt: nowIso
         };
+  const target = args.target ?? null;
+  if (target) {
+    const prevAssetQueue =
+      prevMeta.assetQueue && typeof prevMeta.assetQueue === "object"
+        ? (prevMeta.assetQueue as Record<string, unknown>)
+        : {};
+    const queueKind = campaignQueueKindForAssetTarget(target) ?? args.queue;
+    historyEntry.target = target;
+    historyEntry.queue = queueKind;
+    const assetQueueEntry = {
+      ...queueEntry,
+      queue: queueKind,
+      target
+    };
+    return {
+      ...prevMeta,
+      assetQueue: {
+        ...prevAssetQueue,
+        [target]: assetQueueEntry
+      },
+      queueHistory: [...prevHistory.slice(-49), historyEntry]
+    };
+  }
   return {
     ...prevMeta,
     queue: {
@@ -21642,15 +21678,20 @@ app.patch("/campaigns/:id", requireManager, (req, res) => {
 app.post("/campaigns/:id/queue", requireManager, (req, res) => {
   const campaign = getCampaign(String(req.params.id ?? "").trim());
   if (!campaign) return res.status(404).json({ ok: false, error: "Campaign not found" });
+  const target =
+    normalizeSingleCampaignAssetTarget(req.body?.target) ??
+    normalizeSingleCampaignAssetTarget(req.body?.assetTarget);
+  const inferredQueue = target ? campaignQueueKindForAssetTarget(target) : null;
   const queueRaw = String(req.body?.queue ?? "").trim().toLowerCase();
   const actionRaw = String(req.body?.action ?? "queue").trim().toLowerCase();
-  const queue: CampaignQueueKind | null = queueRaw === "send" || queueRaw === "post" ? queueRaw : null;
+  const queue: CampaignQueueKind | null =
+    inferredQueue ?? (queueRaw === "send" || queueRaw === "post" ? queueRaw : null);
   const action: CampaignQueueAction | null = actionRaw === "queue" || actionRaw === "dequeue" ? actionRaw : null;
   if (!queue) return res.status(400).json({ ok: false, error: "Invalid queue. Use 'send' or 'post'" });
   if (!action) return res.status(400).json({ ok: false, error: "Invalid action. Use 'queue' or 'dequeue'" });
   const user = (req as any).user ?? null;
   const updated = updateCampaign(campaign.id, {
-    metadata: withCampaignQueueMetadata(campaign, { queue, action, user })
+    metadata: withCampaignQueueMetadata(campaign, { queue, action, user, target })
   });
   if (!updated) return res.status(404).json({ ok: false, error: "Campaign not found" });
   return res.json({ ok: true, campaign: updated });
