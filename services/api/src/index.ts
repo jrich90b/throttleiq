@@ -20675,24 +20675,13 @@ async function normalizeCampaignImageForExactFrame(
         } catch {
           sampled = { r: 24, g: 24, b: 24 };
         }
-        const bg = await sharp({
-          create: {
-            width,
-            height,
-            channels: 3,
-            background: sampled
-          }
-        }).toBuffer();
-        const fg = await rotated
-          .clone()
+        // Keep this branch single-pass to avoid secondary decode/composite failures on odd source buffers.
+        return rotated
           .resize(width, height, {
             fit: "contain",
             position: "centre",
-            background: { r: 0, g: 0, b: 0, alpha: 0 }
+            background: { r: sampled.r, g: sampled.g, b: sampled.b, alpha: 1 }
           })
-          .toBuffer();
-        return sharp(bg)
-          .composite([{ input: fg, blend: "over" }])
           .jpeg({ quality: q, mozjpeg: true, chromaSubsampling: "4:2:0" })
           .toBuffer();
       }
