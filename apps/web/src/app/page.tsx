@@ -11318,13 +11318,16 @@ export default function Home() {
                     return (
                       <label
                         key={`campaign-asset-target-${opt.value}`}
-                        className={`inline-flex items-center gap-2 border rounded px-2.5 py-1.5 text-xs ${
-                          isChecked ? "bg-white border-gray-400" : "bg-gray-100 border-gray-300"
+                        className={`inline-flex items-center gap-2 border rounded px-2.5 py-1.5 text-xs transition-colors ${
+                          isChecked
+                            ? "bg-[var(--lr-accent)] text-[#101522] border-[var(--lr-accent)] font-semibold"
+                            : "bg-transparent text-gray-100 border-[rgba(255,255,255,0.32)]"
                         } cursor-pointer`}
                       >
                         <input
                           type="radio"
                           name="campaign-output-target"
+                          className="h-3.5 w-3.5 accent-[var(--lr-accent)]"
                           checked={isChecked}
                           onChange={() =>
                             setCampaignForm(prev => {
