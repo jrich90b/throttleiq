@@ -768,6 +768,31 @@ function buildSearchQuery(input: GenerateCampaignInput): string {
   return "motorcycle dealer promotion";
 }
 
+function buildLogoSearchQuery(input: GenerateCampaignInput): string {
+  const dealerName = normalizeText(input.dealerProfile?.dealerName);
+  const websiteHost = parseHostFromUrl(input.dealerProfile?.website);
+  const refHosts = Array.isArray(input.dealerProfile?.webSearch?.referenceUrls)
+    ? input.dealerProfile!.webSearch!.referenceUrls!
+        .map(v => {
+          const parsed = parseHostFromUrl(v);
+          if (parsed) return parsed;
+          return normalizeText(v).toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
+        })
+        .filter(Boolean)
+    : [];
+  const hostHint = websiteHost || refHosts[0] || "";
+  if (dealerName && hostHint) {
+    return `"${dealerName}" logo site:${hostHint}`;
+  }
+  if (dealerName) {
+    return `"${dealerName}" motorcycle dealership logo`;
+  }
+  if (hostHint) {
+    return `site:${hostHint} logo`;
+  }
+  return "";
+}
+
 function deriveTopicFromSourceHits(sourceHits: CampaignSourceHit[]): string {
   for (const hit of sourceHits) {
     const title = normalizeText(hit.title);
@@ -1056,6 +1081,7 @@ export async function generateCampaignContent(input: GenerateCampaignInput): Pro
   const brandContext = await fetchDealerBrandContext(input.dealerProfile ?? null);
   const briefContexts = await collectBriefContexts(normalizeUrls(input.briefDocumentUrls));
   const shouldRunWebSearch = input.buildMode === "web_search_design";
+  const shouldRunLogoSearch = input.buildMode === "design_from_scratch";
   const userProvidedInspiration = normalizeUrls(input.inspirationImageUrls);
   const userProvidedAssetImages = normalizeUrls(input.assetImageUrls);
   const hasUserReferenceOverride = userProvidedInspiration.length > 0 || userProvidedAssetImages.length > 0;
@@ -1075,7 +1101,17 @@ export async function generateCampaignContent(input: GenerateCampaignInput): Pro
           maxResults: 6
         })
       : null;
+  const logoSearchQuery = shouldRunLogoSearch ? buildLogoSearchQuery(input) : "";
+  const logoSearchResult =
+    shouldRunLogoSearch && logoSearchQuery
+      ? await searchGoogleCse({
+          query: logoSearchQuery,
+          profile: input.dealerProfile ?? undefined,
+          maxResults: Math.max(2, Math.min(8, Number(process.env.CAMPAIGN_LOGO_SEARCH_MAX_RESULTS ?? 6)))
+        })
+      : null;
   const sourceHits = filterSourceHitsByTags(toSourceHits(searchResult), input.tags, suppressTradeOnly);
+  const logoSourceHits = filterSourceHitsByTags(toSourceHits(logoSearchResult), input.tags, suppressTradeOnly);
   const placeDiscoveredInspiration = shouldRunWebSearch
     ? filterImageUrlsByTags(googlePlacePhotos.photoUrls, input.tags, suppressTradeOnly)
     : [];
@@ -1096,10 +1132,32 @@ export async function generateCampaignContent(input: GenerateCampaignInput): Pro
           suppressTradeOnly
         )
       : [];
+  const logoBrandInspiration = shouldRunLogoSearch
+    ? filterImageUrlsByTags(
+        normalizeUrls(brandContext.logoImageUrls).slice(0, Math.max(1, Number(process.env.CAMPAIGN_BRAND_LOGO_MAX ?? 3))),
+        input.tags,
+        suppressTradeOnly
+      )
+    : [];
+  const logoSearchInspiration = shouldRunLogoSearch
+    ? filterImageUrlsByTags(
+        await collectImageCandidatesFromHits(logoSourceHits, {
+          maxImages: Math.max(1, Math.min(8, Number(process.env.CAMPAIGN_LOGO_IMAGE_MAX ?? 4)))
+        }),
+        input.tags,
+        suppressTradeOnly
+      )
+    : [];
   const resolvedInspirationImageUrls = userProvidedInspiration.length
-    ? userProvidedInspiration
+    ? Array.from(new Set([...userProvidedInspiration, ...logoBrandInspiration, ...logoSearchInspiration]))
     : Array.from(
-        new Set([...placeDiscoveredInspiration, ...websiteDiscoveredInspiration, ...autoDiscoveredInspiration])
+        new Set([
+          ...placeDiscoveredInspiration,
+          ...websiteDiscoveredInspiration,
+          ...autoDiscoveredInspiration,
+          ...logoBrandInspiration,
+          ...logoSearchInspiration
+        ])
       ).slice(
         0,
         Math.max(1, Number(process.env.CAMPAIGN_FINAL_IMAGE_MAX ?? 6))
@@ -1121,7 +1179,9 @@ export async function generateCampaignContent(input: GenerateCampaignInput): Pro
     );
     withPlacesMeta.metadata = {
       ...(withPlacesMeta.metadata ?? {}),
-      googlePlaceForcedForDealerEvent: forcePlacePhotos
+      googlePlaceForcedForDealerEvent: forcePlacePhotos,
+      logoSearchQuery: logoSearchQuery || null,
+      logoSourceCount: logoSourceHits.length
     };
     return suppressTradeOnly
       ? applyNoTradeLanguageGuard(withPlacesMeta, input.dealerProfile?.dealerName)
@@ -1143,7 +1203,9 @@ export async function generateCampaignContent(input: GenerateCampaignInput): Pro
   );
   withPlacesMeta.metadata = {
     ...(withPlacesMeta.metadata ?? {}),
-    googlePlaceForcedForDealerEvent: forcePlacePhotos
+    googlePlaceForcedForDealerEvent: forcePlacePhotos,
+    logoSearchQuery: logoSearchQuery || null,
+    logoSourceCount: logoSourceHits.length
   };
   return suppressTradeOnly
     ? applyNoTradeLanguageGuard(withPlacesMeta, input.dealerProfile?.dealerName)

@@ -21556,10 +21556,12 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
   let generatedAssets: CampaignGeneratedAsset[] = [];
   let missingRequestedAssetTargets: CampaignAssetTarget[] = [];
   if (shouldAttemptImageFallback && imageTargetsRequested) {
+    const strictReferenceLock =
+      buildMode === "design_from_scratch" && (inspirationImageUrls.length > 0 || assetImageUrls.length > 0);
     const referenceImageUrls = normalizeCampaignUrlArray([
-      ...(generated.inspirationImageUrls ?? []),
       ...(inspirationImageUrls ?? []),
-      ...(assetImageUrls ?? [])
+      ...(assetImageUrls ?? []),
+      ...(generated.inspirationImageUrls ?? [])
     ]);
     const uniqueTargets = requestedAssetTargets.slice();
     const styleLockAnchorTarget =
@@ -21585,15 +21587,18 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     ): Promise<TargetRenderResult | null> => {
       const targetAssetTargets: CampaignAssetTarget[] = [target];
       const targetLabel = campaignAssetTargetLabel(target);
-      const styleLockDirective: string | undefined = styleLockRefUrl
-        ? `Style-lock requirement: match the same campaign theme, color palette, brand look, and message hierarchy as the reference image while adapting composition to ${targetLabel}. Keep headline/offer intent consistent across all outputs.`
+      const strictReferenceDirective = strictReferenceLock
+        ? `Reference-lock requirement (critical): use uploaded reference images as the primary visual source of truth. Closely match core subject, style, color palette, typography hierarchy, and branding cues. Do not drift to unrelated concepts, products, scenes, or text. Adapt composition for ${targetLabel} while preserving the same campaign identity.`
+        : undefined;
+      const styleLockDirective = styleLockRefUrl
+        ? `Style-lock requirement: match the same campaign theme, color palette, brand look, and message hierarchy as the anchor image while adapting composition to ${targetLabel}. Keep headline/offer intent consistent across all outputs.`
         : undefined;
       const targetPrompt: string | undefined =
-        [prompt, styleLockDirective]
+        [prompt, strictReferenceDirective, styleLockDirective]
           .filter((value): value is string => Boolean(String(value ?? "").trim()))
           .join("\n\n") || undefined;
       const targetDescription: string | undefined =
-        [description, styleLockDirective]
+        [description, strictReferenceDirective, styleLockDirective]
           .filter((value): value is string => Boolean(String(value ?? "").trim()))
           .join("\n\n") || undefined;
       const targetReferenceImageUrls = normalizeCampaignUrlArray([
@@ -21619,7 +21624,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       const hasReferenceAnchors = targetReferenceImageUrls.length > 0;
       const allowReflessOpenAiFallback =
         String(process.env.CAMPAIGN_ALLOW_REFERENCELESS_OPENAI_FALLBACK ?? "0").trim() === "1";
-      const canUseOpenAiFallback = !hasReferenceAnchors || allowReflessOpenAiFallback;
+      const canUseOpenAiFallback = (!hasReferenceAnchors || allowReflessOpenAiFallback) && !strictReferenceLock;
       const generatedImageUrl: string | null =
         generatedImageUrlNano ||
         (canUseOpenAiFallback
@@ -21695,7 +21700,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     // Last-resort path: if all target renders failed (commonly due upstream 429/timeouts),
     // generate one OpenAI anchor image and fan it out to all requested target frames so
     // campaign generation doesn't hard-fail for the user.
-    if (!generatedAssets.length) {
+    if (!generatedAssets.length && !strictReferenceLock) {
       const emergencyAnchorUrl = await runCampaignTaskWithTimeout(
         generateCampaignImageWithOpenAI({
           name,
@@ -21726,6 +21731,10 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
           styleLockReferenceUrl = emergencyAnchorUrl;
         }
       }
+    } else if (!generatedAssets.length && strictReferenceLock) {
+      console.warn(
+        "[campaign] strict reference lock enabled; skipping emergency openai fallback to prevent reference drift"
+      );
     }
 
     const computeMissingTargets = (): CampaignAssetTarget[] => {
