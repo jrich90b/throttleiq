@@ -1667,6 +1667,7 @@ export default function Home() {
   >("");
   const [campaignError, setCampaignError] = useState<string | null>(null);
   const [campaignSelectedId, setCampaignSelectedId] = useState("");
+  const [campaignListFilter, setCampaignListFilter] = useState<"all" | CampaignQueueKind>("all");
   const [campaignForm, setCampaignForm] = useState({ ...EMPTY_CAMPAIGN_FORM });
   const [campaignSourceHits, setCampaignSourceHits] = useState<CampaignSourceHit[]>([]);
   const [campaignGeneratedBy, setCampaignGeneratedBy] = useState<string>("");
@@ -1752,6 +1753,16 @@ export default function Home() {
         ),
     [campaigns]
   );
+  const campaignVisibleList = useMemo(() => {
+    if (campaignListFilter === "send") return campaignSendQueue;
+    if (campaignListFilter === "post") return campaignPostQueue;
+    return campaigns;
+  }, [campaignListFilter, campaignSendQueue, campaignPostQueue, campaigns]);
+  const campaignListFilterLabel = useMemo(() => {
+    if (campaignListFilter === "send") return "Send Queue";
+    if (campaignListFilter === "post") return "Post Queue";
+    return "All campaigns";
+  }, [campaignListFilter]);
   const campaignAssetGenerationStatus = useMemo(() => {
     const fromEntry = normalizeCampaignAssetGenerationMap(campaignSelectedEntry?.assetGenerationStatus);
     if (Object.keys(fromEntry).length) return fromEntry;
@@ -2668,6 +2679,7 @@ export default function Home() {
   }
 
   function openQueuedCampaign(queue: CampaignQueueKind) {
+    setCampaignListFilter(queue);
     const list = queue === "send" ? campaignSendQueue : campaignPostQueue;
     const first = list[0];
     if (!first) {
@@ -2676,6 +2688,7 @@ export default function Home() {
     }
     setCampaignSelectedId(first.id);
     applyCampaignToForm(first);
+    setSaveToast(queue === "send" ? "Viewing Send Queue" : "Viewing Post Queue");
   }
 
   async function deleteCampaignById(id: string) {
@@ -9291,9 +9304,21 @@ export default function Home() {
               </button>
             </div>
             {campaignError ? <div className="text-xs text-red-600">{campaignError}</div> : null}
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <button
-                className="border rounded p-2 bg-[var(--surface-2)] text-left hover:bg-[var(--surface)]"
+                className={`border rounded p-2 text-left hover:bg-[var(--surface)] ${
+                  campaignListFilter === "all" ? "bg-[var(--surface)] ring-1 ring-[var(--accent)]" : "bg-[var(--surface-2)]"
+                }`}
+                onClick={() => setCampaignListFilter("all")}
+                title="Show all campaigns"
+              >
+                <div className="text-[11px] text-gray-500">All</div>
+                <div className="text-sm font-semibold">{campaigns.length}</div>
+              </button>
+              <button
+                className={`border rounded p-2 text-left hover:bg-[var(--surface)] ${
+                  campaignListFilter === "send" ? "bg-[var(--surface)] ring-1 ring-[var(--accent)]" : "bg-[var(--surface-2)]"
+                }`}
                 onClick={() => openQueuedCampaign("send")}
                 title={campaignSendQueue.length ? "Open newest Send Queue campaign" : "Send Queue is empty"}
               >
@@ -9301,7 +9326,9 @@ export default function Home() {
                 <div className="text-sm font-semibold">{campaignSendQueue.length}</div>
               </button>
               <button
-                className="border rounded p-2 bg-[var(--surface-2)] text-left hover:bg-[var(--surface)]"
+                className={`border rounded p-2 text-left hover:bg-[var(--surface)] ${
+                  campaignListFilter === "post" ? "bg-[var(--surface)] ring-1 ring-[var(--accent)]" : "bg-[var(--surface-2)]"
+                }`}
                 onClick={() => openQueuedCampaign("post")}
                 title={campaignPostQueue.length ? "Open newest Post Queue campaign" : "Post Queue is empty"}
               >
@@ -9365,13 +9392,31 @@ export default function Home() {
             ) : null}
             {campaignLoading ? (
               <div className="text-sm text-gray-500">Loading campaigns...</div>
-            ) : campaigns.length === 0 ? (
+            ) : campaignVisibleList.length === 0 ? (
               <div className="text-sm text-gray-500 border rounded p-3 bg-[var(--surface-2)]">
-                No campaigns yet. Create a draft to get started.
+                {campaignListFilter === "all"
+                  ? "No campaigns yet. Create a draft to get started."
+                  : campaignListFilter === "send"
+                    ? "No campaigns in Send Queue."
+                    : "No campaigns in Post Queue."}
               </div>
             ) : (
-              <div className="border rounded-lg divide-y bg-[var(--surface)] max-h-[55vh] overflow-y-auto">
-                {campaigns.map(item => {
+              <div className="space-y-2">
+                <div className="flex items-center justify-between px-1">
+                  <div className="text-[11px] text-gray-600">
+                    Showing: <span className="font-semibold text-gray-800">{campaignListFilterLabel}</span>
+                  </div>
+                  {campaignListFilter !== "all" ? (
+                    <button
+                      className="text-[11px] text-[var(--accent)] hover:underline"
+                      onClick={() => setCampaignListFilter("all")}
+                    >
+                      Show all
+                    </button>
+                  ) : null}
+                </div>
+                <div className="border rounded-lg divide-y bg-[var(--surface)] max-h-[55vh] overflow-y-auto">
+                {campaignVisibleList.map(item => {
                   const selected = campaignSelectedId === item.id;
                   const status = String(item.status ?? "draft").toLowerCase() === "generated" ? "Generated" : "Draft";
                   const updated = item.updatedAt || item.createdAt;
@@ -9426,6 +9471,7 @@ export default function Home() {
                     </div>
                   );
                 })}
+                </div>
               </div>
             )}
           </div>
