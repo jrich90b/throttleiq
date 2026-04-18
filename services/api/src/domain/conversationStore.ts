@@ -539,7 +539,7 @@ export type Conversation = {
     skipNextCheckin?: boolean;
   };
   campaignThread?: {
-    status: "campaign" | "passed";
+    status: "campaign" | "linked_open" | "passed";
     campaignId?: string;
     campaignName?: string;
     listId?: string;

@@ -555,7 +555,7 @@ type ConversationListItem = {
   } | null;
   leadSource?: string | null;
   campaignThread?: {
-    status?: "campaign" | "passed";
+    status?: "campaign" | "linked_open" | "passed";
     campaignId?: string;
     campaignName?: string;
     listId?: string;
@@ -6275,20 +6275,27 @@ export default function Home() {
     );
   };
 
-  const isCampaignConversation = useCallback((c: ConversationListItem | null | undefined) => {
+  const isCampaignOnlyConversation = useCallback((c: ConversationListItem | null | undefined) => {
     if (!c) return false;
     return String(c.campaignThread?.status ?? "").trim().toLowerCase() === "campaign";
+  }, []);
+
+  const isCampaignConversation = useCallback((c: ConversationListItem | null | undefined) => {
+    if (!c) return false;
+    const status = String(c.campaignThread?.status ?? "").trim().toLowerCase();
+    return status === "campaign" || status === "linked_open";
   }, []);
 
   const visibleConversations = useMemo(() => {
     return conversations.filter(c => {
       const archived = isArchivedConversation(c);
-      const campaignOnly = isCampaignConversation(c);
+      const campaignOnly = isCampaignOnlyConversation(c);
+      const campaignVisible = isCampaignConversation(c);
       if (view === "archive") return archived;
-      if (view === "campaigns") return !archived && campaignOnly;
+      if (view === "campaigns") return !archived && campaignVisible;
       return !archived && !campaignOnly;
     });
-  }, [conversations, view, isCampaignConversation]);
+  }, [conversations, view, isCampaignOnlyConversation, isCampaignConversation]);
 
   const inboxDepartmentTeamsByConv = useMemo(() => {
     const out = new Map<string, Set<string>>();
@@ -9941,11 +9948,18 @@ export default function Home() {
                   )}
                   {expanded ? (
                   <div className="mt-2 border border-[var(--border)] rounded-lg divide-y bg-[var(--surface)]">
-                    {group.items.map(c => (
+                    {group.items.map(c => {
+                      const campaignThreadStatus = String(c.campaignThread?.status ?? "")
+                        .trim()
+                        .toLowerCase();
+                      const linkedOpenCampaign = view === "campaigns" && campaignThreadStatus === "linked_open";
+                      return (
                       <div key={c.id} className="flex items-stretch">
                         <button
                           onClick={() => openConversation(c.id)}
                           className={`flex-1 min-w-0 text-left p-4 hover:bg-[var(--surface-2)] ${
+                            linkedOpenCampaign ? "bg-gray-50/70 opacity-70" : ""
+                          } ${
                             selectedId === c.id ? "bg-[var(--surface-2)]" : ""
                           }`}
                         >
@@ -10001,6 +10015,11 @@ export default function Home() {
                                     Hold
                                   </span>
                                 ) : null}
+                                {linkedOpenCampaign ? (
+                                  <span className="text-xs px-2 py-1 rounded border bg-gray-100 text-gray-700 border-gray-300">
+                                    Open in Inbox
+                                  </span>
+                                ) : null}
                               </div>
                               {c.vehicleDescription ? (
                                 <div className="text-xs text-gray-500 mt-1 truncate">{c.vehicleDescription}</div>
@@ -10050,6 +10069,9 @@ export default function Home() {
                             </div>
                             ) : null;
                           })()}
+                          {linkedOpenCampaign ? (
+                            <div className="text-xs text-gray-500 mt-1">Open conversation exists in Inbox.</div>
+                          ) : null}
                         </button>
                         <div className="relative border-l shrink-0 w-10 flex items-center justify-center bg-[var(--surface-2)]">
                           <button
@@ -10419,7 +10441,8 @@ export default function Home() {
                               ) : null}
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                   ) : null}
                 </div>

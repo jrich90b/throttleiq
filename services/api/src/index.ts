@@ -22355,12 +22355,26 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
         sid
       );
       const shouldRouteToCampaigns = !existingIsOpen || existingIsCampaignThread;
+      const nowIso = new Date().toISOString();
+      const currentThread = (conv as any).campaignThread ?? {};
       if (shouldRouteToCampaigns) {
-        const nowIso = new Date().toISOString();
-        const currentThread = (conv as any).campaignThread ?? {};
         (conv as any).campaignThread = {
           ...currentThread,
           status: "campaign",
+          campaignId: campaignId ?? currentThread.campaignId ?? undefined,
+          campaignName: campaignName ?? currentThread.campaignName ?? (String(list?.name ?? "").trim() || undefined),
+          listId: sendToAll ? "all" : listId,
+          listName:
+            sendToAll
+              ? "All contacts"
+              : String(list?.name ?? "").trim() || currentThread.listName || undefined,
+          firstSentAt: String(currentThread.firstSentAt ?? "").trim() || nowIso,
+          lastSentAt: nowIso
+        };
+      } else {
+        (conv as any).campaignThread = {
+          ...currentThread,
+          status: "linked_open",
           campaignId: campaignId ?? currentThread.campaignId ?? undefined,
           campaignName: campaignName ?? currentThread.campaignName ?? (String(list?.name ?? "").trim() || undefined),
           listId: sendToAll ? "all" : listId,
