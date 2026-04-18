@@ -9637,7 +9637,7 @@ export default function Home() {
                   return (
                     <div
                       key={item.id}
-                      className={`flex items-stretch ${selected ? "bg-[var(--surface-2)]" : ""}`}
+                      className={`flex items-stretch ${selected ? "bg-[var(--surface-2)] lr-campaign-list-row-selected" : "lr-campaign-list-row"}`}
                     >
                       <button
                         className="flex-1 w-full text-left p-3 hover:bg-[var(--surface-2)]"
@@ -9646,18 +9646,18 @@ export default function Home() {
                           applyCampaignToForm(item);
                         }}
                       >
-                        <div className="text-sm font-medium truncate">{item.name || "Untitled campaign"}</div>
-                        <div className="text-[11px] text-gray-500 mt-1">
+                        <div className="text-sm font-medium truncate lr-campaign-list-row-title">{item.name || "Untitled campaign"}</div>
+                        <div className="text-[11px] text-gray-500 mt-1 lr-campaign-list-row-meta">
                           {status}
                           {updated ? ` • ${new Date(updated).toLocaleString()}` : ""}
                         </div>
                         {tags.length ? (
-                          <div className="text-[11px] text-gray-600 mt-1 truncate">
+                          <div className="text-[11px] text-gray-600 mt-1 truncate lr-campaign-list-row-meta">
                             {tags.join(" • ")}
                           </div>
                         ) : null}
                         {inSendQueue || inPostQueue ? (
-                          <div className="text-[11px] text-gray-600 mt-1 truncate">
+                          <div className="text-[11px] text-gray-600 mt-1 truncate lr-campaign-list-row-meta">
                             {inSendQueue ? "In Send Queue" : ""}
                             {inSendQueue && inPostQueue ? " • " : ""}
                             {inPostQueue ? "In Post Queue" : ""}

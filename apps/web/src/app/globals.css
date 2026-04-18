@@ -75,6 +75,11 @@ input[type="reset"],
   --lr-muted-strong: #dbe6f7;
   --lr-accent: #fb7f04;
   --lr-accent-soft: rgba(251, 127, 4, 0.18);
+  --surface: var(--lr-surface);
+  --surface-2: var(--lr-surface-2);
+  --accent: var(--lr-accent);
+  --border: var(--lr-border);
+  --foreground: var(--lr-text);
 }
 
 .lr-campaign-theme .lr-campaign-sidebar {
@@ -110,6 +115,27 @@ input[type="reset"],
 .lr-campaign-theme .lr-campaign-list .text-gray-800,
 .lr-campaign-theme .lr-campaign-list .text-gray-900 {
   color: var(--lr-muted-strong) !important;
+}
+
+.lr-campaign-theme .lr-campaign-list .bg-\[var\(--surface\)\] {
+  background-color: var(--lr-surface) !important;
+}
+
+.lr-campaign-theme .lr-campaign-list .bg-\[var\(--surface-2\)\] {
+  background-color: var(--lr-surface-2) !important;
+}
+
+.lr-campaign-theme .lr-campaign-list .lr-campaign-list-row-selected {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+  box-shadow: inset 0 0 0 1px rgba(251, 127, 4, 0.45);
+}
+
+.lr-campaign-theme .lr-campaign-list .lr-campaign-list-row-title {
+  color: #f2f6ff !important;
+}
+
+.lr-campaign-theme .lr-campaign-list .lr-campaign-list-row-meta {
+  color: #d8e2f4 !important;
 }
 
 .lr-campaign-theme .lr-campaign-panel,
