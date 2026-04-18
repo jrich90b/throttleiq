@@ -2667,6 +2667,17 @@ export default function Home() {
     }
   }
 
+  function openQueuedCampaign(queue: CampaignQueueKind) {
+    const list = queue === "send" ? campaignSendQueue : campaignPostQueue;
+    const first = list[0];
+    if (!first) {
+      setSaveToast(queue === "send" ? "Send Queue is empty" : "Post Queue is empty");
+      return;
+    }
+    setCampaignSelectedId(first.id);
+    applyCampaignToForm(first);
+  }
+
   async function deleteCampaignById(id: string) {
     const target = campaigns.find(row => row.id === id) ?? null;
     const displayName = String(target?.name ?? "this campaign").trim() || "this campaign";
@@ -9281,14 +9292,22 @@ export default function Home() {
             </div>
             {campaignError ? <div className="text-xs text-red-600">{campaignError}</div> : null}
             <div className="grid grid-cols-2 gap-2">
-              <div className="border rounded p-2 bg-[var(--surface-2)]">
+              <button
+                className="border rounded p-2 bg-[var(--surface-2)] text-left hover:bg-[var(--surface)]"
+                onClick={() => openQueuedCampaign("send")}
+                title={campaignSendQueue.length ? "Open newest Send Queue campaign" : "Send Queue is empty"}
+              >
                 <div className="text-[11px] text-gray-500">Send Queue</div>
                 <div className="text-sm font-semibold">{campaignSendQueue.length}</div>
-              </div>
-              <div className="border rounded p-2 bg-[var(--surface-2)]">
+              </button>
+              <button
+                className="border rounded p-2 bg-[var(--surface-2)] text-left hover:bg-[var(--surface)]"
+                onClick={() => openQueuedCampaign("post")}
+                title={campaignPostQueue.length ? "Open newest Post Queue campaign" : "Post Queue is empty"}
+              >
                 <div className="text-[11px] text-gray-500">Post Queue</div>
                 <div className="text-sm font-semibold">{campaignPostQueue.length}</div>
-              </div>
+              </button>
             </div>
             {campaignSendQueue.length ? (
               <div className="border rounded-lg bg-[var(--surface)]">
