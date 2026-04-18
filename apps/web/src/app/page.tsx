@@ -1489,6 +1489,60 @@ function campaignAssetQueueEntry(
   return row as Record<string, unknown>;
 }
 
+function campaignQueuedAssetTargetsForQueue(
+  entry: CampaignEntry | null | undefined,
+  queue: CampaignQueueKind
+): CampaignAssetTarget[] {
+  const meta = entry?.metadata;
+  if (!meta || typeof meta !== "object") return [];
+  const root = (meta as any)?.assetQueue;
+  if (!root || typeof root !== "object") return [];
+  const out: CampaignAssetTarget[] = [];
+  for (const [targetRaw, rowRaw] of Object.entries(root as Record<string, unknown>)) {
+    const target = String(targetRaw ?? "").trim() as CampaignAssetTarget;
+    if (!target || !CAMPAIGN_ASSET_TARGET_OPTIONS.some(opt => opt.value === target)) continue;
+    if (!rowRaw || typeof rowRaw !== "object") continue;
+    const status = String((rowRaw as any)?.status ?? "").trim().toLowerCase();
+    if (status !== "queued") continue;
+    const rowQueueRaw = String((rowRaw as any)?.queue ?? "").trim().toLowerCase();
+    const rowQueue =
+      rowQueueRaw === "send" || rowQueueRaw === "post"
+        ? (rowQueueRaw as CampaignQueueKind)
+        : campaignQueueKindForAssetTarget(target);
+    if (rowQueue !== queue) continue;
+    out.push(target);
+  }
+  return Array.from(new Set(out));
+}
+
+function campaignQueuedAssetAtIsoForQueue(
+  entry: CampaignEntry | null | undefined,
+  queue: CampaignQueueKind
+): string {
+  const meta = entry?.metadata;
+  if (!meta || typeof meta !== "object") return "";
+  const root = (meta as any)?.assetQueue;
+  if (!root || typeof root !== "object") return "";
+  let best = "";
+  for (const [targetRaw, rowRaw] of Object.entries(root as Record<string, unknown>)) {
+    const target = String(targetRaw ?? "").trim() as CampaignAssetTarget;
+    if (!target || !CAMPAIGN_ASSET_TARGET_OPTIONS.some(opt => opt.value === target)) continue;
+    if (!rowRaw || typeof rowRaw !== "object") continue;
+    const status = String((rowRaw as any)?.status ?? "").trim().toLowerCase();
+    if (status !== "queued") continue;
+    const rowQueueRaw = String((rowRaw as any)?.queue ?? "").trim().toLowerCase();
+    const rowQueue =
+      rowQueueRaw === "send" || rowQueueRaw === "post"
+        ? (rowQueueRaw as CampaignQueueKind)
+        : campaignQueueKindForAssetTarget(target);
+    if (rowQueue !== queue) continue;
+    const iso = String((rowRaw as any)?.queuedAt ?? (rowRaw as any)?.updatedAt ?? "").trim();
+    if (!iso) continue;
+    if (!best || new Date(iso).getTime() > new Date(best).getTime()) best = iso;
+  }
+  return best;
+}
+
 function campaignAssetIsQueued(entry: CampaignEntry | null | undefined, target: CampaignAssetTarget): boolean {
   const row = campaignAssetQueueEntry(entry, target);
   return String(row?.status ?? "").trim().toLowerCase() === "queued";
@@ -1503,13 +1557,16 @@ function campaignAssetQueuedAtIso(entry: CampaignEntry | null | undefined, targe
 
 function campaignIsQueued(entry: CampaignEntry | null | undefined, queue: CampaignQueueKind): boolean {
   const row = campaignQueueEntry(entry, queue);
-  return String(row?.status ?? "").trim().toLowerCase() === "queued";
+  if (String(row?.status ?? "").trim().toLowerCase() === "queued") return true;
+  return campaignQueuedAssetTargetsForQueue(entry, queue).length > 0;
 }
 
 function campaignQueuedAtIso(entry: CampaignEntry | null | undefined, queue: CampaignQueueKind): string {
   const row = campaignQueueEntry(entry, queue);
   const iso = String(row?.queuedAt ?? row?.updatedAt ?? "").trim();
   if (iso) return iso;
+  const assetIso = campaignQueuedAssetAtIsoForQueue(entry, queue);
+  if (assetIso) return assetIso;
   return String(entry?.updatedAt ?? entry?.createdAt ?? "").trim();
 }
 
@@ -1593,7 +1650,6 @@ export default function Home() {
   const [campaignLoading, setCampaignLoading] = useState(false);
   const [campaignSaving, setCampaignSaving] = useState(false);
   const [campaignGenerating, setCampaignGenerating] = useState(false);
-  const [campaignQueueBusy, setCampaignQueueBusy] = useState<CampaignQueueKind | "">("");
   const [campaignAssetQueueBusyTarget, setCampaignAssetQueueBusyTarget] =
     useState<CampaignAssetTarget | "">("");
   const [campaignDeletingId, setCampaignDeletingId] = useState("");
@@ -1672,10 +1728,6 @@ export default function Home() {
     () => campaigns.find(row => row.id === campaignSelectedId) ?? null,
     [campaigns, campaignSelectedId]
   );
-  const campaignSelectedInSendQueue = useMemo(
-    () => campaignIsQueued(campaignSelectedEntry, "send"),
-    [campaignSelectedEntry]
-  );
   const campaignSelectedInPostQueue = useMemo(
     () => campaignIsQueued(campaignSelectedEntry, "post"),
     [campaignSelectedEntry]
@@ -1723,15 +1775,26 @@ export default function Home() {
     campaignSelectedTargets.has("instagram_story");
   const campaignHasAnyTarget = campaignSelectedTargets.size > 0;
   const campaignHasPublishAsset = campaignGeneratedAssets.length > 0 || Boolean(campaignFinalImageUrl);
+  const campaignSelectedQueuedPostTargets = useMemo(
+    () => campaignQueuedAssetTargetsForQueue(campaignSelectedEntry, "post"),
+    [campaignSelectedEntry]
+  );
+  const campaignSelectedQueuedPostTargetSet = useMemo(
+    () => new Set<CampaignAssetTarget>(campaignSelectedQueuedPostTargets),
+    [campaignSelectedQueuedPostTargets]
+  );
+  const campaignHasQueuedPostAsset = campaignSelectedQueuedPostTargets.length > 0;
   const canPublishCampaign = Boolean(
-    campaignWantsSocial && metaStatus?.connected && campaignSelectedId && campaignHasPublishAsset
+    campaignSelectedInPostQueue && metaStatus?.connected && campaignSelectedId && campaignHasPublishAsset && campaignHasQueuedPostAsset
   );
   const campaignPublishTargetOptions = useMemo(() => {
+    const restrictToQueued = campaignSelectedQueuedPostTargetSet.size > 0;
     const seen = new Set<CampaignAssetTarget>();
     const out: Array<{ value: CampaignAssetTarget; label: string }> = [];
     for (const asset of campaignGeneratedAssets) {
       const target = String(asset?.target ?? "").trim() as CampaignAssetTarget;
       if (!target || seen.has(target)) continue;
+      if (restrictToQueued && !campaignSelectedQueuedPostTargetSet.has(target)) continue;
       seen.add(target);
       out.push({
         value: target,
@@ -1739,7 +1802,7 @@ export default function Home() {
       });
     }
     return out;
-  }, [campaignGeneratedAssets]);
+  }, [campaignGeneratedAssets, campaignSelectedQueuedPostTargetSet]);
   const campaignNextPendingTarget = useMemo(() => {
     const selected = campaignSelectedTargetsOrdered;
     if (!selected.length) return null;
@@ -2628,54 +2691,6 @@ export default function Home() {
       setCampaignError(err?.message ?? "Failed to delete campaign");
     } finally {
       setCampaignDeletingId("");
-    }
-  }
-
-  async function setCampaignQueue(queue: CampaignQueueKind, shouldQueue: boolean) {
-    const id = String(campaignSelectedId ?? "").trim();
-    if (!id) {
-      setCampaignError("Save the campaign first, then add it to a queue.");
-      return;
-    }
-    setCampaignQueueBusy(queue);
-    setCampaignError(null);
-    try {
-      const resp = await fetch(`/api/campaigns/${encodeURIComponent(id)}/queue`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          queue,
-          action: shouldQueue ? "queue" : "dequeue"
-        })
-      });
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok || !data?.ok || !data?.campaign) {
-        throw new Error(data?.error ?? "Failed to update campaign queue");
-      }
-      const saved = data.campaign as CampaignEntry;
-      setCampaigns(prev => {
-        const idx = prev.findIndex(row => row.id === saved.id);
-        const next = idx >= 0 ? prev.map(row => (row.id === saved.id ? saved : row)) : [saved, ...prev];
-        return next.sort((a, b) => {
-          const aAt = new Date(String(a.updatedAt ?? a.createdAt ?? "")).getTime();
-          const bAt = new Date(String(b.updatedAt ?? b.createdAt ?? "")).getTime();
-          return bAt - aAt;
-        });
-      });
-      if (campaignSelectedId === saved.id) applyCampaignToForm(saved);
-      setSaveToast(
-        shouldQueue
-          ? queue === "send"
-            ? "Saved to Send Queue"
-            : "Saved to Post Queue"
-          : queue === "send"
-            ? "Removed from Send Queue"
-            : "Removed from Post Queue"
-      );
-    } catch (err: any) {
-      setCampaignError(err?.message ?? "Failed to update campaign queue");
-    } finally {
-      setCampaignQueueBusy("");
     }
   }
 
@@ -11239,41 +11254,8 @@ export default function Home() {
                 <div className="text-[11px] text-gray-500">
                   Generate creates/updates the selected output. Redo retries the same output.
                 </div>
-                <div className="pt-1 border-t border-gray-200 space-y-2">
-                  <div className="text-xs font-semibold text-gray-700">Queue this campaign</div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
-                      disabled={campaignQueueBusy !== "" || !campaignSelectedId}
-                      onClick={() => {
-                        void setCampaignQueue("send", !campaignSelectedInSendQueue);
-                      }}
-                    >
-                      {campaignQueueBusy === "send"
-                        ? "Saving..."
-                        : campaignSelectedInSendQueue
-                          ? "Remove from Send Queue"
-                          : "Save to Send Queue"}
-                    </button>
-                    <button
-                      className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60"
-                      disabled={campaignQueueBusy !== "" || !campaignSelectedId}
-                      onClick={() => {
-                        void setCampaignQueue("post", !campaignSelectedInPostQueue);
-                      }}
-                    >
-                      {campaignQueueBusy === "post"
-                        ? "Saving..."
-                        : campaignSelectedInPostQueue
-                          ? "Remove from Post Queue"
-                          : "Save to Post Queue"}
-                    </button>
-                  </div>
-                  {!campaignSelectedId ? (
-                    <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-                      Save Draft first to enable queue actions.
-                    </div>
-                  ) : null}
+                <div className="pt-1 border-t border-gray-200 text-[11px] text-gray-600">
+                  Queueing is handled per generated file below (Send/Post).
                 </div>
               </div>
             </div>
@@ -11404,15 +11386,22 @@ export default function Home() {
                 </div>
               ) : null}
 
-              {campaignWantsSocial ? (
+              {campaignWantsSocial && !campaignSelectedInPostQueue ? (
+                <div className="text-[11px] text-gray-600 border rounded px-3 py-2 bg-gray-50">
+                  To publish on Facebook/Instagram, first queue at least one social file with{" "}
+                  <span className="font-semibold">Queue for Post</span> in Generated files.
+                </div>
+              ) : null}
+
+              {campaignSelectedInPostQueue ? (
                 <details className="border rounded-lg p-3 bg-gray-50" open={false}>
                   <summary className="text-xs font-semibold text-gray-700 cursor-pointer">
-                    4) Publish to Facebook / Instagram (optional)
+                    4) Publish queued post assets (optional)
                   </summary>
                   <div className="mt-3 space-y-3">
                     <div className="flex items-center justify-between gap-2">
                       <div className="text-[11px] text-gray-500">
-                        Connect once, then publish generated assets.
+                        Connect once, then publish assets queued for Post.
                       </div>
                       <div className="text-xs">
                         {metaLoading ? (
@@ -11507,9 +11496,9 @@ export default function Home() {
                           ))}
                         </select>
                         <div className="text-[11px] text-gray-500 mt-1">
-                          {campaignHasPublishAsset
-                            ? "Generated assets found for this campaign."
-                            : "Generate campaign assets before publishing."}
+                          {campaignHasQueuedPostAsset
+                            ? "Queued post assets found for this campaign."
+                            : "Queue at least one social asset as Post before publishing."}
                         </div>
                       </label>
                     </div>
