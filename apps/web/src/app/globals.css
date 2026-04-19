@@ -64,6 +64,121 @@ input[type="reset"],
   cursor: pointer;
 }
 
+.lr-app-theme {
+  --lr-app-bg: #eef3fa;
+  --lr-app-bg-soft: #f7faff;
+  --lr-app-surface: #ffffff;
+  --lr-app-border: #d4deec;
+  --lr-app-border-strong: #bcc8da;
+  --lr-app-text: #0f172a;
+  --lr-app-muted: #4b5563;
+  --lr-app-muted-soft: #667085;
+}
+
+.lr-app-theme .lr-app-sidebar-panel,
+.lr-app-theme .lr-app-main-panel {
+  font-family:
+    var(--font-body),
+    "Avenir Next",
+    "SF Pro Text",
+    "Segoe UI",
+    system-ui,
+    sans-serif;
+  color: var(--lr-app-text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.lr-app-theme .lr-app-sidebar-panel {
+  background:
+    radial-gradient(680px 220px at 16% -6%, rgba(251, 127, 4, 0.12), transparent 60%),
+    linear-gradient(180deg, #fdfefe 0%, #f4f8ff 100%) !important;
+  border-right-color: var(--lr-app-border) !important;
+}
+
+.lr-app-theme .lr-app-main-panel {
+  background:
+    radial-gradient(760px 260px at 74% -8%, rgba(251, 127, 4, 0.1), transparent 58%),
+    linear-gradient(180deg, #fbfdff 0%, #f3f7fd 100%) !important;
+}
+
+.lr-app-theme .lr-app-sidebar-panel h1,
+.lr-app-theme .lr-app-main-panel h2 {
+  font-family:
+    var(--font-display),
+    "Avenir Next",
+    "SF Pro Display",
+    system-ui,
+    sans-serif;
+  color: #0b1220;
+  letter-spacing: 0.01em;
+}
+
+.lr-app-theme .lr-app-sidebar-panel h1 {
+  font-size: clamp(1.1rem, 0.82rem + 0.7vw, 1.4rem);
+  font-weight: 680;
+}
+
+.lr-app-theme .lr-app-sidebar-panel .text-gray-500,
+.lr-app-theme .lr-app-sidebar-panel .text-gray-600,
+.lr-app-theme .lr-app-sidebar-panel .text-gray-700,
+.lr-app-theme .lr-app-main-panel .text-gray-500,
+.lr-app-theme .lr-app-main-panel .text-gray-600,
+.lr-app-theme .lr-app-main-panel .text-gray-700 {
+  color: var(--lr-app-muted-soft) !important;
+}
+
+.lr-app-theme .lr-app-sidebar-panel .text-gray-800,
+.lr-app-theme .lr-app-sidebar-panel .text-gray-900,
+.lr-app-theme .lr-app-main-panel .text-gray-800,
+.lr-app-theme .lr-app-main-panel .text-gray-900 {
+  color: var(--lr-app-text) !important;
+}
+
+.lr-app-theme .lr-app-list-surface {
+  border-color: var(--lr-app-border) !important;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%) !important;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+}
+
+.lr-app-theme .lr-app-list-surface.divide-y > * + * {
+  border-top-color: #e3eaf4 !important;
+}
+
+.lr-app-theme .lr-app-sidebar-panel input,
+.lr-app-theme .lr-app-sidebar-panel select,
+.lr-app-theme .lr-app-sidebar-panel textarea,
+.lr-app-theme .lr-app-main-panel input,
+.lr-app-theme .lr-app-main-panel select,
+.lr-app-theme .lr-app-main-panel textarea {
+  border-color: var(--lr-app-border) !important;
+  background: #ffffff !important;
+  color: var(--lr-app-text) !important;
+}
+
+.lr-app-theme .lr-app-sidebar-panel input::placeholder,
+.lr-app-theme .lr-app-sidebar-panel textarea::placeholder,
+.lr-app-theme .lr-app-main-panel input::placeholder,
+.lr-app-theme .lr-app-main-panel textarea::placeholder {
+  color: #8a95a6;
+}
+
+.lr-app-theme .lr-app-sidebar-panel input:focus,
+.lr-app-theme .lr-app-sidebar-panel select:focus,
+.lr-app-theme .lr-app-sidebar-panel textarea:focus,
+.lr-app-theme .lr-app-main-panel input:focus,
+.lr-app-theme .lr-app-main-panel select:focus,
+.lr-app-theme .lr-app-main-panel textarea:focus {
+  outline: none;
+  border-color: #9db1cc !important;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+}
+
+.lr-app-theme .lr-app-sidebar-panel button,
+.lr-app-theme .lr-app-main-panel button {
+  border-color: var(--lr-app-border) !important;
+}
+
 .lr-campaign-theme {
   --lr-bg: #070b12;
   --lr-bg-soft: #0d131f;

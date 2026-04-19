@@ -893,6 +893,36 @@ type WatchFormItem = {
 };
 
 type TodoInboxSection = "followup" | "appointment" | "todo" | "reminder";
+type InboxDealFilter = "all" | "hot" | "sold" | "hold";
+
+const TODO_SECTION_THEME: Record<TodoInboxSection, { header: string; title: string }> = {
+  followup: {
+    header: "bg-blue-50 border-b border-blue-200",
+    title: "text-blue-800"
+  },
+  appointment: {
+    header: "bg-emerald-50 border-b border-emerald-200",
+    title: "text-emerald-800"
+  },
+  reminder: {
+    header: "bg-purple-50 border-b border-purple-200",
+    title: "text-purple-800"
+  },
+  todo: {
+    header: "bg-amber-50 border-b border-amber-200",
+    title: "text-amber-800"
+  }
+};
+
+function getTodoSectionTheme(section: TodoInboxSection) {
+  return TODO_SECTION_THEME[section];
+}
+
+function getInboxDealFilterButtonClass(active: boolean) {
+  return `px-2.5 py-1 text-xs rounded border ${
+    active ? "bg-[var(--accent)] text-white border-[var(--accent)]" : "bg-white hover:bg-[var(--surface-2)]"
+  }`;
+}
 
 const APPOINTMENT_SECONDARY_OPTIONS_BY_PRIMARY: Record<
   "showed" | "did_not_show" | "cancelled",
@@ -1672,7 +1702,7 @@ export default function Home() {
   const [watchSalespersonFilter, setWatchSalespersonFilter] = useState("all");
   const [inboxQuery, setInboxQuery] = useState("");
   const [inboxOwnerFilter, setInboxOwnerFilter] = useState("all");
-  const [inboxDealFilter, setInboxDealFilter] = useState<"all" | "hot" | "sold" | "hold">("all");
+  const [inboxDealFilter, setInboxDealFilter] = useState<InboxDealFilter>("all");
   const [campaignInboxExpanded, setCampaignInboxExpanded] = useState<Record<string, boolean>>({});
   const [todoQuery, setTodoQuery] = useState("");
   const [todoLeadOwnerFilter, setTodoLeadOwnerFilter] = useState("all");
@@ -9054,12 +9084,13 @@ export default function Home() {
     );
   }
 
+  const isCampaignSection = section === "campaigns";
+  const rootThemeClass = isCampaignSection ? "lr-campaign-theme" : "lr-app-theme";
+
   return (
     <main
-      className={`h-screen flex flex-col md:flex-row bg-[var(--background)] text-[var(--foreground)] ${
-        section === "campaigns" ? "lr-campaign-theme" : ""
-      }`}
-      data-campaign-theme={section === "campaigns" ? "true" : "false"}
+      className={`h-screen flex flex-col md:flex-row bg-[var(--background)] text-[var(--foreground)] ${rootThemeClass}`}
+      data-campaign-theme={isCampaignSection ? "true" : "false"}
     >
       {saveToast ? (
         <div className="fixed top-4 right-4 z-[60] px-3 py-2 rounded border bg-white text-sm shadow">
@@ -9307,10 +9338,10 @@ export default function Home() {
       <section
         className={`w-full ${
           section === "contacts" ? "md:w-[620px]" : "md:w-96"
-        } border-r border-[var(--border)] bg-[var(--surface)] p-4 overflow-y-auto shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${
-          section === "campaigns" ? "lr-campaign-sidebar" : ""
+        } border-r border-[var(--border)] bg-[var(--surface)] p-4 overflow-y-auto shadow-[0_10px_30px_rgba(0,0,0,0.08)] lr-app-sidebar-panel ${
+          isCampaignSection ? "lr-campaign-sidebar" : ""
         } ${section === "calendar" ? "hidden" : ""} ${isConversationSection && mobilePanel === "detail" ? "hidden md:block" : ""}`}
-        data-campaign-sidebar={section === "campaigns" ? "true" : "false"}
+        data-campaign-sidebar={isCampaignSection ? "true" : "false"}
       >
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -9885,46 +9916,20 @@ export default function Home() {
 
             <div className="mt-2 flex items-center gap-2">
               <span className="text-xs text-gray-600">Deal status</span>
-              <button
-                className={`px-2.5 py-1 text-xs rounded border ${
-                  inboxDealFilter === "all"
-                    ? "bg-[var(--accent)] text-white border-[var(--accent)]"
-                    : "bg-white hover:bg-[var(--surface-2)]"
-                }`}
-                onClick={() => setInboxDealFilter("all")}
-              >
-                All
-              </button>
-              <button
-                className={`px-2.5 py-1 text-xs rounded border ${
-                  inboxDealFilter === "hot"
-                    ? "bg-[var(--accent)] text-white border-[var(--accent)]"
-                    : "bg-white hover:bg-[var(--surface-2)]"
-                }`}
-                onClick={() => setInboxDealFilter("hot")}
-              >
-                Hot deals ({inboxDealCounts.hot})
-              </button>
-              <button
-                className={`px-2.5 py-1 text-xs rounded border ${
-                  inboxDealFilter === "hold"
-                    ? "bg-[var(--accent)] text-white border-[var(--accent)]"
-                    : "bg-white hover:bg-[var(--surface-2)]"
-                }`}
-                onClick={() => setInboxDealFilter("hold")}
-              >
-                Hold deals ({inboxDealCounts.hold})
-              </button>
-              <button
-                className={`px-2.5 py-1 text-xs rounded border ${
-                  inboxDealFilter === "sold"
-                    ? "bg-[var(--accent)] text-white border-[var(--accent)]"
-                    : "bg-white hover:bg-[var(--surface-2)]"
-                }`}
-                onClick={() => setInboxDealFilter("sold")}
-              >
-                Sold deals ({inboxDealCounts.sold})
-              </button>
+              {([
+                { key: "all" as const, label: "All" },
+                { key: "hot" as const, label: `Hot deals (${inboxDealCounts.hot})` },
+                { key: "hold" as const, label: `Hold deals (${inboxDealCounts.hold})` },
+                { key: "sold" as const, label: `Sold deals (${inboxDealCounts.sold})` }
+              ] as Array<{ key: InboxDealFilter; label: string }>).map(option => (
+                <button
+                  key={`inbox-deal-filter-${option.key}`}
+                  className={getInboxDealFilterButtonClass(inboxDealFilter === option.key)}
+                  onClick={() => setInboxDealFilter(option.key)}
+                >
+                  {option.label}
+                </button>
+              ))}
             </div>
 
             <div className="mt-3 space-y-3">
@@ -9955,7 +9960,7 @@ export default function Home() {
                     </div>
                   )}
                   {expanded ? (
-                  <div className="mt-2 border border-[var(--border)] rounded-lg divide-y bg-[var(--surface)]">
+                  <div className="mt-2 border border-[var(--border)] rounded-lg divide-y bg-[var(--surface)] lr-app-list-surface">
                     {group.items.map(c => {
                       const campaignThreadStatus = String(c.campaignThread?.status ?? "")
                         .trim()
@@ -10527,29 +10532,14 @@ export default function Home() {
             <div className="mt-3 space-y-3">
               {todoSectionDefs.map(sectionDef => {
                 const rows = groupedTodos[sectionDef.key];
-                const sectionHeaderClass =
-                  sectionDef.key === "followup"
-                    ? "bg-blue-50 border-b border-blue-200"
-                    : sectionDef.key === "appointment"
-                      ? "bg-emerald-50 border-b border-emerald-200"
-                    : sectionDef.key === "reminder"
-                      ? "bg-purple-50 border-b border-purple-200"
-                      : "bg-amber-50 border-b border-amber-200";
-                const sectionTitleClass =
-                  sectionDef.key === "followup"
-                    ? "text-blue-800"
-                    : sectionDef.key === "appointment"
-                      ? "text-emerald-800"
-                    : sectionDef.key === "reminder"
-                      ? "text-purple-800"
-                      : "text-amber-800";
+                const sectionTheme = getTodoSectionTheme(sectionDef.key);
                 return (
-                  <div key={sectionDef.key} className="border rounded-lg overflow-hidden">
-                    <div className={`px-4 py-2 flex items-center justify-between ${sectionHeaderClass}`}>
-                      <div className={`text-xs font-semibold uppercase tracking-wide ${sectionTitleClass}`}>
+                  <div key={sectionDef.key} className="border rounded-lg overflow-hidden lr-app-list-surface">
+                    <div className={`px-4 py-2 flex items-center justify-between ${sectionTheme.header}`}>
+                      <div className={`text-xs font-semibold uppercase tracking-wide ${sectionTheme.title}`}>
                         {sectionDef.label}
                       </div>
-                      <div className={`text-xs ${sectionTitleClass}`}>{rows.length}</div>
+                      <div className={`text-xs ${sectionTheme.title}`}>{rows.length}</div>
                     </div>
                     {rows.length ? rows.map((t, rowIdx) => {
                       const rowConv = conversationsById.get(t.convId);
@@ -11243,15 +11233,15 @@ export default function Home() {
 
       <section
         className={`flex-1 ${
-          section === "campaigns"
+          isCampaignSection
             ? "bg-[#090d14] shadow-none lr-campaign-main"
-            : "bg-[var(--surface)] shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]"
+            : "bg-[var(--surface)] shadow-[inset_0_1px_0_rgba(255,255,255,0.6)] lr-app-main-panel"
         } ${
           section === "calendar" ? "p-2 overflow-hidden" : "p-6 overflow-y-auto"
         } ${isConversationSection && mobilePanel === "list" ? "hidden md:block" : ""}`}
-        data-campaign-main={section === "campaigns" ? "true" : "false"}
+        data-campaign-main={isCampaignSection ? "true" : "false"}
       >
-        {section === "campaigns" ? (
+        {isCampaignSection ? (
           <div className="max-w-4xl mx-auto space-y-4 lr-campaign-content">
             <div>
               <h2 className="text-xl font-semibold">Campaign Studio</h2>
