@@ -2,6 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { InboxSection } from "./components/InboxSection";
+import { TaskInboxSection } from "./components/TaskInboxSection";
+import { useInboxSectionData } from "./hooks/useInboxSectionData";
+import { useTaskInboxData } from "./hooks/useTaskInboxData";
 
 type SpeechRecognitionLike = {
   lang: string;
@@ -5541,78 +5545,21 @@ export default function Home() {
     return byId;
   }, [conversations]);
 
-  const filteredTodos = useMemo(() => {
-    const q = todoQuery.trim().toLowerCase();
-    const ownerNameFilter = todoLeadOwnerFilter.startsWith("owner:")
-      ? decodeURIComponent(todoLeadOwnerFilter.slice("owner:".length)).toLowerCase()
-      : "";
-    return todos.filter(t => {
-      const leadName = String(t.leadName ?? "").toLowerCase();
-      const leadKey = String(t.leadKey ?? "").toLowerCase();
-      const leadOwnerCanonical = canonicalizeOwnerName(String(t.leadOwnerName ?? "").trim());
-      const leadOwner = String(leadOwnerCanonical ?? "").trim();
-      const departmentOwner = String(t.departmentOwnerName ?? "").trim();
-      const todoDept = inferTodoDepartment(t);
-      const inferredDeptOwner = inferOwnerDepartment(leadOwner);
-      const todoTeamBase = todoDept ?? "sales";
-      const todoTeam = todoTeamBase === "sales" && inferredDeptOwner ? inferredDeptOwner : todoTeamBase;
-      if (isManager && todoLeadOwnerFilter !== "all") {
-        if (todoLeadOwnerFilter === "team:unassigned") {
-          if (todoTeam === "sales") {
-            if (leadOwner) return false;
-          } else if (departmentOwner) {
-            return false;
-          }
-        } else if (todoLeadOwnerFilter.startsWith("team:")) {
-          if (todoTeam !== todoLeadOwnerFilter.slice(5)) return false;
-        } else if (ownerNameFilter) {
-          if (leadOwner.toLowerCase() !== ownerNameFilter) return false;
-        } else {
-          return false;
-        }
-      }
-      if (todoTaskTypeFilter !== "all" && todoInboxSection(t) !== todoTaskTypeFilter) return false;
-      if (!q) return true;
-      return leadName.includes(q) || leadKey.includes(q);
-    });
-  }, [todos, todoQuery, isManager, todoLeadOwnerFilter, todoTaskTypeFilter, canonicalizeOwnerName, inferOwnerDepartment, inferTodoDepartment]);
-
-  const groupedTodos = useMemo(() => {
-    const groups: Record<TodoInboxSection, TodoItem[]> = {
-      followup: [],
-      appointment: [],
-      todo: [],
-      reminder: []
-    };
-    for (const task of filteredTodos) {
-      groups[todoInboxSection(task)].push(task);
-    }
-    return groups;
-  }, [filteredTodos]);
-
-  const todoSectionDefs = useMemo(() => {
-    if (todoTaskTypeFilter === "all") {
-      return [
-        { key: "followup", label: "Follow-ups" },
-        { key: "todo", label: "To Dos" },
-        { key: "reminder", label: "Reminders" },
-        { key: "appointment", label: "Appointments" }
-      ] as Array<{ key: TodoInboxSection; label: string }>;
-    }
-    return [
-      {
-        key: todoTaskTypeFilter,
-        label:
-          todoTaskTypeFilter === "followup"
-            ? "Follow-ups"
-            : todoTaskTypeFilter === "appointment"
-              ? "Appointments"
-            : todoTaskTypeFilter === "reminder"
-              ? "Reminders"
-              : "To Dos"
-      }
-    ] as Array<{ key: TodoInboxSection; label: string }>;
-  }, [todoTaskTypeFilter]);
+  const {
+    filteredTodos,
+    groupedTodos,
+    todoSectionDefs
+  } = useTaskInboxData({
+    todos,
+    todoQuery,
+    isManager,
+    todoLeadOwnerFilter,
+    todoTaskTypeFilter,
+    canonicalizeOwnerName,
+    inferOwnerDepartment,
+    inferTodoDepartment,
+    todoInboxSection
+  });
 
   useEffect(() => {
     if (blockForm.salespersonId) return;
@@ -6316,192 +6263,29 @@ export default function Home() {
     return status === "campaign" || status === "linked_open";
   }, []);
 
-  const visibleConversations = useMemo(() => {
-    return conversations.filter(c => {
-      const archived = isArchivedConversation(c);
-      const campaignOnly = isCampaignOnlyConversation(c);
-      const campaignVisible = isCampaignConversation(c);
-      if (view === "archive") return archived;
-      if (view === "campaigns") return !archived && campaignVisible;
-      return !archived && !campaignOnly;
-    });
-  }, [conversations, view, isCampaignOnlyConversation, isCampaignConversation]);
-
-  const inboxDepartmentTeamsByConv = useMemo(() => {
-    const out = new Map<string, Set<string>>();
-    for (const t of todos) {
-      const team = inferTodoDepartment(t);
-      if (!team) continue;
-      if (!out.has(t.convId)) out.set(t.convId, new Set<string>());
-      out.get(t.convId)?.add(team);
-    }
-    return out;
-  }, [todos, inferTodoDepartment]);
-
-  const inboxTodoOwnerByConv = useMemo(() => {
-    const out = new Map<string, string>();
-    for (const t of todos) {
-      const ownerDisplay = String(
-        t.ownerDisplayName ?? t.departmentOwnerName ?? t.ownerName ?? ""
-      ).trim();
-      const reason = String(t.reason ?? "").toLowerCase();
-      const isDepartmentTodo =
-        reason === "service" ||
-        reason === "parts" ||
-        reason === "apparel" ||
-        t.ownerDisplayType === "department_owner";
-      if (!isDepartmentTodo) continue;
-      if (!ownerDisplay) continue;
-      if (!out.has(t.convId)) out.set(t.convId, ownerDisplay);
-    }
-    return out;
-  }, [todos]);
-
-  const filteredConversations = useMemo(() => {
-    const q = inboxQuery.trim().toLowerCase();
-    const qDigits = q.replace(/\D/g, "");
-    const ownerNameFilter = inboxOwnerFilter.startsWith("owner:")
-      ? decodeURIComponent(inboxOwnerFilter.slice("owner:".length)).toLowerCase()
-      : "";
-    const rows = visibleConversations.filter(c => {
-      if (inboxDealFilter === "hot" && !isHotDealConversation(c)) return false;
-      if (inboxDealFilter === "sold" && !isSoldDealConversation(c)) return false;
-      if (inboxDealFilter === "hold" && !isConversationOnHold(c)) return false;
-      if (isManager && inboxOwnerFilter !== "all") {
-        const leadOwner = canonicalizeOwnerName(
-          String(c.leadOwner?.name ?? c.leadOwner?.id ?? "").trim(),
-          c.leadOwner?.id
-        );
-        const ownerDepartment = inferOwnerDepartment(
-          String(c.leadOwner?.name ?? c.leadOwner?.id ?? "").trim(),
-          c.leadOwner?.id
-        );
-        const teams = inboxDepartmentTeamsByConv.get(c.id) ?? new Set<string>();
-        const hasServiceTodo = teams.has("service") || ownerDepartment === "service";
-        const hasPartsTodo = teams.has("parts") || ownerDepartment === "parts";
-        const hasApparelTodo = teams.has("apparel") || ownerDepartment === "apparel";
-        if (inboxOwnerFilter === "team:sales") {
-          if (!leadOwner || ownerDepartment) return false;
-        } else if (inboxOwnerFilter === "team:service") {
-          if (!hasServiceTodo) return false;
-        } else if (inboxOwnerFilter === "team:parts") {
-          if (!hasPartsTodo) return false;
-        } else if (inboxOwnerFilter === "team:apparel") {
-          if (!hasApparelTodo) return false;
-        } else if (inboxOwnerFilter === "team:unassigned") {
-          if (leadOwner || hasServiceTodo || hasPartsTodo || hasApparelTodo || ownerDepartment) return false;
-        } else if (ownerNameFilter) {
-          if (leadOwner.toLowerCase() !== ownerNameFilter) return false;
-        } else {
-          return false;
-        }
-      }
-      if (!q) return true;
-      const name = (c.leadName ?? "").toLowerCase();
-      const key = (c.leadKey ?? "").toLowerCase();
-      if (name.includes(q) || key.includes(q)) return true;
-      if (qDigits) {
-        const keyDigits = (c.leadKey ?? "").replace(/\D/g, "");
-        if (keyDigits.includes(qDigits)) return true;
-      }
-      return false;
-    });
-    const sorted = [...rows].sort((a, b) => {
-      const aMs = Date.parse(String(a.updatedAt ?? "")) || 0;
-      const bMs = Date.parse(String(b.updatedAt ?? "")) || 0;
-      return bMs - aMs;
-    });
-    return sorted;
-  }, [
-    visibleConversations,
+  const {
+    inboxTodoOwnerByConv,
+    filteredConversations,
+    inboxDealCounts,
+    groupedConversations
+  } = useInboxSectionData({
+    conversations,
+    todos,
+    view,
     inboxQuery,
-    isManager,
     inboxOwnerFilter,
     inboxDealFilter,
-    inboxDepartmentTeamsByConv,
+    isManager,
     canonicalizeOwnerName,
-    inferOwnerDepartment
-  ]);
-
-  const inboxDealCounts = useMemo(() => {
-    let hot = 0;
-    let sold = 0;
-    let hold = 0;
-    for (const c of visibleConversations) {
-      if (isSoldDealConversation(c)) sold += 1;
-      if (isConversationOnHold(c)) hold += 1;
-      if (isHotDealConversation(c)) hot += 1;
-    }
-    return { hot, sold, hold };
-  }, [visibleConversations]);
-
-  const groupedConversations = useMemo(() => {
-    if (view === "campaigns") {
-      const byKey = new Map<
-        string,
-        { key: string; label: string; items: ConversationListItem[]; latestUpdatedMs: number }
-      >();
-      for (const c of filteredConversations) {
-        const thread = c.campaignThread ?? null;
-        const campaignId = String(thread?.campaignId ?? "").trim();
-        const campaignName =
-          String(thread?.campaignName ?? "").trim() ||
-          String(thread?.listName ?? "").trim() ||
-          "Unlabeled campaign";
-        const key =
-          campaignId ||
-          String(thread?.listId ?? "").trim() ||
-          `campaign_name:${campaignName.toLowerCase()}`;
-        const updatedMs = Date.parse(String(c.updatedAt ?? "")) || 0;
-        const existing = byKey.get(key);
-        if (!existing) {
-          byKey.set(key, {
-            key,
-            label: campaignName,
-            items: [c],
-            latestUpdatedMs: updatedMs
-          });
-          continue;
-        }
-        existing.items.push(c);
-        existing.latestUpdatedMs = Math.max(existing.latestUpdatedMs, updatedMs);
-      }
-      return Array.from(byKey.values())
-        .map(group => ({
-          key: group.key,
-          label: group.label,
-          items: group.items.sort((a, b) => {
-            const aMs = Date.parse(String(a.updatedAt ?? "")) || 0;
-            const bMs = Date.parse(String(b.updatedAt ?? "")) || 0;
-            return bMs - aMs;
-          }),
-          isCampaignGroup: true
-        }))
-        .sort((a, b) => {
-          const aMs = Date.parse(String(a.items[0]?.updatedAt ?? "")) || 0;
-          const bMs = Date.parse(String(b.items[0]?.updatedAt ?? "")) || 0;
-          return bMs - aMs;
-        });
-    }
-
-    const groups: Array<{ key: string; label: string; items: ConversationListItem[]; isCampaignGroup: false }> = [];
-    let lastLabel = "";
-    for (const c of filteredConversations) {
-      const label = new Date(c.updatedAt).toLocaleDateString("en-US", {
-        weekday: "long",
-        year: "numeric",
-        month: "long",
-        day: "numeric"
-      });
-      if (label !== lastLabel) {
-        groups.push({ key: label, label, items: [c], isCampaignGroup: false });
-        lastLabel = label;
-      } else {
-        groups[groups.length - 1].items.push(c);
-      }
-    }
-    return groups;
-  }, [filteredConversations, view]);
+    inferOwnerDepartment,
+    inferTodoDepartment,
+    isHotDealConversation,
+    isSoldDealConversation,
+    isConversationOnHold,
+    isArchivedConversation,
+    isCampaignOnlyConversation,
+    isCampaignConversation
+  });
 
   const contactLookup = useMemo(() => {
     const byConversationId = new Map<string, ContactItem>();
@@ -9824,930 +9608,120 @@ export default function Home() {
             {kpiError ? <div className="text-xs text-red-600">{kpiError}</div> : null}
           </div>
         ) : section === "inbox" ? (
-          <>
-            <div className="mt-4 flex items-center justify-between">
-              <div className="flex gap-2">
-                <button
-                  className={`px-3 py-2 border border-[var(--border)] rounded cursor-pointer ${view === "inbox" ? "font-semibold bg-[var(--accent)] text-white border-[var(--accent)]" : "hover:bg-[var(--surface-2)]"}`}
-                  onClick={() => setView("inbox")}
-                >
-                  Inbox
-                </button>
-                <button
-                  className={`px-3 py-2 border border-[var(--border)] rounded cursor-pointer ${view === "campaigns" ? "font-semibold bg-[var(--accent)] text-white border-[var(--accent)]" : "hover:bg-[var(--surface-2)]"}`}
-                  onClick={() => setView("campaigns")}
-                >
-                  Campaigns
-                </button>
-                <button
-                  className={`px-3 py-2 border border-[var(--border)] rounded cursor-pointer ${view === "archive" ? "font-semibold bg-[var(--accent)] text-white border-[var(--accent)]" : "hover:bg-[var(--surface-2)]"}`}
-                  onClick={() => setView("archive")}
-                >
-                  Archive
-                </button>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="text-xs text-[var(--palette-graphite)]">
-                  {view === "inbox"
-                    ? `Open: ${filteredConversations.length}`
-                    : view === "campaigns"
-                      ? `Campaign leads: ${filteredConversations.length}`
-                      : `Archived: ${filteredConversations.length}`}
-                </div>
-                <button
-                  className="h-9 w-9 inline-flex items-center justify-center border-2 border-[var(--accent)] text-[var(--accent)] rounded hover:bg-[var(--surface-2)]"
-                  onClick={openCompose}
-                  title="Compose SMS"
-                  aria-label="Compose SMS"
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    className="h-5 w-5"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.6"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    aria-hidden="true"
-                  >
-                    <path d="M4 5a2 2 0 0 1 2-2h8.5" />
-                    <path d="M4 5v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9.5" />
-                    <path d="m9 15.1 1.4 3.1 3.1-1.4 6.2-6.2a2 2 0 0 0-2.8-2.8l-6.2 6.2Z" />
-                    <path d="m15.8 8.6 2.8 2.8" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-
-            <div className="mt-3 flex flex-col gap-2 md:flex-row">
-              <input
-                className="w-full border rounded px-3 py-2 text-sm"
-                placeholder="Search name or phone..."
-                value={inboxQuery}
-                onChange={e => setInboxQuery(e.target.value)}
-              />
-              {isManager ? (
-                <select
-                  className="w-28 self-start border rounded px-3 py-2 text-sm bg-white md:w-28"
-                  value={inboxOwnerFilter}
-                  onChange={e => setInboxOwnerFilter(e.target.value)}
-                  title="Filter inbox by owner"
-                >
-                  <option value="all">Owners</option>
-                  {managerLeadOwnerOptions.length ? (
-                    <optgroup label="Salespeople">
-                      {managerLeadOwnerOptions.map(name => (
-                        <option key={`inbox-owner-${name}`} value={`owner:${encodeURIComponent(name)}`}>
-                          {name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ) : null}
-                  <optgroup label="Departments">
-                  <option value="team:sales">Sales (Lead Owner)</option>
-                  <option value="team:service">Service (Department)</option>
-                  <option value="team:parts">Parts (Department)</option>
-                  <option value="team:apparel">Apparel (Department)</option>
-                  </optgroup>
-                  <option value="team:unassigned">Unassigned</option>
-                </select>
-              ) : null}
-            </div>
-
-            <div className="mt-2 flex items-center gap-2">
-              <span className="text-xs text-gray-600">Deal status</span>
-              {([
-                { key: "all" as const, label: "All" },
-                { key: "hot" as const, label: `Hot deals (${inboxDealCounts.hot})` },
-                { key: "hold" as const, label: `Hold deals (${inboxDealCounts.hold})` },
-                { key: "sold" as const, label: `Sold deals (${inboxDealCounts.sold})` }
-              ] as Array<{ key: InboxDealFilter; label: string }>).map(option => (
-                <button
-                  key={`inbox-deal-filter-${option.key}`}
-                  className={getInboxDealFilterButtonClass(inboxDealFilter === option.key)}
-                  onClick={() => setInboxDealFilter(option.key)}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="mt-3 space-y-3">
-              {groupedConversations.map(group => {
-                const expanded = group.isCampaignGroup
-                  ? (campaignInboxExpanded[group.key] ?? true)
-                  : true;
-                return (
-                <div key={group.key}>
-                  {group.isCampaignGroup ? (
-                    <button
-                      className="w-full px-1 pb-1 text-xs font-semibold text-[var(--accent)] border-b border-[var(--border)] flex items-center justify-between gap-2"
-                      onClick={() =>
-                        setCampaignInboxExpanded(prev => ({
-                          ...prev,
-                          [group.key]: !expanded
-                        }))
-                      }
-                    >
-                      <span className="truncate text-left">{group.label}</span>
-                      <span className="shrink-0">
-                        {group.items.length} {(group.items.length === 1 ? "lead" : "leads")} {expanded ? "▾" : "▸"}
-                      </span>
-                    </button>
-                  ) : (
-                    <div className="px-1 pb-1 text-xs font-semibold text-[var(--accent)] border-b border-[var(--border)]">
-                      {group.label}
-                    </div>
-                  )}
-                  {expanded ? (
-                  <div className="mt-2 border border-[var(--border)] rounded-lg divide-y bg-[var(--surface)] lr-app-list-surface">
-                    {group.items.map(c => {
-                      const campaignThreadStatus = String(c.campaignThread?.status ?? "")
-                        .trim()
-                        .toLowerCase();
-                      const linkedOpenCampaign = view === "campaigns" && campaignThreadStatus === "linked_open";
-                      return (
-                      <div key={c.id} className="flex items-stretch">
-                        <button
-                          onClick={() => openConversation(c.id)}
-                          className={`flex-1 min-w-0 text-left p-4 hover:bg-[var(--surface-2)] ${
-                            linkedOpenCampaign ? "bg-gray-50/70 opacity-70" : ""
-                          } ${
-                            selectedId === c.id ? "bg-[var(--surface-2)]" : ""
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="font-medium flex items-center gap-2">
-                                <span className="truncate">
-                                  {c.leadName && c.leadName.length > 0 ? c.leadName : c.leadKey}
-                                </span>
-                                {c.walkIn ? (
-                                  <span
-                                    className="text-blue-600 text-lg leading-none"
-                                    title="Walk-in"
-                                    aria-label="Walk-in"
-                                  >
-                                    <svg
-                                      viewBox="0 0 24 24"
-                                      width="18"
-                                      height="18"
-                                      fill="currentColor"
-                                      aria-hidden="true"
-                                    >
-                                      <path d="M13.5 5.5c.83 0 1.5-.67 1.5-1.5S14.33 2.5 13.5 2.5 12 3.17 12 4s.67 1.5 1.5 1.5zM9.8 8.9L7 23h2.1l1.8-8 2.1 2v6h2V15.5l-2.1-2 .6-3c1.3 1.5 3.1 2.5 5.2 2.5V11c-1.5 0-2.8-.9-3.4-2.1l-1-1.6c-.4-.6-1.1-1-1.8-1-.3 0-.5.1-.8.1L8 9.3V12h2V9.9l1.8-1z" />
-                                    </svg>
-                                  </span>
-                                ) : null}
-                                {renderDealTemperatureIcon(getDealTemperature(c), "text-lg")}
-                                {c.contactPreference === "call_only" ? (
-                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
-                                    Prefers Call
-                                  </span>
-                                ) : null}
-                                {c.status === "closed" ? (
-                                  <span
-                                    className={`text-xs px-2 py-1 rounded border ${
-                                      c.closedReason === "sold"
-                                        ? "bg-blue-50 text-blue-700 border-blue-200"
-                                        : "bg-gray-50"
-                                    }`}
-                                  >
-                                    {c.closedReason === "sold" ? "Sold" : "Closed"}
-                                  </span>
-                                ) : c.followUpCadence?.pauseReason === "manual_hold" ||
-                                  c.followUpCadence?.pauseReason === "unit_hold" ||
-                                  c.followUpCadence?.pauseReason === "order_hold" ||
-                                  c.followUpCadence?.stopReason === "unit_hold" ||
-                                  c.followUpCadence?.stopReason === "order_hold" ||
-                                  c.followUp?.reason === "manual_hold" ||
-                                  c.followUp?.reason === "unit_hold" ||
-                                  c.followUp?.reason === "order_hold" ||
-                                  !!c.hold ? (
-                                  <span className="text-xs px-2 py-1 rounded border bg-red-100 text-red-700 border-red-200">
-                                    Hold
-                                  </span>
-                                ) : null}
-                                {linkedOpenCampaign ? (
-                                  <span className="text-xs px-2 py-1 rounded border bg-gray-100 text-gray-700 border-gray-300">
-                                    Open in Inbox
-                                  </span>
-                                ) : null}
-                              </div>
-                              {c.vehicleDescription ? (
-                                <div className="text-xs text-gray-500 mt-1 truncate">{c.vehicleDescription}</div>
-                              ) : null}
-                            </div>
-
-                            <div className="flex items-center gap-2 shrink-0">
-                              {c.mode === "human" ? <span title="Human override">👤</span> : null}
-                              <button
-                                className={`text-xs px-2 py-1 rounded border ${
-                                  c.mode === "human" ? "bg-gray-100" : "bg-blue-50"
-                                }`}
-                                title={c.mode === "human" ? "Switch to AI" : "Switch to Human"}
-                                onClick={e => {
-                                  e.stopPropagation();
-                                  void setHumanModeForId(c.id, c.mode === "human" ? "suggest" : "human");
-                                }}
-                              >
-                                {c.mode === "human" ? "Human" : "AI"}
-                              </button>
-                              {c.pendingDraft ? <span className="text-xs px-2 py-1 rounded border">Draft</span> : null}
-                              <span className="text-xs px-2 py-1 rounded border">{c.messageCount}</span>
-                            </div>
-                          </div>
-
-                          <div className="text-sm text-gray-700 mt-2 line-clamp-2">
-                            {c.pendingDraftPreview ? (
-                              <>
-                                Draft: {renderBookingLinkLine(c.pendingDraftPreview)}
-                              </>
-                            ) : (
-                              renderBookingLinkLine(c.lastMessage?.body ?? "(no messages)")
-                            )}
-                          </div>
-
-                          <div className="text-xs text-gray-500 mt-2">
-                            {c.status === "closed" && c.closedAt
-                              ? `closed: ${new Date(c.closedAt).toLocaleString()}`
-                              : `updated: ${new Date(c.updatedAt).toLocaleString()}`}
-                          </div>
-                          {(() => {
-                            const inboxOwner =
-                              c.leadOwner?.name || c.leadOwner?.id || inboxTodoOwnerByConv.get(c.id);
-                            return inboxOwner ? (
-                            <div className="text-xs text-red-600 mt-1">
-                              Owner: {inboxOwner}
-                            </div>
-                            ) : null;
-                          })()}
-                          {linkedOpenCampaign ? (
-                            <div className="text-xs text-gray-500 mt-1">Open conversation exists in Inbox.</div>
-                          ) : null}
-                        </button>
-                        <div className="relative border-l shrink-0 w-10 flex items-center justify-center bg-[var(--surface-2)]">
-                          <button
-                            className="w-8 h-8 flex items-center justify-center text-xl font-semibold text-gray-700 hover:text-gray-900"
-                            aria-label="Conversation actions"
-                            data-actions-button
-                            onClick={e => {
-                              e.stopPropagation();
-                              setListActionsOpenId(prev => (prev === c.id ? null : c.id));
-                            }}
-                            onMouseDown={e => e.stopPropagation()}
-                          >
-                            ⋮
-                          </button>
-                              {listActionsOpenId === c.id ? (
-                                <div
-                                  className={`absolute right-0 mt-2 border rounded bg-white shadow z-10 ${
-                                    todoInlineOpenId === c.id ||
-                                    reminderInlineOpenId === c.id ||
-                                    contactInlineOpenId === c.id ||
-                                    reassignInlineOpenId === c.id
-                                      ? "w-72"
-                                      : "w-40"
-                                  }`}
-                                  data-actions-menu
-                                  onClick={e => e.stopPropagation()}
-                                  onMouseDown={e => e.stopPropagation()}
-                                >
-                                  {todoInlineOpenId === c.id ? (
-                                    <div className="p-2">
-                                      <div className="text-[11px] text-gray-500 mb-1">
-                                        To‑do note
-                                      </div>
-                                      {isManager ? (
-                                        <select
-                                          className="w-full border rounded px-2 py-1 text-xs mb-2 bg-white"
-                                          value={todoInlineTarget}
-                                          onChange={e => setTodoInlineTarget(e.target.value)}
-                                          title="Who this To Do is for"
-                                        >
-                                          <option value="lead_owner">Lead owner</option>
-                                          {reassignSalesOwnerOptions.length ? (
-                                            <optgroup label="Salespeople">
-                                              {reassignSalesOwnerOptions.map(owner => (
-                                                <option key={`todo-owner-${owner.id}`} value={`owner:${owner.id}`}>
-                                                  {owner.name}
-                                                </option>
-                                              ))}
-                                            </optgroup>
-                                          ) : null}
-                                          <optgroup label="Departments">
-                                            <option value="department:service">Service Department</option>
-                                            <option value="department:parts">Parts Department</option>
-                                            <option value="department:apparel">Apparel Department</option>
-                                          </optgroup>
-                                        </select>
-                                      ) : null}
-                                      <textarea
-                                        className="w-full border rounded px-2 py-1 text-xs"
-                                        rows={3}
-                                        value={todoInlineText}
-                                        onChange={e => setTodoInlineText(e.target.value)}
-                                        placeholder="Call customer about trade appraisal"
-                                      />
-                                      <div className="mt-2 flex justify-end gap-2">
-                                        <button
-                                          className="px-2 py-1 border rounded text-xs"
-                                          onClick={() => {
-                                            setTodoInlineOpenId(null);
-                                            setTodoInlineText("");
-                                            setTodoInlineTarget(isManager ? "lead_owner" : "self");
-                                          }}
-                                        >
-                                          Cancel
-                                        </button>
-                                        <button
-                                          className="px-2 py-1 border rounded text-xs"
-                                          onClick={() => {
-                                            void submitTodoInline(c);
-                                          }}
-                                        >
-                                          Create
-                                        </button>
-                                      </div>
-                                    </div>
-                                  ) : reminderInlineOpenId === c.id ? (
-                                    <div className="p-2">
-                                      <div className="text-[11px] text-gray-500 mb-1">
-                                        Set reminder
-                                      </div>
-                                      {isManager ? (
-                                        <select
-                                          className="w-full border rounded px-2 py-1 text-xs mb-2 bg-white"
-                                          value={reminderInlineTarget}
-                                          onChange={e => setReminderInlineTarget(e.target.value)}
-                                          title="Who should receive this reminder"
-                                        >
-                                          <option value="lead_owner">Lead owner</option>
-                                          {reassignSalesOwnerOptions.length ? (
-                                            <optgroup label="Salespeople">
-                                              {reassignSalesOwnerOptions.map(owner => (
-                                                <option key={`reminder-owner-${owner.id}`} value={`owner:${owner.id}`}>
-                                                  {owner.name}
-                                                </option>
-                                              ))}
-                                            </optgroup>
-                                          ) : null}
-                                          <optgroup label="Departments">
-                                            <option value="department:service">Service Department</option>
-                                            <option value="department:parts">Parts Department</option>
-                                            <option value="department:apparel">Apparel Department</option>
-                                          </optgroup>
-                                        </select>
-                                      ) : null}
-                                      <textarea
-                                        className="w-full border rounded px-2 py-1 text-xs"
-                                        rows={2}
-                                        value={reminderInlineText}
-                                        onChange={e => setReminderInlineText(e.target.value)}
-                                        placeholder="Call customer about financing update"
-                                      />
-                                      <label className="mt-2 block text-[11px] text-gray-500">
-                                        Reminder time
-                                        <input
-                                          type="datetime-local"
-                                          className="mt-1 w-full border rounded px-2 py-1 text-xs"
-                                          value={reminderInlineDueAt}
-                                          onChange={e => setReminderInlineDueAt(e.target.value)}
-                                        />
-                                      </label>
-                                      <label className="mt-2 block text-[11px] text-gray-500">
-                                        Send SMS reminder
-                                        <select
-                                          className="mt-1 w-full border rounded px-2 py-1 text-xs bg-white"
-                                          value={reminderInlineLeadMinutes}
-                                          onChange={e => setReminderInlineLeadMinutes(e.target.value)}
-                                        >
-                                          <option value="0">At reminder time</option>
-                                          <option value="15">15 min before</option>
-                                          <option value="30">30 min before</option>
-                                          <option value="60">1 hour before</option>
-                                        </select>
-                                      </label>
-                                      <div className="mt-2 flex justify-end gap-2">
-                                        <button
-                                          className="px-2 py-1 border rounded text-xs"
-                                          onClick={() => {
-                                            setReminderInlineOpenId(null);
-                                            setReminderInlineText("");
-                                            setReminderInlineTarget(isManager ? "lead_owner" : "self");
-                                            setReminderInlineDueAt("");
-                                            setReminderInlineLeadMinutes("30");
-                                          }}
-                                        >
-                                          Cancel
-                                        </button>
-                                        <button
-                                          className="px-2 py-1 border rounded text-xs"
-                                          disabled={reminderInlineSaving}
-                                          onClick={() => {
-                                            void submitReminderInline(c);
-                                          }}
-                                        >
-                                          {reminderInlineSaving ? "Saving..." : "Create"}
-                                        </button>
-                                      </div>
-                                    </div>
-                                  ) : contactInlineOpenId === c.id ? (
-                                    <div className="p-2">
-                                      <div className="text-[11px] text-gray-500 mb-1">
-                                        {findLinkedContactForConversation(c) ? "Edit contact" : "New contact"}
-                                      </div>
-                                      <div className="grid grid-cols-2 gap-2">
-                                        <input
-                                          className="border rounded px-2 py-1 text-xs"
-                                          value={contactInlineForm.firstName}
-                                          onChange={e =>
-                                            setContactInlineForm(prev => ({
-                                              ...prev,
-                                              firstName: e.target.value
-                                            }))
-                                          }
-                                          placeholder="First name"
-                                        />
-                                        <input
-                                          className="border rounded px-2 py-1 text-xs"
-                                          value={contactInlineForm.lastName}
-                                          onChange={e =>
-                                            setContactInlineForm(prev => ({
-                                              ...prev,
-                                              lastName: e.target.value
-                                            }))
-                                          }
-                                          placeholder="Last name"
-                                        />
-                                      </div>
-                                      <input
-                                        className="w-full border rounded px-2 py-1 text-xs mt-2"
-                                        value={contactInlineForm.phone}
-                                        onChange={e =>
-                                          setContactInlineForm(prev => ({
-                                            ...prev,
-                                            phone: e.target.value
-                                          }))
-                                        }
-                                        placeholder="Phone"
-                                      />
-                                      <input
-                                        className="w-full border rounded px-2 py-1 text-xs mt-2"
-                                        value={contactInlineForm.email}
-                                        onChange={e =>
-                                          setContactInlineForm(prev => ({
-                                            ...prev,
-                                            email: e.target.value
-                                          }))
-                                        }
-                                        placeholder="Email"
-                                      />
-                                      <div className="mt-2 flex justify-end gap-2">
-                                        <button
-                                          className="px-2 py-1 border rounded text-xs"
-                                          onClick={() => {
-                                            setContactInlineOpenId(null);
-                                            setContactInlineForm({
-                                              firstName: "",
-                                              lastName: "",
-                                              phone: "",
-                                              email: ""
-                                            });
-                                          }}
-                                        >
-                                          Cancel
-                                        </button>
-                                        <button
-                                          className="px-2 py-1 border rounded text-xs"
-                                          disabled={contactInlineSaving}
-                                          onClick={() => {
-                                            void submitInlineContact(c);
-                                          }}
-                                        >
-                                          {contactInlineSaving ? "Saving..." : "Save"}
-                                        </button>
-                                      </div>
-                                    </div>
-                                  ) : reassignInlineOpenId === c.id ? (
-                                    <div className="p-2">
-                                      <div className="text-[11px] text-gray-500 mb-1">Reassign lead</div>
-                                      <select
-                                        className="w-full border rounded px-2 py-1 text-xs"
-                                        value={reassignInlineTarget}
-                                        onChange={e => setReassignInlineTarget(e.target.value)}
-                                      >
-                                        {reassignSalesOwnerOptions.length ? (
-                                          <optgroup label="Salespeople">
-                                            {reassignSalesOwnerOptions.map(owner => (
-                                              <option key={`reassign-owner-${owner.id}`} value={`owner:${owner.id}`}>
-                                                {owner.name}
-                                              </option>
-                                            ))}
-                                          </optgroup>
-                                        ) : null}
-                                        <optgroup label="Departments">
-                                          <option value="department:service">Service</option>
-                                          <option value="department:parts">Parts</option>
-                                          <option value="department:apparel">Apparel</option>
-                                        </optgroup>
-                                      </select>
-                                      {reassignInlineTarget.startsWith("department:") ? (
-                                        <textarea
-                                          className="w-full border rounded px-2 py-1 text-xs mt-2"
-                                          rows={3}
-                                          value={reassignInlineSummary}
-                                          onChange={e => setReassignInlineSummary(e.target.value)}
-                                          placeholder="Optional note for department"
-                                        />
-                                      ) : (
-                                        <div className="mt-2 text-[11px] text-gray-500">
-                                          This will reassign lead owner only.
-                                        </div>
-                                      )}
-                                      <div className="mt-2 flex justify-end gap-2">
-                                        <button
-                                          className="px-2 py-1 border rounded text-xs"
-                                          onClick={() => {
-                                            setReassignInlineOpenId(null);
-                                            setReassignInlineTarget("department:service");
-                                            setReassignInlineSummary("");
-                                          }}
-                                        >
-                                          Cancel
-                                        </button>
-                                        <button
-                                          className="px-2 py-1 border rounded text-xs"
-                                          disabled={reassignInlineSaving}
-                                          onClick={() => {
-                                            void reassignLeadInline(c);
-                                          }}
-                                        >
-                                          {reassignInlineSaving ? "Saving..." : "Save"}
-                                        </button>
-                                      </div>
-                                    </div>
-                                  ) : (
-                                    <>
-                                      <button
-                                        className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
-                                        onClick={() => {
-                                          setContactInlineOpenId(null);
-                                          setTodoInlineOpenId(c.id);
-                                          setTodoInlineText("");
-                                          setTodoInlineTarget(isManager ? "lead_owner" : "self");
-                                          setReminderInlineOpenId(null);
-                                          setReminderInlineText("");
-                                          setReminderInlineTarget(isManager ? "lead_owner" : "self");
-                                          setReminderInlineDueAt("");
-                                          setReminderInlineLeadMinutes("30");
-                                        }}
-                                      >
-                                        Create To Do
-                                      </button>
-                                      <button
-                                        className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
-                                        onClick={() => {
-                                          setContactInlineOpenId(null);
-                                          setTodoInlineOpenId(null);
-                                          setTodoInlineText("");
-                                          setTodoInlineTarget(isManager ? "lead_owner" : "self");
-                                          setReminderInlineOpenId(c.id);
-                                          setReminderInlineText("");
-                                          setReminderInlineTarget(isManager ? "lead_owner" : "self");
-                                          setReminderInlineDueAt("");
-                                          setReminderInlineLeadMinutes("30");
-                                        }}
-                                      >
-                                        Set Reminder
-                                      </button>
-                                      <button
-                                        className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
-                                        onClick={() => {
-                                          openInlineContactFromConversation(c);
-                                        }}
-                                      >
-                                        {findLinkedContactForConversation(c) ? "Edit contact" : "Add new contact"}
-                                      </button>
-                                      {(authUser?.role === "manager" || authUser?.permissions?.canAccessTodos) ? (
-                                        <button
-                                          className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
-                                          onClick={() => {
-                                            openReassignLeadInline(c);
-                                          }}
-                                        >
-                                          Reassign lead
-                                        </button>
-                                      ) : null}
-                                    </>
-                                  )}
-                                  <button
-                                    className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-                                    onClick={() => {
-                                      setListActionsOpenId(null);
-                                      void deleteConvFromList(c.id);
-                                    }}
-                                  >
-                                    Delete
-                                  </button>
-                                </div>
-                              ) : null}
-                        </div>
-                      </div>
-                      );
-                    })}
-                  </div>
-                  ) : null}
-                </div>
-                );
-              })}
-
-              {!loading && filteredConversations.length === 0 && (
-                <div className="p-4 text-sm text-gray-600 border rounded-lg">
-                  {inboxQuery.trim()
-                    ? "No conversations match your search."
-                    : view === "inbox"
-                      ? "No open conversations."
-                      : view === "campaigns"
-                        ? "No campaign threads."
-                        : "No archived conversations."}
-                </div>
-              )}
-            </div>
-          </>
+          <InboxSection
+            view={view}
+            setView={setView}
+            filteredConversations={filteredConversations}
+            openCompose={openCompose}
+            inboxQuery={inboxQuery}
+            setInboxQuery={setInboxQuery}
+            isManager={isManager}
+            inboxOwnerFilter={inboxOwnerFilter}
+            setInboxOwnerFilter={setInboxOwnerFilter}
+            managerLeadOwnerOptions={managerLeadOwnerOptions}
+            inboxDealCounts={inboxDealCounts}
+            inboxDealFilter={inboxDealFilter}
+            setInboxDealFilter={setInboxDealFilter}
+            getInboxDealFilterButtonClass={getInboxDealFilterButtonClass}
+            groupedConversations={groupedConversations}
+            campaignInboxExpanded={campaignInboxExpanded}
+            setCampaignInboxExpanded={setCampaignInboxExpanded}
+            selectedId={selectedId}
+            openConversation={openConversation}
+            getDealTemperature={getDealTemperature}
+            renderDealTemperatureIcon={renderDealTemperatureIcon}
+            setHumanModeForId={setHumanModeForId}
+            listActionsOpenId={listActionsOpenId}
+            setListActionsOpenId={setListActionsOpenId}
+            todoInlineOpenId={todoInlineOpenId}
+            setTodoInlineOpenId={setTodoInlineOpenId}
+            todoInlineTarget={todoInlineTarget}
+            setTodoInlineTarget={setTodoInlineTarget}
+            reassignSalesOwnerOptions={reassignSalesOwnerOptions}
+            todoInlineText={todoInlineText}
+            setTodoInlineText={setTodoInlineText}
+            submitTodoInline={submitTodoInline}
+            reminderInlineOpenId={reminderInlineOpenId}
+            setReminderInlineOpenId={setReminderInlineOpenId}
+            reminderInlineTarget={reminderInlineTarget}
+            setReminderInlineTarget={setReminderInlineTarget}
+            reminderInlineText={reminderInlineText}
+            setReminderInlineText={setReminderInlineText}
+            reminderInlineDueAt={reminderInlineDueAt}
+            setReminderInlineDueAt={setReminderInlineDueAt}
+            reminderInlineLeadMinutes={reminderInlineLeadMinutes}
+            setReminderInlineLeadMinutes={setReminderInlineLeadMinutes}
+            reminderInlineSaving={reminderInlineSaving}
+            submitReminderInline={submitReminderInline}
+            contactInlineOpenId={contactInlineOpenId}
+            setContactInlineOpenId={setContactInlineOpenId}
+            findLinkedContactForConversation={findLinkedContactForConversation}
+            contactInlineForm={contactInlineForm}
+            setContactInlineForm={setContactInlineForm}
+            contactInlineSaving={contactInlineSaving}
+            submitInlineContact={submitInlineContact}
+            reassignInlineOpenId={reassignInlineOpenId}
+            setReassignInlineOpenId={setReassignInlineOpenId}
+            reassignInlineTarget={reassignInlineTarget}
+            setReassignInlineTarget={setReassignInlineTarget}
+            reassignInlineSummary={reassignInlineSummary}
+            setReassignInlineSummary={setReassignInlineSummary}
+            reassignInlineSaving={reassignInlineSaving}
+            reassignLeadInline={reassignLeadInline}
+            openInlineContactFromConversation={openInlineContactFromConversation}
+            openReassignLeadInline={openReassignLeadInline}
+            authUser={authUser}
+            deleteConvFromList={deleteConvFromList}
+            inboxTodoOwnerByConv={inboxTodoOwnerByConv}
+            renderBookingLinkLine={renderBookingLinkLine}
+            loading={loading}
+          />
         ) : null}
 
         {section === "todos" &&
         (authUser?.role === "manager" || authUser?.role === "salesperson" || isDepartmentUser || authUser?.permissions?.canAccessTodos) ? (
-          <>
-            <div className="mt-3 text-sm font-semibold text-gray-800">Task Inbox</div>
-            <div className="mt-3 space-y-2">
-              <input
-                className="w-full border rounded px-3 py-2 text-sm"
-                placeholder="Search customer..."
-                value={todoQuery}
-                onChange={e => setTodoQuery(e.target.value)}
-              />
-              <div className="flex flex-col gap-2 md:flex-row">
-                {isManager ? (
-                  <select
-                    className="w-full md:w-44 border rounded px-3 py-2 text-sm bg-white"
-                    value={todoLeadOwnerFilter}
-                    onChange={e => setTodoLeadOwnerFilter(e.target.value)}
-                    title="Filter by owner"
-                  >
-                    <option value="all">Owners</option>
-                    {managerLeadOwnerOptions.length ? (
-                      <optgroup label="Salespeople">
-                        {managerLeadOwnerOptions.map(name => (
-                          <option key={`todo-owner-${name}`} value={`owner:${encodeURIComponent(name)}`}>
-                            {name}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ) : null}
-                    <optgroup label="Departments">
-                      <option value="team:sales">Sales (Lead Owner)</option>
-                      <option value="team:service">Service (Department)</option>
-                      <option value="team:parts">Parts (Department)</option>
-                      <option value="team:apparel">Apparel (Department)</option>
-                    </optgroup>
-                    <option value="team:unassigned">Unassigned</option>
-                  </select>
-                ) : null}
-                <select
-                  className="w-full md:w-44 border rounded px-3 py-2 text-sm bg-white"
-                  value={todoTaskTypeFilter}
-                  onChange={e => setTodoTaskTypeFilter(e.target.value as "all" | TodoInboxSection)}
-                  title="Filter by task type"
-                >
-                  <option value="all">Task Type: All</option>
-                  <option value="followup">Task Type: Follow-up</option>
-                  <option value="todo">Task Type: To Do</option>
-                  <option value="reminder">Task Type: Reminder</option>
-                  <option value="appointment">Task Type: Appointment</option>
-                </select>
-              </div>
-            </div>
-            <div className="mt-3 space-y-3">
-              {todoSectionDefs.map(sectionDef => {
-                const rows = groupedTodos[sectionDef.key];
-                const sectionTheme = getTodoSectionTheme(sectionDef.key);
-                return (
-                  <div key={sectionDef.key} className="border rounded-lg overflow-hidden lr-app-list-surface">
-                    <div className={`px-4 py-2 flex items-center justify-between ${sectionTheme.header}`}>
-                      <div className={`text-xs font-semibold uppercase tracking-wide ${sectionTheme.title}`}>
-                        {sectionDef.label}
-                      </div>
-                      <div className={`text-xs ${sectionTheme.title}`}>{rows.length}</div>
-                    </div>
-                    {rows.length ? rows.map((t, rowIdx) => {
-                      const rowConv = conversationsById.get(t.convId);
-                      const reason = (t.reason ?? "").toLowerCase();
-                      const sectionType = todoInboxSection(t);
-                      const taskLabel =
-                        sectionType === "followup"
-                          ? "Follow-up"
-                          : sectionType === "appointment"
-                            ? "Appointment"
-                            : sectionType === "reminder"
-                              ? "Reminder"
-                              : "To Do";
-                      const isInternalNoteTodo = /(^|\\b)note(\\b|$)/.test(reason);
-                      const showCallButton = !isInternalNoteTodo;
-                      const actionLabel = todoActionLabel(t);
-                      const requestedCallTime =
-                        todoRequestedCallTimeLabel(t) || String(t.callbackTimeLabel ?? "").trim() || null;
-                      const appointmentTime =
-                        sectionType === "appointment" ? todoAppointmentTimeLabel(t) : null;
-                      const actionAlreadyHasRequestedTime = /\brequested(?::| call time:)/i.test(actionLabel);
-                      const showRequestedCallTime =
-                        sectionType !== "appointment" && !!requestedCallTime && !actionAlreadyHasRequestedTime;
-                      const ownerDisplay = String(t.ownerDisplayName ?? t.ownerName ?? t.leadOwnerName ?? "").trim();
-                      const appointmentOutcomeStatus = String(t.appointmentOutcomeStatus ?? "").trim();
-                      const appointmentOutcomePrimaryStatus = String(t.appointmentOutcomePrimaryStatus ?? "").trim();
-                      const appointmentOutcomeSecondaryStatus = String(t.appointmentOutcomeSecondaryStatus ?? "").trim();
-                      const appointmentOutcomeLabel = formatAppointmentOutcomeDisplay({
-                        primary: appointmentOutcomePrimaryStatus || null,
-                        secondary: appointmentOutcomeSecondaryStatus || null,
-                        legacy: appointmentOutcomeStatus || null
-                      });
-                      return (
-                        <div key={t.id} className={`p-4 flex items-start justify-between gap-4 ${rowIdx > 0 ? "border-t" : ""}`}>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2">
-                              <span className="inline-flex items-center rounded-full border border-gray-300 bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-700">
-                                {taskLabel}
-                              </span>
-                            </div>
-                            {t.leadName ? (
-                              <>
-                                <div className="text-sm font-medium mt-2 flex items-center gap-1">
-                                  {t.leadName}
-                                  {renderDealTemperatureIcon(
-                                    rowConv ? getDealTemperature(rowConv) : null,
-                                    "text-base"
-                                  )}
-                                </div>
-                                <div className="text-sm text-gray-600 break-all">{t.leadKey}</div>
-                              </>
-                            ) : (
-                              <div className="text-sm font-medium break-all mt-2 flex items-center gap-1">
-                                {t.leadKey}
-                                {renderDealTemperatureIcon(
-                                  rowConv ? getDealTemperature(rowConv) : null,
-                                  "text-base"
-                                )}
-                              </div>
-                            )}
-                            <div className="text-xs text-gray-500 mt-1">
-                              {t.reason} • {new Date(t.createdAt).toLocaleString()}
-                            </div>
-                            <div className="text-sm text-gray-700 mt-2 line-clamp-3 break-words">{t.summary}</div>
-                            <div className="text-sm font-semibold text-red-600 mt-2">
-                              Action: {actionLabel}
-                            </div>
-                            {ownerDisplay ? (
-                              <div className="text-xs text-gray-600 mt-1">Owner: {ownerDisplay}</div>
-                            ) : null}
-                            {showRequestedCallTime ? (
-                              <div className="text-xs text-gray-600 mt-1">
-                                Requested call time: {requestedCallTime}
-                              </div>
-                            ) : null}
-                            {appointmentTime ? (
-                              <div className="text-xs text-gray-600 mt-1">
-                                Appointment time: {appointmentTime}
-                              </div>
-                            ) : null}
-                            {sectionType === "appointment" && appointmentOutcomeLabel ? (
-                              <div className="text-xs text-gray-600 mt-1">
-                                Outcome: {appointmentOutcomeLabel}
-                              </div>
-                            ) : null}
-                            {reassignInlineOpenId === t.convId && rowConv ? (
-                              <div className="mt-3 border rounded p-2 bg-gray-50">
-                                <div className="text-[11px] text-gray-500 mb-1">Reassign lead</div>
-                                <select
-                                  className="w-full border rounded px-2 py-1 text-xs bg-white"
-                                  value={reassignInlineTarget}
-                                  onChange={e => setReassignInlineTarget(e.target.value)}
-                                >
-                                  {reassignSalesOwnerOptions.length ? (
-                                    <optgroup label="Salespeople">
-                                      {reassignSalesOwnerOptions.map(owner => (
-                                        <option key={`task-reassign-owner-${owner.id}`} value={`owner:${owner.id}`}>
-                                          {owner.name}
-                                        </option>
-                                      ))}
-                                    </optgroup>
-                                  ) : null}
-                                  <optgroup label="Departments">
-                                    <option value="department:service">Service</option>
-                                    <option value="department:parts">Parts</option>
-                                    <option value="department:apparel">Apparel</option>
-                                  </optgroup>
-                                </select>
-                                {reassignInlineTarget.startsWith("department:") ? (
-                                  <textarea
-                                    className="w-full border rounded px-2 py-1 text-xs mt-2 bg-white"
-                                    rows={3}
-                                    value={reassignInlineSummary}
-                                    onChange={e => setReassignInlineSummary(e.target.value)}
-                                    placeholder="Optional note for department"
-                                  />
-                                ) : (
-                                  <div className="mt-2 text-[11px] text-gray-500">
-                                    This will reassign lead owner only.
-                                  </div>
-                                )}
-                                <div className="mt-2 flex justify-end gap-2">
-                                  <button
-                                    className="px-2 py-1 border rounded text-xs"
-                                    onClick={() => {
-                                      setReassignInlineOpenId(null);
-                                      setReassignInlineTarget("department:service");
-                                      setReassignInlineSummary("");
-                                    }}
-                                  >
-                                    Cancel
-                                  </button>
-                                  <button
-                                    className="px-2 py-1 border rounded text-xs"
-                                    disabled={reassignInlineSaving}
-                                    onClick={() => {
-                                      void reassignLeadInline(rowConv);
-                                    }}
-                                  >
-                                    {reassignInlineSaving ? "Saving..." : "Save"}
-                                  </button>
-                                </div>
-                              </div>
-                            ) : null}
-                            <button
-                              className="text-xs text-blue-600 mt-2 inline-block"
-                              onClick={() => {
-                                openConversation(t.convId);
-                              }}
-                            >
-                              Open conversation
-                            </button>
-                          </div>
-                          <div className="shrink-0 flex flex-col items-end gap-2">
-                            {(authUser?.role === "manager" || authUser?.permissions?.canAccessTodos) && rowConv ? (
-                              <button
-                                className="px-3 py-2 border rounded text-sm"
-                                onClick={() => {
-                                  openReassignLeadInline(rowConv);
-                                }}
-                                title="Reassign lead"
-                              >
-                                Reassign
-                              </button>
-                            ) : null}
-                            {showCallButton ? (
-                              <button
-                                className="px-3 py-2 border rounded text-sm"
-                                onClick={() => openCallFromTodo(t)}
-                                title="Call customer"
-                              >
-                                <span className="mr-1">📞</span>
-                                Call
-                              </button>
-                            ) : null}
-                            <button
-                              className="px-3 py-2 border rounded text-sm text-gray-600"
-                              onClick={() => {
-                                if (sectionType === "appointment" && !appointmentOutcomeLabel) {
-                                  setAppointmentCloseTarget(t);
-                                  setAppointmentClosePrimaryOutcome("showed");
-                                  setAppointmentCloseSecondaryOutcome("needs_follow_up");
-                                  setAppointmentCloseNote("");
-                                  setAppointmentCloseOpen(true);
-                                  return;
-                                }
-                                void markTodoDone(t, "dismiss");
-                              }}
-                              title="Close this To Do"
-                            >
-                              Close
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    }) : (
-                      <div className="px-4 py-3 text-xs text-gray-500">No {sectionDef.label.toLowerCase()}.</div>
-                    )}
-                  </div>
-                );
-              })}
-              {!loading && filteredTodos.length === 0 && (
-                <div className="p-4 text-sm text-gray-600">
-                  {todoQuery.trim() ? "No To Dos match your search." : "No open To Dos."}
-                </div>
-              )}
-            </div>
-          </>
+          <TaskInboxSection
+            todoQuery={todoQuery}
+            setTodoQuery={setTodoQuery}
+            isManager={isManager}
+            todoLeadOwnerFilter={todoLeadOwnerFilter}
+            setTodoLeadOwnerFilter={setTodoLeadOwnerFilter}
+            managerLeadOwnerOptions={managerLeadOwnerOptions}
+            todoTaskTypeFilter={todoTaskTypeFilter}
+            setTodoTaskTypeFilter={setTodoTaskTypeFilter}
+            todoSectionDefs={todoSectionDefs}
+            groupedTodos={groupedTodos}
+            getTodoSectionTheme={getTodoSectionTheme}
+            conversationsById={conversationsById}
+            todoInboxSection={todoInboxSection}
+            todoActionLabel={todoActionLabel}
+            todoRequestedCallTimeLabel={todoRequestedCallTimeLabel}
+            todoAppointmentTimeLabel={todoAppointmentTimeLabel}
+            formatAppointmentOutcomeDisplay={formatAppointmentOutcomeDisplay}
+            reassignInlineOpenId={reassignInlineOpenId}
+            reassignInlineTarget={reassignInlineTarget}
+            setReassignInlineTarget={setReassignInlineTarget}
+            reassignSalesOwnerOptions={reassignSalesOwnerOptions}
+            reassignInlineSummary={reassignInlineSummary}
+            setReassignInlineSummary={setReassignInlineSummary}
+            setReassignInlineOpenId={setReassignInlineOpenId}
+            reassignInlineSaving={reassignInlineSaving}
+            reassignLeadInline={reassignLeadInline}
+            openConversation={openConversation}
+            authUser={authUser}
+            openReassignLeadInline={openReassignLeadInline}
+            openCallFromTodo={openCallFromTodo}
+            setAppointmentCloseTarget={setAppointmentCloseTarget}
+            setAppointmentClosePrimaryOutcome={setAppointmentClosePrimaryOutcome}
+            setAppointmentCloseSecondaryOutcome={setAppointmentCloseSecondaryOutcome}
+            setAppointmentCloseNote={setAppointmentCloseNote}
+            setAppointmentCloseOpen={setAppointmentCloseOpen}
+            markTodoDone={markTodoDone}
+            renderDealTemperatureIcon={renderDealTemperatureIcon}
+            getDealTemperature={getDealTemperature}
+            loading={loading}
+            filteredTodos={filteredTodos}
+          />
         ) : null}
 
         {section === "questions" ? (
