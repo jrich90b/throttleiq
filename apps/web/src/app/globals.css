@@ -311,8 +311,35 @@ input[type="reset"],
 }
 
 .lr-campaign-theme .lr-campaign-list .lr-campaign-list-row-selected {
-  background-color: rgba(255, 255, 255, 0.06) !important;
-  box-shadow: inset 0 0 0 1px rgba(251, 127, 4, 0.45);
+  background:
+    linear-gradient(180deg, rgba(251, 127, 4, 0.2), rgba(251, 127, 4, 0.07)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02)) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(251, 127, 4, 0.52),
+    0 10px 26px rgba(0, 0, 0, 0.34);
+}
+
+.lr-campaign-theme .lr-campaign-list .lr-campaign-list-row {
+  background: linear-gradient(180deg, rgba(17, 28, 44, 0.78), rgba(12, 20, 33, 0.76));
+}
+
+.lr-campaign-theme .lr-campaign-list .lr-campaign-list-row-btn {
+  min-height: 86px;
+}
+
+.lr-campaign-theme .lr-campaign-list .lr-campaign-filter-card {
+  background-image: linear-gradient(180deg, rgba(20, 32, 51, 0.9), rgba(12, 20, 33, 0.9));
+  border-color: rgba(255, 255, 255, 0.2) !important;
+}
+
+.lr-campaign-theme .lr-campaign-list .lr-campaign-filter-card .text-\[11px\] {
+  color: #d2ddf2 !important;
+  letter-spacing: 0.03em;
+  font-weight: 560;
+}
+
+.lr-campaign-theme .lr-campaign-list .lr-campaign-filter-card .text-sm.font-semibold {
+  color: #f6f9ff !important;
 }
 
 .lr-campaign-theme .lr-campaign-list .lr-campaign-list-row-title {
@@ -338,7 +365,9 @@ input[type="reset"],
 }
 
 .lr-campaign-theme .lr-campaign-list .lr-campaign-list-row-meta {
-  color: #d8e2f4 !important;
+  color: #dce7fb !important;
+  font-weight: 540;
+  letter-spacing: 0.01em;
 }
 
 .lr-campaign-theme .lr-campaign-panel,
@@ -386,7 +415,35 @@ input[type="reset"],
   background: linear-gradient(180deg, #ff9229, #fb7f04) !important;
   border-color: #fb7f04 !important;
   color: #101522 !important;
-  font-weight: 600;
+  font-weight: 700;
+}
+
+.lr-campaign-theme .lr-campaign-target-pill {
+  border-color: rgba(255, 255, 255, 0.34) !important;
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.lr-campaign-theme .lr-campaign-target-pill .lr-campaign-target-pill-label {
+  color: #edf4ff !important;
+  font-family:
+    var(--font-display),
+    "Avenir Next",
+    "SF Pro Display",
+    system-ui,
+    sans-serif;
+  letter-spacing: 0.012em;
+  font-weight: 620;
+  line-height: 1.2;
+}
+
+.lr-campaign-theme .lr-campaign-target-pill input.lr-campaign-target-input {
+  border-color: rgba(255, 255, 255, 0.62);
+}
+
+.lr-campaign-theme .lr-campaign-target-pill.bg-\[var\(--lr-accent\)\] .lr-campaign-target-pill-label {
+  color: #101522 !important;
+  font-weight: 700;
 }
 
 .lr-campaign-theme .lr-campaign-alert {

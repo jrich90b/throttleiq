@@ -9310,7 +9310,7 @@ export default function Home() {
             {campaignError ? <div className="text-xs text-red-600">{campaignError}</div> : null}
             <div className="grid grid-cols-3 gap-2">
               <button
-                className={`border rounded p-2 text-left hover:bg-[var(--surface)] ${
+                className={`border rounded p-2 text-left hover:bg-[var(--surface)] lr-campaign-filter-card ${
                   campaignListFilter === "all" ? "bg-[var(--surface)] ring-1 ring-[var(--accent)]" : "bg-[var(--surface-2)]"
                 }`}
                 onClick={() => setCampaignListFilter("all")}
@@ -9320,7 +9320,7 @@ export default function Home() {
                 <div className="text-sm font-semibold">{campaigns.length}</div>
               </button>
               <button
-                className={`border rounded p-2 text-left hover:bg-[var(--surface)] ${
+                className={`border rounded p-2 text-left hover:bg-[var(--surface)] lr-campaign-filter-card ${
                   campaignListFilter === "send" ? "bg-[var(--surface)] ring-1 ring-[var(--accent)]" : "bg-[var(--surface-2)]"
                 }`}
                 onClick={() => openQueuedCampaign("send")}
@@ -9330,7 +9330,7 @@ export default function Home() {
                 <div className="text-sm font-semibold">{campaignSendQueue.length}</div>
               </button>
               <button
-                className={`border rounded p-2 text-left hover:bg-[var(--surface)] ${
+                className={`border rounded p-2 text-left hover:bg-[var(--surface)] lr-campaign-filter-card ${
                   campaignListFilter === "post" ? "bg-[var(--surface)] ring-1 ring-[var(--accent)]" : "bg-[var(--surface-2)]"
                 }`}
                 onClick={() => openQueuedCampaign("post")}
@@ -9355,7 +9355,7 @@ export default function Home() {
                           onClick={() => openCampaignFromQueue(item, "send", { toast: false })}
                         >
                           <div className="font-medium truncate">{item.name || "Untitled campaign"}</div>
-                          <div className="text-[10px] text-gray-500">
+                          <div className="text-[11px] text-gray-500">
                             Queued{" "}
                             {campaignQueueEntry(item, "send")?.queuedAt
                               ? new Date(String(campaignQueueEntry(item, "send")?.queuedAt)).toLocaleString()
@@ -9393,7 +9393,7 @@ export default function Home() {
                           onClick={() => openCampaignFromQueue(item, "post", { toast: false })}
                         >
                           <div className="font-medium truncate">{item.name || "Untitled campaign"}</div>
-                          <div className="text-[10px] text-gray-500">
+                          <div className="text-[11px] text-gray-500">
                             Queued{" "}
                             {campaignQueueEntry(item, "post")?.queuedAt
                               ? new Date(String(campaignQueueEntry(item, "post")?.queuedAt)).toLocaleString()
@@ -9455,7 +9455,7 @@ export default function Home() {
                       className={`flex items-stretch ${selected ? "bg-[var(--surface-2)] lr-campaign-list-row-selected" : "lr-campaign-list-row"}`}
                     >
                       <button
-                        className="flex-1 w-full text-left p-3 hover:bg-[var(--surface-2)]"
+                        className="flex-1 w-full text-left p-3 hover:bg-[var(--surface-2)] lr-campaign-list-row-btn"
                         onClick={() => {
                           setCampaignSelectedId(item.id);
                           applyCampaignToForm(item);
@@ -10218,8 +10218,8 @@ export default function Home() {
         {isCampaignSection ? (
           <div className="max-w-4xl mx-auto space-y-4 lr-campaign-content">
             <div>
-              <h2 className="text-xl font-semibold">Campaign Studio</h2>
-              <p className="text-xs text-gray-500 mt-1">
+              <h2 className="text-2xl md:text-[2rem] font-semibold tracking-tight">Campaign Studio</h2>
+              <p className="text-sm text-gray-500 mt-1">
                 1) Set up campaign, 2) generate assets, 3) review drafts, 4) optionally publish to Meta.
               </p>
             </div>
@@ -10282,7 +10282,7 @@ export default function Home() {
                     return (
                       <label
                         key={`campaign-asset-target-${opt.value}`}
-                        className={`inline-flex items-center gap-2 border rounded px-2.5 py-1.5 text-xs transition-colors ${
+                        className={`inline-flex items-center gap-2 border rounded px-3 py-2 text-sm transition-colors lr-campaign-target-pill ${
                           isChecked
                             ? "bg-[var(--lr-accent)] text-[#101522] border-[var(--lr-accent)] font-semibold"
                             : "bg-transparent text-gray-100 border-[rgba(255,255,255,0.32)]"
@@ -10291,7 +10291,7 @@ export default function Home() {
                         <input
                           type="radio"
                           name="campaign-output-target"
-                          className="h-3.5 w-3.5 accent-[var(--lr-accent)]"
+                          className="h-4 w-4 accent-[var(--lr-accent)] lr-campaign-target-input"
                           checked={isChecked}
                           onChange={() =>
                             setCampaignForm(prev => {
@@ -10302,7 +10302,7 @@ export default function Home() {
                             })
                           }
                         />
-                        <span>{opt.label}</span>
+                        <span className="lr-campaign-target-pill-label">{opt.label}</span>
                       </label>
                     );
                   })}
