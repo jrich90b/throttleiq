@@ -13870,7 +13870,7 @@ export default function Home() {
                     </span>
                   ) : null}
                   {selectedConv.leadOwner?.name || selectedConv.leadOwner?.id ? (
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-200">
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-[color:rgba(251,127,4,0.14)] text-[var(--accent)] border border-[color:rgba(251,127,4,0.42)]">
                       Owner: {selectedConv.leadOwner?.name || selectedConv.leadOwner?.id}
                     </span>
                   ) : null}

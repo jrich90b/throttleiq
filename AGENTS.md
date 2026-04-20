@@ -265,6 +265,7 @@ When changing responses:
   - chat bubble combinations:
     - inbound: `.bg-gray-100.text-gray-900.border-gray-200`
     - outbound: `.bg-blue-600.text-white.border-blue-600`
+  - lead owner labels/chips moved from red to accent orange for inbox list rows and conversation header owner badge (`apps/web/src/app/components/InboxSection.tsx`, `apps/web/src/app/page.tsx`)
 - Do not use broad low-level color overrides that force light text on all utility classes (example risk: overriding `.text-gray-900` globally inside `.lr-app-theme` can make inbound bubbles unreadable).
 
 ## Rider-to-Rider Finance Inquiry Policy

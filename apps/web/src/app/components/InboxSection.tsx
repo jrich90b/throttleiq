@@ -318,7 +318,7 @@ export function InboxSection(props: any) {
                             const inboxOwner =
                               c.leadOwner?.name || c.leadOwner?.id || inboxTodoOwnerByConv.get(c.id);
                             return inboxOwner ? (
-                              <div className="text-xs text-red-600 mt-1">Owner: {inboxOwner}</div>
+                              <div className="text-xs text-[var(--accent)] mt-1">Owner: {inboxOwner}</div>
                             ) : null;
                           })()}
                           {linkedOpenCampaign ? (
