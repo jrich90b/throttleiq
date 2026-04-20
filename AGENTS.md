@@ -292,3 +292,11 @@ When changing responses:
 - Regenerate/send guard: when `channel` is missing and `draftId` resolves to a pending `draft_ai` message, `/conversations/:id/send` defaults that send to SMS. Explicit `channel: "email"` remains email.
 - Email send failures now return `details` from the SendGrid exception; web send alert includes that detail text for faster on-box diagnosis.
 - API logs now include structured email failure context for tracing: `convId`, `leadKey`, `to`, `from`, `replyTo`, and `details` for both manual send and follow-up email paths.
+
+## Cadence Anti-Repetition Guard
+- Follow-up cadence no-repeat logic in `services/api/src/index.ts` now blocks **near-duplicate** drafts, not only exact body matches.
+- `selectNonRepeatingCadenceMessage(...)` now checks semantic overlap against recent outbound cadence messages (token overlap + repeated long-sentence detection) before accepting a candidate.
+- Context and personalization tail lines are now skipped when that line (or near-equivalent sentence) was already used recently, preventing repeated endings like “Hope your ... search is going smoothly.”
+- This guard is applied in both:
+  - cadence send loop
+  - cadence regenerate draft path

@@ -5484,12 +5484,20 @@ async function buildCadenceRegeneratedDraft(
       buildCadenceCheckInFallbacks(firstName, labelClause)
     );
     const contextLine = getFollowUpContextLine(conv, now);
-    if (contextLine && !message.toLowerCase().includes(contextLine.toLowerCase())) {
+    if (
+      contextLine &&
+      !message.toLowerCase().includes(contextLine.toLowerCase()) &&
+      !wasCadenceLineUsedRecently(conv, contextLine)
+    ) {
       message = `${message} ${contextLine}`.trim();
     }
     if (!isCadencePreferenceClarifierMessage(message)) {
       const personalizationLine = await getCadencePersonalizationLine(conv, cadence, now);
-      if (personalizationLine && !message.toLowerCase().includes(personalizationLine.toLowerCase())) {
+      if (
+        personalizationLine &&
+        !message.toLowerCase().includes(personalizationLine.toLowerCase()) &&
+        !wasCadenceLineUsedRecently(conv, personalizationLine)
+      ) {
         message = `${message} ${personalizationLine}`.trim();
       }
     }
@@ -5554,12 +5562,20 @@ async function buildCadenceRegeneratedDraft(
     buildCadenceCheckInFallbacks(firstName, labelClause)
   );
   const contextLine = getFollowUpContextLine(conv, now);
-  if (contextLine && !message.toLowerCase().includes(contextLine.toLowerCase())) {
+  if (
+    contextLine &&
+    !message.toLowerCase().includes(contextLine.toLowerCase()) &&
+    !wasCadenceLineUsedRecently(conv, contextLine)
+  ) {
     message = `${message} ${contextLine}`.trim();
   }
   if (!isCadencePreferenceClarifierMessage(message)) {
     const personalizationLine = await getCadencePersonalizationLine(conv, cadence, now);
-    if (personalizationLine && !message.toLowerCase().includes(personalizationLine.toLowerCase())) {
+    if (
+      personalizationLine &&
+      !message.toLowerCase().includes(personalizationLine.toLowerCase()) &&
+      !wasCadenceLineUsedRecently(conv, personalizationLine)
+    ) {
       message = `${message} ${personalizationLine}`.trim();
     }
   }
@@ -9942,6 +9958,115 @@ function normalizeOutboundMediaForDedup(mediaUrls?: string[]): string {
     .join("|");
 }
 
+const CADENCE_SIMILARITY_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "by",
+  "can",
+  "did",
+  "do",
+  "for",
+  "from",
+  "get",
+  "got",
+  "have",
+  "i",
+  "if",
+  "in",
+  "is",
+  "it",
+  "just",
+  "let",
+  "me",
+  "my",
+  "of",
+  "on",
+  "or",
+  "our",
+  "so",
+  "still",
+  "that",
+  "the",
+  "this",
+  "to",
+  "we",
+  "what",
+  "when",
+  "which",
+  "with",
+  "you",
+  "your"
+]);
+
+function cadenceSimilarityTokens(text: string): Set<string> {
+  const normalized = normalizeOutboundText(text)
+    .replace(/[’']/g, "")
+    .replace(/[^a-z0-9\s]/g, " ");
+  const out = new Set<string>();
+  for (const token of normalized.split(/\s+/)) {
+    if (!token) continue;
+    if (CADENCE_SIMILARITY_STOP_WORDS.has(token)) continue;
+    if (token.length <= 2 && !/^\d+$/.test(token)) continue;
+    out.add(token);
+  }
+  return out;
+}
+
+function extractComparableCadenceSentences(text: string): string[] {
+  const compact = String(text ?? "")
+    .replace(/[!?]+/g, ".")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!compact) return [];
+  return compact
+    .split(".")
+    .map(part =>
+      normalizeOutboundText(part)
+        .replace(/[’']/g, "")
+        .replace(/[^a-z0-9\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+    )
+    .filter(part => part.length >= 24 && part.split(" ").length >= 5);
+}
+
+function cadenceTokenOverlapScore(a: string, b: string): number {
+  const left = cadenceSimilarityTokens(a);
+  const right = cadenceSimilarityTokens(b);
+  if (!left.size || !right.size) return 0;
+  let overlap = 0;
+  for (const token of left) {
+    if (right.has(token)) overlap += 1;
+  }
+  return overlap / Math.min(left.size, right.size);
+}
+
+function cadenceSharesSentence(a: string, b: string): boolean {
+  const left = extractComparableCadenceSentences(a);
+  if (!left.length) return false;
+  const right = new Set(extractComparableCadenceSentences(b));
+  if (!right.size) return false;
+  return left.some(sentence => right.has(sentence));
+}
+
+function isCadenceNearDuplicateText(a: string, b: string): boolean {
+  const left = normalizeOutboundText(a);
+  const right = normalizeOutboundText(b);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const minLen = Math.min(left.length, right.length);
+  if (minLen >= 48 && (left.includes(right) || right.includes(left))) return true;
+  const overlap = cadenceTokenOverlapScore(left, right);
+  if (overlap >= 0.82) return true;
+  if (cadenceSharesSentence(left, right) && overlap >= 0.45) return true;
+  return false;
+}
+
 function isRecentDuplicateOutbound(
   conv: any,
   to: string,
@@ -10007,12 +10132,17 @@ function selectNonRepeatingCadenceMessage(
   fallbackOptions: string[] = [],
   providers: string[] = ["twilio", "draft_ai", "human", "sendgrid"]
 ): string {
-  const normalizedCandidate = normalizeOutboundText(candidate);
+  const trimmedCandidate = String(candidate ?? "").trim();
+  const normalizedCandidate = normalizeOutboundText(trimmedCandidate);
   if (!normalizedCandidate) return candidate;
   const outbounds = getOutboundMessagesByProvider(conv, providers);
-  if (!outbounds.length) return candidate;
-  const lastNorm = normalizeOutboundText(outbounds[outbounds.length - 1]?.body ?? "");
-  if (!lastNorm || normalizedCandidate !== lastNorm) return candidate;
+  if (!outbounds.length) return trimmedCandidate || candidate;
+  const recentNorms = outbounds
+    .slice(-3)
+    .map((m: any) => normalizeOutboundText(m?.body ?? ""))
+    .filter(Boolean);
+  const isNearRecentDuplicate = recentNorms.some(prev => isCadenceNearDuplicateText(normalizedCandidate, prev));
+  if (!isNearRecentDuplicate) return trimmedCandidate || candidate;
 
   const used = new Set(
     outbounds
@@ -10021,14 +10151,48 @@ function selectNonRepeatingCadenceMessage(
   );
   for (const option of fallbackOptions) {
     const normalizedOption = normalizeOutboundText(option);
-    if (!normalizedOption || normalizedOption === lastNorm) continue;
+    if (!normalizedOption) continue;
+    if (recentNorms.some(prev => isCadenceNearDuplicateText(normalizedOption, prev))) continue;
     if (!used.has(normalizedOption)) return option.trim();
   }
   for (const option of fallbackOptions) {
     const normalizedOption = normalizeOutboundText(option);
-    if (normalizedOption && normalizedOption !== lastNorm) return option.trim();
+    if (!normalizedOption) continue;
+    if (recentNorms.some(prev => isCadenceNearDuplicateText(normalizedOption, prev))) continue;
+    return option.trim();
   }
-  return `${candidate.trim()} If timing changed, just let me know.`.trim();
+  const withSuffix = `${trimmedCandidate} If timing changed, just let me know.`.trim();
+  if (!recentNorms.some(prev => isCadenceNearDuplicateText(withSuffix, prev))) {
+    return withSuffix;
+  }
+  const fallback = "Quick follow-up — if timing changed, just let me know.";
+  if (!recentNorms.some(prev => isCadenceNearDuplicateText(fallback, prev))) {
+    return fallback;
+  }
+  return trimmedCandidate || candidate;
+}
+
+function wasCadenceLineUsedRecently(
+  conv: any,
+  line: string,
+  providers: string[] = ["twilio", "draft_ai", "human", "sendgrid"],
+  lookback: number = 4
+): boolean {
+  const lineNorm = normalizeOutboundText(line);
+  if (!lineNorm) return false;
+  const recent = getOutboundMessagesByProvider(conv, providers).slice(-Math.max(1, lookback));
+  if (!recent.length) return false;
+  for (const msg of recent) {
+    const bodyNorm = normalizeOutboundText(msg?.body ?? "");
+    if (!bodyNorm) continue;
+    if (bodyNorm.includes(lineNorm) || lineNorm.includes(bodyNorm)) return true;
+    if (isCadenceNearDuplicateText(lineNorm, bodyNorm)) return true;
+    const messageSentences = new Set(extractComparableCadenceSentences(bodyNorm));
+    if (extractComparableCadenceSentences(lineNorm).some(sentence => messageSentences.has(sentence))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function hasIntro(conv: any, dealerName?: string, agentName?: string): boolean {
@@ -15468,7 +15632,11 @@ async function processDueFollowUps() {
     }
     if (!leadUnitAvailabilityOverride && !isPostSale && cadence.kind !== "long_term") {
       const contextLine = getFollowUpContextLine(conv, now);
-      if (contextLine && !message.toLowerCase().includes(contextLine.toLowerCase())) {
+      if (
+        contextLine &&
+        !message.toLowerCase().includes(contextLine.toLowerCase()) &&
+        !wasCadenceLineUsedRecently(conv, contextLine)
+      ) {
         message = `${message} ${contextLine}`.trim();
         if (conv.appointment) {
           conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
@@ -15477,7 +15645,11 @@ async function processDueFollowUps() {
       }
       if (!isCadencePreferenceClarifierMessage(message)) {
         const personalizationLine = await getCadencePersonalizationLine(conv, cadence, now);
-        if (personalizationLine && !message.toLowerCase().includes(personalizationLine.toLowerCase())) {
+        if (
+          personalizationLine &&
+          !message.toLowerCase().includes(personalizationLine.toLowerCase()) &&
+          !wasCadenceLineUsedRecently(conv, personalizationLine)
+        ) {
           message = `${message} ${personalizationLine}`.trim();
         }
       }
