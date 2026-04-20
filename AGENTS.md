@@ -323,6 +323,9 @@ When changing responses:
   1) dealer profile campaign size
   2) legacy profile keys (`webBannerWidth`, `webBannerHeight`) for backward compatibility
   3) env defaults (`CAMPAIGN_WEB_BANNER_WIDTH`, `CAMPAIGN_WEB_BANNER_HEIGHT`)
+- Settings UI note:
+  - Dealer Profile save flow must not silently write fixed defaults (e.g., `1200x628`) when banner size fields are unset.
+  - On load/save, treat legacy top-level keys as valid fallback sources so older dealer profiles retain their configured banner size.
 
 ## Rider-to-Rider Finance Inquiry Policy
 - Dealer profile toggle:

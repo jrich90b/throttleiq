@@ -2261,8 +2261,8 @@ export default function Home() {
     webSearchReferenceUrls: [] as string[],
     webSearchUseGooglePlacePhotos: false,
     webSearchGooglePlaceId: "",
-    campaignWebBannerWidth: "1200",
-    campaignWebBannerHeight: "628",
+    campaignWebBannerWidth: "",
+    campaignWebBannerHeight: "",
     campaignWebBannerFit: "auto" as "auto" | "cover" | "contain",
     taxRate: "8"
   });
@@ -5049,8 +5049,8 @@ export default function Home() {
         const webSearchUseGooglePlacePhotos = webSearch.useGooglePlacePhotos === true;
         const webSearchGooglePlaceId = String(webSearch.googlePlaceId ?? "").trim();
         const campaign = profile.campaign ?? {};
-        const campaignWebBannerWidth = Number(campaign.webBannerWidth);
-        const campaignWebBannerHeight = Number(campaign.webBannerHeight);
+        const campaignWebBannerWidth = Number(campaign.webBannerWidth ?? profile.webBannerWidth);
+        const campaignWebBannerHeight = Number(campaign.webBannerHeight ?? profile.webBannerHeight);
         const campaignWebBannerFitRaw = String(campaign.webBannerFit ?? "").trim().toLowerCase();
         const campaignWebBannerFit =
           campaignWebBannerFitRaw === "contain" || campaignWebBannerFitRaw === "cover"
@@ -5097,11 +5097,11 @@ export default function Home() {
           campaignWebBannerWidth:
             Number.isFinite(campaignWebBannerWidth) && campaignWebBannerWidth > 0
               ? String(campaignWebBannerWidth)
-              : "1200",
+              : "",
           campaignWebBannerHeight:
             Number.isFinite(campaignWebBannerHeight) && campaignWebBannerHeight > 0
               ? String(campaignWebBannerHeight)
-              : "628",
+              : "",
           campaignWebBannerFit: campaignWebBannerFit as "auto" | "cover" | "contain",
           taxRate: String(taxRate)
         });
@@ -8434,6 +8434,33 @@ export default function Home() {
         typeof dealerProfile.policies === "object"
           ? dealerProfile.policies
           : {};
+      const existingCampaign =
+        dealerProfile &&
+        typeof dealerProfile === "object" &&
+        dealerProfile.campaign &&
+        typeof dealerProfile.campaign === "object"
+          ? dealerProfile.campaign
+          : {};
+      const campaignWebBannerWidthFromForm = Number(dealerProfileForm.campaignWebBannerWidth);
+      const campaignWebBannerHeightFromForm = Number(dealerProfileForm.campaignWebBannerHeight);
+      const campaignWebBannerWidthFallback = Number(
+        (existingCampaign as any)?.webBannerWidth ?? (dealerProfile as any)?.webBannerWidth
+      );
+      const campaignWebBannerHeightFallback = Number(
+        (existingCampaign as any)?.webBannerHeight ?? (dealerProfile as any)?.webBannerHeight
+      );
+      const campaignWebBannerWidth =
+        Number.isFinite(campaignWebBannerWidthFromForm) && campaignWebBannerWidthFromForm > 0
+          ? Math.round(campaignWebBannerWidthFromForm)
+          : Number.isFinite(campaignWebBannerWidthFallback) && campaignWebBannerWidthFallback > 0
+            ? Math.round(campaignWebBannerWidthFallback)
+            : undefined;
+      const campaignWebBannerHeight =
+        Number.isFinite(campaignWebBannerHeightFromForm) && campaignWebBannerHeightFromForm > 0
+          ? Math.round(campaignWebBannerHeightFromForm)
+          : Number.isFinite(campaignWebBannerHeightFallback) && campaignWebBannerHeightFallback > 0
+            ? Math.round(campaignWebBannerHeightFallback)
+            : undefined;
       const payload = {
         dealerName: dealerProfileForm.dealerName.trim(),
         agentName: dealerProfileForm.agentName.trim(),
@@ -8480,8 +8507,9 @@ export default function Home() {
           googlePlaceId: String(dealerProfileForm.webSearchGooglePlaceId ?? "").trim()
         },
         campaign: {
-          webBannerWidth: Math.max(1, Number(dealerProfileForm.campaignWebBannerWidth) || 1200),
-          webBannerHeight: Math.max(1, Number(dealerProfileForm.campaignWebBannerHeight) || 628),
+          ...(existingCampaign as Record<string, any>),
+          webBannerWidth: campaignWebBannerWidth,
+          webBannerHeight: campaignWebBannerHeight,
           webBannerFit:
             dealerProfileForm.campaignWebBannerFit === "contain" ||
             dealerProfileForm.campaignWebBannerFit === "cover"
@@ -10581,8 +10609,28 @@ export default function Home() {
                 </div>
                 <div className="text-[11px] text-gray-500">
                   Web banner uses Dealer Profile size (
-                  {Math.max(1, Number(dealerProfileForm.campaignWebBannerWidth) || 1200)}x
-                  {Math.max(1, Number(dealerProfileForm.campaignWebBannerHeight) || 628)}), fit mode:{" "}
+                  {(() => {
+                    const widthFromForm = Number(dealerProfileForm.campaignWebBannerWidth);
+                    const widthFromProfile = Number(
+                      (dealerProfile as any)?.campaign?.webBannerWidth ?? (dealerProfile as any)?.webBannerWidth
+                    );
+                    if (Number.isFinite(widthFromForm) && widthFromForm > 0) return Math.round(widthFromForm);
+                    if (Number.isFinite(widthFromProfile) && widthFromProfile > 0) return Math.round(widthFromProfile);
+                    return 1920;
+                  })()}
+                  x
+                  {(() => {
+                    const heightFromForm = Number(dealerProfileForm.campaignWebBannerHeight);
+                    const heightFromProfile = Number(
+                      (dealerProfile as any)?.campaign?.webBannerHeight ?? (dealerProfile as any)?.webBannerHeight
+                    );
+                    if (Number.isFinite(heightFromForm) && heightFromForm > 0) return Math.round(heightFromForm);
+                    if (Number.isFinite(heightFromProfile) && heightFromProfile > 0) {
+                      return Math.round(heightFromProfile);
+                    }
+                    return 600;
+                  })()}
+                  ), fit mode:{" "}
                   <span className="font-semibold">{dealerProfileForm.campaignWebBannerFit}</span>. Select{" "}
                   <span className="font-semibold">Web banner</span> as the selected output format to generate that exact frame.
                 </div>
@@ -12560,6 +12608,7 @@ export default function Home() {
                         className="border rounded px-3 py-2 text-sm w-full"
                         type="number"
                         min={1}
+                        placeholder="2400"
                         value={dealerProfileForm.campaignWebBannerWidth}
                         onChange={e =>
                           setDealerProfileForm({ ...dealerProfileForm, campaignWebBannerWidth: e.target.value })
@@ -12572,6 +12621,7 @@ export default function Home() {
                         className="border rounded px-3 py-2 text-sm w-full"
                         type="number"
                         min={1}
+                        placeholder="1079"
                         value={dealerProfileForm.campaignWebBannerHeight}
                         onChange={e =>
                           setDealerProfileForm({ ...dealerProfileForm, campaignWebBannerHeight: e.target.value })
