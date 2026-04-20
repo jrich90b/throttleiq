@@ -269,7 +269,7 @@ When changing responses:
 
 ## Rider-to-Rider Finance Inquiry Policy
 - Dealer profile toggle:
-  - `policies.riderToRiderFinancingEnabled` (managed from Settings -> Dealer Profile -> Financing Programs).
+  - `policies.riderToRiderFinancingEnabled` (managed from Settings -> Dealer Profile -> profile fields near Credit app URL).
 - Inbound deterministic handling (`services/api/src/routes/sendgridInbound.ts`):
   - Detect lead source/inquiry text containing Rider-to-Rider financing.
   - If enabled: acknowledge inquiry, create approval todo, set manual handoff (`credit_app`), stop cadence.

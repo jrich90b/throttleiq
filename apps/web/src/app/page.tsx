@@ -12167,6 +12167,25 @@ export default function Home() {
                         onChange={e => setDealerProfileForm({ ...dealerProfileForm, creditAppUrl: e.target.value })}
                       />
                     </label>
+                    <div className="md:col-span-2 border rounded p-3">
+                      <div className="text-xs text-gray-600 mb-2">Marketplace Rider-to-Rider financing</div>
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={!!dealerProfileForm.riderToRiderFinancingEnabled}
+                          onChange={e =>
+                            setDealerProfileForm({
+                              ...dealerProfileForm,
+                              riderToRiderFinancingEnabled: e.target.checked
+                            })
+                          }
+                        />
+                        Dealer offers Rider-to-Rider financing
+                      </label>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Used for &quot;Marketplace - Rider to Rider Finance Inquiry&quot; replies and regenerate behavior.
+                      </div>
+                    </div>
                     <label className="space-y-1 md:col-span-2">
                       <div className="text-xs text-gray-600">
                         Lien holder / payoff response (used when customer asks for lien holder details)
@@ -12415,27 +12434,6 @@ export default function Home() {
                     </div>
                     <div className="text-xs text-gray-500 mt-1">
                       Used to decide when to offer pickup or delay test rides (snow or &lt; threshold).
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="text-sm font-medium mb-2">Financing Programs</div>
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={!!dealerProfileForm.riderToRiderFinancingEnabled}
-                        onChange={e =>
-                          setDealerProfileForm({
-                            ...dealerProfileForm,
-                            riderToRiderFinancingEnabled: e.target.checked
-                          })
-                        }
-                      />
-                      Dealer offers Rider to Rider financing
-                    </label>
-                    <div className="text-xs text-gray-500 mt-1">
-                      Controls &quot;Marketplace - Rider to Rider Finance Inquiry&quot; handling for inbound and
-                      regenerate drafts.
                     </div>
                   </div>
 
