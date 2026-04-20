@@ -269,7 +269,7 @@ When changing responses:
   - inbox row hover/readability: conversation rows use dedicated `.lr-inbox-row` hover/keyboard-focus contrast treatment (`apps/web/src/app/components/InboxSection.tsx`, `apps/web/src/app/globals.css`) so hover states no longer wash out text
   - task inbox action callouts (`Action: ...`) now use accent orange instead of red (`apps/web/src/app/components/TaskInboxSection.tsx`)
   - task inbox task-type pills use stronger high-contrast styling; Follow-up now uses solid accent orange with dark text so the badge label remains readable in dark mode (`apps/web/src/app/components/TaskInboxSection.tsx`)
-  - Campaign Studio generated-file cards now expose direct per-file actions in-frame (`Open`, `Download`, `Print`, and context-aware `Send`/`Post`) so users no longer need to manually toggle queue checkboxes before acting (`apps/web/src/app/page.tsx`)
+  - Campaign Studio preview cards now include aligned per-image action rows inside the same frame as each generated image (`Open`, `Download`, `Print`, and context-aware `Send`/`Post`) so actions are in-context without separate queue toggles (`apps/web/src/app/page.tsx`)
 - Do not use broad low-level color overrides that force light text on all utility classes (example risk: overriding `.text-gray-900` globally inside `.lr-app-theme` can make inbound bubbles unreadable).
 
 ## Rider-to-Rider Finance Inquiry Policy

@@ -10620,7 +10620,7 @@ export default function Home() {
                   Generate creates/updates the selected output. Redo retries the same output.
                 </div>
                 <div className="pt-1 border-t border-gray-200 text-[11px] text-gray-600">
-                  Use the per-file actions below for Open, Download, Print, and Send/Post.
+                  Use the per-file actions directly inside each preview frame.
                 </div>
               </div>
             </div>
@@ -10639,57 +10639,6 @@ export default function Home() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {campaignGeneratedAssets.map((asset, idx) => {
                       const label = campaignAssetDisplayLabel(asset);
-                      return (
-                        <a
-                          key={`campaign-preview-image-${asset.target}-${idx}`}
-                          href={asset.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="block border rounded overflow-hidden bg-white"
-                          title={asset.url}
-                        >
-                          <div className="px-3 py-2 border-b text-xs font-semibold bg-gray-50">{label}</div>
-                          <img
-                            src={asset.url}
-                            alt={`Campaign preview ${label}`}
-                            className="w-full max-h-[440px] object-contain bg-white"
-                            loading="lazy"
-                          />
-                        </a>
-                      );
-                    })}
-                  </div>
-                ) : campaignFinalImageUrl ? (
-                  <a
-                    href={campaignFinalImageUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="block border rounded overflow-hidden bg-white"
-                    title={campaignFinalImageUrl}
-                  >
-                    <img
-                      src={campaignFinalImageUrl}
-                      alt="Final generated campaign creative"
-                      className="w-full max-h-[440px] object-contain bg-white"
-                      loading="lazy"
-                    />
-                  </a>
-                ) : (
-                  <div className="text-sm text-gray-500 py-10 text-center">
-                    Generate to preview your final image here.
-                  </div>
-                )}
-                <div className="text-[11px] text-gray-500">
-                  Preview is scaled to fit this panel. Download/Open uses the native file size shown in Generated files.
-                </div>
-              </div>
-
-              {campaignGeneratedAssets.length ? (
-                <div className="space-y-2">
-                  <div className="text-xs font-semibold text-gray-700">Generated files</div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                    {campaignGeneratedAssets.map((asset, idx) => {
-                      const label = campaignAssetDisplayLabel(asset);
                       const meta = [asset.mimeType].filter(Boolean).join(" • ");
                       const queueKind = campaignQueueKindForAssetTarget(asset.target);
                       const queueable = Boolean(queueKind);
@@ -10706,10 +10655,24 @@ export default function Home() {
                       const actionBusyLabel =
                         queueKind === "send" ? "Opening Send..." : queueKind === "post" ? "Opening Post..." : "";
                       return (
-                        <div key={`campaign-generated-asset-${asset.target}-${idx}`} className="border rounded px-3 py-2 bg-gray-50">
-                          <div className="text-xs font-semibold">{label}</div>
-                          {meta ? <div className="text-[11px] text-gray-500 mt-0.5">{meta}</div> : null}
-                          <div className="grid grid-cols-2 gap-2 mt-3">
+                        <div
+                          key={`campaign-preview-image-${asset.target}-${idx}`}
+                          className="border rounded overflow-hidden bg-white flex flex-col"
+                          title={asset.url}
+                        >
+                          <div className="px-3 py-2 border-b text-xs bg-gray-50">
+                            <div className="font-semibold">{label}</div>
+                            {meta ? <div className="text-[11px] text-gray-500 mt-0.5">{meta}</div> : null}
+                          </div>
+                          <a href={asset.url} target="_blank" rel="noreferrer" className="block bg-white">
+                            <img
+                              src={asset.url}
+                              alt={`Campaign preview ${label}`}
+                              className="w-full max-h-[440px] object-contain bg-white"
+                              loading="lazy"
+                            />
+                          </a>
+                          <div className="grid grid-cols-2 gap-2 p-2 border-t bg-gray-50 mt-auto">
                             <a
                               className="inline-flex items-center justify-center px-2 py-1.5 border rounded text-xs hover:bg-white"
                               href={asset.url}
@@ -10758,8 +10721,52 @@ export default function Home() {
                       );
                     })}
                   </div>
+                ) : campaignFinalImageUrl ? (
+                  <div className="border rounded overflow-hidden bg-white flex flex-col" title={campaignFinalImageUrl}>
+                    <a href={campaignFinalImageUrl} target="_blank" rel="noreferrer" className="block bg-white">
+                      <img
+                        src={campaignFinalImageUrl}
+                        alt="Final generated campaign creative"
+                        className="w-full max-h-[440px] object-contain bg-white"
+                        loading="lazy"
+                      />
+                    </a>
+                    <div className="grid grid-cols-2 gap-2 p-2 border-t bg-gray-50">
+                      <a
+                        className="inline-flex items-center justify-center px-2 py-1.5 border rounded text-xs hover:bg-white"
+                        href={campaignFinalImageUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Open
+                      </a>
+                      <a
+                        className="inline-flex items-center justify-center px-2 py-1.5 border rounded text-xs hover:bg-white"
+                        href={campaignFinalImageUrl}
+                        download
+                      >
+                        Download
+                      </a>
+                      <button
+                        className="inline-flex items-center justify-center px-2 py-1.5 border rounded text-xs hover:bg-white"
+                        onClick={() => printCampaignAsset({ target: campaignActiveTarget, url: campaignFinalImageUrl })}
+                      >
+                        Print
+                      </button>
+                      <div className="inline-flex items-center justify-center px-2 py-1.5 border rounded text-xs text-gray-500 bg-white">
+                        Print only
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-sm text-gray-500 py-10 text-center">
+                    Generate to preview your final image here.
+                  </div>
+                )}
+                <div className="text-[11px] text-gray-500">
+                  Preview is scaled to fit this panel. Buttons in each frame use native file output.
                 </div>
-              ) : null}
+              </div>
 
               {campaignWantsSms ? (
                 <label className="block text-xs text-gray-600">
