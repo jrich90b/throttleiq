@@ -282,4 +282,8 @@ When changing responses:
 
 ## Send Channel Guardrail
 - In `/conversations/:id/send` (`services/api/src/index.ts`), explicit `channel: "sms"` must never be auto-overridden to email by conversation classification.
-- Email fallback from classification is only allowed when `channel` is missing (legacy caller behavior).
+- Classification channel is no longer used to infer email for manual send.
+- Missing-channel fallback now prefers SMS unless email intent is explicit from:
+  - destination looks like an email address (non-phone), or
+  - email payload hints (`subject`, `attachments`, `skipEmailSignature`, `forceEmail`).
+- Web send path (`apps/web/src/app/page.tsx`) now snapshots send channel at click time and passes it through edit-note modal flow so channel cannot drift if tabs are switched before confirming.

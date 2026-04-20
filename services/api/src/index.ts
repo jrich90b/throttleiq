@@ -23149,9 +23149,23 @@ app.post("/conversations/:id/send", async (req, res) => {
   const rawTo = String(conv.leadKey ?? "").trim();
   const emailTo = conv.lead?.email ?? (rawTo.includes("@") ? rawTo : null);
   const requestedEmailChannel = channel === "email";
+  const requestedSmsChannel = channel === "sms";
+  const rawToDigits = rawTo.replace(/\D/g, "");
+  const rawToLooksPhone =
+    rawTo.startsWith("+") ||
+    rawToDigits.length === 10 ||
+    (rawToDigits.length === 11 && rawToDigits.startsWith("1"));
+  const hasEmailPayloadHints =
+    typeof req.body?.subject === "string" ||
+    Array.isArray(req.body?.attachments) ||
+    req.body?.skipEmailSignature === true ||
+    req.body?.forceEmail === true;
+  const implicitEmailPreferred =
+    !channel &&
+    ((rawTo.includes("@") && !rawToLooksPhone) || hasEmailPayloadHints);
   const wantsEmail =
     !!emailTo &&
-    (channel === "email" || rawTo.includes("@") || conv.classification?.channel === "email");
+    (requestedEmailChannel || (!requestedSmsChannel && implicitEmailPreferred));
   if (requestedEmailChannel && !emailTo) {
     return res.status(400).json({
       ok: false,

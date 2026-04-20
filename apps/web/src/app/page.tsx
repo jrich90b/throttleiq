@@ -1997,7 +1997,7 @@ export default function Home() {
   const [editPromptOpen, setEditPromptOpen] = useState(false);
   const [editNote, setEditNote] = useState("");
   const [pendingSend, setPendingSend] = useState<
-    { body: string; draftId?: string; mediaUrls?: string[] } | null
+    { body: string; draftId?: string; mediaUrls?: string[]; channel: "sms" | "email" } | null
   >(null);
   const [smsAttachments, setSmsAttachments] = useState<
     { name: string; type: string; size: number; url: string; mode: "mms" | "link" }[]
@@ -6680,8 +6680,10 @@ export default function Home() {
     attachments?: { name: string; type: string; size: number; content: string }[];
     mediaUrls?: string[];
     forceEmail?: boolean;
+    channel?: "sms" | "email";
   }): Promise<boolean> {
     if (!selectedConv) return false;
+    const sendChannel = payload.channel ?? (messageFilter === "email" ? "email" : "sms");
     setComposeSending(true);
     try {
       const resp = await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/send`, {
@@ -6691,23 +6693,23 @@ export default function Home() {
           ...payload,
           manualTakeover: payload.manualTakeover ?? !payload.draftId,
           skipEmailSignature: payload.skipEmailSignature === true,
-          channel: messageFilter,
+          channel: sendChannel,
           forceEmail: payload.forceEmail === true,
           attachments:
-            messageFilter === "email"
+            sendChannel === "email"
               ? (payload.attachments || []).map(att => ({
                   content: att.content,
                   filename: att.name,
                   type: att.type
                 }))
               : undefined,
-          mediaUrls: messageFilter === "sms" ? payload.mediaUrls ?? [] : undefined
+          mediaUrls: sendChannel === "sms" ? payload.mediaUrls ?? [] : undefined
         })
       });
       const data = await resp.json().catch(() => null);
       if (!resp.ok) {
         if (
-          messageFilter === "email" &&
+          sendChannel === "email" &&
           data?.error === "email opt-in not present for this lead" &&
           !payload.forceEmail
         ) {
@@ -6722,7 +6724,7 @@ export default function Home() {
         window.alert(data?.error ?? "Send failed");
         return false;
       }
-      if (messageFilter === "email") {
+      if (sendChannel === "email") {
         const attachmentCount = payload.attachments?.length ?? 0;
         setEmailAttachments([]);
         setEmailAttachmentsBusy(false);
@@ -6731,7 +6733,7 @@ export default function Home() {
             ? `Email sent with ${attachmentCount} attachment${attachmentCount === 1 ? "" : "s"}.`
             : "Email sent."
         );
-      } else if (messageFilter === "sms") {
+      } else if (sendChannel === "sms") {
         const mediaCount = payload.mediaUrls?.length ?? 0;
         setSmsAttachments([]);
         setSmsAttachmentsBusy(false);
@@ -6808,25 +6810,26 @@ export default function Home() {
     if (!selectedConv) return;
     if (composeSending) return;
     if (messageFilter === "calls") return;
-    if (messageFilter === "sms" && selectedConv.contactPreference === "call_only") {
+    const sendChannel: "sms" | "email" = messageFilter === "email" ? "email" : "sms";
+    if (sendChannel === "sms" && selectedConv.contactPreference === "call_only") {
       return;
     }
     const leadEmail = String(selectedConv.lead?.email ?? "").trim();
     const hasLeadEmail = leadEmail.includes("@");
-    if (messageFilter === "email" && !hasLeadEmail) {
+    if (sendChannel === "email" && !hasLeadEmail) {
       window.alert("No email address is on this lead. Add an email first, or send SMS instead.");
       return;
     }
-    if (messageFilter === "email" && emailAttachmentsBusy) {
+    if (sendChannel === "email" && emailAttachmentsBusy) {
       window.alert("Attachments are still processing. Please wait a moment.");
       return;
     }
-    if (messageFilter === "sms" && smsAttachmentsBusy) {
+    if (sendChannel === "sms" && smsAttachmentsBusy) {
       window.alert("Media is still uploading. Please wait a moment.");
       return;
     }
-    const useEmailDraft = messageFilter === "email" && !!emailDraft && !emailManualMode;
-    const effectiveDraft = messageFilter === "email" ? null : pendingDraft;
+    const useEmailDraft = sendChannel === "email" && !!emailDraft && !emailManualMode;
+    const effectiveDraft = sendChannel === "email" ? null : pendingDraft;
     const bodySource =
       sendBodySource === "user"
         ? sendBody
@@ -6834,20 +6837,20 @@ export default function Home() {
           ? emailDraft
           : (pendingDraft?.body ?? sendBody);
     let body = bodySource.trim();
-    if (messageFilter === "email") {
+    if (sendChannel === "email") {
       const bookingUrl = extractBookingUrl(emailDraft);
       if (bookingUrl && !/https?:\/\//i.test(body)) {
         body = injectBookingUrl(body, bookingUrl);
       }
     }
     const smsMmsMediaUrls =
-      messageFilter === "sms"
+      sendChannel === "sms"
         ? smsAttachments.filter(att => att.mode === "mms").map(att => att.url)
         : [];
     const smsLinkAttachments =
-      messageFilter === "sms" ? smsAttachments.filter(att => att.mode === "link") : [];
+      sendChannel === "sms" ? smsAttachments.filter(att => att.mode === "link") : [];
     const smsLinkSuffix =
-      messageFilter === "sms" && smsLinkAttachments.length
+      sendChannel === "sms" && smsLinkAttachments.length
         ? `\n\n${smsLinkAttachments
             .map(att => `${att.name || "Media"}: ${att.url}`)
             .join("\n")}`
@@ -6855,7 +6858,7 @@ export default function Home() {
     if (smsLinkSuffix) {
       body = `${body}${smsLinkSuffix}`.trim();
     }
-    if (!body && !(messageFilter === "sms" && smsMmsMediaUrls.length > 0)) return;
+    if (!body && !(sendChannel === "sms" && smsMmsMediaUrls.length > 0)) return;
     const draftId = effectiveDraft?.id;
     const normalizeDraftCompare = (text: string) => text.replace(/\r\n/g, "\n").trim();
     const edited =
@@ -6865,15 +6868,16 @@ export default function Home() {
       setPendingSend({
         body,
         draftId,
-        mediaUrls: messageFilter === "sms" ? smsMmsMediaUrls : undefined
+        mediaUrls: sendChannel === "sms" ? smsMmsMediaUrls : undefined,
+        channel: sendChannel
       });
       setEditNote("");
       setEditPromptOpen(true);
       return;
     }
-    const manualTakeover = messageFilter === "email" ? emailManualMode : !draftId;
-    const attachments = messageFilter === "email" ? emailAttachments : undefined;
-    const isManualEmail = messageFilter === "email" && emailManualMode;
+    const manualTakeover = sendChannel === "email" ? emailManualMode : !draftId;
+    const attachments = sendChannel === "email" ? emailAttachments : undefined;
+    const isManualEmail = sendChannel === "email" && emailManualMode;
     await doSend(
       draftId
         ? {
@@ -6881,14 +6885,16 @@ export default function Home() {
             draftId,
             manualTakeover,
             attachments,
-            mediaUrls: messageFilter === "sms" ? smsMmsMediaUrls : undefined,
+            mediaUrls: sendChannel === "sms" ? smsMmsMediaUrls : undefined,
+            channel: sendChannel,
             skipEmailSignature: isManualEmail
           }
         : {
             body,
             manualTakeover: isManualEmail ? true : manualTakeover,
             attachments,
-            mediaUrls: messageFilter === "sms" ? smsMmsMediaUrls : undefined,
+            mediaUrls: sendChannel === "sms" ? smsMmsMediaUrls : undefined,
+            channel: sendChannel,
             skipEmailSignature: isManualEmail
           }
     );
@@ -15664,14 +15670,15 @@ export default function Home() {
                           ? {
                               ...pendingSend,
                               editNote: note,
-                              attachments: messageFilter === "email" ? emailAttachments : undefined,
-                              mediaUrls: messageFilter === "sms" ? pendingSend.mediaUrls : undefined
+                              attachments: pendingSend.channel === "email" ? emailAttachments : undefined,
+                              mediaUrls: pendingSend.channel === "sms" ? pendingSend.mediaUrls : undefined
                             }
                           : {
                               body: pendingSend.body,
+                              channel: pendingSend.channel,
                               editNote: note,
-                              attachments: messageFilter === "email" ? emailAttachments : undefined,
-                              mediaUrls: messageFilter === "sms" ? pendingSend.mediaUrls : undefined
+                              attachments: pendingSend.channel === "email" ? emailAttachments : undefined,
+                              mediaUrls: pendingSend.channel === "sms" ? pendingSend.mediaUrls : undefined
                             };
                         setEditPromptOpen(false);
                         setPendingSend(null);
@@ -15686,13 +15693,14 @@ export default function Home() {
                         const payload = pendingSend.draftId
                           ? {
                               ...pendingSend,
-                              attachments: messageFilter === "email" ? emailAttachments : undefined,
-                              mediaUrls: messageFilter === "sms" ? pendingSend.mediaUrls : undefined
+                              attachments: pendingSend.channel === "email" ? emailAttachments : undefined,
+                              mediaUrls: pendingSend.channel === "sms" ? pendingSend.mediaUrls : undefined
                             }
                           : {
                               body: pendingSend.body,
-                              attachments: messageFilter === "email" ? emailAttachments : undefined,
-                              mediaUrls: messageFilter === "sms" ? pendingSend.mediaUrls : undefined
+                              channel: pendingSend.channel,
+                              attachments: pendingSend.channel === "email" ? emailAttachments : undefined,
+                              mediaUrls: pendingSend.channel === "sms" ? pendingSend.mediaUrls : undefined
                             };
                         setEditPromptOpen(false);
                         setPendingSend(null);
