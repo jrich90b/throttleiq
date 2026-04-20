@@ -22144,6 +22144,9 @@ app.patch("/campaigns/:id", requireManager, (req, res) => {
   if (req.body?.generatedAssets !== undefined && Array.isArray(req.body.generatedAssets)) {
     patch.generatedAssets = req.body.generatedAssets;
   }
+  if (req.body?.assetGenerationStatus !== undefined && req.body?.assetGenerationStatus) {
+    patch.assetGenerationStatus = req.body.assetGenerationStatus;
+  }
   if (req.body?.sourceHits !== undefined && Array.isArray(req.body.sourceHits)) patch.sourceHits = req.body.sourceHits;
   if (req.body?.metadata !== undefined && req.body?.metadata && typeof req.body.metadata === "object") {
     patch.metadata = req.body.metadata;

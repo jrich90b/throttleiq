@@ -1869,6 +1869,7 @@ export default function Home() {
   const [campaignAssetQueueBusyTarget, setCampaignAssetQueueBusyTarget] =
     useState<CampaignAssetTarget | "">("");
   const [campaignDeletingId, setCampaignDeletingId] = useState("");
+  const [campaignRemovingAssetKey, setCampaignRemovingAssetKey] = useState("");
   const [campaignInspirationUploadBusy, setCampaignInspirationUploadBusy] = useState(false);
   const [campaignAssetUploadBusy, setCampaignAssetUploadBusy] = useState(false);
   const [campaignBriefUploadBusy, setCampaignBriefUploadBusy] = useState(false);
@@ -3178,6 +3179,201 @@ export default function Home() {
       return null;
     } finally {
       setCampaignAssetQueueBusyTarget("");
+    }
+  }
+
+  async function removeCampaignGeneratedAsset(asset: CampaignGeneratedAsset) {
+    const campaignId = String(campaignSelectedId ?? "").trim();
+    if (!campaignId) {
+      setCampaignError("Save the campaign first, then remove generated files.");
+      return;
+    }
+    const target = String(asset?.target ?? "").trim() as CampaignAssetTarget;
+    const targetUrl = String(asset?.url ?? "").trim();
+    if (!target || !targetUrl) {
+      setCampaignError("Missing generated file target or URL.");
+      return;
+    }
+    const label = campaignAssetDisplayLabel(asset);
+    const okToRemove = window.confirm(`Remove "${label}" from this campaign? You can regenerate it anytime.`);
+    if (!okToRemove) return;
+
+    const busyKey = `remove:${campaignId}:${target}:${targetUrl}`;
+    setCampaignRemovingAssetKey(busyKey);
+    setCampaignError(null);
+    try {
+      let workingEntry = campaignSelectedEntry;
+      if (!workingEntry || workingEntry.id !== campaignId) {
+        workingEntry = campaigns.find(row => row.id === campaignId) ?? null;
+      }
+      if (!workingEntry) {
+        throw new Error("Campaign not found.");
+      }
+
+      if (campaignAssetIsQueued(workingEntry, target)) {
+        const saved = await setCampaignAssetQueue(target, false);
+        if (saved) {
+          workingEntry = saved;
+        }
+      }
+
+      const existingAssets: CampaignGeneratedAsset[] = Array.isArray(workingEntry.generatedAssets)
+        ? workingEntry.generatedAssets
+            .filter(row => String(row?.url ?? "").trim())
+            .map(row => ({
+              ...row,
+              target: String(row?.target ?? "").trim() as CampaignAssetTarget,
+              url: String(row?.url ?? "").trim()
+            }))
+        : [];
+      const nextAssets = existingAssets.filter(row => {
+        const rowTarget = String(row?.target ?? "").trim();
+        const rowUrl = String(row?.url ?? "").trim();
+        if (rowTarget !== target) return true;
+        return rowUrl !== targetUrl;
+      });
+      if (nextAssets.length === existingAssets.length) {
+        throw new Error("Generated file was not found on this campaign.");
+      }
+
+      const preferredTargets = Array.isArray(workingEntry.assetTargets) && workingEntry.assetTargets.length
+        ? workingEntry.assetTargets
+        : CAMPAIGN_ASSET_TARGET_OPTIONS.map(opt => opt.value);
+      const nextPreviewAsset =
+        preferredTargets
+          .map(preferred => nextAssets.find(row => String(row?.target ?? "").trim() === preferred))
+          .find((row): row is CampaignGeneratedAsset => Boolean(row?.url)) ??
+        nextAssets[0] ??
+        null;
+      const nextFinalImageUrl = String(nextPreviewAsset?.url ?? "").trim();
+
+      const nextStatus = normalizeCampaignAssetGenerationMap(
+        workingEntry.assetGenerationStatus ??
+          ((workingEntry.metadata as any)?.assetGenerationStatus ?? {})
+      );
+      nextStatus[target] = {
+        status: "pending",
+        updatedAt: new Date().toISOString()
+      };
+
+      const resp = await fetch(`/api/campaigns/${encodeURIComponent(campaignId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          generatedAssets: nextAssets,
+          finalImageUrl: nextFinalImageUrl || "",
+          assetGenerationStatus: nextStatus
+        })
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.ok || !data?.campaign) {
+        throw new Error(data?.error ?? "Failed to remove generated file");
+      }
+      const saved = data.campaign as CampaignEntry;
+      setCampaigns(prev => {
+        const idx = prev.findIndex(row => row.id === saved.id);
+        const next = idx >= 0 ? prev.map(row => (row.id === saved.id ? saved : row)) : [saved, ...prev];
+        return next.sort((a, b) => {
+          const aAt = new Date(String(a.updatedAt ?? a.createdAt ?? "")).getTime();
+          const bAt = new Date(String(b.updatedAt ?? b.createdAt ?? "")).getTime();
+          return bAt - aAt;
+        });
+      });
+      if (campaignSelectedId === saved.id) applyCampaignToForm(saved);
+      setSaveToast(`${label} removed`);
+    } catch (err: any) {
+      setCampaignError(err?.message ?? "Failed to remove generated file");
+    } finally {
+      setCampaignRemovingAssetKey("");
+    }
+  }
+
+  async function removeCampaignFinalImagePreview() {
+    const campaignId = String(campaignSelectedId ?? "").trim();
+    const currentUrl = String(campaignFinalImageUrl ?? "").trim();
+    if (!campaignId) {
+      setCampaignError("Save the campaign first, then remove generated files.");
+      return;
+    }
+    if (!currentUrl) return;
+    const okToRemove = window.confirm("Remove this output preview from the campaign? You can regenerate it anytime.");
+    if (!okToRemove) return;
+
+    const busyKey = `remove:${campaignId}:final:${currentUrl}`;
+    setCampaignRemovingAssetKey(busyKey);
+    setCampaignError(null);
+    try {
+      const workingEntry =
+        campaignSelectedEntry && campaignSelectedEntry.id === campaignId
+          ? campaignSelectedEntry
+          : campaigns.find(row => row.id === campaignId) ?? null;
+      if (!workingEntry) {
+        throw new Error("Campaign not found.");
+      }
+
+      const existingAssets: CampaignGeneratedAsset[] = Array.isArray(workingEntry.generatedAssets)
+        ? workingEntry.generatedAssets
+            .filter(row => String(row?.url ?? "").trim())
+            .map(row => ({
+              ...row,
+              target: String(row?.target ?? "").trim() as CampaignAssetTarget,
+              url: String(row?.url ?? "").trim()
+            }))
+        : [];
+      const removedAsset = existingAssets.find(row => String(row.url ?? "").trim() === currentUrl) ?? null;
+      const nextAssets = existingAssets.filter(row => String(row.url ?? "").trim() !== currentUrl);
+
+      const preferredTargets = Array.isArray(workingEntry.assetTargets) && workingEntry.assetTargets.length
+        ? workingEntry.assetTargets
+        : CAMPAIGN_ASSET_TARGET_OPTIONS.map(opt => opt.value);
+      const nextPreviewAsset =
+        preferredTargets
+          .map(preferred => nextAssets.find(row => String(row?.target ?? "").trim() === preferred))
+          .find((row): row is CampaignGeneratedAsset => Boolean(row?.url)) ??
+        nextAssets[0] ??
+        null;
+      const nextFinalImageUrl = String(nextPreviewAsset?.url ?? "").trim();
+
+      const nextStatus = normalizeCampaignAssetGenerationMap(
+        workingEntry.assetGenerationStatus ??
+          ((workingEntry.metadata as any)?.assetGenerationStatus ?? {})
+      );
+      if (removedAsset?.target) {
+        nextStatus[removedAsset.target] = {
+          status: "pending",
+          updatedAt: new Date().toISOString()
+        };
+      }
+
+      const resp = await fetch(`/api/campaigns/${encodeURIComponent(campaignId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          generatedAssets: nextAssets,
+          finalImageUrl: nextFinalImageUrl || "",
+          assetGenerationStatus: nextStatus
+        })
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.ok || !data?.campaign) {
+        throw new Error(data?.error ?? "Failed to remove output preview");
+      }
+      const saved = data.campaign as CampaignEntry;
+      setCampaigns(prev => {
+        const idx = prev.findIndex(row => row.id === saved.id);
+        const next = idx >= 0 ? prev.map(row => (row.id === saved.id ? saved : row)) : [saved, ...prev];
+        return next.sort((a, b) => {
+          const aAt = new Date(String(a.updatedAt ?? a.createdAt ?? "")).getTime();
+          const bAt = new Date(String(b.updatedAt ?? b.createdAt ?? "")).getTime();
+          return bAt - aAt;
+        });
+      });
+      if (campaignSelectedId === saved.id) applyCampaignToForm(saved);
+      setSaveToast("Output removed");
+    } catch (err: any) {
+      setCampaignError(err?.message ?? "Failed to remove output");
+    } finally {
+      setCampaignRemovingAssetKey("");
     }
   }
 
@@ -10969,7 +11165,7 @@ export default function Home() {
                   const statusRaw = String(statusRow?.status ?? "").trim().toLowerCase();
                   const hasAsset = campaignActiveTarget ? campaignGeneratedAssetTargetSet.has(campaignActiveTarget) : false;
                   const status: "ready" | "pending" | "failed" =
-                    statusRaw === "failed" ? "failed" : hasAsset || statusRaw === "ready" ? "ready" : "pending";
+                    statusRaw === "failed" ? "failed" : hasAsset ? "ready" : "pending";
                   const badgeClass =
                     status === "ready"
                       ? "border-green-300 bg-green-50 text-green-700"
@@ -11079,12 +11275,14 @@ export default function Home() {
                       const queueKind = campaignQueueKindForAssetTarget(asset.target);
                       const queueable = Boolean(queueKind);
                       const actionGridClass = queueable
-                        ? "grid grid-cols-3 gap-2 p-2 border-t bg-gray-50 mt-auto"
-                        : "grid grid-cols-2 gap-2 p-2 border-t bg-gray-50 mt-auto";
+                        ? "grid grid-cols-4 gap-2 p-2 border-t bg-gray-50 mt-auto"
+                        : "grid grid-cols-3 gap-2 p-2 border-t bg-gray-50 mt-auto";
                       const queueBusy = campaignAssetQueueBusyTarget === asset.target;
                       const campaignId = String(campaignSelectedId ?? "").trim();
                       const sendBusyKey = `send:${campaignId}:${asset.target}`;
                       const postBusyPrefix = `post:${campaignId}:${asset.target}:`;
+                      const removeBusyKey = `remove:${campaignId}:${asset.target}:${asset.url}`;
+                      const removeBusy = campaignRemovingAssetKey === removeBusyKey;
                       const actionBusy = queueKind
                         ? queueKind === "send"
                           ? campaignQueueActionBusyKey === sendBusyKey
@@ -11142,14 +11340,31 @@ export default function Home() {
                                 onClick={() => {
                                   void openCampaignAssetPrimaryAction(asset);
                                 }}
-                              >
-                                {queueBusy || actionBusy ? actionBusyLabel : actionLabel}
-                              </button>
-                            ) : null}
-                          </div>
+                            >
+                              {queueBusy || actionBusy ? actionBusyLabel : actionLabel}
+                            </button>
+                          ) : null}
+                          <button
+                            className="lr-campaign-asset-btn text-red-700 border-red-300 hover:bg-red-50"
+                            type="button"
+                            disabled={
+                              !campaignId ||
+                              removeBusy ||
+                              queueBusy ||
+                              Boolean(campaignQueueActionBusyKey) ||
+                              campaignGenerating ||
+                              campaignSaving
+                            }
+                            onClick={() => {
+                              void removeCampaignGeneratedAsset(asset);
+                            }}
+                          >
+                            {removeBusy ? "Removing..." : "Remove"}
+                          </button>
                         </div>
-                      );
-                    })}
+                      </div>
+                    );
+                  })}
                   </div>
                 ) : campaignFinalImageUrl ? (
                   <div className="border rounded overflow-hidden bg-white flex flex-col" title={campaignFinalImageUrl}>
@@ -11161,7 +11376,7 @@ export default function Home() {
                         loading="lazy"
                       />
                     </a>
-                    <div className="grid grid-cols-2 gap-2 p-2 border-t bg-gray-50">
+                    <div className="grid grid-cols-3 gap-2 p-2 border-t bg-gray-50">
                       <a
                         className="lr-campaign-asset-btn"
                         href={campaignFinalImageUrl}
@@ -11178,6 +11393,25 @@ export default function Home() {
                         }}
                       >
                         Download
+                      </button>
+                      <button
+                        className="lr-campaign-asset-btn text-red-700 border-red-300 hover:bg-red-50"
+                        type="button"
+                        disabled={
+                          !campaignSelectedId ||
+                          campaignRemovingAssetKey ===
+                            `remove:${String(campaignSelectedId ?? "").trim()}:final:${campaignFinalImageUrl}` ||
+                          campaignGenerating ||
+                          campaignSaving
+                        }
+                        onClick={() => {
+                          void removeCampaignFinalImagePreview();
+                        }}
+                      >
+                        {campaignRemovingAssetKey ===
+                        `remove:${String(campaignSelectedId ?? "").trim()}:final:${campaignFinalImageUrl}`
+                          ? "Removing..."
+                          : "Remove"}
                       </button>
                     </div>
                   </div>
