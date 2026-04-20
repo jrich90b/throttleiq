@@ -11290,7 +11290,8 @@ export default function Home() {
                                 className="relative border-r"
                                 style={{
                                   height: columnHeight,
-                                  backgroundImage: `repeating-linear-gradient(to bottom, transparent, transparent ${rowHeight - 1}px, rgba(0,0,0,0.14) ${rowHeight}px)`
+                                  backgroundImage: "linear-gradient(to bottom, rgba(148,163,184,0.58) 1px, transparent 1px)",
+                                  backgroundSize: `100% ${rowHeight}px`
                                 }}
                                 ref={el => {
                                   calendarColumnRefs.current[sp.id] = el;
