@@ -289,6 +289,12 @@ When changing responses:
 - Keep story exception strict:
   - do not auto-send story captions; use story notes for manual overlays where needed.
 
+## Regenerate UX Guardrail
+- Conversation regenerate now avoids silent no-op behavior:
+  - hides Regenerate in Calls tab (unsupported context)
+  - shows explicit user-facing reason when regenerate is blocked (Suggest mode / Human mode)
+  - shows a success toast after a regenerate completes so users can confirm action occurred
+
 ## Rider-to-Rider Finance Inquiry Policy
 - Dealer profile toggle:
   - `policies.riderToRiderFinancingEnabled` (managed from Settings -> Dealer Profile -> **Lead Source Policy** card).

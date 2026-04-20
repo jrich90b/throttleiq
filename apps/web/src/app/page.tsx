@@ -7240,8 +7240,18 @@ export default function Home() {
 
   async function regenerateDraft() {
     if (!selectedConv) return;
-    if (messageFilter === "calls") return;
-    if (mode !== "suggest" || selectedConv.mode === "human") return;
+    if (messageFilter === "calls") {
+      window.alert("Switch to SMS or Email to regenerate a draft.");
+      return;
+    }
+    if (mode !== "suggest") {
+      window.alert("Regenerate is available in Suggest mode only.");
+      return;
+    }
+    if (selectedConv.mode === "human") {
+      window.alert("This conversation is in Human mode. Switch it back to AI to regenerate.");
+      return;
+    }
     setRegenBusy(true);
     try {
       const resp = await fetch(
@@ -7254,7 +7264,14 @@ export default function Home() {
       );
       const data = await resp.json().catch(() => null);
       if (!resp.ok) {
-        window.alert(data?.error ?? "Regenerate failed");
+        const errCode = String(data?.error ?? "").trim();
+        const friendly =
+          errCode === "regenerate_requires_suggest_mode"
+            ? "Regenerate is available in Suggest mode only."
+            : errCode === "human_override"
+              ? "This conversation is in Human mode. Switch it back to AI to regenerate."
+              : data?.error ?? "Regenerate failed";
+        window.alert(friendly);
         return;
       }
       if (data?.skipped) {
@@ -7308,8 +7325,12 @@ export default function Home() {
             };
           })
         );
+        if (!data?.skipped) {
+          setSaveToast("Draft regenerated.");
+        }
       } else {
         await loadConversation(selectedConv.id);
+        setSaveToast("Draft regenerated.");
       }
       await load();
     } catch {
@@ -15702,7 +15723,7 @@ export default function Home() {
                     </button>
                   )
                 ) : null}
-                {mode === "suggest" && selectedConv.mode !== "human" ? (
+                {mode === "suggest" && selectedConv.mode !== "human" && messageFilter !== "calls" ? (
                   <button
                     className={`px-4 py-2 border rounded text-xs ${regenBusy ? "opacity-50 cursor-not-allowed" : ""}`}
                     onClick={regenerateDraft}
