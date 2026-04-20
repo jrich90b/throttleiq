@@ -70,6 +70,15 @@ export function InboxSection(props: any) {
     loading
   } = props;
 
+  const isSoldConversation = (conversation: any) => {
+    const status = String(conversation?.status ?? "").trim().toLowerCase();
+    const closedReason = String(conversation?.closedReason ?? "").trim().toLowerCase();
+    const soldByReason = closedReason === "sold" || /\bsold\b/.test(closedReason);
+    const soldByCadence =
+      String(conversation?.followUpCadence?.kind ?? "").trim().toLowerCase() === "post_sale";
+    return !!conversation?.sale?.soldAt || soldByCadence || (status === "closed" && soldByReason);
+  };
+
   return (
     <>
       <div className="mt-4 flex items-center justify-between">
@@ -251,12 +260,12 @@ export function InboxSection(props: any) {
                                 {c.status === "closed" ? (
                                   <span
                                     className={`text-xs px-2 py-1 rounded border ${
-                                      c.closedReason === "sold"
+                                      isSoldConversation(c)
                                         ? "bg-blue-50 text-blue-700 border-blue-200"
                                         : "bg-gray-50"
                                     }`}
                                   >
-                                    {c.closedReason === "sold" ? "Sold" : "Closed"}
+                                    {isSoldConversation(c) ? "Sold" : "Closed"}
                                   </span>
                                 ) : c.followUpCadence?.pauseReason === "manual_hold" ||
                                   c.followUpCadence?.pauseReason === "unit_hold" ||

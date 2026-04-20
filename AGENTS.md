@@ -387,3 +387,11 @@ When changing responses:
 - Standard and engaged follow-up SMS template banks were rewritten for a friendlier, more down-to-earth dealer voice (less pushy sales language) while keeping cadence structure and placeholders intact.
 - Slot/no-slot variant pools and cadence fallback lines were aligned to the same tone so regenerate and scheduled sends stay consistent.
 - Email follow-up template bank was also softened to match the updated SMS tone.
+
+## Inbox Closed/Sold Filter Guardrail
+- Sold lead detection in web inbox now normalizes by:
+  - `closedReason` (case-insensitive, includes sold token),
+  - `sale.soldAt`, and
+  - `followUpCadence.kind === "post_sale"` (legacy/edge-data fallback).
+- Archive filter now excludes those sold leads consistently, so sold deals do not linger under Archive/closed view when marked sold.
+- Sold/Closed status badges in inbox rows and conversation header now use the same normalized sold detection.

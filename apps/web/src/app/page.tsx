@@ -6609,26 +6609,6 @@ export default function Home() {
     }
   }, [section, filteredContactIdsKey, selectedContact?.id]);
 
-  const isArchivedConversation = (c: ConversationListItem) => {
-    const status = String(c.status ?? "").trim().toLowerCase();
-    const closedReason = String(c.closedReason ?? "").trim().toLowerCase();
-    const soldDeal = closedReason === "sold" || !!c.sale?.soldAt;
-    const holdDeal =
-      /\bhold\b/.test(closedReason) ||
-      c.followUpCadence?.pauseReason === "manual_hold" ||
-      c.followUpCadence?.pauseReason === "unit_hold" ||
-      c.followUpCadence?.pauseReason === "order_hold" ||
-      c.followUpCadence?.stopReason === "unit_hold" ||
-      c.followUpCadence?.stopReason === "order_hold" ||
-      c.followUp?.reason === "manual_hold" ||
-      c.followUp?.reason === "unit_hold" ||
-      c.followUp?.reason === "order_hold" ||
-      !!c.hold;
-    if (soldDeal || holdDeal) return false;
-    if (status === "closed") return true;
-    return /archive/.test(closedReason);
-  };
-
   const isConversationOnHold = (c: ConversationListItem) =>
     c.followUpCadence?.pauseReason === "manual_hold" ||
     c.followUpCadence?.pauseReason === "unit_hold" ||
@@ -6640,8 +6620,32 @@ export default function Home() {
     c.followUp?.reason === "order_hold" ||
     !!c.hold;
 
-  const isSoldDealConversation = (c: ConversationListItem) =>
-    (c.status === "closed" && c.closedReason === "sold") || !!c.sale?.soldAt;
+  const isSoldDealConversation = (c: ConversationListItem) => {
+    const status = String(c.status ?? "").trim().toLowerCase();
+    const closedReason = String(c.closedReason ?? "").trim().toLowerCase();
+    const soldByReason = closedReason === "sold" || /\bsold\b/.test(closedReason);
+    const soldByCadence = String(c.followUpCadence?.kind ?? "").trim().toLowerCase() === "post_sale";
+    return !!c.sale?.soldAt || soldByCadence || (status === "closed" && soldByReason);
+  };
+
+  const isArchivedConversation = (c: ConversationListItem) => {
+    const status = String(c.status ?? "").trim().toLowerCase();
+    const closedReason = String(c.closedReason ?? "").trim().toLowerCase();
+    const holdDeal =
+      /\bhold\b/.test(closedReason) ||
+      c.followUpCadence?.pauseReason === "manual_hold" ||
+      c.followUpCadence?.pauseReason === "unit_hold" ||
+      c.followUpCadence?.pauseReason === "order_hold" ||
+      c.followUpCadence?.stopReason === "unit_hold" ||
+      c.followUpCadence?.stopReason === "order_hold" ||
+      c.followUp?.reason === "manual_hold" ||
+      c.followUp?.reason === "unit_hold" ||
+      c.followUp?.reason === "order_hold" ||
+      !!c.hold;
+    if (isSoldDealConversation(c) || holdDeal) return false;
+    if (status === "closed") return true;
+    return /archive/.test(closedReason);
+  };
 
   const PURCHASE_INTENT_BUCKETS = new Set(["inventory_interest", "test_ride", "pricing_payments"]);
   const PURCHASE_INTENT_CTAS = new Set([
@@ -14659,8 +14663,10 @@ export default function Home() {
                       selectedConv.followUp?.reason === "unit_hold" ||
                       selectedConv.followUp?.reason === "order_hold" ||
                       !!selectedConv.hold;
-                    const isSold =
-                      selectedConv.status === "closed" && selectedConv.closedReason === "sold";
+                    const isSold = isSoldDealConversation(
+                      (selectedListItem ??
+                        (selectedConv as unknown as ConversationListItem)) as ConversationListItem
+                    );
                     const holdUntil =
                       selectedConv.hold?.until ??
                       (isHold ? selectedConv.followUpCadence?.pausedUntil : null);
@@ -14793,7 +14799,11 @@ export default function Home() {
                       selectedConv.hold?.until ??
                       (isHold ? selectedConv.followUpCadence?.pausedUntil : null);
                     if (selectedConv.status === "closed") {
-                      if (selectedConv.closedReason === "sold") {
+                      const soldInDetail = isSoldDealConversation(
+                        (selectedListItem ??
+                          (selectedConv as unknown as ConversationListItem)) as ConversationListItem
+                      );
+                      if (soldInDetail) {
                         return "Sold";
                       }
                       if (selectedConv.closedAt) {
