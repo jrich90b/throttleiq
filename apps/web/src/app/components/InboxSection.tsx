@@ -215,9 +215,9 @@ export function InboxSection(props: any) {
                       <div key={c.id} className="flex items-stretch">
                         <button
                           onClick={() => openConversation(c.id)}
-                          className={`flex-1 min-w-0 text-left p-4 hover:bg-[var(--surface-2)] ${
+                          className={`lr-inbox-row flex-1 min-w-0 text-left p-4 transition-colors hover:bg-[color:rgba(251,127,4,0.16)] focus-visible:bg-[color:rgba(251,127,4,0.16)] ${
                             linkedOpenCampaign ? "bg-gray-50/70 opacity-70" : ""
-                          } ${selectedId === c.id ? "bg-[var(--surface-2)]" : ""}`}
+                          } ${selectedId === c.id ? "bg-[color:rgba(63,126,255,0.18)]" : ""}`}
                         >
                           <div className="flex items-center justify-between gap-3">
                             <div className="min-w-0">

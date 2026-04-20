@@ -416,6 +416,24 @@ input[type="reset"],
   --tw-ring-color: rgba(251, 127, 4, 0.8) !important;
 }
 
+.lr-app-theme .lr-app-sidebar-panel .lr-inbox-row:hover,
+.lr-app-theme .lr-app-sidebar-panel .lr-inbox-row:focus-visible {
+  color: #f8fbff !important;
+}
+
+.lr-app-theme .lr-app-sidebar-panel .lr-inbox-row:hover .text-gray-500,
+.lr-app-theme .lr-app-sidebar-panel .lr-inbox-row:hover .text-gray-600,
+.lr-app-theme .lr-app-sidebar-panel .lr-inbox-row:hover .text-gray-700,
+.lr-app-theme .lr-app-sidebar-panel .lr-inbox-row:hover .text-gray-800,
+.lr-app-theme .lr-app-sidebar-panel .lr-inbox-row:hover .text-gray-900,
+.lr-app-theme .lr-app-sidebar-panel .lr-inbox-row:focus-visible .text-gray-500,
+.lr-app-theme .lr-app-sidebar-panel .lr-inbox-row:focus-visible .text-gray-600,
+.lr-app-theme .lr-app-sidebar-panel .lr-inbox-row:focus-visible .text-gray-700,
+.lr-app-theme .lr-app-sidebar-panel .lr-inbox-row:focus-visible .text-gray-800,
+.lr-app-theme .lr-app-sidebar-panel .lr-inbox-row:focus-visible .text-gray-900 {
+  color: #edf4ff !important;
+}
+
 .lr-campaign-theme {
   --lr-bg: #070b12;
   --lr-bg-soft: #0d131f;
