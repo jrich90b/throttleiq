@@ -395,3 +395,4 @@ When changing responses:
   - `followUpCadence.kind === "post_sale"` (legacy/edge-data fallback).
 - Archive filter now excludes those sold leads consistently, so sold deals do not linger under Archive/closed view when marked sold.
 - Sold/Closed status badges in inbox rows and conversation header now use the same normalized sold detection.
+- Hold filter now excludes sold leads as well (sold and hold are treated as mutually exclusive in inbox deal filters).

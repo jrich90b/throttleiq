@@ -6609,16 +6609,24 @@ export default function Home() {
     }
   }, [section, filteredContactIdsKey, selectedContact?.id]);
 
-  const isConversationOnHold = (c: ConversationListItem) =>
-    c.followUpCadence?.pauseReason === "manual_hold" ||
-    c.followUpCadence?.pauseReason === "unit_hold" ||
-    c.followUpCadence?.pauseReason === "order_hold" ||
-    c.followUpCadence?.stopReason === "unit_hold" ||
-    c.followUpCadence?.stopReason === "order_hold" ||
-    c.followUp?.reason === "manual_hold" ||
-    c.followUp?.reason === "unit_hold" ||
-    c.followUp?.reason === "order_hold" ||
-    !!c.hold;
+  const isConversationOnHold = (c: ConversationListItem) => {
+    const status = String(c.status ?? "").trim().toLowerCase();
+    const closedReason = String(c.closedReason ?? "").trim().toLowerCase();
+    const soldByReason = closedReason === "sold" || /\bsold\b/.test(closedReason);
+    const soldByCadence = String(c.followUpCadence?.kind ?? "").trim().toLowerCase() === "post_sale";
+    if (!!c.sale?.soldAt || soldByCadence || (status === "closed" && soldByReason)) return false;
+    return (
+      c.followUpCadence?.pauseReason === "manual_hold" ||
+      c.followUpCadence?.pauseReason === "unit_hold" ||
+      c.followUpCadence?.pauseReason === "order_hold" ||
+      c.followUpCadence?.stopReason === "unit_hold" ||
+      c.followUpCadence?.stopReason === "order_hold" ||
+      c.followUp?.reason === "manual_hold" ||
+      c.followUp?.reason === "unit_hold" ||
+      c.followUp?.reason === "order_hold" ||
+      !!c.hold
+    );
+  };
 
   const isSoldDealConversation = (c: ConversationListItem) => {
     const status = String(c.status ?? "").trim().toLowerCase();
