@@ -2997,6 +2997,59 @@ export default function Home() {
     }
   }
 
+  async function downloadCampaignAsset(url: string, fallbackName?: string) {
+    const source = String(url ?? "").trim();
+    if (!source) {
+      setCampaignError("Missing download URL.");
+      return;
+    }
+    setCampaignError(null);
+    try {
+      const resp = await fetch(source, { method: "GET" });
+      if (!resp.ok) {
+        throw new Error(`Download failed (${resp.status})`);
+      }
+      const blob = await resp.blob();
+      const parsed = (() => {
+        try {
+          return new URL(source, window.location.origin);
+        } catch {
+          return null;
+        }
+      })();
+      const rawName = parsed
+        ? decodeURIComponent(parsed.pathname.split("/").pop() || "")
+        : "";
+      const extFromType = (() => {
+        const mime = String(blob.type ?? "").toLowerCase();
+        if (mime === "image/jpeg") return ".jpg";
+        if (mime === "image/png") return ".png";
+        if (mime === "image/webp") return ".webp";
+        if (mime === "image/gif") return ".gif";
+        if (mime === "application/pdf") return ".pdf";
+        return "";
+      })();
+      const cleanFallback =
+        String(fallbackName ?? "")
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9._-]+/g, "_")
+          .replace(/^_+|_+$/g, "") || "campaign_asset";
+      const baseName = rawName || (extFromType ? `${cleanFallback}${extFromType}` : cleanFallback);
+
+      const blobUrl = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = blobUrl;
+      anchor.download = baseName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (err: any) {
+      setCampaignError(err?.message ?? "Failed to download file.");
+    }
+  }
+
   async function openCampaignAssetPrimaryAction(asset: CampaignGeneratedAsset) {
     const target = asset.target;
     const queue = campaignQueueKindForAssetTarget(target);
@@ -10591,13 +10644,15 @@ export default function Home() {
                             >
                               Open
                             </a>
-                            <a
+                            <button
                               className="lr-campaign-asset-btn"
-                              href={asset.url}
-                              download
+                              type="button"
+                              onClick={() => {
+                                void downloadCampaignAsset(asset.url, campaignAssetDisplayLabel(asset));
+                              }}
                             >
                               Download
-                            </a>
+                            </button>
                             {queueable ? (
                               <button
                                 className="lr-campaign-asset-btn lr-campaign-asset-btn-primary"
@@ -10639,13 +10694,15 @@ export default function Home() {
                       >
                         Open
                       </a>
-                      <a
+                      <button
                         className="lr-campaign-asset-btn"
-                        href={campaignFinalImageUrl}
-                        download
+                        type="button"
+                        onClick={() => {
+                          void downloadCampaignAsset(campaignFinalImageUrl, "campaign_output");
+                        }}
                       >
                         Download
-                      </a>
+                      </button>
                     </div>
                   </div>
                 ) : (
