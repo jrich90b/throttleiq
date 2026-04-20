@@ -17,6 +17,7 @@ export type RegenerateInboundPick = {
   inbound: ConversationMessageLike | null;
   latestInboundBeforeDraft: ConversationMessageLike | null;
   latestInboundIsCreditAdf: boolean;
+  latestInboundIsRiderToRiderFinanceAdf: boolean;
   latestInboundIsDlaNoPurchaseAdf: boolean;
 };
 
@@ -50,6 +51,14 @@ function isCreditAdfBody(text: string): boolean {
   );
 }
 
+function isRiderToRiderFinanceAdfBody(text: string): boolean {
+  const lower = String(text ?? "").toLowerCase();
+  return (
+    /\bsource:\s*[^\n\r]*rider\s*(?:to|-)?\s*rider[^\n\r]*financ(?:e|ing)/.test(lower) ||
+    (/\brider\s*(?:to|-)?\s*rider\b/.test(lower) && /\b(finance|financing)\b/.test(lower))
+  );
+}
+
 function isDlaNoPurchaseAdfBody(text: string): boolean {
   const lower = String(text ?? "").toLowerCase();
   return (
@@ -77,11 +86,16 @@ export function pickRegenerateInbound(args: PickArgs): RegenerateInboundPick {
   const latestInboundBodyLower = String(latestInboundBeforeDraft?.body ?? "").toLowerCase();
   const latestInboundIsCreditAdf =
     latestInboundBeforeDraft?.provider === "sendgrid_adf" && isCreditAdfBody(latestInboundBodyLower);
+  const latestInboundIsRiderToRiderFinanceAdf =
+    latestInboundBeforeDraft?.provider === "sendgrid_adf" &&
+    isRiderToRiderFinanceAdfBody(latestInboundBodyLower);
   const latestInboundIsDlaNoPurchaseAdf =
     latestInboundBeforeDraft?.provider === "sendgrid_adf" &&
     isDlaNoPurchaseAdfBody(latestInboundBodyLower);
   let inbound =
-    (latestInboundIsCreditAdf || latestInboundIsDlaNoPurchaseAdf ? latestInboundBeforeDraft : null) ??
+    (latestInboundIsCreditAdf || latestInboundIsRiderToRiderFinanceAdf || latestInboundIsDlaNoPurchaseAdf
+      ? latestInboundBeforeDraft
+      : null) ??
     inboundMessages.find(m => m.provider !== "sendgrid_adf" && m.body && isBeforeDraft(m)) ??
     inboundMessages.find(m => m.body && isBeforeDraft(m)) ??
     inboundMessages.find(m => m.provider !== "sendgrid_adf" && m.body) ??
@@ -121,6 +135,7 @@ export function pickRegenerateInbound(args: PickArgs): RegenerateInboundPick {
     inbound,
     latestInboundBeforeDraft,
     latestInboundIsCreditAdf,
+    latestInboundIsRiderToRiderFinanceAdf,
     latestInboundIsDlaNoPurchaseAdf
   };
 }

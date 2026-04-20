@@ -137,6 +137,58 @@ function normalizeDisplayCase(raw?: string | null): string {
   return letters === letters.toUpperCase() ? toTitleCase(trimmed) : trimmed;
 }
 
+function isRiderToRiderFinanceLeadSource(raw?: string | null): boolean {
+  const text = String(raw ?? "").toLowerCase();
+  if (!text) return false;
+  return /\brider\s*(?:to|-)?\s*rider\b/.test(text) && /\b(finance|financing)\b/.test(text);
+}
+
+function dealerOffersRiderToRiderFinancing(profile: any): boolean {
+  if (!profile || typeof profile !== "object") return false;
+  const policies = profile?.policies && typeof profile.policies === "object" ? profile.policies : {};
+  const candidates = [
+    policies.riderToRiderFinancingEnabled,
+    policies.riderToRiderFinanceEnabled,
+    policies.offersRiderToRiderFinancing,
+    profile.riderToRiderFinancingEnabled,
+    profile.riderToRiderFinanceEnabled
+  ];
+  for (const value of candidates) {
+    if (typeof value === "boolean") return value;
+  }
+  return false;
+}
+
+function buildRiderToRiderFinanceLeadReply(args: {
+  firstName?: string | null;
+  isInitialAdf: boolean;
+  dealerOffersProgram: boolean;
+}): string {
+  const firstName = normalizeDisplayCase(args.firstName);
+  if (args.dealerOffersProgram) {
+    if (args.isInitialAdf) {
+      return (
+        "Thanks - we received your Rider to Rider financing inquiry. " +
+        "I'll have our business manager reach out shortly. " +
+        "If you also want a quick inventory check on the bike from your inquiry, I can confirm that too."
+      );
+    }
+    return firstName
+      ? `Thanks ${firstName} - we received your Rider to Rider financing inquiry. Our business manager will reach out shortly. If you also want a quick inventory check on the bike from your inquiry, I can confirm that too.`
+      : "Thanks - we received your Rider to Rider financing inquiry. Our business manager will reach out shortly. If you also want a quick inventory check on the bike from your inquiry, I can confirm that too.";
+  }
+  if (args.isInitialAdf) {
+    return (
+      "Thanks for reaching out about Rider to Rider financing. " +
+      "We don't participate in Rider to Rider financing, but we can review similar financing options we do offer. " +
+      "If you also want a quick inventory check on the bike from your inquiry, I can confirm that too."
+    );
+  }
+  return firstName
+    ? `Thanks ${firstName} - we don't participate in Rider to Rider financing, but we can review similar financing options we do offer. If you also want a quick inventory check on the bike from your inquiry, I can confirm that too.`
+    : "Thanks - we don't participate in Rider to Rider financing, but we can review similar financing options we do offer. If you also want a quick inventory check on the bike from your inquiry, I can confirm that too.";
+}
+
 function pickFirstToken(raw: string | null | undefined): string {
   return String(raw ?? "")
     .trim()
@@ -3130,6 +3182,47 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       note: "preferred_contact_phone_no_auto_reply"
     });
   }
+
+  const isRiderToRiderFinanceLead =
+    isRiderToRiderFinanceLeadSource(leadSource) || isRiderToRiderFinanceLeadSource(lead.inquiry);
+  if (isRiderToRiderFinanceLead) {
+    const profile = await getDealerProfile();
+    const firstName = normalizeDisplayCase(conv.lead?.firstName);
+    const dealerOffersProgram = dealerOffersRiderToRiderFinancing(profile);
+    let ack = buildRiderToRiderFinanceLeadReply({
+      firstName,
+      isInitialAdf,
+      dealerOffersProgram
+    });
+    if (isInitialAdf) {
+      ack = await applyInitialAdfPrefix(ack);
+    }
+    ack = withInitialAvailabilityLine(ack);
+    if (dealerOffersProgram) {
+      addTodo(conv, "approval", event.body ?? "Rider to Rider financing inquiry", event.providerMessageId);
+      setFollowUpMode(conv, "manual_handoff", "credit_app");
+      stopFollowUpCadence(conv, "manual_handoff");
+    }
+    queueInitialDraftForPreferredContact(ack);
+    maybeAddInitialCallTodo();
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      draft: ack,
+      note: dealerOffersProgram
+        ? "rider_to_rider_financing_handoff"
+        : "rider_to_rider_financing_not_offered"
+    });
+  }
+
   if (isServiceLead) {
     let ack =
       "Thanks — I’ve received your service request. I’ll have our service department reach out shortly.";

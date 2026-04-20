@@ -45,6 +45,7 @@ These must remain deterministic to avoid brittle or risky LLM behavior:
 3) **Lead‑type handlers (explicit rules)**
    - Credit apps, demo ride events, room58 standard, meta offer “Other”, etc.
    - Implemented in `services/api/src/routes/sendgridInbound.ts` and `services/api/src/domain/orchestrator.ts`
+   - Rider-to-Rider finance inquiry leads are deterministic and policy-gated by dealer profile.
 
 4) **Call‑only preference**
    - If “call only”, block SMS/email auto‑drafts & follow‑up cadence.
@@ -265,3 +266,15 @@ When changing responses:
     - inbound: `.bg-gray-100.text-gray-900.border-gray-200`
     - outbound: `.bg-blue-600.text-white.border-blue-600`
 - Do not use broad low-level color overrides that force light text on all utility classes (example risk: overriding `.text-gray-900` globally inside `.lr-app-theme` can make inbound bubbles unreadable).
+
+## Rider-to-Rider Finance Inquiry Policy
+- Dealer profile toggle:
+  - `policies.riderToRiderFinancingEnabled` (managed from Settings -> Dealer Profile -> Financing Programs).
+- Inbound deterministic handling (`services/api/src/routes/sendgridInbound.ts`):
+  - Detect lead source/inquiry text containing Rider-to-Rider financing.
+  - If enabled: acknowledge inquiry, create approval todo, set manual handoff (`credit_app`), stop cadence.
+  - If disabled: explicitly say dealership does not participate in Rider-to-Rider financing and offer similar in-house options.
+  - Response also keeps inventory-check language so availability questions are not ignored.
+- Regenerate parity (`services/api/src/domain/regenerateSelection.ts`, `services/api/src/index.ts`):
+  - Regenerate picker flags Rider-to-Rider ADF turns.
+  - Regenerate route applies the same policy-gated deterministic reply path so manual regenerate matches live inbound behavior.

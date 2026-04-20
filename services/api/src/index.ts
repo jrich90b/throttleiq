@@ -2164,6 +2164,54 @@ function getConversationDepartment(conv: any): DepartmentRole | null {
   return inferDepartmentFromText(`${leadText} ${inboundText}`);
 }
 
+function isRiderToRiderFinanceLeadText(raw?: string | null): boolean {
+  const text = String(raw ?? "").toLowerCase();
+  if (!text) return false;
+  return /\brider\s*(?:to|-)?\s*rider\b/.test(text) && /\b(finance|financing)\b/.test(text);
+}
+
+function dealerOffersRiderToRiderFinancing(profile: any): boolean {
+  if (!profile || typeof profile !== "object") return false;
+  const policies = profile?.policies && typeof profile.policies === "object" ? profile.policies : {};
+  const candidates = [
+    policies.riderToRiderFinancingEnabled,
+    policies.riderToRiderFinanceEnabled,
+    policies.offersRiderToRiderFinancing,
+    profile.riderToRiderFinancingEnabled,
+    profile.riderToRiderFinanceEnabled
+  ];
+  for (const value of candidates) {
+    if (typeof value === "boolean") return value;
+  }
+  return false;
+}
+
+function buildRiderToRiderFinanceRegenReply(args: {
+  firstName?: string | null;
+  dealerName: string;
+  agentName: string;
+  hasPriorOutbound: boolean;
+  dealerOffersProgram: boolean;
+}): string {
+  const firstName = normalizeDisplayCase(args.firstName);
+  const leadIn = args.hasPriorOutbound
+    ? firstName
+      ? `Thanks ${firstName} - `
+      : "Thanks - "
+    : `${firstName ? `Hi ${firstName} - ` : "Hi - "}This is ${args.agentName} at ${args.dealerName}. `;
+  if (args.dealerOffersProgram) {
+    return (
+      `${leadIn}we received your Rider to Rider financing inquiry. ` +
+      "Our business manager will reach out shortly. " +
+      "If you also want a quick inventory check on the bike from your inquiry, I can confirm that too."
+    ).trim();
+  }
+  return (
+    `${leadIn}we don't participate in Rider to Rider financing, but we can review similar financing options we do offer. ` +
+    "If you also want a quick inventory check on the bike from your inquiry, I can confirm that too."
+  ).trim();
+}
+
 function isServiceConversation(conv: any): boolean {
   return getConversationDepartment(conv) === "service";
 }
@@ -23500,6 +23548,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     inbound,
     latestInboundBeforeDraft,
     latestInboundIsCreditAdf,
+    latestInboundIsRiderToRiderFinanceAdf,
     latestInboundIsDlaNoPurchaseAdf
   } = pickRegenerateInbound({
     messages: conv.messages ?? [],
@@ -23564,6 +23613,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     latestInboundProvider: latestInboundBeforeDraft?.provider ?? null,
     latestInboundAt: latestInboundBeforeDraft?.at ?? null,
     latestInboundIsCreditAdf,
+    latestInboundIsRiderToRiderFinanceAdf,
     latestInboundIsDlaNoPurchaseAdf
   });
   let regenDraftInvariantHints: {
@@ -24417,14 +24467,48 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     if (actorName) return actorName.split(/\s+/).filter(Boolean)[0] ?? actorName;
     return "";
   };
-  if (latestInboundIsCreditAdf) {
+  const latestInboundBodyLower = String(latestInboundBeforeDraft?.body ?? "").toLowerCase();
+  const latestInboundIsRiderFinanceAdf =
+    latestInboundIsRiderToRiderFinanceAdf ||
+    isRiderToRiderFinanceLeadText(latestInboundBodyLower) ||
+    isRiderToRiderFinanceLeadText(conv.lead?.source);
+  if (latestInboundIsCreditAdf || latestInboundIsRiderFinanceAdf) {
     const firstName = normalizeDisplayCase(conv.lead?.firstName);
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName =
       resolveRegenSenderName() ||
       resolveConversationAgentName(conv, dealerProfile?.agentName || "Brooke");
     const hasPriorOutbound = Array.isArray(conv.messages) && conv.messages.some(m => m.direction === "out");
-    const latestInboundBodyLower = String(latestInboundBeforeDraft?.body ?? "").toLowerCase();
+    if (latestInboundIsRiderFinanceAdf) {
+      const dealerOffersProgram = dealerOffersRiderToRiderFinancing(dealerProfile);
+      const reply = buildRiderToRiderFinanceRegenReply({
+        firstName,
+        dealerName,
+        agentName,
+        hasPriorOutbound,
+        dealerOffersProgram
+      });
+      if (dealerOffersProgram) {
+        const hasApprovalTodo = listOpenTodos().some(
+          t => t.convId === conv.id && t.reason === "approval" && t.status === "open"
+        );
+        if (!hasApprovalTodo) {
+          addTodo(
+            conv,
+            "approval",
+            event.body ?? "Rider to Rider financing inquiry",
+            event.providerMessageId
+          );
+        }
+        setFollowUpMode(conv, "manual_handoff", "credit_app");
+        stopFollowUpCadence(conv, "manual_handoff");
+        stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+      }
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(reply);
+      }
+      return respondWithSmsRegeneratedDraft(reply);
+    }
     const latestInboundIsPrequalAdf =
       latestInboundBeforeDraft?.provider === "sendgrid_adf" &&
       (/source:\s*marketplace\s*-\s*prequal/.test(latestInboundBodyLower) ||
