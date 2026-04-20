@@ -381,3 +381,9 @@ When changing responses:
   - cadence send loop
   - cadence regenerate draft path
 - Cadence personalization lines now also block weather/riding-condition small-talk tails (e.g., “Hope the weather’s been good for riding...”) to keep follow-up tone focused and consistent.
+- Cached cadence personalization lines now pass through the same blocklist; previously generated weather/riding tails are auto-cleared instead of being reused when cache keys remain unchanged.
+
+## Cadence Tone Refresh
+- Standard and engaged follow-up SMS template banks were rewritten for a friendlier, more down-to-earth dealer voice (less pushy sales language) while keeping cadence structure and placeholders intact.
+- Slot/no-slot variant pools and cadence fallback lines were aligned to the same tone so regenerate and scheduled sends stay consistent.
+- Email follow-up template bank was also softened to match the updated SMS tone.
