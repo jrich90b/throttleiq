@@ -9559,20 +9559,40 @@ function getPreferredSalespeopleForConv(
 
 function resolveConversationAgentName(conv: any, fallbackName?: string): string {
   const fallback = String(fallbackName ?? "").trim() || "our team";
+  const leadFirst = String(conv?.lead?.firstName ?? "")
+    .trim()
+    .toLowerCase();
+  const leadFull = [conv?.lead?.firstName, conv?.lead?.lastName]
+    .map((v: unknown) => String(v ?? "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  const leadDisplay = String(conv?.lead?.name ?? "")
+    .trim()
+    .toLowerCase();
+  const matchesLeadIdentity = (raw: string): boolean => {
+    const clean = String(raw ?? "").trim().toLowerCase();
+    if (!clean) return false;
+    const first = clean.split(/\s+/).filter(Boolean)[0] ?? "";
+    if (leadFirst && first === leadFirst) return true;
+    if (leadFull && clean === leadFull) return true;
+    if (leadDisplay && clean === leadDisplay) return true;
+    return false;
+  };
   const lockedNameRaw = String(conv?.manualSender?.userName ?? "").trim();
   if (lockedNameRaw) {
     const first = lockedNameRaw.split(/\s+/).filter(Boolean)[0] ?? "";
     return first || lockedNameRaw || fallback;
   }
-  const ownerNameRaw = String(conv?.leadOwner?.name ?? "").trim();
-  if (ownerNameRaw) {
-    const first = ownerNameRaw.split(/\s+/).filter(Boolean)[0] ?? "";
-    return first || ownerNameRaw || fallback;
-  }
-  const preferredNameRaw = String(conv?.scheduler?.preferredSalespersonName ?? "").trim();
-  if (preferredNameRaw) {
-    const first = preferredNameRaw.split(/\s+/).filter(Boolean)[0] ?? "";
-    return first || preferredNameRaw || fallback;
+  const manualTakeover =
+    String(conv?.manualSender?.source ?? "").trim().toLowerCase() === "manual_takeover";
+  const walkInLead = Boolean(conv?.lead?.walkIn);
+  if (manualTakeover || walkInLead) {
+    const ownerNameRaw = String(conv?.leadOwner?.name ?? "").trim();
+    if (ownerNameRaw && !matchesLeadIdentity(ownerNameRaw)) {
+      const first = ownerNameRaw.split(/\s+/).filter(Boolean)[0] ?? "";
+      return first || ownerNameRaw || fallback;
+    }
   }
   return fallback;
 }

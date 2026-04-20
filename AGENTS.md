@@ -359,6 +359,12 @@ When changing responses:
 - Email send failures now return `details` from the SendGrid exception; web send alert includes that detail text for faster on-box diagnosis.
 - API logs now include structured email failure context for tracing: `convId`, `leadKey`, `to`, `from`, `replyTo`, and `details` for both manual send and follow-up email paths.
 
+## Sender Identity Guardrail
+- `resolveConversationAgentName(...)` in `services/api/src/index.ts` now prefers the dealer profile runtime `agentName` fallback for automated sender identity lines.
+- Lead-owner name is only used for sender identity when the conversation is a true `manual_takeover` or a walk-in lead (`lead.walkIn=true`).
+- Outside of those two cases, owner/preferred-salesperson names are not used for “This is … at …” identity text, keeping identity consistent with Dealer Profile.
+- `manualSender.userName` remains highest priority and is still trusted when explicitly set by a real user action.
+
 ## Campaign Image Reliability (Reference-Lock)
 - Nano Banana request handling in `services/api/src/index.ts` now retries aborted/timeboxed/transient network failures instead of failing the target on first abort.
 - Retryable HTTP statuses now include `408/425/429/500/502/503/504` with exponential backoff.
