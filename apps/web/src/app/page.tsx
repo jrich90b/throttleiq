@@ -2994,54 +2994,11 @@ export default function Home() {
     }
   }
 
-  function printCampaignAsset(asset: CampaignGeneratedAsset) {
-    const assetUrl = String(asset?.url ?? "").trim();
-    if (!assetUrl) return;
-    const label = campaignAssetDisplayLabel(asset);
-    const html = `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>${escapeHtml(label)} - Print</title>
-    <style>
-      html, body { margin: 0; padding: 0; background: #ffffff; }
-      .wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; box-sizing: border-box; }
-      img { max-width: 100%; max-height: 100vh; object-fit: contain; }
-      @page { margin: 10mm; }
-    </style>
-  </head>
-  <body>
-    <div class="wrap">
-      <img src="${escapeHtml(assetUrl)}" alt="${escapeHtml(label)}" />
-    </div>
-  </body>
-</html>`;
-    const printWindow = window.open("", "_blank");
-    if (!printWindow) {
-      setCampaignError("Pop-up blocked. Allow pop-ups to print generated assets.");
-      return;
-    }
-    printWindow.document.open();
-    printWindow.document.write(html);
-    printWindow.document.close();
-    const triggerPrint = () => {
-      try {
-        printWindow.focus();
-        printWindow.print();
-      } catch {}
-    };
-    if (printWindow.document.readyState === "complete") {
-      setTimeout(triggerPrint, 120);
-    } else {
-      printWindow.onload = () => setTimeout(triggerPrint, 120);
-    }
-  }
-
   async function openCampaignAssetPrimaryAction(asset: CampaignGeneratedAsset) {
     const target = asset.target;
     const queue = campaignQueueKindForAssetTarget(target);
     if (!queue) {
-      setCampaignError("This generated file supports open/download/print only.");
+      setCampaignError("This generated file supports open/download only.");
       return;
     }
     const entry = campaignSelectedEntry;
@@ -10642,6 +10599,9 @@ export default function Home() {
                       const meta = [asset.mimeType].filter(Boolean).join(" • ");
                       const queueKind = campaignQueueKindForAssetTarget(asset.target);
                       const queueable = Boolean(queueKind);
+                      const actionGridClass = queueable
+                        ? "grid grid-cols-3 gap-2 p-2 border-t bg-gray-50 mt-auto"
+                        : "grid grid-cols-2 gap-2 p-2 border-t bg-gray-50 mt-auto";
                       const queueBusy = campaignAssetQueueBusyTarget === asset.target;
                       const campaignId = String(campaignSelectedId ?? "").trim();
                       const sendBusyKey = `send:${campaignId}:${asset.target}`;
@@ -10672,9 +10632,9 @@ export default function Home() {
                               loading="lazy"
                             />
                           </a>
-                          <div className="grid grid-cols-2 gap-2 p-2 border-t bg-gray-50 mt-auto">
+                          <div className={actionGridClass}>
                             <a
-                              className="inline-flex items-center justify-center px-2 py-1.5 border rounded text-xs hover:bg-white"
+                              className="lr-campaign-asset-btn"
                               href={asset.url}
                               target="_blank"
                               rel="noreferrer"
@@ -10682,22 +10642,15 @@ export default function Home() {
                               Open
                             </a>
                             <a
-                              className="inline-flex items-center justify-center px-2 py-1.5 border rounded text-xs hover:bg-white"
+                              className="lr-campaign-asset-btn"
                               href={asset.url}
                               download
                             >
                               Download
                             </a>
-                            <button
-                              className="inline-flex items-center justify-center px-2 py-1.5 border rounded text-xs hover:bg-white"
-                              onClick={() => printCampaignAsset(asset)}
-                              disabled={!asset.url}
-                            >
-                              Print
-                            </button>
                             {queueable ? (
                               <button
-                                className="inline-flex items-center justify-center px-2 py-1.5 border rounded text-xs bg-[var(--accent)] text-[#101522] border-[var(--accent)] hover:brightness-95 disabled:opacity-60"
+                                className="lr-campaign-asset-btn lr-campaign-asset-btn-primary"
                                 disabled={
                                   !campaignId ||
                                   queueBusy ||
@@ -10711,11 +10664,7 @@ export default function Home() {
                               >
                                 {queueBusy || actionBusy ? actionBusyLabel : actionLabel}
                               </button>
-                            ) : (
-                              <div className="inline-flex items-center justify-center px-2 py-1.5 border rounded text-xs text-gray-500 bg-white">
-                                Print only
-                              </div>
-                            )}
+                            ) : null}
                           </div>
                         </div>
                       );
@@ -10733,7 +10682,7 @@ export default function Home() {
                     </a>
                     <div className="grid grid-cols-2 gap-2 p-2 border-t bg-gray-50">
                       <a
-                        className="inline-flex items-center justify-center px-2 py-1.5 border rounded text-xs hover:bg-white"
+                        className="lr-campaign-asset-btn"
                         href={campaignFinalImageUrl}
                         target="_blank"
                         rel="noreferrer"
@@ -10741,21 +10690,12 @@ export default function Home() {
                         Open
                       </a>
                       <a
-                        className="inline-flex items-center justify-center px-2 py-1.5 border rounded text-xs hover:bg-white"
+                        className="lr-campaign-asset-btn"
                         href={campaignFinalImageUrl}
                         download
                       >
                         Download
                       </a>
-                      <button
-                        className="inline-flex items-center justify-center px-2 py-1.5 border rounded text-xs hover:bg-white"
-                        onClick={() => printCampaignAsset({ target: campaignActiveTarget, url: campaignFinalImageUrl })}
-                      >
-                        Print
-                      </button>
-                      <div className="inline-flex items-center justify-center px-2 py-1.5 border rounded text-xs text-gray-500 bg-white">
-                        Print only
-                      </div>
                     </div>
                   </div>
                 ) : (
