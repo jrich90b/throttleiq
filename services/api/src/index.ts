@@ -20792,7 +20792,8 @@ function buildCampaignImagePrompt(args: {
       `- Compose as a wide horizontal web banner at ${bannerW}x${bannerH} (~${ratio}:1).`,
       "- Fill the frame edge-to-edge (no borders, no letterboxing, no padding).",
       "- Keep composition slightly zoomed out (avoid tight close-crops).",
-      "- Keep all essential text/logo/CTA inside a center safe area (~70% width, ~60% height), leaving top/bottom breathing room."
+      "- Keep all essential text/logo/CTA inside a center safe area (~68% width, ~52% height).",
+      "- Leave extra vertical headroom: avoid placing critical content in the top/bottom ~24% of the frame."
     );
   } else if (selectedTargetCount <= 1 && preferredTarget) {
     const socialDims: Record<
@@ -21091,7 +21092,7 @@ function campaignWebBannerInsetPercent(profile?: Awaited<ReturnType<typeof getDe
   if (Number.isFinite(candidate) && candidate >= 0 && candidate <= 25) {
     return Number(candidate);
   }
-  return Math.max(0, Math.min(25, Number(process.env.CAMPAIGN_WEB_BANNER_INSET_PERCENT ?? 12)));
+  return Math.max(0, Math.min(25, Number(process.env.CAMPAIGN_WEB_BANNER_INSET_PERCENT ?? 0)));
 }
 
 function campaignSocialMaxBytes(): number {
