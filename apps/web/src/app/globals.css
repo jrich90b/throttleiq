@@ -178,7 +178,49 @@ input[type="reset"],
 .lr-app-theme .lr-app-sidebar-panel button,
 .lr-app-theme .lr-app-main-panel button {
   border-color: var(--lr-app-border) !important;
-  color: #e8f0fe;
+  color: var(--lr-app-text) !important;
+}
+
+.lr-app-theme .lr-app-sidebar-panel button.bg-gray-50,
+.lr-app-theme .lr-app-sidebar-panel button.bg-gray-100,
+.lr-app-theme .lr-app-sidebar-panel button.bg-white,
+.lr-app-theme .lr-app-sidebar-panel button.bg-blue-50,
+.lr-app-theme .lr-app-sidebar-panel button.bg-blue-100,
+.lr-app-theme .lr-app-sidebar-panel button.bg-red-50,
+.lr-app-theme .lr-app-sidebar-panel button.bg-amber-50,
+.lr-app-theme .lr-app-main-panel button.bg-gray-50,
+.lr-app-theme .lr-app-main-panel button.bg-gray-100,
+.lr-app-theme .lr-app-main-panel button.bg-white,
+.lr-app-theme .lr-app-main-panel button.bg-blue-50,
+.lr-app-theme .lr-app-main-panel button.bg-blue-100,
+.lr-app-theme .lr-app-main-panel button.bg-red-50,
+.lr-app-theme .lr-app-main-panel button.bg-amber-50 {
+  color: #0f172a !important;
+}
+
+.lr-app-theme .lr-app-sidebar-panel button.bg-\[var\(--accent\)\],
+.lr-app-theme .lr-app-main-panel button.bg-\[var\(--accent\)\] {
+  color: #0f172a !important;
+  font-weight: 700;
+}
+
+.lr-app-theme .lr-app-main-panel .bg-gray-100.text-gray-900.border-gray-200 {
+  background-color: #ecf2fb !important;
+  border-color: #cbd8ed !important;
+  color: #0f172a !important;
+}
+
+.lr-app-theme .lr-app-main-panel .bg-gray-50.text-gray-700.border-gray-200,
+.lr-app-theme .lr-app-main-panel .bg-gray-50.text-gray-800.border-gray-200 {
+  background-color: #e9eff8 !important;
+  border-color: #c8d5eb !important;
+  color: #1e293b !important;
+}
+
+.lr-app-theme .lr-app-main-panel .bg-blue-600.text-white.border-blue-600 {
+  background: linear-gradient(180deg, #2e6bff 0%, #1f55d5 100%) !important;
+  border-color: #4f7df1 !important;
+  color: #ffffff !important;
 }
 
 .lr-app-theme .lr-app-sidebar-panel .bg-\[var\(--surface\)\],

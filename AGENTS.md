@@ -212,6 +212,9 @@ When changing responses:
   - `FEEDBACK_REPORT_EMAIL_TO` (recipient)
   - `FEEDBACK_REPORT_EMAIL_FROM` (sender; falls back to `NOTIFICATION_FROM_EMAIL`)
   - Optional: `FEEDBACK_REPORT_ATTACH_FULL=1` (attach full labeled + fixture payloads)
+  - Optional: `FEEDBACK_REPORT_ATTACH_ZIP=1` (attach a single `.zip` bundle of report artifacts)
+  - Optional: `FEEDBACK_REPORT_ZIP_ONLY=1` (send only the zip attachment, skip individual JSON attachments)
+  - Optional: `FEEDBACK_REPORT_ZIP_NAME=feedback_report_custom.zip` (custom zip filename)
 
 - Cron setup (daily at 8:15 AM ET):
   - `crontab -e`
@@ -245,3 +248,14 @@ When changing responses:
 - If you add a new Next.js API route (e.g., under `apps/web/src/app/api/...`), you must:
   - Commit the route file(s) locally.
   - Pull + rebuild the web app on the instance (otherwise the route 404s).
+
+## UI Contrast Pivot (Web Inbox/Chat)
+- High-contrast fixes for dark inbox/chat theme now live in:
+  - `apps/web/src/app/globals.css`
+- Added targeted overrides for:
+  - light-background button states (`bg-gray-50/100`, `bg-white`, `bg-blue-50/100`, `bg-red-50`, `bg-amber-50`)
+  - accent buttons (`bg-[var(--accent)]`) to use dark foreground text
+  - chat bubble combinations:
+    - inbound: `.bg-gray-100.text-gray-900.border-gray-200`
+    - outbound: `.bg-blue-600.text-white.border-blue-600`
+- Do not use broad low-level color overrides that force light text on all utility classes (example risk: overriding `.text-gray-900` globally inside `.lr-app-theme` can make inbound bubbles unreadable).
