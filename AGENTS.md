@@ -256,6 +256,7 @@ When changing responses:
   - light-background button states (`bg-gray-50/100`, `bg-white`, `bg-blue-50/100`, `bg-red-50`, `bg-amber-50`)
   - global light-surface readability map so nested gray text flips to dark contrast on:
     - `bg-white`, `bg-gray-50`, `bg-gray-100`, `bg-blue-50`, `bg-blue-100`, `bg-amber-50`, `bg-red-50`
+  - removed forced `button` foreground override in `apps/web/src/app/globals.css` so button labels inherit surface contrast (prevents light text on light cards like Contacts rows and Follow-up "Open conversation")
   - calendar header readability on day/week grid (salesperson names + time labels in `bg-gray-50` rows)
   - calendar day-view hourly gridlines use a stronger light-slate divider in `apps/web/src/app/page.tsx` (`linear-gradient` + `backgroundSize` row repeat) so hour rows remain visible on dark backgrounds
   - accent buttons (`bg-[var(--accent)]`) to use dark foreground text

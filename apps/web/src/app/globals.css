@@ -178,7 +178,6 @@ input[type="reset"],
 .lr-app-theme .lr-app-sidebar-panel button,
 .lr-app-theme .lr-app-main-panel button {
   border-color: var(--lr-app-border) !important;
-  color: var(--lr-app-text) !important;
 }
 
 .lr-app-theme .lr-app-sidebar-panel button.bg-gray-50,
