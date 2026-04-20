@@ -9108,7 +9108,11 @@ export default function Home() {
                       Notifications
                     </button>
                   </>
-                ) : null}
+                ) : (
+                  <div className="px-2 py-2 text-xs text-gray-500 border-t border-gray-100 mt-1">
+                    Dealer Profile and policy toggles are available to manager users.
+                  </div>
+                )}
                 <button
                   className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm text-red-600"
                   onClick={async () => {
@@ -11889,6 +11893,28 @@ export default function Home() {
             {settingsTab === "dealer" ? (
               <div className="border rounded-lg p-4 space-y-6">
                 <div className="text-lg font-semibold">Dealer Profile</div>
+                <div
+                  id="rider-to-rider-financing-toggle"
+                  className="border border-slate-300 rounded-lg p-3 bg-white text-slate-900 space-y-2"
+                >
+                  <div className="text-sm font-semibold">Lead Source Policy</div>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={!!dealerProfileForm.riderToRiderFinancingEnabled}
+                      onChange={e =>
+                        setDealerProfileForm({
+                          ...dealerProfileForm,
+                          riderToRiderFinancingEnabled: e.target.checked
+                        })
+                      }
+                    />
+                    Dealer offers Marketplace Rider-to-Rider financing
+                  </label>
+                  <div className="text-xs text-slate-600">
+                    Controls replies for &quot;Marketplace - Rider to Rider Finance Inquiry&quot; and regenerate behavior.
+                  </div>
+                </div>
                 <div className="border rounded-lg p-3 space-y-3">
                   <div className="text-sm font-semibold">Basic Information</div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -12167,25 +12193,6 @@ export default function Home() {
                         onChange={e => setDealerProfileForm({ ...dealerProfileForm, creditAppUrl: e.target.value })}
                       />
                     </label>
-                    <div className="md:col-span-2 border rounded p-3">
-                      <div className="text-xs text-gray-600 mb-2">Marketplace Rider-to-Rider financing</div>
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={!!dealerProfileForm.riderToRiderFinancingEnabled}
-                          onChange={e =>
-                            setDealerProfileForm({
-                              ...dealerProfileForm,
-                              riderToRiderFinancingEnabled: e.target.checked
-                            })
-                          }
-                        />
-                        Dealer offers Rider-to-Rider financing
-                      </label>
-                      <div className="text-xs text-gray-500 mt-1">
-                        Used for &quot;Marketplace - Rider to Rider Finance Inquiry&quot; replies and regenerate behavior.
-                      </div>
-                    </div>
                     <label className="space-y-1 md:col-span-2">
                       <div className="text-xs text-gray-600">
                         Lien holder / payoff response (used when customer asks for lien holder details)

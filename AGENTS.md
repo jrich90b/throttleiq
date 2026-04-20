@@ -269,7 +269,8 @@ When changing responses:
 
 ## Rider-to-Rider Finance Inquiry Policy
 - Dealer profile toggle:
-  - `policies.riderToRiderFinancingEnabled` (managed from Settings -> Dealer Profile -> profile fields near Credit app URL).
+  - `policies.riderToRiderFinancingEnabled` (managed from Settings -> Dealer Profile -> **Lead Source Policy** card).
+  - UI note: the settings menu and dealer-profile editor are manager-only; non-manager users now see a settings-menu hint that policy toggles require manager access.
 - Inbound deterministic handling (`services/api/src/routes/sendgridInbound.ts`):
   - Detect lead source/inquiry text containing Rider-to-Rider financing.
   - If enabled: acknowledge inquiry, create approval todo, set manual handoff (`credit_app`), stop cadence.
@@ -278,3 +279,7 @@ When changing responses:
 - Regenerate parity (`services/api/src/domain/regenerateSelection.ts`, `services/api/src/index.ts`):
   - Regenerate picker flags Rider-to-Rider ADF turns.
   - Regenerate route applies the same policy-gated deterministic reply path so manual regenerate matches live inbound behavior.
+
+## Send Channel Guardrail
+- In `/conversations/:id/send` (`services/api/src/index.ts`), explicit `channel: "sms"` must never be auto-overridden to email by conversation classification.
+- Email fallback from classification is only allowed when `channel` is missing (legacy caller behavior).
