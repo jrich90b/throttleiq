@@ -2607,7 +2607,10 @@ export default function Home() {
   }
 
   function openPostQueuePublishDialog(entry: CampaignEntry, target?: CampaignAssetTarget) {
-    openCampaignFromQueue(entry, "post", { toast: false });
+    goToSection("campaigns");
+    setCampaignListFilter("all");
+    setCampaignSelectedId(entry.id);
+    applyCampaignToForm(entry);
     const autoCaption = campaignAutoPublishCaption(entry);
     const captions: Partial<Record<CampaignAssetTarget, string>> = {};
     for (const queuedTarget of campaignQueuedAssetTargetsForQueue(entry, "post")) {
@@ -9366,7 +9369,7 @@ export default function Home() {
               </button>
             </div>
             {campaignError ? <div className="text-xs text-red-600">{campaignError}</div> : null}
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2">
               <button
                 className={`border rounded p-2 text-left hover:bg-[var(--surface)] lr-campaign-filter-card ${
                   campaignListFilter === "all" ? "bg-[var(--surface)] ring-1 ring-[var(--accent)]" : "bg-[var(--surface-2)]"
@@ -9386,16 +9389,6 @@ export default function Home() {
               >
                 <div className="text-[11px] text-gray-500">Send Queue</div>
                 <div className="text-sm font-semibold">{campaignSendQueue.length}</div>
-              </button>
-              <button
-                className={`border rounded p-2 text-left hover:bg-[var(--surface)] lr-campaign-filter-card ${
-                  campaignListFilter === "post" ? "bg-[var(--surface)] ring-1 ring-[var(--accent)]" : "bg-[var(--surface-2)]"
-                }`}
-                onClick={() => openQueuedCampaign("post")}
-                title={campaignPostQueue.length ? "Open newest Post Queue campaign" : "Post Queue is empty"}
-              >
-                <div className="text-[11px] text-gray-500">Post Queue</div>
-                <div className="text-sm font-semibold">{campaignPostQueue.length}</div>
               </button>
             </div>
             {campaignSendQueue.length ? (
@@ -9436,53 +9429,13 @@ export default function Home() {
                 </div>
               </div>
             ) : null}
-            {campaignPostQueue.length ? (
-              <div className="border rounded-lg bg-[var(--surface)]">
-                <div className="px-3 py-2 text-xs font-semibold border-b">Post Queue</div>
-                <div className="divide-y max-h-32 overflow-y-auto">
-                  {campaignPostQueue.map(item => {
-                    const actionBusy = campaignQueueActionBusyKey.startsWith(`post:${item.id}:`);
-                    return (
-                      <div key={`post-queue-${item.id}`} className="flex items-stretch">
-                        <button
-                          className={`flex-1 text-left px-3 py-2 text-xs hover:bg-[var(--surface-2)] ${
-                            campaignSelectedId === item.id ? "bg-[var(--surface-2)]" : ""
-                          }`}
-                          onClick={() => openCampaignFromQueue(item, "post", { toast: false })}
-                        >
-                          <div className="font-medium truncate">{item.name || "Untitled campaign"}</div>
-                          <div className="text-[11px] text-gray-500">
-                            Queued{" "}
-                            {campaignQueueEntry(item, "post")?.queuedAt
-                              ? new Date(String(campaignQueueEntry(item, "post")?.queuedAt)).toLocaleString()
-                              : "recently"}
-                          </div>
-                        </button>
-                        <button
-                          className="px-2 text-[10px] border-l text-[var(--accent)] hover:bg-[var(--surface-2)] disabled:opacity-60"
-                          disabled={Boolean(campaignQueueActionBusyKey) || actionBusy || campaignGenerating || campaignSaving}
-                          onClick={() => {
-                            openPostQueuePublishDialog(item);
-                          }}
-                          title="Open queued post publish window"
-                        >
-                          {actionBusy ? "Publishing..." : "Post…"}
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : null}
             {campaignLoading ? (
               <div className="text-sm text-gray-500">Loading campaigns...</div>
             ) : campaignVisibleList.length === 0 ? (
               <div className="text-sm text-gray-500 border rounded p-3 bg-[var(--surface-2)]">
                 {campaignListFilter === "all"
                   ? "No campaigns yet. Create a draft to get started."
-                  : campaignListFilter === "send"
-                    ? "No campaigns in Send Queue."
-                    : "No campaigns in Post Queue."}
+                  : "No campaigns in Send Queue."}
               </div>
             ) : (
               <div className="space-y-2">
@@ -9506,7 +9459,6 @@ export default function Home() {
                   const updated = item.updatedAt || item.createdAt;
                   const tags = Array.isArray(item.tags) ? item.tags : [];
                   const inSendQueue = campaignIsQueued(item, "send");
-                  const inPostQueue = campaignIsQueued(item, "post");
                   return (
                     <div
                       key={item.id}
@@ -9529,11 +9481,9 @@ export default function Home() {
                             {tags.join(" • ")}
                           </div>
                         ) : null}
-                        {inSendQueue || inPostQueue ? (
+                        {inSendQueue ? (
                           <div className="text-[11px] text-gray-600 mt-1 truncate lr-campaign-list-row-meta">
-                            {inSendQueue ? "In Send Queue" : ""}
-                            {inSendQueue && inPostQueue ? " • " : ""}
-                            {inPostQueue ? "In Post Queue" : ""}
+                            In Send Queue
                           </div>
                         ) : null}
                       </button>

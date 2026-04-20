@@ -270,6 +270,7 @@ When changing responses:
   - task inbox action callouts (`Action: ...`) now use accent orange instead of red (`apps/web/src/app/components/TaskInboxSection.tsx`)
   - task inbox task-type pills use stronger high-contrast styling; Follow-up now uses solid accent orange with dark text so the badge label remains readable in dark mode (`apps/web/src/app/components/TaskInboxSection.tsx`)
   - Campaign Studio preview cards now include aligned per-image action rows inside the same frame as each generated image (`Open`, `Download`, and context-aware `Send`/`Post`); print actions were removed and buttons were restyled to branded dark/orange campaign controls (`apps/web/src/app/page.tsx`, `apps/web/src/app/globals.css`)
+  - Campaign left-rail queue UI now shows only `Send Queue`; `Post Queue` summary/list indicators were removed from the inbox rail to reduce clutter (`apps/web/src/app/page.tsx`)
 - Do not use broad low-level color overrides that force light text on all utility classes (example risk: overriding `.text-gray-900` globally inside `.lr-app-theme` can make inbound bubbles unreadable).
 
 ## Rider-to-Rider Finance Inquiry Policy
