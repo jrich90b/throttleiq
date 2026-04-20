@@ -22147,6 +22147,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
   const buildMode = normalizeCampaignBuildMode(req.body?.buildMode);
   const channel = normalizeCampaignChannel(req.body?.channel);
   const assetTargets = normalizeCampaignAssetTargets(req.body?.assetTargets, channel);
+  const editFromCurrent = req.body?.editFromCurrent === true;
   const singleTarget =
     normalizeSingleCampaignAssetTarget(req.body?.singleTarget) ??
     normalizeSingleCampaignAssetTarget(req.body?.target) ??
@@ -22183,7 +22184,8 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
   let missingRequestedAssetTargets: CampaignAssetTarget[] = [];
   if (shouldAttemptImageFallback && imageTargetsRequested) {
     const strictReferenceLock =
-      buildMode === "design_from_scratch" && (inspirationImageUrls.length > 0 || assetImageUrls.length > 0);
+      editFromCurrent ||
+      (buildMode === "design_from_scratch" && (inspirationImageUrls.length > 0 || assetImageUrls.length > 0));
     const referenceImageUrls = normalizeCampaignUrlArray([
       ...(inspirationImageUrls ?? []),
       ...(assetImageUrls ?? []),
@@ -22213,6 +22215,14 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     ): Promise<TargetRenderResult | null> => {
       const targetAssetTargets: CampaignAssetTarget[] = [target];
       const targetLabel = campaignAssetTargetLabel(target);
+      const editModeDirective = editFromCurrent
+        ? [
+            "Edit-mode requirement (critical):",
+            "- Apply the requested change clearly and visibly in the subject/composition.",
+            "- Do not return a near-identical image with only minor background or sky color tweaks unless explicitly requested.",
+            "- Keep dealership/brand style and bike realism intact while making the requested edit obvious."
+          ].join("\n")
+        : undefined;
       const strictReferenceDirective = strictReferenceLock
         ? `Reference-lock requirement (critical): use uploaded reference images as the primary visual source of truth. Closely match core subject, style, color palette, typography hierarchy, and branding cues. Do not drift to unrelated concepts, products, scenes, or text. Adapt composition for ${targetLabel} while preserving the same campaign identity.`
         : undefined;
@@ -22220,11 +22230,11 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
         ? `Style-lock requirement: match the same campaign theme, color palette, brand look, and message hierarchy as the anchor image while adapting composition to ${targetLabel}. Keep headline/offer intent consistent across all outputs.`
         : undefined;
       const targetPrompt: string | undefined =
-        [prompt, strictReferenceDirective, styleLockDirective]
+        [prompt, editModeDirective, strictReferenceDirective, styleLockDirective]
           .filter((value): value is string => Boolean(String(value ?? "").trim()))
           .join("\n\n") || undefined;
       const targetDescription: string | undefined =
-        [description, strictReferenceDirective, styleLockDirective]
+        [description, editModeDirective, strictReferenceDirective, styleLockDirective]
           .filter((value): value is string => Boolean(String(value ?? "").trim()))
           .join("\n\n") || undefined;
       const targetReferenceImageUrls = normalizeCampaignUrlArray([
@@ -22500,6 +22510,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       ...(effectiveGenerated.metadata ?? {}),
       requestedAssetTargets: requestedAssetTargets.slice(),
       singleTarget: singleTarget ?? undefined,
+      editFromCurrent: editFromCurrent || undefined,
       assetGenerationStatus
     }
   };

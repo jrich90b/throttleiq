@@ -1391,6 +1391,9 @@ type CampaignSocialPublishOptions = {
   stickerText?: string;
 };
 
+type CampaignUploadDropZone = "briefs" | "refs" | "design";
+type CampaignUrlTextField = "inspirationImageUrlsText" | "assetImageUrlsText" | "briefDocumentUrlsText";
+
 const CAMPAIGN_ASSET_TARGET_OPTIONS: Array<{ value: CampaignAssetTarget; label: string }> = [
   { value: "sms", label: "SMS" },
   { value: "email", label: "Email" },
@@ -1486,6 +1489,19 @@ function parseCampaignUrlsText(raw: string): string[] {
         .filter(Boolean)
     )
   );
+}
+
+function campaignFileLabelFromUrl(url: string, fallback: string): string {
+  const value = String(url ?? "").trim();
+  if (!value) return fallback;
+  try {
+    const parsed = new URL(value);
+    const last = String(parsed.pathname ?? "").split("/").filter(Boolean).pop();
+    return decodeURIComponent(last || fallback);
+  } catch {
+    const last = value.split("/").filter(Boolean).pop();
+    return decodeURIComponent(last || fallback);
+  }
 }
 
 function deriveCampaignChannelFromTargets(targets: CampaignAssetTarget[] | null | undefined): CampaignChannel {
@@ -1856,6 +1872,7 @@ export default function Home() {
   const [campaignInspirationUploadBusy, setCampaignInspirationUploadBusy] = useState(false);
   const [campaignAssetUploadBusy, setCampaignAssetUploadBusy] = useState(false);
   const [campaignBriefUploadBusy, setCampaignBriefUploadBusy] = useState(false);
+  const [campaignActiveDropZone, setCampaignActiveDropZone] = useState<CampaignUploadDropZone | "">("");
   const [metaStatus, setMetaStatus] = useState<MetaIntegrationStatus | null>(null);
   const [metaLoading, setMetaLoading] = useState(false);
   const [metaActionBusy, setMetaActionBusy] = useState(false);
@@ -1883,22 +1900,23 @@ export default function Home() {
   const [campaignGeneratedAssets, setCampaignGeneratedAssets] = useState<CampaignGeneratedAsset[]>([]);
   const [campaignTargetToGenerate, setCampaignTargetToGenerate] = useState<CampaignAssetTarget>("sms");
   const [campaignEditFromCurrentImage, setCampaignEditFromCurrentImage] = useState(false);
+  const campaignBriefUploadInputRef = useRef<HTMLInputElement | null>(null);
+  const campaignInspirationUploadInputRef = useRef<HTMLInputElement | null>(null);
+  const campaignAssetUploadInputRef = useRef<HTMLInputElement | null>(null);
   const campaignInspirationPreviewUrls = useMemo(
     () =>
       parseCampaignUrlsText(campaignForm.inspirationImageUrlsText)
-        .filter(looksLikeCampaignImageUrl)
-        .slice(0, 8),
+        .filter(looksLikeCampaignImageUrl),
     [campaignForm.inspirationImageUrlsText]
   );
   const campaignBriefPreviewUrls = useMemo(
-    () => parseCampaignUrlsText(campaignForm.briefDocumentUrlsText).slice(0, 8),
+    () => parseCampaignUrlsText(campaignForm.briefDocumentUrlsText),
     [campaignForm.briefDocumentUrlsText]
   );
   const campaignAssetPreviewUrls = useMemo(
     () =>
       parseCampaignUrlsText(campaignForm.assetImageUrlsText)
-        .filter(looksLikeCampaignImageUrl)
-        .slice(0, 8),
+        .filter(looksLikeCampaignImageUrl),
     [campaignForm.assetImageUrlsText]
   );
   const campaignEffectiveChannel = useMemo(
@@ -2649,6 +2667,30 @@ export default function Home() {
     }
   }
 
+  function removeCampaignUrlFromField(field: CampaignUrlTextField, urlToRemove: string) {
+    const needle = String(urlToRemove ?? "").trim();
+    if (!needle) return;
+    setCampaignForm(prev => {
+      const existing = parseCampaignUrlsText(prev[field]);
+      const next = existing.filter(url => url !== needle);
+      return { ...prev, [field]: next.join("\n") };
+    });
+  }
+
+  async function handleCampaignDropZoneFiles(zone: CampaignUploadDropZone, files: FileList | null) {
+    if (!files || files.length === 0) return;
+    if (zone === "briefs") {
+      await handleCampaignBriefUploads(files);
+      return;
+    }
+    if (campaignForm.buildMode !== "design_from_scratch") return;
+    if (zone === "refs") {
+      await handleCampaignInspirationUploads(files);
+      return;
+    }
+    await handleCampaignAssetUploads(files);
+  }
+
   async function loadMetaStatus() {
     if (!isManager) return;
     setMetaLoading(true);
@@ -3254,17 +3296,16 @@ export default function Home() {
     }
     const isScratchBuild = campaignForm.buildMode === "design_from_scratch";
     const baseInspirationImageUrls = parseCampaignUrlsText(campaignForm.inspirationImageUrlsText);
-    const inspirationImageUrls = isScratchBuild || editFromCurrent
-      ? Array.from(
-          new Set(
-            [
-              ...(editFromCurrent && currentTargetAssetUrl ? [currentTargetAssetUrl] : []),
-              ...baseInspirationImageUrls
-            ].filter(Boolean)
-          )
-        )
-      : [];
-    const assetImageUrls = isScratchBuild ? parseCampaignUrlsText(campaignForm.assetImageUrlsText) : [];
+    const inspirationImageUrls = editFromCurrent
+      ? (currentTargetAssetUrl ? [currentTargetAssetUrl] : [])
+      : isScratchBuild
+        ? baseInspirationImageUrls
+        : [];
+    const assetImageUrls = editFromCurrent
+      ? []
+      : isScratchBuild
+        ? parseCampaignUrlsText(campaignForm.assetImageUrlsText)
+        : [];
     setCampaignGenerating(true);
     setCampaignError(null);
     try {
@@ -3278,6 +3319,7 @@ export default function Home() {
         assetTargets: campaignForm.assetTargets,
         singleTarget: target,
         replaceTarget: opts?.replaceTarget !== false,
+        editFromCurrent,
         prompt: String(campaignForm.prompt ?? "").trim() || undefined,
         description: String(campaignForm.description ?? "").trim() || undefined,
         inspirationImageUrls,
@@ -3326,7 +3368,11 @@ export default function Home() {
           String(generated?.finalImageUrl ?? "").trim() || String(generatedAssets[0]?.url ?? "").trim()
         );
       }
-      setSaveToast(`${CAMPAIGN_ASSET_TARGET_OPTIONS.find(opt => opt.value === target)?.label ?? "Asset"} generated`);
+      setSaveToast(
+        `${CAMPAIGN_ASSET_TARGET_OPTIONS.find(opt => opt.value === target)?.label ?? "Asset"} ${
+          editFromCurrent ? "edited" : "generated"
+        }`
+      );
     } catch (err: any) {
       setCampaignError(err?.message ?? "Failed to generate campaign");
     } finally {
@@ -10548,101 +10594,284 @@ export default function Home() {
               </div>
 
               <div className="border rounded-lg p-3 bg-gray-50 space-y-3 lr-campaign-subpanel">
-                <div className="flex flex-wrap items-center gap-2">
-                  <div className="text-xs font-semibold text-gray-700">Optional reference material</div>
-                  <label
-                    className={`inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
-                      campaignBriefUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-white"
-                    }`}
-                  >
-                    <span>{campaignBriefUploadBusy ? "Uploading..." : "Upload brief"}</span>
-                    <input
-                      className="hidden"
-                      type="file"
-                      accept=".pdf,.txt,.md,.csv,.json,.html,.doc,.docx,application/pdf,text/plain,text/markdown,text/csv,application/json,text/html,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                      multiple
-                      disabled={campaignBriefUploadBusy}
-                      onChange={async e => {
-                        const inputEl = e.currentTarget;
-                        await handleCampaignBriefUploads(inputEl.files);
-                        inputEl.value = "";
-                      }}
-                    />
-                  </label>
-                </div>
-
-                {campaignBriefPreviewUrls.length ? (
-                  <div className="flex flex-wrap gap-1.5">
-                    {campaignBriefPreviewUrls.map((url, idx) => {
-                      const label = String(url).split("/").pop() || `brief-${idx + 1}`;
-                      return (
-                        <a
-                          key={`campaign-brief-${idx}`}
-                          href={url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-[11px] px-2 py-1 border rounded bg-white hover:bg-gray-100 text-gray-700 truncate max-w-[260px]"
-                          title={url}
-                        >
-                          {label}
-                        </a>
-                      );
-                    })}
-                  </div>
-                ) : null}
-
-                {campaignForm.buildMode === "design_from_scratch" ? (
-                  <>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <label
-                        className={`inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
-                          campaignInspirationUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-white"
-                        }`}
-                      >
-                        <span>{campaignInspirationUploadBusy ? "Uploading..." : "Upload refs"}</span>
-                        <input
-                          className="hidden"
-                          type="file"
-                          accept="image/*"
-                          multiple
-                          disabled={campaignInspirationUploadBusy}
-                          onChange={async e => {
-                            const inputEl = e.currentTarget;
-                            await handleCampaignInspirationUploads(inputEl.files);
-                            inputEl.value = "";
-                          }}
-                        />
-                      </label>
-                      <label
-                        className={`inline-flex items-center gap-2 px-3 py-1.5 border rounded text-xs ${
-                          campaignAssetUploadBusy ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:bg-white"
-                        }`}
-                      >
-                        <span>{campaignAssetUploadBusy ? "Uploading..." : "Upload design imgs"}</span>
-                        <input
-                          className="hidden"
-                          type="file"
-                          accept="image/*"
-                          multiple
-                          disabled={campaignAssetUploadBusy}
-                          onChange={async e => {
-                            const inputEl = e.currentTarget;
-                            await handleCampaignAssetUploads(inputEl.files);
-                            inputEl.value = "";
-                          }}
-                        />
-                      </label>
+                <div className="text-xs font-semibold text-gray-700">Optional reference material</div>
+                <div
+                  className={`grid grid-cols-1 gap-3 ${
+                    campaignForm.buildMode === "design_from_scratch" ? "md:grid-cols-3" : "md:grid-cols-1"
+                  }`}
+                >
+                  <div className="border rounded-lg p-3 bg-white/90 lr-campaign-upload-card">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-xs font-semibold text-gray-700">Brief files</div>
+                      <div className="text-[11px] text-gray-500">{campaignBriefPreviewUrls.length}</div>
                     </div>
-
-                    {(campaignInspirationPreviewUrls.length || campaignAssetPreviewUrls.length) ? (
-                      <div className="text-[11px] text-gray-600">
-                        {campaignInspirationPreviewUrls.length ? `${campaignInspirationPreviewUrls.length} ref image(s)` : ""}
-                        {campaignInspirationPreviewUrls.length && campaignAssetPreviewUrls.length ? " • " : ""}
-                        {campaignAssetPreviewUrls.length ? `${campaignAssetPreviewUrls.length} design image(s)` : ""}
+                    <div
+                      className={`mt-2 lr-campaign-dropzone ${campaignActiveDropZone === "briefs" ? "is-dragging" : ""}`}
+                      onDragEnter={e => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setCampaignActiveDropZone("briefs");
+                      }}
+                      onDragOver={e => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (campaignActiveDropZone !== "briefs") setCampaignActiveDropZone("briefs");
+                      }}
+                      onDragLeave={e => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const nextTarget = e.relatedTarget as Node | null;
+                        if (nextTarget && e.currentTarget.contains(nextTarget)) return;
+                        if (campaignActiveDropZone === "briefs") setCampaignActiveDropZone("");
+                      }}
+                      onDrop={e => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setCampaignActiveDropZone("");
+                        void handleCampaignDropZoneFiles("briefs", e.dataTransfer?.files ?? null);
+                      }}
+                    >
+                      <div className="text-xs font-semibold text-gray-700">
+                        Drag &amp; drop file(s)
                       </div>
-                    ) : null}
-                  </>
-                ) : null}
+                      <div className="text-[11px] text-gray-500 mt-0.5">
+                        PDF, DOC, TXT, CSV, JSON, HTML
+                      </div>
+                      <button
+                        type="button"
+                        className="lr-campaign-upload-btn mt-2"
+                        disabled={campaignBriefUploadBusy}
+                        onClick={() => campaignBriefUploadInputRef.current?.click()}
+                      >
+                        {campaignBriefUploadBusy ? "Uploading..." : "Choose files"}
+                      </button>
+                      <input
+                        ref={campaignBriefUploadInputRef}
+                        className="hidden"
+                        type="file"
+                        accept=".pdf,.txt,.md,.csv,.json,.html,.doc,.docx,application/pdf,text/plain,text/markdown,text/csv,application/json,text/html,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        multiple
+                        disabled={campaignBriefUploadBusy}
+                        onChange={async e => {
+                          const inputEl = e.currentTarget;
+                          await handleCampaignBriefUploads(inputEl.files);
+                          inputEl.value = "";
+                        }}
+                      />
+                    </div>
+                    {campaignBriefPreviewUrls.length ? (
+                      <div className="mt-2 space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                        {campaignBriefPreviewUrls.map((url, idx) => (
+                          <div key={`campaign-brief-${idx}`} className="lr-campaign-upload-row">
+                            <a
+                              href={url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="min-w-0 truncate text-[11px] font-medium text-blue-700 hover:underline"
+                              title={url}
+                            >
+                              {campaignFileLabelFromUrl(url, `brief-${idx + 1}`)}
+                            </a>
+                            <button
+                              type="button"
+                              className="lr-campaign-upload-remove"
+                              onClick={() => removeCampaignUrlFromField("briefDocumentUrlsText", url)}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="mt-2 text-[11px] text-gray-500">No brief files yet.</div>
+                    )}
+                  </div>
+
+                  {campaignForm.buildMode === "design_from_scratch" ? (
+                    <>
+                      <div className="border rounded-lg p-3 bg-white/90 lr-campaign-upload-card">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-xs font-semibold text-gray-700">Reference images</div>
+                          <div className="text-[11px] text-gray-500">{campaignInspirationPreviewUrls.length}</div>
+                        </div>
+                        <div
+                          className={`mt-2 lr-campaign-dropzone ${campaignActiveDropZone === "refs" ? "is-dragging" : ""}`}
+                          onDragEnter={e => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setCampaignActiveDropZone("refs");
+                          }}
+                          onDragOver={e => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            if (campaignActiveDropZone !== "refs") setCampaignActiveDropZone("refs");
+                          }}
+                          onDragLeave={e => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const nextTarget = e.relatedTarget as Node | null;
+                            if (nextTarget && e.currentTarget.contains(nextTarget)) return;
+                            if (campaignActiveDropZone === "refs") setCampaignActiveDropZone("");
+                          }}
+                          onDrop={e => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setCampaignActiveDropZone("");
+                            void handleCampaignDropZoneFiles("refs", e.dataTransfer?.files ?? null);
+                          }}
+                        >
+                          <div className="text-xs font-semibold text-gray-700">Drag &amp; drop image(s)</div>
+                          <div className="text-[11px] text-gray-500 mt-0.5">PNG, JPG, WEBP, GIF</div>
+                          <button
+                            type="button"
+                            className="lr-campaign-upload-btn mt-2"
+                            disabled={campaignInspirationUploadBusy}
+                            onClick={() => campaignInspirationUploadInputRef.current?.click()}
+                          >
+                            {campaignInspirationUploadBusy ? "Uploading..." : "Choose images"}
+                          </button>
+                          <input
+                            ref={campaignInspirationUploadInputRef}
+                            className="hidden"
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            disabled={campaignInspirationUploadBusy}
+                            onChange={async e => {
+                              const inputEl = e.currentTarget;
+                              await handleCampaignInspirationUploads(inputEl.files);
+                              inputEl.value = "";
+                            }}
+                          />
+                        </div>
+                        {campaignInspirationPreviewUrls.length ? (
+                          <div className="mt-2 space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                            {campaignInspirationPreviewUrls.map((url, idx) => (
+                              <div key={`campaign-ref-${idx}`} className="lr-campaign-upload-row">
+                                <img
+                                  src={url}
+                                  alt={`Reference ${idx + 1}`}
+                                  className="h-9 w-14 object-cover rounded border shrink-0"
+                                  loading="lazy"
+                                />
+                                <a
+                                  href={url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="min-w-0 truncate text-[11px] font-medium text-blue-700 hover:underline"
+                                  title={url}
+                                >
+                                  {campaignFileLabelFromUrl(url, `reference-${idx + 1}`)}
+                                </a>
+                                <button
+                                  type="button"
+                                  className="lr-campaign-upload-remove"
+                                  onClick={() => removeCampaignUrlFromField("inspirationImageUrlsText", url)}
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="mt-2 text-[11px] text-gray-500">No reference images yet.</div>
+                        )}
+                      </div>
+
+                      <div className="border rounded-lg p-3 bg-white/90 lr-campaign-upload-card">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-xs font-semibold text-gray-700">Design images</div>
+                          <div className="text-[11px] text-gray-500">{campaignAssetPreviewUrls.length}</div>
+                        </div>
+                        <div
+                          className={`mt-2 lr-campaign-dropzone ${campaignActiveDropZone === "design" ? "is-dragging" : ""}`}
+                          onDragEnter={e => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setCampaignActiveDropZone("design");
+                          }}
+                          onDragOver={e => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            if (campaignActiveDropZone !== "design") setCampaignActiveDropZone("design");
+                          }}
+                          onDragLeave={e => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const nextTarget = e.relatedTarget as Node | null;
+                            if (nextTarget && e.currentTarget.contains(nextTarget)) return;
+                            if (campaignActiveDropZone === "design") setCampaignActiveDropZone("");
+                          }}
+                          onDrop={e => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setCampaignActiveDropZone("");
+                            void handleCampaignDropZoneFiles("design", e.dataTransfer?.files ?? null);
+                          }}
+                        >
+                          <div className="text-xs font-semibold text-gray-700">Drag &amp; drop image(s)</div>
+                          <div className="text-[11px] text-gray-500 mt-0.5">Use logos, badges, overlays</div>
+                          <button
+                            type="button"
+                            className="lr-campaign-upload-btn mt-2"
+                            disabled={campaignAssetUploadBusy}
+                            onClick={() => campaignAssetUploadInputRef.current?.click()}
+                          >
+                            {campaignAssetUploadBusy ? "Uploading..." : "Choose images"}
+                          </button>
+                          <input
+                            ref={campaignAssetUploadInputRef}
+                            className="hidden"
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            disabled={campaignAssetUploadBusy}
+                            onChange={async e => {
+                              const inputEl = e.currentTarget;
+                              await handleCampaignAssetUploads(inputEl.files);
+                              inputEl.value = "";
+                            }}
+                          />
+                        </div>
+                        {campaignAssetPreviewUrls.length ? (
+                          <div className="mt-2 space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                            {campaignAssetPreviewUrls.map((url, idx) => (
+                              <div key={`campaign-design-${idx}`} className="lr-campaign-upload-row">
+                                <img
+                                  src={url}
+                                  alt={`Design image ${idx + 1}`}
+                                  className="h-9 w-14 object-cover rounded border shrink-0"
+                                  loading="lazy"
+                                />
+                                <a
+                                  href={url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="min-w-0 truncate text-[11px] font-medium text-blue-700 hover:underline"
+                                  title={url}
+                                >
+                                  {campaignFileLabelFromUrl(url, `design-${idx + 1}`)}
+                                </a>
+                                <button
+                                  type="button"
+                                  className="lr-campaign-upload-remove"
+                                  onClick={() => removeCampaignUrlFromField("assetImageUrlsText", url)}
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="mt-2 text-[11px] text-gray-500">No design images yet.</div>
+                        )}
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+                <div className="text-[11px] text-gray-500">
+                  Drag files into the boxes or click Choose. Remove anything you do not want included.
+                </div>
               </div>
 
               <div className="border rounded-lg p-3 bg-gray-50 space-y-3 lr-campaign-subpanel">

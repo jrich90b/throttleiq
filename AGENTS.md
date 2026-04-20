@@ -295,6 +295,22 @@ When changing responses:
   - shows explicit user-facing reason when regenerate is blocked (Suggest mode / Human mode)
   - shows a success toast after a regenerate completes so users can confirm action occurred
 
+## Campaign Edit Mode Strengthening
+- Campaign generate now forwards `editFromCurrent` to API explicitly (was UI-only behavior before).
+- In edit mode, generation references are narrowed to the current selected output image to reduce prompt dilution.
+- API edit-mode prompt now adds hard directives to enforce visible requested changes (not only subtle sky/background tweaks).
+- Edit mode now enforces strict reference lock and records `metadata.editFromCurrent` on generated campaign output for traceability.
+
+## Campaign Upload UX + Contrast Pass
+- Campaign Studio optional reference materials now use drag-and-drop upload cards (brief files, reference images, design images).
+- Each uploaded item is listed with direct remove action (no manual text cleanup required).
+- Campaign action controls (`Redo`, `Save Draft`, upload action buttons, remove buttons) were restyled for stronger contrast in dark theme.
+- New styling hooks in `apps/web/src/app/globals.css`:
+  - `.lr-campaign-dropzone`
+  - `.lr-campaign-upload-btn`
+  - `.lr-campaign-upload-row`
+  - `.lr-campaign-upload-remove`
+
 ## Rider-to-Rider Finance Inquiry Policy
 - Dealer profile toggle:
   - `policies.riderToRiderFinancingEnabled` (managed from Settings -> Dealer Profile -> **Lead Source Policy** card).
