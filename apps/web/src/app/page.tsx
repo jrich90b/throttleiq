@@ -10908,7 +10908,7 @@ export default function Home() {
                       if (Number.isFinite(insetFromProfile) && insetFromProfile >= 0) {
                         return `${Math.max(0, Math.min(25, insetFromProfile))}%`;
                       }
-                      return "0%";
+                      return "8%";
                     })()}
                   </span>
                   .
@@ -12953,7 +12953,7 @@ export default function Home() {
                         min={0}
                         max={25}
                         step={0.5}
-                        placeholder="0"
+                        placeholder="8"
                         value={dealerProfileForm.campaignWebBannerInsetPercent}
                         onChange={e =>
                           setDealerProfileForm({

@@ -21091,7 +21091,7 @@ function campaignWebBannerInsetPercent(profile?: Awaited<ReturnType<typeof getDe
   if (Number.isFinite(candidate) && candidate >= 0 && candidate <= 25) {
     return Number(candidate);
   }
-  return Math.max(0, Math.min(25, Number(process.env.CAMPAIGN_WEB_BANNER_INSET_PERCENT ?? 0)));
+  return Math.max(0, Math.min(25, Number(process.env.CAMPAIGN_WEB_BANNER_INSET_PERCENT ?? 8)));
 }
 
 function campaignSocialMaxBytes(): number {
