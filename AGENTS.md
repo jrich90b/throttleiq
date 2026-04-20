@@ -274,6 +274,21 @@ When changing responses:
   - Campaign Studio `Download` now uses a blob-based forced download handler in the web client so cross-origin asset URLs save the file instead of navigating/opening in-browser (`apps/web/src/app/page.tsx`)
 - Do not use broad low-level color overrides that force light text on all utility classes (example risk: overriding `.text-gray-900` globally inside `.lr-app-theme` can make inbound bubbles unreadable).
 
+## Meta Social Publish Pivot (Campaign Studio)
+- Meta connect + publish remains:
+  - connect/start: `/integrations/meta/start`
+  - status: `/integrations/meta/status`
+  - disconnect: `/integrations/meta/disconnect`
+  - publish: `/campaigns/:id/publish/facebook` and `/campaigns/:id/publish/instagram`
+- Campaign Studio post publish modal now supports per-asset social fields:
+  - `linkUrl`, `mentionHandles`, `locationName`, `gifUrl`, `musicCue`, `stickerText`
+- Caption policy:
+  - non-story posts auto-build a catchy social caption when explicit caption is absent
+  - story posts remain captionless (`instagram_story`) by design
+  - optional social fields are appended/saved for non-story captions and stored in campaign metadata (`metadata.socialPublishOptions`)
+- Keep story exception strict:
+  - do not auto-send story captions; use story notes for manual overlays where needed.
+
 ## Rider-to-Rider Finance Inquiry Policy
 - Dealer profile toggle:
   - `policies.riderToRiderFinancingEnabled` (managed from Settings -> Dealer Profile -> **Lead Source Policy** card).

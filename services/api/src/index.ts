@@ -16393,6 +16393,150 @@ function withCampaignPublishMetadata(
   };
 }
 
+type CampaignSocialPublishOptions = {
+  linkUrl?: string;
+  mentionHandles?: string;
+  locationName?: string;
+  gifUrl?: string;
+  musicCue?: string;
+  stickerText?: string;
+};
+
+function trimPublishText(raw: unknown, max = 220): string {
+  return String(raw ?? "").trim().replace(/\s+/g, " ").slice(0, max);
+}
+
+function normalizePublishUrl(raw: unknown): string {
+  const value = String(raw ?? "").trim();
+  if (!value) return "";
+  if (!/^https?:\/\//i.test(value)) return "";
+  return value.slice(0, 1000);
+}
+
+function normalizeCampaignSocialPublishOptions(raw: unknown): CampaignSocialPublishOptions {
+  if (!raw || typeof raw !== "object") return {};
+  const row = raw as Record<string, unknown>;
+  const linkUrl = normalizePublishUrl(row.linkUrl);
+  const mentionHandles = trimPublishText(row.mentionHandles, 220);
+  const locationName = trimPublishText(row.locationName, 140);
+  const gifUrl = normalizePublishUrl(row.gifUrl);
+  const musicCue = trimPublishText(row.musicCue, 120);
+  const stickerText = trimPublishText(row.stickerText, 120);
+  return {
+    linkUrl: linkUrl || undefined,
+    mentionHandles: mentionHandles || undefined,
+    locationName: locationName || undefined,
+    gifUrl: gifUrl || undefined,
+    musicCue: musicCue || undefined,
+    stickerText: stickerText || undefined
+  };
+}
+
+function campaignMentionLine(raw: unknown): string {
+  const value = String(raw ?? "").trim();
+  if (!value) return "";
+  const handles = Array.from(
+    new Set(
+      value
+        .split(/[,\s]+/)
+        .map(v => v.trim())
+        .filter(Boolean)
+        .map(v => (v.startsWith("@") ? v : `@${v.replace(/^@+/, "")}`))
+    )
+  );
+  return handles.join(" ");
+}
+
+function campaignTagHashtags(tags: unknown): string {
+  const list = Array.isArray(tags)
+    ? tags.map(v => String(v ?? "").trim().toLowerCase()).filter(Boolean)
+    : [];
+  const out: string[] = [];
+  const add = (v: string) => {
+    if (!out.includes(v)) out.push(v);
+  };
+  for (const tag of list) {
+    if (tag === "sales") add("#HarleyDavidsonDeals");
+    if (tag === "parts") add("#HarleyParts");
+    if (tag === "apparel") add("#HarleyGear");
+    if (tag === "service") add("#HarleyService");
+    if (tag === "financing") add("#RideNowPayLater");
+    if (tag === "national_campaign") add("#HarleyEvent");
+    if (tag === "dealer_event") add("#DealerEvent");
+  }
+  add("#HarleyDavidson");
+  add("#AmericanHarley");
+  add("#RideWithUs");
+  return out.slice(0, 6).join(" ");
+}
+
+function campaignAutoSocialCaption(campaign: any): string {
+  const metadata = campaign?.metadata && typeof campaign.metadata === "object"
+    ? (campaign.metadata as Record<string, unknown>)
+    : null;
+  const explicit =
+    String(metadata?.socialCaption ?? metadata?.caption ?? "").trim() ||
+    String(metadata?.publishCaption ?? "").trim();
+  if (explicit) return explicit.slice(0, 1800);
+
+  const name = String(campaign?.name ?? "").trim();
+  const description = String(campaign?.description ?? "").trim();
+  const prompt = String(campaign?.prompt ?? "").trim();
+  const intro = name || "Fresh inventory just dropped";
+  const detail = description || prompt || "New arrivals, standout options, and riding season momentum.";
+  const tags = campaignTagHashtags(campaign?.tags);
+  const cta = Array.isArray(campaign?.tags) && campaign.tags.includes("dealer_event")
+    ? "Save your spot and message us for event details."
+    : "Message us for pricing, availability, and next steps.";
+  const composed = [intro, detail, cta, tags].filter(Boolean).join("\n\n").trim();
+  if (composed) return composed.slice(0, 1800);
+
+  const sms = String(campaign?.smsBody ?? "").trim();
+  if (sms) return sms.slice(0, 1800);
+  const emailText = String(campaign?.emailBodyText ?? "").trim();
+  if (emailText) return emailText.slice(0, 1800);
+  return "";
+}
+
+function composeSocialPublishCaption(baseCaptionRaw: string, options: CampaignSocialPublishOptions): string {
+  const base = String(baseCaptionRaw ?? "").trim().slice(0, 1600);
+  const extras: string[] = [];
+  const mentions = campaignMentionLine(options.mentionHandles);
+  if (mentions) extras.push(mentions);
+  if (options.locationName) extras.push(`Location: ${options.locationName}`);
+  if (options.musicCue) extras.push(`Music cue: ${options.musicCue}`);
+  if (options.stickerText) extras.push(`Sticker: ${options.stickerText}`);
+  if (options.linkUrl) extras.push(options.linkUrl);
+  if (options.gifUrl) extras.push(`GIF: ${options.gifUrl}`);
+  return [base, ...extras].filter(Boolean).join("\n\n").trim().slice(0, 1800);
+}
+
+function withCampaignSocialPublishOptionsMetadata(
+  baseMetadata: Record<string, unknown>,
+  target: CampaignAssetTarget | undefined,
+  options: CampaignSocialPublishOptions
+): Record<string, unknown> {
+  if (!target) return baseMetadata;
+  const hasOptions = Object.values(options).some(Boolean);
+  if (!hasOptions) return baseMetadata;
+  const currentRoot =
+    baseMetadata.socialPublishOptions && typeof baseMetadata.socialPublishOptions === "object"
+      ? (baseMetadata.socialPublishOptions as Record<string, unknown>)
+      : {};
+  return {
+    ...baseMetadata,
+    socialPublishOptions: {
+      ...currentRoot,
+      [target]: {
+        ...(currentRoot[target] && typeof currentRoot[target] === "object"
+          ? (currentRoot[target] as Record<string, unknown>)
+          : {}),
+        ...options
+      }
+    }
+  };
+}
+
 type CampaignQueueKind = "send" | "post";
 type CampaignQueueAction = "queue" | "dequeue";
 
@@ -16644,7 +16788,9 @@ app.post("/campaigns/:id/publish/facebook", requireManager, async (req, res) => 
   if (!/^https?:\/\//i.test(imageUrl)) {
     return res.status(400).json({ ok: false, error: "Image URL is not publicly accessible" });
   }
-  const caption = String(req.body?.caption ?? "").trim();
+  const socialOptions = normalizeCampaignSocialPublishOptions(req.body ?? {});
+  const requestedCaption = String(req.body?.caption ?? "").trim();
+  const caption = composeSocialPublishCaption(requestedCaption || campaignAutoSocialCaption(campaign), socialOptions);
   const postResp = await fetchMetaGraphJson<{ id?: string; post_id?: string }>(`/${integration.pageId}/photos`, {
     method: "POST",
     form: {
@@ -16658,16 +16804,23 @@ app.post("/campaigns/:id/publish/facebook", requireManager, async (req, res) => 
     return res.status(502).json({ ok: false, error: `Facebook publish failed: ${postResp.error}` });
   }
   const postId = String(postResp.data?.post_id ?? postResp.data?.id ?? "").trim() || undefined;
-  const updated = updateCampaign(campaign.id, {
-    metadata: withCampaignPublishMetadata(campaign, {
+  const publishMeta = withCampaignSocialPublishOptionsMetadata(
+    withCampaignPublishMetadata(campaign, {
       platform: "facebook",
       publishedAt: new Date().toISOString(),
       postId,
       pageId: integration.pageId,
       pageName: integration.pageName,
       assetTarget: selectedAsset.target,
-      assetUrl: imageUrl
-    })
+      assetUrl: imageUrl,
+      caption: caption || undefined,
+      socialOptions
+    }),
+    selectedAsset.target,
+    socialOptions
+  );
+  const updated = updateCampaign(campaign.id, {
+    metadata: publishMeta
   });
   return res.json({ ok: true, postId, pageId: integration.pageId, campaign: updated ?? campaign });
 });
@@ -16694,10 +16847,14 @@ app.post("/campaigns/:id/publish/instagram", requireManager, async (req, res) =>
   if (!/^https?:\/\//i.test(imageUrl)) {
     return res.status(400).json({ ok: false, error: "Image URL is not publicly accessible" });
   }
-  const caption = String(req.body?.caption ?? "").trim();
+  const socialOptions = normalizeCampaignSocialPublishOptions(req.body ?? {});
+  const requestedCaption = String(req.body?.caption ?? "").trim();
   const isStory =
     String(req.body?.mediaType ?? "").trim().toLowerCase() === "story" ||
     selectedAsset.target === "instagram_story";
+  const caption = isStory
+    ? ""
+    : composeSocialPublishCaption(requestedCaption || campaignAutoSocialCaption(campaign), socialOptions);
 
   const mediaResp = await fetchMetaGraphJson<{ id?: string }>(`/${igUserId}/media`, {
     method: "POST",
@@ -16727,8 +16884,8 @@ app.post("/campaigns/:id/publish/instagram", requireManager, async (req, res) =>
     return res.status(502).json({ ok: false, error: `Instagram publish failed: ${publishResp.error}` });
   }
   const mediaId = String(publishResp.data?.id ?? "").trim() || undefined;
-  const updated = updateCampaign(campaign.id, {
-    metadata: withCampaignPublishMetadata(campaign, {
+  const publishMeta = withCampaignSocialPublishOptionsMetadata(
+    withCampaignPublishMetadata(campaign, {
       platform: "instagram",
       publishedAt: new Date().toISOString(),
       mediaId,
@@ -16737,8 +16894,15 @@ app.post("/campaigns/:id/publish/instagram", requireManager, async (req, res) =>
       igUsername: integration.instagramBusinessAccountUsername,
       assetTarget: selectedAsset.target,
       assetUrl: imageUrl,
-      mediaType: isStory ? "story" : "feed"
-    })
+      mediaType: isStory ? "story" : "feed",
+      caption: isStory ? undefined : caption || undefined,
+      socialOptions
+    }),
+    selectedAsset.target,
+    socialOptions
+  );
+  const updated = updateCampaign(campaign.id, {
+    metadata: publishMeta
   });
   return res.json({ ok: true, mediaId, igUserId, campaign: updated ?? campaign });
 });

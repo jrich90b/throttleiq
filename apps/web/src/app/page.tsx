@@ -1382,6 +1382,15 @@ type MetaIntegrationStatus = {
   error?: string;
 };
 
+type CampaignSocialPublishOptions = {
+  linkUrl?: string;
+  mentionHandles?: string;
+  locationName?: string;
+  gifUrl?: string;
+  musicCue?: string;
+  stickerText?: string;
+};
+
 const CAMPAIGN_ASSET_TARGET_OPTIONS: Array<{ value: CampaignAssetTarget; label: string }> = [
   { value: "sms", label: "SMS" },
   { value: "email", label: "Email" },
@@ -1621,6 +1630,119 @@ function campaignFindGeneratedAsset(
   };
 }
 
+function campaignTrimToLimit(raw: unknown, max = 1800): string {
+  return String(raw ?? "").trim().slice(0, max);
+}
+
+function campaignSanitizePublishOptionText(raw: unknown, max = 220): string {
+  return String(raw ?? "").trim().replace(/\s+/g, " ").slice(0, max);
+}
+
+function campaignSanitizeUrl(raw: unknown): string {
+  const value = String(raw ?? "").trim();
+  if (!value) return "";
+  if (!/^https?:\/\//i.test(value)) return "";
+  return value.slice(0, 1000);
+}
+
+function campaignNormalizeSocialPublishOptions(raw: unknown): CampaignSocialPublishOptions {
+  if (!raw || typeof raw !== "object") return {};
+  const row = raw as Record<string, unknown>;
+  const linkUrl = campaignSanitizeUrl(row.linkUrl);
+  const mentionHandles = campaignSanitizePublishOptionText(row.mentionHandles, 220);
+  const locationName = campaignSanitizePublishOptionText(row.locationName, 140);
+  const gifUrl = campaignSanitizeUrl(row.gifUrl);
+  const musicCue = campaignSanitizePublishOptionText(row.musicCue, 120);
+  const stickerText = campaignSanitizePublishOptionText(row.stickerText, 120);
+  return {
+    linkUrl: linkUrl || undefined,
+    mentionHandles: mentionHandles || undefined,
+    locationName: locationName || undefined,
+    gifUrl: gifUrl || undefined,
+    musicCue: musicCue || undefined,
+    stickerText: stickerText || undefined
+  };
+}
+
+function campaignNormalizeSocialPublishOptionsMap(raw: unknown): Partial<Record<CampaignAssetTarget, CampaignSocialPublishOptions>> {
+  const out: Partial<Record<CampaignAssetTarget, CampaignSocialPublishOptions>> = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const [targetRaw, rowRaw] of Object.entries(raw as Record<string, unknown>)) {
+    const target = String(targetRaw ?? "").trim() as CampaignAssetTarget;
+    if (!CAMPAIGN_ASSET_TARGET_OPTIONS.some(opt => opt.value === target)) continue;
+    out[target] = campaignNormalizeSocialPublishOptions(rowRaw);
+  }
+  return out;
+}
+
+function campaignMentionLine(raw: string | undefined): string {
+  const input = String(raw ?? "").trim();
+  if (!input) return "";
+  const handles = Array.from(
+    new Set(
+      input
+        .split(/[,\s]+/)
+        .map(v => v.trim())
+        .filter(Boolean)
+        .map(v => (v.startsWith("@") ? v : `@${v.replace(/^@+/, "")}`))
+    )
+  );
+  return handles.join(" ");
+}
+
+function campaignTagHashtags(tags: CampaignTag[] | undefined): string {
+  const seed = Array.isArray(tags) ? tags : [];
+  const out: string[] = [];
+  const add = (v: string) => {
+    if (!out.includes(v)) out.push(v);
+  };
+  for (const tag of seed) {
+    if (tag === "sales") add("#HarleyDavidsonDeals");
+    if (tag === "parts") add("#HarleyParts");
+    if (tag === "apparel") add("#HarleyGear");
+    if (tag === "service") add("#HarleyService");
+    if (tag === "financing") add("#RideNowPayLater");
+    if (tag === "national_campaign") add("#HarleyEvent");
+    if (tag === "dealer_event") add("#DealerEvent");
+  }
+  add("#HarleyDavidson");
+  add("#AmericanHarley");
+  add("#RideWithUs");
+  return out.slice(0, 6).join(" ");
+}
+
+function campaignBuildCatchyCaption(entry: CampaignEntry): string {
+  const name = campaignTrimToLimit(entry.name, 140);
+  const description = campaignTrimToLimit(entry.description, 240);
+  const prompt = campaignTrimToLimit(entry.prompt, 180);
+  const intro = name || "Fresh inventory just dropped";
+  const detail = description || prompt || "New arrivals, standout options, and serious riding season energy.";
+  const tags = campaignTagHashtags(entry.tags);
+  const cta = (entry.tags ?? []).includes("dealer_event")
+    ? "Save your spot and message us for event details."
+    : "Message us for pricing, availability, and next steps.";
+  const lines = [intro, detail, cta, tags].filter(Boolean);
+  return lines.join("\n\n").slice(0, 1800);
+}
+
+function campaignComposePublishCaption(
+  baseCaptionRaw: string,
+  options?: CampaignSocialPublishOptions
+): string {
+  const baseCaption = campaignTrimToLimit(baseCaptionRaw, 1600);
+  const normalized = campaignNormalizeSocialPublishOptions(options);
+  const extras: string[] = [];
+  const mentions = campaignMentionLine(normalized.mentionHandles);
+  if (mentions) extras.push(mentions);
+  if (normalized.locationName) extras.push(`Location: ${normalized.locationName}`);
+  if (normalized.musicCue) extras.push(`Music cue: ${normalized.musicCue}`);
+  if (normalized.stickerText) extras.push(`Sticker: ${normalized.stickerText}`);
+  if (normalized.linkUrl) extras.push(normalized.linkUrl);
+  if (normalized.gifUrl) extras.push(`GIF: ${normalized.gifUrl}`);
+  const merged = [baseCaption, ...extras].filter(Boolean).join("\n\n").trim();
+  return merged.slice(0, 1800);
+}
+
 function campaignAutoPublishCaption(entry: CampaignEntry | null | undefined): string {
   if (!entry) return "";
   const meta = entry.metadata && typeof entry.metadata === "object" ? (entry.metadata as Record<string, unknown>) : null;
@@ -1628,6 +1750,9 @@ function campaignAutoPublishCaption(entry: CampaignEntry | null | undefined): st
     String(meta?.socialCaption ?? meta?.caption ?? "").trim() ||
     String(meta?.publishCaption ?? "").trim();
   if (explicit) return explicit.slice(0, 1800);
+
+  const catchy = campaignBuildCatchyCaption(entry);
+  if (catchy) return catchy;
 
   const sms = String(entry.smsBody ?? "").trim();
   if (sms) return sms.slice(0, 1800);
@@ -1743,6 +1868,9 @@ export default function Home() {
   const [campaignQueuePublishDialogTarget, setCampaignQueuePublishDialogTarget] = useState<CampaignAssetTarget | "">("");
   const [campaignQueuePublishCaptionByTarget, setCampaignQueuePublishCaptionByTarget] = useState<
     Partial<Record<CampaignAssetTarget, string>>
+  >({});
+  const [campaignQueuePublishOptionsByTarget, setCampaignQueuePublishOptionsByTarget] = useState<
+    Partial<Record<CampaignAssetTarget, CampaignSocialPublishOptions>>
   >({});
   const [campaignError, setCampaignError] = useState<string | null>(null);
   const [campaignSelectedId, setCampaignSelectedId] = useState("");
@@ -2611,12 +2739,16 @@ export default function Home() {
     setCampaignListFilter("all");
     setCampaignSelectedId(entry.id);
     applyCampaignToForm(entry);
+    const metaMap = campaignNormalizeSocialPublishOptionsMap((entry.metadata as any)?.socialPublishOptions);
     const autoCaption = campaignAutoPublishCaption(entry);
     const captions: Partial<Record<CampaignAssetTarget, string>> = {};
+    const optionsByTarget: Partial<Record<CampaignAssetTarget, CampaignSocialPublishOptions>> = {};
     for (const queuedTarget of campaignQueuedAssetTargetsForQueue(entry, "post")) {
       captions[queuedTarget] = autoCaption;
+      optionsByTarget[queuedTarget] = metaMap[queuedTarget] ?? {};
     }
     setCampaignQueuePublishCaptionByTarget(captions);
+    setCampaignQueuePublishOptionsByTarget(optionsByTarget);
     setCampaignQueuePublishDialogTarget(target ?? "");
     setCampaignQueuePublishDialogCampaignId(entry.id);
     void loadMetaStatus();
@@ -2640,6 +2772,7 @@ export default function Home() {
     setCampaignQueuePublishDialogCampaignId("");
     setCampaignQueuePublishDialogTarget("");
     setCampaignQueuePublishCaptionByTarget({});
+    setCampaignQueuePublishOptionsByTarget({});
     setCampaignQueueActionBusyKey("");
   }
 
@@ -2752,9 +2885,17 @@ export default function Home() {
       const body: Record<string, unknown> = {};
       body.assetTarget = target;
       if (platform === "instagram_story") body.mediaType = "story";
+      const socialOptions = campaignNormalizeSocialPublishOptions(campaignQueuePublishOptionsByTarget[target]);
       const manualCaption = String(campaignQueuePublishCaptionByTarget[target] ?? "").trim();
-      const captionToUse = manualCaption || campaignAutoPublishCaption(entry);
+      const autoCaption = campaignAutoPublishCaption(entry);
+      const captionToUse = campaignComposePublishCaption(manualCaption || autoCaption, socialOptions);
       if (captionToUse && platform !== "instagram_story") body.caption = captionToUse;
+      if (socialOptions.linkUrl) body.linkUrl = socialOptions.linkUrl;
+      if (socialOptions.mentionHandles) body.mentionHandles = socialOptions.mentionHandles;
+      if (socialOptions.locationName) body.locationName = socialOptions.locationName;
+      if (socialOptions.gifUrl) body.gifUrl = socialOptions.gifUrl;
+      if (socialOptions.musicCue) body.musicCue = socialOptions.musicCue;
+      if (socialOptions.stickerText) body.stickerText = socialOptions.stickerText;
       const resp = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -16309,6 +16450,9 @@ export default function Home() {
                   const captionValue =
                     String(campaignQueuePublishCaptionByTarget[target] ?? "").trim() ||
                     campaignAutoPublishCaption(campaignQueuePublishDialogEntry);
+                  const socialOptions = campaignNormalizeSocialPublishOptions(
+                    campaignQueuePublishOptionsByTarget[target]
+                  );
                   const busyKey = publishPlatform
                     ? `post:${campaignQueuePublishDialogEntry.id}:${target}:${publishPlatform}`
                     : "";
@@ -16345,8 +16489,102 @@ export default function Home() {
                           />
                         </label>
                       ) : (
-                        <div className="min-h-[122px]" aria-hidden />
+                        <div className="text-[11px] text-gray-500 border rounded bg-gray-50 p-2">
+                          Stories publish without captions. Use notes below for manual story overlays.
+                        </div>
                       )}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <label className="block text-xs text-gray-600">
+                          Link URL
+                          <input
+                            className="mt-1 w-full border rounded px-2 py-2 text-sm"
+                            placeholder="https://..."
+                            value={String(socialOptions.linkUrl ?? "")}
+                            onChange={e => {
+                              const next = campaignNormalizeSocialPublishOptions({
+                                ...socialOptions,
+                                linkUrl: e.target.value
+                              });
+                              setCampaignQueuePublishOptionsByTarget(prev => ({ ...prev, [target]: next }));
+                            }}
+                          />
+                        </label>
+                        <label className="block text-xs text-gray-600">
+                          Mentions
+                          <input
+                            className="mt-1 w-full border rounded px-2 py-2 text-sm"
+                            placeholder="@americanharley @rider"
+                            value={String(socialOptions.mentionHandles ?? "")}
+                            onChange={e => {
+                              const next = campaignNormalizeSocialPublishOptions({
+                                ...socialOptions,
+                                mentionHandles: e.target.value
+                              });
+                              setCampaignQueuePublishOptionsByTarget(prev => ({ ...prev, [target]: next }));
+                            }}
+                          />
+                        </label>
+                        <label className="block text-xs text-gray-600">
+                          Location
+                          <input
+                            className="mt-1 w-full border rounded px-2 py-2 text-sm"
+                            placeholder="Virginia Beach, VA"
+                            value={String(socialOptions.locationName ?? "")}
+                            onChange={e => {
+                              const next = campaignNormalizeSocialPublishOptions({
+                                ...socialOptions,
+                                locationName: e.target.value
+                              });
+                              setCampaignQueuePublishOptionsByTarget(prev => ({ ...prev, [target]: next }));
+                            }}
+                          />
+                        </label>
+                        <label className="block text-xs text-gray-600">
+                          GIF URL
+                          <input
+                            className="mt-1 w-full border rounded px-2 py-2 text-sm"
+                            placeholder="https://..."
+                            value={String(socialOptions.gifUrl ?? "")}
+                            onChange={e => {
+                              const next = campaignNormalizeSocialPublishOptions({
+                                ...socialOptions,
+                                gifUrl: e.target.value
+                              });
+                              setCampaignQueuePublishOptionsByTarget(prev => ({ ...prev, [target]: next }));
+                            }}
+                          />
+                        </label>
+                        <label className="block text-xs text-gray-600">
+                          Music Cue
+                          <input
+                            className="mt-1 w-full border rounded px-2 py-2 text-sm"
+                            placeholder="Song/artist idea"
+                            value={String(socialOptions.musicCue ?? "")}
+                            onChange={e => {
+                              const next = campaignNormalizeSocialPublishOptions({
+                                ...socialOptions,
+                                musicCue: e.target.value
+                              });
+                              setCampaignQueuePublishOptionsByTarget(prev => ({ ...prev, [target]: next }));
+                            }}
+                          />
+                        </label>
+                        <label className="block text-xs text-gray-600">
+                          Sticker Note
+                          <input
+                            className="mt-1 w-full border rounded px-2 py-2 text-sm"
+                            placeholder="Poll, emoji, countdown, etc."
+                            value={String(socialOptions.stickerText ?? "")}
+                            onChange={e => {
+                              const next = campaignNormalizeSocialPublishOptions({
+                                ...socialOptions,
+                                stickerText: e.target.value
+                              });
+                              setCampaignQueuePublishOptionsByTarget(prev => ({ ...prev, [target]: next }));
+                            }}
+                          />
+                        </label>
+                      </div>
                       <div className="flex flex-wrap items-center gap-2 mt-auto">
                         <button
                           className="px-3 py-2 border rounded text-xs bg-[var(--accent)] text-white border-[var(--accent)] hover:brightness-95 disabled:opacity-60"
