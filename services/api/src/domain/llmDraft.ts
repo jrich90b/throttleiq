@@ -930,6 +930,7 @@ export async function parseCadencePersonalizationLineWithLLM(args: {
     "- Avoid sensitive details (medical/legal/financial specifics).",
     "- Be tense-safe: if timing is uncertain or likely past, prefer past/neutral phrasing like \"went well\" or \"hope everything's going smoothly.\"",
     "- Avoid assuming an ongoing event is still happening.",
+    "- Do not use weather or riding-condition small talk.",
     "",
     `Recent messages/context:\n${history.join("\n")}`
   ].join("\n");

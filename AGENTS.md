@@ -380,3 +380,4 @@ When changing responses:
 - This guard is applied in both:
   - cadence send loop
   - cadence regenerate draft path
+- Cadence personalization lines now also block weather/riding-condition small-talk tails (e.g., “Hope the weather’s been good for riding...”) to keep follow-up tone focused and consistent.

@@ -5173,6 +5173,15 @@ async function getCadencePersonalizationLine(
     }
   }
   if (line) {
+    if (
+      /\b(weather|sunny|rain|rainy|snow|snowy|windy|cold|warm|hot|chilly|riding weather|good for riding|ride around|riding around)\b/i.test(
+        line
+      )
+    ) {
+      line = "";
+    }
+  }
+  if (line) {
     if (!/[.!?]$/.test(line)) line = `${line}.`;
     if (line.length > 140) line = `${line.slice(0, 139).trimEnd()}.`;
   }
