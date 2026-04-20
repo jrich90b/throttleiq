@@ -267,6 +267,7 @@ When changing responses:
     - outbound: `.bg-blue-600.text-white.border-blue-600`
   - lead owner labels/chips moved from red to accent orange for inbox list rows and conversation header owner badge (`apps/web/src/app/components/InboxSection.tsx`, `apps/web/src/app/page.tsx`)
   - inbox row hover/readability: conversation rows use dedicated `.lr-inbox-row` hover/keyboard-focus contrast treatment (`apps/web/src/app/components/InboxSection.tsx`, `apps/web/src/app/globals.css`) so hover states no longer wash out text
+  - task inbox action callouts (`Action: ...`) now use accent orange instead of red (`apps/web/src/app/components/TaskInboxSection.tsx`)
 - Do not use broad low-level color overrides that force light text on all utility classes (example risk: overriding `.text-gray-900` globally inside `.lr-app-theme` can make inbound bubbles unreadable).
 
 ## Rider-to-Rider Finance Inquiry Policy

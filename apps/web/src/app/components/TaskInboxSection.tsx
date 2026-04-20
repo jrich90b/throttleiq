@@ -175,7 +175,7 @@ export function TaskInboxSection(props: any) {
                             {t.reason} • {new Date(t.createdAt).toLocaleString()}
                           </div>
                           <div className="text-sm text-gray-700 mt-2 line-clamp-3 break-words">{t.summary}</div>
-                          <div className="text-sm font-semibold text-red-600 mt-2">Action: {actionLabel}</div>
+                          <div className="text-sm font-semibold text-[var(--accent)] mt-2">Action: {actionLabel}</div>
                           {ownerDisplay ? <div className="text-xs text-gray-600 mt-1">Owner: {ownerDisplay}</div> : null}
                           {showRequestedCallTime ? (
                             <div className="text-xs text-gray-600 mt-1">Requested call time: {requestedCallTime}</div>
