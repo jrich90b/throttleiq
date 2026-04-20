@@ -331,7 +331,8 @@ When changing responses:
   - `webBannerFit=auto` should only use `cover` when source/target aspect ratios are close.
   - When aspect ratio mismatch is large (too narrow/tall or too wide), auto must use `contain_blur` to avoid over-cropped, zoomed-looking banners.
   - Dealer profile supports `campaign.webBannerInsetPercent` (0-25) for optional zoom-out composition inside the exact banner frame.
-  - Default inset fallback is `8%` when dealer profile does not explicitly set `campaign.webBannerInsetPercent`.
+  - Default inset fallback is `12%` when dealer profile does not explicitly set `campaign.webBannerInsetPercent`.
+  - Web-banner prompt safe area is tighter vertically (~60% height) to protect against live-site top/bottom crop on responsive hero renderers.
   - Web banner normalization skips neutral-edge trim to avoid unintentional extra crop before banner resizing.
 
 ## Rider-to-Rider Finance Inquiry Policy
