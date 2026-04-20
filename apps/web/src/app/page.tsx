@@ -1737,8 +1737,10 @@ export default function Home() {
   const [metaError, setMetaError] = useState<string | null>(null);
   const [campaignQueueActionBusyKey, setCampaignQueueActionBusyKey] = useState("");
   const [campaignQueueSendDialogCampaignId, setCampaignQueueSendDialogCampaignId] = useState("");
+  const [campaignQueueSendDialogTarget, setCampaignQueueSendDialogTarget] = useState<CampaignAssetTarget | "">("");
   const [campaignQueueSendDialogListId, setCampaignQueueSendDialogListId] = useState("all");
   const [campaignQueuePublishDialogCampaignId, setCampaignQueuePublishDialogCampaignId] = useState("");
+  const [campaignQueuePublishDialogTarget, setCampaignQueuePublishDialogTarget] = useState<CampaignAssetTarget | "">("");
   const [campaignQueuePublishCaptionByTarget, setCampaignQueuePublishCaptionByTarget] = useState<
     Partial<Record<CampaignAssetTarget, string>>
   >({});
@@ -1814,14 +1816,16 @@ export default function Home() {
     () => campaigns.find(row => row.id === campaignQueueSendDialogCampaignId) ?? null,
     [campaigns, campaignQueueSendDialogCampaignId]
   );
-  const campaignQueueSendDialogTargets = useMemo(
-    () => campaignQueuedAssetTargetsForQueue(campaignQueueSendDialogEntry, "send"),
-    [campaignQueueSendDialogEntry]
-  );
-  const campaignQueuePublishDialogTargets = useMemo(
-    () => campaignQueuedAssetTargetsForQueue(campaignQueuePublishDialogEntry, "post"),
-    [campaignQueuePublishDialogEntry]
-  );
+  const campaignQueueSendDialogTargets = useMemo(() => {
+    const queued = campaignQueuedAssetTargetsForQueue(campaignQueueSendDialogEntry, "send");
+    if (!campaignQueueSendDialogTarget) return queued;
+    return queued.includes(campaignQueueSendDialogTarget) ? [campaignQueueSendDialogTarget] : queued;
+  }, [campaignQueueSendDialogEntry, campaignQueueSendDialogTarget]);
+  const campaignQueuePublishDialogTargets = useMemo(() => {
+    const queued = campaignQueuedAssetTargetsForQueue(campaignQueuePublishDialogEntry, "post");
+    if (!campaignQueuePublishDialogTarget) return queued;
+    return queued.includes(campaignQueuePublishDialogTarget) ? [campaignQueuePublishDialogTarget] : queued;
+  }, [campaignQueuePublishDialogEntry, campaignQueuePublishDialogTarget]);
   const campaignQueuePublishDialogAssets = useMemo(
     () =>
       campaignQueuePublishDialogTargets
@@ -2602,32 +2606,36 @@ export default function Home() {
     }
   }
 
-  function openPostQueuePublishDialog(entry: CampaignEntry) {
+  function openPostQueuePublishDialog(entry: CampaignEntry, target?: CampaignAssetTarget) {
     openCampaignFromQueue(entry, "post", { toast: false });
     const autoCaption = campaignAutoPublishCaption(entry);
     const captions: Partial<Record<CampaignAssetTarget, string>> = {};
-    for (const target of campaignQueuedAssetTargetsForQueue(entry, "post")) {
-      captions[target] = autoCaption;
+    for (const queuedTarget of campaignQueuedAssetTargetsForQueue(entry, "post")) {
+      captions[queuedTarget] = autoCaption;
     }
     setCampaignQueuePublishCaptionByTarget(captions);
+    setCampaignQueuePublishDialogTarget(target ?? "");
     setCampaignQueuePublishDialogCampaignId(entry.id);
     void loadMetaStatus();
   }
 
-  function openSendQueueSendDialog(entry: CampaignEntry) {
+  function openSendQueueSendDialog(entry: CampaignEntry, target?: CampaignAssetTarget) {
     openCampaignFromQueue(entry, "send", { toast: false });
+    setCampaignQueueSendDialogTarget(target ?? "");
     setCampaignQueueSendDialogCampaignId(entry.id);
     setCampaignQueueSendDialogListId(selectedContactListId || "all");
   }
 
   function closeSendQueueSendDialog() {
     setCampaignQueueSendDialogCampaignId("");
+    setCampaignQueueSendDialogTarget("");
     setCampaignQueueSendDialogListId("all");
     setCampaignQueueActionBusyKey("");
   }
 
   function closePostQueuePublishDialog() {
     setCampaignQueuePublishDialogCampaignId("");
+    setCampaignQueuePublishDialogTarget("");
     setCampaignQueuePublishCaptionByTarget({});
     setCampaignQueueActionBusyKey("");
   }
@@ -2927,16 +2935,19 @@ export default function Home() {
     }
   }
 
-  async function setCampaignAssetQueue(target: CampaignAssetTarget, shouldQueue: boolean) {
+  async function setCampaignAssetQueue(
+    target: CampaignAssetTarget,
+    shouldQueue: boolean
+  ): Promise<CampaignEntry | null> {
     const id = String(campaignSelectedId ?? "").trim();
     if (!id) {
       setCampaignError("Save the campaign first, then queue generated files.");
-      return;
+      return null;
     }
     const queue = campaignQueueKindForAssetTarget(target);
     if (!queue) {
       setCampaignError("This output type is download-only and cannot be queued.");
-      return;
+      return null;
     }
     setCampaignAssetQueueBusyTarget(target);
     setCampaignError(null);
@@ -2974,11 +2985,81 @@ export default function Home() {
             : `${targetLabel} queued for post`
           : `${targetLabel} removed from queue`
       );
+      return saved;
     } catch (err: any) {
       setCampaignError(err?.message ?? "Failed to update generated file queue");
+      return null;
     } finally {
       setCampaignAssetQueueBusyTarget("");
     }
+  }
+
+  function printCampaignAsset(asset: CampaignGeneratedAsset) {
+    const assetUrl = String(asset?.url ?? "").trim();
+    if (!assetUrl) return;
+    const label = campaignAssetDisplayLabel(asset);
+    const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>${escapeHtml(label)} - Print</title>
+    <style>
+      html, body { margin: 0; padding: 0; background: #ffffff; }
+      .wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; box-sizing: border-box; }
+      img { max-width: 100%; max-height: 100vh; object-fit: contain; }
+      @page { margin: 10mm; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <img src="${escapeHtml(assetUrl)}" alt="${escapeHtml(label)}" />
+    </div>
+  </body>
+</html>`;
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) {
+      setCampaignError("Pop-up blocked. Allow pop-ups to print generated assets.");
+      return;
+    }
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+    const triggerPrint = () => {
+      try {
+        printWindow.focus();
+        printWindow.print();
+      } catch {}
+    };
+    if (printWindow.document.readyState === "complete") {
+      setTimeout(triggerPrint, 120);
+    } else {
+      printWindow.onload = () => setTimeout(triggerPrint, 120);
+    }
+  }
+
+  async function openCampaignAssetPrimaryAction(asset: CampaignGeneratedAsset) {
+    const target = asset.target;
+    const queue = campaignQueueKindForAssetTarget(target);
+    if (!queue) {
+      setCampaignError("This generated file supports open/download/print only.");
+      return;
+    }
+    const entry = campaignSelectedEntry;
+    if (!entry || !campaignSelectedId) {
+      setCampaignError("Save the campaign first, then use send/post.");
+      return;
+    }
+    let actionEntry: CampaignEntry = entry;
+    if (!campaignAssetIsQueued(entry, target)) {
+      const saved = await setCampaignAssetQueue(target, true);
+      if (!saved) return;
+      actionEntry = saved;
+    }
+    if (queue === "send") {
+      openSendQueueSendDialog(actionEntry, target);
+      return;
+    }
+    openPostQueuePublishDialog(actionEntry, target);
   }
 
   async function generateCampaign(opts?: {
@@ -10539,7 +10620,7 @@ export default function Home() {
                   Generate creates/updates the selected output. Redo retries the same output.
                 </div>
                 <div className="pt-1 border-t border-gray-200 text-[11px] text-gray-600">
-                  Queueing is handled per generated file below (Send/Post).
+                  Use the per-file actions below for Open, Download, Print, and Send/Post.
                 </div>
               </div>
             </div>
@@ -10612,43 +10693,25 @@ export default function Home() {
                       const meta = [asset.mimeType].filter(Boolean).join(" • ");
                       const queueKind = campaignQueueKindForAssetTarget(asset.target);
                       const queueable = Boolean(queueKind);
-                      const queued = queueable ? campaignAssetIsQueued(campaignSelectedEntry, asset.target) : false;
-                      const queuedAtIso = queueable ? campaignAssetQueuedAtIso(campaignSelectedEntry, asset.target) : "";
                       const queueBusy = campaignAssetQueueBusyTarget === asset.target;
-                      const queueLabel =
-                        queueKind === "send"
-                          ? "Queue for Send"
-                          : queueKind === "post"
-                            ? "Queue for Post"
-                            : "Download only";
+                      const campaignId = String(campaignSelectedId ?? "").trim();
+                      const sendBusyKey = `send:${campaignId}:${asset.target}`;
+                      const postBusyPrefix = `post:${campaignId}:${asset.target}:`;
+                      const actionBusy = queueKind
+                        ? queueKind === "send"
+                          ? campaignQueueActionBusyKey === sendBusyKey
+                          : campaignQueueActionBusyKey.startsWith(postBusyPrefix)
+                        : false;
+                      const actionLabel = queueKind === "send" ? "Send" : queueKind === "post" ? "Post" : "";
+                      const actionBusyLabel =
+                        queueKind === "send" ? "Opening Send..." : queueKind === "post" ? "Opening Post..." : "";
                       return (
                         <div key={`campaign-generated-asset-${asset.target}-${idx}`} className="border rounded px-3 py-2 bg-gray-50">
                           <div className="text-xs font-semibold">{label}</div>
                           {meta ? <div className="text-[11px] text-gray-500 mt-0.5">{meta}</div> : null}
-                          {queueable ? (
-                            <label className="flex items-center gap-2 mt-2 text-xs text-gray-700">
-                              <input
-                                type="checkbox"
-                                className="h-3.5 w-3.5"
-                                checked={queued}
-                                disabled={!campaignSelectedId || queueBusy}
-                                onChange={e => {
-                                  void setCampaignAssetQueue(asset.target, e.target.checked);
-                                }}
-                              />
-                              <span>{queueBusy ? "Saving..." : queueLabel}</span>
-                            </label>
-                          ) : (
-                            <div className="text-[11px] text-gray-500 mt-2">{queueLabel}</div>
-                          )}
-                          {queueable && queued ? (
-                            <div className="text-[11px] text-green-700 mt-1">
-                              Queued {queuedAtIso ? new Date(queuedAtIso).toLocaleString() : "now"}
-                            </div>
-                          ) : null}
-                          <div className="flex items-center gap-2 mt-2">
+                          <div className="grid grid-cols-2 gap-2 mt-3">
                             <a
-                              className="px-2 py-1 border rounded text-xs hover:bg-white"
+                              className="inline-flex items-center justify-center px-2 py-1.5 border rounded text-xs hover:bg-white"
                               href={asset.url}
                               target="_blank"
                               rel="noreferrer"
@@ -10656,12 +10719,40 @@ export default function Home() {
                               Open
                             </a>
                             <a
-                              className="px-2 py-1 border rounded text-xs hover:bg-white"
+                              className="inline-flex items-center justify-center px-2 py-1.5 border rounded text-xs hover:bg-white"
                               href={asset.url}
                               download
                             >
                               Download
                             </a>
+                            <button
+                              className="inline-flex items-center justify-center px-2 py-1.5 border rounded text-xs hover:bg-white"
+                              onClick={() => printCampaignAsset(asset)}
+                              disabled={!asset.url}
+                            >
+                              Print
+                            </button>
+                            {queueable ? (
+                              <button
+                                className="inline-flex items-center justify-center px-2 py-1.5 border rounded text-xs bg-[var(--accent)] text-[#101522] border-[var(--accent)] hover:brightness-95 disabled:opacity-60"
+                                disabled={
+                                  !campaignId ||
+                                  queueBusy ||
+                                  Boolean(campaignQueueActionBusyKey) ||
+                                  campaignGenerating ||
+                                  campaignSaving
+                                }
+                                onClick={() => {
+                                  void openCampaignAssetPrimaryAction(asset);
+                                }}
+                              >
+                                {queueBusy || actionBusy ? actionBusyLabel : actionLabel}
+                              </button>
+                            ) : (
+                              <div className="inline-flex items-center justify-center px-2 py-1.5 border rounded text-xs text-gray-500 bg-white">
+                                Print only
+                              </div>
+                            )}
                           </div>
                         </div>
                       );
@@ -16048,7 +16139,7 @@ export default function Home() {
           <div className="w-full max-w-5xl rounded-lg bg-white shadow-lg border p-4 max-h-[94dvh] overflow-y-auto lr-campaign-dialog">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <div className="text-sm font-semibold">Send queued campaign assets</div>
+                <div className="text-sm font-semibold">Send campaign assets</div>
                 <div className="text-xs text-gray-500">
                   {campaignQueueSendDialogEntry?.name || "Selected campaign"}
                 </div>
@@ -16087,7 +16178,7 @@ export default function Home() {
               </div>
             ) : campaignQueueSendDialogTargets.length === 0 ? (
               <div className="mt-3 text-sm text-gray-600 border rounded p-3 bg-[var(--surface-2)]">
-                No queued send assets found for this campaign.
+                No send-ready assets found for this campaign.
               </div>
             ) : (
               <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -16167,7 +16258,7 @@ export default function Home() {
           <div className="w-full max-w-5xl rounded-lg bg-white shadow-lg border p-4 max-h-[94dvh] overflow-y-auto lr-campaign-dialog">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <div className="text-sm font-semibold">Publish queued post assets</div>
+                <div className="text-sm font-semibold">Publish post assets</div>
                 <div className="text-xs text-gray-500">
                   {campaignQueuePublishDialogEntry?.name || "Selected campaign"}
                 </div>
@@ -16183,7 +16274,7 @@ export default function Home() {
             <div className="mt-3 border rounded-lg p-3 bg-gray-50">
               <div className="flex items-center justify-between gap-2">
                 <div className="text-xs text-gray-600">
-                  Connect once, then publish assets queued for Post.
+                  Connect once, then publish selected post assets.
                 </div>
                 <div className="text-xs">
                   {metaLoading ? (
@@ -16238,7 +16329,7 @@ export default function Home() {
               </div>
             ) : campaignQueuePublishDialogAssets.length === 0 ? (
               <div className="mt-3 text-sm text-gray-600 border rounded p-3 bg-[var(--surface-2)]">
-                No queued post assets found for this campaign.
+                No post-ready assets found for this campaign.
               </div>
             ) : (
               <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
