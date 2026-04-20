@@ -120,6 +120,14 @@ export function TaskInboxSection(props: any) {
                           : sectionType === "reminder"
                             ? "Reminder"
                             : "To Do";
+                    const taskTagClass =
+                      sectionType === "followup"
+                        ? "border-[color:rgba(251,127,4,0.88)] bg-[var(--accent)] text-[#101522]"
+                        : sectionType === "appointment"
+                          ? "border-[color:rgba(16,185,129,0.55)] bg-[color:rgba(16,185,129,0.22)] text-[#d8ffef]"
+                          : sectionType === "reminder"
+                            ? "border-[color:rgba(234,179,8,0.62)] bg-[color:rgba(234,179,8,0.20)] text-[#fff4c6]"
+                            : "border-[color:rgba(59,130,246,0.52)] bg-[color:rgba(59,130,246,0.18)] text-[#dce9ff]";
                     const isInternalNoteTodo = /(^|\\b)note(\\b|$)/.test(reason);
                     const showCallButton = !isInternalNoteTodo;
                     const actionLabel = todoActionLabel(t);
@@ -147,7 +155,7 @@ export function TaskInboxSection(props: any) {
                       >
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
-                            <span className="inline-flex items-center rounded-full border border-gray-300 bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-700">
+                            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${taskTagClass}`}>
                               {taskLabel}
                             </span>
                           </div>
