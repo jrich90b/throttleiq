@@ -769,6 +769,24 @@ input[type="reset"],
 .lr-campaign-theme .lr-campaign-upload-card {
   border-color: rgba(255, 255, 255, 0.26) !important;
   background: linear-gradient(180deg, rgba(246, 249, 255, 0.96), rgba(236, 243, 255, 0.94)) !important;
+  color: #0f172a !important;
+}
+
+.lr-campaign-theme .lr-campaign-upload-card .text-gray-500 {
+  color: #475569 !important;
+}
+
+.lr-campaign-theme .lr-campaign-upload-card .text-gray-600 {
+  color: #334155 !important;
+}
+
+.lr-campaign-theme .lr-campaign-upload-card .text-gray-700 {
+  color: #1f2937 !important;
+}
+
+.lr-campaign-theme .lr-campaign-upload-card .text-gray-800,
+.lr-campaign-theme .lr-campaign-upload-card .text-gray-900 {
+  color: #0f172a !important;
 }
 
 .lr-campaign-theme .lr-campaign-dropzone {
@@ -818,6 +836,14 @@ input[type="reset"],
   border-radius: 0.5rem;
   background: rgba(255, 255, 255, 0.84);
   padding: 0.38rem 0.5rem;
+}
+
+.lr-campaign-theme .lr-campaign-upload-row a {
+  color: #1d4ed8 !important;
+}
+
+.lr-campaign-theme .lr-campaign-upload-row a:hover {
+  color: #1e40af !important;
 }
 
 .lr-campaign-theme .lr-campaign-upload-remove {

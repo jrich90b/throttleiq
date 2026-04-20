@@ -310,6 +310,9 @@ When changing responses:
   - `.lr-campaign-upload-btn`
   - `.lr-campaign-upload-row`
   - `.lr-campaign-upload-remove`
+- Follow-up contrast tweak:
+  - white upload cards now force dark text ramps for `.text-gray-500/600/700/800/900`
+  - upload-row links are forced blue (`#1d4ed8`) for readable filename contrast on light rows
 
 ## Rider-to-Rider Finance Inquiry Policy
 - Dealer profile toggle:
