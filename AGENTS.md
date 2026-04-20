@@ -314,6 +314,16 @@ When changing responses:
   - white upload cards now force dark text ramps for `.text-gray-500/600/700/800/900`
   - upload-row links are forced blue (`#1d4ed8`) for readable filename contrast on light rows
 
+## Web Banner Size Source of Truth
+- Web banner generation dimensions must come from Dealer Profile fields when set:
+  - `campaign.webBannerWidth`
+  - `campaign.webBannerHeight`
+- Do not hardcode a global web banner size in code paths that run per dealer.
+- Fallback order for API/web banner sizing:
+  1) dealer profile campaign size
+  2) legacy profile keys (`webBannerWidth`, `webBannerHeight`) for backward compatibility
+  3) env defaults (`CAMPAIGN_WEB_BANNER_WIDTH`, `CAMPAIGN_WEB_BANNER_HEIGHT`)
+
 ## Rider-to-Rider Finance Inquiry Policy
 - Dealer profile toggle:
   - `policies.riderToRiderFinancingEnabled` (managed from Settings -> Dealer Profile -> **Lead Source Policy** card).
