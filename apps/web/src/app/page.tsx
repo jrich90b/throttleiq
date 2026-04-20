@@ -6611,6 +6611,7 @@ export default function Home() {
 
   const isConversationOnHold = (c: ConversationListItem) => {
     const status = String(c.status ?? "").trim().toLowerCase();
+    if (status === "closed") return false;
     const closedReason = String(c.closedReason ?? "").trim().toLowerCase();
     const soldByReason = closedReason === "sold" || /\bsold\b/.test(closedReason);
     const soldByCadence = String(c.followUpCadence?.kind ?? "").trim().toLowerCase() === "post_sale";
@@ -6639,6 +6640,8 @@ export default function Home() {
   const isArchivedConversation = (c: ConversationListItem) => {
     const status = String(c.status ?? "").trim().toLowerCase();
     const closedReason = String(c.closedReason ?? "").trim().toLowerCase();
+    if (isSoldDealConversation(c)) return false;
+    if (status === "closed") return true;
     const holdDeal =
       /\bhold\b/.test(closedReason) ||
       c.followUpCadence?.pauseReason === "manual_hold" ||
@@ -6650,8 +6653,7 @@ export default function Home() {
       c.followUp?.reason === "unit_hold" ||
       c.followUp?.reason === "order_hold" ||
       !!c.hold;
-    if (isSoldDealConversation(c) || holdDeal) return false;
-    if (status === "closed") return true;
+    if (holdDeal) return false;
     return /archive/.test(closedReason);
   };
 
