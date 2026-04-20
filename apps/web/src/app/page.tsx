@@ -1504,6 +1504,48 @@ function campaignFileLabelFromUrl(url: string, fallback: string): string {
   }
 }
 
+function formatFileSizeShort(bytes: number): string {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n <= 0) return "0 B";
+  if (n < 1024) return `${Math.round(n)} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+async function readImageDimensionsFromBlob(blob: Blob): Promise<{ width: number; height: number } | null> {
+  const mime = String(blob?.type ?? "").toLowerCase();
+  if (!mime.startsWith("image/")) return null;
+  if (typeof createImageBitmap === "function") {
+    try {
+      const bitmap = await createImageBitmap(blob);
+      const dims = { width: Number(bitmap.width ?? 0), height: Number(bitmap.height ?? 0) };
+      bitmap.close();
+      if (dims.width > 0 && dims.height > 0) return dims;
+    } catch {
+      // fall through to HTMLImageElement probe
+    }
+  }
+  return await new Promise(resolve => {
+    const objUrl = window.URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      const width = Number(img.naturalWidth ?? img.width ?? 0);
+      const height = Number(img.naturalHeight ?? img.height ?? 0);
+      window.URL.revokeObjectURL(objUrl);
+      if (width > 0 && height > 0) {
+        resolve({ width, height });
+        return;
+      }
+      resolve(null);
+    };
+    img.onerror = () => {
+      window.URL.revokeObjectURL(objUrl);
+      resolve(null);
+    };
+    img.src = objUrl;
+  });
+}
+
 function deriveCampaignChannelFromTargets(targets: CampaignAssetTarget[] | null | undefined): CampaignChannel {
   const set = new Set<CampaignAssetTarget>(Array.isArray(targets) ? targets : []);
   const hasSms = set.has("sms");
@@ -3390,6 +3432,8 @@ export default function Home() {
         throw new Error(`Download failed (${resp.status})`);
       }
       const blob = await resp.blob();
+      const blobBytes = Number(blob.size ?? 0);
+      const blobDims = await readImageDimensionsFromBlob(blob);
       const parsed = (() => {
         try {
           return new URL(source, window.location.origin);
@@ -3425,6 +3469,8 @@ export default function Home() {
       anchor.click();
       anchor.remove();
       window.URL.revokeObjectURL(blobUrl);
+      const specText = blobDims ? `${blobDims.width}x${blobDims.height}` : "non-image";
+      setSaveToast(`Downloaded ${baseName} (${specText}, ${formatFileSizeShort(blobBytes)})`);
     } catch (err: any) {
       setCampaignError(err?.message ?? "Failed to download file.");
     }
