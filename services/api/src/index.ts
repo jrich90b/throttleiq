@@ -15614,7 +15614,14 @@ async function processDueFollowUps() {
         appendOutbound(conv, emailFrom, emailTo!, signed, "sendgrid", undefined, mediaUrls);
         maybeAddCallTodoForFollowUp();
       } catch (e: any) {
-        console.log("[followup] email send failed:", e?.message ?? e);
+        console.log("[followup] email send failed", {
+          convId: conv?.id ?? null,
+          leadKey: conv?.leadKey ?? null,
+          to: emailTo ?? null,
+          from: emailFrom ?? null,
+          replyTo: replyTo ?? null,
+          details: e?.message ?? String(e)
+        });
         const fallbackMessage = emailMessage ?? message;
         appendOutbound(conv, "salesperson", emailTo!, fallbackMessage, "human", undefined, mediaUrls);
         maybeAddCallTodoForFollowUp();
@@ -23353,7 +23360,14 @@ app.post("/conversations/:id/send", async (req, res) => {
       queueTlpLog();
       return res.json({ ok: true, conversation: conv });
   } catch (err: any) {
-    console.warn("[email] send failed:", err?.message ?? err);
+    console.warn("[email] send failed", {
+      convId: conv?.id ?? null,
+      leadKey: conv?.leadKey ?? null,
+      to: emailTo ?? null,
+      from: emailFrom ?? null,
+      replyTo: replyTo ?? null,
+      details: err?.message ?? String(err)
+    });
     const details = String(err?.message ?? "").trim();
     return res.status(500).json({
       ok: false,
