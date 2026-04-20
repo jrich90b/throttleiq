@@ -324,6 +324,64 @@ input[type="reset"],
   color: #0b1220 !important;
 }
 
+/* Keep light modals readable inside dark app/campaign shells. */
+.lr-app-theme .lr-light-modal,
+.lr-campaign-theme .lr-light-modal {
+  color: #0f172a !important;
+}
+
+.lr-app-theme .lr-light-modal .text-gray-500,
+.lr-app-theme .lr-light-modal .text-gray-600,
+.lr-app-theme .lr-light-modal .text-gray-700,
+.lr-campaign-theme .lr-light-modal .text-gray-500,
+.lr-campaign-theme .lr-light-modal .text-gray-600,
+.lr-campaign-theme .lr-light-modal .text-gray-700 {
+  color: #475569 !important;
+}
+
+.lr-app-theme .lr-light-modal .text-gray-800,
+.lr-app-theme .lr-light-modal .text-gray-900,
+.lr-campaign-theme .lr-light-modal .text-gray-800,
+.lr-campaign-theme .lr-light-modal .text-gray-900 {
+  color: #0f172a !important;
+}
+
+.lr-app-theme .lr-light-modal input,
+.lr-app-theme .lr-light-modal select,
+.lr-app-theme .lr-light-modal textarea,
+.lr-campaign-theme .lr-light-modal input,
+.lr-campaign-theme .lr-light-modal select,
+.lr-campaign-theme .lr-light-modal textarea {
+  background: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+.lr-app-theme .lr-light-modal input::placeholder,
+.lr-app-theme .lr-light-modal textarea::placeholder,
+.lr-campaign-theme .lr-light-modal input::placeholder,
+.lr-campaign-theme .lr-light-modal textarea::placeholder {
+  color: #64748b !important;
+  opacity: 1;
+}
+
+.lr-app-theme .lr-light-modal input:focus,
+.lr-app-theme .lr-light-modal select:focus,
+.lr-app-theme .lr-light-modal textarea:focus,
+.lr-campaign-theme .lr-light-modal input:focus,
+.lr-campaign-theme .lr-light-modal select:focus,
+.lr-campaign-theme .lr-light-modal textarea:focus {
+  outline: none;
+  border-color: #60a5fa !important;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+.lr-app-theme .lr-light-modal button:not([style]),
+.lr-campaign-theme .lr-light-modal button:not([style]) {
+  color: #0f172a !important;
+  border-color: #cbd5e1 !important;
+}
+
 .lr-app-theme .lr-app-main-panel .bg-gray-100.text-gray-900.border-gray-200 {
   background-color: #ecf2fb !important;
   border-color: #cbd8ed !important;

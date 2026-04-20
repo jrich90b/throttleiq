@@ -11564,7 +11564,7 @@ export default function Home() {
             </div>
             {calendarEdit ? (
             <div className="fixed inset-0 z-50 flex items-start md:items-center justify-center bg-black/30 p-3 overflow-y-auto">
-                <div className="bg-white w-full max-w-xl rounded-lg shadow-lg p-4 space-y-4 max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
+                <div className="bg-white lr-light-modal w-full max-w-xl rounded-lg shadow-lg p-4 space-y-4 max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
                   <div className="flex items-center justify-between">
                     <div className="text-lg font-semibold">Edit appointment</div>
                     <button className="px-2 py-1 border rounded text-sm" onClick={() => setCalendarEdit(null)}>
