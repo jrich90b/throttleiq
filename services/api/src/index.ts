@@ -21169,11 +21169,11 @@ async function normalizeCampaignImageForExactFrame(
           : "cover";
   if (requestedFit === "auto") {
     if (sourceAspect && Number.isFinite(sourceAspect) && sourceAspect > 0) {
-      // Prefer full-frame cover by default.
-      // Only switch to contain_blur when source is substantially narrower/taller than target,
-      // because that case would otherwise crop too aggressively.
-      const narrowVsTarget = sourceAspect / targetAspect;
-      effectiveFit = narrowVsTarget < 0.88 ? "contain_blur" : "cover";
+      // Prefer cover only when source and target aspect ratios are reasonably close.
+      // If source is much narrower/taller OR much wider than target, cover crops too much
+      // and can make creative look "zoomed". In those cases, use contain_blur.
+      const sourceVsTarget = sourceAspect / targetAspect;
+      effectiveFit = sourceVsTarget < 0.88 || sourceVsTarget > 1.12 ? "contain_blur" : "cover";
     } else {
       effectiveFit = "cover";
     }

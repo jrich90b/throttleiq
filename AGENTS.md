@@ -326,6 +326,9 @@ When changing responses:
 - Settings UI note:
   - Dealer Profile save flow must not silently write fixed defaults (e.g., `1200x628`) when banner size fields are unset.
   - On load/save, treat legacy top-level keys as valid fallback sources so older dealer profiles retain their configured banner size.
+- Resize-fit note:
+  - `webBannerFit=auto` should only use `cover` when source/target aspect ratios are close.
+  - When aspect ratio mismatch is large (too narrow/tall or too wide), auto must use `contain_blur` to avoid over-cropped, zoomed-looking banners.
 
 ## Rider-to-Rider Finance Inquiry Policy
 - Dealer profile toggle:
