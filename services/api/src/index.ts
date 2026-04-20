@@ -23481,6 +23481,29 @@ app.post("/conversations/:id/send", async (req, res) => {
       /\b(\d{1,2}(:\d{2})?\s*(am|pm)\b|morning|afternoon|evening|night|noon|midnight)\b/i.test(
         text
       );
+    const explicitTimeMentions = text.match(/\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/gi) ?? [];
+    const offersMultipleTimeChoices =
+      explicitTimeMentions.length >= 2 && /\b(or|either)\b/i.test(lower);
+    const asksScheduleQuestion =
+      /\?/.test(text) ||
+      /\b(would|could|can|do|does|are|is|what|which|when)\b/i.test(lower);
+    const scheduleOfferOnly =
+      (hasScheduleKeyword || hasDayToken || hasTimeToken) &&
+      (asksScheduleQuestion || offersMultipleTimeChoices);
+    const explicitBookingStatement =
+      /\b(you(?:'|’)re|you are)\s+(all set|booked|confirmed)\b/i.test(lower) ||
+      /\b(booked for|confirmed for|appointment(?: is)? set|see you then|locked in)\b/i.test(lower);
+
+    // Manual outbound schedule offers/questions should not auto-confirm bookings.
+    if (scheduleOfferOnly && !explicitBookingStatement) {
+      recordRouteOutcome("live", "manual_outbound_schedule_offer_only", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        channel: opts?.channel ?? null
+      });
+      return;
+    }
+
     const looksAppointmentLike = hasScheduleKeyword || hasDayToken || hasTimeToken || hasAppointmentContext;
 
     // Hard dedupe guard for manual outbound confirmations:
@@ -23572,7 +23595,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     let requested = parseRequestedDayTime(parseSource, schedulerTimezone);
 
     const confirmCue =
-      /\b(works|see you|all set|confirmed|booked|sounds good|perfect|that works|can work)\b/i.test(
+      /\b(see you|all set|confirmed|booked|sounds good|perfect|that works|you(?:'|’)re set|you are set)\b/i.test(
         lower
       );
     const shouldInferManualAppointment =

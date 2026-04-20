@@ -388,6 +388,11 @@ When changing responses:
 - Slot/no-slot variant pools and cadence fallback lines were aligned to the same tone so regenerate and scheduled sends stay consistent.
 - Email follow-up template bank was also softened to match the updated SMS tone.
 
+## Manual Outbound Booking Guardrail
+- Manual outbound messages now treat scheduling **questions/offers** as offer-only and do not auto-confirm bookings.
+- Messages with question-form scheduling language (for example, “would today work at 2:45 or 3:15?”) no longer trigger `manual_outbound_schedule_confirmed`.
+- Manual outbound booking confirmation now requires explicit booking statement language (for example, booked/confirmed/all set), not just generic “works”.
+
 ## Inbox Closed/Sold Filter Guardrail
 - Sold lead detection in web inbox now normalizes by:
   - `closedReason` (case-insensitive, includes sold token),
