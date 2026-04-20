@@ -204,6 +204,127 @@ input[type="reset"],
   font-weight: 700;
 }
 
+/* Global readability guard: any intentionally light utility surface should
+   flip back to dark foreground text even inside dark app themes. */
+.lr-app-theme .bg-white,
+.lr-app-theme .bg-gray-50,
+.lr-app-theme .bg-gray-100,
+.lr-app-theme .bg-blue-50,
+.lr-app-theme .bg-blue-100,
+.lr-app-theme .bg-amber-50,
+.lr-app-theme .bg-red-50,
+.lr-campaign-theme .bg-white,
+.lr-campaign-theme .bg-gray-50,
+.lr-campaign-theme .bg-gray-100,
+.lr-campaign-theme .bg-blue-50,
+.lr-campaign-theme .bg-blue-100,
+.lr-campaign-theme .bg-amber-50,
+.lr-campaign-theme .bg-red-50 {
+  color: #0f172a !important;
+}
+
+.lr-app-theme .bg-white .text-gray-400,
+.lr-app-theme .bg-gray-50 .text-gray-400,
+.lr-app-theme .bg-gray-100 .text-gray-400,
+.lr-app-theme .bg-blue-50 .text-gray-400,
+.lr-app-theme .bg-blue-100 .text-gray-400,
+.lr-app-theme .bg-amber-50 .text-gray-400,
+.lr-app-theme .bg-red-50 .text-gray-400,
+.lr-campaign-theme .bg-white .text-gray-400,
+.lr-campaign-theme .bg-gray-50 .text-gray-400,
+.lr-campaign-theme .bg-gray-100 .text-gray-400,
+.lr-campaign-theme .bg-blue-50 .text-gray-400,
+.lr-campaign-theme .bg-blue-100 .text-gray-400,
+.lr-campaign-theme .bg-amber-50 .text-gray-400,
+.lr-campaign-theme .bg-red-50 .text-gray-400 {
+  color: #64748b !important;
+}
+
+.lr-app-theme .bg-white .text-gray-500,
+.lr-app-theme .bg-gray-50 .text-gray-500,
+.lr-app-theme .bg-gray-100 .text-gray-500,
+.lr-app-theme .bg-blue-50 .text-gray-500,
+.lr-app-theme .bg-blue-100 .text-gray-500,
+.lr-app-theme .bg-amber-50 .text-gray-500,
+.lr-app-theme .bg-red-50 .text-gray-500,
+.lr-campaign-theme .bg-white .text-gray-500,
+.lr-campaign-theme .bg-gray-50 .text-gray-500,
+.lr-campaign-theme .bg-gray-100 .text-gray-500,
+.lr-campaign-theme .bg-blue-50 .text-gray-500,
+.lr-campaign-theme .bg-blue-100 .text-gray-500,
+.lr-campaign-theme .bg-amber-50 .text-gray-500,
+.lr-campaign-theme .bg-red-50 .text-gray-500 {
+  color: #475569 !important;
+}
+
+.lr-app-theme .bg-white .text-gray-600,
+.lr-app-theme .bg-gray-50 .text-gray-600,
+.lr-app-theme .bg-gray-100 .text-gray-600,
+.lr-app-theme .bg-blue-50 .text-gray-600,
+.lr-app-theme .bg-blue-100 .text-gray-600,
+.lr-app-theme .bg-amber-50 .text-gray-600,
+.lr-app-theme .bg-red-50 .text-gray-600,
+.lr-campaign-theme .bg-white .text-gray-600,
+.lr-campaign-theme .bg-gray-50 .text-gray-600,
+.lr-campaign-theme .bg-gray-100 .text-gray-600,
+.lr-campaign-theme .bg-blue-50 .text-gray-600,
+.lr-campaign-theme .bg-blue-100 .text-gray-600,
+.lr-campaign-theme .bg-amber-50 .text-gray-600,
+.lr-campaign-theme .bg-red-50 .text-gray-600 {
+  color: #334155 !important;
+}
+
+.lr-app-theme .bg-white .text-gray-700,
+.lr-app-theme .bg-gray-50 .text-gray-700,
+.lr-app-theme .bg-gray-100 .text-gray-700,
+.lr-app-theme .bg-blue-50 .text-gray-700,
+.lr-app-theme .bg-blue-100 .text-gray-700,
+.lr-app-theme .bg-amber-50 .text-gray-700,
+.lr-app-theme .bg-red-50 .text-gray-700,
+.lr-campaign-theme .bg-white .text-gray-700,
+.lr-campaign-theme .bg-gray-50 .text-gray-700,
+.lr-campaign-theme .bg-gray-100 .text-gray-700,
+.lr-campaign-theme .bg-blue-50 .text-gray-700,
+.lr-campaign-theme .bg-blue-100 .text-gray-700,
+.lr-campaign-theme .bg-amber-50 .text-gray-700,
+.lr-campaign-theme .bg-red-50 .text-gray-700 {
+  color: #1f2937 !important;
+}
+
+.lr-app-theme .bg-white .text-gray-800,
+.lr-app-theme .bg-gray-50 .text-gray-800,
+.lr-app-theme .bg-gray-100 .text-gray-800,
+.lr-app-theme .bg-blue-50 .text-gray-800,
+.lr-app-theme .bg-blue-100 .text-gray-800,
+.lr-app-theme .bg-amber-50 .text-gray-800,
+.lr-app-theme .bg-red-50 .text-gray-800,
+.lr-campaign-theme .bg-white .text-gray-800,
+.lr-campaign-theme .bg-gray-50 .text-gray-800,
+.lr-campaign-theme .bg-gray-100 .text-gray-800,
+.lr-campaign-theme .bg-blue-50 .text-gray-800,
+.lr-campaign-theme .bg-blue-100 .text-gray-800,
+.lr-campaign-theme .bg-amber-50 .text-gray-800,
+.lr-campaign-theme .bg-red-50 .text-gray-800 {
+  color: #111827 !important;
+}
+
+.lr-app-theme .bg-white .text-gray-900,
+.lr-app-theme .bg-gray-50 .text-gray-900,
+.lr-app-theme .bg-gray-100 .text-gray-900,
+.lr-app-theme .bg-blue-50 .text-gray-900,
+.lr-app-theme .bg-blue-100 .text-gray-900,
+.lr-app-theme .bg-amber-50 .text-gray-900,
+.lr-app-theme .bg-red-50 .text-gray-900,
+.lr-campaign-theme .bg-white .text-gray-900,
+.lr-campaign-theme .bg-gray-50 .text-gray-900,
+.lr-campaign-theme .bg-gray-100 .text-gray-900,
+.lr-campaign-theme .bg-blue-50 .text-gray-900,
+.lr-campaign-theme .bg-blue-100 .text-gray-900,
+.lr-campaign-theme .bg-amber-50 .text-gray-900,
+.lr-campaign-theme .bg-red-50 .text-gray-900 {
+  color: #0b1220 !important;
+}
+
 .lr-app-theme .lr-app-main-panel .bg-gray-100.text-gray-900.border-gray-200 {
   background-color: #ecf2fb !important;
   border-color: #cbd8ed !important;

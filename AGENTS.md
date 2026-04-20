@@ -254,6 +254,9 @@ When changing responses:
   - `apps/web/src/app/globals.css`
 - Added targeted overrides for:
   - light-background button states (`bg-gray-50/100`, `bg-white`, `bg-blue-50/100`, `bg-red-50`, `bg-amber-50`)
+  - global light-surface readability map so nested gray text flips to dark contrast on:
+    - `bg-white`, `bg-gray-50`, `bg-gray-100`, `bg-blue-50`, `bg-blue-100`, `bg-amber-50`, `bg-red-50`
+  - calendar header readability on day/week grid (salesperson names + time labels in `bg-gray-50` rows)
   - accent buttons (`bg-[var(--accent)]`) to use dark foreground text
   - chat bubble combinations:
     - inbound: `.bg-gray-100.text-gray-900.border-gray-200`
