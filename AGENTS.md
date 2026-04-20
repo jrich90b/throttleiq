@@ -298,6 +298,14 @@ When changing responses:
 - Email send failures now return `details` from the SendGrid exception; web send alert includes that detail text for faster on-box diagnosis.
 - API logs now include structured email failure context for tracing: `convId`, `leadKey`, `to`, `from`, `replyTo`, and `details` for both manual send and follow-up email paths.
 
+## Campaign Image Reliability (Reference-Lock)
+- Nano Banana request handling in `services/api/src/index.ts` now retries aborted/timeboxed/transient network failures instead of failing the target on first abort.
+- Retryable HTTP statuses now include `408/425/429/500/502/503/504` with exponential backoff.
+- Default campaign image timeout knobs were increased for strict reference-image runs:
+  - `CAMPAIGN_NANO_BANANA_REQUEST_TIMEOUT_MS` default: `90000` (was `45000`)
+  - `CAMPAIGN_PER_TARGET_TIMEOUT_MS` default: `240000` (was `120000`)
+- Strict reference-lock behavior is unchanged: when reference images are supplied in scratch mode, OpenAI fallback remains blocked to prevent reference drift.
+
 ## Cadence Anti-Repetition Guard
 - Follow-up cadence no-repeat logic in `services/api/src/index.ts` now blocks **near-duplicate** drafts, not only exact body matches.
 - `selectNonRepeatingCadenceMessage(...)` now checks semantic overlap against recent outbound cadence messages (token overlap + repeated long-sentence detection) before accepting a candidate.

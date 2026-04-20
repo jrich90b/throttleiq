@@ -21553,7 +21553,7 @@ async function generateCampaignImageWithNanoBanana(args: {
   try {
     const requestTimeoutMs = Math.max(
       5_000,
-      Number(process.env.CAMPAIGN_NANO_BANANA_REQUEST_TIMEOUT_MS ?? 45_000)
+      Number(process.env.CAMPAIGN_NANO_BANANA_REQUEST_TIMEOUT_MS ?? 90_000)
     );
     const maxAttempts = Math.max(1, Number(process.env.CAMPAIGN_NANO_BANANA_RETRY_ATTEMPTS ?? 3));
     const baseBackoffMs = Math.max(250, Number(process.env.CAMPAIGN_NANO_BANANA_RETRY_BACKOFF_MS ?? 2500));
@@ -21562,36 +21562,63 @@ async function generateCampaignImageWithNanoBanana(args: {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), requestTimeoutMs);
-      const resp = await (async () => {
-        try {
-          return await fetch(endpoint, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-              "Content-Type": "application/json"
-            },
-            signal: controller.signal,
-            body: JSON.stringify({
-              contents: [
-                {
-                  role: "user",
-                  parts
-                }
-              ],
-              generationConfig
-            })
-          });
-        } finally {
-          clearTimeout(timer);
-        }
-      })();
-      if (!resp.ok) {
-        const body = await resp.text().catch(() => "");
-        if (resp.status === 429 && attempt < maxAttempts) {
+      let resp: Response | null = null;
+      try {
+        resp = await (async () => {
+          try {
+            return await fetch(endpoint, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                "Content-Type": "application/json"
+              },
+              signal: controller.signal,
+              body: JSON.stringify({
+                contents: [
+                  {
+                    role: "user",
+                    parts
+                  }
+                ],
+                generationConfig
+              })
+            });
+          } finally {
+            clearTimeout(timer);
+          }
+        })();
+      } catch (err: any) {
+        clearTimeout(timer);
+        const message = String(err?.message ?? err ?? "");
+        const isAbort =
+          String(err?.name ?? "").toLowerCase() === "aborterror" ||
+          /aborted|abort/i.test(message);
+        const isTransientNetwork =
+          /timeout|timed out|fetch failed|network|econnreset|eai_again|enotfound|socket/i.test(
+            message.toLowerCase()
+          );
+        const retryable = isAbort || isTransientNetwork;
+        if (retryable && attempt < maxAttempts) {
           const jitter = Math.floor(Math.random() * 500);
           const delay = baseBackoffMs * Math.pow(2, attempt - 1) + jitter;
           console.warn(
-            `[campaign] nano banana vertex rate limited (429), retry ${attempt}/${maxAttempts} in ${delay}ms`
+            `[campaign] nano banana request ${isAbort ? "aborted" : "failed"} (attempt ${attempt}/${maxAttempts}); retrying in ${delay}ms`
+          );
+          await waitMs(delay);
+          continue;
+        }
+        console.warn("[campaign] nano banana vertex exception:", message || err);
+        return null;
+      }
+      if (!resp) return null;
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => "");
+        const retryableStatus = new Set([408, 425, 429, 500, 502, 503, 504]);
+        if (retryableStatus.has(resp.status) && attempt < maxAttempts) {
+          const jitter = Math.floor(Math.random() * 500);
+          const delay = baseBackoffMs * Math.pow(2, attempt - 1) + jitter;
+          console.warn(
+            `[campaign] nano banana vertex retryable status ${resp.status} (attempt ${attempt}/${maxAttempts}); retrying in ${delay}ms`
           );
           await waitMs(delay);
           continue;
@@ -22007,7 +22034,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     ];
     const generatorsUsed = new Set<"nano_banana_vertex" | "openai_fallback">();
     let totalReferenceCount = 0;
-    const perTargetTimeoutMs = Math.max(15_000, Number(process.env.CAMPAIGN_PER_TARGET_TIMEOUT_MS ?? 120_000));
+    const perTargetTimeoutMs = Math.max(15_000, Number(process.env.CAMPAIGN_PER_TARGET_TIMEOUT_MS ?? 240_000));
     type TargetRenderResult = {
       target: CampaignAssetTarget;
       sourceImageUrl: string;
