@@ -90,7 +90,7 @@ export default function ConversationPage() {
     await fetch(`/api/conversations/${id}/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(draftId ? { body, draftId } : { body })
+      body: JSON.stringify(draftId ? { body, draftId, channel: "sms" } : { body, channel: "sms" })
     });
 
     setSendBody("");

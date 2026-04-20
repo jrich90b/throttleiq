@@ -6721,7 +6721,11 @@ export default function Home() {
           }
           return false;
         }
-        window.alert(data?.error ?? "Send failed");
+        const errorText =
+          data?.details && typeof data.details === "string"
+            ? `${data?.error ?? "Send failed"} (${data.details})`
+            : (data?.error ?? "Send failed");
+        window.alert(errorText);
         return false;
       }
       if (sendChannel === "email") {

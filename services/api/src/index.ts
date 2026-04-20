@@ -22637,8 +22637,8 @@ app.post("/conversations/:id/send", async (req, res) => {
 
   const draftId = req.body?.draftId ? String(req.body.draftId) : undefined;
   const manualTakeover = req.body?.manualTakeover === true;
-  const channel =
-    req.body?.channel === "email" ? "email" : req.body?.channel === "sms" ? "sms" : null;
+  const channelRaw = String(req.body?.channel ?? "").trim().toLowerCase();
+  const channel = channelRaw === "email" ? "email" : channelRaw === "sms" ? "sms" : null;
   const editNote = req.body?.editNote ? String(req.body.editNote).trim() : null;
   const draftCandidate = draftId
     ? conv.messages.find(m => m.id === draftId)
@@ -23148,8 +23148,9 @@ app.post("/conversations/:id/send", async (req, res) => {
   // Normalize destination number from conversation leadKey
   const rawTo = String(conv.leadKey ?? "").trim();
   const emailTo = conv.lead?.email ?? (rawTo.includes("@") ? rawTo : null);
+  const hasSmsDraftContext = !!draftId && !!draft;
   const requestedEmailChannel = channel === "email";
-  const requestedSmsChannel = channel === "sms";
+  const requestedSmsChannel = channel === "sms" || (!channel && hasSmsDraftContext);
   const rawToDigits = rawTo.replace(/\D/g, "");
   const rawToLooksPhone =
     rawTo.startsWith("+") ||
@@ -23162,6 +23163,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     req.body?.forceEmail === true;
   const implicitEmailPreferred =
     !channel &&
+    !hasSmsDraftContext &&
     ((rawTo.includes("@") && !rawToLooksPhone) || hasEmailPayloadHints);
   const wantsEmail =
     !!emailTo &&
@@ -23350,10 +23352,16 @@ app.post("/conversations/:id/send", async (req, res) => {
       queueTuningLog(null);
       queueTlpLog();
       return res.json({ ok: true, conversation: conv });
-    } catch (err: any) {
-      console.warn("[email] send failed:", err?.message ?? err);
-      return res.status(500).json({ ok: false, error: "email send failed", conversation: conv });
-    }
+  } catch (err: any) {
+    console.warn("[email] send failed:", err?.message ?? err);
+    const details = String(err?.message ?? "").trim();
+    return res.status(500).json({
+      ok: false,
+      error: "email send failed",
+      ...(details ? { details } : {}),
+      conversation: conv
+    });
+  }
   }
 
   if (!to.startsWith("+")) {
