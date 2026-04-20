@@ -20791,6 +20791,7 @@ function buildCampaignImagePrompt(args: {
       "Output framing requirements (critical):",
       `- Compose as a wide horizontal web banner at ${bannerW}x${bannerH} (~${ratio}:1).`,
       "- Fill the frame edge-to-edge (no borders, no letterboxing, no padding).",
+      "- Keep composition slightly zoomed out (avoid tight close-crops).",
       "- Keep all essential text/logo/CTA inside a center safe area (~70% width, ~80% height) to avoid edge loss."
     );
   } else if (selectedTargetCount <= 1 && preferredTarget) {
@@ -21083,6 +21084,16 @@ function campaignWebBannerHeight(profile?: Awaited<ReturnType<typeof getDealerPr
   return Math.max(120, Math.min(3000, Number(process.env.CAMPAIGN_WEB_BANNER_HEIGHT ?? 600)));
 }
 
+function campaignWebBannerInsetPercent(profile?: Awaited<ReturnType<typeof getDealerProfile>>): number {
+  const fromProfile = Number((profile as any)?.campaign?.webBannerInsetPercent);
+  const fromLegacy = Number((profile as any)?.webBannerInsetPercent);
+  const candidate = Number.isFinite(fromProfile) ? fromProfile : fromLegacy;
+  if (Number.isFinite(candidate) && candidate >= 0 && candidate <= 25) {
+    return Number(candidate);
+  }
+  return Math.max(0, Math.min(25, Number(process.env.CAMPAIGN_WEB_BANNER_INSET_PERCENT ?? 0)));
+}
+
 function campaignSocialMaxBytes(): number {
   return Math.max(
     250_000,
@@ -21130,6 +21141,41 @@ function campaignImageResizeOptions(width: number, height: number, fitOverride?:
     position: "centre" as const,
     background: { r: 255, g: 255, b: 255, alpha: 1 }
   };
+}
+
+async function applyWebBannerInsetBackdrop(
+  buffer: Buffer,
+  width: number,
+  height: number,
+  insetPercent: number
+): Promise<Buffer> {
+  const pct = Math.max(0, Math.min(25, Number(insetPercent || 0)));
+  if (!(pct > 0)) return buffer;
+  const insetRatio = pct / 100;
+  const innerW = Math.max(1, Math.round(width * (1 - insetRatio * 2)));
+  const innerH = Math.max(1, Math.round(height * (1 - insetRatio * 2)));
+  if (innerW >= width || innerH >= height) return buffer;
+
+  const rotated = sharp(buffer, { failOn: "none", animated: false }).rotate();
+  const bg = await rotated
+    .clone()
+    .resize(width, height, { fit: "cover", position: "centre" })
+    .blur(14)
+    .toBuffer();
+  const fg = await rotated
+    .clone()
+    .resize(innerW, innerH, {
+      fit: "contain",
+      position: "centre",
+      background: { r: 0, g: 0, b: 0, alpha: 0 }
+    })
+    .png()
+    .toBuffer();
+  return sharp(bg, { failOn: "none", animated: false })
+    .composite([{ input: fg, gravity: "centre" }])
+    .jpeg({ quality: 95, mozjpeg: true, chromaSubsampling: "4:2:0" })
+    .toBuffer()
+    .catch(() => buffer);
 }
 
 async function normalizeCampaignImageForExactFrame(
@@ -21381,13 +21427,22 @@ async function normalizeCampaignImageForProfile(
     );
   }
   if (profile === "web_banner") {
+    const bannerWidth = campaignWebBannerWidth(dealerProfile);
+    const bannerHeight = campaignWebBannerHeight(dealerProfile);
     const bannerFitSetting = campaignWebBannerResizeFit(dealerProfile);
     const bannerFit: "auto" | "cover" | "contain_blur" =
       bannerFitSetting === "cover" ? "cover" : "contain_blur";
+    const bannerInsetPercent = campaignWebBannerInsetPercent(dealerProfile);
+    const sourceWithInset =
+      bannerInsetPercent > 0
+        ? await applyWebBannerInsetBackdrop(buffer, bannerWidth, bannerHeight, bannerInsetPercent).catch(
+            () => buffer
+          )
+        : buffer;
     return normalizeCampaignImageForExactFrame(
-      buffer,
-      campaignWebBannerWidth(dealerProfile),
-      campaignWebBannerHeight(dealerProfile),
+      sourceWithInset,
+      bannerWidth,
+      bannerHeight,
       { fit: bannerFit }
     );
   }
@@ -21500,7 +21555,8 @@ async function buildCampaignGeneratedAssetsFromSource(args: {
   for (const target of uniqueTargets) {
     try {
       const profile = campaignImageOutputProfileForAssetTarget(target);
-      const normalized = await normalizeCampaignImageForProfile(trimmedBuffer, profile, args.dealerProfile);
+      const sourceForTarget = target === "web_banner" ? workingSourceBuffer : trimmedBuffer;
+      const normalized = await normalizeCampaignImageForProfile(sourceForTarget, profile, args.dealerProfile);
       const saved = await saveCampaignGeneratedImage(normalized, `campaign_${target}`);
       out.push({
         id: `${target}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,

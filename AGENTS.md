@@ -329,6 +329,8 @@ When changing responses:
 - Resize-fit note:
   - `webBannerFit=auto` should only use `cover` when source/target aspect ratios are close.
   - When aspect ratio mismatch is large (too narrow/tall or too wide), auto must use `contain_blur` to avoid over-cropped, zoomed-looking banners.
+  - Dealer profile supports `campaign.webBannerInsetPercent` (0-25) for optional zoom-out composition inside the exact banner frame.
+  - Web banner normalization skips neutral-edge trim to avoid unintentional extra crop before banner resizing.
 
 ## Rider-to-Rider Finance Inquiry Policy
 - Dealer profile toggle:

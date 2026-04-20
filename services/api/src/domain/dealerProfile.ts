@@ -48,6 +48,7 @@ export type DealerProfile = {
     webBannerWidth?: number;
     webBannerHeight?: number;
     webBannerFit?: "auto" | "cover" | "contain";
+    webBannerInsetPercent?: number;
   };
   taxRate?: number;
 };

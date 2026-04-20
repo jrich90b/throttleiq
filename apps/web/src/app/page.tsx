@@ -2263,6 +2263,7 @@ export default function Home() {
     webSearchGooglePlaceId: "",
     campaignWebBannerWidth: "",
     campaignWebBannerHeight: "",
+    campaignWebBannerInsetPercent: "",
     campaignWebBannerFit: "auto" as "auto" | "cover" | "contain",
     taxRate: "8"
   });
@@ -5051,6 +5052,9 @@ export default function Home() {
         const campaign = profile.campaign ?? {};
         const campaignWebBannerWidth = Number(campaign.webBannerWidth ?? profile.webBannerWidth);
         const campaignWebBannerHeight = Number(campaign.webBannerHeight ?? profile.webBannerHeight);
+        const campaignWebBannerInsetPercent = Number(
+          campaign.webBannerInsetPercent ?? profile.webBannerInsetPercent
+        );
         const campaignWebBannerFitRaw = String(campaign.webBannerFit ?? "").trim().toLowerCase();
         const campaignWebBannerFit =
           campaignWebBannerFitRaw === "contain" || campaignWebBannerFitRaw === "cover"
@@ -5101,6 +5105,10 @@ export default function Home() {
           campaignWebBannerHeight:
             Number.isFinite(campaignWebBannerHeight) && campaignWebBannerHeight > 0
               ? String(campaignWebBannerHeight)
+              : "",
+          campaignWebBannerInsetPercent:
+            Number.isFinite(campaignWebBannerInsetPercent) && campaignWebBannerInsetPercent >= 0
+              ? String(campaignWebBannerInsetPercent)
               : "",
           campaignWebBannerFit: campaignWebBannerFit as "auto" | "cover" | "contain",
           taxRate: String(taxRate)
@@ -8443,11 +8451,15 @@ export default function Home() {
           : {};
       const campaignWebBannerWidthFromForm = Number(dealerProfileForm.campaignWebBannerWidth);
       const campaignWebBannerHeightFromForm = Number(dealerProfileForm.campaignWebBannerHeight);
+      const campaignWebBannerInsetPercentFromForm = Number(dealerProfileForm.campaignWebBannerInsetPercent);
       const campaignWebBannerWidthFallback = Number(
         (existingCampaign as any)?.webBannerWidth ?? (dealerProfile as any)?.webBannerWidth
       );
       const campaignWebBannerHeightFallback = Number(
         (existingCampaign as any)?.webBannerHeight ?? (dealerProfile as any)?.webBannerHeight
+      );
+      const campaignWebBannerInsetPercentFallback = Number(
+        (existingCampaign as any)?.webBannerInsetPercent ?? (dealerProfile as any)?.webBannerInsetPercent
       );
       const campaignWebBannerWidth =
         Number.isFinite(campaignWebBannerWidthFromForm) && campaignWebBannerWidthFromForm > 0
@@ -8460,6 +8472,12 @@ export default function Home() {
           ? Math.round(campaignWebBannerHeightFromForm)
           : Number.isFinite(campaignWebBannerHeightFallback) && campaignWebBannerHeightFallback > 0
             ? Math.round(campaignWebBannerHeightFallback)
+            : undefined;
+      const campaignWebBannerInsetPercent =
+        Number.isFinite(campaignWebBannerInsetPercentFromForm) && campaignWebBannerInsetPercentFromForm >= 0
+          ? Math.max(0, Math.min(25, campaignWebBannerInsetPercentFromForm))
+          : Number.isFinite(campaignWebBannerInsetPercentFallback) && campaignWebBannerInsetPercentFallback >= 0
+            ? Math.max(0, Math.min(25, campaignWebBannerInsetPercentFallback))
             : undefined;
       const payload = {
         dealerName: dealerProfileForm.dealerName.trim(),
@@ -8510,6 +8528,7 @@ export default function Home() {
           ...(existingCampaign as Record<string, any>),
           webBannerWidth: campaignWebBannerWidth,
           webBannerHeight: campaignWebBannerHeight,
+          webBannerInsetPercent: campaignWebBannerInsetPercent,
           webBannerFit:
             dealerProfileForm.campaignWebBannerFit === "contain" ||
             dealerProfileForm.campaignWebBannerFit === "cover"
@@ -10633,6 +10652,24 @@ export default function Home() {
                   ), fit mode:{" "}
                   <span className="font-semibold">{dealerProfileForm.campaignWebBannerFit}</span>. Select{" "}
                   <span className="font-semibold">Web banner</span> as the selected output format to generate that exact frame.
+                  {" "}Zoom-out inset:{" "}
+                  <span className="font-semibold">
+                    {(() => {
+                      const insetFromForm = Number(dealerProfileForm.campaignWebBannerInsetPercent);
+                      const insetFromProfile = Number(
+                        (dealerProfile as any)?.campaign?.webBannerInsetPercent ??
+                          (dealerProfile as any)?.webBannerInsetPercent
+                      );
+                      if (Number.isFinite(insetFromForm) && insetFromForm >= 0) {
+                        return `${Math.max(0, Math.min(25, insetFromForm))}%`;
+                      }
+                      if (Number.isFinite(insetFromProfile) && insetFromProfile >= 0) {
+                        return `${Math.max(0, Math.min(25, insetFromProfile))}%`;
+                      }
+                      return "0%";
+                    })()}
+                  </span>
+                  .
                 </div>
                 {!campaignHasAnyTarget ? (
                   <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
@@ -12625,6 +12662,24 @@ export default function Home() {
                         value={dealerProfileForm.campaignWebBannerHeight}
                         onChange={e =>
                           setDealerProfileForm({ ...dealerProfileForm, campaignWebBannerHeight: e.target.value })
+                        }
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <div className="text-xs text-gray-600">Web banner zoom-out inset (%)</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        type="number"
+                        min={0}
+                        max={25}
+                        step={0.5}
+                        placeholder="0"
+                        value={dealerProfileForm.campaignWebBannerInsetPercent}
+                        onChange={e =>
+                          setDealerProfileForm({
+                            ...dealerProfileForm,
+                            campaignWebBannerInsetPercent: e.target.value
+                          })
                         }
                       />
                     </label>
