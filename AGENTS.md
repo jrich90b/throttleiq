@@ -423,3 +423,6 @@ When changing responses:
 - In `processDueFollowUps` (`services/api/src/index.ts`), `post_sale` cadence now bypasses suggest/human draft gating and always runs through send/fallback delivery.
 - This means sold follow-ups still deliver when a conversation remains in `human` mode or when global mode is `suggest`.
 - Non-post-sale cadence behavior is unchanged (still drafts in suggest/human review flows).
+- Additional post-sale fix: appointment-booked skip now applies only to non-post-sale cadences.
+  - Previously, any sold lead with `appointment.bookedEventId` could be skipped before post-sale send logic.
+  - Post-sale cadence now continues and sends even when the original appointment event ID is present.

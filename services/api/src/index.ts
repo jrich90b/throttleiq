@@ -15307,7 +15307,7 @@ async function processDueFollowUps() {
       saveConversation(conv);
     }
     if (new Date(cadence.nextDueAt) > now) continue;
-    if (conv.appointment?.bookedEventId) {
+    if (!isPostSale && conv.appointment?.bookedEventId) {
       onAppointmentBooked(conv);
       continue;
     }
