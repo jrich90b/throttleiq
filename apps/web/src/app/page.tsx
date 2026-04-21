@@ -2101,6 +2101,7 @@ export default function Home() {
   const [holdNote, setHoldNote] = useState("");
   const [holdError, setHoldError] = useState<string | null>(null);
   const [holdSaving, setHoldSaving] = useState(false);
+  const [holdDetailsOpen, setHoldDetailsOpen] = useState(false);
   const [soldDetailsOpen, setSoldDetailsOpen] = useState(false);
   const [soldModalOpen, setSoldModalOpen] = useState(false);
   const [soldModalConv, setSoldModalConv] = useState<ConversationDetail | null>(null);
@@ -14694,7 +14695,7 @@ export default function Home() {
                         : statusLabel === "Sold"
                           ? "bg-blue-100 text-blue-900 border-blue-300"
                           : statusLabel === "Hold"
-                            ? "bg-red-100 text-red-700 border-red-200"
+                            ? "bg-red-100 text-red-900 border-red-300"
                             : "bg-emerald-100 text-emerald-800 border-emerald-200";
                     if (statusLabel === "Sold") {
                       return (
@@ -14705,6 +14706,18 @@ export default function Home() {
                           title="View purchased motorcycle"
                         >
                           Sold
+                        </button>
+                      );
+                    }
+                    if (statusLabel === "Hold") {
+                      return (
+                        <button
+                          type="button"
+                          className={`text-xs px-2 py-0.5 rounded-full border cursor-pointer transition-colors hover:bg-red-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1 ${badgeClass}`}
+                          onClick={() => setHoldDetailsOpen(true)}
+                          title="View bike on hold"
+                        >
+                          Hold
                         </button>
                       );
                     }
@@ -14843,10 +14856,28 @@ export default function Home() {
                       }
                     }
                     if (isHold && holdUntil) {
-                      return `Hold until ${formatCadenceDate(holdUntil)}`;
+                      return (
+                        <button
+                          type="button"
+                          className="text-red-900 underline decoration-red-300 underline-offset-2 hover:text-red-700 cursor-pointer"
+                          onClick={() => setHoldDetailsOpen(true)}
+                          title="View bike on hold"
+                        >
+                          {`Hold until ${formatCadenceDate(holdUntil)}`}
+                        </button>
+                      );
                     }
                     if (isHold) {
-                      return "Hold";
+                      return (
+                        <button
+                          type="button"
+                          className="text-red-900 underline decoration-red-300 underline-offset-2 hover:text-red-700 cursor-pointer"
+                          onClick={() => setHoldDetailsOpen(true)}
+                          title="View bike on hold"
+                        >
+                          Hold
+                        </button>
+                      );
                     }
                     return "Active";
                   })()}
@@ -15796,6 +15827,137 @@ export default function Home() {
                     </div>
                   </div>
                 </div>
+                </div>
+              </div>
+            ) : null}
+
+            {holdDetailsOpen && selectedConv ? (
+              <div className="fixed inset-0 z-50 bg-black/40 overflow-y-auto">
+                <div className="min-h-full flex items-start sm:items-center justify-center p-2 sm:p-4">
+                  <div className="w-full max-w-xl rounded-lg bg-white shadow-lg border border-slate-200 p-3 sm:p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">Bike on hold</div>
+                        <div className="mt-1 text-xs text-slate-700">
+                          {selectedConv.lead?.name ||
+                            [selectedConv.lead?.firstName, selectedConv.lead?.lastName]
+                              .filter(Boolean)
+                              .join(" ") ||
+                            selectedConv.leadKey}
+                          {selectedConv.lead?.phone ? ` • ${selectedConv.lead.phone}` : ""}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="px-3 py-2 border rounded text-sm text-slate-800 border-slate-300 bg-white hover:bg-slate-50"
+                        onClick={() => setHoldDetailsOpen(false)}
+                      >
+                        Close
+                      </button>
+                    </div>
+
+                    {(() => {
+                      const hold = selectedConv.hold ?? null;
+                      const holdLabel = String(hold?.label ?? "").trim();
+                      const holdParts = [hold?.year, hold?.make, hold?.model, hold?.trim]
+                        .map(v => String(v ?? "").trim())
+                        .filter(Boolean);
+                      const holdColor = String(hold?.color ?? "").trim();
+                      const holdStockId = String(hold?.stockId ?? "").trim();
+                      const holdVin = String(hold?.vin ?? "").trim();
+                      const holdNote = String(hold?.note ?? "").trim();
+                      const holdUntil = String(
+                        hold?.until ??
+                          selectedConv.followUpCadence?.pausedUntil ??
+                          ""
+                      ).trim();
+                      const holdUpdatedAt = String(hold?.updatedAt ?? hold?.createdAt ?? "").trim();
+                      const holdReason = String(
+                        hold?.reason ??
+                          selectedConv.followUpCadence?.pauseReason ??
+                          selectedConv.followUpCadence?.stopReason ??
+                          selectedConv.followUp?.reason ??
+                          ""
+                      )
+                        .trim()
+                        .replace(/_/g, " ");
+                      const combinedLabel = holdParts.length
+                        ? holdColor
+                          ? `${holdParts.join(" ")} (${holdColor})`
+                          : holdParts.join(" ")
+                        : "";
+                      const primaryLabel = holdLabel || combinedLabel || holdStockId || holdVin;
+                      const hasAnyHoldField =
+                        !!primaryLabel ||
+                        !!holdUntil ||
+                        !!holdReason ||
+                        !!holdUpdatedAt ||
+                        !!holdNote ||
+                        !!hold?.onOrder;
+                      const detailRows = [
+                        { key: "Year", value: String(hold?.year ?? "").trim() },
+                        { key: "Make", value: String(hold?.make ?? "").trim() },
+                        { key: "Model", value: String(hold?.model ?? "").trim() },
+                        { key: "Trim", value: String(hold?.trim ?? "").trim() },
+                        { key: "Color", value: holdColor },
+                        { key: "Stock #", value: holdStockId },
+                        { key: "VIN", value: holdVin },
+                        { key: "Hold Until", value: holdUntil ? formatCadenceDate(holdUntil) : "" },
+                        { key: "Type", value: hold?.onOrder ? "Bike on order" : "" },
+                        { key: "Reason", value: holdReason },
+                        {
+                          key: "Updated",
+                          value: holdUpdatedAt ? new Date(holdUpdatedAt).toLocaleString() : ""
+                        }
+                      ].filter(row => row.value);
+                      if (!hasAnyHoldField) {
+                        return (
+                          <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                            No hold-unit details are saved yet for this conversation.
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="mt-3">
+                          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">
+                              Hold Unit
+                            </div>
+                            <div className="mt-1 text-sm font-semibold text-slate-900 break-words">
+                              {primaryLabel || (hold?.onOrder ? "Bike on order" : "Hold active")}
+                            </div>
+                          </div>
+                          {detailRows.length ? (
+                            <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              {detailRows.map(row => (
+                                <div
+                                  key={row.key}
+                                  className="rounded border border-slate-200 bg-white px-3 py-2"
+                                >
+                                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+                                    {row.key}
+                                  </div>
+                                  <div className="mt-1 text-sm font-medium text-slate-900 break-words">
+                                    {row.value}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                          {holdNote ? (
+                            <div className="mt-3 rounded border border-slate-200 bg-white px-3 py-2">
+                              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+                                Notes
+                              </div>
+                              <div className="mt-1 text-sm text-slate-900 whitespace-pre-wrap">
+                                {holdNote}
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })()}
+                  </div>
                 </div>
               </div>
             ) : null}

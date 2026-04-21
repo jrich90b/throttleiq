@@ -455,3 +455,11 @@ When changing responses:
 - `inferWalkIn(...)` now anchors walk-in detection to the **first inbound ADF source line**.
 - If first-touch ADF source is non-walk-in (for example web/marketplace source), later lead-source updates (such as Dealer Lead App ADF entries) no longer flip the conversation to walk-in.
 - Explicit `lead.walkIn=true` still takes priority when a lead is truly created as walk-in.
+
+## Hold Status Detail Modal
+- In conversation header, the `Hold` status badge is now clickable and opens a read-only hold-unit modal.
+- The status line text (`Hold` / `Hold until ...`) is also clickable and opens the same modal.
+- Modal styling matches existing UI cards/modals and uses high-contrast label/value text on light backgrounds.
+- Modal shows hold metadata when present:
+  - `hold.label`, year/make/model/trim/color, stock, VIN,
+  - hold-until time, hold type (`Bike on order`), reason, updated timestamp, and notes.
