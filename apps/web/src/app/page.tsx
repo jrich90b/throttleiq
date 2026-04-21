@@ -2101,6 +2101,7 @@ export default function Home() {
   const [holdNote, setHoldNote] = useState("");
   const [holdError, setHoldError] = useState<string | null>(null);
   const [holdSaving, setHoldSaving] = useState(false);
+  const [soldDetailsOpen, setSoldDetailsOpen] = useState(false);
   const [soldModalOpen, setSoldModalOpen] = useState(false);
   const [soldModalConv, setSoldModalConv] = useState<ConversationDetail | null>(null);
   const [soldInventoryItems, setSoldInventoryItems] = useState<any[]>([]);
@@ -14691,10 +14692,22 @@ export default function Home() {
                       statusLabel === "Closed"
                         ? "bg-gray-100 text-gray-700 border-gray-200"
                         : statusLabel === "Sold"
-                          ? "bg-blue-100 text-blue-700 border-blue-200"
+                          ? "bg-blue-100 text-blue-900 border-blue-300"
                           : statusLabel === "Hold"
                             ? "bg-red-100 text-red-700 border-red-200"
                             : "bg-emerald-100 text-emerald-800 border-emerald-200";
+                    if (statusLabel === "Sold") {
+                      return (
+                        <button
+                          type="button"
+                          className={`text-xs px-2 py-0.5 rounded-full border cursor-pointer transition-colors hover:bg-blue-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1 ${badgeClass}`}
+                          onClick={() => setSoldDetailsOpen(true)}
+                          title="View purchased motorcycle"
+                        >
+                          Sold
+                        </button>
+                      );
+                    }
                     return (
                       <span className={`text-xs px-2 py-0.5 rounded-full border ${badgeClass}`}>
                         {statusLabel}
@@ -14814,7 +14827,16 @@ export default function Home() {
                           (selectedConv as unknown as ConversationListItem)) as ConversationListItem
                       );
                       if (soldInDetail) {
-                        return "Sold";
+                        return (
+                          <button
+                            type="button"
+                            className="text-blue-900 underline decoration-blue-300 underline-offset-2 hover:text-blue-700 cursor-pointer"
+                            onClick={() => setSoldDetailsOpen(true)}
+                            title="View purchased motorcycle"
+                          >
+                            Sold
+                          </button>
+                        );
                       }
                       if (selectedConv.closedAt) {
                         return `Closed: ${new Date(selectedConv.closedAt).toLocaleString()}`;
@@ -15774,6 +15796,117 @@ export default function Home() {
                     </div>
                   </div>
                 </div>
+                </div>
+              </div>
+            ) : null}
+
+            {soldDetailsOpen && selectedConv ? (
+              <div className="fixed inset-0 z-50 bg-black/40 overflow-y-auto">
+                <div className="min-h-full flex items-start sm:items-center justify-center p-2 sm:p-4">
+                  <div className="w-full max-w-xl rounded-lg bg-white shadow-lg border border-slate-200 p-3 sm:p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">Purchased motorcycle</div>
+                        <div className="mt-1 text-xs text-slate-700">
+                          {selectedConv.lead?.name ||
+                            [selectedConv.lead?.firstName, selectedConv.lead?.lastName]
+                              .filter(Boolean)
+                              .join(" ") ||
+                            selectedConv.leadKey}
+                          {selectedConv.lead?.phone ? ` • ${selectedConv.lead.phone}` : ""}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="px-3 py-2 border rounded text-sm text-slate-800 border-slate-300 bg-white hover:bg-slate-50"
+                        onClick={() => setSoldDetailsOpen(false)}
+                      >
+                        Close
+                      </button>
+                    </div>
+
+                    {(() => {
+                      const sale = selectedConv.sale ?? null;
+                      const saleLabel = String(sale?.label ?? "").trim();
+                      const saleParts = [sale?.year, sale?.make, sale?.model, sale?.trim]
+                        .map(v => String(v ?? "").trim())
+                        .filter(Boolean);
+                      const saleColor = String(sale?.color ?? "").trim();
+                      const saleStockId = String(sale?.stockId ?? "").trim();
+                      const saleVin = String(sale?.vin ?? "").trim();
+                      const saleSoldAt = String(sale?.soldAt ?? "").trim();
+                      const saleSoldBy = String(sale?.soldByName ?? sale?.soldById ?? "").trim();
+                      const saleNote = String(sale?.note ?? "").trim();
+                      const combinedLabel = saleParts.length
+                        ? saleColor
+                          ? `${saleParts.join(" ")} (${saleColor})`
+                          : saleParts.join(" ")
+                        : "";
+                      const primaryLabel = saleLabel || combinedLabel || saleStockId || saleVin;
+                      const hasAnySaleField =
+                        !!primaryLabel || !!saleSoldAt || !!saleSoldBy || !!saleNote;
+                      const detailRows = [
+                        { key: "Year", value: String(sale?.year ?? "").trim() },
+                        { key: "Make", value: String(sale?.make ?? "").trim() },
+                        { key: "Model", value: String(sale?.model ?? "").trim() },
+                        { key: "Trim", value: String(sale?.trim ?? "").trim() },
+                        { key: "Color", value: saleColor },
+                        { key: "Stock #", value: saleStockId },
+                        { key: "VIN", value: saleVin },
+                        {
+                          key: "Sold At",
+                          value: saleSoldAt ? new Date(saleSoldAt).toLocaleString() : ""
+                        },
+                        { key: "Sold By", value: saleSoldBy }
+                      ].filter(row => row.value);
+                      if (!hasAnySaleField) {
+                        return (
+                          <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                            No sold-unit details are saved yet for this conversation.
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="mt-3">
+                          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">
+                              Motorcycle
+                            </div>
+                            <div className="mt-1 text-sm font-semibold text-slate-900 break-words">
+                              {primaryLabel}
+                            </div>
+                          </div>
+                          {detailRows.length ? (
+                            <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              {detailRows.map(row => (
+                                <div
+                                  key={row.key}
+                                  className="rounded border border-slate-200 bg-white px-3 py-2"
+                                >
+                                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+                                    {row.key}
+                                  </div>
+                                  <div className="mt-1 text-sm font-medium text-slate-900 break-words">
+                                    {row.value}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                          {saleNote ? (
+                            <div className="mt-3 rounded border border-slate-200 bg-white px-3 py-2">
+                              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+                                Notes
+                              </div>
+                              <div className="mt-1 text-sm text-slate-900 whitespace-pre-wrap">
+                                {saleNote}
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })()}
+                  </div>
                 </div>
               </div>
             ) : null}

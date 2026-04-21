@@ -442,3 +442,11 @@ When changing responses:
 - This prevents sold cards from showing stale inbound lead condition/model text (for example, old “New …” labels) after a different pre-owned unit is marked sold.
 - API list payload alignment:
   - `listConversations()` now includes `sale` in `/conversations` list rows so inbox cards can access sold-unit metadata without opening detail first.
+
+## Sold Status Detail Modal
+- In conversation header, the `Sold` status badge is now clickable and opens a read-only purchased-motorcycle modal.
+- The lower status line `Sold` text is also clickable and opens the same modal.
+- Modal content uses existing UI styling (white card modal, bordered sections) with higher-contrast text on light backgrounds:
+  - dark label/value text for all fields,
+  - explicit sold-unit details (`sale.label`, year/make/model/trim/color, stock, VIN, sold-by, sold-at, note),
+  - clear fallback notice when sold-unit details are not yet recorded.
