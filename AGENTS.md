@@ -401,6 +401,14 @@ When changing responses:
 - Correction acknowledgement line now appears when either year or model was corrected.
 - Initial Room58 sell acknowledgment now prefers `lead.tradeVehicle` year/model for bike label text before falling back to `lead.vehicle`, preventing wrong-year/wrong-model opener copy when ADF includes multiple vehicle contexts.
 
+## Twilio Reaction No-Reply Guardrail
+- Twilio inbound reaction-only texts that quote a prior outbound message (for example `👍 to "..."` and iOS-style `Liked "..."`) are now treated as **no-reply signals**.
+- Behavior in `/webhooks/twilio` (`services/api/src/index.ts`):
+  - inbound is still recorded on the conversation timeline
+  - cadence pause-on-inbound still applies
+  - no AI draft is generated and no outbound SMS is sent
+- This prevents reaction acknowledgements from triggering unnecessary follow-up drafts.
+
 ## Inbox Closed/Sold Filter Guardrail
 - Sold lead detection in web inbox now normalizes by:
   - `closedReason` (case-insensitive, includes sold token),

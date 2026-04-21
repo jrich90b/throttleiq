@@ -10443,6 +10443,41 @@ function isEmojiOnlyText(text: string): boolean {
   return t.length > 0 && /^[\p{Extended_Pictographic}\s]+$/u.test(t);
 }
 
+function normalizeReactionInboundText(text: string): string {
+  return String(text ?? "")
+    .replace(/[\u2000-\u200F\u202A-\u202E\u2060\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isQuotedReactionInboundText(text: string): boolean {
+  const normalized = normalizeReactionInboundText(text);
+  if (!normalized) return false;
+
+  if (
+    /^(liked|loved|disliked|laughed at|emphasized|questioned)\s+["'\u201c\u201d][\s\S]{1,1000}["'\u201c\u201d]$/i.test(
+      normalized
+    )
+  ) {
+    return true;
+  }
+
+  const toQuotedMatch = normalized.match(
+    /^(.*?)\s+to\s+["'\u201c\u201d]([\s\S]{1,1000})["'\u201c\u201d]$/i
+  );
+  if (!toQuotedMatch) return false;
+
+  const reactionToken = String(toQuotedMatch[1] ?? "").trim().toLowerCase();
+  if (!reactionToken) return false;
+  if (/^(liked|loved|disliked|laughed at|emphasized|questioned)$/.test(reactionToken)) {
+    return true;
+  }
+  if (/^reacted(?:\s+with)?\s*[\p{Extended_Pictographic}\s]+$/u.test(reactionToken)) {
+    return true;
+  }
+  return !/[\p{L}\p{N}]/u.test(reactionToken);
+}
+
 function isShortAckText(text: string): boolean {
   const t = String(text ?? "").trim().toLowerCase();
   if (!t) return false;
@@ -26095,6 +26130,14 @@ if (authToken && signature) {
     });
   }
   pauseRelatedCadencesOnInbound(conv, event);
+  if (event.provider === "twilio" && isQuotedReactionInboundText(event.body ?? "")) {
+    recordRouteOutcome("live", "reaction_only_inbound_no_reply", {
+      convId: conv.id,
+      leadKey: conv.leadKey
+    });
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   const responseControlParserEligible =
     event.provider === "twilio" &&
     process.env.LLM_ENABLED === "1" &&
