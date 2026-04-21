@@ -2795,21 +2795,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     });
   }
 
-  const isRideChallengeSignup =
+  const isRideChallengeLead =
     event.provider === "sendgrid_adf" &&
-    !(conv.messages ?? []).some((m: any) => m.direction === "out") &&
     (/ride challenge|challenge signup|miles challenge/i.test(leadSourceLower) ||
       /ride challenge|challenge signup|record your miles|ride challenge/i.test(inquiryText));
-  if (isRideChallengeSignup) {
-    const profile = await getDealerProfile();
-    const dealerName = profile?.dealerName ?? "American Harley-Davidson";
-    const agentName = profile?.agentName ?? "Alexandra";
-    const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
-    const ack =
-      `Hi ${firstName} — this is ${agentName} at ${dealerName}. ` +
-      "Thanks for signing up for this year's ride challenge. " +
-      "Feel free to stop in and record your miles throughout the year. " +
-      "Let us know if you need anything to keep your bike rolling through the challenge!";
+  const computeRideChallengeReminderDueAt = async () => {
     const cfg = await getSchedulerConfig();
     const tz = cfg.timezone || "America/New_York";
     const now = new Date();
@@ -2832,15 +2822,36 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         reminderYear = year + 1;
       }
     }
-    const dueAt = localPartsToUtcDate(tz, {
+    return localPartsToUtcDate(tz, {
       year: reminderYear,
       month: reminderMonth,
       day: reminderDay,
       hour24: 10,
       minute: 30
     }).toISOString();
-    scheduleLongTermFollowUp(conv, dueAt, "ride_challenge_final_mileage");
+  };
+  const applyRideChallengeReminderCadence = async () => {
+    const dueAt = await computeRideChallengeReminderDueAt();
+    scheduleLongTermFollowUp(conv, dueAt, "ride_challenge_final_mileage", {
+      contextTag: "ride_challenge_signup"
+    });
     setFollowUpMode(conv, "active", "ride_challenge_signup");
+    return dueAt;
+  };
+  const isRideChallengeSignup =
+    isRideChallengeLead &&
+    !(conv.messages ?? []).some((m: any) => m.direction === "out");
+  if (isRideChallengeSignup) {
+    const profile = await getDealerProfile();
+    const dealerName = profile?.dealerName ?? "American Harley-Davidson";
+    const agentName = profile?.agentName ?? "Alexandra";
+    const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
+    const ack =
+      `Hi ${firstName} — this is ${agentName} at ${dealerName}. ` +
+      "Thanks for signing up for this year's ride challenge. " +
+      "Feel free to stop in and record your miles throughout the year. " +
+      "Let us know if you need anything to keep your bike rolling through the challenge!";
+    const dueAt = await applyRideChallengeReminderCadence();
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai");
     return res.status(200).json({
       ok: true,
@@ -4948,6 +4959,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const hasExistingCadence =
     conv.followUpCadence?.status === "active" || conv.followUpCadence?.status === "stopped";
   const existingCadenceKind = String(conv.followUpCadence?.kind ?? "").toLowerCase();
+  const shouldForceRideChallengeCadence =
+    isRideChallengeLead && conv.classification?.bucket !== "event_promo" && conv.status !== "closed";
+  if (shouldForceRideChallengeCadence) {
+    await applyRideChallengeReminderCadence();
+  }
   const canRealignExistingCadenceToLongTerm =
     hasExistingCadence &&
     existingCadenceKind !== "post_sale" &&
@@ -4960,7 +4976,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     conv.classification?.bucket !== "event_promo" &&
     conv.classification?.cta !== "hdfs_coa" &&
     conv.classification?.cta !== "prequalify" &&
-    !notReadyTimeframe;
+    !notReadyTimeframe &&
+    !shouldForceRideChallengeCadence;
   if (canRealignExistingCadenceToLongTerm && hasLongTermTimeframe) {
     const due = new Date();
     due.setMonth(due.getMonth() + Math.max(1, Math.round(monthsStart)));
@@ -4978,7 +4995,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     conv.classification?.bucket !== "event_promo" &&
     conv.classification?.cta !== "hdfs_coa" &&
     conv.classification?.cta !== "prequalify" &&
-    !notReadyTimeframe;
+    !notReadyTimeframe &&
+    !shouldForceRideChallengeCadence;
   if (shouldStartCadence) {
     const cfg = await getSchedulerConfig();
     if (hasLongTermTimeframe) {
@@ -4990,7 +5008,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     } else {
       startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
     }
-  } else if (notReadyTimeframe) {
+  } else if (notReadyTimeframe && !shouldForceRideChallengeCadence) {
     stopFollowUpCadence(conv, "not_ready_no_timeframe");
     setFollowUpMode(conv, "paused_indefinite", "not_ready_no_timeframe");
   }

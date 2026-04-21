@@ -469,3 +469,10 @@ When changing responses:
 - In both Twilio realtime and regenerate mention paths (`services/api/src/index.ts`):
   - if the mentioned name matches the current sender identity, or the inbound is courtesy-only (thanks/signoff with no request), reply stays direct (for example, “You’re welcome — have a great day too.”),
   - handoff phrasing is only used when there is an explicit handoff/callback signal.
+
+## Ride Challenge Cadence Override
+- Ride Challenge ADF leads now always get the dedicated long-term reminder cadence anchored to the Ride Challenge schedule (September 15 target, with existing late-season catch-up rules), even when purchase timeframe says “not interested.”
+- In `services/api/src/routes/sendgridInbound.ts`:
+  - Ride Challenge cadence scheduling was centralized into a reusable helper.
+  - Non-initial Ride Challenge ADF updates now still enforce the Ride Challenge long-term reminder.
+  - Generic `not_ready_no_timeframe` pause/stop logic is bypassed for Ride Challenge leads so the challenge reminder is not removed.
