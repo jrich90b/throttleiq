@@ -79,6 +79,26 @@ export function InboxSection(props: any) {
     return !!conversation?.sale?.soldAt || soldByCadence || (status === "closed" && soldByReason);
   };
 
+  const getInboxVehicleLine = (conversation: any) => {
+    const fallback = String(conversation?.vehicleDescription ?? "").trim();
+    if (!isSoldConversation(conversation)) return fallback;
+    const sale = conversation?.sale ?? {};
+    const soldLabel = String(sale?.label ?? "").trim();
+    if (soldLabel) return soldLabel;
+    const soldParts = [sale?.year, sale?.make, sale?.model, sale?.trim]
+      .map((v: unknown) => String(v ?? "").trim())
+      .filter(Boolean);
+    if (soldParts.length) {
+      const color = String(sale?.color ?? "").trim();
+      return color ? `${soldParts.join(" ")} (${color})` : soldParts.join(" ");
+    }
+    const stockId = String(sale?.stockId ?? "").trim();
+    if (stockId) return stockId;
+    const vin = String(sale?.vin ?? "").trim();
+    if (vin) return vin;
+    return fallback;
+  };
+
   return (
     <>
       <div className="mt-4 flex items-center justify-between">
@@ -286,8 +306,8 @@ export function InboxSection(props: any) {
                                   </span>
                                 ) : null}
                               </div>
-                              {c.vehicleDescription ? (
-                                <div className="text-xs text-gray-500 mt-1 truncate">{c.vehicleDescription}</div>
+                              {getInboxVehicleLine(c) ? (
+                                <div className="text-xs text-gray-500 mt-1 truncate">{getInboxVehicleLine(c)}</div>
                               ) : null}
                             </div>
 

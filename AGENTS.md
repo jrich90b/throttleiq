@@ -432,3 +432,11 @@ When changing responses:
 - “Assigned” now means **either** `leadOwner.id` or `leadOwner.name` is present.
 - First-caller auto-assignment only occurs when the lead is truly unassigned (no owner id and no owner name).
 - Existing behavior to fill in a missing owner name still applies when owner id already exists.
+
+## Sold Card Vehicle Label Guardrail
+- Inbox row vehicle text now prefers sold-unit metadata for sold conversations:
+  - `sale.label` first,
+  - then `sale.year/make/model/trim` (+ color),
+  - then `sale.stockId`/`sale.vin`,
+  - and only then falls back to original `vehicleDescription`.
+- This prevents sold cards from showing stale inbound lead condition/model text (for example, old “New …” labels) after a different pre-owned unit is marked sold.
