@@ -25927,13 +25927,16 @@ app.post("/conversations/:id/call", async (req, res) => {
   const dealerPhoneRaw = String(dealerProfile?.phone ?? "").trim();
   const ownerId = String(user?.id ?? "").trim();
   const ownerNameRaw = String(user?.name ?? user?.email ?? "").trim();
-  if (ownerId && (!conv.leadOwner || !conv.leadOwner.id)) {
+  const existingOwnerId = String(conv?.leadOwner?.id ?? "").trim();
+  const existingOwnerName = String(conv?.leadOwner?.name ?? "").trim();
+  const leadAlreadyAssigned = !!(existingOwnerId || existingOwnerName);
+  if (ownerId && !leadAlreadyAssigned) {
     conv.leadOwner = {
       id: ownerId,
       name: ownerNameRaw || undefined,
       assignedAt: new Date().toISOString()
     };
-  } else if (conv.leadOwner && !conv.leadOwner.name && ownerNameRaw) {
+  } else if (existingOwnerId && conv.leadOwner && !conv.leadOwner.name && ownerNameRaw) {
     conv.leadOwner.name = ownerNameRaw;
   }
 

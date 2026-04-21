@@ -426,3 +426,9 @@ When changing responses:
 - Additional post-sale fix: appointment-booked skip now applies only to non-post-sale cadences.
   - Previously, any sold lead with `appointment.bookedEventId` could be skipped before post-sale send logic.
   - Post-sale cadence now continues and sends even when the original appointment event ID is present.
+
+## Voice Call Owner Guardrail
+- Voice call initiation (`POST /conversations/:id/call`) no longer reassigns a lead owner if the conversation is already assigned.
+- “Assigned” now means **either** `leadOwner.id` or `leadOwner.name` is present.
+- First-caller auto-assignment only occurs when the lead is truly unassigned (no owner id and no owner name).
+- Existing behavior to fill in a missing owner name still applies when owner id already exists.
