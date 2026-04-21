@@ -393,6 +393,13 @@ When changing responses:
 - Messages with question-form scheduling language (for example, “would today work at 2:45 or 3:15?”) no longer trigger `manual_outbound_schedule_confirmed`.
 - Manual outbound booking confirmation now requires explicit booking statement language (for example, booked/confirmed/all set), not just generic “works”.
 
+## Trade Clarification Guardrail
+- Twilio trade clarification flow now supports **model correction** in addition to year correction for sell/trade leads.
+- Correction inputs like “It’s a 2013 Harley SuperGlide Custom” now update both:
+  - `lead.vehicle.model`
+  - `lead.tradeVehicle.model`
+- Correction acknowledgement line now appears when either year or model was corrected.
+
 ## Inbox Closed/Sold Filter Guardrail
 - Sold lead detection in web inbox now normalizes by:
   - `closedReason` (case-insensitive, includes sold token),

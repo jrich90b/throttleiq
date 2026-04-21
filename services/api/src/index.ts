@@ -13549,6 +13549,60 @@ function extractTradeYearCorrection(
   return years[0] ?? null;
 }
 
+function normalizeCompactModelTokens(text: string): string {
+  return String(text ?? "")
+    .replace(/\broadglide\b/gi, "road glide")
+    .replace(/\bstreetglide\b/gi, "street glide")
+    .replace(/\bsuperglide\b/gi, "super glide")
+    .replace(/\blowrider\b/gi, "low rider")
+    .replace(/\broadking\b/gi, "road king")
+    .replace(/\bfatboy\b/gi, "fat boy");
+}
+
+function extractTradeModelCorrection(
+  text: string,
+  baselineModel?: string | null
+): string | null {
+  const raw = String(text ?? "").trim();
+  if (!raw) return null;
+  const normalizedText = normalizeCompactModelTokens(raw.toLowerCase());
+  const baseline = normalizeModelText(baselineModel ?? "");
+
+  const mentioned = findMentionedModels(normalizedText);
+  if (mentioned.length > 0) {
+    const candidate = normalizeDisplayCase(mentioned[0]);
+    const candidateNorm = normalizeModelText(candidate);
+    if (candidateNorm && candidateNorm !== baseline) {
+      return candidate;
+    }
+  }
+
+  const hasYearCue = /\b(19\d{2}|20\d{2})\b/.test(normalizedText);
+  const hasHarleyCue = /\b(harley(?:-|\s)?davidson|h[-\s]?d)\b/.test(normalizedText);
+  if (!hasYearCue && !hasHarleyCue) return null;
+
+  const direct =
+    normalizedText.match(
+      /\b(?:it'?s|it is|its|sorry|correction|actually|meant)\b[\s,:-]*(?:a\s+)?(?:19\d{2}|20\d{2})?\s*(?:harley(?:-|\s)?davidson|h[-\s]?d)?\s*([a-z0-9][a-z0-9\s-]{2,60})/i
+    )?.[1] ?? null;
+  if (!direct) return null;
+
+  const cleaned = normalizeDisplayCase(
+    normalizeCompactModelTokens(
+      direct
+        .replace(/\b(and|but|if|when|because)\b[\s\S]*$/i, "")
+        .replace(/\.{2,}[\s\S]*$/, "")
+        .replace(/[!?.,]+$/, "")
+        .trim()
+    )
+  );
+  if (!cleaned) return null;
+  const cleanedNorm = normalizeModelText(cleaned);
+  if (!cleanedNorm || cleanedNorm.length < 3) return null;
+  if (baseline && cleanedNorm === baseline) return null;
+  return cleaned;
+}
+
 function normalizeModelName(s: string): string {
   return s.toLowerCase().replace(/\s+/g, " ").trim();
 }
@@ -30790,6 +30844,17 @@ if (authToken && signature) {
           conv.lead?.tradeVehicle?.year ?? conv.lead?.vehicle?.year ?? null
         )
       : null;
+  const tradeModelCorrection =
+    isTradeLead && !availabilityExplicit && !routeExecAvailability
+      ? extractTradeModelCorrection(
+          textLower,
+          conv.lead?.tradeVehicle?.model ??
+            conv.lead?.vehicle?.model ??
+            conv.lead?.tradeVehicle?.description ??
+            conv.lead?.vehicle?.description ??
+            null
+        )
+      : null;
   const tradeFollowupMessage =
     isTradeLead &&
     !availabilityExplicit &&
@@ -30797,6 +30862,7 @@ if (authToken && signature) {
     !isSteppingBackDispositionText(textLower) &&
     !pricingSignal &&
     (tradeYearCorrection ||
+      tradeModelCorrection ||
       /\b(inspection|appraisal|bring (it|the bike) (in|by)|coming in|come in|stop in|call for (an )?appointment|call (to )?(set|schedule) (an )?appointment|check my schedule|i(?:'|’)ll call|i will call|let you know when i(?:'|’)m coming in|let you know when i am coming in)\b/i.test(
         textLower
       ));
@@ -30811,6 +30877,10 @@ if (authToken && signature) {
       if (tradeYearCorrection) {
         conv.lead.vehicle.year = tradeYearCorrection;
         conv.lead.tradeVehicle.year = tradeYearCorrection;
+      }
+      if (tradeModelCorrection) {
+        conv.lead.vehicle.model = tradeModelCorrection;
+        conv.lead.tradeVehicle.model = tradeModelCorrection;
       }
     }
     if (!isTradeDialogState(getDialogState(conv))) {
@@ -30829,7 +30899,7 @@ if (authToken && signature) {
       : tradeYear
         ? `${tradeYear} bike`
         : "your bike";
-    const correctionLine = tradeYearCorrection
+    const correctionLine = tradeYearCorrection || tradeModelCorrection
       ? `Thanks for clarifying — I updated it to ${tradeLabel}. `
       : "";
     const reply = `${correctionLine}Sounds good. When you’re ready, call us or text us a day and time, and we can line up the appraisal.`;
