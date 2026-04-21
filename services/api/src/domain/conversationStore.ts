@@ -2268,6 +2268,7 @@ export function listConversations() {
         campaignThread: c.campaignThread ?? null,
         walkIn: inferredWalkIn ? true : null,
         engagement: c.engagement ?? null,
+        sale: c.sale ?? null,
         classification: c.classification ?? null,
         followUpCadence: c.followUpCadence ?? null,
         followUp: c.followUp ?? null,

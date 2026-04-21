@@ -440,3 +440,5 @@ When changing responses:
   - then `sale.stockId`/`sale.vin`,
   - and only then falls back to original `vehicleDescription`.
 - This prevents sold cards from showing stale inbound lead condition/model text (for example, old “New …” labels) after a different pre-owned unit is marked sold.
+- API list payload alignment:
+  - `listConversations()` now includes `sale` in `/conversations` list rows so inbox cards can access sold-unit metadata without opening detail first.
