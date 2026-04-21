@@ -13192,6 +13192,40 @@ function isDirectUserMention(text: string, user: any): boolean {
   return direct.test(body);
 }
 
+function isMentionTargetCurrentSpeaker(mentionedUser: any, conv: any, fallbackAgentName?: string): boolean {
+  if (!mentionedUser) return false;
+  const mentionedId = String(mentionedUser?.id ?? "").trim();
+  const senderId = String(conv?.manualSender?.userId ?? "").trim();
+  if (mentionedId && senderId && mentionedId === senderId) return true;
+  const mentionedFirst = normalizeMentionToken(
+    String(mentionedUser?.firstName ?? "").trim() ||
+      String(mentionedUser?.name ?? "").trim().split(/\s+/).filter(Boolean)[0] ||
+      ""
+  );
+  if (!mentionedFirst) return false;
+  const agentName = resolveConversationAgentName(conv, fallbackAgentName ?? "our team");
+  const agentFirst = normalizeMentionToken(
+    String(agentName ?? "").trim().split(/\s+/).filter(Boolean)[0] ?? ""
+  );
+  return !!agentFirst && agentFirst === mentionedFirst;
+}
+
+function isThankYouSignoffNoRequest(text: string): boolean {
+  const t = String(text ?? "").trim().toLowerCase();
+  if (!t) return false;
+  if (/[?]/.test(t)) return false;
+  if (
+    /\b(call|text|reach out|contact|appointment|schedule|book|available|price|pricing|payment|monthly|apr|trade|service|parts|apparel|inventory|stock|vin|email)\b/.test(
+      t
+    )
+  ) {
+    return false;
+  }
+  return /\b(thanks|thank you|thx|ty|appreciate it|appreciate you|have a great day|have great day|have a good day|have good day|you too|sounds good|all set|perfect)\b/.test(
+    t
+  );
+}
+
 function inboundReferencesOtherPerson(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   return (
@@ -25192,13 +25226,34 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "our team");
     const customerName = normalizeDisplayCase(conv.lead?.firstName) || "there";
+    const mentionToken = escapeRegex(firstName);
+    const explicitMentionedHandoff =
+      !!mentionToken &&
+      new RegExp(`\\b(tell|let|ask|have)\\s+${mentionToken}\\b`, "i").test(
+        String(event.body ?? "")
+      );
+    const mentionIsCurrentSpeaker = isMentionTargetCurrentSpeaker(
+      mentionedUser,
+      conv,
+      dealerProfile?.agentName ?? "our team"
+    );
+    const shouldHandoffToMention =
+      !mentionIsCurrentSpeaker &&
+      (wantsCall || inboundReferencesOtherPerson(event.body ?? "") || explicitMentionedHandoff);
+    const courtesyOnly = isThankYouSignoffNoRequest(event.body ?? "");
     const intro = isDirectUserMention(event.body ?? "", mentionedUser)
       ? `Hey ${customerName} — this is ${agentName} at ${dealerName}. `
       : "";
     const handoff = wantsCall
       ? `I'll have ${firstName} reach out.`
       : `I'll let ${firstName} know.`;
-    const reply = `${intro}${empathyNeeded ? "I'm really sorry to hear that. " : "Got it — "}${handoff}`;
+    const reply = shouldHandoffToMention
+      ? `${intro}${empathyNeeded ? "I'm really sorry to hear that. " : "Got it — "}${handoff}`
+      : empathyNeeded
+        ? "I'm really sorry to hear that."
+        : courtesyOnly
+          ? "You're welcome — have a great day too."
+          : "Got it — thanks for the update.";
     return respondWithSmsRegeneratedDraft(reply);
   }
 
@@ -28975,15 +29030,34 @@ if (authToken && signature) {
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "our team");
     const customerName = normalizeDisplayCase(conv.lead?.firstName) || "there";
+    const mentionToken = escapeRegex(firstName);
+    const explicitMentionedHandoff =
+      !!mentionToken &&
+      new RegExp(`\\b(tell|let|ask|have)\\s+${mentionToken}\\b`, "i").test(
+        String(event.body ?? "")
+      );
+    const mentionIsCurrentSpeaker = isMentionTargetCurrentSpeaker(
+      mentionedUser,
+      conv,
+      dealerProfile?.agentName ?? "our team"
+    );
+    const shouldHandoffToMention =
+      !mentionIsCurrentSpeaker &&
+      (wantsCall || inboundReferencesOtherPerson(event.body ?? "") || explicitMentionedHandoff);
+    const courtesyOnly = isThankYouSignoffNoRequest(event.body ?? "");
     const intro = isDirectUserMention(event.body ?? "", mentionedUser)
       ? `Hey ${customerName} — this is ${agentName} at ${dealerName}. `
       : "";
     const handoff = wantsCall
       ? `I'll have ${firstName} reach out.`
       : `I'll let ${firstName} know.`;
-    const reply = `${intro}${
-      empathyNeeded ? "I'm really sorry to hear that. " : "Got it — "
-    }${handoff}`;
+    const reply = shouldHandoffToMention
+      ? `${intro}${empathyNeeded ? "I'm really sorry to hear that. " : "Got it — "}${handoff}`
+      : empathyNeeded
+        ? "I'm really sorry to hear that."
+        : courtesyOnly
+          ? "You're welcome — have a great day too."
+          : "Got it — thanks for the update.";
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");

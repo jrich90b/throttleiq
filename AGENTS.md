@@ -463,3 +463,9 @@ When changing responses:
 - Modal shows hold metadata when present:
   - `hold.label`, year/make/model/trim/color, stock, VIN,
   - hold-until time, hold type (`Bike on order`), reason, updated timestamp, and notes.
+
+## Mention Handoff Guardrail
+- Mention-based handling no longer defaults to third-person handoff copy (`I'll let {name} know`) for simple acknowledgements/signoffs.
+- In both Twilio realtime and regenerate mention paths (`services/api/src/index.ts`):
+  - if the mentioned name matches the current sender identity, or the inbound is courtesy-only (thanks/signoff with no request), reply stays direct (for example, “You’re welcome — have a great day too.”),
+  - handoff phrasing is only used when there is an explicit handoff/callback signal.
