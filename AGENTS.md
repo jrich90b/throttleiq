@@ -399,6 +399,7 @@ When changing responses:
   - `lead.vehicle.model`
   - `lead.tradeVehicle.model`
 - Correction acknowledgement line now appears when either year or model was corrected.
+- Initial Room58 sell acknowledgment now prefers `lead.tradeVehicle` year/model for bike label text before falling back to `lead.vehicle`, preventing wrong-year/wrong-model opener copy when ADF includes multiple vehicle contexts.
 
 ## Inbox Closed/Sold Filter Guardrail
 - Sold lead detection in web inbox now normalizes by:

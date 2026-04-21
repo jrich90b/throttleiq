@@ -3981,10 +3981,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const blockPurchase = !buyingUsedEnabled && !tradeIntent;
     const firstName = normalizeDisplayCase(conv.lead?.firstName);
     const modelLabel = normalizeVehicleModel(
-      conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "",
-      conv.lead?.vehicle?.make ?? null
+      conv.lead?.tradeVehicle?.model ??
+        conv.lead?.tradeVehicle?.description ??
+        conv.lead?.vehicle?.model ??
+        conv.lead?.vehicle?.description ??
+        "",
+      conv.lead?.tradeVehicle?.make ?? conv.lead?.vehicle?.make ?? null
     );
-    const yearLabel = conv.lead?.vehicle?.year ? `${conv.lead?.vehicle?.year} ` : "";
+    const sellYear = conv.lead?.tradeVehicle?.year ?? conv.lead?.vehicle?.year ?? null;
+    const yearLabel = sellYear ? `${sellYear} ` : "";
     const bikeLabel = modelLabel ? `${yearLabel}${modelLabel}`.trim() : "your bike";
     const sellLabel = bikeLabel.startsWith("your ") ? bikeLabel.slice(5) : bikeLabel;
     let ack = "";
