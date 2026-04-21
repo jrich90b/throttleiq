@@ -418,3 +418,8 @@ When changing responses:
 - Sold/Closed status badges in inbox rows and conversation header now use the same normalized sold detection.
 - Hold filter now excludes sold leads as well (sold and hold are treated as mutually exclusive in inbox deal filters).
 - Filter precedence fix: `status=closed` (non-sold) is now always treated as archived even if legacy hold fields still exist on the record.
+
+## Post-Sale Mode-Agnostic Delivery Guardrail
+- In `processDueFollowUps` (`services/api/src/index.ts`), `post_sale` cadence now bypasses suggest/human draft gating and always runs through send/fallback delivery.
+- This means sold follow-ups still deliver when a conversation remains in `human` mode or when global mode is `suggest`.
+- Non-post-sale cadence behavior is unchanged (still drafts in suggest/human review flows).

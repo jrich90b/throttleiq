@@ -15786,6 +15786,7 @@ async function processDueFollowUps() {
     const useEmail =
       !isPostSale && conv.classification?.channel === "email" && !!emailTo && hasEmailOptIn(conv.lead);
     const systemMode = effectiveMode(conv);
+    const forceAutoSendPostSaleCadence = isPostSale;
     const recentHumanOutboundInLoop = (conv.messages ?? []).some((m: any) => {
       if (m?.direction !== "out" || m?.provider !== "human") return false;
       const atMs = new Date(String(m?.at ?? "")).getTime();
@@ -15850,7 +15851,7 @@ async function processDueFollowUps() {
       addCallTodoIfMissing(conv, buildCadenceFollowUpCallTodoSummary(conv));
     };
 
-    if (systemMode === "suggest" || enforceSalesReviewForCadence) {
+    if (!forceAutoSendPostSaleCadence && (systemMode === "suggest" || enforceSalesReviewForCadence)) {
       const draftTo = useEmail ? emailTo! : to;
       const draftMessage = useEmail && emailMessage ? emailMessage : message;
       if (
