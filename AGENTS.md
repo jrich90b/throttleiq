@@ -450,3 +450,8 @@ When changing responses:
   - dark label/value text for all fields,
   - explicit sold-unit details (`sale.label`, year/make/model/trim/color, stock, VIN, sold-by, sold-at, note),
   - clear fallback notice when sold-unit details are not yet recorded.
+
+## Walk-In Source Anchoring Guardrail
+- `inferWalkIn(...)` now anchors walk-in detection to the **first inbound ADF source line**.
+- If first-touch ADF source is non-walk-in (for example web/marketplace source), later lead-source updates (such as Dealer Lead App ADF entries) no longer flip the conversation to walk-in.
+- Explicit `lead.walkIn=true` still takes priority when a lead is truly created as walk-in.

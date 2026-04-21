@@ -1853,20 +1853,36 @@ export function getLatestPendingDraft(conv: Conversation): Message | null {
   return null;
 }
 
+const WALK_IN_SOURCE_RE = /traffic log pro|walk[\s_-]*in|dealer lead app/i;
+
+function extractAdfSourceLine(body: string): string {
+  const match = String(body ?? "").match(/(?:^|\n)\s*source:\s*([^\n\r]+)/i);
+  return String(match?.[1] ?? "").trim();
+}
+
 export function inferWalkIn(conv: Conversation): boolean {
   if (conv.lead?.walkIn) return true;
+  const firstAdfBody =
+    conv.messages.find(
+      m =>
+        m.direction === "in" &&
+        m.provider === "sendgrid_adf" &&
+        typeof m.body === "string"
+    )?.body ?? "";
+  const firstAdfSource = extractAdfSourceLine(firstAdfBody);
+  const firstAdfSourceSignalsWalkIn = WALK_IN_SOURCE_RE.test(firstAdfSource);
+  const firstAdfSourceLocksNonWalkIn = !!firstAdfSource && !firstAdfSourceSignalsWalkIn;
+  if (firstAdfSourceLocksNonWalkIn) return false;
   const leadSource = String(conv.lead?.source ?? "");
   const legacyLeadSource = String((conv as any)?.leadSource ?? "");
   const bucket = String(conv.classification?.bucket ?? "").toLowerCase();
   const ruleName = String(conv.classification?.ruleName ?? "").toLowerCase();
   if (bucket === "in_store") return true;
   if (ruleName.includes("dealer_lead_app")) return true;
-  const adfBody =
-    conv.messages.find(m => m.provider === "sendgrid_adf" && typeof m.body === "string")?.body ?? "";
   const sourceMatch =
-    /traffic log pro|walk[\s_-]*in|dealer lead app/i.test(leadSource) ||
-    /traffic log pro|walk[\s_-]*in|dealer lead app/i.test(legacyLeadSource) ||
-    /source:\s*(traffic log pro|walk[\s_-]*in|dealer lead app)/i.test(adfBody);
+    WALK_IN_SOURCE_RE.test(leadSource) ||
+    WALK_IN_SOURCE_RE.test(legacyLeadSource) ||
+    WALK_IN_SOURCE_RE.test(firstAdfSource);
   return sourceMatch;
 }
 
