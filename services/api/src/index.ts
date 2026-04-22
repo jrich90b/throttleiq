@@ -4607,16 +4607,16 @@ async function applyPostCallSummaryActions(opts: {
 }
 
 const FOLLOW_UP_MESSAGES = [
-  "Hey {name}, just checking in{labelClause}. No rush - happy to help whenever you are ready.",
-  "Hey {name}, if it helps, I can send a couple fresh photos or a quick walkaround of{label}.",
-  "Hey {name}, still interested in{labelClause}, or want me to keep this on the back burner for now?",
-  "Quick check {name} - are you still browsing{labelClause}, or already narrowing it down?",
-  "If you want to see it in person{labelClause}, I can send two easy time options.",
-  "No pressure, {name}. I can keep an eye out{labelClause} and text you if something good pops up.",
-  "If your week is packed, {name}, no problem - I can work around your schedule.",
-  "Want me to text two quick time options{labelClause}?",
-  "If you decide to swing by{labelClause}, what day is easiest for you?",
-  "All good either way, {name}. Want me to leave this open or pause it for now?"
+  "Hey {name}, just checking in{labelClause}. If helpful, I can send a quick price and payment snapshot.",
+  "If helpful, I can send current photos or a short walkaround of{label}.",
+  "Want a simple side-by-side on{labelClause} so it is easier to compare?",
+  "I can also check current incentives on{labelClause} and send only what applies.",
+  "If you’d rather stop in{labelClause}, I can send two easy time options.",
+  "No rush, {name}. I can keep an eye on{labelClause} and only text when something changes.",
+  "If trade-in is part of your plan, I can start with a rough range before you come in.",
+  "If timing shifted, totally fine. Send me a day that works and I’ll keep it easy.",
+  "Still happy to help{labelClause}. Want me to keep this open or switch to update-only?",
+  "All good either way, {name}. Want me to pause check-ins until you’re ready?"
 ];
 
 type WalkInCommentFollowUpCtx = {
@@ -4687,9 +4687,9 @@ const buildWalkInCommentFollowUp = ({
 };
 
 const FOLLOW_UP_VARIANTS_WITH_SLOTS: string[] = [
-  "Hey {name}, if you want to stop by, I can do {a} or {b}. Which one is easier?{extraLine}",
-  "Quick one {name} - I have {a} and {b} open. Want either?{extraLine}",
-  "{name}, if you want to come in, I can hold {a} or {b}. Which works better?{extraLine}"
+  "Hey {name}, if you want to stop by{labelClause}, I can do {a} or {b}. Which is easier?{extraLine}",
+  "{name}, I can set aside {a} or {b} if you want to take a look{labelClause}. Which one works better?{extraLine}",
+  "Want me to hold a quick window{labelClause}? {a} or {b} both work.{extraLine}"
 ];
 
 const SELL_FOLLOW_UP_VARIANTS_WITH_SLOTS: string[] = [
@@ -4700,58 +4700,58 @@ const SELL_FOLLOW_UP_VARIANTS_WITH_SLOTS: string[] = [
 
 const FOLLOW_UP_VARIANTS_NO_SLOTS: Record<number, string[]> = {
   0: [
-    "Hey {name}, quick check-in{labelClause}. Let me know where your head is at.{extraLine}",
-    "Hey {name}, any questions on{label}? Happy to help if you want it.{extraLine}",
-    "{name}, if you want to stop by{labelClause}, send me a day that works for you.{extraLine}"
+    "Hey {name}, just checking in{labelClause}. Want me to send a quick price and payment snapshot?{extraLine}",
+    "If helpful, I can send two options on{label} with estimated payments so comparing is easier.{extraLine}",
+    "{name}, no rush if timing is better later - I can keep this open and only send useful updates.{extraLine}"
   ],
   1: [
-    "Hey {name}, want a couple photos or a quick walkaround of{label}?",
-    "{name}, I can send a short video of{label} if that is easier."
+    "Want current photos or a quick walkaround of{label}?",
+    "I can send a short video of{label} plus the key differences versus similar options."
   ],
   2: [
-    "Quick check {name} - is{label} still near the top of your list?",
-    "Hey {name}, still leaning toward{label} or comparing a few options?"
+    "Would a side-by-side on{labelClause} help (price, payment, and condition)?",
+    "Still deciding{labelClause}, or want me to narrow it to two best-fit options?"
   ],
   4: [
-    "If it helps {name}, I can send a couple easy times to stop by.",
-    "Want me to send two quick time options, {name}?",
-    "If it is easier {name}, I can text times that work on our side."
+    "If you want to come in, I can send two time options.",
+    "Want me to text two quick time slots so this stays easy?",
+    "I can line up two windows if you want to stop by."
   ],
   7: [
-    "If you want to line up a quick visit {name}, I can send a couple options.",
-    "Want a couple time options to stop in, {name}?",
-    "If you want, I can text times that work on our side."
+    "If now is not ideal, I can switch this to update-only and keep it light.",
+    "Want me to keep this active, or pause and only send major updates?",
+    "I can keep an eye on it and only reach out when something meaningful changes."
   ]
 };
 
 const FOLLOW_UP_VARIANTS_NO_MODEL_NO_SLOTS: Record<number, string[]> = {
   0: [
-    "Hey {name}, quick check-in. Want me to send a couple bikes that fit what you are after?{extraLine}",
-    "Hey {name}, still looking around? I can send 2-3 options that fit your range.{extraLine}"
+    "Hey {name}, want me to send 2-3 bikes that fit what you are after, with ballpark price and payment ranges?{extraLine}",
+    "I can narrow this down fast if you share your target monthly range and whether you prefer new, used, or both.{extraLine}"
   ],
   1: [
-    "Hey {name}, if it helps, I can send a quick walkaround on a couple options.",
-    "{name}, want me to text over a couple options to compare?"
+    "If helpful, I can send a quick walkaround on two strong options.",
+    "Want me to text a short compare list so you do not have to sort through everything?"
   ],
   2: [
-    "Quick check {name} - still narrowing down models or comparing a few?",
-    "Hey {name}, want me to send a short list of bikes that fit what you are after?"
+    "Still narrowing down models, or want me to pick two best fits for you?",
+    "I can send a short list matched to your budget and riding style if helpful."
   ]
 };
 
 const ENGAGED_FOLLOW_UP_VARIANTS_WITH_SLOTS: Record<string, string[]> = {
   general: [
-    "Hey {name}, if you want to stop by, I can do {a} or {b}. Which one is easier for you?{extraLine}",
-    "Quick one {name} - I have {a} and {b} open. Want either?{extraLine}"
+    "Hey {name}, if you want to stop by, I can do {a} or {b}. Which one is easier?{extraLine}",
+    "{name}, I have {a} and {b} open. Want me to hold one?{extraLine}"
   ],
   deal_progress: [
-    "Hey {name}, I can go over the details on the {model}. I have {a} or {b}. Want me to hold one?{extraLine}",
-    "Quick check {name} - if you still plan to come in, I can do {a} or {b}. Which works better?{extraLine}"
+    "Hey {name}, I can go over details on the {model}. I have {a} or {b}. Want me to hold one?{extraLine}",
+    "If you still plan to come in, I can do {a} or {b}. Which works better for you?{extraLine}"
   ],
   trade: [
     "Hey {name}, if you want to look over trade numbers for {trade}, I have {a} or {b} open. Which works better?{extraLine}",
     "{name}, I can set a quick trade appraisal for {trade} at {a} or {b}. Which one works?{extraLine}",
-    "Quick check {name} - want to bring {trade} by? I can hold {a} or {b}.{extraLine}"
+    "{name}, want to bring {trade} by? I can hold {a} or {b}.{extraLine}"
   ],
   pricing: [
     "Hey {name}, if you want to go over numbers on the {model}, I have {a} or {b} open. Which works better?{extraLine}",
@@ -4763,7 +4763,7 @@ const ENGAGED_FOLLOW_UP_VARIANTS_WITH_SLOTS: Record<string, string[]> = {
   ],
   finance_docs: [
     "Hey {name}, quick check-in - how is it going with the remaining application docs? If easier, I can do {a} or {b} and help you finish it up.",
-    "{name}, if it helps, we can knock out the remaining docs/references at {a} or {b}. Which works better?"
+    "{name}, if helpful, we can knock out the remaining docs/references at {a} or {b}. Which works better?"
   ],
   inventory: [
     "Hey {name}, if you want to see{label}, I have {a} or {b} open. Which works better?{extraLine}",
@@ -4778,20 +4778,20 @@ const ENGAGED_FOLLOW_UP_VARIANTS_WITH_SLOTS: Record<string, string[]> = {
 const ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS: Record<string, Record<number, string[]>> = {
   general: {
     0: [
-      "Hey {name}, quick check-in{labelClause}. Let me know what you are thinking.{extraLine}",
+      "Hey {name}, just checking in{labelClause}. Let me know what you’re thinking.{extraLine}",
       "{name}, if you want to stop by{labelClause}, send me a day that works for you.{extraLine}"
     ],
     1: [
       "Hey {name}, want a quick walkaround video of{label}?"
     ],
     2: [
-      "Quick check {name} - still leaning toward{label} or comparing a few?"
+      "Still leaning toward{label}, or comparing a few options?"
     ]
   },
   deal_progress: {
     0: [
-      "Hey {name}, quick check-in. I can go over the setup you picked whenever you are ready.{extraLine}",
-      "{name}, still good to review details this week? I can make it quick.{extraLine}"
+      "Hey {name}, just checking in. I can go over the setup you picked whenever you’re ready.{extraLine}",
+      "{name}, still good to review details this week? I can keep it quick.{extraLine}"
     ],
     1: [
       "If it helps, I can send a quick recap of bike, parts, and payment options before you come in.",
@@ -4799,12 +4799,12 @@ const ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS: Record<string, Record<number, string[
     ],
     2: [
       "Still want me to keep this moving, or hold off for now?",
-      "Quick check {name} — should I keep working this setup for you?"
+      "{name}, should I keep working this setup for you?"
     ]
   },
   trade: {
     0: [
-      "Hey {name}, I can run trade numbers on {trade} if you want.{extraLine}",
+      "Hey {name}, I can run trade numbers on {trade} if helpful.{extraLine}",
       "{name}, I can walk you through a rough trade value on {trade}.{extraLine}"
     ],
     1: [
@@ -4812,34 +4812,34 @@ const ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS: Record<string, Record<number, string[
       "{name}, want me to check trade options on {trade}?"
     ],
     2: [
-      "Quick check {name} - still thinking about a trade on {trade}?",
+      "Still thinking about a trade on {trade}?",
       "{name}, want me to run trade numbers now or wait for now?"
     ]
   },
   pricing: {
     0: [
       "Hey {name}, any questions on pricing{labelClause}?{extraLine}",
-      "{name}, want me to re-check numbers on the {model}?{extraLine}"
+      "{name}, want me to recheck numbers on the {model}?{extraLine}"
     ],
     1: [
       "Hey {name}, I can send a quick pricing breakdown on the {model}.",
       "{name}, want a quick video or pricing recap on the {model}?"
     ],
     2: [
-      "Quick check {name} - still interested in the {model} at this price?",
+      "Still interested in the {model} at this price point?",
       "{name}, want me to revisit pricing on the {model}?"
     ]
   },
   payments: {
     0: [
-      "Hey {name}, any questions on payments? I can tighten numbers if you want.{extraLine}",
+      "Hey {name}, any questions on payments? I can tighten numbers if helpful.{extraLine}",
       "{name}, want me to walk through payment options?{extraLine}"
     ],
     1: [
       "Hey {name}, I can send a quick payment breakdown."
     ],
     2: [
-      "Quick check {name} - still looking at payments or holding off for now?"
+      "Still looking at payments, or holding off for now?"
     ]
   },
   finance_docs: {
@@ -4852,7 +4852,7 @@ const ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS: Record<string, Record<number, string[
       "Want me to resend the short checklist for the remaining application items?"
     ],
     2: [
-      "Quick check {name} - want me to keep this open while you finish those documents?",
+      "Want me to keep this open while you finish those documents?",
       "{name}, still planning to finish the pending application items, or should I pause this for now?"
     ]
   },
@@ -4866,7 +4866,7 @@ const ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS: Record<string, Record<number, string[
       "{name}, I can send a walkaround video of{label}."
     ],
     2: [
-      "Quick check {name} - still interested in{label} or looking at others?",
+      "Still interested in{label} or looking at other options?",
       "{name}, want me to keep an eye on the {model} for you?"
     ]
   },
@@ -4880,7 +4880,7 @@ const ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS: Record<string, Record<number, string[
       "{name}, I can send a short walkaround of the {model}."
     ],
     2: [
-      "Quick check {name} - want to line up a time or hold off for now?",
+      "Want to line up a time, or hold off for now?",
       "{name}, still planning to stop in soon?"
     ]
   }
@@ -5021,7 +5021,7 @@ async function buildEarlyCadencePromotionOverride(args: {
   const name = normalizeDisplayCase(args.name || "there");
   const { model, year } = resolveCadencePromotionModel(conv);
   if (!model) {
-    return `Hey ${name}, happy to send a short list. What style are you leaning toward, and should I focus on new, used, or both? If you want, share your budget range and I will keep it dialed in.`;
+    return `Hey ${name}, happy to send a short list. What style are you leaning toward, and should I focus on new, used, or both? If you want, share your target monthly range and I can narrow it down for you.`;
   }
 
   let matches = await findInventoryMatches({ year: year ?? null, model });
@@ -5040,9 +5040,9 @@ async function buildEarlyCadencePromotionOverride(args: {
   const modelLabel = formatModelLabel(year, model);
   if (notes.length) {
     const promoLine = notes.length === 1 ? notes[0] : `${notes[0]} and ${notes[1]}`;
-    return `Hey ${name}, quick check-in on the ${modelLabel}. Right now there is ${promoLine}. If you want, I can send a couple easy options for next steps.`;
+    return `Hey ${name}, quick update on the ${modelLabel}: ${promoLine}. If helpful, I can send a short pricing and payment breakdown.`;
   }
-  return `Hey ${name}, quick check-in on the ${modelLabel}. If you want, I can send a couple easy next steps and keep it simple.`;
+  return `Hey ${name}, just checking in on the ${modelLabel}. If helpful, I can send a simple compare and next-step options.`;
 }
 
 function isCadencePreferenceClarifierMessage(message: string): boolean {
@@ -5133,9 +5133,9 @@ function buildCadenceCheckInFallbacks(name: string, labelClause?: string): strin
   const clause = String(labelClause ?? "").trim();
   const about = clause ? ` ${clause.replace(/^\s+/, "")}` : "";
   return [
-    `Hey ${cleanName}, quick check${about} - did you catch my last message?`,
-    `Hey ${cleanName}, just following up${about}. If you want, I can send a couple easy next-step options.`,
-    `Hey ${cleanName}, checking back in${about}. If this week is better, I can work around your schedule.`
+    `Hey ${cleanName}, just checking in${about}.`,
+    `Hey ${cleanName}, checking back${about}. If helpful, I can send a simple compare and next-step options.`,
+    `Hey ${cleanName}, just circling back${about}. If timing shifted, I can switch this to update-only.`
   ];
 }
 
@@ -5746,25 +5746,25 @@ type EmailFollowUpCtx = {
 
 const EMAIL_FOLLOW_UP_MESSAGES: Array<(ctx: EmailFollowUpCtx) => string> = [
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nJust checking in on ${label}. If you want to stop by, ${bookingLine}\n\nThanks,`,
+    `Hi ${name},\n\nJust checking in on ${label}. If helpful, I can send a quick price and payment snapshot.\n\n${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nIf it helps, I can send a few fresh photos or a quick walkaround video of ${label}. ${bookingLine}\n\nThanks,`,
+    `Hi ${name},\n\nIf helpful, I can send current photos and a short walkaround video of ${label}, plus key differences versus similar options.\n\n${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine, canTestRide }) =>
-    `Hi ${name},\n\nThanks again for your interest in ${label}. ${canTestRide ? "If you want a test ride, I can hold a time." : "If you want to stop by, I can hold a time."} ${bookingLine}\n\nThanks,`,
+    `Hi ${name},\n\nThanks again for your interest in ${label}. ${canTestRide ? "If you want a test ride, I can hold a time." : "If you want to stop by, I can hold a time."} I can also send a simple side-by-side with price and payment options.\n\n${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nQuick question - is ${label} still near the top of your list? If you want to see it in person, ${bookingLine}\n\nThanks,`,
+    `Hi ${name},\n\nWould it help if I sent a quick side-by-side on ${label} (price, payment, condition) so it is easier to compare?\n\n${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nWanted to follow up on ${label}. If you want to take a closer look, ${bookingLine}\n\nThanks,`,
+    `Hi ${name},\n\nJust checking in on ${label}. If you want to take a closer look, I can line up two easy time options.\n\n${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nNo pressure at all. If you are still shopping for ${label}, I am here to help. ${bookingLine}\n\nThanks,`,
+    `Hi ${name},\n\nNo pressure at all. If you are still shopping for ${label}, I’m happy to help and keep updates useful.\n\n${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nIf it is easier, tell me what day works best and I will handle the rest. ${bookingLine}\n\nThanks,`,
+    `Hi ${name},\n\nIf trade-in is part of your plan, I can add a rough trade range before you come in. If text is easier, that works too.\n\n${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nIf you want to set a time to check out ${label}, I can get it on the calendar. ${bookingLine}\n\nThanks,`,
+    `Hi ${name},\n\nIf you want to set a time to check out ${label}, I can get it on the calendar and keep it quick.\n\n${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nWant me to hold a time for you to see ${label}? ${bookingLine}\n\nThanks,`,
+    `Hi ${name},\n\nStill happy to help with ${label}. Want me to keep this active, or switch to update-only?\n\n${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nAll good either way - still interested in taking a look at ${label}? ${bookingLine}\n\nThanks,`
+    `Hi ${name},\n\nAll good either way. Should I keep this open for now, or pause check-ins until you want to revisit ${label}?\n\n${bookingLine}\n\nThanks,`
 ];
 
 const SCHEDULE_INVITE_THRESHOLD = 3;
@@ -16007,9 +16007,7 @@ async function processDueFollowUps() {
     const replyTo = maybeTagReplyTo(emailReplyTo, conv);
     const bookingUrl = buildBookingUrlForLead(dealerProfile?.bookingUrl, conv);
     const name = conv.lead?.firstName?.trim() || "there";
-    const year = conv.lead?.vehicle?.year ?? null;
-    const model = conv.lead?.vehicle?.model ?? null;
-    const label = model ? `the ${formatModelLabel(year, model)}` : "your inquiry";
+    const label = hasSpecificFollowUpModel && followUpLabel ? `the ${followUpLabel}` : "your inquiry";
     const bookingLine = conv.scheduleSoft && !allowProactiveSchedule
       ? "If you need anything, just let me know."
       : bookingUrl

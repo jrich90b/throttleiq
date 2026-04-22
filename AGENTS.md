@@ -544,3 +544,40 @@ When changing responses:
   - Ride Challenge cadence scheduling was centralized into a reusable helper.
   - Non-initial Ride Challenge ADF updates now still enforce the Ride Challenge long-term reminder.
   - Generic `not_ready_no_timeframe` pause/stop logic is bypassed for Ride Challenge leads so the challenge reminder is not removed.
+
+## DDP Cadence Quality + Timing Alignment
+- Follow-up cadence messaging in `services/api/src/index.ts` was refreshed to align with DDP lead-handling guidance:
+  - stronger value-forward language (price/payment snapshot, side-by-side compare, incentives, trade support),
+  - less repetitive “quick check-in” phrasing,
+  - clearer update-only/pause options in later steps.
+- Updated template banks:
+  - `FOLLOW_UP_MESSAGES`
+  - `FOLLOW_UP_VARIANTS_WITH_SLOTS`
+  - `FOLLOW_UP_VARIANTS_NO_SLOTS`
+  - `FOLLOW_UP_VARIANTS_NO_MODEL_NO_SLOTS`
+  - engaged slot/no-slot variant maps
+  - `EMAIL_FOLLOW_UP_MESSAGES`
+  - cadence fallback helpers (`buildCadenceCheckInFallbacks`, early promo wording)
+- Label hygiene:
+  - follow-up email cadence now uses resolved cadence model label when available; avoids awkward `Other/full line` style labels in cadence emails.
+- Day-offset schedule updated in `services/api/src/domain/conversationStore.ts`:
+  - from `[1,2,4,6,8,10,12,14,18,21,27,35,45]`
+  - to `[1,2,3,5,7,10,15,21,30,45,60,90,120]`
+- Timing accuracy fix (important):
+  - corrected date math in `computeFollowUpDueAt(...)` and `computePostSaleDueAt(...)` so `day + N` cadence sends land on the intended local calendar day in the configured timezone.
+
+## Humanized Cadence Copy Pass
+- Follow-up wording in `services/api/src/index.ts` was further adjusted to sound less scripted and less pushy while keeping deterministic cadence behavior unchanged.
+- Updated language patterns now favor:
+  - conversational check-ins ("just checking in", "no rush"),
+  - low-friction asks ("want me to send..."),
+  - simpler wording over sales-heavy phrasing ("quick breakdown", "simple compare").
+- Updated banks/functions:
+  - `FOLLOW_UP_MESSAGES`
+  - `FOLLOW_UP_VARIANTS_WITH_SLOTS`
+  - `FOLLOW_UP_VARIANTS_NO_SLOTS`
+  - `FOLLOW_UP_VARIANTS_NO_MODEL_NO_SLOTS`
+  - engaged slot/no-slot maps
+  - `EMAIL_FOLLOW_UP_MESSAGES`
+  - `buildEarlyCadencePromotionOverride(...)`
+  - `buildCadenceCheckInFallbacks(...)`

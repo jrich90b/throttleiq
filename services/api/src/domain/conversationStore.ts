@@ -2697,7 +2697,7 @@ function localPartsToUtcDate(
   return new Date(guess.getTime() - diffMs);
 }
 
-export const FOLLOW_UP_DAY_OFFSETS = [1, 2, 4, 6, 8, 10, 12, 14, 18, 21, 27, 35, 45];
+export const FOLLOW_UP_DAY_OFFSETS = [1, 2, 3, 5, 7, 10, 15, 21, 30, 45, 60, 90, 120];
 export const ENGAGED_DAY_OFFSETS = FOLLOW_UP_DAY_OFFSETS;
 export const POST_SALE_DAY_OFFSETS = [1, 60, 365, 690];
 export const LONG_TERM_DAY_OFFSETS = [30, 90, 180];
@@ -2707,9 +2707,11 @@ export const PRIVATE_PARTY_SELL_DAY_OFFSETS = [30, 60, 90, 120];
 export function computeFollowUpDueAt(anchorAtIso: string, offsetDays: number, timeZone: string) {
   const anchor = new Date(anchorAtIso);
   const anchorParts = getZonedParts(anchor, timeZone);
-  const base = new Date(Date.UTC(anchorParts.year, anchorParts.month - 1, anchorParts.day));
-  base.setUTCDate(base.getUTCDate() + offsetDays);
-  const baseParts = getZonedParts(base, timeZone);
+  const baseLocalDate = new Date(Date.UTC(anchorParts.year, anchorParts.month - 1, anchorParts.day));
+  baseLocalDate.setUTCDate(baseLocalDate.getUTCDate() + offsetDays);
+  const targetYear = baseLocalDate.getUTCFullYear();
+  const targetMonth = baseLocalDate.getUTCMonth() + 1;
+  const targetDay = baseLocalDate.getUTCDate();
 
   const baseMinutes = 10 * 60 + 30;
   const randMinutes = Math.floor(Math.random() * 121);
@@ -2718,9 +2720,9 @@ export function computeFollowUpDueAt(anchorAtIso: string, offsetDays: number, ti
   const minute = total % 60;
 
   return localPartsToUtcDate(timeZone, {
-    year: baseParts.year,
-    month: baseParts.month,
-    day: baseParts.day,
+    year: targetYear,
+    month: targetMonth,
+    day: targetDay,
     hour24,
     minute
   }).toISOString();
@@ -2729,13 +2731,15 @@ export function computeFollowUpDueAt(anchorAtIso: string, offsetDays: number, ti
 export function computePostSaleDueAt(anchorAtIso: string, offsetDays: number, timeZone: string) {
   const anchor = new Date(anchorAtIso);
   const anchorParts = getZonedParts(anchor, timeZone);
-  const base = new Date(Date.UTC(anchorParts.year, anchorParts.month - 1, anchorParts.day));
-  base.setUTCDate(base.getUTCDate() + offsetDays);
-  const baseParts = getZonedParts(base, timeZone);
+  const baseLocalDate = new Date(Date.UTC(anchorParts.year, anchorParts.month - 1, anchorParts.day));
+  baseLocalDate.setUTCDate(baseLocalDate.getUTCDate() + offsetDays);
+  const targetYear = baseLocalDate.getUTCFullYear();
+  const targetMonth = baseLocalDate.getUTCMonth() + 1;
+  const targetDay = baseLocalDate.getUTCDate();
   let due = localPartsToUtcDate(timeZone, {
-    year: baseParts.year,
-    month: baseParts.month,
-    day: baseParts.day,
+    year: targetYear,
+    month: targetMonth,
+    day: targetDay,
     hour24: 10,
     minute: 30
   });
