@@ -369,7 +369,7 @@ export function InboxSection(props: any) {
                           </button>
                           {listActionsOpenId === c.id ? (
                             <div
-                              className={`absolute right-0 mt-2 border rounded bg-white shadow z-10 ${
+                              className={`absolute right-0 mt-2 border rounded bg-white lr-light-modal shadow z-10 ${
                                 todoInlineOpenId === c.id ||
                                 reminderInlineOpenId === c.id ||
                                 contactInlineOpenId === c.id ||

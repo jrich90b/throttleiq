@@ -327,6 +327,11 @@ When changing responses:
   - overlay now supports vertical scrolling (`overflow-y-auto`) with top padding and mobile-friendly alignment.
   - modal container now has viewport-capped height and internal scroll (`max-h` + `overflow-y-auto`) so lower fields/actions remain reachable.
 
+## Inbox Actions Popup Contrast Guardrail
+- Updated Inbox actions popup wrapper in `apps/web/src/app/components/InboxSection.tsx` to include `.lr-light-modal`.
+- Purpose:
+  - ensure inline popups like **Edit contact** use high-contrast text/inputs/buttons on white surfaces inside the dark inbox shell.
+
 ## Legacy New Condition Guardrail
 - Some ADF leads can arrive with `condition: new` for older model years that are realistically only used inventory.
 - Added ingest-time normalization in `services/api/src/routes/sendgridInbound.ts`:
