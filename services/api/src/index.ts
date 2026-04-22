@@ -4137,18 +4137,124 @@ async function applyPostCallSummaryActions(opts: {
   sourceMessageId?: string;
 }) {
   const { conv, summaryText, transcriptText, sourceMessageId } = opts;
-  const extractCustomerUtterances = (text: string) => {
-    if (!text) return "";
+  const splitVoiceTurns = (text: string): Array<{ speaker: string; body: string }> => {
+    if (!text) return [];
+    const turns: Array<{ speaker: string; body: string }> = [];
     const lines = text.split(/\r?\n/);
-    const customerLines = lines
-      .map(line => line.trim())
-      .filter(line =>
-        /^(customer|caller|client|prospect)\s*:/i.test(line)
-      )
-      .map(line => line.replace(/^(customer|caller|client|prospect)\s*:\s*/i, ""));
-    return customerLines.length ? customerLines.join(" ") : "";
+    for (const rawLine of lines) {
+      const line = String(rawLine ?? "").trim();
+      if (!line) continue;
+      const m = line.match(/^([^:]{1,40})\s*:\s*(.+)$/);
+      if (!m) continue;
+      const speaker = String(m[1] ?? "").trim().toLowerCase();
+      const body = String(m[2] ?? "").trim();
+      if (!speaker || !body) continue;
+      turns.push({ speaker, body });
+    }
+    return turns;
   };
-  const customerText = extractCustomerUtterances(transcriptText) || summaryText;
+  const normalizeVoiceDayToken = (raw: string): string | null => {
+    const t = String(raw ?? "").trim().toLowerCase();
+    if (!t) return null;
+    if (t === "today" || t === "tomorrow") return t;
+    if (t.startsWith("mon")) return "monday";
+    if (t.startsWith("tue")) return "tuesday";
+    if (t.startsWith("wed")) return "wednesday";
+    if (t.startsWith("thu")) return "thursday";
+    if (t.startsWith("fri")) return "friday";
+    if (t.startsWith("sat")) return "saturday";
+    if (t.startsWith("sun")) return "sunday";
+    return null;
+  };
+  const extractVoiceDayToken = (text: string): string | null => {
+    const m = String(text ?? "").match(
+      /\b(monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun|today|tomorrow)\b/i
+    );
+    return m?.[1] ? normalizeVoiceDayToken(m[1]) : null;
+  };
+  const extractExactVoiceTime = (text: string): string | null => {
+    const raw = String(text ?? "");
+    if (!raw.trim()) return null;
+    if (/\bnoon\b/i.test(raw)) return "12";
+    const withMinutes = raw.match(/\b(?:at|for)\s*(\d{1,2})([:.])(\d{2})\s*(am|pm)?\b/i);
+    if (withMinutes) {
+      const hour = Number(withMinutes[1]);
+      const minute = Number(withMinutes[3]);
+      const meridiem = String(withMinutes[4] ?? "").toLowerCase();
+      if (hour >= 1 && hour <= 12 && minute >= 0 && minute <= 59) {
+        const hh = String(hour);
+        const mm = String(minute).padStart(2, "0");
+        return meridiem ? `${hh}:${mm}${meridiem}` : `${hh}:${mm}`;
+      }
+    }
+    const numericHour = raw.match(/\b(?:at|for)\s*(\d{1,2})\s*(am|pm)?\b/i);
+    if (numericHour) {
+      const hour = Number(numericHour[1]);
+      const meridiem = String(numericHour[2] ?? "").toLowerCase();
+      if (hour >= 1 && hour <= 12) {
+        return meridiem ? `${hour}${meridiem}` : String(hour);
+      }
+    }
+    const hourWords: Record<string, number> = {
+      one: 1,
+      two: 2,
+      three: 3,
+      four: 4,
+      five: 5,
+      six: 6,
+      seven: 7,
+      eight: 8,
+      nine: 9,
+      ten: 10,
+      eleven: 11,
+      twelve: 12
+    };
+    const minuteWords: Record<string, string> = {
+      fifteen: "15",
+      thirty: "30",
+      "forty-five": "45",
+      fortyfive: "45"
+    };
+    const wordMatch = raw.match(
+      /\b(?:at|for)\s*(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?:\s+(fifteen|thirty|forty-five|fortyfive))?(?:\s+o'?clock)?\b/i
+    );
+    if (wordMatch) {
+      const hour = hourWords[String(wordMatch[1] ?? "").toLowerCase()];
+      const minute = minuteWords[String(wordMatch[2] ?? "").toLowerCase()] ?? "";
+      if (hour) return minute ? `${hour}:${minute}` : String(hour);
+    }
+    return null;
+  };
+  const inferVoiceAgentCommittedSlot = (
+    turns: Array<{ speaker: string; body: string }>,
+    fallbackDay?: string | null
+  ): { day: string; timeText: string; sourceLine: string } | null => {
+    if (!Array.isArray(turns) || turns.length === 0) return null;
+    const customerSpeakers = new Set(["customer", "caller", "client", "prospect"]);
+    const customerLines = turns.filter(t => customerSpeakers.has(t.speaker)).map(t => t.body);
+    const agentLines = turns.filter(t => !customerSpeakers.has(t.speaker)).map(t => t.body);
+    const commitmentRe =
+      /\b(i(?:'ll| will)|we(?:'ll| will)|let me)\b[^.!?\n]{0,90}\b(schedule|book|put(?:\s+you)?\s+down|set(?:\s+you)?\s+up|lock(?:\s+you)?\s+in)\b/i;
+    for (let i = agentLines.length - 1; i >= 0; i -= 1) {
+      const line = String(agentLines[i] ?? "").trim();
+      if (!line || !commitmentRe.test(line)) continue;
+      const timeText = extractExactVoiceTime(line);
+      if (!timeText) continue;
+      const dayFromLine = extractVoiceDayToken(line);
+      const dayFromCustomer = extractVoiceDayToken(customerLines.join(" "));
+      const day = dayFromLine || dayFromCustomer || normalizeVoiceDayToken(String(fallbackDay ?? ""));
+      if (!day) continue;
+      return { day, timeText, sourceLine: line };
+    }
+    return null;
+  };
+  const transcriptTurns = splitVoiceTurns(transcriptText);
+  const customerTextFromTurns = transcriptTurns
+    .filter(turn => /^(customer|caller|client|prospect)$/.test(turn.speaker))
+    .map(turn => turn.body)
+    .join(" ")
+    .trim();
+  const customerText = customerTextFromTurns || summaryText;
   const parserHistory = [{ direction: "in" as const, body: customerText }];
 
   const intentParse = await parseIntentWithLLM({
@@ -4318,20 +4424,41 @@ async function applyPostCallSummaryActions(opts: {
         .toLowerCase();
       // Voice transcripts can contain mixed speaker labels and business-hours chatter.
       // Only auto-book on calls when parser captured an explicit customer day+time.
-      const hasExplicitDay = bookingRequestedDay.length > 0;
-      const hasExplicitTime = bookingRequestedTime.length > 0;
-      const hasExactWindow = bookingRequestedWindow === "exact";
+      let resolvedBookingDay = bookingRequestedDay;
+      let resolvedBookingTime = bookingRequestedTime;
+      let resolvedBookingWindow = bookingRequestedWindow;
+      let hasExplicitDay = resolvedBookingDay.length > 0;
+      let hasExplicitTime = resolvedBookingTime.length > 0;
+      let hasExactWindow = resolvedBookingWindow === "exact";
+      if (!hasExplicitDay || !hasExplicitTime || !hasExactWindow) {
+        const fallback = inferVoiceAgentCommittedSlot(transcriptTurns, bookingRequestedDay);
+        if (fallback) {
+          resolvedBookingDay = resolvedBookingDay || fallback.day;
+          resolvedBookingTime = fallback.timeText;
+          resolvedBookingWindow = "exact";
+          hasExplicitDay = resolvedBookingDay.length > 0;
+          hasExplicitTime = resolvedBookingTime.length > 0;
+          hasExactWindow = true;
+          recordRouteOutcome("live", "voice_booking_agent_commitment_fallback", {
+            convId: conv.id,
+            leadKey: conv.leadKey,
+            fallbackDay: resolvedBookingDay,
+            fallbackTime: resolvedBookingTime,
+            sourceLine: fallback.sourceLine
+          });
+        }
+      }
       if (!hasExplicitDay || !hasExplicitTime || !hasExactWindow) {
         recordRouteOutcome("live", "voice_booking_requires_explicit_time", {
           convId: conv.id,
           leadKey: conv.leadKey,
-          bookingRequestedDay,
-          bookingRequestedTime,
-          bookingRequestedWindow
+          bookingRequestedDay: resolvedBookingDay,
+          bookingRequestedTime: resolvedBookingTime,
+          bookingRequestedWindow: resolvedBookingWindow
         });
         return;
       }
-      const bookingRequestedText = `${bookingRequestedDay} ${bookingRequestedTime}`.trim();
+      const bookingRequestedText = `${resolvedBookingDay} ${resolvedBookingTime}`.trim();
       const requested = parseRequestedDayTime(bookingRequestedText, cfg.timezone);
       if (!requested) return;
 

@@ -258,6 +258,7 @@ When changing responses:
   - global light-surface readability map so nested gray text flips to dark contrast on:
     - `bg-white`, `bg-gray-50`, `bg-gray-100`, `bg-blue-50`, `bg-blue-100`, `bg-amber-50`, `bg-red-50`
   - calendar edit modal uses `.lr-light-modal` (set on `apps/web/src/app/page.tsx`) with dedicated light-surface form/text/button rules in `apps/web/src/app/globals.css` so modal fields/buttons remain legible in dark shell mode
+
   - removed forced `button` foreground override in `apps/web/src/app/globals.css` so button labels inherit surface contrast (prevents light text on light cards like Contacts rows and Follow-up "Open conversation")
   - calendar header readability on day/week grid (salesperson names + time labels in `bg-gray-50` rows)
   - calendar day-view hourly gridlines use a stronger light-slate divider in `apps/web/src/app/page.tsx` (`linear-gradient` + `backgroundSize` row repeat) so hour rows remain visible on dark backgrounds
@@ -274,6 +275,14 @@ When changing responses:
 - Campaign left-rail queue UI now shows only `Send Queue`; `Post Queue` summary/list indicators were removed from the inbox rail to reduce clutter (`apps/web/src/app/page.tsx`)
   - Campaign Studio `Download` now uses a blob-based forced download handler in the web client so cross-origin asset URLs save the file instead of navigating/opening in-browser (`apps/web/src/app/page.tsx`)
 - Do not use broad low-level color overrides that force light text on all utility classes (example risk: overriding `.text-gray-900` globally inside `.lr-app-theme` can make inbound bubbles unreadable).
+
+## Voice Call Booking Pivot (Agent Confirmed Time)
+- Voice transcript auto-booking is still gated to avoid false bookings, but now supports a safe fallback in `services/api/src/index.ts` (`applyPostCallSummaryActions`):
+  - If customer scheduling intent is present and customer day/time was not parseable as exact, the system may use an explicit salesperson commitment line (for example, “I’ll schedule you in for 12”) to recover an exact time.
+  - Fallback only applies when there is an agent booking-commitment phrase plus resolvable day + exact time.
+  - Route audit markers:
+    - `voice_booking_agent_commitment_fallback` when fallback is used
+    - `voice_booking_requires_explicit_time` when still blocked
 
 ## Meta Social Publish Pivot (Campaign Studio)
 - Meta connect + publish remains:
