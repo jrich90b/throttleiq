@@ -314,6 +314,13 @@ When changing responses:
 - Purpose:
   - prevent false positives for short numeric model names (for example, `"72"`) from being inferred out of phone numbers or other long digit strings in ADF bodies.
 
+## Reassign Dropdown Contrast Guardrail
+- Updated `apps/web/src/app/globals.css` action-menu select styling:
+  - force high-contrast dark text on white background for dropdowns rendered inside `[data-actions-menu]`.
+  - explicitly set `option` / `optgroup` foreground/background to maintain readability in native dropdown menus.
+- Purpose:
+  - prevent low-contrast owner/department selections in the Inbox reassign popover on light modal surfaces.
+
 ## Legacy New Condition Guardrail
 - Some ADF leads can arrive with `condition: new` for older model years that are realistically only used inventory.
 - Added ingest-time normalization in `services/api/src/routes/sendgridInbound.ts`:

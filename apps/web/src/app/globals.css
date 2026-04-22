@@ -157,6 +157,29 @@ input[type="reset"],
   color: var(--lr-app-text) !important;
 }
 
+/* Action menus are intentionally light surfaces; force form controls there
+   to dark text on white for contrast/readability. */
+.lr-app-theme .lr-app-sidebar-panel [data-actions-menu] select,
+.lr-app-theme .lr-app-main-panel [data-actions-menu] select,
+.lr-campaign-theme .lr-app-sidebar-panel [data-actions-menu] select,
+.lr-campaign-theme .lr-app-main-panel [data-actions-menu] select {
+  background: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+.lr-app-theme .lr-app-sidebar-panel [data-actions-menu] select option,
+.lr-app-theme .lr-app-main-panel [data-actions-menu] select option,
+.lr-app-theme .lr-app-sidebar-panel [data-actions-menu] select optgroup,
+.lr-app-theme .lr-app-main-panel [data-actions-menu] select optgroup,
+.lr-campaign-theme .lr-app-sidebar-panel [data-actions-menu] select option,
+.lr-campaign-theme .lr-app-main-panel [data-actions-menu] select option,
+.lr-campaign-theme .lr-app-sidebar-panel [data-actions-menu] select optgroup,
+.lr-campaign-theme .lr-app-main-panel [data-actions-menu] select optgroup {
+  background: #ffffff !important;
+  color: #0f172a !important;
+}
+
 .lr-app-theme .lr-app-sidebar-panel input::placeholder,
 .lr-app-theme .lr-app-sidebar-panel textarea::placeholder,
 .lr-app-theme .lr-app-main-panel input::placeholder,
