@@ -284,6 +284,14 @@ When changing responses:
     - `voice_booking_agent_commitment_fallback` when fallback is used
     - `voice_booking_requires_explicit_time` when still blocked
 
+## Inventory Watch Grammar Guardrail
+- Added `normalizeInventoryWatchReplyGrammar(...)` in `services/api/src/index.ts` to correct dangling watch-ack phrasing like:
+  - `"I’ll text you as soon as I spot."` -> `"I’ll text you as soon as I spot one."`
+- Applied in:
+  - live Twilio reply path (`/webhooks/twilio`)
+  - regenerate reply path (`/conversations/:id/regenerate`)
+  - scheduled cadence sends (`processDueFollowUps`)
+
 ## Meta Social Publish Pivot (Campaign Studio)
 - Meta connect + publish remains:
   - connect/start: `/integrations/meta/start`

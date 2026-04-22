@@ -13621,6 +13621,17 @@ function stripAgentCallFollowupWhenCustomerWillCall(reply: string, inboundText: 
   return "Sounds good — thanks for the update. When you’re ready, call us or text us and we can line up the appraisal.";
 }
 
+function normalizeInventoryWatchReplyGrammar(reply: string): string {
+  let out = String(reply ?? "").trim();
+  if (!out) return out;
+  out = out.replace(
+    /\bas soon as (i|we)\s+spot\s*([.!?])?\s*$/i,
+    (_m, subject: string, punct: string | undefined) =>
+      `as soon as ${subject} spot one${punct && punct.trim() ? punct : "."}`
+  );
+  return out;
+}
+
 function applyServicePolicy(
   conv: any,
   reply: string,
@@ -15942,6 +15953,7 @@ async function processDueFollowUps() {
         }
       }
     }
+    message = normalizeInventoryWatchReplyGrammar(message);
 
     const emailTo = conv.lead?.email;
     const useEmail =
@@ -26001,6 +26013,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   reply = stripNonAdfThanks(reply, event.provider);
   reply = stripCallTimingQuestions(reply);
   reply = stripAgentCallFollowupWhenCustomerWillCall(reply, String(event.body ?? ""));
+  reply = normalizeInventoryWatchReplyGrammar(reply);
   if (regenNeedsLienHolderInfo) {
     reply =
       maybeEscalateLienHolderInfoRequest(conv, event, dealerProfile, {
@@ -34072,6 +34085,7 @@ if (authToken && signature) {
   reply = stripYearPreferenceIfAnyYearSpecified(reply, String(event.body ?? ""));
   reply = stripSchedulingLanguageIfNotAsked(reply, String(event.body ?? ""));
   reply = stripAgentCallFollowupWhenCustomerWillCall(reply, String(event.body ?? ""));
+  reply = normalizeInventoryWatchReplyGrammar(reply);
   const lienHolderFallback = maybeEscalateLienHolderInfoRequest(conv, event, dealerProfile, {
     createTodo: true,
     setManualHandoff: true
