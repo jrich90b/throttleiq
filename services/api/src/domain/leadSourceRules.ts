@@ -317,6 +317,16 @@ const RULES: LeadRule[] = [
     tone: "short_conversational"
   },
   {
+    name: "traffic_log_pro_walkin",
+    match: {
+      equals: ["Traffic Log Pro"],
+      prefix: ["Traffic Log Pro"]
+    },
+    bucket: "in_store",
+    cta: "contact_us",
+    tone: "short_conversational"
+  },
+  {
     name: "gla_demo_ride_dat",
     match: {
       equals: ["GLA - Demo Ride - DAT", "HDMC GLA - Road to Your Ride DAT Dealer Demo Ride"],

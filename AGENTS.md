@@ -524,6 +524,15 @@ When changing responses:
 - If first-touch ADF source is non-walk-in (for example web/marketplace source), later lead-source updates (such as Dealer Lead App ADF entries) no longer flip the conversation to walk-in.
 - Explicit `lead.walkIn=true` still takes priority when a lead is truly created as walk-in.
 
+## Traffic Log Pro Walk-In Routing Guardrail
+- Added explicit lead-source rule in `services/api/src/domain/leadSourceRules.ts`:
+  - `Traffic Log Pro` => bucket `in_store`, CTA `contact_us`.
+- In `services/api/src/routes/sendgridInbound.ts`, initial Traffic Log Pro ADF leads now hard-prioritize walk-in routing:
+  - force classification to in-store/contact for initial Traffic Log Pro ADF turns,
+  - block credit/prequal routing for that initial walk-in turn even if comments include words like `credit`/`finance`/`credit union`,
+  - walk-in responder selection now keys off initial ADF + (Traffic Log Pro source OR `in_store` bucket).
+- Effect: walk-in comments are treated as context for the walk-in response logic, not as standalone credit/prequal submissions.
+
 ## Hold Status Detail Modal
 - In conversation header, the `Hold` status badge is now clickable and opens a read-only hold-unit modal.
 - The status line text (`Hold` / `Hold until ...`) is also clickable and opens the same modal.

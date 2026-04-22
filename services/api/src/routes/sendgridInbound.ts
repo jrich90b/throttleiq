@@ -2551,6 +2551,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     });
     return res.status(200).json({ ok: true, parsed: true, duplicate: true, leadKey });
   }
+  const hasOutboundBeforeInbound = Array.isArray(conv.messages) && conv.messages.some((m: any) => m.direction === "out");
+  const isInitialAdf = event.provider === "sendgrid_adf" && !hasOutboundBeforeInbound;
+  const isTrafficLogProLeadSource = /traffic\s*log\s*pro/i.test(leadSourceLower);
+  const isInitialTrafficLogWalkIn = isInitialAdf && isTrafficLogProLeadSource;
   const adfHistory = buildEffectiveHistory(conv, 6);
   const llmDialogAct = await parseDialogActWithLLM({
     text: effectiveInquiry,
@@ -2720,6 +2724,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     inferredCta = "sell_my_bike";
     pricingInquiryIntent = false;
   }
+  if (isInitialTrafficLogWalkIn) {
+    inferredBucket = "in_store";
+    inferredCta = "contact_us";
+  }
   if (
     pricingInquiryIntent &&
     inferredBucket !== "trade_in_sell" &&
@@ -2824,15 +2832,17 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   let creditTodoCreated = false;
   const inquiryLower = inquiryText.toLowerCase();
   const isPrequalLead =
-    inferredCta === "prequalify" ||
-    (inferredBucket === "finance_prequal" && inferredCta !== "hdfs_coa") ||
-    /prequal|pre-qual/.test(leadSourceLower) ||
-    /\bprequal\b/.test(inquiryLower);
+    !isInitialTrafficLogWalkIn &&
+    (inferredCta === "prequalify" ||
+      (inferredBucket === "finance_prequal" && inferredCta !== "hdfs_coa") ||
+      /prequal|pre-qual/.test(leadSourceLower) ||
+      /\bprequal\b/.test(inquiryLower));
   const isCreditLead =
-    inferredBucket === "finance_prequal" ||
-    inferredCta === "hdfs_coa" ||
-    inferredCta === "prequalify" ||
-    /coa|credit application|apply for credit|finance application|prequal/i.test(leadSourceLower);
+    !isInitialTrafficLogWalkIn &&
+    (inferredBucket === "finance_prequal" ||
+      inferredCta === "hdfs_coa" ||
+      inferredCta === "prequalify" ||
+      /coa|credit application|apply for credit|finance application|prequal/i.test(leadSourceLower));
   if (isCreditLead) {
     if (!creditTodoCreated) {
       addTodo(conv, "approval", event.body ?? "Credit application", event.providerMessageId);
@@ -3169,9 +3179,6 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     });
   }
 
-  const isInitialAdf =
-    event.provider === "sendgrid_adf" &&
-    !(conv.messages ?? []).some((m: any) => m.direction === "out");
   const applyInitialAdfPrefix = async (text: string) => {
     if (!isInitialAdf) return text;
     const profile = await getDealerProfile();
@@ -3444,7 +3451,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const walkInCleanedComment = walkInRawComment.replace(/<br\s*\/?>/gi, " ").replace(/\s+/g, " ").trim();
   const commentLower = walkInCleanedComment.toLowerCase();
   const emailLower = (lead.email ?? "").toLowerCase();
-  const isWalkInLead = isInitialAdf && /traffic log pro/i.test(leadSourceLower);
+  const isWalkInLead =
+    isInitialAdf && (isTrafficLogProLeadSource || inferredBucket === "in_store");
   if (isWalkInLead) {
     initialMedia = undefined;
     initialMediaUrls = undefined;
