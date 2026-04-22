@@ -1643,6 +1643,54 @@ function normalizeVehicleCondition(raw?: string | null): "new" | "used" | undefi
   return undefined;
 }
 
+async function normalizeLegacyNewLeadCondition(args: {
+  condition?: "new" | "used";
+  year?: string | number | null;
+  model?: string | null;
+  make?: string | null;
+}): Promise<"new" | "used" | undefined> {
+  const incoming = args.condition;
+  if (incoming !== "new") return incoming;
+
+  const currentYear = new Date().getFullYear();
+  const maxNewAgeYears = Math.max(1, Number(process.env.NEW_CONDITION_MAX_AGE_YEARS ?? 2));
+  const yearNum = Number(String(args.year ?? "").trim());
+  const hasNumericYear = Number.isFinite(yearNum) && yearNum > 0;
+  const legacyYear = hasNumericYear && yearNum <= currentYear - maxNewAgeYears;
+  const modelRaw =
+    normalizeVehicleModel(args.model, args.make) ??
+    String(args.model ?? "").trim() ??
+    "";
+  if (!modelRaw) {
+    return legacyYear ? "used" : incoming;
+  }
+
+  try {
+    const modelMatches = await findInventoryMatches({ year: null, model: modelRaw });
+    const yearMatches = hasNumericYear
+      ? await findInventoryMatches({ year: String(yearNum), model: modelRaw })
+      : [];
+    const modelHasExplicitNew = modelMatches.some(item => normalizeVehicleCondition(item?.condition) === "new");
+    const yearHasExplicitNew = yearMatches.some(item => normalizeVehicleCondition(item?.condition) === "new");
+    const newestModelYear = modelMatches.reduce((max, item) => {
+      const n = Number(String(item?.year ?? "").trim());
+      if (!Number.isFinite(n)) return max;
+      return Math.max(max, n);
+    }, 0);
+
+    if (legacyYear && !yearHasExplicitNew) return "used";
+    if (yearMatches.length > 0 && !yearHasExplicitNew) return "used";
+    if (!modelHasExplicitNew && Number.isFinite(newestModelYear) && newestModelYear <= currentYear - 1) {
+      return "used";
+    }
+  } catch (err: any) {
+    console.warn("[sendgrid inbound] legacy new-condition normalization failed:", err?.message ?? err);
+  }
+
+  if (legacyYear) return "used";
+  return incoming;
+}
+
 function escapeRegExp(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -2367,6 +2415,17 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     conv.lead.vehicle.condition = /^u/i.test(stockId) ? "used" : "new";
   } else {
     conv.lead.vehicle.condition = "new_model_interest";
+  }
+  if (conv.lead.vehicle.condition === "new") {
+    const normalizedLeadCondition = await normalizeLegacyNewLeadCondition({
+      condition: "new",
+      year: conv.lead.vehicle.year,
+      model: conv.lead.vehicle.model,
+      make: conv.lead.vehicle.make
+    });
+    if (normalizedLeadCondition && normalizedLeadCondition !== "new") {
+      conv.lead.vehicle.condition = normalizedLeadCondition;
+    }
   }
 
   upsertContact({

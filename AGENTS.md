@@ -292,6 +292,14 @@ When changing responses:
   - regenerate reply path (`/conversations/:id/regenerate`)
   - scheduled cadence sends (`processDueFollowUps`)
 
+## Legacy New Condition Guardrail
+- Some ADF leads can arrive with `condition: new` for older model years that are realistically only used inventory.
+- Added ingest-time normalization in `services/api/src/routes/sendgridInbound.ts`:
+  - `normalizeLegacyNewLeadCondition(...)` keeps `new` only when inventory evidence supports it; otherwise downgrades to `used`.
+  - Uses model/year inventory checks (`findInventoryMatches`) plus year-age fallback (`NEW_CONDITION_MAX_AGE_YEARS`, default `2`).
+- Added watch-time safety in `services/api/src/index.ts`:
+  - `inferWatchCondition(...)` now downgrades stale `new` to `used` for older model years, preventing incorrect `new` inventory-watch filters.
+
 ## Meta Social Publish Pivot (Campaign Studio)
 - Meta connect + publish remains:
   - connect/start: `/integrations/meta/start`

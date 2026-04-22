@@ -14068,9 +14068,16 @@ function inferWatchCondition(
   year: number | undefined,
   conv: Conversation
 ): "new" | "used" | undefined {
-  const leadCondition = normalizeWatchCondition(conv.lead?.vehicle?.condition);
-  if (leadCondition) return leadCondition;
   const currentYear = new Date().getFullYear();
+  const maxNewAgeYears = Math.max(1, Number(process.env.NEW_CONDITION_MAX_AGE_YEARS ?? 2));
+  const leadCondition = normalizeWatchCondition(conv.lead?.vehicle?.condition);
+  if (leadCondition === "new") {
+    const leadYearNum = Number(String(conv.lead?.vehicle?.year ?? year ?? "").trim());
+    if (Number.isFinite(leadYearNum) && leadYearNum <= currentYear - maxNewAgeYears) return "used";
+    if (model && !isModelInRecentYears(model, currentYear, 1)) return "used";
+    return "new";
+  }
+  if (leadCondition === "used") return "used";
   if (year && year === currentYear) return "new";
   if (model && !isModelInRecentYears(model, currentYear, 1)) return "used";
   return undefined;
