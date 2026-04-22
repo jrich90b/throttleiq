@@ -308,6 +308,12 @@ When changing responses:
 - Purpose:
   - prevent `/conversations` list rendering from crashing and blanking the Inbox UI due to one bad runtime row.
 
+## Model Detection Boundary Guardrail
+- Updated model mention parsing in `services/api/src/index.ts`:
+  - `findMentionedModel(...)` / `findMentionedModels(...)` now require phrase-boundary matches in normalized text.
+- Purpose:
+  - prevent false positives for short numeric model names (for example, `"72"`) from being inferred out of phone numbers or other long digit strings in ADF bodies.
+
 ## Legacy New Condition Guardrail
 - Some ADF leads can arrive with `condition: new` for older model years that are realistically only used inventory.
 - Added ingest-time normalization in `services/api/src/routes/sendgridInbound.ts`:

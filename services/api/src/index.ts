@@ -6651,11 +6651,20 @@ function isInfoOnlyRequest(text: string): boolean {
   );
 }
 
+function normalizedModelPhrasePresent(haystackNormalized: string, modelNormalized: string): boolean {
+  const hay = String(haystackNormalized ?? "").trim();
+  const needle = String(modelNormalized ?? "").trim();
+  if (!hay || !needle) return false;
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`(?:^|\\s)${escaped}(?:\\s|$)`);
+  return re.test(hay);
+}
+
 function findMentionedModel(text: string): string | null {
   const t = normalizeModelText(text);
   const models = getHarleyModelLexicon();
   if (!t || !models.length) return null;
-  const matches = models.filter(m => t.includes(normalizeModelText(m)));
+  const matches = models.filter(m => normalizedModelPhrasePresent(t, normalizeModelText(m)));
   if (!matches.length) return null;
   matches.sort((a, b) => b.length - a.length);
   return matches[0] ?? null;
@@ -6669,7 +6678,7 @@ function findMentionedModels(text: string): string[] {
   const found: string[] = [];
   for (const model of sorted) {
     const normalized = normalizeModelText(model);
-    if (!normalized || !t.includes(normalized)) continue;
+    if (!normalized || !normalizedModelPhrasePresent(t, normalized)) continue;
     const alreadyCovered = found.some(existing =>
       normalizeModelText(existing).includes(normalized)
     );
@@ -13630,6 +13639,24 @@ function normalizeInventoryWatchReplyGrammar(reply: string): string {
       `as soon as ${subject} spot one${punct && punct.trim() ? punct : "."}`
   );
   return out;
+}
+
+function normalizeAlreadyHandledCourtesyTone(reply: string, inboundText: string): string {
+  const out = String(reply ?? "").trim();
+  if (!out) return out;
+  const inbound = String(inboundText ?? "").toLowerCase();
+  const alreadyHandledSignal =
+    /\b(no need|already|called(?:\s+and)?\s+spoke|spoke with|took care of it|all set|handled|sorted|resolved)\b/.test(
+      inbound
+    );
+  if (!alreadyHandledSignal) return out;
+  const soundsOverCasualHandledAck =
+    /\b(glad|awesome|perfect|great)\b/i.test(out) &&
+    /\b(sorted|handled|taken care of|all set)\b/i.test(out);
+  const soundsHeadsUpOnlyAck =
+    /\bthanks for the heads up\b/i.test(out) && /^\s*(awesome|great|perfect)\b/i.test(out);
+  if (!soundsOverCasualHandledAck && !soundsHeadsUpOnlyAck) return out;
+  return "Thanks for letting me know — appreciate the update.";
 }
 
 function applyServicePolicy(
@@ -26021,6 +26048,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   reply = stripCallTimingQuestions(reply);
   reply = stripAgentCallFollowupWhenCustomerWillCall(reply, String(event.body ?? ""));
   reply = normalizeInventoryWatchReplyGrammar(reply);
+  reply = normalizeAlreadyHandledCourtesyTone(reply, String(event.body ?? ""));
   if (regenNeedsLienHolderInfo) {
     reply =
       maybeEscalateLienHolderInfoRequest(conv, event, dealerProfile, {
@@ -34093,6 +34121,7 @@ if (authToken && signature) {
   reply = stripSchedulingLanguageIfNotAsked(reply, String(event.body ?? ""));
   reply = stripAgentCallFollowupWhenCustomerWillCall(reply, String(event.body ?? ""));
   reply = normalizeInventoryWatchReplyGrammar(reply);
+  reply = normalizeAlreadyHandledCourtesyTone(reply, String(event.body ?? ""));
   const lienHolderFallback = maybeEscalateLienHolderInfoRequest(conv, event, dealerProfile, {
     createTodo: true,
     setManualHandoff: true
