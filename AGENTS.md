@@ -321,6 +321,12 @@ When changing responses:
 - Purpose:
   - prevent low-contrast owner/department selections in the Inbox reassign popover on light modal surfaces.
 
+## Users Modal Contrast + Scroll Guardrail
+- Updated Settings -> Users edit/add dialog in `apps/web/src/app/page.tsx`:
+  - modal panel now uses `.lr-light-modal` so dark-shell input/select overrides do not wash out text on white surfaces.
+  - overlay now supports vertical scrolling (`overflow-y-auto`) with top padding and mobile-friendly alignment.
+  - modal container now has viewport-capped height and internal scroll (`max-h` + `overflow-y-auto`) so lower fields/actions remain reachable.
+
 ## Legacy New Condition Guardrail
 - Some ADF leads can arrive with `condition: new` for older model years that are realistically only used inventory.
 - Added ingest-time normalization in `services/api/src/routes/sendgridInbound.ts`:

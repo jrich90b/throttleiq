@@ -13382,8 +13382,8 @@ export default function Home() {
                 </button>
 
                 {editingUserId || showNewUserForm ? (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-                    <div className="bg-white w-full max-w-2xl rounded-lg shadow-lg p-4 space-y-4">
+                  <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center bg-black/30 p-3 sm:p-4 overflow-y-auto">
+                    <div className="bg-white lr-light-modal w-full max-w-2xl rounded-lg shadow-lg border p-4 space-y-4 max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
                       <div className="flex items-center justify-between">
                         <div className="text-lg font-semibold">
                           {editingUserId ? "Edit user" : "Add user"}
