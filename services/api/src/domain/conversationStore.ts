@@ -1111,6 +1111,11 @@ async function loadFromDisk() {
     conversations.clear();
     leadKeyIndex.clear();
     for (const c of list) {
+      // Defensive normalization: prevent one malformed row from taking down
+      // list rendering/API responses.
+      if (!Array.isArray((c as any)?.messages)) {
+        (c as any).messages = [];
+      }
       const leadKey = normalizeLeadKey(c?.leadKey || c?.id || "");
       if (!leadKey) continue;
       c.leadKey = leadKey;

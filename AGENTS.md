@@ -292,6 +292,22 @@ When changing responses:
   - regenerate reply path (`/conversations/:id/regenerate`)
   - scheduled cadence sends (`processDueFollowUps`)
 
+## Already-Handled Tone Guardrail
+- Added `normalizeAlreadyHandledCourtesyTone(...)` in `services/api/src/index.ts`.
+- When inbound indicates the customer already handled it (e.g., "no need", "already called/spoke"), rewrite overly casual outputs like:
+  - `"Awesome, glad that’s sorted — thanks for the heads up!"`
+  to:
+  - `"Thanks for letting me know — appreciate the update."`
+- Applied in:
+  - live Twilio reply path (`/webhooks/twilio`)
+  - regenerate reply path (`/conversations/:id/regenerate`)
+
+## Inbox Resilience Guardrail
+- Added defensive normalization in `services/api/src/domain/conversationStore.ts` load path:
+  - if a malformed conversation row is missing `messages`, coerce it to `[]` during store load.
+- Purpose:
+  - prevent `/conversations` list rendering from crashing and blanking the Inbox UI due to one bad runtime row.
+
 ## Legacy New Condition Guardrail
 - Some ADF leads can arrive with `condition: new` for older model years that are realistically only used inventory.
 - Added ingest-time normalization in `services/api/src/routes/sendgridInbound.ts`:
