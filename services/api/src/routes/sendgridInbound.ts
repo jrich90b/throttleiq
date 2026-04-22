@@ -70,7 +70,7 @@ import { getInventoryFeed, hasInventoryForModelYear, findInventoryMatches } from
 import { resolveInventoryUrlByStock } from "../domain/inventoryUrlResolver.js";
 import { listInventoryHolds, normalizeInventoryHoldKey } from "../domain/inventoryHolds.js";
 import { listInventorySolds, normalizeInventorySoldKey } from "../domain/inventorySolds.js";
-import { getAllModels } from "../domain/modelsByYear.js";
+import { getAllModels, isModelInRecentYearsForMake } from "../domain/modelsByYear.js";
 import { shouldRouteRoom58PriceHandoff } from "../domain/adfPolicy.js";
 import { isResponseControlParserAccepted } from "../domain/transitionSafety.js";
 import { listUsers } from "../domain/userStore.js";
@@ -1670,17 +1670,33 @@ async function normalizeLegacyNewLeadCondition(args: {
     const yearMatches = hasNumericYear
       ? await findInventoryMatches({ year: String(yearNum), model: modelRaw })
       : [];
+    const hasModelInventoryEvidence = modelMatches.length > 0;
     const modelHasExplicitNew = modelMatches.some(item => normalizeVehicleCondition(item?.condition) === "new");
     const yearHasExplicitNew = yearMatches.some(item => normalizeVehicleCondition(item?.condition) === "new");
+    const lineupRecentForMake = isModelInRecentYearsForMake(modelRaw, args.make ?? null, currentYear, 1);
     const newestModelYear = modelMatches.reduce((max, item) => {
       const n = Number(String(item?.year ?? "").trim());
       if (!Number.isFinite(n)) return max;
       return Math.max(max, n);
     }, 0);
 
+    if (
+      !hasModelInventoryEvidence &&
+      lineupRecentForMake === true &&
+      (!hasNumericYear || yearNum >= currentYear - 1)
+    ) {
+      return incoming;
+    }
     if (legacyYear && !yearHasExplicitNew) return "used";
     if (yearMatches.length > 0 && !yearHasExplicitNew) return "used";
-    if (!modelHasExplicitNew && Number.isFinite(newestModelYear) && newestModelYear <= currentYear - 1) {
+    // Do not downgrade to "used" just because we have no current stock for the model.
+    // Only apply model-year inventory evidence when the model has actual feed matches.
+    if (
+      hasModelInventoryEvidence &&
+      !modelHasExplicitNew &&
+      Number.isFinite(newestModelYear) &&
+      newestModelYear <= currentYear - 1
+    ) {
       return "used";
     }
   } catch (err: any) {
@@ -2416,7 +2432,17 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   } else {
     conv.lead.vehicle.condition = "new_model_interest";
   }
-  if (conv.lead.vehicle.condition === "new") {
+  const nonSalesPromotionLead =
+    /ride challenge|challenge signup|miles challenge/i.test(leadSourceLower) ||
+    /ride challenge|challenge signup|record your miles/i.test(journeyText);
+  const shouldNormalizeLegacyNewCondition =
+    conv.lead.vehicle.condition === "new" &&
+    !nonSalesPromotionLead &&
+    (isStrictSalesTradeBucket(rule.bucket) ||
+      !!String(conv.lead.vehicle.stockId ?? "").trim() ||
+      !!String(conv.lead.vehicle.vin ?? "").trim() ||
+      !!String(conv.lead.vehicle.model ?? "").trim());
+  if (shouldNormalizeLegacyNewCondition) {
     const normalizedLeadCondition = await normalizeLegacyNewLeadCondition({
       condition: "new",
       year: conv.lead.vehicle.year,

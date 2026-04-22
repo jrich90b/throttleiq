@@ -297,6 +297,9 @@ When changing responses:
 - Added ingest-time normalization in `services/api/src/routes/sendgridInbound.ts`:
   - `normalizeLegacyNewLeadCondition(...)` keeps `new` only when inventory evidence supports it; otherwise downgrades to `used`.
   - Uses model/year inventory checks (`findInventoryMatches`) plus year-age fallback (`NEW_CONDITION_MAX_AGE_YEARS`, default `2`).
+  - Out-of-stock guardrail: if the dealer currently has zero matching inventory rows for the model, do not auto-downgrade `new -> used` from absence alone.
+  - Manufacturer lineup check (Harley first): when inventory has no matching rows, use make-aware model-year lineup data to keep current/near-current models as `new` with higher confidence.
+  - Non-sales guardrail: skip legacy `new -> used` normalization for Ride Challenge/promo-style non-sales leads so generic `new/null` fields do not affect those journeys.
 - Added watch-time safety in `services/api/src/index.ts`:
   - `inferWatchCondition(...)` now downgrades stale `new` to `used` for older model years, preventing incorrect `new` inventory-watch filters.
 
