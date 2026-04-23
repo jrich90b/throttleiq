@@ -26338,6 +26338,26 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     return `${prefix} ${body}`.trim();
   };
+  const enforceAdfInquiryPriorityForRegen = (text: string): string => {
+    const body = String(text ?? "").trim();
+    if (!body || event.provider !== "sendgrid_adf") return body;
+    const inboundLower = String(event.body ?? "").toLowerCase();
+    const hasSpecificInquiry =
+      regenPricingIntentHint ||
+      regenAvailabilityPrimaryIntentHint ||
+      regenSchedulingIntentHint ||
+      /\b(price|pricing|payment|payments|monthly|apr|finance|financing|credit|otd|out the door|down payment|term|still available|availability|in stock|schedule|appointment|test ride|trade|service)\b/.test(
+        inboundLower
+      );
+    if (!hasSpecificInquiry) return body;
+    let out = body;
+    out = out.replace(
+      /\s*i saw you wanted to learn more about[^.]*\.\s*(are you interested in checking it out\?|that unit is currently on hold\.[^.]*|that unit is no longer available[^.]*)?/gi,
+      " "
+    );
+    out = out.replace(/\s{2,}/g, " ").replace(/\s+([,.!?])/g, "$1").trim();
+    return out;
+  };
   const lastOutboundTextFinal = getLastNonVoiceOutbound(conv)?.body ?? "";
   let reply = ensureUniqueDraft(result.draft, conv, dealerName, agentName);
   reply = applySlotOfferPolicy(conv, reply, lastOutboundTextFinal);
@@ -26388,6 +26408,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       reply = enforceInitialAdfPrefixForRegen(reply);
     }
   }
+  reply = enforceAdfInquiryPriorityForRegen(reply);
   if (isSlotOfferMessage(reply)) {
     const appointmentType = String(result.requestedAppointmentType ?? "inventory_visit");
     if (appointmentType === "test_ride") {

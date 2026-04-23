@@ -18,6 +18,11 @@ Required order:
 5) Keep regex only as fallback when parser is disabled/low-confidence.
 6) Add eval fixtures for new state phrases before deployment.
 
+## ADF Inquiry Priority
+- For initial ADF response drafting, specific customer inquiry intent must win over generic “learn more” phrasing.
+- Generic availability line (`I saw you wanted to learn more about ...`) should be used only when inquiry intent is non-specific.
+- Regenerate route parity: apply the same rule in `/conversations/:id/regenerate` for `sendgrid_adf` turns.
+
 Current parser-first disposition states:
 - `customer_sell_on_own`
 - `customer_keep_current_bike`
