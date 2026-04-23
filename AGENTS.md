@@ -23,6 +23,12 @@ Required order:
 - Generic availability line (`I saw you wanted to learn more about ...`) should be used only when inquiry intent is non-specific.
 - Regenerate route parity: apply the same rule in `/conversations/:id/regenerate` for `sendgrid_adf` turns.
 
+## Walk-In Inquiry Context
+- Traffic Log Pro / walk-in ADF inquiry comments are salesperson-authored context notes and should be treated as operational context, not direct customer chat turns.
+- Explicit watch phrasing in walk-in comments (including “watching for ...”) should create/refresh inventory watch state even if matching inventory currently exists.
+- When a watch clause is present alongside other context, extract watch attributes (year range/condition/color/trim) from the watch clause first to avoid contamination from unrelated in-stock details in the same note.
+- Build the walk-in acknowledgement message after watch-state overrides are applied so watch intent wording always wins over in-stock phrasing when both are present.
+
 Current parser-first disposition states:
 - `customer_sell_on_own`
 - `customer_keep_current_bike`

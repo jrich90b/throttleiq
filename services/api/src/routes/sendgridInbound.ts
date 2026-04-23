@@ -1250,9 +1250,19 @@ function extractWatchDirectiveSegment(text?: string | null): string {
   const source = String(text ?? "");
   if (!source) return "";
   const m = source.match(
-    /\b(?:watch for|keep an eye out for|please watch for|open to watch for|watch)\b([\s\S]*?)(?=(?:\b(?:step\s*\d+|email opt-?in|view lead)\b|[.;]|$))/i
+    /\b(?:watch(?:ing)? for|keep an eye out for|please watch for|open to watch for|watch)\b([\s\S]*?)(?=(?:\b(?:step\s*\d+|email opt-?in|view lead)\b|[.;]|$))/i
   );
   return String(m?.[1] ?? "").replace(/\s+/g, " ").trim();
+}
+
+function hasWatchIntentPhrase(text?: string | null): boolean {
+  const source = String(text ?? "").toLowerCase();
+  if (!source.trim()) return false;
+  return (
+    /\b(keep an eye out(?: for)?|watch(?:ing)? for|please watch|open to watch for|notify me|let me know when|text me when|if you get one|when you get one|as soon as one comes in)\b/i.test(
+      source
+    ) || /\bif one comes in\b/i.test(source)
+  );
 }
 
 function extractWatchDirectiveModelHint(text?: string | null): string | undefined {
@@ -2084,9 +2094,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         process.env.LLM_SEMANTIC_SLOT_PARSER_ENABLED === "1" &&
         !!process.env.OPENAI_API_KEY;
       const watchParserHint =
-        /\b(let me know|keep me posted|keep an eye out|watch for|notify me|text me when|if you get one|when you get one|as soon as one comes in)\b/i.test(
+        /\b(let me know|keep me posted|keep an eye out|watch(?:ing)? for|notify me|text me when|if you get one|when you get one|as soon as one comes in)\b/i.test(
           bodyTextLower
         ) ||
+        hasWatchIntentPhrase(bodyTextLower) ||
         !!conv.inventoryWatchPending ||
         !!conv.inventoryWatch;
       if (watchParserEligible && watchParserHint) {
@@ -2112,9 +2123,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           const watchAction = semanticAccepted ? semantic.watchAction : "none";
           const watchIntent =
             watchAction === "set_watch" ||
-            /\b(keep an eye out|watch for|notify me|let me know when|text me when|if you get one|when you get one|as soon as one comes in)\b/i.test(
-              bodyTextLower
-            );
+            hasWatchIntentPhrase(bodyTextLower);
           if (watchIntent) {
             const inventoryParserEligible =
               process.env.LLM_ENABLED === "1" &&
@@ -3517,10 +3526,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       llmIntent.intent === "availability" &&
       llmIntent.explicitRequest === true &&
       Number(llmIntent.confidence ?? 0) >= intentConfidenceMin;
+    const watchDirectiveSegment = extractWatchDirectiveSegment(walkInCleanedComment);
     const hasWatchIntentFromText =
-      /\b(keep an eye out|watch for|please watch|notify me|let me know when|text me when)\b/.test(
-        commentLower
-      ) || /\bif one comes in\b/.test(commentLower);
+      hasWatchIntentPhrase(commentLower) || !!watchDirectiveSegment;
     const hasWatchIntent = hasWatchIntentFromParser || hasWatchIntentFromText;
     const pricingFollowupIntentFromParser = pricingInquiryIntentFromParser;
     const pricingFollowupIntentFromText =
@@ -3534,7 +3542,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const lowSignalWalkInUpdate =
       !walkInCleanedComment ||
       /^(email updates?|email opt-?in|view lead|step\s*\d+|n\/?a|na)$/i.test(walkInCleanedComment.trim());
-    const requestedConditionHint = inferWalkInRequestedCondition(walkInCleanedComment);
+    const watchSourceText =
+      hasWatchIntent && watchDirectiveSegment
+        ? watchDirectiveSegment
+        : lead.comment ?? lead.inquiry ?? "";
+    const requestedConditionHint = inferWalkInRequestedCondition(
+      hasWatchIntent && watchDirectiveSegment ? watchDirectiveSegment : walkInCleanedComment
+    );
     const wantsUsed = requestedConditionHint === "used";
     const wantsNew = requestedConditionHint === "new";
     const walkInReminderRequest = extractWalkInReminderRequest(walkInCleanedComment);
@@ -3547,27 +3561,29 @@ export async function handleSendgridInbound(req: Request, res: Response) {
             max: Math.max(llmInventoryEntities.yearMin, llmInventoryEntities.yearMax)
           }
         : null;
-    const yearRange = parserYearRange ?? extractYearRangeFromText(lead.comment ?? lead.inquiry ?? "");
+    const regexWatchYearRange = extractYearRangeFromText(watchSourceText);
+    const yearRange = regexWatchYearRange ?? parserYearRange;
     const singleYear =
       !yearRange
-        ? (inventoryEntityAccepted ? (llmInventoryEntities?.year ?? undefined) : undefined) ??
-          extractSingleYearFromText(lead.comment ?? lead.inquiry ?? "")
+        ? extractSingleYearFromText(watchSourceText) ??
+          (inventoryEntityAccepted ? (llmInventoryEntities?.year ?? undefined) : undefined)
         : undefined;
-    const regexPriceRange = extractPriceRangeFromText(lead.comment ?? lead.inquiry ?? "");
+    const regexPriceRange = extractPriceRangeFromText(watchSourceText);
     const priceRange =
-      inventoryEntityAccepted &&
+      regexPriceRange ??
+      (inventoryEntityAccepted &&
       (llmInventoryEntities?.minPrice || llmInventoryEntities?.maxPrice)
         ? {
             minPrice: llmInventoryEntities?.minPrice ?? undefined,
             maxPrice: llmInventoryEntities?.maxPrice ?? undefined
           }
-        : regexPriceRange;
+        : null);
     const desiredColor =
-      (inventoryEntityAccepted ? llmInventoryEntities?.color ?? undefined : undefined) ??
-      extractColorFromText(lead.comment ?? lead.inquiry ?? "");
+      extractColorFromText(watchSourceText) ??
+      (inventoryEntityAccepted ? llmInventoryEntities?.color ?? undefined : undefined);
     const desiredTrim =
-      (inventoryEntityAccepted ? llmInventoryEntities?.trim ?? undefined : undefined) ??
-      extractTrimFromText(lead.comment ?? lead.inquiry ?? "");
+      extractTrimFromText(watchSourceText) ??
+      (inventoryEntityAccepted ? llmInventoryEntities?.trim ?? undefined : undefined);
     const rangeLabel = yearRange ? `${yearRange.min}-${yearRange.max} ` : "";
     let hasUsedMatch = false;
     let hasNewMatch = false;
@@ -3875,12 +3891,6 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       }
       return "";
     };
-    const addendum = buildWalkInAddendum();
-    const ack =
-      `Hi ${firstName} — this is ${salespersonName} at ${dealerName}. ` +
-      "Thanks for stopping in, it was nice chatting with you. " +
-      tail +
-      (addendum ? ` ${addendum}` : "");
     const suppressWalkInAutoAck =
       lowSignalWalkInUpdate ||
       hasCompletedTestRideSignal ||
@@ -3952,6 +3962,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         tail = "I’ll keep an eye out and text you as soon as a good match comes in.";
       }
     }
+
+    const addendum = buildWalkInAddendum();
+    const ack =
+      `Hi ${firstName} — this is ${salespersonName} at ${dealerName}. ` +
+      "Thanks for stopping in, it was nice chatting with you. " +
+      tail +
+      (addendum ? ` ${addendum}` : "");
 
     if (!suppressWalkInAutoAck) {
       queueInitialDraftForPreferredContact(ack, initialMediaUrls);

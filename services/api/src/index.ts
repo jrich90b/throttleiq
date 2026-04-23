@@ -11391,7 +11391,7 @@ async function deriveContextNoteWatches(
   const semanticYear = Number(semanticSlots?.watch?.year ?? "");
 
   const watchSegments = sentences.filter(sentence =>
-    /\b(watch for|keep an eye out|let me know (?:if|when)|notify|text me (?:if|when)|open to watch for|looking for)\b/i.test(
+    /\b(watch(?:ing)? for|keep an eye out|let me know (?:if|when)|notify|text me (?:if|when)|open to watch for|looking for)\b/i.test(
       sentence
     )
   );
