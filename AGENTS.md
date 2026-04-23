@@ -458,6 +458,14 @@ When changing responses:
   - `SMS draft` directly under SMS generated images.
 - This keeps generated copy visible in the same frame as each image instead of only in publish dialogs or separate draft sections (`apps/web/src/app/page.tsx`).
 
+## Campaign Copy Readability Fix
+- Campaign generated-image copy blocks (Auto caption / SMS draft) now use dedicated high-contrast styling classes to avoid dark-theme utility overrides washing out text.
+- Added in `apps/web/src/app/page.tsx`:
+  - `.lr-campaign-copy-block`
+  - `.lr-campaign-copy-label`
+  - `.lr-campaign-copy-text`
+- Styled in `apps/web/src/app/globals.css` with forced dark text on a light card background for reliable readability in Campaign Studio.
+
 ## Cadence Anti-Repetition Guard
 - Follow-up cadence no-repeat logic in `services/api/src/index.ts` now blocks **near-duplicate** drafts, not only exact body matches.
 - `selectNonRepeatingCadenceMessage(...)` now checks semantic overlap against recent outbound cadence messages (token overlap + repeated long-sentence detection) before accepting a candidate.

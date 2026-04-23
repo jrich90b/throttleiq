@@ -11415,17 +11415,17 @@ export default function Home() {
                             />
                           </a>
                           {socialCaptionPreview ? (
-                            <div className="px-3 py-2 border-t bg-gray-50">
-                              <div className="text-[11px] font-semibold text-gray-700">Auto caption</div>
-                              <div className="mt-1 text-xs text-gray-800 whitespace-pre-wrap">
+                            <div className="lr-campaign-copy-block">
+                              <div className="lr-campaign-copy-label">Auto caption</div>
+                              <div className="lr-campaign-copy-text">
                                 {socialCaptionPreview}
                               </div>
                             </div>
                           ) : null}
                           {smsDraftPreview ? (
-                            <div className="px-3 py-2 border-t bg-gray-50">
-                              <div className="text-[11px] font-semibold text-gray-700">SMS draft</div>
-                              <div className="mt-1 text-xs text-gray-800 whitespace-pre-wrap">
+                            <div className="lr-campaign-copy-block">
+                              <div className="lr-campaign-copy-label">SMS draft</div>
+                              <div className="lr-campaign-copy-text">
                                 {smsDraftPreview}
                               </div>
                             </div>

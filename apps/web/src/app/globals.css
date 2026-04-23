@@ -761,6 +761,29 @@ input[type="reset"],
   color: #0f172a !important;
 }
 
+.lr-campaign-theme .lr-campaign-content .lr-campaign-copy-block {
+  border-top: 1px solid rgba(148, 163, 184, 0.55) !important;
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.98), rgba(241, 245, 249, 0.98)) !important;
+  padding: 0.58rem 0.75rem;
+  color: #0f172a !important;
+}
+
+.lr-campaign-theme .lr-campaign-content .lr-campaign-copy-label {
+  font-size: 0.69rem;
+  font-weight: 700;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+  color: #0f172a !important;
+}
+
+.lr-campaign-theme .lr-campaign-content .lr-campaign-copy-text {
+  margin-top: 0.26rem;
+  font-size: 0.79rem;
+  line-height: 1.38;
+  white-space: pre-wrap;
+  color: #0f172a !important;
+}
+
 .lr-campaign-theme .lr-campaign-target-pill {
   border-color: rgba(255, 255, 255, 0.34) !important;
   background: rgba(255, 255, 255, 0.04);
