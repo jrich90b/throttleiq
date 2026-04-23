@@ -618,15 +618,23 @@ function extractPreferredTermMonths(text: string): number | null {
 
 function parseDownPayment(text: string): { amount: number; assumedThousands: boolean } | null {
   const t = text.toLowerCase();
+  const normalized = t
+    // Accept compact punctuation forms like "1000'down" or "1000-down".
+    .replace(
+      /(\d)\s*['’`/_-]+\s*(?=(?:down payment|down|deposit|dp|put down|cash down)\b)/g,
+      "$1 "
+    )
+    .replace(/\s+/g, " ")
+    .trim();
   if (hasZeroDownSignal(t)) return { amount: 0, assumedThousands: false };
-  const match = t.match(
+  const match = normalized.match(
     /(?:\$\s*)?(\d{1,3}(?:,\d{3})+|\d+)\s*(k|grand)?\s*(?:down|down payment|deposit|dp|put down)/
   );
   if (!match) return null;
   const rawNum = Number(String(match[1]).replace(/,/g, ""));
   if (!Number.isFinite(rawNum) || rawNum <= 0) return null;
   const hasK = !!match[2];
-  const hasDollar = t.includes("$");
+  const hasDollar = normalized.includes("$");
   let amount = rawNum;
   let assumedThousands = false;
   if (hasK) {

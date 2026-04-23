@@ -12471,13 +12471,21 @@ function hasZeroDownSignal(text: string): boolean {
 
 function parseDownPaymentForBudget(text: string): { amount: number; assumedThousands: boolean } | null {
   const t = String(text ?? "").toLowerCase();
+  const normalized = t
+    // Accept compact punctuation forms like "1000'down" or "1000-down".
+    .replace(
+      /(\d)\s*['’`/_-]+\s*(?=(?:down payment|down|deposit|dp|put down|cash down)\b)/g,
+      "$1 "
+    )
+    .replace(/\s+/g, " ")
+    .trim();
   if (hasZeroDownSignal(t)) {
     return { amount: 0, assumedThousands: false };
   }
-  const numberFirstMatch = t.match(
+  const numberFirstMatch = normalized.match(
     /(?:\$\s*)?(\d{1,3}(?:,\d{3})+|\d+)\s*(k|grand)?(?:\s*(?:to|toward|towards|for|as)\s*)?(?:\s*(?:a|an|the))?\s*(?:down payment|down|deposit|dp|put down|cash down)\b/
   );
-  const intentFirstMatch = t.match(
+  const intentFirstMatch = normalized.match(
     /(?:down payment|put down|cash down|deposit|dp)(?:\s*(?:of|for|around|about|at|is|would be))?\s*(?:\$\s*)?(\d{1,3}(?:,\d{3})+|\d+)\s*(k|grand)?\b/
   );
   const match = numberFirstMatch ?? intentFirstMatch;
@@ -12485,7 +12493,7 @@ function parseDownPaymentForBudget(text: string): { amount: number; assumedThous
   const rawNum = Number(String(match[1]).replace(/,/g, ""));
   if (!Number.isFinite(rawNum) || rawNum <= 0) return null;
   const hasK = !!match[2];
-  const hasDollar = t.includes("$");
+  const hasDollar = normalized.includes("$");
   let amount = rawNum;
   let assumedThousands = false;
   if (hasK) {

@@ -628,7 +628,16 @@ When changing responses:
   - from `[1,2,4,6,8,10,12,14,18,21,27,35,45]`
   - to `[1,2,3,5,7,10,15,21,30,45,60,90,120]`
 - Timing accuracy fix (important):
-  - corrected date math in `computeFollowUpDueAt(...)` and `computePostSaleDueAt(...)` so `day + N` cadence sends land on the intended local calendar day in the configured timezone.
+- corrected date math in `computeFollowUpDueAt(...)` and `computePostSaleDueAt(...)` so `day + N` cadence sends land on the intended local calendar day in the configured timezone.
+
+## Finance Down-Payment Parse Guardrail
+- Down-payment extraction now normalizes compact punctuation formats before parsing (for example `1000'down`, `1000-down`).
+- Applied in both:
+  - shared payment budget parser (`services/api/src/index.ts` -> `parseDownPaymentForBudget(...)`)
+  - orchestrator payment parser (`services/api/src/domain/orchestrator.ts` -> `parseDownPayment(...)`)
+- Purpose:
+  - when the customer already gave down payment, do not ask for down again;
+  - keep live and regenerate payment follow-up behavior aligned.
 
 ## Humanized Cadence Copy Pass
 - Follow-up wording in `services/api/src/index.ts` was further adjusted to sound less scripted and less pushy while keeping deterministic cadence behavior unchanged.
