@@ -28919,10 +28919,40 @@ if (authToken && signature) {
     );
   const inboundText = String(event.body ?? "").trim();
   const inboundLower = inboundText.toLowerCase();
+  const recentHistory = buildHistory(conv, 6);
+  const routingDecisionParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_ROUTING_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  const routingDecisionParsePrecheck = routingDecisionParserEligible
+    ? await safeLlmParse("routing_decision_parser_precheck", () =>
+        parseRoutingDecisionWithLLM({
+          text: event.body,
+          history: recentHistory,
+          lead: conv.lead,
+          followUp: conv.followUp ?? null,
+          dialogState: getDialogState(conv),
+          classification: conv.classification ?? null
+        })
+      )
+    : null;
+  const routingParserDecisionPrecheck = resolveRoutingParserDecision({
+    parserIntent: routingDecisionParsePrecheck?.primaryIntent ?? null,
+    parserFallbackAction: routingDecisionParsePrecheck?.fallbackAction ?? null,
+    parserClarifyPrompt: routingDecisionParsePrecheck?.clarifyPrompt ?? null,
+    parserConfidence: routingDecisionParsePrecheck?.confidence ?? null,
+    parserConfidenceMin: Number(process.env.LLM_ROUTING_PARSER_CONFIDENCE_MIN ?? 0.72)
+  });
+  const routingParserIntentOverridePrecheck =
+    routingParserDecisionPrecheck.intentOverride && routingParserDecisionPrecheck.intentOverride !== "general"
+      ? routingParserDecisionPrecheck.intentOverride
+      : null;
+  const parserPrecheckBlocksDeterministicShortcut = !!routingParserIntentOverridePrecheck;
   const lastOutboundAskedTradeQualifier =
     /\bdo you have a trade\b/i.test(lastOutboundText) ||
     /\bany trade\b/i.test(lastOutboundText);
-  if (event.provider === "twilio" && lastOutboundAskedTradeQualifier) {
+  if (event.provider === "twilio" && lastOutboundAskedTradeQualifier && !parserPrecheckBlocksDeterministicShortcut) {
     const tradeYear = extractYearSingle(inboundLower);
     const tradeModel = findMentionedModel(inboundLower);
     const tradeAffirmed = isAffirmative(inboundText) || /\b(i have|i got|i've got|ive got)\b/i.test(inboundText);
@@ -28981,7 +29011,7 @@ if (authToken && signature) {
       return res.status(200).type("text/xml").send(twiml);
     }
   }
-  if (event.provider === "twilio") {
+  if (event.provider === "twilio" && !parserPrecheckBlocksDeterministicShortcut) {
     const activeBike =
       formatModelLabel(
         conv.lead?.vehicle?.year ? String(conv.lead?.vehicle?.year) : null,
@@ -29415,7 +29445,6 @@ if (authToken && signature) {
     }
   }
   const shortAck = isShortAckText(inboundText) || emojiOnly;
-  const recentHistory = buildHistory(conv, 6);
   const routeTimingEnabled = process.env.DEBUG_ROUTE_TIMING === "1";
   const liveTurnId =
     String(event.providerMessageId ?? "").trim() ||
@@ -29530,23 +29559,7 @@ if (authToken && signature) {
         })
       )
     : Promise.resolve(null);
-  const routingDecisionParserEligible =
-    event.provider === "twilio" &&
-    process.env.LLM_ENABLED === "1" &&
-    process.env.LLM_ROUTING_PARSER_ENABLED !== "0" &&
-    !!process.env.OPENAI_API_KEY;
-  const routingDecisionParsePromise = routingDecisionParserEligible
-    ? safeLlmParse("routing_decision_parser", () =>
-        parseRoutingDecisionWithLLM({
-          text: event.body,
-          history: recentHistory,
-          lead: conv.lead,
-          followUp: conv.followUp ?? null,
-          dialogState: getDialogState(conv),
-          classification: conv.classification ?? null
-        })
-      )
-    : Promise.resolve(null);
+  const routingDecisionParsePromise = Promise.resolve(routingDecisionParsePrecheck);
   const affectParserEligible =
     event.provider === "twilio" &&
     process.env.LLM_ENABLED === "1" &&

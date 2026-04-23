@@ -22,6 +22,12 @@ Required order:
 - For initial ADF response drafting, specific customer inquiry intent must win over generic “learn more” phrasing.
 - Generic availability line (`I saw you wanted to learn more about ...`) should be used only when inquiry intent is non-specific.
 - Regenerate route parity: apply the same rule in `/conversations/:id/regenerate` for `sendgrid_adf` turns.
+- ADF classification is parser-first: when routing parser intent is accepted, map intent before legacy bucket/CTA heuristics:
+  - `availability` -> `inventory_interest/check_availability`
+  - `pricing_payments` -> `inventory_interest/request_a_quote`
+  - `scheduling` -> `test_ride/schedule_test_ride`
+  - `callback` -> `general_inquiry/contact_us`
+- Keep deterministic source overrides (for example forced walk-in/test-ride/trade source rules) after parser mapping.
 
 ## Walk-In Inquiry Context
 - Traffic Log Pro / walk-in ADF inquiry comments are salesperson-authored context notes and should be treated as operational context, not direct customer chat turns.
@@ -66,6 +72,10 @@ These must remain deterministic to avoid brittle or risky LLM behavior:
 4) **Call‑only preference**
    - If “call only”, block SMS/email auto‑drafts & follow‑up cadence.
    - `contactPreference` = `call_only`
+
+5) **Parser-gated deterministic shortcuts**
+   - Twilio deterministic trade-qualifier and media-affirmative shortcuts must not fire when routing parser has an accepted explicit intent override (`pricing_payments`, `scheduling`, `callback`, `availability`).
+   - This prevents deterministic shortcut replies from overriding parser-routed intent handling.
 
 ## LLM (Guard‑railed)
 Used for inbound replies where nuance is required:

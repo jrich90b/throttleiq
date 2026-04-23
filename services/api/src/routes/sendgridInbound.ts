@@ -42,13 +42,14 @@ import {
 import type { InventoryWatch } from "../domain/conversationStore.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { buildEffectiveHistory } from "../domain/effectiveContext.js";
-import { resolveChannel, resolveLeadRule } from "../domain/leadSourceRules.js";
+import { resolveChannel, resolveLeadRule, type LeadBucket, type LeadCTA } from "../domain/leadSourceRules.js";
 import {
   parseDealershipFaqTopicWithLLM,
   parseDialogActWithLLM,
   parseInventoryEntitiesWithLLM,
   parseIntentWithLLM,
   parseSemanticSlotsWithLLM,
+  parseRoutingDecisionWithLLM,
   parseResponseControlWithLLM,
   parseBookingIntentWithLLM,
   parseJourneyIntentWithLLM,
@@ -73,6 +74,7 @@ import { listInventorySolds, normalizeInventorySoldKey } from "../domain/invento
 import { getAllModels, isModelInRecentYearsForMake } from "../domain/modelsByYear.js";
 import { shouldRouteRoom58PriceHandoff } from "../domain/adfPolicy.js";
 import { isResponseControlParserAccepted } from "../domain/transitionSafety.js";
+import { resolveRoutingParserDecision } from "../domain/routerV2.js";
 import { listUsers } from "../domain/userStore.js";
 
 function base64UrlDecode(input: string): string | null {
@@ -2733,6 +2735,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     llmJourneyIntent,
     llmInventoryEntities,
     llmResponseControl,
+    llmRoutingDecision,
     llmFaqTopic,
     llmWalkInOutcome
   ] = await Promise.all([
@@ -2771,6 +2774,19 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         lead: conv.lead
       })
     ),
+    safeParser("routing_decision", () =>
+      parseRoutingDecisionWithLLM({
+        text: effectiveInquiry,
+        history: adfHistory,
+        lead: conv.lead,
+        followUp: conv.followUp ?? null,
+        dialogState: conv.dialogState?.name ?? null,
+        classification: {
+          bucket: conv.classification?.bucket ?? null,
+          cta: conv.classification?.cta ?? null
+        }
+      })
+    ),
     safeParser("faq_topic", () =>
       parseDealershipFaqTopicWithLLM({
         text: effectiveInquiry,
@@ -2801,25 +2817,43 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     journeyIntentAccepted && llmJourneyIntent?.journeyIntent === "service_support";
   const marketingEventIntentFromParser =
     journeyIntentAccepted && llmJourneyIntent?.journeyIntent === "marketing_event";
+  const routingParserDecision = resolveRoutingParserDecision({
+    parserIntent: llmRoutingDecision?.primaryIntent ?? null,
+    parserFallbackAction: llmRoutingDecision?.fallbackAction ?? null,
+    parserClarifyPrompt: llmRoutingDecision?.clarifyPrompt ?? null,
+    parserConfidence: llmRoutingDecision?.confidence ?? null,
+    parserConfidenceMin: Number(process.env.LLM_ROUTING_PARSER_CONFIDENCE_MIN ?? 0.72)
+  });
+  const routingParserIntentOverride =
+    routingParserDecision.intentOverride && routingParserDecision.intentOverride !== "general"
+      ? routingParserDecision.intentOverride
+      : null;
+  const parserPricingIntent = routingParserIntentOverride === "pricing_payments";
+  const parserSchedulingIntent = routingParserIntentOverride === "scheduling";
+  const parserCallbackIntent = routingParserIntentOverride === "callback";
+  const parserAvailabilityIntent = routingParserIntentOverride === "availability";
   const pricingInquiryIntentFromParser =
     !!llmDialogAct &&
     llmDialogAct.topic === "pricing" &&
     llmDialogAct.explicitRequest === true &&
     Number(llmDialogAct.confidence ?? 0) >= dialogActConfidenceMin;
-  let pricingInquiryIntent = pricingInquiryIntentFromParser || isPricingPaymentInquiry(inquiryText);
+  let pricingInquiryIntent =
+    pricingInquiryIntentFromParser || parserPricingIntent || isPricingPaymentInquiry(inquiryText);
   const inventoryEntityConfidence =
     typeof llmInventoryEntities?.confidence === "number" ? llmInventoryEntities.confidence : 0;
   const inventoryEntityConfidenceMin = Number(process.env.LLM_INVENTORY_ENTITY_CONFIDENCE_MIN ?? 0.68);
   const inventoryEntityAccepted = !!llmInventoryEntities && inventoryEntityConfidence >= inventoryEntityConfidenceMin;
   const availabilityIntentFromParser =
+    parserAvailabilityIntent ||
     !!llmIntent &&
     llmIntent.intent === "availability" &&
     llmIntent.explicitRequest === true &&
     Number(llmIntent.confidence ?? 0) >= intentConfidenceMin;
   const responseControlAccepted = isResponseControlParserAccepted(llmResponseControl);
   const scheduleIntentFromParser =
-    responseControlAccepted && llmResponseControl?.intent === "schedule_request";
+    parserSchedulingIntent || (responseControlAccepted && llmResponseControl?.intent === "schedule_request");
   const callbackIntentFromParser =
+    parserCallbackIntent ||
     !!llmIntent &&
     llmIntent.intent === "callback" &&
     llmIntent.explicitRequest === true &&
@@ -2841,11 +2875,24 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     /registration\s+or\s+vin\s+number/i.test(lead.inquiry ?? "");
   const hasStockIntent =
     !!lead.stockId || !!lead.vin || inquiryText.includes("available") || availabilityIntentFromParser;
+  const parserBucketCta: { bucket: LeadBucket; cta: LeadCTA } | null =
+    routingParserIntentOverride === "availability"
+      ? { bucket: "inventory_interest", cta: "check_availability" }
+      : routingParserIntentOverride === "pricing_payments"
+        ? { bucket: "inventory_interest", cta: "request_a_quote" }
+        : routingParserIntentOverride === "scheduling"
+          ? { bucket: "test_ride", cta: "schedule_test_ride" }
+          : routingParserIntentOverride === "callback"
+            ? { bucket: "general_inquiry", cta: "contact_us" }
+            : null;
 
   let inferredBucket = rule.bucket;
   let inferredCta = rule.cta;
   if (!leadSource || rule.ruleName === "default") {
-    if (serviceSupportIntentFromParser) {
+    if (parserBucketCta) {
+      inferredBucket = parserBucketCta.bucket;
+      inferredCta = parserBucketCta.cta;
+    } else if (serviceSupportIntentFromParser) {
       inferredBucket = "service";
       inferredCta = "service_request";
     } else if (marketingEventIntentFromParser) {
@@ -2892,7 +2939,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       inferredBucket = "general_inquiry";
       inferredCta = "unknown";
     }
-    if (saleTradeIntentFromParser && inferredBucket === "general_inquiry") {
+    if (saleTradeIntentFromParser && inferredBucket === "general_inquiry" && !parserBucketCta) {
       inferredBucket = hasStockIntent ? "inventory_interest" : "trade_in_sell";
       inferredCta = hasStockIntent ? "check_availability" : "value_my_trade";
     }
@@ -2955,7 +3002,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     leadSourceId,
     inferredBucket,
     inferredCta,
-    forcedTestRide
+    forcedTestRide,
+    routingParserAccepted: routingParserDecision.accepted,
+    routingParserIntentOverride
   });
   setConversationClassification(conv, {
     bucket: inferredBucket,
