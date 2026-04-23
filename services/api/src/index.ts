@@ -24907,7 +24907,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return res.status(400).json({ ok: false, error: "human_override" });
   }
   const isWalkInLead =
-    inferWalkIn(conv) || /traffic log pro/i.test(String(conv.lead?.source ?? ""));
+    inferWalkIn(conv) ||
+    /traffic log pro|walk[\s_-]*in|dealership visit/i.test(String(conv.lead?.source ?? ""));
   if (isWalkInLead && Array.isArray(conv.messages)) {
     for (const m of conv.messages) {
       if (m.direction === "out" && m.provider === "draft_ai") {
@@ -26584,7 +26585,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       (m.provider === "twilio" || m.provider === "human" || m.provider === "sendgrid")
   );
   const regenIsWalkInLead =
-    inferWalkIn(conv) || /traffic log pro/i.test(String(conv.lead?.source ?? ""));
+    inferWalkIn(conv) ||
+    /traffic log pro|walk[\s_-]*in|dealership visit/i.test(String(conv.lead?.source ?? ""));
   const enforceInitialAdfPrefixForRegen = (text: string): string => {
     const body = String(text ?? "").trim();
     if (!body) return body;

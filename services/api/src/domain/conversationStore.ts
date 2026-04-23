@@ -263,6 +263,7 @@ export type InternalQuestion = {
 
 export type DialogStateName =
   | "none"
+  | "walk_in_active"
   | "specs_single_request"
   | "specs_single_answered"
   | "inventory_init"
@@ -1868,6 +1869,7 @@ function extractAdfSourceLine(body: string): string {
 
 export function inferWalkIn(conv: Conversation): boolean {
   if (conv.lead?.walkIn) return true;
+  if (String(conv.dialogState?.name ?? "") === "walk_in_active") return true;
   const firstAdfBody =
     conv.messages.find(
       m =>

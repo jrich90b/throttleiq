@@ -31,6 +31,7 @@ Required order:
 - Traffic Log Pro step tags (`Step 1` ... `Step 9`) should influence walk-in draft tone, but the concrete follow-up topic should be derived from salesperson-entered context text (not hardcoded to a fixed topic).
 - Avoid duplicate acknowledgement phrasing in walk-in drafts: if the selected tail already begins with a thank-you/acknowledgement, skip the default "Thanks for stopping in..." sentence.
 - Treat source labels like `Walk In` / `Walk-In` as walk-in lead sources for initial ADF routing (same walk-in guardrail behavior as Traffic Log Pro source labels).
+- Canonical walk-in marker: set `dialogState.name = walk_in_active` on initial walk-in routing, and allow `inferWalkIn(...)` / regenerate guards to treat that state as walk-in context.
 
 Current parser-first disposition states:
 - `customer_sell_on_own`

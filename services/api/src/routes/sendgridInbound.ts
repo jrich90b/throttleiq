@@ -3602,6 +3602,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const agentName = profile?.agentName ?? "Brooke";
     const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
     if (conv.lead) conv.lead.walkIn = true;
+    if (!conv.dialogState?.name || conv.dialogState.name === "none" || conv.dialogState.name === "inventory_init") {
+      conv.dialogState = { name: "walk_in_active", updatedAt: new Date().toISOString() } as any;
+    }
     const vendorFirst = vendorContactName.split(/\s+/).filter(Boolean)[0] || "";
     if (!conv.leadOwner?.id && vendorFirst) {
       try {
