@@ -197,6 +197,22 @@ function pickFirstToken(raw: string | null | undefined): string {
     .filter(Boolean)[0] ?? "";
 }
 
+function extractExplicitSalespersonName(raw: string | null | undefined): string {
+  const text = String(raw ?? "");
+  if (!text) return "";
+  const patterns = [
+    /\bsales\s*person\s*:\s*([a-z][a-z\s.'-]{1,40})/i,
+    /\bsalesperson\s*:\s*([a-z][a-z\s.'-]{1,40})/i,
+    /\bowner\s*:\s*([a-z][a-z\s.'-]{1,40})/i,
+    /\bassigned\s*(?:to)?\s*:\s*([a-z][a-z\s.'-]{1,40})/i
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) return match[1].trim();
+  }
+  return "";
+}
+
 function normalizePhoneE164(raw: string | null | undefined): string {
   const digits = String(raw ?? "").replace(/\D/g, "");
   if (!digits) return "";
@@ -2413,6 +2429,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const meta = extractLeadMeta(adfXml);
   const leadSource = meta.leadSource?.trim() || undefined;
   const leadSourceLower = (leadSource ?? "").toLowerCase();
+  const isTrafficLogProLeadSourceHint = /traffic\s*log\s*pro/i.test(leadSourceLower);
+  const isExplicitWalkInLeadSourceHint =
+    /\bwalk\s*[- ]?in\b/i.test(leadSourceLower) || /\bdealership\s+visit\b/i.test(leadSourceLower);
   const vendorContactName = meta.vendorContactName?.trim() || "";
   const leadSourceId = lead.leadSourceId ?? undefined;
   const timeframeInfo = parseTimeframeMonths(lead.purchaseTimeframe);
@@ -2489,11 +2508,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const users = await listUsers();
     const manager = users.find(u => u.role === "manager") ?? null;
     const vendorFirst = pickFirstToken(vendorContactName);
-    const rawSalespersonFromComment =
-      String(lead.comment ?? lead.inquiry ?? "").match(
-        /\bsalesperson\s*:\s*([a-z][a-z\s.'-]{1,40})/i
-      )?.[1] ?? "";
+    const rawSalespersonFromComment = extractExplicitSalespersonName(
+      String(lead.comment ?? lead.inquiry ?? "")
+    );
     const salespersonFirst = pickFirstToken(rawSalespersonFromComment);
+    const allowVendorOwnerFallback =
+      !isExplicitWalkInLeadSourceHint || isTrafficLogProLeadSourceHint || !!salespersonFirst;
     const matchedSalesperson =
       users.find(u => {
         if (u.role !== "salesperson") return false;
@@ -2503,6 +2523,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       }) ??
       users.find(u => {
         if (u.role !== "salesperson") return false;
+        if (!allowVendorOwnerFallback) return false;
         const first = pickFirstToken(u.firstName);
         const nameFirst = pickFirstToken(u.name);
         return !!vendorFirst && (vendorFirst === first || vendorFirst === nameFirst);
@@ -2687,46 +2708,77 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
   const hasOutboundBeforeInbound = Array.isArray(conv.messages) && conv.messages.some((m: any) => m.direction === "out");
   const isInitialAdf = event.provider === "sendgrid_adf" && !hasOutboundBeforeInbound;
-  const isTrafficLogProLeadSource = /traffic\s*log\s*pro/i.test(leadSourceLower);
-  const isExplicitWalkInLeadSource =
-    /\bwalk\s*[- ]?in\b/i.test(leadSourceLower) || /\bdealership\s+visit\b/i.test(leadSourceLower);
+  const isTrafficLogProLeadSource = isTrafficLogProLeadSourceHint;
+  const isExplicitWalkInLeadSource = isExplicitWalkInLeadSourceHint;
   const isInitialTrafficLogWalkIn = isInitialAdf && (isTrafficLogProLeadSource || isExplicitWalkInLeadSource);
   const adfHistory = buildEffectiveHistory(conv, 6);
-  const llmDialogAct = await parseDialogActWithLLM({
-    text: effectiveInquiry,
-    history: adfHistory,
-    lead: conv.lead
-  });
-  const llmIntent = await parseIntentWithLLM({
-    text: effectiveInquiry,
-    history: adfHistory,
-    lead: conv.lead
-  });
-  const llmJourneyIntent = await parseJourneyIntentWithLLM({
-    text: effectiveInquiry,
-    history: adfHistory,
-    lead: conv.lead
-  });
-  const llmInventoryEntities = await parseInventoryEntitiesWithLLM({
-    text: effectiveInquiry,
-    history: adfHistory,
-    lead: conv.lead
-  });
-  const llmResponseControl = await parseResponseControlWithLLM({
-    text: effectiveInquiry,
-    history: adfHistory,
-    lead: conv.lead
-  });
-  const llmFaqTopic = await parseDealershipFaqTopicWithLLM({
-    text: effectiveInquiry,
-    history: adfHistory,
-    lead: conv.lead
-  });
-  const llmWalkInOutcome = await parseWalkInOutcomeWithLLM({
-    text: effectiveInquiry,
-    history: adfHistory,
-    lead: conv.lead
-  });
+  const safeParser = async <T>(label: string, run: () => Promise<T | null>): Promise<T | null> => {
+    try {
+      return await run();
+    } catch (error) {
+      console.warn(`[sendgrid inbound] parser ${label} failed:`, (error as any)?.message ?? error);
+      return null;
+    }
+  };
+  const [
+    llmDialogAct,
+    llmIntent,
+    llmJourneyIntent,
+    llmInventoryEntities,
+    llmResponseControl,
+    llmFaqTopic,
+    llmWalkInOutcome
+  ] = await Promise.all([
+    safeParser("dialog_act", () =>
+      parseDialogActWithLLM({
+        text: effectiveInquiry,
+        history: adfHistory,
+        lead: conv.lead
+      })
+    ),
+    safeParser("intent", () =>
+      parseIntentWithLLM({
+        text: effectiveInquiry,
+        history: adfHistory,
+        lead: conv.lead
+      })
+    ),
+    safeParser("journey_intent", () =>
+      parseJourneyIntentWithLLM({
+        text: effectiveInquiry,
+        history: adfHistory,
+        lead: conv.lead
+      })
+    ),
+    safeParser("inventory_entities", () =>
+      parseInventoryEntitiesWithLLM({
+        text: effectiveInquiry,
+        history: adfHistory,
+        lead: conv.lead
+      })
+    ),
+    safeParser("response_control", () =>
+      parseResponseControlWithLLM({
+        text: effectiveInquiry,
+        history: adfHistory,
+        lead: conv.lead
+      })
+    ),
+    safeParser("faq_topic", () =>
+      parseDealershipFaqTopicWithLLM({
+        text: effectiveInquiry,
+        history: adfHistory,
+        lead: conv.lead
+      })
+    ),
+    safeParser("walkin_outcome", () =>
+      parseWalkInOutcomeWithLLM({
+        text: effectiveInquiry,
+        history: adfHistory,
+        lead: conv.lead
+      })
+    )
+  ]);
   const dialogActConfidenceMin = Number(process.env.LLM_DIALOG_ACT_CONFIDENCE_MIN ?? 0.68);
   const intentConfidenceMin = Number(process.env.LLM_INTENT_CONFIDENCE_MIN ?? 0.75);
   const journeyIntentConfidence =
@@ -3606,10 +3658,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       conv.dialogState = { name: "walk_in_active", updatedAt: new Date().toISOString() } as any;
     }
     const vendorFirst = vendorContactName.split(/\s+/).filter(Boolean)[0] || "";
-    if (!conv.leadOwner?.id && vendorFirst) {
+    const rawSalespersonFromComment = extractExplicitSalespersonName(walkInRawComment);
+    const salespersonFirst = pickFirstToken(rawSalespersonFromComment);
+    const allowWalkInVendorOwnerFallback =
+      !isExplicitWalkInLeadSource || isTrafficLogProLeadSource || !!salespersonFirst;
+    const ownerToken = salespersonFirst || (allowWalkInVendorOwnerFallback ? vendorFirst.toLowerCase() : "");
+    if (!conv.leadOwner?.id && ownerToken) {
       try {
         const users = await listUsers();
-        const vendorToken = vendorFirst.toLowerCase();
         const owner = users.find(u => {
           if (u.role !== "salesperson") return false;
           const first = String(u.firstName ?? "").trim().toLowerCase();
@@ -3618,12 +3674,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
             .split(/\s+/)
             .filter(Boolean)[0]
             ?.toLowerCase();
-          return first === vendorToken || nameFirst === vendorToken;
+          return first === ownerToken || nameFirst === ownerToken;
         });
         if (owner) {
           conv.leadOwner = {
             id: owner.id,
-            name: owner.name ?? owner.firstName ?? owner.email ?? vendorFirst,
+            name: owner.name ?? owner.firstName ?? owner.email ?? ownerToken,
             assignedAt: new Date().toISOString()
           };
         }
@@ -3633,7 +3689,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
     const leadOwnerName = String(conv.leadOwner?.name ?? "").trim();
     const leadOwnerFirst = leadOwnerName ? leadOwnerName.split(/\s+/).filter(Boolean)[0] ?? "" : "";
-    const salespersonName = leadOwnerFirst || vendorFirst || agentName;
+    const salespersonName =
+      leadOwnerFirst || salespersonFirst || (allowWalkInVendorOwnerFallback ? vendorFirst : "") || agentName;
     const modelRaw =
       conv.lead?.vehicle?.model ??
       conv.lead?.vehicle?.description ??

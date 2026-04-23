@@ -32,6 +32,7 @@ Required order:
 - Avoid duplicate acknowledgement phrasing in walk-in drafts: if the selected tail already begins with a thank-you/acknowledgement, skip the default "Thanks for stopping in..." sentence.
 - Treat source labels like `Walk In` / `Walk-In` as walk-in lead sources for initial ADF routing (same walk-in guardrail behavior as Traffic Log Pro source labels).
 - Canonical walk-in marker: set `dialogState.name = walk_in_active` on initial walk-in routing, and allow `inferWalkIn(...)` / regenerate guards to treat that state as walk-in context.
+- Owner assignment guardrail for walk-ins: for generic `Walk In` source labels, do not trust `vendor.contact.name` as owner fallback unless salesperson is explicitly present in inquiry/comment text (forwarded ADF emails can contaminate vendor contact name).
 
 Current parser-first disposition states:
 - `customer_sell_on_own`
@@ -695,3 +696,13 @@ When changing responses:
   - `Happy to check inventory right now...`
   - `specific year, color, or trim`
 - This closes a guardrail gap where finance-priority turns could occasionally allow an inventory-style fallback prompt instead of being blocked by `finance_priority_inventory_prompt_guard`.
+
+## Walk-In Owner Guardrail + Parser Latency
+- In `services/api/src/routes/sendgridInbound.ts`:
+  - added explicit owner parsing support for inbound text labels like `Salesperson:`, `Owner:`, and `Assigned to:`.
+  - hardened walk-in owner assignment to avoid using forwarded email vendor/sender names for generic `Walk In` sources unless an explicit salesperson is present (or source is Traffic Log Pro).
+  - applied the same owner-fallback guardrail in both initial conversation-owner assignment and walk-in-specific branch to keep behavior consistent.
+  - changed ADF parser fan-out (`dialog_act`, `intent`, `journey_intent`, `inventory_entities`, `response_control`, `faq_topic`, `walkin_outcome`) from sequential awaits to parallel execution with per-parser fail-open handling.
+- Purpose:
+  - prevents owner pollution when ADF emails are forwarded,
+  - reduces “AI • thinking” dwell time caused by stacked sequential parser latency.
