@@ -30,6 +30,7 @@ Required order:
 - Build the walk-in acknowledgement message after watch-state overrides are applied so watch intent wording always wins over in-stock phrasing when both are present.
 - Traffic Log Pro step tags (`Step 1` ... `Step 9`) should influence walk-in draft tone, but the concrete follow-up topic should be derived from salesperson-entered context text (not hardcoded to a fixed topic).
 - Avoid duplicate acknowledgement phrasing in walk-in drafts: if the selected tail already begins with a thank-you/acknowledgement, skip the default "Thanks for stopping in..." sentence.
+- Treat source labels like `Walk In` / `Walk-In` as walk-in lead sources for initial ADF routing (same walk-in guardrail behavior as Traffic Log Pro source labels).
 
 Current parser-first disposition states:
 - `customer_sell_on_own`

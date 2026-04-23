@@ -2688,7 +2688,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const hasOutboundBeforeInbound = Array.isArray(conv.messages) && conv.messages.some((m: any) => m.direction === "out");
   const isInitialAdf = event.provider === "sendgrid_adf" && !hasOutboundBeforeInbound;
   const isTrafficLogProLeadSource = /traffic\s*log\s*pro/i.test(leadSourceLower);
-  const isInitialTrafficLogWalkIn = isInitialAdf && isTrafficLogProLeadSource;
+  const isExplicitWalkInLeadSource =
+    /\bwalk\s*[- ]?in\b/i.test(leadSourceLower) || /\bdealership\s+visit\b/i.test(leadSourceLower);
+  const isInitialTrafficLogWalkIn = isInitialAdf && (isTrafficLogProLeadSource || isExplicitWalkInLeadSource);
   const adfHistory = buildEffectiveHistory(conv, 6);
   const llmDialogAct = await parseDialogActWithLLM({
     text: effectiveInquiry,
@@ -3590,7 +3592,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const commentLower = walkInCleanedComment.toLowerCase();
   const emailLower = (lead.email ?? "").toLowerCase();
   const isWalkInLead =
-    isInitialAdf && (isTrafficLogProLeadSource || inferredBucket === "in_store");
+    isInitialAdf &&
+    (isTrafficLogProLeadSource || isExplicitWalkInLeadSource || inferredBucket === "in_store");
   if (isWalkInLead) {
     initialMedia = undefined;
     initialMediaUrls = undefined;
@@ -3664,7 +3667,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         walkInCleanedComment
       );
     const hasPricingFollowupIntent = pricingFollowupIntentFromParser || pricingFollowupIntentFromText;
-    const trafficLogProStep = isTrafficLogProLeadSource ? extractTrafficLogProStep(walkInCleanedComment) : null;
+    const trafficLogProStep =
+      isTrafficLogProLeadSource || isExplicitWalkInLeadSource || inferredBucket === "in_store"
+        ? extractTrafficLogProStep(walkInCleanedComment)
+        : null;
     const lowSignalWalkInUpdate =
       !walkInCleanedComment ||
       /^(email updates?|email opt-?in|view lead|step\s*\d+|n\/?a|na)$/i.test(walkInCleanedComment.trim());
