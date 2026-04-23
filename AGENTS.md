@@ -142,6 +142,9 @@ When changing responses:
 - Flyer outputs are non-social assets:
   - Do not auto-generate social caption for flyer target.
   - In the generated output card, flyer actions are `Print`, `Download`, `Remove` (no send/post queue action).
+- Prompt fidelity is now stricter for flyer generation:
+  - The API extracts required detail phrases from the prompt/description and injects a required checklist into the image model prompt.
+  - For `flyer_8_5x11`, checklist items are treated as mandatory copy details (helps prevent missing items like “flash tattooing”).
 
 ## Auth UI Theme
 - Login/bootstrap screen now uses the same dark brand theme style direction as the app shell.

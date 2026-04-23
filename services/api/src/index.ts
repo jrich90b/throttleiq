@@ -21220,6 +21220,72 @@ function isLogoLikeDesignAsset(rawUrl: string): boolean {
   return /\b(logo|badge|emblem|wordmark|lockup|mark|brand|overlay)\b/.test(hint);
 }
 
+const CAMPAIGN_PROMPT_DETAIL_INSTRUCTION_RE =
+  /\b(make sure|important|include\b.*\blogo|logos?\s+must|put\b.*\bbottom|row\b.*\bbottom|separate\b|reference image|design images?|same color(?:ing)?|same style|for styling|output format|step\s*\d+|drag|drop|choose)\b/i;
+const CAMPAIGN_PROMPT_DETAIL_SIGNAL_RE =
+  /\b(flash tattoo(?:ing)?|tattoo(?:ing)?|pinstrip(?:ing)?|mechanical bull|cornhole|giveaway|ticket|live music|music|vendor|food|swag|on site|bbq|from\s+[a-z0-9&.'-]+|logo|sponsor|address|erie ave|north tonawanda|am|pm)\b/i;
+
+function normalizeCampaignPromptDetailItem(raw: string): string {
+  let text = String(raw ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "";
+  text = text
+    .replace(/^["'“”‘’\s]+|["'“”‘’\s]+$/g, "")
+    .replace(/^[\-•*]+\s*/, "")
+    .replace(/\s*[.;:!?]+$/g, "")
+    .replace(/^(?:and|also|plus|then)\s+/i, "")
+    .trim();
+  if (!text) return "";
+  if (/^(?:gen(?:e|r)?ate|create)\s+a?\s*campaign\b/i.test(text)) return "";
+  if (CAMPAIGN_PROMPT_DETAIL_INSTRUCTION_RE.test(text)) return "";
+  if (text.length < 4 || text.length > 180) return "";
+  return text;
+}
+
+function extractPromptRequiredDetails(args: {
+  prompt?: string;
+  description?: string;
+  strict?: boolean;
+}): string[] {
+  const source = [String(args.prompt ?? "").trim(), String(args.description ?? "").trim()]
+    .filter(Boolean)
+    .join(". ");
+  if (!source) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const push = (raw: string) => {
+    const cleaned = normalizeCampaignPromptDetailItem(raw);
+    if (!cleaned) return;
+    const key = cleaned.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(cleaned);
+  };
+
+  const quoted = source.match(/["“](.+?)["”]/g) ?? [];
+  for (const row of quoted) {
+    push(row.replace(/^["“]|["”]$/g, ""));
+  }
+  const splitRows = source.split(/[\n,;]+/);
+  for (const row of splitRows) {
+    push(row);
+  }
+
+  const strict = Boolean(args.strict);
+  const selected = out.filter(item => {
+    const lower = item.toLowerCase();
+    const hasSignal =
+      CAMPAIGN_PROMPT_DETAIL_SIGNAL_RE.test(lower) ||
+      /\b\d{1,2}(?::\d{2})?\s?(?:am|pm)\b/i.test(lower) ||
+      /\b\d{1,5}\s+[a-z0-9.\s]+(?:ave|avenue|rd|road|st|street|blvd|boulevard|dr|drive)\b/i.test(lower);
+    if (strict) return true;
+    return hasSignal;
+  });
+  const cap = strict ? 16 : 8;
+  return selected.slice(0, cap);
+}
+
 function buildCampaignImagePrompt(args: {
   name: string;
   channel: CampaignChannel;
@@ -21272,6 +21338,23 @@ function buildCampaignImagePrompt(args: {
     !tagSet.has("sales");
   const preferredTarget = preferredCampaignGenerationTarget(args.assetTargets, args.channel);
   const selectedTargetCount = Array.isArray(args.assetTargets) ? args.assetTargets.length : 0;
+  const strictPromptDetailLock = selectedTargetCount <= 1 && preferredTarget === "flyer_8_5x11";
+  const requiredPromptDetails = extractPromptRequiredDetails({
+    prompt: args.prompt,
+    description: args.description,
+    strict: strictPromptDetailLock
+  });
+  const promptDetailGuardrails = requiredPromptDetails.length
+    ? [
+        "Prompt fidelity requirements (critical):",
+        strictPromptDetailLock
+          ? "- Include every required detail below in the design copy. Do not omit any item."
+          : "- Include required details below where frame space allows.",
+        "- Preserve names/terms exactly as written (for example: flash tattooing, sponsor names, event labels).",
+        "- If space is tight, shorten decorative wording first before removing required details.",
+        ...requiredPromptDetails.map((item, idx) => `- Required detail ${idx + 1}: ${item}`)
+      ]
+    : [];
   const outputGuardrails: string[] = [];
   if (preferredTarget === "web_banner" && selectedTargetCount <= 1) {
     const bannerW = campaignWebBannerWidth(args.dealerProfile);
@@ -21380,6 +21463,7 @@ function buildCampaignImagePrompt(args: {
     `Direction: ${primary}`,
     ...tagGuardrails,
     ...(designAssetGuardrails.length ? ["", ...designAssetGuardrails] : []),
+    ...(promptDetailGuardrails.length ? ["", ...promptDetailGuardrails] : []),
     ...(placePhotoGuardrails.length ? ["", ...placePhotoGuardrails] : []),
     ...(outputGuardrails.length ? ["", ...outputGuardrails] : []),
     "",
