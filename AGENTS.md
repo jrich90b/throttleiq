@@ -356,6 +356,12 @@ When changing responses:
 - Purpose:
   - ensure inline popups like **Edit contact** use high-contrast text/inputs/buttons on white surfaces inside the dark inbox shell.
 
+## Calendar Day-View Time Alignment Guardrail
+- Fixed day-view grid alignment in `apps/web/src/app/page.tsx` so event block placement matches visible hour lines.
+- Display window now snaps to full-hour boundaries (`open` floored, `close` ceiled) before computing row layout.
+- Time-slot labels now render with actual minute component (not forced `:00`), preventing left-column label drift when source hours include half-hour boundaries.
+- Result: events like `10:00–11:00` render on the correct hour position in the day grid.
+
 ## Legacy New Condition Guardrail
 - Some ADF leads can arrive with `condition: new` for older model years that are realistically only used inventory.
 - Added ingest-time normalization in `services/api/src/routes/sendgridInbound.ts`:

@@ -3932,6 +3932,11 @@ export default function Home() {
         open = 9 * 60;
         close = 18 * 60;
       }
+      open = Math.max(0, Math.floor(open / 60) * 60);
+      close = Math.min(24 * 60, Math.ceil(close / 60) * 60);
+      if (close <= open) {
+        close = Math.min(24 * 60, open + 60);
+      }
       const totalMinutes = close - open;
       const rowCount = Math.max(1, Math.ceil(totalMinutes / 60));
       const nextHeight = Math.max(32, Math.floor(height / rowCount));
@@ -12273,12 +12278,17 @@ export default function Home() {
                   if (openWindow == null || closeWindow == null || closeWindow <= openWindow) {
                     return <div className="text-sm text-gray-600">Closed today.</div>;
                   }
+                  openWindow = Math.max(0, Math.floor(openWindow / 60) * 60);
+                  closeWindow = Math.min(24 * 60, Math.ceil(closeWindow / 60) * 60);
+                  if (closeWindow <= openWindow) {
+                    closeWindow = Math.min(24 * 60, openWindow + 60);
+                  }
                   const totalMinutes = closeWindow - openWindow;
                   const rowHeight = calendarRowHeight;
                   const slots = [];
                   for (let m = openWindow; m < closeWindow; m += 60) {
                     const h = Math.floor(m / 60);
-                    const raw = `${String(h).padStart(2, "0")}:00`;
+                    const raw = `${String(h).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
                     slots.push(formatTimeLabel(raw, tz));
                   }
                   const dayStart = new Date(calendarDate);
