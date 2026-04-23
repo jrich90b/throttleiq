@@ -22954,6 +22954,37 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       assetGenerationStatus
     }
   };
+  const hasSocialFeedTarget = (assetTargets ?? []).some(
+    target => target === "facebook_post" || target === "instagram_post"
+  );
+  if (hasSocialFeedTarget) {
+    const existingMeta =
+      effectiveGenerated.metadata && typeof effectiveGenerated.metadata === "object"
+        ? { ...(effectiveGenerated.metadata as Record<string, unknown>) }
+        : {};
+    const existingCaption =
+      String(existingMeta.socialCaption ?? existingMeta.caption ?? "").trim() ||
+      String(existingMeta.publishCaption ?? "").trim();
+    if (!existingCaption) {
+      const autoCaption = campaignAutoSocialCaption({
+        ...(existingCampaign ?? {}),
+        name,
+        description,
+        prompt,
+        tags,
+        smsBody: effectiveGenerated.smsBody,
+        emailBodyText: effectiveGenerated.emailBodyText,
+        metadata: existingMeta
+      });
+      if (autoCaption) {
+        existingMeta.socialCaption = autoCaption;
+      }
+    }
+    effectiveGenerated = {
+      ...effectiveGenerated,
+      metadata: existingMeta
+    };
+  }
 
   if (!save) {
     return res.json({ ok: true, generated: effectiveGenerated, warning: imageGenerationWarning });

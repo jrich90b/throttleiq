@@ -451,6 +451,13 @@ When changing responses:
   - `CAMPAIGN_NANO_BANANA_MAX_REFS` default is now `6` (was `4`) to reduce dropped uploaded references in typical multi-image runs.
 - Campaign Studio UI helper text now clarifies that design images are treated as required by the generator (`apps/web/src/app/page.tsx`).
 
+## Campaign Generated Copy Visibility
+- Campaign generation now persists an auto social caption in metadata when Facebook/Instagram feed targets are selected and no explicit caption is already set (`services/api/src/index.ts`).
+- Campaign Studio generated asset cards now show:
+  - `Auto caption` directly under Facebook/Instagram generated images,
+  - `SMS draft` directly under SMS generated images.
+- This keeps generated copy visible in the same frame as each image instead of only in publish dialogs or separate draft sections (`apps/web/src/app/page.tsx`).
+
 ## Cadence Anti-Repetition Guard
 - Follow-up cadence no-repeat logic in `services/api/src/index.ts` now blocks **near-duplicate** drafts, not only exact body matches.
 - `selectNonRepeatingCadenceMessage(...)` now checks semantic overlap against recent outbound cadence messages (token overlap + repeated long-sentence detection) before accepting a candidate.

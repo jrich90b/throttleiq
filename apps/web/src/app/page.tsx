@@ -1997,6 +1997,35 @@ export default function Home() {
     () => campaigns.find(row => row.id === campaignSelectedId) ?? null,
     [campaigns, campaignSelectedId]
   );
+  const campaignPreviewEntry = useMemo<CampaignEntry | null>(() => {
+    if (campaignSelectedEntry) return campaignSelectedEntry;
+    const name = String(campaignForm.name ?? "").trim();
+    const prompt = String(campaignForm.prompt ?? "").trim();
+    const description = String(campaignForm.description ?? "").trim();
+    const smsBody = String(campaignForm.smsBody ?? "").trim();
+    const emailBodyText = String(campaignForm.emailBodyText ?? "").trim();
+    if (!name && !prompt && !description && !smsBody && !emailBodyText) return null;
+    return {
+      id: "preview",
+      name: name || "Campaign preview",
+      buildMode: campaignForm.buildMode,
+      channel: campaignEffectiveChannel,
+      tags: campaignForm.tags,
+      prompt: prompt || undefined,
+      description: description || undefined,
+      smsBody: smsBody || undefined,
+      emailBodyText: emailBodyText || undefined,
+      metadata: {}
+    };
+  }, [campaignSelectedEntry, campaignForm, campaignEffectiveChannel]);
+  const campaignAutoCaptionPreview = useMemo(
+    () => campaignAutoPublishCaption(campaignPreviewEntry),
+    [campaignPreviewEntry]
+  );
+  const campaignSocialOptionsByTarget = useMemo(
+    () => campaignNormalizeSocialPublishOptionsMap((campaignSelectedEntry?.metadata as any)?.socialPublishOptions),
+    [campaignSelectedEntry]
+  );
   const campaignQueuePublishDialogEntry = useMemo(
     () => campaigns.find(row => row.id === campaignQueuePublishDialogCampaignId) ?? null,
     [campaigns, campaignQueuePublishDialogCampaignId]
@@ -11336,6 +11365,18 @@ export default function Home() {
                     {campaignGeneratedAssets.map((asset, idx) => {
                       const label = campaignAssetDisplayLabel(asset);
                       const meta = [asset.mimeType].filter(Boolean).join(" • ");
+                      const socialCaptionPreview =
+                        asset.target === "facebook_post" || asset.target === "instagram_post"
+                          ? campaignComposePublishCaption(
+                              campaignAutoCaptionPreview,
+                              campaignSocialOptionsByTarget[asset.target]
+                            )
+                          : "";
+                      const smsDraftPreview =
+                        asset.target === "sms"
+                          ? String(campaignForm.smsBody ?? "").trim() ||
+                            String(campaignPreviewEntry?.smsBody ?? "").trim()
+                          : "";
                       const queueKind = campaignQueueKindForAssetTarget(asset.target);
                       const queueable = Boolean(queueKind);
                       const actionGridClass = queueable
@@ -11373,6 +11414,22 @@ export default function Home() {
                               loading="lazy"
                             />
                           </a>
+                          {socialCaptionPreview ? (
+                            <div className="px-3 py-2 border-t bg-gray-50">
+                              <div className="text-[11px] font-semibold text-gray-700">Auto caption</div>
+                              <div className="mt-1 text-xs text-gray-800 whitespace-pre-wrap">
+                                {socialCaptionPreview}
+                              </div>
+                            </div>
+                          ) : null}
+                          {smsDraftPreview ? (
+                            <div className="px-3 py-2 border-t bg-gray-50">
+                              <div className="text-[11px] font-semibold text-gray-700">SMS draft</div>
+                              <div className="mt-1 text-xs text-gray-800 whitespace-pre-wrap">
+                                {smsDraftPreview}
+                              </div>
+                            </div>
+                          ) : null}
                           <div className={actionGridClass}>
                             <a
                               className="lr-campaign-asset-btn"
