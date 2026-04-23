@@ -631,3 +631,9 @@ When changing responses:
 - Implemented in both:
   - API caption generator (`services/api/src/index.ts`)
   - Web caption preview fallback (`apps/web/src/app/page.tsx`)
+
+## Cadence Draft Invariant Coverage Tweak
+- Expanded inventory-prompt detection in `services/api/src/domain/draftStateInvariants.ts` to include common fallback phrasing:
+  - `Happy to check inventory right now...`
+  - `specific year, color, or trim`
+- This closes a guardrail gap where finance-priority turns could occasionally allow an inventory-style fallback prompt instead of being blocked by `finance_priority_inventory_prompt_guard`.

@@ -40,6 +40,9 @@ function looksLikeInventoryPromptDraft(text: string): boolean {
   if (!t.trim()) return false;
   return (
     /\b(which model are you (?:interested|leaning)|exact year\/color\/finish)\b/.test(t) ||
+    /\b(happy to check inventory right now|specific year,?\s*color,?\s*or\s*trim|specific year\/color\/trim)\b/.test(
+      t
+    ) ||
     /\b(keep an eye out|watch for|text you as soon as one comes in|when one comes in)\b/.test(t) ||
     /\b(walkaround video|more photos?|a couple photos?)\b/.test(t) ||
     /\b(stop by to take a look|come check it out)\b/.test(t)
