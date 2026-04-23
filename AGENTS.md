@@ -28,6 +28,7 @@ Required order:
 - Explicit watch phrasing in walk-in comments (including “watching for ...”) should create/refresh inventory watch state even if matching inventory currently exists.
 - When a watch clause is present alongside other context, extract watch attributes (year range/condition/color/trim) from the watch clause first to avoid contamination from unrelated in-stock details in the same note.
 - Build the walk-in acknowledgement message after watch-state overrides are applied so watch intent wording always wins over in-stock phrasing when both are present.
+- Traffic Log Pro step tags (`Step 1` ... `Step 9`) should influence walk-in draft tone, but the concrete follow-up topic should be derived from salesperson-entered context text (not hardcoded to a fixed topic).
 
 Current parser-first disposition states:
 - `customer_sell_on_own`

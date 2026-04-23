@@ -330,6 +330,7 @@ export type LeadProfile = {
   sourceId?: number;
   walkIn?: boolean;
   walkInComment?: string;
+  walkInStep?: number;
   walkInCommentCapturedAt?: string;
   walkInCommentUsedAt?: string;
   vehicle?: {

@@ -1265,6 +1265,125 @@ function hasWatchIntentPhrase(text?: string | null): boolean {
   );
 }
 
+function extractTrafficLogProStep(text?: string | null): number | null {
+  const source = String(text ?? "");
+  if (!source.trim()) return null;
+  const explicit = source.match(/\b(?:step|stp)\s*[:#-]?\s*(\d{1,2})\b/i);
+  const named =
+    explicit ??
+    source.match(
+      /\b([1-9])\s*-\s*(?:greet|probe|sit\s*on|presentation|sit\s*down|write[\s-]*up|close|f\s*&\s*i|delivered)\b/i
+    );
+  if (!named?.[1]) return null;
+  const step = Number(named[1]);
+  if (!Number.isFinite(step)) return null;
+  const normalized = Math.trunc(step);
+  if (normalized < 1 || normalized > 9) return null;
+  return normalized;
+}
+
+function extractTrafficLogProFollowUpTopic(text?: string | null): string | undefined {
+  const source = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (!source) return undefined;
+  const cleaned = source
+    .replace(/\(\s*step\s*\d{1,2}\s*\)/gi, " ")
+    .replace(/\bstep\s*[:#-]?\s*\d{1,2}\b/gi, " ")
+    .replace(/\bview lead\b/gi, " ")
+    .replace(/\bemail opt-?in\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return undefined;
+
+  const patterns = [
+    /\b(?:i(?:'ll| will)|we(?:'ll| will)|please|can you|could you|reach out|follow up|check in|be in touch)\b[\s\S]{0,24}\b(?:about|on|with|regarding|for)\s+([^.;]+)/i,
+    /\b(?:about|on|with|regarding)\s+([^.;]+)/i
+  ];
+  for (const pattern of patterns) {
+    const match = cleaned.match(pattern);
+    const rawTopic = String(match?.[1] ?? "").replace(/\s+/g, " ").trim();
+    if (!rawTopic) continue;
+    const topic = rawTopic
+      .replace(/^(?:him|her|them|customer|the customer)\b[\s,:-]*/i, "")
+      .replace(/\b(?:please|thanks?|thank you)\b/gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!topic) continue;
+    const truncated =
+      topic.length > 100 ? `${topic.slice(0, 97).trim().replace(/[,\-:]$/, "")}...` : topic;
+    if (truncated) return truncated;
+  }
+  return undefined;
+}
+
+function buildTrafficLogProWalkInTail(args: {
+  step: number;
+  comment: string;
+  modelLabel?: string | null;
+  hasPricingFollowupIntent?: boolean;
+}): string | null {
+  const step = Math.trunc(Number(args.step));
+  if (!Number.isFinite(step) || step < 1 || step > 9) return null;
+  const source = String(args.comment ?? "").toLowerCase();
+  const label = formatWatchModelForMessage(String(args.modelLabel ?? "").trim() || "bike");
+  const followUpTopic = extractTrafficLogProFollowUpTopic(args.comment);
+  const hasFinanceCue =
+    /\b(finance|f\s*&\s*i|f and i|credit\s*app|approval|approved|paperwork|contract|lender|bank|credit union|docs?)\b/.test(
+      source
+    );
+  const hasPricingCue =
+    /\b(price|pricing|numbers?|payment|payments|write[\s-]*up|worksheet|out the door|otd|trade|appraisal)\b/.test(
+      source
+    ) || !!args.hasPricingFollowupIntent;
+  const hasFollowupCue =
+    /\b(in touch|follow up|follow-up|reach out|check in|circle back|touch base|keep you posted)\b/.test(source);
+
+  const withTopic = (base: string): string => {
+    if (!followUpTopic) return base;
+    return `${base} I'll follow up about ${followUpTopic}.`;
+  };
+
+  if (step >= 9) {
+    return withTopic("Thanks again for working with us - enjoy the new bike. I'm here if you need anything.");
+  }
+  if (step === 8) {
+    if (followUpTopic) {
+      return `Thanks again for coming in today - it was great working with you. I'll be in touch about ${followUpTopic}.`;
+    }
+    if (hasFinanceCue) {
+      return "Thanks again for coming in today - it was great working with you. I'll keep you posted as we wrap up finance and final details.";
+    }
+    return "Thanks again for coming in today - it was great working with you. I'll keep you posted on final details and next steps.";
+  }
+  if (step === 7) {
+    if (followUpTopic) {
+      return `Thanks again for coming in - I'll follow up about ${followUpTopic}.`;
+    }
+    if (hasPricingCue || hasFinanceCue || hasFollowupCue) {
+      return "Thanks again for coming in - I'll follow up with final numbers and next steps.";
+    }
+    return "Thanks again for coming in - I'll stay in touch as we finish up the next steps.";
+  }
+  if (step === 6 || step === 5) {
+    if (followUpTopic) {
+      return `Thanks again for your time today. I'll follow up about ${followUpTopic}.`;
+    }
+    if (hasPricingCue) {
+      return "Thanks again for sitting down with me today. I'll follow up with the numbers we discussed and next steps.";
+    }
+    return "Thanks again for your time today. I'll follow up shortly with next steps.";
+  }
+  if (step <= 4) {
+    if (followUpTopic) {
+      return `Thanks for stopping in today - I'll follow up about ${followUpTopic}.`;
+    }
+    if (hasFollowupCue) {
+      return "Thanks for stopping in today - I'll check back in soon like we discussed.";
+    }
+    return `Thanks for stopping in today. If you want, I can send a quick recap on ${label}.`;
+  }
+  return null;
+}
+
 function extractWatchDirectiveModelHint(text?: string | null): string | undefined {
   const segment = extractWatchDirectiveSegment(text);
   if (!segment) return undefined;
@@ -3539,6 +3658,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         walkInCleanedComment
       );
     const hasPricingFollowupIntent = pricingFollowupIntentFromParser || pricingFollowupIntentFromText;
+    const trafficLogProStep = isTrafficLogProLeadSource ? extractTrafficLogProStep(walkInCleanedComment) : null;
     const lowSignalWalkInUpdate =
       !walkInCleanedComment ||
       /^(email updates?|email opt-?in|view lead|step\s*\d+|n\/?a|na)$/i.test(walkInCleanedComment.trim());
@@ -3606,6 +3726,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
     if (walkInCleanedComment) {
       conv.lead.walkInComment = walkInCleanedComment;
+      conv.lead.walkInStep = trafficLogProStep ?? undefined;
       conv.lead.walkInCommentCapturedAt = new Date().toISOString();
       conv.lead.walkInCommentUsedAt = undefined;
       conv.updatedAt = new Date().toISOString();
@@ -3870,6 +3991,25 @@ export async function handleSendgridInbound(req: Request, res: Response) {
             ? `new ${rangeLabel}${formatWatchModelForMessage(modelLabel)}`
             : `${rangeLabel}${formatWatchModelForMessage(modelLabel)}`;
         tail = `I’ll check back next week and we can line up your test ride on ${rideLabel}.`;
+      }
+    }
+    if (
+      trafficLogProStep &&
+      !hasWatchIntent &&
+      !hasCompletedTestRideSignal &&
+      !hasCreditCosignerSignal &&
+      !hasDealProgressSignal &&
+      !hasHoldSignal &&
+      !hasResumeHoldSignal
+    ) {
+      const tlpStepTail = buildTrafficLogProWalkInTail({
+        step: trafficLogProStep,
+        comment: walkInCleanedComment,
+        modelLabel,
+        hasPricingFollowupIntent
+      });
+      if (tlpStepTail) {
+        tail = tlpStepTail;
       }
     }
     const hasDirectedTestRidePlan = /line up your test ride|reach back when the weather looks better|check back next week/i.test(
