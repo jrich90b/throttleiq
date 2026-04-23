@@ -21067,6 +21067,24 @@ function campaignHasExplicitTradeRequest(args: { name?: string; prompt?: string;
   return CAMPAIGN_TRADE_ONLY_TERMS_RE.test(joined);
 }
 
+function campaignDesignAssetFileHint(rawUrl: string): string {
+  const trimmed = String(rawUrl ?? "").trim();
+  if (!trimmed) return "";
+  const withoutQuery = trimmed.split("?")[0]?.split("#")[0] ?? "";
+  const lastSegment = withoutQuery.split("/").filter(Boolean).pop() ?? "";
+  try {
+    return decodeURIComponent(lastSegment).toLowerCase();
+  } catch {
+    return lastSegment.toLowerCase();
+  }
+}
+
+function isLogoLikeDesignAsset(rawUrl: string): boolean {
+  const hint = campaignDesignAssetFileHint(rawUrl);
+  if (!hint) return false;
+  return /\b(logo|badge|emblem|wordmark|lockup|mark|brand|overlay)\b/.test(hint);
+}
+
 function buildCampaignImagePrompt(args: {
   name: string;
   channel: CampaignChannel;
@@ -21077,6 +21095,7 @@ function buildCampaignImagePrompt(args: {
   dealerProfile?: Awaited<ReturnType<typeof getDealerProfile>>;
   sourceHits?: Array<{ title?: string; snippet?: string; url?: string }>;
   referenceImageUrls?: string[];
+  designImageUrls?: string[];
 }): string {
   const dealerName = String(args.dealerProfile?.dealerName ?? "").trim() || "the dealership";
   const website = String(args.dealerProfile?.website ?? "").trim();
@@ -21103,6 +21122,9 @@ function buildCampaignImagePrompt(args: {
     )
     .join("\n");
   const referenceBlock = references || "(none)";
+  const designImageUrls = normalizeCampaignUrlArray(args.designImageUrls ?? []);
+  const designImageCount = designImageUrls.length;
+  const hasLogoLikeDesignAsset = designImageUrls.some(isLogoLikeDesignAsset);
   const hasPlacePhotos = Array.isArray(args.referenceImageUrls)
     ? args.referenceImageUrls.some(url =>
         /campaign_place_|googleapis\.com\/v1\/places|places\.googleapis\.com/i.test(String(url ?? ""))
@@ -21194,6 +21216,17 @@ function buildCampaignImagePrompt(args: {
         "- Do NOT replace with a generic or different dealership facade."
       ]
     : [];
+  const designAssetGuardrails = designImageCount
+    ? [
+        "Design-asset guardrails (critical):",
+        `- ${designImageCount} uploaded design image${designImageCount === 1 ? "" : "s"} are required brand assets.`,
+        "- Incorporate uploaded design assets by default (do not omit them unless the target frame is technically impossible).",
+        hasLogoLikeDesignAsset
+          ? "- At least one uploaded logo/badge must be clearly visible and legible (not tiny, cropped, or hidden)."
+          : "- At least one uploaded design image element should be clearly visible in the final composition.",
+        "- Do NOT replace uploaded logos/marks with invented substitutes."
+      ]
+    : [];
   return [
     "Create a single high-quality dealership campaign hero image.",
     "Style: premium, modern motorcycle dealership marketing visual.",
@@ -21206,6 +21239,7 @@ function buildCampaignImagePrompt(args: {
     `Campaign: ${String(args.name ?? "").trim() || "(untitled)"}`,
     `Direction: ${primary}`,
     ...tagGuardrails,
+    ...(designAssetGuardrails.length ? ["", ...designAssetGuardrails] : []),
     ...(placePhotoGuardrails.length ? ["", ...placePhotoGuardrails] : []),
     ...(outputGuardrails.length ? ["", ...outputGuardrails] : []),
     "",
@@ -21981,7 +22015,7 @@ async function buildNanoBananaReferenceParts(rawUrls: string[] | null | undefine
   const urls = normalizeCampaignUrlArray(rawUrls ?? []);
   if (!urls.length) return [];
 
-  const maxRefs = Math.max(0, Math.min(14, Number(process.env.CAMPAIGN_NANO_BANANA_MAX_REFS ?? 4)));
+  const maxRefs = Math.max(0, Math.min(14, Number(process.env.CAMPAIGN_NANO_BANANA_MAX_REFS ?? 6)));
   if (!maxRefs) return [];
   const maxBytesPerImage = Math.max(
     256 * 1024,
@@ -22078,6 +22112,7 @@ async function generateCampaignImageWithNanoBanana(args: {
   dealerProfile?: Awaited<ReturnType<typeof getDealerProfile>>;
   sourceHits?: Array<{ title?: string; snippet?: string; url?: string }>;
   referenceImageUrls?: string[];
+  designImageUrls?: string[];
 }): Promise<{ url: string; referenceCount: number } | null> {
   if (String(process.env.CAMPAIGN_NANO_BANANA_ENABLED ?? "1") === "0") return null;
 
@@ -22218,6 +22253,8 @@ async function generateCampaignImageWithOpenAI(args: {
   tags: CampaignTag[];
   dealerProfile?: Awaited<ReturnType<typeof getDealerProfile>>;
   sourceHits?: Array<{ title?: string; snippet?: string; url?: string }>;
+  referenceImageUrls?: string[];
+  designImageUrls?: string[];
 }): Promise<string | null> {
   if (String(process.env.CAMPAIGN_OPENAI_IMAGE_FALLBACK_ENABLED ?? "1") === "0") return null;
   const apiKey = String(process.env.OPENAI_API_KEY ?? "").trim();
@@ -22579,10 +22616,14 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     const strictReferenceLock =
       editFromCurrent ||
       (buildMode === "design_from_scratch" && (inspirationImageUrls.length > 0 || assetImageUrls.length > 0));
-    const referenceImageUrls = normalizeCampaignUrlArray([
+    const designImageUrls = normalizeCampaignUrlArray([...(assetImageUrls ?? [])]);
+    const inspirationContextImageUrls = normalizeCampaignUrlArray([
       ...(inspirationImageUrls ?? []),
-      ...(assetImageUrls ?? []),
       ...(generated.inspirationImageUrls ?? [])
+    ]);
+    const referenceImageUrls = normalizeCampaignUrlArray([
+      ...designImageUrls,
+      ...inspirationContextImageUrls
     ]);
     const uniqueTargets = requestedAssetTargets.slice();
     const styleLockAnchorTarget =
@@ -22631,8 +22672,9 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
           .filter((value): value is string => Boolean(String(value ?? "").trim()))
           .join("\n\n") || undefined;
       const targetReferenceImageUrls = normalizeCampaignUrlArray([
-        ...referenceImageUrls,
-        ...(styleLockRefUrl ? [styleLockRefUrl] : [])
+        ...designImageUrls,
+        ...(styleLockRefUrl ? [styleLockRefUrl] : []),
+        ...inspirationContextImageUrls
       ]);
       const generatedImageNano = await runCampaignTaskWithTimeout(
         generateCampaignImageWithNanoBanana({
@@ -22644,7 +22686,8 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
           tags,
           dealerProfile,
           sourceHits: generated.sourceHits,
-          referenceImageUrls: targetReferenceImageUrls
+          referenceImageUrls: targetReferenceImageUrls,
+          designImageUrls
         }),
         perTargetTimeoutMs,
         `nano target ${target}`
@@ -22666,7 +22709,9 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
                 description: targetDescription,
                 tags,
                 dealerProfile,
-                sourceHits: generated.sourceHits
+                sourceHits: generated.sourceHits,
+                referenceImageUrls: targetReferenceImageUrls,
+                designImageUrls
               }),
               perTargetTimeoutMs,
               `openai target ${target}`
@@ -22739,7 +22784,9 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
           description,
           tags,
           dealerProfile,
-          sourceHits: generated.sourceHits
+          sourceHits: generated.sourceHits,
+          referenceImageUrls,
+          designImageUrls
         }),
         Math.max(perTargetTimeoutMs, 120_000),
         "openai emergency anchor"

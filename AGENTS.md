@@ -441,6 +441,16 @@ When changing responses:
   - `CAMPAIGN_PER_TARGET_TIMEOUT_MS` default: `240000` (was `120000`)
 - Strict reference-lock behavior is unchanged: when reference images are supplied in scratch mode, OpenAI fallback remains blocked to prevent reference drift.
 
+## Campaign Design-Image Inclusion Guardrail
+- Campaign Studio generation now treats uploaded **Design images** (logos/badges/overlays) as required brand assets by default.
+- In `services/api/src/index.ts`:
+  - prompt builder now injects explicit design-asset guardrails when design images are present (including visible logo/badge requirement when logo-like filenames are detected),
+  - reference ordering was changed to prioritize design images ahead of inspiration/context references so they are not crowded out by generic photo refs,
+  - per-target generate calls pass design-image context into both Nano Banana and OpenAI prompt builders.
+- Nano Banana reference-part default limit was increased:
+  - `CAMPAIGN_NANO_BANANA_MAX_REFS` default is now `6` (was `4`) to reduce dropped uploaded references in typical multi-image runs.
+- Campaign Studio UI helper text now clarifies that design images are treated as required by the generator (`apps/web/src/app/page.tsx`).
+
 ## Cadence Anti-Repetition Guard
 - Follow-up cadence no-repeat logic in `services/api/src/index.ts` now blocks **near-duplicate** drafts, not only exact body matches.
 - `selectNonRepeatingCadenceMessage(...)` now checks semantic overlap against recent outbound cadence messages (token overlap + repeated long-sentence detection) before accepting a candidate.

@@ -11153,7 +11153,9 @@ export default function Home() {
                           }}
                         >
                           <div className="text-xs font-semibold text-gray-700">Drag &amp; drop image(s)</div>
-                          <div className="text-[11px] text-gray-500 mt-0.5">Use logos, badges, overlays</div>
+                          <div className="text-[11px] text-gray-500 mt-0.5">
+                            Use logos, badges, overlays (treated as required by generator)
+                          </div>
                           <button
                             type="button"
                             className="lr-campaign-upload-btn mt-2"
