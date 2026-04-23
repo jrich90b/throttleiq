@@ -34,6 +34,7 @@ import {
   parseDialogActWithLLM,
   parseCustomerDispositionWithLLM,
   parseResponseControlWithLLM,
+  parseSalespersonMentionWithLLM,
   parseJourneyIntentWithLLM,
   parseConversationStateWithLLM,
   parseFinanceOutcomeFromCallWithLLM,
@@ -13505,6 +13506,32 @@ function buildMentionClarificationReply(ambiguousUsers: any[]): string {
   return `Just to confirm — did you mean ${list}?`;
 }
 
+function getSalespersonMentionRosterFirstNames(users: Array<any>): string[] {
+  const names = new Set<string>();
+  for (const user of users ?? []) {
+    const first =
+      String(user?.firstName ?? "").trim() ||
+      String(user?.name ?? "").trim().split(/\s+/).filter(Boolean)[0] ||
+      "";
+    if (first) names.add(first);
+  }
+  return Array.from(names);
+}
+
+function resolveMentionParserTargetUser(targetFirstName: string | null | undefined, users: Array<any>): any | null {
+  const token = normalizeMentionToken(String(targetFirstName ?? ""));
+  if (!token) return null;
+  const matches = (users ?? []).filter(user => {
+    const first = normalizeMentionToken(
+      String(user?.firstName ?? "").trim() ||
+        String(user?.name ?? "").trim().split(/\s+/).filter(Boolean)[0] ||
+        ""
+    );
+    return !!first && first === token;
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
+
 function shouldAskMentionClarification(text: string): boolean {
   const body = String(text ?? "").toLowerCase();
   if (!body.trim()) return false;
@@ -25975,11 +26002,38 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       : findMentionedUsers(event.body ?? "", usersForMentions);
   let mentionedUser = mentionResolution.user;
   const ambiguousMentionUsers = mentionResolution.ambiguousUsers;
+  const mentionParserConfidenceMin = Number(process.env.LLM_SALESPERSON_MENTION_CONFIDENCE_MIN ?? 0.72);
+  const mentionParserEligible =
+    event.provider === "twilio" &&
+    (!!mentionedUser || ambiguousMentionUsers.length > 0 || inboundReferencesOtherPerson(event.body ?? ""));
+  const mentionParserResult = mentionParserEligible
+    ? await safeLlmParse("regen_salesperson_mention_parser", () =>
+        parseSalespersonMentionWithLLM({
+          text: event.body ?? "",
+          history,
+          rosterFirstNames: getSalespersonMentionRosterFirstNames(usersForMentions)
+        })
+      )
+    : null;
+  const mentionParserConfidence =
+    typeof mentionParserResult?.confidence === "number" ? mentionParserResult.confidence : 0;
+  const mentionParserAccepted =
+    !!mentionParserResult && mentionParserConfidence >= mentionParserConfidenceMin;
+  const mentionParserContextOnly =
+    mentionParserAccepted && mentionParserResult?.intent === "context_reference";
+  if (!mentionedUser && mentionParserAccepted && mentionParserResult?.intent === "handoff_request") {
+    const targetUser = resolveMentionParserTargetUser(
+      mentionParserResult.targetFirstName ?? null,
+      ambiguousMentionUsers.length ? ambiguousMentionUsers : usersForMentions
+    );
+    if (targetUser) mentionedUser = targetUser;
+  }
   if (
     event.provider === "twilio" &&
     !mentionedUser &&
     ambiguousMentionUsers.length > 1 &&
-    shouldAskMentionClarification(event.body ?? "")
+    shouldAskMentionClarification(event.body ?? "") &&
+    (!mentionParserAccepted || mentionParserResult?.intent === "handoff_request")
   ) {
     return respondWithSmsRegeneratedDraft(buildMentionClarificationReply(ambiguousMentionUsers));
   }
@@ -26024,7 +26078,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       ? `I'll have ${firstName} reach out.`
       : `I'll let ${firstName} know.`;
     const shouldBypassMentionShortcut =
-      !shouldHandoffToMention && hasActionableRequestBeyondMention(String(event.body ?? ""));
+      mentionParserContextOnly ||
+      (!shouldHandoffToMention && hasActionableRequestBeyondMention(String(event.body ?? "")));
     if (shouldBypassMentionShortcut) {
       // Continue through normal routing so actionable requests (for example scheduling updates)
       // are handled instead of being consumed by mention acknowledgment logic.
@@ -29748,15 +29803,42 @@ if (authToken && signature) {
   let mentionedUser: any | null = null;
   let ambiguousMentionUsers: any[] = [];
   let usersForMentions: Array<any> = [];
+  let mentionParserContextOnly = false;
   if (event.provider === "twilio") {
     usersForMentions = await listUsers();
     const mentionResolution = findMentionedUsers(event.body ?? "", usersForMentions);
     mentionedUser = mentionResolution.user;
     ambiguousMentionUsers = mentionResolution.ambiguousUsers;
+    const mentionParserConfidenceMin = Number(process.env.LLM_SALESPERSON_MENTION_CONFIDENCE_MIN ?? 0.72);
+    const mentionParserEligible =
+      !!mentionedUser || ambiguousMentionUsers.length > 0 || inboundReferencesOtherPerson(event.body ?? "");
+    const mentionParserResult = mentionParserEligible
+      ? await safeLlmParse("salesperson_mention_parser", () =>
+          parseSalespersonMentionWithLLM({
+            text: event.body ?? "",
+            history: recentHistory,
+            rosterFirstNames: getSalespersonMentionRosterFirstNames(usersForMentions)
+          })
+        )
+      : null;
+    const mentionParserConfidence =
+      typeof mentionParserResult?.confidence === "number" ? mentionParserResult.confidence : 0;
+    const mentionParserAccepted =
+      !!mentionParserResult && mentionParserConfidence >= mentionParserConfidenceMin;
+    mentionParserContextOnly =
+      mentionParserAccepted && mentionParserResult?.intent === "context_reference";
+    if (!mentionedUser && mentionParserAccepted && mentionParserResult?.intent === "handoff_request") {
+      const targetUser = resolveMentionParserTargetUser(
+        mentionParserResult.targetFirstName ?? null,
+        ambiguousMentionUsers.length ? ambiguousMentionUsers : usersForMentions
+      );
+      if (targetUser) mentionedUser = targetUser;
+    }
     if (
       !mentionedUser &&
       ambiguousMentionUsers.length > 1 &&
-      shouldAskMentionClarification(event.body ?? "")
+      shouldAskMentionClarification(event.body ?? "") &&
+      (!mentionParserAccepted || mentionParserResult?.intent === "handoff_request")
     ) {
       const clarifyReply = buildMentionClarificationReply(ambiguousMentionUsers);
       if (webhookMode === "suggest") {
@@ -29891,7 +29973,8 @@ if (authToken && signature) {
       ? `I'll have ${firstName} reach out.`
       : `I'll let ${firstName} know.`;
     const shouldBypassMentionShortcut =
-      !shouldHandoffToMention && hasActionableRequestBeyondMention(String(event.body ?? ""));
+      mentionParserContextOnly ||
+      (!shouldHandoffToMention && hasActionableRequestBeyondMention(String(event.body ?? "")));
     if (shouldBypassMentionShortcut) {
       // Continue through normal routing so actionable requests (for example scheduling updates)
       // are handled instead of being consumed by mention acknowledgment logic.

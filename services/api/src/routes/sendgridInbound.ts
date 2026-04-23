@@ -1742,7 +1742,12 @@ function pauseRelatedCadencesOnInbound(conv: any, fromEmail?: string) {
   pauseFollowUpCadence(conv, pauseUntil, "inbound_email");
 }
 
-function extractLeadMeta(adfXml: string): { leadSource?: string; model?: string; vendorContactName?: string } {
+function extractLeadMeta(adfXml: string): {
+  leadSource?: string;
+  model?: string;
+  vendorContactName?: string;
+  sourceFromId?: string;
+} {
   try {
     const cleaned = decodeQuotedPrintable(adfXml);
     const parser = new XMLParser({ ignoreAttributes: false });
@@ -1780,7 +1785,7 @@ function extractLeadMeta(adfXml: string): { leadSource?: string; model?: string;
     const vehicle = prospect?.vehicle ?? prospect?.request?.vehicle ?? adf?.vehicle ?? {};
     const model = text(vehicle?.model);
 
-    return { leadSource, model, vendorContactName };
+    return { leadSource, model, vendorContactName, sourceFromId };
   } catch {
     return {};
   }
@@ -2429,7 +2434,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const meta = extractLeadMeta(adfXml);
   const leadSource = meta.leadSource?.trim() || undefined;
   const leadSourceLower = (leadSource ?? "").toLowerCase();
-  const isTrafficLogProLeadSourceHint = /traffic\s*log\s*pro/i.test(leadSourceLower);
+  const sourceFromIdLower = String(meta.sourceFromId ?? "").trim().toLowerCase();
+  const isTrafficLogProLeadSourceHint =
+    /traffic\s*log\s*pro/i.test(leadSourceLower) || /traffic\s*log\s*pro/i.test(sourceFromIdLower);
   const isExplicitWalkInLeadSourceHint =
     /\bwalk\s*[- ]?in\b/i.test(leadSourceLower) || /\bdealership\s+visit\b/i.test(leadSourceLower);
   const vendorContactName = meta.vendorContactName?.trim() || "";
@@ -3663,9 +3670,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const allowWalkInVendorOwnerFallback =
       !isExplicitWalkInLeadSource || isTrafficLogProLeadSource || !!salespersonFirst;
     const ownerToken = salespersonFirst || (allowWalkInVendorOwnerFallback ? vendorFirst.toLowerCase() : "");
-    if (!conv.leadOwner?.id && ownerToken) {
+    if (ownerToken) {
       try {
         const users = await listUsers();
+        const currentOwnerId = String(conv.leadOwner?.id ?? "").trim();
+        const currentOwner =
+          users.find(u => String(u.id ?? "").trim() === currentOwnerId) ?? null;
+        const currentOwnerIsManager = !!currentOwner && currentOwner.role === "manager";
         const owner = users.find(u => {
           if (u.role !== "salesperson") return false;
           const first = String(u.firstName ?? "").trim().toLowerCase();
@@ -3676,7 +3687,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
             ?.toLowerCase();
           return first === ownerToken || nameFirst === ownerToken;
         });
-        if (owner) {
+        if (owner && (!currentOwnerId || currentOwnerIsManager)) {
           conv.leadOwner = {
             id: owner.id,
             name: owner.name ?? owner.firstName ?? owner.email ?? ownerToken,

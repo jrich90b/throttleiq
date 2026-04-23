@@ -1160,6 +1160,13 @@ export type ResponseControlParse = {
   confidence?: number;
 };
 
+export type SalespersonMentionParse = {
+  intent: "handoff_request" | "context_reference" | "none";
+  explicitRequest: boolean;
+  targetFirstName?: string | null;
+  confidence?: number;
+};
+
 export type AffectParse = {
   primaryAffect:
     | "neutral"
@@ -1625,6 +1632,21 @@ const RESPONSE_CONTROL_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
       enum: ["opt_out", "not_interested", "schedule_request", "compliment_only", "none"]
     },
     explicit_request: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const SALESPERSON_MENTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent", "explicit_request", "target_first_name", "confidence"],
+  properties: {
+    intent: {
+      type: "string",
+      enum: ["handoff_request", "context_reference", "none"]
+    },
+    explicit_request: { type: "boolean" },
+    target_first_name: { type: "string" },
     confidence: { type: "number" }
   }
 };
@@ -2842,6 +2864,100 @@ export async function parseResponseControlWithLLM(args: {
   return {
     intent,
     explicitRequest,
+    confidence
+  };
+}
+
+export async function parseSalespersonMentionWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  rosterFirstNames?: string[];
+}): Promise<SalespersonMentionParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_SALESPERSON_MENTION_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_SALESPERSON_MENTION_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_SALESPERSON_MENTION_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_SALESPERSON_MENTION_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const roster = Array.from(
+    new Set(
+      (args.rosterFirstNames ?? [])
+        .map(v => String(v ?? "").trim())
+        .filter(Boolean)
+    )
+  ).slice(0, 20);
+
+  const prompt = [
+    "You parse salesperson-name mentions in dealership customer messages.",
+    "Return only JSON matching the schema.",
+    "",
+    "Classify intent:",
+    "- handoff_request: customer is asking a specific teammate to call/text/follow up (for example: 'tell Scott to call me', 'have Joe reach out').",
+    "- context_reference: teammate name is context only (for example updates like 'Scott has the insurance cards') while primary ask is something else.",
+    "- none: no teammate-name mention.",
+    "",
+    "Rules:",
+    "- explicit_request=true only when the customer explicitly asks for teammate action.",
+    "- target_first_name must be one roster first name when clearly referenced; else empty string.",
+    "- If ambiguous/uncertain, keep target_first_name empty.",
+    "- confidence is 0..1.",
+    "",
+    `Team roster first names: ${roster.length ? roster.join(", ") : "(none provided)"}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> => {
+    return requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "salesperson_mention_parser",
+      schema: SALESPERSON_MENTION_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 140,
+      debugTag: "llm-salesperson-mention-parser",
+      debug
+    });
+  };
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const intentRaw = String(parsed.intent ?? "").toLowerCase();
+  const intent: SalespersonMentionParse["intent"] =
+    intentRaw === "handoff_request" || intentRaw === "context_reference" ? intentRaw : "none";
+  const explicitRequest = !!parsed.explicit_request;
+  let targetFirstName = cleanOptionalString(parsed.target_first_name);
+  if (targetFirstName && roster.length) {
+    const normalized = targetFirstName.toLowerCase();
+    const exact = roster.find(name => name.toLowerCase() === normalized);
+    if (exact) {
+      targetFirstName = exact;
+    } else {
+      targetFirstName = null;
+    }
+  }
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    intent,
+    explicitRequest,
+    targetFirstName: targetFirstName ?? null,
     confidence
   };
 }

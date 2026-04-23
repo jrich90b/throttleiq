@@ -714,3 +714,20 @@ When changing responses:
   - applied to both live inbound routing and regenerate routing paths.
 - Purpose:
   - prevents coworker name mentions in context (for example, “Scott has insurance cards”) from interrupting scheduling flows with unnecessary clarification prompts.
+
+## Parser-First Salesperson Mention Routing
+- Salesperson mention handling should be parser-first (LLM) with deterministic regex only as fallback.
+- Implemented in `services/api/src/domain/llmDraft.ts` and `services/api/src/index.ts`:
+  - new parser: `parseSalespersonMentionWithLLM(...)` classifies mention intent (`handoff_request`, `context_reference`, `none`) and optional `target_first_name`.
+  - both live inbound routing and regenerate routing now consult this parser before ambiguous-name clarification or mention handoff shortcut logic.
+  - deterministic mention rules remain as fallback when parser confidence is below threshold.
+- Default confidence gate:
+  - `LLM_SALESPERSON_MENTION_CONFIDENCE_MIN` (default `0.72`).
+
+## Walk-In Owner Detection (TLP XML Source Attr)
+- In `services/api/src/routes/sendgridInbound.ts`:
+  - `extractLeadMeta(...)` now returns `sourceFromId` from `<id source=\"...\">`.
+  - Traffic Log Pro source detection now checks both provider/source label and XML ID source attribute.
+  - for initial trusted walk-in routing, if owner was only manager fallback, vendor-contact salesperson can replace manager owner when confidently matched.
+- Purpose:
+  - for payloads where provider is `Walk In` but XML id source is `Traffic Log Pro`, owner routing can still trust vendor contact salesperson (for example `Scott Hartrich`) instead of falling back to manager.
