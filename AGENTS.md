@@ -118,6 +118,11 @@ Pricing/Payments policy enforcement (runtime):
 - If `pricing_answered`, avoid repeating the exact same pricing reply.
 - If `pricing_handoff`/`payments_handoff`, send a manager follow‑up ack.
 
+License/Credit pending follow-up policy (context-note driven):
+- When salesperson context notes indicate the customer is waiting on a motorcycle license/permit and plans to run a credit app after that, set cadence context to `license_credit_pending`.
+- This path should reset cadence to an engaged delayed check-in (not immediate day-1 pressure) and use license/credit-specific follow-up wording.
+- Default delay is controlled by `LICENSE_CREDIT_PENDING_DEFAULT_DAYS` (defaults to 21 days) when no explicit follow-up window is parsed.
+
 Callback/Call‑Only policy enforcement (runtime):
 - If callback is requested, respond with a call‑back ack and create a handoff todo.
 - If call‑only is requested, set `contactPreference=call_only`, stop cadence, and do not send SMS.

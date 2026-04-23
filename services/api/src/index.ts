@@ -4765,6 +4765,10 @@ const ENGAGED_FOLLOW_UP_VARIANTS_WITH_SLOTS: Record<string, string[]> = {
     "Hey {name}, quick check-in - how is it going with the remaining application docs? If easier, I can do {a} or {b} and help you finish it up.",
     "{name}, if helpful, we can knock out the remaining docs/references at {a} or {b}. Which works better?"
   ],
+  license_credit_pending: [
+    "Hey {name}, once your license is set, I can do {a} or {b} to run the credit app and next steps.",
+    "{name}, when your license is in place, I can hold {a} or {b} to wrap up the credit app."
+  ],
   inventory: [
     "Hey {name}, if you want to see{label}, I have {a} or {b} open. Which works better?{extraLine}",
     "{name}, want to stop by for the {model}? I can do {a} or {b}.{extraLine}"
@@ -4854,6 +4858,20 @@ const ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS: Record<string, Record<number, string[
     2: [
       "Want me to keep this open while you finish those documents?",
       "{name}, still planning to finish the pending application items, or should I pause this for now?"
+    ]
+  },
+  license_credit_pending: {
+    0: [
+      "Hey {name}, quick check-in — once your license is set, I can help you run the credit app and keep it moving.",
+      "{name}, whenever your license is ready, we can run the credit app and go over next steps."
+    ],
+    1: [
+      "If helpful, I can send a short credit-app checklist now so you are ready when your license is done.",
+      "Want me to text the quick credit-app items so it is easy once your license is in place?"
+    ],
+    2: [
+      "Still planning to come back once the license is done, or want me to pause for now?",
+      "{name}, want me to keep this open until your license is ready?"
     ]
   },
   inventory: {
@@ -5334,6 +5352,9 @@ async function getCadencePersonalizationLine(
 function inferCadenceTagFromAgentContext(conv: any): string | null {
   const text = getCadenceAgentContextText(conv, new Date()).toLowerCase();
   if (!text) return null;
+  if (hasLicensePendingContextCue(text) && hasCreditAppPlanContextCue(text)) {
+    return "license_credit_pending";
+  }
   if (
     /\b(docs?|documents?|paperwork|references?|pay\s*stubs?|proof of (income|residence|address|insurance)|co-?signer|cosigner|contingenc(?:y|ies)|needs more info|pending)\b/.test(
       text
@@ -5381,6 +5402,24 @@ function hasCadenceFinanceDocsSignal(conv: any): boolean {
       text
     );
   return hasDocTerm && hasPendingTerm;
+}
+
+function hasCadenceLicenseCreditPendingSignal(conv: any): boolean {
+  if (!conv) return false;
+  const followUpReason = String(conv?.followUp?.reason ?? "").trim().toLowerCase();
+  if (followUpReason === "license_credit_pending") return true;
+  if (String(conv?.followUpCadence?.contextTag ?? "").trim().toLowerCase() === "license_credit_pending") {
+    return true;
+  }
+  const agentContext = getCadenceAgentContextText(conv, new Date()).toLowerCase();
+  const walkInComment = String(conv?.lead?.walkInComment ?? "").toLowerCase();
+  const recentHistory = buildHistory(conv, 12)
+    .slice(-8)
+    .map(h => String(h.body ?? "").toLowerCase())
+    .join(" ");
+  const text = `${agentContext} ${walkInComment} ${recentHistory}`.trim();
+  if (!text) return false;
+  return hasLicensePendingContextCue(text) && hasCreditAppPlanContextCue(text);
 }
 
 function mapDialogStateToCadenceTag(name: DialogStateName): string | null {
@@ -5472,6 +5511,11 @@ async function resolveCadenceContextTag(conv: any, cadence: any): Promise<string
   const cachedAt = cadence?.contextTagUpdatedAt ? new Date(cadence.contextTagUpdatedAt) : null;
   if (cached && cachedAt && Date.now() - cachedAt.getTime() < 24 * 60 * 60 * 1000) {
     return cached;
+  }
+  if (hasCadenceLicenseCreditPendingSignal(conv)) {
+    cadence.contextTag = "license_credit_pending";
+    cadence.contextTagUpdatedAt = nowIso();
+    return "license_credit_pending";
   }
   if (hasCadenceFinanceDocsSignal(conv)) {
     cadence.contextTag = "finance_docs";
@@ -11296,6 +11340,38 @@ function hasLikelyFollowUpCue(text: string): boolean {
   );
 }
 
+const LICENSE_CREDIT_PENDING_WALKIN_STATES = new Set([
+  "timing_defer_window",
+  "docs_or_insurance_pending",
+  "outside_financing_pending",
+  "down_payment_pending",
+  "household_approval_pending",
+  "decision_pending",
+  "cosigner_required"
+]);
+
+function hasLicensePendingContextCue(text: string): boolean {
+  const source = String(text ?? "").toLowerCase();
+  if (!source.trim()) return false;
+  if (!/\b(license|licence|permit)\b/.test(source)) return false;
+  return (
+    /\b(wait(?:ing)? on|once|when|after|until|gets?|has|have|get)\b[\s\S]{0,40}\b(license|licence|permit)\b/.test(
+      source
+    ) ||
+    /\b(license|licence|permit)\b[\s\S]{0,40}\b(wait(?:ing)? on|once|when|after|until|gets?|has|have|get)\b/.test(
+      source
+    )
+  );
+}
+
+function hasCreditAppPlanContextCue(text: string): boolean {
+  const source = String(text ?? "").toLowerCase();
+  if (!source.trim()) return false;
+  return /\b(credit app|credit application|finance app|run credit|submit credit|apply for credit|prequal|pre-qual)\b/.test(
+    source
+  );
+}
+
 async function deriveContextNoteWatches(
   conv: any,
   noteText: string,
@@ -11447,6 +11523,45 @@ async function applyActionStateFromContextNote(
         dueLabel ? `context_note_follow_up_scheduled:${dueLabel}` : "context_note_follow_up_added"
       );
     }
+  }
+
+  const walkInState = String(walkInOutcome?.state ?? "").trim().toLowerCase();
+  const walkInDeferredState =
+    walkInOutcomeAccepted && LICENSE_CREDIT_PENDING_WALKIN_STATES.has(walkInState);
+  const licensePendingCue = hasLicensePendingContextCue(text);
+  const creditAppCue = hasCreditAppPlanContextCue(text);
+  const shouldApplyLicenseCreditPendingCadence =
+    licensePendingCue &&
+    (creditAppCue || walkInDeferredState) &&
+    !isSoldOrPostSaleConversation(conv);
+  if (shouldApplyLicenseCreditPendingCadence) {
+    const cfg = await getSchedulerConfigHot();
+    const timezone = cfg.timezone || "America/New_York";
+    const defaultDaysRaw = Number(process.env.LICENSE_CREDIT_PENDING_DEFAULT_DAYS ?? 21);
+    const defaultDays = Number.isFinite(defaultDaysRaw)
+      ? Math.max(7, Math.min(90, Math.trunc(defaultDaysRaw)))
+      : 21;
+    const parsedWindow = parseFutureTimeframe(followUpWindowHint || text, new Date());
+    const dueAtIso = parsedWindow?.until
+      ? parsedWindow.until.toISOString()
+      : computeFollowUpDueAt(nowIso(), defaultDays, timezone);
+    const cadenceUpdatedAt = nowIso();
+    conv.followUpCadence = {
+      status: "active",
+      anchorAt: dueAtIso,
+      nextDueAt: dueAtIso,
+      stepIndex: 0,
+      kind: "engaged",
+      contextTag: "license_credit_pending",
+      contextTagUpdatedAt: cadenceUpdatedAt,
+      scheduleInviteCount: 0,
+      scheduleMuted: false
+    };
+    if (conv.followUp?.mode !== "holding_inventory" && conv.followUp?.mode !== "manual_handoff") {
+      setFollowUpMode(conv, "active", "license_credit_pending");
+    }
+    changed = true;
+    reasons.push(`context_note_license_credit_pending:${formatSlotLocal(dueAtIso, timezone)}`);
   }
 
   if (changed) {
