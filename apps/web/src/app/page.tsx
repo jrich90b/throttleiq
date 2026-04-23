@@ -1769,17 +1769,106 @@ function campaignTagHashtags(tags: CampaignTag[] | undefined): string {
   return out.slice(0, 6).join(" ");
 }
 
+function campaignSplitCaptionSentences(raw: string): string[] {
+  const input = String(raw ?? "").replace(/\s+/g, " ").trim();
+  if (!input) return [];
+  const parts = input.match(/[^.!?]+[.!?]?/g) ?? [];
+  return parts.map(part => part.trim()).filter(Boolean);
+}
+
+function campaignNormalizeCaptionSentence(raw: string): string {
+  let text = String(raw ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  text = text.replace(
+    /^(?:gen(?:e|r)?ate|create)\s+a?\s*campaign[\s\S]*?\bfor\s+an?\s+event\s+called\s+/i,
+    ""
+  );
+  text = text.replace(/^(?:for\s+an?\s+event\s+called|event\s+called)\s+/i, "");
+  text = text.replace(/^using\s+the\s+reference\s+image[\s\S]*?\bfor\s+styling\b/i, "");
+  text = text.replace(/^important[:,]?\s*/i, "");
+  text = text.replace(/^make\s+sure\s+/i, "");
+  text = text.replace(/\s{2,}/g, " ").trim();
+  return text;
+}
+
+function campaignIsInstructionSentence(raw: string): boolean {
+  const text = String(raw ?? "").toLowerCase();
+  if (!text) return true;
+  if (
+    /\b(make sure|important|output format|step \d+|drag|drop|choose|reference image|design images?|logos? must|put .* bottom|include .* logo|separate from)\b/.test(
+      text
+    )
+  ) {
+    return true;
+  }
+  if (/\b(gen(?:e|r)?ate|create)\s+a?\s*campaign\b/.test(text) && !/\bevent\s+called\b/.test(text)) {
+    return true;
+  }
+  return false;
+}
+
+function campaignCaptionHasInstructionSignals(raw: string): boolean {
+  const input = String(raw ?? "").replace(/\s+/g, " ").trim();
+  if (!input) return false;
+  if (/\b(genrate|generate|create)\s+a?\s*campaign\b/i.test(input)) return true;
+  for (const sentence of campaignSplitCaptionSentences(input)) {
+    if (campaignIsInstructionSentence(sentence)) return true;
+  }
+  return false;
+}
+
+function campaignSanitizeCaptionDetail(raw: unknown): string {
+  const input = String(raw ?? "").replace(/\s+/g, " ").trim();
+  if (!input) return "";
+  const out: string[] = [];
+  for (const sentenceRaw of campaignSplitCaptionSentences(input)) {
+    const sentence = campaignNormalizeCaptionSentence(sentenceRaw);
+    if (!sentence) continue;
+    if (campaignIsInstructionSentence(sentence)) continue;
+    out.push(sentence);
+    if (out.length >= 2) break;
+  }
+  if (out.length) return out.join(" ").trim();
+  const eventCalled = input.match(/event\s+called\s+(.+?)(?:\.|$)/i);
+  if (eventCalled?.[1]) return campaignNormalizeCaptionSentence(eventCalled[1]);
+  return "";
+}
+
+function campaignFirstEmailParagraph(raw: unknown): string {
+  const text = String(raw ?? "").trim();
+  if (!text) return "";
+  return text.split(/\n\s*\n/).map(v => v.trim()).find(Boolean) ?? "";
+}
+
+function campaignDeriveCaptionDetail(entry: CampaignEntry): string {
+  const fromDescription = campaignSanitizeCaptionDetail(entry.description);
+  if (fromDescription) return fromDescription;
+  const fromSms = campaignSanitizeCaptionDetail(entry.smsBody);
+  if (fromSms) return fromSms;
+  const fromEmail = campaignSanitizeCaptionDetail(campaignFirstEmailParagraph(entry.emailBodyText));
+  if (fromEmail) return fromEmail;
+  const fromPrompt = campaignSanitizeCaptionDetail(entry.prompt);
+  if (fromPrompt) return fromPrompt;
+  return "";
+}
+
+function campaignLooksLikeEvent(entry: CampaignEntry, detail: string): boolean {
+  const joined = [entry.name, entry.description, entry.prompt, detail].map(v => String(v ?? "").toLowerCase()).join(" ");
+  return /\b(event|pre-?party|open house|rsvp|join us|saturday|sunday|monday|tuesday|wednesday|thursday|friday|\d{1,2}\s?(?:am|pm))\b/.test(
+    joined
+  );
+}
+
 function campaignBuildCatchyCaption(entry: CampaignEntry): string {
   const name = campaignTrimToLimit(entry.name, 140);
-  const description = campaignTrimToLimit(entry.description, 240);
-  const prompt = campaignTrimToLimit(entry.prompt, 180);
+  const detailRaw = campaignDeriveCaptionDetail(entry);
+  const detail = campaignTrimToLimit(detailRaw, 280);
   const intro = name || "Fresh inventory just dropped";
-  const detail = description || prompt || "New arrivals, standout options, and serious riding season energy.";
   const tags = campaignTagHashtags(entry.tags);
-  const cta = (entry.tags ?? []).includes("dealer_event")
+  const cta = (entry.tags ?? []).includes("dealer_event") || campaignLooksLikeEvent(entry, detail)
     ? "Save your spot and message us for event details."
     : "Message us for pricing, availability, and next steps.";
-  const lines = [intro, detail, cta, tags].filter(Boolean);
+  const lines = [intro, detail || "New arrivals, standout options, and serious riding season energy.", cta, tags].filter(Boolean);
   return lines.join("\n\n").slice(0, 1800);
 }
 
@@ -1804,10 +1893,10 @@ function campaignComposePublishCaption(
 function campaignAutoPublishCaption(entry: CampaignEntry | null | undefined): string {
   if (!entry) return "";
   const meta = entry.metadata && typeof entry.metadata === "object" ? (entry.metadata as Record<string, unknown>) : null;
-  const explicit =
+  const explicitRaw =
     String(meta?.socialCaption ?? meta?.caption ?? "").trim() ||
     String(meta?.publishCaption ?? "").trim();
-  if (explicit) return explicit.slice(0, 1800);
+  if (explicitRaw && !campaignCaptionHasInstructionSignals(explicitRaw)) return explicitRaw.slice(0, 1800);
 
   const catchy = campaignBuildCatchyCaption(entry);
   if (catchy) return catchy;

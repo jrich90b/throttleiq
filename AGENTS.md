@@ -615,3 +615,11 @@ When changing responses:
   - `EMAIL_FOLLOW_UP_MESSAGES`
   - `buildEarlyCadencePromotionOverride(...)`
   - `buildCadenceCheckInFallbacks(...)`
+
+## Campaign Caption Prompt-Sanitization Guardrail
+- Auto caption generation for social posts now strips internal prompt/instruction language and keeps customer-facing copy only.
+- Added instruction-signal detection for phrases like “generate campaign,” “output format,” “make sure,” drag/drop UI text, and logo-placement instructions.
+- Behavior updates:
+  - API (`services/api/src/index.ts`): `campaignAutoSocialCaption(...)` now ignores instruction-like existing captions and rebuilds from sanitized campaign detail.
+  - API generate-save path refreshes stale instruction-like `metadata.socialCaption` for feed targets instead of preserving bad prompt text.
+  - Web (`apps/web/src/app/page.tsx`): `campaignAutoPublishCaption(...)` and `campaignBuildCatchyCaption(...)` now use the same sanitization logic, so preview cards show customer-facing captions even for older campaigns with stale metadata.

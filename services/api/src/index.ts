@@ -16803,25 +16803,121 @@ function campaignTagHashtags(tags: unknown): string {
   return out.slice(0, 6).join(" ");
 }
 
+function splitCaptionSentences(raw: string): string[] {
+  const input = String(raw ?? "").replace(/\s+/g, " ").trim();
+  if (!input) return [];
+  const parts = input.match(/[^.!?]+[.!?]?/g) ?? [];
+  return parts.map(part => part.trim()).filter(Boolean);
+}
+
+function normalizeCaptionSentence(raw: string): string {
+  let text = String(raw ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  text = text.replace(
+    /^(?:gen(?:e|r)?ate|create)\s+a?\s*campaign[\s\S]*?\bfor\s+an?\s+event\s+called\s+/i,
+    ""
+  );
+  text = text.replace(/^(?:for\s+an?\s+event\s+called|event\s+called)\s+/i, "");
+  text = text.replace(/^using\s+the\s+reference\s+image[\s\S]*?\bfor\s+styling\b/i, "");
+  text = text.replace(/^important[:,]?\s*/i, "");
+  text = text.replace(/^make\s+sure\s+/i, "");
+  text = text.replace(/\s{2,}/g, " ").trim();
+  return text;
+}
+
+function isInstructionSentence(raw: string): boolean {
+  const text = String(raw ?? "").toLowerCase();
+  if (!text) return true;
+  if (
+    /\b(make sure|important|output format|step \d+|drag|drop|choose|reference image|design images?|logos? must|put .* bottom|include .* logo|separate from)\b/.test(
+      text
+    )
+  ) {
+    return true;
+  }
+  if (/\b(gen(?:e|r)?ate|create)\s+a?\s*campaign\b/.test(text) && !/\bevent\s+called\b/.test(text)) {
+    return true;
+  }
+  return false;
+}
+
+function captionHasInstructionSignals(raw: unknown): boolean {
+  const input = String(raw ?? "").replace(/\s+/g, " ").trim();
+  if (!input) return false;
+  if (/\b(genrate|generate|create)\s+a?\s*campaign\b/i.test(input)) return true;
+  for (const sentence of splitCaptionSentences(input)) {
+    if (isInstructionSentence(sentence)) return true;
+  }
+  return false;
+}
+
+function sanitizeCampaignCaptionDetail(raw: unknown): string {
+  const input = String(raw ?? "").replace(/\s+/g, " ").trim();
+  if (!input) return "";
+  const out: string[] = [];
+  for (const sentenceRaw of splitCaptionSentences(input)) {
+    const sentence = normalizeCaptionSentence(sentenceRaw);
+    if (!sentence) continue;
+    if (isInstructionSentence(sentence)) continue;
+    out.push(sentence);
+    if (out.length >= 2) break;
+  }
+  if (out.length) return out.join(" ").trim();
+
+  const eventCalled = input.match(/event\s+called\s+(.+?)(?:\.|$)/i);
+  if (eventCalled?.[1]) {
+    return normalizeCaptionSentence(eventCalled[1]);
+  }
+  return "";
+}
+
+function firstEmailParagraph(raw: unknown): string {
+  const text = String(raw ?? "").trim();
+  if (!text) return "";
+  return text.split(/\n\s*\n/).map(v => v.trim()).find(Boolean) ?? "";
+}
+
+function deriveCampaignCaptionDetail(campaign: any): string {
+  const fromDescription = sanitizeCampaignCaptionDetail(campaign?.description);
+  if (fromDescription) return fromDescription;
+  const fromSms = sanitizeCampaignCaptionDetail(campaign?.smsBody);
+  if (fromSms) return fromSms;
+  const fromEmail = sanitizeCampaignCaptionDetail(firstEmailParagraph(campaign?.emailBodyText));
+  if (fromEmail) return fromEmail;
+  const fromPrompt = sanitizeCampaignCaptionDetail(campaign?.prompt);
+  if (fromPrompt) return fromPrompt;
+  return "";
+}
+
+function campaignLooksLikeEvent(campaign: any, detail: string): boolean {
+  const joined = [campaign?.name, campaign?.description, campaign?.prompt, detail]
+    .map(v => String(v ?? "").toLowerCase())
+    .join(" ");
+  return /\b(event|pre-?party|open house|rsvp|join us|saturday|sunday|monday|tuesday|wednesday|thursday|friday|\d{1,2}\s?(?:am|pm))\b/.test(
+    joined
+  );
+}
+
 function campaignAutoSocialCaption(campaign: any): string {
   const metadata = campaign?.metadata && typeof campaign.metadata === "object"
     ? (campaign.metadata as Record<string, unknown>)
     : null;
-  const explicit =
+  const explicitRaw =
     String(metadata?.socialCaption ?? metadata?.caption ?? "").trim() ||
     String(metadata?.publishCaption ?? "").trim();
-  if (explicit) return explicit.slice(0, 1800);
+  if (explicitRaw && !captionHasInstructionSignals(explicitRaw)) return explicitRaw.slice(0, 1800);
 
   const name = String(campaign?.name ?? "").trim();
-  const description = String(campaign?.description ?? "").trim();
-  const prompt = String(campaign?.prompt ?? "").trim();
+  const detail = deriveCampaignCaptionDetail(campaign);
   const intro = name || "Fresh inventory just dropped";
-  const detail = description || prompt || "New arrivals, standout options, and riding season momentum.";
   const tags = campaignTagHashtags(campaign?.tags);
-  const cta = Array.isArray(campaign?.tags) && campaign.tags.includes("dealer_event")
+  const cta = (Array.isArray(campaign?.tags) && campaign.tags.includes("dealer_event")) || campaignLooksLikeEvent(campaign, detail)
     ? "Save your spot and message us for event details."
     : "Message us for pricing, availability, and next steps.";
-  const composed = [intro, detail, cta, tags].filter(Boolean).join("\n\n").trim();
+  const composed = [intro, detail || "New arrivals, standout options, and riding season momentum.", cta, tags]
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
   if (composed) return composed.slice(0, 1800);
 
   const sms = String(campaign?.smsBody ?? "").trim();
@@ -22962,10 +23058,10 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       effectiveGenerated.metadata && typeof effectiveGenerated.metadata === "object"
         ? { ...(effectiveGenerated.metadata as Record<string, unknown>) }
         : {};
-    const existingCaption =
+    const existingCaptionRaw =
       String(existingMeta.socialCaption ?? existingMeta.caption ?? "").trim() ||
       String(existingMeta.publishCaption ?? "").trim();
-    if (!existingCaption) {
+    if (!existingCaptionRaw || captionHasInstructionSignals(existingCaptionRaw)) {
       const autoCaption = campaignAutoSocialCaption({
         ...(existingCampaign ?? {}),
         name,
