@@ -143,6 +143,13 @@ When changing responses:
   - Do not auto-generate social caption for flyer target.
   - In the generated output card, flyer actions are `Print`, `Download`, `Remove` (no send/post queue action).
 
+## Auth UI Theme
+- Login/bootstrap screen now uses the same dark brand theme style direction as the app shell.
+- High-contrast controls are required on auth screens:
+  - Inputs use bright foreground on dark field with clear orange focus ring.
+  - Primary submit uses orange fill with dark text.
+  - Errors/success states use readable high-contrast colors.
+
 ## Phase 1 Routing Alignment (No Line Number Notes)
 - Deterministic availability and finance-priority gating are shared helpers in `services/api/src/index.ts`:
   - `getDeterministicAvailabilitySignals(...)`

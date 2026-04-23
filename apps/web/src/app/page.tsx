@@ -9611,35 +9611,35 @@ export default function Home() {
 
   if (authLoading) {
     return (
-      <main className="h-screen flex items-center justify-center text-sm text-gray-600 bg-white">
-        Loading…
+      <main className="lr-auth-shell">
+        <div className="lr-auth-loading">Loading…</div>
       </main>
     );
   }
 
   if (needsBootstrap || !authUser) {
     return (
-      <main className="h-screen flex items-center justify-center bg-white">
-        <div className="w-full max-w-sm border rounded-lg p-6 space-y-4">
-          <div className="text-lg font-semibold">
+      <main className="lr-auth-shell">
+        <div className="lr-auth-card w-full max-w-sm space-y-4">
+          <div className="lr-auth-title text-lg font-semibold">
             {needsBootstrap ? "Create manager account" : "Sign in"}
           </div>
           {needsBootstrap ? (
             <input
-              className="w-full border rounded px-3 py-2 text-sm"
+              className="lr-auth-input w-full px-3 py-2 text-sm"
               placeholder="Name"
               value={loginForm.name}
               onChange={e => setLoginForm({ ...loginForm, name: e.target.value })}
             />
           ) : null}
           <input
-            className="w-full border rounded px-3 py-2 text-sm"
+            className="lr-auth-input w-full px-3 py-2 text-sm"
             placeholder="Email"
             value={loginForm.email}
             onChange={e => setLoginForm({ ...loginForm, email: e.target.value })}
           />
           <input
-            className="w-full border rounded px-3 py-2 text-sm"
+            className="lr-auth-input w-full px-3 py-2 text-sm"
             placeholder="Password"
             type="password"
             value={loginForm.password}
@@ -9647,7 +9647,7 @@ export default function Home() {
           />
           {!needsBootstrap ? (
             <button
-              className="text-xs underline"
+              className="lr-auth-link text-xs underline"
               type="button"
               onClick={() => {
                 const nextOpen = !forgotOpen;
@@ -9661,29 +9661,29 @@ export default function Home() {
             </button>
           ) : null}
           {forgotOpen && !needsBootstrap ? (
-            <div className="border rounded p-3 space-y-2 bg-gray-50">
-              <div className="text-xs font-medium">Reset password by email</div>
+            <div className="lr-auth-forgot-panel rounded p-3 space-y-2">
+              <div className="text-xs font-medium lr-auth-forgot-title">Reset password by email</div>
               <input
-                className="w-full border rounded px-3 py-2 text-sm"
+                className="lr-auth-input w-full px-3 py-2 text-sm"
                 placeholder="Email"
                 value={forgotEmail}
                 onChange={e => setForgotEmail(e.target.value)}
               />
               <button
-                className="px-3 py-2 border rounded text-sm bg-white"
+                className="lr-auth-secondary-btn px-3 py-2 rounded text-sm"
                 type="button"
                 onClick={submitForgotPassword}
                 disabled={forgotBusy}
               >
                 {forgotBusy ? "Sending..." : "Send reset link"}
               </button>
-              {forgotError ? <div className="text-xs text-red-600">{forgotError}</div> : null}
-              {forgotMessage ? <div className="text-xs text-green-700">{forgotMessage}</div> : null}
+              {forgotError ? <div className="text-xs lr-auth-error">{forgotError}</div> : null}
+              {forgotMessage ? <div className="text-xs lr-auth-success">{forgotMessage}</div> : null}
             </div>
           ) : null}
-          {authError ? <div className="text-xs text-red-600">{authError}</div> : null}
+          {authError ? <div className="text-xs lr-auth-error">{authError}</div> : null}
           <button
-            className="w-full px-3 py-2 border rounded text-sm"
+            className="lr-auth-primary-btn w-full px-3 py-2 rounded text-sm"
             onClick={needsBootstrap ? submitBootstrap : submitLogin}
           >
             {needsBootstrap ? "Create account" : "Sign in"}
