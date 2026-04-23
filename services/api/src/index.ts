@@ -13505,6 +13505,55 @@ function buildMentionClarificationReply(ambiguousUsers: any[]): string {
   return `Just to confirm — did you mean ${list}?`;
 }
 
+function shouldAskMentionClarification(text: string): boolean {
+  const body = String(text ?? "").toLowerCase();
+  if (!body.trim()) return false;
+  const explicitNamedHandoff =
+    /\b(tell|let|ask)\s+[a-z][a-z.'-]{1,30}\b/.test(body) ||
+    /\bhave\s+[a-z][a-z.'-]{1,30}\s+(call|text|reach out|follow up|contact)\b/.test(body) ||
+    /\b(can|could|would)\s+[a-z][a-z.'-]{1,30}\s+(call|text|reach out|follow up|contact)\b/.test(body);
+  const callbackAsk = /\b(call me|give me a call|please call|text me|reach out|follow up|contact me)\b/.test(
+    body
+  );
+  return explicitNamedHandoff || (callbackAsk && inboundReferencesOtherPerson(body));
+}
+
+function hasActionableRequestBeyondMention(text: string): boolean {
+  const body = String(text ?? "").toLowerCase().trim();
+  if (!body) return false;
+  if (isThankYouSignoffNoRequest(body)) return false;
+
+  const hasDayToken =
+    /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|this week|weekend)\b/.test(
+      body
+    );
+  const hasTimeToken =
+    /\b(\d{1,2}(:\d{2})?\s*(am|pm)\b|between\s+\d{1,2}|around\s+\d{1,2}|at\s+\d{1,2})/.test(body);
+  const hasScheduleCue =
+    /\b(schedule|book|set up|set|reschedul|reschedule|move|bump|pickup|pick up|delivery|stop in|come in)\b/.test(
+      body
+    );
+  if (hasScheduleCue && (hasDayToken || hasTimeToken || /\?/.test(body))) return true;
+
+  if (
+    /\?/.test(body) &&
+    /\b(works|ok|okay|available|availability|price|pricing|payment|trade|inventory|in stock|test ride|finance|apr|months|down)\b/.test(
+      body
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    /\b(insurance card|insurance cards|insurance binder|lien holder|pickup time|pick up time)\b/.test(body) &&
+    (hasDayToken || hasTimeToken || /\?/.test(body))
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function isDirectUserMention(text: string, user: any): boolean {
   const body = String(text ?? "");
   if (!body || !user) return false;
@@ -25926,7 +25975,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       : findMentionedUsers(event.body ?? "", usersForMentions);
   let mentionedUser = mentionResolution.user;
   const ambiguousMentionUsers = mentionResolution.ambiguousUsers;
-  if (event.provider === "twilio" && !mentionedUser && ambiguousMentionUsers.length > 1) {
+  if (
+    event.provider === "twilio" &&
+    !mentionedUser &&
+    ambiguousMentionUsers.length > 1 &&
+    shouldAskMentionClarification(event.body ?? "")
+  ) {
     return respondWithSmsRegeneratedDraft(buildMentionClarificationReply(ambiguousMentionUsers));
   }
   if (!mentionedUser && inboundReferencesOtherPerson(event.body ?? "")) {
@@ -25969,14 +26023,21 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const handoff = wantsCall
       ? `I'll have ${firstName} reach out.`
       : `I'll let ${firstName} know.`;
-    const reply = shouldHandoffToMention
+    const shouldBypassMentionShortcut =
+      !shouldHandoffToMention && hasActionableRequestBeyondMention(String(event.body ?? ""));
+    if (shouldBypassMentionShortcut) {
+      // Continue through normal routing so actionable requests (for example scheduling updates)
+      // are handled instead of being consumed by mention acknowledgment logic.
+    } else {
+      const reply = shouldHandoffToMention
       ? `${intro}${empathyNeeded ? "I'm really sorry to hear that. " : "Got it — "}${handoff}`
       : empathyNeeded
         ? "I'm really sorry to hear that."
         : courtesyOnly
           ? "You're welcome — have a great day too."
           : "Got it — thanks for the update.";
-    return respondWithSmsRegeneratedDraft(reply);
+      return respondWithSmsRegeneratedDraft(reply);
+    }
   }
 
   const regenCustomerDispositionParserEligible =
@@ -29692,7 +29753,11 @@ if (authToken && signature) {
     const mentionResolution = findMentionedUsers(event.body ?? "", usersForMentions);
     mentionedUser = mentionResolution.user;
     ambiguousMentionUsers = mentionResolution.ambiguousUsers;
-    if (!mentionedUser && ambiguousMentionUsers.length > 1) {
+    if (
+      !mentionedUser &&
+      ambiguousMentionUsers.length > 1 &&
+      shouldAskMentionClarification(event.body ?? "")
+    ) {
       const clarifyReply = buildMentionClarificationReply(ambiguousMentionUsers);
       if (webhookMode === "suggest") {
         appendOutbound(conv, event.to, event.from, clarifyReply, "draft_ai");
@@ -29825,24 +29890,31 @@ if (authToken && signature) {
     const handoff = wantsCall
       ? `I'll have ${firstName} reach out.`
       : `I'll let ${firstName} know.`;
-    const reply = shouldHandoffToMention
+    const shouldBypassMentionShortcut =
+      !shouldHandoffToMention && hasActionableRequestBeyondMention(String(event.body ?? ""));
+    if (shouldBypassMentionShortcut) {
+      // Continue through normal routing so actionable requests (for example scheduling updates)
+      // are handled instead of being consumed by mention acknowledgment logic.
+    } else {
+      const reply = shouldHandoffToMention
       ? `${intro}${empathyNeeded ? "I'm really sorry to hear that. " : "Got it — "}${handoff}`
       : empathyNeeded
         ? "I'm really sorry to hear that."
         : courtesyOnly
           ? "You're welcome — have a great day too."
           : "Got it — thanks for the update.";
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
   }
   const bookingConfidence =
     typeof bookingParse?.confidence === "number" ? bookingParse.confidence : 0;

@@ -706,3 +706,11 @@ When changing responses:
 - Purpose:
   - prevents owner pollution when ADF emails are forwarded,
   - reduces “AI • thinking” dwell time caused by stacked sequential parser latency.
+
+## Mention Clarification Guardrail (Coworker Names)
+- In `services/api/src/index.ts`:
+  - ambiguous teammate-name clarification (`Just to confirm — did you mean X or Y?`) now only triggers when the inbound text actually requires person disambiguation for a handoff/callback action.
+  - if a message contains actionable non-mention intent (especially scheduling/pickup time updates), mention shortcut handling is bypassed so normal routing handles the request.
+  - applied to both live inbound routing and regenerate routing paths.
+- Purpose:
+  - prevents coworker name mentions in context (for example, “Scott has insurance cards”) from interrupting scheduling flows with unnecessary clarification prompts.
