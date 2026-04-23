@@ -134,6 +134,15 @@ When changing responses:
 - `services/api/src/domain/tone.ts` — centralized tone normalization for outbound sales language.
 - `scripts/*_eval.ts` + `scripts/*_examples.json` — parser evals and regression fixtures.
 
+## Campaign Studio Output Targets
+- Added flyer output target: `flyer_8_5x11` (default frame `2550x3300` px for 8.5x11 in at 300 DPI).
+- Optional env overrides:
+  - `CAMPAIGN_FLYER_8_5X11_WIDTH`
+  - `CAMPAIGN_FLYER_8_5X11_HEIGHT`
+- Flyer outputs are non-social assets:
+  - Do not auto-generate social caption for flyer target.
+  - In the generated output card, flyer actions are `Print`, `Download`, `Remove` (no send/post queue action).
+
 ## Phase 1 Routing Alignment (No Line Number Notes)
 - Deterministic availability and finance-priority gating are shared helpers in `services/api/src/index.ts`:
   - `getDeterministicAvailabilitySignals(...)`

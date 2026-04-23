@@ -1292,7 +1292,8 @@ type CampaignAssetTarget =
   | "facebook_post"
   | "instagram_post"
   | "instagram_story"
-  | "web_banner";
+  | "web_banner"
+  | "flyer_8_5x11";
 type CampaignTag =
   | "sales"
   | "parts"
@@ -1400,7 +1401,8 @@ const CAMPAIGN_ASSET_TARGET_OPTIONS: Array<{ value: CampaignAssetTarget; label: 
   { value: "facebook_post", label: "Facebook post" },
   { value: "instagram_post", label: "Instagram post" },
   { value: "instagram_story", label: "Instagram story" },
-  { value: "web_banner", label: "Web banner" }
+  { value: "web_banner", label: "Web banner" },
+  { value: "flyer_8_5x11", label: "Flyer (8.5x11)" }
 ];
 
 const CAMPAIGN_TAG_OPTIONS: Array<{ value: CampaignTag; label: string }> = [
@@ -2742,7 +2744,8 @@ export default function Home() {
         | "facebook_post"
         | "instagram_post"
         | "instagram_story"
-        | "web_banner";
+        | "web_banner"
+        | "flyer_8_5x11";
     }
   ): Promise<string[]> {
     if (!files || files.length === 0) return [];
@@ -3603,6 +3606,77 @@ export default function Home() {
       setSaveToast(`Downloaded ${baseName} (${specText}, ${formatFileSizeShort(blobBytes)})`);
     } catch (err: any) {
       setCampaignError(err?.message ?? "Failed to download file.");
+    }
+  }
+
+  async function printCampaignAsset(url: string, fallbackName?: string) {
+    const source = String(url ?? "").trim();
+    if (!source) {
+      setCampaignError("Missing print URL.");
+      return;
+    }
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) {
+      setCampaignError("Popup blocked. Allow popups for this site and try again.");
+      return;
+    }
+    printWindow.document.open();
+    printWindow.document.write("<!doctype html><html><body style='font-family:Arial,sans-serif;padding:16px;'>Preparing print…</body></html>");
+    printWindow.document.close();
+    setCampaignError(null);
+    try {
+      const resp = await fetch(source, { method: "GET" });
+      if (!resp.ok) {
+        throw new Error(`Print failed (${resp.status})`);
+      }
+      const blob = await resp.blob();
+      const objectUrl = window.URL.createObjectURL(blob);
+      const title = escapeHtml(String(fallbackName ?? "Campaign flyer").trim() || "Campaign flyer");
+      const imageUrlEscaped = escapeHtml(objectUrl);
+      const html = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${title}</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: #fff; }
+    .wrap { margin: 0 auto; width: 100%; max-width: 8.5in; }
+    img { display: block; width: 100%; height: auto; }
+    @media print {
+      @page { size: auto; margin: 0.25in; }
+      html, body { background: #fff; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <img src="${imageUrlEscaped}" alt="${title}" />
+  </div>
+</body>
+</html>`;
+      printWindow.document.open();
+      printWindow.document.write(html);
+      printWindow.document.close();
+      try {
+        printWindow.focus();
+        const triggerPrint = () => {
+          try {
+            printWindow.print();
+          } catch {}
+        };
+        if (printWindow.document.readyState === "complete") {
+          setTimeout(triggerPrint, 150);
+        } else {
+          printWindow.onload = () => setTimeout(triggerPrint, 150);
+        }
+      } catch {}
+      setTimeout(() => window.URL.revokeObjectURL(objectUrl), 60_000);
+      setSaveToast("Opening print dialog...");
+    } catch (err: any) {
+      try {
+        printWindow.close();
+      } catch {}
+      setCampaignError(err?.message ?? "Failed to print file.");
     }
   }
 
@@ -11471,6 +11545,7 @@ export default function Home() {
                               campaignSocialOptionsByTarget[asset.target]
                             )
                           : "";
+                      const isFlyerOutput = asset.target === "flyer_8_5x11";
                       const smsDraftPreview =
                         asset.target === "sms"
                           ? String(campaignForm.smsBody ?? "").trim() ||
@@ -11530,14 +11605,26 @@ export default function Home() {
                             </div>
                           ) : null}
                           <div className={actionGridClass}>
-                            <a
-                              className="lr-campaign-asset-btn"
-                              href={asset.url}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              Open
-                            </a>
+                            {isFlyerOutput ? (
+                              <button
+                                className="lr-campaign-asset-btn"
+                                type="button"
+                                onClick={() => {
+                                  void printCampaignAsset(asset.url, campaignAssetDisplayLabel(asset));
+                                }}
+                              >
+                                Print
+                              </button>
+                            ) : (
+                              <a
+                                className="lr-campaign-asset-btn"
+                                href={asset.url}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Open
+                              </a>
+                            )}
                             <button
                               className="lr-campaign-asset-btn"
                               type="button"
@@ -11579,7 +11666,7 @@ export default function Home() {
                               void removeCampaignGeneratedAsset(asset);
                             }}
                           >
-                            {removeBusy ? "Removing..." : "Remove"}
+                            {removeBusy ? "Removing..." : isFlyerOutput ? "Delete" : "Remove"}
                           </button>
                         </div>
                       </div>

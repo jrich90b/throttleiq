@@ -20934,7 +20934,8 @@ const CAMPAIGN_ASSET_TARGETS = new Set<CampaignAssetTarget>([
   "facebook_post",
   "instagram_post",
   "instagram_story",
-  "web_banner"
+  "web_banner",
+  "flyer_8_5x11"
 ]);
 const CAMPAIGN_TAGS: CampaignTag[] = [
   "sales",
@@ -21064,6 +21065,7 @@ function campaignAssetTargetLabel(target: CampaignAssetTarget): string {
   if (target === "instagram_post") return "Instagram post";
   if (target === "instagram_story") return "Instagram story";
   if (target === "web_banner") return "Web banner";
+  if (target === "flyer_8_5x11") return "Flyer (8.5x11)";
   return target;
 }
 
@@ -21083,6 +21085,7 @@ function preferredCampaignGenerationTarget(
   if (list.includes("instagram_post")) return "instagram_post";
   if (list.includes("facebook_post")) return "facebook_post";
   if (list.includes("instagram_story")) return "instagram_story";
+  if (list.includes("flyer_8_5x11")) return "flyer_8_5x11";
   if (list.includes("web_banner")) return "web_banner";
   return list[0] ?? null;
 }
@@ -21110,10 +21113,34 @@ function preferredCampaignPreviewTargets(
   const ordered = Array.from(new Set(available));
   const preference =
     channel === "sms"
-      ? (["sms", "web_banner", "email", "facebook_post", "instagram_post", "instagram_story"] as CampaignAssetTarget[])
+      ? ([
+          "sms",
+          "web_banner",
+          "flyer_8_5x11",
+          "email",
+          "facebook_post",
+          "instagram_post",
+          "instagram_story"
+        ] as CampaignAssetTarget[])
       : channel === "email"
-        ? (["email", "web_banner", "sms", "facebook_post", "instagram_post", "instagram_story"] as CampaignAssetTarget[])
-        : (["sms", "email", "web_banner", "facebook_post", "instagram_post", "instagram_story"] as CampaignAssetTarget[]);
+        ? ([
+            "email",
+            "web_banner",
+            "flyer_8_5x11",
+            "sms",
+            "facebook_post",
+            "instagram_post",
+            "instagram_story"
+          ] as CampaignAssetTarget[])
+        : ([
+            "sms",
+            "email",
+            "web_banner",
+            "flyer_8_5x11",
+            "facebook_post",
+            "instagram_post",
+            "instagram_story"
+          ] as CampaignAssetTarget[]);
   const preferred = preference.filter(target => ordered.includes(target));
   const remainder = ordered.filter(target => !preferred.includes(target));
   return [...preferred, ...remainder];
@@ -21284,6 +21311,11 @@ function buildCampaignImagePrompt(args: {
         width: campaignWebBannerWidth(args.dealerProfile),
         height: campaignWebBannerHeight(args.dealerProfile),
         label: "Web banner"
+      },
+      flyer_8_5x11: {
+        width: campaignFlyerWidth(),
+        height: campaignFlyerHeight(),
+        label: "Flyer (8.5x11)"
       }
     };
     const frame = socialDims[preferredTarget];
@@ -21494,7 +21526,8 @@ type CampaignImageOutputProfile =
   | "facebook_post"
   | "instagram_post"
   | "instagram_story"
-  | "web_banner";
+  | "web_banner"
+  | "flyer_8_5x11";
 
 function campaignImageOutputProfileForChannel(channel: CampaignChannel): CampaignImageOutputProfile {
   if (channel === "email") return "email";
@@ -21513,6 +21546,7 @@ function campaignImageOutputProfileForAssetTarget(target: CampaignAssetTarget): 
   if (target === "facebook_post") return "facebook_post";
   if (target === "instagram_post") return "instagram_post";
   if (target === "instagram_story") return "instagram_story";
+  if (target === "flyer_8_5x11") return "flyer_8_5x11";
   return "web_banner";
 }
 
@@ -21538,6 +21572,14 @@ function campaignInstagramStoryWidth(): number {
 
 function campaignInstagramStoryHeight(): number {
   return Math.max(960, Math.min(6144, Number(process.env.CAMPAIGN_INSTAGRAM_STORY_HEIGHT ?? 1920)));
+}
+
+function campaignFlyerWidth(): number {
+  return Math.max(850, Math.min(6000, Number(process.env.CAMPAIGN_FLYER_8_5X11_WIDTH ?? 2550)));
+}
+
+function campaignFlyerHeight(): number {
+  return Math.max(1100, Math.min(7000, Number(process.env.CAMPAIGN_FLYER_8_5X11_HEIGHT ?? 3300)));
 }
 
 function campaignWebBannerWidth(profile?: Awaited<ReturnType<typeof getDealerProfile>>): number {
@@ -21920,6 +21962,14 @@ async function normalizeCampaignImageForProfile(
       bannerWidth,
       bannerHeight,
       { fit: bannerFit }
+    );
+  }
+  if (profile === "flyer_8_5x11") {
+    return normalizeCampaignImageForExactFrame(
+      buffer,
+      campaignFlyerWidth(),
+      campaignFlyerHeight(),
+      { fit: "contain_blur" }
     );
   }
   return normalizeCampaignImageForMms(buffer);
@@ -22457,7 +22507,8 @@ app.post("/campaigns/media", requireManager, upload.single("file"), async (req, 
     "facebook_post",
     "instagram_post",
     "instagram_story",
-    "web_banner"
+    "web_banner",
+    "flyer_8_5x11"
   ]);
   const profile: CampaignImageOutputProfile =
     profileSet.has(profileRaw as CampaignImageOutputProfile)

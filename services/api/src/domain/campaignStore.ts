@@ -10,7 +10,8 @@ export type CampaignAssetTarget =
   | "facebook_post"
   | "instagram_post"
   | "instagram_story"
-  | "web_banner";
+  | "web_banner"
+  | "flyer_8_5x11";
 export type CampaignTag =
   | "sales"
   | "parts"
@@ -91,7 +92,8 @@ const CAMPAIGN_ASSET_TARGET_SET = new Set<CampaignAssetTarget>([
   "facebook_post",
   "instagram_post",
   "instagram_story",
-  "web_banner"
+  "web_banner",
+  "flyer_8_5x11"
 ]);
 
 function nowIso() {
