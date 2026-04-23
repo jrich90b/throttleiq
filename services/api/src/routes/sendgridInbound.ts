@@ -1384,6 +1384,12 @@ function buildTrafficLogProWalkInTail(args: {
   return null;
 }
 
+function walkInTailHasOwnAcknowledgement(text?: string | null): boolean {
+  const source = String(text ?? "").trim();
+  if (!source) return false;
+  return /^(thanks?|thank you|appreciate|great to|great working|good to|nice to|awesome|perfect)\b/i.test(source);
+}
+
 function extractWatchDirectiveModelHint(text?: string | null): string | undefined {
   const segment = extractWatchDirectiveSegment(text);
   if (!segment) return undefined;
@@ -4104,9 +4110,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
 
     const addendum = buildWalkInAddendum();
+    const includeDefaultWalkInThanks = !walkInTailHasOwnAcknowledgement(tail);
     const ack =
       `Hi ${firstName} — this is ${salespersonName} at ${dealerName}. ` +
-      "Thanks for stopping in, it was nice chatting with you. " +
+      (includeDefaultWalkInThanks ? "Thanks for stopping in, it was nice chatting with you. " : "") +
       tail +
       (addendum ? ` ${addendum}` : "");
 
