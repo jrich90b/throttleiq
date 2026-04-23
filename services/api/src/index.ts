@@ -12562,16 +12562,33 @@ function resolvePaymentBudgetForConversation(
 } {
   const recent = findRecentInboundPaymentBudgetContext(conv);
   const stored = getStoredPaymentBudgetContext(conv);
-  let monthlyBudget = extractMonthlyBudgetLimit(text) ?? recent.monthlyBudget ?? stored.monthlyBudget;
+  const explicitMonthlyBudget = extractMonthlyBudgetLimit(text);
+  const parsedDown = parseDownPaymentForBudget(text)?.amount;
+  const hasDownLanguage =
+    /\b(down payment|put down|cash down|deposit|down|dp)\b/i.test(String(text ?? ""));
+  let monthlyBudget = explicitMonthlyBudget ?? recent.monthlyBudget ?? stored.monthlyBudget;
   if (monthlyBudget == null) {
     const bareBudget = extractBareBudgetAmount(text);
     const inPricingDialog = String(getDialogState(conv) ?? "").startsWith("pricing_");
-    if (bareBudget != null && (inPricingDialog || hasRecentPricingPromptContext(conv))) {
+    if (
+      bareBudget != null &&
+      (inPricingDialog || hasRecentPricingPromptContext(conv)) &&
+      !hasDownLanguage &&
+      parsedDown == null
+    ) {
       monthlyBudget = bareBudget;
     }
   }
+  if (
+    explicitMonthlyBudget == null &&
+    parsedDown != null &&
+    monthlyBudget != null &&
+    Math.round(Number(monthlyBudget)) === Math.round(Number(parsedDown))
+  ) {
+    // Guard against down-payment values being mis-carried into monthly budget context.
+    monthlyBudget = undefined;
+  }
   const termMonths = extractPaymentTermMonths(text) ?? recent.termMonths ?? stored.termMonths;
-  const parsedDown = parseDownPaymentForBudget(text)?.amount;
   const zeroDown = hasZeroDownSignal(text);
   const downPayment = parsedDown ?? (zeroDown ? 0 : (recent.downPayment ?? stored.downPayment));
   return { monthlyBudget, termMonths, downPayment };
@@ -12933,6 +12950,53 @@ function estimateMonthlyPaymentBandFromPrice(opts: {
   const high = calcMonthlyPayment(financed, aprRange.max, termMonths);
   if (!Number.isFinite(low) || !Number.isFinite(high)) return null;
   return { low: Math.min(low, high), high: Math.max(low, high) };
+}
+
+async function resolvePaymentEstimateAnchor(args: {
+  conv: any;
+  lastOutboundText?: string;
+}): Promise<{ price: number; isUsed: boolean; taxRate: number } | null> {
+  const conv = args.conv;
+  const stockId = String(conv?.lead?.vehicle?.stockId ?? "").trim() || null;
+  const vin = String(conv?.lead?.vehicle?.vin ?? "").trim() || null;
+  const inferShared = async (price: number, yearHint?: string | number | null, conditionHint?: string | null) => {
+    const taxRate = normalizeTaxRate((await getDealerProfileHot())?.taxRate ?? 8);
+    const yearText =
+      yearHint == null || String(yearHint).trim() === "" ? null : String(yearHint).trim();
+    const isUsed = isUsedInventoryConditionForBudget(conditionHint, yearText);
+    return { price, isUsed, taxRate };
+  };
+
+  if (stockId || vin) {
+    const match = await findInventoryPrice({ stockId, vin });
+    const item = match?.item ?? null;
+    const itemPrice = Number(item?.price ?? NaN);
+    if (Number.isFinite(itemPrice) && itemPrice > 0) {
+      return inferShared(
+        itemPrice,
+        item?.year ?? conv?.lead?.vehicle?.year ?? null,
+        item?.condition ?? conv?.lead?.vehicle?.condition ?? null
+      );
+    }
+  }
+
+  const leadPrice = Number(conv?.lead?.vehicle?.price ?? conv?.lead?.price ?? NaN);
+  if (Number.isFinite(leadPrice) && leadPrice > 0) {
+    return inferShared(leadPrice, conv?.lead?.vehicle?.year ?? null, conv?.lead?.vehicle?.condition ?? null);
+  }
+
+  const lastOutbound = String(args.lastOutboundText ?? "");
+  const outboundPriceToken =
+    lastOutbound.match(/\bon\s+about\s+\$?\s*([0-9][0-9,]{2,6})\b/i)?.[1] ??
+    lastOutbound.match(/\babout\s+\$?\s*([0-9][0-9,]{2,6})\s*(?:at\s+\d{2,3}\s+months|before|you(?:'|’)re|you are)\b/i)?.[1] ??
+    null;
+  if (outboundPriceToken) {
+    const parsed = Number(String(outboundPriceToken).replace(/,/g, ""));
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return inferShared(parsed, conv?.lead?.vehicle?.year ?? null, conv?.lead?.vehicle?.condition ?? null);
+    }
+  }
+  return null;
 }
 
 type TermPaymentBand = {
@@ -13531,6 +13595,32 @@ function buildFinancePriorityInvariantFallbackReply(
   }
 
   if (monthlyBudget == null && termMonths != null && downValue != null) {
+    const hintedPrice = Number(pricingHint?.price);
+    if (
+      Number.isFinite(hintedPrice) &&
+      hintedPrice > 0 &&
+      pricingHint?.isUsed != null &&
+      Number.isFinite(Number(pricingHint?.taxRate))
+    ) {
+      const paymentBand = estimateMonthlyPaymentBandFromPrice({
+        price: hintedPrice,
+        isUsed: Boolean(pricingHint?.isUsed),
+        termMonths,
+        taxRate: Number(pricingHint?.taxRate),
+        downPayment: downValue
+      });
+      if (paymentBand) {
+        const lowRounded = Math.round(paymentBand.low / 10) * 10;
+        const highRounded = Math.round(paymentBand.high / 10) * 10;
+        const priceLabel = `$${Math.round(hintedPrice).toLocaleString("en-US")}`;
+        return (
+          `Ballpark, with ${downLabel} on about ${priceLabel} at ${termMonths} months, ` +
+          `you’re around $${lowRounded.toLocaleString("en-US")}–$${highRounded.toLocaleString("en-US")}/mo ` +
+          `before taxes and fees, based on your APR. ` +
+          "If that range works for you, want to set a time to stop in or fill out the online credit app?"
+        );
+      }
+    }
     return `Got it — ${downLabel} at ${termMonths} months. What monthly payment are you trying to stay around?`;
   }
 
@@ -25995,9 +26085,37 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         regenMonthlyBudget != null ? `$${Number(regenMonthlyBudget).toLocaleString("en-US")}/mo` : null;
       let reply: string;
       if (regenTermMonths != null) {
-        reply = budgetLabel
-          ? `Perfect — with ${downLabel} down at ${regenTermMonths} months targeting ${budgetLabel}, I can run the exact numbers now.`
-          : `Perfect — with ${downLabel} down at ${regenTermMonths} months, I can run the exact numbers now.`;
+        const anchor = await resolvePaymentEstimateAnchor({
+          conv,
+          lastOutboundText
+        });
+        if (anchor) {
+          const paymentBand = estimateMonthlyPaymentBandFromPrice({
+            price: anchor.price,
+            isUsed: anchor.isUsed,
+            termMonths: regenTermMonths,
+            taxRate: anchor.taxRate,
+            downPayment: Number(regenPaymentBudget.downPayment)
+          });
+          if (paymentBand) {
+            const lowRounded = Math.round(paymentBand.low / 10) * 10;
+            const highRounded = Math.round(paymentBand.high / 10) * 10;
+            const priceLabel = `$${Math.round(anchor.price).toLocaleString("en-US")}`;
+            reply =
+              `Ballpark, with ${downLabel} on about ${priceLabel} at ${regenTermMonths} months, ` +
+              `you’re around $${lowRounded.toLocaleString("en-US")}–$${highRounded.toLocaleString("en-US")}/mo ` +
+              `before taxes and fees, based on your APR. ` +
+              "If that range works for you, want to set a time to stop in or fill out the online credit app?";
+          } else {
+            reply = budgetLabel
+              ? `Perfect — with ${downLabel} down at ${regenTermMonths} months targeting ${budgetLabel}, I can run the exact numbers now.`
+              : `Perfect — with ${downLabel} down at ${regenTermMonths} months, I can run the exact numbers now.`;
+          }
+        } else {
+          reply = budgetLabel
+            ? `Perfect — with ${downLabel} down at ${regenTermMonths} months targeting ${budgetLabel}, I can run the exact numbers now.`
+            : `Perfect — with ${downLabel} down at ${regenTermMonths} months, I can run the exact numbers now.`;
+        }
       } else {
         const stockId = conv.lead?.vehicle?.stockId ?? null;
         const vin = conv.lead?.vehicle?.vin ?? null;
@@ -30420,7 +30538,33 @@ if (authToken && signature) {
         Number(downPayment) <= 0
           ? "$0 down"
           : `$${Number(downPayment).toLocaleString("en-US")} down`;
-      reply = `Got it — ${downLabel} at ${termMonths} months. What monthly payment are you trying to stay around?`;
+      const anchor = await resolvePaymentEstimateAnchor({
+        conv,
+        lastOutboundText
+      });
+      if (anchor) {
+        const paymentBand = estimateMonthlyPaymentBandFromPrice({
+          price: anchor.price,
+          isUsed: anchor.isUsed,
+          termMonths,
+          taxRate: anchor.taxRate,
+          downPayment
+        });
+        if (paymentBand) {
+          const lowRounded = Math.round(paymentBand.low / 10) * 10;
+          const highRounded = Math.round(paymentBand.high / 10) * 10;
+          const priceLabel = `$${Math.round(anchor.price).toLocaleString("en-US")}`;
+          reply =
+            `Ballpark, with ${downLabel} on about ${priceLabel} at ${termMonths} months, ` +
+            `you’re around $${lowRounded.toLocaleString("en-US")}–$${highRounded.toLocaleString("en-US")}/mo ` +
+            `before taxes and fees, based on your APR. ` +
+            "If that range works for you, want to set a time to stop in or fill out the online credit app?";
+        } else {
+          reply = `Got it — ${downLabel} at ${termMonths} months. What monthly payment are you trying to stay around?`;
+        }
+      } else {
+        reply = `Got it — ${downLabel} at ${termMonths} months. What monthly payment are you trying to stay around?`;
+      }
       if (!isScheduleDialogState(getDialogState(conv))) {
         setDialogState(conv, "pricing_init");
       }

@@ -638,6 +638,9 @@ When changing responses:
 - Purpose:
   - when the customer already gave down payment, do not ask for down again;
   - keep live and regenerate payment follow-up behavior aligned.
+- Additional payment-follow-up behavior:
+  - when customer provides `term + down` and monthly target is missing, run a ballpark payment calculation immediately when a price anchor is available (inventory unit, lead price, or last outbound price anchor), instead of asking for monthly again.
+  - guard against accidental monthly-budget carryover when the same numeric token is clearly a down-payment value.
 
 ## Humanized Cadence Copy Pass
 - Follow-up wording in `services/api/src/index.ts` was further adjusted to sound less scripted and less pushy while keeping deterministic cadence behavior unchanged.
