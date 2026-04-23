@@ -2896,6 +2896,26 @@ export async function parseSalespersonMentionWithLLM(args: {
         .filter(Boolean)
     )
   ).slice(0, 20);
+  const examples = [
+    `EXAMPLE A
+inbound: "Can Scott call me after 3?"
+output: {"intent":"handoff_request","explicit_request":true,"target_first_name":"Scott","confidence":0.97}`,
+    `EXAMPLE B
+inbound: "Please have Joe reach out when my bike lands."
+output: {"intent":"handoff_request","explicit_request":true,"target_first_name":"Joe","confidence":0.96}`,
+    `EXAMPLE C
+inbound: "Scott should have the insurance cards and binder from Progressive."
+output: {"intent":"context_reference","explicit_request":false,"target_first_name":"Scott","confidence":0.95}`,
+    `EXAMPLE D
+inbound: "Joe, thank you for your help today. Scott should have insurance cards. Can we bump pickup to Tuesday around 11 to 11:30?"
+output: {"intent":"context_reference","explicit_request":false,"target_first_name":"Scott","confidence":0.94}`,
+    `EXAMPLE E
+inbound: "Thanks Joe"
+output: {"intent":"context_reference","explicit_request":false,"target_first_name":"Joe","confidence":0.9}`,
+    `EXAMPLE F
+inbound: "Is this still available?"
+output: {"intent":"none","explicit_request":false,"target_first_name":"","confidence":0.98}`
+  ];
 
   const prompt = [
     "You parse salesperson-name mentions in dealership customer messages.",
@@ -2911,6 +2931,8 @@ export async function parseSalespersonMentionWithLLM(args: {
     "- target_first_name must be one roster first name when clearly referenced; else empty string.",
     "- If ambiguous/uncertain, keep target_first_name empty.",
     "- confidence is 0..1.",
+    "",
+    ...examples,
     "",
     `Team roster first names: ${roster.length ? roster.join(", ") : "(none provided)"}`,
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
@@ -3178,7 +3200,16 @@ inbound: "Android Auto won’t connect and I’m pretty frustrated with this inf
 output: {"primary_intent":"general","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.95}`,
     `EXAMPLE T
 inbound: "I’m annoyed this thing won’t show Google Maps from my phone."
-output: {"primary_intent":"general","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.94}`
+output: {"primary_intent":"general","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.94}`,
+    `EXAMPLE U
+inbound: "Thinking ab 72 months with about 1000 down"
+output: {"primary_intent":"pricing_payments","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.97}`,
+    `EXAMPLE V
+inbound: "Joe, thank you for your help today. Scott should have insurance cards and insurance binder. Can we bump pickup to Tuesday between 11:00 and 11:30?"
+output: {"primary_intent":"scheduling","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.97}`,
+    `EXAMPLE W
+inbound: "Scott should have insurance cards and the binder from Progressive."
+output: {"primary_intent":"general","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.9}`
   ];
   const prompt = [
     "You are a strict routing parser for dealership inbound messages.",
@@ -3772,7 +3803,16 @@ comment: "picked out accessories and wants to go over final numbers this week"
 output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"this week","confidence":0.9}`,
     `EXAMPLE M
 comment: "looking for a 2026 Street Glide Limited in Dark Billiard Gray, please watch and let me know when one comes in"
-output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","confidence":0.78}`
+output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","confidence":0.78}`,
+    `EXAMPLE N
+comment: "Gary was a walk in and is buying 2026 Street Glide Limited. Trading in 2016 Ultra Limited and 2024 Pan Am Special. Had to discount bike to close deal. Plans on closing 4/24 (Step 6)"
+output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"4/24","confidence":0.96}`,
+    `EXAMPLE O
+comment: "Thank for coming in and tell him it was nice working with him. I will be in touch about delivery and parts status. (Step 8)"
+output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","confidence":0.95}`,
+    `EXAMPLE P
+comment: "Stopped in, really liked the dark billiard and gray 2026 Street Glide. Would also like to watch for a 2024-2025 pre-owned street glide. Reach follow up on 5/23/26. (Step 2)"
+output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"5/23/26","confidence":0.88}`
   ];
   const prompt = [
     "You parse walk-in salesperson comments from dealership ADF leads.",

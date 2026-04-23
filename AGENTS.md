@@ -17,6 +17,7 @@ Required order:
    - regenerate (`/conversations/:id/regenerate`)
 5) Keep regex only as fallback when parser is disabled/low-confidence.
 6) Add eval fixtures for new state phrases before deployment.
+7) Keep parser few-shot examples updated for newly observed production misses (live inbound and regenerate parity cases).
 
 ## ADF Inquiry Priority
 - For initial ADF response drafting, specific customer inquiry intent must win over generic “learn more” phrasing.
