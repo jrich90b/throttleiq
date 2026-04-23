@@ -11331,7 +11331,7 @@ function hasLikelyFollowUpCue(text: string): boolean {
   const source = String(text ?? "").toLowerCase();
   if (!source.trim()) return false;
   return (
-    /\b(follow up|follow-up|check in|check-in|circle back|touch base|call (him|her|them|back)|invite back)\b/.test(
+    /\b(follow up|follow-up|check in|check-in|circle back|touch base|reach out|reconnect|call (him|her|them|back|me)|invite back)\b/.test(
       source
     ) &&
     /\b(today|tomorrow|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun|next week|this week|next|morning|afternoon|evening|noon|\d{1,2}(?::\d{2})?\s*(am|pm)?)\b/.test(
@@ -19563,6 +19563,22 @@ app.post("/conversations/:id/agent-context", async (req, res) => {
     updatedByUserId: String(user?.id ?? "").trim() || undefined,
     updatedByUserName: String(user?.name ?? user?.email ?? "").trim() || undefined
   });
+  if (mode === "persistent") {
+    try {
+      await applyAppointmentStateFromContextNote(
+        conv,
+        text,
+        String(user?.name ?? user?.email ?? "").trim() || undefined
+      );
+      await applyActionStateFromContextNote(
+        conv,
+        text,
+        String(user?.name ?? user?.email ?? "").trim() || undefined
+      );
+    } catch (err: any) {
+      return res.status(400).json({ ok: false, error: err?.message ?? "Failed to apply context actions" });
+    }
+  }
   saveConversation(conv);
   return res.json({ ok: true, conversation: conv });
 });
