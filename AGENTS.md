@@ -623,3 +623,11 @@ When changing responses:
   - API (`services/api/src/index.ts`): `campaignAutoSocialCaption(...)` now ignores instruction-like existing captions and rebuilds from sanitized campaign detail.
   - API generate-save path refreshes stale instruction-like `metadata.socialCaption` for feed targets instead of preserving bad prompt text.
   - Web (`apps/web/src/app/page.tsx`): `campaignAutoPublishCaption(...)` and `campaignBuildCatchyCaption(...)` now use the same sanitization logic, so preview cards show customer-facing captions even for older campaigns with stale metadata.
+
+## Campaign RSVP Caption Guardrail
+- Social auto captions no longer default to RSVP/“save your spot” language for event posts.
+- Default event CTA is now neutral: `Message us for event details.`
+- RSVP CTA is only used when the campaign prompt/content explicitly includes RSVP/registration intent keywords (for example: `rsvp`, `register`, `book a spot`, `save your spot`).
+- Implemented in both:
+  - API caption generator (`services/api/src/index.ts`)
+  - Web caption preview fallback (`apps/web/src/app/page.tsx`)

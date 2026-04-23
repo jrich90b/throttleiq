@@ -1859,14 +1859,24 @@ function campaignLooksLikeEvent(entry: CampaignEntry, detail: string): boolean {
   );
 }
 
+function campaignWantsRsvpLanguage(entry: CampaignEntry, detail: string): boolean {
+  const joined = [entry.name, entry.description, entry.prompt, detail].map(v => String(v ?? "").toLowerCase()).join(" ");
+  return /\b(rsvp|register|registration|book(?:\s+(?:a|your))?\s*spot|reserve(?:\s+(?:a|your))?\s*spot|save\s+your\s+spot)\b/.test(
+    joined
+  );
+}
+
 function campaignBuildCatchyCaption(entry: CampaignEntry): string {
   const name = campaignTrimToLimit(entry.name, 140);
   const detailRaw = campaignDeriveCaptionDetail(entry);
   const detail = campaignTrimToLimit(detailRaw, 280);
   const intro = name || "Fresh inventory just dropped";
   const tags = campaignTagHashtags(entry.tags);
-  const cta = (entry.tags ?? []).includes("dealer_event") || campaignLooksLikeEvent(entry, detail)
-    ? "Save your spot and message us for event details."
+  const eventLike = (entry.tags ?? []).includes("dealer_event") || campaignLooksLikeEvent(entry, detail);
+  const cta = eventLike
+    ? campaignWantsRsvpLanguage(entry, detail)
+      ? "Message us to RSVP and get event details."
+      : "Message us for event details."
     : "Message us for pricing, availability, and next steps.";
   const lines = [intro, detail || "New arrivals, standout options, and serious riding season energy.", cta, tags].filter(Boolean);
   return lines.join("\n\n").slice(0, 1800);

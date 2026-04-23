@@ -16898,6 +16898,15 @@ function campaignLooksLikeEvent(campaign: any, detail: string): boolean {
   );
 }
 
+function campaignWantsRsvpLanguage(campaign: any, detail: string): boolean {
+  const joined = [campaign?.name, campaign?.description, campaign?.prompt, detail]
+    .map(v => String(v ?? "").toLowerCase())
+    .join(" ");
+  return /\b(rsvp|register|registration|book(?:\s+(?:a|your))?\s*spot|reserve(?:\s+(?:a|your))?\s*spot|save\s+your\s+spot)\b/.test(
+    joined
+  );
+}
+
 function campaignAutoSocialCaption(campaign: any): string {
   const metadata = campaign?.metadata && typeof campaign.metadata === "object"
     ? (campaign.metadata as Record<string, unknown>)
@@ -16911,8 +16920,11 @@ function campaignAutoSocialCaption(campaign: any): string {
   const detail = deriveCampaignCaptionDetail(campaign);
   const intro = name || "Fresh inventory just dropped";
   const tags = campaignTagHashtags(campaign?.tags);
-  const cta = (Array.isArray(campaign?.tags) && campaign.tags.includes("dealer_event")) || campaignLooksLikeEvent(campaign, detail)
-    ? "Save your spot and message us for event details."
+  const eventLike = (Array.isArray(campaign?.tags) && campaign.tags.includes("dealer_event")) || campaignLooksLikeEvent(campaign, detail);
+  const cta = eventLike
+    ? campaignWantsRsvpLanguage(campaign, detail)
+      ? "Message us to RSVP and get event details."
+      : "Message us for event details."
     : "Message us for pricing, availability, and next steps.";
   const composed = [intro, detail || "New arrivals, standout options, and riding season momentum.", cta, tags]
     .filter(Boolean)
