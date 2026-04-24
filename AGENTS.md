@@ -776,7 +776,7 @@ When changing responses:
 
 ## Timed Callback Request Handling (No Auto-Draft + Timed Call To-Do)
 - In `services/api/src/routes/sendgridInbound.ts`:
-  - initial ADF leads with parser-confirmed callback request and resolvable callback time now suppress automatic customer draft creation,
+  - ADF leads (not walk-in flow) with parser-confirmed callback request and resolvable callback time now suppress automatic customer draft creation,
   - system creates a scheduled `call` to-do (`Call requested: <time hint>`) with reminder metadata,
   - conversation is set to manual handoff (`callback_requested`) so cadence does not keep generating follow-up drafts ahead of the requested call window.
 - Parser-first policy:

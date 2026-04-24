@@ -3315,7 +3315,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     ? `Call requested: ${callbackTimeHint}.`
     : "Call requested.";
   const suppressInitialAutoDraftForTimedCallback =
-    isInitialAdf && callbackRequestedInLead && !!String(callbackSchedule?.dueAt ?? "").trim();
+    callbackRequestedInLead &&
+    !!String(callbackSchedule?.dueAt ?? "").trim() &&
+    !isTrafficLogWalkInLead &&
+    inferredBucket !== "in_store";
 
   let creditTodoCreated = false;
   const inquiryLower = inquiryText.toLowerCase();
