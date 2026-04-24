@@ -26386,8 +26386,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
     const reply =
       regenInboundDepartmentIntent === "parts"
-        ? "Got it — I’ll have our parts department reach out shortly."
-        : "Got it — I’ll have our apparel team reach out shortly.";
+        ? "Thanks — I’ll have our parts department reach out shortly."
+        : "Thanks — I’ll have our apparel team reach out shortly.";
     if (channel === "email") {
       return respondWithEmailRegeneratedDraft(reply);
     }
@@ -28018,8 +28018,8 @@ if (authToken && signature) {
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
     const reply =
       inboundDepartmentIntent === "parts"
-        ? "Got it — I’ll have our parts department reach out shortly."
-        : "Got it — I’ll have our apparel team reach out shortly.";
+        ? "Thanks — I’ll have our parts department reach out shortly."
+        : "Thanks — I’ll have our apparel team reach out shortly.";
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
