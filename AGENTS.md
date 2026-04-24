@@ -39,7 +39,17 @@ Required order:
 - Avoid duplicate acknowledgement phrasing in walk-in drafts: if the selected tail already begins with a thank-you/acknowledgement, skip the default "Thanks for stopping in..." sentence.
 - Treat source labels like `Walk In` / `Walk-In` as walk-in lead sources for initial ADF routing (same walk-in guardrail behavior as Traffic Log Pro source labels).
 - Canonical walk-in marker: set `dialogState.name = walk_in_active` on initial walk-in routing, and allow `inferWalkIn(...)` / regenerate guards to treat that state as walk-in context.
+- Traffic Log Pro / walk-in source handling must be sticky across follow-up ADF updates (not just first touch): keep classification on `in_store/contact_us` and block finance/prequal auto-ack hijacks from context words like “credit union”.
 - Owner assignment guardrail for walk-ins: for generic `Walk In` source labels, do not trust `vendor.contact.name` as owner fallback unless salesperson is explicitly present in inquiry/comment text (forwarded ADF emails can contaminate vendor contact name).
+- Traffic Log Pro exception for owner fallback: when vendor contact matches a known manager/salesperson user, allow that owner mapping so forwarded TLP ADF notes can retain the intended salesperson/manager owner.
+
+## Feedback Loop Quality Reports
+- Tone quality nightly reports should focus on actionable customer turns. Skip non-actionable inbound classes in `scripts/tone_quality_eval.ts`:
+  - `voice_transcript` provider rows
+  - pure reactions/emoji-to-message rows
+  - short ack/no-action rows
+  - clear closeout updates with no ask (for example “No need, I already called”)
+- Keep these skips explicit and reason-coded in summary output (`skippedReasonCounts`) so report noise is visible but separated from true response-quality misses.
 
 Current parser-first disposition states:
 - `customer_sell_on_own`
@@ -264,6 +274,7 @@ When changing responses:
   - `SENDGRID_API_KEY`
   - `FEEDBACK_REPORT_EMAIL_TO` (recipient)
   - `FEEDBACK_REPORT_EMAIL_FROM` (sender; falls back to `NOTIFICATION_FROM_EMAIL`)
+  - Nightly loader: `scripts/feedback_loop_nightly.sh` now auto-loads `FEEDBACK_LOOP_ENV_PATH` (default `/home/ubuntu/throttleiq-runtime/.feedback_loop.env`) before deciding whether to send report email.
   - Optional: `FEEDBACK_REPORT_ATTACH_FULL=1` (attach full labeled + fixture payloads)
   - Optional: `FEEDBACK_REPORT_ATTACH_ZIP=1` (attach a single `.zip` bundle of report artifacts)
   - Optional: `FEEDBACK_REPORT_ZIP_ONLY=1` (send only the zip attachment, skip individual JSON attachments)

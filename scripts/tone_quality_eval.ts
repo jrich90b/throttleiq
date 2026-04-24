@@ -84,6 +84,63 @@ function computeMedian(values: number[]): number {
   return ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2;
 }
 
+function isShortAckNoAction(text: string): boolean {
+  const t = String(text ?? "")
+    .trim()
+    .toLowerCase();
+  if (!t) return false;
+  if (/^[\p{Emoji}\p{Extended_Pictographic}\s]+$/u.test(t)) return true;
+  return /^(ok|okay|k|kk|got it|sounds good|thanks|thank you|thx|ty|perfect|awesome|cool|great|will do)[.!?\s]*$/i.test(
+    t
+  );
+}
+
+function isReactionToOutboundText(text: string): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  return /to\s+["“][\s\S]+["”]/i.test(t) && /^[\p{Emoji}\p{Extended_Pictographic}\s\W]*to\s+["“]/u.test(t);
+}
+
+function hasActionableCue(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  if (/\?/.test(t)) return true;
+  return /\b(available|in stock|price|pricing|payment|payments|apr|finance|financing|monthly|down payment|term|months|come in|stop by|schedule|appointment|call me|callback|text me|tomorrow|today|next week|when)\b/.test(
+    t
+  );
+}
+
+function isCloseoutUpdateNoReplyNeeded(text: string): boolean {
+  const t = String(text ?? "").trim().toLowerCase();
+  if (!t) return false;
+  if (/\?/.test(t)) return false;
+  if (
+    /\b(no need|already called|already spoke|spoke with them|handled it|all set|sorted|taken care of|sorry it took so long)\b/.test(
+      t
+    )
+  ) {
+    return !hasActionableCue(t);
+  }
+  return false;
+}
+
+function getSkipReason(conv: AnyObj, inbound: AnyObj, inboundText: string): string | null {
+  const provider = String(inbound?.provider ?? "").trim().toLowerCase();
+  const followUpMode = String(conv?.followUp?.mode ?? "").trim().toLowerCase();
+  const convMode = String(conv?.mode ?? "").trim().toLowerCase();
+  if (provider === "voice_transcript") return "provider_voice_transcript";
+  if (isReactionToOutboundText(inboundText)) return "reaction_to_outbound";
+  if (isShortAckNoAction(inboundText)) return "short_ack_no_action";
+  if (isCloseoutUpdateNoReplyNeeded(inboundText)) return "closeout_update_no_reply";
+  if ((followUpMode === "manual_handoff" || followUpMode === "paused_indefinite") && !hasActionableCue(inboundText)) {
+    return "manual_handoff_non_actionable";
+  }
+  if (convMode === "human" && !hasActionableCue(inboundText)) {
+    return "human_mode_non_actionable";
+  }
+  return null;
+}
+
 function main() {
   const parsed = parseArgs(process.argv.slice(2));
   if (!fs.existsSync(parsed.conversationsPath)) {
@@ -98,6 +155,8 @@ function main() {
   const windowEndMs = Number.POSITIVE_INFINITY;
 
   const rows: EvalRow[] = [];
+  const skippedReasonMap = new Map<string, number>();
+  let skippedTurns = 0;
   for (const conv of conversations) {
     const convId = String(conv?.id ?? conv?.leadKey ?? "");
     if (!convId) continue;
@@ -117,6 +176,12 @@ function main() {
 
       const inboundText = normalizeText(inbound?.body);
       if (!inboundText) continue;
+      const skipReason = getSkipReason(conv, inbound, inboundText);
+      if (skipReason) {
+        skippedTurns += 1;
+        skippedReasonMap.set(skipReason, (skippedReasonMap.get(skipReason) ?? 0) + 1);
+        continue;
+      }
 
       const maxOutMs = inboundAtMs + parsed.responseWindowMin * 60 * 1000;
       let matchedOut: any | null = null;
@@ -256,6 +321,10 @@ function main() {
     sinceHours: parsed.sinceHours,
     windowStart: Number.isFinite(windowStartMs) ? new Date(windowStartMs).toISOString() : null,
     responseWindowMin: parsed.responseWindowMin,
+    skippedTurnCount: skippedTurns,
+    skippedReasonCounts: [...skippedReasonMap.entries()]
+      .map(([reason, count]) => ({ reason, count }))
+      .sort((a, b) => b.count - a.count),
     totalInboundTurns: rows.length,
     respondedTurns: responded.length,
     missingResponseCount: missing.length,
@@ -279,4 +348,3 @@ function main() {
 }
 
 main();
-

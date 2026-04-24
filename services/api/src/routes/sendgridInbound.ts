@@ -2538,7 +2538,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         return !!vendorFirst && (vendorFirst === first || vendorFirst === nameFirst);
       }) ??
       null;
-    const owner = matchedSalesperson ?? manager;
+    const matchedManagerFromVendor =
+      users.find(u => {
+        if (u.role !== "manager") return false;
+        if (!allowVendorOwnerFallback) return false;
+        const first = pickFirstToken(u.firstName);
+        const nameFirst = pickFirstToken(u.name);
+        return !!vendorFirst && (vendorFirst === first || vendorFirst === nameFirst);
+      }) ?? null;
+    const owner = matchedSalesperson ?? matchedManagerFromVendor ?? manager;
     if (owner) {
       conv.leadOwner = {
         id: owner.id,
@@ -2719,7 +2727,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const isInitialAdf = event.provider === "sendgrid_adf" && !hasOutboundBeforeInbound;
   const isTrafficLogProLeadSource = isTrafficLogProLeadSourceHint;
   const isExplicitWalkInLeadSource = isExplicitWalkInLeadSourceHint;
-  const isInitialTrafficLogWalkIn = isInitialAdf && (isTrafficLogProLeadSource || isExplicitWalkInLeadSource);
+  const isTrafficLogWalkInLead =
+    isTrafficLogProLeadSource || isExplicitWalkInLeadSource || !!conv?.lead?.walkIn;
+  const isInitialTrafficLogWalkIn = isInitialAdf && isTrafficLogWalkInLead;
   const adfHistory = buildEffectiveHistory(conv, 6);
   const safeParser = async <T>(label: string, run: () => Promise<T | null>): Promise<T | null> => {
     try {
@@ -2966,7 +2976,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     inferredCta = "sell_my_bike";
     pricingInquiryIntent = false;
   }
-  if (isInitialTrafficLogWalkIn) {
+  if (isTrafficLogWalkInLead) {
     inferredBucket = "in_store";
     inferredCta = "contact_us";
   }
@@ -3076,13 +3086,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   let creditTodoCreated = false;
   const inquiryLower = inquiryText.toLowerCase();
   const isPrequalLead =
-    !isInitialTrafficLogWalkIn &&
+    !isTrafficLogWalkInLead &&
     (inferredCta === "prequalify" ||
       (inferredBucket === "finance_prequal" && inferredCta !== "hdfs_coa") ||
       /prequal|pre-qual/.test(leadSourceLower) ||
       /\bprequal\b/.test(inquiryLower));
   const isCreditLead =
-    !isInitialTrafficLogWalkIn &&
+    !isTrafficLogWalkInLead &&
     (inferredBucket === "finance_prequal" ||
       inferredCta === "hdfs_coa" ||
       inferredCta === "prequalify" ||
@@ -3699,9 +3709,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const walkInCleanedComment = walkInRawComment.replace(/<br\s*\/?>/gi, " ").replace(/\s+/g, " ").trim();
   const commentLower = walkInCleanedComment.toLowerCase();
   const emailLower = (lead.email ?? "").toLowerCase();
-  const isWalkInLead =
-    isInitialAdf &&
-    (isTrafficLogProLeadSource || isExplicitWalkInLeadSource || inferredBucket === "in_store");
+  const isWalkInLead = isTrafficLogWalkInLead || inferredBucket === "in_store";
   if (isWalkInLead) {
     initialMedia = undefined;
     initialMediaUrls = undefined;
@@ -3727,7 +3735,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           users.find(u => String(u.id ?? "").trim() === currentOwnerId) ?? null;
         const currentOwnerIsManager = !!currentOwner && currentOwner.role === "manager";
         const owner = users.find(u => {
-          if (u.role !== "salesperson") return false;
+          if (u.role !== "salesperson" && u.role !== "manager") return false;
           const first = String(u.firstName ?? "").trim().toLowerCase();
           const nameFirst = String(u.name ?? "")
             .trim()

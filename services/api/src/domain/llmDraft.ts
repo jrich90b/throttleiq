@@ -3209,7 +3209,13 @@ inbound: "Joe, thank you for your help today. Scott should have insurance cards 
 output: {"primary_intent":"scheduling","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.97}`,
     `EXAMPLE W
 inbound: "Scott should have insurance cards and the binder from Progressive."
-output: {"primary_intent":"general","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.9}`
+output: {"primary_intent":"general","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.9}`,
+    `EXAMPLE X
+inbound: "No need, I called and spoke with them already. Thanks Alexandra."
+output: {"primary_intent":"none","explicit_request":false,"fallback_action":"no_response","clarify_prompt":"","confidence":0.95}`,
+    `EXAMPLE Y
+inbound: "Sorry it took so long."
+output: {"primary_intent":"none","explicit_request":false,"fallback_action":"no_response","clarify_prompt":"","confidence":0.9}`
   ];
   const prompt = [
     "You are a strict routing parser for dealership inbound messages.",
