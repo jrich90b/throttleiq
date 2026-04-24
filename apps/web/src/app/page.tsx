@@ -7840,6 +7840,36 @@ export default function Home() {
     setEmailAttachmentsBusy(false);
   }
 
+  async function uploadConversationMediaFile(
+    convId: string,
+    file: File,
+    timeoutMs = 45000
+  ): Promise<any> {
+    const fd = new FormData();
+    fd.append("file", file);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const resp = await fetch(`/api/conversations/${encodeURIComponent(convId)}/media`, {
+        method: "POST",
+        body: fd,
+        signal: controller.signal
+      });
+      const payload = await resp.json().catch(() => null);
+      if (!resp.ok || !payload?.url) {
+        throw new Error(payload?.error ?? `Failed to upload "${file.name}".`);
+      }
+      return payload;
+    } catch (err: any) {
+      if (err?.name === "AbortError") {
+        throw new Error(`Upload timed out for "${file.name}". Please try again.`);
+      }
+      throw err;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+
   function removeEmailAttachment(index: number) {
     setEmailAttachments(prev => prev.filter((_, i) => i !== index));
   }
@@ -7848,46 +7878,45 @@ export default function Home() {
     if (!selectedConv) return;
     if (!files || files.length === 0) return;
     setSmsAttachmentsBusy(true);
-    const selected = Array.from(files);
-    const maxPerFile = 100 * 1024 * 1024;
+    try {
+      const selected = Array.from(files);
+      const maxPerFile = 100 * 1024 * 1024;
 
-    for (const file of selected) {
-      if (file.size > maxPerFile) {
-        window.alert(`"${file.name}" is too large (max 100MB).`);
-        continue;
-      }
-      if (!(file.type.startsWith("image/") || file.type.startsWith("video/"))) {
-        window.alert(`"${file.name}" must be an image or video file.`);
-        continue;
-      }
+      for (const file of selected) {
+        if (file.size > maxPerFile) {
+          window.alert(`"${file.name}" is too large (max 100MB).`);
+          continue;
+        }
+        if (!(file.type.startsWith("image/") || file.type.startsWith("video/"))) {
+          window.alert(`"${file.name}" must be an image or video file.`);
+          continue;
+        }
 
-      const fd = new FormData();
-      fd.append("file", file);
-      const resp = await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/media`, {
-        method: "POST",
-        body: fd
-      });
-      const payload = await resp.json().catch(() => null);
-      if (!resp.ok || !payload?.url) {
-        window.alert(payload?.error ?? `Failed to upload "${file.name}".`);
-        continue;
+        let payload: any = null;
+        try {
+          payload = await uploadConversationMediaFile(selectedConv.id, file);
+        } catch (err: any) {
+          window.alert(err?.message ?? `Failed to upload "${file.name}".`);
+          continue;
+        }
+
+        const nextAttachment = {
+          name: String(payload.name ?? file.name),
+          type: String((payload.type ?? file.type) || "application/octet-stream"),
+          size: Number(payload.size ?? file.size ?? 0),
+          url: String(payload.url),
+          mode:
+            (typeof payload.mmsEligible === "boolean"
+              ? payload.mmsEligible
+              : file.size <= 5 * 1024 * 1024)
+              ? ("mms" as const)
+              : ("link" as const)
+        };
+        setSmsAttachments(prev => [...prev, nextAttachment]);
       }
-      const nextAttachment = {
-        name: String(payload.name ?? file.name),
-        type: String((payload.type ?? file.type) || "application/octet-stream"),
-        size: Number(payload.size ?? file.size ?? 0),
-        url: String(payload.url),
-        mode:
-          (typeof payload.mmsEligible === "boolean"
-            ? payload.mmsEligible
-            : file.size <= 5 * 1024 * 1024)
-            ? ("mms" as const)
-            : ("link" as const)
-      };
-      setSmsAttachments(prev => [...prev, nextAttachment]);
+    } finally {
+      setSmsAttachmentsBusy(false);
     }
-
-    setSmsAttachmentsBusy(false);
   }
 
   function removeSmsAttachment(index: number) {
@@ -16811,7 +16840,9 @@ export default function Home() {
                       : m.direction === "in" && m.provider === "sendgrid_adf"
                         ? cleanAdfLeadForDisplay(m.body)
                         : m.body;
+                  const hasVisibleBody = String(messageBody ?? "").trim().length > 0;
                   const canRateMessage =
+                    hasVisibleBody &&
                     m.direction === "out" &&
                     (m.provider === "draft_ai" ||
                       m.provider === "twilio" ||
@@ -16829,17 +16860,19 @@ export default function Home() {
                         {isDraftMessage ? " • DRAFT (not sent)" : ""}
                         {!isDraftMessage && isPending ? " • DRAFT (not sent)" : ""}
                       </div>
-                      <div
-                        className={`inline-block mt-1 px-3 py-2 rounded-2xl border max-w-[85%] whitespace-pre-wrap break-words text-base font-medium ${
-                          isSummary
-                            ? "bg-gray-50 text-gray-800 border-gray-200"
-                            : m.direction === "in"
-                              ? "bg-gray-100 text-gray-900 border-gray-200"
-                              : "bg-blue-600 text-white border-blue-600"
-                        }`}
-                      >
-                        {renderMessageBody(messageBody)}
-                      </div>
+                      {hasVisibleBody ? (
+                        <div
+                          className={`inline-block mt-1 px-3 py-2 rounded-2xl border max-w-[85%] whitespace-pre-wrap break-words text-base font-medium ${
+                            isSummary
+                              ? "bg-gray-50 text-gray-800 border-gray-200"
+                              : m.direction === "in"
+                                ? "bg-gray-100 text-gray-900 border-gray-200"
+                                : "bg-blue-600 text-white border-blue-600"
+                          }`}
+                        >
+                          {renderMessageBody(messageBody)}
+                        </div>
+                      ) : null}
                       {m.provider === "voice_transcript" ? (
                         <div className="mt-2 text-xs text-gray-600">
                           {summaryText ? (
