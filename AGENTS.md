@@ -36,6 +36,16 @@ Required order:
   - This prevents part-number and gear inquiries from being misrouted as inventory-availability sales leads.
 - Keep deterministic source overrides (for example forced walk-in/test-ride/trade source rules) after parser mapping.
 
+## Channel Layout Guardrail
+- Outbound drafting must remain channel-specific:
+  - SMS drafts should use compact SMS layout (trimmed spacing, no email-style greeting blocks unless explicitly authored).
+  - Email drafts should be normalized to email layout (greeting + paragraph spacing) before storage/send.
+- Apply the same email-layout normalization in:
+  - initial ADF email draft builders,
+  - regenerate email draft publishing,
+  - manual email send path,
+  - any direct `conv.emailDraft` assignment path.
+
 ## Walk-In Inquiry Context
 - Traffic Log Pro / walk-in ADF inquiry comments are salesperson-authored context notes and should be treated as operational context, not direct customer chat turns.
 - Explicit watch phrasing in walk-in comments (including “watching for ...”) should create/refresh inventory watch state even if matching inventory currently exists.

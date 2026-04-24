@@ -4,7 +4,7 @@ import type { InboundMessageEvent } from "./types.js";
 import { maybeMarkEngagedFromInbound } from "./engagement.js";
 import { fileURLToPath } from "node:url";
 import { dataPath } from "./dataDir.js";
-import { normalizeSalesTone } from "./tone.js";
+import { formatEmailLayout, formatSmsLayout, normalizeSalesTone } from "./tone.js";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
 import { applyDraftStateInvariants } from "./draftStateInvariants.js";
 
@@ -1422,6 +1422,7 @@ export function appendOutbound(
   providerMessageId?: string,
   mediaUrls?: string[]
 ) {
+  const isEmailThread = String(from ?? "").includes("@") || String(to ?? "").includes("@");
   const lastInbound = [...(conv.messages || [])]
     .reverse()
     .find(m => m.direction === "in" && m.body);
@@ -1448,13 +1449,18 @@ export function appendOutbound(
     }
     tonedBody = invariant.draftText;
   }
+  if (!isEmailThread) {
+    tonedBody = formatSmsLayout(tonedBody);
+  }
   // If this is an email-thread draft, store it as an email draft instead of a SMS draft.
   if (
     provider === "draft_ai" &&
-    (String(from ?? "").includes("@") || String(to ?? "").includes("@"))
+    isEmailThread
   ) {
-    conv.emailDraft = tonedBody;
-    if (outboundAsksForShortList(tonedBody)) {
+    const firstName = String(conv?.lead?.firstName ?? conv?.lead?.name ?? "").trim();
+    const emailDraft = formatEmailLayout(tonedBody, { firstName, fallbackName: "there" });
+    conv.emailDraft = emailDraft;
+    if (outboundAsksForShortList(emailDraft)) {
       markPendingShortListPrompt(conv, `outbound_${provider}`);
     }
     consumeAgentContextIfNeeded(conv, "outbound_email_draft");

@@ -76,6 +76,7 @@ import { shouldRouteRoom58PriceHandoff } from "../domain/adfPolicy.js";
 import { isResponseControlParserAccepted } from "../domain/transitionSafety.js";
 import { resolveRoutingParserDecision } from "../domain/routerV2.js";
 import { listUsers } from "../domain/userStore.js";
+import { formatEmailLayout } from "../domain/tone.js";
 
 function base64UrlDecode(input: string): string | null {
   try {
@@ -1253,7 +1254,10 @@ function buildInitialEmailDraft(
     : "Just reply with a day and time that works for you.";
   const extra = "If a walkaround or extra photos would help, just let me know.";
 
-  return `Hi ${name},\n\n${thanks} ${intro} ${help} ${noteLine} ${buildLine} ${visit}\n\n${bookingLine}\n\n${extra}`.replace(/\s+\n/g, "\n").trim();
+  const draft = `Hi ${name},\n\n${thanks} ${intro} ${help} ${noteLine} ${buildLine} ${visit}\n\n${bookingLine}\n\n${extra}`
+    .replace(/\s+\n/g, "\n")
+    .trim();
+  return formatEmailLayout(draft, { firstName: name, fallbackName: "there" });
 }
 
 function appendFallbackEmailSignoff(body: string, profile: any): string {
@@ -1268,17 +1272,12 @@ function appendFallbackEmailSignoff(body: string, profile: any): string {
 }
 
 function toEmailStyledBody(body: string, conv: any): string {
-  const raw = String(body ?? "").trim();
-  if (!raw) return raw;
   const firstName = normalizeDisplayCase(conv?.lead?.firstName) || normalizeDisplayCase(conv?.lead?.name);
-  const greetingName = (firstName || "there").split(/\s+/)[0];
-  // Convert SMS-style greeting "Hi X — ..." into email-style "Hi X,\n\n..."
-  let text = raw.replace(/^Hi\s+([^—,\n]+)\s*[—-]\s*/i, (_m, name) => `Hi ${String(name).trim()},\n\n`);
-  // If no greeting exists, prepend one for email readability.
-  if (!/^Hi\s+[^,\n]+,\s*/i.test(text)) {
-    text = `Hi ${greetingName},\n\n${text}`;
-  }
-  return text;
+  return formatEmailLayout(body, { firstName, fallbackName: "there" });
+}
+
+function setEmailDraft(conv: any, text: string): void {
+  conv.emailDraft = toEmailStyledBody(text, conv);
 }
 import { getSystemMode } from "../domain/settingsStore.js";
 import { sendEmail } from "../domain/emailSender.js";
@@ -2595,12 +2594,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       if (result.handoff.reason === "pricing" || result.handoff.reason === "payments") {
         markPricingEscalated(conv);
       }
-      conv.emailDraft = result.handoff.ack;
+      setEmailDraft(conv, result.handoff.ack);
     } else if (result.autoClose?.reason) {
       closeConversation(conv, result.autoClose.reason);
-      conv.emailDraft = result.draft;
+      setEmailDraft(conv, result.draft);
     } else {
-      conv.emailDraft = result.draft;
+      setEmailDraft(conv, result.draft);
     }
 
     saveConversation(conv);
@@ -3686,7 +3685,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     if (shouldSendCustomerReply.allow) {
       const preferredMethod = String(conv.lead?.preferredContactMethod ?? "").trim().toLowerCase();
       if (preferredMethod === "email") {
-        conv.emailDraft = customerAck;
+        setEmailDraft(conv, customerAck);
       } else if (preferredMethod === "phone") {
         addCallTodoIfMissing(conv, "Preferred contact method is phone. Call customer (no auto text/email).");
       } else {
@@ -3840,7 +3839,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       return;
     }
     if (prefersEmailOnly) {
-      conv.emailDraft = text;
+      setEmailDraft(conv, text);
       return;
     }
     appendOutbound(conv, "dealership", leadKey, text, "draft_ai", undefined, mediaUrls);
@@ -4822,7 +4821,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     addTodo(conv, "other", event.body, event.providerMessageId);
     queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     maybeAddInitialCallTodo();
-    conv.emailDraft = ack;
+    setEmailDraft(conv, ack);
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -4925,7 +4924,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         setFollowUpMode(conv, "active", "private_party_seller");
       }
     }
-    conv.emailDraft = emailDraft;
+    setEmailDraft(conv, emailDraft);
     const systemMode = getSystemMode();
     const emailTo = conv.lead?.email?.trim();
     const canSendEmail = systemMode !== "suggest" && !!emailTo && conv.lead?.emailOptIn === true;
@@ -5089,7 +5088,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     ack = await applyInitialAdfPrefix(ack);
     queueInitialDraftForPreferredContact(ack);
     maybeAddInitialCallTodo();
-    conv.emailDraft = ack;
+    setEmailDraft(conv, ack);
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -5132,7 +5131,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     ack = await applyInitialAdfPrefix(ack);
     queueInitialDraftForPreferredContact(ack);
     maybeAddInitialCallTodo();
-    conv.emailDraft = ack;
+    setEmailDraft(conv, ack);
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -5165,14 +5164,17 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
     maybeAddInitialCallTodo();
     const emailGreeting = firstName ? `Hi ${firstName},` : "Hi,";
-    conv.emailDraft = [
+    setEmailDraft(
+      conv,
+      [
       emailGreeting,
       "",
       "Thanks for your H-D Meta promo offer request.",
       `This is ${agentName} at ${dealerName}.`,
       "I can help with pricing and availability.",
       "Which model are you interested in, and do you have a preferred trim or color?"
-    ].join("\n");
+    ].join("\n")
+    );
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -5203,7 +5205,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     ack = await applyInitialAdfPrefix(ack);
     queueInitialDraftForPreferredContact(ack);
     maybeAddInitialCallTodo();
-    conv.emailDraft = ack;
+    setEmailDraft(conv, ack);
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -5290,7 +5292,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
     queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     maybeAddInitialCallTodo();
-    conv.emailDraft = ack;
+    setEmailDraft(conv, ack);
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -5314,7 +5316,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     closeConversation(conv, result.autoClose.reason);
     queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     maybeAddInitialCallTodo();
-    conv.emailDraft = ack;
+    setEmailDraft(conv, ack);
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -5355,9 +5357,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         buildInventoryAvailable = false;
       }
     }
-    conv.emailDraft = buildInitialEmailDraft(conv, profile, inventoryNote, buildInventoryAvailable);
+    setEmailDraft(conv, buildInitialEmailDraft(conv, profile, inventoryNote, buildInventoryAvailable));
   } else {
-    conv.emailDraft = result.draft;
+    setEmailDraft(conv, result.draft);
   }
 
   if (result.requestedTime && !conv.appointment?.bookedEventId) {

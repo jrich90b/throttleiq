@@ -282,6 +282,7 @@ import {
   type MetaPageSnapshot
 } from "./domain/metaIntegration.js";
 import { isLikelyVoicemailTranscript, maybeMarkEngagedFromCall } from "./domain/engagement.js";
+import { formatEmailLayout, formatSmsLayout } from "./domain/tone.js";
 
 import { getSystemMode, setSystemMode, type SystemMode } from "./domain/settingsStore.js";
 import {
@@ -2447,6 +2448,11 @@ function appendFallbackEmailSignoff(body: string, dealerProfile: any): string {
     return `${text}\n${agent}\n${dealer}`;
   }
   return `${text}\n\nBest,\n${agent}\n${dealer}`;
+}
+
+function formatEmailBodyForConversation(body: string, conv: any): string {
+  const firstName = String(conv?.lead?.firstName ?? conv?.lead?.name ?? "").trim();
+  return formatEmailLayout(body, { firstName, fallbackName: "there" });
 }
 
 function base64UrlEncode(input: string): string {
@@ -5913,7 +5919,10 @@ function buildInitialEmailDraft(conv: any, dealerProfile: any): string {
     : "Just reply with a day and time that works for you.";
   const extra = "If a walkaround or extra photos would help, just let me know.";
 
-  return `Hi ${name},\n\n${thanks} ${intro} ${help} ${buildLine} ${visit}\n\n${bookingLine}\n\n${extra}`;
+  return formatEmailLayout(
+    `Hi ${name},\n\n${thanks} ${intro} ${help} ${buildLine} ${visit}\n\n${bookingLine}\n\n${extra}`,
+    { firstName: name, fallbackName: "there" }
+  );
 }
 
 const FOLLOW_UP_COLOR_WORDS = [
@@ -16370,7 +16379,7 @@ async function processDueFollowUps() {
 
     if (useEmail) {
       if (!emailFrom) {
-        const fallbackMessage = emailMessage ?? message;
+        const fallbackMessage = formatEmailBodyForConversation(emailMessage ?? message, conv);
         if (
           isRecentDuplicateOutbound(conv, emailTo!, fallbackMessage, {
             providers: ["human", "sendgrid", "draft_ai"],
@@ -16387,7 +16396,7 @@ async function processDueFollowUps() {
         try {
         const dealerName = dealerProfile?.dealerName ?? "Dealership";
         const subject = `Follow-up from ${dealerName}`;
-        const body = emailMessage ?? message;
+        const body = formatEmailBodyForConversation(emailMessage ?? message, conv);
         if (
           isRecentDuplicateOutbound(conv, emailTo!, body, {
             providers: ["sendgrid", "human"],
@@ -16420,7 +16429,7 @@ async function processDueFollowUps() {
           replyTo: replyTo ?? null,
           details: e?.message ?? String(e)
         });
-        const fallbackMessage = emailMessage ?? message;
+        const fallbackMessage = formatEmailBodyForConversation(emailMessage ?? message, conv);
         appendOutbound(conv, "salesperson", emailTo!, fallbackMessage, "human", undefined, mediaUrls);
         maybeAddCallTodoForFollowUp();
       }
@@ -24180,6 +24189,8 @@ app.post("/conversations/:id/send", async (req, res) => {
 
   const user = (req as any).user ?? null;
   const body = String(req.body?.body ?? "").trim();
+  const smsBody = formatSmsLayout(body);
+  const emailBody = formatEmailBodyForConversation(body, conv);
 
   const draftId = req.body?.draftId ? String(req.body.draftId) : undefined;
   const manualTakeover = req.body?.manualTakeover === true;
@@ -24737,6 +24748,7 @@ app.post("/conversations/:id/send", async (req, res) => {
   const wantsEmail =
     !!emailTo &&
     (requestedEmailChannel || (!requestedSmsChannel && implicitEmailPreferred));
+  const outboundBodyForLog = wantsEmail ? emailBody : smsBody;
   if (requestedEmailChannel && !emailTo) {
     return res.status(400).json({
       ok: false,
@@ -24786,7 +24798,7 @@ app.post("/conversations/:id/send", async (req, res) => {
         channel: channel ?? conv.classification?.channel ?? "sms",
         draftId: draft?.id ?? null,
         draft: draftForLog,
-        final: body,
+        final: outboundBodyForLog,
         edited: draftForLog ? draftForLog.trim() !== body.trim() : null,
         editDistance: null,
         editNote: editNote && editNote.length > 0 ? editNote : null,
@@ -24874,8 +24886,8 @@ app.post("/conversations/:id/send", async (req, res) => {
       .filter(att => att.content.length > 0);
     const signed =
       !skipEmailSignature && effectiveSignature
-        ? `${body}\n\n${effectiveSignature}${dealerProfile?.logoUrl ? `\n\n${dealerProfile.logoUrl}` : ""}`
-        : body;
+        ? `${emailBody}\n\n${effectiveSignature}${dealerProfile?.logoUrl ? `\n\n${dealerProfile.logoUrl}` : ""}`
+        : emailBody;
     if (isManualDuplicateOutbound(emailTo!, signed, ["sendgrid", "human", "draft_ai"])) {
       return res.json({
         ok: true,
@@ -24903,8 +24915,8 @@ app.post("/conversations/:id/send", async (req, res) => {
       if (!fin.usedDraft) {
         appendOutbound(conv, emailFrom, emailTo!, signed, outboundProvider);
       }
-      applyManualOutboundStateHints(signed, { channel: "email" });
-      await reconcileManualOutboundState(signed, { channel: "email", delivered: true });
+      applyManualOutboundStateHints(emailBody, { channel: "email" });
+      await reconcileManualOutboundState(emailBody, { channel: "email", delivered: true });
       finalizeManualSendDraftState({ clearEmailDraft: true, preserveSmsDrafts: true });
       saveConversation(conv);
       await flushConversationStore();
@@ -24942,7 +24954,7 @@ app.post("/conversations/:id/send", async (req, res) => {
 
   if (!to.startsWith("+")) {
     // Not a phone number; still log as human note so it isn't lost
-    if (isManualDuplicateOutbound(conv.leadKey, body, ["human", "draft_ai", "twilio"])) {
+    if (isManualDuplicateOutbound(conv.leadKey, smsBody, ["human", "draft_ai", "twilio"])) {
       return res.status(400).json({
         ok: false,
         error: "leadKey is not a valid phone number for SMS send",
@@ -24951,12 +24963,12 @@ app.post("/conversations/:id/send", async (req, res) => {
       });
     }
     const hadOutbound = conv.messages.some(m => m.direction === "out");
-    const fin = finalizeDraftAsSent(conv, draftId, body, "human");
+    const fin = finalizeDraftAsSent(conv, draftId, smsBody, "human");
     if (!fin.usedDraft) {
-      appendOutbound(conv, "salesperson", conv.leadKey, body, "human", undefined, mediaUrls);
+      appendOutbound(conv, "salesperson", conv.leadKey, smsBody, "human", undefined, mediaUrls);
     }
-    applyManualOutboundStateHints(body, { channel: "sms" });
-    await reconcileManualOutboundState(body, { channel: "sms", delivered: false });
+    applyManualOutboundStateHints(smsBody, { channel: "sms" });
+    await reconcileManualOutboundState(smsBody, { channel: "sms", delivered: false });
     finalizeManualSendDraftState();
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
@@ -24982,7 +24994,7 @@ app.post("/conversations/:id/send", async (req, res) => {
   const from = process.env.TWILIO_FROM_NUMBER;
 
   if (!accountSid || !authToken || !from) {
-    if (isManualDuplicateOutbound(to, body, ["human", "draft_ai", "twilio"])) {
+    if (isManualDuplicateOutbound(to, smsBody, ["human", "draft_ai", "twilio"])) {
       return res.status(500).json({
         ok: false,
         error: "Twilio credentials not configured (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_FROM_NUMBER)",
@@ -24991,12 +25003,12 @@ app.post("/conversations/:id/send", async (req, res) => {
       });
     }
     const hadOutbound = conv.messages.some(m => m.direction === "out");
-    const fin = finalizeDraftAsSent(conv, draftId, body, "human");
+    const fin = finalizeDraftAsSent(conv, draftId, smsBody, "human");
     if (!fin.usedDraft) {
-      appendOutbound(conv, "salesperson", to, body, "human", undefined, mediaUrls);
+      appendOutbound(conv, "salesperson", to, smsBody, "human", undefined, mediaUrls);
     }
-    applyManualOutboundStateHints(body, { channel: "sms" });
-    await reconcileManualOutboundState(body, { channel: "sms", delivered: false });
+    applyManualOutboundStateHints(smsBody, { channel: "sms" });
+    await reconcileManualOutboundState(smsBody, { channel: "sms", delivered: false });
     finalizeManualSendDraftState();
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
@@ -25018,7 +25030,7 @@ app.post("/conversations/:id/send", async (req, res) => {
   }
 
   try {
-    if (isManualDuplicateOutbound(to, body, ["twilio", "human", "draft_ai"])) {
+    if (isManualDuplicateOutbound(to, smsBody, ["twilio", "human", "draft_ai"])) {
       return res.json({
         ok: true,
         sent: false,
@@ -25031,7 +25043,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       client.messages.create({
         from,
         to,
-        body,
+        body: smsBody,
         ...(mediaUrls && mediaUrls.length ? { mediaUrl: mediaUrls } : {})
       }),
       outboundSendTimeoutMs,
@@ -25040,12 +25052,12 @@ app.post("/conversations/:id/send", async (req, res) => {
 
     // Log as truly sent via Twilio (store SID)
     const hadOutbound = conv.messages.some(m => m.direction === "out");
-    const fin = finalizeDraftAsSent(conv, draftId, body, "twilio", msg.sid);
+    const fin = finalizeDraftAsSent(conv, draftId, smsBody, "twilio", msg.sid);
     if (!fin.usedDraft) {
-      appendOutbound(conv, from, to, body, "twilio", msg.sid, mediaUrls);
+      appendOutbound(conv, from, to, smsBody, "twilio", msg.sid, mediaUrls);
     }
-    applyManualOutboundStateHints(body, { channel: "sms" });
-    await reconcileManualOutboundState(body, {
+    applyManualOutboundStateHints(smsBody, { channel: "sms" });
+    await reconcileManualOutboundState(smsBody, {
       channel: "sms",
       delivered: true,
       sourceMessageId: msg.sid ?? null
@@ -25073,12 +25085,12 @@ app.post("/conversations/:id/send", async (req, res) => {
   } catch (err: any) {
     // Log the attempted send as human so rep still sees it
     const hadOutbound = conv.messages.some(m => m.direction === "out");
-    const fin = finalizeDraftAsSent(conv, draftId, body, "human");
+    const fin = finalizeDraftAsSent(conv, draftId, smsBody, "human");
     if (!fin.usedDraft) {
-      appendOutbound(conv, "salesperson", to, body, "human", undefined, mediaUrls);
+      appendOutbound(conv, "salesperson", to, smsBody, "human", undefined, mediaUrls);
     }
-    applyManualOutboundStateHints(body, { channel: "sms" });
-    await reconcileManualOutboundState(body, { channel: "sms", delivered: false });
+    applyManualOutboundStateHints(smsBody, { channel: "sms" });
+    await reconcileManualOutboundState(smsBody, { channel: "sms", delivered: false });
     finalizeManualSendDraftState();
     if (!hadOutbound) {
       await maybeStartCadence(conv, new Date().toISOString());
@@ -25288,13 +25300,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     if (!invariant.allow) {
       return respondRegenerateSkipped(invariant.reason ?? "draft_invariant_blocked");
     }
-    conv.emailDraft = invariant.draftText;
+    conv.emailDraft = formatEmailBodyForConversation(invariant.draftText, conv);
     saveConversation(conv);
     recordRouteOutcome("regen", "email_draft_published", {
       convId: conv.id,
       leadKey: conv.leadKey
     });
-    return res.json({ ok: true, conversation: conv, draft: invariant.draftText });
+    return res.json({ ok: true, conversation: conv, draft: conv.emailDraft });
   };
   if (event.provider === "twilio" && isInventoryBrowseLinkRequest(String(event.body ?? ""))) {
     const dealerProfile = await getDealerProfileHot();
@@ -26951,12 +26963,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       if (!invariant.allow) {
         return respondRegenerateSkipped(invariant.reason ?? "draft_invariant_blocked");
       }
-      conv.emailDraft = invariant.draftText;
+      conv.emailDraft = formatEmailBodyForConversation(invariant.draftText, conv);
       saveConversation(conv);
       return res.json({
         ok: true,
         conversation: conv,
-        draft: invariant.draftText,
+        draft: conv.emailDraft,
         debug: {
           inboundBody: event.body,
           inboundAt: event.receivedAt,
