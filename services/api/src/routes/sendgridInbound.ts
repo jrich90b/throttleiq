@@ -3314,6 +3314,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const callbackSummary = callbackTimeHint
     ? `Call requested: ${callbackTimeHint}.`
     : "Call requested.";
+  const suppressInitialAutoDraftForTimedCallback =
+    isInitialAdf && callbackRequestedInLead && !!String(callbackSchedule?.dueAt ?? "").trim();
 
   let creditTodoCreated = false;
   const inquiryLower = inquiryText.toLowerCase();
@@ -3750,6 +3752,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         undefined,
         callbackSchedule
       );
+      if (suppressInitialAutoDraftForTimedCallback && conv.followUp?.mode !== "manual_handoff") {
+        setFollowUpMode(conv, "manual_handoff", "callback_requested");
+        stopFollowUpCadence(conv, "manual_handoff");
+      }
       return;
     }
     addCallTodoIfMissing(conv, "Call customer (initial reply sent).");
@@ -3761,6 +3767,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     setContactPreference(conv, "call_only");
   }
   const queueInitialDraftForPreferredContact = (text: string, mediaUrls?: string[]) => {
+    if (suppressInitialAutoDraftForTimedCallback) {
+      return;
+    }
     if (prefersPhoneOnly) {
       addCallTodoIfMissing(conv, "Preferred contact method is phone. Call customer (no auto text/email).");
       // In Suggest mode, still surface a draft so staff can review/send manually.

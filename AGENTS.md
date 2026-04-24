@@ -773,3 +773,18 @@ When changing responses:
   - owner fallback logic still supports TLP transport metadata for salesperson mapping where appropriate.
 - Purpose:
   - prevent standard Room58 / sales ADF leads from being misrouted into walk-in response templates when they are only transported through Traffic Log Pro.
+
+## Timed Callback Request Handling (No Auto-Draft + Timed Call To-Do)
+- In `services/api/src/routes/sendgridInbound.ts`:
+  - initial ADF leads with parser-confirmed callback request and resolvable callback time now suppress automatic customer draft creation,
+  - system creates a scheduled `call` to-do (`Call requested: <time hint>`) with reminder metadata,
+  - conversation is set to manual handoff (`callback_requested`) so cadence does not keep generating follow-up drafts ahead of the requested call window.
+- Parser-first policy:
+  - callback detection remains parser/router first (`parseIntentWithLLM` + `parseRoutingDecisionWithLLM`), with deterministic fallback only when parser confidence does not provide intent/time.
+
+## Callback Few-Shot Coverage
+- Added explicit callback few-shot examples in `services/api/src/domain/llmDraft.ts`:
+  - intent parser example for `call me around 1-2pm ... I work night shift`,
+  - routing parser example mapping the same pattern to `primary_intent=callback`.
+- Purpose:
+  - improve parser confidence and consistency on time-window callback requests from ADF leads.
