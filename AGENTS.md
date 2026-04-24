@@ -201,6 +201,13 @@ When changing responses:
   - Primary submit uses orange fill with dark text.
   - Errors/success states use readable high-contrast colors.
 
+## SMS Media Uploads
+- `/conversations/:id/media` now performs server-side image normalization for MMS:
+  - Auto-convert non-MMS-friendly image formats to JPEG when possible.
+  - Auto-resize/compress oversized images toward MMS-safe limits before deciding link fallback.
+- MMS eligibility for uploaded media is computed from final stored bytes + MIME support, not raw original file size only.
+- If an uploaded image still exceeds configured MMS limits after optimization, keep existing link fallback behavior.
+
 ## Phase 1 Routing Alignment (No Line Number Notes)
 - Deterministic availability and finance-priority gating are shared helpers in `services/api/src/index.ts`:
   - `getDeterministicAvailabilitySignals(...)`

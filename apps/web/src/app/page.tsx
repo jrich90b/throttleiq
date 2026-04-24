@@ -17346,7 +17346,6 @@ export default function Home() {
                     >
                       <span className="truncate max-w-[220px]">
                         {att.name}
-                        {att.size > 5 * 1024 * 1024 ? " (link)" : ""}
                       </span>
                       <button
                         type="button"
@@ -17363,9 +17362,9 @@ export default function Home() {
               {composeSmsAttachmentsBusy ? (
                 <div className="text-xs text-gray-500">Processing media…</div>
               ) : null}
-              {composeSmsAttachments.some(att => att.size > 5 * 1024 * 1024) ? (
+              {composeSmsAttachments.length ? (
                 <div className="text-xs text-gray-500">
-                  Large files will be sent as links automatically.
+                  Images are auto-optimized for MMS when possible. If still too large, they will be sent as links.
                 </div>
               ) : null}
               <div>

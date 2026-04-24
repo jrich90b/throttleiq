@@ -23943,6 +23943,128 @@ function buildTranscript(
   return { note, lastAt, count: messages.length };
 }
 
+function messageMmsMaxBytes(): number {
+  return Math.max(
+    500_000,
+    Math.min(20 * 1024 * 1024, Number(process.env.MESSAGE_MMS_MAX_BYTES ?? 5 * 1024 * 1024))
+  );
+}
+
+function messageMmsImageTargetBytes(maxBytes: number): number {
+  const configured = Number(process.env.MESSAGE_MMS_IMAGE_TARGET_BYTES ?? 3_500_000);
+  const sane = Number.isFinite(configured) ? configured : 3_500_000;
+  return Math.max(250_000, Math.min(maxBytes, sane));
+}
+
+function messageMmsImageMaxDimension(): number {
+  return Math.max(
+    640,
+    Math.min(4096, Number(process.env.MESSAGE_MMS_IMAGE_MAX_DIMENSION ?? 2048))
+  );
+}
+
+function mmsDirectImageMimeSupported(mime: string): boolean {
+  const normalized = String(mime ?? "").toLowerCase();
+  return (
+    normalized === "image/jpeg" ||
+    normalized === "image/jpg" ||
+    normalized === "image/png" ||
+    normalized === "image/gif"
+  );
+}
+
+function mmsDirectVideoMimeSupported(mime: string): boolean {
+  const normalized = String(mime ?? "").toLowerCase();
+  return (
+    normalized === "video/mp4" ||
+    normalized === "video/quicktime" ||
+    normalized === "video/3gpp" ||
+    normalized === "video/3gpp2"
+  );
+}
+
+function isConvertibleImageMimeForMms(mime: string): boolean {
+  const normalized = String(mime ?? "").toLowerCase();
+  if (!normalized.startsWith("image/")) return false;
+  if (normalized === "image/gif" || normalized === "image/svg+xml") return false;
+  return true;
+}
+
+async function normalizeMessageImageForMms(params: {
+  buffer: Buffer;
+  mime: string;
+  maxBytes: number;
+}): Promise<{
+  buffer: Buffer;
+  mime: string;
+  optimized: boolean;
+}> {
+  const originalBuffer = params.buffer;
+  const mime = String(params.mime ?? "").toLowerCase();
+  const maxBytes = Math.max(250_000, Number(params.maxBytes || 0) || 5 * 1024 * 1024);
+  const targetBytes = messageMmsImageTargetBytes(maxBytes);
+  const needsFormatCoercion = !mmsDirectImageMimeSupported(mime);
+  const needsSizeReduction = originalBuffer.length > targetBytes;
+  if (!isConvertibleImageMimeForMms(mime) || (!needsFormatCoercion && !needsSizeReduction)) {
+    return { buffer: originalBuffer, mime, optimized: false };
+  }
+
+  const maxDim = messageMmsImageMaxDimension();
+  const qualityStart = Math.max(55, Math.min(90, Number(process.env.MESSAGE_MMS_IMAGE_QUALITY ?? 82)));
+  const qualityMin = Math.max(35, Math.min(80, Number(process.env.MESSAGE_MMS_IMAGE_MIN_QUALITY ?? 46)));
+  const qualityStep = Math.max(4, Math.min(10, Number(process.env.MESSAGE_MMS_IMAGE_QUALITY_STEP ?? 6)));
+  const dimStep = Math.max(0.7, Math.min(0.95, Number(process.env.MESSAGE_MMS_IMAGE_DIMENSION_STEP ?? 0.86)));
+
+  let widthCap = maxDim;
+  let heightCap = maxDim;
+  let lastBuffer: Buffer | null = null;
+
+  const render = async (quality: number, width: number, height: number) =>
+    sharp(originalBuffer, { failOn: "none", animated: false })
+      .rotate()
+      .resize({
+        width,
+        height,
+        fit: "inside",
+        withoutEnlargement: true
+      })
+      .jpeg({ quality, mozjpeg: true, chromaSubsampling: "4:2:0" })
+      .toBuffer();
+
+  try {
+    let dimPass = 0;
+    while (dimPass < 7) {
+      let quality = qualityStart;
+      while (quality >= qualityMin) {
+        const candidate = await render(
+          quality,
+          Math.max(320, Math.round(widthCap)),
+          Math.max(320, Math.round(heightCap))
+        );
+        lastBuffer = candidate;
+        if (candidate.length <= targetBytes) {
+          return { buffer: candidate, mime: "image/jpeg", optimized: true };
+        }
+        quality -= qualityStep;
+      }
+      widthCap *= dimStep;
+      heightCap *= dimStep;
+      dimPass += 1;
+    }
+  } catch (err: any) {
+    console.warn("[conversations media] image normalize failed:", err?.message ?? err);
+  }
+
+  if (lastBuffer && lastBuffer.length < originalBuffer.length) {
+    const underHardLimit = lastBuffer.length <= maxBytes;
+    if (underHardLimit || needsFormatCoercion) {
+      return { buffer: lastBuffer, mime: "image/jpeg", optimized: true };
+    }
+  }
+
+  return { buffer: originalBuffer, mime, optimized: false };
+}
+
 app.post("/crm/tlp/log-contact", async (req, res) => {
   const leadRef = String(req.body?.leadRef ?? "").trim();
   const conversationId = String(req.body?.conversationId ?? "").trim();
@@ -23986,44 +24108,64 @@ app.post("/conversations/:id/media", upload.single("file"), async (req, res) => 
     return res.status(400).json({ ok: false, error: "file too large (max 100MB)" });
   }
 
+  const mmsEligibleMaxBytes = messageMmsMaxBytes();
+  let outputBuffer = req.file.buffer;
+  let outputMime = mime;
+  let optimizedForMms = false;
+  if (isImage) {
+    const normalized = await normalizeMessageImageForMms({
+      buffer: req.file.buffer,
+      mime,
+      maxBytes: mmsEligibleMaxBytes
+    });
+    outputBuffer = normalized.buffer;
+    outputMime = normalized.mime;
+    optimizedForMms = normalized.optimized;
+  }
+
   const extFromOriginal = path.extname(req.file.originalname || "").toLowerCase();
   const extFromMime =
-    mime === "image/jpeg"
+    outputMime === "image/jpeg"
       ? ".jpg"
-      : mime === "image/png"
+      : outputMime === "image/png"
         ? ".png"
-        : mime === "image/webp"
+        : outputMime === "image/webp"
           ? ".webp"
-          : mime === "image/gif"
+          : outputMime === "image/gif"
             ? ".gif"
-            : mime === "video/mp4"
+            : outputMime === "video/mp4"
               ? ".mp4"
-              : mime === "video/quicktime"
+              : outputMime === "video/quicktime"
                 ? ".mov"
                 : "";
-  const ext = extFromOriginal || extFromMime || (isVideo ? ".mp4" : ".jpg");
+  const ext = extFromMime || extFromOriginal || (isVideo ? ".mp4" : ".jpg");
   const safeConv = String(conv.id ?? "conv").replace(/[^a-z0-9_-]/gi, "_").slice(0, 48) || "conv";
   const fileName = `${safeConv}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
   const dir = path.resolve(getDataDir(), "uploads", "messages");
   await fs.promises.mkdir(dir, { recursive: true });
   const dest = path.join(dir, fileName);
-  await fs.promises.writeFile(dest, req.file.buffer);
+  await fs.promises.writeFile(dest, outputBuffer);
 
   const publicBase = process.env.PUBLIC_BASE_URL ?? "";
   const url = publicBase
     ? `${publicBase.replace(/\/$/, "")}/uploads/messages/${fileName}`
     : `/uploads/messages/${fileName}`;
-  const mmsEligibleMaxBytes = 5 * 1024 * 1024;
-  const sizeBytes = Number(req.file.size ?? 0);
-  const mmsEligible = sizeBytes > 0 && sizeBytes <= mmsEligibleMaxBytes;
+  const sizeBytes = Number(outputBuffer.length ?? 0);
+  const mmsEligible =
+    sizeBytes > 0 &&
+    sizeBytes <= mmsEligibleMaxBytes &&
+    ((isImage && mmsDirectImageMimeSupported(outputMime)) ||
+      (isVideo && mmsDirectVideoMimeSupported(outputMime)));
 
   return res.json({
     ok: true,
     url,
     name: req.file.originalname || fileName,
-    type: mime || "application/octet-stream",
+    type: outputMime || "application/octet-stream",
     size: sizeBytes,
-    mmsEligible
+    mmsEligible,
+    optimizedForMms,
+    originalSize: Number(req.file.size ?? 0)
   });
 });
 
