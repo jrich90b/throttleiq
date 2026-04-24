@@ -142,7 +142,9 @@ function normalizeDisplayCase(raw?: string | null): string {
 function isRiderToRiderFinanceLeadSource(raw?: string | null): boolean {
   const text = String(raw ?? "").toLowerCase();
   if (!text) return false;
-  return /\brider\s*(?:to|-)?\s*rider\b/.test(text) && /\b(finance|financing)\b/.test(text);
+  const hasRiderPhrase = /\b(?:rider\s*(?:to|2|-)?\s*rider|r2r)\b/.test(text);
+  const hasFinancePhrase = /\b(finance|financing)\b/.test(text);
+  return hasRiderPhrase && hasFinancePhrase;
 }
 
 function dealerOffersRiderToRiderFinancing(profile: any): boolean {
@@ -3513,12 +3515,17 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   };
   const prefersPhoneOnly = conv.lead?.preferredContactMethod === "phone";
   const prefersEmailOnly = conv.lead?.preferredContactMethod === "email";
+  const systemMode = getSystemMode();
   if (prefersPhoneOnly) {
     setContactPreference(conv, "call_only");
   }
   const queueInitialDraftForPreferredContact = (text: string, mediaUrls?: string[]) => {
     if (prefersPhoneOnly) {
       addCallTodoIfMissing(conv, "Preferred contact method is phone. Call customer (no auto text/email).");
+      // In Suggest mode, still surface a draft so staff can review/send manually.
+      if (systemMode === "suggest") {
+        appendOutbound(conv, "dealership", leadKey, text, "draft_ai", undefined, mediaUrls);
+      }
       return;
     }
     if (prefersEmailOnly) {
@@ -3527,7 +3534,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
     appendOutbound(conv, "dealership", leadKey, text, "draft_ai", undefined, mediaUrls);
   };
-  if (isInitialAdf && prefersPhoneOnly) {
+  if (isInitialAdf && prefersPhoneOnly && systemMode !== "suggest") {
     maybeAddInitialCallTodo();
     return res.status(200).json({
       ok: true,
@@ -3545,7 +3552,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
 
   const isRiderToRiderFinanceLead =
-    isRiderToRiderFinanceLeadSource(leadSource) || isRiderToRiderFinanceLeadSource(lead.inquiry);
+    isRiderToRiderFinanceLeadSource(leadSource) ||
+    isRiderToRiderFinanceLeadSource(conv.lead?.source) ||
+    isRiderToRiderFinanceLeadSource(lead.inquiry) ||
+    isRiderToRiderFinanceLeadSource(lead.comment) ||
+    isRiderToRiderFinanceLeadSource(event.body);
   if (isRiderToRiderFinanceLead) {
     const profile = await getDealerProfile();
     const firstName = normalizeDisplayCase(conv.lead?.firstName);
@@ -4761,23 +4772,39 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
 
   const history = buildEffectiveHistory(conv, 20);
-  const result = await orchestrateInbound(event, history, {
-    appointment: conv.appointment,
-    followUp: conv.followUp,
-    lead: conv.lead,
-    leadSource: conv.lead?.source ?? null,
-    bucket: conv.classification?.bucket ?? null,
-    cta: conv.classification?.cta ?? null,
-    availabilityIntentHint: availabilityIntentFromParser || hasStockIntent,
-    schedulingIntentHint: scheduleIntentFromParser || forcedTestRide,
-    pricingIntentHint: pricingInquiryIntent,
-    financeIntentHint: pricingInquiryIntent,
-    pricingAttempts: getPricingAttempts(conv),
-    allowSchedulingOffer: true,
-    agentNameOverride:
-      String(conv?.manualSender?.userName ?? conv?.leadOwner?.name ?? "")
-        .trim() || undefined
-  });
+  let result: any;
+  try {
+    result = await orchestrateInbound(event, history, {
+      appointment: conv.appointment,
+      followUp: conv.followUp,
+      lead: conv.lead,
+      leadSource: conv.lead?.source ?? null,
+      bucket: conv.classification?.bucket ?? null,
+      cta: conv.classification?.cta ?? null,
+      availabilityIntentHint: availabilityIntentFromParser || hasStockIntent,
+      schedulingIntentHint: scheduleIntentFromParser || forcedTestRide,
+      pricingIntentHint: pricingInquiryIntent,
+      financeIntentHint: pricingInquiryIntent,
+      pricingAttempts: getPricingAttempts(conv),
+      allowSchedulingOffer: true,
+      agentNameOverride:
+        String(conv?.manualSender?.userName ?? conv?.leadOwner?.name ?? "")
+          .trim() || undefined
+    });
+  } catch (error: any) {
+    console.error("[sendgrid inbound] orchestrator failed:", error?.message ?? error);
+    result = {
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft: "Thanks — I got your inquiry. I’ll follow up shortly.",
+      requestedTime: null,
+      requestedAppointmentType: null,
+      handoff: { required: false, reason: null, ack: "" },
+      autoClose: null,
+      pricingAttempted: false
+    };
+  }
   console.log("[sendgrid inbound] requestedTime", result.requestedTime);
 
   const setDialogState = (name: string) => {
@@ -5292,7 +5319,6 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     draft = withInitialAvailabilityLine(draft);
   }
 
-  const systemMode = getSystemMode();
   const emailTo = lead.email?.trim();
   const useEmail = channel === "email" && !!emailTo && lead.emailOptIn === true;
 

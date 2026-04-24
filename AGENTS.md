@@ -42,6 +42,8 @@ Required order:
 - Traffic Log Pro / walk-in source handling must be sticky across follow-up ADF updates (not just first touch): keep classification on `in_store/contact_us` and block finance/prequal auto-ack hijacks from context words like “credit union”.
 - Owner assignment guardrail for walk-ins: for generic `Walk In` source labels, do not trust `vendor.contact.name` as owner fallback unless salesperson is explicitly present in inquiry/comment text (forwarded ADF emails can contaminate vendor contact name).
 - Traffic Log Pro exception for owner fallback: when vendor contact matches a known manager/salesperson user, allow that owner mapping so forwarded TLP ADF notes can retain the intended salesperson/manager owner.
+- Rider-to-rider finance source detection should match broader variants (`rider to rider`, `rider 2 rider`, `r2r`) across lead source/inquiry/comment/body so marketplace finance-inquiry leads do not miss deterministic routing.
+- Preferred-contact `phone` guardrail: in live/AI mode, still suppress auto text/email; in Suggest mode, still create a draft for staff review so the thread does not appear stuck with no draft.
 
 ## Feedback Loop Quality Reports
 - Tone quality nightly reports should focus on actionable customer turns. Skip non-actionable inbound classes in `scripts/tone_quality_eval.ts`:
