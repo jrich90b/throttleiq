@@ -300,6 +300,34 @@ function pickUserForRole(
   return users.find(u => String(u?.role ?? "").trim().toLowerCase() === role) ?? null;
 }
 
+function isDepartmentUserRole(role: string | null | undefined): boolean {
+  const normalized = String(role ?? "").trim().toLowerCase();
+  return normalized === "service" || normalized === "parts" || normalized === "apparel";
+}
+
+function isLikelyDepartmentOwnerName(name: string | null | undefined): boolean {
+  const normalized = String(name ?? "").trim().toLowerCase();
+  if (!normalized) return false;
+  return /\b(service|parts?|apparel|motorclothes)\b/.test(normalized);
+}
+
+function pickSalesOwner(
+  users: any[],
+  preferredFirstToken?: string | null
+): any | null {
+  const token = pickFirstToken(preferredFirstToken ?? "");
+  const byPreferred =
+    users.find(u => {
+      if (String(u?.role ?? "").trim().toLowerCase() !== "salesperson") return false;
+      if (!token) return false;
+      const first = pickFirstToken(u?.firstName);
+      const nameFirst = pickFirstToken(u?.name);
+      return token === first || token === nameFirst;
+    }) ?? null;
+  if (byPreferred) return byPreferred;
+  return users.find(u => String(u?.role ?? "").trim().toLowerCase() === "salesperson") ?? null;
+}
+
 function normalizeAdfIdentityToken(raw?: string | null): string {
   return String(raw ?? "")
     .trim()
@@ -3036,8 +3064,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
             inferredCtaKey === "apparel_inquiry"
           ? "apparel"
           : null;
+  let usersForOwnerRouting: any[] | null = null;
+  const getUsersForOwnerRouting = async (): Promise<any[]> => {
+    if (usersForOwnerRouting) return usersForOwnerRouting;
+    usersForOwnerRouting = await listUsers();
+    return usersForOwnerRouting;
+  };
   if (isFreshLeadConversation && departmentLeadRole) {
-    const users = await listUsers();
+    const users = await getUsersForOwnerRouting();
     const departmentOwner = pickUserForRole(users, departmentLeadRole, vendorContactName);
     if (departmentOwner?.id) {
       conv.leadOwner = {
@@ -3050,9 +3084,30 @@ export async function handleSendgridInbound(req: Request, res: Response) {
             ? "Service Department"
             : departmentLeadRole === "parts"
               ? "Parts Department"
-              : "Apparel Department"),
+            : "Apparel Department"),
         assignedAt: new Date().toISOString()
       };
+    }
+  }
+  if (!departmentLeadRole) {
+    const users = await getUsersForOwnerRouting();
+    const currentOwnerId = String(conv.leadOwner?.id ?? "").trim();
+    const currentOwnerName = String(conv.leadOwner?.name ?? "").trim();
+    const currentOwner =
+      users.find(u => String(u?.id ?? "").trim() === currentOwnerId) ?? null;
+    const currentOwnerRole = String(currentOwner?.role ?? "").trim().toLowerCase();
+    const currentOwnerIsDepartment =
+      isDepartmentUserRole(currentOwnerRole) ||
+      (!currentOwner && isLikelyDepartmentOwnerName(currentOwnerName));
+    if (currentOwnerIsDepartment) {
+      const salesOwner = pickSalesOwner(users, vendorContactName);
+      if (salesOwner?.id) {
+        conv.leadOwner = {
+          id: salesOwner.id,
+          name: salesOwner.name ?? salesOwner.firstName ?? salesOwner.email ?? "Sales",
+          assignedAt: new Date().toISOString()
+        };
+      }
     }
   }
   if (!conv.dialogState?.name || conv.dialogState.name === "none") {
