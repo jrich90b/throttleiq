@@ -5901,9 +5901,13 @@ function buildInitialEmailDraft(conv: any, dealerProfile: any): string {
   const buildLine = isCustomBuild ? "I can walk you through build options and next steps." : "";
   const visit = isCustomBuild
     ? "If you want to stop in to go over build options, you can book an appointment below."
-    : label
-      ? "If you want to stop in to check out the bike and go over options, you can book an appointment below."
-      : "If you want to stop in to go over options, you can book an appointment below.";
+    : isTestRide
+      ? label
+        ? "If you want to stop in for a test ride and go over options, you can book an appointment below."
+        : "If you want to stop in for a test ride, you can book an appointment below."
+      : label
+        ? "If you want to stop in to check out the bike and go over options, you can book an appointment below."
+        : "If you want to stop in to go over options, you can book an appointment below.";
   const bookingLine = bookingUrl
     ? `You can book an appointment here: ${bookingUrl}`
     : "Just reply with a day and time that works for you.";

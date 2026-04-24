@@ -23,6 +23,7 @@ Required order:
 - For initial ADF response drafting, specific customer inquiry intent must win over generic “learn more” phrasing.
 - Generic availability line (`I saw you wanted to learn more about ...`) should be used only when inquiry intent is non-specific.
 - Regenerate route parity: apply the same rule in `/conversations/:id/regenerate` for `sendgrid_adf` turns.
+- Test-ride inquiry copy must stay explicit in both initial email draft paths (`sendgridInbound` + shared `index.ts` fallback): use “stop in for a test ride...” wording (not generic “check out the bike...” text).
 - ADF inquiry extraction must prefer multiline `Your inquiry:` blocks over first-line captures so payloads like `Hello, ... Do you have it in stock?` do not collapse to only `Hello`.
 - When selecting `effectiveInquiry` from parsed/comment fallbacks, prefer substantive non-metadata text over greeting-only fragments.
 - ADF classification is parser-first: when routing parser intent is accepted, map intent before legacy bucket/CTA heuristics:

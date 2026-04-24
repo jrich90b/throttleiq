@@ -1241,6 +1241,10 @@ function buildInitialEmailDraft(
     ? buildInventoryAvailable
       ? "If you want to stop in to check it out and go over build options, you can book an appointment below."
       : "If you want to stop in to go over build options, you can book an appointment below."
+    : isTestRide
+      ? model
+        ? "If you want to stop in for a test ride and go over options, you can book an appointment below."
+        : "If you want to stop in for a test ride, you can book an appointment below."
     : model
       ? "If you want to stop in to check out the bike and go over options, you can book an appointment below."
       : "If you want to stop in to go over options, you can book an appointment below.";
