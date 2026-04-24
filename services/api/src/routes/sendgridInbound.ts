@@ -2626,10 +2626,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const leadSource = meta.leadSource?.trim() || undefined;
   const leadSourceLower = (leadSource ?? "").toLowerCase();
   const sourceFromIdLower = String(meta.sourceFromId ?? "").trim().toLowerCase();
-  const isTrafficLogProLeadSourceHint =
-    /traffic\s*log\s*pro/i.test(leadSourceLower) || /traffic\s*log\s*pro/i.test(sourceFromIdLower);
+  const isTrafficLogProLeadSourceHint = /traffic\s*log\s*pro/i.test(leadSourceLower);
+  const isTrafficLogProSourceFromIdHint = /traffic\s*log\s*pro/i.test(sourceFromIdLower);
+  const isTrafficLogProPayloadHint =
+    isTrafficLogProLeadSourceHint || isTrafficLogProSourceFromIdHint;
   const isExplicitWalkInLeadSourceHint =
     /\bwalk\s*[- ]?in\b/i.test(leadSourceLower) || /\bdealership\s+visit\b/i.test(leadSourceLower);
+  const walkInSignalHint = /\b(step\s*\d+|walk\s*[- ]?in|stopped in|came in|dealership visit)\b/i.test(
+    `${String(lead.comment ?? "")} ${String(lead.inquiry ?? "")} ${leadSourceLower}`
+  );
   const vendorContactName = meta.vendorContactName?.trim() || "";
   const leadSourceId = lead.leadSourceId ?? undefined;
   const timeframeInfo = parseTimeframeMonths(lead.purchaseTimeframe);
@@ -2711,7 +2716,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     );
     const salespersonFirst = pickFirstToken(rawSalespersonFromComment);
     const allowVendorOwnerFallback =
-      !isExplicitWalkInLeadSourceHint || isTrafficLogProLeadSourceHint || !!salespersonFirst;
+      !isExplicitWalkInLeadSourceHint || isTrafficLogProPayloadHint || !!salespersonFirst;
     const matchedSalesperson =
       users.find(u => {
         if (u.role !== "salesperson") return false;
@@ -2914,10 +2919,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
   const hasOutboundBeforeInbound = Array.isArray(conv.messages) && conv.messages.some((m: any) => m.direction === "out");
   const isInitialAdf = event.provider === "sendgrid_adf" && !hasOutboundBeforeInbound;
-  const isTrafficLogProLeadSource = isTrafficLogProLeadSourceHint;
   const isExplicitWalkInLeadSource = isExplicitWalkInLeadSourceHint;
   const isTrafficLogWalkInLead =
-    isTrafficLogProLeadSource || isExplicitWalkInLeadSource || !!conv?.lead?.walkIn;
+    isExplicitWalkInLeadSource ||
+    (isTrafficLogProPayloadHint && walkInSignalHint) ||
+    !!conv?.lead?.walkIn;
   const isInitialTrafficLogWalkIn = isInitialAdf && isTrafficLogWalkInLead;
   const adfHistory = buildEffectiveHistory(conv, 6);
   const safeParser = async <T>(label: string, run: () => Promise<T | null>): Promise<T | null> => {
@@ -3949,7 +3955,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const walkInCleanedComment = walkInRawComment.replace(/<br\s*\/?>/gi, " ").replace(/\s+/g, " ").trim();
   const commentLower = walkInCleanedComment.toLowerCase();
   const emailLower = (lead.email ?? "").toLowerCase();
-  const isWalkInLead = isTrafficLogWalkInLead || inferredBucket === "in_store";
+  const isWalkInLead =
+    isTrafficLogWalkInLead ||
+    (inferredBucket === "in_store" && (isExplicitWalkInLeadSource || walkInSignalHint));
   if (isWalkInLead) {
     initialMedia = undefined;
     initialMediaUrls = undefined;
@@ -3965,7 +3973,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const rawSalespersonFromComment = extractExplicitSalespersonName(walkInRawComment);
     const salespersonFirst = pickFirstToken(rawSalespersonFromComment);
     const allowWalkInVendorOwnerFallback =
-      !isExplicitWalkInLeadSource || isTrafficLogProLeadSource || !!salespersonFirst;
+      !isExplicitWalkInLeadSource || isTrafficLogProPayloadHint || !!salespersonFirst;
     const ownerToken = salespersonFirst || (allowWalkInVendorOwnerFallback ? vendorFirst.toLowerCase() : "");
     if (ownerToken) {
       try {
@@ -4036,7 +4044,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       );
     const hasPricingFollowupIntent = pricingFollowupIntentFromParser || pricingFollowupIntentFromText;
     const trafficLogProStep =
-      isTrafficLogProLeadSource || isExplicitWalkInLeadSource || inferredBucket === "in_store"
+      isTrafficLogProPayloadHint || isExplicitWalkInLeadSource || inferredBucket === "in_store"
         ? extractTrafficLogProStep(walkInCleanedComment)
         : null;
     const lowSignalWalkInUpdate =

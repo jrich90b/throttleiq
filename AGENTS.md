@@ -765,3 +765,11 @@ When changing responses:
 - Behavior:
   - initial ADF leads that ask for a callback window now create/update a `call` to-do with schedule metadata instead of only generic `other` follow-up.
   - service callback flows keep service-owner routing/handoff behavior while using the same normalized callback summary/schedule format.
+
+## Walk-In Routing Guardrail (TLP Transport vs Walk-In Intent)
+- In `services/api/src/routes/sendgridInbound.ts`:
+  - walk-in routing no longer triggers solely because ADF XML transport metadata says `source=\"Traffic Log Pro\"`.
+  - walk-in branch now requires trusted walk-in intent signals (explicit walk-in source label or walk-in/step phrasing in comment/inquiry).
+  - owner fallback logic still supports TLP transport metadata for salesperson mapping where appropriate.
+- Purpose:
+  - prevent standard Room58 / sales ADF leads from being misrouted into walk-in response templates when they are only transported through Traffic Log Pro.
