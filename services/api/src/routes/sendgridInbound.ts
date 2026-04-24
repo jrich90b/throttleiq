@@ -1759,22 +1759,30 @@ function extractTrueInquiryFromAdfText(input?: string | null): string {
   const normalized = normalizeAdfInquiryText(input);
   if (!normalized) return "";
   const direct =
-    normalized.match(/\byour inquiry:\s*([^>\n\r]+)/i)?.[1]?.trim() ??
     normalized.match(/\byour inquiry:\s*([\s\S]+)$/i)?.[1]?.trim() ??
+    normalized.match(/\byour inquiry:\s*([^>\n\r]+)/i)?.[1]?.trim() ??
+    normalized.match(/\binquiry:\s*([\s\S]+)$/i)?.[1]?.trim() ??
     normalized.match(/\binquiry:\s*([^>\n\r]+)/i)?.[1]?.trim() ??
     normalized;
   let value = String(direct ?? "").trim();
   if (!value) return "";
   value = value.replace(
-    /\s*(?:can we contact you via (?:email|phone|text)\?:|client_id\s*:|hdmc-campaign-tracking code\s*:|lead captured date\s*:|event name\s*:|\/\/\/customer information\/\/\/|parts and accessories interest\s*:|biker rider\?\s*:|language\s*:|purchase timeframe\s*:|source id\s*:|inventory year\s*:|inventory stock id\s*:|vin\s*:|first name\s*:|last name\s*:|phone\s*:|email\s*:|pre-inspection trade-in value estimate|rough trade in wholesale\s*:|clean trade in wholesale\s*:|average retail\s*:|suggested list price\s*:|prices shown to customer).*/i,
+    /\s*(?:can we contact you via (?:email|phone|text)\?:|client_id\s*:|hdmc-campaign-tracking code\s*:|lead captured date\s*:|event name\s*:|\/\/\/customer information\/\/\/|parts and accessories interest\s*:|biker rider\?\s*:|language\s*:|purchase timeframe\s*:|source id\s*:|inventory year\s*:|inventory stock id\s*:|vin\s*:|first name\s*:|last name\s*:|phone\s*:|email\s*:|pre-inspection trade-in value estimate|rough trade in wholesale\s*:|clean trade in wholesale\s*:|average retail\s*:|suggested list price\s*:|prices shown to customer)[\s\S]*/i,
     ""
   );
   value = value.replace(/^[>\-\s:]+/, "").trim();
   if (!value) return "";
+  if (/^(hello|hi|hey|good\s+(morning|afternoon|evening))[,\s!.-]*$/i.test(value)) return "";
   if (/^(yes|no|n\/a|na|null)$/i.test(value)) return "";
   if (/^can we contact you via/i.test(value)) return "";
   if (looksLikeAdfMetadataBlob(value)) return "";
   return value;
+}
+
+function isLikelyGreetingOnlyInquiry(input?: string | null): boolean {
+  const value = String(input ?? "").trim();
+  if (!value) return false;
+  return /^(hello|hi|hey|good\s+(morning|afternoon|evening))[,\s!.-]*$/i.test(value);
 }
 
 function sanitizeTradeAcceleratorInquiry(input?: string | null): string {
@@ -2852,16 +2860,22 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const inquiryRaw = String(lead.inquiry ?? "");
   const cleanedInquiry = normalizeAdfInquiryText(inquiryRaw);
   const parsedInquiry = extractTrueInquiryFromAdfText(inquiryRaw);
+  const inquiryCandidates = [parsedInquiry, commentInquiry, cleanedInquiry, cleanedComment]
+    .map(v => String(v ?? "").trim())
+    .filter(Boolean);
+  const nonMetadataInquiryCandidates = inquiryCandidates.filter(v => !looksLikeAdfMetadataBlob(v));
+  const substantiveInquiryCandidates = nonMetadataInquiryCandidates.filter(
+    v => !isLikelyGreetingOnlyInquiry(v)
+  );
   let effectiveInquiry =
-    [parsedInquiry, commentInquiry, cleanedInquiry, cleanedComment]
-      .map(v => String(v ?? "").trim())
-      .filter(Boolean)
-      .find(v => !looksLikeAdfMetadataBlob(v)) ?? "";
+    substantiveInquiryCandidates[0] ??
+    nonMetadataInquiryCandidates[0] ??
+    "";
   if (isTradeAcceleratorLead) {
     const tradeInquiryCandidate =
-      [parsedInquiry, commentInquiry, cleanedInquiry, cleanedComment]
-        .map(v => String(v ?? "").trim())
-        .filter(Boolean)[0] ?? "";
+      substantiveInquiryCandidates[0] ??
+      inquiryCandidates[0] ??
+      "";
     const sanitizedTradeInquiry = sanitizeTradeAcceleratorInquiry(tradeInquiryCandidate);
     effectiveInquiry = sanitizedTradeInquiry || "trade-in appraisal request";
   }

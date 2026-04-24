@@ -200,17 +200,21 @@ function parseFromComment(comment?: string) {
     const raw = String(text ?? "");
     if (!raw) return undefined;
     const direct =
-      raw.match(/\byour inquiry:\s*([^>\n\r]+)/i)?.[1]?.trim() ??
       raw.match(/\byour inquiry:\s*([\s\S]+)$/i)?.[1]?.trim() ??
+      raw.match(/\byour inquiry:\s*([^>\n\r]+)/i)?.[1]?.trim() ??
+      raw.match(/\binquiry:\s*([\s\S]+)$/i)?.[1]?.trim() ??
       raw.match(/\binquiry:\s*([^>\n\r]+)/i)?.[1]?.trim();
     let value = String(direct ?? "").trim();
     if (!value) return undefined;
     value = value.replace(
-      /\s*(?:can we contact you via (?:email|phone|text)\?:|client_id\s*:|hdmc-campaign-tracking code\s*:|lead captured date\s*:|event name\s*:|\/\/\/customer information\/\/\/|parts and accessories interest\s*:|biker rider\?\s*:|language\s*:|purchase timeframe\s*:|source id\s*:|inventory year\s*:|inventory stock id\s*:|vin\s*:|first name\s*:|last name\s*:|phone\s*:|email\s*:).*/i,
+      /\s*(?:can we contact you via (?:email|phone|text)\?:|client_id\s*:|hdmc-campaign-tracking code\s*:|lead captured date\s*:|event name\s*:|\/\/\/customer information\/\/\/|parts and accessories interest\s*:|biker rider\?\s*:|language\s*:|purchase timeframe\s*:|source id\s*:|inventory year\s*:|inventory stock id\s*:|vin\s*:|first name\s*:|last name\s*:|phone\s*:|email\s*:)[\s\S]*/i,
       ""
     );
     value = value.replace(/^[>\-\s:]+/, "").trim();
     if (!value) return undefined;
+    if (/^(hello|hi|hey|good\s+(morning|afternoon|evening))[,\s!.-]*$/i.test(value)) {
+      return undefined;
+    }
     if (/^(yes|no|n\/a|na|null)$/i.test(value)) return undefined;
     if (/^can we contact you via/i.test(value)) return undefined;
     return value;
