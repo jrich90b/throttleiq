@@ -46,6 +46,9 @@ Required order:
   - manual email send path,
   - any direct `conv.emailDraft` assignment path.
 
+## Watch Parser Few-Shot Coverage
+- Keep watch parser few-shot examples current for real inbound shorthand/slang patterns seen in production (for example `lmk`, `23 lrs`, `fxlrs`) so human-mode and AI-mode watch intent set reliably.
+
 ## Walk-In Inquiry Context
 - Traffic Log Pro / walk-in ADF inquiry comments are salesperson-authored context notes and should be treated as operational context, not direct customer chat turns.
 - Explicit watch phrasing in walk-in comments (including “watching for ...”) should create/refresh inventory watch state even if matching inventory currently exists.

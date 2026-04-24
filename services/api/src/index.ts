@@ -3098,6 +3098,7 @@ function canonicalizeWatchModelLabel(model: string | null | undefined): string {
     .replace(/\s+/g, " ")
     .trim();
   const t = normalizeModelName(cleaned);
+  if (/\b(fxlrs|lrs)\b/.test(t) || /\blow rider s\b/.test(t)) return "Low Rider S";
   if (isRoadGlide3Variant(cleaned)) return "Road Glide 3";
   if (isStreetGlide3Variant(cleaned)) return "Street Glide 3 Limited";
   if (/\bflhtcutg\b/.test(t) || /\btri glide(?:\s+ultra)?\b/.test(t)) return "Tri Glide Ultra";
@@ -14583,7 +14584,7 @@ function isWatchConfirmationIntentText(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
   const intent =
-    /\b(let me know|keep me posted|keep an eye out|watch for|notify me|text me|call me|shoot me(?: a)? (?:text|message|one)|shot me(?: a)? (?:text|message|one)|send(?:ing)? (?:it|one|them)?\s*my way|send(?:ing)? (?:it|one|them)?\s*over)\b/.test(
+    /\b(let me know|lmk|keep me posted|keep an eye out|watch for|notify me|text me|call me|shoot me(?: a)? (?:text|message|one)|shot me(?: a)? (?:text|message|one)|send(?:ing)? (?:it|one|them)?\s*my way|send(?:ing)? (?:it|one|them)?\s*over)\b/.test(
       t
     );
   const trigger =
@@ -14598,6 +14599,9 @@ async function resolveWatchModelFromText(
 ): Promise<string | null> {
   const fallback = String(fallbackModel ?? "").trim();
   const normalized = normalizeModelText(textLower);
+  if (/\b(fxlrs|lrs)\b/.test(normalized) || /\blow rider s\b/.test(normalized)) {
+    return "Low Rider S";
+  }
   if (/\biron\b/.test(normalized)) {
     if (is883ModelToken(normalized)) return "Sportster 883";
     return "Iron";
@@ -27403,7 +27407,7 @@ if (authToken && signature) {
       !!process.env.OPENAI_API_KEY &&
       !humanModeShortAck;
     const humanModeWatchHint =
-      /\b(let me know|keep me posted|keep an eye out|watch for|notify me|if you get one|when you get one|as soon as one comes in)\b/i.test(
+      /\b(let me know|lmk|keep me posted|keep an eye out|watch for|notify me|if you get one|if you get it|if you get another|when you get one|when you get it|when you get another|as soon as one comes in)\b/i.test(
         humanModeTextLower
       ) ||
       !!conv.inventoryWatchPending ||

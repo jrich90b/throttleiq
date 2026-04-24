@@ -4343,6 +4343,8 @@ export async function parseSemanticSlotsWithLLM(args: {
   const voiceExamples = [
     'input: "Customer: keep an eye out for a 2026 road glide 3 in black and text me when one hits" output: {"watch_action":"set_watch","watch":{"model":"Road Glide 3","year":"2026","color":"black","condition":"new"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
     'input: "Customer: if a black street glide comes in let me know" output: {"watch_action":"set_watch","watch":{"model":"Street Glide","year":"","color":"black","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: can you lmk when you get the 23 lrs?" output: {"watch_action":"set_watch","watch":{"model":"Low Rider S","year":"2023","color":"","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: lmk when a 2023 low rider s comes in" output: {"watch_action":"set_watch","watch":{"model":"Low Rider S","year":"2023","color":"","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
     'input: "Customer: do you have any black street glides in stock?" output: {"watch_action":"none","watch":{"model":"Street Glide","year":"","color":"black","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
     'input: "Customer: stop the watch alerts for the road glide please" output: {"watch_action":"stop_watch","watch":{"model":"Road Glide","year":"","color":"","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
     'input: "Customer: left a 1000 deposit and I am coming in saturday to finalize" output: {"watch_action":"none","watch":{"model":"","year":"","color":"","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.94}',
@@ -4365,6 +4367,7 @@ export async function parseSemanticSlotsWithLLM(args: {
     "",
     "Rules:",
     "- watch_action=set_watch only when the customer asks to be notified/updated if inventory comes in or becomes available.",
+    "- Treat shorthand as valid intent/model cues (e.g., 'lmk' = let me know, 'lrs'/'fxlrs' = Low Rider S).",
     "- watch_action=stop_watch only when customer asks to stop those watch alerts/updates (not global STOP opt-out unless watch context is explicit).",
     "- watch_action=none for general inventory questions without watch request.",
     "- department_intent=service/parts/apparel only when customer explicitly requests that department/category help.",
