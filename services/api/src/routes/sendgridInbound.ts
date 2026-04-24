@@ -2581,9 +2581,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       cta: conv.classification?.cta ?? null,
       pricingAttempts: getPricingAttempts(conv),
       allowSchedulingOffer,
-      agentNameOverride:
-        String(conv?.manualSender?.userName ?? conv?.leadOwner?.name ?? "")
-          .trim() || undefined
+      agentNameOverride: String(conv?.manualSender?.userName ?? "").trim() || undefined
     });
 
     if (result.handoff?.required) {
@@ -3747,6 +3745,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       }
     }
     const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // Strip any pre-existing identity intro so initial ADF always uses one
+    // consistent profile-based line and never double-introduces.
+    body = body.replace(/\bthis is\s+[^.]{1,80}?\s+at\s+[^.]{2,120}\.?\s*/gi, "");
     const agentEsc = esc(agentName);
     const dealerEsc = esc(dealerName);
     body = body.replace(new RegExp(`\\bthis is\\s+${agentEsc}\\s+at\\s+${dealerEsc}\\.?\\s*`, "ig"), "");
@@ -5231,9 +5232,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       financeIntentHint: pricingInquiryIntent,
       pricingAttempts: getPricingAttempts(conv),
       allowSchedulingOffer: true,
-      agentNameOverride:
-        String(conv?.manualSender?.userName ?? conv?.leadOwner?.name ?? "")
-          .trim() || undefined
+      agentNameOverride: String(conv?.manualSender?.userName ?? "").trim() || undefined
     });
   } catch (error: any) {
     console.error("[sendgrid inbound] orchestrator failed:", error?.message ?? error);

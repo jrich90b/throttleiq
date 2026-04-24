@@ -1093,7 +1093,16 @@ function findRecentInboundStyleFamily(
   return null;
 }
 
-function buildScheduleInvite(hasConcreteInventory: boolean): string {
+function buildScheduleInvite(
+  hasConcreteInventory: boolean,
+  appointmentType?: "inventory_visit" | "test_ride" | "trade_appraisal" | "finance_discussion"
+): string {
+  if (appointmentType === "test_ride") {
+    if (hasConcreteInventory) {
+      return "I can set up a time to stop in for a test ride and go over options.";
+    }
+    return "I can set up a time to stop in for a test ride.";
+  }
   if (hasConcreteInventory) {
     return "I can set up a time to stop in and check out the bike and go over options.";
   }
@@ -4080,7 +4089,7 @@ export async function orchestrateInbound(
         }
         const hasConcreteInventory =
           !!stockId || inventoryStatus === "AVAILABLE" || (isCustomBuild && hasBuildInventory);
-        const scheduleInvite = buildScheduleInvite(hasConcreteInventory);
+        const scheduleInvite = buildScheduleInvite(hasConcreteInventory, appointmentType);
         const noteLine = inventoryNote ? `Right now there's ${inventoryNote} available. ` : "";
         const buildLine = isCustomBuild
           ? "I can walk you through build options and next steps. "

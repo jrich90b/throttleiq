@@ -50,6 +50,7 @@ Required order:
 - Cross-department owner realignment: if an existing conversation is owned by a department role (`service`/`parts`/`apparel`) and a new non-department ADF (sales/trade/inventory/in_store/general) arrives, auto-reassign owner back to a salesperson (prefer vendor contact name when it matches a salesperson).
 - Rider-to-rider finance source detection should match broader variants (`rider to rider`, `rider 2 rider`, `r2r`) across lead source/inquiry/comment/body so marketplace finance-inquiry leads do not miss deterministic routing.
 - Preferred-contact `phone` guardrail: in live/AI mode, still suppress auto text/email; in Suggest mode, still create a draft for staff review so the thread does not appear stuck with no draft.
+- Initial ADF agent identity rule: default intro identity comes from dealer profile `agentName`; do not override with `leadOwner` unless there is explicit manual sender/takeover context.
 
 ## Feedback Loop Quality Reports
 - Tone quality nightly reports should focus on actionable customer turns. Skip non-actionable inbound classes in `scripts/tone_quality_eval.ts`:
