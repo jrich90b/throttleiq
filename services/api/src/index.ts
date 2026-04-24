@@ -4616,8 +4616,8 @@ const FOLLOW_UP_MESSAGES = [
   "No rush, {name}. I can keep an eye on{labelClause} and only text when something changes.",
   "If trade-in is part of your plan, I can start with a rough range before you come in.",
   "If timing shifted, totally fine. Send me a day that works and I’ll keep it easy.",
-  "Still happy to help{labelClause}. Want me to keep this open or switch to update-only?",
-  "All good either way, {name}. Want me to pause check-ins until you’re ready?"
+  "Still happy to help{labelClause}. If timing changed, just text me and I can pick this back up.",
+  "All good either way, {name}. When you’re ready, I’m here to help."
 ];
 
 type WalkInCommentFollowUpCtx = {
@@ -4703,7 +4703,7 @@ const FOLLOW_UP_VARIANTS_NO_SLOTS: Record<number, string[]> = {
   0: [
     "Hey {name}, just checking in{labelClause}. Want me to send a quick price and payment snapshot?{extraLine}",
     "If helpful, I can send two options on{label} with estimated payments so comparing is easier.{extraLine}",
-    "{name}, no rush if timing is better later - I can keep this open and only send useful updates.{extraLine}"
+    "{name}, no rush if timing is better later - just text me when you want to pick this back up.{extraLine}"
   ],
   1: [
     "Want current photos or a quick walkaround of{label}?",
@@ -4719,8 +4719,8 @@ const FOLLOW_UP_VARIANTS_NO_SLOTS: Record<number, string[]> = {
     "I can line up two windows if you want to stop by."
   ],
   7: [
-    "If now is not ideal, I can switch this to update-only and keep it light.",
-    "Want me to keep this active, or pause and only send major updates?",
+    "If now is not ideal, no problem - I’m here whenever you want to pick this back up.",
+    "No pressure at all - I can keep an eye on it and reach out only when something meaningful changes.",
     "I can keep an eye on it and only reach out when something meaningful changes."
   ]
 };
@@ -4857,7 +4857,7 @@ const ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS: Record<string, Record<number, string[
       "Want me to resend the short checklist for the remaining application items?"
     ],
     2: [
-      "Want me to keep this open while you finish those documents?",
+      "While you finish those documents, I can help with next steps as soon as you’re ready.",
       "{name}, still planning to finish the pending application items, or should I pause this for now?"
     ]
   },
@@ -4872,7 +4872,7 @@ const ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS: Record<string, Record<number, string[
     ],
     2: [
       "Still planning to come back once the license is done, or want me to pause for now?",
-      "{name}, want me to keep this open until your license is ready?"
+      "{name}, once your license is ready, text me and we’ll pick this back up."
     ]
   },
   inventory: {
@@ -5154,7 +5154,7 @@ function buildCadenceCheckInFallbacks(name: string, labelClause?: string): strin
   return [
     `Hey ${cleanName}, just checking in${about}.`,
     `Hey ${cleanName}, checking back${about}. If helpful, I can send a simple compare and next-step options.`,
-    `Hey ${cleanName}, just circling back${about}. If timing shifted, I can switch this to update-only.`
+    `Hey ${cleanName}, just circling back${about}. If timing shifted, no problem - I’m here when you’re ready.`
   ];
 }
 
@@ -5807,9 +5807,9 @@ const EMAIL_FOLLOW_UP_MESSAGES: Array<(ctx: EmailFollowUpCtx) => string> = [
   ({ name, label, bookingLine }) =>
     `Hi ${name},\n\nIf you want to set a time to check out ${label}, I can get it on the calendar and keep it quick.\n\n${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nStill happy to help with ${label}. Want me to keep this active, or switch to update-only?\n\n${bookingLine}\n\nThanks,`,
+    `Hi ${name},\n\nStill happy to help with ${label}. If timing changed, just reply here and I can pick this back up.\n\n${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nAll good either way. Should I keep this open for now, or pause check-ins until you want to revisit ${label}?\n\n${bookingLine}\n\nThanks,`
+    `Hi ${name},\n\nAll good either way. When you want to revisit ${label}, reply here and I’ll help with next steps.\n\n${bookingLine}\n\nThanks,`
 ];
 
 const SCHEDULE_INVITE_THRESHOLD = 3;
@@ -7075,7 +7075,7 @@ async function buildLateFollowUp(
   if (stepIndex === 12) {
     if (!hasMatch && !testRideOk) {
       return {
-        body: `${greeting}Should I keep this open or close it out for now? If you’re still looking, I’m happy to help.`
+        body: `${greeting}No pressure either way. If you’re still looking, I’m here to help when you’re ready.`
       };
     }
     if (canTestRide) {
@@ -7084,7 +7084,7 @@ async function buildLateFollowUp(
       };
     }
     return {
-      body: `${greeting}Should I keep this open or close it out for now? If you’re still looking, I’m happy to help.`
+      body: `${greeting}No pressure either way. If you’re still looking, I’m here to help when you’re ready.`
     };
   }
 

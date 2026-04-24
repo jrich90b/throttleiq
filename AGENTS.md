@@ -79,6 +79,7 @@ These must remain deterministic to avoid brittle or risky LLM behavior:
    - SMS cadence: `FOLLOW_UP_MESSAGES`
    - Email cadence: `EMAIL_FOLLOW_UP_MESSAGES`
    - Implemented in `services/api/src/index.ts`
+   - Tone guardrail: avoid operational workflow phrasing in customer-facing copy (for example “keep this open”, “switch to update-only”). Use natural, human language like “text me when you’re ready.”
 
 3) **Lead‑type handlers (explicit rules)**
    - Credit apps, demo ride events, room58 standard, meta offer “Other”, etc.
