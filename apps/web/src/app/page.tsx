@@ -31,6 +31,127 @@ function getSpeechRecognitionCtor(): SpeechRecognitionCtorLike | null {
   );
 }
 
+type SideNavIconName =
+  | "inbox"
+  | "todos"
+  | "contacts"
+  | "suppressions"
+  | "calendar"
+  | "inventory"
+  | "watches"
+  | "campaigns"
+  | "kpi"
+  | "questions"
+  | "settings";
+
+function SideNavIcon({ name, className = "w-5 h-5" }: { name: SideNavIconName; className?: string }) {
+  const commonProps = {
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.9,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    className,
+    "aria-hidden": true
+  };
+
+  if (name === "inbox") {
+    return (
+      <svg {...commonProps}>
+        <path d="M3 11.5 5.6 6a2 2 0 0 1 1.8-1.1h9.2a2 2 0 0 1 1.8 1.1L21 11.5v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+        <path d="M3 12h5l1.8 2h4.4L16 12h5" />
+      </svg>
+    );
+  }
+  if (name === "todos") {
+    return (
+      <svg {...commonProps}>
+        <rect x="4" y="3.5" width="16" height="17" rx="2.5" />
+        <path d="m8 12 2.1 2.1L16 8.3" />
+        <path d="M8 17h8" />
+      </svg>
+    );
+  }
+  if (name === "contacts") {
+    return (
+      <svg {...commonProps}>
+        <circle cx="9" cy="9" r="2.5" />
+        <path d="M4.5 17a4.5 4.5 0 0 1 9 0" />
+        <circle cx="16.5" cy="10" r="2" />
+        <path d="M14 17.5a3.5 3.5 0 0 1 6.5-1.6" />
+      </svg>
+    );
+  }
+  if (name === "suppressions") {
+    return (
+      <svg {...commonProps}>
+        <circle cx="12" cy="12" r="8" />
+        <path d="m7.2 16.8 9.6-9.6" />
+      </svg>
+    );
+  }
+  if (name === "calendar") {
+    return (
+      <svg {...commonProps}>
+        <rect x="3.5" y="5" width="17" height="15" rx="2.5" />
+        <path d="M7 3.5V7M17 3.5V7M3.5 9.5h17" />
+        <path d="M8.5 13h3.5v3.5H8.5z" />
+      </svg>
+    );
+  }
+  if (name === "inventory") {
+    return (
+      <svg {...commonProps}>
+        <circle cx="6.5" cy="17.5" r="2.4" />
+        <circle cx="17.5" cy="17.5" r="2.4" />
+        <path d="M9 17.5h4.8l-2.2-4.2h3.2l2.7 4.2" />
+        <path d="M11.5 13.3 9.6 9.7H7" />
+      </svg>
+    );
+  }
+  if (name === "watches") {
+    return (
+      <svg {...commonProps}>
+        <path d="M2.5 12s3.5-5.5 9.5-5.5 9.5 5.5 9.5 5.5-3.5 5.5-9.5 5.5-9.5-5.5-9.5-5.5z" />
+        <circle cx="12" cy="12" r="2.3" />
+      </svg>
+    );
+  }
+  if (name === "campaigns") {
+    return (
+      <svg {...commonProps}>
+        <path d="M4 13.5V10l10-4v12L4 14z" />
+        <path d="M14 10h2.2a3.8 3.8 0 0 1 0 7.6H14" />
+        <path d="M7.5 14.5 9 20h3" />
+      </svg>
+    );
+  }
+  if (name === "kpi") {
+    return (
+      <svg {...commonProps}>
+        <path d="M4 18.5h16" />
+        <path d="M6 16V11M11 16V8M16 16v-4" />
+        <path d="m5.5 9.5 4-3.2 4 2.2 4.5-4.3" />
+      </svg>
+    );
+  }
+  if (name === "questions") {
+    return (
+      <svg {...commonProps}>
+        <path d="M18 8.5a6 6 0 0 0-12 0c0 2-1 3.5-2 4.5h16c-1-1-2-2.5-2-4.5Z" />
+        <path d="M9.5 17.5a2.5 2.5 0 0 0 5 0" />
+      </svg>
+    );
+  }
+  return (
+    <svg {...commonProps}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 4v2M12 18v2M4 12h2M18 12h2M6.3 6.3l1.4 1.4M16.3 16.3l1.4 1.4M6.3 17.7l1.4-1.4M16.3 7.7l1.4-1.4" />
+    </svg>
+  );
+}
+
 const BOOKING_LINK_RE =
   /(Book here|You can choose a time here|You can book an appointment here):\s*(https?:\/\/[^\s<]+)/i;
 const BOOKING_LABEL_ONLY_RE =
@@ -9716,6 +9837,16 @@ export default function Home() {
 
   const isCampaignSection = section === "campaigns";
   const rootThemeClass = isCampaignSection ? "lr-campaign-theme" : "lr-app-theme";
+  const sideNavButtonClass = (active: boolean) =>
+    [
+      "w-10 h-10 rounded-xl flex items-center justify-center border text-white/90 transition-all duration-150",
+      "border-white/20 bg-white/[0.04]",
+      active
+        ? "bg-white/16 border-white/45 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_7px_18px_rgba(0,0,0,0.34)]"
+        : "hover:bg-white/10 hover:border-white/35 hover:text-white"
+    ].join(" ");
+  const sideNavSettingsButtonClass =
+    "w-11 h-11 md:w-10 md:h-10 rounded-xl flex items-center justify-center border border-white/20 bg-white/[0.04] text-white/90 transition-all duration-150 hover:bg-white/10 hover:border-white/35 hover:text-white";
 
   return (
     <main
@@ -9760,7 +9891,7 @@ export default function Home() {
         <div className="text-lg font-semibold shrink-0">TI</div>
         <div className="mt-3 flex-1 min-h-0 w-full overflow-y-auto flex flex-col items-center gap-4 px-2 pb-3">
         <button
-          className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "inbox" ? "bg-white/10" : "hover:bg-white/5"}`}
+          className={sideNavButtonClass(section === "inbox")}
           title="Inbox"
           onClick={() => {
             goToSection("inbox");
@@ -9769,15 +9900,15 @@ export default function Home() {
             setSelectedContact(null);
           }}
         >
-          📥
+          <SideNavIcon name="inbox" />
         </button>
         {(authUser?.role === "manager" || authUser?.role === "salesperson" || isDepartmentUser || authUser?.permissions?.canAccessTodos) ? (
           <button
-            className={`relative w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "todos" ? "bg-white/10" : "hover:bg-white/5"}`}
+            className={`relative ${sideNavButtonClass(section === "todos")}`}
             title="To Dos"
             onClick={() => goToSection("todos")}
           >
-            ✅
+            <SideNavIcon name="todos" />
             {todos.length > 0 ? (
               <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-semibold flex items-center justify-center border border-white">
                 {todos.length > 99 ? "99+" : todos.length}
@@ -9787,47 +9918,47 @@ export default function Home() {
         ) : null}
         {!isDepartmentUser ? (
           <button
-            className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "contacts" ? "bg-white/10" : "hover:bg-white/5"}`}
+            className={sideNavButtonClass(section === "contacts")}
             title="Contacts"
             onClick={() => goToSection("contacts")}
           >
-            👥
+            <SideNavIcon name="contacts" />
           </button>
         ) : null}
         {!isDepartmentUser && (authUser?.role === "manager" || authUser?.permissions?.canAccessSuppressions) ? (
           <button
-            className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "suppressions" ? "bg-white/10" : "hover:bg-white/5"}`}
+            className={sideNavButtonClass(section === "suppressions")}
             title="Suppressions"
             onClick={() => goToSection("suppressions")}
           >
-            ⛔
+            <SideNavIcon name="suppressions" />
           </button>
         ) : null}
         {!isDepartmentUser && (authUser?.role === "manager" || authUser?.permissions?.canEditAppointments) ? (
           <button
-            className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "calendar" ? "bg-white/10" : "hover:bg-white/5"}`}
+            className={sideNavButtonClass(section === "calendar")}
             title="Calendar"
             onClick={() => goToSection("calendar")}
           >
-            📅
+            <SideNavIcon name="calendar" />
           </button>
         ) : null}
         {!isDepartmentUser ? (
           <button
-            className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "inventory" ? "bg-white/10" : "hover:bg-white/5"}`}
+            className={sideNavButtonClass(section === "inventory")}
             title="Inventory"
             onClick={() => goToSection("inventory")}
           >
-            📦
+            <SideNavIcon name="inventory" />
           </button>
         ) : null}
         {!isDepartmentUser && (authUser?.role === "manager" || authUser?.role === "salesperson") ? (
         <button
-          className={`relative w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "watches" ? "bg-white/10" : "hover:bg-white/5"}`}
+          className={`relative ${sideNavButtonClass(section === "watches")}`}
           title="Watches"
           onClick={() => goToSection("watches")}
         >
-          👀
+          <SideNavIcon name="watches" />
           {watchCount > 0 ? (
             <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-semibold flex items-center justify-center border border-white">
               {watchCount > 99 ? "99+" : watchCount}
@@ -9837,29 +9968,29 @@ export default function Home() {
         ) : null}
         {!isDepartmentUser && authUser?.role === "manager" ? (
           <button
-            className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "campaigns" ? "bg-white/10" : "hover:bg-white/5"}`}
+            className={sideNavButtonClass(section === "campaigns")}
             title="Campaign Studio"
             onClick={() => goToSection("campaigns")}
           >
-            📣
+            <SideNavIcon name="campaigns" />
           </button>
         ) : null}
         {!isDepartmentUser && authUser?.role === "manager" ? (
           <button
-            className={`w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "kpi" ? "bg-white/10" : "hover:bg-white/5"}`}
+            className={sideNavButtonClass(section === "kpi")}
             title="KPI Overview"
             onClick={() => goToSection("kpi")}
           >
-            📈
+            <SideNavIcon name="kpi" />
           </button>
         ) : null}
         {!isDepartmentUser ? (
           <button
-            className={`relative w-10 h-10 rounded flex items-center justify-center border border-white/20 ${section === "questions" ? "bg-white/10" : "hover:bg-white/5"}`}
+            className={`relative ${sideNavButtonClass(section === "questions")}`}
             title="Questions"
             onClick={() => goToSection("questions")}
           >
-            🔔
+            <SideNavIcon name="questions" />
             {questions.length > 0 ? (
               <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-semibold flex items-center justify-center border border-white">
                 {questions.length > 99 ? "99+" : questions.length}
@@ -9872,11 +10003,11 @@ export default function Home() {
           <div className="text-xs text-white/60">{loading ? "…" : ""}</div>
           <div className="relative">
             <button
-              className="w-11 h-11 md:w-10 md:h-10 rounded flex items-center justify-center border border-white/20 hover:bg-white/5 relative"
+              className={`${sideNavSettingsButtonClass} relative`}
               title="Settings"
               onClick={() => setSettingsOpen(v => !v)}
             >
-              ⚙️
+              <SideNavIcon name="settings" />
               {hasNotifications ? (
                 <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-600 border border-white" />
               ) : null}
