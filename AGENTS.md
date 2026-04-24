@@ -30,6 +30,9 @@ Required order:
   - `pricing_payments` -> `inventory_interest/request_a_quote`
   - `scheduling` -> `test_ride/schedule_test_ride`
   - `callback` -> `general_inquiry/contact_us`
+- Department-intent priority for initial ADF classification:
+  - `parts` / `apparel` / `service` intent (from parser or explicit text) must be evaluated before generic availability heuristics like “in stock”.
+  - This prevents part-number and gear inquiries from being misrouted as inventory-availability sales leads.
 - Keep deterministic source overrides (for example forced walk-in/test-ride/trade source rules) after parser mapping.
 
 ## Walk-In Inquiry Context

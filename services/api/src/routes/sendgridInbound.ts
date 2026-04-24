@@ -2953,6 +2953,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     llmIntent,
     llmJourneyIntent,
     llmInventoryEntities,
+    llmSemanticSlots,
     llmResponseControl,
     llmRoutingDecision,
     llmFaqTopic,
@@ -2984,6 +2985,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         text: effectiveInquiry,
         history: adfHistory,
         lead: conv.lead
+      })
+    ),
+    safeParser("semantic_slots", () =>
+      parseSemanticSlotsWithLLM({
+        text: effectiveInquiry,
+        history: adfHistory,
+        lead: conv.lead,
+        inventoryWatch: conv.inventoryWatch,
+        inventoryWatchPending: conv.inventoryWatchPending,
+        dialogState: String(conv.dialogState?.name ?? "")
       })
     ),
     safeParser("response_control", () =>
@@ -3051,6 +3062,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const parserSchedulingIntent = routingParserIntentOverride === "scheduling";
   const parserCallbackIntent = routingParserIntentOverride === "callback";
   const parserAvailabilityIntent = routingParserIntentOverride === "availability";
+  const semanticSlotsConfidence =
+    typeof llmSemanticSlots?.confidence === "number" ? llmSemanticSlots.confidence : 0;
+  const semanticSlotsConfidenceMin = Number(process.env.LLM_SEMANTIC_SLOT_CONFIDENCE_MIN ?? 0.76);
+  const semanticSlotsAccepted = !!llmSemanticSlots && semanticSlotsConfidence >= semanticSlotsConfidenceMin;
+  const semanticDepartmentIntent = semanticSlotsAccepted ? llmSemanticSlots?.departmentIntent ?? "none" : "none";
+  const semanticPartsIntent = semanticDepartmentIntent === "parts";
+  const semanticApparelIntent = semanticDepartmentIntent === "apparel";
+  const semanticServiceIntent = semanticDepartmentIntent === "service";
   const pricingInquiryIntentFromParser =
     !!llmDialogAct &&
     llmDialogAct.topic === "pricing" &&
@@ -3092,6 +3111,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const serviceVinRequest =
     /registration\s+or\s+vin\s+number/i.test(lead.comment ?? "") ||
     /registration\s+or\s+vin\s+number/i.test(lead.inquiry ?? "");
+  const partsIntentFromText =
+    /\b(part number|oem parts?|aftermarket parts?|need (?:a )?part|looking for (?:a )?part|parts?\s+(?:for|department|counter|desk)|do you have (?:it|this|that)?\s*in stock)\b/i.test(
+      inquiryText
+    ) ||
+    /\bparts?\b/.test(leadSourceLower);
+  const apparelIntentFromText =
+    /\b(apparel|motorclothes|merch|jacket|helmet|gloves|boots|shirt|hoodie)\b/i.test(inquiryText) ||
+    /\bapparel|motorclothes\b/i.test(leadSourceLower);
   const hasStockIntent =
     !!lead.stockId || !!lead.vin || inquiryText.includes("available") || availabilityIntentFromParser;
   const parserBucketCta: { bucket: LeadBucket; cta: LeadCTA } | null =
@@ -3111,7 +3138,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     if (parserBucketCta) {
       inferredBucket = parserBucketCta.bucket;
       inferredCta = parserBucketCta.cta;
-    } else if (serviceSupportIntentFromParser) {
+    } else if (semanticPartsIntent || partsIntentFromText) {
+      inferredBucket = "parts";
+      inferredCta = "parts_request";
+    } else if (semanticApparelIntent || apparelIntentFromText) {
+      inferredBucket = "apparel";
+      inferredCta = "apparel_request";
+    } else if (semanticServiceIntent || serviceSupportIntentFromParser) {
       inferredBucket = "service";
       inferredCta = "service_request";
     } else if (marketingEventIntentFromParser) {
@@ -3721,17 +3754,23 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   };
 
   const isServiceLead = inferredBucket === "service" || inferredCta === "service_request" || serviceVinRequest;
+  const isPartsLead = inferredBucket === "parts" || inferredCta === "parts_request" || inferredCta === "parts_inquiry";
+  const isApparelLead =
+    inferredBucket === "apparel" ||
+    inferredCta === "apparel_request" ||
+    inferredCta === "apparel_inquiry";
+  const isDepartmentLead = isServiceLead || isPartsLead || isApparelLead;
   const room58Source = /room58/i.test(String(conv.lead?.source ?? ""));
   const isRoom58Standard =
     leadSourceLower.includes("room58 - standard") || rule.ruleName === "room58_standard";
   const metaOfferRawModel = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "";
   const isMetaPromoOffer = /meta promo offer/i.test(leadSourceLower);
   const skipAvailabilityLine =
-    isServiceLead ||
+    isDepartmentLead ||
     isRoom58Standard ||
     (isMetaPromoOffer && /^(other|full line)$/i.test(metaOfferRawModel.trim()));
   let initialMedia =
-    isInitialAdf && !isServiceLead && !room58Source
+    isInitialAdf && !isDepartmentLead && !room58Source
       ? await pickLeadInventoryMedia(conv)
       : undefined;
   let initialMediaUrls = initialMedia?.mediaUrls;
@@ -3981,6 +4020,90 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       }
     }
     setFollowUpMode(conv, "manual_handoff", "service_request");
+    stopFollowUpCadence(conv, "manual_handoff");
+    queueInitialDraftForPreferredContact(ack, initialMediaUrls);
+    maybeAddInitialCallTodo();
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      draft: ack
+    });
+  }
+
+  if (isPartsLead || isApparelLead) {
+    const departmentRole = isPartsLead ? "parts" : "apparel";
+    let ack = isPartsLead
+      ? "Thanks — I’ve received your parts request. I’ll have our parts department reach out shortly."
+      : "Thanks — I’ve received your apparel request. I’ll have our apparel team reach out shortly.";
+    ack = await applyInitialAdfPrefix(ack);
+    const users = await listUsers();
+    const ownerId = String(conv.leadOwner?.id ?? "").trim();
+    const leadOwner = users.find(u => String(u?.id ?? "").trim() === ownerId) ?? null;
+    const departmentOwner = pickUserForRole(users, departmentRole, vendorContactName);
+    const departmentTodoOwner = departmentOwner
+      ? {
+          id: String(departmentOwner.id ?? "").trim(),
+          name:
+            String(departmentOwner.name ?? "").trim() ||
+            String(departmentOwner.firstName ?? "").trim() ||
+            (departmentRole === "parts" ? "Parts" : "Apparel")
+        }
+      : { id: "", name: departmentRole === "parts" ? "Parts Department" : "Apparel Department" };
+    const notifyOwner = departmentOwner ?? leadOwner;
+    const ownerName =
+      String(notifyOwner?.name ?? "").trim() ||
+      String(notifyOwner?.firstName ?? "").trim() ||
+      String(conv.leadOwner?.name ?? "").trim() ||
+      (departmentRole === "parts" ? "parts team" : "apparel team");
+    const ownerPhone = pickUserPhone(notifyOwner);
+    conv.dialogState = { name: `${departmentRole}_handoff`, updatedAt: new Date().toISOString() };
+    addTodo(
+      conv,
+      departmentRole,
+      event.body ?? `${departmentRole} request`,
+      event.providerMessageId,
+      departmentTodoOwner
+    );
+    if (callbackRequestedInLead) {
+      addTodo(
+        conv,
+        "call",
+        callbackSummary,
+        event.providerMessageId,
+        departmentTodoOwner,
+        callbackSchedule
+      );
+      const customerName =
+        [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() ||
+        conv.leadKey ||
+        "customer";
+      const ownerSummary = [
+        `${departmentRole === "parts" ? "Parts" : "Apparel"} lead callback requested for ${customerName}.`,
+        callbackTimeHint ? `Requested time: ${callbackTimeHint}.` : null,
+        conv.lead?.phone ? `Customer phone: ${conv.lead.phone}` : null,
+        conv.lead?.leadRef ? `Lead Ref: ${conv.lead.leadRef}` : null
+      ]
+        .filter(Boolean)
+        .join("\n");
+      const staffSms = await sendInternalSalespersonSms(ownerPhone, ownerSummary);
+      if (!staffSms.sent) {
+        addTodo(
+          conv,
+          "note",
+          `Owner SMS failed for ${ownerName}: ${staffSms.reason ?? "unknown_error"}.`,
+          event.providerMessageId
+        );
+      }
+    }
+    setFollowUpMode(conv, "manual_handoff", `${departmentRole}_request`);
     stopFollowUpCadence(conv, "manual_handoff");
     queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     maybeAddInitialCallTodo();
