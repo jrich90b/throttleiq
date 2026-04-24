@@ -6414,6 +6414,7 @@ export default function Home() {
     return (
       reason.includes("dealer_ride_no_purchase") ||
       reason === "call_only" ||
+      reason === "callback_requested" ||
       reason === "marketplace_relay"
     );
   };
@@ -6438,6 +6439,13 @@ export default function Home() {
     if (isShortAckNoActionText(lastInbound.body ?? "")) return false;
     const lastInboundAt = new Date(lastInbound.at).getTime();
     if (!Number.isFinite(lastInboundAt)) return false;
+    const preferredContact = String((selectedConv as any)?.lead?.preferredContactMethod ?? "")
+      .trim()
+      .toLowerCase();
+    const latestInboundIsAdf = String(lastInbound.provider ?? "").toLowerCase() === "sendgrid_adf";
+    if (latestInboundIsAdf && preferredContact === "email" && !!emailDraft) {
+      return false;
+    }
     // Don't show "thinking" indefinitely when AI intentionally chooses no response.
     if (Date.now() - lastInboundAt > 90 * 1000) return false;
     const lastOutboundAfterInbound = [...messages]
@@ -6457,6 +6465,14 @@ export default function Home() {
     ) {
       return false;
     }
+    const preferredContact = String((selectedConv as any)?.lead?.preferredContactMethod ?? "")
+      .trim()
+      .toLowerCase();
+    const latestInboundIsAdf =
+      String(selectedListItem.lastMessage?.provider ?? "").toLowerCase() === "sendgrid_adf";
+    if (latestInboundIsAdf && preferredContact === "email" && !!emailDraft) {
+      return false;
+    }
     if (isShortAckNoActionText(selectedListItem.lastMessage?.body ?? "")) return false;
     const listUpdatedAt = Date.parse(String(selectedListItem.updatedAt ?? ""));
     const detailUpdatedAt = Date.parse(String(selectedConv?.updatedAt ?? ""));
@@ -6464,7 +6480,7 @@ export default function Home() {
     if (Date.now() - listUpdatedAt > 90 * 1000) return false;
     if (!Number.isFinite(detailUpdatedAt)) return true;
     return listUpdatedAt > detailUpdatedAt;
-  }, [mode, selectedConv?.mode, selectedConv?.updatedAt, selectedListItem]);
+  }, [mode, selectedConv?.mode, selectedConv?.updatedAt, selectedListItem, emailDraft]);
   const appointmentSalespersonName = useMemo(() => {
     const id = selectedConv?.appointment?.bookedSalespersonId ?? "";
     if (!id) return "";

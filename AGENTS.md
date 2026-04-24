@@ -781,6 +781,15 @@ When changing responses:
   - conversation is set to manual handoff (`callback_requested`) so cadence does not keep generating follow-up drafts ahead of the requested call window.
 - Parser-first policy:
   - callback detection remains parser/router first (`parseIntentWithLLM` + `parseRoutingDecisionWithLLM`), with deterministic fallback only when parser confidence does not provide intent/time.
+- Additional behavior:
+  - timed callback requests now short-circuit to a to-do-only return path (no customer draft generation),
+  - owner notification SMS is sent to lead owner when possible; failures log a `note` to-do for visibility.
+
+## UI Thinking Guardrail (Callback Manual Handoff)
+- In `apps/web/src/app/page.tsx`:
+  - manual-handoff reason `callback_requested` is treated as no-customer-reply mode for ADF inbound.
+- Purpose:
+  - prevents misleading persistent `AI • thinking` state when backend intentionally performs callback to-do-only routing.
 
 ## Callback Few-Shot Coverage
 - Added explicit callback few-shot examples in `services/api/src/domain/llmDraft.ts`:

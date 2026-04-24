@@ -3784,6 +3784,64 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
     appendOutbound(conv, "dealership", leadKey, text, "draft_ai", undefined, mediaUrls);
   };
+  if (suppressInitialAutoDraftForTimedCallback) {
+    addTodo(
+      conv,
+      "call",
+      callbackSummary,
+      event.providerMessageId,
+      undefined,
+      callbackSchedule
+    );
+    setFollowUpMode(conv, "manual_handoff", "callback_requested");
+    stopFollowUpCadence(conv, "manual_handoff");
+
+    const users = await getUsersForOwnerRouting();
+    const ownerId = String(conv.leadOwner?.id ?? "").trim();
+    const owner =
+      users.find(u => String(u?.id ?? "").trim() === ownerId) ?? null;
+    const ownerName =
+      String(owner?.name ?? "").trim() ||
+      String(owner?.firstName ?? "").trim() ||
+      String(conv.leadOwner?.name ?? "").trim() ||
+      "sales team";
+    const ownerPhone = pickUserPhone(owner);
+    const customerName =
+      [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() ||
+      conv.leadKey ||
+      "customer";
+    const ownerSummary = [
+      `Callback requested for ${customerName}.`,
+      callbackTimeHint ? `Requested time: ${callbackTimeHint}.` : null,
+      conv.lead?.phone ? `Customer phone: ${conv.lead.phone}` : null,
+      conv.lead?.leadRef ? `Lead Ref: ${conv.lead.leadRef}` : null
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const staffSms = await sendInternalSalespersonSms(ownerPhone, ownerSummary);
+    if (!staffSms.sent) {
+      addTodo(
+        conv,
+        "note",
+        `Owner SMS failed for ${ownerName}: ${staffSms.reason ?? "unknown_error"}.`,
+        event.providerMessageId
+      );
+    }
+
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      note: "timed_callback_todo_only"
+    });
+  }
   if (isInitialAdf && prefersPhoneOnly && systemMode !== "suggest") {
     maybeAddInitialCallTodo();
     return res.status(200).json({
