@@ -252,6 +252,134 @@ function getCallbackReminderLeadMinutes(): number {
   return Math.max(5, Math.min(24 * 60, Math.round(raw)));
 }
 
+function getZonedDateTimeParts(
+  timezone: string,
+  at: Date = new Date()
+): { year: number; month: number; day: number; hour24: number; minute: number; weekday: string } | null {
+  try {
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      weekday: "short",
+      hour12: false
+    });
+    const parts = fmt.formatToParts(at);
+    const map: Record<string, string> = {};
+    for (const p of parts) {
+      if (p.type !== "literal") map[p.type] = p.value;
+    }
+    const year = Number(map.year);
+    const month = Number(map.month);
+    const day = Number(map.day);
+    const hour24 = Number(map.hour);
+    const minute = Number(map.minute);
+    const weekday = String(map.weekday ?? "").slice(0, 3).toLowerCase();
+    if (
+      !Number.isFinite(year) ||
+      !Number.isFinite(month) ||
+      !Number.isFinite(day) ||
+      !Number.isFinite(hour24) ||
+      !Number.isFinite(minute)
+    ) {
+      return null;
+    }
+    return { year, month, day, hour24, minute, weekday };
+  } catch {
+    return null;
+  }
+}
+
+function toHour24(hourRaw: number, minuteRaw: number, meridiemRaw: string | undefined, sourceText: string): {
+  hour24: number;
+  minute: number;
+} | null {
+  if (!Number.isFinite(hourRaw) || !Number.isFinite(minuteRaw)) return null;
+  if (hourRaw < 0 || hourRaw > 23 || minuteRaw < 0 || minuteRaw > 59) return null;
+  const meridiem = String(meridiemRaw ?? "").toLowerCase();
+  if (meridiem && meridiem !== "am" && meridiem !== "pm") return null;
+  if (meridiem && (hourRaw < 1 || hourRaw > 12)) return null;
+  if (meridiem) {
+    const hour24 = meridiem === "am" ? (hourRaw === 12 ? 0 : hourRaw) : hourRaw === 12 ? 12 : hourRaw + 12;
+    return { hour24, minute: minuteRaw };
+  }
+  if (hourRaw >= 0 && hourRaw <= 23) {
+    if (hourRaw > 12) return { hour24: hourRaw, minute: minuteRaw };
+    const source = sourceText.toLowerCase();
+    if (/\b(morning)\b/.test(source)) return { hour24: hourRaw === 12 ? 0 : hourRaw, minute: minuteRaw };
+    if (/\b(afternoon|evening|night|tonight)\b/.test(source))
+      return { hour24: hourRaw === 12 ? 12 : hourRaw + 12, minute: minuteRaw };
+    // Ambiguous bare-hour fallback.
+    return { hour24: hourRaw <= 7 ? hourRaw + 12 : hourRaw, minute: minuteRaw };
+  }
+  return null;
+}
+
+function parseCallbackClockHint(source: string): { hour24: number; minute: number } | null {
+  const text = String(source ?? "").trim();
+  if (!text) return null;
+  if (/\bnoon\b/i.test(text)) return { hour24: 12, minute: 0 };
+  if (/\bmidnight\b/i.test(text)) return { hour24: 0, minute: 0 };
+  const range =
+    text.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:-|–|to)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i) ??
+    text.match(
+      /\b(?:around|about|between|from)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:-|–|to)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i
+    );
+  if (range) {
+    const hourRaw = Number(range[1]);
+    const minuteRaw = Number(range[2] ?? 0);
+    const firstMeridiem = String(range[3] ?? "").trim().toLowerCase();
+    const secondMeridiem = String(range[6] ?? "").trim().toLowerCase();
+    return toHour24(hourRaw, minuteRaw, firstMeridiem || secondMeridiem || undefined, text);
+  }
+  const single = text.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
+  if (single) {
+    return toHour24(Number(single[1]), Number(single[2] ?? 0), single[3], text);
+  }
+  const barePrefixed = text.match(/\b(?:at|around|about|by|after|before)\s+(\d{1,2})(?::(\d{2}))?\b/i);
+  if (barePrefixed) {
+    return toHour24(Number(barePrefixed[1]), Number(barePrefixed[2] ?? 0), undefined, text);
+  }
+  return null;
+}
+
+function callbackRelativeDayOffset(source: string, timezone: string): number {
+  const text = String(source ?? "").toLowerCase();
+  if (/\btomorrow\b/.test(text)) return 1;
+  if (/\btoday\b/.test(text)) return 0;
+  const weekdayMatch = text.match(/\b(mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b/);
+  if (!weekdayMatch) return 0;
+  const weekdayToken = weekdayMatch[1].slice(0, 3).toLowerCase();
+  const order: Record<string, number> = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+  const target = order[weekdayToken];
+  if (!Number.isFinite(target)) return 0;
+  const nowParts = getZonedDateTimeParts(timezone);
+  if (!nowParts) return 0;
+  const today = order[nowParts.weekday];
+  if (!Number.isFinite(today)) return 0;
+  let delta = (target - today + 7) % 7;
+  if (delta === 0) delta = 7;
+  return delta;
+}
+
+function extractCallbackTimeHintFromText(text: string): string {
+  const source = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (!source) return "";
+  const dayAndTime = source.match(
+    /\b(?:today|tomorrow|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun)[^.!?\n]{0,64}\b(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|noon\b|midnight\b)/i
+  );
+  if (dayAndTime) return dayAndTime[0].trim();
+  const range = source.match(
+    /\b(?:around|about|between|from)?\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*(?:-|–|to)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/i
+  );
+  if (range) return range[0].trim();
+  const single = source.match(/\b(?:around|about|at|by|after|before)?\s*(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|noon\b|midnight\b)/i);
+  return single ? single[0].trim() : "";
+}
+
 function buildCallbackTodoSchedule(
   callbackTimeHint: string,
   timezone: string
@@ -268,6 +396,37 @@ function buildCallbackTodoSchedule(
   if (!requested && hasDayToken && !hasTimeToken) {
     requested = parseRequestedDayTime(`${source} at 9am`, timezone);
     defaultedToNineAm = !!requested;
+  }
+  if (!requested && hasTimeToken) {
+    const clock = parseCallbackClockHint(source);
+    const nowParts = getZonedDateTimeParts(timezone);
+    if (clock && nowParts) {
+      const base = new Date(Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day, 12, 0, 0, 0));
+      const dayOffset = callbackRelativeDayOffset(source, timezone);
+      if (dayOffset > 0) {
+        base.setUTCDate(base.getUTCDate() + dayOffset);
+      }
+      requested = {
+        year: base.getUTCFullYear(),
+        month: base.getUTCMonth() + 1,
+        day: base.getUTCDate(),
+        hour24: clock.hour24,
+        minute: clock.minute,
+        dayOfWeek: ""
+      };
+      const candidate = localPartsToUtcDate(timezone, requested);
+      if (candidate.getTime() <= Date.now() + 5 * 60_000) {
+        base.setUTCDate(base.getUTCDate() + 1);
+        requested = {
+          year: base.getUTCFullYear(),
+          month: base.getUTCMonth() + 1,
+          day: base.getUTCDate(),
+          hour24: clock.hour24,
+          minute: clock.minute,
+          dayOfWeek: ""
+        };
+      }
+    }
   }
   if (!requested) return {};
   const dueAtDate = localPartsToUtcDate(timezone, requested);
@@ -3123,22 +3282,32 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
 
   const callOnlyRequested = isCallOnlyText(inquiryText);
-  const isServiceLeadByClassifier =
-    inferredBucket === "service" || inferredCta === "service_request" || serviceVinRequest;
-  const callbackRequestedByServiceHeuristic =
-    isServiceLeadByClassifier &&
+  const callbackRequestedByLeadHeuristic =
     /\b(call|callback|call me|give me a call|reach out|reach me|phone me|call us)\b/i.test(inquiryText) &&
-    /\b(today|tomorrow|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun|morning|afternoon|evening)\b/i.test(
+    (/\b(today|tomorrow|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun|morning|afternoon|evening|tonight)\b/i.test(
       inquiryText
-    );
+    ) ||
+      /\b(\d{1,2}(:\d{2})?\s*(am|pm)\b|noon\b|midnight\b)\b/i.test(inquiryText) ||
+      /\b\d{1,2}(?::\d{2})?\s*(?:-|–|to)\s*\d{1,2}(?::\d{2})?\s*(am|pm)\b/i.test(inquiryText));
   const callbackRequestedInLead =
     callbackIntentFromParser ||
-    callbackRequestedByServiceHeuristic ||
+    callbackRequestedByLeadHeuristic ||
     !!String(lead.preferredTime ?? "").trim();
+  const callbackTimeHintFromText = extractCallbackTimeHintFromText(inquiryText);
   const callbackTimeHint =
     callbackTimeFromParser ||
     String(lead.preferredTime ?? "").trim() ||
+    callbackTimeHintFromText ||
     (inquiryDayPart ? `${inquiryDayPart.dayLabel} ${inquiryDayPart.dayPart}` : "");
+  const callbackTz = callbackRequestedInLead
+    ? (await getSchedulerConfig()).timezone || "America/New_York"
+    : "America/New_York";
+  const callbackSchedule = callbackRequestedInLead
+    ? buildCallbackTodoSchedule(callbackTimeHint, callbackTz)
+    : {};
+  const callbackSummary = callbackTimeHint
+    ? `Call requested: ${callbackTimeHint}.`
+    : "Call requested.";
 
   let creditTodoCreated = false;
   const inquiryLower = inquiryText.toLowerCase();
@@ -3566,6 +3735,17 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   };
   const maybeAddInitialCallTodo = () => {
     if (!isInitialAdf) return;
+    if (callbackRequestedInLead) {
+      addTodo(
+        conv,
+        "call",
+        callbackSummary,
+        event.providerMessageId,
+        undefined,
+        callbackSchedule
+      );
+      return;
+    }
     addCallTodoIfMissing(conv, "Call customer (initial reply sent).");
   };
   const prefersPhoneOnly = conv.lead?.preferredContactMethod === "phone";
@@ -3679,12 +3859,6 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     conv.dialogState = { name: "service_handoff", updatedAt: new Date().toISOString() };
     addTodo(conv, "service", event.body, event.providerMessageId, serviceTodoOwner);
     if (callbackRequestedInLead) {
-      const callbackSummary = callbackTimeHint
-        ? `Call requested${callbackTimeHint ? `: ${callbackTimeHint}` : ""}.`
-        : "Call requested.";
-      const callbackCfg = await getSchedulerConfig();
-      const callbackTz = callbackCfg.timezone || "America/New_York";
-      const callbackSchedule = buildCallbackTodoSchedule(callbackTimeHint, callbackTz);
       const callbackTodoOwner = serviceTodoOwner;
       addTodo(
         conv,

@@ -756,3 +756,12 @@ When changing responses:
   - for initial trusted walk-in routing, if owner was only manager fallback, vendor-contact salesperson can replace manager owner when confidently matched.
 - Purpose:
   - for payloads where provider is `Walk In` but XML id source is `Traffic Log Pro`, owner routing can still trust vendor contact salesperson (for example `Scott Hartrich`) instead of falling back to manager.
+
+## ADF Callback To-Do Scheduling (Parser-First + Time Fallback)
+- In `services/api/src/routes/sendgridInbound.ts`:
+  - callback intent detection is now parser-first with non-service heuristic fallback (when parser confidence does not explicitly route callback),
+  - callback time hint extraction now reads explicit time windows from inquiry text (for example `around 1-2pm`),
+  - callback schedule builder now supports time-only callback hints (no weekday token) and converts them into timezone-aware `dueAt`/reminder times.
+- Behavior:
+  - initial ADF leads that ask for a callback window now create/update a `call` to-do with schedule metadata instead of only generic `other` follow-up.
+  - service callback flows keep service-owner routing/handoff behavior while using the same normalized callback summary/schedule format.
