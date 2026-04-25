@@ -191,6 +191,10 @@ Trade‑in policy enforcement (runtime):
 - When `trade_cash`, offer two concrete times if available; otherwise ask for a stop‑in time.
 - When `trade_trade`, ask what model they want to trade into.
 - When `trade_either`, ask which direction they prefer.
+- Trade correction follow-up parity:
+  - When inbound corrects trade year/model and includes timing intent (for example “can we do tomorrow”), apply closed-day checks before drafting.
+  - If requested day is closed, explicitly say `We’re closed on <Day>` and offer alternate slots when available.
+  - Keep this behavior aligned for both live Twilio inbound and `/conversations/:id/regenerate`.
 
 Pricing/Payments policy enforcement (runtime):
 - If `pricing_need_model`, always ask which model (and trim/color if known).

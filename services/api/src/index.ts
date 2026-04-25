@@ -14140,6 +14140,168 @@ function extractTradeModelCorrection(
   return cleaned;
 }
 
+function formatTradeCorrectionLabel(
+  year?: string | number | null,
+  model?: string | null
+): string {
+  const yearText = year != null ? String(year).trim() : "";
+  const modelText = normalizeDisplayCase(model) || "";
+  let normalizedModel = modelText;
+  if (yearText) {
+    const leadingYear = new RegExp(`^${yearText}\\s+`, "i");
+    normalizedModel = normalizedModel.replace(leadingYear, "").trim();
+  }
+  if (normalizedModel) {
+    return formatModelLabel(yearText || null, normalizedModel);
+  }
+  if (yearText) return `${yearText} bike`;
+  return "your bike";
+}
+
+type TradeFollowupSlot = {
+  salespersonId: string;
+  salespersonName: string;
+  calendarId: string;
+  start: string;
+  end: string;
+  startLocal: string;
+  endLocal: string;
+  appointmentType: "trade_appraisal";
+};
+
+type TradeFollowupSuggestion = {
+  slots: TradeFollowupSlot[];
+  requestedDaySlotCount: number;
+};
+
+function toDayLabel(dayKeyValue?: string | null): string {
+  const raw = String(dayKeyValue ?? "").trim().toLowerCase();
+  if (!raw) return "";
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
+}
+
+async function findTradeFollowupSlots(args: {
+  cfg: SchedulerConfigSnapshot;
+  requestedDayKey?: string | null;
+}): Promise<TradeFollowupSuggestion> {
+  const cfg = args.cfg;
+  const requestedDayKey = String(args.requestedDayKey ?? "").trim().toLowerCase() || null;
+  const appointmentTypes = cfg.appointmentTypes ?? { trade_appraisal: { durationMinutes: 60 } };
+  const durationMinutes =
+    appointmentTypes.trade_appraisal?.durationMinutes ??
+    appointmentTypes.inventory_visit?.durationMinutes ??
+    60;
+  const preferredSalespeople = getPreferredSalespeople(cfg);
+  const salespeople = cfg.salespeople ?? [];
+  const now = new Date();
+  const candidatesByDay = generateCandidateSlots(cfg, now, durationMinutes, 14);
+  const dayFiltered = requestedDayKey
+    ? candidatesByDay.filter(d => dayKey(d.dayStart, cfg.timezone) === requestedDayKey)
+    : [];
+
+  let cal: any = null;
+  try {
+    cal = await getAuthedCalendarClient();
+  } catch {
+    cal = null;
+  }
+
+  const queryPool = async (pool: Array<{ dayStart: Date; candidates: { start: Date; end: Date }[] }>) => {
+    if (!pool.length) return [] as TradeFollowupSlot[];
+    for (const salespersonId of preferredSalespeople) {
+      const sp = salespeople.find((p: any) => p.id === salespersonId);
+      if (!sp) continue;
+      let expanded: { start: Date; end: Date }[] = [];
+      if (cal) {
+        try {
+          const timeMin = now.toISOString();
+          const timeMax = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString();
+          const fb = await queryFreeBusy(cal, [sp.calendarId], timeMin, timeMax, cfg.timezone);
+          const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any;
+          expanded = expandBusyBlocks(busy, cfg.minGapBetweenAppointmentsMinutes ?? 60);
+        } catch {
+          expanded = [];
+        }
+      }
+      const picked = pickSlotsForSalesperson(cfg, sp.id, sp.calendarId, pool, expanded, 2);
+      if (picked.length >= 2) {
+        return picked
+          .map((slot: any) => ({
+            salespersonId: sp.id,
+            salespersonName: sp.name,
+            calendarId: sp.calendarId,
+            start: slot.start,
+            end: slot.end,
+            startLocal: formatSlotLocal(slot.start, cfg.timezone),
+            endLocal: formatSlotLocal(slot.end, cfg.timezone),
+            appointmentType: "trade_appraisal" as const
+          }))
+          .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
+      }
+    }
+    return [] as TradeFollowupSlot[];
+  };
+
+  const requestedDaySlots = await queryPool(dayFiltered);
+  if (requestedDaySlots.length >= 2) {
+    return { slots: requestedDaySlots, requestedDaySlotCount: requestedDaySlots.length };
+  }
+  const fallbackSlots = await queryPool(candidatesByDay);
+  return { slots: fallbackSlots, requestedDaySlotCount: 0 };
+}
+
+async function buildTradeFollowupReply(args: {
+  conv: any;
+  inboundText: string;
+  correctionLine?: string;
+}): Promise<string> {
+  const correctionLine = String(args.correctionLine ?? "");
+  const inboundText = String(args.inboundText ?? "");
+  const schedulingSignals = detectSchedulingSignals(inboundText);
+  const hasScheduleIntent =
+    schedulingSignals.explicit ||
+    schedulingSignals.hasDayTime ||
+    schedulingSignals.hasDayOnlyAvailability ||
+    schedulingSignals.hasDayOnlyRequest;
+  if (!hasScheduleIntent) {
+    return `${correctionLine}Sounds good. When you’re ready, call us or text us a day and time, and we can line up the appraisal.`;
+  }
+
+  const cfg = await getSchedulerConfigHot();
+  const requestedDay = parseDayOfWeek(inboundText);
+  let requestedDayKey: string | null = null;
+  let requestedDayLabel = "";
+  if (requestedDay) {
+    if (requestedDay.day === "today" || requestedDay.day === "tomorrow") {
+      requestedDayKey = dayKey(requestedDay.date, cfg.timezone);
+      requestedDayLabel = toDayLabel(requestedDayKey);
+    } else {
+      requestedDayKey = requestedDay.day.toLowerCase();
+      requestedDayLabel = requestedDay.day;
+    }
+  }
+
+  const requestedDayHours = requestedDayKey ? cfg.businessHours?.[requestedDayKey] : undefined;
+  const requestedDayClosed =
+    !!requestedDayKey && (!requestedDayHours || !requestedDayHours.open || !requestedDayHours.close);
+
+  const suggested = await findTradeFollowupSlots({ cfg, requestedDayKey });
+  if (requestedDayClosed) {
+    if (suggested.slots.length >= 2) {
+      return `${correctionLine}We’re closed on ${requestedDayLabel}. The closest openings I have are ${suggested.slots[0].startLocal} or ${suggested.slots[1].startLocal} — do any of these times work?`;
+    }
+    return `${correctionLine}We’re closed on ${requestedDayLabel}. I can set up a trade appraisal for another day — what day and time works best for you?`;
+  }
+
+  if (requestedDayKey && suggested.requestedDaySlotCount === 0 && suggested.slots.length >= 2) {
+    return `${correctionLine}I’m booked up for ${toDayLabel(requestedDayKey)}, but the closest openings I have are ${suggested.slots[0].startLocal} or ${suggested.slots[1].startLocal} — do any of these times work?`;
+  }
+  if (suggested.slots.length >= 2) {
+    return `${correctionLine}I can set up a trade appraisal. I have ${suggested.slots[0].startLocal} or ${suggested.slots[1].startLocal} — do any of these times work?`;
+  }
+  return `${correctionLine}I can set up a trade appraisal. What day and time works for you?`;
+}
+
 function normalizeModelName(s: string): string {
   return s.toLowerCase().replace(/\s+/g, " ").trim();
 }
@@ -25665,6 +25827,77 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     /trade[-\s]?in|trade accelerator/.test(regenLeadSourceText) ||
     conv.classification?.cta === "sell_my_bike" ||
     conv.classification?.bucket === "trade_in_sell";
+  const regenTradeYearCorrection =
+    event.provider === "twilio" && regenIsTradeLead && !isExplicitAvailabilityQuestion(event.body ?? "")
+      ? extractTradeYearCorrection(
+          regenTextLower,
+          conv.lead?.tradeVehicle?.year ?? conv.lead?.vehicle?.year ?? null
+        )
+      : null;
+  const regenTradeModelCorrection =
+    event.provider === "twilio" && regenIsTradeLead && !isExplicitAvailabilityQuestion(event.body ?? "")
+      ? extractTradeModelCorrection(
+          regenTextLower,
+          conv.lead?.tradeVehicle?.model ??
+            conv.lead?.vehicle?.model ??
+            conv.lead?.tradeVehicle?.description ??
+            conv.lead?.vehicle?.description ??
+            null
+        )
+      : null;
+  const regenTradeFollowupMessage =
+    event.provider === "twilio" &&
+    regenIsTradeLead &&
+    !isExplicitAvailabilityQuestion(event.body ?? "") &&
+    !isSteppingBackDispositionText(regenTextLower) &&
+    !isPricingText(event.body ?? "") &&
+    (regenTradeYearCorrection ||
+      regenTradeModelCorrection ||
+      /\b(inspection|appraisal|bring (it|the bike) (in|by)|coming in|come in|stop in|call for (an )?appointment|call (to )?(set|schedule) (an )?appointment|check my schedule|i(?:'|’)ll call|i will call|let you know when i(?:'|’)m coming in|let you know when i am coming in)\b/i.test(
+        regenTextLower
+      ));
+  if (regenTradeFollowupMessage) {
+    if (conv.lead) {
+      conv.lead.vehicle = conv.lead.vehicle ?? {};
+      conv.lead.tradeVehicle = {
+        ...(conv.lead.tradeVehicle ?? {}),
+        model: conv.lead.tradeVehicle?.model ?? conv.lead.vehicle?.model,
+        description: conv.lead.tradeVehicle?.description ?? conv.lead.vehicle?.description
+      };
+      if (regenTradeYearCorrection) {
+        conv.lead.vehicle.year = regenTradeYearCorrection;
+        conv.lead.tradeVehicle.year = regenTradeYearCorrection;
+      }
+      if (regenTradeModelCorrection) {
+        conv.lead.vehicle.model = regenTradeModelCorrection;
+        conv.lead.tradeVehicle.model = regenTradeModelCorrection;
+      }
+    }
+    if (!isTradeDialogState(getDialogState(conv))) {
+      setDialogState(conv, "trade_init");
+    }
+    const tradeModel =
+      conv.lead?.tradeVehicle?.model ??
+      conv.lead?.tradeVehicle?.description ??
+      conv.lead?.vehicle?.model ??
+      conv.lead?.vehicle?.description ??
+      null;
+    const tradeYear =
+      regenTradeYearCorrection ?? conv.lead?.tradeVehicle?.year ?? conv.lead?.vehicle?.year ?? null;
+    const tradeLabel = formatTradeCorrectionLabel(tradeYear, tradeModel);
+    const correctionLine = regenTradeYearCorrection || regenTradeModelCorrection
+      ? `Thanks for clarifying — I updated it to ${tradeLabel}. `
+      : "";
+    const reply = await buildTradeFollowupReply({
+      conv,
+      inboundText: String(event.body ?? ""),
+      correctionLine
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply);
+  }
   const regenUnifiedTradeTargetAmount = Number(regenUnifiedSlotParse?.tradeTargetValue?.amount);
   const regenUnifiedTradeTargetConfidence =
     typeof regenUnifiedSlotParse?.tradeTargetConfidence === "number"
@@ -32145,15 +32378,15 @@ if (authToken && signature) {
       null;
     const tradeYear =
       tradeYearCorrection ?? conv.lead?.tradeVehicle?.year ?? conv.lead?.vehicle?.year ?? null;
-    const tradeLabel = tradeModel
-      ? formatModelLabel(tradeYear, tradeModel)
-      : tradeYear
-        ? `${tradeYear} bike`
-        : "your bike";
+    const tradeLabel = formatTradeCorrectionLabel(tradeYear, tradeModel);
     const correctionLine = tradeYearCorrection || tradeModelCorrection
       ? `Thanks for clarifying — I updated it to ${tradeLabel}. `
       : "";
-    const reply = `${correctionLine}Sounds good. When you’re ready, call us or text us a day and time, and we can line up the appraisal.`;
+    const reply = await buildTradeFollowupReply({
+      conv,
+      inboundText: String(event.body ?? ""),
+      correctionLine
+    });
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
