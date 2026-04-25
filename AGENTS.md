@@ -175,6 +175,7 @@ Env vars:
 - Test-ride scheduling weather gate:
   - Pass dealer weather status into orchestrator for ADF/email inbound paths.
   - Treat sustained rain as bad weather (in addition to snow/cold) for test-ride slot gating.
+  - Rain gate should consider persistent light rain/all-day precipitation probability, not only heavy hourly rain spikes.
   - If weather is bad, do not offer immediate test-ride time slots; offer stop-in + schedule test ride when weather clears.
 - Test-ride slot wording:
   - When a suggested slot is on the same local day, format as `Today, h:mm AM/PM` instead of `Sat, Apr 25, ...`.
