@@ -198,6 +198,7 @@ Trade‑in policy enforcement (runtime):
 - Trade correction follow-up parity:
   - When inbound corrects trade year/model and includes timing intent (for example “can we do tomorrow”), apply closed-day checks before drafting.
   - If requested day is closed, explicitly say `We’re closed on <Day>` and offer alternate slots when available.
+  - For trade leads, day/time scheduling intent alone should route through the same trade follow-up helper (even when no explicit `appraisal` keyword is present).
   - Keep this behavior aligned for both live Twilio inbound and `/conversations/:id/regenerate`.
 
 Pricing/Payments policy enforcement (runtime):

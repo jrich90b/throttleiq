@@ -25845,13 +25845,20 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
             null
         )
       : null;
+  const regenTradeSchedulingSignals = detectSchedulingSignals(String(event.body ?? ""));
+  const regenTradeScheduleIntent =
+    regenTradeSchedulingSignals.explicit ||
+    regenTradeSchedulingSignals.hasDayTime ||
+    regenTradeSchedulingSignals.hasDayOnlyAvailability ||
+    regenTradeSchedulingSignals.hasDayOnlyRequest;
   const regenTradeFollowupMessage =
     event.provider === "twilio" &&
     regenIsTradeLead &&
     !isExplicitAvailabilityQuestion(event.body ?? "") &&
     !isSteppingBackDispositionText(regenTextLower) &&
     !isPricingText(event.body ?? "") &&
-    (regenTradeYearCorrection ||
+    (regenTradeScheduleIntent ||
+      regenTradeYearCorrection ||
       regenTradeModelCorrection ||
       /\b(inspection|appraisal|bring (it|the bike) (in|by)|coming in|come in|stop in|call for (an )?appointment|call (to )?(set|schedule) (an )?appointment|check my schedule|i(?:'|’)ll call|i will call|let you know when i(?:'|’)m coming in|let you know when i am coming in)\b/i.test(
         regenTextLower
@@ -32339,13 +32346,20 @@ if (authToken && signature) {
             null
         )
       : null;
+  const tradeSchedulingSignals = detectSchedulingSignals(textLower);
+  const tradeScheduleIntent =
+    tradeSchedulingSignals.explicit ||
+    tradeSchedulingSignals.hasDayTime ||
+    tradeSchedulingSignals.hasDayOnlyAvailability ||
+    tradeSchedulingSignals.hasDayOnlyRequest;
   const tradeFollowupMessage =
     isTradeLead &&
     !availabilityExplicit &&
     !routeExecAvailability &&
     !isSteppingBackDispositionText(textLower) &&
     !pricingSignal &&
-    (tradeYearCorrection ||
+    (tradeScheduleIntent ||
+      tradeYearCorrection ||
       tradeModelCorrection ||
       /\b(inspection|appraisal|bring (it|the bike) (in|by)|coming in|come in|stop in|call for (an )?appointment|call (to )?(set|schedule) (an )?appointment|check my schedule|i(?:'|’)ll call|i will call|let you know when i(?:'|’)m coming in|let you know when i am coming in)\b/i.test(
         textLower
