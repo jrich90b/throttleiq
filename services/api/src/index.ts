@@ -8489,7 +8489,11 @@ async function applyOutcomeSold(
       const tlpNote = buildTlpDeliveredNote(unit, soldBy, note);
       await tlpMarkDealershipVisitDelivered({ leadRef: conv.lead.leadRef, note: tlpNote, details: tlpDetails });
     } catch (err: any) {
-      const msg = `TLP delivered step failed for leadRef ${conv.lead.leadRef}. Retry in TLP or update manually.`;
+      const errDetail = String(err?.message ?? err ?? "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 260);
+      const msg = `TLP delivered step failed for leadRef ${conv.lead.leadRef}${errDetail ? `: ${errDetail}` : ""}. Retry in TLP or update manually.`;
       addInternalQuestion(conv.id, conv.leadKey, msg);
       console.warn("[tlp] delivered mark failed:", err?.message ?? err);
     }
@@ -20131,7 +20135,11 @@ app.post("/conversations/:id/close", async (req, res) => {
         const note = buildTlpDeliveredNote(soldUnit, soldBy, soldNote);
         await tlpMarkDealershipVisitDelivered({ leadRef: conv.lead.leadRef, note, details: tlpDetails });
       } catch (err: any) {
-        const msg = `TLP delivered step failed for leadRef ${conv.lead.leadRef}. Retry in TLP or update manually.`;
+        const errDetail = String(err?.message ?? err ?? "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 260);
+        const msg = `TLP delivered step failed for leadRef ${conv.lead.leadRef}${errDetail ? `: ${errDetail}` : ""}. Retry in TLP or update manually.`;
         addInternalQuestion(conv.id, conv.leadKey, msg);
         console.warn("[tlp] delivered mark failed:", err?.message ?? err);
       }

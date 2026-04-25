@@ -583,30 +583,32 @@ async function fillDealershipVisitDeliveredDetails(
 ) {
   if (!details) return;
 
-  await requireCheckedFieldByText(page, step, "First Name");
-  await requireCheckedFieldByText(page, step, "Last Name");
-  await requireCheckedFieldByText(page, step, "Phone");
-  await requireCheckedFieldByText(page, step, "Email");
+  // TLP dealership-visit forms can vary by account and release.
+  // Keep this best-effort so selector drift or optional fields do not block Step 9.
+  await bestEffortCheckFieldByText(page, step, "First Name");
+  await bestEffortCheckFieldByText(page, step, "Last Name");
+  await bestEffortCheckFieldByText(page, step, "Phone");
+  await bestEffortCheckFieldByText(page, step, "Email");
 
-  await requireFilledText(page, step, "first name", details.firstName, [
+  await bestEffortFillText(page, step, "first name", details.firstName, [
     "#TLPLOG_first_name",
     "#first_name",
     "input[name='first_name']",
     "input[name*='first']"
   ]);
-  await requireFilledText(page, step, "last name", details.lastName, [
+  await bestEffortFillText(page, step, "last name", details.lastName, [
     "#TLPLOG_last_name",
     "#last_name",
     "input[name='last_name']",
     "input[name*='last']"
   ]);
-  await requireFilledText(page, step, "phone", details.phone, [
+  await bestEffortFillText(page, step, "phone", details.phone, [
     "#TLPLOG_phone",
     "#phone",
     "input[name='phone']",
     "input[name*='phone']"
   ]);
-  await requireFilledText(page, step, "email", details.email, [
+  await bestEffortFillText(page, step, "email", details.email, [
     "#TLPLOG_email",
     "#email",
     "input[name='email']",
@@ -614,7 +616,7 @@ async function fillDealershipVisitDeliveredDetails(
   ]);
 
   const condition = normalizeVehicleCondition(details.condition);
-  await requireSelectedValue(page, step, "condition", condition, [
+  await bestEffortSelect(page, step, "condition", condition, [
     "#TLPLOG_new_used",
     "#TLPLOG_vehicle_condition",
     "#TLPLOG_product_condition",
@@ -626,31 +628,26 @@ async function fillDealershipVisitDeliveredDetails(
   ]);
 
   const yearText = String(details.year ?? "").trim();
-  if (!yearText) {
-    throw new Error('visit: required text value missing for "year"');
-  }
-
-  const yearSelected = await bestEffortSelect(page, step, "year", yearText, [
-    "#TLPLOG_vehicle_year",
-    "#TLPLOG_year",
-    "#TLPLOG_model_year",
-    "#vehicle_year",
-    "select[name*='year']"
-  ]);
-  if (!yearSelected) {
-    const yearFilled = await bestEffortFillText(page, step, "year", yearText, [
+  if (yearText) {
+    const yearSelected = await bestEffortSelect(page, step, "year", yearText, [
       "#TLPLOG_vehicle_year",
       "#TLPLOG_year",
       "#TLPLOG_model_year",
       "#vehicle_year",
-      "input[name*='year']"
+      "select[name*='year']"
     ]);
-    if (!yearFilled) {
-      throw new Error("visit: required year field not found");
+    if (!yearSelected) {
+      await bestEffortFillText(page, step, "year", yearText, [
+        "#TLPLOG_vehicle_year",
+        "#TLPLOG_year",
+        "#TLPLOG_model_year",
+        "#vehicle_year",
+        "input[name*='year']"
+      ]);
     }
   }
 
-  await requireSelectedValue(page, step, "manufacturer", details.manufacturer, [
+  await bestEffortSelect(page, step, "manufacturer", details.manufacturer, [
     "#TLPLOG_vehicle_make",
     "#TLPLOG_make",
     "#TLPLOG_manufacturer",
@@ -659,14 +656,14 @@ async function fillDealershipVisitDeliveredDetails(
     "select[name*='manufacturer']"
   ]);
 
-  await requireSelectedValue(page, step, "product category", details.productCategoryValue ?? "MOTORCYCLES", [
+  await bestEffortSelect(page, step, "product category", details.productCategoryValue ?? "MOTORCYCLES", [
     "#TLPLOG_product_category",
     "#product_category",
     "select[name*='product_category']",
     "select[name*='category']"
   ]);
 
-  await requireSelectedValue(page, step, "model", details.model, [
+  await bestEffortSelect(page, step, "model", details.model, [
     "#TLPLOG_vehicle_model",
     "#TLPLOG_model",
     "#TLPLOG_motorcycle_model",
@@ -691,7 +688,7 @@ async function fillDealershipVisitDeliveredDetails(
     "input[name*='vin']"
   ]);
 
-  await requireSelectedValue(page, step, "salesperson", details.salespersonName, [
+  await bestEffortSelect(page, step, "salesperson", details.salespersonName, [
     "#TLPLOG_salesperson",
     "#TLPLOG_salesman",
     "#salesperson",

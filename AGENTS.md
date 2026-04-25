@@ -66,6 +66,12 @@ Required order:
 - Preferred-contact `phone` guardrail: in live/AI mode, still suppress auto text/email; in Suggest mode, still create a draft for staff review so the thread does not appear stuck with no draft.
 - Initial ADF agent identity rule: default intro identity comes from dealer profile `agentName`; do not override with `leadOwner` unless there is explicit manual sender/takeover context.
 
+## TLP Delivered Automation
+- Playwright delivered-step automation (`tlpMarkDealershipVisitDelivered`) should be resilient to TLP form drift:
+  - detail field hydration is best-effort (do not hard-fail entire Step 9 for missing/renamed optional fields),
+  - only fail when core delivered transition/submit cannot be completed.
+- Internal-question alert for delivered-step failures must include concise step/error detail so production triage can identify whether failure is login, lead-open, delivered-toggle, or submit.
+
 ## Feedback Loop Quality Reports
 - Tone quality nightly reports should focus on actionable customer turns. Skip non-actionable inbound classes in `scripts/tone_quality_eval.ts`:
   - `voice_transcript` provider rows
