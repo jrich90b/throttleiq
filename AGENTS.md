@@ -73,6 +73,9 @@ Required order:
   - short ack/no-action rows
   - clear closeout updates with no ask (for example “No need, I already called”)
 - Keep these skips explicit and reason-coded in summary output (`skippedReasonCounts`) so report noise is visible but separated from true response-quality misses.
+- Language corpus mining now auto-exports feedback-derived few-shot seeds from message feedback ratings:
+  - `few_shot_seed_positive_feedback.json` (thumbs-up / what to say),
+  - `few_shot_seed_negative_feedback.json` (thumbs-down / what not to say).
 
 Current parser-first disposition states:
 - `customer_sell_on_own`

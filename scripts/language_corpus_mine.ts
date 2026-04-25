@@ -30,6 +30,7 @@ type FewShotCandidate = {
   kind:
     | "invariant_guard_miss"
     | "manual_edit_delta"
+    | "positive_feedback"
     | "negative_feedback"
     | "slow_or_missing_response";
   severity: "high" | "medium" | "low";
@@ -50,6 +51,9 @@ type FewShotCandidate = {
   classificationBucket: string | null;
   classificationCta: string | null;
   invariantExpectedReason: string | null;
+  feedbackRating?: "up" | "down" | null;
+  feedbackReason?: string | null;
+  feedbackNote?: string | null;
 };
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -172,11 +176,49 @@ function findNextOutbound(messages: AnyObj[], fromIndex: number): AnyObj | null 
   return null;
 }
 
-function outboundHasNegativeFeedback(msg: AnyObj): boolean {
-  if (msg?.feedback === "down" || msg?.feedback === "negative") return true;
-  if (msg?.thumb === "down" || msg?.thumbs === "down") return true;
+function outboundFeedbackDetails(msg: AnyObj): {
+  rating: "up" | "down" | null;
+  reason: string | null;
+  note: string | null;
+} {
+  const feedbackRating = String(msg?.feedback?.rating ?? "")
+    .trim()
+    .toLowerCase();
+  if (feedbackRating === "up" || feedbackRating === "down") {
+    return {
+      rating: feedbackRating,
+      reason: normText(msg?.feedback?.reason) || null,
+      note: normText(msg?.feedback?.note) || null
+    };
+  }
+
+  const legacyFeedback = String(msg?.feedback ?? "")
+    .trim()
+    .toLowerCase();
+  if (legacyFeedback === "up" || legacyFeedback === "positive") {
+    return { rating: "up", reason: null, note: null };
+  }
+  if (legacyFeedback === "down" || legacyFeedback === "negative") {
+    return { rating: "down", reason: null, note: null };
+  }
+
+  const thumb = String(msg?.thumb ?? msg?.thumbs ?? "")
+    .trim()
+    .toLowerCase();
+  if (thumb === "up") return { rating: "up", reason: null, note: null };
+  if (thumb === "down") return { rating: "down", reason: null, note: null };
+
   const reactions = Array.isArray(msg?.reactions) ? msg.reactions : [];
-  return reactions.some((r: any) => String(r?.value ?? r ?? "").toLowerCase().includes("down"));
+  for (const reaction of reactions) {
+    const token = String(reaction?.value ?? reaction ?? "")
+      .trim()
+      .toLowerCase();
+    if (!token) continue;
+    if (token.includes("down")) return { rating: "down", reason: null, note: null };
+    if (token.includes("up")) return { rating: "up", reason: null, note: null };
+  }
+
+  return { rating: null, reason: null, note: null };
 }
 
 function buildCandidateId(convId: string, inboundAt: string, kind: string): string {
@@ -283,7 +325,10 @@ function run() {
           dialogState: String(conv?.dialogState?.name ?? "") || null,
           classificationBucket: String(conv?.classification?.bucket ?? "") || null,
           classificationCta: String(conv?.classification?.cta ?? "") || null,
-          invariantExpectedReason: null
+          invariantExpectedReason: null,
+          feedbackRating: null,
+          feedbackReason: null,
+          feedbackNote: null
         });
         continue;
       }
@@ -338,7 +383,10 @@ function run() {
           dialogState: String(conv?.dialogState?.name ?? "") || null,
           classificationBucket: String(conv?.classification?.bucket ?? "") || null,
           classificationCta: String(conv?.classification?.cta ?? "") || null,
-          invariantExpectedReason: invariant.reason || null
+          invariantExpectedReason: invariant.reason || null,
+          feedbackRating: null,
+          feedbackReason: null,
+          feedbackNote: null
         });
       }
 
@@ -363,11 +411,43 @@ function run() {
           dialogState: String(conv?.dialogState?.name ?? "") || null,
           classificationBucket: String(conv?.classification?.bucket ?? "") || null,
           classificationCta: String(conv?.classification?.cta ?? "") || null,
-          invariantExpectedReason: null
+          invariantExpectedReason: null,
+          feedbackRating: null,
+          feedbackReason: null,
+          feedbackNote: null
         });
       }
 
-      if (outboundHasNegativeFeedback(nextOutbound)) {
+      const feedback = outboundFeedbackDetails(nextOutbound);
+      if (feedback.rating === "up") {
+        fewShotCandidates.push({
+          id: buildCandidateId(convId, atIso, "positive_feedback"),
+          kind: "positive_feedback",
+          severity: "medium",
+          reason: "outbound received positive feedback/thumbs up",
+          convId,
+          leadRef,
+          leadName,
+          leadPhone,
+          inboundAt: atIso,
+          inboundText: body,
+          observedDraft,
+          observedProvider: String(nextOutbound?.provider ?? ""),
+          observedAt: nextOutAtIso,
+          finalIfEdited,
+          followUpMode: String(conv?.followUp?.mode ?? "") || null,
+          followUpReason: String(conv?.followUp?.reason ?? "") || null,
+          dialogState: String(conv?.dialogState?.name ?? "") || null,
+          classificationBucket: String(conv?.classification?.bucket ?? "") || null,
+          classificationCta: String(conv?.classification?.cta ?? "") || null,
+          invariantExpectedReason: null,
+          feedbackRating: "up",
+          feedbackReason: feedback.reason,
+          feedbackNote: feedback.note
+        });
+      }
+
+      if (feedback.rating === "down") {
         fewShotCandidates.push({
           id: buildCandidateId(convId, atIso, "negative_feedback"),
           kind: "negative_feedback",
@@ -388,7 +468,10 @@ function run() {
           dialogState: String(conv?.dialogState?.name ?? "") || null,
           classificationBucket: String(conv?.classification?.bucket ?? "") || null,
           classificationCta: String(conv?.classification?.cta ?? "") || null,
-          invariantExpectedReason: null
+          invariantExpectedReason: null,
+          feedbackRating: "down",
+          feedbackReason: feedback.reason,
+          feedbackNote: feedback.note
         });
       }
     }
@@ -469,18 +552,59 @@ function run() {
       };
     });
 
+  const positiveFewShotSeedRows = candidateRows
+    .filter(row => row.kind === "positive_feedback")
+    .map(row => ({
+      id: row.id,
+      category: "what_to_say",
+      reason: row.reason,
+      inboundText: row.inboundText,
+      preferredDraft: row.finalIfEdited ?? row.observedDraft,
+      observedDraft: row.observedDraft,
+      feedbackReason: row.feedbackReason ?? null,
+      feedbackNote: row.feedbackNote ?? null,
+      convId: row.convId,
+      leadRef: row.leadRef,
+      observedAt: row.observedAt
+    }));
+
+  const negativeFewShotSeedRows = candidateRows
+    .filter(row => row.kind === "negative_feedback")
+    .map(row => ({
+      id: row.id,
+      category: "what_not_to_say",
+      reason: row.reason,
+      inboundText: row.inboundText,
+      rejectedDraft: row.observedDraft,
+      feedbackReason: row.feedbackReason ?? null,
+      feedbackNote: row.feedbackNote ?? null,
+      convId: row.convId,
+      leadRef: row.leadRef,
+      observedAt: row.observedAt
+    }));
+
   fs.mkdirSync(parsed.outDir, { recursive: true });
   const summaryPath = path.join(parsed.outDir, "language_corpus_summary.json");
   const corpusPath = path.join(parsed.outDir, "all_message_language_rows.json");
   const patternsPath = path.join(parsed.outDir, "frequent_language_patterns.json");
   const candidatesPath = path.join(parsed.outDir, "few_shot_candidates.json");
   const seedPath = path.join(parsed.outDir, "few_shot_seed_candidates.json");
+  const positiveSeedPath = path.join(parsed.outDir, "few_shot_seed_positive_feedback.json");
+  const negativeSeedPath = path.join(parsed.outDir, "few_shot_seed_negative_feedback.json");
 
   fs.writeFileSync(summaryPath, JSON.stringify(summary, null, 2));
   fs.writeFileSync(corpusPath, JSON.stringify({ count: messageRows.length, rows: messageRows }, null, 2));
   fs.writeFileSync(patternsPath, JSON.stringify({ count: frequentPatterns.length, rows: frequentPatterns }, null, 2));
   fs.writeFileSync(candidatesPath, JSON.stringify({ count: candidateRows.length, rows: candidateRows }, null, 2));
   fs.writeFileSync(seedPath, JSON.stringify({ count: fewShotSeedRows.length, rows: fewShotSeedRows }, null, 2));
+  fs.writeFileSync(
+    positiveSeedPath,
+    JSON.stringify({ count: positiveFewShotSeedRows.length, rows: positiveFewShotSeedRows }, null, 2)
+  );
+  fs.writeFileSync(
+    negativeSeedPath,
+    JSON.stringify({ count: negativeFewShotSeedRows.length, rows: negativeFewShotSeedRows }, null, 2)
+  );
 
   console.log(
     JSON.stringify(
@@ -492,7 +616,9 @@ function run() {
           corpusPath,
           patternsPath,
           candidatesPath,
-          seedPath
+          seedPath,
+          positiveSeedPath,
+          negativeSeedPath
         },
         summary
       },
