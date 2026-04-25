@@ -81,6 +81,7 @@ Required order:
   - writes runtime rules to `DATA_DIR/deterministic_tone_rules.json` (or `DETERMINISTIC_TONE_RULES_PATH`),
   - nightly loop runs this automatically after `language_corpus:mine`.
 - Runtime tone normalization (`services/api/src/domain/tone.ts`) loads both `manual` and `auto` override sections from deterministic tone rules, applies rewrite rules, and blocks exact discouraged drafts with a safe fallback.
+- State safety lock: outbound state/soft-tag detectors (finance-doc signals, trade-payoff signals, shortlist prompt signals) evaluate pre-deterministic text so promoted tone rules cannot alter dialog/cadence state behavior.
 
 Current parser-first disposition states:
 - `customer_sell_on_own`

@@ -162,7 +162,7 @@ function applyDeterministicToneRules(text: string): string {
   return out;
 }
 
-export function normalizeSalesTone(text: string): string {
+export function normalizeSalesToneBase(text: string): string {
   let out = String(text ?? "").trim();
   if (!out) return out;
 
@@ -205,8 +205,18 @@ export function normalizeSalesTone(text: string): string {
     out = out.replace(pattern, replacement);
   }
 
+  return out;
+}
+
+export function applyDeterministicToneOverrides(text: string): string {
+  let out = String(text ?? "").trim();
+  if (!out) return out;
   out = applyDeterministicToneRules(out);
   return out;
+}
+
+export function normalizeSalesTone(text: string): string {
+  return applyDeterministicToneOverrides(normalizeSalesToneBase(text));
 }
 
 function firstToken(value: string): string {

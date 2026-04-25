@@ -4,7 +4,12 @@ import type { InboundMessageEvent } from "./types.js";
 import { maybeMarkEngagedFromInbound } from "./engagement.js";
 import { fileURLToPath } from "node:url";
 import { dataPath } from "./dataDir.js";
-import { formatEmailLayout, formatSmsLayout, normalizeSalesTone } from "./tone.js";
+import {
+  applyDeterministicToneOverrides,
+  formatEmailLayout,
+  formatSmsLayout,
+  normalizeSalesToneBase
+} from "./tone.js";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
 import { applyDraftStateInvariants } from "./draftStateInvariants.js";
 
@@ -1423,15 +1428,14 @@ export function appendOutbound(
   mediaUrls?: string[]
 ) {
   const isEmailThread = String(from ?? "").includes("@") || String(to ?? "").includes("@");
+  const salesToneProvider = provider === "draft_ai" || provider === "twilio" || provider === "sendgrid";
   const lastInbound = [...(conv.messages || [])]
     .reverse()
     .find(m => m.direction === "in" && m.body);
   const inboundText = lastInbound?.body ?? "";
   const normalizedBody = normalizeGotItLeadIn(body, inboundText, provider);
-  let tonedBody =
-    provider === "draft_ai" || provider === "twilio" || provider === "sendgrid"
-      ? normalizeSalesTone(normalizedBody)
-      : normalizedBody;
+  let stateSignalBody = salesToneProvider ? normalizeSalesToneBase(normalizedBody) : normalizedBody;
+  let tonedBody = stateSignalBody;
   if (provider === "draft_ai") {
     const invariant = applyDraftStateInvariants({
       inboundText,
@@ -1448,6 +1452,10 @@ export function appendOutbound(
       return;
     }
     tonedBody = invariant.draftText;
+    stateSignalBody = invariant.draftText;
+  }
+  if (salesToneProvider) {
+    tonedBody = applyDeterministicToneOverrides(tonedBody);
   }
   if (!isEmailThread) {
     tonedBody = formatSmsLayout(tonedBody);
@@ -1460,7 +1468,7 @@ export function appendOutbound(
     const firstName = String(conv?.lead?.firstName ?? conv?.lead?.name ?? "").trim();
     const emailDraft = formatEmailLayout(tonedBody, { firstName, fallbackName: "there" });
     conv.emailDraft = emailDraft;
-    if (outboundAsksForShortList(emailDraft)) {
+    if (outboundAsksForShortList(stateSignalBody)) {
       markPendingShortListPrompt(conv, `outbound_${provider}`);
     }
     consumeAgentContextIfNeeded(conv, "outbound_email_draft");
@@ -1468,7 +1476,7 @@ export function appendOutbound(
     scheduleSave();
     return;
   }
-  if (outboundAsksForShortList(tonedBody)) {
+  if (outboundAsksForShortList(stateSignalBody)) {
     markPendingShortListPrompt(conv, `outbound_${provider}`);
   }
   conv.messages.push({
@@ -1483,8 +1491,8 @@ export function appendOutbound(
     providerMessageId
   });
   if (provider === "twilio" || provider === "human" || provider === "sendgrid") {
-    trackFinanceDocsRequestFromOutbound(conv, tonedBody);
-    trackTradePayoffFromOutbound(conv, tonedBody);
+    trackFinanceDocsRequestFromOutbound(conv, stateSignalBody);
+    trackTradePayoffFromOutbound(conv, stateSignalBody);
   }
   consumeAgentContextIfNeeded(conv, "outbound_sent");
   conv.updatedAt = nowIso();
@@ -1701,7 +1709,8 @@ export function finalizeDraftAsSent(
   if (msg.draftStatus === "stale") return { usedDraft: false };
 
   const original = msg.body;
-  const tonedFinalBody = normalizeSalesTone(finalBody);
+  const stateSignalBody = normalizeSalesToneBase(finalBody);
+  const tonedFinalBody = applyDeterministicToneOverrides(stateSignalBody);
   if (original.trim() !== tonedFinalBody.trim()) {
     msg.originalDraftBody = original;
   }
@@ -1712,8 +1721,8 @@ export function finalizeDraftAsSent(
   msg.draftStatus = undefined;
 
   if (provider === "twilio" || provider === "human" || provider === "sendgrid") {
-    trackFinanceDocsRequestFromOutbound(conv, tonedFinalBody);
-    trackTradePayoffFromOutbound(conv, tonedFinalBody);
+    trackFinanceDocsRequestFromOutbound(conv, stateSignalBody);
+    trackTradePayoffFromOutbound(conv, stateSignalBody);
   }
 
   conv.updatedAt = new Date().toISOString();
