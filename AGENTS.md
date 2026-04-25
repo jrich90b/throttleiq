@@ -877,3 +877,11 @@ When changing responses:
   - `thanks for your.` -> `thanks for your message.`
 - Purpose:
   - prevent broken SMS drafts when upstream wording or rewrite rules produce truncated acknowledgement tails.
+
+## Hold Modal Contrast Pass
+- In `apps/web/src/app/page.tsx`, the `Mark bike on hold` modal now uses higher-contrast text and controls on white surfaces.
+- Updated contrast targets:
+  - headings/helper labels/body copy,
+  - inventory list row text and selected-row state,
+  - held badge visibility,
+  - action buttons (`Cancel` + orange primary `Save hold`).

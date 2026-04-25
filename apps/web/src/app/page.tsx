@@ -16065,9 +16065,9 @@ export default function Home() {
             {holdModalOpen ? (
               <div className="fixed inset-0 z-50 bg-black/40 overflow-y-auto">
                 <div className="min-h-full flex items-start sm:items-center justify-center p-2 sm:p-4">
-                <div className="w-full max-w-2xl max-h-[94vh] overflow-y-auto rounded-lg bg-white shadow-lg border p-3 sm:p-4">
-                  <div className="text-sm font-semibold">Mark bike on hold</div>
-                  <div className="text-xs text-gray-600 mt-1">
+                <div className="w-full max-w-2xl max-h-[94vh] overflow-y-auto rounded-lg bg-white shadow-lg border border-slate-300 p-3 sm:p-4">
+                  <div className="text-sm font-semibold text-slate-900">Mark bike on hold</div>
+                  <div className="text-xs text-slate-800 mt-1">
                     {holdModalConv?.lead?.name ||
                       [holdModalConv?.lead?.firstName, holdModalConv?.lead?.lastName]
                         .filter(Boolean)
@@ -16082,7 +16082,7 @@ export default function Home() {
                     holdModalConv?.followUpCadence?.stopReason === "order_hold" ||
                     holdModalConv?.followUp?.reason === "order_hold" ||
                     holdModalConv?.followUp?.reason === "unit_hold") ? (
-                    <div className="text-xs text-gray-500 mt-2">
+                    <div className="text-xs text-slate-700 mt-2">
                       Current hold:{" "}
                       {holdModalConv?.hold?.onOrder
                         ? `Bike on order${holdModalConv?.hold?.label ? ` • ${holdModalConv.hold.label}` : ""}`
@@ -16094,7 +16094,7 @@ export default function Home() {
                   ) : null}
 
                   <div className="mt-3">
-                    <label className="inline-flex items-center gap-2 text-sm">
+                    <label className="inline-flex items-center gap-2 text-sm font-medium text-slate-900">
                       <input
                         type="checkbox"
                         checked={holdOnOrder}
@@ -16110,9 +16110,9 @@ export default function Home() {
 
                   {holdOnOrder ? (
                     <div className="mt-3">
-                      <div className="text-xs text-gray-500 mb-1">Bike label (optional)</div>
+                      <div className="text-xs font-medium text-slate-700 mb-1">Bike label (optional)</div>
                       <input
-                        className="border rounded px-3 py-2 text-sm w-full"
+                        className="border border-slate-300 rounded px-3 py-2 text-sm text-slate-900 placeholder:text-slate-500 bg-white w-full"
                         placeholder="2026 Harley-Davidson Street Glide"
                         value={holdOnOrderLabel}
                         onChange={e => setHoldOnOrderLabel(e.target.value)}
@@ -16121,9 +16121,9 @@ export default function Home() {
                   ) : null}
 
                   <div className="mt-3">
-                    <div className="text-xs text-gray-500 mb-1">Search inventory</div>
+                    <div className="text-xs font-medium text-slate-700 mb-1">Search inventory</div>
                     <input
-                      className="border rounded px-3 py-2 text-sm w-full"
+                      className="border border-slate-300 rounded px-3 py-2 text-sm text-slate-900 placeholder:text-slate-500 bg-white w-full"
                       placeholder="Search by model, stock, VIN, color..."
                       value={holdSearch}
                       onChange={e => setHoldSearch(e.target.value)}
@@ -16131,15 +16131,15 @@ export default function Home() {
                     />
                   </div>
 
-                  <div className="mt-3 max-h-64 overflow-auto border rounded">
+                  <div className="mt-3 max-h-64 overflow-auto border border-slate-300 rounded">
                     {holdOnOrder ? (
-                      <div className="p-3 text-sm text-gray-500">
+                      <div className="p-3 text-sm text-slate-700">
                         Inventory selection disabled while Bike on order is enabled.
                       </div>
                     ) : holdInventoryLoading ? (
-                      <div className="p-3 text-sm text-gray-500">Loading inventory…</div>
+                      <div className="p-3 text-sm text-slate-700">Loading inventory…</div>
                     ) : holdInventoryItems.length === 0 ? (
-                      <div className="p-3 text-sm text-gray-500">No inventory items found.</div>
+                      <div className="p-3 text-sm text-slate-700">No inventory items found.</div>
                     ) : (
                       holdInventoryItems
                         .filter((it: any) => {
@@ -16173,8 +16173,8 @@ export default function Home() {
                           return (
                             <button
                               key={key || label}
-                              className={`w-full text-left px-3 py-2 border-b last:border-b-0 hover:bg-gray-50 ${
-                                isSelected ? "bg-blue-50" : ""
+                              className={`w-full text-left px-3 py-2 border-b border-slate-200 last:border-b-0 hover:bg-slate-50 ${
+                                isSelected ? "bg-orange-50 ring-1 ring-orange-200" : ""
                               }`}
                               onClick={() => setHoldSelection(it)}
                               type="button"
@@ -16191,11 +16191,11 @@ export default function Home() {
                                     </div>
                                   ) : null}
                                   <div className="text-sm min-w-0">
-                                  <div className="font-medium">
+                                  <div className="font-medium text-slate-900">
                                     {label || it.model || it.stockId || it.vin}
                                     {color}
                                   </div>
-                                  <div className="text-xs text-gray-500">
+                                  <div className="text-xs text-slate-700">
                                     {it.stockId ? `Stock ${it.stockId}` : ""}
                                     {it.stockId && it.vin ? " • " : ""}
                                     {it.vin ? `VIN ${it.vin}` : ""}
@@ -16203,7 +16203,7 @@ export default function Home() {
                                 </div>
                                 </div>
                                 {it.hold ? (
-                                  <span className="text-[11px] px-2 py-0.5 rounded-full border bg-red-100 text-red-700 border-red-200">
+                                  <span className="text-[11px] px-2 py-0.5 rounded-full border bg-orange-100 text-orange-900 border-orange-300">
                                     Held
                                   </span>
                                 ) : null}
@@ -16215,9 +16215,9 @@ export default function Home() {
                   </div>
 
                   <div className="mt-3">
-                    <div className="text-xs text-gray-500 mb-1">Note (optional)</div>
+                    <div className="text-xs font-medium text-slate-700 mb-1">Note (optional)</div>
                     <textarea
-                      className="border rounded px-3 py-2 text-sm w-full"
+                      className="border border-slate-300 rounded px-3 py-2 text-sm text-slate-900 placeholder:text-slate-500 bg-white w-full"
                       rows={2}
                       value={holdNote}
                       onChange={e => setHoldNote(e.target.value)}
@@ -16228,7 +16228,7 @@ export default function Home() {
                   {holdError ? <div className="text-xs text-red-600 mt-2">{holdError}</div> : null}
 
                   <div className="mt-4 flex items-center justify-between">
-                    <div className="text-xs text-gray-500">
+                    <div className="text-xs text-slate-800">
                       {holdOnOrder
                         ? `Bike on order${holdOnOrderLabel?.trim() ? `: ${holdOnOrderLabel.trim()}` : ""}`
                         : holdSelection
@@ -16246,7 +16246,7 @@ export default function Home() {
                       holdModalConv?.followUp?.reason === "order_hold" ||
                       holdModalConv?.followUp?.reason === "unit_hold" ? (
                         <button
-                          className="px-3 py-2 border rounded text-sm text-red-600 border-red-200 hover:bg-red-50"
+                          className="px-3 py-2 border rounded text-sm font-medium text-red-700 border-red-300 bg-white hover:bg-red-50"
                           onClick={() => submitHold(null, "hold_clear")}
                           disabled={holdSaving}
                         >
@@ -16254,14 +16254,14 @@ export default function Home() {
                         </button>
                       ) : null}
                       <button
-                        className="px-3 py-2 border rounded text-sm"
+                        className="px-3 py-2 border rounded text-sm font-medium text-slate-900 border-slate-300 bg-white hover:bg-slate-50"
                         onClick={() => setHoldModalOpen(false)}
                         disabled={holdSaving}
                       >
                         Cancel
                       </button>
                       <button
-                        className="px-3 py-2 border rounded text-sm"
+                        className="px-3 py-2 border rounded text-sm font-semibold text-white bg-orange-600 border-orange-600 hover:bg-orange-500 disabled:bg-orange-300 disabled:border-orange-300"
                         onClick={() => submitHold(holdSelection, "hold")}
                         disabled={holdSaving}
                       >
