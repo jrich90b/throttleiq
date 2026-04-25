@@ -168,6 +168,12 @@ Env vars:
 - Use suggested slots only if customer asked to schedule.
 - Do not confirm unless booked.
 - Avoid offering times if “holding_inventory” or “manual_handoff”.
+- Test-ride scheduling weather gate:
+  - Pass dealer weather status into orchestrator for ADF/email inbound paths.
+  - Treat sustained rain as bad weather (in addition to snow/cold) for test-ride slot gating.
+  - If weather is bad, do not offer immediate test-ride time slots; offer stop-in + schedule test ride when weather clears.
+- Test-ride slot wording:
+  - When a suggested slot is on the same local day, format as `Today, h:mm AM/PM` instead of `Sat, Apr 25, ...`.
 
 ## Dialog State (Policy)
 Dialog state is tracked in `conv.dialogState` to avoid repeats and guide flow:

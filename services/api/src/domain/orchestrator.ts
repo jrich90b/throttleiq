@@ -1095,9 +1095,17 @@ function findRecentInboundStyleFamily(
 
 function buildScheduleInvite(
   hasConcreteInventory: boolean,
-  appointmentType?: "inventory_visit" | "test_ride" | "trade_appraisal" | "finance_discussion"
+  appointmentType?: "inventory_visit" | "test_ride" | "trade_appraisal" | "finance_discussion",
+  opts?: { weatherBlockedTestRide?: boolean }
 ): string {
+  const weatherBlockedTestRide = !!opts?.weatherBlockedTestRide;
   if (appointmentType === "test_ride") {
+    if (weatherBlockedTestRide) {
+      if (hasConcreteInventory) {
+        return "I can set up a time to stop in and check out the bike today, then line up the test ride when weather clears.";
+      }
+      return "I can set up a time to stop in today, then line up the test ride when weather clears.";
+    }
     if (hasConcreteInventory) {
       return "I can set up a time to stop in for a test ride and go over options.";
     }
@@ -1499,6 +1507,39 @@ function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
   return aStart < bEnd && bStart < aEnd;
 }
 
+function localDateKey(date: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+  const map: Record<string, string> = {};
+  for (const part of parts) {
+    if (part.type !== "literal") map[part.type] = part.value;
+  }
+  return `${map.year}-${map.month}-${map.day}`;
+}
+
+function formatOfferSlotLabel(
+  iso: string,
+  timeZone: string,
+  opts?: { labelToday?: boolean; now?: Date }
+): string {
+  if (!opts?.labelToday) return formatSlotLocal(iso, timeZone);
+  const slotDate = new Date(iso);
+  const now = opts.now ?? new Date();
+  if (localDateKey(slotDate, timeZone) === localDateKey(now, timeZone)) {
+    const timeLabel = slotDate.toLocaleString("en-US", {
+      timeZone,
+      hour: "numeric",
+      minute: "2-digit"
+    });
+    return `Today, ${timeLabel}`;
+  }
+  return formatSlotLocal(iso, timeZone);
+}
+
 function enforceNoPrematureBooking(draft: string, appointment: any) {
   if (appointment?.status === "confirmed") return draft;
 
@@ -1542,7 +1583,17 @@ export async function orchestrateInbound(
     hold?: any;
     sale?: any;
     pickup?: any;
-    weather?: { bad?: boolean; cold?: boolean; snow?: boolean } | null;
+    weather?:
+      | {
+          bad?: boolean;
+          cold?: boolean;
+          snow?: boolean;
+          rain?: boolean;
+          reason?: string;
+          rainHours?: number;
+          maxRainInches?: number;
+        }
+      | null;
     dealerProfile?: any;
     agentNameOverride?: string | null;
   }
@@ -3524,6 +3575,7 @@ export async function orchestrateInbound(
         isAdfLead ||
         (ctxSuggestsScheduling && allowSchedulingOffer);
       const appointmentType = ctx?.appointmentTypeOverride ?? inferAppointmentType(event.body);
+      const weatherBlockedTestRide = appointmentType === "test_ride" && !!ctx?.weather?.bad;
 
       const apptBooked = appointment?.bookedEventId;
       const apptConfirmed = !!apptBooked;
@@ -3557,7 +3609,7 @@ export async function orchestrateInbound(
         }
       }
 
-      if (schedulingIntent && !apptConfirmed && !holding) {
+      if (schedulingIntent && !apptConfirmed && !holding && !weatherBlockedTestRide) {
         try {
           const cfg = await getSchedulerConfig();
           const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
@@ -3784,13 +3836,8 @@ export async function orchestrateInbound(
 
             if (slots.length >= 1) {
               const fmtLocal = (iso: string) =>
-                new Date(iso).toLocaleString("en-US", {
-                  timeZone: cfg.timezone,
-                  weekday: "short",
-                  month: "short",
-                  day: "numeric",
-                  hour: "numeric",
-                  minute: "2-digit"
+                formatOfferSlotLabel(iso, cfg.timezone, {
+                  labelToday: appointmentType === "test_ride"
                 });
 
               suggestedSlots = slots.map(s => ({
@@ -4089,12 +4136,16 @@ export async function orchestrateInbound(
         }
         const hasConcreteInventory =
           !!stockId || inventoryStatus === "AVAILABLE" || (isCustomBuild && hasBuildInventory);
-        const scheduleInvite = buildScheduleInvite(hasConcreteInventory, appointmentType);
+        const scheduleInvite = buildScheduleInvite(hasConcreteInventory, appointmentType, {
+          weatherBlockedTestRide
+        });
         const noteLine = inventoryNote ? `Right now there's ${inventoryNote} available. ` : "";
         const buildLine = isCustomBuild
           ? "I can walk you through build options and next steps. "
           : "";
-        if (canScheduleNow && suggestedSlots.length >= 2) {
+        if (weatherBlockedTestRide && canScheduleNow) {
+          finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}${noteLine}${buildLine}${scheduleInvite}`.trim();
+        } else if (canScheduleNow && suggestedSlots.length >= 2) {
           const a = suggestedSlots[0].startLocal;
           const b = suggestedSlots[1].startLocal;
           finalDraft = `${greeting}This is ${agentName} at ${dealerName}. ${availabilityLine}${noteLine}${buildLine}${scheduleInvite} I have ${a} or ${b} — do any of these times work?`.trim();

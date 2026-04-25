@@ -5,6 +5,8 @@ type WeatherConfig = {
   coldThresholdF?: number;
   forecastHours?: number;
   pickupRadiusMiles?: number;
+  rainThresholdInches?: number;
+  rainHoursThreshold?: number;
 };
 
 type DealerProfileLike = {
@@ -16,8 +18,11 @@ type WeatherStatus = {
   bad: boolean;
   cold: boolean;
   snow: boolean;
+  rain: boolean;
   minTempF?: number;
   maxSnow?: number;
+  rainHours?: number;
+  maxRainInches?: number;
   reason?: string;
 };
 
@@ -37,8 +42,15 @@ const GEO_TTL_MS = 6 * 60 * 60 * 1000;
 const WEATHER_TTL_MS = 15 * 60 * 1000;
 const WEATHER_FETCH_TIMEOUT_MS = Number(process.env.WEATHER_FETCH_TIMEOUT_MS ?? 5000);
 
-function cacheKey(lat: number, lon: number, hours: number, cold: number) {
-  return `${lat.toFixed(4)}|${lon.toFixed(4)}|${hours}|${cold}`;
+function cacheKey(
+  lat: number,
+  lon: number,
+  hours: number,
+  cold: number,
+  rainThresholdInches: number,
+  rainHoursThreshold: number
+) {
+  return `${lat.toFixed(4)}|${lon.toFixed(4)}|${hours}|${cold}|${rainThresholdInches}|${rainHoursThreshold}`;
 }
 
 async function fetchJsonWithTimeout(url: string, timeoutMs: number): Promise<any | null> {
@@ -62,7 +74,9 @@ export function getWeatherConfig(profile: DealerProfileLike | null | undefined):
     longitude: weather.longitude,
     coldThresholdF: weather.coldThresholdF ?? 50,
     forecastHours: weather.forecastHours ?? 48,
-    pickupRadiusMiles: weather.pickupRadiusMiles ?? 25
+    pickupRadiusMiles: weather.pickupRadiusMiles ?? 25,
+    rainThresholdInches: weather.rainThresholdInches ?? 0.03,
+    rainHoursThreshold: weather.rainHoursThreshold ?? 6
   };
 }
 
@@ -110,7 +124,16 @@ export async function getDealerWeatherStatus(
   if (!coords) return null;
   const hours = Math.max(1, Math.min(72, Number(cfg.forecastHours ?? 48)));
   const coldThreshold = Number(cfg.coldThresholdF ?? 50);
-  const key = cacheKey(coords.lat, coords.lon, hours, coldThreshold);
+  const rainThresholdInches = Math.max(0, Number(cfg.rainThresholdInches ?? 0.03));
+  const rainHoursThreshold = Math.max(1, Number(cfg.rainHoursThreshold ?? 6));
+  const key = cacheKey(
+    coords.lat,
+    coords.lon,
+    hours,
+    coldThreshold,
+    rainThresholdInches,
+    rainHoursThreshold
+  );
   const now = Date.now();
   const cached = weatherCache.get(key);
   if (cached && cached.expiresAt > now) return cached.value;
@@ -118,8 +141,8 @@ export async function getDealerWeatherStatus(
   const url =
     `https://api.open-meteo.com/v1/forecast?latitude=${coords.lat}` +
     `&longitude=${coords.lon}` +
-    `&hourly=temperature_2m,snowfall,snow_depth` +
-    `&forecast_days=3&temperature_unit=fahrenheit&timezone=auto`;
+    `&hourly=temperature_2m,snowfall,snow_depth,precipitation` +
+    `&forecast_days=3&temperature_unit=fahrenheit&precipitation_unit=inch&timezone=auto`;
   try {
     const data = (await fetchJsonWithTimeout(url, WEATHER_FETCH_TIMEOUT_MS)) as any;
     if (!data) return null;
@@ -128,11 +151,14 @@ export async function getDealerWeatherStatus(
     const temps: number[] = Array.isArray(hourly.temperature_2m) ? hourly.temperature_2m : [];
     const snowfall: number[] = Array.isArray(hourly.snowfall) ? hourly.snowfall : [];
     const snowDepth: number[] = Array.isArray(hourly.snow_depth) ? hourly.snow_depth : [];
+    const precipitation: number[] = Array.isArray(hourly.precipitation) ? hourly.precipitation : [];
     if (!times.length) return null;
     const start = Date.now();
     const end = start + hours * 60 * 60 * 1000;
     let minTemp = Number.POSITIVE_INFINITY;
     let maxSnow = 0;
+    let maxRainInches = 0;
+    let rainHours = 0;
     for (let i = 0; i < times.length; i += 1) {
       const t = new Date(times[i]).getTime();
       if (Number.isNaN(t) || t < start || t > end) continue;
@@ -140,17 +166,26 @@ export async function getDealerWeatherStatus(
       if (Number.isFinite(temp)) minTemp = Math.min(minTemp, temp);
       const snow = Math.max(Number(snowfall[i] ?? 0), Number(snowDepth[i] ?? 0));
       if (Number.isFinite(snow)) maxSnow = Math.max(maxSnow, snow);
+      const rain = Number(precipitation[i] ?? 0);
+      if (Number.isFinite(rain)) {
+        maxRainInches = Math.max(maxRainInches, rain);
+        if (rain >= rainThresholdInches) rainHours += 1;
+      }
     }
     const cold = Number.isFinite(minTemp) && minTemp < coldThreshold;
     const snow = maxSnow > 0;
-    const bad = cold || snow;
+    const rain = rainHours >= rainHoursThreshold || maxRainInches >= Math.max(rainThresholdInches * 3, 0.12);
+    const bad = cold || snow || rain;
     const status: WeatherStatus = {
       bad,
       cold,
       snow,
+      rain,
       minTempF: Number.isFinite(minTemp) ? minTemp : undefined,
       maxSnow: Number.isFinite(maxSnow) ? maxSnow : undefined,
-      reason: bad ? (snow ? "snow" : "cold") : undefined
+      rainHours: Number.isFinite(rainHours) ? rainHours : undefined,
+      maxRainInches: Number.isFinite(maxRainInches) ? maxRainInches : undefined,
+      reason: bad ? (snow ? "snow" : rain ? "rain" : "cold") : undefined
     };
     weatherCache.set(key, { value: status, expiresAt: now + WEATHER_TTL_MS });
     return status;

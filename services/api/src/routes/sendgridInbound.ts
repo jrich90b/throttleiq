@@ -66,6 +66,7 @@ import {
   localPartsToUtcDate
 } from "../domain/schedulerEngine.js";
 import { getDealerProfile } from "../domain/dealerProfile.js";
+import { getDealerWeatherStatus } from "../domain/weather.js";
 import { getInventoryNote } from "../domain/inventoryNotes.js";
 import { getInventoryFeed, hasInventoryForModelYear, findInventoryMatches } from "../domain/inventoryFeed.js";
 import { resolveInventoryUrlByStock } from "../domain/inventoryUrlResolver.js";
@@ -124,6 +125,15 @@ function normalizeModelToken(raw: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
+}
+
+async function getDealerWeatherStatusSafe() {
+  try {
+    const profile = await getDealerProfile();
+    return await getDealerWeatherStatus(profile);
+  } catch {
+    return null;
+  }
 }
 
 function toTitleCase(input: string): string {
@@ -2575,6 +2585,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       /(appointment|appt|schedule|book|reserve|come in|stop in|stop by|visit|test ride|demo ride|\b\d{1,2}(:\d{2})?\s*(am|pm)\b)/i.test(
         event.body ?? ""
       );
+    const weatherStatus = await getDealerWeatherStatusSafe();
     const result = await orchestrateInbound(event, history, {
       appointment: conv.appointment,
       followUp: conv.followUp,
@@ -2584,6 +2595,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       cta: conv.classification?.cta ?? null,
       pricingAttempts: getPricingAttempts(conv),
       allowSchedulingOffer,
+      weather: weatherStatus,
       agentNameOverride: String(conv?.manualSender?.userName ?? "").trim() || undefined
     });
 
@@ -5223,6 +5235,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
 
   const history = buildEffectiveHistory(conv, 20);
+  const weatherStatus = await getDealerWeatherStatusSafe();
   let result: any;
   try {
     result = await orchestrateInbound(event, history, {
@@ -5238,6 +5251,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       financeIntentHint: pricingInquiryIntent,
       pricingAttempts: getPricingAttempts(conv),
       allowSchedulingOffer: true,
+      weather: weatherStatus,
       agentNameOverride: String(conv?.manualSender?.userName ?? "").trim() || undefined
     });
   } catch (error: any) {
