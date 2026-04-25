@@ -46,6 +46,9 @@ Required order:
   - manual email send path,
   - any direct `conv.emailDraft` assignment path.
 
+## UI Contrast Guardrail
+- Any inline light-surface action panel (for example Task Inbox reassign inline card) must include the `data-actions-menu` hook so form controls inherit enforced high-contrast white-surface styling in dark theme.
+
 ## Staff SMS Links
 - Internal staff SMS prompts that request appointment/finance outcomes should include a clickable staff inbox conversation URL (`section=inbox&convId=...`) so salespeople can open the exact thread directly from text.
 

@@ -195,7 +195,7 @@ export function TaskInboxSection(props: any) {
                             <div className="text-xs text-gray-600 mt-1">Outcome: {appointmentOutcomeLabel}</div>
                           ) : null}
                           {reassignInlineOpenId === t.convId && rowConv ? (
-                            <div className="mt-3 border rounded p-2 bg-gray-50">
+                            <div className="mt-3 border rounded p-2 bg-gray-50" data-actions-menu>
                               <div className="text-[11px] text-gray-500 mb-1">Reassign lead</div>
                               <select
                                 className="w-full border rounded px-2 py-1 text-xs bg-white"
