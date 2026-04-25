@@ -869,3 +869,11 @@ When changing responses:
   - `Meta Promo Offer` sources include the offers link in the initial outbound draft.
   - Room58 leads include an offers link only when a promo-note URL is present in inquiry/comment text.
   - URL precedence is: promo-note URL (when detected) -> dealer profile `offersUrl`.
+
+## Draft Cleanup Guardrail (Dangling Thanks Fragment)
+- In `services/api/src/domain/tone.ts`, deterministic-tone post-processing now repairs dangling acknowledgement fragments before saving drafts/messages.
+- Guardrail examples:
+  - `thanks for the.` -> `thanks for the update.`
+  - `thanks for your.` -> `thanks for your message.`
+- Purpose:
+  - prevent broken SMS drafts when upstream wording or rewrite rules produce truncated acknowledgement tails.

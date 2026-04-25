@@ -162,6 +162,21 @@ function applyDeterministicToneRules(text: string): string {
   return out;
 }
 
+function repairDanglingAcknowledgements(text: string): string {
+  let out = String(text ?? "").trim();
+  if (!out) return out;
+  out = out.replace(
+    /\b(thanks\s+for\s+the)\s*(?:[.!?]|$)/gi,
+    "thanks for the update."
+  );
+  out = out.replace(
+    /\b(thanks\s+for\s+your)\s*(?:[.!?]|$)/gi,
+    "thanks for your message."
+  );
+  out = out.replace(/\s{2,}/g, " ").replace(/\s+([,.;:!?])/g, "$1").trim();
+  return out;
+}
+
 function dedupeIdentityIntro(text: string): string {
   let out = String(text ?? "").trim();
   if (!out) return out;
@@ -247,6 +262,7 @@ export function applyDeterministicToneOverrides(text: string): string {
   let out = String(text ?? "").trim();
   if (!out) return out;
   out = applyDeterministicToneRules(out);
+  out = repairDanglingAcknowledgements(out);
   return out;
 }
 
