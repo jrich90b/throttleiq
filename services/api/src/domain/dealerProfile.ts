@@ -15,6 +15,7 @@ export type DealerProfile = {
   bookingUrl?: string;
   bookingToken?: string;
   creditAppUrl?: string;
+  offersUrl?: string;
   usedInventoryUrl?: string;
   preownedInventoryUrl?: string;
   address?: { line1?: string; city?: string; state?: string; zip?: string; country?: string };

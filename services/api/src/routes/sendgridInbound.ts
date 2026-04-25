@@ -78,6 +78,7 @@ import { isResponseControlParserAccepted } from "../domain/transitionSafety.js";
 import { resolveRoutingParserDecision } from "../domain/routerV2.js";
 import { listUsers } from "../domain/userStore.js";
 import { formatEmailLayout } from "../domain/tone.js";
+import { buildOffersLine, resolveOffersUrl } from "../domain/offers.js";
 
 function base64UrlDecode(input: string): string | null {
   try {
@@ -1226,6 +1227,16 @@ function buildInitialEmailDraft(
   const bookingUrl = buildBookingUrlForLead(dealerProfile?.bookingUrl, conv);
   const model = formatModelLabel(conv?.lead?.vehicle?.year ?? conv?.lead?.year, conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description);
   const leadSourceLower = (conv?.lead?.source ?? conv?.leadSource ?? "").toLowerCase();
+  const offersResolution = resolveOffersUrl({
+    dealerProfile,
+    conversation: conv
+  });
+  const includeOffersLine =
+    /meta promo offer/i.test(leadSourceLower) ||
+    (/room58/i.test(leadSourceLower) && !!offersResolution.promoNoteUrl);
+  const offersLine = includeOffersLine
+    ? buildOffersLine(offersResolution.preferredUrl, { prefix: "Current offers are listed here:" })
+    : "";
   const isCustomBuild = /custom build/.test(leadSourceLower);
   const isTestRide =
     conv?.classification?.bucket === "test_ride" || conv?.classification?.cta === "schedule_test_ride";
@@ -1264,7 +1275,9 @@ function buildInitialEmailDraft(
     : "Just reply with a day and time that works for you.";
   const extra = "If a walkaround or extra photos would help, just let me know.";
 
-  const draft = `Hi ${name},\n\n${thanks} ${intro} ${help} ${noteLine} ${buildLine} ${visit}\n\n${bookingLine}\n\n${extra}`
+  const draft = `Hi ${name},\n\n${thanks} ${intro} ${help} ${noteLine} ${buildLine} ${visit}\n\n${
+    offersLine ? `${offersLine}\n\n` : ""
+  }${bookingLine}\n\n${extra}`
     .replace(/\s+\n/g, "\n")
     .trim();
   return formatEmailLayout(draft, { firstName: name, fallbackName: "there" });
@@ -3730,9 +3743,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     });
   }
 
+  let cachedInitialDealerProfile: any | undefined;
+  const getInitialDealerProfile = async () => {
+    if (cachedInitialDealerProfile !== undefined) return cachedInitialDealerProfile;
+    cachedInitialDealerProfile = await getDealerProfile();
+    return cachedInitialDealerProfile;
+  };
+
   const applyInitialAdfPrefix = async (text: string) => {
     if (!isInitialAdf) return text;
-    const profile = await getDealerProfile();
+    const profile = await getInitialDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
     const agentName = profile?.agentName ?? "Brooke";
     const firstName = normalizeDisplayCase(conv.lead?.firstName);
@@ -3812,6 +3832,41 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       return text;
     }
     return `${text} ${initialAvailabilityLine}`.trim();
+  };
+  let cachedInitialOffersLine: string | null | undefined;
+  const resolveInitialOffersLine = async (): Promise<string> => {
+    if (cachedInitialOffersLine !== undefined) return cachedInitialOffersLine ?? "";
+    if (!isInitialAdf) {
+      cachedInitialOffersLine = null;
+      return "";
+    }
+    const sourceLower = String(conv.lead?.source ?? "").toLowerCase();
+    const metaPromoSource = /meta promo offer/i.test(sourceLower);
+    const room58LeadSource = /room58/i.test(sourceLower);
+    if (!metaPromoSource && !room58LeadSource) {
+      cachedInitialOffersLine = null;
+      return "";
+    }
+    const profile = await getInitialDealerProfile();
+    const offersResolution = resolveOffersUrl({
+      dealerProfile: profile,
+      conversation: conv,
+      leadInquiry: effectiveInquiry,
+      leadComment: lead.inquiry ?? inquiryRaw,
+      inboundText: event.body
+    });
+    const shouldIncludeOffersLine = metaPromoSource || (room58LeadSource && !!offersResolution.promoNoteUrl);
+    cachedInitialOffersLine = shouldIncludeOffersLine
+      ? buildOffersLine(offersResolution.preferredUrl, { prefix: "Current offers:" }) || null
+      : null;
+    return cachedInitialOffersLine ?? "";
+  };
+  const withInitialOffersLine = async (text: string) => {
+    const offersLine = await resolveInitialOffersLine();
+    if (!offersLine) return text;
+    if (text.toLowerCase().includes(offersLine.toLowerCase())) return text;
+    if (/current offers?:\s*https?:\/\//i.test(text)) return text;
+    return `${text} ${offersLine}`.trim();
   };
   const maybeAddInitialCallTodo = () => {
     if (!isInitialAdf) return;
@@ -5160,7 +5215,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
 
   if (isMetaPromoOffer && /^(other|full line)$/i.test(metaOfferRawModel.trim())) {
-    const profile = await getDealerProfile();
+    const profile = await getInitialDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
     const agentName = profile?.agentName ?? "Brooke";
     const firstName = normalizeDisplayCase(conv.lead?.firstName);
@@ -5172,20 +5227,24 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     ack = await applyInitialAdfPrefix(ack);
     ack = withInitialPhoto(ack);
     ack = withInitialAvailabilityLine(ack);
+    ack = await withInitialOffersLine(ack);
 
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
     maybeAddInitialCallTodo();
     const emailGreeting = firstName ? `Hi ${firstName},` : "Hi,";
-    setEmailDraft(
-      conv,
-      [
+    const offersLine = await resolveInitialOffersLine();
+    const emailLines = [
       emailGreeting,
       "",
       "Thanks for your H-D Meta promo offer request.",
       `This is ${agentName} at ${dealerName}.`,
       "I can help with pricing and availability.",
+      ...(offersLine ? [offersLine] : []),
       "Which model are you interested in, and do you have a preferred trim or color?"
-    ].join("\n")
+    ];
+    setEmailDraft(
+      conv,
+      emailLines.join("\n")
     );
     return res.status(200).json({
       ok: true,
@@ -5296,6 +5355,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     let ack = await applyInitialAdfPrefix(result.handoff.ack);
     ack = withInitialPhoto(ack);
     ack = withInitialAvailabilityLine(ack);
+    ack = await withInitialOffersLine(ack);
     if (!creditTodoCreated) {
       addTodo(conv, reason, event.body, event.providerMessageId);
     }
@@ -5327,6 +5387,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     let ack = await applyInitialAdfPrefix(result.draft);
     ack = withInitialPhoto(ack);
     ack = withInitialAvailabilityLine(ack);
+    ack = await withInitialOffersLine(ack);
     closeConversation(conv, result.autoClose.reason);
     queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     maybeAddInitialCallTodo();
@@ -5577,7 +5638,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
   }
 
-  const dealerProfile = await getDealerProfile();
+  const dealerProfile = await getInitialDealerProfile();
   const requestedRideDate =
     result.requestedTime
       ? new Date(
@@ -5781,6 +5842,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (!suppressAvailabilityAppend) {
     draft = withInitialAvailabilityLine(draft);
   }
+  draft = await withInitialOffersLine(draft);
 
   const emailTo = lead.email?.trim();
   const useEmail = channel === "email" && !!emailTo && lead.emailOptIn === true;

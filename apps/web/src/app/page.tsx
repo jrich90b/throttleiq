@@ -2540,6 +2540,7 @@ export default function Home() {
     bookingUrl: "",
     bookingToken: "",
     creditAppUrl: "",
+    offersUrl: "",
     lienHolderResponse: "",
     riderToRiderFinancingEnabled: false,
     phone: "",
@@ -5646,6 +5647,7 @@ export default function Home() {
           bookingUrl: profile.bookingUrl ?? "",
           bookingToken: profile.bookingToken ?? "",
           creditAppUrl: profile.creditAppUrl ?? "",
+          offersUrl: profile.offersUrl ?? "",
           lienHolderResponse:
             profile?.policies?.lienHolderResponse ??
             profile?.policies?.lienHolderText ??
@@ -9122,6 +9124,7 @@ export default function Home() {
         bookingUrl: dealerProfileForm.bookingUrl.trim(),
         bookingToken: dealerProfileForm.bookingToken.trim(),
         creditAppUrl: dealerProfileForm.creditAppUrl.trim(),
+        offersUrl: dealerProfileForm.offersUrl.trim(),
         policies: {
           ...existingPolicies,
           lienHolderResponse: dealerProfileForm.lienHolderResponse.trim(),
@@ -13469,6 +13472,15 @@ export default function Home() {
                         className="border rounded px-3 py-2 text-sm w-full"
                         value={dealerProfileForm.creditAppUrl}
                         onChange={e => setDealerProfileForm({ ...dealerProfileForm, creditAppUrl: e.target.value })}
+                      />
+                    </label>
+                    <label className="space-y-1 md:col-span-2">
+                      <div className="text-xs text-gray-600">Offers URL (promotions/specials)</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        placeholder="https://americanharley-davidson.com/l/h-d-national-promotions"
+                        value={dealerProfileForm.offersUrl}
+                        onChange={e => setDealerProfileForm({ ...dealerProfileForm, offersUrl: e.target.value })}
                       />
                     </label>
                     <label className="space-y-1 md:col-span-2">

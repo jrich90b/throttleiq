@@ -74,6 +74,7 @@ import {
   isWebFallbackEnabled,
   searchGoogleCse
 } from "./domain/webFallback.js";
+import { buildOffersLine, resolveOffersUrl } from "./domain/offers.js";
 import type { DailyForecast } from "./domain/weather.js";
 import { resolveTownNearestDealer, formatTownLabel } from "./domain/geo.js";
 import { getDataDir } from "./domain/dataDir.js";
@@ -4618,7 +4619,7 @@ const FOLLOW_UP_MESSAGES = [
   "Hey {name}, just checking in{labelClause}. If helpful, I can send a quick price and payment snapshot.",
   "If helpful, I can send current photos or a short walkaround of{label}.",
   "Want a simple side-by-side on{labelClause} so it is easier to compare?",
-  "I can also check current incentives on{labelClause} and send only what applies.",
+  "I can also check current incentives on{labelClause} and send only what applies.{offersLine}",
   "If you’d rather stop in{labelClause}, I can send two easy time options.",
   "No rush, {name}. I can keep an eye on{labelClause} and only text when something changes.",
   "If trade-in is part of your plan, I can start with a rough range before you come in.",
@@ -5622,6 +5623,14 @@ async function buildCadenceRegeneratedDraft(
   const tradeLabel =
     tradeVehicle && (tradeVehicle.model || tradeVehicle.description) ? getSellBikeLabel(conv) : "";
   const tradeName = normalizeDisplayCase(tradeVehicle?.model) || tradeLabel || "your trade";
+  const offersResolution = resolveOffersUrl({
+    dealerProfile,
+    conversation: conv
+  });
+  const cadenceOffersLine =
+    lastSentStep === 3
+      ? buildOffersLine(offersResolution.preferredUrl, { prefix: "Current offers:" })
+      : "";
   const pricingLine =
     getPricingAttempts(conv) > 0 ? " If you want me to run numbers, just say the word." : "";
   const tradeLine = tradeLabel ? ` If you want to go over the trade on ${tradeLabel}, just let me know.` : "";
@@ -5636,6 +5645,7 @@ async function buildCadenceRegeneratedDraft(
     labelClause,
     label: labelWithThe,
     extraLine,
+    offersLine: cadenceOffersLine ? ` ${cadenceOffersLine}` : "",
     model: modelName,
     modelYear,
     trade: tradeName
@@ -5668,6 +5678,9 @@ async function buildCadenceRegeneratedDraft(
     }
     if (conv.scheduleSoft && !allowProactiveSchedule) {
       message = stripSchedulingPromptFromFollowUp(message);
+    }
+    if (lastSentStep === 3 && cadenceOffersLine && !message.toLowerCase().includes(cadenceOffersLine.toLowerCase())) {
+      message = `${message} ${cadenceOffersLine}`.trim();
     }
     message = ensureCadenceAnchorMessage({
       message,
@@ -5743,6 +5756,9 @@ async function buildCadenceRegeneratedDraft(
   if (promotionOverride) {
     message = promotionOverride;
   }
+  if (lastSentStep === 3 && cadenceOffersLine && !message.toLowerCase().includes(cadenceOffersLine.toLowerCase())) {
+    message = `${message} ${cadenceOffersLine}`.trim();
+  }
 
   if (conv.scheduleSoft && !allowProactiveSchedule) {
     message = stripSchedulingPromptFromFollowUp(message);
@@ -5792,6 +5808,7 @@ type EmailFollowUpCtx = {
   name: string;
   label: string;
   bookingLine: string;
+  offersLine: string;
   dealerName: string;
   canTestRide: boolean;
 };
@@ -5803,8 +5820,10 @@ const EMAIL_FOLLOW_UP_MESSAGES: Array<(ctx: EmailFollowUpCtx) => string> = [
     `Hi ${name},\n\nIf helpful, I can send current photos and a short walkaround video of ${label}, plus key differences versus similar options.\n\n${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine, canTestRide }) =>
     `Hi ${name},\n\nThanks again for your interest in ${label}. ${canTestRide ? "If you want a test ride, I can hold a time." : "If you want to stop by, I can hold a time."} I can also send a simple side-by-side with price and payment options.\n\n${bookingLine}\n\nThanks,`,
-  ({ name, label, bookingLine }) =>
-    `Hi ${name},\n\nWould it help if I sent a quick side-by-side on ${label} (price, payment, condition) so it is easier to compare?\n\n${bookingLine}\n\nThanks,`,
+  ({ name, label, bookingLine, offersLine }) =>
+    `Hi ${name},\n\nWould it help if I sent a quick side-by-side on ${label} (price, payment, condition) so it is easier to compare?\n\n${
+      offersLine ? `${offersLine}\n\n` : ""
+    }${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
     `Hi ${name},\n\nJust checking in on ${label}. If you want to take a closer look, I can line up two easy time options.\n\n${bookingLine}\n\nThanks,`,
   ({ name, label, bookingLine }) =>
@@ -5900,6 +5919,16 @@ function buildInitialEmailDraft(conv: any, dealerProfile: any): string {
   const bookingUrl = buildBookingUrlForLead(dealerProfile?.bookingUrl, conv);
   const label = normalizeLeadLabel(conv);
   const leadSourceLower = (conv?.lead?.source ?? conv?.leadSource ?? "").toLowerCase();
+  const offersResolution = resolveOffersUrl({
+    dealerProfile,
+    conversation: conv
+  });
+  const includeOffersLine = /meta promo offer/i.test(leadSourceLower) || !!offersResolution.promoNoteUrl;
+  const offersLine = includeOffersLine
+    ? buildOffersLine(offersResolution.preferredUrl, {
+        prefix: "Current published offers are listed here:"
+      })
+    : "";
   const isCustomBuild = /custom build/.test(leadSourceLower);
   const isTestRide =
     conv?.classification?.bucket === "test_ride" || conv?.classification?.cta === "schedule_test_ride";
@@ -5932,7 +5961,9 @@ function buildInitialEmailDraft(conv: any, dealerProfile: any): string {
   const extra = "If a walkaround or extra photos would help, just let me know.";
 
   return formatEmailLayout(
-    `Hi ${name},\n\n${thanks} ${intro} ${help} ${buildLine} ${visit}\n\n${bookingLine}\n\n${extra}`,
+    `Hi ${name},\n\n${thanks} ${intro} ${help} ${buildLine} ${visit}\n\n${
+      offersLine ? `${offersLine}\n\n` : ""
+    }${bookingLine}\n\n${extra}`,
     { firstName: name, fallbackName: "there" }
   );
 }
@@ -16041,6 +16072,14 @@ async function processDueFollowUps() {
     const modelName = formatModelToken(followUpModel);
     const modelYear = followUpYear ? `${followUpYear} ${modelName}` : modelName;
     const tradeName = normalizeDisplayCase(tradeVehicle?.model) || tradeLabel || "your trade";
+    const offersResolution = resolveOffersUrl({
+      dealerProfile,
+      conversation: conv
+    });
+    const cadenceOffersLine =
+      cadence.stepIndex === 3
+        ? buildOffersLine(offersResolution.preferredUrl, { prefix: "Current offers:" })
+        : "";
     const pricingLine =
       getPricingAttempts(conv) > 0 ? " If you want me to run numbers, just say the word." : "";
     const tradeLine = tradeLabel ? ` If you want to go over the trade on ${tradeLabel}, just let me know.` : "";
@@ -16055,6 +16094,7 @@ async function processDueFollowUps() {
       labelClause,
       label: labelWithThe,
       extraLine,
+      offersLine: cadenceOffersLine ? ` ${cadenceOffersLine}` : "",
       model: modelName,
       modelYear,
       trade: tradeName
@@ -16323,6 +16363,17 @@ async function processDueFollowUps() {
       mediaUrls = late.mediaUrls;
       }
     }
+    if (
+      cadence.stepIndex === 3 &&
+      cadenceOffersLine &&
+      !isPostSale &&
+      cadence.kind !== "long_term" &&
+      !isTradeNoInterest &&
+      !isSellMyBikeLead &&
+      !message.toLowerCase().includes(cadenceOffersLine.toLowerCase())
+    ) {
+      message = `${message} ${cadenceOffersLine}`.trim();
+    }
     if (leadUnitAvailabilityOverride) {
       message = leadUnitAvailabilityOverride;
       mediaUrls = undefined;
@@ -16520,6 +16571,7 @@ async function processDueFollowUps() {
           name,
           label,
           bookingLine,
+          offersLine: cadence.stepIndex === 3 ? cadenceOffersLine : "",
           dealerName: dealerProfile?.dealerName ?? "American Harley-Davidson",
           canTestRide: canTestRideFlag
         });

@@ -859,3 +859,13 @@ When changing responses:
   - routing parser example mapping the same pattern to `primary_intent=callback`.
 - Purpose:
   - improve parser confidence and consistency on time-window callback requests from ADF leads.
+
+## Offers URL in Profile + Cadence/Initial Usage
+- Dealer profile supports a dedicated offers link: `dealerProfile.offersUrl` (UI + API schema).
+- Follow-up cadence insertion point:
+  - Step 4 (0-based `stepIndex === 3`) is the offers step and now appends `Current offers: <url>` when available.
+  - Applied to both SMS and email cadence templates, including cadence regenerate parity.
+- Initial ADF offer-link behavior:
+  - `Meta Promo Offer` sources include the offers link in the initial outbound draft.
+  - Room58 leads include an offers link only when a promo-note URL is present in inquiry/comment text.
+  - URL precedence is: promo-note URL (when detected) -> dealer profile `offersUrl`.
