@@ -7587,7 +7587,11 @@ function buildBrandedShortLinkForConv(conv: any, targetUrl: string, profile?: an
   }
 }
 
-function buildCallbackCallLink(conv: any, profile?: any): string | null {
+function buildStaffInboxConversationLink(
+  conv: any,
+  profile?: any,
+  opts?: { action?: string | null }
+): string | null {
   const base = deriveStaffWebBaseUrl(profile);
   const convId = String(conv?.id ?? conv?.leadKey ?? "").trim();
   if (!base || !convId) return null;
@@ -7595,11 +7599,18 @@ function buildCallbackCallLink(conv: any, profile?: any): string | null {
     const url = new URL(base);
     url.searchParams.set("section", "inbox");
     url.searchParams.set("convId", convId);
-    url.searchParams.set("action", "call");
+    const action = String(opts?.action ?? "").trim();
+    if (action) {
+      url.searchParams.set("action", action);
+    }
     return url.toString();
   } catch {
     return null;
   }
+}
+
+function buildCallbackCallLink(conv: any, profile?: any): string | null {
+  return buildStaffInboxConversationLink(conv, profile, { action: "call" });
 }
 
 function ensureDealerRideOutcomeToken(conv: any): string {
@@ -7830,10 +7841,13 @@ async function maybePromptBusinessManagerFinanceOutcomeFallback(
     conv?.lead?.vehicle?.description ??
     conv?.sale?.label ??
     "the deal";
+  const dealerProfile = await getDealerProfileHot();
+  const conversationLink = buildStaffInboxConversationLink(conv, dealerProfile);
   const note = String(opts.note ?? "").trim();
   const prompt = [
     `Finance outcome needed: ${customerName} — ${vehicle}.`,
     note ? `Context: ${note}` : null,
+    conversationLink ? `Open conversation: ${conversationLink}` : null,
     `Reply: OUTCOME ${token} APPROVED | DECLINED | NEEDS_INFO | PENDING.`
   ]
     .filter(Boolean)

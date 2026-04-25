@@ -46,6 +46,9 @@ Required order:
   - manual email send path,
   - any direct `conv.emailDraft` assignment path.
 
+## Staff SMS Links
+- Internal staff SMS prompts that request appointment/finance outcomes should include a clickable staff inbox conversation URL (`section=inbox&convId=...`) so salespeople can open the exact thread directly from text.
+
 ## Watch Parser Few-Shot Coverage
 - Keep watch parser few-shot examples current for real inbound shorthand/slang patterns seen in production (for example `lmk`, `23 lrs`, `fxlrs`) so human-mode and AI-mode watch intent set reliably.
 
