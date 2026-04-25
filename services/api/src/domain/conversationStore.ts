@@ -3029,6 +3029,10 @@ function parseExactTime(text: string): { hour24: number; minute: number; timeTex
         t.match(/\b(?:at|for|by)\s*(\d{3,4})\s*(am|pm)?\b/);
       if (compact) {
         const digits = compact[1];
+        const numeric = Number(digits);
+        if (!compact[2] && digits.length === 4 && Number.isFinite(numeric) && numeric >= 1900 && numeric <= 2099) {
+          return null;
+        }
         const split = digits.length === 3 ? 1 : 2;
         hourRaw = Number(digits.slice(0, split));
         minute = Number(digits.slice(split));

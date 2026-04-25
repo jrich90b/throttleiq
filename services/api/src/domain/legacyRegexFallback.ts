@@ -26,6 +26,11 @@ export function extractTimeToken(msg: string): string | null {
   if (m) {
     const digits = m[1];
     const ap = m[2] ?? "";
+    const numeric = Number(digits);
+    // Guardrail: model years like 2022/2026 should never be parsed as compact times.
+    if (!ap && digits.length === 4 && Number.isFinite(numeric) && numeric >= 1900 && numeric <= 2099) {
+      return null;
+    }
     if (!ap && financeNumericContext) return null;
     const d = digits.padStart(4, "0");
     const hh = String(Number(d.slice(0, 2)));

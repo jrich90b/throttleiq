@@ -164,6 +164,10 @@ Env vars:
 - `LLM_BOOKING_CONFIDENCE_MIN` (default 0.70)
 - `LLM_CUSTOMER_DISPOSITION_CONFIDENCE_MIN` (default 0.74)
 
+## Time Parsing Guardrail
+- Compact numeric year tokens (for example `2022`, `2026`) must not be interpreted as times (`20:22`, `20:26`) in scheduling/re-generate flows.
+- Applies to both legacy time token extraction and `parseRequestedDayTime(...)` compact-time parsing.
+
 ## Appointment Offer Rules (Source of Truth)
 - Use suggested slots only if customer asked to schedule.
 - Do not confirm unless booked.
