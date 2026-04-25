@@ -885,3 +885,19 @@ When changing responses:
   - inventory list row text and selected-row state,
   - held badge visibility,
   - action buttons (`Cancel` + orange primary `Save hold`).
+
+## Contact Groups + Campaign Suppression Guardrail
+- Contact group filters now support `motorcycleInterest` end-to-end:
+  - schema/store update in `services/api/src/domain/contactListsStore.ts`,
+  - filter matching in `services/api/src/index.ts` (`contactMatchesListFilter(...)`),
+  - UI controls in `apps/web/src/app/page.tsx` (dynamic group rules panel).
+- Contacts UI now supports adding a single selected contact into a chosen group directly from contact detail:
+  - manager-only `Add to group` control in contact detail pane,
+  - persists by patching group `contactIds`.
+- Campaign send hard exclusions are now enforced server-side in `/contacts/broadcast`:
+  - skip recipients with contact status `suppressed` or `archived` for both SMS and email sends.
+- Campaign SMS opt-out compliance:
+  - when sending campaign SMS (`campaignId`/campaign context), API auto-appends `Reply STOP to opt out.` unless already present,
+  - send dialog now shows explicit footer/suppression note.
+- STOP behavior remains suppression-backed:
+  - STOP replies continue to flow into suppression handling; suppressed contacts are excluded from future campaign sends.

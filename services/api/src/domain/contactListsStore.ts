@@ -6,6 +6,7 @@ export type ContactListFilter = {
   year?: string;
   make?: string;
   model?: string;
+  motorcycleInterest?: string;
 };
 
 export type ContactListEntry = {
@@ -80,12 +81,20 @@ function normalizeFilter(filter?: ContactListFilter | null): ContactListFilter |
   const year = String(filter.year ?? "").trim();
   const make = String(filter.make ?? "").trim();
   const model = String(filter.model ?? "").trim();
+  const motorcycleInterest = String(filter.motorcycleInterest ?? "").trim();
   const normalized: ContactListFilter = {};
   if (condition) normalized.condition = condition;
   if (year) normalized.year = year;
   if (make) normalized.make = make;
   if (model) normalized.model = model;
-  if (!normalized.condition && !normalized.year && !normalized.make && !normalized.model) {
+  if (motorcycleInterest) normalized.motorcycleInterest = motorcycleInterest;
+  if (
+    !normalized.condition &&
+    !normalized.year &&
+    !normalized.make &&
+    !normalized.model &&
+    !normalized.motorcycleInterest
+  ) {
     return undefined;
   }
   return normalized;

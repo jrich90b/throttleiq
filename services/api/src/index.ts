@@ -21427,13 +21427,20 @@ function buildContactsView() {
 
 function contactMatchesListFilter(
   contact: any,
-  filter?: { condition?: string; year?: string; make?: string; model?: string } | null
+  filter?: {
+    condition?: string;
+    year?: string;
+    make?: string;
+    model?: string;
+    motorcycleInterest?: string;
+  } | null
 ): boolean {
   if (!filter) return true;
   const condition = normalizeContactCondition(filter.condition);
   const year = normalizeContactText(filter.year);
   const make = normalizeContactText(filter.make);
   const model = normalizeContactText(filter.model);
+  const motorcycleInterest = normalizeContactText(filter.motorcycleInterest);
 
   if (condition) {
     const rowCondition = normalizeContactCondition(contact.condition);
@@ -21453,6 +21460,21 @@ function contactMatchesListFilter(
     const rowModel = normalizeContactText(contact.model ?? contact.vehicle);
     if (!rowModel.includes(model)) return false;
   }
+  if (motorcycleInterest) {
+    const rowInterest = normalizeContactText(
+      [
+        contact.year,
+        contact.make,
+        contact.model ?? contact.vehicle,
+        contact.trim,
+        contact.vehicleDescription,
+        contact.vehicle
+      ]
+        .filter(Boolean)
+        .join(" ")
+    );
+    if (!rowInterest.includes(motorcycleInterest)) return false;
+  }
   return true;
 }
 
@@ -21468,6 +21490,15 @@ function resolveContactIdsForList(list: any, contacts: any[]): string[] {
   return Array.from(
     new Set([...explicitIds, ...filteredIds].filter(id => byId.has(id)))
   );
+}
+
+function ensureCampaignSmsOptOutFooter(body: string): string {
+  const trimmed = String(body ?? "").trim();
+  if (!trimmed) return "";
+  if (/(reply\s+stop\b|opt[-\s]?out\b|unsubscribe\b)/i.test(trimmed)) {
+    return trimmed;
+  }
+  return `${trimmed}\n\nReply STOP to opt out.`;
 }
 
 const CAMPAIGN_BUILD_MODES = new Set<CampaignBuildMode>([
@@ -23949,6 +23980,10 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
   if (channel === "email" && !emailBodyText && !emailBodyHtml) {
     return res.status(400).json({ ok: false, error: "Missing emailBodyText/emailBodyHtml" });
   }
+  const campaignSmsBody =
+    channel === "sms" && (campaignId || campaignName)
+      ? ensureCampaignSmsOptOutFooter(message)
+      : message;
 
   let list: any = null;
   if (!sendToAll) {
@@ -24001,6 +24036,15 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
 
   for (const contact of recipients) {
     try {
+      const contactStatus = String(contact.status ?? "active").trim().toLowerCase();
+      if (contactStatus === "suppressed") {
+        skipped.push({ id: String(contact.id), reason: "suppressed" });
+        continue;
+      }
+      if (contactStatus === "archived") {
+        skipped.push({ id: String(contact.id), reason: "archived" });
+        continue;
+      }
       const phone = normalizePhone(String(contact.phone ?? "").trim());
       const email = String(contact.email ?? "").trim();
       let sid: string | undefined;
@@ -24016,7 +24060,7 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
         const out = await twilioClient!.messages.create({
           from: smsFrom,
           to: phone,
-          body: message
+          body: campaignSmsBody
         });
         sid = out.sid ?? undefined;
       } else {
@@ -24047,7 +24091,7 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
         phone,
         email
       });
-      const outboundBody = channel === "email" ? fallbackEmailText : message;
+      const outboundBody = channel === "email" ? fallbackEmailText : campaignSmsBody;
       appendOutbound(
         conv,
         channel === "email" ? emailFrom : smsFrom,

@@ -1323,6 +1323,7 @@ type ContactListItem = {
     year?: string;
     make?: string;
     model?: string;
+    motorcycleInterest?: string;
   };
   createdAt?: string;
   updatedAt?: string;
@@ -2416,12 +2417,14 @@ export default function Home() {
   const [contactQuery, setContactQuery] = useState("");
   const [contactLists, setContactLists] = useState<ContactListItem[]>([]);
   const [selectedContactListId, setSelectedContactListId] = useState("all");
+  const [contactAddGroupId, setContactAddGroupId] = useState("");
   const [newContactListName, setNewContactListName] = useState("");
   const [contactListFilterForm, setContactListFilterForm] = useState({
     condition: "",
     year: "",
     make: "",
-    model: ""
+    model: "",
+    motorcycleInterest: ""
   });
   const [importListName, setImportListName] = useState("");
   const [importBusy, setImportBusy] = useState(false);
@@ -6024,9 +6027,15 @@ export default function Home() {
       condition: list?.filter?.condition ?? "",
       year: list?.filter?.year ?? "",
       make: list?.filter?.make ?? "",
-      model: list?.filter?.model ?? ""
+      model: list?.filter?.model ?? "",
+      motorcycleInterest: list?.filter?.motorcycleInterest ?? ""
     });
   }, [selectedContactListId, contactLists]);
+
+  useEffect(() => {
+    if (selectedContactListId === "all") return;
+    setContactAddGroupId(selectedContactListId);
+  }, [selectedContactListId]);
 
   useEffect(() => {
     if (selectedContactListId === "all") return;
@@ -8938,15 +8947,53 @@ export default function Home() {
     setSelectedContactListId(payload.list.id);
   }
 
+  async function addSelectedContactToGroup() {
+    if (!isManager) return;
+    if (!selectedContact) return;
+    const targetListId = String(contactAddGroupId ?? "").trim();
+    if (!targetListId || targetListId === "all") {
+      setSaveToast("Select a group first.");
+      return;
+    }
+    const targetList = contactLists.find(list => String(list.id) === targetListId);
+    if (!targetList) {
+      setSaveToast("Group not found.");
+      return;
+    }
+    const nextIds = Array.from(
+      new Set([...(targetList.contactIds ?? []).map(v => String(v)), String(selectedContact.id)])
+    );
+    const resp = await fetch(`/api/contacts/lists/${encodeURIComponent(targetListId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contactIds: nextIds,
+        lastImportAt: new Date().toISOString()
+      })
+    });
+    const payload = await resp.json().catch(() => null);
+    if (!resp.ok || !payload?.ok) {
+      setSaveToast(payload?.error ?? "Failed to add contact to group");
+      return;
+    }
+    setSaveToast(`Added to group: ${targetList.name}`);
+    setSelectedContactListId(targetListId);
+    await load();
+  }
+
   async function saveGroupFilter() {
     if (selectedContactListId === "all") return;
+    const filter = {
+      condition: contactListFilterForm.condition.trim(),
+      year: contactListFilterForm.year.trim(),
+      make: contactListFilterForm.make.trim(),
+      model: contactListFilterForm.model.trim(),
+      motorcycleInterest: contactListFilterForm.motorcycleInterest.trim()
+    };
+    const hasDynamicRule = Object.values(filter).some(Boolean);
     const body = {
-      filter: {
-        condition: contactListFilterForm.condition.trim(),
-        year: contactListFilterForm.year.trim(),
-        make: contactListFilterForm.make.trim(),
-        model: contactListFilterForm.model.trim()
-      }
+      filter,
+      source: hasDynamicRule ? "filter" : "manual"
     };
     const resp = await fetch(`/api/contacts/lists/${encodeURIComponent(selectedContactListId)}`, {
       method: "PATCH",
@@ -10853,13 +10900,87 @@ export default function Home() {
             </div>
 
             <div className="flex flex-col">
-              <div className="p-3 border-b bg-gray-50">
+              <div className="p-3 border-b bg-gray-50 space-y-3">
                 <input
                   className="w-full border rounded px-3 py-2 text-sm"
-                  placeholder="Search all contacts"
+                  placeholder={
+                    selectedContactListId === "all"
+                      ? "Search all contacts"
+                      : `Search ${selectedContactList?.name ?? "group"}`
+                  }
                   value={contactQuery}
                   onChange={e => setContactQuery(e.target.value)}
                 />
+                {selectedContactListId !== "all" ? (
+                  <div className="border rounded-md bg-white p-2 space-y-2">
+                    <div className="text-[11px] font-semibold text-gray-700">
+                      Dynamic group rules (motorcycle of interest)
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
+                      <select
+                        className="border rounded px-2 py-1.5 text-xs bg-white text-gray-900"
+                        value={contactListFilterForm.condition}
+                        onChange={e =>
+                          setContactListFilterForm(prev => ({ ...prev, condition: e.target.value }))
+                        }
+                      >
+                        <option value="">Any condition</option>
+                        <option value="new">New</option>
+                        <option value="used">Used</option>
+                      </select>
+                      <input
+                        className="border rounded px-2 py-1.5 text-xs text-gray-900"
+                        placeholder="Year"
+                        value={contactListFilterForm.year}
+                        onChange={e => setContactListFilterForm(prev => ({ ...prev, year: e.target.value }))}
+                      />
+                      <input
+                        className="border rounded px-2 py-1.5 text-xs text-gray-900"
+                        placeholder="Make"
+                        value={contactListFilterForm.make}
+                        onChange={e => setContactListFilterForm(prev => ({ ...prev, make: e.target.value }))}
+                      />
+                      <input
+                        className="border rounded px-2 py-1.5 text-xs text-gray-900"
+                        placeholder="Model"
+                        value={contactListFilterForm.model}
+                        onChange={e => setContactListFilterForm(prev => ({ ...prev, model: e.target.value }))}
+                      />
+                      <input
+                        className="border rounded px-2 py-1.5 text-xs text-gray-900"
+                        placeholder="Motorcycle interest"
+                        value={contactListFilterForm.motorcycleInterest}
+                        onChange={e =>
+                          setContactListFilterForm(prev => ({ ...prev, motorcycleInterest: e.target.value }))
+                        }
+                      />
+                    </div>
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        className="px-2 py-1.5 border rounded text-xs"
+                        onClick={() =>
+                          setContactListFilterForm({
+                            condition: "",
+                            year: "",
+                            make: "",
+                            model: "",
+                            motorcycleInterest: ""
+                          })
+                        }
+                      >
+                        Clear
+                      </button>
+                      <button
+                        className="px-2 py-1.5 border rounded text-xs bg-[var(--accent)] text-white border-[var(--accent)]"
+                        onClick={() => {
+                          void saveGroupFilter();
+                        }}
+                      >
+                        Save filters
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
               <div className="flex-1 overflow-y-auto divide-y">
                 {filteredContacts.map(c => (
@@ -15009,6 +15130,38 @@ export default function Home() {
                 )}
               </div>
 
+              {isManager ? (
+                <div className="border rounded-lg p-4">
+                  <div className="text-2xl font-semibold text-gray-800 mb-3">Groups</div>
+                  <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto] gap-2">
+                    <select
+                      className="border rounded px-3 py-2 text-sm bg-white text-gray-900"
+                      value={contactAddGroupId}
+                      onChange={e => setContactAddGroupId(e.target.value)}
+                    >
+                      <option value="">Select a group…</option>
+                      {contactLists.map(list => (
+                        <option key={`contact-group-add-${list.id}`} value={list.id}>
+                          {list.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-white border-[var(--accent)] disabled:opacity-60"
+                      disabled={!contactAddGroupId}
+                      onClick={() => {
+                        void addSelectedContactToGroup();
+                      }}
+                    >
+                      Add to group
+                    </button>
+                  </div>
+                  <div className="mt-2 text-xs text-gray-600">
+                    Use dynamic group rules to auto-build lists by bike interest, year, make, model, and condition.
+                  </div>
+                </div>
+              ) : null}
+
               <div className="border rounded-lg p-4">
                 <div className="text-2xl font-semibold text-gray-800 mb-3">Notes</div>
                 <button className="w-full border rounded px-3 py-2 text-left text-blue-600">+ Add Notes</button>
@@ -17740,6 +17893,12 @@ export default function Home() {
                 })}
               </div>
             )}
+            {campaignQueueSendDialogTargets.includes("sms") ? (
+              <div className="mt-3 text-xs text-gray-700 border rounded p-2 bg-gray-50">
+                Campaign SMS sends include an opt-out footer: <span className="font-semibold">Reply STOP to opt out.</span>
+                {" "}If a customer replies STOP, we add them to the suppression list automatically and future campaign sends skip them.
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}
