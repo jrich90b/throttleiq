@@ -30,6 +30,7 @@ type FewShotCandidate = {
   kind:
     | "invariant_guard_miss"
     | "manual_edit_delta"
+    | "manual_human_exemplar"
     | "positive_feedback"
     | "negative_feedback"
     | "slow_or_missing_response";
@@ -157,6 +158,19 @@ function textHasSchedulingSignal(text: string): boolean {
     /\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/.test(t) ||
     /\b(schedule|book|appointment|time works|can i come in)\b/.test(t)
   );
+}
+
+function textHasCallbackSignal(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  return /\b(call me|give me a call|can you call|please call|phone call|ring me)\b/.test(t);
+}
+
+function inferIntentHint(inboundText: string): "pricing_payments" | "availability" | "scheduling" | "callback" | "general" {
+  if (textHasFinanceSignal(inboundText)) return "pricing_payments";
+  if (textHasAvailabilitySignal(inboundText)) return "availability";
+  if (textHasSchedulingSignal(inboundText)) return "scheduling";
+  if (textHasCallbackSignal(inboundText)) return "callback";
+  return "general";
 }
 
 function isShortAck(text: string): boolean {
@@ -419,6 +433,36 @@ function run() {
       }
 
       const feedback = outboundFeedbackDetails(nextOutbound);
+      const nextOutProvider = String(nextOutbound?.provider ?? "").trim().toLowerCase();
+      const manualHumanOutbound = nextOutProvider === "human";
+      if (manualHumanOutbound && observedDraft && !isShortAck(observedDraft)) {
+        fewShotCandidates.push({
+          id: buildCandidateId(convId, atIso, "manual_human_exemplar"),
+          kind: "manual_human_exemplar",
+          severity: "low",
+          reason: "manual human outbound after inbound",
+          convId,
+          leadRef,
+          leadName,
+          leadPhone,
+          inboundAt: atIso,
+          inboundText: body,
+          observedDraft,
+          observedProvider: String(nextOutbound?.provider ?? ""),
+          observedAt: nextOutAtIso,
+          finalIfEdited: null,
+          followUpMode: String(conv?.followUp?.mode ?? "") || null,
+          followUpReason: String(conv?.followUp?.reason ?? "") || null,
+          dialogState: String(conv?.dialogState?.name ?? "") || null,
+          classificationBucket: String(conv?.classification?.bucket ?? "") || null,
+          classificationCta: String(conv?.classification?.cta ?? "") || null,
+          invariantExpectedReason: null,
+          feedbackRating: null,
+          feedbackReason: null,
+          feedbackNote: null
+        });
+      }
+
       if (feedback.rating === "up") {
         fewShotCandidates.push({
           id: buildCandidateId(convId, atIso, "positive_feedback"),
@@ -583,6 +627,19 @@ function run() {
       observedAt: row.observedAt
     }));
 
+  const manualOutboundFewShotSeedRows = candidateRows
+    .filter(row => row.kind === "manual_human_exemplar")
+    .map(row => ({
+      id: row.id,
+      intentHint: inferIntentHint(row.inboundText),
+      reason: row.reason,
+      inboundText: row.inboundText,
+      preferredDraft: row.observedDraft,
+      convId: row.convId,
+      leadRef: row.leadRef,
+      observedAt: row.observedAt
+    }));
+
   fs.mkdirSync(parsed.outDir, { recursive: true });
   const summaryPath = path.join(parsed.outDir, "language_corpus_summary.json");
   const corpusPath = path.join(parsed.outDir, "all_message_language_rows.json");
@@ -591,6 +648,7 @@ function run() {
   const seedPath = path.join(parsed.outDir, "few_shot_seed_candidates.json");
   const positiveSeedPath = path.join(parsed.outDir, "few_shot_seed_positive_feedback.json");
   const negativeSeedPath = path.join(parsed.outDir, "few_shot_seed_negative_feedback.json");
+  const manualOutboundSeedPath = path.join(parsed.outDir, "few_shot_seed_manual_outbound.json");
 
   fs.writeFileSync(summaryPath, JSON.stringify(summary, null, 2));
   fs.writeFileSync(corpusPath, JSON.stringify({ count: messageRows.length, rows: messageRows }, null, 2));
@@ -605,6 +663,10 @@ function run() {
     negativeSeedPath,
     JSON.stringify({ count: negativeFewShotSeedRows.length, rows: negativeFewShotSeedRows }, null, 2)
   );
+  fs.writeFileSync(
+    manualOutboundSeedPath,
+    JSON.stringify({ count: manualOutboundFewShotSeedRows.length, rows: manualOutboundFewShotSeedRows }, null, 2)
+  );
 
   console.log(
     JSON.stringify(
@@ -618,7 +680,8 @@ function run() {
           candidatesPath,
           seedPath,
           positiveSeedPath,
-          negativeSeedPath
+          negativeSeedPath,
+          manualOutboundSeedPath
         },
         summary
       },

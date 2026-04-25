@@ -1,8 +1,172 @@
 // services/api/src/domain/llmDraft.ts
+import fs from "node:fs";
 import OpenAI from "openai";
 import type { Conversation } from "./conversationStore.js";
+import { dataPath } from "./dataDir.js";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+type ManualReplyExample = {
+  inboundText?: string;
+  reply?: string;
+  count?: number;
+  observedAt?: string;
+};
+
+type ManualReplyExamplesFile = {
+  byIntent?: Record<string, ManualReplyExample[]>;
+};
+
+type LoadedManualReplyExamples = {
+  sourcePath: string;
+  loadedAtMs: number;
+  mtimeMs: number;
+  byIntent: Record<string, Array<{ inboundText: string; reply: string }>>;
+};
+
+const MANUAL_REPLY_EXAMPLES_CACHE_MS = (() => {
+  const raw = Number(process.env.MANUAL_REPLY_EXAMPLES_CACHE_MS ?? "60000");
+  if (!Number.isFinite(raw) || raw <= 0) return 60000;
+  return Math.floor(raw);
+})();
+
+let manualReplyExamplesCache: LoadedManualReplyExamples | null = null;
+
+function normalizeManualText(input: unknown): string {
+  return String(input ?? "").replace(/\s+/g, " ").trim();
+}
+
+function resolveManualReplyExamplesPath(): string {
+  const configured = normalizeManualText(process.env.MANUAL_REPLY_EXAMPLES_PATH);
+  return configured || dataPath("manual_reply_examples.json");
+}
+
+function normalizeManualIntentHint(input: unknown): string {
+  const text = normalizeManualText(input).toLowerCase();
+  if (text === "pricing_payments") return "pricing_payments";
+  if (text === "availability") return "availability";
+  if (text === "scheduling") return "scheduling";
+  if (text === "callback") return "callback";
+  return "general";
+}
+
+function loadManualReplyExamples(): LoadedManualReplyExamples | null {
+  const sourcePath = resolveManualReplyExamplesPath();
+  const nowMs = Date.now();
+  if (
+    manualReplyExamplesCache &&
+    manualReplyExamplesCache.sourcePath === sourcePath &&
+    nowMs - manualReplyExamplesCache.loadedAtMs < MANUAL_REPLY_EXAMPLES_CACHE_MS
+  ) {
+    return manualReplyExamplesCache;
+  }
+
+  let mtimeMs = -1;
+  try {
+    mtimeMs = fs.statSync(sourcePath).mtimeMs;
+  } catch {
+    manualReplyExamplesCache = {
+      sourcePath,
+      loadedAtMs: nowMs,
+      mtimeMs: -1,
+      byIntent: {}
+    };
+    return manualReplyExamplesCache;
+  }
+
+  if (
+    manualReplyExamplesCache &&
+    manualReplyExamplesCache.sourcePath === sourcePath &&
+    manualReplyExamplesCache.mtimeMs === mtimeMs
+  ) {
+    manualReplyExamplesCache.loadedAtMs = nowMs;
+    return manualReplyExamplesCache;
+  }
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(sourcePath, "utf8")) as ManualReplyExamplesFile;
+    const byIntent: Record<string, Array<{ inboundText: string; reply: string }>> = {};
+    const buckets = parsed?.byIntent && typeof parsed.byIntent === "object" ? parsed.byIntent : {};
+    for (const [intentHint, rows] of Object.entries(buckets)) {
+      if (!Array.isArray(rows)) continue;
+      const normalizedRows = rows
+        .map(row => ({
+          inboundText: normalizeManualText(row?.inboundText),
+          reply: normalizeManualText(row?.reply)
+        }))
+        .filter(row => row.inboundText && row.reply && row.reply.length <= 500)
+        .slice(0, 8);
+      if (!normalizedRows.length) continue;
+      byIntent[normalizeManualIntentHint(intentHint)] = normalizedRows;
+    }
+    manualReplyExamplesCache = {
+      sourcePath,
+      loadedAtMs: nowMs,
+      mtimeMs,
+      byIntent
+    };
+  } catch {
+    manualReplyExamplesCache = {
+      sourcePath,
+      loadedAtMs: nowMs,
+      mtimeMs,
+      byIntent: {}
+    };
+  }
+
+  return manualReplyExamplesCache;
+}
+
+function hasWord(text: string, pattern: RegExp): boolean {
+  return pattern.test(String(text ?? "").toLowerCase());
+}
+
+function inferManualIntentHintFromDraftContext(ctx: DraftContext): string {
+  const bucket = String(ctx.bucket ?? "").toLowerCase();
+  const cta = String(ctx.cta ?? "").toLowerCase();
+  const inquiry = String(ctx.inquiry ?? "").toLowerCase();
+  if (ctx.callbackRequest || hasWord(inquiry, /\b(call me|give me a call|please call|can you call)\b/)) {
+    return "callback";
+  }
+  if (
+    ctx.pricingIntent ||
+    bucket === "pricing" ||
+    bucket === "finance_prequal" ||
+    hasWord(cta, /\b(quote|price|pricing|finance|payment|prequal)\b/) ||
+    hasWord(inquiry, /\b(apr|rate|payment|payments|monthly|down payment|finance|credit)\b/)
+  ) {
+    return "pricing_payments";
+  }
+  if (
+    bucket === "test_ride" ||
+    hasWord(cta, /\b(schedule|appointment|book|test_ride)\b/) ||
+    hasWord(inquiry, /\b(schedule|appointment|book|stop in|come in|time works|today|tomorrow)\b/)
+  ) {
+    return "scheduling";
+  }
+  if (
+    bucket === "inventory_interest" ||
+    hasWord(cta, /\b(availability|in_stock|inventory|request_details)\b/) ||
+    hasWord(inquiry, /\b(in stock|available|availability|do you have|still available|have any)\b/)
+  ) {
+    return "availability";
+  }
+  return "general";
+}
+
+function buildManualReplyExamplesPromptBlock(intentHint: string): string {
+  const loaded = loadManualReplyExamples();
+  if (!loaded) return "none";
+  const byIntent = loaded.byIntent ?? {};
+  const selected = [
+    ...(Array.isArray(byIntent[intentHint]) ? byIntent[intentHint].slice(0, 3) : []),
+    ...(intentHint !== "general" && Array.isArray(byIntent.general) ? byIntent.general.slice(0, 1) : [])
+  ];
+  if (!selected.length) return "none";
+  return selected
+    .map((row, idx) => `${idx + 1}) inbound: "${row.inboundText}"\n   reply: "${row.reply}"`)
+    .join("\n");
+}
 
 function isGpt5Model(model: string): boolean {
   return /^gpt-5/i.test(String(model ?? "").trim());
@@ -4754,6 +4918,8 @@ ${history.map(h => `${h.direction.toUpperCase()}: ${h.body}`).join("\n")}
 
 export async function generateDraftWithLLM(ctx: DraftContext): Promise<string> {
   const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  const manualIntentHint = inferManualIntentHintFromDraftContext(ctx);
+  const manualReplyExamplesBlock = buildManualReplyExamplesPromptBlock(manualIntentHint);
 
   const isEmail = ctx.channel === "email";
   const channelRules = isEmail
@@ -5124,6 +5290,12 @@ ${JSON.stringify(ctx.suggestedSlots ?? [], null, 2)}
 Pricing objections:
 - pricingAttempts: ${ctx.pricingAttempts ?? 0}
 - pricingIntent: ${ctx.pricingIntent ? "true" : "false"}
+
+Manual reply style exemplars (authoritative tone examples from approved human replies):
+- intentHint: ${manualIntentHint}
+- Use these for tone/wording cadence only.
+- Do NOT copy specific facts (names, units, prices, dates, times) unless they are also in current lead context.
+${manualReplyExamplesBlock}
 
 Handoff:
 ${JSON.stringify(ctx.handoff ?? null, null, 2)}

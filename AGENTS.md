@@ -76,12 +76,19 @@ Required order:
 - Language corpus mining now auto-exports feedback-derived few-shot seeds from message feedback ratings:
   - `few_shot_seed_positive_feedback.json` (thumbs-up / what to say),
   - `few_shot_seed_negative_feedback.json` (thumbs-down / what not to say).
+- Language corpus mining also exports manual human outbound exemplars:
+  - `few_shot_seed_manual_outbound.json` (inbound -> approved manual reply pairs).
 - Deterministic tone rules can now be auto-promoted from mined feedback artifacts:
   - `scripts/deterministic_rules_promote.ts` consumes manual-edit deltas + thumbs-down seeds,
   - writes runtime rules to `DATA_DIR/deterministic_tone_rules.json` (or `DETERMINISTIC_TONE_RULES_PATH`),
   - nightly loop runs this automatically after `language_corpus:mine`.
+- Manual reply exemplar promotion:
+  - `scripts/manual_outbound_promote.ts` consumes `few_shot_seed_manual_outbound.json`,
+  - writes runtime style exemplars to `DATA_DIR/manual_reply_examples.json` (or `MANUAL_REPLY_EXAMPLES_PATH`),
+  - nightly loop runs this automatically after deterministic rule promotion.
 - Runtime tone normalization (`services/api/src/domain/tone.ts`) loads both `manual` and `auto` override sections from deterministic tone rules, applies rewrite rules, and blocks exact discouraged drafts with a safe fallback.
 - State safety lock: outbound state/soft-tag detectors (finance-doc signals, trade-payoff signals, shortlist prompt signals) evaluate pre-deterministic text so promoted tone rules cannot alter dialog/cadence state behavior.
+- LLM draft generation (`services/api/src/domain/llmDraft.ts`) may use promoted manual reply exemplars as tone references only; orchestrator/parser routing and state transitions remain authoritative and unchanged.
 
 Current parser-first disposition states:
 - `customer_sell_on_own`

@@ -14,6 +14,7 @@ AUDIT_SINCE_HOURS="${AUDIT_SINCE_HOURS:-24}"
 EDIT_FEEDBACK_OUT_DIR="${EDIT_FEEDBACK_OUT_DIR:-$REPORT_ROOT/edit_feedback}"
 LANGUAGE_CORPUS_OUT_DIR="${LANGUAGE_CORPUS_OUT_DIR:-$REPORT_ROOT/language_corpus}"
 DETERMINISTIC_TONE_RULES_PATH="${DETERMINISTIC_TONE_RULES_PATH:-$DATA_DIR/deterministic_tone_rules.json}"
+MANUAL_REPLY_EXAMPLES_PATH="${MANUAL_REPLY_EXAMPLES_PATH:-$DATA_DIR/manual_reply_examples.json}"
 TONE_QUALITY_OUT_DIR="${TONE_QUALITY_OUT_DIR:-$REPORT_ROOT/tone_quality}"
 LOG_DIR="${LOG_DIR:-$REPORT_ROOT/feedback_loop_logs}"
 FEEDBACK_LOOP_ENV_PATH="${FEEDBACK_LOOP_ENV_PATH:-/home/ubuntu/throttleiq-runtime/.feedback_loop.env}"
@@ -47,11 +48,12 @@ ROUTE_STATE_LOG="$LOG_DIR/route_state_$TS.log"
   echo "[feedback-loop] EDIT_FEEDBACK_OUT_DIR=$EDIT_FEEDBACK_OUT_DIR"
   echo "[feedback-loop] LANGUAGE_CORPUS_OUT_DIR=$LANGUAGE_CORPUS_OUT_DIR"
   echo "[feedback-loop] DETERMINISTIC_TONE_RULES_PATH=$DETERMINISTIC_TONE_RULES_PATH"
+  echo "[feedback-loop] MANUAL_REPLY_EXAMPLES_PATH=$MANUAL_REPLY_EXAMPLES_PATH"
   echo "[feedback-loop] TONE_QUALITY_OUT_DIR=$TONE_QUALITY_OUT_DIR"
   echo "[feedback-loop] FEEDBACK_LOOP_ENV_PATH=$FEEDBACK_LOOP_ENV_PATH"
   echo "[feedback-loop] FEEDBACK_REPORT_EMAIL_TO=${FEEDBACK_REPORT_EMAIL_TO:-}"
 
-  export DATA_DIR CONVERSATIONS_DB_PATH ROUTE_AUDIT_DIR CHANGED_MESSAGES_PATH CHANGED_MESSAGES_SINCE_HOURS AUDIT_SINCE_HOURS EDIT_FEEDBACK_OUT_DIR LANGUAGE_CORPUS_OUT_DIR DETERMINISTIC_TONE_RULES_PATH TONE_QUALITY_OUT_DIR
+  export DATA_DIR CONVERSATIONS_DB_PATH ROUTE_AUDIT_DIR CHANGED_MESSAGES_PATH CHANGED_MESSAGES_SINCE_HOURS AUDIT_SINCE_HOURS EDIT_FEEDBACK_OUT_DIR LANGUAGE_CORPUS_OUT_DIR DETERMINISTIC_TONE_RULES_PATH MANUAL_REPLY_EXAMPLES_PATH TONE_QUALITY_OUT_DIR
 
   echo "[feedback-loop] step=export_changed_messages"
   npm run export:changed_messages
@@ -67,6 +69,9 @@ ROUTE_STATE_LOG="$LOG_DIR/route_state_$TS.log"
 
   echo "[feedback-loop] step=deterministic_rules_promote"
   npm run deterministic_rules:promote
+
+  echo "[feedback-loop] step=manual_outbound_promote"
+  npm run manual_outbound:promote
 
   echo "[feedback-loop] step=language_seed_eval"
   npm run language_seed:eval
