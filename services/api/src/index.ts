@@ -12872,6 +12872,7 @@ function conversationHasInboundMediaContext(conv: any): boolean {
     if (!m || m.direction !== "in") continue;
     if (Array.isArray(m.mediaUrls) && m.mediaUrls.length > 0) return true;
     const body = String(m.body ?? "");
+    if (/^\s*(open attachment|sent an attachment|sent an image|sent a photo)\s*$/i.test(body)) return true;
     if (/\bhttps?:\/\/\S+\.(?:jpe?g|png|webp|gif|mp4|mov)\b/i.test(body)) return true;
   }
   return false;

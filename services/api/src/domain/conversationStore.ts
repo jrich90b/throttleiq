@@ -818,6 +818,17 @@ function detectFinanceDocMentionSignals(body: string): {
   };
 }
 
+function looksLikeAttachmentPlaceholderBody(body: string): boolean {
+  const text = String(body ?? "").trim().toLowerCase();
+  if (!text) return false;
+  return (
+    text === "open attachment" ||
+    text === "sent an attachment" ||
+    text === "sent an image" ||
+    text === "sent a photo"
+  );
+}
+
 function detectLienNoPayoffStatement(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   return (
@@ -954,7 +965,9 @@ function inferRequestedFinanceDocsFromRecentOutbound(conv: Conversation): {
 }
 
 function trackFinanceDocsReceiptFromInbound(conv: Conversation, evt: InboundMessageEvent): void {
-  const hasMedia = Array.isArray(evt.mediaUrls) && evt.mediaUrls.length > 0;
+  const hasMedia =
+    (Array.isArray(evt.mediaUrls) && evt.mediaUrls.length > 0) ||
+    looksLikeAttachmentPlaceholderBody(evt.body);
   if (!hasMedia) return;
   const mentions = detectFinanceDocMentionSignals(evt.body);
   const inferredRequest = inferRequestedFinanceDocsFromRecentOutbound(conv);

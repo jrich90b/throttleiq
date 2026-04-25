@@ -53,6 +53,9 @@ Required order:
 - Reassigning lead owner should also cascade open non-department task owners (`call`, `note`, `other`, follow-up/reminder/appointment task classes) for that conversation so Task Inbox ownership and filters stay aligned with the new lead owner.
 - Keep department todos (`service` / `parts` / `apparel`) with department ownership during lead-owner reassignment.
 
+## Finance Docs Attachment Handling
+- Treat iOS/Twilio attachment placeholder inbound texts (for example `Open attachment`) as media-bearing for finance-doc state updates and doc-receipt replies, so the assistant does not ask customers to resend documents they already attached.
+
 ## Watch Parser Few-Shot Coverage
 - Keep watch parser few-shot examples current for real inbound shorthand/slang patterns seen in production (for example `lmk`, `23 lrs`, `fxlrs`) so human-mode and AI-mode watch intent set reliably.
 

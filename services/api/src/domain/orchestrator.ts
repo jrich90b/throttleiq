@@ -1524,6 +1524,17 @@ function inboundMentionsInsuranceDocs(text: string): boolean {
   );
 }
 
+function looksLikeAttachmentPlaceholderBody(text: string): boolean {
+  const t = String(text ?? "").trim().toLowerCase();
+  if (!t) return false;
+  return (
+    t === "open attachment" ||
+    t === "sent an attachment" ||
+    t === "sent an image" ||
+    t === "sent a photo"
+  );
+}
+
 function recentOutboundRequestedInsuranceDocs(
   history: { direction: "in" | "out"; body: string }[]
 ): boolean {
@@ -1758,7 +1769,9 @@ export async function orchestrateInbound(
     event.body = mergedBody;
   }
 
-  const hasInboundMedia = Array.isArray(event.mediaUrls) && event.mediaUrls.length > 0;
+  const hasInboundMedia =
+    (Array.isArray(event.mediaUrls) && event.mediaUrls.length > 0) ||
+    looksLikeAttachmentPlaceholderBody(event.body);
   if (
     hasInboundMedia &&
     (inboundMentionsInsuranceDocs(event.body) ||
