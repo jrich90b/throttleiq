@@ -162,9 +162,44 @@ function applyDeterministicToneRules(text: string): string {
   return out;
 }
 
+function dedupeIdentityIntro(text: string): string {
+  let out = String(text ?? "").trim();
+  if (!out) return out;
+
+  const introMatches = Array.from(
+    out.matchAll(/\bthis is\s+([^.]{1,80}?)\s+at\s+([^.]{2,120})\.?\s*/gi)
+  );
+  if (introMatches.length <= 1) return out;
+
+  const first = introMatches[0];
+  const firstIndex = first.index ?? -1;
+  if (firstIndex < 0) return out;
+
+  let rebuilt = "";
+  let cursor = 0;
+  let keptFirst = false;
+  for (const match of introMatches) {
+    const start = match.index ?? -1;
+    if (start < 0) continue;
+    const full = String(match[0] ?? "");
+    if (!full) continue;
+    rebuilt += out.slice(cursor, start);
+    if (!keptFirst) {
+      rebuilt += full;
+      keptFirst = true;
+    }
+    cursor = start + full.length;
+  }
+  rebuilt += out.slice(cursor);
+  out = rebuilt.replace(/\s{2,}/g, " ").replace(/\s+([,.;:])/g, "$1").trim();
+
+  return out;
+}
+
 export function normalizeSalesToneBase(text: string): string {
   let out = String(text ?? "").trim();
   if (!out) return out;
+  out = dedupeIdentityIntro(out);
 
   const replacements: Array<[RegExp, string]> = [
     [

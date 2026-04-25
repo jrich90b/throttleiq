@@ -87,6 +87,7 @@ Required order:
   - writes runtime style exemplars to `DATA_DIR/manual_reply_examples.json` (or `MANUAL_REPLY_EXAMPLES_PATH`),
   - nightly loop runs this automatically after deterministic rule promotion.
 - Runtime tone normalization (`services/api/src/domain/tone.ts`) loads both `manual` and `auto` override sections from deterministic tone rules, applies rewrite rules, and blocks exact discouraged drafts with a safe fallback.
+- Runtime tone normalization also dedupes repeated identity intros (`This is <name> at <dealer>`) so mixed-name double-intro artifacts are collapsed to one identity line across outbound channels.
 - State safety lock: outbound state/soft-tag detectors (finance-doc signals, trade-payoff signals, shortlist prompt signals) evaluate pre-deterministic text so promoted tone rules cannot alter dialog/cadence state behavior.
 - LLM draft generation (`services/api/src/domain/llmDraft.ts`) may use promoted manual reply exemplars as tone references only; orchestrator/parser routing and state transitions remain authoritative and unchanged.
 
