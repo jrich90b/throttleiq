@@ -7015,6 +7015,11 @@ export default function Home() {
   }, [selectedContactListId]);
 
   useEffect(() => {
+    if (selectedContactListId === "all") return;
+    setNewContactOpen(false);
+  }, [selectedContactListId]);
+
+  useEffect(() => {
     if (!groupSingleAddOpen) {
       setGroupSingleAddQuery("");
       setGroupSingleAddContactId("");
@@ -11169,57 +11174,59 @@ export default function Home() {
                   )
                 ) : null}
 
-                {!newContactOpen ? (
-                  <button
-                    className="w-full border rounded px-3 py-2 text-sm bg-white text-gray-900"
-                    onClick={() => {
-                      setNewContactOpen(true);
-                      setGroupSingleAddOpen(false);
-                    }}
-                  >
-                    + Add to Contacts
-                  </button>
-                ) : (
-                  <div className="space-y-2 border rounded p-2 bg-white">
-                    <div className="grid grid-cols-2 gap-2">
-                      <input
-                        className="border rounded px-2 py-1.5 text-xs bg-white text-gray-900"
-                        placeholder="First name"
-                        value={newContactForm.firstName}
-                        onChange={e => setNewContactForm(prev => ({ ...prev, firstName: e.target.value }))}
-                      />
-                      <input
-                        className="border rounded px-2 py-1.5 text-xs bg-white text-gray-900"
-                        placeholder="Last name"
-                        value={newContactForm.lastName}
-                        onChange={e => setNewContactForm(prev => ({ ...prev, lastName: e.target.value }))}
-                      />
-                      <input
-                        className="border rounded px-2 py-1.5 text-xs bg-white text-gray-900"
-                        placeholder="Phone"
-                        value={newContactForm.phone}
-                        onChange={e => setNewContactForm(prev => ({ ...prev, phone: e.target.value }))}
-                      />
-                      <input
-                        className="border rounded px-2 py-1.5 text-xs bg-white text-gray-900"
-                        placeholder="Email"
-                        value={newContactForm.email}
-                        onChange={e => setNewContactForm(prev => ({ ...prev, email: e.target.value }))}
-                      />
+                {selectedContactListId === "all" ? (
+                  !newContactOpen ? (
+                    <button
+                      className="w-full border rounded px-3 py-2 text-sm bg-white text-gray-900"
+                      onClick={() => {
+                        setNewContactOpen(true);
+                        setGroupSingleAddOpen(false);
+                      }}
+                    >
+                      + Add to Contacts
+                    </button>
+                  ) : (
+                    <div className="space-y-2 border rounded p-2 bg-white">
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          className="border rounded px-2 py-1.5 text-xs bg-white text-gray-900"
+                          placeholder="First name"
+                          value={newContactForm.firstName}
+                          onChange={e => setNewContactForm(prev => ({ ...prev, firstName: e.target.value }))}
+                        />
+                        <input
+                          className="border rounded px-2 py-1.5 text-xs bg-white text-gray-900"
+                          placeholder="Last name"
+                          value={newContactForm.lastName}
+                          onChange={e => setNewContactForm(prev => ({ ...prev, lastName: e.target.value }))}
+                        />
+                        <input
+                          className="border rounded px-2 py-1.5 text-xs bg-white text-gray-900"
+                          placeholder="Phone"
+                          value={newContactForm.phone}
+                          onChange={e => setNewContactForm(prev => ({ ...prev, phone: e.target.value }))}
+                        />
+                        <input
+                          className="border rounded px-2 py-1.5 text-xs bg-white text-gray-900"
+                          placeholder="Email"
+                          value={newContactForm.email}
+                          onChange={e => setNewContactForm(prev => ({ ...prev, email: e.target.value }))}
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <button className="flex-1 border rounded px-2 py-1.5 text-xs" onClick={createNewContact}>
+                          Save Contact
+                        </button>
+                        <button
+                          className="flex-1 border rounded px-2 py-1.5 text-xs"
+                          onClick={() => setNewContactOpen(false)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex gap-2">
-                      <button className="flex-1 border rounded px-2 py-1.5 text-xs" onClick={createNewContact}>
-                        Save Contact
-                      </button>
-                      <button
-                        className="flex-1 border rounded px-2 py-1.5 text-xs"
-                        onClick={() => setNewContactOpen(false)}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                )}
+                  )
+                ) : null}
               </div>
             </div>
           </div>

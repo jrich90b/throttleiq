@@ -53,6 +53,7 @@ Required order:
 - In Contacts, keep group-open actions explicit and separate:
   - `Add to Contacts` creates/saves contact records only.
   - `Add to Group` (when a group is open) adds an existing contact to that group via searchable single-contact picker.
+- `Add to Contacts` is visible only in `All Contacts` view; hide it when a specific group is open.
 
 ## Staff SMS Links
 - Internal staff SMS prompts that request appointment/finance outcomes should include a clickable staff inbox conversation URL (`section=inbox&convId=...`) so salespeople can open the exact thread directly from text.
