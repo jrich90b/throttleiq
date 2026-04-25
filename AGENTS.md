@@ -195,6 +195,7 @@ Trade‑in policy enforcement (runtime):
 - When `trade_cash`, offer two concrete times if available; otherwise ask for a stop‑in time.
 - When `trade_trade`, ask what model they want to trade into.
 - When `trade_either`, ask which direction they prefer.
+- Trade conversation detection must be sticky across turns: treat prior trade-appraisal outbound context and active trade dialog state as trade context even if lead source/classification is sparse, so regenerate/live scheduling does not fall back to generic inventory timing replies.
 - Trade correction follow-up parity:
   - When inbound corrects trade year/model and includes timing intent (for example “can we do tomorrow”), apply closed-day checks before drafting.
   - If requested day is closed, explicitly say `We’re closed on <Day>` and offer alternate slots when available.

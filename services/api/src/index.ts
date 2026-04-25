@@ -5856,7 +5856,18 @@ function isSellLead(conv: any): boolean {
     bucket === "trade_in_sell" ||
     cta === "sell_my_bike" ||
     cta === "value_my_trade" ||
-    /sell my bike|sell your bike|sell your vehicle/.test(source)
+    /sell my bike|sell your bike|sell your vehicle|value my trade|value your trade/.test(source)
+  );
+}
+
+function isTradeConversationLead(conv: any): boolean {
+  const source = String(conv?.lead?.source ?? conv?.leadSource ?? "").toLowerCase();
+  return (
+    isSellLead(conv) ||
+    isTradeAcceleratorLead(conv) ||
+    /trade[-\s]?in|value my trade|value your trade/.test(source) ||
+    isTradeDialogState(getDialogState(conv)) ||
+    hasPriorTradeAppraisalMention(conv)
   );
 }
 
@@ -25821,12 +25832,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (regenTradePayoffAccepted) {
     applyTradePayoffParseToConversation(conv, regenTradePayoffParse);
   }
-  const regenLeadSourceText = String(conv.lead?.source ?? "").toLowerCase();
-  const regenIsTradeLead =
-    /sell my bike/.test(regenLeadSourceText) ||
-    /trade[-\s]?in|trade accelerator/.test(regenLeadSourceText) ||
-    conv.classification?.cta === "sell_my_bike" ||
-    conv.classification?.bucket === "trade_in_sell";
+  const regenIsTradeLead = isTradeConversationLead(conv);
   const regenTradeYearCorrection =
     event.provider === "twilio" && regenIsTradeLead && !isExplicitAvailabilityQuestion(event.body ?? "")
       ? extractTradeYearCorrection(
@@ -29497,11 +29503,7 @@ if (authToken && signature) {
     schedulingSignalsBase.hasDayOnlyRequest;
   const preParserNonWatchPrimaryIntent = preParserFinanceSignal || preParserSchedulingSignal;
   const leadSourceText = String(conv.lead?.source ?? "").toLowerCase();
-  const isTradeLead =
-    /sell my bike/.test(leadSourceText) ||
-    /trade[-\s]?in|trade accelerator/.test(leadSourceText) ||
-    conv.classification?.cta === "sell_my_bike" ||
-    conv.classification?.bucket === "trade_in_sell";
+  const isTradeLead = isTradeConversationLead(conv);
   const unifiedTradeTargetAmount = Number(unifiedSemanticSlotParse?.tradeTargetValue?.amount);
   const unifiedTradeTargetConfidence =
     typeof unifiedSemanticSlotParse?.tradeTargetConfidence === "number"
