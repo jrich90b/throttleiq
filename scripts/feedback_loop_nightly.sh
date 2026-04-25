@@ -13,8 +13,18 @@ CHANGED_MESSAGES_SINCE_HOURS="${CHANGED_MESSAGES_SINCE_HOURS:-24}"
 AUDIT_SINCE_HOURS="${AUDIT_SINCE_HOURS:-24}"
 EDIT_FEEDBACK_OUT_DIR="${EDIT_FEEDBACK_OUT_DIR:-$REPORT_ROOT/edit_feedback}"
 LANGUAGE_CORPUS_OUT_DIR="${LANGUAGE_CORPUS_OUT_DIR:-$REPORT_ROOT/language_corpus}"
+DETERMINISTIC_TONE_RULES_PATH="${DETERMINISTIC_TONE_RULES_PATH:-$DATA_DIR/deterministic_tone_rules.json}"
 TONE_QUALITY_OUT_DIR="${TONE_QUALITY_OUT_DIR:-$REPORT_ROOT/tone_quality}"
 LOG_DIR="${LOG_DIR:-$REPORT_ROOT/feedback_loop_logs}"
+FEEDBACK_LOOP_ENV_PATH="${FEEDBACK_LOOP_ENV_PATH:-/home/ubuntu/throttleiq-runtime/.feedback_loop.env}"
+
+if [[ -f "$FEEDBACK_LOOP_ENV_PATH" ]]; then
+  # Load dealer/runtime-specific feedback loop env (recipient, sender, optional attachment flags).
+  set -a
+  # shellcheck disable=SC1090
+  source "$FEEDBACK_LOOP_ENV_PATH"
+  set +a
+fi
 
 mkdir -p "$REPORT_ROOT" "$EDIT_FEEDBACK_OUT_DIR" "$LANGUAGE_CORPUS_OUT_DIR" "$TONE_QUALITY_OUT_DIR" "$LOG_DIR"
 
@@ -36,9 +46,12 @@ ROUTE_STATE_LOG="$LOG_DIR/route_state_$TS.log"
   echo "[feedback-loop] AUDIT_SINCE_HOURS=$AUDIT_SINCE_HOURS"
   echo "[feedback-loop] EDIT_FEEDBACK_OUT_DIR=$EDIT_FEEDBACK_OUT_DIR"
   echo "[feedback-loop] LANGUAGE_CORPUS_OUT_DIR=$LANGUAGE_CORPUS_OUT_DIR"
+  echo "[feedback-loop] DETERMINISTIC_TONE_RULES_PATH=$DETERMINISTIC_TONE_RULES_PATH"
   echo "[feedback-loop] TONE_QUALITY_OUT_DIR=$TONE_QUALITY_OUT_DIR"
+  echo "[feedback-loop] FEEDBACK_LOOP_ENV_PATH=$FEEDBACK_LOOP_ENV_PATH"
+  echo "[feedback-loop] FEEDBACK_REPORT_EMAIL_TO=${FEEDBACK_REPORT_EMAIL_TO:-}"
 
-  export DATA_DIR CONVERSATIONS_DB_PATH ROUTE_AUDIT_DIR CHANGED_MESSAGES_PATH CHANGED_MESSAGES_SINCE_HOURS AUDIT_SINCE_HOURS EDIT_FEEDBACK_OUT_DIR LANGUAGE_CORPUS_OUT_DIR TONE_QUALITY_OUT_DIR
+  export DATA_DIR CONVERSATIONS_DB_PATH ROUTE_AUDIT_DIR CHANGED_MESSAGES_PATH CHANGED_MESSAGES_SINCE_HOURS AUDIT_SINCE_HOURS EDIT_FEEDBACK_OUT_DIR LANGUAGE_CORPUS_OUT_DIR DETERMINISTIC_TONE_RULES_PATH TONE_QUALITY_OUT_DIR
 
   echo "[feedback-loop] step=export_changed_messages"
   npm run export:changed_messages
@@ -51,6 +64,9 @@ ROUTE_STATE_LOG="$LOG_DIR/route_state_$TS.log"
 
   echo "[feedback-loop] step=language_corpus_mine"
   LANGUAGE_CORPUS_SINCE_HOURS="${CHANGED_MESSAGES_SINCE_HOURS}" npm run language_corpus:mine
+
+  echo "[feedback-loop] step=deterministic_rules_promote"
+  npm run deterministic_rules:promote
 
   echo "[feedback-loop] step=language_seed_eval"
   npm run language_seed:eval
@@ -80,11 +96,16 @@ ROUTE_STATE_LOG="$LOG_DIR/route_state_$TS.log"
     echo "[feedback-loop] route_state_eval=fail"
   fi
 
-  if [[ -n "${FEEDBACK_REPORT_EMAIL_TO:-}" ]]; then
+  if [[ -n "${FEEDBACK_REPORT_EMAIL_TO:-}" || -f "${FEEDBACK_LOOP_ENV_PATH}" ]]; then
     echo "[feedback-loop] step=email_report -> ${FEEDBACK_REPORT_EMAIL_TO}"
-    FEEDBACK_REPORT_AUDIT_PATH="$AUDIT_JSON" \
-    FEEDBACK_REPORT_MINE_LOG_PATH="$MINE_LOG" \
-    npm run edit_feedback:email
+    if FEEDBACK_LOOP_ENV_PATH="$FEEDBACK_LOOP_ENV_PATH" \
+      FEEDBACK_REPORT_AUDIT_PATH="$AUDIT_JSON" \
+      FEEDBACK_REPORT_MINE_LOG_PATH="$MINE_LOG" \
+      npm run edit_feedback:email; then
+      echo "[feedback-loop] email_report=sent"
+    else
+      echo "[feedback-loop] email_report=fail"
+    fi
   else
     echo "[feedback-loop] step=email_report skipped (missing FEEDBACK_REPORT_EMAIL_TO)"
   fi

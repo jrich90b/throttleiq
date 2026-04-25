@@ -1,3 +1,167 @@
+import fs from "node:fs";
+import { dataPath } from "./dataDir.js";
+
+type ToneRewriteRule = {
+  match?: string;
+  replace?: string;
+};
+
+type ToneBlockedRule = {
+  text?: string;
+};
+
+type DeterministicToneRulesFile = {
+  auto?: {
+    rewriteRules?: ToneRewriteRule[];
+    blockedExactDrafts?: ToneBlockedRule[];
+  };
+  manual?: {
+    rewriteRules?: ToneRewriteRule[];
+    blockedExactDrafts?: ToneBlockedRule[];
+  };
+};
+
+type LoadedToneRules = {
+  sourcePath: string;
+  loadedAtMs: number;
+  mtimeMs: number;
+  rewrites: Array<{ pattern: RegExp; replace: string }>;
+  blockedExact: Set<string>;
+};
+
+const DEFAULT_BLOCKED_FALLBACK = "Still happy to help. Text me when you're ready.";
+
+const DETERMINISTIC_TONE_RULES_CACHE_MS = (() => {
+  const raw = Number(process.env.DETERMINISTIC_TONE_RULES_CACHE_MS ?? "60000");
+  if (!Number.isFinite(raw) || raw <= 0) return 60000;
+  return Math.floor(raw);
+})();
+
+let deterministicToneRulesCache: LoadedToneRules | null = null;
+
+function normalizeText(input: unknown): string {
+  return String(input ?? "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeRuleKey(input: unknown): string {
+  return normalizeText(input).toLowerCase();
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function resolveDeterministicToneRulesPath(): string {
+  const configured = normalizeText(process.env.DETERMINISTIC_TONE_RULES_PATH);
+  return configured || dataPath("deterministic_tone_rules.json");
+}
+
+function normalizeRewriteRules(file: DeterministicToneRulesFile): Array<{ pattern: RegExp; replace: string }> {
+  const merged = [
+    ...(Array.isArray(file.manual?.rewriteRules) ? file.manual?.rewriteRules : []),
+    ...(Array.isArray(file.auto?.rewriteRules) ? file.auto?.rewriteRules : [])
+  ];
+  const out: Array<{ pattern: RegExp; replace: string }> = [];
+  for (const row of merged) {
+    const match = normalizeText(row?.match);
+    const replace = normalizeText(row?.replace);
+    if (!match || !replace) continue;
+    if (normalizeRuleKey(match) === normalizeRuleKey(replace)) continue;
+    out.push({
+      pattern: new RegExp(escapeRegex(match), "gi"),
+      replace
+    });
+  }
+  return out;
+}
+
+function normalizeBlockedExactRules(file: DeterministicToneRulesFile): Set<string> {
+  const merged = [
+    ...(Array.isArray(file.manual?.blockedExactDrafts) ? file.manual?.blockedExactDrafts : []),
+    ...(Array.isArray(file.auto?.blockedExactDrafts) ? file.auto?.blockedExactDrafts : [])
+  ];
+  const out = new Set<string>();
+  for (const row of merged) {
+    const key = normalizeRuleKey(row?.text);
+    if (!key) continue;
+    out.add(key);
+  }
+  return out;
+}
+
+function loadDeterministicToneRules(): LoadedToneRules | null {
+  const sourcePath = resolveDeterministicToneRulesPath();
+  const nowMs = Date.now();
+  if (
+    deterministicToneRulesCache &&
+    deterministicToneRulesCache.sourcePath === sourcePath &&
+    nowMs - deterministicToneRulesCache.loadedAtMs < DETERMINISTIC_TONE_RULES_CACHE_MS
+  ) {
+    return deterministicToneRulesCache;
+  }
+
+  let mtimeMs = -1;
+  try {
+    mtimeMs = fs.statSync(sourcePath).mtimeMs;
+  } catch {
+    deterministicToneRulesCache = {
+      sourcePath,
+      loadedAtMs: nowMs,
+      mtimeMs: -1,
+      rewrites: [],
+      blockedExact: new Set<string>()
+    };
+    return deterministicToneRulesCache;
+  }
+
+  if (
+    deterministicToneRulesCache &&
+    deterministicToneRulesCache.sourcePath === sourcePath &&
+    deterministicToneRulesCache.mtimeMs === mtimeMs
+  ) {
+    deterministicToneRulesCache.loadedAtMs = nowMs;
+    return deterministicToneRulesCache;
+  }
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(sourcePath, "utf8")) as DeterministicToneRulesFile;
+    deterministicToneRulesCache = {
+      sourcePath,
+      loadedAtMs: nowMs,
+      mtimeMs,
+      rewrites: normalizeRewriteRules(parsed),
+      blockedExact: normalizeBlockedExactRules(parsed)
+    };
+  } catch {
+    deterministicToneRulesCache = {
+      sourcePath,
+      loadedAtMs: nowMs,
+      mtimeMs,
+      rewrites: [],
+      blockedExact: new Set<string>()
+    };
+  }
+
+  return deterministicToneRulesCache;
+}
+
+function applyDeterministicToneRules(text: string): string {
+  let out = String(text ?? "").trim();
+  if (!out) return out;
+  const loaded = loadDeterministicToneRules();
+  if (!loaded) return out;
+
+  for (const rule of loaded.rewrites) {
+    out = out.replace(rule.pattern, rule.replace);
+  }
+
+  if (loaded.blockedExact.has(normalizeRuleKey(out))) {
+    return DEFAULT_BLOCKED_FALLBACK;
+  }
+
+  return out;
+}
+
 export function normalizeSalesTone(text: string): string {
   let out = String(text ?? "").trim();
   if (!out) return out;
@@ -41,6 +205,7 @@ export function normalizeSalesTone(text: string): string {
     out = out.replace(pattern, replacement);
   }
 
+  out = applyDeterministicToneRules(out);
   return out;
 }
 

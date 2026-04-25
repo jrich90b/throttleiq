@@ -76,6 +76,11 @@ Required order:
 - Language corpus mining now auto-exports feedback-derived few-shot seeds from message feedback ratings:
   - `few_shot_seed_positive_feedback.json` (thumbs-up / what to say),
   - `few_shot_seed_negative_feedback.json` (thumbs-down / what not to say).
+- Deterministic tone rules can now be auto-promoted from mined feedback artifacts:
+  - `scripts/deterministic_rules_promote.ts` consumes manual-edit deltas + thumbs-down seeds,
+  - writes runtime rules to `DATA_DIR/deterministic_tone_rules.json` (or `DETERMINISTIC_TONE_RULES_PATH`),
+  - nightly loop runs this automatically after `language_corpus:mine`.
+- Runtime tone normalization (`services/api/src/domain/tone.ts`) loads both `manual` and `auto` override sections from deterministic tone rules, applies rewrite rules, and blocks exact discouraged drafts with a safe fallback.
 
 Current parser-first disposition states:
 - `customer_sell_on_own`
