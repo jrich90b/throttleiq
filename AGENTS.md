@@ -901,3 +901,15 @@ When changing responses:
   - send dialog now shows explicit footer/suppression note.
 - STOP behavior remains suppression-backed:
   - STOP replies continue to flow into suppression handling; suppressed contacts are excluded from future campaign sends.
+
+## Test Ride Inventory Gate
+- Test-ride scheduling now requires a matching in-stock unit before offering appointment slots.
+- Implemented in `services/api/src/domain/orchestrator.ts`:
+  - added test-ride inventory gate (`evaluateTestRideInventoryGate(...)`) using model/year + hold/sold filtering,
+  - when not in stock, orchestrator now returns a non-scheduling reply with inventory browse link guidance,
+  - scheduling slot offers are suppressed in that branch (`requestedTime` cleared, no suggested slots).
+- Initial ADF email draft path aligned in `services/api/src/routes/sendgridInbound.ts`:
+  - `buildInitialEmailDraft(...)` now honors initial inventory status for test-ride leads,
+  - if not in stock, draft instructs customer to choose an in-stock bike from inventory link instead of showing booking CTA.
+- Purpose:
+  - avoid booking customers on motorcycles not currently available for test ride.

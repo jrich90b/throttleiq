@@ -1109,7 +1109,7 @@ function buildScheduleInvite(
     if (hasConcreteInventory) {
       return "I can set up a time to stop in for a test ride and go over options.";
     }
-    return "I can set up a time to stop in for a test ride.";
+    return "I can help you pick an in-stock bike first, then line up a test ride.";
   }
   if (hasConcreteInventory) {
     return "I can set up a time to stop in and check out the bike and go over options.";
@@ -1326,6 +1326,117 @@ function inventoryItemMatchesRequestedCondition(
 
 function formatRequestedConditionPrefix(condition: "new" | "used" | null): string {
   return condition ? `${condition} ` : "";
+}
+
+function normalizeHttpUrl(raw?: string | null): string | null {
+  const text = String(raw ?? "").trim();
+  if (!text) return null;
+  try {
+    const parsed = new URL(text);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function inventoryListUrlsFromEnv(): string[] {
+  const raw = String(process.env.INVENTORY_LIST_URLS ?? "").trim();
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map(v => normalizeHttpUrl(v))
+    .filter((v): v is string => !!v);
+}
+
+function resolveInventoryBrowseUrl(profile?: any): string | null {
+  const fromEnv = inventoryListUrlsFromEnv();
+  if (fromEnv.length) return fromEnv[0];
+  return (
+    normalizeHttpUrl(profile?.website) ??
+    normalizeHttpUrl(profile?.usedInventoryUrl) ??
+    normalizeHttpUrl(profile?.preownedInventoryUrl) ??
+    null
+  );
+}
+
+type TestRideInventoryGate = {
+  canOfferTestRide: boolean;
+  reason: "available" | "missing_model" | "not_in_stock" | "lookup_failed";
+  bikeLabel: string;
+  availableCount: number;
+  inventoryBrowseUrl: string | null;
+};
+
+async function evaluateTestRideInventoryGate(args: {
+  lead?: LeadProfile | null;
+  dealerProfile?: any;
+}): Promise<TestRideInventoryGate> {
+  const lead = args.lead ?? null;
+  const rawModel = String(lead?.vehicle?.model ?? lead?.vehicle?.description ?? "").trim();
+  const modelLabel = normalizeModelLabel(rawModel);
+  const year = String(lead?.vehicle?.year ?? "").trim() || null;
+  const bikeLabel = `${year ? `${year} ` : ""}${modelLabel}`.trim() || "that bike";
+  const inventoryBrowseUrl = resolveInventoryBrowseUrl(args.dealerProfile);
+
+  if (!rawModel || isUnknownModel(rawModel)) {
+    return {
+      canOfferTestRide: false,
+      reason: "missing_model",
+      bikeLabel,
+      availableCount: 0,
+      inventoryBrowseUrl
+    };
+  }
+
+  try {
+    const requestedCondition = normalizeRequestedInventoryCondition(lead?.vehicle?.condition ?? null);
+    let matches = await findInventoryMatches({ year, model: rawModel });
+    if (requestedCondition) {
+      matches = matches.filter(m => inventoryItemMatchesRequestedCondition(m, requestedCondition));
+    }
+    if (!matches.length) {
+      return {
+        canOfferTestRide: false,
+        reason: "not_in_stock",
+        bikeLabel,
+        availableCount: 0,
+        inventoryBrowseUrl
+      };
+    }
+    const [holds, solds] = await Promise.all([listInventoryHolds(), listInventorySolds()]);
+    const availableMatches = matches.filter(m => {
+      const holdKey = normalizeInventoryHoldKey(m.stockId, m.vin);
+      const soldKey = normalizeInventorySoldKey(m.stockId, m.vin);
+      if (holdKey && holds?.[holdKey]) return false;
+      if (soldKey && solds?.[soldKey]) return false;
+      return true;
+    });
+    if (!availableMatches.length) {
+      return {
+        canOfferTestRide: false,
+        reason: "not_in_stock",
+        bikeLabel,
+        availableCount: 0,
+        inventoryBrowseUrl
+      };
+    }
+    return {
+      canOfferTestRide: true,
+      reason: "available",
+      bikeLabel,
+      availableCount: availableMatches.length,
+      inventoryBrowseUrl
+    };
+  } catch {
+    return {
+      canOfferTestRide: false,
+      reason: "lookup_failed",
+      bikeLabel,
+      availableCount: 0,
+      inventoryBrowseUrl
+    };
+  }
 }
 
 function resolveModelFromHistory(
@@ -3576,6 +3687,32 @@ export async function orchestrateInbound(
         (ctxSuggestsScheduling && allowSchedulingOffer);
       const appointmentType = ctx?.appointmentTypeOverride ?? inferAppointmentType(event.body);
       const weatherBlockedTestRide = appointmentType === "test_ride" && !!ctx?.weather?.bad;
+      const testRideInventoryGate =
+        appointmentType === "test_ride"
+          ? await evaluateTestRideInventoryGate({
+              lead,
+              dealerProfile: await getDealerProfileWithAgentName()
+            })
+          : null;
+      if (testRideInventoryGate && !testRideInventoryGate.canOfferTestRide) {
+        const modelLine =
+          testRideInventoryGate.reason === "missing_model"
+            ? "I can absolutely set up a test ride, but I need the exact bike you want to ride first."
+            : `I’m not seeing ${testRideInventoryGate.bikeLabel} in stock right now, and I don’t want to book you on a bike we don’t have.`;
+        const inventoryLine = testRideInventoryGate.inventoryBrowseUrl
+          ? `Here’s our current inventory so you can pick an in-stock bike: ${testRideInventoryGate.inventoryBrowseUrl}`
+          : "If you want, I can send you a few in-stock options right now.";
+        return finalize({
+          intent,
+          stage: "ENGAGED",
+          shouldRespond: true,
+          draft: `${modelLine} ${inventoryLine} Once you pick one, I can line up the test ride right away.`,
+          suggestedSlots: [],
+          requestedTime: null,
+          requestedAppointmentType: "inventory_visit",
+          pricingAttempted
+        });
+      }
 
       const apptBooked = appointment?.bookedEventId;
       const apptConfirmed = !!apptBooked;
@@ -4135,7 +4272,10 @@ export async function orchestrateInbound(
           }
         }
         const hasConcreteInventory =
-          !!stockId || inventoryStatus === "AVAILABLE" || (isCustomBuild && hasBuildInventory);
+          !!stockId ||
+          inventoryStatus === "AVAILABLE" ||
+          (isCustomBuild && hasBuildInventory) ||
+          (appointmentType === "test_ride" && !!testRideInventoryGate?.canOfferTestRide);
         const scheduleInvite = buildScheduleInvite(hasConcreteInventory, appointmentType, {
           weatherBlockedTestRide
         });

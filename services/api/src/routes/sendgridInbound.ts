@@ -1061,6 +1061,38 @@ function buildBookingUrlForLead(baseUrl: string | undefined | null, conv: any): 
   }
 }
 
+function normalizeHttpUrl(raw?: string | null): string | null {
+  const text = String(raw ?? "").trim();
+  if (!text) return null;
+  try {
+    const parsed = new URL(text);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function inventoryListUrlsFromEnv(): string[] {
+  const raw = String(process.env.INVENTORY_LIST_URLS ?? "").trim();
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map(v => normalizeHttpUrl(v))
+    .filter((v): v is string => !!v);
+}
+
+function resolveInventoryBrowseUrl(dealerProfile: any): string | null {
+  const fromEnv = inventoryListUrlsFromEnv();
+  if (fromEnv.length) return fromEnv[0];
+  return (
+    normalizeHttpUrl(dealerProfile?.website) ??
+    normalizeHttpUrl(dealerProfile?.usedInventoryUrl) ??
+    normalizeHttpUrl(dealerProfile?.preownedInventoryUrl) ??
+    null
+  );
+}
+
 function formatModelLabel(year?: string | null, model?: string | null): string | null {
   if (!model) return null;
   const clean = normalizeDisplayCase(model);
@@ -1215,7 +1247,10 @@ function buildInitialEmailDraft(
   conv: any,
   dealerProfile: any,
   inventoryNote?: string | null,
-  buildInventoryAvailable?: boolean | null
+  buildInventoryAvailable?: boolean | null,
+  options?: {
+    testRideInventoryStatus?: "in_stock" | "on_hold" | "sold" | "not_found" | "unknown";
+  }
 ): string {
   const rawName =
     normalizeDisplayCase(conv?.lead?.firstName) ||
@@ -1225,6 +1260,7 @@ function buildInitialEmailDraft(
   const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
   const agentName = dealerProfile?.agentName ?? "our team";
   const bookingUrl = buildBookingUrlForLead(dealerProfile?.bookingUrl, conv);
+  const inventoryBrowseUrl = resolveInventoryBrowseUrl(dealerProfile);
   const model = formatModelLabel(conv?.lead?.vehicle?.year ?? conv?.lead?.year, conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description);
   const leadSourceLower = (conv?.lead?.source ?? conv?.leadSource ?? "").toLowerCase();
   const offersResolution = resolveOffersUrl({
@@ -1240,6 +1276,11 @@ function buildInitialEmailDraft(
   const isCustomBuild = /custom build/.test(leadSourceLower);
   const isTestRide =
     conv?.classification?.bucket === "test_ride" || conv?.classification?.cta === "schedule_test_ride";
+  const testRideInventoryStatus =
+    isTestRide && options?.testRideInventoryStatus
+      ? options.testRideInventoryStatus
+      : "unknown";
+  const testRideInStock = !isTestRide || testRideInventoryStatus === "in_stock";
   const thanks = isTestRide
     ? model
       ? `Thanks for your interest in a test ride on the ${model}.`
@@ -1264,15 +1305,24 @@ function buildInitialEmailDraft(
       ? "If you want to stop in to check it out and go over build options, you can book an appointment below."
       : "If you want to stop in to go over build options, you can book an appointment below."
     : isTestRide
-      ? model
-        ? "If you want to stop in for a test ride and go over options, you can book an appointment below."
-        : "If you want to stop in for a test ride, you can book an appointment below."
+      ? testRideInStock
+        ? model
+          ? "If you want to stop in for a test ride and go over options, you can book an appointment below."
+          : "If you want to stop in for a test ride, you can book an appointment below."
+        : model
+          ? "I don’t want to schedule a test ride on a bike we don’t currently have in stock."
+          : "I can line up a test ride once you pick an in-stock bike."
     : model
       ? "If you want to stop in to check out the bike and go over options, you can book an appointment below."
       : "If you want to stop in to go over options, you can book an appointment below.";
-  const bookingLine = bookingUrl
-    ? `You can book an appointment here: ${bookingUrl}`
-    : "Just reply with a day and time that works for you.";
+  const bookingLine =
+    isTestRide && !testRideInStock
+      ? inventoryBrowseUrl
+        ? `Please pick an in-stock bike from here and reply with the one you want to ride: ${inventoryBrowseUrl}`
+        : "Reply with the exact in-stock bike you want to ride and I’ll line up the test ride."
+      : bookingUrl
+        ? `You can book an appointment here: ${bookingUrl}`
+        : "Just reply with a day and time that works for you.";
   const extra = "If a walkaround or extra photos would help, just let me know.";
 
   const draft = `Hi ${name},\n\n${thanks} ${intro} ${help} ${noteLine} ${buildLine} ${visit}\n\n${
@@ -5432,7 +5482,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         buildInventoryAvailable = false;
       }
     }
-    setEmailDraft(conv, buildInitialEmailDraft(conv, profile, inventoryNote, buildInventoryAvailable));
+    setEmailDraft(
+      conv,
+      buildInitialEmailDraft(conv, profile, inventoryNote, buildInventoryAvailable, {
+        testRideInventoryStatus: initialAvailability
+      })
+    );
   } else {
     setEmailDraft(conv, result.draft);
   }
