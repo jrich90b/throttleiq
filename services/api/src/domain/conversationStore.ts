@@ -3475,6 +3475,28 @@ export function markOpenTodosDoneForConversation(convId: string): number {
   return count;
 }
 
+export function reassignOpenTodoOwnersForConversation(
+  convId: string,
+  owner: { id?: string | null; name?: string | null },
+  opts?: { includeDepartmentTodos?: boolean }
+): number {
+  const ownerId = String(owner?.id ?? "").trim() || undefined;
+  const ownerName = String(owner?.name ?? "").trim() || undefined;
+  const includeDepartmentTodos = !!opts?.includeDepartmentTodos;
+  let count = 0;
+  for (const task of todos) {
+    if (task.convId !== convId || task.status !== "open") continue;
+    const reason = String(task.reason ?? "").trim().toLowerCase();
+    const isDepartmentTodo = reason === "service" || reason === "parts" || reason === "apparel";
+    if (isDepartmentTodo && !includeDepartmentTodos) continue;
+    task.ownerId = ownerId;
+    task.ownerName = ownerName;
+    count += 1;
+  }
+  if (count > 0) scheduleSave();
+  return count;
+}
+
 export function markOpenTodosDoneForConversationByClass(
   convId: string,
   taskClasses: TodoTaskClass[]

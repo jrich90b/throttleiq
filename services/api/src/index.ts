@@ -209,6 +209,7 @@ import {
   markTodoReminderSent,
   markOpenTodosDoneForConversation,
   markOpenTodosDoneForConversationByClass,
+  reassignOpenTodoOwnersForConversation,
   deleteConversation,
   setFollowUpMode,
   incrementPricingAttempt,
@@ -20047,6 +20048,10 @@ app.post("/conversations/:id/lead-owner", requirePermission("canAccessTodos"), a
     name: ownerName,
     assignedAt: new Date().toISOString()
   };
+  const reassignedTodoCount = reassignOpenTodoOwnersForConversation(conv.id, {
+    id: conv.leadOwner.id,
+    name: conv.leadOwner.name
+  });
   const ownerRole = String(owner?.role ?? "").trim().toLowerCase();
   const passTarget =
     ownerRole === "service" || ownerRole === "parts" || ownerRole === "apparel"
@@ -20055,7 +20060,7 @@ app.post("/conversations/:id/lead-owner", requirePermission("canAccessTodos"), a
   maybeMarkCampaignThreadPassed(conv, passTarget);
   conv.updatedAt = new Date().toISOString();
   saveConversation(conv);
-  return res.json({ ok: true, conversation: conv });
+  return res.json({ ok: true, conversation: conv, reassignedTodoCount });
 });
 
 app.post("/conversations/:id/contact-preference", (req, res) => {

@@ -49,6 +49,10 @@ Required order:
 ## Staff SMS Links
 - Internal staff SMS prompts that request appointment/finance outcomes should include a clickable staff inbox conversation URL (`section=inbox&convId=...`) so salespeople can open the exact thread directly from text.
 
+## Lead Reassignment
+- Reassigning lead owner should also cascade open non-department task owners (`call`, `note`, `other`, follow-up/reminder/appointment task classes) for that conversation so Task Inbox ownership and filters stay aligned with the new lead owner.
+- Keep department todos (`service` / `parts` / `apparel`) with department ownership during lead-owner reassignment.
+
 ## Watch Parser Few-Shot Coverage
 - Keep watch parser few-shot examples current for real inbound shorthand/slang patterns seen in production (for example `lmk`, `23 lrs`, `fxlrs`) so human-mode and AI-mode watch intent set reliably.
 
