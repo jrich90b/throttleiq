@@ -1330,6 +1330,10 @@ type ContactListItem = {
   lastImportAt?: string;
 };
 
+function contactDisplayName(c: ContactItem): string {
+  return c.name || [c.firstName, c.lastName].filter(Boolean).join(" ") || c.phone || c.email || "Unknown";
+}
+
 type KpiLeadType = "all" | "new" | "used" | "walk_in";
 type KpiLeadScope = "online_only" | "include_walkins" | "walkin_only";
 
@@ -2432,6 +2436,10 @@ export default function Home() {
   const [broadcastBusy, setBroadcastBusy] = useState(false);
   const [broadcastResult, setBroadcastResult] = useState<string | null>(null);
   const [newContactOpen, setNewContactOpen] = useState(false);
+  const [groupSingleAddOpen, setGroupSingleAddOpen] = useState(false);
+  const [groupSingleAddQuery, setGroupSingleAddQuery] = useState("");
+  const [groupSingleAddContactId, setGroupSingleAddContactId] = useState("");
+  const [groupSingleAddBusy, setGroupSingleAddBusy] = useState(false);
   const [newContactForm, setNewContactForm] = useState({
     firstName: "",
     lastName: "",
@@ -6953,6 +6961,39 @@ export default function Home() {
     [filteredContacts]
   );
 
+  const groupSingleAddOptions = useMemo(() => {
+    if (selectedContactListId === "all") return [] as ContactItem[];
+    const selectedIds = new Set((selectedContactList?.contactIds ?? []).map(v => String(v)));
+    const q = groupSingleAddQuery.trim().toLowerCase();
+    const rows = contacts.filter(c => !selectedIds.has(String(c.id)));
+    const searched = !q
+      ? rows
+      : rows.filter(c => {
+          const haystack = [
+            contactDisplayName(c),
+            c.firstName,
+            c.lastName,
+            c.email,
+            c.phone,
+            c.leadSource,
+            c.leadRef,
+            c.model,
+            c.vehicle,
+            c.make
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          return haystack.includes(q);
+        });
+    return [...searched].sort((a, b) =>
+      contactDisplayName(a).localeCompare(contactDisplayName(b), undefined, {
+        sensitivity: "base",
+        numeric: true
+      })
+    );
+  }, [selectedContactListId, selectedContactList, groupSingleAddQuery, contacts]);
+
   useEffect(() => {
     if (section !== "contacts") return;
     if (!filteredContacts.length) {
@@ -6965,6 +7006,29 @@ export default function Home() {
       setSelectedContact(filteredContacts[0]);
     }
   }, [section, filteredContactIdsKey, selectedContact?.id]);
+
+  useEffect(() => {
+    if (selectedContactListId !== "all") return;
+    setGroupSingleAddOpen(false);
+    setGroupSingleAddQuery("");
+    setGroupSingleAddContactId("");
+  }, [selectedContactListId]);
+
+  useEffect(() => {
+    if (!groupSingleAddOpen) {
+      setGroupSingleAddQuery("");
+      setGroupSingleAddContactId("");
+      return;
+    }
+    if (!groupSingleAddOptions.length) {
+      setGroupSingleAddContactId("");
+      return;
+    }
+    const exists = groupSingleAddOptions.some(c => String(c.id) === String(groupSingleAddContactId));
+    if (!exists) {
+      setGroupSingleAddContactId(String(groupSingleAddOptions[0].id));
+    }
+  }, [groupSingleAddOpen, groupSingleAddOptions, groupSingleAddContactId]);
 
   const isConversationOnHold = (c: ConversationListItem) => {
     const status = String(c.status ?? "").trim().toLowerCase();
@@ -8947,23 +9011,27 @@ export default function Home() {
     setSelectedContactListId(payload.list.id);
   }
 
-  async function addSelectedContactToGroup() {
-    if (!isManager) return;
-    if (!selectedContact) return;
-    const targetListId = String(contactAddGroupId ?? "").trim();
-    if (!targetListId || targetListId === "all") {
-      setSaveToast("Select a group first.");
-      return;
+  async function addContactIdToGroup(targetContactId: string, targetListId: string): Promise<boolean> {
+    if (!isManager) return false;
+    const safeContactId = String(targetContactId ?? "").trim();
+    const safeListId = String(targetListId ?? "").trim();
+    if (!safeContactId) {
+      setSaveToast("Select a contact first.");
+      return false;
     }
-    const targetList = contactLists.find(list => String(list.id) === targetListId);
+    if (!safeListId || safeListId === "all") {
+      setSaveToast("Select a group first.");
+      return false;
+    }
+    const targetList = contactLists.find(list => String(list.id) === safeListId);
     if (!targetList) {
       setSaveToast("Group not found.");
-      return;
+      return false;
     }
     const nextIds = Array.from(
-      new Set([...(targetList.contactIds ?? []).map(v => String(v)), String(selectedContact.id)])
+      new Set([...(targetList.contactIds ?? []).map(v => String(v)), safeContactId])
     );
-    const resp = await fetch(`/api/contacts/lists/${encodeURIComponent(targetListId)}`, {
+    const resp = await fetch(`/api/contacts/lists/${encodeURIComponent(safeListId)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -8974,11 +9042,45 @@ export default function Home() {
     const payload = await resp.json().catch(() => null);
     if (!resp.ok || !payload?.ok) {
       setSaveToast(payload?.error ?? "Failed to add contact to group");
-      return;
+      return false;
     }
     setSaveToast(`Added to group: ${targetList.name}`);
-    setSelectedContactListId(targetListId);
+    setSelectedContactListId(safeListId);
     await load();
+    return true;
+  }
+
+  async function addSelectedContactToGroup() {
+    if (!selectedContact) return;
+    const targetListId = String(contactAddGroupId ?? "").trim();
+    await addContactIdToGroup(String(selectedContact.id), targetListId);
+  }
+
+  async function addSingleContactToOpenGroup() {
+    if (!isManager) return;
+    if (selectedContactListId === "all") {
+      setSaveToast("Open a group first.");
+      return;
+    }
+    const targetContactId = String(groupSingleAddContactId ?? "").trim();
+    if (!targetContactId) {
+      setSaveToast("Choose a contact first.");
+      return;
+    }
+    setGroupSingleAddBusy(true);
+    try {
+      const ok = await addContactIdToGroup(targetContactId, selectedContactListId);
+      if (!ok) return;
+      const added = contacts.find(c => String(c.id) === targetContactId) ?? null;
+      if (added) {
+        setSelectedContact(added);
+      }
+      setGroupSingleAddOpen(false);
+      setGroupSingleAddQuery("");
+      setGroupSingleAddContactId("");
+    } finally {
+      setGroupSingleAddBusy(false);
+    }
   }
 
   async function saveGroupFilter() {
@@ -10991,9 +11093,7 @@ export default function Home() {
                     }`}
                     onClick={() => setSelectedContact(c)}
                   >
-                    <div className="text-sm font-medium">
-                      {c.name || [c.firstName, c.lastName].filter(Boolean).join(" ") || c.phone || c.email || "Unknown"}
-                    </div>
+                    <div className="text-sm font-medium">{contactDisplayName(c)}</div>
                     <div className="text-xs text-gray-500 mt-0.5">
                       {c.phone || c.email || "No phone/email"}
                     </div>
@@ -11006,37 +11106,102 @@ export default function Home() {
                   <div className="p-4 text-sm text-gray-600">No contacts in this group.</div>
                 ) : null}
               </div>
-              <div className="p-3 border-t bg-gray-50">
+              <div className="p-3 border-t bg-gray-50 space-y-2" data-actions-menu>
+                {selectedContactListId !== "all" ? (
+                  !groupSingleAddOpen ? (
+                    <button
+                      className="w-full border rounded px-3 py-2 text-sm bg-white text-gray-900"
+                      onClick={() => {
+                        setGroupSingleAddOpen(true);
+                        setNewContactOpen(false);
+                      }}
+                    >
+                      + Add to Group
+                    </button>
+                  ) : (
+                    <div className="space-y-2 border rounded p-2 bg-white">
+                      <div className="text-[11px] font-semibold text-gray-700">
+                        Add one existing contact to this group
+                      </div>
+                      <input
+                        className="w-full border rounded px-2 py-1.5 text-xs bg-white text-gray-900"
+                        placeholder="Search contact by name"
+                        value={groupSingleAddQuery}
+                        onChange={e => setGroupSingleAddQuery(e.target.value)}
+                      />
+                      <select
+                        className="w-full border rounded px-2 py-1.5 text-xs bg-white text-gray-900"
+                        value={groupSingleAddContactId}
+                        onChange={e => setGroupSingleAddContactId(e.target.value)}
+                      >
+                        {groupSingleAddOptions.length ? (
+                          groupSingleAddOptions.map(c => (
+                            <option key={`group-add-contact-${c.id}`} value={c.id}>
+                              {contactDisplayName(c)}{c.phone ? ` • ${c.phone}` : c.email ? ` • ${c.email}` : ""}
+                            </option>
+                          ))
+                        ) : (
+                          <option value="">No matching contacts</option>
+                        )}
+                      </select>
+                      <div className="flex gap-2">
+                        <button
+                          className="flex-1 border rounded px-2 py-1.5 text-xs bg-[var(--accent)] text-white border-[var(--accent)] disabled:opacity-60"
+                          disabled={!groupSingleAddContactId || groupSingleAddBusy}
+                          onClick={() => {
+                            void addSingleContactToOpenGroup();
+                          }}
+                        >
+                          {groupSingleAddBusy ? "Adding..." : "Add to Group"}
+                        </button>
+                        <button
+                          className="flex-1 border rounded px-2 py-1.5 text-xs"
+                          onClick={() => {
+                            setGroupSingleAddOpen(false);
+                            setGroupSingleAddQuery("");
+                            setGroupSingleAddContactId("");
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )
+                ) : null}
+
                 {!newContactOpen ? (
                   <button
-                    className="w-full border rounded px-3 py-2 text-sm"
-                    onClick={() => setNewContactOpen(true)}
+                    className="w-full border rounded px-3 py-2 text-sm bg-white text-gray-900"
+                    onClick={() => {
+                      setNewContactOpen(true);
+                      setGroupSingleAddOpen(false);
+                    }}
                   >
-                    + New Contact
+                    + Add to Contacts
                   </button>
                 ) : (
-                  <div className="space-y-2">
+                  <div className="space-y-2 border rounded p-2 bg-white">
                     <div className="grid grid-cols-2 gap-2">
                       <input
-                        className="border rounded px-2 py-1.5 text-xs"
+                        className="border rounded px-2 py-1.5 text-xs bg-white text-gray-900"
                         placeholder="First name"
                         value={newContactForm.firstName}
                         onChange={e => setNewContactForm(prev => ({ ...prev, firstName: e.target.value }))}
                       />
                       <input
-                        className="border rounded px-2 py-1.5 text-xs"
+                        className="border rounded px-2 py-1.5 text-xs bg-white text-gray-900"
                         placeholder="Last name"
                         value={newContactForm.lastName}
                         onChange={e => setNewContactForm(prev => ({ ...prev, lastName: e.target.value }))}
                       />
                       <input
-                        className="border rounded px-2 py-1.5 text-xs"
+                        className="border rounded px-2 py-1.5 text-xs bg-white text-gray-900"
                         placeholder="Phone"
                         value={newContactForm.phone}
                         onChange={e => setNewContactForm(prev => ({ ...prev, phone: e.target.value }))}
                       />
                       <input
-                        className="border rounded px-2 py-1.5 text-xs"
+                        className="border rounded px-2 py-1.5 text-xs bg-white text-gray-900"
                         placeholder="Email"
                         value={newContactForm.email}
                         onChange={e => setNewContactForm(prev => ({ ...prev, email: e.target.value }))}
@@ -14992,11 +15157,7 @@ export default function Home() {
             <div className="max-w-5xl space-y-5">
               <div className="flex items-center justify-between border-b pb-3">
                 <div className="text-4xl font-medium text-gray-900">
-                  {selectedContact.name ||
-                    [selectedContact.firstName, selectedContact.lastName].filter(Boolean).join(" ") ||
-                    selectedContact.phone ||
-                    selectedContact.email ||
-                    "Unknown"}
+                  {contactDisplayName(selectedContact)}
                 </div>
                 <div className="flex items-center gap-2">
                   {selectedContact.conversationId || selectedContact.leadKey ? (

@@ -49,6 +49,11 @@ Required order:
 ## UI Contrast Guardrail
 - Any inline light-surface action panel (for example Task Inbox reassign inline card) must include the `data-actions-menu` hook so form controls inherit enforced high-contrast white-surface styling in dark theme.
 
+## Contacts Groups UX Guardrail
+- In Contacts, keep group-open actions explicit and separate:
+  - `Add to Contacts` creates/saves contact records only.
+  - `Add to Group` (when a group is open) adds an existing contact to that group via searchable single-contact picker.
+
 ## Staff SMS Links
 - Internal staff SMS prompts that request appointment/finance outcomes should include a clickable staff inbox conversation URL (`section=inbox&convId=...`) so salespeople can open the exact thread directly from text.
 
