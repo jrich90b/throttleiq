@@ -503,7 +503,8 @@ function applyNoTradeLanguageGuard(
     ? normalizeGeneratedEmailHtml(existingEmailHtml, {
         dealerName,
         website: dealerProfile?.website,
-        logoUrl: dealerProfile?.logoUrl
+        logoUrl: dealerProfile?.logoUrl,
+        expectedImageUrls: normalizeCampaignEmailImageUrls(output.inspirationImageUrls ?? [])
       })
     : textToHtml(emailBodyText, output.sourceHits ?? [], {
         dealerName,
@@ -1192,6 +1193,52 @@ function appendCssDeclaration(style: string, property: string, value: string): s
   return `${base} ${property}:${value};`.trim();
 }
 
+function upsertImgTagAttribute(tag: string, attr: string, value: string): string {
+  const escapedValue = escapeHtml(value);
+  const attrRe = new RegExp(`\\b${attr}\\s*=\\s*(['\"]).*?\\1`, "i");
+  if (attrRe.test(tag)) {
+    return tag.replace(attrRe, `${attr}="${escapedValue}"`);
+  }
+  return tag.replace(/<img\b/i, `<img ${attr}="${escapedValue}"`);
+}
+
+function isLogoLikeImgTag(tag: string): boolean {
+  const raw = String(tag ?? "");
+  if (!raw) return false;
+  if (/data-lr-header-logo\s*=\s*(['"])1\1/i.test(raw)) return true;
+  const srcMatch = raw.match(/\bsrc\s*=\s*(['"])(.*?)\1/i);
+  const altMatch = raw.match(/\balt\s*=\s*(['"])(.*?)\1/i);
+  const src = String(srcMatch?.[2] ?? "").toLowerCase();
+  const alt = String(altMatch?.[2] ?? "").toLowerCase();
+  return src.includes("logo") || /\blogo\b/.test(alt);
+}
+
+function enforceEmailReferenceImageAssignments(html: string, expectedImageUrls: string[] = []): string {
+  const expected = normalizeCampaignEmailImageUrls(expectedImageUrls);
+  if (!html || !expected.length) return html;
+  let nonLogoIdx = 0;
+  let output = String(html).replace(/<img\b[^>]*>/gi, tag => {
+    if (isLogoLikeImgTag(tag)) return tag;
+    const desired = expected[Math.min(nonLogoIdx, expected.length - 1)] || "";
+    nonLogoIdx += 1;
+    if (!desired) return tag;
+    return upsertImgTagAttribute(tag, "src", desired);
+  });
+  if (nonLogoIdx === 0) {
+    const hero = `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 14px 0;">
+      <tr><td style="padding:0;">
+        <img src="${escapeHtml(expected[0])}" alt="Campaign hero image" style="display:block;width:100%;height:auto;max-height:360px;object-fit:contain;border-radius:8px;border:1px solid #d1d5db;background:#f3f4f6;" />
+      </td></tr>
+    </table>`;
+    if (/<table\b[^>]*data-lr-required-header/i.test(output)) {
+      output = output.replace(/(<table\b[^>]*data-lr-required-header[\s\S]*?<\/table>)/i, `$1${hero}`);
+    } else {
+      output = output.replace(/<body[^>]*>/i, match => `${match}${hero}`);
+    }
+  }
+  return output;
+}
+
 function enforceEmailImageStyles(html: string): string {
   if (!html) return "";
   return html.replace(/<img\b([^>]*?)>/gi, (full, attrsRaw) => {
@@ -1259,6 +1306,7 @@ function normalizeGeneratedEmailHtml(
     dealerName: string;
     website?: string;
     logoUrl?: string;
+    expectedImageUrls?: string[];
   }
 ): string {
   let html = String(raw ?? "").trim();
@@ -1283,6 +1331,7 @@ function normalizeGeneratedEmailHtml(
     html = html.replace(/<body[^>]*>/i, match => `${match}${requiredHeader}`);
   }
   html = enforceEmailImageStyles(html);
+  html = enforceEmailReferenceImageAssignments(html, opts.expectedImageUrls ?? []);
   return html;
 }
 
@@ -1780,6 +1829,7 @@ async function tryGenerateWithLlm(args: {
     `Campaign name: ${normalizeText(args.input.name) || "(untitled)"}`,
     `Description (optional): ${normalizeText(args.input.description) || "(none)"}`,
     `Prompt: ${normalizeText(args.input.prompt) || "(none)"}`,
+    "Primary topic rule: the current campaign prompt/description is the primary narrative. Supporting campaign context blocks are style/asset references and must not override the primary topic unless explicitly requested.",
     `Inspiration images: ${normalizeUrls(args.resolvedInspirationImageUrls).join(", ") || "(none)"}`,
     `Asset images: ${normalizeUrls(args.input.assetImageUrls).join(", ") || "(none)"}`,
     `Brief document URLs: ${briefUrls.join(", ") || "(none)"}`,
@@ -1865,7 +1915,8 @@ async function tryGenerateWithLlm(args: {
       const normalized = normalizeGeneratedEmailHtml(htmlRaw, {
         dealerName,
         website,
-        logoUrl: args.input.dealerProfile?.logoUrl
+        logoUrl: args.input.dealerProfile?.logoUrl,
+        expectedImageUrls: emailImageUrls
       });
       if (!isCompleteEmailHtml(normalized, emailImageUrls.length, emailImageUrls)) return "";
       return normalized;
@@ -1901,7 +1952,8 @@ async function tryGenerateWithLlm(args: {
         ? normalizeGeneratedEmailHtml(emailBodyHtmlRaw, {
             dealerName,
             website,
-            logoUrl: args.input.dealerProfile?.logoUrl
+            logoUrl: args.input.dealerProfile?.logoUrl,
+            expectedImageUrls: emailImageUrls
           })
         : undefined;
       if (!isCompleteEmailHtml(emailBodyHtml || "", emailImageUrls.length, emailImageUrls)) {
@@ -1965,13 +2017,15 @@ async function tryGenerateWithLlm(args: {
         ? normalizeGeneratedEmailHtml(emailBodyHtmlRaw, {
             dealerName,
             website,
-            logoUrl: args.input.dealerProfile?.logoUrl
+            logoUrl: args.input.dealerProfile?.logoUrl,
+            expectedImageUrls: emailImageUrls
           })
         : isRenderableEmailHtml(rawHtmlDirect)
           ? normalizeGeneratedEmailHtml(rawHtmlDirect, {
               dealerName,
               website,
-              logoUrl: args.input.dealerProfile?.logoUrl
+              logoUrl: args.input.dealerProfile?.logoUrl,
+              expectedImageUrls: emailImageUrls
             })
           : undefined;
       if (!isCompleteEmailHtml(emailBodyHtml || "", emailImageUrls.length, emailImageUrls)) {
@@ -2017,7 +2071,8 @@ async function tryGenerateWithLlm(args: {
       const emailBodyHtml = normalizeGeneratedEmailHtml(rawHtmlDirect, {
         dealerName,
         website,
-        logoUrl: args.input.dealerProfile?.logoUrl
+        logoUrl: args.input.dealerProfile?.logoUrl,
+        expectedImageUrls: emailImageUrls
       });
       if (isCompleteEmailHtml(emailBodyHtml, emailImageUrls.length, emailImageUrls)) {
         const emailSubject = `${dealerName} | ${normalizeText(args.input.name || "Update").slice(0, 60)}`;

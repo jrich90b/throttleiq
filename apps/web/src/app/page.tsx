@@ -1715,7 +1715,11 @@ function collectCampaignEmailContext(entries: CampaignEntry[]): CampaignEmailCon
 function buildCampaignEmailContextBlock(contextBlocks: string[]): string {
   const blocks = Array.isArray(contextBlocks) ? contextBlocks.filter(Boolean) : [];
   if (!blocks.length) return "";
-  return [CAMPAIGN_EMAIL_CONTEXT_MARKER, ...blocks].join("\n\n");
+  return [
+    CAMPAIGN_EMAIL_CONTEXT_MARKER,
+    "Use these selected campaign blocks as supporting style/context only. Keep the current campaign prompt as the primary topic unless explicitly asked to combine campaigns.",
+    ...blocks
+  ].join("\n\n");
 }
 
 function campaignFileLabelFromUrl(url: string, fallback: string): string {
@@ -4257,6 +4261,10 @@ export default function Home() {
         ? [basePrompt, selectedEmailContextPrompt].filter(Boolean).join("\n\n") || undefined
         : basePrompt || undefined;
     const baseInspirationImageUrls = parseCampaignUrlsText(campaignForm.inspirationImageUrlsText);
+    const selectedEmailContextInspiration =
+      target === "email" && !editFromCurrent
+        ? selectedEmailContextBundle.inspirationImageUrls.slice(0, baseInspirationImageUrls.length ? 2 : 4)
+        : [];
     const defaultEmailPrimaryImage = !editFromCurrent && target === "email" && campaignEmailIncludePrimaryImage
       ? campaignPrimaryGeneratedImageUrl
       : "";
@@ -4271,7 +4279,7 @@ export default function Home() {
             new Set([
               ...inspirationImageUrlsRaw,
               ...(defaultEmailPrimaryImage ? [defaultEmailPrimaryImage] : []),
-              ...selectedEmailContextBundle.inspirationImageUrls
+              ...selectedEmailContextInspiration
             ])
           )
         : Array.from(
