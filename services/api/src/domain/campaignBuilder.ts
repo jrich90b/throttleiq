@@ -872,7 +872,27 @@ function isRenderableEmailHtml(raw: string): boolean {
   return structuralSignals >= 2;
 }
 
-function isCompleteEmailHtml(raw: string, expectedImageCount = 0): boolean {
+function extractImageSrcUrlsFromHtml(rawHtml: string): string[] {
+  const html = String(rawHtml ?? "");
+  if (!html) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const re = /<img\b[^>]*\bsrc\s*=\s*(['"])(.*?)\1/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    const srcRaw = String(m[2] ?? "")
+      .replace(/&amp;/gi, "&")
+      .replace(/\\\//g, "/")
+      .trim();
+    const normalized = normalizeCampaignEmailImageUrl(srcRaw);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+}
+
+function isCompleteEmailHtml(raw: string, expectedImageCount = 0, expectedImageUrls: string[] = []): boolean {
   const html = String(raw ?? "").trim();
   if (!isRenderableEmailHtml(html)) return false;
   const lower = html.toLowerCase();
@@ -884,6 +904,14 @@ function isCompleteEmailHtml(raw: string, expectedImageCount = 0): boolean {
   if (expectedImageCount > 0) {
     const minimumImages = Math.min(3, Math.max(1, expectedImageCount));
     if (imageCount < minimumImages) return false;
+  }
+  const expected = normalizeCampaignEmailImageUrls(expectedImageUrls);
+  if (expected.length > 0) {
+    const expectedSet = new Set(expected);
+    const renderedSet = new Set(extractImageSrcUrlsFromHtml(html));
+    const matchedDistinct = Array.from(renderedSet).filter(url => expectedSet.has(url)).length;
+    const minimumDistinctExpected = Math.min(3, Math.max(1, expectedSet.size));
+    if (matchedDistinct < minimumDistinctExpected) return false;
   }
   return true;
 }
@@ -1729,6 +1757,7 @@ async function tryGenerateWithLlm(args: {
     "- email_body_html must be responsive table-based email markup with inline CSS only (no scripts, no external CSS).",
     "- email_body_html must include a branded top header row with the dealer logo and a right-side dealer link.",
     "- For each major content block, pair the most relevant image from the image library. Keep text/image pairing logically matched.",
+    "- Use distinct image URLs across sections; do not repeat the same campaign image for every block when multiple images are provided.",
     "- If an image is not relevant to any section, place it in an additional visuals row instead of forcing mismatch.",
     "- All images must render fully visible (no crop). Use object-fit:contain with height:auto and sensible max-height.",
     "- Keep URLs exactly as provided. Do not invent or rewrite image URLs.",
@@ -1753,6 +1782,7 @@ async function tryGenerateWithLlm(args: {
       "Use responsive table-based markup and inline CSS only.",
       "Always include branded top header row with dealer logo at left and dealer link at right.",
       "Use provided campaign/reference images in context-matching sections.",
+      "When multiple image URLs are provided, distribute distinct URLs across sections instead of repeating one image.",
       "If image library URLs are present, include each image URL at least once in the body.",
       "Never crop images. Use contain behavior and responsive sizing.",
       "",
@@ -1789,7 +1819,7 @@ async function tryGenerateWithLlm(args: {
         website,
         logoUrl: args.input.dealerProfile?.logoUrl
       });
-      if (!isCompleteEmailHtml(normalized, emailImageUrls.length)) return "";
+      if (!isCompleteEmailHtml(normalized, emailImageUrls.length, emailImageUrls)) return "";
       return normalized;
     } catch {
       return "";
@@ -1826,7 +1856,7 @@ async function tryGenerateWithLlm(args: {
             logoUrl: args.input.dealerProfile?.logoUrl
           })
         : undefined;
-      if (!isCompleteEmailHtml(emailBodyHtml || "", emailImageUrls.length)) {
+      if (!isCompleteEmailHtml(emailBodyHtml || "", emailImageUrls.length, emailImageUrls)) {
         emailBodyHtml = undefined;
       }
       if (requiresEmailHtml && !emailBodyHtml) {
@@ -1896,7 +1926,7 @@ async function tryGenerateWithLlm(args: {
               logoUrl: args.input.dealerProfile?.logoUrl
             })
           : undefined;
-      if (!isCompleteEmailHtml(emailBodyHtml || "", emailImageUrls.length)) {
+      if (!isCompleteEmailHtml(emailBodyHtml || "", emailImageUrls.length, emailImageUrls)) {
         emailBodyHtml = undefined;
       }
       if (requiresEmailHtml && !emailBodyHtml) {
@@ -1941,7 +1971,7 @@ async function tryGenerateWithLlm(args: {
         website,
         logoUrl: args.input.dealerProfile?.logoUrl
       });
-      if (isCompleteEmailHtml(emailBodyHtml, emailImageUrls.length)) {
+      if (isCompleteEmailHtml(emailBodyHtml, emailImageUrls.length, emailImageUrls)) {
         const emailSubject = `${dealerName} | ${normalizeText(args.input.name || "Update").slice(0, 60)}`;
         const emailBodyText = htmlToPlainText(emailBodyHtml).slice(0, 4000);
         const smsBody = `Quick update from ${dealerName}: Reply and I can share the details.`;

@@ -23233,6 +23233,102 @@ async function generateCampaignImageWithOpenAI(args: {
   }
 }
 
+function campaignEmailNanoVariantTargets(): CampaignAssetTarget[] {
+  const raw = String(
+    process.env.CAMPAIGN_EMAIL_NANO_VARIANT_TARGETS ?? "web_banner,facebook_post,instagram_post"
+  )
+    .trim()
+    .toLowerCase();
+  const fallback: CampaignAssetTarget[] = ["web_banner", "facebook_post", "instagram_post"];
+  if (!raw) return fallback;
+  const parsed = Array.from(
+    new Set(
+      raw
+        .split(/[,\s]+/)
+        .map(v => String(v ?? "").trim())
+        .filter(v => CAMPAIGN_ASSET_TARGETS.has(v as CampaignAssetTarget))
+        .map(v => v as CampaignAssetTarget)
+        .filter(campaignAssetTargetRequiresGeneratedImage)
+    )
+  );
+  return parsed.length ? parsed : fallback;
+}
+
+async function generateCampaignEmailImageVariantsWithNanoBanana(args: {
+  name: string;
+  channel: CampaignChannel;
+  tags: CampaignTag[];
+  prompt?: string;
+  description?: string;
+  dealerProfile?: Awaited<ReturnType<typeof getDealerProfile>>;
+  sourceHits?: Array<{ title?: string; snippet?: string; url?: string }>;
+  referenceImageUrls?: string[];
+  designImageUrls?: string[];
+}): Promise<string[]> {
+  if (String(process.env.CAMPAIGN_EMAIL_NANO_VARIANTS_ENABLED ?? "1") === "0") return [];
+  const referenceImageUrls = normalizeCampaignUrlArray(args.referenceImageUrls ?? []);
+  if (!referenceImageUrls.length) return [];
+  const designImageUrls = normalizeCampaignUrlArray(args.designImageUrls ?? []);
+  const targets = campaignEmailNanoVariantTargets();
+  const maxVariants = Math.max(
+    1,
+    Math.min(
+      Math.max(1, targets.length),
+      Number(process.env.CAMPAIGN_EMAIL_NANO_VARIANTS_MAX ?? 3)
+    )
+  );
+  const timeoutMs = Math.max(15_000, Number(process.env.CAMPAIGN_EMAIL_NANO_VARIANT_TIMEOUT_MS ?? 180_000));
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const target of targets) {
+    if (out.length >= maxVariants) break;
+    const targetLabel = campaignAssetTargetLabel(target);
+    const variantPrompt = [
+      String(args.prompt ?? "").trim(),
+      `Email image variant target: ${targetLabel}. Generate a fresh composition that fits this frame while preserving the same campaign theme and core details from selected references.`
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    const variantDescription = [
+      String(args.description ?? "").trim(),
+      `Use this as a distinct visual for an email section. Keep brand/style consistent, but do not duplicate the same composition from another variant.`
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    const generated = await runCampaignTaskWithTimeout(
+      generateCampaignImageWithNanoBanana({
+        name: args.name,
+        channel: args.channel,
+        assetTargets: [target],
+        prompt: variantPrompt || undefined,
+        description: variantDescription || undefined,
+        tags: args.tags,
+        dealerProfile: args.dealerProfile,
+        sourceHits: args.sourceHits,
+        referenceImageUrls,
+        designImageUrls
+      }),
+      timeoutMs,
+      `nano email variant ${target}`
+    );
+    if (!generated?.url) continue;
+    const normalizedAssets = await runCampaignTaskWithTimeout(
+      buildCampaignGeneratedAssetsFromSource({
+        sourceImageUrl: generated.url,
+        targets: [target],
+        dealerProfile: args.dealerProfile
+      }),
+      timeoutMs,
+      `normalize email variant ${target}`
+    );
+    const normalizedUrl = String(normalizedAssets?.[0]?.url ?? generated.url).trim();
+    if (!normalizedUrl || seen.has(normalizedUrl)) continue;
+    seen.add(normalizedUrl);
+    out.push(normalizedUrl);
+  }
+  return out;
+}
+
 app.get("/campaigns", requireManager, (_req, res) => {
   return res.json({ ok: true, campaigns: listCampaigns() });
 });
@@ -23499,12 +23595,33 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
   const tags = normalizeCampaignTags(req.body?.tags);
   const prompt = String(req.body?.prompt ?? "").trim() || undefined;
   const description = String(req.body?.description ?? "").trim() || undefined;
-  const inspirationImageUrls = normalizeCampaignUrlArray(req.body?.inspirationImageUrls);
+  let inspirationImageUrls = normalizeCampaignUrlArray(req.body?.inspirationImageUrls);
   const assetImageUrls = normalizeCampaignUrlArray(req.body?.assetImageUrls);
   const briefDocumentUrls = normalizeCampaignUrlArray(req.body?.briefDocumentUrls);
   const save = req.body?.save !== false;
 
   const dealerProfile = await getDealerProfile();
+  let emailNanoVariantUrls: string[] = [];
+  const shouldGenerateEmailVariants =
+    !editFromCurrent &&
+    requestedAssetTargets.includes("email") &&
+    String(process.env.CAMPAIGN_EMAIL_NANO_VARIANTS_ENABLED ?? "1") !== "0";
+  if (shouldGenerateEmailVariants) {
+    const variantReferenceImageUrls = normalizeCampaignUrlArray([...inspirationImageUrls, ...assetImageUrls]);
+    emailNanoVariantUrls = await generateCampaignEmailImageVariantsWithNanoBanana({
+      name,
+      channel,
+      tags,
+      prompt,
+      description,
+      dealerProfile,
+      referenceImageUrls: variantReferenceImageUrls,
+      designImageUrls: assetImageUrls
+    });
+    if (emailNanoVariantUrls.length) {
+      inspirationImageUrls = normalizeCampaignUrlArray([...emailNanoVariantUrls, ...inspirationImageUrls]);
+    }
+  }
   const generated = await generateCampaignContent({
     name,
     buildMode,
@@ -23894,6 +24011,8 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     generatedAssets: mergedGeneratedAssets,
     metadata: {
       ...(effectiveGenerated.metadata ?? {}),
+      emailNanoVariantCount: emailNanoVariantUrls.length || undefined,
+      emailNanoVariantUrls: emailNanoVariantUrls.length ? emailNanoVariantUrls : undefined,
       requestedAssetTargets: requestedAssetTargets.slice(),
       singleTarget: singleTarget ?? undefined,
       editFromCurrent: editFromCurrent || undefined,

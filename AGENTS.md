@@ -1025,3 +1025,26 @@ When changing responses:
   - added `Open Preview` and `Download HTML` actions for quick QA/share.
 - Purpose:
   - make email generation strictly HTML-first and remove confusing image-only preview behavior in email mode.
+
+## Email Locker Auto-Merge + Distinct Image Enforcement
+- In `apps/web/src/app/page.tsx`:
+  - email generate now auto-merges selected `Email Context Campaigns` (locker) into generation payload (prompt context + reference/design images + brief files) without requiring a separate apply click.
+  - current campaign generated images are now always included for email generation context (not just a single primary image).
+  - locker row thumbnails use `object-contain` to avoid visual cropping in the selector list.
+- In `services/api/src/domain/campaignBuilder.ts`:
+  - email HTML completeness validation now checks distinct image URL usage from provided campaign image library (prevents one image being repeated for all sections when multiple images are supplied).
+  - LLM/rescue instructions explicitly require distributing distinct provided images across sections.
+- Purpose:
+  - ensure locker-selected campaigns materially influence output, include active campaign visuals, and improve image variety/fit in generated email layouts.
+
+## Email Nano Variants From Locker Context
+- In `services/api/src/index.ts` (`/campaigns/generate`):
+  - when `Email` output is requested (and not edit mode), backend now pre-generates fresh Nano Banana visual variants from selected reference/design campaign images before email HTML generation.
+  - generated variant URLs are prepended into email inspiration context so LLM email layout can use these newly-sized visuals (not just reusing one existing campaign image).
+  - variant generation targets are configurable via env:
+    - `CAMPAIGN_EMAIL_NANO_VARIANTS_ENABLED` (default `1`)
+    - `CAMPAIGN_EMAIL_NANO_VARIANTS_MAX` (default `3`)
+    - `CAMPAIGN_EMAIL_NANO_VARIANT_TARGETS` (default `web_banner,facebook_post,instagram_post`)
+  - generation metadata now stores `emailNanoVariantCount` and `emailNanoVariantUrls` for traceability.
+- Purpose:
+  - improve fit/composition diversity for email campaigns and ensure locker-selected campaigns materially drive new email visuals.

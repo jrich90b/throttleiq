@@ -1638,6 +1638,82 @@ function stripCampaignEmailReferenceContext(raw: string): string {
   return text.slice(0, markerIdx).trim();
 }
 
+type CampaignEmailContextBundle = {
+  contextBlocks: string[];
+  inspirationImageUrls: string[];
+  assetImageUrls: string[];
+  briefDocumentUrls: string[];
+};
+
+function collectCampaignEmailContext(entries: CampaignEntry[]): CampaignEmailContextBundle {
+  const selectedEntries = Array.isArray(entries) ? entries.filter(Boolean) : [];
+  const inspirationImageUrls: string[] = [];
+  const assetImageUrls: string[] = [];
+  const briefDocumentUrls: string[] = [];
+  const seenInspiration = new Set<string>();
+  const seenAssets = new Set<string>();
+  const seenBriefs = new Set<string>();
+  const contextBlocks: string[] = [];
+  for (const entry of selectedEntries) {
+    const name = String(entry.name ?? "").trim() || "Untitled campaign";
+    const prompt = String(entry.prompt ?? "").trim();
+    const description = String(entry.description ?? "").trim();
+    const finalImageUrl = String(entry.finalImageUrl ?? "").trim();
+    const generatedImageUrls = (Array.isArray(entry.generatedAssets) ? entry.generatedAssets : [])
+      .map(asset => String(asset?.url ?? "").trim())
+      .filter(looksLikeCampaignImageUrl);
+    const refUrls = [
+      ...(looksLikeCampaignImageUrl(finalImageUrl) ? [finalImageUrl] : []),
+      ...generatedImageUrls,
+      ...(Array.isArray(entry.inspirationImageUrls)
+        ? entry.inspirationImageUrls.map(v => String(v ?? "").trim()).filter(looksLikeCampaignImageUrl)
+        : [])
+    ];
+    for (const url of refUrls) {
+      if (!url || seenInspiration.has(url)) continue;
+      seenInspiration.add(url);
+      inspirationImageUrls.push(url);
+    }
+    const designUrls = (Array.isArray(entry.assetImageUrls) ? entry.assetImageUrls : [])
+      .map(v => String(v ?? "").trim())
+      .filter(looksLikeCampaignImageUrl);
+    for (const url of designUrls) {
+      if (!url || seenAssets.has(url)) continue;
+      seenAssets.add(url);
+      assetImageUrls.push(url);
+    }
+    const briefUrls = (Array.isArray(entry.briefDocumentUrls) ? entry.briefDocumentUrls : [])
+      .map(v => String(v ?? "").trim())
+      .filter(Boolean);
+    for (const url of briefUrls) {
+      if (!url || seenBriefs.has(url)) continue;
+      seenBriefs.add(url);
+      briefDocumentUrls.push(url);
+    }
+    contextBlocks.push(
+      [
+        `Campaign name: ${name}`,
+        prompt ? `Campaign prompt: ${prompt}` : "",
+        description ? `Campaign description: ${description}` : ""
+      ]
+        .filter(Boolean)
+        .join("\n")
+    );
+  }
+  return {
+    contextBlocks,
+    inspirationImageUrls,
+    assetImageUrls,
+    briefDocumentUrls
+  };
+}
+
+function buildCampaignEmailContextBlock(contextBlocks: string[]): string {
+  const blocks = Array.isArray(contextBlocks) ? contextBlocks.filter(Boolean) : [];
+  if (!blocks.length) return "";
+  return [CAMPAIGN_EMAIL_CONTEXT_MARKER, ...blocks].join("\n\n");
+}
+
 function campaignFileLabelFromUrl(url: string, fallback: string): string {
   const value = String(url ?? "").trim();
   if (!value) return fallback;
@@ -3193,69 +3269,17 @@ export default function Home() {
   function applyEmailContextCampaignToForm(entries: CampaignEntry[]) {
     const selectedEntries = Array.isArray(entries) ? entries.filter(Boolean) : [];
     if (!selectedEntries.length) return;
-    const inspirationImageUrls: string[] = [];
-    const assetImageUrls: string[] = [];
-    const briefDocumentUrls: string[] = [];
-    const seenInspiration = new Set<string>();
-    const seenAssets = new Set<string>();
-    const seenBriefs = new Set<string>();
-    const contextBlocks: string[] = [];
-    for (const entry of selectedEntries) {
-      const name = String(entry.name ?? "").trim() || "Untitled campaign";
-      const prompt = String(entry.prompt ?? "").trim();
-      const description = String(entry.description ?? "").trim();
-      const finalImageUrl = String(entry.finalImageUrl ?? "").trim();
-      const generatedImageUrls = (Array.isArray(entry.generatedAssets) ? entry.generatedAssets : [])
-        .map(asset => String(asset?.url ?? "").trim())
-        .filter(looksLikeCampaignImageUrl);
-      const refUrls = [
-        ...(looksLikeCampaignImageUrl(finalImageUrl) ? [finalImageUrl] : []),
-        ...generatedImageUrls,
-        ...(Array.isArray(entry.inspirationImageUrls)
-          ? entry.inspirationImageUrls.map(v => String(v ?? "").trim()).filter(looksLikeCampaignImageUrl)
-          : [])
-      ];
-      for (const url of refUrls) {
-        if (!url || seenInspiration.has(url)) continue;
-        seenInspiration.add(url);
-        inspirationImageUrls.push(url);
-      }
-      const designUrls = (Array.isArray(entry.assetImageUrls) ? entry.assetImageUrls : [])
-        .map(v => String(v ?? "").trim())
-        .filter(looksLikeCampaignImageUrl);
-      for (const url of designUrls) {
-        if (!url || seenAssets.has(url)) continue;
-        seenAssets.add(url);
-        assetImageUrls.push(url);
-      }
-      const briefUrls = (Array.isArray(entry.briefDocumentUrls) ? entry.briefDocumentUrls : [])
-        .map(v => String(v ?? "").trim())
-        .filter(Boolean);
-      for (const url of briefUrls) {
-        if (!url || seenBriefs.has(url)) continue;
-        seenBriefs.add(url);
-        briefDocumentUrls.push(url);
-      }
-      contextBlocks.push(
-        [
-          `Campaign name: ${name}`,
-          prompt ? `Campaign prompt: ${prompt}` : "",
-          description ? `Campaign description: ${description}` : ""
-        ]
-          .filter(Boolean)
-          .join("\n")
-      );
-    }
-    const contextBlock = [CAMPAIGN_EMAIL_CONTEXT_MARKER, ...contextBlocks].join("\n\n");
+    const bundle = collectCampaignEmailContext(selectedEntries);
+    const contextBlock = buildCampaignEmailContextBlock(bundle.contextBlocks);
     setCampaignForm(prev => {
       const basePrompt = stripCampaignEmailReferenceContext(prev.prompt);
       const nextPrompt = [basePrompt, contextBlock].filter(Boolean).join("\n\n");
       return {
         ...prev,
         prompt: nextPrompt,
-        inspirationImageUrlsText: inspirationImageUrls.slice(0, 24).join("\n"),
-        assetImageUrlsText: assetImageUrls.slice(0, 32).join("\n"),
-        briefDocumentUrlsText: briefDocumentUrls.slice(0, 32).join("\n")
+        inspirationImageUrlsText: bundle.inspirationImageUrls.slice(0, 24).join("\n"),
+        assetImageUrlsText: bundle.assetImageUrls.slice(0, 32).join("\n"),
+        briefDocumentUrlsText: bundle.briefDocumentUrls.slice(0, 32).join("\n")
       };
     });
     setSaveToast(
@@ -4224,6 +4248,28 @@ export default function Home() {
     }
     const isScratchBuild = campaignForm.buildMode === "design_from_scratch";
     const includeMediaContext = isScratchBuild || target === "email";
+    const basePrompt = stripCampaignEmailReferenceContext(String(campaignForm.prompt ?? "").trim());
+    const currentCampaignRuntimeImageUrls = Array.from(
+      new Set(
+        [
+          String(campaignFinalImageUrl ?? "").trim(),
+          ...((campaignGeneratedAssets ?? []).map(asset => String(asset?.url ?? "").trim())),
+          String(campaignSelectedEntry?.finalImageUrl ?? "").trim(),
+          ...((Array.isArray(campaignSelectedEntry?.generatedAssets) ? campaignSelectedEntry?.generatedAssets : []).map(asset =>
+            String(asset?.url ?? "").trim()
+          ))
+        ].filter(looksLikeCampaignImageUrl)
+      )
+    );
+    const selectedEmailContextBundle =
+      target === "email" && !editFromCurrent
+        ? collectCampaignEmailContext(campaignEmailContextEntries)
+        : { contextBlocks: [], inspirationImageUrls: [], assetImageUrls: [], briefDocumentUrls: [] };
+    const selectedEmailContextPrompt = buildCampaignEmailContextBlock(selectedEmailContextBundle.contextBlocks);
+    const payloadPrompt =
+      target === "email"
+        ? [basePrompt, selectedEmailContextPrompt].filter(Boolean).join("\n\n") || undefined
+        : basePrompt || undefined;
     const baseInspirationImageUrls = parseCampaignUrlsText(campaignForm.inspirationImageUrlsText);
     const defaultEmailPrimaryImage = !editFromCurrent && target === "email" && campaignEmailIncludePrimaryImage
       ? campaignPrimaryGeneratedImageUrl
@@ -4233,17 +4279,38 @@ export default function Home() {
       : includeMediaContext
         ? baseInspirationImageUrls
         : [];
-    const inspirationImageUrls = Array.from(
-      new Set([
-        ...inspirationImageUrlsRaw,
-        ...(defaultEmailPrimaryImage ? [defaultEmailPrimaryImage] : [])
-      ])
-    );
+    const inspirationImageUrls =
+      target === "email" && !editFromCurrent
+        ? Array.from(
+            new Set([
+              ...(defaultEmailPrimaryImage ? [defaultEmailPrimaryImage] : []),
+              ...currentCampaignRuntimeImageUrls,
+              ...selectedEmailContextBundle.inspirationImageUrls,
+              ...inspirationImageUrlsRaw
+            ])
+          )
+        : Array.from(
+            new Set([
+              ...inspirationImageUrlsRaw,
+              ...(defaultEmailPrimaryImage ? [defaultEmailPrimaryImage] : [])
+            ])
+          );
     const assetImageUrls = editFromCurrent
       ? []
       : includeMediaContext
-        ? parseCampaignUrlsText(campaignForm.assetImageUrlsText)
+        ? Array.from(
+            new Set([
+              ...parseCampaignUrlsText(campaignForm.assetImageUrlsText),
+              ...(target === "email" && !editFromCurrent ? selectedEmailContextBundle.assetImageUrls : [])
+            ])
+          )
         : [];
+    const briefDocumentUrls = Array.from(
+      new Set([
+        ...parseCampaignUrlsText(campaignForm.briefDocumentUrlsText),
+        ...(target === "email" && !editFromCurrent ? selectedEmailContextBundle.briefDocumentUrls : [])
+      ])
+    );
     setCampaignGenerating(true);
     setCampaignError(null);
     try {
@@ -4258,11 +4325,11 @@ export default function Home() {
         singleTarget: target,
         replaceTarget: opts?.replaceTarget !== false,
         editFromCurrent,
-        prompt: String(campaignForm.prompt ?? "").trim() || undefined,
+        prompt: payloadPrompt,
         description: String(campaignForm.description ?? "").trim() || undefined,
         inspirationImageUrls,
         assetImageUrls,
-        briefDocumentUrls: parseCampaignUrlsText(campaignForm.briefDocumentUrlsText)
+        briefDocumentUrls
       };
       const resp = await fetch("/api/campaigns/generate", {
         method: "POST",
@@ -12336,7 +12403,7 @@ export default function Home() {
                                 <img
                                   src={previewImage}
                                   alt={entry.name}
-                                  className="h-10 w-16 object-cover rounded border shrink-0"
+                                  className="h-10 w-16 object-contain rounded border shrink-0 bg-white"
                                   loading="lazy"
                                 />
                               ) : null}
@@ -12363,7 +12430,9 @@ export default function Home() {
                         })}
                       </div>
                     ) : (
-                      <div className="text-[11px] text-gray-500">Add campaign context above, then apply it to this email.</div>
+                      <div className="text-[11px] text-gray-500">
+                        Selected campaigns are auto-included when you click Generate in Email mode.
+                      </div>
                     )}
                     <div className="flex flex-wrap items-center gap-2">
                       <button
@@ -12372,7 +12441,7 @@ export default function Home() {
                         disabled={!campaignEmailContextEntries.length}
                         onClick={() => applyEmailContextCampaignToForm(campaignEmailContextEntries)}
                       >
-                        Use Campaign Context
+                        Apply Context To Form
                       </button>
                       <button
                         type="button"
