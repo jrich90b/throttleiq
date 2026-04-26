@@ -1037,7 +1037,7 @@ When changing responses:
   - Email locker context now picks a single canonical primary image per selected campaign (target-priority based) to reduce duplicate/redundant mixed-style image blocks in generated HTML.
   - In Email mode, explicit user `Reference images` are prioritized ahead of locker context images so start-from-scratch reference anchors remain primary.
   - when user already provides email reference images, locker image contribution is now capped tighter to reduce cross-campaign drift and random placement.
-  - email context block now explicitly marks locker campaigns as supporting style/context only (primary narrative stays with current campaign prompt unless explicitly combined).
+  - email context block now marks locker campaigns as required digest sections so details stay grouped by campaign (instead of blending all campaign text into one generic block).
 - In `services/api/src/domain/campaignBuilder.ts`:
   - email HTML completeness validation now checks distinct image URL usage from provided campaign image library (prevents one image being repeated for all sections when multiple images are supplied).
   - LLM/rescue instructions explicitly require distributing distinct provided images across sections.
@@ -1046,8 +1046,10 @@ When changing responses:
   - HTML normalization now enforces reference image assignment order on non-logo images (first non-logo image is forced to primary reference URL) and injects a hero image if none exists.
   - HTML normalization now strips `Additional visuals` gallery blocks and removes overflow non-logo image tags once the provided image library is exhausted (prevents repeating one campaign image across random blocks).
   - LLM email instructions now explicitly forbid adding additional-visual strips and require one-time image use per URL (unless only one URL exists).
+  - when explicit user reference images are provided, email generation now avoids auto-injecting logo/web-search image discovery so selected references remain the source of truth.
+  - LLM instructions now allow varied email layouts per campaign while preserving required header, image mapping, and section-detail fidelity.
 - In `services/api/src/index.ts` (`/campaigns/generate`):
-  - Email Nano variant URLs are now prepended to email inspiration context so generated Email HTML can lean on fresh Nano-composed visuals first.
+  - Email Nano variant URLs are appended after explicit references so the active campaign reference/locker ordering stays primary.
   - Email Nano variant reference input is capped to a focused subset to reduce style drift/noise.
   - optional strict mode `CAMPAIGN_EMAIL_NANO_VARIANTS_STRICT=1` can block Email generation when Nano variants are required but unavailable (prevents silent LLM-only layout runs).
   - when Email uses Nano variants successfully, `generatedBy` is promoted to `nano_banana` and metadata records `emailLayoutGenerator` for traceability.

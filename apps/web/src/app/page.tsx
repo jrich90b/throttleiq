@@ -1733,7 +1733,7 @@ function buildCampaignEmailContextBlock(contextBlocks: string[]): string {
   if (!blocks.length) return "";
   return [
     CAMPAIGN_EMAIL_CONTEXT_MARKER,
-    "Use these selected campaign blocks as supporting style/context only. Keep the current campaign prompt as the primary topic unless explicitly asked to combine campaigns.",
+    "Use these selected campaign blocks as required digest sections for this email. Keep details grouped by campaign block and avoid blending details across campaigns.",
     ...blocks
   ].join("\n\n");
 }
@@ -4304,9 +4304,9 @@ export default function Home() {
       target === "email" && !editFromCurrent
         ? Array.from(
             new Set([
+              ...inspirationImageUrlsRaw,
               ...(defaultEmailPrimaryImage ? [defaultEmailPrimaryImage] : []),
-              ...selectedEmailContextInspiration,
-              ...inspirationImageUrlsRaw
+              ...selectedEmailContextInspiration
             ])
           )
         : Array.from(

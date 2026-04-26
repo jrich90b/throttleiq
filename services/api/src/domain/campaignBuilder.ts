@@ -42,6 +42,7 @@ const PARTS_APPAREL_TERMS_RE =
   /\b(parts?|accessor(?:y|ies)|gear|apparel|helmet|jacket|gloves?|riding\s+gear|motorclothes?)\b/i;
 const SERVICE_TERMS_RE =
   /\b(service|maintenance|repair|shop|oil\s*change|inspection|diagnostic|tires?|brakes?)\b/i;
+const EMAIL_CONTEXT_BLOCK_MARKER = "Selected campaign context blocks (email locker):";
 
 export type GenerateCampaignInput = {
   name: string;
@@ -1750,6 +1751,7 @@ async function tryGenerateWithLlm(args: {
   const directionsUrl = normalizeText(args.input.dealerProfile?.directionsUrl);
   const tags = args.input.tags.map(tag => TAG_LABELS[tag]).join(", ") || "General";
   const channelSupportsEmailDigest = args.input.channel !== "sms";
+  const hasEmailContextBlocks = normalizeText(args.input.prompt).includes(EMAIL_CONTEXT_BLOCK_MARKER);
   const suppressTradeOnly = shouldSuppressTradeByInput(args.input);
   const brandWebsite = normalizeText(args.brandContext?.websiteUrl);
   const brandTitle = normalizeText(args.brandContext?.title);
@@ -1839,7 +1841,9 @@ async function tryGenerateWithLlm(args: {
     `Campaign name: ${normalizeText(args.input.name) || "(untitled)"}`,
     `Description (optional): ${normalizeText(args.input.description) || "(none)"}`,
     `Prompt: ${normalizeText(args.input.prompt) || "(none)"}`,
-    "Primary topic rule: the current campaign prompt/description is the primary narrative. Supporting campaign context blocks are style/asset references and must not override the primary topic unless explicitly requested.",
+    channelSupportsEmailDigest && hasEmailContextBlocks
+      ? "Digest grouping rule: create one section for the active campaign and one section per selected campaign context block. Keep each block's details together and do not blend details across blocks."
+      : "Primary topic rule: the current campaign prompt/description is the primary narrative.",
     `Inspiration images: ${normalizeUrls(args.resolvedInspirationImageUrls).join(", ") || "(none)"}`,
     `Asset images: ${normalizeUrls(args.input.assetImageUrls).join(", ") || "(none)"}`,
     `Brief document URLs: ${briefUrls.join(", ") || "(none)"}`,
@@ -1866,7 +1870,8 @@ async function tryGenerateWithLlm(args: {
     "- Use distinct image URLs across sections; do not repeat the same campaign image for every block when multiple images are provided.",
     "- Use each image URL at most once unless only one image URL is available.",
     "- Do NOT add an 'additional visuals' gallery/strip section.",
-    "- Keep section order aligned to the image library order (hero first, then one image per section).",
+    "- Keep section image mapping aligned to image library order (hero first, then one image per section).",
+    "- Layout may vary per campaign; do not force one rigid repeated template pattern every run.",
     "- All images must render fully visible (no crop). Use object-fit:contain with height:auto and sensible max-height.",
     "- Keep URLs exactly as provided. Do not invent or rewrite image URLs.",
     "- email_sections: optional array of section blocks for digest-style email layout.",
@@ -2160,11 +2165,11 @@ export async function generateCampaignContent(input: GenerateCampaignInput): Pro
   const requiredPromptDetailUrls = extractPromptDetailUrls(input);
   const brandContext = await fetchDealerBrandContext(input.dealerProfile ?? null);
   const briefContexts = await collectBriefContexts(normalizeUrls(input.briefDocumentUrls));
-  const shouldRunWebSearch = input.buildMode === "web_search_design";
-  const shouldRunLogoSearch = input.buildMode === "design_from_scratch";
   const userProvidedInspiration = normalizeUrls(input.inspirationImageUrls);
   const userProvidedAssetImages = normalizeUrls(input.assetImageUrls);
   const hasUserReferenceOverride = userProvidedInspiration.length > 0 || userProvidedAssetImages.length > 0;
+  const shouldRunWebSearch = input.buildMode === "web_search_design" && !hasUserReferenceOverride;
+  const shouldRunLogoSearch = input.buildMode === "design_from_scratch" && !hasUserReferenceOverride;
   const forcePlacePhotos = input.tags.includes("dealer_event") && !hasUserReferenceOverride;
   const googlePlacePhotos = shouldRunWebSearch
     ? await fetchGooglePlacePhotos(input.dealerProfile ?? null, {
@@ -2229,7 +2234,7 @@ export async function generateCampaignContent(input: GenerateCampaignInput): Pro
       )
     : [];
   const resolvedInspirationImageUrls = userProvidedInspiration.length
-    ? Array.from(new Set([...userProvidedInspiration, ...logoBrandInspiration, ...logoSearchInspiration]))
+    ? Array.from(new Set([...userProvidedInspiration]))
     : Array.from(
         new Set([
           ...placeDiscoveredInspiration,

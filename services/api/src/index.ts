@@ -23619,7 +23619,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       designImageUrls: assetImageUrls
     });
     if (emailNanoVariantUrls.length) {
-      inspirationImageUrls = normalizeCampaignUrlArray([...emailNanoVariantUrls, ...inspirationImageUrls]);
+      inspirationImageUrls = normalizeCampaignUrlArray([...inspirationImageUrls, ...emailNanoVariantUrls]);
     }
   }
   const emailNanoStrictMode = String(process.env.CAMPAIGN_EMAIL_NANO_VARIANTS_STRICT ?? "0") === "1";
