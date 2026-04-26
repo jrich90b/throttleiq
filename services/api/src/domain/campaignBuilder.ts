@@ -508,6 +508,9 @@ function applyNoTradeLanguageGuard(
       website: dealerProfile?.website,
       phone: dealerProfile?.phone,
       bookingUrl: dealerProfile?.bookingUrl,
+      creditAppUrl: dealerProfile?.creditAppUrl,
+      offersUrl: dealerProfile?.offersUrl,
+      directionsUrl: dealerProfile?.directionsUrl,
       logoUrl: dealerProfile?.logoUrl,
       imageUrls: normalizeCampaignEmailImageUrls(output.inspirationImageUrls ?? [])
     })
@@ -1008,6 +1011,9 @@ function textToHtml(
     website?: string;
     phone?: string;
     bookingUrl?: string;
+    creditAppUrl?: string;
+    offersUrl?: string;
+    directionsUrl?: string;
     logoUrl?: string;
     sections?: CampaignEmailSection[];
     imageUrls?: string[];
@@ -1017,6 +1023,9 @@ function textToHtml(
   const emailSubject = normalizeText(opts?.emailSubject) || `${dealerName} Update`;
   const website = normalizeHttpUrl(opts?.website);
   const bookingUrl = normalizeHttpUrl(opts?.bookingUrl);
+  const creditAppUrl = normalizeHttpUrl(opts?.creditAppUrl);
+  const offersUrl = normalizeHttpUrl(opts?.offersUrl);
+  const directionsUrl = normalizeHttpUrl(opts?.directionsUrl);
   const logoUrl = normalizeCampaignEmailImageUrl(String(opts?.logoUrl ?? ""));
   const phone = normalizeText(opts?.phone);
   const imageUrls = normalizeCampaignEmailImageUrls(opts?.imageUrls);
@@ -1031,23 +1040,47 @@ function textToHtml(
   const introHtml = escapeHtml(introText).replace(/\n/g, "<br/>");
 
   const normalizedSections = normalizeCampaignEmailSections(opts?.sections);
+  const derivedSections = deriveCampaignEmailSectionsFromText(text);
   const sections = normalizedSections.length
     ? normalizedSections
-    : deriveCampaignEmailSectionsFromText(text);
+    : derivedSections.length
+      ? derivedSections
+      : [
+          {
+            title: "What is happening",
+            body: paragraphs[1] || introText || "Latest update from the dealership."
+          },
+          {
+            title: "Next step",
+            body:
+              bookingUrl || website
+                ? "Use the button below to book or view full details."
+                : "Reply to this email and we will send details right away."
+          }
+        ];
   const sectionCards = sections
-    .map(section => {
+    .map((section, idx) => {
       const title = escapeHtml(section.title);
       const body = escapeHtml(section.body).replace(/\n/g, "<br/>");
       const ctaUrl = normalizeHttpUrl(section.ctaUrl);
       const ctaText = escapeHtml(section.ctaText || "Learn more");
+      const sectionImageUrl = imageUrls[idx + 1] || "";
+      const sectionImageBlock = sectionImageUrl
+        ? `<tr>
+             <td style="padding:0 0 10px 0;">
+               <img src="${escapeHtml(sectionImageUrl)}" alt="${title}" style="display:block;width:100%;height:220px;max-height:220px;object-fit:cover;border-radius:6px;border:1px solid #d1d5db;background:#f3f4f6;" />
+             </td>
+           </tr>`
+        : "";
       return `
         <tr>
-          <td style="padding:0 0 12px 0;">
+          <td style="padding:0 0 14px 0;">
             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid #d1d5db;border-radius:8px;background:#ffffff;">
+              ${sectionImageBlock}
               <tr>
                 <td style="padding:14px 16px 14px 16px;">
                   <div style="font-size:16px;line-height:22px;font-weight:700;color:#111827;margin:0 0 8px 0;">${title}</div>
-                  <div style="font-size:14px;line-height:22px;color:#111827;">${body}</div>
+                  <div style="font-size:15px;line-height:24px;color:#111827;">${body}</div>
                   ${
                     ctaUrl
                       ? `<div style="margin-top:12px;"><a href="${escapeHtml(ctaUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;font-weight:700;font-size:13px;line-height:13px;padding:10px 14px;border-radius:6px;">${ctaText}</a></div>`
@@ -1076,6 +1109,56 @@ function textToHtml(
 
   const primaryCtaUrl = bookingUrl || website;
   const primaryCtaText = bookingUrl ? "Schedule Now" : website ? "View Website" : "";
+  const preheaderText = escapeHtml(
+    normalizeText(paragraphs[1] || introText)
+      .replace(/\s+/g, " ")
+      .slice(0, 140) || `Latest update from ${dealerName}.`
+  );
+  const utilityLinks = [
+    { label: "Motorcycle Lineup", url: website },
+    { label: "Test Ride", url: bookingUrl || website },
+    { label: "Financing", url: creditAppUrl || website },
+    { label: "Current Offers", url: offersUrl || website }
+  ].filter(link => Boolean(link.url));
+  const utilityRows: string[] = [];
+  const utilityCells = utilityLinks.slice(0, 4);
+  for (let i = 0; i < utilityCells.length; i += 2) {
+    const left = utilityCells[i];
+    const right = utilityCells[i + 1];
+    const leftCell = left
+      ? `<td style="padding:0 6px 8px 0;width:50%;">
+           <a href="${escapeHtml(String(left.url ?? ""))}" target="_blank" rel="noopener noreferrer" style="display:block;text-decoration:none;background:#ffffff;border:2px solid #111827;border-radius:6px;color:#111827;font-size:14px;line-height:18px;font-weight:700;text-align:center;padding:12px 10px;">${escapeHtml(left.label)}</a>
+         </td>`
+      : `<td style="padding:0 6px 8px 0;width:50%;"></td>`;
+    const rightCell = right
+      ? `<td style="padding:0 0 8px 6px;width:50%;">
+           <a href="${escapeHtml(String(right.url ?? ""))}" target="_blank" rel="noopener noreferrer" style="display:block;text-decoration:none;background:#ffffff;border:2px solid #111827;border-radius:6px;color:#111827;font-size:14px;line-height:18px;font-weight:700;text-align:center;padding:12px 10px;">${escapeHtml(right.label)}</a>
+         </td>`
+      : `<td style="padding:0 0 8px 6px;width:50%;"></td>`;
+    utilityRows.push(`<tr>${leftCell}${rightCell}</tr>`);
+  }
+  const utilityGridBlock =
+    utilityLinks.length >= 2
+      ? `<tr>
+           <td style="padding:8px 0 14px 0;">
+             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+               ${utilityRows.join("")}
+             </table>
+           </td>
+         </tr>`
+      : "";
+  const contactLineBits = [phone ? `Phone: ${phone}` : "", website ? `Website: ${website}` : ""]
+    .filter(Boolean)
+    .join(" | ");
+  const footerNavBits = [
+    website ? `<a href="${escapeHtml(website)}" target="_blank" rel="noopener noreferrer" style="color:#111827;text-decoration:underline;">Website</a>` : "",
+    bookingUrl ? `<a href="${escapeHtml(bookingUrl)}" target="_blank" rel="noopener noreferrer" style="color:#111827;text-decoration:underline;">Book</a>` : "",
+    creditAppUrl ? `<a href="${escapeHtml(creditAppUrl)}" target="_blank" rel="noopener noreferrer" style="color:#111827;text-decoration:underline;">Financing</a>` : "",
+    offersUrl ? `<a href="${escapeHtml(offersUrl)}" target="_blank" rel="noopener noreferrer" style="color:#111827;text-decoration:underline;">Offers</a>` : "",
+    directionsUrl ? `<a href="${escapeHtml(directionsUrl)}" target="_blank" rel="noopener noreferrer" style="color:#111827;text-decoration:underline;">Directions</a>` : ""
+  ]
+    .filter(Boolean)
+    .join(" | ");
   const footerBits = [website ? `Website: ${website}` : "", phone ? `Phone: ${phone}` : ""]
     .filter(Boolean)
     .join(" · ");
@@ -1084,7 +1167,7 @@ function textToHtml(
          <td style="padding:0 0 14px 0;">
            <img src="${escapeHtml(heroImageUrl)}" alt="${escapeHtml(
              dealerName
-           )} campaign image" style="display:block;width:100%;height:320px;max-height:320px;object-fit:contain;border-radius:8px;border:1px solid #d1d5db;background:#f3f4f6;" />
+           )} campaign image" style="display:block;width:100%;height:auto;max-height:360px;object-fit:cover;border-radius:8px;border:1px solid #d1d5db;background:#f3f4f6;" />
          </td>
        </tr>`
     : "";
@@ -1094,11 +1177,12 @@ function textToHtml(
            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="table-layout:fixed;">
              <tr>
                ${stripImageUrls
-                 .map(
-                    url => `<td style="padding-right:8px;">
-                     <img src="${escapeHtml(url)}" alt="Campaign detail image" style="display:block;width:100%;height:132px;max-height:132px;object-fit:contain;border-radius:6px;border:1px solid #d1d5db;background:#f3f4f6;" />
-                   </td>`
-                 )
+                 .map((url, idx) => {
+                   const pad = idx < stripImageUrls.length - 1 ? "padding-right:8px;" : "";
+                   return `<td style="${pad}">
+                     <img src="${escapeHtml(url)}" alt="Campaign detail image" style="display:block;width:100%;height:132px;max-height:132px;object-fit:cover;border-radius:6px;border:1px solid #d1d5db;background:#f3f4f6;" />
+                   </td>`;
+                 })
                  .join("")}
              </tr>
            </table>
@@ -1121,6 +1205,7 @@ function textToHtml(
   return `<!doctype html>
 <html>
   <body style="margin:0;padding:0;background:#f6f6f6;">
+    <div style="display:none;font-size:1px;color:#f6f6f6;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">${preheaderText}</div>
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f6f6f6;">
       <tr>
         <td align="center" style="padding:22px 12px;">
@@ -1156,17 +1241,22 @@ function textToHtml(
                   ${sectionCards}
                   ${
                     primaryCtaUrl
-                      ? `<tr><td style="padding:6px 0 10px 0;"><a href="${escapeHtml(
+                      ? `<tr><td style="padding:6px 0 16px 0;"><a href="${escapeHtml(
                           primaryCtaUrl
                         )}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#f97316;color:#111827;text-decoration:none;font-weight:800;font-size:13px;line-height:13px;padding:12px 16px;border-radius:4px;">${escapeHtml(
                           primaryCtaText
                         )}</a></td></tr>`
                       : ""
                   }
+                  ${utilityGridBlock}
                   ${referencesBlock}
                   <tr>
-                    <td style="padding:14px 0 0 0;font-size:12px;line-height:18px;color:#4b5563;border-top:1px solid #e5e7eb;">
-                      ${escapeHtml(dealerName)}${footerBits ? ` · ${escapeHtml(footerBits)}` : ""}
+                    <td style="padding:16px 0 0 0;font-size:12px;line-height:18px;color:#4b5563;border-top:1px solid #e5e7eb;">
+                      <div style="font-weight:700;color:#111827;">${escapeHtml(dealerName)}</div>
+                      ${contactLineBits ? `<div style="margin-top:4px;">${escapeHtml(contactLineBits)}</div>` : ""}
+                      ${footerNavBits ? `<div style="margin-top:8px;">${footerNavBits}</div>` : ""}
+                      ${footerBits ? `<div style="margin-top:8px;">${escapeHtml(footerBits)}</div>` : ""}
+                      <div style="margin-top:8px;color:#6b7280;">Reply STOP to opt out of promotional messages.</div>
                     </td>
                   </tr>
                 </table>
@@ -1229,6 +1319,9 @@ function buildTemplateOutput(
       website: input.dealerProfile?.website,
       phone: input.dealerProfile?.phone,
       bookingUrl: input.dealerProfile?.bookingUrl,
+      creditAppUrl: input.dealerProfile?.creditAppUrl,
+      offersUrl: input.dealerProfile?.offersUrl,
+      directionsUrl: input.dealerProfile?.directionsUrl,
       logoUrl: input.dealerProfile?.logoUrl,
       sections: emailSections,
       imageUrls: emailImageUrls
@@ -1404,6 +1497,9 @@ async function tryGenerateWithLlm(args: {
                 website,
                 phone,
                 bookingUrl,
+                creditAppUrl: args.input.dealerProfile?.creditAppUrl,
+                offersUrl: args.input.dealerProfile?.offersUrl,
+                directionsUrl: args.input.dealerProfile?.directionsUrl,
                 logoUrl: args.input.dealerProfile?.logoUrl,
                 sections: emailSections,
                 imageUrls: emailImageUrls
@@ -1458,6 +1554,9 @@ async function tryGenerateWithLlm(args: {
                 website,
                 phone,
                 bookingUrl,
+                creditAppUrl: args.input.dealerProfile?.creditAppUrl,
+                offersUrl: args.input.dealerProfile?.offersUrl,
+                directionsUrl: args.input.dealerProfile?.directionsUrl,
                 logoUrl: args.input.dealerProfile?.logoUrl,
                 sections: emailSections,
                 imageUrls: emailImageUrls
