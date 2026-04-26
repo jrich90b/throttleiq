@@ -784,12 +784,75 @@ function extractJsonObject(raw: string): any | null {
 function extractHtmlFromModelOutput(raw: string): string {
   const text = String(raw ?? "").trim();
   if (!text) return "";
+  const jsonLikeHtml = extractEmailHtmlFieldFromJsonLike(text);
+  if (isRenderableEmailHtml(jsonLikeHtml)) return jsonLikeHtml;
   const fenced = text.match(/```(?:html)?\s*([\s\S]*?)```/i);
   if (fenced?.[1]) return String(fenced[1]).trim();
   if (/<(?:!doctype|html|body|table|div|section|img|p|h1|h2|h3)\b/i.test(text)) return text;
+  return "";
+}
+
+function decodeEscapedHtmlString(raw: string): string {
+  const text = String(raw ?? "").trim();
+  if (!text) return "";
+  let out = text;
+  if ((out.startsWith('"') && out.endsWith('"')) || (out.startsWith("'") && out.endsWith("'"))) {
+    try {
+      const parsed = JSON.parse(out.replace(/^'/, '"').replace(/'$/, '"'));
+      if (typeof parsed === "string") out = parsed;
+    } catch {
+      // keep fallback decoding below
+    }
+  }
+  if (/\\[nrt"\\]/.test(out)) {
+    out = out
+      .replace(/\\n/g, "\n")
+      .replace(/\\r/g, "\r")
+      .replace(/\\t/g, "\t")
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, "\\");
+  }
+  return out.trim();
+}
+
+function extractEmailHtmlFieldFromJsonLike(raw: string): string {
+  const text = String(raw ?? "").trim();
+  if (!text) return "";
   const parsed = extractJsonObject(text);
-  const htmlField = normalizeText(parsed?.email_body_html);
-  return htmlField || "";
+  const parsedField = normalizeText(parsed?.email_body_html);
+  if (parsedField) return decodeEscapedHtmlString(parsedField);
+
+  const keyRe = /"email_body_html"\s*:\s*"/i;
+  const keyMatch = keyRe.exec(text);
+  if (!keyMatch) return "";
+  let i = keyMatch.index + keyMatch[0].length;
+  let out = "";
+  let escaped = false;
+  for (; i < text.length; i += 1) {
+    const ch = text[i];
+    if (escaped) {
+      out += `\\${ch}`;
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') break;
+    out += ch;
+  }
+  return decodeEscapedHtmlString(out);
+}
+
+function hasJsonWrapperLeak(html: string): boolean {
+  const head = String(html ?? "").slice(0, 1200).toLowerCase();
+  return (
+    head.includes('"sms_body"') ||
+    head.includes('"email_subject"') ||
+    head.includes('"email_body_text"') ||
+    head.includes('"email_body_html"')
+  );
 }
 
 function isRenderableEmailHtml(raw: string): boolean {
@@ -1144,6 +1207,10 @@ function normalizeGeneratedEmailHtml(
 ): string {
   let html = String(raw ?? "").trim();
   if (!html) return "";
+  if (hasJsonWrapperLeak(html)) {
+    const extracted = extractEmailHtmlFieldFromJsonLike(html);
+    if (isRenderableEmailHtml(extracted)) html = extracted;
+  }
   if (!isRenderableEmailHtml(html)) return "";
   html = html.replace(/<script\b[\s\S]*?<\/script>/gi, "");
   html = html.replace(/\son[a-z]+\s*=\s*(["']).*?\1/gi, "");
@@ -1762,7 +1829,7 @@ async function tryGenerateWithLlm(args: {
       if (!isCompleteEmailHtml(emailBodyHtml || "", emailImageUrls.length)) {
         emailBodyHtml = undefined;
       }
-      if (requiresEmailHtml) {
+      if (requiresEmailHtml && !emailBodyHtml) {
         const rescued = await generateEmailHtmlRescue(emailSubject, emailBodyText);
         if (rescued) emailBodyHtml = rescued;
       }
@@ -1832,7 +1899,7 @@ async function tryGenerateWithLlm(args: {
       if (!isCompleteEmailHtml(emailBodyHtml || "", emailImageUrls.length)) {
         emailBodyHtml = undefined;
       }
-      if (requiresEmailHtml) {
+      if (requiresEmailHtml && !emailBodyHtml) {
         const rescued = await generateEmailHtmlRescue(emailSubject, emailBodyText);
         if (rescued) emailBodyHtml = rescued;
       }
