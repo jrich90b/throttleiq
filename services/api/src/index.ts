@@ -23518,6 +23518,17 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     dealerProfile
   });
 
+  if (requestedAssetTargets.includes("email")) {
+    const hasEmailHtml = Boolean(String(generated.emailBodyHtml ?? "").trim());
+    if (!hasEmailHtml) {
+      return res.status(502).json({
+        ok: false,
+        error:
+          "Email HTML generation failed (LLM layout required). Retry Generate; template fallback is disabled for Email mode."
+      });
+    }
+  }
+
   let effectiveGenerated: typeof generated & { generatedAssets?: CampaignGeneratedAsset[]; finalImageUrl?: string } =
     generated;
   const shouldAttemptImageFallback = req.body?.generateImage !== false;

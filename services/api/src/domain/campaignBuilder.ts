@@ -497,23 +497,31 @@ function applyNoTradeLanguageGuard(
   const smsBody = stripTradeLanguage(String(output.smsBody ?? "")) || smsFallback;
   const emailSubject = stripTradeLanguage(String(output.emailSubject ?? "")) || emailSubjectFallback;
   const emailBodyText = stripTradeLanguage(String(output.emailBodyText ?? "")) || emailBodyFallback;
+  const existingEmailHtml = String(output.emailBodyHtml ?? "").trim();
+  const emailBodyHtml = existingEmailHtml
+    ? normalizeGeneratedEmailHtml(existingEmailHtml, {
+        dealerName,
+        website: dealerProfile?.website,
+        logoUrl: dealerProfile?.logoUrl
+      })
+    : textToHtml(emailBodyText, output.sourceHits ?? [], {
+        dealerName,
+        emailSubject,
+        website: dealerProfile?.website,
+        phone: dealerProfile?.phone,
+        bookingUrl: dealerProfile?.bookingUrl,
+        creditAppUrl: dealerProfile?.creditAppUrl,
+        offersUrl: dealerProfile?.offersUrl,
+        directionsUrl: dealerProfile?.directionsUrl,
+        logoUrl: dealerProfile?.logoUrl,
+        imageUrls: normalizeCampaignEmailImageUrls(output.inspirationImageUrls ?? [])
+      });
   return {
     ...output,
     smsBody,
     emailSubject,
     emailBodyText,
-    emailBodyHtml: textToHtml(emailBodyText, output.sourceHits ?? [], {
-      dealerName,
-      emailSubject,
-      website: dealerProfile?.website,
-      phone: dealerProfile?.phone,
-      bookingUrl: dealerProfile?.bookingUrl,
-      creditAppUrl: dealerProfile?.creditAppUrl,
-      offersUrl: dealerProfile?.offersUrl,
-      directionsUrl: dealerProfile?.directionsUrl,
-      logoUrl: dealerProfile?.logoUrl,
-      imageUrls: normalizeCampaignEmailImageUrls(output.inspirationImageUrls ?? [])
-    })
+    emailBodyHtml
   };
 }
 
@@ -1470,6 +1478,7 @@ async function tryGenerateWithLlm(args: {
 }): Promise<GenerateCampaignOutput | null> {
   if (process.env.LLM_ENABLED !== "1" || !process.env.OPENAI_API_KEY) return null;
   const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  const requiresEmailHtml = args.input.channel !== "sms";
   const dealerName = normalizeText(args.input.dealerProfile?.dealerName) || "the dealership";
   const website = normalizeText(args.input.dealerProfile?.website);
   const phone = normalizeText(args.input.dealerProfile?.phone);
@@ -1626,35 +1635,17 @@ async function tryGenerateWithLlm(args: {
       const emailBodyText = normalizeText(parsed.email_body_text);
       const emailBodyHtmlRaw = normalizeText(parsed.email_body_html);
       const emailSections = normalizeCampaignEmailSections(parsed.email_sections);
-      if (smsBody || emailSubject || emailBodyText) {
-        const fallbackHtml = emailBodyText
-          ? textToHtml(emailBodyText, args.sourceHits, {
-              dealerName,
-              emailSubject: emailSubject || undefined,
-              website,
-              phone,
-              bookingUrl,
-              creditAppUrl: args.input.dealerProfile?.creditAppUrl,
-              offersUrl: args.input.dealerProfile?.offersUrl,
-              directionsUrl: args.input.dealerProfile?.directionsUrl,
-              logoUrl: args.input.dealerProfile?.logoUrl,
-              sections: emailSections,
-              imageUrls: emailImageUrls
-            })
-          : "";
-        const emailBodyHtml = emailBodyHtmlRaw
-          ? normalizeGeneratedEmailHtml(emailBodyHtmlRaw, {
-              dealerName,
-              website,
-              logoUrl: args.input.dealerProfile?.logoUrl
-            })
-          : fallbackHtml
-            ? normalizeGeneratedEmailHtml(fallbackHtml, {
-                dealerName,
-                website,
-                logoUrl: args.input.dealerProfile?.logoUrl
-              })
-            : undefined;
+      const emailBodyHtml = emailBodyHtmlRaw
+        ? normalizeGeneratedEmailHtml(emailBodyHtmlRaw, {
+            dealerName,
+            website,
+            logoUrl: args.input.dealerProfile?.logoUrl
+          })
+        : undefined;
+      if (requiresEmailHtml && !emailBodyHtml) {
+        return null;
+      }
+      if (smsBody || emailSubject || emailBodyText || emailBodyHtml) {
         return {
           status: "generated",
           inspirationImageUrls: args.resolvedInspirationImageUrls,
@@ -1673,7 +1664,7 @@ async function tryGenerateWithLlm(args: {
             generator: "llm_fallback",
             model,
             emailSectionCount: emailSections.length,
-            emailHtmlFromLlm: Boolean(emailBodyHtmlRaw),
+            emailHtmlFromLlm: Boolean(emailBodyHtml),
             brandWebsite: brandWebsite || website || null
           }
         };
@@ -1699,35 +1690,17 @@ async function tryGenerateWithLlm(args: {
       const emailBodyText = normalizeText(parsed.email_body_text);
       const emailBodyHtmlRaw = normalizeText(parsed.email_body_html);
       const emailSections = normalizeCampaignEmailSections(parsed.email_sections);
-      if (smsBody || emailSubject || emailBodyText) {
-        const fallbackHtml = emailBodyText
-          ? textToHtml(emailBodyText, args.sourceHits, {
-              dealerName,
-              emailSubject: emailSubject || undefined,
-              website,
-              phone,
-              bookingUrl,
-              creditAppUrl: args.input.dealerProfile?.creditAppUrl,
-              offersUrl: args.input.dealerProfile?.offersUrl,
-              directionsUrl: args.input.dealerProfile?.directionsUrl,
-              logoUrl: args.input.dealerProfile?.logoUrl,
-              sections: emailSections,
-              imageUrls: emailImageUrls
-            })
-          : "";
-        const emailBodyHtml = emailBodyHtmlRaw
-          ? normalizeGeneratedEmailHtml(emailBodyHtmlRaw, {
-              dealerName,
-              website,
-              logoUrl: args.input.dealerProfile?.logoUrl
-            })
-          : fallbackHtml
-            ? normalizeGeneratedEmailHtml(fallbackHtml, {
-                dealerName,
-                website,
-                logoUrl: args.input.dealerProfile?.logoUrl
-              })
-            : undefined;
+      const emailBodyHtml = emailBodyHtmlRaw
+        ? normalizeGeneratedEmailHtml(emailBodyHtmlRaw, {
+            dealerName,
+            website,
+            logoUrl: args.input.dealerProfile?.logoUrl
+          })
+        : undefined;
+      if (requiresEmailHtml && !emailBodyHtml) {
+        return null;
+      }
+      if (smsBody || emailSubject || emailBodyText || emailBodyHtml) {
         return {
           status: "generated",
           inspirationImageUrls: args.resolvedInspirationImageUrls,
@@ -1746,7 +1719,7 @@ async function tryGenerateWithLlm(args: {
             generator: "llm_fallback",
             model,
             emailSectionCount: emailSections.length,
-            emailHtmlFromLlm: Boolean(emailBodyHtmlRaw),
+            emailHtmlFromLlm: Boolean(emailBodyHtml),
             brandWebsite: brandWebsite || website || null
           }
         };
@@ -1871,6 +1844,32 @@ export async function generateCampaignContent(input: GenerateCampaignInput): Pro
       ? applyNoTradeLanguageGuard(withPlacesMeta, input.dealerProfile)
       : withPlacesMeta;
     return ensureSmsBodyIncludesPromptDetailUrls(guarded, requiredPromptDetailUrls);
+  }
+
+  const requiresEmailHtml = input.channel !== "sms";
+  if (requiresEmailHtml) {
+    const fallbackSubject = `${normalizeText(input.dealerProfile?.dealerName) || "Dealership"} | Update`;
+    const fallbackSms = `Quick update from ${normalizeText(input.dealerProfile?.dealerName) || "the dealership"}: reply and we can share details.`;
+    return {
+      status: "generated",
+      inspirationImageUrls: resolvedInspirationImageUrls,
+      smsBody: fallbackSms,
+      emailSubject: fallbackSubject,
+      emailBodyText: "",
+      emailBodyHtml: "",
+      sourceHits,
+      generatedBy: "llm_fallback",
+      metadata: {
+        buildMode: input.buildMode,
+        searchQuery,
+        sourceCount: sourceHits.length,
+        briefDocumentCount: normalizeUrls(input.briefDocumentUrls).length,
+        briefExtractedCount: (briefContexts ?? []).filter(row => row.type === "text").length,
+        generator: "llm_required_no_template_fallback",
+        llmHtmlRequired: true,
+        brandWebsite: brandContext?.websiteUrl ?? null
+      }
+    };
   }
 
   const template = buildTemplateOutput(

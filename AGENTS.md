@@ -52,6 +52,8 @@ Required order:
   - Email HTML generation is LLM-first and should be designed from scratch per campaign context (not forced into one rigid static layout).
   - enforce a required branded header logo row even when LLM HTML omits it.
   - enforce non-cropping image rendering (`object-fit: contain`, `height:auto`) so campaign visuals are fully visible.
+  - for Email output target, do not silently fall back to deterministic template HTML when LLM HTML generation fails; return an explicit generation error so users can retry.
+  - trade-language guardrails must not overwrite an existing LLM-generated `emailBodyHtml` with deterministic template HTML; preserve LLM HTML and only synthesize template HTML when HTML is missing.
 - Campaign Studio Email locker UX should stay campaign-based (not per-file picking):
   - allow selecting multiple locker campaigns and hydrate prompt/details plus brief/reference/design context into the current email generation input.
   - keep context hydration deterministic and replace-style so users can clearly switch/stack campaign contexts.
