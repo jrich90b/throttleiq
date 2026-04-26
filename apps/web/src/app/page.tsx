@@ -4071,10 +4071,37 @@ export default function Home() {
     setSaveToast("Downloaded email HTML preview");
   }
 
+  function isCrossOriginCampaignAssetUrl(rawUrl: string): boolean {
+    try {
+      const parsed = new URL(String(rawUrl ?? "").trim(), window.location.origin);
+      return parsed.origin !== window.location.origin;
+    } catch {
+      return false;
+    }
+  }
+
+  function openCampaignAssetDirect(url: string) {
+    const source = String(url ?? "").trim();
+    if (!source) return;
+    const anchor = document.createElement("a");
+    anchor.href = source;
+    anchor.target = "_blank";
+    anchor.rel = "noopener noreferrer";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  }
+
   async function downloadCampaignAsset(url: string, fallbackName?: string) {
     const source = String(url ?? "").trim();
     if (!source) {
       setCampaignError("Missing download URL.");
+      return;
+    }
+    if (isCrossOriginCampaignAssetUrl(source)) {
+      setCampaignError(null);
+      openCampaignAssetDirect(source);
+      setSaveToast("Opened file in a new tab (cross-origin download).");
       return;
     }
     setCampaignError(null);
@@ -4132,6 +4159,12 @@ export default function Home() {
     const source = String(url ?? "").trim();
     if (!source) {
       setCampaignError("Missing print URL.");
+      return;
+    }
+    if (isCrossOriginCampaignAssetUrl(source)) {
+      setCampaignError(null);
+      openCampaignAssetDirect(source);
+      setSaveToast("Opened file in a new tab. Use browser print.");
       return;
     }
     const printWindow = window.open("", "_blank");
