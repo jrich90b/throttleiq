@@ -781,6 +781,36 @@ function extractJsonObject(raw: string): any | null {
   return null;
 }
 
+function extractHtmlFromModelOutput(raw: string): string {
+  const text = String(raw ?? "").trim();
+  if (!text) return "";
+  const fenced = text.match(/```(?:html)?\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) return String(fenced[1]).trim();
+  if (/<(?:!doctype|html|body|table|div|section|img|p|h1|h2|h3)\b/i.test(text)) return text;
+  const parsed = extractJsonObject(text);
+  const htmlField = normalizeText(parsed?.email_body_html);
+  return htmlField || "";
+}
+
+function htmlToPlainText(rawHtml: string): string {
+  const html = String(rawHtml ?? "");
+  if (!html) return "";
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<\/div>/gi, "\n")
+    .replace(/<\/tr>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/\s+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
 function isGpt5Model(model: string): boolean {
   return /^gpt-5/i.test(String(model ?? "").trim());
 }
@@ -1612,6 +1642,54 @@ async function tryGenerateWithLlm(args: {
     return parsed && typeof parsed === "object" ? parsed : null;
   };
 
+  const generateEmailHtmlRescue = async (seedSubject?: string, seedBodyText?: string): Promise<string> => {
+    if (!requiresEmailHtml) return "";
+    const rescuePrompt = [
+      "Return only HTML for a complete marketing email body.",
+      "No markdown fences. No JSON. No explanations.",
+      "Use responsive table-based markup and inline CSS only.",
+      "Always include branded top header row with dealer logo at left and dealer link at right.",
+      "Use provided campaign/reference images in context-matching sections.",
+      "Never crop images. Use contain behavior and responsive sizing.",
+      "",
+      `Dealer: ${dealerName}`,
+      `Website: ${website || "(not provided)"}`,
+      `Email subject seed: ${seedSubject || "(none)"}`,
+      `Email body text seed: ${seedBodyText || "(none)"}`,
+      `Prompt: ${normalizeText(args.input.prompt) || "(none)"}`,
+      `Description: ${normalizeText(args.input.description) || "(none)"}`,
+      "",
+      "Brief file excerpts:",
+      briefBlock || "(No brief files provided)",
+      "",
+      "Reference hits:",
+      sourceBlock,
+      "",
+      "Image library (exact URLs, do not rewrite):",
+      imageLibrary
+    ].join("\n");
+
+    try {
+      const rescueResp = await client.responses.create({
+        model,
+        input: rescuePrompt,
+        ...optionalReasoning(model),
+        ...optionalTextVerbosity(model),
+        ...optionalTemperature(model, 0.2),
+        max_output_tokens: 2600
+      });
+      const htmlRaw = extractHtmlFromModelOutput(rescueResp.output_text ?? "");
+      if (!htmlRaw) return "";
+      return normalizeGeneratedEmailHtml(htmlRaw, {
+        dealerName,
+        website,
+        logoUrl: args.input.dealerProfile?.logoUrl
+      });
+    } catch {
+      return "";
+    }
+  };
+
   try {
     const parsedResp = await client.responses.parse({
       model,
@@ -1635,13 +1713,17 @@ async function tryGenerateWithLlm(args: {
       const emailBodyText = normalizeText(parsed.email_body_text);
       const emailBodyHtmlRaw = normalizeText(parsed.email_body_html);
       const emailSections = normalizeCampaignEmailSections(parsed.email_sections);
-      const emailBodyHtml = emailBodyHtmlRaw
+      let emailBodyHtml = emailBodyHtmlRaw
         ? normalizeGeneratedEmailHtml(emailBodyHtmlRaw, {
             dealerName,
             website,
             logoUrl: args.input.dealerProfile?.logoUrl
           })
         : undefined;
+      if (requiresEmailHtml && !emailBodyHtml) {
+        const rescued = await generateEmailHtmlRescue(emailSubject, emailBodyText);
+        emailBodyHtml = rescued || undefined;
+      }
       if (requiresEmailHtml && !emailBodyHtml) {
         return null;
       }
@@ -1665,6 +1747,7 @@ async function tryGenerateWithLlm(args: {
             model,
             emailSectionCount: emailSections.length,
             emailHtmlFromLlm: Boolean(emailBodyHtml),
+            emailHtmlRescued: !emailBodyHtmlRaw && Boolean(emailBodyHtml),
             brandWebsite: brandWebsite || website || null
           }
         };
@@ -1683,6 +1766,7 @@ async function tryGenerateWithLlm(args: {
       ...optionalTemperature(model, 0.2),
       max_output_tokens: 1800
     });
+    const rawHtmlDirect = extractHtmlFromModelOutput(resp.output_text ?? "");
     const parsed = parseObject(resp.output_text ?? "");
     if (parsed?.sms_body || parsed?.email_subject || parsed?.email_body_text || parsed?.email_body_html) {
       const smsBody = normalizeText(parsed.sms_body);
@@ -1690,13 +1774,23 @@ async function tryGenerateWithLlm(args: {
       const emailBodyText = normalizeText(parsed.email_body_text);
       const emailBodyHtmlRaw = normalizeText(parsed.email_body_html);
       const emailSections = normalizeCampaignEmailSections(parsed.email_sections);
-      const emailBodyHtml = emailBodyHtmlRaw
+      let emailBodyHtml = emailBodyHtmlRaw
         ? normalizeGeneratedEmailHtml(emailBodyHtmlRaw, {
             dealerName,
             website,
             logoUrl: args.input.dealerProfile?.logoUrl
           })
-        : undefined;
+        : rawHtmlDirect
+          ? normalizeGeneratedEmailHtml(rawHtmlDirect, {
+              dealerName,
+              website,
+              logoUrl: args.input.dealerProfile?.logoUrl
+            })
+          : undefined;
+      if (requiresEmailHtml && !emailBodyHtml) {
+        const rescued = await generateEmailHtmlRescue(emailSubject, emailBodyText);
+        emailBodyHtml = rescued || undefined;
+      }
       if (requiresEmailHtml && !emailBodyHtml) {
         return null;
       }
@@ -1720,6 +1814,76 @@ async function tryGenerateWithLlm(args: {
             model,
             emailSectionCount: emailSections.length,
             emailHtmlFromLlm: Boolean(emailBodyHtml),
+            emailHtmlRescued: !emailBodyHtmlRaw && Boolean(emailBodyHtml),
+            brandWebsite: brandWebsite || website || null
+          }
+        };
+      }
+    }
+
+    if (requiresEmailHtml && rawHtmlDirect) {
+      const emailBodyHtml = normalizeGeneratedEmailHtml(rawHtmlDirect, {
+        dealerName,
+        website,
+        logoUrl: args.input.dealerProfile?.logoUrl
+      });
+      if (emailBodyHtml) {
+        const emailSubject = `${dealerName} | ${normalizeText(args.input.name || "Update").slice(0, 60)}`;
+        const emailBodyText = htmlToPlainText(emailBodyHtml).slice(0, 4000);
+        const smsBody = `Quick update from ${dealerName}: Reply and I can share the details.`;
+        return {
+          status: "generated",
+          inspirationImageUrls: args.resolvedInspirationImageUrls,
+          smsBody,
+          emailSubject,
+          emailBodyText,
+          emailBodyHtml,
+          sourceHits: args.sourceHits,
+          generatedBy: "llm_fallback",
+          metadata: {
+            buildMode: args.input.buildMode,
+            searchQuery: args.searchQuery,
+            sourceCount: args.sourceHits.length,
+            briefDocumentCount: briefUrls.length,
+            briefExtractedCount: (args.briefContexts ?? []).filter(row => row.type === "text").length,
+            generator: "llm_fallback",
+            model,
+            emailSectionCount: 0,
+            emailHtmlFromLlm: true,
+            emailHtmlRescued: false,
+            emailHtmlDirect: true,
+            brandWebsite: brandWebsite || website || null
+          }
+        };
+      }
+    }
+
+    if (requiresEmailHtml) {
+      const rescuedHtml = await generateEmailHtmlRescue();
+      if (rescuedHtml) {
+        const emailSubject = `${dealerName} | ${normalizeText(args.input.name || "Update").slice(0, 60)}`;
+        const emailBodyText = htmlToPlainText(rescuedHtml).slice(0, 4000);
+        const smsBody = `Quick update from ${dealerName}: Reply and I can share the details.`;
+        return {
+          status: "generated",
+          inspirationImageUrls: args.resolvedInspirationImageUrls,
+          smsBody,
+          emailSubject,
+          emailBodyText,
+          emailBodyHtml: rescuedHtml,
+          sourceHits: args.sourceHits,
+          generatedBy: "llm_fallback",
+          metadata: {
+            buildMode: args.input.buildMode,
+            searchQuery: args.searchQuery,
+            sourceCount: args.sourceHits.length,
+            briefDocumentCount: briefUrls.length,
+            briefExtractedCount: (args.briefContexts ?? []).filter(row => row.type === "text").length,
+            generator: "llm_fallback",
+            model,
+            emailSectionCount: 0,
+            emailHtmlFromLlm: true,
+            emailHtmlRescued: true,
             brandWebsite: brandWebsite || website || null
           }
         };
