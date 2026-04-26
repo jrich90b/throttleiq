@@ -809,6 +809,22 @@ function isRenderableEmailHtml(raw: string): boolean {
   return structuralSignals >= 2;
 }
 
+function isCompleteEmailHtml(raw: string, expectedImageCount = 0): boolean {
+  const html = String(raw ?? "").trim();
+  if (!isRenderableEmailHtml(html)) return false;
+  const lower = html.toLowerCase();
+  const tableCount = (lower.match(/<table\b/g) ?? []).length;
+  const linkCount = (lower.match(/<a\b/g) ?? []).length;
+  const imageCount = (lower.match(/<img\b/g) ?? []).length;
+  const plainLen = htmlToPlainText(html).length;
+  if (tableCount < 2 || linkCount < 1 || plainLen < 180) return false;
+  if (expectedImageCount > 0) {
+    const minimumImages = Math.min(3, Math.max(1, expectedImageCount));
+    if (imageCount < minimumImages) return false;
+  }
+  return true;
+}
+
 function htmlToPlainText(rawHtml: string): string {
   const html = String(rawHtml ?? "");
   if (!html) return "";
@@ -1564,7 +1580,7 @@ async function tryGenerateWithLlm(args: {
   const schema: { [key: string]: unknown } = {
     type: "object",
     additionalProperties: false,
-    required: ["sms_body", "email_subject", "email_body_text", "email_body_html"],
+    required: ["sms_body", "email_subject", "email_body_text"],
     properties: {
       sms_body: { type: "string" },
       email_subject: { type: "string" },
@@ -1642,7 +1658,7 @@ async function tryGenerateWithLlm(args: {
     "- sms_body: 1-2 short sentences.",
     "- email_subject: under 75 chars.",
     "- email_body_text: plain text email body with clear CTA.",
-    "- email_body_html: FULL email HTML designed from scratch for this specific campaign context (do NOT force a generic template).",
+    "- email_body_html: optional in this JSON pass.",
     "- email_body_html must be responsive table-based email markup with inline CSS only (no scripts, no external CSS).",
     "- email_body_html must include a branded top header row with the dealer logo and a right-side dealer link.",
     "- For each major content block, pair the most relevant image from the image library. Keep text/image pairing logically matched.",
@@ -1665,9 +1681,12 @@ async function tryGenerateWithLlm(args: {
     const rescuePrompt = [
       "Return only HTML for a complete marketing email body.",
       "No markdown fences. No JSON. No explanations.",
+      "Start with <!doctype html> and end with </html>.",
+      "Do not output plain text outside HTML tags.",
       "Use responsive table-based markup and inline CSS only.",
       "Always include branded top header row with dealer logo at left and dealer link at right.",
       "Use provided campaign/reference images in context-matching sections.",
+      "If image library URLs are present, include each image URL at least once in the body.",
       "Never crop images. Use contain behavior and responsive sizing.",
       "",
       `Dealer: ${dealerName}`,
@@ -1694,15 +1713,17 @@ async function tryGenerateWithLlm(args: {
         ...optionalReasoning(model),
         ...optionalTextVerbosity(model),
         ...optionalTemperature(model, 0.2),
-        max_output_tokens: 2600
+        max_output_tokens: 5200
       });
       const htmlRaw = extractHtmlFromModelOutput(rescueResp.output_text ?? "");
       if (!isRenderableEmailHtml(htmlRaw)) return "";
-      return normalizeGeneratedEmailHtml(htmlRaw, {
+      const normalized = normalizeGeneratedEmailHtml(htmlRaw, {
         dealerName,
         website,
         logoUrl: args.input.dealerProfile?.logoUrl
       });
+      if (!isCompleteEmailHtml(normalized, emailImageUrls.length)) return "";
+      return normalized;
     } catch {
       return "";
     }
@@ -1738,9 +1759,12 @@ async function tryGenerateWithLlm(args: {
             logoUrl: args.input.dealerProfile?.logoUrl
           })
         : undefined;
-      if (requiresEmailHtml && !emailBodyHtml) {
+      if (!isCompleteEmailHtml(emailBodyHtml || "", emailImageUrls.length)) {
+        emailBodyHtml = undefined;
+      }
+      if (requiresEmailHtml) {
         const rescued = await generateEmailHtmlRescue(emailSubject, emailBodyText);
-        emailBodyHtml = rescued || undefined;
+        if (rescued) emailBodyHtml = rescued;
       }
       if (requiresEmailHtml && !emailBodyHtml) {
         return null;
@@ -1765,7 +1789,7 @@ async function tryGenerateWithLlm(args: {
             model,
             emailSectionCount: emailSections.length,
             emailHtmlFromLlm: Boolean(emailBodyHtml),
-            emailHtmlRescued: !emailBodyHtmlRaw && Boolean(emailBodyHtml),
+            emailHtmlRescued: Boolean(emailBodyHtml) && (!emailBodyHtmlRaw || !isRenderableEmailHtml(emailBodyHtmlRaw)),
             brandWebsite: brandWebsite || website || null
           }
         };
@@ -1805,9 +1829,12 @@ async function tryGenerateWithLlm(args: {
               logoUrl: args.input.dealerProfile?.logoUrl
             })
           : undefined;
-      if (requiresEmailHtml && !emailBodyHtml) {
+      if (!isCompleteEmailHtml(emailBodyHtml || "", emailImageUrls.length)) {
+        emailBodyHtml = undefined;
+      }
+      if (requiresEmailHtml) {
         const rescued = await generateEmailHtmlRescue(emailSubject, emailBodyText);
-        emailBodyHtml = rescued || undefined;
+        if (rescued) emailBodyHtml = rescued;
       }
       if (requiresEmailHtml && !emailBodyHtml) {
         return null;
@@ -1832,7 +1859,9 @@ async function tryGenerateWithLlm(args: {
             model,
             emailSectionCount: emailSections.length,
             emailHtmlFromLlm: Boolean(emailBodyHtml),
-            emailHtmlRescued: !emailBodyHtmlRaw && Boolean(emailBodyHtml),
+            emailHtmlRescued:
+              Boolean(emailBodyHtml) &&
+              (!emailBodyHtmlRaw || !isRenderableEmailHtml(emailBodyHtmlRaw) || !isRenderableEmailHtml(rawHtmlDirect)),
             brandWebsite: brandWebsite || website || null
           }
         };
@@ -1845,7 +1874,7 @@ async function tryGenerateWithLlm(args: {
         website,
         logoUrl: args.input.dealerProfile?.logoUrl
       });
-      if (emailBodyHtml) {
+      if (isCompleteEmailHtml(emailBodyHtml, emailImageUrls.length)) {
         const emailSubject = `${dealerName} | ${normalizeText(args.input.name || "Update").slice(0, 60)}`;
         const emailBodyText = htmlToPlainText(emailBodyHtml).slice(0, 4000);
         const smsBody = `Quick update from ${dealerName}: Reply and I can share the details.`;
