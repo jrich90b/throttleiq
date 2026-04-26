@@ -23760,6 +23760,7 @@ app.post("/campaigns/email/generate", requireManager, async (req, res) => {
     "- Use a centered, compact email body (max width about 680-700px). Avoid full-bleed extra-wide sections.",
     "- Use dark layout shell with high-contrast text (near-white text on dark background).",
     "- Build one digest section per selected campaign block and pair each section with that block's Primary image URL.",
+    "- Add clear vertical spacing between campaign sections (about 18-24px) so blocks do not visually run together.",
     "- Do not repeat the same image URL across multiple sections when multiple section images are available.",
     "- Section typography should match each section image style (for example vintage/western blocks vs modern/performance blocks).",
     "- Typography fallback mapping: vintage/western sections use Georgia/Times serif stack; modern/performance sections use Arial/Helvetica sans stack.",

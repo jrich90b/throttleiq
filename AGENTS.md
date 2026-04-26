@@ -1094,3 +1094,11 @@ When changing responses:
   - added explicit layout directives for dark shell, compact width, and typography mapping fallbacks (serif for vintage blocks, sans for modern blocks).
 - Purpose:
   - cleaner composition in previews/emails, stronger contrast, and better visual pairing between campaign art style and section typography.
+
+## Email Builder Section Spacing Enforcement
+- In `services/api/src/domain/campaignBuilder.ts`:
+  - normalization now applies explicit inter-section spacing both at heading boundaries and across subsequent content images to keep campaign blocks visually separated.
+- In `services/api/src/index.ts` (`/campaigns/email/generate`):
+  - added explicit layout directive requiring `~18-24px` vertical spacing between campaign sections.
+- Purpose:
+  - prevent campaign blocks from visually collapsing together in preview and exported HTML.

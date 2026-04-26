@@ -1306,6 +1306,7 @@ function enforceEmailReferenceImageAssignments(html: string, expectedImageUrls: 
 
 function enforceEmailImageStyles(html: string): string {
   if (!html) return "";
+  let contentImageIndex = 0;
   return html.replace(/<img\b([^>]*?)>/gi, (full, attrsRaw) => {
     let attrs = String(attrsRaw ?? "");
     const styleMatch = attrs.match(/\bstyle\s*=\s*(['"])([\s\S]*?)\1/i);
@@ -1315,12 +1316,19 @@ function enforceEmailImageStyles(html: string): string {
     const src = String(srcMatch?.[2] ?? "").toLowerCase();
     const alt = String(altMatch?.[2] ?? "").toLowerCase();
     const isLogo = src.includes("logo") || alt.includes("logo");
+    const isContentImage = isLikelyContentImageTag(full);
     style = appendCssDeclaration(style, "display", "block");
     style = appendCssDeclaration(style, "max-width", "100%");
     style = appendCssDeclaration(style, "height", "auto");
     if (!isLogo) {
       style = appendCssDeclaration(style, "object-fit", "contain");
       style = appendCssDeclaration(style, "background", "#f3f4f6");
+      if (isContentImage) {
+        contentImageIndex += 1;
+        if (contentImageIndex > 1) {
+          style = appendCssDeclaration(style, "margin-top", "18px");
+        }
+      }
     }
     if (styleMatch) {
       attrs = attrs.replace(styleMatch[0], `style="${escapeHtml(style)}"`);
@@ -1403,6 +1411,29 @@ function enforceEmailTextContrast(html: string): string {
   return out;
 }
 
+function enforceEmailCampaignSectionSpacing(html: string): string {
+  let out = String(html ?? "");
+  if (!out) return out;
+  let headingCount = 0;
+  out = out.replace(/<h([1-6])\b([^>]*)>/gi, (full, level, attrsRaw) => {
+    headingCount += 1;
+    if (headingCount <= 1) return full;
+    let attrs = String(attrsRaw ?? "");
+    const styleMatch = attrs.match(/\bstyle\s*=\s*(['"])([\s\S]*?)\1/i);
+    let style = styleMatch ? String(styleMatch[2] ?? "") : "";
+    style = appendCssDeclaration(style, "margin-top", "22px");
+    style = appendCssDeclaration(style, "padding-top", "14px");
+    style = appendCssDeclaration(style, "border-top", "1px solid #263143");
+    if (styleMatch) {
+      attrs = attrs.replace(styleMatch[0], `style="${escapeHtml(style)}"`);
+    } else {
+      attrs = `${attrs} style="${escapeHtml(style)}"`;
+    }
+    return `<h${level}${attrs}>`;
+  });
+  return out;
+}
+
 function normalizeGeneratedEmailHtml(
   raw: string,
   opts: {
@@ -1438,6 +1469,7 @@ function normalizeGeneratedEmailHtml(
   html = stripCompetingGeneratedHeaderBlocks(html);
   html = ensureEmailShellLayout(html);
   html = enforceEmailTextContrast(html);
+  html = enforceEmailCampaignSectionSpacing(html);
   html = enforceEmailImageStyles(html);
   html = enforceEmailReferenceImageAssignments(html, opts.expectedImageUrls ?? []);
   return html;
