@@ -73,6 +73,7 @@ type CampaignEmailSection = {
   body: string;
   ctaText?: string;
   ctaUrl?: string;
+  imageUrl?: string;
 };
 
 type DealerBrandContext = {
@@ -892,6 +893,24 @@ function extractImageSrcUrlsFromHtml(rawHtml: string): string[] {
   return out;
 }
 
+function extractImageSrcSequenceFromHtml(rawHtml: string): string[] {
+  const html = String(rawHtml ?? "");
+  if (!html) return [];
+  const out: string[] = [];
+  const re = /<img\b[^>]*\bsrc\s*=\s*(['"])(.*?)\1/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    const srcRaw = String(m[2] ?? "")
+      .replace(/&amp;/gi, "&")
+      .replace(/\\\//g, "/")
+      .trim();
+    const normalized = normalizeCampaignEmailImageUrl(srcRaw);
+    if (!normalized) continue;
+    out.push(normalized);
+  }
+  return out;
+}
+
 function isCompleteEmailHtml(raw: string, expectedImageCount = 0, expectedImageUrls: string[] = []): boolean {
   const html = String(raw ?? "").trim();
   if (!isRenderableEmailHtml(html)) return false;
@@ -908,10 +927,17 @@ function isCompleteEmailHtml(raw: string, expectedImageCount = 0, expectedImageU
   const expected = normalizeCampaignEmailImageUrls(expectedImageUrls);
   if (expected.length > 0) {
     const expectedSet = new Set(expected);
+    const primaryExpected = expected[0] || "";
     const renderedSet = new Set(extractImageSrcUrlsFromHtml(html));
     const matchedDistinct = Array.from(renderedSet).filter(url => expectedSet.has(url)).length;
     const minimumDistinctExpected = Math.min(3, Math.max(1, expectedSet.size));
     if (matchedDistinct < minimumDistinctExpected) return false;
+    if (primaryExpected && !renderedSet.has(primaryExpected)) return false;
+    const renderedSeq = extractImageSrcSequenceFromHtml(html).filter(url => expectedSet.has(url));
+    if (expectedSet.size > 1 && renderedSeq.length > 1) {
+      const renderedSeqDistinct = new Set(renderedSeq);
+      if (renderedSeqDistinct.size <= 1) return false;
+    }
   }
   return true;
 }
@@ -1061,11 +1087,13 @@ function normalizeCampaignEmailSections(raw: unknown): CampaignEmailSection[] {
       .trim()
       .slice(0, 80);
     const ctaUrl = normalizeHttpUrl(String((row as any)?.cta_url ?? (row as any)?.ctaUrl ?? ""));
+    const imageUrl = normalizeCampaignEmailImageUrl(String((row as any)?.image_url ?? (row as any)?.imageUrl ?? ""));
     out.push({
       title,
       body,
       ctaText: ctaText || undefined,
-      ctaUrl: ctaUrl || undefined
+      ctaUrl: ctaUrl || undefined,
+      imageUrl: imageUrl || undefined
     });
     if (out.length >= 4) break;
   }
@@ -1345,13 +1373,29 @@ function textToHtml(
                 : "Reply to this email and we will send details right away."
           }
         ];
+  const fallbackImagePool = imageUrls.slice(heroImageUrl ? 1 : 0);
+  const usedSectionImageUrls = new Set<string>();
+  const pickNextFallbackImage = () => {
+    for (const url of fallbackImagePool) {
+      if (!url || usedSectionImageUrls.has(url)) continue;
+      usedSectionImageUrls.add(url);
+      return url;
+    }
+    return "";
+  };
   const sectionCards = sections
-    .map((section, idx) => {
+    .map(section => {
       const title = escapeHtml(section.title);
       const body = escapeHtml(section.body).replace(/\n/g, "<br/>");
       const ctaUrl = normalizeHttpUrl(section.ctaUrl);
       const ctaText = escapeHtml(section.ctaText || "Learn more");
-      const sectionImageUrl = imageUrls[idx + 1] || "";
+      const requestedSectionImage = normalizeCampaignEmailImageUrl(String(section.imageUrl ?? ""));
+      const sectionImageUrl =
+        requestedSectionImage &&
+        imageUrls.includes(requestedSectionImage) &&
+        !usedSectionImageUrls.has(requestedSectionImage)
+          ? (usedSectionImageUrls.add(requestedSectionImage), requestedSectionImage)
+          : pickNextFallbackImage();
       const sectionImageBlock = sectionImageUrl
         ? `<tr>
              <td style="padding:0 0 10px 0;">
@@ -1693,7 +1737,8 @@ async function tryGenerateWithLlm(args: {
             title: { type: "string" },
             body: { type: "string" },
             cta_text: { type: "string" },
-            cta_url: { type: "string" }
+            cta_url: { type: "string" },
+            image_url: { type: "string" }
           }
         }
       }
@@ -1756,12 +1801,14 @@ async function tryGenerateWithLlm(args: {
     "- email_body_html: optional in this JSON pass.",
     "- email_body_html must be responsive table-based email markup with inline CSS only (no scripts, no external CSS).",
     "- email_body_html must include a branded top header row with the dealer logo and a right-side dealer link.",
+    "- Use the first image URL in the image library as the primary hero/lead visual.",
     "- For each major content block, pair the most relevant image from the image library. Keep text/image pairing logically matched.",
     "- Use distinct image URLs across sections; do not repeat the same campaign image for every block when multiple images are provided.",
     "- If an image is not relevant to any section, place it in an additional visuals row instead of forcing mismatch.",
     "- All images must render fully visible (no crop). Use object-fit:contain with height:auto and sensible max-height.",
     "- Keep URLs exactly as provided. Do not invent or rewrite image URLs.",
     "- email_sections: optional array of section blocks for digest-style email layout.",
+    "- If email_sections are returned, include image_url per section selected from the image library.",
     channelSupportsEmailDigest
       ? "- Prefer 2-4 sections when context provides multiple updates."
       : "- If sections are used, keep to one short section."
@@ -1782,6 +1829,7 @@ async function tryGenerateWithLlm(args: {
       "Use responsive table-based markup and inline CSS only.",
       "Always include branded top header row with dealer logo at left and dealer link at right.",
       "Use provided campaign/reference images in context-matching sections.",
+      "Use the first image library URL as the lead/hero image in the email.",
       "When multiple image URLs are provided, distribute distinct URLs across sections instead of repeating one image.",
       "If image library URLs are present, include each image URL at least once in the body.",
       "Never crop images. Use contain behavior and responsive sizing.",

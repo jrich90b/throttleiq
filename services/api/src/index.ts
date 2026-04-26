@@ -23607,7 +23607,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     requestedAssetTargets.includes("email") &&
     String(process.env.CAMPAIGN_EMAIL_NANO_VARIANTS_ENABLED ?? "1") !== "0";
   if (shouldGenerateEmailVariants) {
-    const variantReferenceImageUrls = normalizeCampaignUrlArray([...inspirationImageUrls, ...assetImageUrls]);
+    const variantReferenceImageUrls = normalizeCampaignUrlArray([...inspirationImageUrls, ...assetImageUrls]).slice(0, 4);
     emailNanoVariantUrls = await generateCampaignEmailImageVariantsWithNanoBanana({
       name,
       channel,
@@ -23619,7 +23619,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       designImageUrls: assetImageUrls
     });
     if (emailNanoVariantUrls.length) {
-      inspirationImageUrls = normalizeCampaignUrlArray([...emailNanoVariantUrls, ...inspirationImageUrls]);
+      inspirationImageUrls = normalizeCampaignUrlArray([...inspirationImageUrls, ...emailNanoVariantUrls]);
     }
   }
   const generated = await generateCampaignContent({
