@@ -26,6 +26,10 @@ Required order:
 - Test-ride inquiry copy must stay explicit in both initial email draft paths (`sendgridInbound` + shared `index.ts` fallback): use “stop in for a test ride...” wording (not generic “check out the bike...” text).
 - ADF inquiry extraction must prefer multiline `Your inquiry:` blocks over first-line captures so payloads like `Hello, ... Do you have it in stock?` do not collapse to only `Hello`.
 - When selecting `effectiveInquiry` from parsed/comment fallbacks, prefer substantive non-metadata text over greeting-only fragments.
+- ADF preferred-contact parser must recognize both phrasing variants:
+  - `Preferred contact method: ...`
+  - `Preferred method of contact - ...`
+  so HDMC comment formats correctly set `lead.preferredContactMethod` for routing/UI.
 - ADF classification is parser-first: when routing parser intent is accepted, map intent before legacy bucket/CTA heuristics:
   - `availability` -> `inventory_interest/check_availability`
   - `pricing_payments` -> `inventory_interest/request_a_quote`
@@ -273,6 +277,11 @@ When changing responses:
 - Prompt fidelity is now stricter for flyer generation:
   - The API extracts required detail phrases from the prompt/description and injects a required checklist into the image model prompt.
   - For `flyer_8_5x11`, checklist items are treated as mandatory copy details (helps prevent missing items like “flash tattooing”).
+- Single-concept image guardrail:
+  - Image generations should represent one campaign concept per output (no mixing unrelated campaigns/events/offers into one image).
+- Email digest behavior:
+  - Email generation may include multi-section updates in a single campaign email (for example upcoming events, current offers, new arrivals) when context supports multiple updates.
+  - Campaign email HTML should render sections in a high-contrast newsletter layout (intro + section cards + CTA + references/footer).
 
 ## Auth UI Theme
 - Login/bootstrap screen now uses the same dark brand theme style direction as the app shell.
@@ -637,9 +646,12 @@ When changing responses:
 ## Campaign Generated Copy Visibility
 - Campaign generation now persists an auto social caption in metadata when Facebook/Instagram feed targets are selected and no explicit caption is already set (`services/api/src/index.ts`).
 - Campaign Studio generated asset cards now show:
-  - `Auto caption` directly under Facebook/Instagram generated images,
-  - `SMS draft` directly under SMS generated images.
-- This keeps generated copy visible in the same frame as each image instead of only in publish dialogs or separate draft sections (`apps/web/src/app/page.tsx`).
+  - `Auto caption` directly under Facebook/Instagram generated images.
+- SMS output is now text-only in Campaign Studio:
+  - no SMS image render target is generated in `/campaigns/generate`,
+  - prompt/detail links are enforced into generated `smsBody`,
+  - SMS send action is launched from the dedicated SMS draft block (`Send SMS`) instead of an SMS image frame.
+- This keeps social copy visible in-image frames while keeping SMS copy in the dedicated draft/send area (`apps/web/src/app/page.tsx`, `services/api/src/index.ts`, `services/api/src/domain/campaignBuilder.ts`).
 
 ## Campaign Copy Readability Fix
 - Campaign generated-image copy blocks (Auto caption / SMS draft) now use dedicated high-contrast styling classes to avoid dark-theme utility overrides washing out text.
@@ -948,6 +960,10 @@ When changing responses:
 - Campaign SMS opt-out compliance:
   - when sending campaign SMS (`campaignId`/campaign context), API auto-appends `Reply STOP to opt out.` unless already present,
   - send dialog now shows explicit footer/suppression note.
+- Campaign mass-text branded link rewrite:
+  - `/contacts/broadcast` now rewrites sensitive raw URLs in SMS body (direct image asset links and any `*.leadrider.ai` links),
+  - removed links are replaced with a branded fallback URL using precedence: request `brandedLinkUrl` -> dealer profile `offersUrl` -> dealer profile `website`,
+  - objective: avoid exposing raw JPEG asset URLs and avoid `leadrider.ai` links in customer-facing mass texts.
 - STOP behavior remains suppression-backed:
   - STOP replies continue to flow into suppression handling; suppressed contacts are excluded from future campaign sends.
 

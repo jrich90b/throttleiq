@@ -1693,6 +1693,64 @@ function normalizeHttpUrl(raw: string | null | undefined): string | null {
   }
 }
 
+const BROADCAST_URL_REGEX = /https?:\/\/[^\s<>"']+/gi;
+const URL_TRAILING_PUNCTUATION_REGEX = /[),.;!?]+$/;
+
+function splitTrailingUrlPunctuation(rawUrl: string): { core: string; trailing: string } {
+  let core = String(rawUrl ?? "").trim();
+  let trailing = "";
+  while (core && URL_TRAILING_PUNCTUATION_REGEX.test(core)) {
+    trailing = core.slice(-1) + trailing;
+    core = core.slice(0, -1);
+  }
+  return { core, trailing };
+}
+
+function isLikelyImageAssetUrl(rawUrl: string | null | undefined): boolean {
+  const parsed = parseHttpUrl(rawUrl);
+  if (!parsed) return false;
+  const pathname = String(parsed.pathname ?? "").toLowerCase();
+  if (!pathname) return false;
+  if (pathname.includes("/uploads/campaigns/")) return true;
+  if (pathname.includes("/uploads/messages/")) return true;
+  if (/\.(jpe?g|png|webp|gif|bmp|tiff?|heic|heif)$/i.test(pathname)) return true;
+  return false;
+}
+
+function rewriteBroadcastSmsBodyForBranding(args: {
+  body: string;
+  brandedFallbackUrl?: string | null;
+}): string {
+  const original = String(args.body ?? "").trim();
+  if (!original) return "";
+  const fallback = normalizeHttpUrl(args.brandedFallbackUrl ?? null);
+  const safeFallback = fallback && !isLeadriderHost(fallback) ? fallback : null;
+  let removedSensitiveUrl = false;
+
+  const rewritten = original.replace(BROADCAST_URL_REGEX, raw => {
+    const { core, trailing } = splitTrailingUrlPunctuation(raw);
+    const normalized = normalizeHttpUrl(core);
+    if (!normalized) return raw;
+    const shouldRewrite = isLeadriderHost(normalized) || isLikelyImageAssetUrl(normalized);
+    if (!shouldRewrite) return raw;
+    removedSensitiveUrl = true;
+    return trailing;
+  });
+
+  let compact = rewritten
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  if (removedSensitiveUrl && safeFallback && !compact.includes(safeFallback)) {
+    compact = compact ? `${compact}\n\n${safeFallback}` : safeFallback;
+  }
+  if (!compact && safeFallback) return safeFallback;
+  return compact || original;
+}
+
 function inventoryListUrlsFromEnv(): string[] {
   const raw = String(process.env.INVENTORY_LIST_URLS ?? "").trim();
   if (!raw) return [];
@@ -21592,6 +21650,10 @@ function uniqCampaignAssetTargets(values: CampaignAssetTarget[] | null | undefin
   return Array.from(new Set((values ?? []).filter(Boolean)));
 }
 
+function campaignAssetTargetRequiresGeneratedImage(target: CampaignAssetTarget): boolean {
+  return target !== "sms";
+}
+
 function mergeCampaignGeneratedAssetsByTarget(args: {
   existing?: CampaignGeneratedAsset[] | null;
   incoming?: CampaignGeneratedAsset[] | null;
@@ -22058,6 +22120,7 @@ function buildCampaignImagePrompt(args: {
     : [];
   return [
     "Create a single high-quality dealership campaign hero image.",
+    "Represent one campaign concept only (do not combine multiple unrelated campaigns/events/offers in one image).",
     "Style: premium, modern motorcycle dealership marketing visual.",
     "No watermarks. No excessive text. No tiny unreadable text blocks.",
     "Keep composition clean and mobile-friendly.",
@@ -23432,6 +23495,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     normalizeSingleCampaignAssetTarget(req.body?.target) ??
     normalizeSingleCampaignAssetTarget(req.body?.assetTarget);
   const requestedAssetTargets = singleTarget ? [singleTarget] : uniqCampaignAssetTargets(assetTargets);
+  const requestedImageAssetTargets = requestedAssetTargets.filter(campaignAssetTargetRequiresGeneratedImage);
   const tags = normalizeCampaignTags(req.body?.tags);
   const prompt = String(req.body?.prompt ?? "").trim() || undefined;
   const description = String(req.body?.description ?? "").trim() || undefined;
@@ -23457,7 +23521,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
   let effectiveGenerated: typeof generated & { generatedAssets?: CampaignGeneratedAsset[]; finalImageUrl?: string } =
     generated;
   const shouldAttemptImageFallback = req.body?.generateImage !== false;
-  const imageTargetsRequested = requestedAssetTargets.length > 0;
+  const imageTargetsRequested = requestedImageAssetTargets.length > 0;
   let generatedFinalImageUrl: string | undefined;
   let generatedAssets: CampaignGeneratedAsset[] = [];
   let missingRequestedAssetTargets: CampaignAssetTarget[] = [];
@@ -23474,7 +23538,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       ...designImageUrls,
       ...inspirationContextImageUrls
     ]);
-    const uniqueTargets = requestedAssetTargets.slice();
+    const uniqueTargets = requestedImageAssetTargets.slice();
     const styleLockAnchorTarget =
       preferredCampaignGenerationTarget(uniqueTargets, channel) ?? uniqueTargets[0] ?? "sms";
     const orderedTargets: CampaignAssetTarget[] = [
@@ -23772,14 +23836,23 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     String(existingCampaign?.finalImageUrl ?? "").trim() ||
     undefined;
   const assetGenerationStatus: CampaignAssetGenerationMap =
-    shouldAttemptImageFallback && requestedAssetTargets.length
+    shouldAttemptImageFallback && requestedImageAssetTargets.length
       ? applyCampaignAssetGenerationAttempt({
           existing: existingCampaign?.assetGenerationStatus,
-          attemptedTargets: requestedAssetTargets,
+          attemptedTargets: requestedImageAssetTargets,
           successfulTargets: successfulTargetsFromRun,
           errorText: imageGenerationWarning
         })
       : normalizeCampaignAssetGenerationStatusMap(existingCampaign?.assetGenerationStatus);
+  if (requestedAssetTargets.includes("sms")) {
+    const hasSmsBody = Boolean(String(effectiveGenerated.smsBody ?? "").trim());
+    assetGenerationStatus.sms = {
+      status: hasSmsBody ? "ready" : "pending",
+      updatedAt: new Date().toISOString(),
+      attemptCount: hasSmsBody ? 1 : undefined,
+      lastGeneratedAt: hasSmsBody ? new Date().toISOString() : undefined
+    };
+  }
   if (imageGenerationWarning) {
     effectiveGenerated = {
       ...effectiveGenerated,
@@ -24012,6 +24085,13 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
     channel === "sms" && (campaignId || campaignName)
       ? ensureCampaignSmsOptOutFooter(message)
       : message;
+  const profile = await getDealerProfileHot();
+  const broadcastBrandedFallbackUrl =
+    channel === "sms"
+      ? normalizeHttpUrl(String(req.body?.brandedLinkUrl ?? "").trim()) ??
+        normalizeHttpUrl((profile as any)?.offersUrl ?? null) ??
+        normalizeHttpUrl(profile?.website ?? null)
+      : null;
 
   let list: any = null;
   if (!sendToAll) {
@@ -24036,7 +24116,6 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
   let emailFrom = "";
   let emailReplyTo = "";
   if (channel === "email") {
-    const profile = await getDealerProfileHot();
     const emailCfg = getEmailConfig(profile);
     emailFrom = String(emailCfg.from ?? "").trim();
     emailReplyTo = String(emailCfg.replyTo ?? "").trim();
@@ -24076,6 +24155,7 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
       const phone = normalizePhone(String(contact.phone ?? "").trim());
       const email = String(contact.email ?? "").trim();
       let sid: string | undefined;
+      let outboundBody = channel === "email" ? fallbackEmailText : campaignSmsBody;
       if (channel === "sms") {
         if (!phone || !phone.startsWith("+")) {
           skipped.push({ id: String(contact.id), reason: "missing_phone" });
@@ -24085,12 +24165,21 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
           skipped.push({ id: String(contact.id), reason: "suppressed" });
           continue;
         }
+        const smsBody = rewriteBroadcastSmsBodyForBranding({
+          body: campaignSmsBody,
+          brandedFallbackUrl: broadcastBrandedFallbackUrl
+        });
+        if (!smsBody) {
+          skipped.push({ id: String(contact.id), reason: "missing_sms_body" });
+          continue;
+        }
         const out = await twilioClient!.messages.create({
           from: smsFrom,
           to: phone,
-          body: campaignSmsBody
+          body: smsBody
         });
         sid = out.sid ?? undefined;
+        outboundBody = smsBody;
       } else {
         if (!email || !email.includes("@")) {
           skipped.push({ id: String(contact.id), reason: "missing_email" });
@@ -24119,7 +24208,6 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
         phone,
         email
       });
-      const outboundBody = channel === "email" ? fallbackEmailText : campaignSmsBody;
       appendOutbound(
         conv,
         channel === "email" ? emailFrom : smsFrom,

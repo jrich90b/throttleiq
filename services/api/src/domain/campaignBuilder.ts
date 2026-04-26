@@ -68,6 +68,13 @@ export type GenerateCampaignOutput = {
   metadata: Record<string, unknown>;
 };
 
+type CampaignEmailSection = {
+  title: string;
+  body: string;
+  ctaText?: string;
+  ctaUrl?: string;
+};
+
 type DealerBrandContext = {
   websiteUrl?: string;
   title?: string;
@@ -106,6 +113,48 @@ function normalizeHttpUrl(raw: string | null | undefined, base?: string): string
   } catch {
     return "";
   }
+}
+
+const CAMPAIGN_DETAIL_URL_RE = /https?:\/\/[^\s<>"'`]+/gi;
+
+function extractPromptDetailUrls(input: GenerateCampaignInput): string[] {
+  const detailText = [normalizeText(input.prompt), normalizeText(input.description)]
+    .filter(Boolean)
+    .join("\n");
+  if (!detailText) return [];
+  const matches = detailText.match(CAMPAIGN_DETAIL_URL_RE) ?? [];
+  const normalized = matches
+    .map(v => normalizeText(v).replace(/[),.;!?]+$/g, ""))
+    .map(v => normalizeHttpUrl(v))
+    .filter(Boolean);
+  return Array.from(new Set(normalized));
+}
+
+function ensureSmsBodyIncludesPromptDetailUrls(
+  output: GenerateCampaignOutput,
+  requiredUrls: string[]
+): GenerateCampaignOutput {
+  const urls = Array.from(new Set((requiredUrls ?? []).map(v => normalizeHttpUrl(v)).filter(Boolean)));
+  if (!urls.length) return output;
+  const currentSms = normalizeText(output.smsBody);
+  const existingSmsUrls = new Set(
+    (currentSms.match(CAMPAIGN_DETAIL_URL_RE) ?? [])
+      .map(v => normalizeText(v).replace(/[),.;!?]+$/g, ""))
+      .map(v => normalizeHttpUrl(v))
+      .filter(Boolean)
+  );
+  const missing = urls.filter(url => !existingSmsUrls.has(url));
+  if (!missing.length) return output;
+  const nextSms = currentSms ? `${currentSms}\n\n${missing.join("\n")}` : missing.join("\n");
+  return {
+    ...output,
+    smsBody: nextSms,
+    metadata: {
+      ...(output.metadata ?? {}),
+      requiredPromptDetailUrls: urls,
+      appendedPromptDetailUrls: missing
+    }
+  };
 }
 
 function localCampaignUploadPathForUrl(url: string): string {
@@ -453,7 +502,10 @@ function applyNoTradeLanguageGuard(
     smsBody,
     emailSubject,
     emailBodyText,
-    emailBodyHtml: textToHtml(emailBodyText, output.sourceHits ?? [])
+    emailBodyHtml: textToHtml(emailBodyText, output.sourceHits ?? [], {
+      dealerName,
+      emailSubject
+    })
   };
 }
 
@@ -815,25 +867,231 @@ function escapeHtml(text: string): string {
     .replace(/'/g, "&#39;");
 }
 
-function textToHtml(text: string, sourceHits: CampaignSourceHit[]): string {
-  const paragraphs = text
+function normalizeCampaignEmailSections(raw: unknown): CampaignEmailSection[] {
+  if (!Array.isArray(raw)) return [];
+  const out: CampaignEmailSection[] = [];
+  const seen = new Set<string>();
+  for (const row of raw) {
+    if (!row || typeof row !== "object") continue;
+    const title = String((row as any)?.title ?? "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 70);
+    const body = String((row as any)?.body ?? "")
+      .replace(/\s+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+      .slice(0, 900);
+    if (!title || !body) continue;
+    const dedupeKey = `${title.toLowerCase()}::${body.toLowerCase().slice(0, 180)}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    const ctaText = String((row as any)?.cta_text ?? (row as any)?.ctaText ?? "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 80);
+    const ctaUrl = normalizeHttpUrl(String((row as any)?.cta_url ?? (row as any)?.ctaUrl ?? ""));
+    out.push({
+      title,
+      body,
+      ctaText: ctaText || undefined,
+      ctaUrl: ctaUrl || undefined
+    });
+    if (out.length >= 4) break;
+  }
+  return out;
+}
+
+function deriveCampaignEmailSectionsFromText(text: string): CampaignEmailSection[] {
+  const paragraphs = String(text ?? "")
     .split(/\n{2,}/)
     .map(p => p.trim())
-    .filter(Boolean)
-    .map(p => `<p style="margin:0 0 12px 0;line-height:1.5;">${escapeHtml(p).replace(/\n/g, "<br/>")}</p>`)
+    .filter(Boolean);
+  if (paragraphs.length <= 1) return [];
+  const out: CampaignEmailSection[] = [];
+  const seen = new Set<string>();
+  for (const rawParagraph of paragraphs.slice(1)) {
+    const paragraph = rawParagraph.trim();
+    if (!paragraph) continue;
+    const headingMatch = paragraph.match(/^([A-Za-z0-9][A-Za-z0-9&/+\-' ]{2,65}):\s*(.+)$/s);
+    const title = headingMatch?.[1]?.trim() || "";
+    const body = headingMatch?.[2]?.trim() || paragraph;
+    const normalizedTitle =
+      title ||
+      (out.length === 0
+        ? "Upcoming Updates"
+        : out.length === 1
+          ? "Current Offers"
+          : out.length === 2
+            ? "New Arrivals"
+            : `Update ${out.length + 1}`);
+    if (!body) continue;
+    const key = `${normalizedTitle.toLowerCase()}::${body.toLowerCase().slice(0, 180)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      title: normalizedTitle.slice(0, 70),
+      body: body.slice(0, 900)
+    });
+    if (out.length >= 4) break;
+  }
+  return out;
+}
+
+function buildTemplateEmailSections(args: {
+  sourceHits: CampaignSourceHit[];
+  topic: string;
+}): CampaignEmailSection[] {
+  const sectionsFromSources = args.sourceHits
+    .slice(0, 3)
+    .map(hit => {
+      const title = normalizeText(hit.title).slice(0, 70);
+      const snippet = normalizeText(hit.snippet).slice(0, 900);
+      if (!title || !snippet) return null;
+      return { title, body: snippet } as CampaignEmailSection;
+    })
+    .filter((row): row is CampaignEmailSection => Boolean(row));
+  if (sectionsFromSources.length) return sectionsFromSources;
+  const topic = normalizeText(args.topic) || "motorcycle updates";
+  return [
+    {
+      title: "Upcoming Updates",
+      body: `We’re sharing quick updates from the dealership this week around ${topic}.`
+    },
+    {
+      title: "Current Offers",
+      body: "If you want current pricing or offer details, reply and we’ll send the options that fit what you’re shopping for."
+    },
+    {
+      title: "New Arrivals",
+      body: "Tell us the model/year you want and we can send matching in-stock updates as units come in."
+    }
+  ];
+}
+
+function textToHtml(
+  text: string,
+  sourceHits: CampaignSourceHit[],
+  opts?: {
+    dealerName?: string;
+    emailSubject?: string;
+    website?: string;
+    phone?: string;
+    bookingUrl?: string;
+    sections?: CampaignEmailSection[];
+  }
+): string {
+  const dealerName = normalizeText(opts?.dealerName) || "Dealership";
+  const emailSubject = normalizeText(opts?.emailSubject) || `${dealerName} Update`;
+  const website = normalizeHttpUrl(opts?.website);
+  const bookingUrl = normalizeHttpUrl(opts?.bookingUrl);
+  const phone = normalizeText(opts?.phone);
+
+  const paragraphs = String(text ?? "")
+    .split(/\n{2,}/)
+    .map(p => p.trim())
+    .filter(Boolean);
+  const introText = paragraphs[0] || "Here is your latest update.";
+  const introHtml = escapeHtml(introText).replace(/\n/g, "<br/>");
+
+  const normalizedSections = normalizeCampaignEmailSections(opts?.sections);
+  const sections = normalizedSections.length
+    ? normalizedSections
+    : deriveCampaignEmailSectionsFromText(text);
+  const sectionCards = sections
+    .map(section => {
+      const title = escapeHtml(section.title);
+      const body = escapeHtml(section.body).replace(/\n/g, "<br/>");
+      const ctaUrl = normalizeHttpUrl(section.ctaUrl);
+      const ctaText = escapeHtml(section.ctaText || "Learn more");
+      return `
+        <tr>
+          <td style="padding:0 0 12px 0;">
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid #d1d5db;border-radius:8px;background:#ffffff;">
+              <tr>
+                <td style="padding:14px 16px 14px 16px;">
+                  <div style="font-size:16px;line-height:22px;font-weight:700;color:#111827;margin:0 0 8px 0;">${title}</div>
+                  <div style="font-size:14px;line-height:22px;color:#111827;">${body}</div>
+                  ${
+                    ctaUrl
+                      ? `<div style="margin-top:12px;"><a href="${escapeHtml(ctaUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;font-weight:700;font-size:13px;line-height:13px;padding:10px 14px;border-radius:6px;">${ctaText}</a></div>`
+                      : ""
+                  }
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>`;
+    })
     .join("");
-  if (!sourceHits.length) return paragraphs;
+
   const links = sourceHits
     .slice(0, 4)
     .filter(hit => hit.url)
     .map(hit => {
       const label = escapeHtml(hit.title || hit.domain || hit.url || "Reference");
       const href = escapeHtml(hit.url || "");
-      return `<li style="margin:0 0 6px 0;"><a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a></li>`;
+      return `<li style="margin:0 0 6px 0;"><a href="${href}" target="_blank" rel="noopener noreferrer" style="color:#1d4ed8;text-decoration:underline;">${label}</a></li>`;
     })
     .join("");
-  if (!links) return paragraphs;
-  return `${paragraphs}<p style="margin:10px 0 6px 0;font-weight:600;">References</p><ul style="margin:0 0 0 18px;padding:0;">${links}</ul>`;
+  const referencesBlock = links
+    ? `<tr><td style="padding:10px 0 0 0;"><div style="font-size:12px;line-height:18px;color:#374151;font-weight:700;margin:0 0 6px 0;">References</div><ul style="margin:0 0 0 18px;padding:0;color:#1f2937;font-size:12px;line-height:18px;">${links}</ul></td></tr>`
+    : "";
+
+  const primaryCtaUrl = bookingUrl || website;
+  const primaryCtaText = bookingUrl ? "Schedule Now" : website ? "View Website" : "";
+  const footerBits = [website ? `Website: ${website}` : "", phone ? `Phone: ${phone}` : ""]
+    .filter(Boolean)
+    .join(" · ");
+
+  return `<!doctype html>
+<html>
+  <body style="margin:0;padding:0;background:#f3f4f6;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f3f4f6;">
+      <tr>
+        <td align="center" style="padding:22px 12px;">
+          <table role="presentation" width="620" cellspacing="0" cellpadding="0" border="0" style="width:620px;max-width:620px;background:#ffffff;border:1px solid #d1d5db;border-radius:10px;overflow:hidden;">
+            <tr>
+              <td style="padding:16px 22px;background:#0f172a;color:#ffffff;">
+                <div style="font-size:12px;line-height:18px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#fdba74;">${escapeHtml(
+                  dealerName
+                )}</div>
+                <div style="font-size:22px;line-height:30px;font-weight:800;color:#ffffff;margin-top:4px;">${escapeHtml(
+                  emailSubject
+                )}</div>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:18px 22px;">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                  <tr>
+                    <td style="font-size:15px;line-height:24px;color:#111827;padding:0 0 12px 0;">${introHtml}</td>
+                  </tr>
+                  ${sectionCards}
+                  ${
+                    primaryCtaUrl
+                      ? `<tr><td style="padding:6px 0 10px 0;"><a href="${escapeHtml(
+                          primaryCtaUrl
+                        )}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#f97316;color:#111827;text-decoration:none;font-weight:800;font-size:13px;line-height:13px;padding:12px 16px;border-radius:6px;">${escapeHtml(
+                          primaryCtaText
+                        )}</a></td></tr>`
+                      : ""
+                  }
+                  ${referencesBlock}
+                  <tr>
+                    <td style="padding:14px 0 0 0;font-size:12px;line-height:18px;color:#4b5563;border-top:1px solid #e5e7eb;">
+                      ${escapeHtml(dealerName)}${footerBits ? ` · ${escapeHtml(footerBits)}` : ""}
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
 }
 
 function buildTemplateOutput(
@@ -857,15 +1115,14 @@ function buildTemplateOutput(
     : "Reply here and I can share details that fit what you're shopping for.";
   const smsBody = `Quick update from ${dealerName}: ${topic}. ${referenceLine}`;
   const emailSubject = `${dealerName} | ${topic.slice(0, 80)}`;
+  const emailSections = buildTemplateEmailSections({ sourceHits, topic });
   const emailBodyText = [
     `Hi there,`,
     ``,
-    `Quick campaign update from ${dealerName}.`,
-    `${topic}`,
+    `Quick update from ${dealerName}.`,
     ``,
-    sourceHits[0]?.url ? `Reference: ${sourceHits[0].url}` : "Reply and we can send specific options.",
-    ``,
-    `Tags: ${tagLabels}`
+    ...emailSections.flatMap(section => [section.title, section.body, ""]),
+    sourceHits[0]?.url ? `Reference: ${sourceHits[0].url}` : "Reply and we can send specific options."
   ]
     .filter(Boolean)
     .join("\n");
@@ -876,7 +1133,14 @@ function buildTemplateOutput(
     smsBody,
     emailSubject,
     emailBodyText,
-    emailBodyHtml: textToHtml(emailBodyText, sourceHits),
+    emailBodyHtml: textToHtml(emailBodyText, sourceHits, {
+      dealerName,
+      emailSubject,
+      website: input.dealerProfile?.website,
+      phone: input.dealerProfile?.phone,
+      bookingUrl: input.dealerProfile?.bookingUrl,
+      sections: emailSections
+    }),
     sourceHits,
     generatedBy: "template",
     metadata: {
@@ -906,6 +1170,7 @@ async function tryGenerateWithLlm(args: {
   const phone = normalizeText(args.input.dealerProfile?.phone);
   const bookingUrl = normalizeText(args.input.dealerProfile?.bookingUrl);
   const tags = args.input.tags.map(tag => TAG_LABELS[tag]).join(", ") || "General";
+  const channelSupportsEmailDigest = args.input.channel !== "sms";
   const suppressTradeOnly = shouldSuppressTradeByInput(args.input);
   const brandWebsite = normalizeText(args.brandContext?.websiteUrl);
   const brandTitle = normalizeText(args.brandContext?.title);
@@ -929,7 +1194,23 @@ async function tryGenerateWithLlm(args: {
     properties: {
       sms_body: { type: "string" },
       email_subject: { type: "string" },
-      email_body_text: { type: "string" }
+      email_body_text: { type: "string" },
+      email_sections: {
+        type: "array",
+        minItems: 0,
+        maxItems: 4,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["title", "body"],
+          properties: {
+            title: { type: "string" },
+            body: { type: "string" },
+            cta_text: { type: "string" },
+            cta_url: { type: "string" }
+          }
+        }
+      }
     }
   };
 
@@ -941,6 +1222,9 @@ async function tryGenerateWithLlm(args: {
     "When description is empty or generic, derive specifics from the reference hits and dealer website context.",
     "Do not require the user to provide manual description details if references already include them.",
     "If details are uncertain, say programs vary by approval/term and invite reply.",
+    channelSupportsEmailDigest
+      ? "For email output, write as a digest with multiple short update blocks (for example upcoming events, current offers, new arrivals) when context supports it."
+      : "Keep email output concise and single-topic when only SMS channel is requested.",
     shouldSuppressFinanceTradeByTags(args.input.tags)
       ? "Hard guardrail: do NOT mention financing/APR/credit/payments/trade-in/value-your-trade language."
       : suppressTradeOnly
@@ -976,7 +1260,11 @@ async function tryGenerateWithLlm(args: {
     "Output requirements:",
     "- sms_body: 1-2 short sentences.",
     "- email_subject: under 75 chars.",
-    "- email_body_text: plain text email body with clear CTA."
+    "- email_body_text: plain text email body with clear CTA.",
+    "- email_sections: optional array of section blocks for digest-style email layout.",
+    channelSupportsEmailDigest
+      ? "- Prefer 2-4 sections when context provides multiple updates."
+      : "- If sections are used, keep to one short section."
   ].join("\n");
 
   const parseObject = (raw: string): any | null => {
@@ -1005,6 +1293,7 @@ async function tryGenerateWithLlm(args: {
       const smsBody = normalizeText(parsed.sms_body);
       const emailSubject = normalizeText(parsed.email_subject);
       const emailBodyText = normalizeText(parsed.email_body_text);
+      const emailSections = normalizeCampaignEmailSections(parsed.email_sections);
       if (smsBody || emailSubject || emailBodyText) {
         return {
           status: "generated",
@@ -1012,7 +1301,16 @@ async function tryGenerateWithLlm(args: {
           smsBody: smsBody || undefined,
           emailSubject: emailSubject || undefined,
           emailBodyText: emailBodyText || undefined,
-          emailBodyHtml: emailBodyText ? textToHtml(emailBodyText, args.sourceHits) : undefined,
+          emailBodyHtml: emailBodyText
+            ? textToHtml(emailBodyText, args.sourceHits, {
+                dealerName,
+                emailSubject: emailSubject || undefined,
+                website,
+                phone,
+                bookingUrl,
+                sections: emailSections
+              })
+            : undefined,
           sourceHits: args.sourceHits,
           generatedBy: "llm_fallback",
           metadata: {
@@ -1023,6 +1321,7 @@ async function tryGenerateWithLlm(args: {
             briefExtractedCount: (args.briefContexts ?? []).filter(row => row.type === "text").length,
             generator: "llm_fallback",
             model,
+            emailSectionCount: emailSections.length,
             brandWebsite: brandWebsite || website || null
           }
         };
@@ -1046,6 +1345,7 @@ async function tryGenerateWithLlm(args: {
       const smsBody = normalizeText(parsed.sms_body);
       const emailSubject = normalizeText(parsed.email_subject);
       const emailBodyText = normalizeText(parsed.email_body_text);
+      const emailSections = normalizeCampaignEmailSections(parsed.email_sections);
       if (smsBody || emailSubject || emailBodyText) {
         return {
           status: "generated",
@@ -1053,7 +1353,16 @@ async function tryGenerateWithLlm(args: {
           smsBody: smsBody || undefined,
           emailSubject: emailSubject || undefined,
           emailBodyText: emailBodyText || undefined,
-          emailBodyHtml: emailBodyText ? textToHtml(emailBodyText, args.sourceHits) : undefined,
+          emailBodyHtml: emailBodyText
+            ? textToHtml(emailBodyText, args.sourceHits, {
+                dealerName,
+                emailSubject: emailSubject || undefined,
+                website,
+                phone,
+                bookingUrl,
+                sections: emailSections
+              })
+            : undefined,
           sourceHits: args.sourceHits,
           generatedBy: "llm_fallback",
           metadata: {
@@ -1064,6 +1373,7 @@ async function tryGenerateWithLlm(args: {
             briefExtractedCount: (args.briefContexts ?? []).filter(row => row.type === "text").length,
             generator: "llm_fallback",
             model,
+            emailSectionCount: emailSections.length,
             brandWebsite: brandWebsite || website || null
           }
         };
@@ -1078,6 +1388,7 @@ async function tryGenerateWithLlm(args: {
 
 export async function generateCampaignContent(input: GenerateCampaignInput): Promise<GenerateCampaignOutput> {
   const suppressTradeOnly = shouldSuppressTradeByInput(input);
+  const requiredPromptDetailUrls = extractPromptDetailUrls(input);
   const brandContext = await fetchDealerBrandContext(input.dealerProfile ?? null);
   const briefContexts = await collectBriefContexts(normalizeUrls(input.briefDocumentUrls));
   const shouldRunWebSearch = input.buildMode === "web_search_design";
@@ -1183,9 +1494,10 @@ export async function generateCampaignContent(input: GenerateCampaignInput): Pro
       logoSearchQuery: logoSearchQuery || null,
       logoSourceCount: logoSourceHits.length
     };
-    return suppressTradeOnly
+    const guarded = suppressTradeOnly
       ? applyNoTradeLanguageGuard(withPlacesMeta, input.dealerProfile?.dealerName)
       : withPlacesMeta;
+    return ensureSmsBodyIncludesPromptDetailUrls(guarded, requiredPromptDetailUrls);
   }
 
   const template = buildTemplateOutput(
@@ -1207,7 +1519,8 @@ export async function generateCampaignContent(input: GenerateCampaignInput): Pro
     logoSearchQuery: logoSearchQuery || null,
     logoSourceCount: logoSourceHits.length
   };
-  return suppressTradeOnly
+  const guarded = suppressTradeOnly
     ? applyNoTradeLanguageGuard(withPlacesMeta, input.dealerProfile?.dealerName)
     : withPlacesMeta;
+  return ensureSmsBodyIncludesPromptDetailUrls(guarded, requiredPromptDetailUrls);
 }
