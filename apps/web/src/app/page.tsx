@@ -1648,10 +1648,8 @@ type CampaignEmailContextBundle = {
 function collectCampaignEmailContext(entries: CampaignEntry[]): CampaignEmailContextBundle {
   const selectedEntries = Array.isArray(entries) ? entries.filter(Boolean) : [];
   const inspirationImageUrls: string[] = [];
-  const assetImageUrls: string[] = [];
   const briefDocumentUrls: string[] = [];
   const seenInspiration = new Set<string>();
-  const seenAssets = new Set<string>();
   const seenBriefs = new Set<string>();
   const contextBlocks: string[] = [];
   for (const entry of selectedEntries) {
@@ -1674,14 +1672,6 @@ function collectCampaignEmailContext(entries: CampaignEntry[]): CampaignEmailCon
       seenInspiration.add(url);
       inspirationImageUrls.push(url);
     }
-    const designUrls = (Array.isArray(entry.assetImageUrls) ? entry.assetImageUrls : [])
-      .map(v => String(v ?? "").trim())
-      .filter(looksLikeCampaignImageUrl);
-    for (const url of designUrls) {
-      if (!url || seenAssets.has(url)) continue;
-      seenAssets.add(url);
-      assetImageUrls.push(url);
-    }
     const briefUrls = (Array.isArray(entry.briefDocumentUrls) ? entry.briefDocumentUrls : [])
       .map(v => String(v ?? "").trim())
       .filter(Boolean);
@@ -1703,7 +1693,7 @@ function collectCampaignEmailContext(entries: CampaignEntry[]): CampaignEmailCon
   return {
     contextBlocks,
     inspirationImageUrls,
-    assetImageUrls,
+    assetImageUrls: [],
     briefDocumentUrls
   };
 }
@@ -3276,10 +3266,7 @@ export default function Home() {
       const nextPrompt = [basePrompt, contextBlock].filter(Boolean).join("\n\n");
       return {
         ...prev,
-        prompt: nextPrompt,
-        inspirationImageUrlsText: bundle.inspirationImageUrls.slice(0, 24).join("\n"),
-        assetImageUrlsText: bundle.assetImageUrls.slice(0, 32).join("\n"),
-        briefDocumentUrlsText: bundle.briefDocumentUrls.slice(0, 32).join("\n")
+        prompt: nextPrompt
       };
     });
     setSaveToast(
@@ -3290,10 +3277,7 @@ export default function Home() {
   function clearEmailContextCampaignFromForm() {
     setCampaignForm(prev => ({
       ...prev,
-      prompt: stripCampaignEmailReferenceContext(prev.prompt),
-      inspirationImageUrlsText: "",
-      assetImageUrlsText: "",
-      briefDocumentUrlsText: ""
+      prompt: stripCampaignEmailReferenceContext(prev.prompt)
     }));
     setSaveToast("Cleared email context campaign");
   }
@@ -4300,8 +4284,7 @@ export default function Home() {
       : includeMediaContext
         ? Array.from(
             new Set([
-              ...parseCampaignUrlsText(campaignForm.assetImageUrlsText),
-              ...(target === "email" && !editFromCurrent ? selectedEmailContextBundle.assetImageUrls : [])
+              ...parseCampaignUrlsText(campaignForm.assetImageUrlsText)
             ])
           )
         : [];
@@ -4342,9 +4325,21 @@ export default function Home() {
       }
       const saved = (data?.campaign as CampaignEntry | undefined) ?? null;
       const generated = (data?.generated as any) ?? null;
+      const preserveEmailFormFields =
+        target === "email"
+          ? {
+              prompt: campaignForm.prompt,
+              inspirationImageUrlsText: campaignForm.inspirationImageUrlsText,
+              assetImageUrlsText: campaignForm.assetImageUrlsText,
+              briefDocumentUrlsText: campaignForm.briefDocumentUrlsText
+            }
+          : null;
       if (saved) {
         setCampaignSelectedId(saved.id);
         applyCampaignToForm(saved);
+        if (preserveEmailFormFields) {
+          setCampaignForm(prev => ({ ...prev, ...preserveEmailFormFields }));
+        }
         setCampaigns(prev => {
           const idx = prev.findIndex(row => row.id === saved.id);
           const next = idx >= 0 ? prev.map(row => (row.id === saved.id ? saved : row)) : [saved, ...prev];
@@ -12359,8 +12354,8 @@ export default function Home() {
                   <div className="border rounded-lg p-3 bg-white/95 lr-campaign-locker-card space-y-2">
                     <div className="text-xs font-semibold text-gray-700">Email Context Campaigns</div>
                     <div className="text-[11px] text-gray-600">
-                      Add one or more campaigns and pull their prompt/details, brief files, and reference/design images into
-                      this email generation.
+                      Add one or more campaigns and pull their prompt/details into this email generation. Locker media is
+                      applied at generate time and not copied into visible Reference/Design fields.
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       <select
@@ -12414,8 +12409,7 @@ export default function Home() {
                                 <div className="text-[11px] text-slate-600">
                                   Prompt: {String(entry.prompt ?? "").trim() ? "Yes" : "No"} · Briefs:{" "}
                                   {Array.isArray(entry.briefDocumentUrls) ? entry.briefDocumentUrls.length : 0} · Ref images:{" "}
-                                  {Array.isArray(entry.inspirationImageUrls) ? entry.inspirationImageUrls.length : 0} · Design images:{" "}
-                                  {Array.isArray(entry.assetImageUrls) ? entry.assetImageUrls.length : 0}
+                                  {Array.isArray(entry.inspirationImageUrls) ? entry.inspirationImageUrls.length : 0}
                                 </div>
                               </div>
                               <button

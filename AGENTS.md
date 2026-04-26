@@ -1031,6 +1031,8 @@ When changing responses:
   - email generate now auto-merges selected `Email Context Campaigns` (locker) into generation payload (prompt context + reference/design images + brief files) without requiring a separate apply click.
   - current campaign generated images are now always included for email generation context (not just a single primary image).
   - locker row thumbnails use `object-contain` to avoid visual cropping in the selector list.
+  - locker-selected campaigns no longer inject `Design images` into Email generation context; locker now contributes prompt/details + reference context while keeping design uploads manual.
+  - Email generate now preserves the visible Step 2 URL text fields after save/reload so locker auto-merge does not flood `Reference images`/`Design images` inputs in the UI.
 - In `services/api/src/domain/campaignBuilder.ts`:
   - email HTML completeness validation now checks distinct image URL usage from provided campaign image library (prevents one image being repeated for all sections when multiple images are supplied).
   - LLM/rescue instructions explicitly require distributing distinct provided images across sections.
