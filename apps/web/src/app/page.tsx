@@ -673,6 +673,7 @@ type ConversationListItem = {
     note?: string;
   } | null;
   contactPreference?: "call_only";
+  preferredContactMethod?: "email" | "sms" | "phone" | null;
   leadOwner?: {
     id?: string;
     name?: string;
@@ -910,6 +911,10 @@ type ConversationDetail = {
     lastName?: string;
     email?: string;
     phone?: string;
+    preferredContactMethod?: "email" | "sms" | "phone";
+    emailOptIn?: boolean;
+    smsOptIn?: boolean;
+    phoneOptIn?: boolean;
     vehicle?: {
       stockId?: string;
       vin?: string;
@@ -1434,6 +1439,11 @@ type CampaignSourceHit = {
   snippet?: string;
   url?: string;
   domain?: string;
+};
+
+type CampaignEmailDigestPreviewSection = {
+  title: string;
+  body: string;
 };
 
 type CampaignGeneratedAsset = {
@@ -1968,6 +1978,63 @@ function campaignFirstEmailParagraph(raw: unknown): string {
   return text.split(/\n\s*\n/).map(v => v.trim()).find(Boolean) ?? "";
 }
 
+function campaignDigestHeadingCandidate(raw: string): string {
+  return String(raw ?? "")
+    .replace(/^[-*•]\s+/, "")
+    .replace(/^\d+\.\s+/, "")
+    .replace(/:\s*$/, "")
+    .trim();
+}
+
+function campaignLooksLikeDigestHeading(raw: string): boolean {
+  const text = campaignDigestHeadingCandidate(raw);
+  if (!text) return false;
+  if (text.length > 72) return false;
+  if (/[.!?]$/.test(text)) return false;
+  if (/^(hi|hello|thanks|thank you|best|regards|sincerely)\b/i.test(text)) return false;
+  return /^[A-Za-z0-9][A-Za-z0-9 '&/+,\-()]*$/.test(text);
+}
+
+function campaignBuildEmailDigestPreview(raw: unknown): CampaignEmailDigestPreviewSection[] {
+  const text = String(raw ?? "").replace(/\r\n/g, "\n").trim();
+  if (!text) return [];
+  const out: CampaignEmailDigestPreviewSection[] = [];
+  const blocks = text.split(/\n\s*\n+/).map(v => v.trim()).filter(Boolean);
+  for (const block of blocks) {
+    const lines = block
+      .split("\n")
+      .map(v => v.trim())
+      .filter(Boolean);
+    if (!lines.length) continue;
+    let title = "";
+    let bodyLines = [...lines];
+    if (campaignLooksLikeDigestHeading(lines[0])) {
+      title = campaignDigestHeadingCandidate(lines[0]);
+      bodyLines = lines.slice(1);
+    }
+    const body = bodyLines.join(" ").replace(/\s+/g, " ").trim() || lines.join(" ").replace(/\s+/g, " ").trim();
+    if (!body) continue;
+    if (!title) title = `Update ${out.length + 1}`;
+    out.push({ title, body });
+    if (out.length >= 4) break;
+  }
+  if (out.length >= 2) return out;
+  const bulletLines = text
+    .split("\n")
+    .map(v => v.trim())
+    .filter(v => /^(?:[-*•]\s+|\d+\.\s+)/.test(v));
+  if (bulletLines.length >= 2) {
+    return bulletLines.slice(0, 4).map((line, idx) => {
+      const body = campaignDigestHeadingCandidate(line).replace(/\s+/g, " ").trim();
+      return {
+        title: `Update ${idx + 1}`,
+        body: body || "Details available in this campaign update."
+      };
+    });
+  }
+  return out;
+}
+
 function campaignDeriveCaptionDetail(entry: CampaignEntry): string {
   const fromDescription = campaignSanitizeCaptionDetail(entry.description);
   if (fromDescription) return fromDescription;
@@ -2248,6 +2315,26 @@ export default function Home() {
   const campaignAutoCaptionPreview = useMemo(
     () => campaignAutoPublishCaption(campaignPreviewEntry),
     [campaignPreviewEntry]
+  );
+  const campaignOutputBehaviorNote = useMemo(() => {
+    if (campaignActiveTarget === "email") {
+      return "Email mode now supports multi-section digest layout (up to 4 update blocks) in generated HTML.";
+    }
+    if (campaignActiveTarget === "sms") {
+      return "SMS mode generates one concise text draft (single campaign concept).";
+    }
+    if (campaignActiveTarget === "flyer_8_5x11") {
+      return "Flyer mode generates one print-ready 8.5 x 11 design (no social caption).";
+    }
+    return "Image modes now generate one campaign concept per output so messaging stays focused and consistent.";
+  }, [campaignActiveTarget]);
+  const campaignEmailDigestPreviewSections = useMemo(
+    () => campaignBuildEmailDigestPreview(campaignForm.emailBodyText),
+    [campaignForm.emailBodyText]
+  );
+  const campaignEmailHtmlReady = useMemo(
+    () => Boolean(String(campaignForm.emailBodyHtml ?? "").trim()),
+    [campaignForm.emailBodyHtml]
   );
   const campaignSocialOptionsByTarget = useMemo(
     () => campaignNormalizeSocialPublishOptionsMap((campaignSelectedEntry?.metadata as any)?.socialPublishOptions),
@@ -3811,6 +3898,21 @@ export default function Home() {
       } catch {}
       setCampaignError(err?.message ?? "Failed to print file.");
     }
+  }
+
+  async function openCampaignTextSendAction(target: "sms" | "email") {
+    const entry = campaignSelectedEntry;
+    if (!entry || !campaignSelectedId) {
+      setCampaignError("Save the campaign first, then use send.");
+      return;
+    }
+    let actionEntry: CampaignEntry = entry;
+    if (!campaignAssetIsQueued(entry, target)) {
+      const saved = await setCampaignAssetQueue(target, true);
+      if (!saved) return;
+      actionEntry = saved;
+    }
+    openSendQueueSendDialog(actionEntry, target);
   }
 
   async function openCampaignAssetPrimaryAction(asset: CampaignGeneratedAsset) {
@@ -11563,6 +11665,10 @@ export default function Home() {
                 <div className="text-[11px] text-gray-500">
                   Select one output format, generate it, then switch formats if you want more versions.
                 </div>
+                <div className="lr-campaign-output-mode-banner">
+                  <div className="lr-campaign-output-mode-kicker">Current Output Behavior</div>
+                  <div className="lr-campaign-output-mode-text">{campaignOutputBehaviorNote}</div>
+                </div>
                 <div className="text-[11px] text-gray-500">
                   Web banner uses Dealer Profile size (
                   {(() => {
@@ -11908,7 +12014,7 @@ export default function Home() {
                   const statusRaw = String(statusRow?.status ?? "").trim().toLowerCase();
                   const hasAsset = campaignActiveTarget ? campaignGeneratedAssetTargetSet.has(campaignActiveTarget) : false;
                   const status: "ready" | "pending" | "failed" =
-                    statusRaw === "failed" ? "failed" : hasAsset ? "ready" : "pending";
+                    statusRaw === "failed" ? "failed" : statusRaw === "ready" || hasAsset ? "ready" : "pending";
                   const badgeClass =
                     status === "ready"
                       ? "border-green-300 bg-green-50 text-green-700"
@@ -12210,14 +12316,38 @@ export default function Home() {
               </div>
 
               {campaignWantsSms ? (
-                <label className="block text-xs text-gray-600">
-                  SMS draft
-                  <textarea
-                    className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[90px]"
-                    value={campaignForm.smsBody}
-                    onChange={e => setCampaignForm(prev => ({ ...prev, smsBody: e.target.value }))}
-                  />
-                </label>
+                <div className="space-y-2">
+                  <label className="block text-xs text-gray-600">
+                    SMS draft
+                    <textarea
+                      className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[90px]"
+                      value={campaignForm.smsBody}
+                      onChange={e => setCampaignForm(prev => ({ ...prev, smsBody: e.target.value }))}
+                    />
+                  </label>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      className="px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)] disabled:opacity-60 lr-campaign-btn"
+                      type="button"
+                      disabled={
+                        !campaignSelectedId ||
+                        !String(campaignForm.smsBody ?? "").trim() ||
+                        campaignGenerating ||
+                        campaignSaving ||
+                        Boolean(campaignQueueActionBusyKey) ||
+                        campaignAssetQueueBusyTarget === "sms"
+                      }
+                      onClick={() => {
+                        void openCampaignTextSendAction("sms");
+                      }}
+                    >
+                      {campaignQueueActionBusyKey === `send:${String(campaignSelectedId ?? "").trim()}:sms` ||
+                      campaignAssetQueueBusyTarget === "sms"
+                        ? "Opening Send..."
+                        : "Send SMS"}
+                    </button>
+                  </div>
+                </div>
               ) : null}
 
               {campaignWantsEmail ? (
@@ -12239,6 +12369,40 @@ export default function Home() {
                       onChange={e => setCampaignForm(prev => ({ ...prev, emailBodyText: e.target.value }))}
                     />
                   </label>
+
+                  <div className="border rounded-lg p-3 bg-gray-50 space-y-2 lr-campaign-email-digest-preview">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-xs font-semibold text-gray-700">Email digest preview</div>
+                      <div className="text-[11px] text-gray-600">
+                        {campaignEmailDigestPreviewSections.length} section
+                        {campaignEmailDigestPreviewSections.length === 1 ? "" : "s"}
+                      </div>
+                    </div>
+                    {campaignEmailDigestPreviewSections.length ? (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        {campaignEmailDigestPreviewSections.map((section, idx) => (
+                          <div
+                            key={`campaign-email-digest-${idx}`}
+                            className="border rounded-md px-2.5 py-2 bg-white lr-campaign-email-digest-card"
+                          >
+                            <div className="text-[11px] font-semibold uppercase tracking-[0.02em] text-slate-700">
+                              {section.title}
+                            </div>
+                            <div className="text-xs text-slate-900 mt-1 leading-5">{section.body}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-gray-600">
+                        Generate or write email copy to preview digest sections here.
+                      </div>
+                    )}
+                    <div className="text-[11px] text-gray-600">
+                      {campaignEmailHtmlReady
+                        ? "Generated HTML is ready and will use this digest structure."
+                        : "Generate once to build the full branded HTML email layout."}
+                    </div>
+                  </div>
 
                   <details className="border rounded p-3 bg-gray-50">
                     <summary className="text-xs font-semibold text-gray-700 cursor-pointer">
@@ -15496,6 +15660,28 @@ export default function Home() {
                       Prefers Call
                     </span>
                   ) : null}
+                  {(() => {
+                    const preferredContact = String(selectedConv.lead?.preferredContactMethod ?? "")
+                      .trim()
+                      .toLowerCase();
+                    const label =
+                      preferredContact === "email"
+                        ? "Prefers Email"
+                        : preferredContact === "sms"
+                          ? "Prefers Text"
+                          : preferredContact === "phone"
+                            ? "Prefers Phone"
+                            : "";
+                    if (!label) return null;
+                    if (selectedConv.contactPreference === "call_only" && preferredContact === "phone") {
+                      return null;
+                    }
+                    return (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-sky-100 text-sky-800 border border-sky-300">
+                        {label}
+                      </span>
+                    );
+                  })()}
                   {selectedConv.leadOwner?.name || selectedConv.leadOwner?.id ? (
                     <span className="text-xs px-2 py-0.5 rounded-full bg-[color:rgba(251,127,4,0.14)] text-[var(--accent)] border border-[color:rgba(251,127,4,0.42)]">
                       Owner: {selectedConv.leadOwner?.name || selectedConv.leadOwner?.id}

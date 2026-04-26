@@ -978,3 +978,14 @@ When changing responses:
   - if not in stock, draft instructs customer to choose an in-stock bike from inventory link instead of showing booking CTA.
 - Purpose:
   - avoid booking customers on motorcycles not currently available for test ride.
+
+## Campaign Studio Visibility Pass (Single-Concept vs Email Digest)
+- In `apps/web/src/app/page.tsx` and `apps/web/src/app/globals.css`:
+  - added a high-contrast `Current Output Behavior` banner under Step 2 output selection,
+  - banner now explicitly states active-mode behavior:
+    - image outputs: one campaign concept per generated asset,
+    - email output: multi-section digest layout support,
+    - flyer output: print-ready with no social caption.
+  - added an `Email digest preview` card block in the email panel that shows section cards derived from the current email draft text.
+- Purpose:
+  - make backend campaign behavior changes immediately visible in UI and reduce ambiguity about what each output mode will generate.
