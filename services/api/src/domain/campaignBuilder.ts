@@ -1213,15 +1213,25 @@ function isLogoLikeImgTag(tag: string): boolean {
   return src.includes("logo") || /\blogo\b/.test(alt);
 }
 
+function stripAdditionalVisualsBlocks(html: string): string {
+  let out = String(html ?? "");
+  if (!out) return out;
+  out = out.replace(/<!--\s*Additional visuals[\s\S]*?-->/gi, "");
+  out = out.replace(/<h[1-6][^>]*>\s*Additional visuals\s*<\/h[1-6]>/gi, "");
+  out = out.replace(/<div[^>]*>\s*Additional visuals\s*<\/div>/gi, "");
+  out = out.replace(/<tr\b[^>]*>[\s\S]*?(?:Additional visuals|Campaign detail image)[\s\S]*?<\/tr>/gi, "");
+  return out;
+}
+
 function enforceEmailReferenceImageAssignments(html: string, expectedImageUrls: string[] = []): string {
   const expected = normalizeCampaignEmailImageUrls(expectedImageUrls);
-  if (!html || !expected.length) return html;
+  if (!html || !expected.length) return stripAdditionalVisualsBlocks(html);
   let nonLogoIdx = 0;
-  let output = String(html).replace(/<img\b[^>]*>/gi, tag => {
+  let output = stripAdditionalVisualsBlocks(String(html)).replace(/<img\b[^>]*>/gi, tag => {
     if (isLogoLikeImgTag(tag)) return tag;
-    const desired = expected[Math.min(nonLogoIdx, expected.length - 1)] || "";
+    const desired = expected[nonLogoIdx] || "";
     nonLogoIdx += 1;
-    if (!desired) return tag;
+    if (!desired) return "";
     return upsertImgTagAttribute(tag, "src", desired);
   });
   if (nonLogoIdx === 0) {
@@ -1854,7 +1864,9 @@ async function tryGenerateWithLlm(args: {
     "- Use the first image URL in the image library as the primary hero/lead visual.",
     "- For each major content block, pair the most relevant image from the image library. Keep text/image pairing logically matched.",
     "- Use distinct image URLs across sections; do not repeat the same campaign image for every block when multiple images are provided.",
-    "- If an image is not relevant to any section, place it in an additional visuals row instead of forcing mismatch.",
+    "- Use each image URL at most once unless only one image URL is available.",
+    "- Do NOT add an 'additional visuals' gallery/strip section.",
+    "- Keep section order aligned to the image library order (hero first, then one image per section).",
     "- All images must render fully visible (no crop). Use object-fit:contain with height:auto and sensible max-height.",
     "- Keep URLs exactly as provided. Do not invent or rewrite image URLs.",
     "- email_sections: optional array of section blocks for digest-style email layout.",
