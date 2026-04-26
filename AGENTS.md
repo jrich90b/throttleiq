@@ -375,6 +375,28 @@ When changing responses:
   - Add line:
     - `15 8 * * * cd /home/ubuntu/throttleiq && DATA_DIR=/home/ubuntu/throttleiq-runtime/data REPORT_ROOT=/home/ubuntu/throttleiq-runtime/reports FEEDBACK_REPORT_EMAIL_TO=joeh@americanharley-davidson.com FEEDBACK_REPORT_EMAIL_FROM=sales@americanharley-davidson.com npm run feedback:nightly >> /home/ubuntu/throttleiq-runtime/reports/feedback_loop_cron.log 2>&1`
 
+## Fast Learning (Hourly Safe Loop)
+- Use the hourly loop for faster tone/example learning while keeping routing/state deterministic:
+  - `cd ~/throttleiq`
+  - `npm run feedback:hourly`
+- Hourly loop (`scripts/feedback_loop_hourly.sh`) runs:
+  1) `language_corpus:mine` (recent-window mining)
+  2) `deterministic_rules:promote`
+  3) `manual_outbound:promote`
+  4) `language_seed:eval`
+  5) auto-rollback to pre-hourly rule/example files if eval fails (`FAST_LOOP_ROLLBACK_ON_EVAL_FAIL=1`, default on)
+- Key env knobs:
+  - `FAST_LOOP_SINCE_HOURS` (default `2`)
+  - `FAST_LOOP_RUN_LANGUAGE_SEED_EVAL` (default `1`)
+  - `FAST_LOOP_ROLLBACK_ON_EVAL_FAIL` (default `1`)
+  - `FAST_LOOP_DETERMINISTIC_RULE_PROMOTE_MIN_COUNT` (default `2`)
+  - `FAST_LOOP_MANUAL_REPLY_PROMOTE_MIN_COUNT` (default `1`)
+  - `FAST_LOOP_MANUAL_REPLY_MAX_PER_INTENT` (default `6`)
+- Cron setup (hourly, top of hour):
+  - `crontab -e`
+  - Add line:
+    - `0 * * * * cd /home/ubuntu/throttleiq && DATA_DIR=/home/ubuntu/throttleiq-runtime/data REPORT_ROOT=/home/ubuntu/throttleiq-runtime/reports FAST_LOOP_SINCE_HOURS=2 npm run feedback:hourly >> /home/ubuntu/throttleiq-runtime/reports/feedback_loop_hourly_cron.log 2>&1`
+
 ## After Any Code Change (Always Include These)
 - Local (push):
   - `cd ~/throttleiq`
