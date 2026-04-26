@@ -2483,6 +2483,17 @@ export default function Home() {
     [campaignForm.emailSubject, campaignForm.emailBodyHtml, campaignForm.emailBodyText]
   );
   const campaignEmailPreviewReady = Boolean(String(campaignEmailPreviewHtmlDoc ?? "").trim());
+  const campaignGeneratedSourceLabel = useMemo(() => {
+    const source = String(campaignGeneratedBy ?? "").trim();
+    const meta = campaignSelectedEntry?.metadata ?? null;
+    const emailNanoVariantCount = Number((meta as any)?.emailNanoVariantCount ?? 0);
+    if (!source) return "";
+    if (source === "llm_fallback") {
+      if (emailNanoVariantCount > 0) return "nano_banana + llm_layout";
+      return "llm_layout";
+    }
+    return source;
+  }, [campaignGeneratedBy, campaignSelectedEntry]);
   const campaignEmailContextOptions = useMemo(
     () =>
       campaigns.map(row => ({
@@ -12564,7 +12575,7 @@ export default function Home() {
               <div className="flex items-center justify-between gap-3">
                 <div className="text-sm font-semibold">Generated Output</div>
                 <div className="text-[11px] text-gray-500 text-right">
-                  {campaignGeneratedBy ? `Source: ${campaignGeneratedBy}` : "Source: N/A"}
+                  {campaignGeneratedSourceLabel ? `Source: ${campaignGeneratedSourceLabel}` : "Source: N/A"}
                   {campaignGeneratedAt ? ` • ${new Date(campaignGeneratedAt).toLocaleString()}` : ""}
                 </div>
               </div>

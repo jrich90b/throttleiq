@@ -1046,6 +1046,8 @@ When changing responses:
 - In `services/api/src/index.ts` (`/campaigns/generate`):
   - Email Nano variant URLs are now appended after provided references (instead of prepended), preserving user reference priority.
   - Email Nano variant reference input is capped to a focused subset to reduce style drift/noise.
+  - optional strict mode `CAMPAIGN_EMAIL_NANO_VARIANTS_STRICT=1` can block Email generation when Nano variants are required but unavailable (prevents silent LLM-only layout runs).
+  - when Email uses Nano variants successfully, `generatedBy` is promoted to `nano_banana` and metadata records `emailLayoutGenerator` for traceability.
 - Purpose:
   - ensure locker-selected campaigns materially influence output, include active campaign visuals, and improve image variety/fit in generated email layouts.
 

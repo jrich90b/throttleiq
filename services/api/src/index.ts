@@ -23622,6 +23622,19 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       inspirationImageUrls = normalizeCampaignUrlArray([...inspirationImageUrls, ...emailNanoVariantUrls]);
     }
   }
+  const emailNanoStrictMode = String(process.env.CAMPAIGN_EMAIL_NANO_VARIANTS_STRICT ?? "0") === "1";
+  if (
+    emailNanoStrictMode &&
+    shouldGenerateEmailVariants &&
+    requestedAssetTargets.includes("email") &&
+    !emailNanoVariantUrls.length
+  ) {
+    return res.status(502).json({
+      ok: false,
+      error:
+        "Email generation blocked: Nano Banana variants were required but none were generated. Retry Generate or disable strict mode."
+    });
+  }
   const generated = await generateCampaignContent({
     name,
     buildMode,
@@ -24007,12 +24020,20 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
   }
   effectiveGenerated = {
     ...effectiveGenerated,
+    generatedBy:
+      requestedAssetTargets.includes("email") && emailNanoVariantUrls.length
+        ? "nano_banana"
+        : effectiveGenerated.generatedBy,
     finalImageUrl: mergedFinalImageUrl,
     generatedAssets: mergedGeneratedAssets,
     metadata: {
       ...(effectiveGenerated.metadata ?? {}),
       emailNanoVariantCount: emailNanoVariantUrls.length || undefined,
       emailNanoVariantUrls: emailNanoVariantUrls.length ? emailNanoVariantUrls : undefined,
+      emailLayoutGenerator:
+        requestedAssetTargets.includes("email") && emailNanoVariantUrls.length
+          ? effectiveGenerated.generatedBy || "llm_fallback"
+          : undefined,
       requestedAssetTargets: requestedAssetTargets.slice(),
       singleTarget: singleTarget ?? undefined,
       editFromCurrent: editFromCurrent || undefined,
