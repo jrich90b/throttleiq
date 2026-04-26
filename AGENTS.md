@@ -44,6 +44,10 @@ Required order:
 - Outbound drafting must remain channel-specific:
   - SMS drafts should use compact SMS layout (trimmed spacing, no email-style greeting blocks unless explicitly authored).
   - Email drafts should be normalized to email layout (greeting + paragraph spacing) before storage/send.
+- Campaign Studio Email HTML should include visual media when campaign image inputs are present:
+  - include the selected/primary campaign image as hero when available,
+  - include additional reference/design images as secondary visuals,
+  - normalize `/uploads/...` image paths to absolute `PUBLIC_BASE_URL` links for external inbox rendering.
 - Apply the same email-layout normalization in:
   - initial ADF email draft builders,
   - regenerate email draft publishing,

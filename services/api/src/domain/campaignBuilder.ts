@@ -504,7 +504,8 @@ function applyNoTradeLanguageGuard(
     emailBodyText,
     emailBodyHtml: textToHtml(emailBodyText, output.sourceHits ?? [], {
       dealerName,
-      emailSubject
+      emailSubject,
+      imageUrls: normalizeCampaignEmailImageUrls(output.inspirationImageUrls ?? [])
     })
   };
 }
@@ -938,6 +939,31 @@ function deriveCampaignEmailSectionsFromText(text: string): CampaignEmailSection
   return out;
 }
 
+function normalizeCampaignEmailImageUrl(raw: string): string {
+  const value = normalizeText(raw);
+  if (!value) return "";
+  if (/^https?:\/\//i.test(value)) return normalizeHttpUrl(value);
+  const normalizedPath = value.startsWith("/") ? value : value.startsWith("uploads/") ? `/${value}` : "";
+  if (!normalizedPath) return "";
+  const publicBase = normalizeText(process.env.PUBLIC_BASE_URL).replace(/\/$/, "");
+  if (publicBase) return normalizeHttpUrl(normalizedPath, publicBase);
+  return normalizedPath;
+}
+
+function normalizeCampaignEmailImageUrls(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const row of raw) {
+    const normalized = normalizeCampaignEmailImageUrl(String(row ?? ""));
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+    if (out.length >= 6) break;
+  }
+  return out;
+}
+
 function buildTemplateEmailSections(args: {
   sourceHits: CampaignSourceHit[];
   topic: string;
@@ -979,6 +1005,7 @@ function textToHtml(
     phone?: string;
     bookingUrl?: string;
     sections?: CampaignEmailSection[];
+    imageUrls?: string[];
   }
 ): string {
   const dealerName = normalizeText(opts?.dealerName) || "Dealership";
@@ -986,6 +1013,9 @@ function textToHtml(
   const website = normalizeHttpUrl(opts?.website);
   const bookingUrl = normalizeHttpUrl(opts?.bookingUrl);
   const phone = normalizeText(opts?.phone);
+  const imageUrls = normalizeCampaignEmailImageUrls(opts?.imageUrls);
+  const heroImageUrl = imageUrls[0] || "";
+  const stripImageUrls = imageUrls.slice(1, 4);
 
   const paragraphs = String(text ?? "")
     .split(/\n{2,}/)
@@ -1043,6 +1073,32 @@ function textToHtml(
   const footerBits = [website ? `Website: ${website}` : "", phone ? `Phone: ${phone}` : ""]
     .filter(Boolean)
     .join(" · ");
+  const heroImageBlock = heroImageUrl
+    ? `<tr>
+         <td style="padding:0 0 14px 0;">
+           <img src="${escapeHtml(heroImageUrl)}" alt="${escapeHtml(
+             dealerName
+           )} campaign image" style="display:block;width:100%;height:auto;border-radius:8px;border:1px solid #d1d5db;background:#e5e7eb;" />
+         </td>
+       </tr>`
+    : "";
+  const imageStripBlock = stripImageUrls.length
+    ? `<tr>
+         <td style="padding:0 0 14px 0;">
+           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+             <tr>
+               ${stripImageUrls
+                 .map(
+                   url => `<td style="padding-right:8px;">
+                     <img src="${escapeHtml(url)}" alt="Campaign detail image" style="display:block;width:100%;height:auto;border-radius:6px;border:1px solid #d1d5db;background:#e5e7eb;" />
+                   </td>`
+                 )
+                 .join("")}
+             </tr>
+           </table>
+         </td>
+       </tr>`
+    : "";
 
   return `<!doctype html>
 <html>
@@ -1067,6 +1123,8 @@ function textToHtml(
                   <tr>
                     <td style="font-size:15px;line-height:24px;color:#111827;padding:0 0 12px 0;">${introHtml}</td>
                   </tr>
+                  ${heroImageBlock}
+                  ${imageStripBlock}
                   ${sectionCards}
                   ${
                     primaryCtaUrl
@@ -1116,6 +1174,10 @@ function buildTemplateOutput(
   const smsBody = `Quick update from ${dealerName}: ${topic}. ${referenceLine}`;
   const emailSubject = `${dealerName} | ${topic.slice(0, 80)}`;
   const emailSections = buildTemplateEmailSections({ sourceHits, topic });
+  const emailImageUrls = normalizeCampaignEmailImageUrls([
+    ...resolvedInspirationImageUrls,
+    ...normalizeUrls(input.assetImageUrls)
+  ]);
   const emailBodyText = [
     `Hi there,`,
     ``,
@@ -1139,7 +1201,8 @@ function buildTemplateOutput(
       website: input.dealerProfile?.website,
       phone: input.dealerProfile?.phone,
       bookingUrl: input.dealerProfile?.bookingUrl,
-      sections: emailSections
+      sections: emailSections,
+      imageUrls: emailImageUrls
     }),
     sourceHits,
     generatedBy: "template",
@@ -1176,6 +1239,10 @@ async function tryGenerateWithLlm(args: {
   const brandTitle = normalizeText(args.brandContext?.title);
   const brandDescription = normalizeText(args.brandContext?.description);
   const brandLogoUrls = normalizeUrls(args.brandContext?.logoImageUrls).slice(0, 3);
+  const emailImageUrls = normalizeCampaignEmailImageUrls([
+    ...args.resolvedInspirationImageUrls,
+    ...normalizeUrls(args.input.assetImageUrls)
+  ]);
   const briefUrls = normalizeUrls(args.input.briefDocumentUrls).slice(0, 6);
   const briefBlock = (args.briefContexts ?? [])
     .map((doc, idx) => `${idx + 1}. ${doc.url}\nType: ${doc.type}\nExtracted: ${doc.excerpt}`)
@@ -1308,7 +1375,8 @@ async function tryGenerateWithLlm(args: {
                 website,
                 phone,
                 bookingUrl,
-                sections: emailSections
+                sections: emailSections,
+                imageUrls: emailImageUrls
               })
             : undefined,
           sourceHits: args.sourceHits,
@@ -1360,7 +1428,8 @@ async function tryGenerateWithLlm(args: {
                 website,
                 phone,
                 bookingUrl,
-                sections: emailSections
+                sections: emailSections,
+                imageUrls: emailImageUrls
               })
             : undefined,
           sourceHits: args.sourceHits,
