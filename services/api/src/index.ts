@@ -276,7 +276,7 @@ import {
   type CampaignGeneratedAsset,
   type CampaignTag
 } from "./domain/campaignStore.js";
-import { generateCampaignContent } from "./domain/campaignBuilder.js";
+import { generateCampaignContent, normalizeCampaignEmailHtml } from "./domain/campaignBuilder.js";
 import {
   clearMetaIntegrationRecord,
   getMetaIntegrationRecord,
@@ -21904,6 +21904,22 @@ function campaignLockerTextSummary(entry: CampaignEntry): string {
   return "";
 }
 
+function campaignTypographyHint(entry: CampaignEntry): string {
+  const joined = [entry.name, entry.prompt, entry.description]
+    .map(v => String(v ?? "").toLowerCase())
+    .join(" ");
+  if (/\b(country|western|vintage|retro|pinup|pre-?party|old[-\s]?school)\b/.test(joined)) {
+    return "vintage/western (serif or slab-style heading stack)";
+  }
+  if (/\b(test ride|performance|sport|demo|modern|street glide|road glide|nightster)\b/.test(joined)) {
+    return "modern/performance (bold sans heading stack)";
+  }
+  if (/\bservice|parts|apparel|financing\b/.test(joined)) {
+    return "utility/promotional (clean high-contrast sans heading stack)";
+  }
+  return "match the visual style of the paired image";
+}
+
 function buildEmailLockerContextBlock(entries: CampaignEntry[]): string {
   if (!entries.length) return "";
   const blocks = entries
@@ -21912,11 +21928,15 @@ function buildEmailLockerContextBlock(entries: CampaignEntry[]): string {
       const prompt = String(entry.prompt ?? "").trim();
       const description = String(entry.description ?? "").trim();
       const summary = campaignLockerTextSummary(entry);
+      const primaryImageUrl = campaignPrimaryImageForEmailLocker(entry);
+      const typographyHint = campaignTypographyHint(entry);
       const lines = [
         `Campaign: ${name}`,
+        primaryImageUrl ? `Primary image URL: ${primaryImageUrl}` : "",
         prompt ? `Prompt details: ${prompt}` : "",
         description ? `Description: ${description}` : "",
-        summary ? `Messaging summary: ${summary}` : ""
+        summary ? `Messaging summary: ${summary}` : "",
+        `Typography hint: ${typographyHint}`
       ]
         .map(v => v.trim())
         .filter(Boolean);
@@ -21928,7 +21948,9 @@ function buildEmailLockerContextBlock(entries: CampaignEntry[]): string {
     "Email locker context (required):",
     "Treat each campaign block as a distinct section in the email.",
     "Do not duplicate campaign sections or reuse the same image for multiple sections unless there is only one image total.",
+    "Use each campaign block's Primary image URL for that block's section (one block -> one section -> one primary image).",
     "Keep each section copy aligned to that section's campaign details.",
+    "Header logo must use dealer profile logo only (never a campaign image).",
     "",
     ...blocks.map((block, idx) => `Block ${idx + 1}\n${block}`)
   ].join("\n\n");
@@ -23729,6 +23751,18 @@ app.post("/campaigns/email/generate", requireManager, async (req, res) => {
   const basePrompt = String(baseCampaign.prompt ?? "").trim();
   const lockerContextBlock = buildEmailLockerContextBlock(contextCampaigns);
   const prompt = [userPrompt || basePrompt, lockerContextBlock].filter(Boolean).join("\n\n");
+  const basePrimaryImageUrl = campaignPrimaryImageForEmailLocker(baseCampaign);
+  const layoutDirectives = [
+    "Email composition directives (critical):",
+    basePrimaryImageUrl
+      ? `- Hero section must represent base campaign "${String(baseCampaign.name ?? "").trim() || "Base Campaign"}" and use this hero image URL: ${basePrimaryImageUrl}`
+      : `- Hero section must represent base campaign "${String(baseCampaign.name ?? "").trim() || "Base Campaign"}".`,
+    "- Build one digest section per selected campaign block and pair each section with that block's Primary image URL.",
+    "- Do not repeat the same image URL across multiple sections when multiple section images are available.",
+    "- Section typography should match each section image style (for example vintage/western blocks vs modern/performance blocks).",
+    "- Keep all section details tied to the matching campaign block; do not blend campaign details."
+  ].join("\n");
+  const finalPrompt = [prompt, layoutDirectives].filter(Boolean).join("\n\n");
   const description =
     String(req.body?.description ?? "").trim() ||
     String(baseCampaign.description ?? "").trim() ||
@@ -23745,7 +23779,7 @@ app.post("/campaigns/email/generate", requireManager, async (req, res) => {
     buildMode,
     channel: "email",
     tags,
-    prompt: prompt || undefined,
+    prompt: finalPrompt || undefined,
     description,
     inspirationImageUrls: inspirationFromCampaigns,
     assetImageUrls,
@@ -23753,7 +23787,20 @@ app.post("/campaigns/email/generate", requireManager, async (req, res) => {
     dealerProfile
   });
 
-  const html = String(generated.emailBodyHtml ?? "").trim();
+  const contextPrimaryImageUrls = Array.from(
+    new Set(
+      contextCampaigns
+        .map(entry => campaignPrimaryImageForEmailLocker(entry))
+        .map(v => String(v ?? "").trim())
+        .filter(Boolean)
+    )
+  );
+  const html = normalizeCampaignEmailHtml(String(generated.emailBodyHtml ?? "").trim(), {
+    dealerName: String(dealerProfile?.dealerName ?? "").trim() || "Dealership",
+    website: String(dealerProfile?.website ?? "").trim() || undefined,
+    logoUrl: String(dealerProfile?.logoUrl ?? "").trim() || undefined,
+    expectedImageUrls: contextPrimaryImageUrls.length ? contextPrimaryImageUrls : inspirationFromCampaigns
+  });
   const htmlLooksJson = html.startsWith("{") || html.startsWith("[") || /"email_body_html"\s*:/.test(html);
   if (!html || htmlLooksJson) {
     return res.status(502).json({
@@ -23771,35 +23818,39 @@ app.post("/campaigns/email/generate", requireManager, async (req, res) => {
       ? (generated.metadata as Record<string, unknown>)
       : {}),
     emailBuilderContextCampaignIds: contextCampaigns.map(entry => String(entry.id ?? "").trim()).filter(Boolean),
-    emailBuilderGeneratedAt: nowIso
+    emailBuilderGeneratedAt: nowIso,
+    emailBuilderPrompt: finalPrompt,
+    emailBuilderContextPrimaryImageUrls: contextPrimaryImageUrls
   };
   const nextAssetTargets = Array.from(
     new Set([...(Array.isArray(baseCampaign.assetTargets) ? baseCampaign.assetTargets : []), "email"])
   ) as CampaignAssetTarget[];
+  const persistedPrompt = userPrompt || basePrompt || String(baseCampaign.prompt ?? "").trim();
+  const generatedNormalized = {
+    ...generated,
+    emailBodyHtml: html
+  };
 
   const updated = updateCampaign(baseCampaign.id, {
     status: "generated",
     buildMode,
     channel: "email",
     assetTargets: nextAssetTargets,
-    prompt: prompt || baseCampaign.prompt,
+    prompt: persistedPrompt || baseCampaign.prompt,
     description: description ?? baseCampaign.description,
-    inspirationImageUrls: inspirationFromCampaigns,
-    assetImageUrls,
-    briefDocumentUrls: briefUrls,
-    smsBody: generated.smsBody ?? baseCampaign.smsBody,
-    emailSubject: generated.emailSubject ?? baseCampaign.emailSubject,
-    emailBodyText: generated.emailBodyText ?? baseCampaign.emailBodyText,
-    emailBodyHtml: generated.emailBodyHtml ?? baseCampaign.emailBodyHtml,
-    sourceHits: generated.sourceHits,
+    smsBody: generatedNormalized.smsBody ?? baseCampaign.smsBody,
+    emailSubject: generatedNormalized.emailSubject ?? baseCampaign.emailSubject,
+    emailBodyText: generatedNormalized.emailBodyText ?? baseCampaign.emailBodyText,
+    emailBodyHtml: generatedNormalized.emailBodyHtml ?? baseCampaign.emailBodyHtml,
+    sourceHits: generatedNormalized.sourceHits,
     metadata: mergedMetadata,
-    generatedBy: generated.generatedBy
+    generatedBy: generatedNormalized.generatedBy
   });
   if (!updated) return res.status(404).json({ ok: false, error: "Campaign not found" });
   return res.json({
     ok: true,
     campaign: updated,
-    generated,
+    generated: generatedNormalized,
     contextCampaigns: contextCampaigns.map(entry => ({
       id: entry.id,
       name: entry.name,

@@ -63,6 +63,7 @@ Required order:
   - do not generate Email via the legacy `/campaigns/generate` route (it should return a redirect/error to Email Builder),
   - keep Campaign Studio focused on non-email assets (`sms`, social, web banner, flyer) to prevent stale mixed-path behavior.
 - Campaign Studio Email HTML branding should keep a dealer-branded top row with dealer logo (`dealer_profile.logoUrl`) and a right-side dealer website link when available.
+- Email HTML normalization must forcibly replace any generated header block with the required dealer header block so campaign creative images can never occupy the header logo slot.
 - Apply the same email-layout normalization in:
   - initial ADF email draft builders,
   - regenerate email draft publishing,
@@ -1071,3 +1072,15 @@ When changing responses:
   - generation metadata now stores `emailNanoVariantCount` and `emailNanoVariantUrls` for traceability.
 - Purpose:
   - improve fit/composition diversity for email campaigns and ensure locker-selected campaigns materially drive new email visuals.
+
+## Email Builder Header + Context Integrity Guard
+- In `services/api/src/domain/campaignBuilder.ts`:
+  - email HTML normalization now strips competing model-generated header tables that mimic dealer-link headers, so only the required dealer header remains.
+  - reference-image reassignment now targets likely content images (not tiny icon/logo/social images), reducing random image swaps in header/footer utility rows.
+  - added exported `normalizeCampaignEmailHtml(...)` helper so API routes can force one final normalization pass before save/respond.
+- In `services/api/src/index.ts` (`/campaigns/email/generate`):
+  - added a final server-side normalization pass using selected context primary image URLs, dealer website, and dealer logo.
+  - stopped persisting locker-derived `inspirationImageUrls`, `assetImageUrls`, and `briefDocumentUrls` onto the base campaign record (prevents cross-campaign image pollution on later runs).
+  - persist user/base prompt only; store merged email-builder prompt in metadata for traceability.
+- Purpose:
+  - prevent campaign hero images from leaking into header-logo slots and keep email image/font/content mapping stable across repeated generations.

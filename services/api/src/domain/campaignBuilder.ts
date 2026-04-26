@@ -1214,6 +1214,58 @@ function isLogoLikeImgTag(tag: string): boolean {
   return src.includes("logo") || /\blogo\b/.test(alt);
 }
 
+function readNumericImgAttribute(tag: string, attr: "width" | "height"): number | null {
+  const m = String(tag ?? "").match(new RegExp(`\\b${attr}\\s*=\\s*(['"]?)(\\d{1,4})\\1`, "i"));
+  if (!m?.[2]) return null;
+  const n = Number(m[2]);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function readStylePixelDeclaration(tag: string, prop: string): number | null {
+  const styleMatch = String(tag ?? "").match(/\bstyle\s*=\s*(['"])([\s\S]*?)\1/i);
+  const style = String(styleMatch?.[2] ?? "");
+  if (!style) return null;
+  const re = new RegExp(`${prop}\\s*:\\s*(\\d{1,4})px`, "i");
+  const m = style.match(re);
+  if (!m?.[1]) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function isLikelyContentImageTag(tag: string): boolean {
+  if (isLogoLikeImgTag(tag)) return false;
+  const lower = String(tag ?? "").toLowerCase();
+  if (
+    /\b(icon|avatar|favicon|social|facebook|instagram|youtube|tiktok|twitter|wordmark|emblem|badge)\b/.test(lower)
+  ) {
+    return false;
+  }
+  const width = readNumericImgAttribute(tag, "width");
+  const height = readNumericImgAttribute(tag, "height");
+  const maxWidth = readStylePixelDeclaration(tag, "max-width");
+  const maxHeight = readStylePixelDeclaration(tag, "max-height");
+  if ((width && width <= 96) || (height && height <= 64) || (maxWidth && maxWidth <= 120) || (maxHeight && maxHeight <= 72)) {
+    return false;
+  }
+  return true;
+}
+
+function stripCompetingGeneratedHeaderBlocks(html: string): string {
+  let out = String(html ?? "");
+  if (!out) return out;
+  out = out.replace(/<table\b(?![^>]*data-lr-required-header)[^>]*>[\s\S]*?<\/table>/gi, table => {
+    const lower = String(table ?? "").toLowerCase();
+    const hasHeaderLink = /(find a dealer|visit dealer site|visit american harley|visit our site|visit dealer)/i.test(
+      lower
+    );
+    const hasImage = /<img\b/i.test(lower);
+    const hasMarker = /data-lr-required-header|data-lr-header-logo/i.test(lower);
+    if (!hasMarker && hasHeaderLink && hasImage) return "";
+    return table;
+  });
+  return out;
+}
+
 function stripAdditionalVisualsBlocks(html: string): string {
   let out = String(html ?? "");
   if (!out) return out;
@@ -1227,15 +1279,17 @@ function stripAdditionalVisualsBlocks(html: string): string {
 function enforceEmailReferenceImageAssignments(html: string, expectedImageUrls: string[] = []): string {
   const expected = normalizeCampaignEmailImageUrls(expectedImageUrls);
   if (!html || !expected.length) return stripAdditionalVisualsBlocks(html);
-  let nonLogoIdx = 0;
+  let mappedContentImageCount = 0;
+  let expectedIdx = 0;
   let output = stripAdditionalVisualsBlocks(String(html)).replace(/<img\b[^>]*>/gi, tag => {
-    if (isLogoLikeImgTag(tag)) return tag;
-    const desired = expected[nonLogoIdx] || "";
-    nonLogoIdx += 1;
+    if (!isLikelyContentImageTag(tag)) return tag;
+    mappedContentImageCount += 1;
+    const desired = expected[expectedIdx] || "";
+    expectedIdx += 1;
     if (!desired) return "";
     return upsertImgTagAttribute(tag, "src", desired);
   });
-  if (nonLogoIdx === 0) {
+  if (mappedContentImageCount === 0) {
     const hero = `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 14px 0;">
       <tr><td style="padding:0;">
         <img src="${escapeHtml(expected[0])}" alt="Campaign hero image" style="display:block;width:100%;height:auto;max-height:360px;object-fit:contain;border-radius:8px;border:1px solid #d1d5db;background:#f3f4f6;" />
@@ -1338,12 +1392,24 @@ function normalizeGeneratedEmailHtml(
     html = html.replace(/<\/head>/i, "</head><body>").replace(/<\/html>/i, "</body></html>");
   }
   const requiredHeader = buildRequiredEmailHeaderBlock(opts);
-  if (!/data-lr-required-header/i.test(html)) {
+  if (/<table\b[^>]*data-lr-required-header[\s\S]*?<\/table>/i.test(html)) {
+    html = html.replace(/<table\b[^>]*data-lr-required-header[\s\S]*?<\/table>/i, requiredHeader);
+  } else {
     html = html.replace(/<body[^>]*>/i, match => `${match}${requiredHeader}`);
   }
+  html = stripCompetingGeneratedHeaderBlocks(html);
   html = enforceEmailImageStyles(html);
   html = enforceEmailReferenceImageAssignments(html, opts.expectedImageUrls ?? []);
   return html;
+}
+
+export function normalizeCampaignEmailHtml(raw: string, opts: {
+  dealerName: string;
+  website?: string;
+  logoUrl?: string;
+  expectedImageUrls?: string[];
+}): string {
+  return normalizeGeneratedEmailHtml(raw, opts);
 }
 
 function buildTemplateEmailSections(args: {
@@ -1865,8 +1931,10 @@ async function tryGenerateWithLlm(args: {
     "- email_body_html: optional in this JSON pass.",
     "- email_body_html must be responsive table-based email markup with inline CSS only (no scripts, no external CSS).",
     "- email_body_html must include a branded top header row with the dealer logo and a right-side dealer link.",
+    "- Header-logo rule: only use dealer logo (never place campaign creative image in the header logo slot).",
     "- Use the first image URL in the image library as the primary hero/lead visual.",
     "- For each major content block, pair the most relevant image from the image library. Keep text/image pairing logically matched.",
+    "- Typography mapping rule: heading style should match the paired image style for that section (for example western/vintage sections use serif/slab fallback stacks, modern/performance sections use bold sans fallback stacks).",
     "- Use distinct image URLs across sections; do not repeat the same campaign image for every block when multiple images are provided.",
     "- Use each image URL at most once unless only one image URL is available.",
     "- Do NOT add an 'additional visuals' gallery/strip section.",
@@ -1895,9 +1963,11 @@ async function tryGenerateWithLlm(args: {
       "Do not output plain text outside HTML tags.",
       "Use responsive table-based markup and inline CSS only.",
       "Always include branded top header row with dealer logo at left and dealer link at right.",
+      "Header-logo rule: only use dealer logo in header (never use campaign creative in logo slot).",
       "Use provided campaign/reference images in context-matching sections.",
       "Use the first image library URL as the lead/hero image in the email.",
       "When multiple image URLs are provided, distribute distinct URLs across sections instead of repeating one image.",
+      "Typography mapping rule: heading style should match the paired image style for that section.",
       "If image library URLs are present, include each image URL at least once in the body.",
       "Never crop images. Use contain behavior and responsive sizing.",
       "",
