@@ -23757,9 +23757,12 @@ app.post("/campaigns/email/generate", requireManager, async (req, res) => {
     basePrimaryImageUrl
       ? `- Hero section must represent base campaign "${String(baseCampaign.name ?? "").trim() || "Base Campaign"}" and use this hero image URL: ${basePrimaryImageUrl}`
       : `- Hero section must represent base campaign "${String(baseCampaign.name ?? "").trim() || "Base Campaign"}".`,
+    "- Use a centered, compact email body (max width about 680-700px). Avoid full-bleed extra-wide sections.",
+    "- Use dark layout shell with high-contrast text (near-white text on dark background).",
     "- Build one digest section per selected campaign block and pair each section with that block's Primary image URL.",
     "- Do not repeat the same image URL across multiple sections when multiple section images are available.",
     "- Section typography should match each section image style (for example vintage/western blocks vs modern/performance blocks).",
+    "- Typography fallback mapping: vintage/western sections use Georgia/Times serif stack; modern/performance sections use Arial/Helvetica sans stack.",
     "- Keep all section details tied to the matching campaign block; do not blend campaign details."
   ].join("\n");
   const finalPrompt = [prompt, layoutDirectives].filter(Boolean).join("\n\n");

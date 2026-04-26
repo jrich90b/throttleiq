@@ -1084,3 +1084,13 @@ When changing responses:
   - persist user/base prompt only; store merged email-builder prompt in metadata for traceability.
 - Purpose:
   - prevent campaign hero images from leaking into header-logo slots and keep email image/font/content mapping stable across repeated generations.
+
+## Email Builder Compact Dark Shell (Contrast + Width)
+- In `services/api/src/domain/campaignBuilder.ts`:
+  - email normalization now wraps generated HTML inside a compact centered shell (`~700px` max) to prevent ultra-wide preview/email layouts.
+  - required header styling switched to dark high-contrast treatment (white link/text on dark header row).
+  - added contrast enforcement pass for common low-contrast dark text colors in generated inline styles.
+- In `services/api/src/index.ts` (`/campaigns/email/generate`):
+  - added explicit layout directives for dark shell, compact width, and typography mapping fallbacks (serif for vintage blocks, sans for modern blocks).
+- Purpose:
+  - cleaner composition in previews/emails, stronger contrast, and better visual pairing between campaign art style and section typography.

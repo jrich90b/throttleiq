@@ -1343,15 +1343,15 @@ function buildRequiredEmailHeaderBlock(opts: {
     ? `<img data-lr-header-logo="1" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(
         dealerName
       )} logo" style="display:block;max-width:180px;max-height:68px;width:auto;height:auto;" />`
-    : `<div data-lr-header-logo="1" style="font-size:14px;line-height:20px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#111827;">${escapeHtml(
+    : `<div data-lr-header-logo="1" style="font-size:14px;line-height:20px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#f8fafc;">${escapeHtml(
         dealerName
       )}</div>`;
   const rightLink = website
     ? `<a href="${escapeHtml(
         website
-      )}" target="_blank" rel="noopener noreferrer" style="font-size:14px;line-height:18px;font-weight:700;color:#111827;text-decoration:underline;">Find A Dealer →</a>`
+      )}" target="_blank" rel="noopener noreferrer" style="font-size:14px;line-height:18px;font-weight:700;color:#f8fafc;text-decoration:underline;">Find A Dealer →</a>`
     : "";
-  return `<table data-lr-required-header="1" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 16px 0;background:#ffffff;border-bottom:1px solid #e5e7eb;">
+  return `<table data-lr-required-header="1" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 16px 0;background:#0b1220;border-bottom:1px solid #263143;">
     <tr>
       <td style="padding:16px 22px;">
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
@@ -1363,6 +1363,44 @@ function buildRequiredEmailHeaderBlock(opts: {
       </td>
     </tr>
   </table>`;
+}
+
+function ensureEmailShellLayout(html: string): string {
+  const raw = String(html ?? "").trim();
+  if (!raw) return raw;
+  if (/data-lr-email-shell\s*=\s*(['"])1\1/i.test(raw)) return raw;
+  const bodyMatch = raw.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i);
+  if (!bodyMatch) return raw;
+  const bodyInner = String(bodyMatch[1] ?? "").trim();
+  if (!bodyInner) return raw;
+  const shell = `<table data-lr-email-shell="1" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0;padding:0;background:#05070b;">
+    <tr>
+      <td align="center" style="padding:22px 12px;">
+        <table role="presentation" width="700" cellspacing="0" cellpadding="0" border="0" style="width:700px;max-width:700px;background:#0b1220;border:1px solid #263143;border-radius:12px;overflow:hidden;">
+          <tr>
+            <td style="padding:18px 20px;font-family:Arial,Helvetica,sans-serif;color:#e5e7eb;">
+              ${bodyInner}
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>`;
+  return raw.replace(/<body\b[^>]*>[\s\S]*?<\/body>/i, `<body style="margin:0;padding:0;background:#05070b;color:#e5e7eb;">${shell}</body>`);
+}
+
+function enforceEmailTextContrast(html: string): string {
+  let out = String(html ?? "");
+  if (!out) return out;
+  out = out.replace(
+    /color\s*:\s*#(?:000|000000|111|111111|111827|1f2937|0f172a)\b/gi,
+    "color:#e5e7eb"
+  );
+  out = out.replace(
+    /\bcolor\s*=\s*(['"])#(?:000|000000|111|111111|111827|1f2937|0f172a)\1/gi,
+    'color="#e5e7eb"'
+  );
+  return out;
 }
 
 function normalizeGeneratedEmailHtml(
@@ -1398,6 +1436,8 @@ function normalizeGeneratedEmailHtml(
     html = html.replace(/<body[^>]*>/i, match => `${match}${requiredHeader}`);
   }
   html = stripCompetingGeneratedHeaderBlocks(html);
+  html = ensureEmailShellLayout(html);
+  html = enforceEmailTextContrast(html);
   html = enforceEmailImageStyles(html);
   html = enforceEmailReferenceImageAssignments(html, opts.expectedImageUrls ?? []);
   return html;
