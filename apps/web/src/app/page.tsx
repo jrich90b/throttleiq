@@ -1541,6 +1541,9 @@ const CAMPAIGN_ASSET_TARGET_OPTIONS: Array<{ value: CampaignAssetTarget; label: 
   { value: "flyer_8_5x11", label: "Flyer (8.5x11)" }
 ];
 
+const CAMPAIGN_STUDIO_ASSET_TARGET_OPTIONS: Array<{ value: CampaignAssetTarget; label: string }> =
+  CAMPAIGN_ASSET_TARGET_OPTIONS.filter(opt => opt.value !== "email");
+
 const CAMPAIGN_TAG_OPTIONS: Array<{ value: CampaignTag; label: string }> = [
   { value: "sales", label: "Sales" },
   { value: "parts", label: "Parts" },
@@ -2410,7 +2413,7 @@ export default function Home() {
   );
   const campaignSelectedTargetsOrdered = useMemo(
     () =>
-      CAMPAIGN_ASSET_TARGET_OPTIONS.map(opt => opt.value).filter(target =>
+      CAMPAIGN_STUDIO_ASSET_TARGET_OPTIONS.map(opt => opt.value).filter(target =>
         (campaignForm.assetTargets ?? []).includes(target)
       ),
     [campaignForm.assetTargets]
@@ -2470,16 +2473,13 @@ export default function Home() {
     [campaignPreviewEntry]
   );
   const campaignOutputBehaviorNote = useMemo(() => {
-    if (campaignActiveTarget === "email") {
-      return "Email mode now supports multi-section digest layout (up to 4 update blocks) in generated HTML.";
-    }
     if (campaignActiveTarget === "sms") {
       return "SMS mode generates one concise text draft (single campaign concept).";
     }
     if (campaignActiveTarget === "flyer_8_5x11") {
       return "Flyer mode generates one print-ready 8.5 x 11 design (no social caption).";
     }
-    return "Image modes now generate one campaign concept per output so messaging stays focused and consistent.";
+    return "Image modes now generate one campaign concept per output so messaging stays focused and consistent. Email generation moved to Email Builder.";
   }, [campaignActiveTarget]);
   const campaignEmailDigestPreviewSections = useMemo(
     () => campaignBuildEmailDigestPreview(campaignForm.emailBodyText),
@@ -3100,6 +3100,7 @@ export default function Home() {
   function applyCampaignToForm(entry: CampaignEntry | null) {
     const validTags = new Set<CampaignTag>(CAMPAIGN_TAG_OPTIONS.map(opt => opt.value));
     const validTargets = new Set<CampaignAssetTarget>(CAMPAIGN_ASSET_TARGET_OPTIONS.map(opt => opt.value));
+    const studioTargets = new Set<CampaignAssetTarget>(CAMPAIGN_STUDIO_ASSET_TARGET_OPTIONS.map(opt => opt.value));
     if (!entry) {
       setCampaignForm({ ...EMPTY_CAMPAIGN_FORM });
       setCampaignSourceHits([]);
@@ -3129,7 +3130,7 @@ export default function Home() {
           .map(v => v as CampaignAssetTarget) as CampaignAssetTarget[])
       : [];
     // UI now enforces one output target at a time for a simpler workflow.
-    const normalizedTargets = assetTargets.length ? [assetTargets[0]] : [];
+    const normalizedTargets = assetTargets.filter(target => studioTargets.has(target)).slice(0, 1);
     const generatedAssets: CampaignGeneratedAsset[] = Array.isArray(entry.generatedAssets)
       ? entry.generatedAssets
           .filter(asset => !!asset?.url && validTargets.has(String(asset?.target ?? "").trim() as CampaignAssetTarget))
@@ -4292,6 +4293,10 @@ export default function Home() {
       setCampaignError("Pick an output target to generate.");
       return;
     }
+    if (target === "email") {
+      setCampaignError("Email output moved to Email Builder.");
+      return;
+    }
     const editFromCurrent = Boolean(opts?.editFromCurrent);
     const currentTargetAssetUrl = (() => {
       const byTarget = (campaignGeneratedAssets ?? []).find(
@@ -4309,45 +4314,16 @@ export default function Home() {
       return;
     }
     const isScratchBuild = campaignForm.buildMode === "design_from_scratch";
-    const includeMediaContext = isScratchBuild || target === "email";
+    const includeMediaContext = isScratchBuild;
     const basePrompt = stripCampaignEmailReferenceContext(String(campaignForm.prompt ?? "").trim());
-    const selectedEmailContextBundle =
-      target === "email" && !editFromCurrent
-        ? collectCampaignEmailContext(campaignEmailContextEntries)
-        : { contextBlocks: [], inspirationImageUrls: [], assetImageUrls: [], briefDocumentUrls: [] };
-    const selectedEmailContextPrompt = buildCampaignEmailContextBlock(selectedEmailContextBundle.contextBlocks);
-    const payloadPrompt =
-      target === "email"
-        ? [basePrompt, selectedEmailContextPrompt].filter(Boolean).join("\n\n") || undefined
-        : basePrompt || undefined;
+    const payloadPrompt = basePrompt || undefined;
     const baseInspirationImageUrls = parseCampaignUrlsText(campaignForm.inspirationImageUrlsText);
-    const selectedEmailContextInspiration =
-      target === "email" && !editFromCurrent
-        ? selectedEmailContextBundle.inspirationImageUrls.slice(0, 8)
-        : [];
-    const defaultEmailPrimaryImage = !editFromCurrent && target === "email" && campaignEmailIncludePrimaryImage
-      ? campaignPrimaryGeneratedImageUrl
-      : "";
     const inspirationImageUrlsRaw = editFromCurrent
       ? (currentTargetAssetUrl ? [currentTargetAssetUrl] : [])
       : includeMediaContext
         ? baseInspirationImageUrls
         : [];
-    const inspirationImageUrls =
-      target === "email" && !editFromCurrent
-        ? Array.from(
-            new Set([
-              ...inspirationImageUrlsRaw,
-              ...(defaultEmailPrimaryImage ? [defaultEmailPrimaryImage] : []),
-              ...selectedEmailContextInspiration
-            ])
-          )
-        : Array.from(
-            new Set([
-              ...inspirationImageUrlsRaw,
-              ...(defaultEmailPrimaryImage ? [defaultEmailPrimaryImage] : [])
-            ])
-          );
+    const inspirationImageUrls = Array.from(new Set([...inspirationImageUrlsRaw]));
     const assetImageUrls = editFromCurrent
       ? []
       : includeMediaContext
@@ -4359,8 +4335,7 @@ export default function Home() {
         : [];
     const briefDocumentUrls = Array.from(
       new Set([
-        ...parseCampaignUrlsText(campaignForm.briefDocumentUrlsText),
-        ...(target === "email" && !editFromCurrent ? selectedEmailContextBundle.briefDocumentUrls : [])
+        ...parseCampaignUrlsText(campaignForm.briefDocumentUrlsText)
       ])
     );
     setCampaignGenerating(true);
@@ -4394,21 +4369,9 @@ export default function Home() {
       }
       const saved = (data?.campaign as CampaignEntry | undefined) ?? null;
       const generated = (data?.generated as any) ?? null;
-      const preserveEmailFormFields =
-        target === "email"
-          ? {
-              prompt: campaignForm.prompt,
-              inspirationImageUrlsText: campaignForm.inspirationImageUrlsText,
-              assetImageUrlsText: campaignForm.assetImageUrlsText,
-              briefDocumentUrlsText: campaignForm.briefDocumentUrlsText
-            }
-          : null;
       if (saved) {
         setCampaignSelectedId(saved.id);
         applyCampaignToForm(saved);
-        if (preserveEmailFormFields) {
-          setCampaignForm(prev => ({ ...prev, ...preserveEmailFormFields }));
-        }
         setCampaigns(prev => {
           const idx = prev.findIndex(row => row.id === saved.id);
           const next = idx >= 0 ? prev.map(row => (row.id === saved.id ? saved : row)) : [saved, ...prev];
@@ -11964,6 +11927,17 @@ export default function Home() {
               <p className="text-sm text-gray-500 mt-1">
                 1) Set up campaign, 2) generate assets, 3) review drafts, 4) optionally publish to Meta.
               </p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <a
+                  href="/email-builder"
+                  className="inline-flex items-center px-3 py-1.5 rounded-md border border-[rgba(255,255,255,0.3)] text-xs font-semibold text-gray-100 hover:bg-white/10"
+                >
+                  Open Email Builder
+                </a>
+                <span className="text-[11px] text-gray-400">
+                  Email generation is now separated from Campaign Studio.
+                </span>
+              </div>
             </div>
 
             {campaignError ? (
@@ -12019,7 +11993,7 @@ export default function Home() {
               <div className="border rounded-lg p-3 bg-gray-50 space-y-2 lr-campaign-subpanel">
                 <div className="text-xs font-semibold text-gray-700">2) Output format (one at a time)</div>
                 <div className="flex flex-wrap gap-2">
-                  {CAMPAIGN_ASSET_TARGET_OPTIONS.map(opt => {
+                  {CAMPAIGN_STUDIO_ASSET_TARGET_OPTIONS.map(opt => {
                     const isChecked = (campaignForm.assetTargets ?? []).includes(opt.value);
                     return (
                       <label
@@ -12909,97 +12883,18 @@ export default function Home() {
                 </div>
               ) : null}
 
-              {campaignWantsEmail ? (
-                <>
-                  <label className="block text-xs text-gray-600">
-                    Email subject
-                    <input
-                      className="mt-1 w-full border rounded px-3 py-2 text-sm"
-                      value={campaignForm.emailSubject}
-                      onChange={e => setCampaignForm(prev => ({ ...prev, emailSubject: e.target.value }))}
-                    />
-                  </label>
-
-                  <label className="block text-xs text-gray-600">
-                    Email draft
-                    <textarea
-                      className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[160px]"
-                      value={campaignForm.emailBodyText}
-                      onChange={e => setCampaignForm(prev => ({ ...prev, emailBodyText: e.target.value }))}
-                    />
-                  </label>
-
-                  <div className="border rounded-lg p-3 bg-gray-50 space-y-2 lr-campaign-email-digest-preview">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="text-xs font-semibold text-gray-700">Email digest preview</div>
-                      <div className="text-[11px] text-gray-600">
-                        {campaignEmailDigestPreviewSections.length} section
-                        {campaignEmailDigestPreviewSections.length === 1 ? "" : "s"}
-                      </div>
-                    </div>
-                    {campaignEmailDigestPreviewSections.length ? (
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                        {campaignEmailDigestPreviewSections.map((section, idx) => (
-                          <div
-                            key={`campaign-email-digest-${idx}`}
-                            className="border rounded-md px-2.5 py-2 bg-white lr-campaign-email-digest-card"
-                          >
-                            <div className="text-[11px] font-semibold uppercase tracking-[0.02em] text-slate-700">
-                              {section.title}
-                            </div>
-                            <div className="text-xs text-slate-900 mt-1 leading-5">{section.body}</div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="text-xs text-gray-600">
-                        Generate or write email copy to preview digest sections here.
-                      </div>
-                    )}
-                    <div className="text-[11px] text-gray-600">
-                      {campaignEmailHtmlReady
-                        ? "Generated HTML is ready and will use this digest structure."
-                        : "Generate once to build the full branded HTML email layout."}
-                    </div>
-                  </div>
-
-                  <details className="border rounded p-3 bg-gray-50">
-                    <summary className="text-xs font-semibold text-gray-700 cursor-pointer">
-                      Advanced HTML + References
-                    </summary>
-                    <label className="block text-xs text-gray-600 mt-3">
-                      Email body (HTML)
-                      <textarea
-                        className="mt-1 w-full border rounded px-3 py-2 text-xs min-h-[160px] font-mono"
-                        value={campaignForm.emailBodyHtml}
-                        onChange={e => setCampaignForm(prev => ({ ...prev, emailBodyHtml: e.target.value }))}
-                      />
-                    </label>
-                    <div className="mt-3">
-                      <div className="text-xs font-semibold text-gray-700 mb-2">Reference hits</div>
-                      {campaignSourceHits.length ? (
-                        <div className="space-y-2 max-h-[220px] overflow-y-auto">
-                          {campaignSourceHits.map((hit, idx) => (
-                            <div key={`campaign-hit-${idx}`} className="text-xs">
-                              <a
-                                href={hit.url || "#"}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-blue-700 hover:underline font-medium"
-                              >
-                                {hit.title || hit.domain || hit.url || `Reference ${idx + 1}`}
-                              </a>
-                              {hit.snippet ? <div className="text-gray-600 mt-0.5">{hit.snippet}</div> : null}
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="text-xs text-gray-500">No references yet.</div>
-                      )}
-                    </div>
-                  </details>
-                </>
-              ) : null}
+              <div className="border rounded-lg p-3 bg-gray-50">
+                <div className="text-xs font-semibold text-gray-700">Email Output</div>
+                <div className="text-xs text-gray-600 mt-1">
+                  Email generation moved to the dedicated Email Builder for cleaner context handling and HTML layout generation.
+                </div>
+                <a
+                  href="/email-builder"
+                  className="inline-flex mt-2 px-3 py-1.5 rounded border border-slate-300 text-xs font-semibold text-slate-800 hover:bg-slate-100"
+                >
+                  Open Email Builder
+                </a>
+              </div>
             </div>
           </div>
         ) : section === "kpi" ? (

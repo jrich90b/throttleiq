@@ -268,6 +268,7 @@ import {
   createCampaign,
   updateCampaign,
   deleteCampaign,
+  type CampaignEntry,
   type CampaignBuildMode,
   type CampaignChannel,
   type CampaignAssetTarget,
@@ -21848,6 +21849,91 @@ function normalizeCampaignUrlArray(raw: unknown): string[] {
   );
 }
 
+const EMAIL_LOCKER_IMAGE_TARGET_PRIORITY: CampaignAssetTarget[] = [
+  "flyer_8_5x11",
+  "web_banner",
+  "facebook_post",
+  "instagram_post",
+  "instagram_story",
+  "sms",
+  "email"
+];
+
+function campaignLooksLikeImageUrl(raw: unknown): boolean {
+  const value = String(raw ?? "").trim();
+  if (!value) return false;
+  if (/^\/uploads\/campaigns\//i.test(value) || /\/uploads\/campaigns\//i.test(value)) return true;
+  return /\.(png|jpe?g|webp|gif|avif|bmp|svg)(\?.*)?$/i.test(value);
+}
+
+function campaignPrimaryImageForEmailLocker(entry: CampaignEntry | null | undefined): string {
+  if (!entry) return "";
+  const generatedAssets = Array.isArray(entry.generatedAssets) ? entry.generatedAssets : [];
+  for (const target of EMAIL_LOCKER_IMAGE_TARGET_PRIORITY) {
+    const match = generatedAssets.find(asset => {
+      const assetTarget = String(asset?.target ?? "").trim();
+      const assetUrl = String(asset?.url ?? "").trim();
+      return assetTarget === target && campaignLooksLikeImageUrl(assetUrl);
+    });
+    if (match?.url) return String(match.url).trim();
+  }
+  const finalImageUrl = String(entry.finalImageUrl ?? "").trim();
+  if (campaignLooksLikeImageUrl(finalImageUrl)) return finalImageUrl;
+  const inspiration = Array.isArray(entry.inspirationImageUrls) ? entry.inspirationImageUrls : [];
+  for (const raw of inspiration) {
+    const url = String(raw ?? "").trim();
+    if (campaignLooksLikeImageUrl(url)) return url;
+  }
+  return "";
+}
+
+function campaignLockerTextSummary(entry: CampaignEntry): string {
+  const sms = String(entry.smsBody ?? "").trim();
+  if (sms) return sms;
+  const emailText = String(entry.emailBodyText ?? "").trim();
+  if (emailText) {
+    return emailText
+      .split(/\n\s*\n/)
+      .map(v => v.trim())
+      .find(Boolean) ?? emailText;
+  }
+  const description = String(entry.description ?? "").trim();
+  if (description) return description;
+  const prompt = String(entry.prompt ?? "").trim();
+  if (prompt) return prompt;
+  return "";
+}
+
+function buildEmailLockerContextBlock(entries: CampaignEntry[]): string {
+  if (!entries.length) return "";
+  const blocks = entries
+    .map((entry, idx) => {
+      const name = String(entry.name ?? "").trim() || `Campaign ${idx + 1}`;
+      const prompt = String(entry.prompt ?? "").trim();
+      const description = String(entry.description ?? "").trim();
+      const summary = campaignLockerTextSummary(entry);
+      const lines = [
+        `Campaign: ${name}`,
+        prompt ? `Prompt details: ${prompt}` : "",
+        description ? `Description: ${description}` : "",
+        summary ? `Messaging summary: ${summary}` : ""
+      ]
+        .map(v => v.trim())
+        .filter(Boolean);
+      return lines.join("\n");
+    })
+    .filter(Boolean);
+  if (!blocks.length) return "";
+  return [
+    "Email locker context (required):",
+    "Treat each campaign block as a distinct section in the email.",
+    "Do not duplicate campaign sections or reuse the same image for multiple sections unless there is only one image total.",
+    "Keep each section copy aligned to that section's campaign details.",
+    "",
+    ...blocks.map((block, idx) => `Block ${idx + 1}\n${block}`)
+  ].join("\n\n");
+}
+
 function campaignCreatorDisplayName(user: any): string | undefined {
   const fullName = [user?.firstName, user?.lastName].filter(Boolean).join(" ").trim();
   if (fullName) return fullName;
@@ -23571,6 +23657,157 @@ app.delete("/campaigns/:id", requireManager, (req, res) => {
   return res.json({ ok: true });
 });
 
+app.post("/campaigns/email/generate", requireManager, async (req, res) => {
+  const campaignId = String(req.body?.campaignId ?? "").trim();
+  if (!campaignId) return res.status(400).json({ ok: false, error: "Missing campaignId" });
+  const baseCampaign = getCampaign(campaignId);
+  if (!baseCampaign) return res.status(404).json({ ok: false, error: "Campaign not found" });
+
+  const includeCurrentCampaign = req.body?.includeCurrentCampaign !== false;
+  const selectedCampaignIds = Array.isArray(req.body?.selectedCampaignIds)
+    ? req.body.selectedCampaignIds.map((v: unknown) => String(v ?? "").trim()).filter(Boolean)
+    : [];
+  const dedupedContextIds = Array.from(
+    new Set([
+      ...(includeCurrentCampaign ? [campaignId] : []),
+      ...selectedCampaignIds
+    ])
+  );
+  const contextCampaigns = dedupedContextIds
+    .map(id => getCampaign(id))
+    .filter((row): row is CampaignEntry => Boolean(row));
+  if (!contextCampaigns.length) {
+    return res.status(400).json({ ok: false, error: "No valid campaigns selected for email context." });
+  }
+
+  const selectedReferences = normalizeCampaignUrlArray(req.body?.referenceImageUrls);
+  const selectedBriefs = normalizeCampaignUrlArray(req.body?.briefDocumentUrls);
+  const inspirationFromCampaigns: string[] = [];
+  const seenInspiration = new Set<string>();
+  for (const entry of contextCampaigns) {
+    const primary = campaignPrimaryImageForEmailLocker(entry);
+    if (!primary || seenInspiration.has(primary)) continue;
+    seenInspiration.add(primary);
+    inspirationFromCampaigns.push(primary);
+  }
+  for (const url of selectedReferences) {
+    if (!url || seenInspiration.has(url)) continue;
+    seenInspiration.add(url);
+    inspirationFromCampaigns.push(url);
+  }
+
+  const briefUrls: string[] = [];
+  const seenBriefs = new Set<string>();
+  for (const entry of contextCampaigns) {
+    const list = Array.isArray(entry.briefDocumentUrls) ? entry.briefDocumentUrls : [];
+    for (const raw of list) {
+      const url = String(raw ?? "").trim();
+      if (!url || seenBriefs.has(url)) continue;
+      seenBriefs.add(url);
+      briefUrls.push(url);
+    }
+  }
+  for (const url of selectedBriefs) {
+    if (!url || seenBriefs.has(url)) continue;
+    seenBriefs.add(url);
+    briefUrls.push(url);
+  }
+
+  const assetImageUrls: string[] = [];
+  const seenAssets = new Set<string>();
+  for (const entry of contextCampaigns) {
+    const list = Array.isArray(entry.assetImageUrls) ? entry.assetImageUrls : [];
+    for (const raw of list) {
+      const url = String(raw ?? "").trim();
+      if (!url || seenAssets.has(url)) continue;
+      seenAssets.add(url);
+      assetImageUrls.push(url);
+    }
+  }
+
+  const userPrompt = String(req.body?.prompt ?? "").trim();
+  const basePrompt = String(baseCampaign.prompt ?? "").trim();
+  const lockerContextBlock = buildEmailLockerContextBlock(contextCampaigns);
+  const prompt = [userPrompt || basePrompt, lockerContextBlock].filter(Boolean).join("\n\n");
+  const description =
+    String(req.body?.description ?? "").trim() ||
+    String(baseCampaign.description ?? "").trim() ||
+    undefined;
+  const tags = normalizeCampaignTags([
+    ...(Array.isArray(baseCampaign.tags) ? baseCampaign.tags : []),
+    ...contextCampaigns.flatMap(entry => (Array.isArray(entry.tags) ? entry.tags : []))
+  ]);
+  const buildMode = normalizeCampaignBuildMode(req.body?.buildMode ?? baseCampaign.buildMode ?? "design_from_scratch");
+  const dealerProfile = await getDealerProfile();
+
+  const generated = await generateCampaignContent({
+    name: String(req.body?.name ?? "").trim() || String(baseCampaign.name ?? "").trim() || "Email Campaign",
+    buildMode,
+    channel: "email",
+    tags,
+    prompt: prompt || undefined,
+    description,
+    inspirationImageUrls: inspirationFromCampaigns,
+    assetImageUrls,
+    briefDocumentUrls: briefUrls,
+    dealerProfile
+  });
+
+  const html = String(generated.emailBodyHtml ?? "").trim();
+  const htmlLooksJson = html.startsWith("{") || html.startsWith("[") || /"email_body_html"\s*:/.test(html);
+  if (!html || htmlLooksJson) {
+    return res.status(502).json({
+      ok: false,
+      error: "Email HTML generation failed (layout output invalid). Retry Generate."
+    });
+  }
+
+  const nowIso = new Date().toISOString();
+  const mergedMetadata = {
+    ...(baseCampaign.metadata && typeof baseCampaign.metadata === "object"
+      ? (baseCampaign.metadata as Record<string, unknown>)
+      : {}),
+    ...(generated.metadata && typeof generated.metadata === "object"
+      ? (generated.metadata as Record<string, unknown>)
+      : {}),
+    emailBuilderContextCampaignIds: contextCampaigns.map(entry => String(entry.id ?? "").trim()).filter(Boolean),
+    emailBuilderGeneratedAt: nowIso
+  };
+  const nextAssetTargets = Array.from(
+    new Set([...(Array.isArray(baseCampaign.assetTargets) ? baseCampaign.assetTargets : []), "email"])
+  ) as CampaignAssetTarget[];
+
+  const updated = updateCampaign(baseCampaign.id, {
+    status: "generated",
+    buildMode,
+    channel: "email",
+    assetTargets: nextAssetTargets,
+    prompt: prompt || baseCampaign.prompt,
+    description: description ?? baseCampaign.description,
+    inspirationImageUrls: inspirationFromCampaigns,
+    assetImageUrls,
+    briefDocumentUrls: briefUrls,
+    smsBody: generated.smsBody ?? baseCampaign.smsBody,
+    emailSubject: generated.emailSubject ?? baseCampaign.emailSubject,
+    emailBodyText: generated.emailBodyText ?? baseCampaign.emailBodyText,
+    emailBodyHtml: generated.emailBodyHtml ?? baseCampaign.emailBodyHtml,
+    sourceHits: generated.sourceHits,
+    metadata: mergedMetadata,
+    generatedBy: generated.generatedBy
+  });
+  if (!updated) return res.status(404).json({ ok: false, error: "Campaign not found" });
+  return res.json({
+    ok: true,
+    campaign: updated,
+    generated,
+    contextCampaigns: contextCampaigns.map(entry => ({
+      id: entry.id,
+      name: entry.name,
+      primaryImageUrl: campaignPrimaryImageForEmailLocker(entry)
+    }))
+  });
+});
+
 app.post("/campaigns/generate", requireManager, async (req, res) => {
   const user = (req as any).user ?? null;
   const name = String(req.body?.name ?? "").trim();
@@ -23591,6 +23828,12 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     normalizeSingleCampaignAssetTarget(req.body?.target) ??
     normalizeSingleCampaignAssetTarget(req.body?.assetTarget);
   const requestedAssetTargets = singleTarget ? [singleTarget] : uniqCampaignAssetTargets(assetTargets);
+  if (requestedAssetTargets.includes("email")) {
+    return res.status(400).json({
+      ok: false,
+      error: "Email generation moved to /campaigns/email/generate. Open Email Builder to generate email outputs."
+    });
+  }
   const requestedImageAssetTargets = requestedAssetTargets.filter(campaignAssetTargetRequiresGeneratedImage);
   const tags = normalizeCampaignTags(req.body?.tags);
   const prompt = String(req.body?.prompt ?? "").trim() || undefined;

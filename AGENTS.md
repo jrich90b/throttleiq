@@ -58,6 +58,10 @@ Required order:
 - Campaign Studio Email locker UX should stay campaign-based (not per-file picking):
   - allow selecting multiple locker campaigns and hydrate prompt/details plus brief/reference/design context into the current email generation input.
   - keep context hydration deterministic and replace-style so users can clearly switch/stack campaign contexts.
+- Email generation is now isolated behind a dedicated Email Builder flow:
+  - use `/campaigns/email/generate` (and web `/email-builder`) for all campaign email HTML generation,
+  - do not generate Email via the legacy `/campaigns/generate` route (it should return a redirect/error to Email Builder),
+  - keep Campaign Studio focused on non-email assets (`sms`, social, web banner, flyer) to prevent stale mixed-path behavior.
 - Campaign Studio Email HTML branding should keep a dealer-branded top row with dealer logo (`dealer_profile.logoUrl`) and a right-side dealer website link when available.
 - Apply the same email-layout normalization in:
   - initial ADF email draft builders,
