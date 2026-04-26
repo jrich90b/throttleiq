@@ -49,6 +49,9 @@ Required order:
   - include additional reference/design images as secondary visuals,
   - normalize `/uploads/...` image paths to absolute `PUBLIC_BASE_URL` links for external inbox rendering.
   - keep a full marketing-email structure (branded header, subject hero block, section cards, primary CTA, utility CTA grid, and branded footer/contact row) instead of image-only layout.
+  - Email HTML generation is LLM-first and should be designed from scratch per campaign context (not forced into one rigid static layout).
+  - enforce a required branded header logo row even when LLM HTML omits it.
+  - enforce non-cropping image rendering (`object-fit: contain`, `height:auto`) so campaign visuals are fully visible.
 - Campaign Studio Email locker UX should stay campaign-based (not per-file picking):
   - allow selecting multiple locker campaigns and hydrate prompt/details plus brief/reference/design context into the current email generation input.
   - keep context hydration deterministic and replace-style so users can clearly switch/stack campaign contexts.

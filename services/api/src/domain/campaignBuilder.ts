@@ -971,6 +971,126 @@ function normalizeCampaignEmailImageUrls(raw: unknown): string[] {
   return out;
 }
 
+function inferCampaignImageLabelFromUrl(raw: string): string {
+  const normalized = normalizeCampaignEmailImageUrl(raw);
+  if (!normalized) return "";
+  try {
+    const pathname = new URL(normalized).pathname;
+    const filename = pathname.split("/").pop() || "";
+    return filename
+      .replace(/\.[a-z0-9]+$/i, "")
+      .replace(/[_-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 80);
+  } catch {
+    const filename = normalized.split("/").pop() || normalized;
+    return filename
+      .replace(/\.[a-z0-9]+$/i, "")
+      .replace(/[_-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 80);
+  }
+}
+
+function appendCssDeclaration(style: string, property: string, value: string): string {
+  const raw = String(style ?? "").trim();
+  const propRe = new RegExp(`(?:^|;)\\s*${property}\\s*:`, "i");
+  if (propRe.test(raw)) return raw;
+  const base = raw ? raw.replace(/\s*;+\s*$/, "") + ";" : "";
+  return `${base} ${property}:${value};`.trim();
+}
+
+function enforceEmailImageStyles(html: string): string {
+  if (!html) return "";
+  return html.replace(/<img\b([^>]*?)>/gi, (full, attrsRaw) => {
+    let attrs = String(attrsRaw ?? "");
+    const styleMatch = attrs.match(/\bstyle\s*=\s*(['"])([\s\S]*?)\1/i);
+    let style = styleMatch ? String(styleMatch[2] ?? "") : "";
+    const srcMatch = attrs.match(/\bsrc\s*=\s*(['"])(.*?)\1/i);
+    const altMatch = attrs.match(/\balt\s*=\s*(['"])(.*?)\1/i);
+    const src = String(srcMatch?.[2] ?? "").toLowerCase();
+    const alt = String(altMatch?.[2] ?? "").toLowerCase();
+    const isLogo = src.includes("logo") || alt.includes("logo");
+    style = appendCssDeclaration(style, "display", "block");
+    style = appendCssDeclaration(style, "max-width", "100%");
+    style = appendCssDeclaration(style, "height", "auto");
+    if (!isLogo) {
+      style = appendCssDeclaration(style, "object-fit", "contain");
+      style = appendCssDeclaration(style, "background", "#f3f4f6");
+    }
+    if (styleMatch) {
+      attrs = attrs.replace(styleMatch[0], `style="${escapeHtml(style)}"`);
+    } else {
+      attrs = `${attrs} style="${escapeHtml(style)}"`;
+    }
+    return `<img${attrs}>`;
+  });
+}
+
+function buildRequiredEmailHeaderBlock(opts: {
+  dealerName: string;
+  website?: string;
+  logoUrl?: string;
+}): string {
+  const dealerName = normalizeText(opts.dealerName) || "Dealership";
+  const website = normalizeHttpUrl(opts.website);
+  const logoUrl = normalizeCampaignEmailImageUrl(String(opts.logoUrl ?? ""));
+  const logoHtml = logoUrl
+    ? `<img data-lr-header-logo="1" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(
+        dealerName
+      )} logo" style="display:block;max-width:180px;max-height:68px;width:auto;height:auto;" />`
+    : `<div data-lr-header-logo="1" style="font-size:14px;line-height:20px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#111827;">${escapeHtml(
+        dealerName
+      )}</div>`;
+  const rightLink = website
+    ? `<a href="${escapeHtml(
+        website
+      )}" target="_blank" rel="noopener noreferrer" style="font-size:14px;line-height:18px;font-weight:700;color:#111827;text-decoration:underline;">Find A Dealer →</a>`
+    : "";
+  return `<table data-lr-required-header="1" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 16px 0;background:#ffffff;border-bottom:1px solid #e5e7eb;">
+    <tr>
+      <td style="padding:16px 22px;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+          <tr>
+            <td align="left" valign="middle">${logoHtml}</td>
+            <td align="right" valign="middle">${rightLink}</td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>`;
+}
+
+function normalizeGeneratedEmailHtml(
+  raw: string,
+  opts: {
+    dealerName: string;
+    website?: string;
+    logoUrl?: string;
+  }
+): string {
+  let html = String(raw ?? "").trim();
+  if (!html) return "";
+  html = html.replace(/<script\b[\s\S]*?<\/script>/gi, "");
+  html = html.replace(/\son[a-z]+\s*=\s*(["']).*?\1/gi, "");
+  html = html.replace(/javascript:/gi, "");
+  const hasHtmlTag = /<html[\s>]/i.test(html);
+  const hasBodyTag = /<body[\s>]/i.test(html);
+  if (!hasHtmlTag) {
+    html = `<!doctype html><html><body>${html}</body></html>`;
+  } else if (!hasBodyTag) {
+    html = html.replace(/<\/head>/i, "</head><body>").replace(/<\/html>/i, "</body></html>");
+  }
+  const requiredHeader = buildRequiredEmailHeaderBlock(opts);
+  if (!/data-lr-required-header/i.test(html)) {
+    html = html.replace(/<body[^>]*>/i, match => `${match}${requiredHeader}`);
+  }
+  html = enforceEmailImageStyles(html);
+  return html;
+}
+
 function buildTemplateEmailSections(args: {
   sourceHits: CampaignSourceHit[];
   topic: string;
@@ -1068,7 +1188,7 @@ function textToHtml(
       const sectionImageBlock = sectionImageUrl
         ? `<tr>
              <td style="padding:0 0 10px 0;">
-               <img src="${escapeHtml(sectionImageUrl)}" alt="${title}" style="display:block;width:100%;height:220px;max-height:220px;object-fit:cover;border-radius:6px;border:1px solid #d1d5db;background:#f3f4f6;" />
+               <img src="${escapeHtml(sectionImageUrl)}" alt="${title}" style="display:block;width:100%;height:220px;max-height:220px;object-fit:contain;border-radius:6px;border:1px solid #d1d5db;background:#f3f4f6;" />
              </td>
            </tr>`
         : "";
@@ -1167,7 +1287,7 @@ function textToHtml(
          <td style="padding:0 0 14px 0;">
            <img src="${escapeHtml(heroImageUrl)}" alt="${escapeHtml(
              dealerName
-           )} campaign image" style="display:block;width:100%;height:auto;max-height:360px;object-fit:cover;border-radius:8px;border:1px solid #d1d5db;background:#f3f4f6;" />
+           )} campaign image" style="display:block;width:100%;height:auto;max-height:360px;object-fit:contain;border-radius:8px;border:1px solid #d1d5db;background:#f3f4f6;" />
          </td>
        </tr>`
     : "";
@@ -1180,7 +1300,7 @@ function textToHtml(
                  .map((url, idx) => {
                    const pad = idx < stripImageUrls.length - 1 ? "padding-right:8px;" : "";
                    return `<td style="${pad}">
-                     <img src="${escapeHtml(url)}" alt="Campaign detail image" style="display:block;width:100%;height:132px;max-height:132px;object-fit:cover;border-radius:6px;border:1px solid #d1d5db;background:#f3f4f6;" />
+                     <img src="${escapeHtml(url)}" alt="Campaign detail image" style="display:block;width:100%;height:132px;max-height:132px;object-fit:contain;border-radius:6px;border:1px solid #d1d5db;background:#f3f4f6;" />
                    </td>`;
                  })
                  .join("")}
@@ -1190,10 +1310,10 @@ function textToHtml(
        </tr>`
     : "";
   const brandHeaderLogoBlock = logoUrl
-    ? `<img src="${escapeHtml(logoUrl)}" alt="${escapeHtml(
+    ? `<img data-lr-header-logo="1" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(
         dealerName
       )} logo" style="display:block;max-width:180px;max-height:68px;width:auto;height:auto;" />`
-    : `<div style="font-size:14px;line-height:20px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#111827;">${escapeHtml(
+    : `<div data-lr-header-logo="1" style="font-size:14px;line-height:20px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#111827;">${escapeHtml(
         dealerName
       )}</div>`;
   const topRightWebsiteBlock = website
@@ -1212,7 +1332,7 @@ function textToHtml(
           <table role="presentation" width="620" cellspacing="0" cellpadding="0" border="0" style="width:620px;max-width:620px;background:#ffffff;border:1px solid #d1d5db;border-radius:10px;overflow:hidden;">
             <tr>
               <td style="padding:16px 22px;border-bottom:1px solid #e5e7eb;background:#ffffff;">
-                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                <table data-lr-required-header="1" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
                   <tr>
                     <td align="left" valign="middle">${brandHeaderLogoBlock}</td>
                     <td align="right" valign="middle">${topRightWebsiteBlock}</td>
@@ -1354,6 +1474,9 @@ async function tryGenerateWithLlm(args: {
   const website = normalizeText(args.input.dealerProfile?.website);
   const phone = normalizeText(args.input.dealerProfile?.phone);
   const bookingUrl = normalizeText(args.input.dealerProfile?.bookingUrl);
+  const creditAppUrl = normalizeText(args.input.dealerProfile?.creditAppUrl);
+  const offersUrl = normalizeText(args.input.dealerProfile?.offersUrl);
+  const directionsUrl = normalizeText(args.input.dealerProfile?.directionsUrl);
   const tags = args.input.tags.map(tag => TAG_LABELS[tag]).join(", ") || "General";
   const channelSupportsEmailDigest = args.input.channel !== "sms";
   const suppressTradeOnly = shouldSuppressTradeByInput(args.input);
@@ -1366,6 +1489,11 @@ async function tryGenerateWithLlm(args: {
     ...normalizeUrls(args.input.assetImageUrls)
   ]);
   const briefUrls = normalizeUrls(args.input.briefDocumentUrls).slice(0, 6);
+  const imageLibrary = emailImageUrls.length
+    ? emailImageUrls
+        .map((url, idx) => `${idx + 1}. ${url} | label_hint: ${inferCampaignImageLabelFromUrl(url) || "none"}`)
+        .join("\n")
+    : "(No campaign images provided)";
   const briefBlock = (args.briefContexts ?? [])
     .map((doc, idx) => `${idx + 1}. ${doc.url}\nType: ${doc.type}\nExtracted: ${doc.excerpt}`)
     .join("\n\n");
@@ -1379,11 +1507,12 @@ async function tryGenerateWithLlm(args: {
   const schema: { [key: string]: unknown } = {
     type: "object",
     additionalProperties: false,
-    required: ["sms_body", "email_subject", "email_body_text"],
+    required: ["sms_body", "email_subject", "email_body_text", "email_body_html"],
     properties: {
       sms_body: { type: "string" },
       email_subject: { type: "string" },
       email_body_text: { type: "string" },
+      email_body_html: { type: "string" },
       email_sections: {
         type: "array",
         minItems: 0,
@@ -1429,6 +1558,9 @@ async function tryGenerateWithLlm(args: {
     `Brand logo/hero images: ${brandLogoUrls.join(", ") || "(none)"}`,
     `Phone: ${phone || "(not provided)"}`,
     `Booking URL: ${bookingUrl || "(not provided)"}`,
+    `Credit app URL: ${creditAppUrl || "(not provided)"}`,
+    `Offers URL: ${offersUrl || "(not provided)"}`,
+    `Directions URL: ${directionsUrl || "(not provided)"}`,
     `Build mode: ${args.input.buildMode}`,
     `Channel: ${args.input.channel}`,
     `Tags: ${tags}`,
@@ -1446,10 +1578,20 @@ async function tryGenerateWithLlm(args: {
     "Reference hits:",
     sourceBlock,
     "",
+    "Image library (use these exact URLs only):",
+    imageLibrary,
+    "",
     "Output requirements:",
     "- sms_body: 1-2 short sentences.",
     "- email_subject: under 75 chars.",
     "- email_body_text: plain text email body with clear CTA.",
+    "- email_body_html: FULL email HTML designed from scratch for this specific campaign context (do NOT force a generic template).",
+    "- email_body_html must be responsive table-based email markup with inline CSS only (no scripts, no external CSS).",
+    "- email_body_html must include a branded top header row with the dealer logo and a right-side dealer link.",
+    "- For each major content block, pair the most relevant image from the image library. Keep text/image pairing logically matched.",
+    "- If an image is not relevant to any section, place it in an additional visuals row instead of forcing mismatch.",
+    "- All images must render fully visible (no crop). Use object-fit:contain with height:auto and sensible max-height.",
+    "- Keep URLs exactly as provided. Do not invent or rewrite image URLs.",
     "- email_sections: optional array of section blocks for digest-style email layout.",
     channelSupportsEmailDigest
       ? "- Prefer 2-4 sections when context provides multiple updates."
@@ -1467,7 +1609,7 @@ async function tryGenerateWithLlm(args: {
       input: prompt,
       ...optionalReasoning(model),
       ...optionalTemperature(model, 0.2),
-      max_output_tokens: 700,
+      max_output_tokens: 1800,
       text: {
         format: {
           type: "json_schema",
@@ -1478,33 +1620,48 @@ async function tryGenerateWithLlm(args: {
       }
     });
     const parsed = ((parsedResp as any)?.output_parsed as any) || parseObject(parsedResp.output_text ?? "");
-    if (parsed?.sms_body || parsed?.email_subject || parsed?.email_body_text) {
+    if (parsed?.sms_body || parsed?.email_subject || parsed?.email_body_text || parsed?.email_body_html) {
       const smsBody = normalizeText(parsed.sms_body);
       const emailSubject = normalizeText(parsed.email_subject);
       const emailBodyText = normalizeText(parsed.email_body_text);
+      const emailBodyHtmlRaw = normalizeText(parsed.email_body_html);
       const emailSections = normalizeCampaignEmailSections(parsed.email_sections);
       if (smsBody || emailSubject || emailBodyText) {
+        const fallbackHtml = emailBodyText
+          ? textToHtml(emailBodyText, args.sourceHits, {
+              dealerName,
+              emailSubject: emailSubject || undefined,
+              website,
+              phone,
+              bookingUrl,
+              creditAppUrl: args.input.dealerProfile?.creditAppUrl,
+              offersUrl: args.input.dealerProfile?.offersUrl,
+              directionsUrl: args.input.dealerProfile?.directionsUrl,
+              logoUrl: args.input.dealerProfile?.logoUrl,
+              sections: emailSections,
+              imageUrls: emailImageUrls
+            })
+          : "";
+        const emailBodyHtml = emailBodyHtmlRaw
+          ? normalizeGeneratedEmailHtml(emailBodyHtmlRaw, {
+              dealerName,
+              website,
+              logoUrl: args.input.dealerProfile?.logoUrl
+            })
+          : fallbackHtml
+            ? normalizeGeneratedEmailHtml(fallbackHtml, {
+                dealerName,
+                website,
+                logoUrl: args.input.dealerProfile?.logoUrl
+              })
+            : undefined;
         return {
           status: "generated",
           inspirationImageUrls: args.resolvedInspirationImageUrls,
           smsBody: smsBody || undefined,
           emailSubject: emailSubject || undefined,
           emailBodyText: emailBodyText || undefined,
-          emailBodyHtml: emailBodyText
-            ? textToHtml(emailBodyText, args.sourceHits, {
-                dealerName,
-                emailSubject: emailSubject || undefined,
-                website,
-                phone,
-                bookingUrl,
-                creditAppUrl: args.input.dealerProfile?.creditAppUrl,
-                offersUrl: args.input.dealerProfile?.offersUrl,
-                directionsUrl: args.input.dealerProfile?.directionsUrl,
-                logoUrl: args.input.dealerProfile?.logoUrl,
-                sections: emailSections,
-                imageUrls: emailImageUrls
-              })
-            : undefined,
+          emailBodyHtml,
           sourceHits: args.sourceHits,
           generatedBy: "llm_fallback",
           metadata: {
@@ -1516,6 +1673,7 @@ async function tryGenerateWithLlm(args: {
             generator: "llm_fallback",
             model,
             emailSectionCount: emailSections.length,
+            emailHtmlFromLlm: Boolean(emailBodyHtmlRaw),
             brandWebsite: brandWebsite || website || null
           }
         };
@@ -1532,36 +1690,51 @@ async function tryGenerateWithLlm(args: {
       ...optionalReasoning(model),
       ...optionalTextVerbosity(model),
       ...optionalTemperature(model, 0.2),
-      max_output_tokens: 700
+      max_output_tokens: 1800
     });
     const parsed = parseObject(resp.output_text ?? "");
-    if (parsed?.sms_body || parsed?.email_subject || parsed?.email_body_text) {
+    if (parsed?.sms_body || parsed?.email_subject || parsed?.email_body_text || parsed?.email_body_html) {
       const smsBody = normalizeText(parsed.sms_body);
       const emailSubject = normalizeText(parsed.email_subject);
       const emailBodyText = normalizeText(parsed.email_body_text);
+      const emailBodyHtmlRaw = normalizeText(parsed.email_body_html);
       const emailSections = normalizeCampaignEmailSections(parsed.email_sections);
       if (smsBody || emailSubject || emailBodyText) {
+        const fallbackHtml = emailBodyText
+          ? textToHtml(emailBodyText, args.sourceHits, {
+              dealerName,
+              emailSubject: emailSubject || undefined,
+              website,
+              phone,
+              bookingUrl,
+              creditAppUrl: args.input.dealerProfile?.creditAppUrl,
+              offersUrl: args.input.dealerProfile?.offersUrl,
+              directionsUrl: args.input.dealerProfile?.directionsUrl,
+              logoUrl: args.input.dealerProfile?.logoUrl,
+              sections: emailSections,
+              imageUrls: emailImageUrls
+            })
+          : "";
+        const emailBodyHtml = emailBodyHtmlRaw
+          ? normalizeGeneratedEmailHtml(emailBodyHtmlRaw, {
+              dealerName,
+              website,
+              logoUrl: args.input.dealerProfile?.logoUrl
+            })
+          : fallbackHtml
+            ? normalizeGeneratedEmailHtml(fallbackHtml, {
+                dealerName,
+                website,
+                logoUrl: args.input.dealerProfile?.logoUrl
+              })
+            : undefined;
         return {
           status: "generated",
           inspirationImageUrls: args.resolvedInspirationImageUrls,
           smsBody: smsBody || undefined,
           emailSubject: emailSubject || undefined,
           emailBodyText: emailBodyText || undefined,
-          emailBodyHtml: emailBodyText
-            ? textToHtml(emailBodyText, args.sourceHits, {
-                dealerName,
-                emailSubject: emailSubject || undefined,
-                website,
-                phone,
-                bookingUrl,
-                creditAppUrl: args.input.dealerProfile?.creditAppUrl,
-                offersUrl: args.input.dealerProfile?.offersUrl,
-                directionsUrl: args.input.dealerProfile?.directionsUrl,
-                logoUrl: args.input.dealerProfile?.logoUrl,
-                sections: emailSections,
-                imageUrls: emailImageUrls
-              })
-            : undefined,
+          emailBodyHtml,
           sourceHits: args.sourceHits,
           generatedBy: "llm_fallback",
           metadata: {
@@ -1573,6 +1746,7 @@ async function tryGenerateWithLlm(args: {
             generator: "llm_fallback",
             model,
             emailSectionCount: emailSections.length,
+            emailHtmlFromLlm: Boolean(emailBodyHtmlRaw),
             brandWebsite: brandWebsite || website || null
           }
         };
