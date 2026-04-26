@@ -989,3 +989,13 @@ When changing responses:
   - added an `Email digest preview` card block in the email panel that shows section cards derived from the current email draft text.
 - Purpose:
   - make backend campaign behavior changes immediately visible in UI and reduce ambiguity about what each output mode will generate.
+
+## Campaign Studio Email Lockers (Asset Locker + Context Locker)
+- In `apps/web/src/app/page.tsx` and `apps/web/src/app/globals.css`:
+  - when output target is `Email`, UI now shows a dedicated locker panel:
+    - `Asset Locker`: reusable generated image assets from active campaigns with one-click `Use` into reference images.
+    - `Context Locker`: reusable brief files and reusable context images from active campaigns with one-click `Add`.
+  - uploads remain available in existing upload cards (locker is additive, not a replacement).
+  - added default email behavior toggle: include the current campaign’s primary generated image in email context by default.
+- Purpose:
+  - reduce repeated uploads, make cross-campaign reuse obvious, and keep email generation setup clear and low-friction.

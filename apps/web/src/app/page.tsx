@@ -1446,6 +1446,23 @@ type CampaignEmailDigestPreviewSection = {
   body: string;
 };
 
+type CampaignLockerAssetItem = {
+  campaignId: string;
+  campaignName: string;
+  campaignUpdatedAt: string;
+  url: string;
+  label: string;
+  isCurrentCampaign: boolean;
+};
+
+type CampaignLockerContextItem = {
+  campaignId: string;
+  campaignName: string;
+  campaignUpdatedAt: string;
+  url: string;
+  kind: "file" | "image";
+};
+
 type CampaignGeneratedAsset = {
   id?: string;
   target: CampaignAssetTarget;
@@ -2237,6 +2254,7 @@ export default function Home() {
   const [campaignGeneratedAssets, setCampaignGeneratedAssets] = useState<CampaignGeneratedAsset[]>([]);
   const [campaignTargetToGenerate, setCampaignTargetToGenerate] = useState<CampaignAssetTarget>("sms");
   const [campaignEditFromCurrentImage, setCampaignEditFromCurrentImage] = useState(false);
+  const [campaignEmailIncludePrimaryImage, setCampaignEmailIncludePrimaryImage] = useState(true);
   const campaignBriefUploadInputRef = useRef<HTMLInputElement | null>(null);
   const campaignInspirationUploadInputRef = useRef<HTMLInputElement | null>(null);
   const campaignAssetUploadInputRef = useRef<HTMLInputElement | null>(null);
@@ -2255,6 +2273,18 @@ export default function Home() {
       parseCampaignUrlsText(campaignForm.assetImageUrlsText)
         .filter(looksLikeCampaignImageUrl),
     [campaignForm.assetImageUrlsText]
+  );
+  const campaignInspirationUrlSet = useMemo(
+    () => new Set(campaignInspirationPreviewUrls.map(url => String(url).trim()).filter(Boolean)),
+    [campaignInspirationPreviewUrls]
+  );
+  const campaignAssetUrlSet = useMemo(
+    () => new Set(campaignAssetPreviewUrls.map(url => String(url).trim()).filter(Boolean)),
+    [campaignAssetPreviewUrls]
+  );
+  const campaignBriefUrlSet = useMemo(
+    () => new Set(campaignBriefPreviewUrls.map(url => String(url).trim()).filter(Boolean)),
+    [campaignBriefPreviewUrls]
   );
   const campaignEffectiveChannel = useMemo(
     () => deriveCampaignChannelFromTargets(campaignForm.assetTargets),
@@ -2287,6 +2317,15 @@ export default function Home() {
     return String(campaignFinalImageUrl ?? "").trim();
   }, [campaignGeneratedAssets, campaignActiveTarget, campaignFinalImageUrl]);
   const campaignHasCurrentBaseImage = Boolean(campaignCurrentBaseImageUrl);
+  const campaignPrimaryGeneratedImageUrl = useMemo(() => {
+    const finalUrl = String(campaignFinalImageUrl ?? "").trim();
+    if (finalUrl && looksLikeCampaignImageUrl(finalUrl)) return finalUrl;
+    for (const asset of campaignGeneratedAssets ?? []) {
+      const url = String(asset?.url ?? "").trim();
+      if (url && looksLikeCampaignImageUrl(url)) return url;
+    }
+    return "";
+  }, [campaignFinalImageUrl, campaignGeneratedAssets]);
   const campaignSelectedEntry = useMemo(
     () => campaigns.find(row => row.id === campaignSelectedId) ?? null,
     [campaigns, campaignSelectedId]
@@ -2335,6 +2374,91 @@ export default function Home() {
   const campaignEmailHtmlReady = useMemo(
     () => Boolean(String(campaignForm.emailBodyHtml ?? "").trim()),
     [campaignForm.emailBodyHtml]
+  );
+  const campaignAssetLockerItems = useMemo<CampaignLockerAssetItem[]>(() => {
+    const seen = new Set<string>();
+    const out: CampaignLockerAssetItem[] = [];
+    for (const row of campaigns) {
+      const campaignId = String(row?.id ?? "").trim();
+      if (!campaignId) continue;
+      const campaignName = String(row?.name ?? "").trim() || "Untitled campaign";
+      const campaignUpdatedAt = String(row?.updatedAt ?? row?.createdAt ?? "").trim();
+      const generated = Array.isArray(row?.generatedAssets) ? row.generatedAssets : [];
+      for (const rawAsset of generated) {
+        const url = String(rawAsset?.url ?? "").trim();
+        if (!url || !looksLikeCampaignImageUrl(url) || seen.has(url)) continue;
+        seen.add(url);
+        const rawTarget = String(rawAsset?.target ?? "").trim() as CampaignAssetTarget;
+        const validTarget = CAMPAIGN_ASSET_TARGET_OPTIONS.some(opt => opt.value === rawTarget) ? rawTarget : null;
+        const label = validTarget
+          ? campaignAssetDisplayLabel({
+              ...rawAsset,
+              target: validTarget,
+              url
+            })
+          : campaignFileLabelFromUrl(url, "generated-image");
+        out.push({
+          campaignId,
+          campaignName,
+          campaignUpdatedAt,
+          url,
+          label,
+          isCurrentCampaign: campaignId === campaignSelectedId
+        });
+        if (out.length >= 60) return out;
+      }
+    }
+    return out;
+  }, [campaigns, campaignSelectedId]);
+  const campaignContextLockerItems = useMemo<CampaignLockerContextItem[]>(() => {
+    const seen = new Set<string>();
+    const out: CampaignLockerContextItem[] = [];
+    for (const row of campaigns) {
+      const campaignId = String(row?.id ?? "").trim();
+      if (!campaignId) continue;
+      const campaignName = String(row?.name ?? "").trim() || "Untitled campaign";
+      const campaignUpdatedAt = String(row?.updatedAt ?? row?.createdAt ?? "").trim();
+      const briefUrls = Array.isArray(row?.briefDocumentUrls) ? row.briefDocumentUrls : [];
+      for (const rawUrl of briefUrls) {
+        const url = String(rawUrl ?? "").trim();
+        if (!url || seen.has(url)) continue;
+        seen.add(url);
+        out.push({
+          campaignId,
+          campaignName,
+          campaignUpdatedAt,
+          url,
+          kind: "file"
+        });
+        if (out.length >= 80) return out;
+      }
+      const imageContextUrls = [
+        ...(Array.isArray(row?.inspirationImageUrls) ? row.inspirationImageUrls : []),
+        ...(Array.isArray(row?.assetImageUrls) ? row.assetImageUrls : [])
+      ];
+      for (const rawUrl of imageContextUrls) {
+        const url = String(rawUrl ?? "").trim();
+        if (!url || !looksLikeCampaignImageUrl(url) || seen.has(url)) continue;
+        seen.add(url);
+        out.push({
+          campaignId,
+          campaignName,
+          campaignUpdatedAt,
+          url,
+          kind: "image"
+        });
+        if (out.length >= 80) return out;
+      }
+    }
+    return out;
+  }, [campaigns]);
+  const campaignContextLockerFileItems = useMemo(
+    () => campaignContextLockerItems.filter(item => item.kind === "file").slice(0, 30),
+    [campaignContextLockerItems]
+  );
+  const campaignContextLockerImageItems = useMemo(
+    () => campaignContextLockerItems.filter(item => item.kind === "image").slice(0, 30),
+    [campaignContextLockerItems]
   );
   const campaignSocialOptionsByTarget = useMemo(
     () => campaignNormalizeSocialPublishOptionsMap((campaignSelectedEntry?.metadata as any)?.socialPublishOptions),
@@ -3070,6 +3194,17 @@ export default function Home() {
     setCampaignForm(prev => {
       const existing = parseCampaignUrlsText(prev[field]);
       const next = existing.filter(url => url !== needle);
+      return { ...prev, [field]: next.join("\n") };
+    });
+  }
+
+  function addCampaignUrlToField(field: CampaignUrlTextField, rawUrl: string) {
+    const url = String(rawUrl ?? "").trim();
+    if (!url) return;
+    setCampaignForm(prev => {
+      const existing = parseCampaignUrlsText(prev[field]);
+      if (existing.includes(url)) return prev;
+      const next = [...existing, url];
       return { ...prev, [field]: next.join("\n") };
     });
   }
@@ -3978,11 +4113,20 @@ export default function Home() {
     }
     const isScratchBuild = campaignForm.buildMode === "design_from_scratch";
     const baseInspirationImageUrls = parseCampaignUrlsText(campaignForm.inspirationImageUrlsText);
-    const inspirationImageUrls = editFromCurrent
+    const defaultEmailPrimaryImage = !editFromCurrent && target === "email" && campaignEmailIncludePrimaryImage
+      ? campaignPrimaryGeneratedImageUrl
+      : "";
+    const inspirationImageUrlsRaw = editFromCurrent
       ? (currentTargetAssetUrl ? [currentTargetAssetUrl] : [])
       : isScratchBuild
         ? baseInspirationImageUrls
         : [];
+    const inspirationImageUrls = Array.from(
+      new Set([
+        ...inspirationImageUrlsRaw,
+        ...(defaultEmailPrimaryImage ? [defaultEmailPrimaryImage] : [])
+      ])
+    );
     const assetImageUrls = editFromCurrent
       ? []
       : isScratchBuild
@@ -12003,6 +12147,174 @@ export default function Home() {
                   Drag files into the boxes or click Choose. Remove anything you do not want included.
                 </div>
               </div>
+
+              {campaignActiveTarget === "email" ? (
+                <div className="border rounded-lg p-3 bg-gray-50 space-y-3 lr-campaign-subpanel lr-campaign-locker-panel">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="text-xs font-semibold text-gray-700">Email Asset + Context Locker</div>
+                      <div className="text-[11px] text-gray-600 mt-1">
+                        Reuse files and images from active campaigns without re-uploading.
+                      </div>
+                    </div>
+                    <div className="text-[11px] text-gray-600 text-right">
+                      Upload still works in the cards above.
+                    </div>
+                  </div>
+                  <label className="inline-flex items-center gap-2 text-xs text-gray-700">
+                    <input
+                      type="checkbox"
+                      className="h-3.5 w-3.5"
+                      checked={campaignEmailIncludePrimaryImage}
+                      onChange={e => setCampaignEmailIncludePrimaryImage(e.target.checked)}
+                    />
+                    <span>Include this campaign’s primary generated image by default for email context</span>
+                  </label>
+                  {campaignEmailIncludePrimaryImage ? (
+                    <div className="text-[11px] text-gray-600">
+                      {campaignPrimaryGeneratedImageUrl
+                        ? `Default image ready: ${campaignFileLabelFromUrl(campaignPrimaryGeneratedImageUrl, "current-campaign-image")}`
+                        : "No generated campaign image yet. Generate one image output first, then it will be included automatically."}
+                    </div>
+                  ) : null}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="border rounded-lg p-3 bg-white/95 lr-campaign-locker-card">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-xs font-semibold text-gray-700">Asset Locker (generated images)</div>
+                        <div className="text-[11px] text-gray-500">{campaignAssetLockerItems.length}</div>
+                      </div>
+                      <div className="text-[11px] text-gray-600 mt-1">
+                        Pick one hero image as a reference for email generation.
+                      </div>
+                      {campaignAssetLockerItems.length ? (
+                        <div className="mt-2 space-y-1.5 max-h-56 overflow-y-auto pr-1">
+                          {campaignAssetLockerItems.map((item, idx) => {
+                            const added = campaignInspirationUrlSet.has(String(item.url ?? "").trim());
+                            return (
+                              <div key={`campaign-locker-asset-${idx}`} className="lr-campaign-locker-row">
+                                <img
+                                  src={item.url}
+                                  alt={item.label}
+                                  className="h-9 w-14 object-cover rounded border shrink-0"
+                                  loading="lazy"
+                                />
+                                <div className="min-w-0 flex-1">
+                                  <div className="truncate text-[11px] font-semibold text-slate-900" title={item.label}>
+                                    {item.label}
+                                  </div>
+                                  <div className="truncate text-[11px] text-slate-600" title={item.campaignName}>
+                                    {item.isCurrentCampaign ? "Current campaign" : item.campaignName}
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="lr-campaign-locker-action"
+                                  disabled={added}
+                                  onClick={() => addCampaignUrlToField("inspirationImageUrlsText", item.url)}
+                                >
+                                  {added ? "Added" : "Use"}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="mt-2 text-[11px] text-gray-500">
+                          No generated images yet. Generate any image output and it will appear here.
+                        </div>
+                      )}
+                    </div>
+                    <div className="border rounded-lg p-3 bg-white/95 lr-campaign-locker-card">
+                      <div className="text-xs font-semibold text-gray-700">Context Locker</div>
+                      <div className="text-[11px] text-gray-600 mt-1">
+                        Reuse prior brief files and context images.
+                      </div>
+                      <div className="mt-2 space-y-2 max-h-56 overflow-y-auto pr-1">
+                        <div>
+                          <div className="text-[11px] font-semibold text-slate-700 mb-1">
+                            Files ({campaignContextLockerFileItems.length})
+                          </div>
+                          {campaignContextLockerFileItems.length ? (
+                            <div className="space-y-1.5">
+                              {campaignContextLockerFileItems.map((item, idx) => {
+                                const added = campaignBriefUrlSet.has(String(item.url ?? "").trim());
+                                return (
+                                  <div key={`campaign-locker-file-${idx}`} className="lr-campaign-locker-row">
+                                    <div className="min-w-0 flex-1">
+                                      <div
+                                        className="truncate text-[11px] font-medium text-slate-900"
+                                        title={campaignFileLabelFromUrl(item.url, `context-file-${idx + 1}`)}
+                                      >
+                                        {campaignFileLabelFromUrl(item.url, `context-file-${idx + 1}`)}
+                                      </div>
+                                      <div className="truncate text-[11px] text-slate-600" title={item.campaignName}>
+                                        {item.campaignName}
+                                      </div>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      className="lr-campaign-locker-action"
+                                      disabled={added}
+                                      onClick={() => addCampaignUrlToField("briefDocumentUrlsText", item.url)}
+                                    >
+                                      {added ? "Added" : "Add"}
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="text-[11px] text-gray-500">No reusable context files yet.</div>
+                          )}
+                        </div>
+                        <div>
+                          <div className="text-[11px] font-semibold text-slate-700 mb-1">
+                            Images ({campaignContextLockerImageItems.length})
+                          </div>
+                          {campaignContextLockerImageItems.length ? (
+                            <div className="space-y-1.5">
+                              {campaignContextLockerImageItems.map((item, idx) => {
+                                const added = campaignAssetUrlSet.has(String(item.url ?? "").trim());
+                                return (
+                                  <div key={`campaign-locker-image-${idx}`} className="lr-campaign-locker-row">
+                                    <img
+                                      src={item.url}
+                                      alt={campaignFileLabelFromUrl(item.url, `context-image-${idx + 1}`)}
+                                      className="h-9 w-14 object-cover rounded border shrink-0"
+                                      loading="lazy"
+                                    />
+                                    <div className="min-w-0 flex-1">
+                                      <div
+                                        className="truncate text-[11px] font-medium text-slate-900"
+                                        title={campaignFileLabelFromUrl(item.url, `context-image-${idx + 1}`)}
+                                      >
+                                        {campaignFileLabelFromUrl(item.url, `context-image-${idx + 1}`)}
+                                      </div>
+                                      <div className="truncate text-[11px] text-slate-600" title={item.campaignName}>
+                                        {item.campaignName}
+                                      </div>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      className="lr-campaign-locker-action"
+                                      disabled={added}
+                                      onClick={() => addCampaignUrlToField("assetImageUrlsText", item.url)}
+                                    >
+                                      {added ? "Added" : "Add"}
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="text-[11px] text-gray-500">No reusable context images yet.</div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
 
               <div className="border rounded-lg p-3 bg-gray-50 space-y-3 lr-campaign-subpanel">
                 <div className="text-xs font-semibold text-gray-700">3) Generate assets</div>
