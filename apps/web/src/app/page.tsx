@@ -2052,6 +2052,38 @@ function campaignBuildEmailDigestPreview(raw: unknown): CampaignEmailDigestPrevi
   return out;
 }
 
+function campaignBuildEmailPreviewHtmlDoc(args: {
+  subject?: string | null;
+  html?: string | null;
+  text?: string | null;
+}): string {
+  const subject = String(args.subject ?? "").trim() || "Campaign Email Preview";
+  const htmlBody = String(args.html ?? "").trim();
+  const textBody = String(args.text ?? "").trim();
+  if (!htmlBody && !textBody) return "";
+  const bodyContent = htmlBody
+    ? htmlBody
+    : `<div style="font-family:Arial,sans-serif;max-width:900px;margin:0 auto;background:#ffffff;padding:24px;">
+  <h1 style="margin:0 0 16px 0;font-size:20px;color:#111827;">${escapeHtml(subject)}</h1>
+  <div style="font-size:14px;line-height:1.55;color:#111827;white-space:pre-wrap;">${escapeHtml(textBody)}</div>
+</div>`;
+  if (/<html[\s>]/i.test(bodyContent)) return bodyContent;
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(subject)}</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: #f1f5f9; }
+  </style>
+</head>
+<body>
+${bodyContent}
+</body>
+</html>`;
+}
+
 function campaignDeriveCaptionDetail(entry: CampaignEntry): string {
   const fromDescription = campaignSanitizeCaptionDetail(entry.description);
   if (fromDescription) return fromDescription;
@@ -2375,6 +2407,16 @@ export default function Home() {
     () => Boolean(String(campaignForm.emailBodyHtml ?? "").trim()),
     [campaignForm.emailBodyHtml]
   );
+  const campaignEmailPreviewHtmlDoc = useMemo(
+    () =>
+      campaignBuildEmailPreviewHtmlDoc({
+        subject: campaignForm.emailSubject,
+        html: campaignForm.emailBodyHtml,
+        text: campaignForm.emailBodyText
+      }),
+    [campaignForm.emailSubject, campaignForm.emailBodyHtml, campaignForm.emailBodyText]
+  );
+  const campaignEmailPreviewReady = Boolean(String(campaignEmailPreviewHtmlDoc ?? "").trim());
   const campaignAssetLockerItems = useMemo<CampaignLockerAssetItem[]>(() => {
     const seen = new Set<string>();
     const out: CampaignLockerAssetItem[] = [];
@@ -3905,6 +3947,51 @@ export default function Home() {
     } finally {
       setCampaignRemovingAssetKey("");
     }
+  }
+
+  function openCampaignEmailPreviewInTab() {
+    const html = String(campaignEmailPreviewHtmlDoc ?? "").trim();
+    if (!html) {
+      setCampaignError("Generate an email first to preview HTML.");
+      return;
+    }
+    setCampaignError(null);
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const objectUrl = window.URL.createObjectURL(blob);
+    const previewWindow = window.open(objectUrl, "_blank", "noopener,noreferrer");
+    if (!previewWindow) {
+      window.URL.revokeObjectURL(objectUrl);
+      setCampaignError("Popup blocked. Allow popups for this site and try again.");
+      return;
+    }
+    window.setTimeout(() => {
+      window.URL.revokeObjectURL(objectUrl);
+    }, 15_000);
+  }
+
+  function downloadCampaignEmailPreviewHtml() {
+    const html = String(campaignEmailPreviewHtmlDoc ?? "").trim();
+    if (!html) {
+      setCampaignError("Generate an email first to download HTML.");
+      return;
+    }
+    setCampaignError(null);
+    const safeName =
+      String(campaignForm.name ?? "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9._-]+/g, "_")
+        .replace(/^_+|_+$/g, "") || "campaign_email";
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const objectUrl = window.URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = `${safeName}_preview.html`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.URL.revokeObjectURL(objectUrl);
+    setSaveToast("Downloaded email HTML preview");
   }
 
   async function downloadCampaignAsset(url: string, fallbackName?: string) {
@@ -12428,7 +12515,50 @@ export default function Home() {
               </div>
 
               <div className="border rounded-lg p-3 bg-gray-50 space-y-3 lr-campaign-subpanel">
-                {campaignGeneratedAssets.length ? (
+                {campaignActiveTarget === "email" ? (
+                  <div className="border rounded overflow-hidden bg-white flex flex-col lr-campaign-email-html-preview-card">
+                    <div className="px-3 py-2 border-b text-xs bg-gray-50">
+                      <div className="font-semibold">Email HTML preview</div>
+                      <div className="text-[11px] text-gray-500 mt-0.5">
+                        Generated Email output renders here. No JPEG preview is generated for Email mode.
+                      </div>
+                    </div>
+                    {campaignEmailPreviewReady ? (
+                      <>
+                        <iframe
+                          title="Campaign email HTML preview"
+                          className="lr-campaign-email-preview-frame"
+                          srcDoc={campaignEmailPreviewHtmlDoc}
+                          sandbox="allow-forms allow-popups allow-popups-to-escape-sandbox"
+                        />
+                        <div className="grid grid-cols-2 gap-2 p-2 border-t bg-gray-50">
+                          <button
+                            type="button"
+                            className="lr-campaign-asset-btn"
+                            onClick={() => {
+                              openCampaignEmailPreviewInTab();
+                            }}
+                          >
+                            Open Preview
+                          </button>
+                          <button
+                            type="button"
+                            className="lr-campaign-asset-btn"
+                            onClick={() => {
+                              downloadCampaignEmailPreviewHtml();
+                            }}
+                          >
+                            Download HTML
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-sm text-gray-500 py-10 text-center">
+                        Generate Email output to render HTML preview here.
+                      </div>
+                    )}
+                  </div>
+                ) : campaignGeneratedAssets.length ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {campaignGeneratedAssets.map((asset, idx) => {
                       const label = campaignAssetDisplayLabel(asset);
@@ -12623,7 +12753,9 @@ export default function Home() {
                   </div>
                 )}
                 <div className="text-[11px] text-gray-500">
-                  Preview is scaled to fit this panel. Buttons in each frame use native file output.
+                  {campaignActiveTarget === "email"
+                    ? "HTML preview is rendered from the generated email body."
+                    : "Preview is scaled to fit this panel. Buttons in each frame use native file output."}
                 </div>
               </div>
 

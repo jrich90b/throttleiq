@@ -999,3 +999,14 @@ When changing responses:
   - added default email behavior toggle: include the current campaign’s primary generated image in email context by default.
 - Purpose:
   - reduce repeated uploads, make cross-campaign reuse obvious, and keep email generation setup clear and low-friction.
+
+## Campaign Studio Email Preview (No JPEG in Email Mode)
+- API change in `services/api/src/index.ts`:
+  - email target no longer requires generated image assets (`campaignAssetTargetRequiresGeneratedImage` excludes `email`).
+  - email target generation status now marks `ready` when subject + body (text/html) are present.
+- UI change in `apps/web/src/app/page.tsx` and `apps/web/src/app/globals.css`:
+  - `Generated Output` now renders a live HTML preview iframe when active target is `Email`,
+  - email mode no longer uses the image/JPEG preview slot in that panel,
+  - added `Open Preview` and `Download HTML` actions for quick QA/share.
+- Purpose:
+  - make email generation strictly HTML-first and remove confusing image-only preview behavior in email mode.

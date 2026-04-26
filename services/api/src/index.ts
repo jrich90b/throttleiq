@@ -21651,7 +21651,7 @@ function uniqCampaignAssetTargets(values: CampaignAssetTarget[] | null | undefin
 }
 
 function campaignAssetTargetRequiresGeneratedImage(target: CampaignAssetTarget): boolean {
-  return target !== "sms";
+  return target !== "sms" && target !== "email";
 }
 
 function mergeCampaignGeneratedAssetsByTarget(args: {
@@ -23851,6 +23851,19 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       updatedAt: new Date().toISOString(),
       attemptCount: hasSmsBody ? 1 : undefined,
       lastGeneratedAt: hasSmsBody ? new Date().toISOString() : undefined
+    };
+  }
+  if (requestedAssetTargets.includes("email")) {
+    const hasEmailSubject = Boolean(String(effectiveGenerated.emailSubject ?? "").trim());
+    const hasEmailBody =
+      Boolean(String(effectiveGenerated.emailBodyText ?? "").trim()) ||
+      Boolean(String(effectiveGenerated.emailBodyHtml ?? "").trim());
+    const hasEmailDraft = hasEmailSubject && hasEmailBody;
+    assetGenerationStatus.email = {
+      status: hasEmailDraft ? "ready" : "pending",
+      updatedAt: new Date().toISOString(),
+      attemptCount: hasEmailDraft ? 1 : undefined,
+      lastGeneratedAt: hasEmailDraft ? new Date().toISOString() : undefined
     };
   }
   if (imageGenerationWarning) {
