@@ -974,6 +974,29 @@ input[type="reset"],
   background: linear-gradient(180deg, rgba(55, 65, 81, 0.98), rgba(30, 41, 59, 0.98));
 }
 
+.lr-campaign-theme .lr-campaign-content .lr-campaign-locker-action-secondary {
+  background: linear-gradient(180deg, rgba(241, 245, 249, 0.98), rgba(226, 232, 240, 0.98));
+  color: #0f172a !important;
+  border-color: rgba(15, 23, 42, 0.26) !important;
+}
+
+.lr-campaign-theme .lr-campaign-content .lr-campaign-locker-action-secondary:hover {
+  background: linear-gradient(180deg, rgba(255, 237, 213, 0.98), rgba(254, 215, 170, 0.98));
+  border-color: rgba(251, 127, 4, 0.72) !important;
+}
+
+.lr-campaign-theme .lr-campaign-content .lr-campaign-locker-select {
+  border-color: rgba(15, 23, 42, 0.25) !important;
+  background: #ffffff !important;
+  color: #0f172a !important;
+}
+
+.lr-campaign-theme .lr-campaign-content .lr-campaign-locker-select:focus {
+  outline: 2px solid rgba(251, 127, 4, 0.55);
+  outline-offset: 1px;
+  border-color: rgba(251, 127, 4, 0.8) !important;
+}
+
 .lr-campaign-theme .lr-campaign-content .lr-campaign-locker-action:disabled {
   border-color: rgba(251, 127, 4, 0.52) !important;
   background: linear-gradient(180deg, rgba(255, 152, 47, 0.92), rgba(251, 127, 4, 0.92));

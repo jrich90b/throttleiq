@@ -488,9 +488,9 @@ function stripTradeLanguage(text: string): string {
 
 function applyNoTradeLanguageGuard(
   output: GenerateCampaignOutput,
-  dealerNameRaw: string | null | undefined
+  dealerProfile?: DealerProfile | null
 ): GenerateCampaignOutput {
-  const dealerName = normalizeText(dealerNameRaw) || "our dealership";
+  const dealerName = normalizeText(dealerProfile?.dealerName) || "our dealership";
   const smsFallback = `Quick update from ${dealerName}: Reply here and I can share current details.`;
   const emailSubjectFallback = `${dealerName} | Current update`;
   const emailBodyFallback = `Hi there,\n\nQuick update from ${dealerName}. Reply here and I can share current details.`;
@@ -505,6 +505,10 @@ function applyNoTradeLanguageGuard(
     emailBodyHtml: textToHtml(emailBodyText, output.sourceHits ?? [], {
       dealerName,
       emailSubject,
+      website: dealerProfile?.website,
+      phone: dealerProfile?.phone,
+      bookingUrl: dealerProfile?.bookingUrl,
+      logoUrl: dealerProfile?.logoUrl,
       imageUrls: normalizeCampaignEmailImageUrls(output.inspirationImageUrls ?? [])
     })
   };
@@ -1004,6 +1008,7 @@ function textToHtml(
     website?: string;
     phone?: string;
     bookingUrl?: string;
+    logoUrl?: string;
     sections?: CampaignEmailSection[];
     imageUrls?: string[];
   }
@@ -1012,6 +1017,7 @@ function textToHtml(
   const emailSubject = normalizeText(opts?.emailSubject) || `${dealerName} Update`;
   const website = normalizeHttpUrl(opts?.website);
   const bookingUrl = normalizeHttpUrl(opts?.bookingUrl);
+  const logoUrl = normalizeCampaignEmailImageUrl(String(opts?.logoUrl ?? ""));
   const phone = normalizeText(opts?.phone);
   const imageUrls = normalizeCampaignEmailImageUrls(opts?.imageUrls);
   const heroImageUrl = imageUrls[0] || "";
@@ -1099,27 +1105,49 @@ function textToHtml(
          </td>
        </tr>`
     : "";
+  const brandHeaderLogoBlock = logoUrl
+    ? `<img src="${escapeHtml(logoUrl)}" alt="${escapeHtml(
+        dealerName
+      )} logo" style="display:block;max-width:180px;max-height:68px;width:auto;height:auto;" />`
+    : `<div style="font-size:14px;line-height:20px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#111827;">${escapeHtml(
+        dealerName
+      )}</div>`;
+  const topRightWebsiteBlock = website
+    ? `<a href="${escapeHtml(
+        website
+      )}" target="_blank" rel="noopener noreferrer" style="font-size:14px;line-height:18px;font-weight:700;color:#111827;text-decoration:underline;">Find A Dealer →</a>`
+    : "";
 
   return `<!doctype html>
 <html>
-  <body style="margin:0;padding:0;background:#f3f4f6;">
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f3f4f6;">
+  <body style="margin:0;padding:0;background:#f6f6f6;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f6f6f6;">
       <tr>
         <td align="center" style="padding:22px 12px;">
           <table role="presentation" width="620" cellspacing="0" cellpadding="0" border="0" style="width:620px;max-width:620px;background:#ffffff;border:1px solid #d1d5db;border-radius:10px;overflow:hidden;">
             <tr>
-              <td style="padding:16px 22px;background:#0f172a;color:#ffffff;">
-                <div style="font-size:12px;line-height:18px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#fdba74;">${escapeHtml(
-                  dealerName
-                )}</div>
-                <div style="font-size:22px;line-height:30px;font-weight:800;color:#ffffff;margin-top:4px;">${escapeHtml(
-                  emailSubject
-                )}</div>
+              <td style="padding:16px 22px;border-bottom:1px solid #e5e7eb;background:#ffffff;">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                  <tr>
+                    <td align="left" valign="middle">${brandHeaderLogoBlock}</td>
+                    <td align="right" valign="middle">${topRightWebsiteBlock}</td>
+                  </tr>
+                </table>
               </td>
             </tr>
             <tr>
               <td style="padding:18px 22px;">
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                  <tr>
+                    <td style="padding:0 0 8px 0;font-size:11px;line-height:16px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#f97316;">${escapeHtml(
+                      dealerName
+                    )}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:0 0 12px 0;font-size:28px;line-height:34px;font-weight:800;color:#111827;">${escapeHtml(
+                      emailSubject
+                    )}</td>
+                  </tr>
                   <tr>
                     <td style="font-size:15px;line-height:24px;color:#111827;padding:0 0 12px 0;">${introHtml}</td>
                   </tr>
@@ -1130,7 +1158,7 @@ function textToHtml(
                     primaryCtaUrl
                       ? `<tr><td style="padding:6px 0 10px 0;"><a href="${escapeHtml(
                           primaryCtaUrl
-                        )}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#f97316;color:#111827;text-decoration:none;font-weight:800;font-size:13px;line-height:13px;padding:12px 16px;border-radius:6px;">${escapeHtml(
+                        )}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#f97316;color:#111827;text-decoration:none;font-weight:800;font-size:13px;line-height:13px;padding:12px 16px;border-radius:4px;">${escapeHtml(
                           primaryCtaText
                         )}</a></td></tr>`
                       : ""
@@ -1201,6 +1229,7 @@ function buildTemplateOutput(
       website: input.dealerProfile?.website,
       phone: input.dealerProfile?.phone,
       bookingUrl: input.dealerProfile?.bookingUrl,
+      logoUrl: input.dealerProfile?.logoUrl,
       sections: emailSections,
       imageUrls: emailImageUrls
     }),
@@ -1375,6 +1404,7 @@ async function tryGenerateWithLlm(args: {
                 website,
                 phone,
                 bookingUrl,
+                logoUrl: args.input.dealerProfile?.logoUrl,
                 sections: emailSections,
                 imageUrls: emailImageUrls
               })
@@ -1428,6 +1458,7 @@ async function tryGenerateWithLlm(args: {
                 website,
                 phone,
                 bookingUrl,
+                logoUrl: args.input.dealerProfile?.logoUrl,
                 sections: emailSections,
                 imageUrls: emailImageUrls
               })
@@ -1564,7 +1595,7 @@ export async function generateCampaignContent(input: GenerateCampaignInput): Pro
       logoSourceCount: logoSourceHits.length
     };
     const guarded = suppressTradeOnly
-      ? applyNoTradeLanguageGuard(withPlacesMeta, input.dealerProfile?.dealerName)
+      ? applyNoTradeLanguageGuard(withPlacesMeta, input.dealerProfile)
       : withPlacesMeta;
     return ensureSmsBodyIncludesPromptDetailUrls(guarded, requiredPromptDetailUrls);
   }
@@ -1589,7 +1620,7 @@ export async function generateCampaignContent(input: GenerateCampaignInput): Pro
     logoSourceCount: logoSourceHits.length
   };
   const guarded = suppressTradeOnly
-    ? applyNoTradeLanguageGuard(withPlacesMeta, input.dealerProfile?.dealerName)
+    ? applyNoTradeLanguageGuard(withPlacesMeta, input.dealerProfile)
     : withPlacesMeta;
   return ensureSmsBodyIncludesPromptDetailUrls(guarded, requiredPromptDetailUrls);
 }

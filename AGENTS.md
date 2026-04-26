@@ -48,6 +48,10 @@ Required order:
   - include the selected/primary campaign image as hero when available,
   - include additional reference/design images as secondary visuals,
   - normalize `/uploads/...` image paths to absolute `PUBLIC_BASE_URL` links for external inbox rendering.
+- Campaign Studio Email locker UX should stay single-select campaign based (not per-file picking):
+  - selecting one locker campaign hydrates prompt/details plus brief/reference/design context into the current email generation input.
+  - keep context hydration deterministic and replace-style so users can clearly switch between campaign contexts.
+- Campaign Studio Email HTML branding should keep a dealer-branded top row with dealer logo (`dealer_profile.logoUrl`) and a right-side dealer website link when available.
 - Apply the same email-layout normalization in:
   - initial ADF email draft builders,
   - regenerate email draft publishing,
