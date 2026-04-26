@@ -48,9 +48,9 @@ Required order:
   - include the selected/primary campaign image as hero when available,
   - include additional reference/design images as secondary visuals,
   - normalize `/uploads/...` image paths to absolute `PUBLIC_BASE_URL` links for external inbox rendering.
-- Campaign Studio Email locker UX should stay single-select campaign based (not per-file picking):
-  - selecting one locker campaign hydrates prompt/details plus brief/reference/design context into the current email generation input.
-  - keep context hydration deterministic and replace-style so users can clearly switch between campaign contexts.
+- Campaign Studio Email locker UX should stay campaign-based (not per-file picking):
+  - allow selecting multiple locker campaigns and hydrate prompt/details plus brief/reference/design context into the current email generation input.
+  - keep context hydration deterministic and replace-style so users can clearly switch/stack campaign contexts.
 - Campaign Studio Email HTML branding should keep a dealer-branded top row with dealer logo (`dealer_profile.logoUrl`) and a right-side dealer website link when available.
 - Apply the same email-layout normalization in:
   - initial ADF email draft builders,
@@ -1002,7 +1002,7 @@ When changing responses:
 - In `apps/web/src/app/page.tsx` and `apps/web/src/app/globals.css`:
   - when output target is `Email`, UI now shows a dedicated locker panel:
     - `Asset Locker`: reusable generated image assets from active campaigns with one-click `Use` into reference images.
-    - `Context Locker`: reusable brief files and reusable context images from active campaigns with one-click `Add`.
+    - `Context Locker`: add one or more reusable campaigns, then apply combined prompt/brief/reference/design context in one action.
   - uploads remain available in existing upload cards (locker is additive, not a replacement).
   - added default email behavior toggle: include the current campaign’s primary generated image in email context by default.
 - Purpose:

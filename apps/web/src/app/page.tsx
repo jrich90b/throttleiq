@@ -2279,7 +2279,8 @@ export default function Home() {
   const [campaignTargetToGenerate, setCampaignTargetToGenerate] = useState<CampaignAssetTarget>("sms");
   const [campaignEditFromCurrentImage, setCampaignEditFromCurrentImage] = useState(false);
   const [campaignEmailIncludePrimaryImage, setCampaignEmailIncludePrimaryImage] = useState(true);
-  const [campaignEmailContextCampaignId, setCampaignEmailContextCampaignId] = useState("");
+  const [campaignEmailContextPickerId, setCampaignEmailContextPickerId] = useState("");
+  const [campaignEmailContextCampaignIds, setCampaignEmailContextCampaignIds] = useState<string[]>([]);
   const campaignBriefUploadInputRef = useRef<HTMLInputElement | null>(null);
   const campaignInspirationUploadInputRef = useRef<HTMLInputElement | null>(null);
   const campaignAssetUploadInputRef = useRef<HTMLInputElement | null>(null);
@@ -2407,9 +2408,12 @@ export default function Home() {
       })),
     [campaigns]
   );
-  const campaignEmailContextEntry = useMemo(
-    () => campaigns.find(row => row.id === campaignEmailContextCampaignId) ?? null,
-    [campaigns, campaignEmailContextCampaignId]
+  const campaignEmailContextEntries = useMemo(
+    () =>
+      campaignEmailContextCampaignIds
+        .map(id => campaigns.find(row => row.id === id) ?? null)
+        .filter((row): row is CampaignEntry => Boolean(row)),
+    [campaigns, campaignEmailContextCampaignIds]
   );
   const campaignSocialOptionsByTarget = useMemo(
     () => campaignNormalizeSocialPublishOptionsMap((campaignSelectedEntry?.metadata as any)?.socialPublishOptions),
@@ -2934,17 +2938,28 @@ export default function Home() {
 
   useEffect(() => {
     if (!campaignEmailContextOptions.length) {
-      if (campaignEmailContextCampaignId) setCampaignEmailContextCampaignId("");
+      if (campaignEmailContextPickerId) setCampaignEmailContextPickerId("");
+      if (campaignEmailContextCampaignIds.length) setCampaignEmailContextCampaignIds([]);
       return;
     }
-    const stillValid = campaignEmailContextOptions.some(opt => opt.id === campaignEmailContextCampaignId);
-    if (stillValid) return;
+    setCampaignEmailContextCampaignIds(prev => {
+      const allowed = new Set(campaignEmailContextOptions.map(opt => opt.id));
+      const next = prev.filter(id => allowed.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+    const pickerStillValid = campaignEmailContextOptions.some(opt => opt.id === campaignEmailContextPickerId);
+    if (pickerStillValid) return;
     const firstNonCurrent =
       campaignEmailContextOptions.find(opt => opt.id && opt.id !== campaignSelectedId)?.id ||
       campaignEmailContextOptions[0]?.id ||
       "";
-    setCampaignEmailContextCampaignId(firstNonCurrent);
-  }, [campaignEmailContextOptions, campaignEmailContextCampaignId, campaignSelectedId]);
+    setCampaignEmailContextPickerId(firstNonCurrent);
+  }, [
+    campaignEmailContextOptions,
+    campaignEmailContextPickerId,
+    campaignEmailContextCampaignIds.length,
+    campaignSelectedId
+  ]);
 
   async function loadKpiOverview() {
     if (!isManager) return;
@@ -3163,57 +3178,89 @@ export default function Home() {
     });
   }
 
-  function applyEmailContextCampaignToForm(entry: CampaignEntry | null) {
-    if (!entry) return;
-    const prompt = String(entry.prompt ?? "").trim();
-    const description = String(entry.description ?? "").trim();
-    const finalImageUrl = String(entry.finalImageUrl ?? "").trim();
-    const generatedImageUrls = (Array.isArray(entry.generatedAssets) ? entry.generatedAssets : [])
-      .map(asset => String(asset?.url ?? "").trim())
-      .filter(looksLikeCampaignImageUrl);
-    const inspirationImageUrls = Array.from(
-      new Set([
+  function addCampaignEmailContextSelection() {
+    const candidate = String(campaignEmailContextPickerId ?? "").trim();
+    if (!candidate) return;
+    setCampaignEmailContextCampaignIds(prev => (prev.includes(candidate) ? prev : [...prev, candidate]));
+  }
+
+  function removeCampaignEmailContextSelection(id: string) {
+    const needle = String(id ?? "").trim();
+    if (!needle) return;
+    setCampaignEmailContextCampaignIds(prev => prev.filter(row => row !== needle));
+  }
+
+  function applyEmailContextCampaignToForm(entries: CampaignEntry[]) {
+    const selectedEntries = Array.isArray(entries) ? entries.filter(Boolean) : [];
+    if (!selectedEntries.length) return;
+    const inspirationImageUrls: string[] = [];
+    const assetImageUrls: string[] = [];
+    const briefDocumentUrls: string[] = [];
+    const seenInspiration = new Set<string>();
+    const seenAssets = new Set<string>();
+    const seenBriefs = new Set<string>();
+    const contextBlocks: string[] = [];
+    for (const entry of selectedEntries) {
+      const name = String(entry.name ?? "").trim() || "Untitled campaign";
+      const prompt = String(entry.prompt ?? "").trim();
+      const description = String(entry.description ?? "").trim();
+      const finalImageUrl = String(entry.finalImageUrl ?? "").trim();
+      const generatedImageUrls = (Array.isArray(entry.generatedAssets) ? entry.generatedAssets : [])
+        .map(asset => String(asset?.url ?? "").trim())
+        .filter(looksLikeCampaignImageUrl);
+      const refUrls = [
         ...(looksLikeCampaignImageUrl(finalImageUrl) ? [finalImageUrl] : []),
         ...generatedImageUrls,
         ...(Array.isArray(entry.inspirationImageUrls)
           ? entry.inspirationImageUrls.map(v => String(v ?? "").trim()).filter(looksLikeCampaignImageUrl)
           : [])
-      ])
-    ).slice(0, 16);
-    const assetImageUrls = Array.from(
-      new Set(
-        (Array.isArray(entry.assetImageUrls) ? entry.assetImageUrls : [])
-          .map(v => String(v ?? "").trim())
-          .filter(looksLikeCampaignImageUrl)
-      )
-    ).slice(0, 24);
-    const briefDocumentUrls = Array.from(
-      new Set(
-        (Array.isArray(entry.briefDocumentUrls) ? entry.briefDocumentUrls : [])
-          .map(v => String(v ?? "").trim())
+      ];
+      for (const url of refUrls) {
+        if (!url || seenInspiration.has(url)) continue;
+        seenInspiration.add(url);
+        inspirationImageUrls.push(url);
+      }
+      const designUrls = (Array.isArray(entry.assetImageUrls) ? entry.assetImageUrls : [])
+        .map(v => String(v ?? "").trim())
+        .filter(looksLikeCampaignImageUrl);
+      for (const url of designUrls) {
+        if (!url || seenAssets.has(url)) continue;
+        seenAssets.add(url);
+        assetImageUrls.push(url);
+      }
+      const briefUrls = (Array.isArray(entry.briefDocumentUrls) ? entry.briefDocumentUrls : [])
+        .map(v => String(v ?? "").trim())
+        .filter(Boolean);
+      for (const url of briefUrls) {
+        if (!url || seenBriefs.has(url)) continue;
+        seenBriefs.add(url);
+        briefDocumentUrls.push(url);
+      }
+      contextBlocks.push(
+        [
+          `Campaign name: ${name}`,
+          prompt ? `Campaign prompt: ${prompt}` : "",
+          description ? `Campaign description: ${description}` : ""
+        ]
           .filter(Boolean)
-      )
-    ).slice(0, 24);
-    const contextBlock = [
-      CAMPAIGN_EMAIL_CONTEXT_MARKER,
-      `Campaign name: ${String(entry.name ?? "").trim() || "Untitled campaign"}`,
-      prompt ? `Campaign prompt: ${prompt}` : "",
-      description ? `Campaign description: ${description}` : ""
-    ]
-      .filter(Boolean)
-      .join("\n");
+          .join("\n")
+      );
+    }
+    const contextBlock = [CAMPAIGN_EMAIL_CONTEXT_MARKER, ...contextBlocks].join("\n\n");
     setCampaignForm(prev => {
       const basePrompt = stripCampaignEmailReferenceContext(prev.prompt);
       const nextPrompt = [basePrompt, contextBlock].filter(Boolean).join("\n\n");
       return {
         ...prev,
         prompt: nextPrompt,
-        inspirationImageUrlsText: inspirationImageUrls.join("\n"),
-        assetImageUrlsText: assetImageUrls.join("\n"),
-        briefDocumentUrlsText: briefDocumentUrls.join("\n")
+        inspirationImageUrlsText: inspirationImageUrls.slice(0, 24).join("\n"),
+        assetImageUrlsText: assetImageUrls.slice(0, 32).join("\n"),
+        briefDocumentUrlsText: briefDocumentUrls.slice(0, 32).join("\n")
       };
     });
-    setSaveToast(`Loaded email context from "${String(entry.name ?? "").trim() || "selected campaign"}"`);
+    setSaveToast(
+      `Loaded email context from ${selectedEntries.length} campaign${selectedEntries.length === 1 ? "" : "s"}`
+    );
   }
 
   function clearEmailContextCampaignFromForm() {
@@ -3579,6 +3626,7 @@ export default function Home() {
       return;
     }
     const isScratchBuild = campaignForm.buildMode === "design_from_scratch";
+    const includeMediaContext = isScratchBuild || campaignSelectedTargets.has("email") || campaignActiveTarget === "email";
     setCampaignSaving(true);
     setCampaignError(null);
     try {
@@ -3591,8 +3639,8 @@ export default function Home() {
         assetTargets: campaignForm.assetTargets,
         prompt: String(campaignForm.prompt ?? "").trim() || undefined,
         description: String(campaignForm.description ?? "").trim() || undefined,
-        inspirationImageUrls: isScratchBuild ? parseCampaignUrlsText(campaignForm.inspirationImageUrlsText) : [],
-        assetImageUrls: isScratchBuild ? parseCampaignUrlsText(campaignForm.assetImageUrlsText) : [],
+        inspirationImageUrls: includeMediaContext ? parseCampaignUrlsText(campaignForm.inspirationImageUrlsText) : [],
+        assetImageUrls: includeMediaContext ? parseCampaignUrlsText(campaignForm.assetImageUrlsText) : [],
         briefDocumentUrls: parseCampaignUrlsText(campaignForm.briefDocumentUrlsText),
         smsBody: String(campaignForm.smsBody ?? "").trim() || undefined,
         emailSubject: String(campaignForm.emailSubject ?? "").trim() || undefined,
@@ -4175,13 +4223,14 @@ export default function Home() {
       return;
     }
     const isScratchBuild = campaignForm.buildMode === "design_from_scratch";
+    const includeMediaContext = isScratchBuild || target === "email";
     const baseInspirationImageUrls = parseCampaignUrlsText(campaignForm.inspirationImageUrlsText);
     const defaultEmailPrimaryImage = !editFromCurrent && target === "email" && campaignEmailIncludePrimaryImage
       ? campaignPrimaryGeneratedImageUrl
       : "";
     const inspirationImageUrlsRaw = editFromCurrent
       ? (currentTargetAssetUrl ? [currentTargetAssetUrl] : [])
-      : isScratchBuild
+      : includeMediaContext
         ? baseInspirationImageUrls
         : [];
     const inspirationImageUrls = Array.from(
@@ -4192,7 +4241,7 @@ export default function Home() {
     );
     const assetImageUrls = editFromCurrent
       ? []
-      : isScratchBuild
+      : includeMediaContext
         ? parseCampaignUrlsText(campaignForm.assetImageUrlsText)
         : [];
     setCampaignGenerating(true);
@@ -12241,70 +12290,87 @@ export default function Home() {
                     </div>
                   ) : null}
                   <div className="border rounded-lg p-3 bg-white/95 lr-campaign-locker-card space-y-2">
-                    <div className="text-xs font-semibold text-gray-700">Email Context Campaign (single select)</div>
+                    <div className="text-xs font-semibold text-gray-700">Email Context Campaigns</div>
                     <div className="text-[11px] text-gray-600">
-                      Select one campaign and pull its prompt/details, brief files, and reference/design images into this
-                      email generation.
+                      Add one or more campaigns and pull their prompt/details, brief files, and reference/design images into
+                      this email generation.
                     </div>
-                    <select
-                      className="w-full border rounded px-2 py-1.5 text-sm bg-white text-slate-900 lr-campaign-locker-select"
-                      value={campaignEmailContextCampaignId}
-                      onChange={e => setCampaignEmailContextCampaignId(e.target.value)}
-                    >
-                      {campaignEmailContextOptions.length ? null : <option value="">No campaigns available</option>}
-                      {campaignEmailContextOptions.map(option => (
-                        <option key={option.id} value={option.id}>
-                          {option.name}
-                          {option.updatedAt ? ` • ${new Date(option.updatedAt).toLocaleString()}` : ""}
-                        </option>
-                      ))}
-                    </select>
-                    {campaignEmailContextEntry ? (
-                      <div className="lr-campaign-locker-row">
-                        {(() => {
+                    <div className="flex flex-wrap items-center gap-2">
+                      <select
+                        className="flex-1 min-w-[220px] border rounded px-2 py-1.5 text-sm bg-white text-slate-900 lr-campaign-locker-select"
+                        value={campaignEmailContextPickerId}
+                        onChange={e => setCampaignEmailContextPickerId(e.target.value)}
+                      >
+                        {campaignEmailContextOptions.length ? null : <option value="">No campaigns available</option>}
+                        {campaignEmailContextOptions.map(option => (
+                          <option key={option.id} value={option.id}>
+                            {option.name}
+                            {option.updatedAt ? ` • ${new Date(option.updatedAt).toLocaleString()}` : ""}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="lr-campaign-locker-action"
+                        disabled={!campaignEmailContextPickerId}
+                        onClick={() => addCampaignEmailContextSelection()}
+                      >
+                        Add
+                      </button>
+                    </div>
+                    {campaignEmailContextEntries.length ? (
+                      <div className="space-y-2">
+                        {campaignEmailContextEntries.map(entry => {
                           const previewImage =
-                            String(campaignEmailContextEntry.finalImageUrl ?? "").trim() ||
-                            (Array.isArray(campaignEmailContextEntry.generatedAssets)
-                              ? String(campaignEmailContextEntry.generatedAssets.find(a => looksLikeCampaignImageUrl(String(a?.url ?? "").trim()))?.url ?? "").trim()
+                            String(entry.finalImageUrl ?? "").trim() ||
+                            (Array.isArray(entry.generatedAssets)
+                              ? String(
+                                  entry.generatedAssets.find(a =>
+                                    looksLikeCampaignImageUrl(String(a?.url ?? "").trim())
+                                  )?.url ?? ""
+                                ).trim()
                               : "");
-                          return previewImage ? (
-                            <img
-                              src={previewImage}
-                              alt={campaignEmailContextEntry.name}
-                              className="h-10 w-16 object-cover rounded border shrink-0"
-                              loading="lazy"
-                            />
-                          ) : null;
-                        })()}
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-[11px] font-semibold text-slate-900" title={campaignEmailContextEntry.name}>
-                            {campaignEmailContextEntry.name}
-                          </div>
-                          <div className="text-[11px] text-slate-600">
-                            Prompt: {String(campaignEmailContextEntry.prompt ?? "").trim() ? "Yes" : "No"} · Briefs:{" "}
-                            {Array.isArray(campaignEmailContextEntry.briefDocumentUrls)
-                              ? campaignEmailContextEntry.briefDocumentUrls.length
-                              : 0}{" "}
-                            · Ref images:{" "}
-                            {Array.isArray(campaignEmailContextEntry.inspirationImageUrls)
-                              ? campaignEmailContextEntry.inspirationImageUrls.length
-                              : 0}{" "}
-                            · Design images:{" "}
-                            {Array.isArray(campaignEmailContextEntry.assetImageUrls)
-                              ? campaignEmailContextEntry.assetImageUrls.length
-                              : 0}
-                          </div>
-                        </div>
+                          return (
+                            <div key={entry.id} className="lr-campaign-locker-row">
+                              {previewImage ? (
+                                <img
+                                  src={previewImage}
+                                  alt={entry.name}
+                                  className="h-10 w-16 object-cover rounded border shrink-0"
+                                  loading="lazy"
+                                />
+                              ) : null}
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate text-[11px] font-semibold text-slate-900" title={entry.name}>
+                                  {entry.name}
+                                </div>
+                                <div className="text-[11px] text-slate-600">
+                                  Prompt: {String(entry.prompt ?? "").trim() ? "Yes" : "No"} · Briefs:{" "}
+                                  {Array.isArray(entry.briefDocumentUrls) ? entry.briefDocumentUrls.length : 0} · Ref images:{" "}
+                                  {Array.isArray(entry.inspirationImageUrls) ? entry.inspirationImageUrls.length : 0} · Design images:{" "}
+                                  {Array.isArray(entry.assetImageUrls) ? entry.assetImageUrls.length : 0}
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                className="lr-campaign-locker-action lr-campaign-locker-action-secondary"
+                                onClick={() => removeCampaignEmailContextSelection(entry.id)}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          );
+                        })}
                       </div>
                     ) : (
-                      <div className="text-[11px] text-gray-500">Pick a campaign above to load its context.</div>
+                      <div className="text-[11px] text-gray-500">Add campaign context above, then apply it to this email.</div>
                     )}
                     <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
                         className="lr-campaign-locker-action"
-                        disabled={!campaignEmailContextEntry}
-                        onClick={() => applyEmailContextCampaignToForm(campaignEmailContextEntry)}
+                        disabled={!campaignEmailContextEntries.length}
+                        onClick={() => applyEmailContextCampaignToForm(campaignEmailContextEntries)}
                       >
                         Use Campaign Context
                       </button>

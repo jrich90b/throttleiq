@@ -1084,19 +1084,19 @@ function textToHtml(
          <td style="padding:0 0 14px 0;">
            <img src="${escapeHtml(heroImageUrl)}" alt="${escapeHtml(
              dealerName
-           )} campaign image" style="display:block;width:100%;height:auto;border-radius:8px;border:1px solid #d1d5db;background:#e5e7eb;" />
+           )} campaign image" style="display:block;width:100%;height:320px;max-height:320px;object-fit:contain;border-radius:8px;border:1px solid #d1d5db;background:#f3f4f6;" />
          </td>
        </tr>`
     : "";
   const imageStripBlock = stripImageUrls.length
     ? `<tr>
          <td style="padding:0 0 14px 0;">
-           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="table-layout:fixed;">
              <tr>
                ${stripImageUrls
                  .map(
-                   url => `<td style="padding-right:8px;">
-                     <img src="${escapeHtml(url)}" alt="Campaign detail image" style="display:block;width:100%;height:auto;border-radius:6px;border:1px solid #d1d5db;background:#e5e7eb;" />
+                    url => `<td style="padding-right:8px;">
+                     <img src="${escapeHtml(url)}" alt="Campaign detail image" style="display:block;width:100%;height:132px;max-height:132px;object-fit:contain;border-radius:6px;border:1px solid #d1d5db;background:#f3f4f6;" />
                    </td>`
                  )
                  .join("")}
