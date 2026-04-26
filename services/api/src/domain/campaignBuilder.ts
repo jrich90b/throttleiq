@@ -792,6 +792,23 @@ function extractHtmlFromModelOutput(raw: string): string {
   return htmlField || "";
 }
 
+function isRenderableEmailHtml(raw: string): boolean {
+  const html = String(raw ?? "").trim();
+  if (!html) return false;
+  if (!/<\/?[a-z][^>]*>/i.test(html)) return false;
+  const structuralSignals = [
+    /<html\b/i.test(html),
+    /<body\b/i.test(html),
+    /<table\b/i.test(html),
+    /<tr\b/i.test(html),
+    /<td\b/i.test(html),
+    /<div\b/i.test(html),
+    /<img\b/i.test(html),
+    /<a\b/i.test(html)
+  ].filter(Boolean).length;
+  return structuralSignals >= 2;
+}
+
 function htmlToPlainText(rawHtml: string): string {
   const html = String(rawHtml ?? "");
   if (!html) return "";
@@ -1111,6 +1128,7 @@ function normalizeGeneratedEmailHtml(
 ): string {
   let html = String(raw ?? "").trim();
   if (!html) return "";
+  if (!isRenderableEmailHtml(html)) return "";
   html = html.replace(/<script\b[\s\S]*?<\/script>/gi, "");
   html = html.replace(/\son[a-z]+\s*=\s*(["']).*?\1/gi, "");
   html = html.replace(/javascript:/gi, "");
@@ -1679,7 +1697,7 @@ async function tryGenerateWithLlm(args: {
         max_output_tokens: 2600
       });
       const htmlRaw = extractHtmlFromModelOutput(rescueResp.output_text ?? "");
-      if (!htmlRaw) return "";
+      if (!isRenderableEmailHtml(htmlRaw)) return "";
       return normalizeGeneratedEmailHtml(htmlRaw, {
         dealerName,
         website,
@@ -1713,7 +1731,7 @@ async function tryGenerateWithLlm(args: {
       const emailBodyText = normalizeText(parsed.email_body_text);
       const emailBodyHtmlRaw = normalizeText(parsed.email_body_html);
       const emailSections = normalizeCampaignEmailSections(parsed.email_sections);
-      let emailBodyHtml = emailBodyHtmlRaw
+      let emailBodyHtml = isRenderableEmailHtml(emailBodyHtmlRaw)
         ? normalizeGeneratedEmailHtml(emailBodyHtmlRaw, {
             dealerName,
             website,
@@ -1774,13 +1792,13 @@ async function tryGenerateWithLlm(args: {
       const emailBodyText = normalizeText(parsed.email_body_text);
       const emailBodyHtmlRaw = normalizeText(parsed.email_body_html);
       const emailSections = normalizeCampaignEmailSections(parsed.email_sections);
-      let emailBodyHtml = emailBodyHtmlRaw
+      let emailBodyHtml = isRenderableEmailHtml(emailBodyHtmlRaw)
         ? normalizeGeneratedEmailHtml(emailBodyHtmlRaw, {
             dealerName,
             website,
             logoUrl: args.input.dealerProfile?.logoUrl
           })
-        : rawHtmlDirect
+        : isRenderableEmailHtml(rawHtmlDirect)
           ? normalizeGeneratedEmailHtml(rawHtmlDirect, {
               dealerName,
               website,
@@ -1821,7 +1839,7 @@ async function tryGenerateWithLlm(args: {
       }
     }
 
-    if (requiresEmailHtml && rawHtmlDirect) {
+    if (requiresEmailHtml && isRenderableEmailHtml(rawHtmlDirect)) {
       const emailBodyHtml = normalizeGeneratedEmailHtml(rawHtmlDirect, {
         dealerName,
         website,
