@@ -2999,16 +2999,28 @@ function weekdayFull(name: string | undefined): string {
 }
 
 function parseDayToken(t: string): string | null {
-  if (/(sat|saturday)/.test(t)) return "saturday";
-  if (/(sun|sunday)/.test(t)) return "sunday";
-  if (/(mon|monday)/.test(t)) return "monday";
-  if (/(tue|tuesday)/.test(t)) return "tuesday";
-  if (/(wed|wednesday)/.test(t)) return "wednesday";
-  if (/(thu|thursday)/.test(t)) return "thursday";
-  if (/(fri|friday)/.test(t)) return "friday";
-  if (/(today)/.test(t)) return "today";
-  if (/(tomorrow)/.test(t)) return "tomorrow";
-  return null;
+  const source = String(t ?? "").toLowerCase();
+  const patterns: Array<{ token: string; re: RegExp }> = [
+    { token: "today", re: /\btoday\b/ },
+    { token: "tomorrow", re: /\btomorrow\b/ },
+    { token: "monday", re: /\b(?:mon|monday)\b/ },
+    { token: "tuesday", re: /\b(?:tue|tues|tuesday)\b/ },
+    { token: "wednesday", re: /\b(?:wed|wednesday)\b/ },
+    { token: "thursday", re: /\b(?:thu|thur|thurs|thursday)\b/ },
+    { token: "friday", re: /\b(?:fri|friday)\b/ },
+    { token: "saturday", re: /\b(?:sat|saturday)\b/ },
+    { token: "sunday", re: /\b(?:sun|sunday)\b/ }
+  ];
+  let best: { token: string; index: number } | null = null;
+  for (const row of patterns) {
+    row.re.lastIndex = 0;
+    const match = row.re.exec(source);
+    if (!match || typeof match.index !== "number") continue;
+    if (!best || match.index < best.index) {
+      best = { token: row.token, index: match.index };
+    }
+  }
+  return best?.token ?? null;
 }
 
 function parseExactTime(text: string): { hour24: number; minute: number; timeText: string } | null {
@@ -3082,16 +3094,74 @@ function parseExactTime(text: string): { hour24: number; minute: number; timeTex
 }
 
 function parseExplicitDate(text: string): { year: number; month: number; day: number } | null {
+  const normalizeYear = (raw: string | undefined): number => {
+    const nowYear = new Date().getFullYear();
+    if (!raw) return nowYear;
+    let year = Number(raw);
+    if (!Number.isFinite(year)) return nowYear;
+    if (raw.length === 2) year = 2000 + year;
+    return year;
+  };
+
+  const monthMap: Record<string, number> = {
+    jan: 1,
+    january: 1,
+    feb: 2,
+    february: 2,
+    mar: 3,
+    march: 3,
+    apr: 4,
+    april: 4,
+    may: 5,
+    jun: 6,
+    june: 6,
+    jul: 7,
+    july: 7,
+    aug: 8,
+    august: 8,
+    sep: 9,
+    sept: 9,
+    september: 9,
+    oct: 10,
+    october: 10,
+    nov: 11,
+    november: 11,
+    dec: 12,
+    december: 12
+  };
+
   const m = text.match(/\b(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?\b/);
-  if (!m) return null;
-  const month = Number(m[1]);
-  const day = Number(m[2]);
-  let year = m[3] ? Number(m[3]) : new Date().getFullYear();
-  if (m[3] && m[3].length === 2) {
-    year = 2000 + year;
+  if (m) {
+    const month = Number(m[1]);
+    const day = Number(m[2]);
+    const year = normalizeYear(m[3]);
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    return { year, month, day };
   }
-  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
-  return { year, month, day };
+
+  const monthFirst = text.match(
+    /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(\d{2,4}))?\b/i
+  );
+  if (monthFirst) {
+    const month = monthMap[String(monthFirst[1] ?? "").toLowerCase()] ?? 0;
+    const day = Number(monthFirst[2]);
+    const year = normalizeYear(monthFirst[3]);
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    return { year, month, day };
+  }
+
+  const dayFirst = text.match(
+    /\b(\d{1,2})(?:st|nd|rd|th)?\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:,?\s*(\d{2,4}))?\b/i
+  );
+  if (dayFirst) {
+    const day = Number(dayFirst[1]);
+    const month = monthMap[String(dayFirst[2] ?? "").toLowerCase()] ?? 0;
+    const year = normalizeYear(dayFirst[3]);
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    return { year, month, day };
+  }
+
+  return null;
 }
 
 export function parsePreferredDateTime(

@@ -192,6 +192,8 @@ Env vars:
 ## Time Parsing Guardrail
 - Compact numeric year tokens (for example `2022`, `2026`) must not be interpreted as times (`20:22`, `20:26`) in scheduling/re-generate flows.
 - Applies to both legacy time token extraction and `parseRequestedDayTime(...)` compact-time parsing.
+- `parseRequestedDayTime(...)` now supports textual dates (for example `May 8`, `May 8th`, `8th May`) in addition to numeric dates.
+- When multiple weekday tokens are present (for example `Friday ... or Saturday`), weekday parsing should use the earliest mention in text order rather than fixed weekday priority.
 
 ## Appointment Offer Rules (Source of Truth)
 - Use suggested slots only if customer asked to schedule.
