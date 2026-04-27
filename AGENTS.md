@@ -1213,3 +1213,18 @@ When changing responses:
   - strengthened `parseFutureTimeframe(...)` month-day parsing to support ordinal day tokens (`May 7th`) and produce exact date anchors.
 - Purpose:
   - prevent responses like `I have Mon, Apr 27...` when customer says they are unavailable until a future date, and keep regenerate behavior aligned.
+
+## Jump Start Experience Routing (Stationary Simulator, Not Road Test Ride)
+- In `services/api/src/domain/llmDraft.ts`:
+  - added parser/router few-shot guidance so jump-start/riding-academy-prep inquiries route as scheduling stop-ins (not inventory-gated test rides).
+- In `services/api/src/routes/sendgridInbound.ts`:
+  - added jump-start detection and enforced non-test-ride routing (`general_inquiry/contact_us`) for these ADF leads.
+  - prevents test-ride inventory checks and test-ride CTA forcing on jump-start inquiries.
+- In `services/api/src/domain/orchestrator.ts`:
+  - added jump-start detection and forced appointment type to `inventory_visit`.
+  - skips test-ride inventory gate when jump-start language is detected.
+- In `services/api/src/index.ts`:
+  - added jump-start-aware `effectiveTestRideIntent` handling in live Twilio and voice-call scheduling flows.
+  - prevents jump-start turns from setting test-ride state, test-ride appointment type, or inventory-gated test-ride responses.
+- Purpose:
+  - jump-start messages now offer stop-in times directly (stationary simulator workflow) instead of requiring an in-stock road-test bike selection.

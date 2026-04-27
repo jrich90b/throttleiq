@@ -2395,6 +2395,7 @@ export async function parseIntentWithLLM(args: {
     'input: "Customer: if you call me around 1-2pm i should be up. i work night shift." output: {"intent":"callback","explicit_request":true,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":true,"time_text":"around 1-2pm","phone":""},"confidence":0.98}',
     'input: "Customer: do you have any black street glides in stock?" output: {"intent":"availability","explicit_request":true,"availability":{"model":"Street Glide","year":"","color":"black","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.97}',
     'input: "Customer: can i test ride one this week?" output: {"intent":"test_ride","explicit_request":true,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.95}',
+    'input: "Customer: I begin my riding academy next Monday and was told you do the jumpstart experience prior." output: {"intent":"none","explicit_request":false,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.95}',
     'input: "Customer: i can come in tuesday at 3:45" output: {"intent":"none","explicit_request":false,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.94}',
     'input: "Customer: im trying to stay under 500 a month" output: {"intent":"none","explicit_request":false,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.94}'
   ];
@@ -2408,6 +2409,7 @@ export async function parseIntentWithLLM(args: {
     "- explicit_request is true only if the customer is asking for a call back, test ride, or availability.",
     "- intent=availability only for inventory availability (bike in stock/still there/sold?).",
     "- intent=test_ride if they ask to test ride or demo the bike.",
+    "- jump start / jumpstart / riding-academy prep messages are not inventory availability requests; do not set intent=test_ride for those.",
     "- intent=callback if they ask for a call or ask you to call them.",
     "- If message is about appointment/schedule availability (day/time/openings), intent=none and explicit_request=false.",
     "- If no clear request, intent=none and explicit_request=false.",
@@ -3299,6 +3301,9 @@ output: {"primary_intent":"pricing_payments","explicit_request":true,"fallback_a
     `EXAMPLE C
 inbound: "Can I come in Wednesday at 1?"
 output: {"primary_intent":"scheduling","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.98}`,
+    `EXAMPLE C2
+inbound: "I begin my riding academy next Monday and was told you do the jumpstart experience prior."
+output: {"primary_intent":"scheduling","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.97}`,
     `EXAMPLE D
 inbound: "Can you call me after 3?"
 output: {"primary_intent":"callback","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.95}`,
@@ -3403,6 +3408,7 @@ output: {"primary_intent":"none","explicit_request":false,"fallback_action":"no_
     "- Use fallback_action=clarify only when message is ambiguous and not safely routable.",
     "- Only choose callback when the customer explicitly asks for a phone call (e.g., call me, have X call me, can you call).",
     "- If message says cash-ready / ready to buy / make a deal and includes a visit timing cue (today/tomorrow/day/time/coming in), choose scheduling, not callback.",
+    "- Jump start / jumpstart / riding-academy prep requests should route to scheduling (in-store stop-in), not availability or pricing by default.",
     "- Dissatisfaction/complaint about feature behavior (for example Android maps, infotainment, navigation, connectivity) without a clear inventory/pricing/scheduling/callback ask should route to general with fallback_action=none.",
     "- For clear complaint/support messages, set explicit_request=true even if phrased as a statement.",
     "- confidence is 0..1.",

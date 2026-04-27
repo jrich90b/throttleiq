@@ -994,6 +994,16 @@ function hasSchedulingIntent(text: string): boolean {
   );
 }
 
+function isJumpStartExperienceRequest(text: string | null | undefined): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  if (/\bjump\s*start\b|\bjumpstart\b|\bjump-start\b/.test(t)) return true;
+  return (
+    /\b(riding academy|rider academy|learn to ride)\b/.test(t) &&
+    /\b(prior|before|prep|practice|experience)\b/.test(t)
+  );
+}
+
 function toTitleCase(label: string): string {
   return label
     .toLowerCase()
@@ -1135,6 +1145,7 @@ function inferAppointmentType(
   text: string
 ): "inventory_visit" | "test_ride" | "trade_appraisal" | "finance_discussion" {
   const t = text.toLowerCase();
+  if (isJumpStartExperienceRequest(t)) return "inventory_visit";
   if (/(test ride|demo ride)/.test(t)) return "test_ride";
   if (detectTradeRequest(t) || /\bappraisal\b/.test(t)) return "trade_appraisal";
   if (/(finance|credit|prequal|hdfs|payment)/.test(t)) return "finance_discussion";
@@ -3698,10 +3709,17 @@ export async function orchestrateInbound(
         event.provider === "sendgrid_adf" ||
         isAdfLead ||
         (ctxSuggestsScheduling && allowSchedulingOffer);
-      const appointmentType = ctx?.appointmentTypeOverride ?? inferAppointmentType(event.body);
+      const jumpStartExperienceLead =
+        isJumpStartExperienceRequest(event.body) ||
+        isJumpStartExperienceRequest(ctx?.lead?.walkInComment ?? null) ||
+        isJumpStartExperienceRequest(ctx?.leadSource ?? null);
+      const appointmentType =
+        jumpStartExperienceLead
+          ? "inventory_visit"
+          : ctx?.appointmentTypeOverride ?? inferAppointmentType(event.body);
       const weatherBlockedTestRide = appointmentType === "test_ride" && !!ctx?.weather?.bad;
       const testRideInventoryGate =
-        appointmentType === "test_ride"
+        appointmentType === "test_ride" && !jumpStartExperienceLead
           ? await evaluateTestRideInventoryGate({
               lead,
               dealerProfile: await getDealerProfileWithAgentName()

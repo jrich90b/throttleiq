@@ -1025,12 +1025,27 @@ function buildInitialPhotoLine(conv: any, pick?: LeadInventoryMediaPick): string
 }
 
 function inferAppointmentTypeFromConv(conv: any): string | null {
+  const jumpStartLead =
+    isJumpStartExperienceText(conv?.lead?.inquiry ?? null) ||
+    isJumpStartExperienceText(conv?.lead?.source ?? null) ||
+    isJumpStartExperienceText(conv?.lead?.vehicle?.description ?? null);
+  if (jumpStartLead) return "inventory_visit";
   const bucket = conv?.classification?.bucket ?? "";
   const cta = conv?.classification?.cta ?? "";
   if (bucket === "test_ride" || cta === "schedule_test_ride") return "test_ride";
   if (bucket === "trade_in_sell" || cta === "value_my_trade" || cta === "trade_in_value") return "trade_appraisal";
   if (bucket === "finance_prequal" || /prequal|credit|finance|hdfs/i.test(cta)) return "finance_discussion";
   return "inventory_visit";
+}
+
+function isJumpStartExperienceText(text: string | null | undefined): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  if (/\bjump\s*start\b|\bjumpstart\b|\bjump-start\b/.test(t)) return true;
+  return (
+    /\b(riding academy|rider academy|learn to ride)\b/.test(t) &&
+    /\b(prior|before|prep|practice|experience)\b/.test(t)
+  );
 }
 
 function buildBookingUrlForLead(baseUrl: string | undefined | null, conv: any): string | null {
@@ -3195,6 +3210,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const apparelIntentFromText =
     /\b(apparel|motorclothes|merch|jacket|helmet|gloves|boots|shirt|hoodie)\b/i.test(inquiryText) ||
     /\bapparel|motorclothes\b/i.test(leadSourceLower);
+  const jumpStartExperienceLead =
+    isJumpStartExperienceText(effectiveInquiry) ||
+    isJumpStartExperienceText(lead.comment ?? null) ||
+    isJumpStartExperienceText(lead.inquiry ?? null) ||
+    isJumpStartExperienceText(leadSource ?? null);
   const hasStockIntent =
     !!lead.stockId || !!lead.vin || inquiryText.includes("available") || availabilityIntentFromParser;
   const parserBucketCta: { bucket: LeadBucket; cta: LeadCTA } | null =
@@ -3203,7 +3223,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       : routingParserIntentOverride === "pricing_payments"
         ? { bucket: "inventory_interest", cta: "request_a_quote" }
         : routingParserIntentOverride === "scheduling"
-          ? { bucket: "test_ride", cta: "schedule_test_ride" }
+          ? jumpStartExperienceLead
+            ? { bucket: "general_inquiry", cta: "contact_us" }
+            : { bucket: "test_ride", cta: "schedule_test_ride" }
           : routingParserIntentOverride === "callback"
             ? { bucket: "general_inquiry", cta: "contact_us" }
             : null;
@@ -3246,8 +3268,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       inquiryText.includes("finance")
     ) {
       if (scheduleIntentFromParser) {
-        inferredBucket = "test_ride";
-        inferredCta = "schedule_test_ride";
+        if (jumpStartExperienceLead) {
+          inferredBucket = "general_inquiry";
+          inferredCta = "contact_us";
+        } else {
+          inferredBucket = "test_ride";
+          inferredCta = "schedule_test_ride";
+        }
       } else {
         inferredBucket = "finance_prequal";
         inferredCta = inquiryText.includes("prequal") ? "prequalify" : "prequalify";
@@ -3273,7 +3300,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
   }
   const forcedTestRide = leadSourceLower.includes("test ride") || leadSourceLower.includes("book test ride");
-  if (forcedTestRide) {
+  if (forcedTestRide && !jumpStartExperienceLead) {
     inferredBucket = "test_ride";
     inferredCta = "schedule_test_ride";
   }
@@ -3296,6 +3323,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
   if (isTrafficLogWalkInLead) {
     inferredBucket = "in_store";
+    inferredCta = "contact_us";
+  }
+  if (jumpStartExperienceLead) {
+    inferredBucket = "general_inquiry";
     inferredCta = "contact_us";
   }
   if (
@@ -3331,6 +3362,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     inferredBucket,
     inferredCta,
     forcedTestRide,
+    jumpStartExperienceLead,
     routingParserAccepted: routingParserDecision.accepted,
     routingParserIntentOverride
   });

@@ -4188,6 +4188,11 @@ function extractBookingToken(req: express.Request): string {
 }
 
 function inferAppointmentTypeFromConv(conv: any): string {
+  const jumpStartLead =
+    isJumpStartExperienceText(conv?.lead?.inquiry ?? null) ||
+    isJumpStartExperienceText(conv?.lead?.source ?? null) ||
+    isJumpStartExperienceText(conv?.lead?.vehicle?.description ?? null);
+  if (jumpStartLead) return "inventory_visit";
   const bucket = conv?.classification?.bucket ?? "";
   const cta = conv?.classification?.cta ?? "";
   if (bucket === "test_ride" || cta === "schedule_test_ride") return "test_ride";
@@ -4366,6 +4371,8 @@ async function applyPostCallSummaryActions(opts: {
   const llmCallbackRequested = intentAccepted && intentParse?.intent === "callback";
   const llmAvailabilityIntent = intentAccepted && intentParse?.intent === "availability";
   const llmTestRideIntent = intentAccepted && intentParse?.intent === "test_ride";
+  const jumpStartExperienceRequest = isJumpStartExperienceText(customerText);
+  const effectiveTestRideIntent = llmTestRideIntent && !jumpStartExperienceRequest;
   const llmAvailability = llmAvailabilityIntent ? intentParse?.availability ?? null : null;
   const conversationStateParse = await parseConversationStateWithLLM({
     text: customerText,
@@ -4448,7 +4455,7 @@ async function applyPostCallSummaryActions(opts: {
     setDialogState(conv, "schedule_request");
   }
 
-  if (llmTestRideIntent && !isTestRideDialogState(getDialogState(conv))) {
+  if (effectiveTestRideIntent && !isTestRideDialogState(getDialogState(conv))) {
     setDialogState(conv, "test_ride_init");
   }
 
@@ -4512,7 +4519,7 @@ async function applyPostCallSummaryActions(opts: {
     }
   }
 
-  if (bookingIntentAccepted || llmTestRideIntent || parserSchedulingIntent) {
+  if (bookingIntentAccepted || effectiveTestRideIntent || parserSchedulingIntent) {
     try {
       const cfg = await getSchedulerConfigHot();
       const bookingRequestedDay = String(bookingParse?.requested?.day ?? "").trim();
@@ -13569,6 +13576,16 @@ function detectsPricingAnswer(text: string): boolean {
 function isCallOnlyText(text: string): boolean {
   return /\b(call only|phone only|call me only|no text|do not text|don't text|text me not)\b/i.test(
     String(text ?? "")
+  );
+}
+
+function isJumpStartExperienceText(text: string | null | undefined): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  if (/\bjump\s*start\b|\bjumpstart\b|\bjump-start\b/.test(t)) return true;
+  return (
+    /\b(riding academy|rider academy|learn to ride)\b/.test(t) &&
+    /\b(prior|before|prep|practice|experience)\b/.test(t)
   );
 }
 
@@ -31654,6 +31671,8 @@ if (authToken && signature) {
   const llmAvailabilityIntent = parserAvailabilityIntent || (intentAccepted && intentParse?.intent === "availability");
   const explicitAvailabilitySignalThisTurn = llmAvailabilityIntent;
   const llmTestRideIntent = intentAccepted && intentParse?.intent === "test_ride";
+  const jumpStartExperienceRequest = isJumpStartExperienceText(event.body ?? "");
+  const effectiveTestRideIntent = llmTestRideIntent && !jumpStartExperienceRequest;
   const llmAvailability = llmAvailabilityIntent ? intentParse?.availability ?? null : null;
   let mentionedUser: any | null = null;
   let ambiguousMentionUsers: any[] = [];
@@ -31900,13 +31919,13 @@ if (authToken && signature) {
       bookingIntentAccepted ||
       scheduleFromDialogAct ||
       llmExplicitScheduleIntent ||
-      !!llmTestRideIntent,
+      !!effectiveTestRideIntent,
     hasDayTime: schedulingSignalsBase.hasDayTime || llmHasDayTime,
     hasDayOnlyAvailability:
       schedulingSignalsBase.hasDayOnlyAvailability || llmHasDayOnlyAvailability,
     hasDayOnlyRequest: schedulingSignalsBase.hasDayOnlyRequest || llmHasDayOnlyRequest
   };
-  if (llmTestRideIntent && schedulingAllowed && !isTestRideDialogState(getDialogState(conv))) {
+  if (effectiveTestRideIntent && schedulingAllowed && !isTestRideDialogState(getDialogState(conv))) {
     setDialogState(conv, "test_ride_init");
   }
   if (schedulingSignalsBase.softVisit) {
@@ -31936,7 +31955,7 @@ if (authToken && signature) {
     bookingIntentAccepted ||
     llmExplicitScheduleIntent ||
     llmSchedulingIntent ||
-    !!llmTestRideIntent ||
+    !!effectiveTestRideIntent ||
     schedulingSignals.explicit ||
     schedulingSignals.hasDayTime ||
     schedulingSignals.hasDayOnlyAvailability ||
@@ -35469,7 +35488,7 @@ if (authToken && signature) {
         const preferredSalespeople = getPreferredSalespeopleForConv(cfg, conv);
         const salespeople = cfg.salespeople ?? [];
         const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
-        const appointmentType = llmTestRideIntent ? "test_ride" : "inventory_visit";
+        const appointmentType = effectiveTestRideIntent ? "test_ride" : "inventory_visit";
         const durationMinutes = appointmentTypes[appointmentType]?.durationMinutes ?? 60;
 
         const cal = await getAuthedCalendarClient();
@@ -35620,7 +35639,7 @@ if (authToken && signature) {
           }
           reply = applySlotOfferPolicy(conv, reply, lastOutboundTextOffer);
           if (isSlotOfferMessage(reply)) {
-            if (llmTestRideIntent) {
+            if (effectiveTestRideIntent) {
               setDialogState(conv, "test_ride_offer_sent");
             } else {
               setDialogState(conv, "schedule_offer_sent");
@@ -35674,7 +35693,7 @@ if (authToken && signature) {
       bookingParse.intent === "availability")
       ? bookingParseText
       : null;
-  const appointmentTypeOverride = llmTestRideIntent ? "test_ride" : undefined;
+  const appointmentTypeOverride = effectiveTestRideIntent ? "test_ride" : undefined;
   const history = buildHistory(conv, 20);
   const memorySummary = conv.memorySummary?.text ?? null;
   const memorySummaryShouldUpdate = shouldUpdateMemorySummary(conv);
