@@ -103,7 +103,41 @@ function escapeHtmlForEmail(value: string): string {
     .replace(/>/g, "&gt;");
 }
 
-function syncDeterministicEmailHtmlFromText(html: string, text: string): string {
+function derivePrimarySectionText(rawText: string, sectionTitle: string): string {
+  const title = String(sectionTitle ?? "").trim().toLowerCase();
+  const lines = String(rawText ?? "")
+    .replace(/\r/g, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/\[object Object\]/gi, " ")
+    .split(/\n+/)
+    .map(v => v.trim())
+    .filter(Boolean)
+    .filter(line => {
+      const lower = line.toLowerCase();
+      if (!lower) return false;
+      if (title && lower === title) return false;
+      if (/^find a dealer/i.test(lower)) return false;
+      if (/^[a-z0-9 .&'-]+\s+\|\s+[a-z0-9 .&'-]+$/i.test(lower)) return false;
+      if (/^https?:\/\//i.test(lower)) return false;
+      return true;
+    });
+  if (!lines.length) return "";
+  const joined = lines.join(" ").replace(/\s+/g, " ").trim();
+  const withoutUrls = joined.replace(/https?:\/\/[^\s<>"'`]+/gi, " ").replace(/[ ]{2,}/g, " ").trim();
+  if (!withoutUrls) return "";
+  const sentences = withoutUrls
+    .split(/(?<=[.!?])\s+/)
+    .map(v => v.trim())
+    .filter(Boolean);
+  const picked = sentences.slice(0, 2).join(" ").trim() || withoutUrls;
+  if (picked.length <= 360) return picked;
+  const clipped = picked.slice(0, 360);
+  const boundary = Math.max(clipped.lastIndexOf("."), clipped.lastIndexOf("!"), clipped.lastIndexOf("?"));
+  if (boundary >= 180) return clipped.slice(0, boundary + 1).trim();
+  return `${clipped.trim()}...`;
+}
+
+function syncDeterministicEmailHtmlFromText(html: string, text: string, sectionTitle: string): string {
   const rawHtml = String(html ?? "").trim();
   const rawText = String(text ?? "").trim();
   if (!rawHtml || !rawText) return rawHtml;
@@ -120,7 +154,9 @@ function syncDeterministicEmailHtmlFromText(html: string, text: string): string 
       bodyCell.querySelectorAll("[data-lr-email-info='1'], div[style*='color:#cbd5e1']")
     ).map(node => (node as HTMLElement).outerHTML);
 
-    const copyHtml = escapeHtmlForEmail(rawText).replace(/\n/g, "<br>");
+    const primaryText = derivePrimarySectionText(rawText, sectionTitle);
+    if (!primaryText) return rawHtml;
+    const copyHtml = escapeHtmlForEmail(primaryText).replace(/\n/g, "<br>");
     bodyCell.innerHTML = `${copyHtml}${infoBlocks.length ? `\n${infoBlocks.join("\n")}` : ""}`;
 
     const rendered = doc.documentElement?.outerHTML ? `<!doctype html>${doc.documentElement.outerHTML}` : rawHtml;
@@ -401,7 +437,11 @@ export default function EmailBuilderPage() {
 
       let htmlForSave = emailHtml;
       if (textChanged && !htmlChanged) {
-        const synced = syncDeterministicEmailHtmlFromText(draftHtml, draftText);
+        const synced = syncDeterministicEmailHtmlFromText(
+          draftHtml,
+          draftText,
+          String(selectedCampaign?.name ?? subject ?? "Campaign Update")
+        );
         if (synced) {
           htmlForSave = synced;
           setEmailHtml(synced);

@@ -21977,6 +21977,10 @@ function campaignPrimaryImageForEmailLocker(entry: CampaignEntry | null | undefi
 }
 
 function campaignLockerTextSummary(entry: CampaignEntry): string {
+  const description = String(entry.description ?? "").trim();
+  if (description) return description;
+  const prompt = String(entry.prompt ?? "").trim();
+  if (prompt) return prompt;
   const emailText = String(entry.emailBodyText ?? "").trim();
   if (emailText) {
     return emailText
@@ -21984,10 +21988,6 @@ function campaignLockerTextSummary(entry: CampaignEntry): string {
       .map(v => v.trim())
       .find(Boolean) ?? emailText;
   }
-  const description = String(entry.description ?? "").trim();
-  if (description) return description;
-  const prompt = String(entry.prompt ?? "").trim();
-  if (prompt) return prompt;
   const sms = String(entry.smsBody ?? "").trim();
   if (sms) return sms;
   return "";
@@ -22271,7 +22271,9 @@ function buildDeterministicEmailBuilderHtml(args: {
       dealerName,
       maxChars: 320
     });
-    const bodyText = summarySource || generatedSource || descriptionSource || promptSource || smsSource;
+    const bodyText = isBase
+      ? generatedSource || descriptionSource || promptSource || summarySource || smsSource
+      : descriptionSource || promptSource || summarySource || smsSource;
     const contextText = [bodyText, promptText, String(entry.prompt ?? ""), String(entry.description ?? "")]
       .filter(Boolean)
       .join("\n");

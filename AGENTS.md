@@ -1154,7 +1154,7 @@ When changing responses:
 
 ## Email Builder Copy Sanitization (No JSON/URL Dump Noise)
 - In `services/api/src/index.ts` (`buildDeterministicEmailBuilderHtml(...)` and helpers):
-  - changed `campaignLockerTextSummary(...)` priority to prefer `emailBodyText -> description -> prompt -> smsBody` (SMS moved last).
+  - changed `campaignLockerTextSummary(...)` priority to prefer `description -> prompt -> emailBodyText -> smsBody`.
   - added section-copy sanitizers to remove noisy artifacts before rendering:
     - strips `[object Object]`, JSON key fragments (`sms_body`, `email_subject`, etc.), escaped slash noise, and raw URL dumps.
     - drops duplicate title/dealer headline lines in body copy.
@@ -1172,3 +1172,15 @@ When changing responses:
   - added section/body/info data markers (`data-lr-email-section`, `data-lr-email-section-body`, `data-lr-email-info`) to make safe text-sync targeting deterministic.
 - Purpose:
   - make text-only edits reflect in preview without collapsing layout to plain-text HTML.
+
+## Email Builder Main-Section Copy Isolation
+- In `services/api/src/index.ts`:
+  - deterministic section body source ranking adjusted so per-campaign details are preferred over stale/global digest text.
+  - for base section: `generated -> description -> prompt -> summary -> sms`.
+  - for locker sections: `description -> prompt -> summary -> sms`.
+  - `campaignLockerTextSummary(...)` now prioritizes `description/prompt` before `emailBodyText`.
+- In `apps/web/src/app/email-builder/page.tsx`:
+  - text-to-HTML save sync now derives only primary-section copy (strips dealer/header lines, URLs, `[object Object]`, and digest noise) before updating first section body.
+  - prevents full multi-campaign draft text from being injected under the hero image.
+- Purpose:
+  - keep text under the main campaign image aligned to that campaign only, without cross-section spillover artifacts.
