@@ -862,14 +862,9 @@ export default function EmailBuilderPage() {
               />
             </label>
 
-            <label className="block text-xs text-gray-300">
-              Email draft (text)
-              <textarea
-                className="mt-1 w-full border border-white/20 bg-[#0a1020] rounded px-2.5 py-2 text-sm min-h-[120px]"
-                value={emailText}
-                onChange={e => setEmailText(e.target.value)}
-              />
-            </label>
+            <div className="text-[11px] text-gray-400">
+              Email body text is auto-derived from generated HTML.
+            </div>
 
             <details className="border border-white/20 rounded p-3 bg-[#0a1020]">
               <summary className="text-xs font-semibold text-gray-200 cursor-pointer">Advanced HTML</summary>

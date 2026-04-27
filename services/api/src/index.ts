@@ -22118,6 +22118,8 @@ function sanitizeEmailSectionCopy(raw: string, args?: { title?: string; dealerNa
       if (dealerName && title && lower === `${dealerName} | ${title}`) return false;
       if (dealerName && /\|/.test(lower) && lower.startsWith(dealerName)) return false;
       if (/^(sms_body|email_subject|email_body_text|email_body_html)$/i.test(lower)) return false;
+      if (/^(generate|create|make)\b/i.test(lower)) return false;
+      if (CAMPAIGN_PROMPT_DETAIL_INSTRUCTION_RE.test(lower)) return false;
       return true;
     });
   const cleaned = lines.join("\n").trim();
@@ -22128,6 +22130,25 @@ function sanitizeEmailSectionCopy(raw: string, args?: { title?: string; dealerNa
     cleaned.split(/\s+/).filter(Boolean).length < 4;
   if (noisy) return "";
   return compactEmailCopy(cleaned, Number(args?.maxChars ?? 420));
+}
+
+function campaignEmailPlainTextFromHtml(rawHtml: string, maxChars = 4000): string {
+  const html = String(rawHtml ?? "").trim();
+  if (!html) return "";
+  const text = html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|h[1-6]|tr|table|section)>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (!text) return "";
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars).trim()}...`;
 }
 
 function dealerAddressLineForEmail(profile: any): string {
@@ -22256,7 +22277,13 @@ function buildDeterministicEmailBuilderHtml(args: {
     const generatedSource = isBase
       ? sanitizeEmailSectionCopy(generatedBody || promptText, { title, dealerName, maxChars: 520 })
       : "";
-    const promptSource = sanitizeEmailSectionCopy(String(entry.prompt ?? "").trim(), {
+    const promptDetails = extractPromptRequiredDetails({
+      prompt: String(entry.prompt ?? "").trim(),
+      description: String(entry.description ?? "").trim(),
+      strict: false
+    });
+    const promptDetailText = promptDetails.slice(0, 6).join(". ");
+    const promptSource = sanitizeEmailSectionCopy(promptDetailText, {
       title,
       dealerName,
       maxChars: 420
@@ -22272,7 +22299,7 @@ function buildDeterministicEmailBuilderHtml(args: {
       maxChars: 320
     });
     const bodyText = isBase
-      ? generatedSource || descriptionSource || promptSource || summarySource || smsSource
+      ? descriptionSource || promptSource || generatedSource || summarySource || smsSource
       : descriptionSource || promptSource || summarySource || smsSource;
     const contextText = [bodyText, promptText, String(entry.prompt ?? ""), String(entry.description ?? "")]
       .filter(Boolean)
@@ -24250,6 +24277,7 @@ app.post("/campaigns/email/generate", requireManager, async (req, res) => {
       error: "Email HTML generation failed (deterministic layout renderer returned empty output). Retry Generate."
     });
   }
+  const deterministicText = campaignEmailPlainTextFromHtml(deterministicHtml, 4000);
 
   const nowIso = new Date().toISOString();
   const mergedMetadata = {
@@ -24270,7 +24298,8 @@ app.post("/campaigns/email/generate", requireManager, async (req, res) => {
   const persistedPrompt = userPrompt || basePrompt || String(baseCampaign.prompt ?? "").trim();
   const generatedNormalized = {
     ...generated,
-    emailBodyHtml: deterministicHtml
+    emailBodyHtml: deterministicHtml,
+    emailBodyText: deterministicText || String(generated.emailBodyText ?? "").trim()
   };
 
   const updated = updateCampaign(baseCampaign.id, {

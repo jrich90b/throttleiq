@@ -1184,3 +1184,15 @@ When changing responses:
   - prevents full multi-campaign draft text from being injected under the hero image.
 - Purpose:
   - keep text under the main campaign image aligned to that campaign only, without cross-section spillover artifacts.
+
+## Email Builder Prompt-Instruction Guard + No Draft Text Editor
+- In `services/api/src/index.ts`:
+  - deterministic section copy sanitizer now drops generation-instruction language (for example `Generate...`, `Use the styling...`) from rendered section text.
+  - base-section copy now prioritizes main campaign details (`description -> extracted prompt details -> generated fallback`) before generic digest text.
+  - prompt-based section copy now uses extracted detail items (event facts) rather than raw prompt instruction paragraphs.
+  - persisted `emailBodyText` for email-builder generation is now derived from deterministic HTML output (plain-text extraction), reducing stale/noisy text carryover.
+- In `apps/web/src/app/email-builder/page.tsx`:
+  - removed editable `Email draft (text)` panel from Email Builder UI.
+  - draft text remains internal/auto-derived for send fallback, but user-facing workflow is now HTML-first to avoid confusion.
+- Purpose:
+  - prevent prompts from being pasted literally into email body and keep main-campaign detail copy clean and deterministic.
