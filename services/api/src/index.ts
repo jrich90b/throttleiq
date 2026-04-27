@@ -21977,8 +21977,6 @@ function campaignPrimaryImageForEmailLocker(entry: CampaignEntry | null | undefi
 }
 
 function campaignLockerTextSummary(entry: CampaignEntry): string {
-  const sms = String(entry.smsBody ?? "").trim();
-  if (sms) return sms;
   const emailText = String(entry.emailBodyText ?? "").trim();
   if (emailText) {
     return emailText
@@ -21990,6 +21988,8 @@ function campaignLockerTextSummary(entry: CampaignEntry): string {
   if (description) return description;
   const prompt = String(entry.prompt ?? "").trim();
   if (prompt) return prompt;
+  const sms = String(entry.smsBody ?? "").trim();
+  if (sms) return sms;
   return "";
 }
 
@@ -22080,6 +22080,54 @@ function compactEmailCopy(raw: string, maxChars = 420): string {
   const boundary = Math.max(truncated.lastIndexOf("."), truncated.lastIndexOf("!"), truncated.lastIndexOf("?"));
   if (boundary >= Math.floor(maxChars * 0.55)) return `${truncated.slice(0, boundary + 1).trim()}`;
   return `${truncated.trim()}...`;
+}
+
+function stripUrlsFromEmailCopy(raw: string): string {
+  return String(raw ?? "")
+    .replace(/https?:\/\/[^\s<>"'`]+/gi, " ")
+    .replace(/[ ]{2,}/g, " ")
+    .trim();
+}
+
+function sanitizeEmailSectionCopy(raw: string, args?: { title?: string; dealerName?: string; maxChars?: number }): string {
+  const title = String(args?.title ?? "").trim().toLowerCase();
+  const dealerName = String(args?.dealerName ?? "").trim().toLowerCase();
+  let text = String(raw ?? "")
+    .replace(/\r/g, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/\[object Object\]/gi, " ")
+    .replace(
+      /"?\s*(sms_body|email_subject|email_body_text|email_body_html)\s*"?\s*:\s*/gi,
+      " "
+    )
+    .replace(/[\\]{2,}/g, " ")
+    .replace(/[{}[\]]/g, " ")
+    .replace(/[ ]{2,}/g, " ")
+    .trim();
+  if (!text) return "";
+  text = stripUrlsFromEmailCopy(text);
+  const lines = text
+    .split(/\n+/)
+    .map(v => v.trim())
+    .filter(Boolean)
+    .filter(line => {
+      const lower = line.toLowerCase();
+      if (!lower) return false;
+      if (title && lower === title) return false;
+      if (dealerName && lower === dealerName) return false;
+      if (dealerName && title && lower === `${dealerName} | ${title}`) return false;
+      if (dealerName && /\|/.test(lower) && lower.startsWith(dealerName)) return false;
+      if (/^(sms_body|email_subject|email_body_text|email_body_html)$/i.test(lower)) return false;
+      return true;
+    });
+  const cleaned = lines.join("\n").trim();
+  if (!cleaned) return "";
+  const noisy =
+    /\b(object|undefined|null)\b/i.test(cleaned) ||
+    /"[a-z0-9_]+":/i.test(cleaned) ||
+    cleaned.split(/\s+/).filter(Boolean).length < 4;
+  if (noisy) return "";
+  return compactEmailCopy(cleaned, Number(args?.maxChars ?? 420));
 }
 
 function dealerAddressLineForEmail(profile: any): string {
@@ -22200,12 +22248,30 @@ function buildDeterministicEmailBuilderHtml(args: {
       title = `${title} ${idx + 1}`;
     }
     usedTitles.add(title.toLowerCase());
-    const summarySource = compactEmailCopy(campaignLockerTextSummary(entry), 520);
-    const bodyText =
-      summarySource ||
-      (isBase ? generatedBody || promptText : "") ||
-      compactEmailCopy(String(entry.prompt ?? "").trim(), 360) ||
-      compactEmailCopy(String(entry.description ?? "").trim(), 360);
+    const summarySource = sanitizeEmailSectionCopy(campaignLockerTextSummary(entry), {
+      title,
+      dealerName,
+      maxChars: 520
+    });
+    const generatedSource = isBase
+      ? sanitizeEmailSectionCopy(generatedBody || promptText, { title, dealerName, maxChars: 520 })
+      : "";
+    const promptSource = sanitizeEmailSectionCopy(String(entry.prompt ?? "").trim(), {
+      title,
+      dealerName,
+      maxChars: 420
+    });
+    const descriptionSource = sanitizeEmailSectionCopy(String(entry.description ?? "").trim(), {
+      title,
+      dealerName,
+      maxChars: 420
+    });
+    const smsSource = sanitizeEmailSectionCopy(String(entry.smsBody ?? "").trim(), {
+      title,
+      dealerName,
+      maxChars: 320
+    });
+    const bodyText = summarySource || generatedSource || descriptionSource || promptSource || smsSource;
     const contextText = [bodyText, promptText, String(entry.prompt ?? ""), String(entry.description ?? "")]
       .filter(Boolean)
       .join("\n");

@@ -1151,3 +1151,14 @@ When changing responses:
   - reinforced centered media/button rendering via `align="center"` and image width attributes.
 - Purpose:
   - keep dark-shell branding and centered layout stable across mailbox clients with different HTML/CSS support.
+
+## Email Builder Copy Sanitization (No JSON/URL Dump Noise)
+- In `services/api/src/index.ts` (`buildDeterministicEmailBuilderHtml(...)` and helpers):
+  - changed `campaignLockerTextSummary(...)` priority to prefer `emailBodyText -> description -> prompt -> smsBody` (SMS moved last).
+  - added section-copy sanitizers to remove noisy artifacts before rendering:
+    - strips `[object Object]`, JSON key fragments (`sms_body`, `email_subject`, etc.), escaped slash noise, and raw URL dumps.
+    - drops duplicate title/dealer headline lines in body copy.
+    - rejects short/noisy copy chunks and falls back to cleaner sources.
+  - body source selection is now sanitized and ranked per section: summary -> generated base copy -> description -> prompt -> sms.
+- Purpose:
+  - prevent malformed/plaintext serialization noise from appearing in rendered email body text.
