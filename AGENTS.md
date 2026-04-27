@@ -1114,7 +1114,7 @@ When changing responses:
 
 ## Email Builder Save Behavior (Text-Only Edit Sync)
 - In `apps/web/src/app/email-builder/page.tsx`:
-  - when saving, if `Email draft (text)` changed but `Advanced HTML` was not manually changed, save now regenerates `emailBodyHtml` from the edited text draft so preview and stored email content update together.
-  - save notice now explicitly indicates when preview was refreshed from edited text.
+  - save now preserves existing `Advanced HTML` layout by default (no automatic text-to-HTML conversion).
+  - when only `Email draft (text)` changes, save updates text while keeping HTML preview/layout intact; notice clarifies layout was preserved.
 - Purpose:
-  - avoid the “saved but preview didn’t change” issue caused by stale HTML taking precedence over edited text.
+  - avoid accidental conversion of rich email layout into plain text while still allowing text-draft edits to be saved.
