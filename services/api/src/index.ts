@@ -1983,6 +1983,7 @@ function isPublicPath(pathname: string): boolean {
     pathname.startsWith("/crm/leads/adf/sendgrid") ||
     pathname.startsWith("/public/booking") ||
     pathname.startsWith("/public/appointment") ||
+    pathname.startsWith("/public/marketing") ||
     pathname.startsWith("/public/inventory") ||
     pathname.startsWith("/integrations/google") ||
     pathname.startsWith("/integrations/meta/callback") ||
@@ -3501,6 +3502,33 @@ app.get("/public/inventory", async (_req, res) => {
     console.warn("public inventory list failed:", err?.message ?? err);
     return res.status(500).json({ ok: false, error: "Failed to load inventory" });
   }
+});
+
+app.get("/public/marketing/unsubscribe", async (req, res) => {
+  const emailRaw = String(req.query?.email ?? "").trim().toLowerCase();
+  const canApply = isLikelyEmail(emailRaw);
+  let applied = false;
+  if (canApply) {
+    const entry = await addSuppression(emailRaw, "marketing_email_unsubscribe", "email_link");
+    applied = !!entry;
+  }
+  const pageTitle = applied ? "You are unsubscribed" : "Manage marketing email preferences";
+  const message = applied
+    ? `You have been unsubscribed from marketing emails for ${escapeHtml(emailRaw)}.`
+    : "Enter your email to unsubscribe from marketing emails.";
+  return res
+    .status(200)
+    .type("html")
+    .send(`<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>${pageTitle}</title></head><body style="margin:0;background:#05070b;color:#f8fafc;font-family:Arial,Helvetica,sans-serif;"><main style="max-width:680px;margin:48px auto;padding:24px;border:1px solid #263143;border-radius:12px;background:#0b1220;"><h1 style="margin:0 0 12px;font-size:24px;line-height:30px;">${pageTitle}</h1><p style="margin:0 0 18px;color:#d1d5db;font-size:15px;line-height:22px;">${message}</p>${applied ? "" : `<form method="post" action="/public/marketing/unsubscribe" style="display:flex;gap:10px;flex-wrap:wrap;"><input name="email" type="email" required placeholder="you@example.com" value="${escapeHtml(emailRaw)}" style="flex:1;min-width:240px;padding:12px 10px;border:1px solid #374151;border-radius:8px;background:#111827;color:#f8fafc;" /><button type="submit" style="padding:12px 14px;border:0;border-radius:8px;background:#f97316;color:#111827;font-weight:700;cursor:pointer;">Unsubscribe</button></form>`}<p style="margin:18px 0 0;color:#94a3b8;font-size:13px;line-height:19px;">American Harley-Davidson</p></main></body></html>`);
+});
+
+app.post("/public/marketing/unsubscribe", async (req, res) => {
+  const emailRaw = String(req.body?.email ?? "").trim().toLowerCase();
+  if (!isLikelyEmail(emailRaw)) {
+    return res.redirect(302, "/public/marketing/unsubscribe");
+  }
+  await addSuppression(emailRaw, "marketing_email_unsubscribe", "email_link");
+  return res.redirect(302, `/public/marketing/unsubscribe?email=${encodeURIComponent(emailRaw)}`);
 });
 
 app.put("/inventory", async (req, res) => {
@@ -21481,7 +21509,11 @@ function buildContactsView() {
     const convId = c.conversationId ?? c.leadKey;
     const conv = convId ? getConversation(convId) : null;
     const archived = !!(conv?.closedReason && /archive/i.test(conv.closedReason));
-    const suppressed = c.phone ? isSuppressed(c.phone) : c.leadKey ? isSuppressed(c.leadKey) : false;
+    const suppressed = Boolean(
+      (c.phone && isSuppressed(c.phone)) ||
+        (c.email && isSuppressed(c.email)) ||
+        (c.leadKey && isSuppressed(c.leadKey))
+    );
     const status = suppressed ? "suppressed" : archived ? "archived" : "active";
     const lastAdf = conv?.messages
       ?.slice()
@@ -22161,6 +22193,8 @@ function sanitizeEmailSectionCopy(raw: string, args?: { title?: string; dealerNa
       if (dealerName && /\|/.test(lower) && lower.startsWith(dealerName)) return false;
       if (/^(sms_body|email_subject|email_body_text|email_body_html)$/i.test(lower)) return false;
       if (/^(generate|create|make)\b/i.test(lower)) return false;
+      if (/^quick update from\b/.test(lower)) return false;
+      if (/^reply (and|here)\b.*\b(details|share)\b/.test(lower)) return false;
       if (CAMPAIGN_PROMPT_DETAIL_INSTRUCTION_RE.test(lower)) return false;
       return true;
     });
@@ -22194,13 +22228,76 @@ function campaignEmailPlainTextFromHtml(rawHtml: string, maxChars = 4000): strin
 }
 
 function dealerAddressLineForEmail(profile: any): string {
-  const street = String(profile?.address ?? profile?.street ?? "").trim();
-  const city = String(profile?.city ?? "").trim();
-  const state = String(profile?.state ?? "").trim();
-  const zip = String(profile?.zip ?? profile?.postalCode ?? "").trim();
+  const addressObj =
+    profile?.address && typeof profile.address === "object" && !Array.isArray(profile.address)
+      ? profile.address
+      : null;
+  const streetRaw = String(addressObj?.street ?? addressObj?.line1 ?? profile?.street ?? profile?.address ?? "").trim();
+  const street = streetRaw === "[object Object]" ? "" : streetRaw;
+  const city = String(addressObj?.city ?? profile?.city ?? "").trim();
+  const state = String(addressObj?.state ?? addressObj?.region ?? profile?.state ?? "").trim();
+  const zip = String(addressObj?.zip ?? addressObj?.postalCode ?? profile?.zip ?? profile?.postalCode ?? "").trim();
   const cityStateZip = [city, state].filter(Boolean).join(", ");
   const locality = [cityStateZip, zip].filter(Boolean).join(" ");
   return [street, locality].filter(Boolean).join(", ");
+}
+
+function isLikelyEmail(value: string): boolean {
+  const text = String(value ?? "").trim();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text);
+}
+
+function buildMarketingEmailUnsubscribeUrl(email?: string): string {
+  const base = String(process.env.PUBLIC_BASE_URL ?? "").trim().replace(/\/+$/, "");
+  if (!base) return "";
+  const url = new URL(`${base}/public/marketing/unsubscribe`);
+  const recipient = String(email ?? "").trim();
+  if (isLikelyEmail(recipient)) {
+    url.searchParams.set("email", recipient.toLowerCase());
+  }
+  return url.toString();
+}
+
+function ensureEmailMarketingOptOutText(textBody: string, unsubscribeUrl: string): string {
+  const cleaned = String(textBody ?? "")
+    .replace(/\r/g, "")
+    .replace(/^\s*Reply STOP to opt out\.?\s*$/gim, "")
+    .replace(/^\s*Reply STOP to opt out of promotional messages\.?\s*$/gim, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (!unsubscribeUrl) return cleaned;
+  if (new RegExp(escapeRegex(unsubscribeUrl), "i").test(cleaned)) return cleaned;
+  const line = `Unsubscribe from marketing emails: ${unsubscribeUrl}`;
+  return [cleaned, line].filter(Boolean).join("\n\n").trim();
+}
+
+function injectEmailMarketingOptOutHtml(rawHtml: string, unsubscribeUrl: string): string {
+  let html = String(rawHtml ?? "").trim();
+  if (!html) return html;
+  html = html
+    .replace(/Reply STOP to opt out of promotional messages\.?/gi, "")
+    .replace(/Reply STOP to opt out\.?/gi, "")
+    .replace(/\{\{MARKETING_EMAIL_OPTOUT_URL\}\}/g, unsubscribeUrl || "#");
+  if (unsubscribeUrl) {
+    html = html.replace(
+      /https?:\/\/[^\s"'<>]+\/public\/marketing\/unsubscribe(?:\?[^\s"'<>]*)?/gi,
+      unsubscribeUrl
+    );
+  }
+  if (!unsubscribeUrl) return html;
+  if (new RegExp(escapeRegex(unsubscribeUrl), "i").test(html)) return html;
+  const footer = `
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:12px;">
+  <tr>
+    <td style="padding-top:8px;border-top:1px solid #263143;color:#cbd5e1;font-size:12px;line-height:18px;font-family:Arial,Helvetica,sans-serif;">
+      <a href="${escapeHtml(unsubscribeUrl)}" target="_blank" rel="noopener noreferrer" style="color:#f97316;font-weight:700;text-decoration:underline;">Unsubscribe from marketing emails</a>
+    </td>
+  </tr>
+</table>`;
+  if (/<\/body>/i.test(html)) {
+    return html.replace(/<\/body>/i, `${footer}\n</body>`);
+  }
+  return `${html}\n${footer}`.trim();
 }
 
 function emailSectionFontFamilies(entry: CampaignEntry): { heading: string; body: string } {
@@ -22381,7 +22478,7 @@ function buildDeterministicEmailBuilderHtml(args: {
       isBase && phone ? `Call: ${phone}` : ""
     ]
       .filter(Boolean)
-      .join("<br>");
+      .join("\n");
     const infoLine = infoLineBits
       ? `<div data-lr-email-info="1" style="margin-top:10px;color:#cbd5e1;font-size:13px;line-height:19px;font-family:Arial,Helvetica,sans-serif;">${escapeHtml(
           infoLineBits
@@ -22427,6 +22524,7 @@ function buildDeterministicEmailBuilderHtml(args: {
       )}" target="_blank" rel="noopener noreferrer" style="font-size:14px;line-height:18px;font-weight:700;color:#f8fafc;text-decoration:underline;">Find A Dealer →</a>`
     : "";
   const footerLine = [addressLine, phone].filter(Boolean).join(" | ");
+  const genericUnsubscribeUrl = buildMarketingEmailUnsubscribeUrl() || "#";
   const sectionsMarkup = sectionsHtml.join(`
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#0b1220" style="width:100%;background-color:#0b1220;">
                 <tr><td height="18" style="height:18px;line-height:18px;font-size:0;">&nbsp;</td></tr>
@@ -22458,7 +22556,7 @@ function buildDeterministicEmailBuilderHtml(args: {
                   <td style="padding-top:12px;color:#94a3b8;font-size:12px;line-height:18px;font-family:Arial,Helvetica,sans-serif;">
                     <div style="font-weight:700;color:#e2e8f0;">${escapeHtml(dealerName)}</div>
                     ${footerLine ? `<div style="margin-top:4px;">${escapeHtml(footerLine)}</div>` : ""}
-                    <div style="margin-top:6px;">Reply STOP to opt out of promotional messages.</div>
+                    <div style="margin-top:6px;"><a href="${escapeHtml(genericUnsubscribeUrl)}" target="_blank" rel="noopener noreferrer" style="color:#f97316;font-weight:700;text-decoration:underline;">Unsubscribe from marketing emails</a></div>
                   </td>
                 </tr>
               </table>
@@ -24391,6 +24489,9 @@ app.post("/campaigns/email/send", requireManager, async (req, res) => {
   if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
     return res.status(400).json({ ok: false, error: "Missing or invalid recipient email" });
   }
+  if (isSuppressed(to)) {
+    return res.status(409).json({ ok: false, error: "Recipient is suppressed" });
+  }
   const isTest = req.body?.test === true;
   const profile = await getDealerProfileHot();
   const { from, replyTo } = getEmailConfig(profile);
@@ -24415,6 +24516,9 @@ app.post("/campaigns/email/send", requireManager, async (req, res) => {
         .trim()
     : "";
   const textBody = bodyTextInput || String(campaign.emailBodyText ?? "").trim() || fallbackTextFromHtml;
+  const unsubscribeUrl = buildMarketingEmailUnsubscribeUrl(to);
+  const htmlBodyFinal = injectEmailMarketingOptOutHtml(htmlBody, unsubscribeUrl);
+  const textBodyFinal = ensureEmailMarketingOptOutText(textBody, unsubscribeUrl);
   if (!textBody && !htmlBody) {
     return res.status(400).json({ ok: false, error: "Missing email body" });
   }
@@ -24425,8 +24529,8 @@ app.post("/campaigns/email/send", requireManager, async (req, res) => {
       from,
       replyTo: replyTo || undefined,
       subject,
-      text: textBody || " ",
-      html: htmlBody || undefined
+      text: textBodyFinal || " ",
+      html: htmlBodyFinal || undefined
     });
   } catch (err: any) {
     const details = String(err?.message ?? "").trim();
@@ -25249,14 +25353,22 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
           skipped.push({ id: String(contact.id), reason: "missing_email" });
           continue;
         }
+        if (isSuppressed(email)) {
+          skipped.push({ id: String(contact.id), reason: "suppressed" });
+          continue;
+        }
+        const recipientUnsubscribeUrl = buildMarketingEmailUnsubscribeUrl(email);
+        const recipientHtml = injectEmailMarketingOptOutHtml(emailBodyHtml, recipientUnsubscribeUrl);
+        const recipientText = ensureEmailMarketingOptOutText(fallbackEmailText, recipientUnsubscribeUrl);
         await sendEmail({
           to: email,
           from: emailFrom,
           replyTo: emailReplyTo || undefined,
           subject,
-          text: fallbackEmailText,
-          html: emailBodyHtml || undefined
+          text: recipientText,
+          html: recipientHtml || undefined
         });
+        outboundBody = recipientText;
       }
       const leadKey = String(contact.leadKey ?? contact.conversationId ?? (phone || email));
       const existingConv = getConversation(leadKey);
@@ -25351,9 +25463,9 @@ app.delete("/contacts/:id", (req, res) => {
 });
 
 app.post("/suppressions", requirePermission("canAccessSuppressions"), async (req, res) => {
-  const phone = String(req.body?.phone ?? "").trim();
-  if (!phone) return res.status(400).json({ ok: false, error: "Missing phone" });
-  const entry = await addSuppression(phone, String(req.body?.reason ?? "manual"), "ui");
+  const target = String(req.body?.phone ?? req.body?.email ?? "").trim();
+  if (!target) return res.status(400).json({ ok: false, error: "Missing phone or email" });
+  const entry = await addSuppression(target, String(req.body?.reason ?? "manual"), "ui");
   res.json({ ok: true, entry });
 });
 

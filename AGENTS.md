@@ -44,6 +44,8 @@ Required order:
 - Outbound drafting must remain channel-specific:
   - SMS drafts should use compact SMS layout (trimmed spacing, no email-style greeting blocks unless explicitly authored).
   - Email drafts should be normalized to email layout (greeting + paragraph spacing) before storage/send.
+  - Email marketing sends must use an unsubscribe link (high-contrast link/button) instead of SMS-style `Reply STOP` footer copy.
+  - Public unsubscribe path `/public/marketing/unsubscribe` must add recipient email to suppression so future marketing sends skip that contact.
 - Campaign Studio Email HTML should include visual media when campaign image inputs are present:
   - include the selected/primary campaign image as hero when available,
   - include additional reference/design images as secondary visuals,
