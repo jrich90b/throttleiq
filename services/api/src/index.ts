@@ -16899,6 +16899,20 @@ async function processAppointmentConfirmations() {
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
     const authToken = process.env.TWILIO_AUTH_TOKEN;
     const toNumber = normalizePhone(conv.leadKey);
+    const triggerMeta = {
+      trigger: "auto_24h_confirmation_sms",
+      triggeredAt: new Date().toISOString(),
+      scheduledFor: appt.whenIso
+    };
+    console.log("[appt-confirm] reminder trigger", {
+      convId: conv.id,
+      leadRef: conv?.lead?.leadRef ?? null,
+      leadKey: conv.leadKey,
+      whenIso: appt.whenIso,
+      whenLocal: when,
+      diffHours: Number((diffMs / (60 * 60 * 1000)).toFixed(3)),
+      mode: systemMode
+    });
 
     if (systemMode === "suggest") {
       if (
@@ -16909,13 +16923,15 @@ async function processAppointmentConfirmations() {
       ) {
         appt.confirmation = {
           sentAt: new Date().toISOString(),
-          status: "pending"
+          status: "pending",
+          ...triggerMeta
         };
         continue;
       }
       appt.confirmation = {
         sentAt: new Date().toISOString(),
-        status: "pending"
+        status: "pending",
+        ...triggerMeta
       };
       appendOutbound(conv, from ?? "salesperson", toNumber, message, "draft_ai");
     } else if (from && accountSid && authToken && toNumber.startsWith("+")) {
@@ -16928,7 +16944,8 @@ async function processAppointmentConfirmations() {
         ) {
           appt.confirmation = {
             sentAt: new Date().toISOString(),
-            status: "pending"
+            status: "pending",
+            ...triggerMeta
           };
           continue;
         }
@@ -16936,7 +16953,8 @@ async function processAppointmentConfirmations() {
         const msg = await client.messages.create({ from, to: toNumber, body: message });
         appt.confirmation = {
           sentAt: new Date().toISOString(),
-          status: "pending"
+          status: "pending",
+          ...triggerMeta
         };
         appendOutbound(conv, from, toNumber, message, "twilio", msg.sid);
       } catch (e: any) {
@@ -16952,13 +16970,15 @@ async function processAppointmentConfirmations() {
       ) {
         appt.confirmation = {
           sentAt: new Date().toISOString(),
-          status: "pending"
+          status: "pending",
+          ...triggerMeta
         };
         continue;
       }
       appt.confirmation = {
         sentAt: new Date().toISOString(),
-        status: "pending"
+        status: "pending",
+        ...triggerMeta
       };
       appendOutbound(conv, "salesperson", toNumber, message, "human");
     }
