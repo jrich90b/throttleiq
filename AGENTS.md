@@ -1111,3 +1111,10 @@ When changing responses:
   - normalization now strips secondary utility top blocks immediately after the required header when they include small image + dealer-link text (e.g., `Visit us online`) to prevent campaign art from appearing in pseudo-header rows.
 - Purpose:
   - keep each campaign’s corresponding visual/font context aligned and prevent base campaign image drift into header-adjacent utility rows.
+
+## Email Builder Save Behavior (Text-Only Edit Sync)
+- In `apps/web/src/app/email-builder/page.tsx`:
+  - when saving, if `Email draft (text)` changed but `Advanced HTML` was not manually changed, save now regenerates `emailBodyHtml` from the edited text draft so preview and stored email content update together.
+  - save notice now explicitly indicates when preview was refreshed from edited text.
+- Purpose:
+  - avoid the “saved but preview didn’t change” issue caused by stale HTML taking precedence over edited text.

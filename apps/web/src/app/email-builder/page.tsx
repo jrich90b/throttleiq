@@ -355,13 +355,22 @@ export default function EmailBuilderPage() {
     setError(null);
     setNotice(null);
     try {
+      const selectedHtml = String(selectedCampaign?.emailBodyHtml ?? "").trim();
+      const selectedText = String(selectedCampaign?.emailBodyText ?? "").trim();
+      const draftHtml = String(emailHtml ?? "").trim();
+      const draftText = String(emailText ?? "").trim();
+      const htmlChanged = draftHtml !== selectedHtml;
+      const textChanged = draftText !== selectedText;
+      const htmlToPersist =
+        !htmlChanged && textChanged ? toPreviewHtml(subject, "", draftText) : String(emailHtml ?? "");
+
       const resp = await fetch(`/api/campaigns/${encodeURIComponent(selectedCampaignId)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           emailSubject: subject,
           emailBodyText: emailText,
-          emailBodyHtml: emailHtml,
+          emailBodyHtml: htmlToPersist,
           channel: "email",
           assetTargets: ["email"]
         })
@@ -372,7 +381,12 @@ export default function EmailBuilderPage() {
       }
       const campaign = data.campaign as CampaignEntry;
       setCampaigns(prev => prev.map(row => (row.id === campaign.id ? campaign : row)));
-      setNotice("Email saved.");
+      if (!htmlChanged && textChanged) {
+        setEmailHtml(htmlToPersist);
+        setNotice("Email saved. Preview was refreshed from edited text.");
+      } else {
+        setNotice("Email saved.");
+      }
     } catch (err: any) {
       setError(err?.message ?? "Failed to save email");
     } finally {
@@ -736,4 +750,3 @@ export default function EmailBuilderPage() {
     </main>
   );
 }
-
