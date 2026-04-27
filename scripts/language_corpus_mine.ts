@@ -198,6 +198,13 @@ function isTrainingOutboundProvider(provider: unknown): boolean {
   return p === "draft_ai" || p === "human" || p === "twilio" || p === "sendgrid";
 }
 
+function isVoiceArtifactProvider(provider: unknown): boolean {
+  const p = String(provider ?? "")
+    .trim()
+    .toLowerCase();
+  return p === "voice_transcript" || p === "voice_summary";
+}
+
 function outboundFeedbackDetails(msg: AnyObj): {
   rating: "up" | "down" | null;
   reason: string | null;
@@ -294,6 +301,8 @@ function run() {
       if (!body) continue;
       const direction = String(msg?.direction ?? "");
       const provider = String(msg?.provider ?? "");
+      const providerNorm = provider.trim().toLowerCase();
+      if (isVoiceArtifactProvider(providerNorm)) continue;
       totalMessages += 1;
       if (direction === "in") inboundMessages += 1;
       if (direction === "out") outboundMessages += 1;
@@ -324,9 +333,7 @@ function run() {
       patterns.set(patternKey, existing);
 
       if (direction !== "in") continue;
-      const inboundProvider = String(msg?.provider ?? "")
-        .trim()
-        .toLowerCase();
+      const inboundProvider = providerNorm;
       const nextOutboundRaw = findNextOutbound(messages, i);
       let nextOutbound = nextOutboundRaw;
       if (nextOutboundRaw && !isTrainingOutboundProvider(nextOutboundRaw?.provider)) {

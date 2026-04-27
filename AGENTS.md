@@ -136,10 +136,11 @@ Required order:
 - Feedback loop now mines phone-call verbiage artifacts:
   - `voice_feedback_summary.json` (voice transcript/summary volume + outbound provider stats),
   - `voice_feedback_rows.json` (per-call transcript, LLM voice summary, and next customer-facing outbound).
-  - Nightly/hourly loops should run `voice_feedback:mine` so call language is visible in reports and available for training review.
-- Language-corpus mining guardrail for phone traffic:
-  - when inbound provider is `voice_transcript`, do not treat `voice_summary`/system artifacts as the “next outbound reply” training target.
-  - only customer-facing outbound providers (`draft_ai`, `human`, `twilio`, `sendgrid`) are valid pairing targets for few-shot mining.
+  - Nightly/hourly loops should run `voice_feedback:mine` so call outcomes are visible for orchestration QA (cadence, todos, appointments).
+- Voice feedback policy:
+  - phone transcript artifacts are orchestration-only (task-trigger/state timing review), not tone/training exemplars.
+  - exclude `voice_transcript` / `voice_summary` rows from language-corpus few-shot mining.
+  - exclude edit-feedback training rows whose prior inbound provider is `voice_transcript`.
 - Deterministic tone rules can now be auto-promoted from mined feedback artifacts:
   - `scripts/deterministic_rules_promote.ts` consumes manual-edit deltas + thumbs-down seeds,
   - writes runtime rules to `DATA_DIR/deterministic_tone_rules.json` (or `DETERMINISTIC_TONE_RULES_PATH`),

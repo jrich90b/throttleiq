@@ -232,20 +232,27 @@ function inferDepartment(text: string): "service" | "parts" | "apparel" | null {
   return null;
 }
 
-function inferPrevInboundText(conv: ConversationLike | undefined, atIso: string): string {
-  if (!conv?.messages?.length) return "";
+function inferPrevInboundContext(
+  conv: ConversationLike | undefined,
+  atIso: string
+): { text: string; provider: string } {
+  if (!conv?.messages?.length) return { text: "", provider: "" };
   const targetMs = Date.parse(atIso);
   const messages = [...conv.messages].sort(
     (a, b) => Date.parse(String(a?.at ?? "")) - Date.parse(String(b?.at ?? ""))
   );
-  let latestInbound = "";
+  let latestInboundText = "";
+  let latestInboundProvider = "";
   for (const m of messages) {
     const atMs = Date.parse(String(m?.at ?? ""));
     if (!Number.isFinite(atMs)) continue;
     if (Number.isFinite(targetMs) && atMs > targetMs) break;
-    if (m?.direction === "in" && m?.body) latestInbound = String(m.body);
+    if (m?.direction === "in" && m?.body) {
+      latestInboundText = String(m.body);
+      latestInboundProvider = String(m?.provider ?? "");
+    }
   }
-  return latestInbound;
+  return { text: latestInboundText, provider: latestInboundProvider };
 }
 
 function classifyEdit(
@@ -429,9 +436,18 @@ function main() {
   > = [];
 
   const fixtures: FixtureCase[] = [];
+  let skippedVoiceInboundRows = 0;
   for (const row of rows) {
     const conv = conversationsById.get(row.convId);
-    const inboundText = inferPrevInboundText(conv, row.at);
+    const inbound = inferPrevInboundContext(conv, row.at);
+    const inboundText = inbound.text;
+    const inboundProvider = String(inbound.provider ?? "")
+      .trim()
+      .toLowerCase();
+    if (inboundProvider === "voice_transcript") {
+      skippedVoiceInboundRows += 1;
+      continue;
+    }
     const classified = classifyEdit(row, inboundText);
     labeled.push({
       ...row,
@@ -522,6 +538,14 @@ function main() {
 
   const summary = {
     generatedAt: new Date().toISOString(),
+    sinceHours:
+      Number.isFinite(Number(changesRaw?.sinceHours)) && Number(changesRaw?.sinceHours) > 0
+        ? Number(changesRaw?.sinceHours)
+        : null,
+    windowStart:
+      typeof changesRaw?.windowStart === "string" && changesRaw.windowStart.trim()
+        ? changesRaw.windowStart
+        : null,
     source: {
       changesPath,
       conversationsPath,
@@ -544,6 +568,7 @@ function main() {
     fixtureCandidates: fixtures.length,
     fixturePassNow: passingFixtures.length,
     fixtureFailNow: failingFixtures.length,
+    skippedVoiceInboundRows,
     outputs: {
       labeledPath,
       fixturesPath,
