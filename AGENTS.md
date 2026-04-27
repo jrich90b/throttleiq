@@ -1142,3 +1142,12 @@ When changing responses:
   - both actions send directly from the Email Builder screen using the current edited HTML/text draft.
 - Purpose:
   - allow direct send workflows from Email Builder without leaving the screen and support safe test sends before live delivery.
+
+## Email Builder Cross-Client Centering + Background Fallbacks
+- In `services/api/src/index.ts` (`buildDeterministicEmailBuilderHtml(...)`):
+  - switched outer shell to stricter email-safe centering (`<center>`, `align="center"`, fixed container width `640`) for more consistent layout in Gmail and Rackspace/OX.
+  - added `bgcolor` fallbacks on body/outer/inner tables and wrapper cells so dark background survives clients that ignore CSS-only backgrounds.
+  - converted section spacing to explicit spacer tables (instead of relying on table margins) for better cross-client rendering.
+  - reinforced centered media/button rendering via `align="center"` and image width attributes.
+- Purpose:
+  - keep dark-shell branding and centered layout stable across mailbox clients with different HTML/CSS support.

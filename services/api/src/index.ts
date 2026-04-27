@@ -22223,8 +22223,10 @@ function buildDeterministicEmailBuilderHtml(args: {
     const safeBody = escapeHtml(bodyText || "").replace(/\n/g, "<br>");
     const imageBlock = imageUrl
       ? `<tr>
-          <td style="padding:0 0 12px 0;text-align:center;">
-            <img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(title)}" style="display:block;width:100%;max-width:640px;height:auto;object-fit:contain;border:0;background:#0f172a;border-radius:8px;" />
+          <td align="center" style="padding:0 0 12px 0;text-align:center;">
+            <img width="640" src="${escapeHtml(imageUrl)}" alt="${escapeHtml(
+              title
+            )}" style="display:block;width:100%;max-width:640px;height:auto;border:0;background-color:#0f172a;border-radius:8px;margin:0 auto;" />
           </td>
         </tr>`
       : "";
@@ -22241,16 +22243,14 @@ function buildDeterministicEmailBuilderHtml(args: {
       : "";
     const ctaBlock = cta
       ? `<tr>
-          <td style="padding:2px 0 16px 0;text-align:center;">
+          <td align="center" style="padding:2px 0 16px 0;text-align:center;">
             <a href="${escapeHtml(cta.url)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#f97316;color:#111827;text-decoration:none;font-weight:800;font-size:14px;line-height:14px;padding:12px 16px;border-radius:5px;">${escapeHtml(
               cta.label
             )}</a>
           </td>
         </tr>`
       : "";
-    sectionsHtml.push(`<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 ${
-      idx === ordered.length - 1 ? "0" : "18px"
-    } 0;">
+    sectionsHtml.push(`<table role="presentation" width="100%" align="center" cellspacing="0" cellpadding="0" border="0" bgcolor="#0b1220" style="width:100%;background-color:#0b1220;">
       <tr>
         <td style="padding:0 0 8px 0;${headingBorder}">
           <${headingTag} style="margin:0;font-size:${headingSize};line-height:${headingLineHeight};font-weight:800;color:#f8fafc;font-family:${fonts.heading};">${escapeHtml(
@@ -22281,13 +22281,20 @@ function buildDeterministicEmailBuilderHtml(args: {
       )}" target="_blank" rel="noopener noreferrer" style="font-size:14px;line-height:18px;font-weight:700;color:#f8fafc;text-decoration:underline;">Find A Dealer →</a>`
     : "";
   const footerLine = [addressLine, phone].filter(Boolean).join(" | ");
-  return `<!doctype html><html><body style="margin:0;padding:0;background:#05070b;color:#e5e7eb;"><table data-lr-email-shell="1" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0;padding:0;background:#05070b;">
+  const sectionsMarkup = sectionsHtml.join(`
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#0b1220" style="width:100%;background-color:#0b1220;">
+                <tr><td height="18" style="height:18px;line-height:18px;font-size:0;">&nbsp;</td></tr>
+              </table>
+              `);
+  return `<!doctype html><html><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /></head><body bgcolor="#05070b" style="margin:0;padding:0;background-color:#05070b;color:#e5e7eb;">
+  <center style="width:100%;background-color:#05070b;">
+  <table data-lr-email-shell="1" role="presentation" width="100%" align="center" cellspacing="0" cellpadding="0" border="0" bgcolor="#05070b" style="margin:0;padding:0;background-color:#05070b;">
     <tr>
-      <td align="center" style="padding:22px 12px;">
-        <table role="presentation" width="700" cellspacing="0" cellpadding="0" border="0" style="width:700px;max-width:700px;background:#0b1220;border:1px solid #263143;border-radius:12px;overflow:hidden;">
+      <td align="center" valign="top" bgcolor="#05070b" style="padding:22px 12px;background-color:#05070b;">
+        <table role="presentation" width="640" align="center" cellspacing="0" cellpadding="0" border="0" bgcolor="#0b1220" style="width:640px;max-width:640px;margin:0 auto;background-color:#0b1220;border:1px solid #263143;border-radius:12px;overflow:hidden;">
           <tr>
-            <td style="padding:18px 20px;font-family:Arial,Helvetica,sans-serif;color:#e5e7eb;">
-              <table data-lr-required-header="1" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 16px 0;background:#0b1220;border-bottom:1px solid #263143;">
+            <td bgcolor="#0b1220" style="padding:18px 20px;font-family:Arial,Helvetica,sans-serif;color:#e5e7eb;background-color:#0b1220;">
+              <table data-lr-required-header="1" role="presentation" width="100%" align="center" cellspacing="0" cellpadding="0" border="0" bgcolor="#0b1220" style="margin:0 0 16px 0;background-color:#0b1220;border-bottom:1px solid #263143;">
                 <tr>
                   <td style="padding:16px 22px;">
                     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
@@ -22299,8 +22306,8 @@ function buildDeterministicEmailBuilderHtml(args: {
                   </td>
                 </tr>
               </table>
-              ${sectionsHtml.join("\n")}
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:8px;border-top:1px solid #263143;">
+              ${sectionsMarkup}
+              <table role="presentation" width="100%" align="center" cellspacing="0" cellpadding="0" border="0" bgcolor="#0b1220" style="margin-top:8px;border-top:1px solid #263143;background-color:#0b1220;">
                 <tr>
                   <td style="padding-top:12px;color:#94a3b8;font-size:12px;line-height:18px;font-family:Arial,Helvetica,sans-serif;">
                     <div style="font-weight:700;color:#e2e8f0;">${escapeHtml(dealerName)}</div>
@@ -22314,7 +22321,8 @@ function buildDeterministicEmailBuilderHtml(args: {
         </table>
       </td>
     </tr>
-  </table></body></html>`;
+  </table>
+  </center></body></html>`;
 }
 
 function campaignCreatorDisplayName(user: any): string | undefined {
