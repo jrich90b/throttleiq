@@ -1162,3 +1162,13 @@ When changing responses:
   - body source selection is now sanitized and ranked per section: summary -> generated base copy -> description -> prompt -> sms.
 - Purpose:
   - prevent malformed/plaintext serialization noise from appearing in rendered email body text.
+
+## Email Builder Save Sync (Text Edit Updates Preview)
+- In `apps/web/src/app/email-builder/page.tsx`:
+  - added client-side deterministic HTML sync helper that updates the first email section body copy from edited `Email draft (text)` when layout HTML was not manually changed.
+  - save flow now uses synced HTML payload in this case, so preview updates immediately after Save instead of appearing unchanged.
+  - preserves section info/footer lines while replacing main copy text.
+- In `services/api/src/index.ts` (`buildDeterministicEmailBuilderHtml(...)`):
+  - added section/body/info data markers (`data-lr-email-section`, `data-lr-email-section-body`, `data-lr-email-info`) to make safe text-sync targeting deterministic.
+- Purpose:
+  - make text-only edits reflect in preview without collapsing layout to plain-text HTML.

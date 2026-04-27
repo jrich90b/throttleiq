@@ -22303,7 +22303,7 @@ function buildDeterministicEmailBuilderHtml(args: {
       .filter(Boolean)
       .join("<br>");
     const infoLine = infoLineBits
-      ? `<div style="margin-top:10px;color:#cbd5e1;font-size:13px;line-height:19px;font-family:Arial,Helvetica,sans-serif;">${escapeHtml(
+      ? `<div data-lr-email-info="1" style="margin-top:10px;color:#cbd5e1;font-size:13px;line-height:19px;font-family:Arial,Helvetica,sans-serif;">${escapeHtml(
           infoLineBits
         ).replace(/\n/g, "<br>")}</div>`
       : "";
@@ -22316,7 +22316,7 @@ function buildDeterministicEmailBuilderHtml(args: {
           </td>
         </tr>`
       : "";
-    sectionsHtml.push(`<table role="presentation" width="100%" align="center" cellspacing="0" cellpadding="0" border="0" bgcolor="#0b1220" style="width:100%;background-color:#0b1220;">
+    sectionsHtml.push(`<table data-lr-email-section="1" role="presentation" width="100%" align="center" cellspacing="0" cellpadding="0" border="0" bgcolor="#0b1220" style="width:100%;background-color:#0b1220;">
       <tr>
         <td style="padding:0 0 8px 0;${headingBorder}">
           <${headingTag} style="margin:0;font-size:${headingSize};line-height:${headingLineHeight};font-weight:800;color:#f8fafc;font-family:${fonts.heading};">${escapeHtml(
@@ -22326,7 +22326,7 @@ function buildDeterministicEmailBuilderHtml(args: {
       </tr>
       ${imageBlock}
       <tr>
-        <td style="padding:0 0 10px 0;color:#e5e7eb;font-size:14px;line-height:21px;font-family:${fonts.body};">
+        <td data-lr-email-section-body="1" style="padding:0 0 10px 0;color:#e5e7eb;font-size:14px;line-height:21px;font-family:${fonts.body};">
           ${safeBody || "Reply for details."}
           ${infoLine}
         </td>

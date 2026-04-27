@@ -96,6 +96,40 @@ function toPreviewHtml(subject: string, html: string, text: string): string {
   return `<!doctype html><html><head><meta charset="utf-8" /><title>${safeSubject}</title></head><body style="font-family:Arial,Helvetica,sans-serif;padding:20px;white-space:pre-wrap;">${escaped}</body></html>`;
 }
 
+function escapeHtmlForEmail(value: string): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function syncDeterministicEmailHtmlFromText(html: string, text: string): string {
+  const rawHtml = String(html ?? "").trim();
+  const rawText = String(text ?? "").trim();
+  if (!rawHtml || !rawText) return rawHtml;
+  if (!/data-lr-email-shell/i.test(rawHtml) && !/data-lr-email-section/i.test(rawHtml)) return rawHtml;
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(rawHtml, "text/html");
+    const bodyCell =
+      (doc.querySelector("td[data-lr-email-section-body='1']") as HTMLTableCellElement | null) ||
+      (doc.querySelector("td[style*='color:#e5e7eb'][style*='line-height:21px']") as HTMLTableCellElement | null);
+    if (!bodyCell) return rawHtml;
+
+    const infoBlocks = Array.from(
+      bodyCell.querySelectorAll("[data-lr-email-info='1'], div[style*='color:#cbd5e1']")
+    ).map(node => (node as HTMLElement).outerHTML);
+
+    const copyHtml = escapeHtmlForEmail(rawText).replace(/\n/g, "<br>");
+    bodyCell.innerHTML = `${copyHtml}${infoBlocks.length ? `\n${infoBlocks.join("\n")}` : ""}`;
+
+    const rendered = doc.documentElement?.outerHTML ? `<!doctype html>${doc.documentElement.outerHTML}` : rawHtml;
+    return rendered;
+  } catch {
+    return rawHtml;
+  }
+}
+
 function parseCampaignUrlsText(raw: string): string[] {
   const text = String(raw ?? "").trim();
   if (!text) return [];
@@ -365,13 +399,22 @@ export default function EmailBuilderPage() {
       const htmlChanged = draftHtml !== selectedHtml;
       const textChanged = draftText !== selectedText;
 
+      let htmlForSave = emailHtml;
+      if (textChanged && !htmlChanged) {
+        const synced = syncDeterministicEmailHtmlFromText(draftHtml, draftText);
+        if (synced) {
+          htmlForSave = synced;
+          setEmailHtml(synced);
+        }
+      }
+
       const resp = await fetch(`/api/campaigns/${encodeURIComponent(selectedCampaignId)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           emailSubject: subject,
           emailBodyText: emailText,
-          emailBodyHtml: emailHtml,
+          emailBodyHtml: htmlForSave,
           channel: "email",
           assetTargets: ["email"]
         })
@@ -382,9 +425,8 @@ export default function EmailBuilderPage() {
       }
       const campaign = data.campaign as CampaignEntry;
       setCampaigns(prev => prev.map(row => (row.id === campaign.id ? campaign : row)));
-      if (!htmlChanged && textChanged) {
-        setNotice("Email saved. Layout HTML was preserved (text draft updated).");
-      } else setNotice("Email saved.");
+      if (!htmlChanged && textChanged) setNotice("Email saved. Preview updated from edited text.");
+      else setNotice("Email saved.");
     } catch (err: any) {
       setError(err?.message ?? "Failed to save email");
     } finally {
