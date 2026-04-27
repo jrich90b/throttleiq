@@ -8,6 +8,7 @@ DATA_DIR="${DATA_DIR:-/home/ubuntu/throttleiq-runtime/data}"
 CONVERSATIONS_DB_PATH="${CONVERSATIONS_DB_PATH:-$DATA_DIR/conversations.json}"
 REPORT_ROOT="${REPORT_ROOT:-/home/ubuntu/throttleiq-runtime/reports}"
 LANGUAGE_CORPUS_OUT_DIR="${LANGUAGE_CORPUS_OUT_DIR:-$REPORT_ROOT/language_corpus}"
+VOICE_FEEDBACK_OUT_DIR="${VOICE_FEEDBACK_OUT_DIR:-$REPORT_ROOT/voice_feedback}"
 DETERMINISTIC_TONE_RULES_PATH="${DETERMINISTIC_TONE_RULES_PATH:-$DATA_DIR/deterministic_tone_rules.json}"
 MANUAL_REPLY_EXAMPLES_PATH="${MANUAL_REPLY_EXAMPLES_PATH:-$DATA_DIR/manual_reply_examples.json}"
 LOG_DIR="${LOG_DIR:-$REPORT_ROOT/feedback_loop_logs}"
@@ -32,7 +33,7 @@ if [[ -f "$FEEDBACK_LOOP_ENV_PATH" ]]; then
   set +a
 fi
 
-mkdir -p "$REPORT_ROOT" "$LANGUAGE_CORPUS_OUT_DIR" "$LOG_DIR"
+mkdir -p "$REPORT_ROOT" "$LANGUAGE_CORPUS_OUT_DIR" "$VOICE_FEEDBACK_OUT_DIR" "$LOG_DIR"
 
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   echo "[feedback-hourly] skipped: another loop is already running (lock: $LOCK_DIR)"
@@ -71,6 +72,7 @@ restore_if_backup_exists() {
   echo "[feedback-hourly] CONVERSATIONS_DB_PATH=$CONVERSATIONS_DB_PATH"
   echo "[feedback-hourly] REPORT_ROOT=$REPORT_ROOT"
   echo "[feedback-hourly] LANGUAGE_CORPUS_OUT_DIR=$LANGUAGE_CORPUS_OUT_DIR"
+  echo "[feedback-hourly] VOICE_FEEDBACK_OUT_DIR=$VOICE_FEEDBACK_OUT_DIR"
   echo "[feedback-hourly] LANGUAGE_CORPUS_SINCE_HOURS=$LANGUAGE_CORPUS_SINCE_HOURS"
   echo "[feedback-hourly] DETERMINISTIC_TONE_RULES_PATH=$DETERMINISTIC_TONE_RULES_PATH"
   echo "[feedback-hourly] MANUAL_REPLY_EXAMPLES_PATH=$MANUAL_REPLY_EXAMPLES_PATH"
@@ -80,11 +82,14 @@ restore_if_backup_exists() {
   echo "[feedback-hourly] FAST_LOOP_RUN_LANGUAGE_SEED_EVAL=$FAST_LOOP_RUN_LANGUAGE_SEED_EVAL"
   echo "[feedback-hourly] FAST_LOOP_ROLLBACK_ON_EVAL_FAIL=$FAST_LOOP_ROLLBACK_ON_EVAL_FAIL"
 
-  export DATA_DIR CONVERSATIONS_DB_PATH LANGUAGE_CORPUS_OUT_DIR DETERMINISTIC_TONE_RULES_PATH MANUAL_REPLY_EXAMPLES_PATH
+  export DATA_DIR CONVERSATIONS_DB_PATH LANGUAGE_CORPUS_OUT_DIR VOICE_FEEDBACK_OUT_DIR DETERMINISTIC_TONE_RULES_PATH MANUAL_REPLY_EXAMPLES_PATH
   export LANGUAGE_CORPUS_SINCE_HOURS DETERMINISTIC_RULE_PROMOTE_MIN_COUNT MANUAL_REPLY_PROMOTE_MIN_COUNT MANUAL_REPLY_PROMOTE_MAX_PER_INTENT
 
   echo "[feedback-hourly] step=language_corpus_mine"
   npm run language_corpus:mine
+
+  echo "[feedback-hourly] step=voice_feedback_mine"
+  VOICE_FEEDBACK_SINCE_HOURS="${FAST_LOOP_SINCE_HOURS}" npm run voice_feedback:mine -- --out-dir "$VOICE_FEEDBACK_OUT_DIR"
 
   TONE_BACKUP_PATH="$BACKUP_DIR/deterministic_tone_rules.before.json"
   MANUAL_BACKUP_PATH="$BACKUP_DIR/manual_reply_examples.before.json"

@@ -133,6 +133,13 @@ Required order:
   - `few_shot_seed_negative_feedback.json` (thumbs-down / what not to say).
 - Language corpus mining also exports manual human outbound exemplars:
   - `few_shot_seed_manual_outbound.json` (inbound -> approved manual reply pairs).
+- Feedback loop now mines phone-call verbiage artifacts:
+  - `voice_feedback_summary.json` (voice transcript/summary volume + outbound provider stats),
+  - `voice_feedback_rows.json` (per-call transcript, LLM voice summary, and next customer-facing outbound).
+  - Nightly/hourly loops should run `voice_feedback:mine` so call language is visible in reports and available for training review.
+- Language-corpus mining guardrail for phone traffic:
+  - when inbound provider is `voice_transcript`, do not treat `voice_summary`/system artifacts as the “next outbound reply” training target.
+  - only customer-facing outbound providers (`draft_ai`, `human`, `twilio`, `sendgrid`) are valid pairing targets for few-shot mining.
 - Deterministic tone rules can now be auto-promoted from mined feedback artifacts:
   - `scripts/deterministic_rules_promote.ts` consumes manual-edit deltas + thumbs-down seeds,
   - writes runtime rules to `DATA_DIR/deterministic_tone_rules.json` (or `DETERMINISTIC_TONE_RULES_PATH`),

@@ -190,6 +190,14 @@ function findNextOutbound(messages: AnyObj[], fromIndex: number): AnyObj | null 
   return null;
 }
 
+function isTrainingOutboundProvider(provider: unknown): boolean {
+  const p = String(provider ?? "")
+    .trim()
+    .toLowerCase();
+  if (!p) return false;
+  return p === "draft_ai" || p === "human" || p === "twilio" || p === "sendgrid";
+}
+
 function outboundFeedbackDetails(msg: AnyObj): {
   rating: "up" | "down" | null;
   reason: string | null;
@@ -316,34 +324,50 @@ function run() {
       patterns.set(patternKey, existing);
 
       if (direction !== "in") continue;
-      const nextOutbound = findNextOutbound(messages, i);
+      const inboundProvider = String(msg?.provider ?? "")
+        .trim()
+        .toLowerCase();
+      const nextOutboundRaw = findNextOutbound(messages, i);
+      let nextOutbound = nextOutboundRaw;
+      if (nextOutboundRaw && !isTrainingOutboundProvider(nextOutboundRaw?.provider)) {
+        nextOutbound = null;
+        for (let j = i + 1; j < messages.length; j += 1) {
+          const out = messages[j];
+          if (String(out?.direction ?? "").toLowerCase() !== "out") continue;
+          if (!isTrainingOutboundProvider(out?.provider)) continue;
+          nextOutbound = out;
+          break;
+        }
+      }
       if (!nextOutbound) {
-        withNoOutboundInWindow += 1;
-        fewShotCandidates.push({
-          id: buildCandidateId(convId, atIso, "slow_or_missing_response"),
-          kind: "slow_or_missing_response",
-          severity: "medium",
-          reason: "no outbound after inbound",
-          convId,
-          leadRef,
-          leadName,
-          leadPhone,
-          inboundAt: atIso,
-          inboundText: body,
-          observedDraft: "",
-          observedProvider: "",
-          observedAt: "",
-          finalIfEdited: null,
-          followUpMode: String(conv?.followUp?.mode ?? "") || null,
-          followUpReason: String(conv?.followUp?.reason ?? "") || null,
-          dialogState: String(conv?.dialogState?.name ?? "") || null,
-          classificationBucket: String(conv?.classification?.bucket ?? "") || null,
-          classificationCta: String(conv?.classification?.cta ?? "") || null,
-          invariantExpectedReason: null,
-          feedbackRating: null,
-          feedbackReason: null,
-          feedbackNote: null
-        });
+        if (inboundProvider !== "voice_transcript") {
+          withNoOutboundInWindow += 1;
+          fewShotCandidates.push({
+            id: buildCandidateId(convId, atIso, "slow_or_missing_response"),
+            kind: "slow_or_missing_response",
+            severity: "medium",
+            reason: "no outbound after inbound",
+            convId,
+            leadRef,
+            leadName,
+            leadPhone,
+            inboundAt: atIso,
+            inboundText: body,
+            observedDraft: "",
+            observedProvider: "",
+            observedAt: "",
+            finalIfEdited: null,
+            followUpMode: String(conv?.followUp?.mode ?? "") || null,
+            followUpReason: String(conv?.followUp?.reason ?? "") || null,
+            dialogState: String(conv?.dialogState?.name ?? "") || null,
+            classificationBucket: String(conv?.classification?.bucket ?? "") || null,
+            classificationCta: String(conv?.classification?.cta ?? "") || null,
+            invariantExpectedReason: null,
+            feedbackRating: null,
+            feedbackReason: null,
+            feedbackNote: null
+          });
+        }
         continue;
       }
 

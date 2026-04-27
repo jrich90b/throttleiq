@@ -27,6 +27,7 @@
     "conversation_replay:eval": "npx tsx scripts/conversation_replay_eval.ts",
     "route_watchdog:run": "npx tsx scripts/route_audit_watchdog.ts",
     "language_corpus:mine": "npx tsx scripts/language_corpus_mine.ts",
+    "voice_feedback:mine": "npx tsx scripts/voice_feedback_mine.ts",
     "deterministic_rules:promote": "npx tsx scripts/deterministic_rules_promote.ts",
     "manual_outbound:promote": "npx tsx scripts/manual_outbound_promote.ts",
     "language_seed:eval": "npx tsx scripts/language_seed_fixture_eval.ts",
