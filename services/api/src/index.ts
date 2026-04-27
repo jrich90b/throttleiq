@@ -21866,25 +21866,109 @@ function campaignLooksLikeImageUrl(raw: unknown): boolean {
   return /\.(png|jpe?g|webp|gif|avif|bmp|svg)(\?.*)?$/i.test(value);
 }
 
+function campaignImageFilenameHint(rawUrl: string): string {
+  const value = String(rawUrl ?? "").trim();
+  if (!value) return "";
+  const withoutQuery = value.split("?")[0]?.split("#")[0] ?? "";
+  const tail = withoutQuery.split("/").filter(Boolean).pop() ?? "";
+  try {
+    return decodeURIComponent(tail).toLowerCase();
+  } catch {
+    return tail.toLowerCase();
+  }
+}
+
+function campaignKeywordTokens(entry: CampaignEntry): string[] {
+  const source = [entry.name, entry.prompt, entry.description]
+    .map(v => String(v ?? "").toLowerCase())
+    .join(" ")
+    .replace(/[^a-z0-9]+/g, " ");
+  if (!source) return [];
+  const stop = new Set([
+    "the",
+    "and",
+    "for",
+    "with",
+    "from",
+    "that",
+    "this",
+    "your",
+    "our",
+    "american",
+    "harley",
+    "davidson",
+    "campaign",
+    "event",
+    "sale"
+  ]);
+  return Array.from(
+    new Set(
+      source
+        .split(/\s+/)
+        .map(v => v.trim())
+        .filter(v => v.length >= 3 && !stop.has(v))
+    )
+  ).slice(0, 24);
+}
+
+function campaignImageMatchScore(url: string, tokens: string[]): number {
+  const haystack = `${String(url ?? "").toLowerCase()} ${campaignImageFilenameHint(url)}`;
+  if (!haystack) return -1;
+  let score = 0;
+  for (const token of tokens) {
+    if (!token) continue;
+    if (haystack.includes(token)) score += token.length >= 7 ? 3 : 2;
+  }
+  if (/\b(test[_\-\s]?ride|mothers?|mother[_\-\s]?day|country|pre[_\-\s]?party|taste)\b/.test(haystack)) {
+    score += 1;
+  }
+  if (/\b(logo|badge|wordmark|icon|emblem|mark)\b/.test(haystack)) {
+    score -= 4;
+  }
+  return score;
+}
+
 function campaignPrimaryImageForEmailLocker(entry: CampaignEntry | null | undefined): string {
   if (!entry) return "";
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const push = (raw: unknown) => {
+    const url = String(raw ?? "").trim();
+    if (!campaignLooksLikeImageUrl(url)) return;
+    if (seen.has(url)) return;
+    seen.add(url);
+    candidates.push(url);
+  };
   const generatedAssets = Array.isArray(entry.generatedAssets) ? entry.generatedAssets : [];
   for (const target of EMAIL_LOCKER_IMAGE_TARGET_PRIORITY) {
-    const match = generatedAssets.find(asset => {
+    const matches = generatedAssets.filter(asset => {
       const assetTarget = String(asset?.target ?? "").trim();
       const assetUrl = String(asset?.url ?? "").trim();
       return assetTarget === target && campaignLooksLikeImageUrl(assetUrl);
     });
-    if (match?.url) return String(match.url).trim();
+    for (const match of matches) push(match?.url);
   }
-  const finalImageUrl = String(entry.finalImageUrl ?? "").trim();
-  if (campaignLooksLikeImageUrl(finalImageUrl)) return finalImageUrl;
+  push(entry.finalImageUrl);
   const inspiration = Array.isArray(entry.inspirationImageUrls) ? entry.inspirationImageUrls : [];
   for (const raw of inspiration) {
-    const url = String(raw ?? "").trim();
-    if (campaignLooksLikeImageUrl(url)) return url;
+    push(raw);
   }
-  return "";
+  if (!candidates.length) return "";
+  const tokens = campaignKeywordTokens(entry);
+  if (tokens.length) {
+    let bestUrl = candidates[0];
+    let bestScore = campaignImageMatchScore(bestUrl, tokens);
+    for (let i = 1; i < candidates.length; i += 1) {
+      const score = campaignImageMatchScore(candidates[i], tokens);
+      if (score > bestScore) {
+        bestScore = score;
+        bestUrl = candidates[i];
+      }
+    }
+    if (bestScore > 0) return bestUrl;
+  }
+  const firstNonLogo = candidates.find(url => !/\b(logo|badge|wordmark|icon|emblem|mark)\b/.test(campaignImageFilenameHint(url)));
+  return firstNonLogo || candidates[0];
 }
 
 function campaignLockerTextSummary(entry: CampaignEntry): string {

@@ -1102,3 +1102,12 @@ When changing responses:
   - added explicit layout directive requiring `~18-24px` vertical spacing between campaign sections.
 - Purpose:
   - prevent campaign blocks from visually collapsing together in preview and exported HTML.
+
+## Email Builder Campaign Mapping + Secondary Header Strip
+- In `services/api/src/index.ts`:
+  - `campaignPrimaryImageForEmailLocker(...)` now ranks candidate images against campaign name/prompt/description tokens (with penalties for logo/icon-like assets) before selecting primary image.
+  - this improves per-campaign image-to-copy alignment when campaigns have mixed historical assets.
+- In `services/api/src/domain/campaignBuilder.ts`:
+  - normalization now strips secondary utility top blocks immediately after the required header when they include small image + dealer-link text (e.g., `Visit us online`) to prevent campaign art from appearing in pseudo-header rows.
+- Purpose:
+  - keep each campaign’s corresponding visual/font context aligned and prevent base campaign image drift into header-adjacent utility rows.

@@ -1266,6 +1266,32 @@ function stripCompetingGeneratedHeaderBlocks(html: string): string {
   return out;
 }
 
+function stripSecondaryTopUtilityBlock(html: string): string {
+  let out = String(html ?? "");
+  if (!out) return out;
+  const removeOne = (input: string): string => {
+    const requiredHeaderMatch = input.match(/<table\b[^>]*data-lr-required-header[\s\S]*?<\/table>/i);
+    if (!requiredHeaderMatch || requiredHeaderMatch.index === undefined) return input;
+    const headerEnd = requiredHeaderMatch.index + requiredHeaderMatch[0].length;
+    const after = input.slice(headerEnd);
+    const blockMatch = after.match(/^\s*(<(?:table|div)\b[\s\S]{0,3200}?<\/(?:table|div)>)/i);
+    if (!blockMatch?.[1]) return input;
+    const block = blockMatch[1];
+    const lower = block.toLowerCase();
+    if (!/<img\b/i.test(lower)) return input;
+    if (/<h[1-6]\b/i.test(lower)) return input;
+    if (!/(visit us online|visit dealer site|visit american harley|find a dealer|visit our site|visit dealer)/i.test(lower)) {
+      return input;
+    }
+    const plain = htmlToPlainText(block);
+    if (plain.length > 180) return input;
+    return input.slice(0, headerEnd) + after.replace(block, "");
+  };
+  const once = removeOne(out);
+  out = removeOne(once);
+  return out;
+}
+
 function stripAdditionalVisualsBlocks(html: string): string {
   let out = String(html ?? "");
   if (!out) return out;
@@ -1467,6 +1493,7 @@ function normalizeGeneratedEmailHtml(
     html = html.replace(/<body[^>]*>/i, match => `${match}${requiredHeader}`);
   }
   html = stripCompetingGeneratedHeaderBlocks(html);
+  html = stripSecondaryTopUtilityBlock(html);
   html = ensureEmailShellLayout(html);
   html = enforceEmailTextContrast(html);
   html = enforceEmailCampaignSectionSpacing(html);
