@@ -3239,8 +3239,6 @@ export function parseRequestedDayTime(
   const now = new Date();
   const nowParts = getZonedParts(now, timeZone);
   const todayIdx = weekdayIndex((nowParts.weekday ?? "").slice(0, 3));
-
-  let target = dayToken;
   let base = new Date(Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day, 12, 0));
 
   if (dayToken === "today" || dayToken === "tomorrow") {
@@ -3259,11 +3257,9 @@ export function parseRequestedDayTime(
 
   const targetIdx = weekdayIndex(dayToken.slice(0, 3));
   if (targetIdx < 0 || todayIdx < 0) return null;
-
-  let delta = (targetIdx - todayIdx + 7) % 7;
-  // If they name a weekday and it's today, assume they mean next week (not today)
-  if (delta === 0) delta = 7;
-  base.setUTCDate(base.getUTCDate() + delta);
+  let offset = (targetIdx - todayIdx + 7) % 7;
+  if (offset === 0) offset = 7;
+  base.setUTCDate(base.getUTCDate() + offset);
   const parts = getZonedParts(base, timeZone);
 
   return {
@@ -3272,7 +3268,77 @@ export function parseRequestedDayTime(
     day: parts.day,
     hour24: time.hour24,
     minute: time.minute,
-    dayOfWeek: target
+    dayOfWeek: weekdayFull((parts.weekday ?? "").slice(0, 3))
+  };
+}
+
+export function parseRequestedDateOnly(
+  text: string,
+  timeZone: string
+): { year: number; month: number; day: number; dayOfWeek: string } | null {
+  const t = String(text ?? "").toLowerCase();
+  const explicitDate = parseExplicitDate(t);
+  if (explicitDate) {
+    const explicitYearProvided =
+      /\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b/.test(t) ||
+      /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s*)\d{2,4}\b/i.test(
+        t
+      ) ||
+      /\b\d{1,2}(?:st|nd|rd|th)?\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:,?\s*)\d{2,4}\b/i.test(
+        t
+      );
+    let year = explicitDate.year;
+    if (!explicitYearProvided) {
+      const now = new Date();
+      const nowParts = getZonedParts(now, timeZone);
+      if (
+        explicitDate.month < nowParts.month ||
+        (explicitDate.month === nowParts.month && explicitDate.day < nowParts.day)
+      ) {
+        year += 1;
+      }
+    }
+    const base = new Date(Date.UTC(year, explicitDate.month - 1, explicitDate.day, 12, 0));
+    const parts = getZonedParts(base, timeZone);
+    return {
+      year,
+      month: explicitDate.month,
+      day: explicitDate.day,
+      dayOfWeek: weekdayFull((parts.weekday ?? "").slice(0, 3))
+    };
+  }
+
+  const dayToken = parseDayToken(t);
+  if (!dayToken) return null;
+
+  const now = new Date();
+  const nowParts = getZonedParts(now, timeZone);
+  const todayIdx = weekdayIndex((nowParts.weekday ?? "").slice(0, 3));
+  let base = new Date(Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day, 12, 0));
+
+  if (dayToken === "today" || dayToken === "tomorrow") {
+    const offset = dayToken === "tomorrow" ? 1 : 0;
+    base.setUTCDate(base.getUTCDate() + offset);
+    const parts = getZonedParts(base, timeZone);
+    return {
+      year: parts.year,
+      month: parts.month,
+      day: parts.day,
+      dayOfWeek: weekdayFull((parts.weekday ?? "").slice(0, 3))
+    };
+  }
+
+  const targetIdx = weekdayIndex(dayToken.slice(0, 3));
+  if (targetIdx < 0 || todayIdx < 0) return null;
+  let offset = (targetIdx - todayIdx + 7) % 7;
+  if (offset === 0) offset = 7;
+  base.setUTCDate(base.getUTCDate() + offset);
+  const parts = getZonedParts(base, timeZone);
+  return {
+    year: parts.year,
+    month: parts.month,
+    day: parts.day,
+    dayOfWeek: weekdayFull((parts.weekday ?? "").slice(0, 3))
   };
 }
 

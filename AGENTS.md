@@ -1202,3 +1202,14 @@ When changing responses:
   - draft text remains internal/auto-derived for send fallback, but user-facing workflow is now HTML-first to avoid confusion.
 - Purpose:
   - prevent prompts from being pasted literally into email body and keep main-campaign detail copy clean and deterministic.
+
+## Scheduling Date-Only Guardrail (Live + Regenerate)
+- In `services/api/src/domain/conversationStore.ts`:
+  - added `parseRequestedDateOnly(...)` to parse date-only scheduling language (for example `May 7th`, `5/7`, `tomorrow`, weekday names) without requiring a time token.
+  - includes rollover handling when user gives month/day without year and that date already passed this year.
+- In `services/api/src/index.ts`:
+  - deterministic slot-offer flow now applies a scheduling window floor from date-only requests, so offers start on/after the requested date instead of defaulting to same-day openings.
+  - regenerate visit-timing quick-path now also resolves date-only requests and uses them in reply phrasing.
+  - strengthened `parseFutureTimeframe(...)` month-day parsing to support ordinal day tokens (`May 7th`) and produce exact date anchors.
+- Purpose:
+  - prevent responses like `I have Mon, Apr 27...` when customer says they are unavailable until a future date, and keep regenerate behavior aligned.

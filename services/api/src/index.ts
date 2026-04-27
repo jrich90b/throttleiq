@@ -189,6 +189,7 @@ import {
   confirmAppointmentIfMatchesSuggested,
   setRequestedTime,
   parseRequestedDayTime,
+  parseRequestedDateOnly,
   startFollowUpCadence,
   pauseFollowUpCadence,
   stopFollowUpCadence,
@@ -10099,6 +10100,23 @@ function parseFutureTimeframe(text: string, base: Date): { label: string; until?
     may: 4, jun: 5, june: 5, jul: 6, july: 6, aug: 7, august: 7, sep: 8, sept: 8, september: 8,
     oct: 9, october: 9, nov: 10, november: 10, dec: 11, december: 11
   };
+  const explicitMonthDay = t.match(
+    /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(\d{4}))?\b/
+  );
+  if (explicitMonthDay) {
+    const month = monthMap[explicitMonthDay[1]];
+    const day = Number(explicitMonthDay[2]);
+    if (Number.isFinite(month) && Number.isFinite(day) && day >= 1 && day <= 31) {
+      const explicitYear = explicitMonthDay[3] ? Number(explicitMonthDay[3]) : null;
+      let year = explicitYear ?? base.getFullYear();
+      let d = new Date(year, month, day, 9, 0, 0, 0);
+      if (!explicitYear && d.getTime() <= base.getTime()) {
+        d = new Date(year + 1, month, day, 9, 0, 0, 0);
+      }
+      const label = `${explicitMonthDay[1]} ${day}`;
+      return { label, until: d };
+    }
+  }
   const monthMatch = t.match(
     /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/
   );
@@ -10106,7 +10124,7 @@ function parseFutureTimeframe(text: string, base: Date): { label: string; until?
     const monthKey = monthMatch[1];
     if (monthKey === "may") {
       const explicitMonth =
-        /\bmay\s+\d{1,2}\b/.test(t) ||
+        /\bmay\s+\d{1,2}(?:st|nd|rd|th)?\b/.test(t) ||
         /\b(in|this|next|on|by|during|around|early|late)\s+may\b/.test(t);
       if (!explicitMonth) return null;
     }
@@ -10207,6 +10225,28 @@ function nextWeekdayDate(base: Date, weekday: number): Date {
     d.setDate(d.getDate() + 7);
   }
   return d;
+}
+
+function resolveRequestedDateFloor(args: {
+  text: string;
+  timeZone: string;
+}): { floorUtc: Date; label: string } | null {
+  const parsed = parseRequestedDateOnly(args.text, args.timeZone);
+  if (!parsed) return null;
+  const floorUtc = localPartsToUtcDate(args.timeZone, {
+    year: parsed.year,
+    month: parsed.month,
+    day: parsed.day,
+    hour24: 0,
+    minute: 0
+  });
+  const label = new Intl.DateTimeFormat("en-US", {
+    timeZone: args.timeZone,
+    weekday: "short",
+    month: "short",
+    day: "numeric"
+  }).format(floorUtc);
+  return { floorUtc, label };
 }
 
 function parseDayOfWeek(text: string): { day: string; date: Date } | null {
@@ -28312,11 +28352,21 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       const requestedDayPart = extractDayPart(event.body ?? "");
       const requestedTimeToken = extractTimeToken(String(event.body ?? ""));
       const requestedDayLabelRaw = requestedDay?.day ?? "";
+      const requestedDateFloor = !requestedDayLabelRaw
+        ? resolveRequestedDateFloor({
+            text: String(event.body ?? ""),
+            timeZone: regenTz
+          })
+        : null;
       const inferredPromptDay =
         !requestedDayLabelRaw && requestedTimeToken
           ? inferDayTokenFromRecentTimePrompt(lastOutboundText, conv.scheduler?.lastSuggestedSlots ?? [])
           : null;
-      const requestedDayLabel = requestedDayLabelRaw || inferredPromptDay || "";
+      const requestedDayLabel =
+        requestedDayLabelRaw ||
+        requestedDateFloor?.label ||
+        inferredPromptDay ||
+        "";
       const timePrompt = requestedDayPart
         ? `What time on ${requestedDayLabel} works best for you?`
         : requestedTimeToken
@@ -35403,10 +35453,14 @@ if (authToken && signature) {
         const schedulerConfigStartedAt = Date.now();
         const cfg = await getSchedulerConfigHot();
         logRouteTiming("scheduler.config", schedulerConfigStartedAt);
-        const requested = parseRequestedDayTime(
-          bookingParseText || String(event.body ?? ""),
-          cfg.timezone
-        );
+        const schedulingText = bookingParseText || String(event.body ?? "");
+        const requested = parseRequestedDayTime(schedulingText, cfg.timezone);
+        const requestedDateFloor = !requested
+          ? resolveRequestedDateFloor({
+              text: schedulingText,
+              timeZone: cfg.timezone
+            })
+          : null;
         if (requested) {
           console.log("[deterministic-offer] skip explicit day/time request");
           // Let orchestrator/exact-booking handle explicit day+time requests.
@@ -35420,8 +35474,12 @@ if (authToken && signature) {
 
         const cal = await getAuthedCalendarClient();
         const now = new Date();
-        const timeMin = new Date(now).toISOString();
-        const timeMax = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString();
+        const windowStart =
+          requestedDateFloor?.floorUtc && requestedDateFloor.floorUtc.getTime() > now.getTime()
+            ? requestedDateFloor.floorUtc
+            : now;
+        const timeMin = new Date(windowStart).toISOString();
+        const timeMax = new Date(windowStart.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString();
 
         let bestSlots: any[] = [];
         for (const salespersonId of preferredSalespeople) {
@@ -35430,7 +35488,7 @@ if (authToken && signature) {
           const fb = await queryFreeBusy(cal, [sp.calendarId], timeMin, timeMax, cfg.timezone);
           const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any;
           const expanded = expandBusyBlocks(busy, gapMinutes);
-          const candidatesByDay = generateCandidateSlots(cfg, now, durationMinutes, 14);
+          const candidatesByDay = generateCandidateSlots(cfg, windowStart, durationMinutes, 14);
           const slots = pickSlotsForSalesperson(
             cfg,
             sp.id,
@@ -35557,6 +35615,9 @@ if (authToken && signature) {
           );
           const lastOutboundTextOffer = getLastNonVoiceOutbound(conv)?.body ?? "";
           let reply = `I have ${bestSlots[0].startLocal} or ${bestSlots[1].startLocal} — do any of these times work?`;
+          if (requestedDateFloor?.label) {
+            reply = `I have openings starting ${requestedDateFloor.label}: ${bestSlots[0].startLocal} or ${bestSlots[1].startLocal} — do any of these times work?`;
+          }
           reply = applySlotOfferPolicy(conv, reply, lastOutboundTextOffer);
           if (isSlotOfferMessage(reply)) {
             if (llmTestRideIntent) {
