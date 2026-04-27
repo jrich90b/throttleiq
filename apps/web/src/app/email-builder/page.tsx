@@ -148,9 +148,12 @@ export default function EmailBuilderPage() {
   const [subject, setSubject] = useState("");
   const [emailText, setEmailText] = useState("");
   const [emailHtml, setEmailHtml] = useState("");
+  const [sendTo, setSendTo] = useState("");
+  const [testTo, setTestTo] = useState("");
 
   const [generating, setGenerating] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [sending, setSending] = useState<"" | "live" | "test">("");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -386,6 +389,50 @@ export default function EmailBuilderPage() {
       setError(err?.message ?? "Failed to save email");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function sendEmailNow(mode: "live" | "test") {
+    if (!selectedCampaignId) {
+      setError("Select a campaign.");
+      return;
+    }
+    const recipient = String(mode === "test" ? testTo : sendTo).trim();
+    if (!recipient) {
+      setError(mode === "test" ? "Enter a test email address." : "Enter a recipient email address.");
+      return;
+    }
+    setSending(mode);
+    setError(null);
+    setNotice(null);
+    try {
+      const resp = await fetch("/api/campaigns/email/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaignId: selectedCampaignId,
+          to: recipient,
+          test: mode === "test",
+          subject,
+          emailBodyText: emailText,
+          emailBodyHtml: emailHtml
+        })
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.ok) {
+        throw new Error(data?.details || data?.error || "Failed to send email");
+      }
+      const sentTo = String(data?.to ?? recipient);
+      const sentSubject = String(data?.subject ?? subject).trim();
+      setNotice(
+        `${mode === "test" ? "Test email sent" : "Email sent"} to ${sentTo}${sentSubject ? ` • Subject: ${sentSubject}` : ""}`
+      );
+      if (mode === "live") setSendTo(sentTo);
+      if (mode === "test") setTestTo(sentTo);
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to send email");
+    } finally {
+      setSending("");
     }
   }
 
@@ -679,6 +726,49 @@ export default function EmailBuilderPage() {
               >
                 Download HTML
               </button>
+            </div>
+
+            <div className="border border-white/20 rounded p-3 bg-[#0a1020] space-y-3">
+              <div className="text-xs font-semibold text-gray-200">Send Email</div>
+              <label className="block text-xs text-gray-300">
+                Recipient email
+                <div className="mt-1 flex flex-wrap gap-2">
+                  <input
+                    className="flex-1 min-w-[260px] border border-white/20 bg-[#070c17] rounded px-2.5 py-2 text-sm"
+                    placeholder="customer@example.com"
+                    value={sendTo}
+                    onChange={e => setSendTo(e.target.value)}
+                  />
+                  <button
+                    className="px-3 py-2 rounded bg-[#f28c28] text-[#111] text-sm font-semibold disabled:opacity-50"
+                    disabled={sending !== "" || !selectedCampaignId}
+                    onClick={() => void sendEmailNow("live")}
+                  >
+                    {sending === "live" ? "Sending..." : "Send Email"}
+                  </button>
+                </div>
+              </label>
+              <label className="block text-xs text-gray-300">
+                Test email
+                <div className="mt-1 flex flex-wrap gap-2">
+                  <input
+                    className="flex-1 min-w-[260px] border border-white/20 bg-[#070c17] rounded px-2.5 py-2 text-sm"
+                    placeholder="you@example.com"
+                    value={testTo}
+                    onChange={e => setTestTo(e.target.value)}
+                  />
+                  <button
+                    className="px-3 py-2 rounded border border-white/25 text-sm hover:bg-white/10 disabled:opacity-50"
+                    disabled={sending !== "" || !selectedCampaignId}
+                    onClick={() => void sendEmailNow("test")}
+                  >
+                    {sending === "test" ? "Sending..." : "Send Test"}
+                  </button>
+                </div>
+                <div className="mt-1 text-[11px] text-gray-400">
+                  Test sends use the same HTML and text from this editor and prefix subject with <span className="font-mono">[TEST]</span>.
+                </div>
+              </label>
             </div>
 
             <label className="block text-xs text-gray-300">

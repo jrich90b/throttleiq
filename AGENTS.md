@@ -1118,3 +1118,27 @@ When changing responses:
   - when only `Email draft (text)` changes, save updates text while keeping HTML preview/layout intact; notice clarifies layout was preserved.
 - Purpose:
   - avoid accidental conversion of rich email layout into plain text while still allowing text-draft edits to be saved.
+
+## Email Builder Deterministic Regenerate Layout
+- In `services/api/src/index.ts` (`/campaigns/email/generate`):
+  - added deterministic HTML renderer for Email Builder output so regenerate always lands on the same dark-shell structure with required dealer header.
+  - output now enforces one section per selected campaign context block (base + locker selection), with stable per-section image mapping and cross-section dedupe when alternates exist.
+  - section typography now follows campaign-style hints (vintage/western -> serif, modern/performance -> sans) to keep copy style aligned with paired creative.
+  - added consistent CTA button injection with URL/intent-aware labels (e.g., `Book a test ride`, `View offers`, `Apply for credit`) when applicable.
+  - removed dependence on model-produced HTML layout for this route; model text/subject still feed content, but final HTML shell/section structure is deterministic.
+- Purpose:
+  - eliminate regenerate drift and keep Email Builder output visually consistent run-to-run.
+
+## Email Builder Send + Send Test Wiring
+- In `services/api/src/index.ts`:
+  - added `POST /campaigns/email/send` (manager auth) to send current Email Builder content through SendGrid.
+  - supports both live send and test send via payload flag `test: true` (subject is prefixed with `[TEST]`).
+  - uses current editor values (`subject`, `emailBodyText`, `emailBodyHtml`) with campaign fallback and stores last-send metadata on the campaign.
+- In `apps/web/src/app/api/campaigns/email/send/route.ts`:
+  - added Next API proxy route to forward authenticated requests from web to API.
+- In `apps/web/src/app/email-builder/page.tsx`:
+  - added `Recipient email + Send Email` action.
+  - added separate `Test email + Send Test` action.
+  - both actions send directly from the Email Builder screen using the current edited HTML/text draft.
+- Purpose:
+  - allow direct send workflows from Email Builder without leaving the screen and support safe test sends before live delivery.

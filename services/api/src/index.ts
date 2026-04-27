@@ -276,7 +276,7 @@ import {
   type CampaignGeneratedAsset,
   type CampaignTag
 } from "./domain/campaignStore.js";
-import { generateCampaignContent, normalizeCampaignEmailHtml } from "./domain/campaignBuilder.js";
+import { generateCampaignContent } from "./domain/campaignBuilder.js";
 import {
   clearMetaIntegrationRecord,
   getMetaIntegrationRecord,
@@ -21928,8 +21928,8 @@ function campaignImageMatchScore(url: string, tokens: string[]): number {
   return score;
 }
 
-function campaignPrimaryImageForEmailLocker(entry: CampaignEntry | null | undefined): string {
-  if (!entry) return "";
+function campaignImageCandidatesForEmailLocker(entry: CampaignEntry | null | undefined): string[] {
+  if (!entry) return [];
   const candidates: string[] = [];
   const seen = new Set<string>();
   const push = (raw: unknown) => {
@@ -21950,25 +21950,30 @@ function campaignPrimaryImageForEmailLocker(entry: CampaignEntry | null | undefi
   }
   push(entry.finalImageUrl);
   const inspiration = Array.isArray(entry.inspirationImageUrls) ? entry.inspirationImageUrls : [];
-  for (const raw of inspiration) {
-    push(raw);
-  }
-  if (!candidates.length) return "";
+  for (const raw of inspiration) push(raw);
+  if (!candidates.length) return [];
   const tokens = campaignKeywordTokens(entry);
-  if (tokens.length) {
-    let bestUrl = candidates[0];
-    let bestScore = campaignImageMatchScore(bestUrl, tokens);
-    for (let i = 1; i < candidates.length; i += 1) {
-      const score = campaignImageMatchScore(candidates[i], tokens);
-      if (score > bestScore) {
-        bestScore = score;
-        bestUrl = candidates[i];
-      }
-    }
-    if (bestScore > 0) return bestUrl;
+  if (!tokens.length) {
+    const nonLogo = candidates.filter(
+      url => !/\b(logo|badge|wordmark|icon|emblem|mark)\b/.test(campaignImageFilenameHint(url))
+    );
+    return nonLogo.length ? [...nonLogo, ...candidates.filter(url => !nonLogo.includes(url))] : candidates;
   }
-  const firstNonLogo = candidates.find(url => !/\b(logo|badge|wordmark|icon|emblem|mark)\b/.test(campaignImageFilenameHint(url)));
-  return firstNonLogo || candidates[0];
+  const scored = candidates.map((url, idx) => ({ url, idx, score: campaignImageMatchScore(url, tokens) }));
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return a.idx - b.idx;
+  });
+  return scored.map(row => row.url);
+}
+
+function campaignPrimaryImageForEmailLocker(entry: CampaignEntry | null | undefined): string {
+  const candidates = campaignImageCandidatesForEmailLocker(entry);
+  if (!candidates.length) return "";
+  const firstNonLogo = candidates.find(
+    url => !/\b(logo|badge|wordmark|icon|emblem|mark)\b/.test(campaignImageFilenameHint(url))
+  );
+  return firstNonLogo || candidates[0] || "";
 }
 
 function campaignLockerTextSummary(entry: CampaignEntry): string {
@@ -22038,6 +22043,278 @@ function buildEmailLockerContextBlock(entries: CampaignEntry[]): string {
     "",
     ...blocks.map((block, idx) => `Block ${idx + 1}\n${block}`)
   ].join("\n\n");
+}
+
+function extractHttpUrlsFromText(raw: string): string[] {
+  const text = String(raw ?? "").trim();
+  if (!text) return [];
+  const matches = text.match(/https?:\/\/[^\s<>"'`]+/gi) ?? [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const match of matches) {
+    const cleaned = String(match ?? "").trim().replace(/[),.;!?]+$/g, "");
+    const normalized = normalizeHttpUrl(cleaned);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+}
+
+function compactEmailCopy(raw: string, maxChars = 420): string {
+  let text = String(raw ?? "")
+    .replace(/\r/g, "")
+    .replace(/\t/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ ]{2,}/g, " ")
+    .trim();
+  if (!text) return "";
+  text = text
+    .replace(/^\{[\s\S]*\}$/g, "")
+    .replace(/\b(data-lr-[a-z0-9_-]+)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "";
+  if (text.length <= maxChars) return text;
+  const truncated = text.slice(0, maxChars);
+  const boundary = Math.max(truncated.lastIndexOf("."), truncated.lastIndexOf("!"), truncated.lastIndexOf("?"));
+  if (boundary >= Math.floor(maxChars * 0.55)) return `${truncated.slice(0, boundary + 1).trim()}`;
+  return `${truncated.trim()}...`;
+}
+
+function dealerAddressLineForEmail(profile: any): string {
+  const street = String(profile?.address ?? profile?.street ?? "").trim();
+  const city = String(profile?.city ?? "").trim();
+  const state = String(profile?.state ?? "").trim();
+  const zip = String(profile?.zip ?? profile?.postalCode ?? "").trim();
+  const cityStateZip = [city, state].filter(Boolean).join(", ");
+  const locality = [cityStateZip, zip].filter(Boolean).join(" ");
+  return [street, locality].filter(Boolean).join(", ");
+}
+
+function emailSectionFontFamilies(entry: CampaignEntry): { heading: string; body: string } {
+  const hint = campaignTypographyHint(entry).toLowerCase();
+  if (hint.includes("vintage") || hint.includes("western") || hint.includes("serif")) {
+    return {
+      heading: "Georgia, 'Times New Roman', Times, serif",
+      body: "Georgia, 'Times New Roman', Times, serif"
+    };
+  }
+  return {
+    heading: "Arial, Helvetica, sans-serif",
+    body: "Arial, Helvetica, sans-serif"
+  };
+}
+
+function inferEmailCtaLabel(url: string, contextText: string): string {
+  const lowerUrl = String(url ?? "").toLowerCase();
+  const lowerText = String(contextText ?? "").toLowerCase();
+  if (lowerUrl.includes("test-ride") || lowerText.includes("test ride")) return "Book a test ride";
+  if (lowerUrl.includes("creditapplication") || /\b(finance|financing|credit|apr|payment)\b/.test(lowerText)) {
+    return "Apply for credit";
+  }
+  if (lowerUrl.includes("promotions") || /\b(offer|offers|promo|promotion|incentive)\b/.test(lowerText)) {
+    return "View offers";
+  }
+  if (/\b(rsvp|event|pre-party|party)\b/.test(lowerText)) return "RSVP now";
+  if (/\b(schedule|appointment|book)\b/.test(lowerText)) return "Book now";
+  return "Learn more";
+}
+
+function chooseEmailSectionCta(args: {
+  entry: CampaignEntry;
+  isBase: boolean;
+  contextText: string;
+  dealerProfile: any;
+}): { url: string; label: string } | null {
+  const textUrls = extractHttpUrlsFromText(
+    [args.contextText, args.entry.prompt, args.entry.description, args.entry.smsBody, args.entry.emailBodyText]
+      .map(v => String(v ?? "").trim())
+      .filter(Boolean)
+      .join("\n")
+  );
+  const bookingUrl = normalizeHttpUrl(String(args.dealerProfile?.bookingUrl ?? "").trim());
+  const offersUrl = normalizeHttpUrl(String(args.dealerProfile?.offersUrl ?? "").trim());
+  const creditUrl = normalizeHttpUrl(String(args.dealerProfile?.creditAppUrl ?? "").trim());
+  const websiteUrl = normalizeHttpUrl(String(args.dealerProfile?.website ?? "").trim());
+  const lower = String(args.contextText ?? "").toLowerCase();
+  const scored: string[] = [];
+  if (/\btest ride\b/.test(lower) && bookingUrl) scored.push(bookingUrl);
+  if (/\b(offer|offers|promo|promotion|incentive)\b/.test(lower) && offersUrl) scored.push(offersUrl);
+  if (/\b(finance|financing|credit|apr|payment)\b/.test(lower) && creditUrl) scored.push(creditUrl);
+  for (const url of textUrls) scored.push(url);
+  if (args.isBase) {
+    if (bookingUrl) scored.push(bookingUrl);
+    if (websiteUrl) scored.push(websiteUrl);
+  }
+  const seen = new Set<string>();
+  const deduped = scored.filter(url => {
+    const normalized = normalizeHttpUrl(url);
+    if (!normalized || seen.has(normalized)) return false;
+    seen.add(normalized);
+    return true;
+  });
+  const first = deduped[0] ?? "";
+  if (!first) return null;
+  return { url: first, label: inferEmailCtaLabel(first, args.contextText) };
+}
+
+function buildDeterministicEmailBuilderHtml(args: {
+  baseCampaign: CampaignEntry;
+  contextCampaigns: CampaignEntry[];
+  dealerProfile: any;
+  promptText?: string;
+  generatedSubject?: string;
+  generatedBodyText?: string;
+}): string {
+  const dealerName = String(args.dealerProfile?.dealerName ?? "").trim() || "Dealership";
+  const websiteUrl = normalizeHttpUrl(String(args.dealerProfile?.website ?? "").trim());
+  const logoUrl = String(args.dealerProfile?.logoUrl ?? "").trim();
+  const phone = String(args.dealerProfile?.phone ?? "").trim();
+  const addressLine = dealerAddressLineForEmail(args.dealerProfile);
+  const promptText = compactEmailCopy(String(args.promptText ?? "").trim(), 540);
+  const generatedBody = compactEmailCopy(String(args.generatedBodyText ?? "").trim(), 540);
+  const ordered = args.contextCampaigns.length ? args.contextCampaigns : [args.baseCampaign];
+  const usedImages = new Set<string>();
+  const sectionsHtml: string[] = [];
+  const usedTitles = new Set<string>();
+  const preferredHeading = compactEmailCopy(
+    String(args.generatedSubject ?? "").trim() || String(args.baseCampaign?.name ?? "").trim() || "Campaign Update",
+    110
+  );
+  for (let idx = 0; idx < ordered.length; idx += 1) {
+    const entry = ordered[idx];
+    const isBase = idx === 0;
+    const candidateImages = campaignImageCandidatesForEmailLocker(entry);
+    const imageUrl =
+      candidateImages.find(url => {
+        const normalized = String(url ?? "").trim();
+        if (!normalized || usedImages.has(normalized)) return false;
+        return true;
+      }) || candidateImages[0] || "";
+    if (imageUrl) usedImages.add(imageUrl);
+    let title = compactEmailCopy(String(entry.name ?? "").trim(), 110) || `Campaign ${idx + 1}`;
+    if (isBase && preferredHeading) title = preferredHeading;
+    const titleKey = title.toLowerCase();
+    if (usedTitles.has(titleKey)) {
+      title = `${title} ${idx + 1}`;
+    }
+    usedTitles.add(title.toLowerCase());
+    const summarySource = compactEmailCopy(campaignLockerTextSummary(entry), 520);
+    const bodyText =
+      summarySource ||
+      (isBase ? generatedBody || promptText : "") ||
+      compactEmailCopy(String(entry.prompt ?? "").trim(), 360) ||
+      compactEmailCopy(String(entry.description ?? "").trim(), 360);
+    const contextText = [bodyText, promptText, String(entry.prompt ?? ""), String(entry.description ?? "")]
+      .filter(Boolean)
+      .join("\n");
+    const cta = chooseEmailSectionCta({
+      entry,
+      isBase,
+      contextText,
+      dealerProfile: args.dealerProfile
+    });
+    const fonts = emailSectionFontFamilies(entry);
+    const headingTag = isBase ? "h1" : "h2";
+    const headingSize = isBase ? "24px" : "20px";
+    const headingLineHeight = isBase ? "30px" : "26px";
+    const headingBorder = isBase ? "" : "margin-top:22px;padding-top:14px;border-top:1px solid #263143;";
+    const safeBody = escapeHtml(bodyText || "").replace(/\n/g, "<br>");
+    const imageBlock = imageUrl
+      ? `<tr>
+          <td style="padding:0 0 12px 0;text-align:center;">
+            <img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(title)}" style="display:block;width:100%;max-width:640px;height:auto;object-fit:contain;border:0;background:#0f172a;border-radius:8px;" />
+          </td>
+        </tr>`
+      : "";
+    const infoLineBits = [
+      isBase && addressLine ? addressLine : "",
+      isBase && phone ? `Call: ${phone}` : ""
+    ]
+      .filter(Boolean)
+      .join("<br>");
+    const infoLine = infoLineBits
+      ? `<div style="margin-top:10px;color:#cbd5e1;font-size:13px;line-height:19px;font-family:Arial,Helvetica,sans-serif;">${escapeHtml(
+          infoLineBits
+        ).replace(/\n/g, "<br>")}</div>`
+      : "";
+    const ctaBlock = cta
+      ? `<tr>
+          <td style="padding:2px 0 16px 0;text-align:center;">
+            <a href="${escapeHtml(cta.url)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#f97316;color:#111827;text-decoration:none;font-weight:800;font-size:14px;line-height:14px;padding:12px 16px;border-radius:5px;">${escapeHtml(
+              cta.label
+            )}</a>
+          </td>
+        </tr>`
+      : "";
+    sectionsHtml.push(`<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 ${
+      idx === ordered.length - 1 ? "0" : "18px"
+    } 0;">
+      <tr>
+        <td style="padding:0 0 8px 0;${headingBorder}">
+          <${headingTag} style="margin:0;font-size:${headingSize};line-height:${headingLineHeight};font-weight:800;color:#f8fafc;font-family:${fonts.heading};">${escapeHtml(
+      title
+    )}</${headingTag}>
+        </td>
+      </tr>
+      ${imageBlock}
+      <tr>
+        <td style="padding:0 0 10px 0;color:#e5e7eb;font-size:14px;line-height:21px;font-family:${fonts.body};">
+          ${safeBody || "Reply for details."}
+          ${infoLine}
+        </td>
+      </tr>
+      ${ctaBlock}
+    </table>`);
+  }
+  const headerLogoHtml = logoUrl
+    ? `<img data-lr-header-logo="1" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(
+        dealerName
+      )} logo" style="display:block;max-width:180px;max-height:68px;width:auto;height:auto;" />`
+    : `<div data-lr-header-logo="1" style="font-size:14px;line-height:20px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#f8fafc;">${escapeHtml(
+        dealerName
+      )}</div>`;
+  const rightLinkHtml = websiteUrl
+    ? `<a href="${escapeHtml(
+        websiteUrl
+      )}" target="_blank" rel="noopener noreferrer" style="font-size:14px;line-height:18px;font-weight:700;color:#f8fafc;text-decoration:underline;">Find A Dealer →</a>`
+    : "";
+  const footerLine = [addressLine, phone].filter(Boolean).join(" | ");
+  return `<!doctype html><html><body style="margin:0;padding:0;background:#05070b;color:#e5e7eb;"><table data-lr-email-shell="1" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0;padding:0;background:#05070b;">
+    <tr>
+      <td align="center" style="padding:22px 12px;">
+        <table role="presentation" width="700" cellspacing="0" cellpadding="0" border="0" style="width:700px;max-width:700px;background:#0b1220;border:1px solid #263143;border-radius:12px;overflow:hidden;">
+          <tr>
+            <td style="padding:18px 20px;font-family:Arial,Helvetica,sans-serif;color:#e5e7eb;">
+              <table data-lr-required-header="1" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 16px 0;background:#0b1220;border-bottom:1px solid #263143;">
+                <tr>
+                  <td style="padding:16px 22px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td align="left" valign="middle">${headerLogoHtml}</td>
+                        <td align="right" valign="middle">${rightLinkHtml}</td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+              ${sectionsHtml.join("\n")}
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:8px;border-top:1px solid #263143;">
+                <tr>
+                  <td style="padding-top:12px;color:#94a3b8;font-size:12px;line-height:18px;font-family:Arial,Helvetica,sans-serif;">
+                    <div style="font-weight:700;color:#e2e8f0;">${escapeHtml(dealerName)}</div>
+                    ${footerLine ? `<div style="margin-top:4px;">${escapeHtml(footerLine)}</div>` : ""}
+                    <div style="margin-top:6px;">Reply STOP to opt out of promotional messages.</div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table></body></html>`;
 }
 
 function campaignCreatorDisplayName(user: any): string | undefined {
@@ -23883,17 +24160,18 @@ app.post("/campaigns/email/generate", requireManager, async (req, res) => {
         .filter(Boolean)
     )
   );
-  const html = normalizeCampaignEmailHtml(String(generated.emailBodyHtml ?? "").trim(), {
-    dealerName: String(dealerProfile?.dealerName ?? "").trim() || "Dealership",
-    website: String(dealerProfile?.website ?? "").trim() || undefined,
-    logoUrl: String(dealerProfile?.logoUrl ?? "").trim() || undefined,
-    expectedImageUrls: contextPrimaryImageUrls.length ? contextPrimaryImageUrls : inspirationFromCampaigns
-  });
-  const htmlLooksJson = html.startsWith("{") || html.startsWith("[") || /"email_body_html"\s*:/.test(html);
-  if (!html || htmlLooksJson) {
+  const deterministicHtml = buildDeterministicEmailBuilderHtml({
+    baseCampaign,
+    contextCampaigns,
+    dealerProfile,
+    promptText: finalPrompt,
+    generatedSubject: String(generated.emailSubject ?? "").trim(),
+    generatedBodyText: String(generated.emailBodyText ?? "").trim()
+  }).trim();
+  if (!deterministicHtml) {
     return res.status(502).json({
       ok: false,
-      error: "Email HTML generation failed (layout output invalid). Retry Generate."
+      error: "Email HTML generation failed (deterministic layout renderer returned empty output). Retry Generate."
     });
   }
 
@@ -23916,7 +24194,7 @@ app.post("/campaigns/email/generate", requireManager, async (req, res) => {
   const persistedPrompt = userPrompt || basePrompt || String(baseCampaign.prompt ?? "").trim();
   const generatedNormalized = {
     ...generated,
-    emailBodyHtml: html
+    emailBodyHtml: deterministicHtml
   };
 
   const updated = updateCampaign(baseCampaign.id, {
@@ -23944,6 +24222,90 @@ app.post("/campaigns/email/generate", requireManager, async (req, res) => {
       name: entry.name,
       primaryImageUrl: campaignPrimaryImageForEmailLocker(entry)
     }))
+  });
+});
+
+app.post("/campaigns/email/send", requireManager, async (req, res) => {
+  const campaignId = String(req.body?.campaignId ?? "").trim();
+  if (!campaignId) return res.status(400).json({ ok: false, error: "Missing campaignId" });
+  const campaign = getCampaign(campaignId);
+  if (!campaign) return res.status(404).json({ ok: false, error: "Campaign not found" });
+
+  const to = String(req.body?.to ?? "").trim();
+  if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+    return res.status(400).json({ ok: false, error: "Missing or invalid recipient email" });
+  }
+  const isTest = req.body?.test === true;
+  const profile = await getDealerProfileHot();
+  const { from, replyTo } = getEmailConfig(profile);
+  if (!from) return res.status(400).json({ ok: false, error: "SendGrid from email not configured" });
+
+  const subjectInput = String(req.body?.subject ?? "").trim();
+  const bodyTextInput = String(req.body?.emailBodyText ?? "").trim();
+  const bodyHtmlInput = String(req.body?.emailBodyHtml ?? "").trim();
+
+  const subjectBase = subjectInput || String(campaign.emailSubject ?? "").trim();
+  if (!subjectBase) return res.status(400).json({ ok: false, error: "Missing subject" });
+  const subject = isTest ? `[TEST] ${subjectBase}` : subjectBase;
+
+  const htmlBody = bodyHtmlInput || String(campaign.emailBodyHtml ?? "").trim();
+  const fallbackTextFromHtml = htmlBody
+    ? htmlBody
+        .replace(/<br\s*\/?>/gi, "\n")
+        .replace(/<\/(p|div|li|h[1-6]|tr)>/gi, "\n")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/[ \t]+\n/g, "\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim()
+    : "";
+  const textBody = bodyTextInput || String(campaign.emailBodyText ?? "").trim() || fallbackTextFromHtml;
+  if (!textBody && !htmlBody) {
+    return res.status(400).json({ ok: false, error: "Missing email body" });
+  }
+
+  try {
+    await sendEmail({
+      to,
+      from,
+      replyTo: replyTo || undefined,
+      subject,
+      text: textBody || " ",
+      html: htmlBody || undefined
+    });
+  } catch (err: any) {
+    const details = String(err?.message ?? "").trim();
+    return res.status(500).json({
+      ok: false,
+      error: "email send failed",
+      ...(details ? { details } : {})
+    });
+  }
+
+  const metadataBase =
+    campaign.metadata && typeof campaign.metadata === "object"
+      ? (campaign.metadata as Record<string, unknown>)
+      : {};
+  const nowIso = new Date().toISOString();
+  const sendCountPrev = Number((metadataBase as any)?.emailBuilderSendCount ?? 0);
+  const sendCount = Number.isFinite(sendCountPrev) && sendCountPrev >= 0 ? sendCountPrev + 1 : 1;
+  const updated = updateCampaign(campaign.id, {
+    metadata: {
+      ...metadataBase,
+      emailBuilderLastSentAt: nowIso,
+      emailBuilderLastSentTo: to,
+      emailBuilderLastSentWasTest: isTest,
+      emailBuilderSendCount: sendCount
+    }
+  });
+
+  return res.json({
+    ok: true,
+    sent: true,
+    test: isTest,
+    to,
+    from,
+    subject,
+    campaign: updated ?? campaign
   });
 });
 
