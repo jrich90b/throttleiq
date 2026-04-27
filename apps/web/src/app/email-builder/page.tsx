@@ -180,6 +180,46 @@ function parseCampaignUrlsText(raw: string): string[] {
   );
 }
 
+function stripEmailBuilderPromptArtifactsClient(raw: string): string {
+  let text = String(raw ?? "")
+    .replace(/\r/g, "")
+    .trim();
+  if (!text) return "";
+  const markers = [
+    "[Reference Campaign Context]",
+    "Email locker context (required):",
+    "Prompt fidelity requirements (critical):",
+    "Output framing requirements (critical):",
+    "Cross-channel framing requirements (critical):"
+  ];
+  let cutAt = -1;
+  for (const marker of markers) {
+    const idx = text.toLowerCase().indexOf(marker.toLowerCase());
+    if (idx >= 0 && (cutAt < 0 || idx < cutAt)) cutAt = idx;
+  }
+  if (cutAt > 0) text = text.slice(0, cutAt).trim();
+  const cleanedLines = text
+    .split(/\n+/)
+    .map(v => v.trim())
+    .filter(Boolean)
+    .filter(line => {
+      const lower = line.toLowerCase();
+      if (!lower) return false;
+      if (/^block\s+\d+\b/.test(lower)) return false;
+      if (
+        /^(campaign name|campaign prompt|campaign|prompt details|description|primary campaign image|primary image url|messaging summary|typography hint)\s*:/.test(
+          lower
+        )
+      )
+        return false;
+      if (/^treat each campaign block as\b/.test(lower)) return false;
+      if (/^do not duplicate campaign sections\b/.test(lower)) return false;
+      if (/^keep each section copy aligned\b/.test(lower)) return false;
+      return true;
+    });
+  return cleanedLines.join("\n").trim();
+}
+
 function fileLabelFromUrl(url: string, fallback: string): string {
   try {
     const parsed = new URL(url);
@@ -320,7 +360,7 @@ export default function EmailBuilderPage() {
     setSubject(String(selectedCampaign.emailSubject ?? ""));
     setEmailText(String(selectedCampaign.emailBodyText ?? ""));
     setEmailHtml(String(selectedCampaign.emailBodyHtml ?? ""));
-    setCustomPrompt(String(selectedCampaign.prompt ?? ""));
+    setCustomPrompt(stripEmailBuilderPromptArtifactsClient(String(selectedCampaign.prompt ?? "")));
     setCustomDescription(String(selectedCampaign.description ?? ""));
     setReferenceImageUrlsText("");
     setBriefDocumentUrlsText("");
@@ -385,7 +425,7 @@ export default function EmailBuilderPage() {
         campaignId: selectedCampaignId,
         includeCurrentCampaign,
         selectedCampaignIds: selectedLockerIds,
-        prompt: String(customPrompt ?? "").trim() || undefined,
+        prompt: stripEmailBuilderPromptArtifactsClient(String(customPrompt ?? "").trim()) || undefined,
         description: String(customDescription ?? "").trim() || undefined,
         referenceImageUrls: parseCampaignUrlsText(referenceImageUrlsText),
         briefDocumentUrls: parseCampaignUrlsText(briefDocumentUrlsText)

@@ -21977,20 +21977,62 @@ function campaignPrimaryImageForEmailLocker(entry: CampaignEntry | null | undefi
 }
 
 function campaignLockerTextSummary(entry: CampaignEntry): string {
-  const description = String(entry.description ?? "").trim();
+  const description = stripEmailBuilderPromptArtifacts(String(entry.description ?? "").trim());
   if (description) return description;
-  const prompt = String(entry.prompt ?? "").trim();
+  const prompt = stripEmailBuilderPromptArtifacts(String(entry.prompt ?? "").trim());
   if (prompt) return prompt;
-  const emailText = String(entry.emailBodyText ?? "").trim();
+  const emailText = stripEmailBuilderPromptArtifacts(String(entry.emailBodyText ?? "").trim());
   if (emailText) {
     return emailText
       .split(/\n\s*\n/)
       .map(v => v.trim())
       .find(Boolean) ?? emailText;
   }
-  const sms = String(entry.smsBody ?? "").trim();
+  const sms = stripEmailBuilderPromptArtifacts(String(entry.smsBody ?? "").trim());
   if (sms) return sms;
   return "";
+}
+
+function stripEmailBuilderPromptArtifacts(raw: string): string {
+  let text = String(raw ?? "")
+    .replace(/\r/g, "")
+    .trim();
+  if (!text) return "";
+
+  const markers = [
+    "[Reference Campaign Context]",
+    "Email locker context (required):",
+    "Prompt fidelity requirements (critical):",
+    "Output framing requirements (critical):",
+    "Cross-channel framing requirements (critical):"
+  ];
+  let cutAt = -1;
+  for (const marker of markers) {
+    const idx = text.toLowerCase().indexOf(marker.toLowerCase());
+    if (idx >= 0 && (cutAt < 0 || idx < cutAt)) cutAt = idx;
+  }
+  if (cutAt > 0) text = text.slice(0, cutAt).trim();
+
+  const cleanedLines = text
+    .split(/\n+/)
+    .map(v => v.trim())
+    .filter(Boolean)
+    .filter(line => {
+      const lower = line.toLowerCase();
+      if (!lower) return false;
+      if (/^block\s+\d+\b/.test(lower)) return false;
+      if (
+        /^(campaign name|campaign prompt|campaign|prompt details|description|primary campaign image|primary image url|messaging summary|typography hint)\s*:/.test(
+          lower
+        )
+      )
+        return false;
+      if (/^treat each campaign block as\b/.test(lower)) return false;
+      if (/^do not duplicate campaign sections\b/.test(lower)) return false;
+      if (/^keep each section copy aligned\b/.test(lower)) return false;
+      return true;
+    });
+  return cleanedLines.join("\n").trim();
 }
 
 function campaignTypographyHint(entry: CampaignEntry): string {
@@ -22014,8 +22056,8 @@ function buildEmailLockerContextBlock(entries: CampaignEntry[]): string {
   const blocks = entries
     .map((entry, idx) => {
       const name = String(entry.name ?? "").trim() || `Campaign ${idx + 1}`;
-      const prompt = String(entry.prompt ?? "").trim();
-      const description = String(entry.description ?? "").trim();
+      const prompt = stripEmailBuilderPromptArtifacts(String(entry.prompt ?? "").trim());
+      const description = stripEmailBuilderPromptArtifacts(String(entry.description ?? "").trim());
       const summary = campaignLockerTextSummary(entry);
       const primaryImageUrl = campaignPrimaryImageForEmailLocker(entry);
       const typographyHint = campaignTypographyHint(entry);
@@ -22241,7 +22283,10 @@ function buildDeterministicEmailBuilderHtml(args: {
   const logoUrl = String(args.dealerProfile?.logoUrl ?? "").trim();
   const phone = String(args.dealerProfile?.phone ?? "").trim();
   const addressLine = dealerAddressLineForEmail(args.dealerProfile);
-  const promptText = compactEmailCopy(String(args.promptText ?? "").trim(), 540);
+  const promptText = compactEmailCopy(
+    stripEmailBuilderPromptArtifacts(String(args.promptText ?? "").trim()),
+    540
+  );
   const generatedBody = compactEmailCopy(String(args.generatedBodyText ?? "").trim(), 540);
   const ordered = args.contextCampaigns.length ? args.contextCampaigns : [args.baseCampaign];
   const usedImages = new Set<string>();
@@ -22274,11 +22319,9 @@ function buildDeterministicEmailBuilderHtml(args: {
       dealerName,
       maxChars: 520
     });
-    const generatedSource = isBase
-      ? sanitizeEmailSectionCopy(generatedBody || promptText, { title, dealerName, maxChars: 520 })
-      : "";
+    const generatedSource = isBase ? sanitizeEmailSectionCopy(generatedBody, { title, dealerName, maxChars: 520 }) : "";
     const promptDetails = extractPromptRequiredDetails({
-      prompt: String(entry.prompt ?? "").trim(),
+      prompt: stripEmailBuilderPromptArtifacts(String(entry.prompt ?? "").trim()),
       description: String(entry.description ?? "").trim(),
       strict: false
     });
@@ -22288,20 +22331,28 @@ function buildDeterministicEmailBuilderHtml(args: {
       dealerName,
       maxChars: 420
     });
-    const descriptionSource = sanitizeEmailSectionCopy(String(entry.description ?? "").trim(), {
-      title,
-      dealerName,
-      maxChars: 420
-    });
+    const descriptionSource = sanitizeEmailSectionCopy(
+      stripEmailBuilderPromptArtifacts(String(entry.description ?? "").trim()),
+      {
+        title,
+        dealerName,
+        maxChars: 420
+      }
+    );
     const smsSource = sanitizeEmailSectionCopy(String(entry.smsBody ?? "").trim(), {
       title,
       dealerName,
       maxChars: 320
     });
     const bodyText = isBase
-      ? descriptionSource || promptSource || generatedSource || summarySource || smsSource
+      ? descriptionSource || promptSource || summarySource || smsSource || generatedSource
       : descriptionSource || promptSource || summarySource || smsSource;
-    const contextText = [bodyText, promptText, String(entry.prompt ?? ""), String(entry.description ?? "")]
+    const contextText = [
+      bodyText,
+      stripEmailBuilderPromptArtifacts(String(entry.prompt ?? "")),
+      stripEmailBuilderPromptArtifacts(String(entry.description ?? "")),
+      generatedSource
+    ]
       .filter(Boolean)
       .join("\n");
     const cta = chooseEmailSectionCta({
@@ -24211,8 +24262,8 @@ app.post("/campaigns/email/generate", requireManager, async (req, res) => {
     }
   }
 
-  const userPrompt = String(req.body?.prompt ?? "").trim();
-  const basePrompt = String(baseCampaign.prompt ?? "").trim();
+  const userPrompt = stripEmailBuilderPromptArtifacts(String(req.body?.prompt ?? "").trim());
+  const basePrompt = stripEmailBuilderPromptArtifacts(String(baseCampaign.prompt ?? "").trim());
   const lockerContextBlock = buildEmailLockerContextBlock(contextCampaigns);
   const prompt = [userPrompt || basePrompt, lockerContextBlock].filter(Boolean).join("\n\n");
   const basePrimaryImageUrl = campaignPrimaryImageForEmailLocker(baseCampaign);
@@ -24267,7 +24318,7 @@ app.post("/campaigns/email/generate", requireManager, async (req, res) => {
     baseCampaign,
     contextCampaigns,
     dealerProfile,
-    promptText: finalPrompt,
+    promptText: userPrompt || basePrompt,
     generatedSubject: String(generated.emailSubject ?? "").trim(),
     generatedBodyText: String(generated.emailBodyText ?? "").trim()
   }).trim();
@@ -24295,7 +24346,7 @@ app.post("/campaigns/email/generate", requireManager, async (req, res) => {
   const nextAssetTargets = Array.from(
     new Set([...(Array.isArray(baseCampaign.assetTargets) ? baseCampaign.assetTargets : []), "email"])
   ) as CampaignAssetTarget[];
-  const persistedPrompt = userPrompt || basePrompt || String(baseCampaign.prompt ?? "").trim();
+  const persistedPrompt = stripEmailBuilderPromptArtifacts(String(baseCampaign.prompt ?? "").trim()) || String(baseCampaign.prompt ?? "").trim();
   const generatedNormalized = {
     ...generated,
     emailBodyHtml: deterministicHtml,
@@ -24308,7 +24359,7 @@ app.post("/campaigns/email/generate", requireManager, async (req, res) => {
     channel: "email",
     assetTargets: nextAssetTargets,
     prompt: persistedPrompt || baseCampaign.prompt,
-    description: description ?? baseCampaign.description,
+    description: baseCampaign.description,
     smsBody: generatedNormalized.smsBody ?? baseCampaign.smsBody,
     emailSubject: generatedNormalized.emailSubject ?? baseCampaign.emailSubject,
     emailBodyText: generatedNormalized.emailBodyText ?? baseCampaign.emailBodyText,

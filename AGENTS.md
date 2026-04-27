@@ -62,6 +62,10 @@ Required order:
   - use `/campaigns/email/generate` (and web `/email-builder`) for all campaign email HTML generation,
   - do not generate Email via the legacy `/campaigns/generate` route (it should return a redirect/error to Email Builder),
   - keep Campaign Studio focused on non-email assets (`sms`, social, web banner, flyer) to prevent stale mixed-path behavior.
+- Email prompt recursion guardrail:
+  - strip any appended email-context scaffolding (`[Reference Campaign Context]`, `Email locker context (required)`, `Block N`, prompt-detail metadata lines) from stored prompt/description before reusing it in Email Builder.
+  - never persist merged locker context back into base campaign `prompt`/`description`.
+  - deterministic email section copy should prefer per-campaign `description/prompt/summary` and use generated global email text only as last-resort fallback, to avoid cross-campaign copy bleed.
 - Campaign Studio Email HTML branding should keep a dealer-branded top row with dealer logo (`dealer_profile.logoUrl`) and a right-side dealer website link when available.
 - Email HTML normalization must forcibly replace any generated header block with the required dealer header block so campaign creative images can never occupy the header logo slot.
 - Apply the same email-layout normalization in:

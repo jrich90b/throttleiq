@@ -1668,10 +1668,21 @@ function parseCampaignUrlsText(raw: string): string[] {
 }
 
 function stripCampaignEmailReferenceContext(raw: string): string {
-  const text = String(raw ?? "");
-  const markerIdx = text.indexOf(CAMPAIGN_EMAIL_CONTEXT_MARKER);
-  if (markerIdx < 0) return text.trim();
-  return text.slice(0, markerIdx).trim();
+  let text = String(raw ?? "");
+  const markers = [
+    CAMPAIGN_EMAIL_CONTEXT_MARKER,
+    "Email locker context (required):",
+    "Prompt fidelity requirements (critical):",
+    "Output framing requirements (critical):",
+    "Cross-channel framing requirements (critical):"
+  ];
+  let cutAt = -1;
+  for (const marker of markers) {
+    const idx = text.toLowerCase().indexOf(marker.toLowerCase());
+    if (idx >= 0 && (cutAt < 0 || idx < cutAt)) cutAt = idx;
+  }
+  if (cutAt >= 0) text = text.slice(0, cutAt);
+  return text.trim();
 }
 
 type CampaignEmailContextBundle = {
@@ -1690,8 +1701,8 @@ function collectCampaignEmailContext(entries: CampaignEntry[]): CampaignEmailCon
   const contextBlocks: string[] = [];
   for (const entry of selectedEntries) {
     const name = String(entry.name ?? "").trim() || "Untitled campaign";
-    const prompt = String(entry.prompt ?? "").trim();
-    const description = String(entry.description ?? "").trim();
+    const prompt = stripCampaignEmailReferenceContext(String(entry.prompt ?? "").trim());
+    const description = stripCampaignEmailReferenceContext(String(entry.description ?? "").trim());
     const primaryRefUrl = campaignEmailContextPrimaryImage(entry);
     const refUrls = primaryRefUrl ? [primaryRefUrl] : [];
     for (const url of refUrls) {
