@@ -1299,3 +1299,20 @@ When changing responses:
   - updated few-shot parser examples to emit `Street Glide 3 Limited` for tri-glide/triglycerides phrases.
 - Purpose:
   - prevent lead context from snapping back to Heritage when customer switches to tri-glide language, and keep regenerate aligned with the canonical Street Glide 3 Limited label.
+
+## LLM Few-Shot Boost (Media Request vs Booking + Model Switch)
+- In `services/api/src/domain/llmDraft.ts`:
+  - expanded parser few-shots to handle mixed media/scheduling text without false auto-booking:
+    - `parseBookingIntentWithLLM(...)` now explicitly treats messages like `11am can you send photos of street glide limited` as `intent=none` (no scheduling request),
+    - and treats `never mind photo. test ride street glide limited 3. thanks` as a model/intention update, not a schedule/reschedule command.
+  - `parseIntentWithLLM(...)` few-shots now include:
+    - media request with model mention (`send photos`) routed as `intent=none` with model extraction,
+    - explicit model switch to `Street Glide 3 Limited` with `intent=test_ride`.
+  - `parseSemanticSlotsWithLLM(...)` few-shots now include:
+    - media request + time token pattern mapped to `media_intent=photos` with `watch_action=none`,
+    - model-switch phrase mapped to `Street Glide 3 Limited` without creating watch actions.
+  - added guardrail text in semantic slot parser prompt:
+    - standalone time tokens and media requests must not be interpreted as watch actions.
+- Purpose:
+  - prevent false booking/reschedule behavior when customers ask for photos/videos,
+  - keep regenerate and live parsing consistent when customer switches from Heritage to `Street Glide Limited 3` phrasing.
