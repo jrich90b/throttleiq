@@ -2436,6 +2436,8 @@ export async function parseIntentWithLLM(args: {
     'input: "Customer: how about a triglycerides instead. it would have to be on a saturday." output: {"intent":"none","explicit_request":false,"availability":{"model":"Street Glide 3 Limited","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.94}',
     'input: "Customer: saturday works for me on a tri glide. does the morning work?" output: {"intent":"none","explicit_request":false,"availability":{"model":"Street Glide 3 Limited","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.95}',
     'input: "Customer: 11am can you send photos of street glide limited" output: {"intent":"none","explicit_request":false,"availability":{"model":"Street Glide Limited","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.95}',
+    'input: "Customer: do you have brake pads in stock for a 2018 street glide?" output: {"intent":"none","explicit_request":false,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.96}',
+    'input: "Customer: is the orange hoodie in stock in xl?" output: {"intent":"none","explicit_request":false,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.96}',
     'input: "Customer: never mind photo. test ride street glide limited 3. thanks" output: {"intent":"test_ride","explicit_request":true,"availability":{"model":"Street Glide 3 Limited","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.96}',
     'input: "Customer: i can come in tuesday at 3:45" output: {"intent":"none","explicit_request":false,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.94}',
     'input: "Customer: im trying to stay under 500 a month" output: {"intent":"none","explicit_request":false,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.94}'
@@ -2449,6 +2451,7 @@ export async function parseIntentWithLLM(args: {
     "Guidelines:",
     "- explicit_request is true only if the customer is asking for a call back, test ride, or availability.",
     "- intent=availability only for inventory availability (bike in stock/still there/sold?).",
+    "- Parts, apparel, service, accessories, gear, clothing, helmets, hoodies, gloves, brake pads, tires, inspections, maintenance, and repair questions are not motorcycle inventory availability; set intent=none.",
     "- intent=test_ride if they ask to test ride or demo the bike.",
     "- jump start / jumpstart / riding-academy prep messages are not inventory availability requests; do not set intent=test_ride for those.",
     "- intent=callback if they ask for a call or ask you to call them.",
