@@ -1978,10 +1978,21 @@ function hasActionableAdfInquiryHotIntent(conv: Conversation): boolean {
   return false;
 }
 
+function isNonSalesLeadForHeat(conv: Conversation): boolean {
+  const bucket = String(conv.classification?.bucket ?? "").trim().toLowerCase();
+  const cta = String(conv.classification?.cta ?? "").trim().toLowerCase();
+  const leadSource = String(conv.lead?.source ?? "").trim().toLowerCase();
+  const nonDealBuckets = new Set(["service", "parts", "apparel"]);
+  const nonDealCtas = new Set(["service_request", "parts_request", "apparel_request"]);
+  if (nonDealBuckets.has(bucket) || nonDealCtas.has(cta)) return true;
+  return /\b(service|parts?|apparel|motorclothes)\b/.test(leadSource);
+}
+
 function computeStickyHotDealSignal(conv: Conversation, hasInboundTwilio: boolean): boolean {
   if (isSoldConversationForHot(conv)) return false;
   if (isConversationOnHoldForHot(conv)) return false;
   if (String(conv.status ?? "").trim().toLowerCase() === "closed") return false;
+  if (isNonSalesLeadForHeat(conv)) return false;
 
   const leadSource = String(conv.lead?.source ?? "").trim().toLowerCase();
   const bucket = String(conv.classification?.bucket ?? "").trim().toLowerCase();
@@ -2170,6 +2181,7 @@ function computeDealTemperature(
   if (isSoldConversationForHot(conv)) return null;
   if (isConversationOnHoldForHot(conv)) return null;
   if (String(conv.status ?? "").trim().toLowerCase() === "closed") return null;
+  if (isNonSalesLeadForHeat(conv)) return null;
   if (hasNotInterestedSignalForHeat(conv)) return null;
 
   const lastHotAtMs = computeLastHotSignalAtMs(conv, hasInboundTwilio);

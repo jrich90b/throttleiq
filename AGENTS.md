@@ -82,6 +82,10 @@ Required order:
 - Ensure the sold-close modal root includes `lr-light-modal` so global dark-shell contrast overrides apply to manual-entry placeholders and helper text.
 - `lr-light-modal` form-control contrast overrides must use `.lr-app-main-panel .lr-light-modal` specificity (plus disabled/autofill states) so dark-shell input rules cannot wash out sold-modal field text.
 
+## Hot Deal Guardrail
+- 🔥 hot-deal tagging is sales-only.
+- Service / Parts / Apparel leads (classification bucket/CTA or lead-source keyword) must never be tagged hot in API heat computation or UI fallback display logic.
+
 ## Sold Close UX
 - In web sold-close flow (`submitSold` in `apps/web/src/app/page.tsx`), apply immediate optimistic state update/close on successful save and defer full list reload briefly.
 - Purpose:

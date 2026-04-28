@@ -7584,6 +7584,14 @@ export default function Home() {
   ]);
   const NON_DEAL_BUCKETS = new Set(["service", "parts", "apparel"]);
   const NON_DEAL_CTAS = new Set(["service_request", "parts_request", "apparel_request"]);
+  const NON_SALES_SOURCE_RE = /\b(service|parts?|apparel|motorclothes)\b/;
+  const isNonSalesLeadConversation = (c: ConversationListItem) => {
+    const bucket = String(c.classification?.bucket ?? "").trim().toLowerCase();
+    const cta = String(c.classification?.cta ?? "").trim().toLowerCase();
+    const leadSource = String(c.leadSource ?? "").trim().toLowerCase();
+    if (NON_DEAL_BUCKETS.has(bucket) || NON_DEAL_CTAS.has(cta)) return true;
+    return NON_SALES_SOURCE_RE.test(leadSource);
+  };
   const getConversationRecencyMs = (c: ConversationListItem) => {
     const atCandidates = [c.updatedAt, c.engagement?.at];
     for (const at of atCandidates) {
@@ -7656,6 +7664,7 @@ export default function Home() {
   };
 
   const isHotDealConversation = (c: ConversationListItem) => {
+    if (isNonSalesLeadConversation(c)) return false;
     const explicitTemperature = String(c.dealTemperature ?? "").trim().toLowerCase();
     if (explicitTemperature === "hot") return true;
     if (explicitTemperature === "warm" || explicitTemperature === "cold") return false;
