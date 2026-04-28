@@ -247,6 +247,8 @@ Env vars:
 - Applies to both legacy time token extraction and `parseRequestedDayTime(...)` compact-time parsing.
 - `parseRequestedDayTime(...)` now supports textual dates (for example `May 8`, `May 8th`, `8th May`) in addition to numeric dates.
 - When multiple weekday tokens are present (for example `Friday ... or Saturday`), weekday parsing should use the earliest mention in text order rather than fixed weekday priority.
+- Hour-only parsing must not treat model trim suffix numbers as appointment times (for example `Street Glide Limited 3` should not parse as `3:00`).
+- Auto-booking must be suppressed when inbound is primarily a direct media request (`send photos/video`) unless the customer also includes an explicit booking command (`book/confirm/schedule`).
 
 ## Appointment Offer Rules (Source of Truth)
 - Use suggested slots only if customer asked to schedule.

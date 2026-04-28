@@ -41,15 +41,29 @@ export function extractTimeToken(msg: string): string | null {
   }
 
   // hour-only: 1, 11, 1pm, 11am
-  m = s.match(/\b(\d{1,2})\s*(am|pm)?\b/);
-  if (m) {
-    const hourNum = Number(m[1]);
-    const hasMeridiem = !!m[2];
+  const hourMatches = Array.from(s.matchAll(/\b(\d{1,2})\s*(am|pm)?\b/g));
+  for (const match of hourMatches) {
+    const hourNum = Number(match[1]);
+    const hasMeridiem = !!match[2];
     // Prevent finance terms like "84 months" from being treated as a time.
-    if (!hasMeridiem && /\b(month|months|mo|year|years|yr|yrs)\b/.test(s)) return null;
-    if (!hasMeridiem && (hourNum < 1 || hourNum > 12)) return null;
-    const hh = String(Number(m[1]));
-    const ap = m[2] ?? "";
+    if (!hasMeridiem && /\b(month|months|mo|year|years|yr|yrs)\b/.test(s)) continue;
+    if (!hasMeridiem && (hourNum < 1 || hourNum > 12)) continue;
+    // Guardrail: avoid treating model trim suffixes as times (e.g. "Street Glide Limited 3").
+    if (!hasMeridiem) {
+      const idx = typeof match.index === "number" ? match.index : -1;
+      if (idx >= 0) {
+        const before = s.slice(Math.max(0, idx - 32), idx);
+        if (
+          /\b(street\s*glide|road\s*glide|tri[\s-]?glide|ultra(?:\s+limited)?|limited|heritage|nightster|sportster|dyna|fat\s*bob|low\s*rider|road\s*king)\s*$/i.test(
+            before
+          )
+        ) {
+          continue;
+        }
+      }
+    }
+    const hh = String(Number(match[1]));
+    const ap = match[2] ?? "";
     return normalizeTimeToken(`${hh}:00${ap}`);
   }
 

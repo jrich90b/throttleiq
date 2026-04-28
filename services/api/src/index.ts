@@ -29895,6 +29895,13 @@ if (authToken && signature) {
   };
 
   const schedulingAllowed = !isServiceLead;
+  const directMediaRequestThisTurn =
+    event.provider === "twilio" && isDirectMediaRequestText(String(event.body ?? ""));
+  const suppressAutoBookForMediaRequest =
+    directMediaRequestThisTurn &&
+    !/\b(book|booking|booked|lock(?:\s+it)?\s+in|confirm|set\s+(?:it\s+)?up|schedule|appointment|appt)\b/i.test(
+      String(event.body ?? "")
+    );
   const appointmentWhenMs = new Date(String(conv.appointment?.whenIso ?? "")).getTime();
   const isFutureBookedAppointment =
     !!conv.appointment?.bookedEventId &&
@@ -29918,7 +29925,8 @@ if (authToken && signature) {
     schedulingAllowed &&
     conv.appointment?.bookedEventId &&
     hasBookedAppointmentForReschedule &&
-    conv.scheduler?.pendingSlot?.reschedule
+    conv.scheduler?.pendingSlot?.reschedule &&
+    !suppressAutoBookForMediaRequest
   ) {
     if (isDeferral(event.body)) {
       conv.scheduler.pendingSlot = undefined;
@@ -30004,7 +30012,12 @@ if (authToken && signature) {
   }
 
   // Auto-book if they confirmed a pending slot
-  if (schedulingAllowed && !conv.appointment?.bookedEventId && conv.scheduler?.pendingSlot) {
+  if (
+    schedulingAllowed &&
+    !conv.appointment?.bookedEventId &&
+    conv.scheduler?.pendingSlot &&
+    !suppressAutoBookForMediaRequest
+  ) {
     if (isDeferral(event.body)) {
       conv.scheduler.pendingSlot = undefined;
     } else {
@@ -30110,7 +30123,8 @@ if (authToken && signature) {
     schedulingAllowed &&
     !conv.appointment?.bookedEventId &&
     Array.isArray(conv.scheduler?.lastSuggestedSlots) &&
-    conv.scheduler.lastSuggestedSlots.length > 0
+    conv.scheduler.lastSuggestedSlots.length > 0 &&
+    !suppressAutoBookForMediaRequest
   ) {
     console.log("[auto-book] inbound:", JSON.stringify(event.body));
     console.log(
@@ -30334,7 +30348,13 @@ if (authToken && signature) {
     requestedReschedule = parseRequestedDayTime(event.body, cfg.timezone);
     if (!requestedReschedule && conv.appointment.whenIso) {
       const token = extractTimeToken(event.body);
-      if (token) {
+      const hasTimeFallbackCue =
+        reschedulePending ||
+        reschedulePhrase ||
+        /\b(at|around|about|between|from|to|tomorrow|today|tonight|morning|afternoon|evening|am|pm)\b/i.test(
+          String(event.body ?? "")
+        );
+      if (token && hasTimeFallbackCue) {
         const baseParts = getLocalDateParts(new Date(conv.appointment.whenIso), cfg.timezone);
         const timeParts = parseTimeTokenToParts(token, baseParts.hour);
         if (timeParts) {
