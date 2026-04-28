@@ -157,7 +157,8 @@ import {
   nextActionFromState,
   reduceStaleStateForInbound,
   resolveNoResponsePolicyDecision,
-  resolveRoutingParserDecision
+  resolveRoutingParserDecision,
+  shouldTreatInboundAsTestRideBikeSelection
 } from "./domain/routerV2.js";
 import {
   SOFT_SCHEDULE_COOLDOWN_MS,
@@ -33982,6 +33983,44 @@ if (authToken && signature) {
       !!conv.lead?.vehicle?.description);
   const infoOnlyRequest =
     (llmInventoryInfoIntent || isInfoOnlyRequest(textLower) || specsSignal || isCompare) && !skipInfoOnly;
+  const testRideBikeSelection = shouldTreatInboundAsTestRideBikeSelection({
+    inboundText: event.body,
+    lastOutboundText,
+    dialogState: getDialogState(conv),
+    classificationBucket: conv.classification?.bucket,
+    classificationCta: conv.classification?.cta,
+    mentionedModelCount: mentionedModelsEarly.length
+  });
+  if (event.provider === "twilio" && testRideBikeSelection) {
+    const selectedModel = mentionedModelsEarly[0] ?? conv.lead?.vehicle?.model ?? conv.inventoryContext?.model ?? null;
+    const selectedYear = extractYearSingle(textLower) ?? conv.lead?.vehicle?.year ?? conv.inventoryContext?.year ?? null;
+    conv.lead = conv.lead ?? {};
+    conv.lead.vehicle = conv.lead.vehicle ?? {};
+    if (selectedModel) conv.lead.vehicle.model = selectedModel;
+    if (selectedYear) conv.lead.vehicle.year = String(selectedYear);
+    conv.inventoryContext = {
+      ...(conv.inventoryContext ?? {}),
+      model: selectedModel ?? conv.inventoryContext?.model,
+      year: selectedYear ? String(selectedYear) : conv.inventoryContext?.year,
+      updatedAt: nowIso()
+    };
+    setDialogState(conv, "test_ride_init");
+    const label = selectedModel
+      ? formatModelLabel(selectedYear ? String(selectedYear) : null, selectedModel)
+      : "that bike";
+    const reply = `Got it — I can line up the test ride on the ${label}. What day and time works best?`;
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (event.provider === "twilio" && finishPreferenceOnlyRaw && !hasModelContext) {
     const reply = "Got it — which model and year are you looking for?";
     const systemMode = webhookMode;

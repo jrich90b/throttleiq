@@ -6,5 +6,6 @@ export {
   nextActionFromState,
   reduceStaleStateForInbound,
   resolveNoResponsePolicyDecision,
-  resolveRoutingParserDecision
+  resolveRoutingParserDecision,
+  shouldTreatInboundAsTestRideBikeSelection
 } from "./routeStateReducer.js";

@@ -153,6 +153,15 @@ export type StaleStateCleanupDecision = {
   reasons: string[];
 };
 
+export type TestRideBikeSelectionInput = {
+  inboundText?: string | null;
+  lastOutboundText?: string | null;
+  dialogState?: string | null;
+  classificationBucket?: string | null;
+  classificationCta?: string | null;
+  mentionedModelCount?: number;
+};
+
 export const DEALER_RIDE_NO_PURCHASE_SKIP_DRAFT =
   "No customer reply needed — dealer ride outcome requires salesperson follow-up.";
 
@@ -439,6 +448,48 @@ export function buildNoResponseFallbackReply(actionable: RouteActionableContextD
 
 function normalizeLower(value: string | null | undefined): string {
   return String(value ?? "").trim().toLowerCase();
+}
+
+export function shouldTreatInboundAsTestRideBikeSelection(
+  input: TestRideBikeSelectionInput
+): boolean {
+  const inbound = normalizeLower(input.inboundText);
+  const lastOutbound = normalizeLower(input.lastOutboundText);
+  if (!inbound || !lastOutbound) return false;
+
+  const testRideContext =
+    normalizeLower(input.dialogState).startsWith("test_ride_") ||
+    normalizeLower(input.classificationBucket) === "test_ride" ||
+    normalizeLower(input.classificationCta) === "schedule_test_ride";
+  if (!testRideContext) return false;
+
+  const promptedForBikeSelection =
+    /\b(pick|choose|reply with|send me|tell me)\b[\s\S]{0,80}\b(in-stock|in stock|stock)\b[\s\S]{0,80}\b(bike|one|model)\b/.test(
+      lastOutbound
+    ) ||
+    /\b(exact|one)\b[\s\S]{0,80}\b(want|would like)\b[\s\S]{0,80}\b(ride|test ride)\b/.test(
+      lastOutbound
+    ) ||
+    /\bline up (the )?test ride\b/.test(lastOutbound);
+  if (!promptedForBikeSelection) return false;
+
+  if ((input.mentionedModelCount ?? 0) <= 0) return false;
+
+  const explicitDifferentAsk =
+    /\?/.test(inbound) ||
+    /\b(price|pricing|payment|payments|monthly|apr|term|down payment|out the door|otd|finance|financing)\b/.test(
+      inbound
+    ) ||
+    /\b(available|availability|in stock|still there|still available|sold|photos?|pictures?|video|walkaround)\b/.test(
+      inbound
+    ) ||
+    /\b(specs?|spec sheet|details|info|information|features?|engine|motor|compare|comparison|difference)\b/.test(
+      inbound
+    ) ||
+    /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|morning|afternoon|evening|at\s+\d{1,2}(?::\d{2})?\s*(am|pm)?|after\s+\d{1,2})\b/.test(
+      inbound
+    );
+  return !explicitDifferentAsk;
 }
 
 function shouldKeepInventoryWatchPending(mode: string, reason: string): boolean {

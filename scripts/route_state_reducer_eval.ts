@@ -6,7 +6,8 @@ import {
   reduceStaleStateForInbound,
   resolveNoResponsePolicyDecision,
   resolveRoutingParserDecision,
-  resolveTurnPrimaryIntent
+  resolveTurnPrimaryIntent,
+  shouldTreatInboundAsTestRideBikeSelection
 } from "../services/api/src/domain/routeStateReducer.ts";
 
 type Case = {
@@ -118,6 +119,70 @@ if (passed !== cases.length) {
 }
 
 console.log(`\nAll ${cases.length} route-state checks passed.`);
+
+type TestRideBikeSelectionCase = {
+  id: string;
+  input: Parameters<typeof shouldTreatInboundAsTestRideBikeSelection>[0];
+  expected: boolean;
+};
+
+const testRideBikeSelectionCases: TestRideBikeSelectionCase[] = [
+  {
+    id: "keeps_test_ride_context_on_model_only_selection",
+    input: {
+      inboundText: "2026 HARLEY-DAVIDSON® STREET GLIDE 3 LIMITED IRON HORSE METALLIC BLACK TRIM",
+      lastOutboundText:
+        "Here’s our current inventory so you can pick an in-stock bike. Once you pick one, I can line up the test ride right away.",
+      dialogState: "test_ride_init",
+      classificationBucket: "test_ride",
+      classificationCta: "schedule_test_ride",
+      mentionedModelCount: 1
+    },
+    expected: true
+  },
+  {
+    id: "does_not_steal_explicit_spec_question",
+    input: {
+      inboundText: "Can you send the specs for the 2026 Street Glide 3 Limited?",
+      lastOutboundText:
+        "Here’s our current inventory so you can pick an in-stock bike. Once you pick one, I can line up the test ride right away.",
+      dialogState: "test_ride_init",
+      classificationBucket: "test_ride",
+      classificationCta: "schedule_test_ride",
+      mentionedModelCount: 1
+    },
+    expected: false
+  },
+  {
+    id: "does_not_apply_without_test_ride_context",
+    input: {
+      inboundText: "2026 Street Glide 3 Limited black trim",
+      lastOutboundText: "Which model are you interested in?",
+      dialogState: "inventory_init",
+      classificationBucket: "inventory_interest",
+      classificationCta: "check_availability",
+      mentionedModelCount: 1
+    },
+    expected: false
+  }
+];
+
+let testRideBikeSelectionPassed = 0;
+for (const c of testRideBikeSelectionCases) {
+  const actual = shouldTreatInboundAsTestRideBikeSelection(c.input);
+  const ok = actual === c.expected;
+  if (ok) testRideBikeSelectionPassed += 1;
+  console.log(`${ok ? "PASS" : "FAIL"} ${c.id} expected=${c.expected} actual=${actual}`);
+}
+
+if (testRideBikeSelectionPassed !== testRideBikeSelectionCases.length) {
+  console.error(
+    `\n${testRideBikeSelectionCases.length - testRideBikeSelectionPassed} failures out of ${testRideBikeSelectionCases.length} test-ride bike-selection checks`
+  );
+  process.exit(1);
+}
+
+console.log(`\nAll ${testRideBikeSelectionCases.length} test-ride bike-selection checks passed.`);
 
 type TurnIntentCase = {
   id: string;
