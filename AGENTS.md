@@ -717,6 +717,7 @@ When changing responses:
   - cadence regenerate draft path
 - Cadence personalization lines now also block weather/riding-condition small-talk tails (e.g., “Hope the weather’s been good for riding...”) to keep follow-up tone focused and consistent.
 - Cached cadence personalization lines now pass through the same blocklist; previously generated weather/riding tails are auto-cleared instead of being reused when cache keys remain unchanged.
+- Cadence personalization lines must not include speculative family milestone/event chatter (birthday/party/graduation/wedding/anniversary). If generated, block and clear the line.
 
 ## Cadence Tone Refresh
 - Standard and engaged follow-up SMS template banks were rewritten for a friendlier, more down-to-earth dealer voice (less pushy sales language) while keeping cadence structure and placeholders intact.

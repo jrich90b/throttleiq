@@ -1092,6 +1092,7 @@ export async function parseCadencePersonalizationLineWithLLM(args: {
     "- Do not invent facts.",
     "- Do not include pricing/inventory asks, links, calls-to-action, or appointment prompts.",
     "- Avoid sensitive details (medical/legal/financial specifics).",
+    "- Do not reference family milestones/events (birthday, party, graduation, wedding, anniversary) even if mentioned in passing.",
     "- Be tense-safe: if timing is uncertain or likely past, prefer past/neutral phrasing like \"went well\" or \"hope everything's going smoothly.\"",
     "- Avoid assuming an ongoing event is still happening.",
     "- Do not use weather or riding-condition small talk.",

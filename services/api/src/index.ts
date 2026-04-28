@@ -5365,6 +5365,13 @@ function isBlockedCadencePersonalizationLine(lineRaw: string): boolean {
     return true;
   }
   if (
+    /\b(birthday|b-?day|party|graduation|wedding|anniversary|sweet\s*16|sixteenth|plans?\s+are\s+coming\s+together)\b/i.test(
+      line
+    )
+  ) {
+    return true;
+  }
+  if (
     /\b(weather|sunny|rain|rainy|snow|snowy|windy|cold|warm|hot|chilly|riding weather|good for riding|ride around|riding around)\b/i.test(
       line
     )
