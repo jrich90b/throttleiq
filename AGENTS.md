@@ -1270,3 +1270,13 @@ When changing responses:
   - added the same spoken alias normalization to model tokenization and canonical model mapping (`Tri Glide Ultra`) for consistency across parser/router paths.
 - Purpose:
   - customer replies like `Saturday morning` now route into scheduling with offered slots, and `triglycerides` resolves to Tri Glide intent/model instead of drifting.
+
+## LLM Few-Shot Boost (Tri Glide + Saturday Scheduling)
+- In `services/api/src/domain/llmDraft.ts`:
+  - expanded voice-style few-shot examples across parsers:
+    - `parseBookingIntentWithLLM(...)`: adds Saturday scheduling examples including `tri glide` and ASR typo `triglycerides`.
+    - `parseIntentWithLLM(...)`: adds examples so mixed model mention + Saturday timing stays `intent=none` (letting scheduling parser handle sloting) while still extracting `availability.model=Tri Glide`.
+    - `parseConversationStateWithLLM(...)`: adds examples that classify the same language as `state_intent=scheduling` with `explicit_request=true`.
+    - `parseInventoryEntitiesWithLLM(...)`: adds alias examples mapping `triglycerides` -> `Tri Glide`.
+- Purpose:
+  - make live draft + regenerate much more consistent for spoken-typo tri-glide requests that also ask for Saturday morning scheduling.
