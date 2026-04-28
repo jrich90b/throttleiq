@@ -2203,6 +2203,26 @@ export async function parseBookingIntentWithLLM(args: {
   lastSuggestedSlots?: { startLocal?: string | null }[];
   appointment?: any;
 }): Promise<BookingParse | null> {
+  const isScheduleDeferralWithoutAsk = (input: string): boolean => {
+    const t = String(input ?? "").toLowerCase().trim();
+    if (!t) return false;
+    const firstPersonDeferral =
+      /\b(i(?:'|’)?ll|i\s+will|we(?:'|’)?ll|we\s+will)\s+(?:let\s+you\s+know|get\s+back\s+to\s+you|reach\s+out|text\s+you|call\s+you)\b/.test(
+        t
+      ) ||
+      (/\blet\s+you\s+know\b/.test(t) &&
+        /\b(later|later today|later tonight|tomorrow|next week|when i know|when i can|once i know|once i can)\b/.test(
+          t
+        ));
+    const explicitScheduleAsk =
+      /\b(can\s+we|could\s+we|what\s+time|what\s+day|does\s+\w+\s+work|works?\s+for\s+you|schedule|book|appointment|available|openings?|come\s+in|stop\s+in)\b/.test(
+        t
+      ) ||
+      /\b(can|could)\s+\w+\s+work\b/.test(t) ||
+      /\?\s*$/.test(t);
+    return firstPersonDeferral && !explicitScheduleAsk;
+  };
+
   const useLLM =
     process.env.LLM_ENABLED === "1" &&
     process.env.LLM_BOOKING_PARSER_ENABLED === "1" &&
@@ -2239,6 +2259,7 @@ export async function parseBookingIntentWithLLM(args: {
     'input: "Customer: can we move that to saturday morning?" output: {"intent":"reschedule","explicit_request":true,"requested":{"day":"saturday","time_text":"morning","time_window":"range"},"reference":"last_appointment","normalized_text":"saturday morning","confidence":0.94}',
     'input: "Customer: can you move me later than that time?" output: {"intent":"reschedule","explicit_request":true,"requested":{"day":"","time_text":"later","time_window":"range"},"reference":"last_suggested","normalized_text":"later than last suggested","confidence":0.9}',
     'input: "Customer: what openings do you have friday?" output: {"intent":"availability","explicit_request":true,"requested":{"day":"friday","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"friday","confidence":0.95}',
+    'input: "Customer: i will let you know a time later today" output: {"intent":"none","explicit_request":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.95}',
     'input: "Customer: payments are too high right now" output: {"intent":"none","explicit_request":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.93}'
   ];
 
@@ -2361,6 +2382,17 @@ export async function parseBookingIntentWithLLM(args: {
     typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
+
+  // Guardrail: first-person deferrals ("I'll let you know later today") are not schedule asks.
+  if (isScheduleDeferralWithoutAsk(messageText)) {
+    intent = "none";
+    explicitRequest = false;
+    day = null;
+    timeText = null;
+    timeWindow = "unknown";
+    reference = "none";
+    normalizedText = "";
+  }
 
   return {
     intent,

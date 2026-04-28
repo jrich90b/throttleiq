@@ -229,6 +229,7 @@ Key hard rules:
 We gate LLM intent/booking parsing by confidence and ask a clarification when low confidence:
 - Intent parser: `explicit_request && confidence >= LLM_INTENT_CONFIDENCE_MIN` (default 0.75)
 - Booking parser: `explicit_request && confidence >= LLM_BOOKING_CONFIDENCE_MIN` (default 0.70)
+- Booking deferral guardrail: first-person deferrals such as “I’ll let you know later today” must resolve to `intent=none` (not scheduling/day-only), so live + regenerate do not rewrite drafts to `today can work...`.
 - If booking confidence is low and there’s no clear day/time signal, ask a single clarification:
   - “Just to confirm — are you looking to set a time to stop in?”
 - If callback/test‑ride/availability confidence is low, ask a single clarification:
