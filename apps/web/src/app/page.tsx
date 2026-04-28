@@ -4889,41 +4889,66 @@ export default function Home() {
       if (!resp.ok || data?.ok === false) {
         throw new Error(data?.error ?? "Failed to mark sold");
       }
-      if (data?.conversation) {
-        const conv = data.conversation as ConversationDetail & { messages?: Message[] };
-        if (selectedConv?.id === conv.id) {
-          setSelectedConv(conv);
-        }
-        setConversations(prev =>
-          prev.map(c => {
-            if (c.id !== conv.id) return c;
-            const last = Array.isArray(conv.messages) ? conv.messages[conv.messages.length - 1] : null;
-            return {
-              ...c,
-              status: conv.status ?? c.status,
-              closedReason: conv.closedReason ?? c.closedReason,
-              sale: conv.sale ?? c.sale,
-              hold: conv.hold ?? c.hold,
-              followUp: conv.followUp ?? c.followUp,
-              followUpCadence: conv.followUpCadence ?? c.followUpCadence,
-              updatedAt: conv.updatedAt ?? c.updatedAt,
-              messageCount: Array.isArray(conv.messages) ? conv.messages.length : c.messageCount,
-              lastMessage: last
-                ? {
-                    direction: last.direction,
-                    body: last.body,
-                    provider: last.provider
-                  }
-                : c.lastMessage ?? null
-            };
-          })
-        );
+      const nowIso = new Date().toISOString();
+      const optimisticSale = {
+        soldAt: nowIso,
+        soldById: soldById || undefined,
+        soldByName: soldByName || undefined,
+        year: soldPayload.year,
+        make: soldPayload.make,
+        model: soldPayload.model,
+        trim: soldPayload.trim,
+        color: soldPayload.color,
+        stockId: soldPayload.stockId,
+        vin: soldPayload.vin,
+        label: soldPayload.label,
+        note: soldPayload.note
+      };
+      const conv =
+        data?.conversation != null
+          ? (data.conversation as ConversationDetail & { messages?: Message[] })
+          : (({
+              ...(soldModalConv as any),
+              status: "closed",
+              closedReason: "sold",
+              closedAt: nowIso,
+              sale: optimisticSale,
+              updatedAt: nowIso
+            } as ConversationDetail & { messages?: Message[] }));
+      if (selectedConv?.id === conv.id) {
+        setSelectedConv(conv);
       }
+      setConversations(prev =>
+        prev.map(c => {
+          if (c.id !== conv.id) return c;
+          const last = Array.isArray(conv.messages) ? conv.messages[conv.messages.length - 1] : null;
+          return {
+            ...c,
+            status: conv.status ?? "closed",
+            closedReason: conv.closedReason ?? "sold",
+            sale: conv.sale ?? optimisticSale,
+            hold: conv.hold ?? c.hold,
+            followUp: conv.followUp ?? c.followUp,
+            followUpCadence: conv.followUpCadence ?? c.followUpCadence,
+            updatedAt: conv.updatedAt ?? nowIso,
+            messageCount: Array.isArray(conv.messages) ? conv.messages.length : c.messageCount,
+            lastMessage: last
+              ? {
+                  direction: last.direction,
+                  body: last.body,
+                  provider: last.provider
+                }
+              : c.lastMessage ?? null
+          };
+        })
+      );
       setSaveToast("Saved");
       setCloseReason("");
       setSoldById("");
       setSoldModalOpen(false);
-      await load();
+      window.setTimeout(() => {
+        void load().catch(() => {});
+      }, 350);
     } catch (err: any) {
       setSoldError(err?.message ?? "Failed to mark sold");
     } finally {
@@ -17491,9 +17516,9 @@ export default function Home() {
             {soldModalOpen ? (
               <div className="fixed inset-0 z-50 bg-black/40 overflow-y-auto">
                 <div className="min-h-full flex items-start sm:items-center justify-center p-2 sm:p-4">
-                <div className="w-full max-w-2xl max-h-[94vh] overflow-y-auto rounded-lg bg-white shadow-lg border p-3 sm:p-4">
-                  <div className="text-sm font-semibold">Mark unit sold</div>
-                  <div className="text-xs text-gray-600 mt-1">
+                <div className="w-full max-w-2xl max-h-[94vh] overflow-y-auto rounded-lg bg-white text-slate-900 shadow-lg border border-slate-300 p-3 sm:p-4">
+                  <div className="text-sm font-semibold text-slate-900">Mark unit sold</div>
+                  <div className="text-xs text-slate-700 mt-1">
                     {soldModalConv?.lead?.name ||
                       [soldModalConv?.lead?.firstName, soldModalConv?.lead?.lastName]
                         .filter(Boolean)
@@ -17504,7 +17529,7 @@ export default function Home() {
                   {soldModalConv?.sale?.label ||
                   soldModalConv?.sale?.stockId ||
                   soldModalConv?.sale?.vin ? (
-                    <div className="text-xs text-gray-500 mt-2">
+                    <div className="text-xs text-slate-700 mt-2">
                       Current sold:{" "}
                       {soldModalConv?.sale?.label ??
                         soldModalConv?.sale?.stockId ??
@@ -17513,20 +17538,20 @@ export default function Home() {
                   ) : null}
 
                   <div className="mt-3">
-                    <div className="text-xs text-gray-500 mb-1">Search inventory</div>
+                    <div className="text-xs font-medium text-slate-700 mb-1">Search inventory</div>
                     <input
-                      className="border rounded px-3 py-2 text-sm w-full"
+                      className="w-full rounded border border-slate-400 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-500 focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
                       placeholder="Search by model, stock, VIN, color..."
                       value={soldSearch}
                       onChange={e => setSoldSearch(e.target.value)}
                     />
                   </div>
 
-                  <div className="mt-3 max-h-64 overflow-auto border rounded">
+                  <div className="mt-3 max-h-64 overflow-auto border border-slate-300 rounded bg-white">
                     {soldInventoryLoading ? (
-                      <div className="p-3 text-sm text-gray-500">Loading inventory…</div>
+                      <div className="p-3 text-sm text-slate-600">Loading inventory…</div>
                     ) : soldInventoryItems.length === 0 ? (
-                      <div className="p-3 text-sm text-gray-500">No inventory items found.</div>
+                      <div className="p-3 text-sm text-slate-600">No inventory items found.</div>
                     ) : (
                       soldInventoryItems
                         .filter((it: any) => {
@@ -17560,8 +17585,8 @@ export default function Home() {
                           return (
                             <button
                               key={key || label}
-                              className={`w-full text-left px-3 py-2 border-b last:border-b-0 hover:bg-gray-50 ${
-                                isSelected ? "bg-blue-50" : ""
+                              className={`w-full text-left px-3 py-2 border-b border-slate-200 last:border-b-0 hover:bg-slate-50 ${
+                                isSelected ? "bg-orange-50" : ""
                               }`}
                               onClick={() => setSoldSelection(it)}
                               type="button"
@@ -17577,12 +17602,12 @@ export default function Home() {
                                       />
                                     </div>
                                   ) : null}
-                                  <div className="text-sm min-w-0">
-                                  <div className="font-medium">
+                                  <div className="text-sm min-w-0 text-slate-900">
+                                  <div className="font-medium text-slate-900">
                                     {label || it.model || it.stockId || it.vin}
                                     {color}
                                   </div>
-                                  <div className="text-xs text-gray-500">
+                                  <div className="text-xs text-slate-600">
                                     {it.stockId ? `Stock ${it.stockId}` : ""}
                                     {it.stockId && it.vin ? " • " : ""}
                                     {it.vin ? `VIN ${it.vin}` : ""}
@@ -17611,7 +17636,7 @@ export default function Home() {
                   <div className="mt-3">
                     <button
                       type="button"
-                      className="text-xs text-blue-700 underline"
+                      className="text-xs text-blue-800 font-medium underline"
                       onClick={() => setSoldManualOpen(v => !v)}
                     >
                       {soldManualOpen ? "Hide manual unit entry" : "Add unit manually"}
@@ -17620,57 +17645,57 @@ export default function Home() {
                   {soldManualOpen ? (
                     <div className="mt-2 grid gap-2 grid-cols-2 text-xs">
                       <input
-                        className="border rounded px-2 py-1"
+                        className="rounded border border-slate-400 bg-white px-2 py-1 text-slate-900 placeholder:text-slate-500"
                         placeholder="Year"
                         value={soldManualUnit.year ?? ""}
                         onChange={e => setSoldManualUnit((prev: any) => ({ ...prev, year: e.target.value }))}
                       />
                       <input
-                        className="border rounded px-2 py-1"
+                        className="rounded border border-slate-400 bg-white px-2 py-1 text-slate-900 placeholder:text-slate-500"
                         placeholder="Make"
                         value={soldManualUnit.make ?? ""}
                         onChange={e => setSoldManualUnit((prev: any) => ({ ...prev, make: e.target.value }))}
                       />
                       <input
-                        className="border rounded px-2 py-1"
+                        className="rounded border border-slate-400 bg-white px-2 py-1 text-slate-900 placeholder:text-slate-500"
                         placeholder="Model"
                         value={soldManualUnit.model ?? ""}
                         onChange={e => setSoldManualUnit((prev: any) => ({ ...prev, model: e.target.value }))}
                       />
                       <input
-                        className="border rounded px-2 py-1"
+                        className="rounded border border-slate-400 bg-white px-2 py-1 text-slate-900 placeholder:text-slate-500"
                         placeholder="Trim"
                         value={soldManualUnit.trim ?? ""}
                         onChange={e => setSoldManualUnit((prev: any) => ({ ...prev, trim: e.target.value }))}
                       />
                       <input
-                        className="border rounded px-2 py-1"
+                        className="rounded border border-slate-400 bg-white px-2 py-1 text-slate-900 placeholder:text-slate-500"
                         placeholder="Color"
                         value={soldManualUnit.color ?? ""}
                         onChange={e => setSoldManualUnit((prev: any) => ({ ...prev, color: e.target.value }))}
                       />
                       <input
-                        className="border rounded px-2 py-1"
+                        className="rounded border border-slate-400 bg-white px-2 py-1 text-slate-900 placeholder:text-slate-500"
                         placeholder="Stock #"
                         value={soldManualUnit.stockId ?? ""}
                         onChange={e => setSoldManualUnit((prev: any) => ({ ...prev, stockId: e.target.value }))}
                       />
                       <input
-                        className="border rounded px-2 py-1 col-span-2"
+                        className="rounded border border-slate-400 bg-white px-2 py-1 text-slate-900 placeholder:text-slate-500 col-span-2"
                         placeholder="VIN"
                         value={soldManualUnit.vin ?? ""}
                         onChange={e => setSoldManualUnit((prev: any) => ({ ...prev, vin: e.target.value }))}
                       />
-                      <div className="col-span-2 text-[11px] text-gray-500">
+                      <div className="col-span-2 text-[11px] text-slate-600">
                         Stock # or VIN is required to save a sold unit.
                       </div>
                     </div>
                   ) : null}
 
                   <div className="mt-3">
-                    <div className="text-xs text-gray-500 mb-1">Note (optional)</div>
+                    <div className="text-xs font-medium text-slate-700 mb-1">Note (optional)</div>
                     <textarea
-                      className="border rounded px-3 py-2 text-sm w-full"
+                      className="w-full rounded border border-slate-400 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-500 focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
                       rows={2}
                       value={soldNote}
                       onChange={e => setSoldNote(e.target.value)}
@@ -17678,10 +17703,14 @@ export default function Home() {
                     />
                   </div>
 
-                  {soldError ? <div className="text-xs text-red-600 mt-2">{soldError}</div> : null}
+                  {soldError ? (
+                    <div className="mt-2 rounded border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-700">
+                      {soldError}
+                    </div>
+                  ) : null}
 
                   <div className="mt-4 flex items-center justify-between">
-                    <div className="text-xs text-gray-500">
+                    <div className="text-xs text-slate-700">
                       {soldSelection
                         ? `Selected: ${[soldSelection.year, soldSelection.make, soldSelection.model, soldSelection.trim]
                             .filter(Boolean)
@@ -17697,14 +17726,14 @@ export default function Home() {
                     </div>
                     <div className="flex gap-2">
                       <button
-                        className="px-3 py-2 border rounded text-sm"
+                        className="px-3 py-2 border border-slate-400 rounded text-sm text-slate-800 hover:bg-slate-100"
                         onClick={() => setSoldModalOpen(false)}
                         disabled={soldSaving}
                       >
                         Cancel
                       </button>
                       <button
-                        className="px-3 py-2 border rounded text-sm"
+                        className="px-3 py-2 rounded text-sm bg-orange-600 text-white hover:bg-orange-500 disabled:opacity-60"
                         onClick={() => submitSold(soldSelection)}
                         disabled={soldSaving}
                       >

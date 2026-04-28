@@ -78,6 +78,12 @@ Required order:
 
 ## UI Contrast Guardrail
 - Any inline light-surface action panel (for example Task Inbox reassign inline card) must include the `data-actions-menu` hook so form controls inherit enforced high-contrast white-surface styling in dark theme.
+- Sold/closed update modal (`Mark unit sold`) should keep high-contrast text + form controls on white surfaces (labels/helper text/actions) so dark-theme overlays remain readable.
+
+## Sold Close UX
+- In web sold-close flow (`submitSold` in `apps/web/src/app/page.tsx`), apply immediate optimistic state update/close on successful save and defer full list reload briefly.
+- Purpose:
+  - avoid stale immediate reloads that make sold state appear unsaved until manual refresh.
 
 ## Contacts Groups UX Guardrail
 - In Contacts, keep group-open actions explicit and separate:
