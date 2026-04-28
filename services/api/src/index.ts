@@ -2847,7 +2847,8 @@ function isStreetGlide3Variant(model: string | null | undefined): boolean {
   if (!t) return false;
   return (
     /\bflhlt\b/.test(t) ||
-    /\bstreet glide\s*(3|iii)\b/.test(t) ||
+    /\bstreet glide(?:\s+limited)?\s*(3|iii)\b/.test(t) ||
+    /\bstreet glide limited iii\b/.test(t) ||
     /\bstreet glide trike\b/.test(t)
   );
 }
@@ -3164,7 +3165,14 @@ function canonicalizeWatchModelLabel(model: string | null | undefined): string {
   if (/\b(fxlrs|lrs)\b/.test(t) || /\blow rider s\b/.test(t)) return "Low Rider S";
   if (isRoadGlide3Variant(cleaned)) return "Road Glide 3";
   if (isStreetGlide3Variant(cleaned)) return "Street Glide 3 Limited";
-  if (/\bflhtcutg\b/.test(t) || /\btri glide(?:\s+ultra)?\b/.test(t)) return "Tri Glide Ultra";
+  if (
+    /\bflhtcutg\b/.test(t) ||
+    /\btri glide(?:\s+ultra)?\b/.test(t) ||
+    /\btri\s*glyc(?:eride|erides|erid(?:es)?)\b/.test(t) ||
+    /\bstreet glide limited iii\b/.test(t)
+  ) {
+    return "Street Glide 3 Limited";
+  }
   if (/\bflhxxx\b/.test(t) || /\bstreet glide trike\b/.test(t)) return "Street Glide Trike";
   if (/\bra1250st\b/.test(t) || /\bpan america(?:\s+1250)?\s+st\b/.test(t)) return "Pan America 1250 ST";
   if (/\bra1250s\b/.test(t) || /\bpan america(?:\s+1250)?\s+special\b/.test(t)) return "Pan America Special";
@@ -6427,6 +6435,9 @@ function normalizeModelText(val?: string | null): string {
     .replace(/\s*\/\s*anniversary\s+edition\b/g, " ")
     .replace(/\banniversary\s+edition\b/g, " ")
     .replace(/\banniversary\b/g, " ")
+    .replace(/\bstreet\s+glide\s+limited\s+iii\b/g, "street glide 3 limited")
+    .replace(/\btri\s*glyc(?:eride|erides|erid(?:es)?)\b/g, "street glide 3 limited")
+    .replace(/\btri\s+glide(?:\s+ultra)?\b/g, "street glide 3 limited")
     // common typing/plural variants that affect trim-specific matching
     .replace(/\bstreet\s+glides\b/g, "street glide")
     .replace(/\broad\s+glides\b/g, "road glide")
@@ -7001,6 +7012,8 @@ const DEFAULT_HARLEY_MODELS = [
   "Street Glide Liberty",
   "Street Glide Liberty Edition",
   "Street Glide 3",
+  "Street Glide 3 Limited",
+  "Street Glide Limited III",
   "Pan America Special",
   "Pan America Limited",
   "CVO Road Glide",

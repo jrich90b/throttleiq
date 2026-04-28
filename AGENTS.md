@@ -1280,3 +1280,19 @@ When changing responses:
     - `parseInventoryEntitiesWithLLM(...)`: adds alias examples mapping `triglycerides` -> `Tri Glide`.
 - Purpose:
   - make live draft + regenerate much more consistent for spoken-typo tri-glide requests that also ask for Saturday morning scheduling.
+
+## Tri Glide Canonicalization -> Street Glide 3 Limited
+- In `services/api/src/domain/orchestrator.ts`:
+  - normalized spoken aliases (`triglycerides`, `triglide`, `tri glide`, `Street Glide Limited III`) to canonical `street glide 3 limited` before model extraction.
+  - expanded trike style-family detection/matching to include `street glide 3 limited` phrasing.
+  - added `Street Glide 3 Limited` / `Street Glide Limited III` to default model candidates.
+- In `services/api/src/routes/sendgridInbound.ts`:
+  - unified walk-in/watch/model normalization so `tri glide`/`triglycerides`/`FLHTCUTG` and `Street Glide Limited III` all resolve to `Street Glide 3 Limited`.
+- In `services/api/src/index.ts`:
+  - expanded `isStreetGlide3Variant(...)` to include `Street Glide Limited III`.
+  - changed watch-model canonicalization so tri-glide variants resolve to `Street Glide 3 Limited` (instead of splitting into separate Tri Glide label).
+  - added `Street Glide 3 Limited` and `Street Glide Limited III` into default Harley model lexicon.
+- In `services/api/src/domain/llmDraft.ts`:
+  - updated few-shot parser examples to emit `Street Glide 3 Limited` for tri-glide/triglycerides phrases.
+- Purpose:
+  - prevent lead context from snapping back to Heritage when customer switches to tri-glide language, and keep regenerate aligned with the canonical Street Glide 3 Limited label.

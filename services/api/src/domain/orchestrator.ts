@@ -1054,15 +1054,22 @@ type InventoryStyleFamily = "grand_american_touring" | "cruiser" | "sport" | "ad
 
 function normalizeSpokenModelAliases(text?: string | null): string {
   return String(text ?? "")
-    .replace(/\btri[\s-]*glyc(?:eride|erides|erid(?:es)?)\b/gi, "tri glide")
-    .replace(/\btri[\s-]*glides?\b/gi, "tri glide");
+    .replace(/\btri[\s-]*glyc(?:eride|erides|erid(?:es)?)\b/gi, "street glide 3 limited")
+    .replace(/\btri[\s-]*glides?\b/gi, "street glide 3 limited")
+    .replace(/\bstreet\s+glide\s+limited\s+iii\b/gi, "street glide 3 limited");
 }
 
 function detectInventoryStyleFamily(text?: string | null): InventoryStyleFamily | null {
   const t = normalizeSpokenModelAliases(text).toLowerCase();
   if (!t.trim()) return null;
   if (/\b(adventure touring|adventure|pan america|pan-am)\b/.test(t)) return "adventure_touring";
-  if (/\b(trike|tri glide|freewheeler|road glide trike|street glide trike)\b/.test(t)) return "trike";
+  if (
+    /\b(trike|tri glide|freewheeler|road glide trike|street glide trike|street glide\s*(?:3|iii)\s*limited?|street glide limited iii)\b/.test(
+      t
+    )
+  ) {
+    return "trike";
+  }
   if (/\b(grand american touring|touring|bagger)\b/.test(t)) return "grand_american_touring";
   if (/\b(cruiser|softail|breakout|street bob|fat boy|fat bob|low rider|heritage)\b/.test(t)) return "cruiser";
   if (/\b(sport|sportster|nightster|street 750|rh975|rh1250)\b/.test(t)) return "sport";
@@ -1090,7 +1097,11 @@ function inventoryItemMatchesStyleFamily(item: { model?: string | null }, family
   const m = String(item?.model ?? "").toLowerCase();
   if (!m) return false;
   if (family === "adventure_touring") return /\bpan america\b/.test(m);
-  if (family === "trike") return /\b(tri glide|freewheeler|road glide trike|street glide trike)\b/.test(m);
+  if (family === "trike") {
+    return /\b(tri glide|freewheeler|road glide trike|street glide trike|street glide\s*(?:3|iii)\s*limited?|street glide limited iii)\b/.test(
+      m
+    );
+  }
   if (family === "grand_american_touring") {
     return /\b(road glide|street glide|road king|electra glide|ultra|road glide limited|street glide limited)\b/.test(
       m
@@ -1238,6 +1249,8 @@ const DEFAULT_MODEL_FALLBACK = [
   "Softail Standard",
   "Electra Glide",
   "Ultra Limited",
+  "Street Glide 3 Limited",
+  "Street Glide Limited III",
   "Tri Glide",
   "Freewheeler",
   "Iron 883",

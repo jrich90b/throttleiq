@@ -123,8 +123,10 @@ function maybeTagReplyTo(replyTo: string | undefined, conv: any): string | undef
 
 function normalizeModelToken(raw: string): string {
   return String(raw ?? "")
-    .replace(/\btri[\s-]*glyc(?:eride|erides|erid(?:es)?)\b/gi, "tri glide")
-    .replace(/\btri[\s-]*glides?\b/gi, "tri glide")
+    .replace(/\bstreet\s+glide\s+limited\s+iii\b/gi, "street glide 3 limited")
+    .replace(/\btri[\s-]*glyc(?:eride|erides|erid(?:es)?)\b/gi, "street glide 3 limited")
+    .replace(/\btri[\s-]*glides?\b/gi, "street glide 3 limited")
+    .replace(/\btri[\s-]*glide(?:\s+ultra)?\b/gi, "street glide 3 limited")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
@@ -724,6 +726,10 @@ let modelTokenKeyIndexCache: Map<string, Set<string>> | null = null;
 function tokenizeModelWords(input?: string | null): string[] {
   if (!input) return [];
   return String(input)
+    .replace(/\bstreet\s+glide\s+limited\s+iii\b/gi, "street glide 3 limited")
+    .replace(/\btri[\s-]*glyc(?:eride|erides|erid(?:es)?)\b/gi, "street glide 3 limited")
+    .replace(/\btri[\s-]*glides?\b/gi, "street glide 3 limited")
+    .replace(/\btri[\s-]*glide(?:\s+ultra)?\b/gi, "street glide 3 limited")
     .toLowerCase()
     .replace(/\bharley[-\s]?davidson\b/g, " ")
     .replace(/\bh[-\s]?d\b/g, " ")
@@ -1542,7 +1548,12 @@ function extractWalkInModelHint(text?: string | null): string | undefined {
   if (/\b(sportster\s*883|xl\s*883|xl883c)\b/.test(t)) return "Sportster 883";
   if (/\b(sportster|xl883c|xl\s*883|883)\b/.test(t)) return "Sportster";
   if (/\b(road glide\s*(3|iii)|fltrt)\b/.test(t)) return "Road Glide 3";
-  if (/\b(street glide\s*(3|iii)|flhlt)\b/.test(t)) return "Street Glide 3 Limited";
+  if (/\b(street glide(?:\s+limited)?\s*(3|iii)|street glide limited iii|flhlt)\b/.test(t)) {
+    return "Street Glide 3 Limited";
+  }
+  if (/\b(tri[\s-]?glide|tri\s*glyc(?:eride|erides|erid(?:es)?)|flhtcutg)\b/.test(t)) {
+    return "Street Glide 3 Limited";
+  }
   return undefined;
 }
 
@@ -1700,7 +1711,9 @@ function extractWatchDirectiveModelHint(text?: string | null): string | undefine
   if (walkInModelHint) return walkInModelHint;
   if (/\b(?:touring|bagger)\b/.test(segmentLower)) return "Touring";
   if (/\b(?:trike|trikes)\b/.test(segmentLower)) return "Trike";
-  if (/\b(?:tri[\s-]?glide)\b/.test(segmentLower)) return "Tri Glide Ultra";
+  if (/\b(?:tri[\s-]?glide|tri\s*glyc(?:eride|erides|erid(?:es)?)|street glide limited iii)\b/.test(segmentLower)) {
+    return "Street Glide 3 Limited";
+  }
   if (/\b(?:road\s+glide)\b/.test(segmentLower)) return "Road Glide";
   if (/\b(?:street\s+glide)\b/.test(segmentLower)) return "Street Glide";
   if (/\b(?:road\s+king)\b/.test(segmentLower)) return "Road King";
@@ -2182,14 +2195,19 @@ function normalizeVehicleModel(raw?: string | null, make?: string | null): strin
   if (/\bfltrt\b/.test(normalized) || /\broad glide\s*(?:3|iii)\b/.test(normalized)) {
     return "Road Glide 3";
   }
-  if (/\bflhlt(?:se)?\b/.test(normalized) || /\bstreet glide\s*(?:3|iii)\b/.test(normalized)) {
+  if (
+    /\bflhlt(?:se)?\b/.test(normalized) ||
+    /\bstreet glide(?:\s+limited)?\s*(?:3|iii)\b/.test(normalized) ||
+    /\bstreet glide limited iii\b/.test(normalized)
+  ) {
     return "Street Glide 3 Limited";
   }
-  if (/\bflhtcutg\b/.test(normalized) || /\btri glide(?:\s+ultra)?\b/.test(normalized)) {
-    return "Tri Glide Ultra";
-  }
-  if (/\btri\s*glyc(?:eride|erides|erid(?:es)?)\b/.test(normalized)) {
-    return "Tri Glide Ultra";
+  if (
+    /\bflhtcutg\b/.test(normalized) ||
+    /\btri glide(?:\s+ultra)?\b/.test(normalized) ||
+    /\btri\s*glyc(?:eride|erides|erid(?:es)?)\b/.test(normalized)
+  ) {
+    return "Street Glide 3 Limited";
   }
   if (/\bflhxxx\b/.test(normalized) || /\bstreet glide trike\b/.test(normalized)) {
     return "Street Glide Trike";
