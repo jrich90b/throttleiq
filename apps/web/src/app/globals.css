@@ -476,18 +476,41 @@ input[type="reset"],
 .lr-app-theme .lr-light-modal input,
 .lr-app-theme .lr-light-modal select,
 .lr-app-theme .lr-light-modal textarea,
+.lr-app-theme .lr-app-main-panel .lr-light-modal input,
+.lr-app-theme .lr-app-main-panel .lr-light-modal select,
+.lr-app-theme .lr-app-main-panel .lr-light-modal textarea,
+.lr-app-theme .lr-app-sidebar-panel .lr-light-modal input,
+.lr-app-theme .lr-app-sidebar-panel .lr-light-modal select,
+.lr-app-theme .lr-app-sidebar-panel .lr-light-modal textarea,
 .lr-campaign-theme .lr-light-modal input,
 .lr-campaign-theme .lr-light-modal select,
-.lr-campaign-theme .lr-light-modal textarea {
+.lr-campaign-theme .lr-light-modal textarea,
+.lr-campaign-theme .lr-app-main-panel .lr-light-modal input,
+.lr-campaign-theme .lr-app-main-panel .lr-light-modal select,
+.lr-campaign-theme .lr-app-main-panel .lr-light-modal textarea,
+.lr-campaign-theme .lr-app-sidebar-panel .lr-light-modal input,
+.lr-campaign-theme .lr-app-sidebar-panel .lr-light-modal select,
+.lr-campaign-theme .lr-app-sidebar-panel .lr-light-modal textarea {
   background: #ffffff !important;
   border-color: #cbd5e1 !important;
   color: #0f172a !important;
+  -webkit-text-fill-color: #0f172a !important;
+  caret-color: #0f172a !important;
+  opacity: 1 !important;
 }
 
 .lr-app-theme .lr-light-modal input::placeholder,
 .lr-app-theme .lr-light-modal textarea::placeholder,
+.lr-app-theme .lr-app-main-panel .lr-light-modal input::placeholder,
+.lr-app-theme .lr-app-main-panel .lr-light-modal textarea::placeholder,
+.lr-app-theme .lr-app-sidebar-panel .lr-light-modal input::placeholder,
+.lr-app-theme .lr-app-sidebar-panel .lr-light-modal textarea::placeholder,
 .lr-campaign-theme .lr-light-modal input::placeholder,
-.lr-campaign-theme .lr-light-modal textarea::placeholder {
+.lr-campaign-theme .lr-light-modal textarea::placeholder,
+.lr-campaign-theme .lr-app-main-panel .lr-light-modal input::placeholder,
+.lr-campaign-theme .lr-app-main-panel .lr-light-modal textarea::placeholder,
+.lr-campaign-theme .lr-app-sidebar-panel .lr-light-modal input::placeholder,
+.lr-campaign-theme .lr-app-sidebar-panel .lr-light-modal textarea::placeholder {
   color: #64748b !important;
   opacity: 1;
 }
@@ -495,12 +518,51 @@ input[type="reset"],
 .lr-app-theme .lr-light-modal input:focus,
 .lr-app-theme .lr-light-modal select:focus,
 .lr-app-theme .lr-light-modal textarea:focus,
+.lr-app-theme .lr-app-main-panel .lr-light-modal input:focus,
+.lr-app-theme .lr-app-main-panel .lr-light-modal select:focus,
+.lr-app-theme .lr-app-main-panel .lr-light-modal textarea:focus,
+.lr-app-theme .lr-app-sidebar-panel .lr-light-modal input:focus,
+.lr-app-theme .lr-app-sidebar-panel .lr-light-modal select:focus,
+.lr-app-theme .lr-app-sidebar-panel .lr-light-modal textarea:focus,
 .lr-campaign-theme .lr-light-modal input:focus,
 .lr-campaign-theme .lr-light-modal select:focus,
-.lr-campaign-theme .lr-light-modal textarea:focus {
+.lr-campaign-theme .lr-light-modal textarea:focus,
+.lr-campaign-theme .lr-app-main-panel .lr-light-modal input:focus,
+.lr-campaign-theme .lr-app-main-panel .lr-light-modal select:focus,
+.lr-campaign-theme .lr-app-main-panel .lr-light-modal textarea:focus,
+.lr-campaign-theme .lr-app-sidebar-panel .lr-light-modal input:focus,
+.lr-campaign-theme .lr-app-sidebar-panel .lr-light-modal select:focus,
+.lr-campaign-theme .lr-app-sidebar-panel .lr-light-modal textarea:focus {
   outline: none;
   border-color: #60a5fa !important;
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+.lr-app-theme .lr-light-modal input:disabled,
+.lr-app-theme .lr-light-modal select:disabled,
+.lr-app-theme .lr-light-modal textarea:disabled,
+.lr-app-theme .lr-app-main-panel .lr-light-modal input:disabled,
+.lr-app-theme .lr-app-main-panel .lr-light-modal select:disabled,
+.lr-app-theme .lr-app-main-panel .lr-light-modal textarea:disabled,
+.lr-campaign-theme .lr-light-modal input:disabled,
+.lr-campaign-theme .lr-light-modal select:disabled,
+.lr-campaign-theme .lr-light-modal textarea:disabled,
+.lr-campaign-theme .lr-app-main-panel .lr-light-modal input:disabled,
+.lr-campaign-theme .lr-app-main-panel .lr-light-modal select:disabled,
+.lr-campaign-theme .lr-app-main-panel .lr-light-modal textarea:disabled {
+  background: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  color: #334155 !important;
+  -webkit-text-fill-color: #334155 !important;
+  opacity: 1 !important;
+}
+
+.lr-app-theme .lr-light-modal input:-webkit-autofill,
+.lr-app-theme .lr-light-modal textarea:-webkit-autofill,
+.lr-campaign-theme .lr-light-modal input:-webkit-autofill,
+.lr-campaign-theme .lr-light-modal textarea:-webkit-autofill {
+  -webkit-text-fill-color: #0f172a !important;
+  box-shadow: 0 0 0 1000px #ffffff inset !important;
 }
 
 .lr-app-theme .lr-light-modal button:not([style]),
