@@ -185,7 +185,12 @@ function detectTradeRequest(text: string): boolean {
 
 function hasStrongIntentSignal(text: string): boolean {
   const t = text.toLowerCase();
+  const dayPartSchedulingPhrase =
+    /\b(morning|afternoon|evening|tonight|tonite)\b/.test(t) &&
+    (/\b(work|works|open|available|availability|time)\b/.test(t) ||
+      /\b(can|could|would|does|do|will)\b/.test(t));
   return (
+    dayPartSchedulingPhrase ||
     detectTradeRequest(t) ||
     /(stock|vin|available|availability|still there|in stock)/.test(t) ||
     /(price|pricing|tax|fees|total|otd|out the door|payment|monthly|finance|credit|apr|down|term|budget|\bdeal(?:s)?\b|rebate|incentive)/.test(t) ||

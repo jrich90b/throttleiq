@@ -1222,6 +1222,13 @@ When changing responses:
 - Purpose:
   - prevent responses like `I have Mon, Apr 27...` when customer says they are unavailable until a future date, and keep regenerate behavior aligned.
 
+## Scheduling Day-Part Guardrail (Small-Talk Bypass)
+- In `services/api/src/domain/orchestrator.ts`:
+  - strengthened `hasStrongIntentSignal(...)` to treat day-part scheduling phrases as intentful (for example `does the morning work`, `can we do afternoon`, `evening available`).
+  - this prevents short scheduling asks from being misclassified as small-talk and returning generic replies like `Sounds good.`.
+- Purpose:
+  - keep scheduling-intent turns routed into slot/time handling instead of ack-only small-talk responses.
+
 ## Jump Start Experience Routing (Stationary Simulator, Not Road Test Ride)
 - In `services/api/src/domain/llmDraft.ts`:
   - added parser/router few-shot guidance so jump-start/riding-academy-prep inquiries route as scheduling stop-ins (not inventory-gated test rides).
