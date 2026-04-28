@@ -2008,6 +2008,29 @@ function hasNonSalesInquiryLanguage(text: string): boolean {
   return !purchaseIntentPattern.test(normalized);
 }
 
+function hasInboundNonSalesIntentForHeat(conv: Conversation): boolean {
+  const adfInquiryTexts = extractInboundAdfInquiryTexts(conv);
+  if (adfInquiryTexts.some(hasNonSalesInquiryLanguage)) return true;
+
+  const inboundMessages = (conv.messages ?? []).filter(m => m?.direction === "in");
+  if (!inboundMessages.length) return false;
+  for (const m of inboundMessages) {
+    const rawBody = String(m?.body ?? "");
+    if (!rawBody) continue;
+    const provider = String(m?.provider ?? "").toLowerCase();
+    const normalizedBody = rawBody.replace(/\s+/g, " ").trim();
+    if (!normalizedBody) continue;
+    if (provider === "sendgrid_adf") continue;
+
+    let text = normalizedBody;
+    const inquiryIdx = text.toLowerCase().lastIndexOf("inquiry:");
+    if (inquiryIdx >= 0) text = text.slice(inquiryIdx + "inquiry:".length).trim();
+    if (!text) continue;
+    if (hasNonSalesInquiryLanguage(text)) return true;
+  }
+  return false;
+}
+
 function isNonSalesLeadForHeat(conv: Conversation): boolean {
   const bucket = String(conv.classification?.bucket ?? "").trim().toLowerCase();
   const cta = String(conv.classification?.cta ?? "").trim().toLowerCase();
@@ -2016,8 +2039,7 @@ function isNonSalesLeadForHeat(conv: Conversation): boolean {
   const nonDealCtas = new Set(["service_request", "parts_request", "apparel_request"]);
   if (nonDealBuckets.has(bucket) || nonDealCtas.has(cta)) return true;
   if (/\b(service|parts?|apparel|motorclothes)\b/.test(leadSource)) return true;
-  const adfInquiryTexts = extractInboundAdfInquiryTexts(conv);
-  if (adfInquiryTexts.some(hasNonSalesInquiryLanguage)) return true;
+  if (hasInboundNonSalesIntentForHeat(conv)) return true;
   return false;
 }
 

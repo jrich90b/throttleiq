@@ -86,6 +86,7 @@ Required order:
 - 🔥 hot-deal tagging is sales-only.
 - Service / Parts / Apparel leads (classification bucket/CTA or lead-source keyword) must never be tagged hot in API heat computation or UI fallback display logic.
 - If classification/source are missing or wrong, ADF inbound inquiry text (for example oil change, inspection, maintenance, repair, parts/part number) must still force non-sales and suppress `hot`.
+- Heat suppression for non-sales must also inspect inbound message text at thread level (not only latest message/classification) so previously-engaged sales threads that later become service/parts are not shown as hot.
 
 ## Sold Close UX
 - In web sold-close flow (`submitSold` in `apps/web/src/app/page.tsx`), apply immediate optimistic state update/close on successful save and defer full list reload briefly.
