@@ -1258,3 +1258,15 @@ When changing responses:
   - prevents jump-start turns from setting test-ride state, test-ride appointment type, or inventory-gated test-ride responses.
 - Purpose:
   - jump-start messages now offer stop-in times directly (stationary simulator workflow) instead of requiring an in-stock road-test bike selection.
+
+## Test Ride Scheduling Guardrail + Tri Glide Speech Alias
+- In `services/api/src/index.ts`:
+  - narrowed Twilio test-ride quick-path to requirement-only questions (`what do I need to bring`, `helmet`, `endorsement`, etc.).
+  - removed broad matching that caught general scheduling turns mentioning past test-ride context and prevented slot offers.
+- In `services/api/src/domain/orchestrator.ts`:
+  - strengthened schedule-intent detection to treat `day + day-part` phrasing (for example `Saturday morning`) as explicit scheduling intent.
+  - added spoken-model alias normalization so ASR typos like `triglycerides` normalize to `tri glide` for model/style routing.
+- In `services/api/src/routes/sendgridInbound.ts`:
+  - added the same spoken alias normalization to model tokenization and canonical model mapping (`Tri Glide Ultra`) for consistency across parser/router paths.
+- Purpose:
+  - customer replies like `Saturday morning` now route into scheduling with offered slots, and `triglycerides` resolves to Tri Glide intent/model instead of drifting.

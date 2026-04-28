@@ -985,10 +985,14 @@ function detectInternationalBuyer(_text: string, from?: string): boolean {
 function hasSchedulingIntent(text: string): boolean {
   const t = text.toLowerCase();
   const hasDayToken = /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(t);
+  const hasDayPart = /\b(morning|afternoon|evening|tonight|tonite)\b/.test(t);
   const hasTimeWord = /\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b/.test(t);
   const hasAtHour = /\b(?:at|for|around|by)\s*(\d{1,2})\b(?!\s*\/)/.test(t);
   const hasBareHour = /\b(1[0-2]|[1-9])\b(?!\s*\/)/.test(t);
-  if (hasDayToken && (hasTimeWord || hasAtHour || hasBareHour)) return true;
+  if (hasDayToken && (hasTimeWord || hasAtHour || hasBareHour || hasDayPart)) return true;
+  if (hasDayPart && /(works?|available|open|come in|stop in|visit|schedule|book|appointment|test ride|demo ride)/.test(t)) {
+    return true;
+  }
   return (
     /(appointment|appt|schedule|book|reserve)/.test(t) ||
     /(come in|stop in|stop by|swing by|visit)/.test(t) ||
@@ -1048,8 +1052,14 @@ function isUnknownModel(label?: string | null): boolean {
 
 type InventoryStyleFamily = "grand_american_touring" | "cruiser" | "sport" | "adventure_touring" | "trike";
 
+function normalizeSpokenModelAliases(text?: string | null): string {
+  return String(text ?? "")
+    .replace(/\btri[\s-]*glyc(?:eride|erides|erid(?:es)?)\b/gi, "tri glide")
+    .replace(/\btri[\s-]*glides?\b/gi, "tri glide");
+}
+
 function detectInventoryStyleFamily(text?: string | null): InventoryStyleFamily | null {
-  const t = String(text ?? "").toLowerCase();
+  const t = normalizeSpokenModelAliases(text).toLowerCase();
   if (!t.trim()) return null;
   if (/\b(adventure touring|adventure|pan america|pan-am)\b/.test(t)) return "adventure_touring";
   if (/\b(trike|tri glide|freewheeler|road glide trike|street glide trike)\b/.test(t)) return "trike";
@@ -1199,7 +1209,7 @@ function resolveModelFromText(
   text: string | null | undefined,
   models: string[]
 ): string | null {
-  const t = String(text ?? "").toLowerCase();
+  const t = normalizeSpokenModelAliases(text).toLowerCase();
   if (!t || !models.length) return null;
   const sorted = [...models].sort((a, b) => b.length - a.length);
   return sorted.find(m => t.includes(m.toLowerCase())) ?? null;
@@ -1245,7 +1255,7 @@ function getModelCandidates(inventoryModels: string[]): string[] {
 }
 
 function normalizeModelMatchText(text?: string | null): string {
-  return String(text ?? "")
+  return normalizeSpokenModelAliases(text)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")

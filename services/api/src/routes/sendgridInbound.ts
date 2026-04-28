@@ -123,6 +123,8 @@ function maybeTagReplyTo(replyTo: string | undefined, conv: any): string | undef
 
 function normalizeModelToken(raw: string): string {
   return String(raw ?? "")
+    .replace(/\btri[\s-]*glyc(?:eride|erides|erid(?:es)?)\b/gi, "tri glide")
+    .replace(/\btri[\s-]*glides?\b/gi, "tri glide")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
@@ -2184,6 +2186,9 @@ function normalizeVehicleModel(raw?: string | null, make?: string | null): strin
     return "Street Glide 3 Limited";
   }
   if (/\bflhtcutg\b/.test(normalized) || /\btri glide(?:\s+ultra)?\b/.test(normalized)) {
+    return "Tri Glide Ultra";
+  }
+  if (/\btri\s*glyc(?:eride|erides|erid(?:es)?)\b/.test(normalized)) {
     return "Tri Glide Ultra";
   }
   if (/\bflhxxx\b/.test(normalized) || /\bstreet glide trike\b/.test(normalized)) {

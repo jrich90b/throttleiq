@@ -33431,10 +33431,12 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
-  const testRideQuestion =
+  const testRideRequirementsQuestion =
     /\b(test ride|demo ride|ride it|take (it )?for a ride)\b/i.test(textLower) &&
-    /\b(while|when|during|there|visit|come in|stop in|stop by|appointment)\b/i.test(textLower);
-  if (event.provider === "twilio" && testRideQuestion) {
+    /\b(what do i need|what should i bring|what to bring|need to bring|requirements?|required|endorsement|dot helmet|eyewear|long pants|long sleeve|boots?|license)\b/i.test(
+      textLower
+    );
+  if (event.provider === "twilio" && testRideRequirementsQuestion) {
     const requirements =
       "For a test ride, please bring a motorcycle endorsement, a DOT helmet, eyewear, long pants, a long sleeve shirt, and over-the-ankle boots.";
     const dealerProfile = await getDealerProfileHot();
