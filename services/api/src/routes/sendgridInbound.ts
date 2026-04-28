@@ -4004,10 +4004,6 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
     if (prefersPhoneOnly) {
       addCallTodoIfMissing(conv, "Preferred contact method is phone. Call customer (no auto text/email).");
-      // In Suggest mode, still surface a draft so staff can review/send manually.
-      if (systemMode === "suggest") {
-        appendOutbound(conv, "dealership", leadKey, text, "draft_ai", undefined, mediaUrls);
-      }
       return;
     }
     if (prefersEmailOnly) {
