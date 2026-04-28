@@ -17516,7 +17516,7 @@ export default function Home() {
             {soldModalOpen ? (
               <div className="fixed inset-0 z-50 bg-black/40 overflow-y-auto">
                 <div className="min-h-full flex items-start sm:items-center justify-center p-2 sm:p-4">
-                <div className="w-full max-w-2xl max-h-[94vh] overflow-y-auto rounded-lg bg-white text-slate-900 shadow-lg border border-slate-300 p-3 sm:p-4">
+                <div className="lr-light-modal w-full max-w-2xl max-h-[94vh] overflow-y-auto rounded-lg bg-white text-slate-900 shadow-lg border border-slate-300 p-3 sm:p-4">
                   <div className="text-sm font-semibold text-slate-900">Mark unit sold</div>
                   <div className="text-xs text-slate-700 mt-1">
                     {soldModalConv?.lead?.name ||
