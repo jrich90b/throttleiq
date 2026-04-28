@@ -27751,6 +27751,36 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       })
       .slice(-1)[0];
     const lastOutboundForTrade = String(lastOutboundBeforeInbound?.body ?? "");
+    const regenMentionedModels = findMentionedModels(String(event.body ?? "").toLowerCase());
+    const regenTestRideBikeSelection = shouldTreatInboundAsTestRideBikeSelection({
+      inboundText: event.body,
+      lastOutboundText: lastOutboundForTrade,
+      dialogState: getDialogState(conv),
+      classificationBucket: conv.classification?.bucket,
+      classificationCta: conv.classification?.cta,
+      mentionedModelCount: regenMentionedModels.length
+    });
+    if (regenTestRideBikeSelection) {
+      const selectedModel = regenMentionedModels[0] ?? conv.lead?.vehicle?.model ?? conv.inventoryContext?.model ?? null;
+      const selectedYear = extractYearSingle(String(event.body ?? "").toLowerCase()) ?? conv.lead?.vehicle?.year ?? conv.inventoryContext?.year ?? null;
+      conv.lead = conv.lead ?? {};
+      conv.lead.vehicle = conv.lead.vehicle ?? {};
+      if (selectedModel) conv.lead.vehicle.model = selectedModel;
+      if (selectedYear) conv.lead.vehicle.year = String(selectedYear);
+      conv.inventoryContext = {
+        ...(conv.inventoryContext ?? {}),
+        model: selectedModel ?? conv.inventoryContext?.model,
+        year: selectedYear ? String(selectedYear) : conv.inventoryContext?.year,
+        updatedAt: nowIso()
+      };
+      setDialogState(conv, "test_ride_init");
+      const label = selectedModel
+        ? formatModelLabel(selectedYear ? String(selectedYear) : null, selectedModel)
+        : "that bike";
+      return respondWithSmsRegeneratedDraft(
+        `Got it — I can line up the test ride on the ${label}. What day and time works best?`
+      );
+    }
     const lastOutboundAskedTradeQualifier =
       /\bdo you have a trade\b/i.test(lastOutboundForTrade) || /\bany trade\b/i.test(lastOutboundForTrade);
     if (lastOutboundAskedTradeQualifier && isNoTradeResponseText(event.body ?? "")) {
