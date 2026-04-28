@@ -7692,6 +7692,7 @@ export default function Home() {
 
   const getDealTemperature = (c: ConversationListItem | null | undefined): "hot" | "warm" | "cold" | null => {
     if (!c) return null;
+    if (isNonSalesLeadConversation(c)) return null;
     const explicitTemperature = String(c.dealTemperature ?? "").trim().toLowerCase();
     if (explicitTemperature === "hot" || explicitTemperature === "warm" || explicitTemperature === "cold") {
       return explicitTemperature as "hot" | "warm" | "cold";

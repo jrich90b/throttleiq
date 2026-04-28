@@ -1978,6 +1978,36 @@ function hasActionableAdfInquiryHotIntent(conv: Conversation): boolean {
   return false;
 }
 
+function extractInboundAdfInquiryTexts(conv: Conversation): string[] {
+  const adfMessages = (conv.messages ?? []).filter(
+    m => m?.direction === "in" && String(m?.provider ?? "").toLowerCase() === "sendgrid_adf"
+  );
+  const inquiryTexts: string[] = [];
+  for (const m of adfMessages) {
+    const body = String(m?.body ?? "");
+    if (!body) continue;
+    const inquiryIdx = body.toLowerCase().lastIndexOf("inquiry:");
+    const inquiryText = (inquiryIdx >= 0 ? body.slice(inquiryIdx + "inquiry:".length) : body)
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!inquiryText) continue;
+    inquiryTexts.push(inquiryText);
+  }
+  return inquiryTexts;
+}
+
+function hasNonSalesInquiryLanguage(text: string): boolean {
+  const normalized = String(text ?? "").toLowerCase();
+  if (!normalized) return false;
+  const directNonSalesPattern =
+    /\b(oil change|nys inspection|state inspection|inspection\b|maintenance|repair|service department|service request|parts? department|part number|need\s+(?:a|an)?\s*part|order(?:ing)?\s+(?:a|an)?\s*part|motorclothes|apparel)\b/i;
+  if (directNonSalesPattern.test(normalized)) return true;
+  if (!/\bservice\b/i.test(normalized)) return false;
+  const purchaseIntentPattern =
+    /\b(test ride|buy|purchase|price|pricing|payment|finance|trade|in stock|availability|quote|appointment|schedule (?:a )?(?:test ride|visit|appointment)|street glide|road glide|nightster|sportster)\b/i;
+  return !purchaseIntentPattern.test(normalized);
+}
+
 function isNonSalesLeadForHeat(conv: Conversation): boolean {
   const bucket = String(conv.classification?.bucket ?? "").trim().toLowerCase();
   const cta = String(conv.classification?.cta ?? "").trim().toLowerCase();
@@ -1985,7 +2015,10 @@ function isNonSalesLeadForHeat(conv: Conversation): boolean {
   const nonDealBuckets = new Set(["service", "parts", "apparel"]);
   const nonDealCtas = new Set(["service_request", "parts_request", "apparel_request"]);
   if (nonDealBuckets.has(bucket) || nonDealCtas.has(cta)) return true;
-  return /\b(service|parts?|apparel|motorclothes)\b/.test(leadSource);
+  if (/\b(service|parts?|apparel|motorclothes)\b/.test(leadSource)) return true;
+  const adfInquiryTexts = extractInboundAdfInquiryTexts(conv);
+  if (adfInquiryTexts.some(hasNonSalesInquiryLanguage)) return true;
+  return false;
 }
 
 function computeStickyHotDealSignal(conv: Conversation, hasInboundTwilio: boolean): boolean {
