@@ -200,5 +200,38 @@
       "intent": "none",
       "explicit_request": false
     }
+  },
+  {
+    "id": "pricing_cash_buyer_best_price",
+    "text": "Cash buyer, what's your best price?",
+    "expected": {
+      "intent": "pricing",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "pricing_otd_fee_breakdown",
+    "text": "Does the OTD include freight, setup, doc, title, and tax?",
+    "expected": {
+      "intent": "pricing",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "none_credit_union_context",
+    "text": "I'm already approved through my credit union.",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "payments_apr_compete",
+    "text": "Can you beat 8.9 APR?",
+    "expected": {
+      "intent": "payments",
+      "explicit_request": true,
+      "asks_apr_or_term": true
+    }
   }
 ]

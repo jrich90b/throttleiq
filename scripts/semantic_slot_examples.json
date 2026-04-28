@@ -90,5 +90,57 @@
       "department_intent": "none",
       "watch_model_contains": "883"
     }
+  },
+  {
+    "id": "parts_in_stock_not_sales_inventory",
+    "text": "Do you have brake pads in stock for my 2018 Street Glide?",
+    "expected": {
+      "watch_action": "none",
+      "department_intent": "parts"
+    }
+  },
+  {
+    "id": "apparel_in_stock_not_sales_inventory",
+    "text": "Is the orange hoodie in stock in XL?",
+    "expected": {
+      "watch_action": "none",
+      "department_intent": "apparel"
+    }
+  },
+  {
+    "id": "service_openings_not_sales_schedule",
+    "text": "Any openings for a state inspection Friday?",
+    "expected": {
+      "watch_action": "none",
+      "department_intent": "service"
+    }
+  },
+  {
+    "id": "watch_shorthand_lmk_lrs",
+    "text": "lmk if you get a 23 lrs in black",
+    "expected": {
+      "watch_action": "set_watch",
+      "department_intent": "none",
+      "watch_model_contains": "lrs",
+      "watch_color_contains": "black"
+    }
+  },
+  {
+    "id": "watch_harley_code_fxlrs",
+    "text": "watch for fxlrs in vivid black",
+    "expected": {
+      "watch_action": "set_watch",
+      "department_intent": "none",
+      "watch_model_contains": "fxlrs",
+      "watch_color_contains": "black"
+    }
+  },
+  {
+    "id": "watch_stop_found_one",
+    "text": "I found one already, stop looking for me.",
+    "expected": {
+      "watch_action": "stop_watch",
+      "department_intent": "none"
+    }
   }
 ]

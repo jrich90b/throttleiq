@@ -2673,6 +2673,29 @@ export async function parseCustomerDispositionWithLLM(args: {
 
   const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
+  const examples = [
+    `EXAMPLE A
+inbound: "I think I'm going to keep my bike and hold off for now."
+output: {"disposition":"keep_current_bike","explicit_disposition":true,"timeframe_text":"","confidence":0.96}`,
+    `EXAMPLE B
+inbound: "I'm just going to sell it myself."
+output: {"disposition":"sell_on_own","explicit_disposition":true,"timeframe_text":"","confidence":0.97}`,
+    `EXAMPLE C
+inbound: "Price is too high right now, maybe after tax return."
+output: {"disposition":"defer_with_window","explicit_disposition":true,"timeframe_text":"after tax return","confidence":0.93}`,
+    `EXAMPLE D
+inbound: "I need to talk to my wife first."
+output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","confidence":0.86}`,
+    `EXAMPLE E
+inbound: "I have $2,500 down and want to stay under $500/month."
+output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","confidence":0.96}`,
+    `EXAMPLE F
+inbound: "Do you have any black Street Glides in stock?"
+output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","confidence":0.96}`,
+    `EXAMPLE G
+inbound: "I'm going to keep mine for now, but can you call me next month?"
+output: {"disposition":"keep_current_bike","explicit_disposition":true,"timeframe_text":"next month","confidence":0.92}`
+  ];
 
   const prompt = [
     "You are a parser for dealership customer disposition in inbound SMS.",
@@ -2691,7 +2714,10 @@ export async function parseCustomerDispositionWithLLM(args: {
     "- If customer says price/payment is too high or they can't afford it right now, treat as defer_no_window unless they provide a clear timeframe.",
     "- explicit_disposition=true only when disposition is clearly expressed.",
     "- timeframe_text should contain the raw timeframe phrase when disposition is defer_with_window; otherwise empty string.",
+    "- If a clear disposition is mixed with another active request, still parse the disposition but preserve any raw timeframe phrase.",
     "- confidence is 0..1.",
+    "",
+    ...examples,
     "",
     `Known lead info: ${JSON.stringify({
       model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,

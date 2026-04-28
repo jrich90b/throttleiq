@@ -285,5 +285,57 @@
       "explicit_request": true,
       "reference": "last_suggested"
     }
+  },
+  {
+    "id": "none_defer_later_today_1",
+    "text": "I'll let you know later today.",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "none_year_and_trim_number_1",
+    "text": "Do you have a 2026 Street Glide Limited 3?",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "none_media_request_1",
+    "text": "Can you send photos and a video when you can?",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "schedule_multi_day_earliest_mention_1",
+    "text": "Friday afternoon or Saturday morning works for me.",
+    "expected": {
+      "intent": "schedule",
+      "explicit_request": true,
+      "requested": {
+        "day": "friday",
+        "time_text": "afternoon",
+        "time_window": "range"
+      },
+      "normalized_contains": "friday afternoon"
+    }
+  },
+  {
+    "id": "schedule_reject_first_day_accept_second_1",
+    "text": "I can't do Friday, maybe Saturday morning.",
+    "expected": {
+      "intent": "schedule",
+      "explicit_request": true,
+      "requested": {
+        "day": "saturday",
+        "time_text": "morning",
+        "time_window": "range"
+      },
+      "normalized_contains": "saturday morning"
+    }
   }
 ]

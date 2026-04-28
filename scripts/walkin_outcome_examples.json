@@ -173,5 +173,44 @@
         ""
       ]
     }
+  },
+  {
+    "id": "walkin_watch_clause_mixed_context",
+    "text": "Liked the in-stock Road Glide, but watch for a 2024-2025 pre-owned Street Glide in blue. Follow up next week. (Step 2)",
+    "expected": {
+      "state": "none",
+      "explicit_state": false,
+      "test_ride_requested": false,
+      "weather_sensitive": false,
+      "follow_up_window_text_any_contains": [
+        "next week"
+      ]
+    }
+  },
+  {
+    "id": "outside_financing_credit_union_no_prequal_ack",
+    "text": "customer is going to the credit union this week and wants us to follow up after approval",
+    "expected": {
+      "state": "outside_financing_pending",
+      "explicit_state": true,
+      "test_ride_requested": false,
+      "weather_sensitive": false,
+      "follow_up_window_text_any_contains": [
+        "this week"
+      ]
+    }
+  },
+  {
+    "id": "generic_walkin_owner_context_none",
+    "text": "Walk In source. Vendor contact says Mike, but no salesperson is mentioned in the customer notes. Customer looked at used Road Kings.",
+    "expected": {
+      "state": "none",
+      "explicit_state": false,
+      "test_ride_requested": false,
+      "weather_sensitive": false,
+      "follow_up_window_text_any": [
+        ""
+      ]
+    }
   }
 ]

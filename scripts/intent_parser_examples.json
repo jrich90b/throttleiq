@@ -275,5 +275,37 @@
       "intent": "callback",
       "explicit_request": true
     }
+  },
+  {
+    "id": "none_parts_in_stock_1",
+    "text": "Do you have brake pads in stock for a 2018 Street Glide?",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "none_apparel_in_stock_1",
+    "text": "Is the orange hoodie in stock in XL?",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "none_media_request_1",
+    "text": "Can you send a couple photos and a video walkaround?",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
+    "id": "availability_multiline_inquiry_1",
+    "text": "Your inquiry:\nHello,\nDo you have this bike in stock?",
+    "expected": {
+      "intent": "availability",
+      "explicit_request": true
+    }
   }
 ]
