@@ -121,7 +121,7 @@
     "expected": {
       "watch_action": "set_watch",
       "department_intent": "none",
-      "watch_model_contains": "lrs",
+      "watch_model_contains": "low rider s",
       "watch_color_contains": "black"
     }
   },
@@ -131,7 +131,7 @@
     "expected": {
       "watch_action": "set_watch",
       "department_intent": "none",
-      "watch_model_contains": "fxlrs",
+      "watch_model_contains": "low rider s",
       "watch_color_contains": "black"
     }
   },
