@@ -10385,6 +10385,126 @@ function formatTime12h(time: string): string {
   return `${hour}:${minute} ${ampm}`;
 }
 
+function resolveRangeHour24(
+  rawHour: number,
+  meridiem: string,
+  otherRawHour: number,
+  otherMeridiem: string,
+  requestedHour24: number,
+  isStart: boolean
+): number {
+  const mer = meridiem.toLowerCase();
+  const otherMer = otherMeridiem.toLowerCase();
+  if (mer === "am") return rawHour === 12 ? 0 : rawHour;
+  if (mer === "pm") return rawHour === 12 ? 12 : rawHour + 12;
+  if (otherMer === "pm") {
+    if (rawHour === 12) return 12;
+    if (isStart && rawHour > otherRawHour && otherRawHour !== 12) return rawHour;
+    return rawHour + 12;
+  }
+  if (otherMer === "am") return rawHour === 12 ? 0 : rawHour;
+  const requestedIsPm = requestedHour24 >= 12;
+  return requestedIsPm && rawHour !== 12 ? rawHour + 12 : rawHour;
+}
+
+function getRequestedTimeWindow(
+  text: string | null | undefined,
+  requested: { year: number; month: number; day: number; hour24: number; minute: number } | null | undefined,
+  timeZone: string
+): { start: Date; end: Date } | null {
+  if (!requested) return null;
+  const t = String(text ?? "").toLowerCase();
+  const match = t.match(
+    /\b(?:around|about|approximately|approx|between|from)?\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:-|to|and)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/
+  );
+  if (!match) return null;
+  const startRaw = Number(match[1]);
+  const startMinute = Number(match[2] ?? "0");
+  const startMeridiem = String(match[3] ?? "");
+  const endRaw = Number(match[4]);
+  const endMinute = Number(match[5] ?? "0");
+  const endMeridiem = String(match[6] ?? "");
+  if (
+    !Number.isFinite(startRaw) ||
+    !Number.isFinite(endRaw) ||
+    startRaw < 1 ||
+    startRaw > 12 ||
+    endRaw < 1 ||
+    endRaw > 12 ||
+    startMinute < 0 ||
+    startMinute > 59 ||
+    endMinute < 0 ||
+    endMinute > 59
+  ) {
+    return null;
+  }
+  const startHour24 = resolveRangeHour24(
+    startRaw,
+    startMeridiem,
+    endRaw,
+    endMeridiem,
+    requested.hour24,
+    true
+  );
+  const endHour24 = resolveRangeHour24(
+    endRaw,
+    endMeridiem,
+    startRaw,
+    startMeridiem,
+    requested.hour24,
+    false
+  );
+  const start = localPartsToUtcDate(timeZone, {
+    year: requested.year,
+    month: requested.month,
+    day: requested.day,
+    hour24: startHour24,
+    minute: startMinute
+  });
+  let end = localPartsToUtcDate(timeZone, {
+    year: requested.year,
+    month: requested.month,
+    day: requested.day,
+    hour24: endHour24,
+    minute: endMinute
+  });
+  if (end.getTime() < start.getTime()) {
+    end = new Date(end.getTime() + 12 * 60 * 60 * 1000);
+  }
+  return { start, end };
+}
+
+function pickSlotsInsideRequestedWindow(
+  slots: any[] | null | undefined,
+  text: string | null | undefined,
+  requested: { year: number; month: number; day: number; hour24: number; minute: number } | null | undefined,
+  timeZone: string
+): any[] {
+  const window = getRequestedTimeWindow(text, requested, timeZone);
+  if (!window) return [];
+  return (slots ?? [])
+    .filter(slot => {
+      const startMs = new Date(slot.start).getTime();
+      return (
+        Number.isFinite(startMs) &&
+        startMs >= window.start.getTime() &&
+        startMs <= window.end.getTime()
+      );
+    })
+    .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
+    .slice(0, 2);
+}
+
+function buildRequestedWindowSlotReply(slots: any[]): string | null {
+  if (slots.length === 1) {
+    return `I have ${slots[0].startLocal}. Does that work?`;
+  }
+  if (slots.length >= 2) {
+    return `I have ${slots[0].startLocal} or ${slots[1].startLocal} in that window — do either of those work?`;
+  }
+  return null;
+}
+
 function formatBusinessHoursForReply(
   hours?: Record<string, any> | null,
   country?: string | null
@@ -30674,22 +30794,32 @@ if (authToken && signature) {
       }));
 
       if (picked.length >= 2) {
-        setLastSuggestedSlots(conv, picked);
+        const requestedWindowSlots = pickSlotsInsideRequestedWindow(
+          picked,
+          event.body,
+          requested,
+          cfg.timezone
+        );
+        const requestedWindowReply = buildRequestedWindowSlotReply(requestedWindowSlots);
+        const slotsToOffer = requestedWindowReply ? requestedWindowSlots : picked;
+        setLastSuggestedSlots(conv, slotsToOffer);
         console.log(
           "[scheduler] persisted lastSuggestedSlots",
-          picked.length,
+          slotsToOffer.length,
           "leadKey",
           conv.leadKey
         );
-        console.log("[scheduler] persisted lastSuggestedSlots len:", picked.length);
+        console.log("[scheduler] persisted lastSuggestedSlots len:", slotsToOffer.length);
         console.log(
           "[scheduler] persisted lastSuggestedSlots preview:",
-          picked.slice(0, 2).map(s => s.startLocal)
+          slotsToOffer.slice(0, 2).map(s => s.startLocal)
         );
         conv.appointment.reschedulePending = true;
         conv.appointment.updatedAt = new Date().toISOString();
         const repBooked = primarySp.name ? `${primarySp.name} is booked around that time.` : "That time is already booked.";
-        const reply = `${repBooked} The closest openings I have are ${picked[0].startLocal} or ${picked[1].startLocal} — do any of these times work?`;
+        const reply =
+          requestedWindowReply ??
+          `${repBooked} The closest openings I have are ${picked[0].startLocal} or ${picked[1].startLocal} — do any of these times work?`;
         const systemMode = webhookMode;
         if (systemMode === "suggest") {
           appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -36513,6 +36643,24 @@ if (authToken && signature) {
         }
       }
     }
+    if (schedulingAllowed && schedulingSignals.hasDayTime && result.requestedTime) {
+      try {
+        const cfg = await getSchedulerConfigHot();
+        const windowSlots = pickSlotsInsideRequestedWindow(
+          result.suggestedSlots,
+          event.body,
+          result.requestedTime,
+          cfg.timezone || "America/New_York"
+        );
+        const windowReply = buildRequestedWindowSlotReply(windowSlots);
+        if (windowReply) {
+          result.suggestedSlots = windowSlots;
+          result.draft = windowReply;
+        }
+      } catch (e: any) {
+        console.log("[scheduler] requested window slot filter failed:", e?.message ?? e);
+      }
+    }
     const prefId = conv.scheduler?.preferredSalespersonId ?? null;
     if (prefId) {
       const preferred = result.suggestedSlots.filter(s => s.salespersonId === prefId);
@@ -36866,6 +37014,16 @@ if (authToken && signature) {
             return res.status(200).type("text/xml").send(twiml);
           }
         }
+        const requestedWindowSlots = pickSlotsInsideRequestedWindow(
+          bestSlots,
+          event.body,
+          result.requestedTime,
+          cfg.timezone
+        );
+        const requestedWindowReply = buildRequestedWindowSlotReply(requestedWindowSlots);
+        if (requestedWindowReply) {
+          bestSlots = requestedWindowSlots;
+        }
         setLastSuggestedSlots(conv, bestSlots);
         console.log("[scheduler] persisted lastSuggestedSlots len:", bestSlots.length);
         console.log(
@@ -36900,7 +37058,9 @@ if (authToken && signature) {
           slotRepNames.length === 1
             ? `${slotRepNames[0]} is booked around that time. `
             : "That time is already booked. ";
-        let reply = `${bookedPrefix}${prefix ? `${prefix} ` : ""}the closest openings I have are ${bestSlots[0].startLocal} or ${bestSlots[1].startLocal} — do any of these times work?`;
+        let reply =
+          requestedWindowReply ??
+          `${bookedPrefix}${prefix ? `${prefix} ` : ""}the closest openings I have are ${bestSlots[0].startLocal} or ${bestSlots[1].startLocal} — do any of these times work?`;
         reply = applySlotOfferPolicy(conv, reply, lastOutboundTextOffer);
         if (isSlotOfferMessage(reply)) {
           const requestedAppointmentType = String(result.requestedAppointmentType ?? "inventory_visit");
