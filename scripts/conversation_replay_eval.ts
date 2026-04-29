@@ -148,6 +148,20 @@ const cases: Case[] = [
     }
   },
   {
+    id: "finance_inventory_miss__13152739247_20260401144531",
+    expectedAllow: false,
+    expectedReason: "finance_priority_inventory_prompt_guard",
+    input: {
+      inboundText: "I want to fill out a credit app ",
+      draftText: "Absolutely. happy to help with pricing or a model comparison. Which model are you leaning toward?",
+      followUpMode: "active",
+      followUpReason: "pricing",
+      dialogState: "pricing_answered",
+      classificationBucket: "inventory_interest",
+      classificationCta: "ask_payment"
+    }
+  },
+  {
     id: "marcy_thanks_blocks_inventory_prompt",
     expectedAllow: false,
     expectedReason: "short_ack_no_action_guard",
@@ -161,6 +175,16 @@ const cases: Case[] = [
       classificationBucket: "general_inquiry",
       classificationCta: "unknown",
       shortAckIntent: true
+    }
+  },
+  {
+    id: "short_ack_miss__17246830020_20260402205129",
+    expectedAllow: false,
+    expectedReason: "short_ack_no_action_guard",
+    input: {
+      inboundText: "Awesome!  Thank you very much!",
+      draftText:
+        "Glad you like it — I can send more photos or a quick walkaround video. Anything specific you want to see?"
     }
   },
   {

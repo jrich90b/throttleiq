@@ -106,10 +106,20 @@ function hasFinanceTurnSignal(text: string): boolean {
 function hasFinanceContext(input: DraftStateInvariantInput): boolean {
   const dialogState = String(input.dialogState ?? "").toLowerCase();
   const followUpReason = String(input.followUpReason ?? "").toLowerCase();
+  const cta = String(input.classificationCta ?? "").toLowerCase();
   return (
     dialogState.startsWith("pricing_") ||
     dialogState.startsWith("payments_") ||
-    /(^|:|\b)(pricing|payments?|finance|financing|credit|approval)\b/.test(followUpReason)
+    /(^|:|\b)(pricing|payments?|finance|financing|credit|approval)\b/.test(followUpReason) ||
+    /(^|:|\b)(ask_payment|payments?|finance|financing|credit|approval)\b/.test(cta)
+  );
+}
+
+function hasExplicitFinanceActionSignal(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return /\b(credit app|credit application|finance app|financing application|apply for (?:credit|financing)|fill out (?:a )?(?:credit|finance|financing) app)\b/.test(
+    t
   );
 }
 
@@ -178,9 +188,9 @@ export function applyDraftStateInvariants(
       ? true
       : input.financeContextIntent === false
         ? false
-        : regexFallbackEnabled
-          ? hasFinanceContext(input) && hasBareBudgetSignal(inboundText)
-          : false;
+        : hasFinanceContext(input) &&
+            (hasExplicitFinanceActionSignal(inboundText) ||
+              (regexFallbackEnabled ? hasBareBudgetSignal(inboundText) : false));
   const schedulingSignal =
     input.turnSchedulingIntent === true
       ? true
@@ -194,9 +204,7 @@ export function applyDraftStateInvariants(
       ? true
       : input.shortAckIntent === false
         ? false
-        : regexFallbackEnabled
-          ? isShortAckText(inboundText)
-          : false;
+        : isShortAckText(inboundText);
   const financePriority = financeSignal || financeContextSignal;
 
   if (shortAckSignal && inventoryPrompt) {
