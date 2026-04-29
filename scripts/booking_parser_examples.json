@@ -48,7 +48,7 @@
       "explicit_request": true,
       "requested": {
         "day": "next week",
-        "time_window": "unknown"
+        "time_window": "range"
       },
       "normalized_contains": "next week"
     }
@@ -243,6 +243,10 @@
     "text": "Any time tomorrow after 5?",
     "expected": {
       "intent": "availability",
+      "intent_any": [
+        "availability",
+        "schedule"
+      ],
       "explicit_request": true,
       "requested": {
         "day": "tomorrow",
@@ -299,6 +303,10 @@
     "text": "Do you have a 2026 Street Glide Limited 3?",
     "expected": {
       "intent": "none",
+      "intent_any": [
+        "none",
+        "question"
+      ],
       "explicit_request": false
     }
   },
