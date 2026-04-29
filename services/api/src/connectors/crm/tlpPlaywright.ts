@@ -1,7 +1,7 @@
 // services/api/src/connectors/crm/tlpPlaywright.ts
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type Locator, type Page } from "playwright";
 
 export type TlpLogCustomerContactArgs = {
   leadRef: string;          // Ref #
@@ -116,6 +116,52 @@ async function loginTlp(page: Page, step: StepFn) {
   });
 }
 
+async function waitForLeadResultRow(page: Page, leadRef: string, step: StepFn): Promise<Locator> {
+  try {
+    await page.waitForLoadState("networkidle", { timeout: SHORT_TIMEOUT_MS });
+  } catch {
+    // Quick lookup often updates the table without a full network-idle state.
+  }
+
+  const rowSelectors = [
+    'tr[id^="NOTEPAD_DATUM_"]',
+    'tr[id*="NOTEPAD_DATUM"]',
+    'tr:has(ul.pencilOnly a.action1)',
+    'tr:has(a[title="Open Lead Actions Menu"])',
+    'tr:has(td.actionListing.action_dt)'
+  ];
+  const deadline = Date.now() + DEFAULT_TIMEOUT_MS;
+  let lastError = "";
+
+  while (Date.now() < deadline) {
+    for (const selector of rowSelectors) {
+      const row = page.locator(selector).first();
+      try {
+        await row.waitFor({ state: "visible", timeout: 1500 });
+        return row;
+      } catch (err: any) {
+        lastError = err?.message ?? String(err);
+      }
+    }
+
+    const noResultVisible = await page
+      .locator("text=/No matching records|No data available|No records found|No results/i")
+      .first()
+      .isVisible()
+      .catch(() => false);
+    if (noResultVisible) {
+      throw new Error(`lead: no quick-lookup result for ref ${leadRef}`);
+    }
+    await page.waitForTimeout(500);
+  }
+
+  throw new Error(
+    `lead: no visible quick-lookup row for ref ${leadRef}; tried ${rowSelectors.join(", ")}${
+      lastError ? `; last error: ${lastError}` : ""
+    }`
+  );
+}
+
 async function openLeadByRef(page: Page, leadRef: string, step: StepFn) {
   const refInput = page.locator("#QL_Ref");
   await step("lead: fill #QL_Ref", async () => {
@@ -125,11 +171,8 @@ async function openLeadByRef(page: Page, leadRef: string, step: StepFn) {
     await refInput.press("Enter");
   });
 
-  // Wait for a results row to appear.
-  // You showed row ids like NOTEPAD_DATUM_<hash>, so use prefix selector.
-  const row = page.locator('tr[id^="NOTEPAD_DATUM_"]').first();
-  await step("lead: wait row tr[id^=NOTEPAD_DATUM_]", async () => {
-    await row.waitFor({ state: "visible", timeout: DEFAULT_TIMEOUT_MS });
+  const row = await step("lead: wait quick lookup result row", async () => {
+    return await waitForLeadResultRow(page, leadRef, step);
   });
 
   // Click the Open Lead Actions Menu (pencilOnly -> action1)
@@ -243,9 +286,8 @@ async function openDealershipVisitByRef(page: Page, leadRef: string, step: StepF
     await refInput.press("Enter");
   });
 
-  const row = page.locator('tr[id^="NOTEPAD_DATUM_"]').first();
-  await step("lead: wait row tr[id^=NOTEPAD_DATUM_]", async () => {
-    await row.waitFor({ state: "visible", timeout: DEFAULT_TIMEOUT_MS });
+  const row = await step("lead: wait quick lookup result row", async () => {
+    return await waitForLeadResultRow(page, leadRef, step);
   });
 
   const actionCell = row.locator("td.actionListing.action_dt.min-mobile.noxls").first();
