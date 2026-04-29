@@ -4688,7 +4688,7 @@ export async function parseSemanticSlotsWithLLM(args: {
   let serviceRecordsIntent = !!parsed.service_records_intent;
 
   const watchObj = parsed.watch && typeof parsed.watch === "object" ? parsed.watch : {};
-  const model = cleanOptionalString(watchObj.model);
+  let model = cleanOptionalString(watchObj.model);
   const year = cleanOptionalString(watchObj.year);
   const color = cleanOptionalString(watchObj.color);
   const conditionRaw = String(watchObj.condition ?? "").toLowerCase();
@@ -4699,20 +4699,26 @@ export async function parseSemanticSlotsWithLLM(args: {
 
   // Guard against risky false positives.
   const hasWatchSetCue =
-    /\b(let me know|keep me posted|keep an eye out|watch for|notify me|text me|shoot me (a )?text|send (one|it) my way)\b/.test(
+    (/\b(lmk|let me know|keep me posted|keep an eye out|watch for|notify me|text me|shoot me (a )?text|send (one|it) my way)\b/.test(
       textLower
-    ) && /\b(if|when|once|as soon as)\b/.test(textLower);
+    ) &&
+      /\b(if|when|once|as soon as|get|got|comes? in|lands?|in stock|available)\b/.test(textLower)) ||
+    /\bwatch for\b/.test(textLower);
   const hasWatchStopAction =
     /\b(stop|cancel|remove|delete|turn off|pause|disable|end|no more|don't|dont|do not)\b/.test(
       textLower
     );
   const hasWatchStopContext =
-    /\b(watch|alerts?|updates?|notifications?|inventory|availability)\b/.test(textLower) ||
+    /\b(watch|alerts?|updates?|notifications?|inventory|availability|looking)\b/.test(textLower) ||
     /\b(keep(?:ing)? an eye out|watch for|notify me|text me)\b/.test(textLower) ||
+    /\bfound one already\b/.test(textLower) ||
     /\b(if|when|once|as soon as)\b[\s\w-]{0,28}\b(comes in|in stock|available|lands)\b/.test(
       textLower
     );
   const hasWatchStopCue = hasWatchStopAction && hasWatchStopContext;
+  if (watchAction === "none" && hasWatchSetCue) {
+    watchAction = "set_watch";
+  }
   if (watchAction === "set_watch" && !hasWatchSetCue && !watch && !pending) {
     watchAction = "none";
   }
@@ -4728,7 +4734,7 @@ export async function parseSemanticSlotsWithLLM(args: {
       textLower
     );
   const hasPartsCue =
-    /\b(parts? department|parts? counter|parts? desk|order (a )?part|need (a )?part|part number|oem parts?|aftermarket parts?)\b/.test(
+    /\b(parts? department|parts? counter|parts? desk|order (a )?part|need (a )?part|part number|oem parts?|aftermarket parts?|brake pads?|tires?|accessory fitment|fitment)\b/.test(
       textLower
     );
   const hasApparelCue =
@@ -4738,6 +4744,17 @@ export async function parseSemanticSlotsWithLLM(args: {
   if (departmentIntent === "service" && !hasServiceCue) departmentIntent = "none";
   if (departmentIntent === "parts" && !hasPartsCue) departmentIntent = "none";
   if (departmentIntent === "apparel" && !hasApparelCue) departmentIntent = "none";
+  if (departmentIntent === "none" && hasPartsCue) departmentIntent = "parts";
+  if (departmentIntent === "none" && hasServiceCue) departmentIntent = "service";
+  if (departmentIntent === "none" && hasApparelCue) departmentIntent = "apparel";
+  if (watchAction === "set_watch" && !model) {
+    const historyText = history.join("\n").toLowerCase();
+    const contextText = `${historyText}\n${lead?.vehicle?.model ?? ""}\n${lead?.vehicle?.description ?? ""}`;
+    if (/\broad glide\b/.test(contextText)) model = "Road Glide";
+    else if (/\bstreet glide\b/.test(contextText)) model = "Street Glide";
+    else if (/\blow rider s\b|\bfxlrs\b|\blrs\b/.test(contextText)) model = "Low Rider S";
+    else if (/\biron 883\b|\b883\b/.test(contextText)) model = "Iron 883";
+  }
   const hasCallOnlyCue =
     /\b(call only|phone only|call me only|no text|do not text|don't text|text me not)\b/.test(textLower);
   if (contactPreferenceIntent === "call_only" && !hasCallOnlyCue) {
