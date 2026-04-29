@@ -4733,6 +4733,14 @@ const FOLLOW_UP_MESSAGES = [
   "All good either way, {name}. When you’re ready, I’m here to help."
 ];
 
+const TEST_RIDE_FOLLOW_UP_MESSAGES = [
+  "Hey {name}, just checking in on the test ride for{label}. If you still want to ride it, text me a day that works.",
+  "Still happy to help line up the test ride for{label}. Want me to send a couple easy time options?",
+  "If the test ride for{label} is still on your list, I can help get it set up.",
+  "Checking back on the test ride for{label}. If timing shifted, just send me what day works best.",
+  "No rush, {name}. When you’re ready to set up the test ride for{label}, just text me."
+];
+
 type WalkInCommentFollowUpCtx = {
   name: string;
   agent: string;
@@ -5724,6 +5732,10 @@ async function buildCadenceRegeneratedDraft(
     isTradeAcceleratorLead(conv);
   const isSellMyBikeLead = isSellLead(conv);
   if (isTradeNoInterest || isSellMyBikeLead) return null;
+  const isTestRideCadenceLead =
+    conv?.classification?.bucket === "test_ride" ||
+    conv?.classification?.cta === "schedule_test_ride" ||
+    isTestRideDialogState(getDialogState(conv));
 
   const now = new Date();
   const walkInComment = String(conv.lead?.walkInComment ?? "").trim();
@@ -5790,7 +5802,11 @@ async function buildCadenceRegeneratedDraft(
   const allowProactiveSchedule = shouldAllowProactiveScheduleAsk(conv, now);
   if (!shouldPreferContextualStep0NoSlots) {
     let message = String(lastDraft?.body ?? "").trim();
-    if (!message) {
+    if (isTestRideCadenceLead) {
+      const template =
+        TEST_RIDE_FOLLOW_UP_MESSAGES[Math.min(lastSentStep, TEST_RIDE_FOLLOW_UP_MESSAGES.length - 1)];
+      message = renderFollowUpTemplate(template, baseCtx);
+    } else if (!message) {
       const fallbackTemplate =
         FOLLOW_UP_MESSAGES[Math.min(lastSentStep, FOLLOW_UP_MESSAGES.length - 1)] ??
         FOLLOW_UP_MESSAGES[FOLLOW_UP_MESSAGES.length - 1];
@@ -5801,7 +5817,7 @@ async function buildCadenceRegeneratedDraft(
     if (conv.scheduleSoft && !allowProactiveSchedule) {
       message = stripSchedulingPromptFromFollowUp(message);
     }
-    if (lastSentStep === 3 && cadenceOffersLine) {
+    if (lastSentStep === 3 && cadenceOffersLine && !isTestRideCadenceLead) {
       message = appendCadenceOffersLine(message, cadenceOffersLine);
     }
     message = ensureCadenceAnchorMessage({
@@ -5878,7 +5894,7 @@ async function buildCadenceRegeneratedDraft(
   if (promotionOverride) {
     message = promotionOverride;
   }
-  if (lastSentStep === 3 && cadenceOffersLine) {
+  if (lastSentStep === 3 && cadenceOffersLine && !isTestRideCadenceLead) {
     message = appendCadenceOffersLine(message, cadenceOffersLine);
   }
 
@@ -16246,6 +16262,10 @@ async function processDueFollowUps() {
       isUnknownInterestVehicle(conv) &&
       isTradeAcceleratorLead(conv);
     const isSellMyBikeLead = isSellLead(conv);
+    const isTestRideCadenceLead =
+      conv?.classification?.bucket === "test_ride" ||
+      conv?.classification?.cta === "schedule_test_ride" ||
+      isTestRideDialogState(getDialogState(conv));
     const sellBikeLabel = isSellMyBikeLead ? getSellBikeLabel(conv) : null;
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "our team");
@@ -16486,6 +16506,16 @@ async function processDueFollowUps() {
           `If timing changed on ${sellBikeLabel ?? "your bike"}, just tell me what day works and I can help.`
         ];
       }
+    } else if (isTestRideCadenceLead) {
+      const template =
+        TEST_RIDE_FOLLOW_UP_MESSAGES[Math.min(cadence.stepIndex, TEST_RIDE_FOLLOW_UP_MESSAGES.length - 1)];
+      message = renderFollowUpTemplate(template, baseCtx);
+      cadenceNoRepeatFallbacks = TEST_RIDE_FOLLOW_UP_MESSAGES.map(template =>
+        renderFollowUpTemplate(template, baseCtx)
+      );
+      if (!isTestRideDialogState(getDialogState(conv))) {
+        setDialogState(conv, "test_ride_init");
+      }
     } else if (cadence.stepIndex === 0) {
       const day2 = await buildDay2Options(cfg);
       if (day2 && !shouldPreferContextualStep0NoSlots) {
@@ -16564,7 +16594,8 @@ async function processDueFollowUps() {
       !isPostSale &&
       cadence.kind !== "long_term" &&
       !isTradeNoInterest &&
-      !isSellMyBikeLead
+      !isSellMyBikeLead &&
+      !isTestRideCadenceLead
     ) {
       message = appendCadenceOffersLine(message, cadenceOffersLine);
     }

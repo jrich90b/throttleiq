@@ -3462,6 +3462,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       conv.dialogState = { name: "trade_init", updatedAt: new Date().toISOString() };
     } else if (inferredBucket === "service" || inferredCta === "service_request") {
       conv.dialogState = { name: "service_request", updatedAt: new Date().toISOString() };
+    } else if (inferredBucket === "test_ride" || inferredCta === "schedule_test_ride") {
+      conv.dialogState = { name: "test_ride_init", updatedAt: new Date().toISOString() };
     }
   }
 
