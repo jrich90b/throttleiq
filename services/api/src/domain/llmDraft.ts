@@ -1479,8 +1479,14 @@ export type SemanticSlotParse = {
   watch?: {
     model?: string | null;
     year?: string | null;
+    yearMin?: number | null;
+    yearMax?: number | null;
     color?: string | null;
     condition?: "new" | "used" | "any" | "unknown" | null;
+    minPrice?: number | null;
+    maxPrice?: number | null;
+    monthlyBudget?: number | null;
+    downPayment?: number | null;
   };
   departmentIntent: "service" | "parts" | "apparel" | "none";
   contactPreferenceIntent?: "call_only" | "none";
@@ -1494,8 +1500,14 @@ export type UnifiedSemanticSlotParse = {
   watch?: {
     model?: string | null;
     year?: string | null;
+    yearMin?: number | null;
+    yearMax?: number | null;
     color?: string | null;
     condition?: "new" | "used" | "any" | "unknown" | null;
+    minPrice?: number | null;
+    maxPrice?: number | null;
+    monthlyBudget?: number | null;
+    downPayment?: number | null;
   };
   departmentIntent: "service" | "parts" | "apparel" | "none";
   contactPreferenceIntent?: "call_only" | "none";
@@ -2032,12 +2044,29 @@ const SEMANTIC_SLOT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     watch: {
       type: "object",
       additionalProperties: false,
-      required: ["model", "year", "color", "condition"],
+      required: [
+        "model",
+        "year",
+        "year_min",
+        "year_max",
+        "color",
+        "condition",
+        "min_price",
+        "max_price",
+        "monthly_budget",
+        "down_payment"
+      ],
       properties: {
         model: { type: "string" },
         year: { type: "string" },
+        year_min: { type: "integer" },
+        year_max: { type: "integer" },
         color: { type: "string" },
-        condition: { type: "string", enum: ["new", "used", "any", "unknown"] }
+        condition: { type: "string", enum: ["new", "used", "any", "unknown"] },
+        min_price: { type: "number" },
+        max_price: { type: "number" },
+        monthly_budget: { type: "number" },
+        down_payment: { type: "number" }
       }
     },
     department_intent: {
@@ -4609,24 +4638,25 @@ export async function parseSemanticSlotsWithLLM(args: {
   const pending = args.inventoryWatchPending ?? null;
   const dialogState = String(args.dialogState ?? "").trim();
   const voiceExamples = [
-    'input: "Customer: keep an eye out for a 2026 road glide 3 in black and text me when one hits" output: {"watch_action":"set_watch","watch":{"model":"Road Glide 3","year":"2026","color":"black","condition":"new"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
-    'input: "Customer: if a black street glide comes in let me know" output: {"watch_action":"set_watch","watch":{"model":"Street Glide","year":"","color":"black","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
-    'input: "Customer: can you lmk when you get the 23 lrs?" output: {"watch_action":"set_watch","watch":{"model":"Low Rider S","year":"2023","color":"","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
-    'input: "Customer: lmk if you get a 23 lrs in black" output: {"watch_action":"set_watch","watch":{"model":"Low Rider S","year":"2023","color":"black","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
-    'input: "Customer: watch for fxlrs in vivid black" output: {"watch_action":"set_watch","watch":{"model":"Low Rider S","year":"","color":"vivid black","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
-    'input: "Customer: lmk when a 2023 low rider s comes in" output: {"watch_action":"set_watch","watch":{"model":"Low Rider S","year":"2023","color":"","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
-    'input: "Customer: if one lands, shoot me a text please" output: {"watch_action":"set_watch","watch":{"model":"","year":"","color":"","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.94}',
-    'input: "Customer: do you have any black street glides in stock?" output: {"watch_action":"none","watch":{"model":"Street Glide","year":"","color":"black","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
-    'input: "Customer: do you have brake pads in stock for my 2018 street glide?" output: {"watch_action":"none","watch":{"model":"Street Glide","year":"2018","color":"","condition":"unknown"},"department_intent":"parts","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
-    'input: "Customer: stop the watch alerts for the road glide please" output: {"watch_action":"stop_watch","watch":{"model":"Road Glide","year":"","color":"","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
-    'input: "Customer: I found one already, stop looking for me." output: {"watch_action":"stop_watch","watch":{"model":"","year":"","color":"","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
-    'input: "Customer: left a 1000 deposit and I am coming in saturday to finalize" output: {"watch_action":"none","watch":{"model":"","year":"","color":"","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.94}',
-    'input: "Customer: can service quote an LED headlight install?" output: {"watch_action":"none","watch":{"model":"","year":"","color":"","condition":"unknown"},"department_intent":"service","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
-    'input: "Customer: can you send a walkaround video?" output: {"watch_action":"none","watch":{"model":"","year":"","color":"","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"video","service_records_intent":false,"confidence":0.95}',
-    'input: "Customer: 11am can you send photos of street glide limited" output: {"watch_action":"none","watch":{"model":"Street Glide Limited","year":"","color":"","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"photos","service_records_intent":false,"confidence":0.95}',
-    'input: "Customer: never mind photo. test ride street glide limited 3. thanks" output: {"watch_action":"none","watch":{"model":"Street Glide 3 Limited","year":"","color":"","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
-    'input: "Customer: can I get a call instead of texts?" output: {"watch_action":"none","watch":{"model":"","year":"","color":"","condition":"unknown"},"department_intent":"none","contact_preference_intent":"call_only","media_intent":"none","service_records_intent":false,"confidence":0.93}',
-    'input: "Customer: do you have service records on that bike?" output: {"watch_action":"none","watch":{"model":"","year":"","color":"","condition":"unknown"},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":true,"confidence":0.94}'
+    'input: "Customer: keep an eye out for a 2026 road glide 3 in black and text me when one hits" output: {"watch_action":"set_watch","watch":{"model":"Road Glide 3","year":"2026","year_min":0,"year_max":0,"color":"black","condition":"new","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
+    'input: "Customer: if a black street glide comes in let me know" output: {"watch_action":"set_watch","watch":{"model":"Street Glide","year":"","year_min":0,"year_max":0,"color":"black","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: can you lmk when you get the 23 lrs?" output: {"watch_action":"set_watch","watch":{"model":"Low Rider S","year":"2023","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: lmk if you get a 23 lrs in black" output: {"watch_action":"set_watch","watch":{"model":"Low Rider S","year":"2023","year_min":0,"year_max":0,"color":"black","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: watch for fxlrs in vivid black" output: {"watch_action":"set_watch","watch":{"model":"Low Rider S","year":"","year_min":0,"year_max":0,"color":"vivid black","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: lmk when a 2023 low rider s comes in" output: {"watch_action":"set_watch","watch":{"model":"Low Rider S","year":"2023","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: text me if a 2021-2023 street glide in silver comes in between 15k and 20k" output: {"watch_action":"set_watch","watch":{"model":"Street Glide","year":"","year_min":2021,"year_max":2023,"color":"silver","condition":"unknown","min_price":15000,"max_price":20000,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: if one lands, shoot me a text please" output: {"watch_action":"set_watch","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.94}',
+    'input: "Customer: do you have any black street glides in stock?" output: {"watch_action":"none","watch":{"model":"Street Glide","year":"","year_min":0,"year_max":0,"color":"black","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: do you have brake pads in stock for my 2018 street glide?" output: {"watch_action":"none","watch":{"model":"Street Glide","year":"2018","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"parts","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
+    'input: "Customer: stop the watch alerts for the road glide please" output: {"watch_action":"stop_watch","watch":{"model":"Road Glide","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: I found one already, stop looking for me." output: {"watch_action":"stop_watch","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: left a 1000 deposit and I am coming in saturday to finalize" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.94}',
+    'input: "Customer: can service quote an LED headlight install?" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"service","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
+    'input: "Customer: can you send a walkaround video?" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"video","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: 11am can you send photos of street glide limited" output: {"watch_action":"none","watch":{"model":"Street Glide Limited","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"photos","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: never mind photo. test ride street glide limited 3. thanks" output: {"watch_action":"none","watch":{"model":"Street Glide 3 Limited","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: can I get a call instead of texts?" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"call_only","media_intent":"none","service_records_intent":false,"confidence":0.93}',
+    'input: "Customer: do you have service records on that bike?" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":true,"confidence":0.94}'
   ];
   const prompt = [
     "You are a semantic slot parser for dealership SMS.",
@@ -4634,7 +4664,7 @@ export async function parseSemanticSlotsWithLLM(args: {
     "",
     "Extract only these slots:",
     "- watch_action: set_watch / stop_watch / none",
-    "- watch: model/year/color/condition if explicitly present",
+    "- watch: model/year/year_min/year_max/color/condition/min_price/max_price/monthly_budget/down_payment if explicitly present",
     "- department_intent: service / parts / apparel / none",
     "- contact_preference_intent: call_only / none",
     "- media_intent: video / photos / either / none",
@@ -4658,8 +4688,11 @@ export async function parseSemanticSlotsWithLLM(args: {
     "- service_records_intent=true only when customer explicitly asks for service/maintenance records/history, battery/tires condition history, or similar records-check request.",
     "- watch.model should be normalized human model text when possible; else empty string.",
     "- watch.year should be empty string unless explicitly provided.",
+    "- watch.year_min/year_max are only for explicit year ranges like 2021-2023 or 2021 to 2023; otherwise 0.",
     "- watch.color should be empty string unless explicitly provided.",
     "- watch.condition should be one of new/used/any/unknown.",
+    "- min_price/max_price are explicit bike-price constraints only; parse k/grand as thousands; otherwise 0.",
+    "- monthly_budget/down_payment are explicit monthly/down values only; otherwise 0.",
     "- confidence is 0..1.",
     "",
     `Lead vehicle: ${JSON.stringify({
@@ -4714,6 +4747,11 @@ export async function parseSemanticSlotsWithLLM(args: {
   const watchObj = parsed.watch && typeof parsed.watch === "object" ? parsed.watch : {};
   let model = cleanOptionalString(watchObj.model);
   const year = cleanOptionalString(watchObj.year);
+  const toPositiveNum = (value: unknown): number | null => {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return Math.round(n);
+  };
   const color = cleanOptionalString(watchObj.color);
   const conditionRaw = String(watchObj.condition ?? "").toLowerCase();
   const condition: NonNullable<SemanticSlotParse["watch"]>["condition"] =
@@ -4808,8 +4846,14 @@ export async function parseSemanticSlotsWithLLM(args: {
     watch: {
       model,
       year,
+      yearMin: toPositiveNum(watchObj.year_min),
+      yearMax: toPositiveNum(watchObj.year_max),
       color,
-      condition
+      condition,
+      minPrice: toPositiveNum(watchObj.min_price),
+      maxPrice: toPositiveNum(watchObj.max_price),
+      monthlyBudget: toPositiveNum(watchObj.monthly_budget),
+      downPayment: toPositiveNum(watchObj.down_payment)
     },
     departmentIntent,
     contactPreferenceIntent,

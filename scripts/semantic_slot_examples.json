@@ -92,6 +92,54 @@
     }
   },
   {
+    "id": "watch_twilio_manual_xg_codes",
+    "text": "Hey Sam. Thanks for stopping in. We will keep an eye out for a XG500 or XG750 for you! Have a great evening!",
+    "expected": {
+      "watch_action": "set_watch",
+      "department_intent": "none",
+      "watch_model_contains": "xg"
+    }
+  },
+  {
+    "id": "watch_year_color_price_cap",
+    "text": "Keep an eye out for a 2020 Road Glide in black under $18k.",
+    "expected": {
+      "watch_action": "set_watch",
+      "department_intent": "none",
+      "watch_model_contains": "road glide",
+      "watch_year": "2020",
+      "watch_color_contains": "black",
+      "watch_max_price": 18000
+    }
+  },
+  {
+    "id": "watch_year_range_color_price_range",
+    "text": "Text me if you get a 2021-2023 Street Glide in silver between $15k and $20k.",
+    "expected": {
+      "watch_action": "set_watch",
+      "department_intent": "none",
+      "watch_model_contains": "street glide",
+      "watch_year_min": 2021,
+      "watch_year_max": 2023,
+      "watch_color_contains": "silver",
+      "watch_min_price": 15000,
+      "watch_max_price": 20000
+    }
+  },
+  {
+    "id": "watch_monthly_budget_down_payment",
+    "text": "lmk if you get a used Low Rider S in vivid black around $400/mo with $2500 down",
+    "expected": {
+      "watch_action": "set_watch",
+      "department_intent": "none",
+      "watch_model_contains": "low rider s",
+      "watch_color_contains": "black",
+      "watch_condition": "used",
+      "watch_monthly_budget": 400,
+      "watch_down_payment": 2500
+    }
+  },
+  {
     "id": "parts_in_stock_not_sales_inventory",
     "text": "Do you have brake pads in stock for my 2018 Street Glide?",
     "expected": {

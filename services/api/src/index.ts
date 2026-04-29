@@ -11870,6 +11870,22 @@ async function deriveContextNoteWatches(
   const semanticCondition = normalizeWatchCondition(semanticSlots?.watch?.condition);
   const semanticColor = sanitizeColorPhrase(semanticSlots?.watch?.color);
   const semanticYear = Number(semanticSlots?.watch?.year ?? "");
+  const semanticYearMin = Number(semanticSlots?.watch?.yearMin ?? "");
+  const semanticYearMax = Number(semanticSlots?.watch?.yearMax ?? "");
+  const semanticYearRange =
+    Number.isFinite(semanticYearMin) && Number.isFinite(semanticYearMax) && semanticYearMin > 1900 && semanticYearMax > 1900
+      ? { min: Math.min(semanticYearMin, semanticYearMax), max: Math.max(semanticYearMin, semanticYearMax) }
+      : null;
+  const semanticPositiveNumber = (value: unknown): number | undefined => {
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? Math.round(n) : undefined;
+  };
+  const semanticBudget = {
+    minPrice: semanticPositiveNumber(semanticSlots?.watch?.minPrice),
+    maxPrice: semanticPositiveNumber(semanticSlots?.watch?.maxPrice),
+    monthlyBudget: semanticPositiveNumber(semanticSlots?.watch?.monthlyBudget),
+    downPayment: semanticPositiveNumber(semanticSlots?.watch?.downPayment)
+  };
 
   const watchSegments = sentences.filter(sentence =>
     /\b(watch(?:ing)? for|keep an eye out|let me know (?:if|when)|notify|text me (?:if|when)|open to watch for|looking for)\b/i.test(
@@ -11890,9 +11906,9 @@ async function deriveContextNoteWatches(
     if (!modelSet.size && fallbackModel && parserRequestedWatch) modelSet.add(fallbackModel);
     if (!modelSet.size) continue;
 
-    const yearRange = extractYearRange(segment);
+    const yearRange = extractYearRange(segment) ?? semanticYearRange;
     const singleYear = !yearRange ? extractYearSingle(segment) : null;
-    const budget = extractWatchBudgetPreference(segment);
+    const budget = mergeWatchBudgetPreference(extractWatchBudgetPreference(segment), semanticBudget);
     const segmentCondition = normalizeWatchCondition(segment);
     const condition = segmentCondition ?? semanticCondition ?? normalizeWatchCondition(conv?.lead?.vehicle?.condition);
     const color = sanitizeColorPhrase(extractColorMention(segment)) ?? semanticColor;

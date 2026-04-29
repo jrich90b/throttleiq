@@ -16,8 +16,15 @@ type Example = {
     department_intent: DepartmentIntent;
     department_intent_any?: DepartmentIntent[];
     watch_model_contains?: string;
+    watch_year?: string;
+    watch_year_min?: number;
+    watch_year_max?: number;
     watch_color_contains?: string;
     watch_condition?: "new" | "used" | "any" | "unknown";
+    watch_min_price?: number;
+    watch_max_price?: number;
+    watch_monthly_budget?: number;
+    watch_down_payment?: number;
   };
 };
 
@@ -47,13 +54,32 @@ let departmentOk = 0;
 let modelOk = 0;
 let colorOk = 0;
 let conditionOk = 0;
+let yearOk = 0;
+let yearMinOk = 0;
+let yearMaxOk = 0;
+let minPriceOk = 0;
+let maxPriceOk = 0;
+let monthlyBudgetOk = 0;
+let downPaymentOk = 0;
 let total = 0;
 let nullCount = 0;
 let modelAsserts = 0;
 let colorAsserts = 0;
 let conditionAsserts = 0;
+let yearAsserts = 0;
+let yearMinAsserts = 0;
+let yearMaxAsserts = 0;
+let minPriceAsserts = 0;
+let maxPriceAsserts = 0;
+let monthlyBudgetAsserts = 0;
+let downPaymentAsserts = 0;
 
 const mismatches: string[] = [];
+
+function num(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
 
 for (const ex of examples) {
   total += 1;
@@ -104,7 +130,69 @@ for (const ex of examples) {
     if (conditionMatch) conditionOk += 1;
   }
 
-  if (!watchActionMatch || !departmentMatch || !modelMatch || !colorMatch || !conditionMatch) {
+  let yearMatch = true;
+  if (ex.expected.watch_year) {
+    yearAsserts += 1;
+    yearMatch = norm(result.watch?.year) === norm(ex.expected.watch_year);
+    if (yearMatch) yearOk += 1;
+  }
+
+  let yearMinMatch = true;
+  if (ex.expected.watch_year_min != null) {
+    yearMinAsserts += 1;
+    yearMinMatch = num((result.watch as any)?.yearMin) === ex.expected.watch_year_min;
+    if (yearMinMatch) yearMinOk += 1;
+  }
+
+  let yearMaxMatch = true;
+  if (ex.expected.watch_year_max != null) {
+    yearMaxAsserts += 1;
+    yearMaxMatch = num((result.watch as any)?.yearMax) === ex.expected.watch_year_max;
+    if (yearMaxMatch) yearMaxOk += 1;
+  }
+
+  let minPriceMatch = true;
+  if (ex.expected.watch_min_price != null) {
+    minPriceAsserts += 1;
+    minPriceMatch = num((result.watch as any)?.minPrice) === ex.expected.watch_min_price;
+    if (minPriceMatch) minPriceOk += 1;
+  }
+
+  let maxPriceMatch = true;
+  if (ex.expected.watch_max_price != null) {
+    maxPriceAsserts += 1;
+    maxPriceMatch = num((result.watch as any)?.maxPrice) === ex.expected.watch_max_price;
+    if (maxPriceMatch) maxPriceOk += 1;
+  }
+
+  let monthlyBudgetMatch = true;
+  if (ex.expected.watch_monthly_budget != null) {
+    monthlyBudgetAsserts += 1;
+    monthlyBudgetMatch = num((result.watch as any)?.monthlyBudget) === ex.expected.watch_monthly_budget;
+    if (monthlyBudgetMatch) monthlyBudgetOk += 1;
+  }
+
+  let downPaymentMatch = true;
+  if (ex.expected.watch_down_payment != null) {
+    downPaymentAsserts += 1;
+    downPaymentMatch = num((result.watch as any)?.downPayment) === ex.expected.watch_down_payment;
+    if (downPaymentMatch) downPaymentOk += 1;
+  }
+
+  if (
+    !watchActionMatch ||
+    !departmentMatch ||
+    !modelMatch ||
+    !colorMatch ||
+    !conditionMatch ||
+    !yearMatch ||
+    !yearMinMatch ||
+    !yearMaxMatch ||
+    !minPriceMatch ||
+    !maxPriceMatch ||
+    !monthlyBudgetMatch ||
+    !downPaymentMatch
+  ) {
     mismatches.push(
       [
         `[${ex.id}]`,
@@ -118,6 +206,17 @@ for (const ex of examples) {
           ? `expected watch_color_contains=${ex.expected.watch_color_contains}`
           : "",
         ex.expected.watch_condition ? `expected watch_condition=${ex.expected.watch_condition}` : "",
+        ex.expected.watch_year ? `expected watch_year=${ex.expected.watch_year}` : "",
+        ex.expected.watch_year_min != null ? `expected watch_year_min=${ex.expected.watch_year_min}` : "",
+        ex.expected.watch_year_max != null ? `expected watch_year_max=${ex.expected.watch_year_max}` : "",
+        ex.expected.watch_min_price != null ? `expected watch_min_price=${ex.expected.watch_min_price}` : "",
+        ex.expected.watch_max_price != null ? `expected watch_max_price=${ex.expected.watch_max_price}` : "",
+        ex.expected.watch_monthly_budget != null
+          ? `expected watch_monthly_budget=${ex.expected.watch_monthly_budget}`
+          : "",
+        ex.expected.watch_down_payment != null
+          ? `expected watch_down_payment=${ex.expected.watch_down_payment}`
+          : "",
         `got watch_action=${result.watchAction}`,
         `got department_intent=${result.departmentIntent}`,
         `got watch=${JSON.stringify(result.watch ?? null)}`,
@@ -142,6 +241,29 @@ if (colorAsserts > 0) {
 if (conditionAsserts > 0) {
   console.log(
     `Watch condition match: ${conditionOk}/${conditionAsserts} (${pct(conditionOk, conditionAsserts)}%)`
+  );
+}
+if (yearAsserts > 0) console.log(`Watch year match: ${yearOk}/${yearAsserts} (${pct(yearOk, yearAsserts)}%)`);
+if (yearMinAsserts > 0) {
+  console.log(`Watch year-min match: ${yearMinOk}/${yearMinAsserts} (${pct(yearMinOk, yearMinAsserts)}%)`);
+}
+if (yearMaxAsserts > 0) {
+  console.log(`Watch year-max match: ${yearMaxOk}/${yearMaxAsserts} (${pct(yearMaxOk, yearMaxAsserts)}%)`);
+}
+if (minPriceAsserts > 0) {
+  console.log(`Watch min-price match: ${minPriceOk}/${minPriceAsserts} (${pct(minPriceOk, minPriceAsserts)}%)`);
+}
+if (maxPriceAsserts > 0) {
+  console.log(`Watch max-price match: ${maxPriceOk}/${maxPriceAsserts} (${pct(maxPriceOk, maxPriceAsserts)}%)`);
+}
+if (monthlyBudgetAsserts > 0) {
+  console.log(
+    `Watch monthly-budget match: ${monthlyBudgetOk}/${monthlyBudgetAsserts} (${pct(monthlyBudgetOk, monthlyBudgetAsserts)}%)`
+  );
+}
+if (downPaymentAsserts > 0) {
+  console.log(
+    `Watch down-payment match: ${downPaymentOk}/${downPaymentAsserts} (${pct(downPaymentOk, downPaymentAsserts)}%)`
   );
 }
 console.log(`Null parses: ${nullCount}/${total}`);
