@@ -27173,6 +27173,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     });
     return res.json({ ok: true, conversation: conv, draft: conv.emailDraft });
   };
+  if (event.provider === "twilio" && isEmojiOnlyText(event.body ?? "")) {
+    return respondRegenerateSkipped("emoji_only_inbound_no_reply");
+  }
   if (event.provider === "twilio" && isInventoryBrowseLinkRequest(String(event.body ?? ""))) {
     const dealerProfile = await getDealerProfileHot();
     const inventoryBrowse = await buildInventoryBrowseReply({
@@ -29227,7 +29230,10 @@ if (authToken && signature) {
     });
   }
   pauseRelatedCadencesOnInbound(conv, event);
-  if (event.provider === "twilio" && isQuotedReactionInboundText(event.body ?? "")) {
+  if (
+    event.provider === "twilio" &&
+    (isQuotedReactionInboundText(event.body ?? "") || isEmojiOnlyText(event.body ?? ""))
+  ) {
     recordRouteOutcome("live", "reaction_only_inbound_no_reply", {
       convId: conv.id,
       leadKey: conv.leadKey
