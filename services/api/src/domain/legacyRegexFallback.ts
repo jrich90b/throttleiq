@@ -40,6 +40,17 @@ export function extractTimeToken(msg: string): string | null {
     return token;
   }
 
+  // range with trailing meridiem: 1-2pm, 1 to 2 pm, around 1-2pm.
+  // Treat the first hour as sharing the trailing meridiem so it does not become 1:00 AM.
+  m = s.match(/\b(\d{1,2})(?::\d{2})?\s*(?:-|to|and)\s*(\d{1,2})(?::\d{2})?\s*(am|pm)\b/);
+  if (m) {
+    const hourNum = Number(m[1]);
+    const ap = m[3] ?? "";
+    if (hourNum >= 1 && hourNum <= 12) {
+      return normalizeTimeToken(`${hourNum}:00${ap}`);
+    }
+  }
+
   // hour-only: 1, 11, 1pm, 11am
   const hourMatches = Array.from(s.matchAll(/\b(\d{1,2})\s*(am|pm)?\b/g));
   for (const match of hourMatches) {

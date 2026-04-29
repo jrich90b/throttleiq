@@ -15281,7 +15281,8 @@ function inferDayTokenFromRecentTimePrompt(
     /\b(what time works best|what time were you thinking|what time on|what time works for you|what time)\b/i.test(
       last
     );
-  if (!askedForTime) return null;
+  const offeredSlots = isSlotOfferMessage(last);
+  if (!askedForTime && !offeredSlots) return null;
   const dayFromText = parseDayOfWeek(last)?.day ?? null;
   if (dayFromText) return dayFromText;
   const dayFromSlot = inferDayTokenFromSlot(String(lastSuggestedSlots?.[0]?.startLocal ?? ""));
