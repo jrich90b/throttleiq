@@ -140,6 +140,18 @@
     }
   },
   {
+    "id": "watch_voice_used_street_glide_spoken_budget",
+    "text": "You got any street glides that are used right now? Probably thirteen, fourteen, maybe. If you wanna jot me down then and keep me in mind, that would be sweet.",
+    "expected": {
+      "watch_action": "set_watch",
+      "department_intent": "none",
+      "watch_model_contains": "street glide",
+      "watch_condition": "used",
+      "watch_min_price": 13000,
+      "watch_max_price": 14000
+    }
+  },
+  {
     "id": "parts_in_stock_not_sales_inventory",
     "text": "Do you have brake pads in stock for my 2018 Street Glide?",
     "expected": {

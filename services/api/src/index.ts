@@ -4486,11 +4486,60 @@ async function applyPostCallSummaryActions(opts: {
     });
   }
 
+  const voiceWatchSourceText = `${customerText}\n${summaryText}`.trim();
+  const shouldParseVoiceWatch =
+    parserInventoryWatchIntent ||
+    /\b(jot me down|mark it down|write me down|keep me in mind|keep an eye out|watch for|let me know|text me|notify me)\b/i.test(
+      voiceWatchSourceText
+    );
+  if (shouldParseVoiceWatch) {
+    const voiceSemanticSlots = await safeLlmParse("voice_watch_semantic_parser", () =>
+      parseUnifiedSemanticSlotsWithLLM({
+        text: voiceWatchSourceText || customerText,
+        history: parserHistory,
+        lead: conv.lead,
+        inventoryWatch: conv.inventoryWatch,
+        inventoryWatchPending: conv.inventoryWatchPending,
+        tradePayoff: conv.tradePayoff,
+        dialogState: getDialogState(conv)
+      })
+    );
+    const voiceWatchConfidence =
+      typeof voiceSemanticSlots?.watchConfidence === "number"
+        ? voiceSemanticSlots.watchConfidence
+        : typeof voiceSemanticSlots?.confidence === "number"
+          ? voiceSemanticSlots.confidence
+          : 0;
+    const voiceWatchAccepted =
+      voiceSemanticSlots?.watchAction === "set_watch" && voiceWatchConfidence >= 0.55;
+    const watches = await deriveContextNoteWatches(
+      conv,
+      voiceWatchSourceText || customerText,
+      voiceWatchAccepted ? voiceSemanticSlots : null
+    );
+    if (watches.length && !(conv.inventoryWatch || (conv.inventoryWatches && conv.inventoryWatches.length))) {
+      conv.inventoryWatches = watches;
+      conv.inventoryWatch = watches[0];
+      conv.inventoryWatchPending = undefined;
+      setDialogState(conv, "inventory_watch_active");
+      setFollowUpMode(conv, "holding_inventory", "inventory_watch");
+      stopFollowUpCadence(conv, "inventory_watch");
+      recordRouteOutcome("live", "voice_watch_set", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        added: watches.length,
+        confidence: voiceWatchConfidence,
+        parserAccepted: voiceWatchAccepted
+      });
+    }
+  }
+
   if (llmAvailabilityIntent || parserInventoryWatchIntent) {
     const model =
       llmAvailability?.model ||
-      conv.lead?.vehicle?.model ||
-      conv.lead?.vehicle?.description ||
+      (!parserInventoryWatchIntent
+        ? conv.lead?.vehicle?.model || conv.lead?.vehicle?.description
+        : undefined) ||
       undefined;
     const hasWatch = !!(conv.inventoryWatch || (conv.inventoryWatches && conv.inventoryWatches.length));
     if (model && !hasWatch) {
@@ -4498,14 +4547,14 @@ async function applyPostCallSummaryActions(opts: {
       const yearFromIntent = llmAvailability?.year ? Number(llmAvailability.year) : undefined;
       const year =
         yearFromIntent ??
-        (Number.isFinite(parsedLeadYear) ? parsedLeadYear : undefined);
+        (!parserInventoryWatchIntent && Number.isFinite(parsedLeadYear) ? parsedLeadYear : undefined);
       const leadCondition = String(conv.lead?.vehicle?.condition ?? "").toLowerCase();
       const inferredCondition =
         llmAvailability?.condition && llmAvailability.condition !== "unknown"
           ? llmAvailability.condition
-          : leadCondition === "used"
+          : !parserInventoryWatchIntent && leadCondition === "used"
             ? "used"
-            : leadCondition === "new"
+            : !parserInventoryWatchIntent && leadCondition === "new"
               ? "new"
               : "unknown";
       const watch: InventoryWatch = {
@@ -13314,6 +13363,61 @@ function parseBudgetMoneyInput(raw: unknown): number | undefined {
   return undefined;
 }
 
+function parseSpokenWatchPriceValue(raw: string): number | null {
+  const token = String(raw ?? "").trim().toLowerCase();
+  if (!token) return null;
+  const direct = Number(token);
+  if (Number.isFinite(direct) && direct >= 5 && direct <= 80) return Math.round(direct * 1000);
+  const words: Record<string, number> = {
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
+    eleven: 11,
+    twelve: 12,
+    thirteen: 13,
+    fourteen: 14,
+    fifteen: 15,
+    sixteen: 16,
+    seventeen: 17,
+    eighteen: 18,
+    nineteen: 19,
+    twenty: 20,
+    "twenty one": 21,
+    "twenty two": 22,
+    "twenty three": 23,
+    "twenty four": 24,
+    "twenty five": 25,
+    "twenty six": 26,
+    "twenty seven": 27,
+    "twenty eight": 28,
+    "twenty nine": 29,
+    thirty: 30
+  };
+  const n = words[token.replace(/\s+/g, " ")];
+  return n ? n * 1000 : null;
+}
+
+function extractSpokenWatchPriceRange(text: string): { minPrice?: number; maxPrice?: number } {
+  const source = String(text ?? "").toLowerCase().replace(/\s+/g, " ");
+  if (!source.trim()) return {};
+  if (!/\b(spend|price range|budget|keep it|around|under|up to|looking to spend|range)\b/.test(source)) {
+    return {};
+  }
+  const numberWord =
+    "(?:\\d{1,2}|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty(?:\\s+(?:one|two|three|four|five|six|seven|eight|nine))?|thirty)";
+  const range = source.match(
+    new RegExp(`\\b(${numberWord})\\s*(?:,|or|to|-|and)\\s*(${numberWord})(?:\\s*(?:k|grand|thousand))?\\b`, "i")
+  );
+  if (!range?.[1] || !range?.[2]) return {};
+  const a = parseSpokenWatchPriceValue(range[1]);
+  const b = parseSpokenWatchPriceValue(range[2]);
+  if (a == null || b == null) return {};
+  return { minPrice: Math.min(a, b), maxPrice: Math.max(a, b) };
+}
+
 function extractWatchPricePreference(text: string): { minPrice?: number; maxPrice?: number } {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return {};
@@ -13347,6 +13451,10 @@ function extractWatchPricePreference(text: string): { minPrice?: number; maxPric
     const parsed = parsePriceTokenForWatch(floor[1]);
     if (parsed != null) minPrice = parsed;
   }
+
+  const spokenRange = extractSpokenWatchPriceRange(t);
+  minPrice = minPrice ?? spokenRange.minPrice;
+  maxPrice = maxPrice ?? spokenRange.maxPrice;
 
   if (minPrice != null && maxPrice != null && minPrice > maxPrice) {
     const swap = minPrice;
