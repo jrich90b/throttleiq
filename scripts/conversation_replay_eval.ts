@@ -218,6 +218,34 @@ const cases: Case[] = [
     }
   },
   {
+    id: "health_recovery_paused_fresh_inventory_interest_allowed",
+    expectedAllow: true,
+    input: {
+      inboundText: "I'm looking for a 2026 cvo road glide but not an st",
+      draftText: "Got it — I can keep an eye out for a 2026 CVO Road Glide that is not an ST and text you when one comes in.",
+      followUpMode: "active",
+      followUpReason: "health_recovery_delay",
+      dialogState: "followup_paused",
+      classificationBucket: "inventory_interest",
+      classificationCta: "check_availability"
+    }
+  },
+  {
+    id: "followup_paused_stale_inventory_prompt_still_blocked",
+    expectedAllow: false,
+    expectedReason: "paused_state_inventory_prompt_guard",
+    input: {
+      inboundText: "ok",
+      draftText: "I can keep an eye out and text you as soon as one comes in.",
+      followUpMode: "active",
+      followUpReason: "health_recovery_delay",
+      dialogState: "followup_paused",
+      classificationBucket: "inventory_interest",
+      classificationCta: "check_availability",
+      shortAckIntent: false
+    }
+  },
+  {
     id: "noah_service_manual_handoff_blocks_walkaround_prompt",
     expectedAllow: false,
     expectedReason: "short_ack_no_action_guard",

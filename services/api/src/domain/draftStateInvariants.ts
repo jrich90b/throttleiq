@@ -79,6 +79,20 @@ function hasAvailabilityTurnSignal(text: string): boolean {
   );
 }
 
+function hasFreshInventoryInterestSignal(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  const hasShoppingVerb = /\b(looking for|lookin for|after|want|wanting|interested in|shopping for|trying to find)\b/.test(
+    t
+  );
+  const hasBikeModel =
+    /\b(cvo|road glide|street glide|pan america|breakout|low rider|fat boy|fat bob|heritage|sportster|nightster|softail|road king|tri glide|freewheeler)\b/.test(
+      t
+    );
+  const hasYear = /\b20\d{2}\b/.test(t);
+  return hasShoppingVerb && (hasBikeModel || hasYear);
+}
+
 function hasFinanceTurnSignal(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
@@ -223,7 +237,15 @@ export function applyDraftStateInvariants(
     };
   }
 
-  if ((dialogState === "followup_paused" || dialogState === "call_only") && inventoryPrompt) {
+  const pausedHealthRecoveryReengaged =
+    dialogState === "followup_paused" &&
+    String(input.followUpReason ?? "").toLowerCase() === "health_recovery_delay" &&
+    hasFreshInventoryInterestSignal(inboundText);
+  if (
+    (dialogState === "followup_paused" || dialogState === "call_only") &&
+    inventoryPrompt &&
+    !pausedHealthRecoveryReengaged
+  ) {
     return {
       allow: false,
       draftText: "",
