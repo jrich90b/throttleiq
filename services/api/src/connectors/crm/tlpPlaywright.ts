@@ -162,14 +162,62 @@ async function waitForLeadResultRow(page: Page, leadRef: string, step: StepFn): 
   );
 }
 
-async function openLeadByRef(page: Page, leadRef: string, step: StepFn) {
+async function submitQuickLookupRef(page: Page, leadRef: string, step: StepFn) {
   const refInput = page.locator("#QL_Ref");
   await step("lead: fill #QL_Ref", async () => {
+    await refInput.click({ force: true });
     await refInput.fill(leadRef);
   });
-  await step("lead: submit ref", async () => {
+  await step("lead: dispatch #QL_Ref change", async () => {
+    await page.evaluate(ref => {
+      const input = (globalThis as any).document?.querySelector?.("#QL_Ref");
+      if (!input) return;
+      (input as any).value = ref;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }, leadRef);
+  });
+  await step("lead: submit ref with Enter", async () => {
     await refInput.press("Enter");
   });
+
+  const clicked = await step("lead: submit quick lookup fallback", async () => {
+    return await page.evaluate(() => {
+      const input = (globalThis as any).document?.querySelector?.("#QL_Ref") as any;
+      if (!input) return false;
+      const candidates = [
+        "#QL_Submit",
+        "#QL_Search",
+        "#QL_Go",
+        "button[name='QL_Submit']",
+        "input[name='QL_Submit']",
+        "button[type='submit']",
+        "input[type='submit']"
+      ];
+      for (const selector of candidates) {
+        const el = (globalThis as any).document?.querySelector?.(selector);
+        if (el && (el as any).offsetParent !== null && (el as any).click) {
+          (el as any).click();
+          return true;
+        }
+      }
+      const form = input.closest("form") as any;
+      if (form) {
+        if (typeof form.requestSubmit === "function") form.requestSubmit();
+        else form.submit();
+        return true;
+      }
+      return false;
+    });
+  });
+
+  if (!clicked) {
+    await page.waitForTimeout(500);
+  }
+}
+
+async function openLeadByRef(page: Page, leadRef: string, step: StepFn) {
+  await submitQuickLookupRef(page, leadRef, step);
 
   const row = await step("lead: wait quick lookup result row", async () => {
     return await waitForLeadResultRow(page, leadRef, step);
@@ -278,13 +326,7 @@ async function openLeadByRef(page: Page, leadRef: string, step: StepFn) {
 }
 
 async function openDealershipVisitByRef(page: Page, leadRef: string, step: StepFn) {
-  const refInput = page.locator("#QL_Ref");
-  await step("lead: fill #QL_Ref", async () => {
-    await refInput.fill(leadRef);
-  });
-  await step("lead: submit ref", async () => {
-    await refInput.press("Enter");
-  });
+  await submitQuickLookupRef(page, leadRef, step);
 
   const row = await step("lead: wait quick lookup result row", async () => {
     return await waitForLeadResultRow(page, leadRef, step);
