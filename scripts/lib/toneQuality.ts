@@ -19,7 +19,8 @@ export type ToneIssueCode =
   | "pushy_cta_on_ack"
   | "template_bloat"
   | "known_fact_conflict"
-  | "overcommitted_availability_watch";
+  | "overcommitted_availability_watch"
+  | "redundant_current_bike_stock_count";
 
 export type ToneIssue = {
   code: ToneIssueCode;
@@ -286,6 +287,15 @@ function hasOvercommittedAvailabilityWatch(inboundText: string, outboundText: st
   );
 }
 
+function hasRedundantCurrentBikeStockCount(inboundText: string, outboundText: string): boolean {
+  const inbound = normalizeText(inboundText).toLowerCase();
+  const outbound = normalizeText(outboundText).toLowerCase();
+  return (
+    /\b(photo|photos|pic|pics|picture|pictures|beat up|condition|shape|rough|clean)\b/.test(inbound) &&
+    /\bwe do have 1\b.*\bin stock\b.*\bwant photos or details\b/.test(outbound)
+  );
+}
+
 export function evaluateTurnToneQuality(input: ToneEvalInput): ToneEvalResult {
   const inboundText = normalizeText(input.inboundText);
   const outboundText = normalizeText(input.outboundText);
@@ -300,6 +310,7 @@ export function evaluateTurnToneQuality(input: ToneEvalInput): ToneEvalResult {
   const templateBloat = hasTemplateBloat(inboundText, outboundText);
   const knownFactConflict = hasKnownFactConflict(inboundText, outboundText);
   const overcommittedAvailabilityWatch = hasOvercommittedAvailabilityWatch(inboundText, outboundText);
+  const redundantCurrentBikeStockCount = hasRedundantCurrentBikeStockCount(inboundText, outboundText);
 
   const issues: ToneIssue[] = [];
   let score = 100;
@@ -375,6 +386,14 @@ export function evaluateTurnToneQuality(input: ToneEvalInput): ToneEvalResult {
       detail: "promised availability monitoring when customer primarily asked for records"
     });
     score -= 15;
+  }
+  if (redundantCurrentBikeStockCount) {
+    issues.push({
+      code: "redundant_current_bike_stock_count",
+      weight: 20,
+      detail: "restated the current bike as a stock count instead of answering detail/photo request"
+    });
+    score -= 20;
   }
 
   score = Math.max(0, Math.min(100, score));

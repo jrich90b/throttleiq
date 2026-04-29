@@ -1024,6 +1024,15 @@ function isConsignmentRequest(text: string | null | undefined): boolean {
   );
 }
 
+function isCurrentBikeDetailRequest(text: string | null | undefined): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\b(photo|photos|pic|pics|picture|pictures|image|images|video|walkaround|walk around)\b/.test(t) ||
+    /\b(beat up|rough|clean|condition|shape|scratches?|dents?|damage|quick details?)\b/.test(t)
+  );
+}
+
 function toTitleCase(label: string): string {
   return label
     .toLowerCase()
@@ -2704,9 +2713,12 @@ export async function orchestrateInbound(
         requestedCondition,
         color
       });
+      const currentBikeDetailRequest = isCurrentBikeDetailRequest(event.body) && count === 1;
       const reply =
         count <= 0
           ? `I’m not seeing any ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}${preferencePrompt ? ` ${preferencePrompt}` : ""}${conditionPrompt}`
+          : currentBikeDetailRequest
+            ? "I don’t want to guess on condition from here. I can have someone grab quick photos and details on it."
           : count === 1
             ? `We do have 1 ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} in stock. Want photos or details?${styleExamples}${conditionPrompt}`
             : `We have ${count} ${conditionPrefix}${yearLabel}${modelLabel}${colorLabel} options in stock. Want photos or details on a specific one?${styleExamples}${conditionPrompt}`;

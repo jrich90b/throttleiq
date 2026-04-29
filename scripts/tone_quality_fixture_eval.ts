@@ -86,6 +86,12 @@ const FIXTURES: Fixture[] = [
     expect: { maxScore: 85, mustIncludeIssues: ["overcommitted_availability_watch"] }
   },
   {
+    id: "current_bike_photo_request_not_stock_count",
+    inboundText: "Is it pretty beat up or? Any quick pics of it? I'm a ways away so it is a bit of a haul.",
+    outboundText: "We do have 1 used 2003 1200 Custom in Silver in stock. Want photos or details?",
+    expect: { maxScore: 85, mustIncludeIssues: ["redundant_current_bike_stock_count"] }
+  },
+  {
     id: "warranty_question_answered",
     inboundText: "What warranty comes with a new Harley?",
     outboundText:
