@@ -7084,6 +7084,12 @@ const DEFAULT_HARLEY_MODELS = [
   "Street Glide Limited III",
   "Pan America Special",
   "Pan America Limited",
+  "XG500",
+  "XG750",
+  "XG750A",
+  "Street 500",
+  "Street 750",
+  "Street Rod",
   "CVO Road Glide",
   "CVO Street Glide",
   "Road Glide ST",
@@ -26387,7 +26393,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       (/\b(i(?:'|’)ll|i will|we(?:'|’)ll|we will)\b/i.test(lower) &&
         /\b(let you know|text you|notify you)\b/i.test(lower));
     const inventoryAvailabilityCue =
-      /\b(comes in|lands|in stock|available|availability|pre[- ]?owned|used|new|bike|model|road glide|street glide|road king|sportster|softail|breakout|touring|trike|pan america|nightster)\b/i.test(
+      /\b(comes in|lands|in stock|available|availability|pre[- ]?owned|used|new|bike|model|road glide|street glide|road king|sportster|softail|breakout|touring|trike|pan america|nightster|xg500|xg750|xg750a|street 500|street 750|street rod)\b/i.test(
         lower
       );
     const outboundWatchCue = explicitWatchVerb && inventoryAvailabilityCue;
@@ -26395,53 +26401,62 @@ app.post("/conversations/:id/send", async (req, res) => {
       process.env.LLM_ENABLED === "1" &&
       process.env.LLM_UNIFIED_SLOT_PARSER_ENABLED === "1" &&
       !!process.env.OPENAI_API_KEY;
-    if (outboundWatchCue && watchParserEligible) {
-      const outboundSemanticSlots = await safeLlmParse("manual_outbound_watch_parser", () =>
-        parseUnifiedSemanticSlotsWithLLM({
-          text,
-          history: buildHistory(conv, 8),
-          lead: conv.lead,
-          inventoryWatch: conv.inventoryWatch,
-          inventoryWatchPending: conv.inventoryWatchPending,
-          tradePayoff: conv.tradePayoff,
-          dialogState: getDialogState(conv)
-        })
+    if (outboundWatchCue) {
+      let outboundSemanticSlots: UnifiedSemanticSlotParse | null = null;
+      let outboundWatchConfidence = 0;
+      let outboundWatchAccepted = false;
+      if (watchParserEligible) {
+        outboundSemanticSlots = await safeLlmParse("manual_outbound_watch_parser", () =>
+          parseUnifiedSemanticSlotsWithLLM({
+            text,
+            history: buildHistory(conv, 8),
+            lead: conv.lead,
+            inventoryWatch: conv.inventoryWatch,
+            inventoryWatchPending: conv.inventoryWatchPending,
+            tradePayoff: conv.tradePayoff,
+            dialogState: getDialogState(conv)
+          })
+        );
+        outboundWatchConfidence =
+          typeof outboundSemanticSlots?.watchConfidence === "number"
+            ? outboundSemanticSlots.watchConfidence
+            : typeof outboundSemanticSlots?.confidence === "number"
+              ? outboundSemanticSlots.confidence
+              : 0;
+        const outboundWatchConfidenceMin = Number(process.env.LLM_SEMANTIC_SLOT_CONFIDENCE_MIN ?? 0.76);
+        outboundWatchAccepted =
+          outboundSemanticSlots?.watchAction === "set_watch" &&
+          outboundWatchConfidence >= outboundWatchConfidenceMin;
+      }
+
+      const watches = await deriveContextNoteWatches(
+        conv,
+        text,
+        outboundWatchAccepted ? outboundSemanticSlots : null
       );
-      const outboundWatchConfidence =
-        typeof outboundSemanticSlots?.watchConfidence === "number"
-          ? outboundSemanticSlots.watchConfidence
-          : typeof outboundSemanticSlots?.confidence === "number"
-            ? outboundSemanticSlots.confidence
-            : 0;
-      const outboundWatchConfidenceMin = Number(process.env.LLM_SEMANTIC_SLOT_CONFIDENCE_MIN ?? 0.76);
-      const outboundWatchAccepted =
-        outboundSemanticSlots?.watchAction === "set_watch" &&
-        outboundWatchConfidence >= outboundWatchConfidenceMin;
-      if (outboundWatchAccepted) {
-        const watches = await deriveContextNoteWatches(conv, text, outboundSemanticSlots);
-        if (watches.length) {
-          const existing = Array.isArray(conv.inventoryWatches)
-            ? (conv.inventoryWatches as InventoryWatch[])
-            : conv.inventoryWatch
-              ? [conv.inventoryWatch as InventoryWatch]
-              : [];
-          const { merged, added } = mergeInventoryWatches(existing, watches);
-          if (added.length) {
-            conv.inventoryWatches = merged;
-            conv.inventoryWatch = merged[0];
-            conv.inventoryWatchPending = undefined;
-            setDialogState(conv, "inventory_watch_active");
-            setFollowUpMode(conv, "holding_inventory", "inventory_watch");
-            stopFollowUpCadence(conv, "inventory_watch");
-            recordRouteOutcome("live", "manual_outbound_watch_set", {
-              convId: conv.id,
-              leadKey: conv.leadKey,
-              channel: opts?.channel ?? null,
-              added: added.length,
-              confidence: outboundWatchConfidence
-            });
-            return;
-          }
+      if (watches.length) {
+        const existing = Array.isArray(conv.inventoryWatches)
+          ? (conv.inventoryWatches as InventoryWatch[])
+          : conv.inventoryWatch
+            ? [conv.inventoryWatch as InventoryWatch]
+            : [];
+        const { merged, added } = mergeInventoryWatches(existing, watches);
+        if (added.length) {
+          conv.inventoryWatches = merged;
+          conv.inventoryWatch = merged[0];
+          conv.inventoryWatchPending = undefined;
+          setDialogState(conv, "inventory_watch_active");
+          setFollowUpMode(conv, "holding_inventory", "inventory_watch");
+          stopFollowUpCadence(conv, "inventory_watch");
+          recordRouteOutcome("live", "manual_outbound_watch_set", {
+            convId: conv.id,
+            leadKey: conv.leadKey,
+            channel: opts?.channel ?? null,
+            added: added.length,
+            confidence: watchParserEligible ? outboundWatchConfidence : null,
+            parserAccepted: outboundWatchAccepted
+          });
+          return;
         }
       }
     }
