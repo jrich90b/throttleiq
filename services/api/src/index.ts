@@ -10505,6 +10505,63 @@ function buildRequestedWindowSlotReply(slots: any[]): string | null {
   return null;
 }
 
+function hasScheduleTimeSignal(text: string | null | undefined): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  return !!extractTimeToken(t) || /\b(morning|afternoon|evening|after\s+\d{1,2}|before\s+\d{1,2})\b/i.test(t);
+}
+
+function getFreshRememberedScheduleTimeText(conv: any, maxAgeHours = 72): string | null {
+  const now = Date.now();
+  const maxAgeMs = maxAgeHours * 60 * 60 * 1000;
+  const requested = conv?.scheduler?.requested;
+  const requestedText = String(requested?.timeText ?? "").trim();
+  const requestedAt = new Date(String(requested?.requestedAt ?? "")).getTime();
+  if (
+    requestedText &&
+    hasScheduleTimeSignal(requestedText) &&
+    (!Number.isFinite(requestedAt) || now - requestedAt <= maxAgeMs)
+  ) {
+    return requestedText;
+  }
+  const messages = Array.isArray(conv?.messages) ? conv.messages : [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
+    if (msg?.direction !== "in") continue;
+    const body = String(msg?.body ?? "").trim();
+    if (!hasScheduleTimeSignal(body)) continue;
+    const atMs = new Date(String(msg?.at ?? "")).getTime();
+    if (Number.isFinite(atMs) && now - atMs > maxAgeMs) continue;
+    return body;
+  }
+  return null;
+}
+
+function parseRememberedScheduleDayTime(
+  conv: any,
+  dayLabel: string | null | undefined,
+  timeZone: string
+): { parsed: { year: number; month: number; day: number; hour24: number; minute: number; dayOfWeek: string }; timeText: string } | null {
+  const day = String(dayLabel ?? "").trim();
+  if (!day) return null;
+  const timeText = getFreshRememberedScheduleTimeText(conv);
+  if (!timeText) return null;
+  const parsed = parseRequestedDayTime(`${day} ${timeText}`, timeZone);
+  if (!parsed) return null;
+  return { parsed, timeText };
+}
+
+function formatRememberedScheduleTimeForReply(text: string | null | undefined): string {
+  const raw = String(text ?? "").trim();
+  const compact = raw.replace(/\s+/g, " ");
+  const rangeMatch = compact.match(
+    /\b((?:around|about|approximately|approx)\s+)?\d{1,2}(?::\d{2})?\s*(?:-|to|and)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/i
+  );
+  if (rangeMatch?.[0]) return rangeMatch[0].trim();
+  const token = extractTimeToken(compact);
+  return token ? formatTime12h(token) : compact;
+}
+
 function formatBusinessHoursForReply(
   hours?: Record<string, any> | null,
   country?: string | null
@@ -28691,6 +28748,24 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         return respondWithSmsRegeneratedDraft(daySpecificReply);
       }
       if (requestedDayLabel) {
+        const remembered = parseRememberedScheduleDayTime(conv, requestedDayLabel, regenTz);
+        if (remembered) {
+          setRequestedTime(conv, {
+            day: remembered.parsed.dayOfWeek,
+            timeText: remembered.timeText
+          });
+          setDialogState(conv, "schedule_request");
+          const requestedPhrase = `${requestedDayLabel} ${formatRememberedScheduleTimeForReply(remembered.timeText)}`;
+          const rememberedReply =
+            availableMatches.length > 0
+              ? explicitAvailabilityAskThisTurn && !recentlyConfirmedAvailable
+                ? `Absolutely — ${unitLabel} is still available right now. ${requestedPhrase} can work.`
+                : `${requestedPhrase} can work.`
+              : explicitAvailabilityAskThisTurn
+                ? `I’ll keep an eye on ${unitLabel} and update you right away. ${requestedPhrase} can work.`
+                : `${requestedPhrase} can work.`;
+          return respondWithSmsRegeneratedDraft(rememberedReply);
+        }
         const requestedPhrase = `${requestedDayLabel}${requestedDayPart ? ` ${requestedDayPart}` : ""}`;
         const daySpecificReply =
           availableMatches.length > 0
@@ -28704,6 +28779,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       }
       if (requestedTimeToken) {
         const requestedTimeLabel = formatTime12h(requestedTimeToken);
+        setRequestedTime(conv, { timeText: event.body });
         const reply = `Got it — ${requestedTimeLabel} can work. Which day were you thinking?`;
         return respondWithSmsRegeneratedDraft(reply);
       }
@@ -36357,10 +36433,21 @@ if (authToken && signature) {
     const dayPart = extractDayPart(textLower);
     const dayInfo = parseDayOfWeek(textLower);
     if (dayInfo?.day) {
+      try {
+        const cfg = await getSchedulerConfigHot();
+        const remembered = parseRememberedScheduleDayTime(conv, dayInfo.day, cfg.timezone || "America/New_York");
+        if (remembered) {
+          result.requestedTime = remembered.parsed;
+          result.draft = `Sounds good. ${dayInfo.day} ${formatRememberedScheduleTimeForReply(remembered.timeText)} can work.`;
+          setDialogState(conv, "schedule_request");
+        }
+      } catch {}
+    }
+    if (dayInfo?.day && !result.requestedTime) {
       const partLabel = dayPart ? ` ${dayPart}` : "";
       result.draft = `Got it — ${dayInfo.day}${partLabel} can work. What time were you thinking?`;
       setDialogState(conv, "schedule_request");
-    } else if (dayPart) {
+    } else if (!result.requestedTime && dayPart) {
       result.draft = `Got it — ${dayPart} can work. What time were you thinking?`;
       setDialogState(conv, "schedule_request");
     }
@@ -36387,6 +36474,9 @@ if (authToken && signature) {
         const requestedTimeLabel = formatTime12h(inboundTimeToken);
         result.draft = `Got it — ${inferredPromptDay} at ${requestedTimeLabel} can work.`;
         setDialogState(conv, "schedule_request");
+      }
+      if (!result.requestedTime) {
+        setRequestedTime(conv, { timeText: event.body });
       }
     }
   }
@@ -36706,7 +36796,10 @@ if (authToken && signature) {
     );
   }
   if (result.requestedTime) {
-    setRequestedTime(conv, { day: result.requestedTime.dayOfWeek, timeText: event.body });
+    const requestedMemoryText = hasScheduleTimeSignal(event.body)
+      ? event.body
+      : getFreshRememberedScheduleTimeText(conv) ?? event.body;
+    setRequestedTime(conv, { day: result.requestedTime.dayOfWeek, timeText: requestedMemoryText });
     if (result.requestedAppointmentType === "test_ride") {
       setDialogState(conv, "test_ride_init");
     } else {
