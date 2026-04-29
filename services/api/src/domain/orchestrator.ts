@@ -15,7 +15,8 @@ import {
   findInventoryPrice,
   findPriceRange,
   getInventoryFeed,
-  hasInventoryForModelYear
+  hasInventoryForModelYear,
+  type InventoryFeedItem
 } from "./inventoryFeed.js";
 import { listInventoryHolds, normalizeInventoryHoldKey } from "./inventoryHolds.js";
 import { listInventorySolds, normalizeInventorySoldKey } from "./inventorySolds.js";
@@ -1405,7 +1406,22 @@ type TestRideInventoryGate = {
   bikeLabel: string;
   availableCount: number;
   inventoryBrowseUrl: string | null;
+  alternateBikeLabel?: string | null;
+  alternateInventoryUrl?: string | null;
 };
+
+function priorModelYear(year?: string | null): string | null {
+  const n = Number(String(year ?? "").trim());
+  if (!Number.isInteger(n) || n < 1900 || n > 2200) return null;
+  return String(n - 1);
+}
+
+function formatInventoryBikeLabel(item: InventoryFeedItem, fallbackModel: string): string {
+  const year = String(item.year ?? "").trim();
+  const model = normalizeModelLabel(item.model ?? fallbackModel);
+  const color = String(item.color ?? "").trim();
+  return `${year ? `${year} ` : ""}${model}${color ? ` in ${color}` : ""}`.trim();
+}
 
 async function evaluateTestRideInventoryGate(args: {
   lead?: LeadProfile | null;
@@ -1430,34 +1446,32 @@ async function evaluateTestRideInventoryGate(args: {
 
   try {
     const requestedCondition = normalizeRequestedInventoryCondition(lead?.vehicle?.condition ?? null);
-    let matches = await findInventoryMatches({ year, model: rawModel });
-    if (requestedCondition) {
-      matches = matches.filter(m => inventoryItemMatchesRequestedCondition(m, requestedCondition));
-    }
-    if (!matches.length) {
-      return {
-        canOfferTestRide: false,
-        reason: "not_in_stock",
-        bikeLabel,
-        availableCount: 0,
-        inventoryBrowseUrl
-      };
-    }
     const [holds, solds] = await Promise.all([listInventoryHolds(), listInventorySolds()]);
-    const availableMatches = matches.filter(m => {
-      const holdKey = normalizeInventoryHoldKey(m.stockId, m.vin);
-      const soldKey = normalizeInventorySoldKey(m.stockId, m.vin);
-      if (holdKey && holds?.[holdKey]) return false;
-      if (soldKey && solds?.[soldKey]) return false;
-      return true;
-    });
+    const filterAvailable = (matches: InventoryFeedItem[]) =>
+      matches.filter(m => {
+        if (requestedCondition && !inventoryItemMatchesRequestedCondition(m, requestedCondition)) return false;
+        const holdKey = normalizeInventoryHoldKey(m.stockId, m.vin);
+        const soldKey = normalizeInventorySoldKey(m.stockId, m.vin);
+        if (holdKey && holds?.[holdKey]) return false;
+        if (soldKey && solds?.[soldKey]) return false;
+        return true;
+      });
+
+    const availableMatches = filterAvailable(await findInventoryMatches({ year, model: rawModel }));
     if (!availableMatches.length) {
+      const alternateYear = priorModelYear(year);
+      const alternateMatches = alternateYear
+        ? filterAvailable(await findInventoryMatches({ year: alternateYear, model: rawModel }))
+        : [];
+      const alternate = alternateMatches[0] ?? null;
       return {
         canOfferTestRide: false,
         reason: "not_in_stock",
         bikeLabel,
         availableCount: 0,
-        inventoryBrowseUrl
+        inventoryBrowseUrl,
+        alternateBikeLabel: alternate ? formatInventoryBikeLabel(alternate, rawModel) : null,
+        alternateInventoryUrl: alternate?.url ?? null
       };
     }
     return {
@@ -3758,14 +3772,24 @@ export async function orchestrateInbound(
           testRideInventoryGate.reason === "missing_model"
             ? "I can absolutely set up a test ride, but I need the exact bike you want to ride first."
             : `I’m not seeing ${testRideInventoryGate.bikeLabel} in stock right now, and I don’t want to book you on a bike we don’t have.`;
+        const alternateLine = testRideInventoryGate.alternateBikeLabel
+          ? `We do have a ${testRideInventoryGate.alternateBikeLabel} available if you’d like to test ride that one instead.`
+          : "";
+        const alternateUrlLine =
+          testRideInventoryGate.alternateBikeLabel && testRideInventoryGate.alternateInventoryUrl
+            ? `Here it is: ${testRideInventoryGate.alternateInventoryUrl}`
+            : "";
         const inventoryLine = testRideInventoryGate.inventoryBrowseUrl
           ? `Here’s our current inventory so you can pick an in-stock bike: ${testRideInventoryGate.inventoryBrowseUrl}`
           : "If you want, I can send you a few in-stock options right now.";
+        const nextStepLine = testRideInventoryGate.alternateBikeLabel
+          ? "If that works, I can line up the test ride right away."
+          : "Once you pick one, I can line up the test ride right away.";
         return finalize({
           intent,
           stage: "ENGAGED",
           shouldRespond: true,
-          draft: `${modelLine} ${inventoryLine} Once you pick one, I can line up the test ride right away.`,
+          draft: [modelLine, alternateLine || inventoryLine, alternateUrlLine, nextStepLine].filter(Boolean).join(" "),
           suggestedSlots: [],
           requestedTime: null,
           requestedAppointmentType: "inventory_visit",
