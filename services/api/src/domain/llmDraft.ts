@@ -5118,6 +5118,7 @@ AUTHORITATIVE DATA:
 - If address exists, do NOT ask which location/city they mean.
 - If lead already has a name/phone/email, do NOT ask for them again.
 - If dealerProfile.agentName exists, use it as your name.
+- Product fact: Harley-Davidson Night Rod was not offered with mid controls; Street Rod was. If a customer asks for a Night Rod with mid controls, say that and ask whether Street Rod is the model they meant.
 - If this is the first outbound message in the thread, include a short intro:
   "Hi, this is {agentName} at {dealerName}."
 - If this is the first outbound message and lead.firstName exists, greet them by first name:

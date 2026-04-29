@@ -28110,8 +28110,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     setFollowUpMode(conv, "manual_handoff", "service_records");
     stopFollowUpCadence(conv, "manual_handoff");
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
-    const reply =
-      "Thanks for the details — I’ll have the team check service records (battery/tires) and follow up. I’ll also keep an eye on availability for early May.";
+    const reply = "Thanks for the details — I’ll have the team check service records (battery/tires) and follow up.";
     if (channel === "email") {
       return respondWithEmailRegeneratedDraft(reply);
     }
@@ -29712,8 +29711,7 @@ if (authToken && signature) {
     setFollowUpMode(conv, "manual_handoff", "service_records");
     stopFollowUpCadence(conv, "manual_handoff");
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
-    const reply =
-      "Thanks for the details — I’ll have the team check service records (battery/tires) and follow up. I’ll also keep an eye on availability for early May.";
+    const reply = "Thanks for the details — I’ll have the team check service records (battery/tires) and follow up.";
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");

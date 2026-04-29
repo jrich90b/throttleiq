@@ -15,8 +15,11 @@ export type ToneIssueCode =
   | "question_not_answered_first"
   | "role_inconsistency"
   | "generic_model_reask"
+  | "generic_day_reask"
   | "pushy_cta_on_ack"
-  | "template_bloat";
+  | "template_bloat"
+  | "known_fact_conflict"
+  | "overcommitted_availability_watch";
 
 export type ToneIssue = {
   code: ToneIssueCode;
@@ -117,7 +120,9 @@ function hasWarrantySignal(text: string): boolean {
 
 function hasTradeSignal(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
-  return /\b(trade|trade[- ]in|payoff|lien|sell my bike|equity)\b/.test(t);
+  return /\b(trade|trade[- ]in|payoff|lien|sell my bike|sell a bike for me|sell the bike for me|commission|consignment|equity)\b/.test(
+    t
+  );
 }
 
 function hasStatusUpdateSignal(text: string): boolean {
@@ -247,6 +252,40 @@ function hasGenericModelReask(inboundText: string, outboundText: string): boolea
   return /\bwhich model are you (interested|leaning)\b/i.test(outboundText);
 }
 
+function hasDayHint(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  return /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow)\b/.test(t);
+}
+
+function hasGenericDayReask(inboundText: string, outboundText: string): boolean {
+  if (!hasDayHint(inboundText)) return false;
+  return /\bwhat day (?:and time )?(?:works|work|would work)|what time works best\b/i.test(outboundText);
+}
+
+function hasKnownFactConflict(inboundText: string, outboundText: string): boolean {
+  const inbound = normalizeText(inboundText).toLowerCase();
+  const outbound = normalizeText(outboundText).toLowerCase();
+  if (/\bnight rod\b/.test(inbound) && /\bmid controls?\b/.test(inbound)) {
+    return (
+      !/\bstreet rod\b/.test(outbound) &&
+      (/\bnight rods?\b.*\bmid controls?\b/.test(outbound) ||
+        /\bmid controls?\b.*\bnight rods?\b/.test(outbound) ||
+        /\bcheck on night rods?\b/.test(outbound))
+    );
+  }
+  return false;
+}
+
+function hasOvercommittedAvailabilityWatch(inboundText: string, outboundText: string): boolean {
+  const inbound = normalizeText(inboundText).toLowerCase();
+  const outbound = normalizeText(outboundText).toLowerCase();
+  return (
+    /\b(service records?|service history|battery|tires?|tire age)\b/.test(inbound) &&
+    /\bif .*still available\b|\bearly may\b/.test(inbound) &&
+    /\bkeep an eye on availability\b/.test(outbound)
+  );
+}
+
 export function evaluateTurnToneQuality(input: ToneEvalInput): ToneEvalResult {
   const inboundText = normalizeText(input.inboundText);
   const outboundText = normalizeText(input.outboundText);
@@ -257,7 +296,10 @@ export function evaluateTurnToneQuality(input: ToneEvalInput): ToneEvalResult {
   const roleConsistent = !hasRoleInconsistency(outboundText);
   const notPushy = !isPushyForAck(inboundText, intent, outboundText);
   const genericModelReask = hasGenericModelReask(inboundText, outboundText);
+  const genericDayReask = hasGenericDayReask(inboundText, outboundText);
   const templateBloat = hasTemplateBloat(inboundText, outboundText);
+  const knownFactConflict = hasKnownFactConflict(inboundText, outboundText);
+  const overcommittedAvailabilityWatch = hasOvercommittedAvailabilityWatch(inboundText, outboundText);
 
   const issues: ToneIssue[] = [];
   let score = 100;
@@ -294,6 +336,14 @@ export function evaluateTurnToneQuality(input: ToneEvalInput): ToneEvalResult {
     });
     score -= 15;
   }
+  if (genericDayReask) {
+    issues.push({
+      code: "generic_day_reask",
+      weight: 15,
+      detail: "asked for the day again even though inbound already included a day"
+    });
+    score -= 15;
+  }
   if (!notPushy) {
     issues.push({
       code: "pushy_cta_on_ack",
@@ -309,6 +359,22 @@ export function evaluateTurnToneQuality(input: ToneEvalInput): ToneEvalResult {
       detail: "contains repeated template language and low-specificity phrasing"
     });
     score -= 10;
+  }
+  if (knownFactConflict) {
+    issues.push({
+      code: "known_fact_conflict",
+      weight: 35,
+      detail: "outbound conflicts with a known product fact"
+    });
+    score -= 35;
+  }
+  if (overcommittedAvailabilityWatch) {
+    issues.push({
+      code: "overcommitted_availability_watch",
+      weight: 15,
+      detail: "promised availability monitoring when customer primarily asked for records"
+    });
+    score -= 15;
   }
 
   score = Math.max(0, Math.min(100, score));

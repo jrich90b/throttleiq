@@ -41,6 +41,37 @@
     }
   },
   {
+    "id": "schedule_correction_wednesday_345_1",
+    "text": "Happy Easter! I see that the location is closed on Mondays. I think I made a mistake on telling you Monday. Wednesday at 3:45pm would work!",
+    "expected": {
+      "intent": "schedule",
+      "explicit_request": true,
+      "requested": {
+        "day": "wednesday",
+        "time_text": "3:45pm",
+        "time_window": "exact"
+      },
+      "normalized_contains": "wednesday"
+    }
+  },
+  {
+    "id": "schedule_context_saturday_ok_1",
+    "text": "Thank you for that. Can you let me know about the check and if Saturday is okay?",
+    "expected": {
+      "intent": "availability",
+      "intent_any": [
+        "availability",
+        "schedule"
+      ],
+      "explicit_request": true,
+      "requested": {
+        "day": "saturday",
+        "time_window": "unknown"
+      },
+      "normalized_contains": "saturday"
+    }
+  },
+  {
     "id": "availability_next_week_1",
     "text": "Any openings next week?",
     "expected": {

@@ -1014,6 +1014,16 @@ function isJumpStartExperienceRequest(text: string | null | undefined): boolean 
   );
 }
 
+function isConsignmentRequest(text: string | null | undefined): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\bconsignment\b/.test(t) ||
+    /\bsell(?:ing)?\s+(?:a|my|the)?\s*bike\s+for\s+me\b/.test(t) ||
+    (/\bsell(?:ing)?\b/.test(t) && /\bbike\b/.test(t) && /\bcommission\b/.test(t))
+  );
+}
+
 function toTitleCase(label: string): string {
   return label
     .toLowerCase()
@@ -1894,6 +1904,14 @@ export async function orchestrateInbound(
   }
 
   const leadSourceRaw = (ctx?.leadSource ?? ctx?.lead?.source ?? "").toLowerCase();
+  if (isConsignmentRequest(event.body)) {
+    return finalize({
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft: "Unfortunately, we do not sell bikes on consignment. I’m sorry about that."
+    });
+  }
   const isSellMyBike = /sell my bike/.test(leadSourceRaw);
   const hasPriorOutbound =
     Array.isArray(history) &&

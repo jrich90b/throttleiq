@@ -52,6 +52,40 @@ const FIXTURES: Fixture[] = [
     expect: { maxScore: 75, mustIncludeIssues: ["generic_model_reask"] }
   },
   {
+    id: "night_rod_mid_controls_fact_conflict",
+    inboundText: "Night rod with the mid controls",
+    outboundText:
+      "Understood. I can check on Night Rods with mid controls and see what options we have. Are you looking for a new or pre-owned Night Rod?",
+    expect: { maxScore: 75, mustIncludeIssues: ["known_fact_conflict"] }
+  },
+  {
+    id: "consignment_request_hijacked_by_scheduling",
+    inboundText: "Can you sell a bike for me for a commission?",
+    outboundText: "I can set up a time to stop in. I have Tuesday at 9:30 AM or 11:30 AM — do any of these times work?",
+    expect: { maxScore: 75, mustIncludeIssues: ["intent_mismatch", "question_not_answered_first"] }
+  },
+  {
+    id: "specific_day_reasked_generically",
+    inboundText: "Thank you for that. Can you let me know about the check and if Saturday is okay?",
+    outboundText: "Absolutely — what day and time works for you?",
+    expect: { maxScore: 85, mustIncludeIssues: ["generic_day_reask"] }
+  },
+  {
+    id: "schedule_correction_answered_wrong_topic",
+    inboundText:
+      "Happy Easter! I see that the location is closed on Mondays. I think I made a mistake on telling you Monday. Wednesday at 3:45pm would work!",
+    outboundText: "We’re located at 1149 Erie Ave., North Tonawanda, NY 14120. Do you want pricing details or a quick model comparison?",
+    expect: { maxScore: 75, mustIncludeIssues: ["intent_mismatch"] }
+  },
+  {
+    id: "service_records_overcommitted_availability_watch",
+    inboundText:
+      "I wanted to know about any service records, including the age of the battery and tires. I'll be back in Westfield, NY in early May. So if this bike is still available at that time, I would love to drop by.",
+    outboundText:
+      "Thanks for the details — I’ll have the team check service records (battery/tires) and follow up. I’ll also keep an eye on availability for early May.",
+    expect: { maxScore: 85, mustIncludeIssues: ["overcommitted_availability_watch"] }
+  },
+  {
     id: "warranty_question_answered",
     inboundText: "What warranty comes with a new Harley?",
     outboundText:
@@ -112,4 +146,3 @@ function main() {
 }
 
 main();
-
