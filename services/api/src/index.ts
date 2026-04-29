@@ -5053,6 +5053,16 @@ function renderFollowUpTemplate(template: string, ctx: Record<string, string>): 
   return out.replace(/\s+/g, " ").trim();
 }
 
+function appendCadenceOffersLine(message: string, offersLine: string): string {
+  const base = String(message ?? "").trim();
+  const line = String(offersLine ?? "").trim();
+  if (!line) return base;
+  const url = line.match(/https?:\/\/\S+/i)?.[0]?.replace(/[),.]+$/g, "") ?? "";
+  if (url && base.toLowerCase().includes(url.toLowerCase())) return base;
+  if (base.toLowerCase().includes(line.toLowerCase())) return base;
+  return `${base} ${line}`.trim();
+}
+
 function isUnknownCadenceModel(model: string | null | undefined): boolean {
   const text = String(model ?? "").trim().toLowerCase();
   if (!text) return true;
@@ -5791,8 +5801,8 @@ async function buildCadenceRegeneratedDraft(
     if (conv.scheduleSoft && !allowProactiveSchedule) {
       message = stripSchedulingPromptFromFollowUp(message);
     }
-    if (lastSentStep === 3 && cadenceOffersLine && !message.toLowerCase().includes(cadenceOffersLine.toLowerCase())) {
-      message = `${message} ${cadenceOffersLine}`.trim();
+    if (lastSentStep === 3 && cadenceOffersLine) {
+      message = appendCadenceOffersLine(message, cadenceOffersLine);
     }
     message = ensureCadenceAnchorMessage({
       message,
@@ -5868,8 +5878,8 @@ async function buildCadenceRegeneratedDraft(
   if (promotionOverride) {
     message = promotionOverride;
   }
-  if (lastSentStep === 3 && cadenceOffersLine && !message.toLowerCase().includes(cadenceOffersLine.toLowerCase())) {
-    message = `${message} ${cadenceOffersLine}`.trim();
+  if (lastSentStep === 3 && cadenceOffersLine) {
+    message = appendCadenceOffersLine(message, cadenceOffersLine);
   }
 
   if (conv.scheduleSoft && !allowProactiveSchedule) {
@@ -16554,10 +16564,9 @@ async function processDueFollowUps() {
       !isPostSale &&
       cadence.kind !== "long_term" &&
       !isTradeNoInterest &&
-      !isSellMyBikeLead &&
-      !message.toLowerCase().includes(cadenceOffersLine.toLowerCase())
+      !isSellMyBikeLead
     ) {
-      message = `${message} ${cadenceOffersLine}`.trim();
+      message = appendCadenceOffersLine(message, cadenceOffersLine);
     }
     if (leadUnitAvailabilityOverride) {
       message = leadUnitAvailabilityOverride;
