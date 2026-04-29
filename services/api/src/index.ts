@@ -5339,6 +5339,23 @@ function buildHealthUpdateReply(text: string | null | undefined): string {
     : "I'm sorry to hear that. Take your time, and just text us when you're ready.";
 }
 
+async function applyHealthRecoveryFollowUpDelay(conv: any) {
+  if (!conv || conv.status === "closed" || conv.followUpCadence?.kind === "post_sale") return;
+  const cfg = await getSchedulerConfigHot();
+  const timezone = cfg.timezone || "America/New_York";
+  const days = Math.max(1, Number(process.env.HEALTH_RECOVERY_DELAY_DAYS ?? 21) || 21);
+  const now = new Date().toISOString();
+  const untilIso = computeFollowUpDueAt(now, days, timezone);
+  if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
+    conv.followUpCadence = undefined;
+    startFollowUpCadence(conv, now, timezone);
+  }
+  pauseFollowUpCadence(conv, untilIso, "health_recovery_delay");
+  setFollowUpMode(conv, "active", "health_recovery_delay");
+  setDialogState(conv, "followup_paused");
+  saveConversation(conv);
+}
+
 function getFollowUpContextLine(conv: any, now: Date): string | null {
   const outcome = conv?.appointment?.staffNotify?.outcome;
   const note = outcome?.note;
@@ -28077,16 +28094,22 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     } else {
       const reply = shouldHandoffToMention
       ? `${intro}${empathyNeeded ? "I'm really sorry to hear that. " : "Got it — "}${handoff}`
-      : empathyNeeded
+      : healthUpdateWithoutScheduleAsk
+        ? buildHealthUpdateReply(event.body ?? "")
+        : empathyNeeded
         ? "I'm really sorry to hear that."
         : courtesyOnly
           ? "You're welcome — have a great day too."
           : "Got it — thanks for the update.";
+      if (healthUpdateWithoutScheduleAsk) {
+        await applyHealthRecoveryFollowUpDelay(conv);
+      }
       return respondWithSmsRegeneratedDraft(reply);
     }
   }
 
   if (event.provider === "twilio" && isHealthUpdateWithoutScheduleAsk(event.body ?? "")) {
+    await applyHealthRecoveryFollowUpDelay(conv);
     return respondWithSmsRegeneratedDraft(buildHealthUpdateReply(event.body ?? ""));
   }
 
@@ -32018,11 +32041,16 @@ if (authToken && signature) {
     } else {
       const reply = shouldHandoffToMention
       ? `${intro}${empathyNeeded ? "I'm really sorry to hear that. " : "Got it — "}${handoff}`
-      : empathyNeeded
+      : healthUpdateWithoutScheduleAsk
+        ? buildHealthUpdateReply(event.body ?? "")
+        : empathyNeeded
         ? "I'm really sorry to hear that."
         : courtesyOnly
           ? "You're welcome — have a great day too."
           : "Got it — thanks for the update.";
+      if (healthUpdateWithoutScheduleAsk) {
+        await applyHealthRecoveryFollowUpDelay(conv);
+      }
       const systemMode = webhookMode;
       if (systemMode === "suggest") {
         appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -32038,6 +32066,7 @@ if (authToken && signature) {
   }
   if (event.provider === "twilio" && isHealthUpdateWithoutScheduleAsk(event.body ?? "")) {
     const reply = buildHealthUpdateReply(event.body ?? "");
+    await applyHealthRecoveryFollowUpDelay(conv);
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
