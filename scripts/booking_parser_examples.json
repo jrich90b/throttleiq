@@ -126,6 +126,14 @@
     }
   },
   {
+    "id": "none_health_update_last_thursday_1",
+    "text": "I just filled out the paperwork to get the free hat talk to Scott the other day told him I'd probably come in shortly with a couple friends they can ride, but I can't. I had my hip replaced last Thursday.",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
     "id": "reference_that_time_1",
     "history": [
       {

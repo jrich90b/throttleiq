@@ -2222,6 +2222,20 @@ export async function parseBookingIntentWithLLM(args: {
       /\?\s*$/.test(t);
     return firstPersonDeferral && !explicitScheduleAsk;
   };
+  const isHealthUpdateWithoutScheduleAsk = (input: string): boolean => {
+    const t = String(input ?? "").toLowerCase().trim();
+    if (!t) return false;
+    const healthContext =
+      /\b(hip replaced|knee replaced|replacement surgery|surgery|surgical|hospital|recovering|recovery|doctor|medical)\b/.test(
+        t
+      );
+    if (!healthContext) return false;
+    const explicitScheduleAsk =
+      /\b(can i|can we|could i|could we|schedule|book|appointment|appt|what time|what day|available|openings?|does .* work|works? for you)\b/.test(
+        t
+      ) || /\?\s*$/.test(t);
+    return !explicitScheduleAsk;
+  };
 
   const useLLM =
     process.env.LLM_ENABLED === "1" &&
@@ -2262,6 +2276,7 @@ export async function parseBookingIntentWithLLM(args: {
     'input: "Customer: can you move me later than that time?" output: {"intent":"reschedule","explicit_request":true,"requested":{"day":"","time_text":"later","time_window":"range"},"reference":"last_suggested","normalized_text":"later than last suggested","confidence":0.9}',
     'input: "Customer: what openings do you have friday?" output: {"intent":"availability","explicit_request":true,"requested":{"day":"friday","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"friday","confidence":0.95}',
     'input: "Customer: i will let you know a time later today" output: {"intent":"none","explicit_request":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.95}',
+    'input: "Customer: I just filled out the paperwork to get the free hat. Talked to Scott the other day, told him I would probably come in shortly with a couple friends they can ride, but I can’t. I had my hip replaced last Thursday." output: {"intent":"none","explicit_request":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.96}',
     'input: "Customer: payments are too high right now" output: {"intent":"none","explicit_request":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.93}'
   ];
 
@@ -2387,6 +2402,15 @@ export async function parseBookingIntentWithLLM(args: {
 
   // Guardrail: first-person deferrals ("I'll let you know later today") are not schedule asks.
   if (isScheduleDeferralWithoutAsk(messageText)) {
+    intent = "none";
+    explicitRequest = false;
+    day = null;
+    timeText = null;
+    timeWindow = "unknown";
+    reference = "none";
+    normalizedText = "";
+  }
+  if (isHealthUpdateWithoutScheduleAsk(messageText)) {
     intent = "none";
     explicitRequest = false;
     day = null;

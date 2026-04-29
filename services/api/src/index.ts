@@ -5315,6 +5315,30 @@ function buildOutcomeContextLine(note: string): string | null {
   return null;
 }
 
+function isHealthUpdateWithoutScheduleAsk(text: string | null | undefined): boolean {
+  const t = String(text ?? "").toLowerCase().trim();
+  if (!t) return false;
+  const healthContext =
+    /\b(hip replaced|knee replaced|replacement surgery|surgery|surgical|hospital|recovering|recovery|doctor|medical)\b/.test(
+      t
+    );
+  if (!healthContext) return false;
+  const explicitScheduleAsk =
+    /\b(can i|can we|could i|could we|schedule|book|appointment|appt|what time|what day|available|openings?|does .* work|works? for you)\b/.test(
+      t
+    ) || /\?\s*$/.test(t);
+  return !explicitScheduleAsk;
+}
+
+function buildHealthUpdateReply(text: string | null | undefined): string {
+  const t = String(text ?? "").toLowerCase();
+  const maybeVisit =
+    /\b(come in|stop in|stop by|come by|visit|shortly|soon|with (a )?(couple )?friends?)\b/.test(t);
+  return maybeVisit
+    ? "I'm sorry to hear that. Take your time, and when you're ready to stop in with your friends, just text us."
+    : "I'm sorry to hear that. Take your time, and just text us when you're ready.";
+}
+
 function getFollowUpContextLine(conv: any, now: Date): string | null {
   const outcome = conv?.appointment?.staffNotify?.outcome;
   const note = outcome?.note;
@@ -28009,7 +28033,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       String(mentionedUser.firstName ?? "").trim() ||
       String(mentionedUser.name ?? "").trim().split(/\s+/).filter(Boolean)[0] ||
       "them";
-    const fallbackSensitive = /\b(cancer|chemo|chemotherapy|radiation|hospice|icu|hospital|surgery|surgical|terminal|stage\s*(four|4)|death|dying|funeral|passed away|stroke|heart attack)\b/i.test(
+    const healthUpdateWithoutScheduleAsk = isHealthUpdateWithoutScheduleAsk(event.body ?? "");
+    const fallbackSensitive = healthUpdateWithoutScheduleAsk || /\b(cancer|chemo|chemotherapy|radiation|hospice|icu|hospital|surgery|surgical|terminal|stage\s*(four|4)|death|dying|funeral|passed away|stroke|heart attack)\b/i.test(
       String(event.body ?? "")
     );
     const empathyNeeded =
@@ -28042,8 +28067,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       ? `I'll have ${firstName} reach out.`
       : `I'll let ${firstName} know.`;
     const shouldBypassMentionShortcut =
-      mentionParserContextOnly ||
-      (!shouldHandoffToMention && hasActionableRequestBeyondMention(String(event.body ?? "")));
+      (mentionParserContextOnly && !healthUpdateWithoutScheduleAsk) ||
+      (!healthUpdateWithoutScheduleAsk &&
+        !shouldHandoffToMention &&
+        hasActionableRequestBeyondMention(String(event.body ?? "")));
     if (shouldBypassMentionShortcut) {
       // Continue through normal routing so actionable requests (for example scheduling updates)
       // are handled instead of being consumed by mention acknowledgment logic.
@@ -28057,6 +28084,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
           : "Got it — thanks for the update.";
       return respondWithSmsRegeneratedDraft(reply);
     }
+  }
+
+  if (event.provider === "twilio" && isHealthUpdateWithoutScheduleAsk(event.body ?? "")) {
+    return respondWithSmsRegeneratedDraft(buildHealthUpdateReply(event.body ?? ""));
   }
 
   const regenCustomerDispositionParserEligible =
@@ -31889,7 +31920,8 @@ if (authToken && signature) {
       (await summarizeSalespersonNoteWithLLM({ text: updateText, history: recentHistory })) ?? "";
     const todoText = noteSummary || updateText || `Update for ${firstName}`;
     addTodo(conv, "note", todoText, event.providerMessageId);
-    const fallbackSensitive = /\b(cancer|chemo|chemotherapy|radiation|hospice|icu|hospital|surgery|surgical|terminal|stage\s*(four|4)|death|dying|funeral|passed away|stroke|heart attack)\b/i.test(
+    const healthUpdateWithoutScheduleAsk = isHealthUpdateWithoutScheduleAsk(event.body ?? "");
+    const fallbackSensitive = healthUpdateWithoutScheduleAsk || /\b(cancer|chemo|chemotherapy|radiation|hospice|icu|hospital|surgery|surgical|terminal|stage\s*(four|4)|death|dying|funeral|passed away|stroke|heart attack)\b/i.test(
       String(event.body ?? "")
     );
     const empathyNeeded =
@@ -31976,8 +32008,10 @@ if (authToken && signature) {
       ? `I'll have ${firstName} reach out.`
       : `I'll let ${firstName} know.`;
     const shouldBypassMentionShortcut =
-      mentionParserContextOnly ||
-      (!shouldHandoffToMention && hasActionableRequestBeyondMention(String(event.body ?? "")));
+      (mentionParserContextOnly && !healthUpdateWithoutScheduleAsk) ||
+      (!healthUpdateWithoutScheduleAsk &&
+        !shouldHandoffToMention &&
+        hasActionableRequestBeyondMention(String(event.body ?? "")));
     if (shouldBypassMentionShortcut) {
       // Continue through normal routing so actionable requests (for example scheduling updates)
       // are handled instead of being consumed by mention acknowledgment logic.
@@ -32001,6 +32035,18 @@ if (authToken && signature) {
       )}</Message>\n</Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
+  }
+  if (event.provider === "twilio" && isHealthUpdateWithoutScheduleAsk(event.body ?? "")) {
+    const reply = buildHealthUpdateReply(event.body ?? "");
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(reply)}</Message></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
   }
   const bookingConfidence =
     typeof bookingParse?.confidence === "number" ? bookingParse.confidence : 0;
