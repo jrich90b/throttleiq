@@ -283,9 +283,6 @@ export function InboxSection(props: any) {
                           <div className="flex items-center justify-between gap-3">
                             <div className="min-w-0">
                               <div className="font-medium flex items-center gap-2">
-                                <span className="truncate">
-                                  {c.leadName && c.leadName.length > 0 ? c.leadName : c.leadKey}
-                                </span>
                                 {needsResponse ? (
                                   <span
                                     className="h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--accent)] shadow-[0_0_0_2px_rgba(251,127,4,0.18)]"
@@ -293,6 +290,9 @@ export function InboxSection(props: any) {
                                     aria-label="Needs response"
                                   />
                                 ) : null}
+                                <span className="truncate">
+                                  {c.leadName && c.leadName.length > 0 ? c.leadName : c.leadKey}
+                                </span>
                                 {c.walkIn ? (
                                   <span
                                     className="text-blue-600 text-lg leading-none"
