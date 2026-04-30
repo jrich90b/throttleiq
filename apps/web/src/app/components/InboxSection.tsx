@@ -285,7 +285,7 @@ export function InboxSection(props: any) {
                               <div className="font-medium flex items-center gap-2">
                                 {needsResponse ? (
                                   <span
-                                    className="h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--accent)] shadow-[0_0_0_2px_rgba(251,127,4,0.18)]"
+                                    className="lr-response-needed-dot h-2.5 w-2.5 shrink-0 rounded-full"
                                     title="Needs response"
                                     aria-label="Needs response"
                                   />
