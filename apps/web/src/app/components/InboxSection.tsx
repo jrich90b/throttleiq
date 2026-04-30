@@ -99,6 +99,37 @@ export function InboxSection(props: any) {
     return fallback;
   };
 
+  const isEmojiOnlyAckText = (text: string) => {
+    const t = String(text ?? "").trim();
+    return t.length > 0 && /^[\p{Extended_Pictographic}\s]+$/u.test(t);
+  };
+
+  const isShortAckNoActionText = (text: string) => {
+    const t = String(text ?? "").trim().toLowerCase();
+    if (!t) return false;
+    if (isEmojiOnlyAckText(t)) return true;
+    if (t.length > 60) return false;
+    if (/[?]/.test(t)) return false;
+    if (
+      /\b(price|pricing|payment|monthly|apr|term|down payment|trade|trade in|service|parts|apparel|available|availability|in stock|stock|test ride|appointment|schedule|call|video|photos?|email|watch)\b/i.test(
+        t
+      )
+    ) {
+      return false;
+    }
+    return /\b(thanks|thank you|thanks again|thx|ty|appreciate|got it|sounds good|sounds great|will do|ok|okay|k|kk|cool|perfect|great|all good|no problem|you bet|yep|yup|sure)\b/.test(
+      t
+    );
+  };
+
+  const needsCustomerResponse = (conversation: any) => {
+    if (conversation?.status === "closed") return false;
+    if (conversation?.pendingDraft) return true;
+    const lastMessage = conversation?.lastMessage;
+    if (lastMessage?.direction !== "in") return false;
+    return !isShortAckNoActionText(lastMessage?.body ?? "");
+  };
+
   return (
     <>
       <div className="mt-4 flex items-center justify-between">
@@ -240,6 +271,7 @@ export function InboxSection(props: any) {
                       .trim()
                       .toLowerCase();
                     const linkedOpenCampaign = view === "campaigns" && campaignThreadStatus === "linked_open";
+                    const needsResponse = needsCustomerResponse(c);
                     return (
                       <div key={c.id} className="flex items-stretch">
                         <button
@@ -254,6 +286,13 @@ export function InboxSection(props: any) {
                                 <span className="truncate">
                                   {c.leadName && c.leadName.length > 0 ? c.leadName : c.leadKey}
                                 </span>
+                                {needsResponse ? (
+                                  <span
+                                    className="h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--accent)] shadow-[0_0_0_2px_rgba(251,127,4,0.18)]"
+                                    title="Needs response"
+                                    aria-label="Needs response"
+                                  />
+                                ) : null}
                                 {c.walkIn ? (
                                   <span
                                     className="text-blue-600 text-lg leading-none"
