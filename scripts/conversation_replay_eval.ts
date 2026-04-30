@@ -132,6 +132,23 @@ const cases: Case[] = [
     }
   },
   {
+    id: "availability_question_blocks_watch_without_answer",
+    expectedAllow: false,
+    expectedReason: "availability_priority_inventory_prompt_guard",
+    input: {
+      inboundText:
+        "Hey I inquired about the red street glide but had to wait on my id to come in still waiting on it but just checking to make sure it's still available",
+      draftText:
+        "Sounds good. I can text you as soon as a red Street Glide comes in. Anything else you want me to watch for (year, miles, or price)?",
+      followUpMode: "active",
+      followUpReason: "inventory_watch",
+      dialogState: "inventory_watch_prompted",
+      classificationBucket: "inventory_interest",
+      classificationCta: "check_availability",
+      turnAvailabilityIntent: true
+    }
+  },
+  {
     id: "blake_credit_app_blocks_inventory_prompt",
     expectedAllow: false,
     expectedReason: "finance_priority_inventory_prompt_guard",

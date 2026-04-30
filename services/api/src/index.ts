@@ -11188,6 +11188,51 @@ function isQuotedReactionInboundText(text: string): boolean {
   return !/[\p{L}\p{N}]/u.test(reactionToken);
 }
 
+function isMediaOnlyPlaceholderText(text: string): boolean {
+  const t = String(text ?? "").trim().toLowerCase();
+  return (
+    !t ||
+    /^(mms image attachment|open attachment|sent an attachment|sent an image|sent a photo|image attachment|photo attachment)$/i.test(
+      t
+    )
+  );
+}
+
+function hasAvailabilityQuestionText(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return /\b(still available|is it available|available\??|availability|in stock|do you have|have any|still there|still got)\b/.test(
+    t
+  );
+}
+
+function getRecentInboundAvailabilityTextForMediaOnlyTurn(
+  conv: any,
+  event: InboundMessageEvent,
+  maxAgeMs = 10 * 60 * 1000
+): string | null {
+  const hasMedia = Array.isArray(event.mediaUrls) && event.mediaUrls.length > 0;
+  if (!hasMedia || !isMediaOnlyPlaceholderText(event.body)) return null;
+  const messages = Array.isArray(conv?.messages) ? conv.messages : [];
+  if (!messages.length) return null;
+  const eventAt = new Date(String(event.receivedAt ?? "")).getTime();
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
+    if (!msg || msg.direction !== "in") continue;
+    if (event.providerMessageId && String(msg.providerMessageId ?? "") === event.providerMessageId) {
+      continue;
+    }
+    const body = String(msg.body ?? "").trim();
+    if (!body || isMediaOnlyPlaceholderText(body)) continue;
+    const msgAt = new Date(String(msg.at ?? "")).getTime();
+    if (Number.isFinite(eventAt) && Number.isFinite(msgAt) && eventAt - msgAt > maxAgeMs) {
+      return null;
+    }
+    return hasAvailabilityQuestionText(body) ? body : null;
+  }
+  return null;
+}
+
 function isShortAckText(text: string): boolean {
   const t = String(text ?? "").trim().toLowerCase();
   if (!t) return false;
@@ -29455,6 +29500,16 @@ if (authToken && signature) {
     });
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
+  }
+  const mediaOnlyAvailabilityContext = getRecentInboundAvailabilityTextForMediaOnlyTurn(conv, event);
+  if (mediaOnlyAvailabilityContext) {
+    event.body = mediaOnlyAvailabilityContext;
+    recordRouteOutcome("live", "media_only_availability_context_reused", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      providerMessageId: event.providerMessageId ?? null,
+      mediaCount: event.mediaUrls?.length ?? 0
+    });
   }
   const responseControlParserEligible =
     event.provider === "twilio" &&

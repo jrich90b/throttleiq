@@ -277,5 +277,20 @@ export function applyDraftStateInvariants(
     };
   }
 
+  if (
+    availabilitySignal &&
+    !financeSignal &&
+    inventoryPrompt &&
+    !/\b(still available|available right now|in stock right now|not seeing\b[^.]{0,80}\bin stock|checking availability|verify availability|confirm availability)\b/.test(
+      draftText.toLowerCase()
+    )
+  ) {
+    return {
+      allow: false,
+      draftText: "",
+      reason: "availability_priority_inventory_prompt_guard"
+    };
+  }
+
   return { allow: true, draftText };
 }
