@@ -125,7 +125,8 @@ import {
   findInventoryMatches,
   findInventoryPrice,
   getInventoryFeed,
-  hasInventoryForModelYear
+  hasInventoryForModelYear,
+  type InventoryFeedItem
 } from "./domain/inventoryFeed.js";
 import { getInventoryNote, listInventoryNotes, setInventoryNote } from "./domain/inventoryNotes.js";
 import {
@@ -12306,12 +12307,154 @@ type DeterministicAvailabilityResolution =
   | { kind: "missing_model" }
   | { kind: "reply"; reply: string; mediaUrls?: string[] };
 
+type InventoryImageHash = {
+  bits: string;
+  sampledAt: number;
+};
+
+type InventoryImageMatch = {
+  item: InventoryFeedItem;
+  imageUrl: string;
+  distance: number;
+  secondDistance: number | null;
+  confidence: number;
+};
+
+const inventoryImageHashCache = new Map<string, InventoryImageHash>();
+const INVENTORY_IMAGE_MATCH_CACHE_TTL_MS = Number(process.env.INVENTORY_IMAGE_MATCH_CACHE_TTL_MS ?? 30 * 60 * 1000);
+const INVENTORY_IMAGE_MATCH_TIMEOUT_MS = Number(process.env.INVENTORY_IMAGE_MATCH_TIMEOUT_MS ?? 4500);
+
+function resolveUploadUrlToLocalPath(value: string): string | null {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  let pathname = raw;
+  try {
+    pathname = new URL(raw).pathname;
+  } catch {
+    pathname = raw.startsWith("/") ? raw : "";
+  }
+  if (!pathname.startsWith("/uploads/")) return null;
+  const rel = pathname.replace(/^\/uploads\//, "");
+  if (!rel || rel.includes("..")) return null;
+  return path.resolve(getDataDir(), "uploads", rel);
+}
+
+async function readImageBufferForHash(url: string): Promise<Buffer | null> {
+  const raw = String(url ?? "").trim();
+  if (!raw) return null;
+  const localPath = resolveUploadUrlToLocalPath(raw);
+  if (localPath) {
+    try {
+      return await fs.promises.readFile(localPath);
+    } catch {
+      // Fall through to fetch in case this is a remote public URL.
+    }
+  }
+  if (!/^https?:\/\//i.test(raw)) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1000, INVENTORY_IMAGE_MATCH_TIMEOUT_MS));
+  try {
+    const resp = await fetch(raw, {
+      headers: { "User-Agent": "ThrottleIQ/1.0 (inventory-image-match)" },
+      signal: controller.signal
+    });
+    if (!resp.ok) return null;
+    const contentType = String(resp.headers.get("content-type") ?? "").toLowerCase();
+    if (contentType && !contentType.startsWith("image/")) return null;
+    return Buffer.from(await resp.arrayBuffer());
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function computeImageAverageHash(url: string): Promise<string | null> {
+  const cacheKey = String(url ?? "").trim();
+  const cached = inventoryImageHashCache.get(cacheKey);
+  if (cached && Date.now() - cached.sampledAt < INVENTORY_IMAGE_MATCH_CACHE_TTL_MS) {
+    return cached.bits;
+  }
+  const buffer = await readImageBufferForHash(cacheKey);
+  if (!buffer) return null;
+  try {
+    const pixels = await sharp(buffer, { failOn: "none", animated: false })
+      .rotate()
+      .resize(16, 16, { fit: "fill" })
+      .greyscale()
+      .raw()
+      .toBuffer();
+    if (!pixels.length) return null;
+    const avg = pixels.reduce((sum, value) => sum + value, 0) / pixels.length;
+    const bits = Array.from(pixels, value => (value >= avg ? "1" : "0")).join("");
+    inventoryImageHashCache.set(cacheKey, { bits, sampledAt: Date.now() });
+    return bits;
+  } catch {
+    return null;
+  }
+}
+
+function hammingDistance(a: string, b: string): number {
+  const len = Math.min(a.length, b.length);
+  let distance = Math.abs(a.length - b.length);
+  for (let i = 0; i < len; i += 1) {
+    if (a[i] !== b[i]) distance += 1;
+  }
+  return distance;
+}
+
+async function findInventoryImageMatch(args: {
+  inboundMediaUrls?: string[];
+  candidates: InventoryFeedItem[];
+}): Promise<InventoryImageMatch | null> {
+  if (process.env.INVENTORY_IMAGE_MATCH_ENABLED === "0") return null;
+  const inboundUrls = (args.inboundMediaUrls ?? []).filter(u => /^https?:\/\//i.test(String(u ?? "")) || String(u ?? "").startsWith("/uploads/"));
+  if (!inboundUrls.length || !args.candidates.length) return null;
+  const maxCandidates = Math.max(1, Number(process.env.INVENTORY_IMAGE_MATCH_MAX_CANDIDATES ?? 24));
+  const maxImagesPerUnit = Math.max(1, Number(process.env.INVENTORY_IMAGE_MATCH_IMAGES_PER_UNIT ?? 3));
+  const maxDistance = Math.max(0, Number(process.env.INVENTORY_IMAGE_MATCH_MAX_DISTANCE ?? 18));
+  const minGap = Math.max(0, Number(process.env.INVENTORY_IMAGE_MATCH_MIN_GAP ?? 8));
+  const inboundHashes = (
+    await Promise.all(inboundUrls.slice(0, 2).map(url => computeImageAverageHash(url)))
+  ).filter((hash): hash is string => !!hash);
+  if (!inboundHashes.length) return null;
+
+  const candidates = args.candidates
+    .filter(item => Array.isArray(item.images) && item.images.some(u => /^https?:\/\//i.test(String(u ?? ""))))
+    .slice(0, maxCandidates);
+  const scores: Array<{ item: InventoryFeedItem; imageUrl: string; distance: number }> = [];
+  for (const item of candidates) {
+    const urls = (item.images ?? []).filter(u => /^https?:\/\//i.test(String(u ?? ""))).slice(0, maxImagesPerUnit);
+    for (const imageUrl of urls) {
+      const hash = await computeImageAverageHash(imageUrl);
+      if (!hash) continue;
+      const distance = Math.min(...inboundHashes.map(inboundHash => hammingDistance(inboundHash, hash)));
+      scores.push({ item, imageUrl, distance });
+    }
+  }
+  scores.sort((a, b) => a.distance - b.distance);
+  const best = scores[0];
+  if (!best) return null;
+  const secondDifferentUnit = scores.find(score => {
+    const bestKey = normalizeInventoryHoldKey(best.item.stockId, best.item.vin) ?? `${best.item.stockId ?? ""}|${best.item.vin ?? ""}|${best.item.url ?? ""}`;
+    const key = normalizeInventoryHoldKey(score.item.stockId, score.item.vin) ?? `${score.item.stockId ?? ""}|${score.item.vin ?? ""}|${score.item.url ?? ""}`;
+    return key !== bestKey;
+  });
+  const secondDistance = secondDifferentUnit?.distance ?? null;
+  const gap = secondDistance == null ? 999 : secondDistance - best.distance;
+  if (best.distance > maxDistance) return null;
+  if (best.distance > 8 && gap < minGap) return null;
+  const confidence = Math.max(0, Math.min(0.99, 1 - best.distance / 64));
+  return { item: best.item, imageUrl: best.imageUrl, distance: best.distance, secondDistance, confidence };
+}
+
 async function resolveDeterministicAvailabilityReply(args: {
   conv: any;
   text: string;
   parsedAvailability?: { model?: string | null; year?: string | number | null; color?: string | null; condition?: string | null } | null;
   otherInventoryRequest?: boolean;
   affectHasHumor?: boolean;
+  inboundMediaUrls?: string[];
 }): Promise<DeterministicAvailabilityResolution> {
   const { conv, parsedAvailability } = args;
   const textLower = String(args.text ?? "").toLowerCase();
@@ -12492,6 +12635,10 @@ async function resolveDeterministicAvailabilityReply(args: {
         m => !((leadStockId && m.stockId === leadStockId) || (leadVin && m.vin === leadVin))
       )
     : availableMatches;
+  const imageMatch = await findInventoryImageMatch({
+    inboundMediaUrls: args.inboundMediaUrls,
+    candidates: availableMatchesForCount
+  });
   const count = availableMatchesForCount.length;
   const validInventoryUrl = (value: string | null | undefined): string | null => {
     const raw = String(value ?? "").trim();
@@ -12542,6 +12689,27 @@ async function resolveDeterministicAvailabilityReply(args: {
   const noStockColorFinishPrompt =
     count <= 0 ? await buildColorFinishFollowUpPrompt(conv, model, year, color) : "";
   let reply = "";
+  if (imageMatch) {
+    const matchedLine = formatInventoryLine(imageMatch.item);
+    const imageMatchPhoto = /^https?:\/\//i.test(String(imageMatch.imageUrl ?? "")) ? imageMatch.imageUrl : null;
+    const matchedMediaUrls = imageMatchPhoto && !sentMediaUrls.has(imageMatchPhoto) ? [imageMatchPhoto] : [];
+    return {
+      kind: "reply",
+      reply: `Yes — that looks like ${matchedLine}, and it’s still available right now. Want to come check it out?`,
+      mediaUrls: matchedMediaUrls.length ? matchedMediaUrls : undefined
+    };
+  }
+  const shouldVerifyExactPhoto =
+    !!args.inboundMediaUrls?.length &&
+    referencesSpecificInventoryUnit(args.text) &&
+    count !== 1;
+  if (shouldVerifyExactPhoto) {
+    addTodo(conv, "other", `Verify inventory availability from customer photo for ${inventoryLabel}.`);
+    return {
+      kind: "reply",
+      reply: `I’m going to verify that exact ${inventoryLabel} from the photo and follow up shortly.`
+    };
+  }
   if (otherInventoryRequest) {
     if (count <= 0) {
       reply = `Right now that’s the only ${inventoryLabel} we have in stock. ${paintTrimPrompt}`;
@@ -28828,7 +28996,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         text: event.body ?? "",
         parsedAvailability: regenAvailabilityPreferenceHint,
         otherInventoryRequest: regenOtherInventoryRequest,
-        affectHasHumor: !!regenAcceptedAffect?.hasHumor
+        affectHasHumor: !!regenAcceptedAffect?.hasHumor,
+        inboundMediaUrls: event.mediaUrls
       });
       if (availabilityResolution.kind === "reply") {
         return respondWithSmsRegeneratedDraft(
@@ -34357,7 +34526,8 @@ if (authToken && signature) {
       text: event.body ?? "",
       parsedAvailability: availabilityPreferenceHint ?? llmAvailability,
       otherInventoryRequest,
-      affectHasHumor: !!acceptedAffect?.hasHumor
+      affectHasHumor: !!acceptedAffect?.hasHumor,
+      inboundMediaUrls: event.mediaUrls
     });
     const reply =
       availabilityResolution.kind === "reply"
