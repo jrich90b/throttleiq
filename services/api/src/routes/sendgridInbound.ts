@@ -1127,6 +1127,16 @@ function isEagleRiderRentalSource(source?: string | null): boolean {
   return /\beagle\s*rider\b/i.test(String(source ?? ""));
 }
 
+function isGenericMetaOfferModel(model?: string | null): boolean {
+  const normalized = String(model ?? "")
+    .toLowerCase()
+    .replace(/\bharley[-\s]?davidson\b/g, "")
+    .replace(/\bh[-\s]?d\b/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  return normalized === "other" || normalized === "full line";
+}
+
 async function getLeadInventoryMatchStatus(
   conv: any
 ): Promise<"in_stock" | "on_hold" | "sold" | "not_found" | "unknown"> {
@@ -3971,7 +3981,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const skipAvailabilityLine =
     isDepartmentLead ||
     isRoom58Standard ||
-    (isMetaPromoOffer && /^(other|full line)$/i.test(metaOfferRawModel.trim()));
+    (isMetaPromoOffer && isGenericMetaOfferModel(metaOfferRawModel));
   let initialMedia =
     isInitialAdf && !isDepartmentLead && !room58Source
       ? await pickLeadInventoryMedia(conv)
@@ -5417,7 +5427,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     });
   }
 
-  if (isMetaPromoOffer && /^(other|full line)$/i.test(metaOfferRawModel.trim())) {
+  if (isMetaPromoOffer && isGenericMetaOfferModel(metaOfferRawModel)) {
     const profile = await getInitialDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
     const agentName = profile?.agentName ?? "Brooke";
