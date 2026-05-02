@@ -5819,6 +5819,11 @@ async function buildCadenceRegeneratedDraft(
   if (cadence.kind === "post_sale" || cadence.kind === "long_term") return null;
 
   const draftAtMs = new Date(String(lastDraft.at ?? "")).getTime();
+  const cadenceLastSentAtMs = new Date(String(cadence.lastSentAt ?? "")).getTime();
+  const lastDraftMatchesCadenceSend =
+    Number.isFinite(draftAtMs) &&
+    Number.isFinite(cadenceLastSentAtMs) &&
+    Math.abs(draftAtMs - cadenceLastSentAtMs) <= 5 * 60 * 1000;
   if (Number.isFinite(draftAtMs)) {
     const hasInboundAfterDraft = (conv.messages ?? []).some((m: any) => {
       if (m?.direction !== "in") return false;
@@ -5903,7 +5908,7 @@ async function buildCadenceRegeneratedDraft(
     contextTag !== "scheduling";
   const allowProactiveSchedule = shouldAllowProactiveScheduleAsk(conv, now);
   if (!shouldPreferContextualStep0NoSlots) {
-    let message = String(lastDraft?.body ?? "").trim();
+    let message = lastDraftMatchesCadenceSend ? String(lastDraft?.body ?? "").trim() : "";
     if (isTestRideCadenceLead) {
       const template =
         TEST_RIDE_FOLLOW_UP_MESSAGES[Math.min(lastSentStep, TEST_RIDE_FOLLOW_UP_MESSAGES.length - 1)];
@@ -5964,24 +5969,31 @@ async function buildCadenceRegeneratedDraft(
       label: labelWithThe.trim() || "the bike"
     });
   } else {
-    const noModelStep0Variants = FOLLOW_UP_VARIANTS_NO_MODEL_NO_SLOTS[0] ?? [];
+    const noModelStepVariants =
+      FOLLOW_UP_VARIANTS_NO_MODEL_NO_SLOTS[lastSentStep] ??
+      FOLLOW_UP_VARIANTS_NO_MODEL_NO_SLOTS[0] ??
+      [];
     const engagedNoSlotMap =
       (contextTag && ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS[contextTag]) ||
       ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS.general;
     const variants =
-      !hasSpecificFollowUpModel && noModelStep0Variants.length
-        ? noModelStep0Variants
+      !hasSpecificFollowUpModel && noModelStepVariants.length
+        ? noModelStepVariants
         : engagedKind
-          ? engagedNoSlotMap[0] ?? []
-          : FOLLOW_UP_VARIANTS_NO_SLOTS[0] ?? [];
-    const fallback = renderFollowUpTemplate(FOLLOW_UP_MESSAGES[0], baseCtx);
+          ? engagedNoSlotMap[lastSentStep] ?? engagedNoSlotMap[0] ?? []
+          : FOLLOW_UP_VARIANTS_NO_SLOTS[lastSentStep] ?? FOLLOW_UP_VARIANTS_NO_SLOTS[0] ?? [];
+    const fallback = renderFollowUpTemplate(
+      FOLLOW_UP_MESSAGES[Math.min(lastSentStep, FOLLOW_UP_MESSAGES.length - 1)] ??
+        FOLLOW_UP_MESSAGES[FOLLOW_UP_MESSAGES.length - 1],
+      baseCtx
+    );
     message = variants.length
       ? renderFollowUpTemplate(
           pickVariantNoRepeat(
             cadence,
             variants,
-            `${conv.leadKey}|regen|${engagedKind ? "engaged" : "standard"}|0`,
-            `${engagedKind ? `engaged:${contextTag ?? "general"}` : "standard"}:0:noslots:regen`
+            `${conv.leadKey}|regen|${engagedKind ? "engaged" : "standard"}|${lastSentStep}`,
+            `${engagedKind ? `engaged:${contextTag ?? "general"}` : "standard"}:${lastSentStep}:noslots:regen`
           ),
           baseCtx
         )
