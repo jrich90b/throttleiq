@@ -40,7 +40,7 @@ function env(name: string): string {
 const DEFAULT_TIMEOUT_MS = Number(process.env.TLP_TIMEOUT_MS ?? 45_000);
 const SHORT_TIMEOUT_MS = Number(process.env.TLP_SHORT_TIMEOUT_MS ?? 15_000);
 const NAV_TIMEOUT_MS = Number(process.env.TLP_NAV_TIMEOUT_MS ?? 60_000);
-const DEBUG = process.env.TLP_DEBUG === "1";
+const DEBUG = process.env.TLP_DEBUG !== "0";
 const DEBUG_DIR = process.env.TLP_DEBUG_DIR ?? "/tmp/tlp-debug";
 
 type StepFn = <T>(label: string, fn: () => Promise<T>) => Promise<T>;
@@ -135,14 +135,21 @@ async function waitForLeadResultRow(page: Page, leadRef: string, step: StepFn): 
     'tr:has(td.actionListing.action_dt)'
   ];
   const refPattern = new RegExp(`(^|\\D)${escapeRegexLiteral(leadRef)}(\\D|$)`);
-  const refRowLocators = [
-    page.locator("tr").filter({ hasText: refPattern }).first(),
-    page.locator('[role="row"]').filter({ hasText: refPattern }).first()
-  ];
   const deadline = Date.now() + DEFAULT_TIMEOUT_MS;
   let lastError = "";
 
   while (Date.now() < deadline) {
+    const frames = page.frames();
+    const frameLocators = frames.flatMap(frame => [
+      frame.locator("tr").filter({ hasText: refPattern }).first(),
+      frame.locator('[role="row"]').filter({ hasText: refPattern }).first()
+    ]);
+    const refRowLocators = [
+      page.locator("tr").filter({ hasText: refPattern }).first(),
+      page.locator('[role="row"]').filter({ hasText: refPattern }).first(),
+      ...frameLocators
+    ];
+
     for (const row of refRowLocators) {
       try {
         await row.waitFor({ state: "visible", timeout: 1500 });
@@ -153,20 +160,32 @@ async function waitForLeadResultRow(page: Page, leadRef: string, step: StepFn): 
     }
 
     for (const selector of rowSelectors) {
-      const row = page.locator(selector).first();
-      try {
-        await row.waitFor({ state: "visible", timeout: 1500 });
-        return row;
-      } catch (err: any) {
-        lastError = err?.message ?? String(err);
+      const locators = [page.locator(selector).first(), ...frames.map(frame => frame.locator(selector).first())];
+      for (const row of locators) {
+        try {
+          await row.waitFor({ state: "visible", timeout: 1500 });
+          return row;
+        } catch (err: any) {
+          lastError = err?.message ?? String(err);
+        }
       }
     }
 
-    const noResultVisible = await page
+    let noResultVisible = await page
       .locator("text=/No matching records|No data available|No records found|No results/i")
       .first()
       .isVisible()
       .catch(() => false);
+    if (!noResultVisible) {
+      for (const frame of frames) {
+        noResultVisible = await frame
+          .locator("text=/No matching records|No data available|No records found|No results/i")
+          .first()
+          .isVisible()
+          .catch(() => false);
+        if (noResultVisible) break;
+      }
+    }
     if (noResultVisible) {
       throw new Error(`lead: no quick-lookup result for ref ${leadRef}`);
     }
