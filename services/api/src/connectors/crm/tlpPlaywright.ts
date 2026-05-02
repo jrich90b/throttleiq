@@ -283,7 +283,6 @@ async function submitQuickLookupRef(page: Page, leadRef: string, step: StepFn) {
         "button[id*='QL']",
         "input[type='button'][id*='QL']",
         "input[type='submit'][id*='QL']",
-        "button:has-text('Submit')",
         "input[type='button'][value='Submit']",
         "input[type='submit'][value='Submit']"
       ];
