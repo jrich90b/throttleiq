@@ -1123,6 +1123,10 @@ function formatModelLabel(year?: string | null, model?: string | null): string |
   return year ? `${year} ${clean}` : clean;
 }
 
+function isEagleRiderRentalSource(source?: string | null): boolean {
+  return /\beagle\s*rider\b/i.test(String(source ?? ""));
+}
+
 async function getLeadInventoryMatchStatus(
   conv: any
 ): Promise<"in_stock" | "on_hold" | "sold" | "not_found" | "unknown"> {
@@ -3399,6 +3403,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     inferredBucket = "in_store";
     inferredCta = "contact_us";
   }
+  if (isEagleRiderRentalSource(leadSource)) {
+    inferredBucket = "general_inquiry";
+    inferredCta = "contact_us";
+    pricingInquiryIntent = false;
+  }
   if (jumpStartExperienceLead) {
     inferredBucket = "general_inquiry";
     inferredCta = "contact_us";
@@ -4137,6 +4146,39 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       intent: "GENERAL",
       stage: "ENGAGED",
       note: "preferred_contact_phone_no_auto_reply"
+    });
+  }
+
+  const isEagleRiderRentalLead = event.provider === "sendgrid_adf" && isEagleRiderRentalSource(leadSource);
+  if (isEagleRiderRentalLead && isInitialAdf) {
+    const profile = await getDealerProfile();
+    const dealerName = profile?.dealerName ?? "American Harley-Davidson";
+    const agentName = profile?.agentName ?? "Alexandra";
+    const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
+    const modelLabel =
+      formatModelLabel(null, conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null) ||
+      "the bike";
+    const rideLabel = modelLabel === "the bike" ? modelLabel : `the ${modelLabel}`;
+    const ack =
+      `Hi ${firstName} — This is ${agentName} at ${dealerName}. ` +
+      `Hope you had a great ride on ${rideLabel}. ` +
+      "If the rental got you thinking about one of your own, stop in anytime and we’d be happy to show you what’s available.";
+    setFollowUpMode(conv, "paused_indefinite", "eagle_rider_rental_followup");
+    stopFollowUpCadence(conv, "eagle_rider_rental_followup");
+    queueInitialDraftForPreferredContact(ack);
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      draft: ack,
+      note: "eagle_rider_rental_followup_no_cadence"
     });
   }
 

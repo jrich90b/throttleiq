@@ -7671,7 +7671,7 @@ export default function Home() {
   ]);
   const NON_DEAL_BUCKETS = new Set(["service", "parts", "apparel"]);
   const NON_DEAL_CTAS = new Set(["service_request", "parts_request", "apparel_request"]);
-  const NON_SALES_SOURCE_RE = /\b(service|parts?|apparel|motorclothes)\b/;
+  const NON_SALES_SOURCE_RE = /\b(service|parts?|apparel|motorclothes|eagle\s*rider)\b/;
   const isNonSalesLeadConversation = (c: ConversationListItem) => {
     const bucket = String(c.classification?.bucket ?? "").trim().toLowerCase();
     const cta = String(c.classification?.cta ?? "").trim().toLowerCase();

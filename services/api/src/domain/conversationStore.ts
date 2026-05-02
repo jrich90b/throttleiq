@@ -2039,7 +2039,7 @@ function isNonSalesLeadForHeat(conv: Conversation): boolean {
   const nonDealBuckets = new Set(["service", "parts", "apparel"]);
   const nonDealCtas = new Set(["service_request", "parts_request", "apparel_request"]);
   if (nonDealBuckets.has(bucket) || nonDealCtas.has(cta)) return true;
-  if (/\b(service|parts?|apparel|motorclothes)\b/.test(leadSource)) return true;
+  if (/\b(service|parts?|apparel|motorclothes|eagle\s*rider)\b/.test(leadSource)) return true;
   if (hasInboundNonSalesIntentForHeat(conv)) return true;
   return false;
 }
