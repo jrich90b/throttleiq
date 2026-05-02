@@ -261,6 +261,10 @@ async function submitQuickLookupRef(page: Page, leadRef: string, step: StepFn) {
       };
       const clickIfVisible = (el: any) => {
         if (!el || !isVisible(el) || typeof el.click !== "function") return false;
+        if (el === input) return false;
+        const tag = String(el?.tagName ?? "").toLowerCase();
+        const type = String(el?.type ?? "").toLowerCase();
+        if (tag === "input" && type !== "button" && type !== "submit") return false;
         el.click();
         return true;
       };
@@ -274,9 +278,14 @@ async function submitQuickLookupRef(page: Page, leadRef: string, step: StepFn) {
         "button[name='QL_Submit']",
         "input[name='QL_Submit']",
         "button[name*='QL']",
-        "input[name*='QL']",
+        "input[type='button'][name*='QL']",
+        "input[type='submit'][name*='QL']",
         "button[id*='QL']",
-        "input[id*='QL']"
+        "input[type='button'][id*='QL']",
+        "input[type='submit'][id*='QL']",
+        "button:has-text('Submit')",
+        "input[type='button'][value='Submit']",
+        "input[type='submit'][value='Submit']"
       ];
       for (const selector of exactSelectors) {
         const matches = Array.from(doc?.querySelectorAll?.(selector) ?? []);
