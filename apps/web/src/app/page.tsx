@@ -970,6 +970,19 @@ function extractLineValue(text: string, label: string): string {
   return match?.[1]?.trim() ?? "";
 }
 
+function extractAdfLeadRef(body: string, providerMessageId?: string | null): string {
+  const direct =
+    extractLineValue(body, "Ref") ||
+    extractLineValue(body, "Lead Ref") ||
+    extractLineValue(body, "LeadRef") ||
+    extractLineValue(body, "Ref #");
+  if (direct) return direct.replace(/[^\dA-Za-z_-].*$/, "").trim();
+  const bodyMatch = body.match(/\b(?:lead\s*ref|leadref|ref\s*#?|reference)\s*[:#-]?\s*([A-Za-z0-9_-]{3,})/i);
+  if (bodyMatch?.[1]) return bodyMatch[1].trim();
+  const providerMatch = String(providerMessageId ?? "").match(/\badf[_-]ref[_-]([A-Za-z0-9_-]{3,})\b/i);
+  return providerMatch?.[1]?.trim() ?? "";
+}
+
 function buildSoldLeadRefOptions(conv?: ConversationDetail | null): LeadRefOption[] {
   const byRef = new Map<string, LeadRefOption>();
   const add = (leadRefRaw: any, sourceText?: string, vehicleText?: string, appText?: string) => {
@@ -994,7 +1007,7 @@ function buildSoldLeadRefOptions(conv?: ConversationDetail | null): LeadRefOptio
     const provider = String(message.provider ?? "").toLowerCase();
     const body = String(message.body ?? "");
     if (provider !== "sendgrid_adf" && !/web lead\s*\(adf\)/i.test(body)) continue;
-    const leadRef = extractLineValue(body, "Ref");
+    const leadRef = extractAdfLeadRef(body, message.providerMessageId);
     if (!leadRef) continue;
     const source = extractLineValue(body, "Source");
     const vehicle = extractLineValue(body, "Vehicle");
@@ -17661,13 +17674,14 @@ export default function Home() {
                     </div>
                   ) : null}
 
-                  {soldLeadRefOptions.length > 1 ? (
+                  {soldLeadRefOptions.length >= 1 ? (
                     <div className="mt-3">
                       <div className="text-xs font-medium text-slate-700 mb-1">CRM lead to update</div>
                       <select
-                        className="w-full rounded border border-slate-400 bg-white px-3 py-2 text-sm text-slate-900 focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
+                        className="w-full rounded border border-slate-400 bg-white px-3 py-2 text-sm text-slate-900 focus:border-orange-500 focus:ring-1 focus:ring-orange-500 disabled:bg-slate-100 disabled:text-slate-600"
                         value={soldLeadRef}
                         onChange={e => setSoldLeadRef(e.target.value)}
+                        disabled={soldLeadRefOptions.length === 1}
                       >
                         {soldLeadRefOptions.map(option => (
                           <option key={option.leadRef} value={option.leadRef}>
@@ -17676,11 +17690,11 @@ export default function Home() {
                         ))}
                       </select>
                       <div className="mt-1 text-[11px] text-slate-600">
-                        This is the TLP lead that will be marked delivered/sold.
+                        {soldLeadRefOptions.length > 1
+                          ? "This is the TLP lead that will be marked delivered/sold."
+                          : "Only one CRM lead ref was found in this conversation."}
                       </div>
                     </div>
-                  ) : soldLeadRef ? (
-                    <div className="mt-2 text-xs text-slate-700">CRM lead to update: Ref {soldLeadRef}</div>
                   ) : null}
 
                   <div className="mt-3">
