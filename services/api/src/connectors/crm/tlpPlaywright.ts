@@ -527,22 +527,27 @@ async function findVisibleDeliveredControl(page: Page) {
 }
 
 async function selectDeliveredViaHiddenSelect(page: Page) {
-  return await page.evaluate(() => {
-    const isDeliveredOption = (opt: any) =>
-      String(opt?.value || "").trim().toLowerCase() === "s9" ||
-      /9[\s-]*delivered/i.test(String(opt?.textContent || ""));
-    const selects = Array.from((globalThis as any).document?.querySelectorAll?.("select") ?? []);
+  return await page.evaluate(`(() => {
+    const selects = Array.from(globalThis.document?.querySelectorAll?.("select") ?? []);
     for (const select of selects) {
-      const options = Array.from((select as any)?.querySelectorAll?.("option") ?? []);
-      const delivered = options.find(isDeliveredOption);
+      const options = Array.from(select?.querySelectorAll?.("option") ?? []);
+      let delivered = null;
+      for (const opt of options) {
+        const value = String(opt?.value || "").trim().toLowerCase();
+        const text = String(opt?.textContent || "");
+        if (value === "s9" || /9[\\s-]*delivered/i.test(text)) {
+          delivered = opt;
+          break;
+        }
+      }
       if (!delivered) continue;
-      (select as any).value = String((delivered as any).value || "s9");
-      (select as any).dispatchEvent(new Event("input", { bubbles: true }));
-      (select as any).dispatchEvent(new Event("change", { bubbles: true }));
+      select.value = String(delivered.value || "s9");
+      select.dispatchEvent(new Event("input", { bubbles: true }));
+      select.dispatchEvent(new Event("change", { bubbles: true }));
       return true;
     }
     return false;
-  });
+  })()`);
 }
 
 async function firstVisibleLocator(page: Page, selectors: string[]) {
@@ -606,10 +611,24 @@ async function bestEffortSelect(
       const normalizedTarget = normalizeTextToken(text);
       return await field.evaluate((el: any, target) => {
         const select = el as any;
-        const norm = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-        const option: any =
-          Array.from(select.options ?? []).find((o: any) => norm(o?.textContent || "") === target) ??
-          Array.from(select.options ?? []).find((o: any) => norm(o?.textContent || "").includes(target));
+        let option: any = null;
+        const options = Array.from(select.options ?? []);
+        for (const o of options as any[]) {
+          const normalized = String(o?.textContent || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+          if (normalized === target) {
+            option = o;
+            break;
+          }
+        }
+        if (!option) {
+          for (const o of options as any[]) {
+            const normalized = String(o?.textContent || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+            if (normalized.includes(target)) {
+              option = o;
+              break;
+            }
+          }
+        }
         if (!option) return false;
         select.value = option.value;
         select.dispatchEvent(new Event("change", { bubbles: true }));
@@ -651,30 +670,21 @@ async function bestEffortCheckFieldByText(
     // continue to fallback
   }
 
-  const clicked = await page.evaluate((label) => {
-    const norm = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-    const target = norm(label);
-    const root = (globalThis as any).document;
+  const clicked = await page.evaluate(`(() => {
+    const target = ${JSON.stringify(labelText)}.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const root = globalThis.document;
     const nodes = Array.from(root?.querySelectorAll?.("label, div, span, td, li") ?? []);
     for (const node of nodes) {
-      const text = norm((node as any)?.textContent || "");
+      const text = String(node?.textContent || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
       if (!text || !text.includes(target)) continue;
-      const scope =
-        (node as any)?.closest?.("tr, li, div, section, fieldset, td") ||
-        (node as any)?.parentElement ||
-        node;
-      const checkbox =
-        (scope as any)?.querySelector?.("input[type='checkbox']") ||
-        (node as any)?.querySelector?.("input[type='checkbox']");
+      const scope = node?.closest?.("tr, li, div, section, fieldset, td") || node?.parentElement || node;
+      const checkbox = scope?.querySelector?.("input[type='checkbox']") || node?.querySelector?.("input[type='checkbox']");
       if (!checkbox) continue;
-      const input = checkbox as any;
-      if (!input.checked) {
-        (checkbox as any).click();
-      }
+      if (!checkbox.checked) checkbox.click();
       return true;
     }
     return false;
-  }, labelText);
+  })()`);
 
   if (clicked) {
     await step(`visit: check ${labelText} (fallback)`, async () => {
@@ -940,50 +950,34 @@ async function findVisitSubmitControl(page: Page): Promise<Locator | null> {
 }
 
 async function clickVisitSubmitFallback(page: Page): Promise<boolean> {
-  return await page.evaluate(() => {
-    const doc = (globalThis as any).document;
-    const isVisible = (el: any) => {
-      if (!el) return false;
-      const style = (globalThis as any).getComputedStyle?.(el);
-      const rect = el.getBoundingClientRect?.();
-      return (
-        style?.visibility !== "hidden" &&
-        style?.display !== "none" &&
-        (el.offsetParent !== null || ((rect?.width ?? 0) > 0 && (rect?.height ?? 0) > 0))
-      );
-    };
-    const controls = Array.from(
-      doc?.querySelectorAll?.("button,input[type='button'],input[type='submit'],a,[role='button']") ?? []
-    );
+  return await page.evaluate(`(() => {
+    const doc = globalThis.document;
+    const controls = Array.from(doc?.querySelectorAll?.("button,input[type='button'],input[type='submit'],a,[role='button']") ?? []);
     for (const el of controls) {
-      if (!isVisible(el)) continue;
-      const hay = [
-        (el as any).id,
-        (el as any).name,
-        (el as any).value,
-        (el as any).title,
-        (el as any).ariaLabel,
-        (el as any).textContent
-      ]
+      const style = globalThis.getComputedStyle?.(el);
+      const rect = el.getBoundingClientRect?.();
+      const visible = style?.visibility !== "hidden" &&
+        style?.display !== "none" &&
+        (el.offsetParent !== null || ((rect?.width ?? 0) > 0 && (rect?.height ?? 0) > 0));
+      if (!visible) continue;
+      const hay = [el.id, el.name, el.value, el.title, el.ariaLabel, el.textContent]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
       if (!/(submit|save|complete).*(log|visit|delivered)?|log.*(submit|save|complete)/i.test(hay)) continue;
-      if (typeof (el as any).click === "function") {
-        (el as any).click();
+      if (typeof el.click === "function") {
+        el.click();
         return true;
       }
     }
-    const form =
-      doc?.querySelector?.("#SEC_Comments")?.closest?.("form") ??
-      doc?.querySelector?.("form");
+    const form = doc?.querySelector?.("#SEC_Comments")?.closest?.("form") ?? doc?.querySelector?.("form");
     if (form) {
-      if (typeof (form as any).requestSubmit === "function") (form as any).requestSubmit();
-      else (form as any).submit();
+      if (typeof form.requestSubmit === "function") form.requestSubmit();
+      else form.submit();
       return true;
     }
     return false;
-  });
+  })()`);
 }
 
 async function waitForVisitSubmitProcessed(page: Page): Promise<void> {
