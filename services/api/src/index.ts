@@ -5507,6 +5507,16 @@ function isBlockedCadencePersonalizationLine(lineRaw: string): boolean {
   ) {
     return true;
   }
+  if (
+    /\bhope\b[\s\S]{0,80}\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow|weekend)\b[\s\S]{0,80}\b(?:test ride|appointment|plans?|works out|weather)\b/i.test(
+      line
+    )
+  ) {
+    return true;
+  }
+  if (/\bhope\b[\s\S]{0,80}\b(?:test ride|appointment)\b[\s\S]{0,80}\b(?:works out|plans?)\b/i.test(line)) {
+    return true;
+  }
   return false;
 }
 
