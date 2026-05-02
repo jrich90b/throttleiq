@@ -16407,6 +16407,14 @@ async function processDueFollowUps() {
   const callbackReminderTz = cfg.timezone || "America/New_York";
   for (const todo of openTodos) {
     if (todo.reason !== "call" || todo.status !== "open") continue;
+    const todoSummary = String(todo.summary ?? "");
+    const todoTaskClass = String(todo.taskClass ?? "").trim().toLowerCase();
+    if (
+      todoTaskClass === "appointment" ||
+      /\b(appointment|schedule|scheduled|book|booking|reschedule|test ride|demo ride)\b/i.test(todoSummary)
+    ) {
+      continue;
+    }
     const conv = convById.get(todo.convId);
     if (!conv) continue;
     let dueAtIso = String(todo.dueAt ?? "").trim();

@@ -240,6 +240,7 @@ export function inferTodoTaskClass(
       /\binitial reply sent\b/i.test(text) ||
       /\bcadence\b/i.test(text);
     if (hasCadenceFollowUpSignals) return "followup";
+    if (hasAppointmentSignals) return "appointment";
     const hasReminderSignals =
       !!String(schedule?.dueAt ?? "").trim() ||
       !!String(schedule?.reminderAt ?? "").trim() ||
@@ -247,7 +248,6 @@ export function inferTodoTaskClass(
       /\brequested call time\b/i.test(text) ||
       /\bremind(er)?\b/i.test(text);
     if (hasReminderSignals) return "reminder";
-    if (hasAppointmentSignals) return "appointment";
   }
   if (hasAppointmentSignals) return "appointment";
   return "todo";
