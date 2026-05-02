@@ -6545,6 +6545,16 @@ function formatModelLabel(year?: string | null, model?: string | null): string {
   return `${yr}${clean}`.trim();
 }
 
+function isGenericMetaOfferModel(model?: string | null): boolean {
+  const normalized = String(model ?? "")
+    .toLowerCase()
+    .replace(/\bharley[-\s]?davidson\b/g, "")
+    .replace(/\bh[-\s]?d\b/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  return normalized === "other" || normalized === "full line";
+}
+
 function formatModelLabelForFollowUp(_year?: string | null, model?: string | null): string {
   if (!model || /full line/i.test(model)) return "the bike";
   const base = normalizeDisplayCase(model);
@@ -27770,6 +27780,42 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
 
   const dealerProfile = await getDealerProfileHot();
+  const regenLeadSourceLower = String(conv.lead?.source ?? "").toLowerCase();
+  const regenMetaPromoSource = /meta promo offer/i.test(regenLeadSourceLower);
+  const regenModelRaw = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "";
+  if (event.provider === "sendgrid_adf" && regenMetaPromoSource && isGenericMetaOfferModel(regenModelRaw)) {
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra");
+    const firstName = normalizeDisplayCase(conv.lead?.firstName);
+    const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
+    const offersResolution = resolveOffersUrl({
+      dealerProfile,
+      conversation: conv
+    });
+    const offersLine =
+      buildOffersLine(offersResolution.preferredUrl, { prefix: "Current offers:" }) || "";
+    const reply = [
+      `${greeting}This is ${agentName} at ${dealerName}. Thanks — I got your H-D Meta promo offer request. I can help with pricing — which model are you interested in, and any trim or color?`,
+      offersLine
+    ]
+      .filter(Boolean)
+      .join(" ");
+    conv.classification = {
+      ...(conv.classification ?? {}),
+      bucket: "general_inquiry",
+      cta: "contact_us",
+      channel: conv.classification?.channel ?? "sms",
+      ruleName: "meta_promo_generic_model"
+    };
+    setDialogState(conv, "pricing_init");
+    stopFollowUpCadence(conv, "meta_promo_generic_model_regen");
+    setFollowUpMode(conv, "paused_indefinite", "meta_promo_generic_model_regen");
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply);
+  }
+
   const cadenceRegeneratedDraft = await buildCadenceRegeneratedDraft(conv, dealerProfile, lastDraft);
   const cadenceLastSentAtMs = new Date(String(conv?.followUpCadence?.lastSentAt ?? "")).getTime();
   const lastDraftAtMs = new Date(String(lastDraft?.at ?? "")).getTime();
