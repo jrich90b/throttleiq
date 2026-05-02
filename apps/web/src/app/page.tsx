@@ -2961,6 +2961,11 @@ export default function Home() {
   const [appointmentCloseNote, setAppointmentCloseNote] = useState("");
   const [appointmentCloseSaving, setAppointmentCloseSaving] = useState(false);
   const [saveToast, setSaveToast] = useState<string | null>(null);
+  const [crmLogToast, setCrmLogToast] = useState<{
+    status: "running" | "success" | "error" | "info";
+    message: string;
+  } | null>(null);
+  const [crmLogRunningByQuestionId, setCrmLogRunningByQuestionId] = useState<Record<string, boolean>>({});
   const [callBusy, setCallBusy] = useState(false);
   const [callMethod, setCallMethod] = useState<"cell" | "extension">("cell");
   const [callPickerOpen, setCallPickerOpen] = useState(false);
@@ -6954,6 +6959,11 @@ export default function Home() {
     return () => clearTimeout(t);
   }, [saveToast]);
   useEffect(() => {
+    if (!crmLogToast || crmLogToast.status === "running") return;
+    const t = setTimeout(() => setCrmLogToast(null), 4500);
+    return () => clearTimeout(t);
+  }, [crmLogToast]);
+  useEffect(() => {
     if (authUser?.phone) {
       setCallMethod("cell");
     } else if (authUser?.extension) {
@@ -8111,12 +8121,19 @@ export default function Home() {
   }
 
   async function retryCrmLog(q: QuestionItem) {
+    if (crmLogRunningByQuestionId[q.id]) return;
+    setCrmLogRunningByQuestionId(prev => ({ ...prev, [q.id]: true }));
+    setCrmLogToast({
+      status: "running",
+      message: `Running TLP update for ${q.leadKey || "lead"}...`
+    });
     try {
       const convResp = await fetch(`/api/conversations/${encodeURIComponent(q.convId)}`);
       const convData = await convResp.json().catch(() => null);
       const leadRef =
         convData?.conversation?.lead?.leadRef ?? convData?.conversation?.leadRef ?? null;
       if (!leadRef) {
+        setCrmLogToast({ status: "error", message: "TLP update could not start: missing lead ref." });
         window.alert("Missing leadRef for this conversation.");
         return;
       }
@@ -8127,17 +8144,27 @@ export default function Home() {
       });
       const data = await resp.json().catch(() => null);
       if (!resp.ok) {
+        setCrmLogToast({ status: "error", message: data?.error ?? "TLP update failed." });
         window.alert(data?.error ?? "CRM update failed");
         return;
       }
       if (data?.skipped) {
+        setCrmLogToast({ status: "info", message: "No new messages to log to TLP." });
         window.alert("No new messages to log to CRM.");
         return;
       }
       await markQuestionDone(q);
+      setCrmLogToast({ status: "success", message: `TLP updated for leadRef ${leadRef}.` });
       setSaveToast("CRM updated");
-    } catch {
+    } catch (err: any) {
+      setCrmLogToast({ status: "error", message: err?.message ?? "TLP update failed." });
       window.alert("CRM update failed");
+    } finally {
+      setCrmLogRunningByQuestionId(prev => {
+        const next = { ...prev };
+        delete next[q.id];
+        return next;
+      });
     }
   }
 
@@ -10538,8 +10565,29 @@ export default function Home() {
       className={`h-screen flex flex-col md:flex-row bg-[var(--background)] text-[var(--foreground)] ${rootThemeClass}`}
       data-campaign-theme={isCampaignSection ? "true" : "false"}
     >
+      {crmLogToast ? (
+        <div
+          className={[
+            "fixed top-4 right-4 z-[70] flex items-center gap-2 rounded border px-3 py-2 text-sm shadow-lg",
+            crmLogToast.status === "running"
+              ? "border-orange-200 bg-orange-50 text-orange-950"
+              : crmLogToast.status === "success"
+                ? "border-emerald-200 bg-emerald-50 text-emerald-950"
+                : crmLogToast.status === "error"
+                  ? "border-red-200 bg-red-50 text-red-950"
+                  : "border-slate-200 bg-white text-slate-900"
+          ].join(" ")}
+        >
+          {crmLogToast.status === "running" ? (
+            <span className="h-2 w-2 rounded-full bg-orange-500 animate-pulse" />
+          ) : null}
+          <span>{crmLogToast.message}</span>
+        </div>
+      ) : null}
       {saveToast ? (
-        <div className="fixed top-4 right-4 z-[60] px-3 py-2 rounded border bg-white text-sm shadow">
+        <div
+          className={`fixed ${crmLogToast ? "top-16" : "top-4"} right-4 z-[60] px-3 py-2 rounded border bg-white text-sm shadow`}
+        >
           {saveToast}
         </div>
       ) : null}
@@ -11432,13 +11480,15 @@ export default function Home() {
                 {(() => {
                   const isCrmFailure = /tlp log failed/i.test(q.text ?? "");
                   if (isCrmFailure) {
+                    const crmRetryRunning = !!crmLogRunningByQuestionId[q.id];
                     return (
                       <div className="flex flex-col gap-2">
                         <button
-                          className="px-3 py-2 border rounded text-sm"
+                          className="px-3 py-2 border rounded text-sm disabled:opacity-60 disabled:cursor-wait"
+                          disabled={crmRetryRunning}
                           onClick={() => retryCrmLog(q)}
                         >
-                          Try again
+                          {crmRetryRunning ? "Running..." : "Try again"}
                         </button>
                         <button
                           className="px-3 py-2 border rounded text-sm"
