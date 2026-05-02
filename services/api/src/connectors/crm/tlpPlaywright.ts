@@ -930,14 +930,95 @@ async function markDeliveredStep(
 
   await fillComments(page, note, step);
 
-  const submit = page
-    .locator('button:has-text("SUBMIT LOG"), button:has-text("Submit Log"), input[value*="Submit"]')
-    .first();
   await step("visit: submit log", async () => {
-    await submit.waitFor({ state: "visible", timeout: DEFAULT_TIMEOUT_MS });
-    await submit.click({ force: true });
+    const submit = await findVisitSubmitControl(page);
+    if (submit) {
+      await submit.scrollIntoViewIfNeeded().catch(() => {});
+      await submit.click({ force: true });
+      return;
+    }
+    const clicked = await clickVisitSubmitFallback(page);
+    if (!clicked) {
+      throw new Error("visit: submit button not found");
+    }
   });
   await page.waitForTimeout(1000);
+}
+
+async function findVisitSubmitControl(page: Page): Promise<Locator | null> {
+  const selectors = [
+    "#SubmitButton",
+    "#Submit",
+    "#submit",
+    'button:has-text("SUBMIT LOG")',
+    'button:has-text("Submit Log")',
+    'button:has-text("Submit")',
+    'button:has-text("Save")',
+    'button:has-text("Complete")',
+    'input[type="submit"]',
+    'input[type="button"][value*="Submit"]',
+    'input[type="button"][value*="Save"]',
+    'input[type="button"][value*="Complete"]',
+    '[role="button"]:has-text("Submit")',
+    '[role="button"]:has-text("Save")'
+  ];
+  for (const selector of selectors) {
+    const locator = page.locator(selector).first();
+    try {
+      await locator.waitFor({ state: "visible", timeout: 1200 });
+      return locator;
+    } catch {
+      // try next
+    }
+  }
+  return null;
+}
+
+async function clickVisitSubmitFallback(page: Page): Promise<boolean> {
+  return await page.evaluate(() => {
+    const doc = (globalThis as any).document;
+    const isVisible = (el: any) => {
+      if (!el) return false;
+      const style = (globalThis as any).getComputedStyle?.(el);
+      const rect = el.getBoundingClientRect?.();
+      return (
+        style?.visibility !== "hidden" &&
+        style?.display !== "none" &&
+        (el.offsetParent !== null || ((rect?.width ?? 0) > 0 && (rect?.height ?? 0) > 0))
+      );
+    };
+    const controls = Array.from(
+      doc?.querySelectorAll?.("button,input[type='button'],input[type='submit'],a,[role='button']") ?? []
+    );
+    for (const el of controls) {
+      if (!isVisible(el)) continue;
+      const hay = [
+        (el as any).id,
+        (el as any).name,
+        (el as any).value,
+        (el as any).title,
+        (el as any).ariaLabel,
+        (el as any).textContent
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      if (!/(submit|save|complete).*(log|visit|delivered)?|log.*(submit|save|complete)/i.test(hay)) continue;
+      if (typeof (el as any).click === "function") {
+        (el as any).click();
+        return true;
+      }
+    }
+    const form =
+      doc?.querySelector?.("#SEC_Comments")?.closest?.("form") ??
+      doc?.querySelector?.("form");
+    if (form) {
+      if (typeof (form as any).requestSubmit === "function") (form as any).requestSubmit();
+      else (form as any).submit();
+      return true;
+    }
+    return false;
+  });
 }
 
 async function selectMotorcyclesCategory(page: Page, categoryValue: string, step: StepFn) {
