@@ -49,6 +49,10 @@ function sanitizeLabel(label: string): string {
   return label.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "");
 }
 
+function escapeRegexLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 async function captureDebugArtifacts(page: Page, step: string) {
   if (!DEBUG) return;
   try {
@@ -130,10 +134,24 @@ async function waitForLeadResultRow(page: Page, leadRef: string, step: StepFn): 
     'tr:has(a[title="Open Lead Actions Menu"])',
     'tr:has(td.actionListing.action_dt)'
   ];
+  const refPattern = new RegExp(`(^|\\D)${escapeRegexLiteral(leadRef)}(\\D|$)`);
+  const refRowLocators = [
+    page.locator("tr").filter({ hasText: refPattern }).first(),
+    page.locator('[role="row"]').filter({ hasText: refPattern }).first()
+  ];
   const deadline = Date.now() + DEFAULT_TIMEOUT_MS;
   let lastError = "";
 
   while (Date.now() < deadline) {
+    for (const row of refRowLocators) {
+      try {
+        await row.waitFor({ state: "visible", timeout: 1500 });
+        return row;
+      } catch (err: any) {
+        lastError = err?.message ?? String(err);
+      }
+    }
+
     for (const selector of rowSelectors) {
       const row = page.locator(selector).first();
       try {
@@ -156,10 +174,33 @@ async function waitForLeadResultRow(page: Page, leadRef: string, step: StepFn): 
   }
 
   throw new Error(
-    `lead: no visible quick-lookup row for ref ${leadRef}; tried ${rowSelectors.join(", ")}${
+    `lead: no visible quick-lookup row for ref ${leadRef}; tried row text match plus ${rowSelectors.join(", ")}${
       lastError ? `; last error: ${lastError}` : ""
     }`
   );
+}
+
+async function findLeadActionsMenu(row: Locator): Promise<Locator | null> {
+  const scopedSelectors = [
+    "ul.pencilOnly a.action1[title='Open Lead Actions Menu']",
+    'a[title="Open Lead Actions Menu"]',
+    'a[title*="Lead Actions"]',
+    'a[title*="Actions"]',
+    "a.action1",
+    'button[title*="Actions"]',
+    '[role="button"][title*="Actions"]',
+    '[aria-label*="Actions"]'
+  ];
+  for (const selector of scopedSelectors) {
+    const candidate = row.locator(selector).first();
+    try {
+      await candidate.waitFor({ state: "visible", timeout: 1200 });
+      return candidate;
+    } catch {
+      // try next selector
+    }
+  }
+  return null;
 }
 
 async function submitQuickLookupRef(page: Page, leadRef: string, step: StepFn) {
@@ -225,9 +266,10 @@ async function openLeadByRef(page: Page, leadRef: string, step: StepFn) {
 
   // Click the Open Lead Actions Menu (pencilOnly -> action1)
   const actionCell = row.locator("td.actionListing.action_dt.min-mobile.noxls").first();
-  const openActions = row
-    .locator("ul.pencilOnly a.action1[title='Open Lead Actions Menu']")
-    .first();
+  const openActions = await findLeadActionsMenu(row);
+  if (!openActions) {
+    throw new Error("lead: actions menu not found in quick-lookup row");
+  }
   await step("lead: wait actions menu", async () => {
     await openActions.waitFor({ state: "visible", timeout: SHORT_TIMEOUT_MS });
   });
@@ -333,9 +375,10 @@ async function openDealershipVisitByRef(page: Page, leadRef: string, step: StepF
   });
 
   const actionCell = row.locator("td.actionListing.action_dt.min-mobile.noxls").first();
-  const openActions = row
-    .locator("ul.pencilOnly a.action1[title='Open Lead Actions Menu']")
-    .first();
+  const openActions = await findLeadActionsMenu(row);
+  if (!openActions) {
+    throw new Error("lead: actions menu not found in quick-lookup row");
+  }
   await step("lead: wait actions menu", async () => {
     await openActions.waitFor({ state: "visible", timeout: SHORT_TIMEOUT_MS });
   });

@@ -26453,6 +26453,12 @@ async function normalizeMessageImageForMms(params: {
   return { buffer: originalBuffer, mime, optimized: false };
 }
 
+function buildTlpLogFailureQuestion(leadRef: string, err: any): string {
+  const raw = String(err?.message ?? err ?? "").replace(/\s+/g, " ").trim();
+  const detail = raw ? ` Last error: ${raw.slice(0, 260)}.` : "";
+  return `TLP log failed for leadRef ${leadRef}.${detail} Retry in TLP or update manually.`;
+}
+
 app.post("/crm/tlp/log-contact", async (req, res) => {
   const leadRef = String(req.body?.leadRef ?? "").trim();
   const conversationId = String(req.body?.conversationId ?? "").trim();
@@ -26474,7 +26480,7 @@ app.post("/crm/tlp/log-contact", async (req, res) => {
     if (lastAt) setCrmLastLoggedAt(conv, lastAt);
     return res.json({ ok: true });
   } catch (err: any) {
-    const msg = `TLP log failed for leadRef ${leadRef}. Retry in TLP or update manually.`;
+    const msg = buildTlpLogFailureQuestion(leadRef, err);
     addInternalQuestion(conversationId, conv.leadKey, msg);
     return res.status(500).json({ ok: false, error: err?.message ?? "Failed to log contact" });
   }
@@ -27217,7 +27223,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       console.log("✅ TLP log success", { leadRef, convId: conv.id });
     } catch (err: any) {
       console.warn("⚠️ TLP log failed:", err?.message ?? err);
-      const msg = `TLP log failed for leadRef ${leadRef}. Retry in TLP or update manually.`;
+      const msg = buildTlpLogFailureQuestion(leadRef, err);
       addInternalQuestion(conv.id, conv.leadKey, msg);
     }
   };
@@ -38275,7 +38281,7 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
           const lastAt = conv.messages[conv.messages.length - 1]?.at;
           if (lastAt) setCrmLastLoggedAt(conv, lastAt);
         } catch (err: any) {
-          const msg = `TLP log failed for leadRef ${leadRef}. Retry in TLP or update manually.`;
+          const msg = buildTlpLogFailureQuestion(leadRef, err);
           addInternalQuestion(conv.id, conv.leadKey, msg);
           console.warn("[voice] TLP log failed:", err?.message ?? err);
         }
