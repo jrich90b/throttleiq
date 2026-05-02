@@ -4947,7 +4947,7 @@ export default function Home() {
           };
         })
       );
-      setSaveToast("Saved");
+      setSaveToast("Marked sold.");
       setCloseReason("");
       setSoldById("");
       setSoldModalOpen(false);

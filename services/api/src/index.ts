@@ -21035,31 +21035,30 @@ app.post("/conversations/:id/close", async (req, res) => {
     startPostSaleCadence(conv, nowIso, cfg.timezone);
     saveConversation(conv);
     if (conv.lead?.leadRef) {
-      try {
-        const soldBy = conv.sale?.soldByName || conv.sale?.soldById || "Unknown";
-        const soldUnit: OutcomeUnitInput = {
-          stockId: soldStockId,
-          vin: soldVin,
-          year: firstNonEmptyText([soldInput?.year, soldInput?.unitYear, conv?.lead?.vehicle?.year]),
-          make: firstNonEmptyText([soldInput?.make, soldInput?.unitMake, conv?.lead?.vehicle?.make]),
-          model: firstNonEmptyText([soldInput?.model, soldInput?.unitModel, conv?.lead?.vehicle?.model]),
-          trim: firstNonEmptyText([soldInput?.trim, soldInput?.unitTrim]),
-          color: firstNonEmptyText([soldInput?.color, soldInput?.unitColor, conv?.lead?.vehicle?.color]),
-          label: soldLabel
-        };
-        soldUnit.label = buildUnitLabel(soldUnit);
-        const tlpDetails = buildTlpDeliveredDetails(conv, soldUnit, soldBy);
-        const note = buildTlpDeliveredNote(soldUnit, soldBy, soldNote);
-        await tlpMarkDealershipVisitDelivered({ leadRef: conv.lead.leadRef, note, details: tlpDetails });
-      } catch (err: any) {
+      const leadRef = conv.lead.leadRef;
+      const soldBy = conv.sale?.soldByName || conv.sale?.soldById || "Unknown";
+      const soldUnit: OutcomeUnitInput = {
+        stockId: soldStockId,
+        vin: soldVin,
+        year: firstNonEmptyText([soldInput?.year, soldInput?.unitYear, conv?.lead?.vehicle?.year]),
+        make: firstNonEmptyText([soldInput?.make, soldInput?.unitMake, conv?.lead?.vehicle?.make]),
+        model: firstNonEmptyText([soldInput?.model, soldInput?.unitModel, conv?.lead?.vehicle?.model]),
+        trim: firstNonEmptyText([soldInput?.trim, soldInput?.unitTrim]),
+        color: firstNonEmptyText([soldInput?.color, soldInput?.unitColor, conv?.lead?.vehicle?.color]),
+        label: soldLabel
+      };
+      soldUnit.label = buildUnitLabel(soldUnit);
+      const tlpDetails = buildTlpDeliveredDetails(conv, soldUnit, soldBy);
+      const note = buildTlpDeliveredNote(soldUnit, soldBy, soldNote);
+      void tlpMarkDealershipVisitDelivered({ leadRef, note, details: tlpDetails }).catch((err: any) => {
         const errDetail = String(err?.message ?? err ?? "")
           .replace(/\s+/g, " ")
           .trim()
           .slice(0, 260);
-        const msg = `TLP delivered step failed for leadRef ${conv.lead.leadRef}${errDetail ? `: ${errDetail}` : ""}. Retry in TLP or update manually.`;
+        const msg = `TLP delivered step failed for leadRef ${leadRef}${errDetail ? `: ${errDetail}` : ""}. Retry in TLP or update manually.`;
         addInternalQuestion(conv.id, conv.leadKey, msg);
         console.warn("[tlp] delivered mark failed:", err?.message ?? err);
-      }
+      });
     }
     return res.json({ ok: true, conversation: conv });
   }
