@@ -246,91 +246,41 @@ async function submitQuickLookupRef(page: Page, leadRef: string, step: StepFn) {
   });
 
   const clicked = await step("lead: submit quick lookup fallback", async () => {
+    const selectors = [
+      "#QL_Submit",
+      "#QL_Search",
+      "#QL_Go",
+      "#QL_Button",
+      "#QL_SearchButton",
+      "button[name='QL_Submit']",
+      "input[name='QL_Submit']",
+      "button[name*='QL']",
+      "input[type='button'][name*='QL']",
+      "input[type='submit'][name*='QL']",
+      "button[id*='QL']",
+      "input[type='button'][id*='QL']",
+      "input[type='submit'][id*='QL']",
+      "button:has-text('Submit')",
+      "input[type='button'][value='Submit']",
+      "input[type='submit'][value='Submit']"
+    ];
+    for (const selector of selectors) {
+      const control = page.locator(selector).first();
+      try {
+        await control.waitFor({ state: "visible", timeout: 1200 });
+        await control.click({ force: true });
+        return true;
+      } catch {
+        // try next control
+      }
+    }
     return await page.evaluate(() => {
       const input = (globalThis as any).document?.querySelector?.("#QL_Ref") as any;
-      if (!input) return false;
-      const doc = (globalThis as any).document;
-      const isVisible = (el: any) => {
-        if (!el) return false;
-        const style = (globalThis as any).getComputedStyle?.(el);
-        const rect = el.getBoundingClientRect?.();
-        return (
-          style?.visibility !== "hidden" &&
-          style?.display !== "none" &&
-          (el.offsetParent !== null || ((rect?.width ?? 0) > 0 && (rect?.height ?? 0) > 0))
-        );
-      };
-      const clickIfVisible = (el: any) => {
-        if (!el || !isVisible(el) || typeof el.click !== "function") return false;
-        if (el === input) return false;
-        const tag = String(el?.tagName ?? "").toLowerCase();
-        const type = String(el?.type ?? "").toLowerCase();
-        if (tag === "input" && type !== "button" && type !== "submit") return false;
-        el.click();
-        return true;
-      };
-
-      const exactSelectors = [
-        "#QL_Submit",
-        "#QL_Search",
-        "#QL_Go",
-        "#QL_Button",
-        "#QL_SearchButton",
-        "button[name='QL_Submit']",
-        "input[name='QL_Submit']",
-        "button[name*='QL']",
-        "input[type='button'][name*='QL']",
-        "input[type='submit'][name*='QL']",
-        "button[id*='QL']",
-        "input[type='button'][id*='QL']",
-        "input[type='submit'][id*='QL']",
-        "input[type='button'][value='Submit']",
-        "input[type='submit'][value='Submit']"
-      ];
-      for (const selector of exactSelectors) {
-        const matches = Array.from(doc?.querySelectorAll?.(selector) ?? []);
-        for (const el of matches) {
-          if (clickIfVisible(el)) return true;
-        }
-      }
-
-      const roots = [
-        input.closest("form"),
-        input.closest("table"),
-        input.closest("div"),
-        doc
-      ].filter(Boolean);
-      const seen = new Set<any>();
-      for (const root of roots) {
-        const controls = Array.from(
-          root.querySelectorAll?.("button,input[type='button'],input[type='submit'],a,[role='button']") ?? []
-        );
-        for (const el of controls) {
-          if (seen.has(el)) continue;
-          seen.add(el);
-          const hay = [
-            (el as any).id,
-            (el as any).name,
-            (el as any).value,
-            (el as any).title,
-            (el as any).ariaLabel,
-            (el as any).textContent
-          ]
-            .filter(Boolean)
-            .join(" ")
-            .toLowerCase();
-          if (!/(quick|lookup|search|go|submit|\bql\b)/i.test(hay)) continue;
-          if (clickIfVisible(el)) return true;
-        }
-      }
-
-      const form = input.closest("form") as any;
-      if (form) {
-        if (typeof form.requestSubmit === "function") form.requestSubmit();
-        else form.submit();
-        return true;
-      }
-      return false;
+      const form = input?.closest?.("form") as any;
+      if (!form) return false;
+      if (typeof form.requestSubmit === "function") form.requestSubmit();
+      else form.submit();
+      return true;
     });
   });
 
