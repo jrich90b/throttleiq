@@ -19,6 +19,7 @@ export type TlpDealershipVisitDeliveredDetails = {
   year?: string;
   manufacturer?: string;
   model?: string;
+  color?: string;
   stockId?: string;
   vin?: string;
   salespersonName?: string;
@@ -888,6 +889,9 @@ async function fillDealershipVisitDeliveredDetails(
     "#TLPLOG_stock_id",
     "#TLPLOG_stock_number",
     "#stock",
+    "#stock_number",
+    "input[placeholder='Stock Number']",
+    "input[placeholder*='Stock']",
     "input[name*='stock']"
   ]);
 
@@ -895,7 +899,18 @@ async function fillDealershipVisitDeliveredDetails(
     "#TLPLOG_vin",
     "#TLPLOG_vehicle_vin",
     "#vin",
+    "input[placeholder='VIN']",
+    "input[placeholder*='VIN']",
     "input[name*='vin']"
+  ]);
+
+  await bestEffortFillText(page, step, "color", details.color, [
+    "#TLPLOG_color",
+    "#TLPLOG_vehicle_color",
+    "#color",
+    "input[placeholder='Color']",
+    "input[placeholder*='Color']",
+    "input[name*='color']"
   ]);
 
   await bestEffortSelect(page, step, "salesperson", details.salespersonName, [
@@ -935,14 +950,14 @@ async function markDeliveredStep(
     if (submit) {
       await submit.scrollIntoViewIfNeeded().catch(() => {});
       await submit.click({ force: true });
-      return;
+    } else {
+      const clicked = await clickVisitSubmitFallback(page);
+      if (!clicked) {
+        throw new Error("visit: submit button not found");
+      }
     }
-    const clicked = await clickVisitSubmitFallback(page);
-    if (!clicked) {
-      throw new Error("visit: submit button not found");
-    }
+    await waitForVisitSubmitProcessed(page);
   });
-  await page.waitForTimeout(1000);
 }
 
 async function findVisitSubmitControl(page: Page): Promise<Locator | null> {
@@ -1019,6 +1034,29 @@ async function clickVisitSubmitFallback(page: Page): Promise<boolean> {
     }
     return false;
   });
+}
+
+async function waitForVisitSubmitProcessed(page: Page): Promise<void> {
+  try {
+    await page.waitForLoadState("networkidle", { timeout: SHORT_TIMEOUT_MS });
+  } catch {
+    // TLP often updates modals without a full network-idle state.
+  }
+  await page.waitForTimeout(1500);
+
+  const stillVisible = await findVisitSubmitControl(page);
+  const validationVisible = await page
+    .locator("text=/required|invalid|please select|please enter|missing/i")
+    .first()
+    .isVisible()
+    .catch(() => false);
+  if (stillVisible || validationVisible) {
+    throw new Error(
+      validationVisible
+        ? "visit: submit appears blocked by validation"
+        : "visit: submit did not close or advance the log form"
+    );
+  }
 }
 
 async function selectMotorcyclesCategory(page: Page, categoryValue: string, step: StepFn) {
