@@ -662,6 +662,7 @@ type ConversationListItem = {
     soldAt?: string;
     soldById?: string;
     soldByName?: string;
+    leadRef?: string;
     year?: string;
     make?: string;
     model?: string;
@@ -806,6 +807,7 @@ type ConversationDetail = {
     soldAt?: string;
     soldById?: string;
     soldByName?: string;
+    leadRef?: string;
     year?: string;
     make?: string;
     model?: string;
@@ -956,6 +958,54 @@ type ConversationDetail = {
   scheduler?: { preferredSalespersonId?: string; preferredSalespersonName?: string };
   messages: Message[];
 };
+
+type LeadRefOption = {
+  leadRef: string;
+  label: string;
+};
+
+function extractLineValue(text: string, label: string): string {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = text.match(new RegExp(`^\\s*${escaped}\\s*:\\s*(.+)$`, "im"));
+  return match?.[1]?.trim() ?? "";
+}
+
+function buildSoldLeadRefOptions(conv?: ConversationDetail | null): LeadRefOption[] {
+  const byRef = new Map<string, LeadRefOption>();
+  const add = (leadRefRaw: any, sourceText?: string, vehicleText?: string, appText?: string) => {
+    const leadRef = String(leadRefRaw ?? "").trim();
+    if (!leadRef) return;
+    const source = String(sourceText ?? "").trim();
+    const vehicle = String(vehicleText ?? "").trim();
+    const app = String(appText ?? "").trim();
+    const parts = [`Ref ${leadRef}`, source, app ? `App ${app}` : "", vehicle].filter(Boolean);
+    const existing = byRef.get(leadRef);
+    if (existing && existing.label.split(" — ").length >= parts.length) return;
+    byRef.set(leadRef, { leadRef, label: parts.join(" — ") });
+  };
+
+  add(
+    conv?.lead?.leadRef,
+    conv?.lead?.source,
+    [conv?.lead?.vehicle?.year, conv?.lead?.vehicle?.model].filter(Boolean).join(" ")
+  );
+
+  for (const message of conv?.messages ?? []) {
+    const provider = String(message.provider ?? "").toLowerCase();
+    const body = String(message.body ?? "");
+    if (provider !== "sendgrid_adf" && !/web lead\s*\(adf\)/i.test(body)) continue;
+    const leadRef = extractLineValue(body, "Ref");
+    if (!leadRef) continue;
+    const source = extractLineValue(body, "Source");
+    const vehicle = extractLineValue(body, "Vehicle");
+    const year = extractLineValue(body, "Year");
+    const appId = body.match(/\bApp ID\s*:\s*([^,\n]+)/i)?.[1]?.trim() ?? "";
+    const model = body.match(/\bModel\s*:\s*([^,\n]+)/i)?.[1]?.trim() ?? "";
+    add(leadRef, source, vehicle || [year, model].filter(Boolean).join(" "), appId);
+  }
+
+  return Array.from(byRef.values());
+}
 
 function normalizeUserRow(user: any) {
   const first = String(user?.firstName ?? "").trim();
@@ -2653,6 +2703,7 @@ export default function Home() {
   const [soldInventoryLoading, setSoldInventoryLoading] = useState(false);
   const [soldSearch, setSoldSearch] = useState("");
   const [soldSelection, setSoldSelection] = useState<any | null>(null);
+  const [soldLeadRef, setSoldLeadRef] = useState("");
   const [soldManualOpen, setSoldManualOpen] = useState(false);
   const [soldManualUnit, setSoldManualUnit] = useState<any>({
     year: "",
@@ -4794,11 +4845,19 @@ export default function Home() {
     setSoldError(null);
     setSoldSearch("");
     setSoldSelection(null);
+    setSoldLeadRef("");
     setSoldManualOpen(false);
     setSoldModalOpen(true);
     const conv =
       selectedConv?.id === convId ? selectedConv : await fetchConversationDetail(convId);
     setSoldModalConv(conv);
+    const leadOptions = buildSoldLeadRefOptions(conv);
+    setSoldLeadRef(
+      String(conv?.sale?.leadRef ?? "").trim() ||
+        String(conv?.lead?.leadRef ?? "").trim() ||
+        leadOptions[0]?.leadRef ||
+        ""
+    );
     setSoldNote(conv?.sale?.note ?? "");
     const leadVehicle = conv?.lead?.vehicle ?? {};
     setSoldManualUnit({
@@ -4852,6 +4911,8 @@ export default function Home() {
     };
   }
 
+  const soldLeadRefOptions = useMemo(() => buildSoldLeadRefOptions(soldModalConv), [soldModalConv]);
+
   async function submitSold(selection: any) {
     if (!soldModalConv) return;
     const resolved = selection ?? resolveSoldSelection();
@@ -4887,6 +4948,7 @@ export default function Home() {
           reason: "sold",
           soldById,
           soldByName,
+          leadRef: String(soldLeadRef ?? "").trim() || undefined,
           soldUnit: soldPayload
         })
       });
@@ -4899,6 +4961,7 @@ export default function Home() {
         soldAt: nowIso,
         soldById: soldById || undefined,
         soldByName: soldByName || undefined,
+        leadRef: String(soldLeadRef ?? "").trim() || undefined,
         year: soldPayload.year,
         make: soldPayload.make,
         model: soldPayload.model,
@@ -17596,6 +17659,28 @@ export default function Home() {
                         soldModalConv?.sale?.stockId ??
                         soldModalConv?.sale?.vin}
                     </div>
+                  ) : null}
+
+                  {soldLeadRefOptions.length > 1 ? (
+                    <div className="mt-3">
+                      <div className="text-xs font-medium text-slate-700 mb-1">CRM lead to update</div>
+                      <select
+                        className="w-full rounded border border-slate-400 bg-white px-3 py-2 text-sm text-slate-900 focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
+                        value={soldLeadRef}
+                        onChange={e => setSoldLeadRef(e.target.value)}
+                      >
+                        {soldLeadRefOptions.map(option => (
+                          <option key={option.leadRef} value={option.leadRef}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="mt-1 text-[11px] text-slate-600">
+                        This is the TLP lead that will be marked delivered/sold.
+                      </div>
+                    </div>
+                  ) : soldLeadRef ? (
+                    <div className="mt-2 text-xs text-slate-700">CRM lead to update: Ref {soldLeadRef}</div>
                   ) : null}
 
                   <div className="mt-3">

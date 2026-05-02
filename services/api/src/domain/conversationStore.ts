@@ -486,6 +486,7 @@ export type Conversation = {
     soldAt?: string;
     soldById?: string;
     soldByName?: string;
+    leadRef?: string;
     year?: string;
     make?: string;
     model?: string;

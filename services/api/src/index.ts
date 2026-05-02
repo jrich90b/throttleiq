@@ -20986,6 +20986,7 @@ app.post("/conversations/:id/close", async (req, res) => {
     const cfg = await getSchedulerConfigHot();
     const soldById = String(req.body?.soldById ?? "").trim();
     const soldByNameRaw = String(req.body?.soldByName ?? "").trim();
+    const selectedLeadRef = String(req.body?.leadRef ?? req.body?.tlpLeadRef ?? "").trim();
     const soldInput = req.body?.soldUnit ?? null;
     const soldStockId = String(soldInput?.stockId ?? "").trim() || undefined;
     const soldVin = String(soldInput?.vin ?? "").trim() || undefined;
@@ -21001,6 +21002,7 @@ app.post("/conversations/:id/close", async (req, res) => {
       soldAt: nowIso,
       soldById: sp?.id ?? (soldById || undefined),
       soldByName: sp?.name ?? (soldByNameRaw || undefined),
+      leadRef: selectedLeadRef || conv.lead?.leadRef || undefined,
       stockId: soldStockId,
       vin: soldVin,
       label: soldLabel,
@@ -21034,8 +21036,9 @@ app.post("/conversations/:id/close", async (req, res) => {
     setFollowUpMode(conv, "active", "post_sale");
     startPostSaleCadence(conv, nowIso, cfg.timezone);
     saveConversation(conv);
-    if (conv.lead?.leadRef) {
-      const leadRef = conv.lead.leadRef;
+    const tlpLeadRef = selectedLeadRef || conv.lead?.leadRef || "";
+    if (tlpLeadRef) {
+      const leadRef = tlpLeadRef;
       const soldBy = conv.sale?.soldByName || conv.sale?.soldById || "Unknown";
       const soldUnit: OutcomeUnitInput = {
         stockId: soldStockId,
