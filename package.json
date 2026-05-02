@@ -41,6 +41,7 @@
     "export:changed_messages": "npx tsx scripts/export_changed_messages.ts",
     "edit_feedback:mine": "npx tsx scripts/edit_feedback_mine.ts",
     "edit_feedback:email": "npx tsx scripts/send_feedback_report_email.ts",
+    "tlp_debug:email": "npx tsx scripts/send_tlp_debug_email.ts",
     "edit_feedback:loop": "npm run conversation:audit && npm run edit_feedback:mine",
     "feedback:nightly": "bash scripts/feedback_loop_nightly.sh",
     "feedback:hourly": "bash scripts/feedback_loop_hourly.sh",
