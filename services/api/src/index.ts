@@ -201,6 +201,7 @@ import {
   findConversationsByLeadKey,
   finalizeDraftAsSent,
   discardPendingDrafts,
+  discardAllDrafts,
   setMessageFeedback,
   addTodo,
   addCallTodoIfMissing,
@@ -27513,7 +27514,7 @@ app.post("/conversations/:id/draft/clear", async (req, res) => {
   const clearEmailDraft = req.body?.clearEmailDraft === true;
   const clearSmsDraft = req.body?.clearSmsDraft !== false;
   if (clearSmsDraft) {
-    discardPendingDrafts(conv, "manual_clear");
+    discardAllDrafts(conv, "manual_clear");
   }
   if (clearEmailDraft) {
     delete conv.emailDraft;

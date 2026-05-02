@@ -1873,6 +1873,20 @@ export function discardPendingDrafts(conv: Conversation, reason?: string) {
   scheduleSave();
 }
 
+export function discardAllDrafts(conv: Conversation, reason?: string) {
+  for (const m of conv.messages ?? []) {
+    if (m.direction !== "out") continue;
+    if (m.provider === "draft_ai" && m.draftStatus !== "stale") {
+      m.draftStatus = "stale";
+      if (reason) {
+        // Reason is reserved for future audit metadata.
+      }
+    }
+  }
+  conv.updatedAt = nowIso();
+  scheduleSave();
+}
+
 export function getLatestPendingDraft(conv: Conversation): Message | null {
   let lastDraftIdx = -1;
   let lastSentIdx = -1;
