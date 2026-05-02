@@ -3166,14 +3166,16 @@ function canonicalizeWatchModelLabel(model: string | null | undefined): string {
     .trim();
   const t = normalizeModelName(cleaned);
   if (/\b(fxlrs|lrs)\b/.test(t) || /\blow rider s\b/.test(t)) return "Low Rider S";
-  if (isRoadGlide3Variant(cleaned)) return "Road Glide 3";
-  if (isStreetGlide3Variant(cleaned)) return "Street Glide 3 Limited";
   if (
     /\bflhtcutg\b/.test(t) ||
-    /\btri glide(?:\s+ultra)?\b/.test(t) ||
-    /\btri\s*glyc(?:eride|erides|erid(?:es)?)\b/.test(t) ||
-    /\bstreet glide limited iii\b/.test(t)
+    /\btri[-\s]+glide(?:\s+ultra)?\b/.test(t) ||
+    /\btri\s*glyc(?:eride|erides|erid(?:es)?)\b/.test(t)
   ) {
+    return "Tri Glide";
+  }
+  if (isRoadGlide3Variant(cleaned)) return "Road Glide 3";
+  if (isStreetGlide3Variant(cleaned)) return "Street Glide 3 Limited";
+  if (/\bstreet glide limited iii\b/.test(t)) {
     return "Street Glide 3 Limited";
   }
   if (/\bflhxxx\b/.test(t) || /\bstreet glide trike\b/.test(t)) return "Street Glide Trike";
@@ -12018,6 +12020,9 @@ async function deriveContextNoteWatches(
       .map(m => canonicalizeWatchModelLabel(m))
       .filter((m): m is string => !!m);
     const modelSet = new Set<string>(models);
+    if (/\b(?:flhtcutg|tri[-\s]+glide(?:\s+ultra)?|tri\s*glyc(?:eride|erides|erid(?:es)?))\b/i.test(segment)) {
+      modelSet.add("Tri Glide");
+    }
     if (semanticModel) modelSet.add(semanticModel);
     const fallbackModel = canonicalizeWatchModelLabel(conv?.lead?.vehicle?.model);
     if (!modelSet.size && fallbackModel && parserRequestedWatch) modelSet.add(fallbackModel);
@@ -13493,18 +13498,18 @@ function resolvePaymentBudgetForConversation(
 function parsePriceTokenForWatch(raw: string): number | null {
   const token = String(raw ?? "").trim().toLowerCase();
   if (!token) return null;
-  const match = token.match(/^\$?\s*(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\s*(k|grand)?\s*$/i);
+  const match = token.match(/^\$?\s*(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\s*(k|grand|thousand)?\s*$/i);
   if (!match?.[1]) return null;
   let value = Number(String(match[1]).replace(/,/g, ""));
   if (!Number.isFinite(value) || value <= 0) return null;
   const hasDollar = token.includes("$");
-  const hasK = !!match[2];
-  if (hasK) value *= 1000;
+  const hasMultiplier = !!match[2];
+  if (hasMultiplier) value *= 1000;
   // Prevent year-like values (e.g. 2024) from being interpreted as price caps.
-  if (!hasDollar && !hasK && value >= 1900 && value <= 2099) return null;
+  if (!hasDollar && !hasMultiplier && value >= 1900 && value <= 2099) return null;
   // Price-watch parsing is for realistic vehicle pricing; require explicit currency/k
   // or a value that already looks like a full dollar amount.
-  if (!hasDollar && !hasK && value < 1000) return null;
+  if (!hasDollar && !hasMultiplier && value < 1000) return null;
   return Math.round(value);
 }
 
@@ -13660,11 +13665,14 @@ function extractWatchPricePreference(text: string): { minPrice?: number; maxPric
   let maxPrice: number | undefined;
 
   const range = t.match(
-    /\b(?:between|from)?\s*(\$?\s*\d{1,3}(?:,\d{3})*|\$?\s*\d+(?:\.\d+)?\s*(?:k|grand)?)\s*(?:-|–|to)\s*(\$?\s*\d{1,3}(?:,\d{3})*|\$?\s*\d+(?:\.\d+)?\s*(?:k|grand)?)\b/i
+    /\b(?:between|from)?\s*(\$?\s*\d{1,3}(?:,\d{3})*|\$?\s*\d+(?:\.\d+)?\s*(?:k|grand|thousand)?)\s*(?:-|–|to)\s*(\$?\s*\d{1,3}(?:,\d{3})*|\$?\s*\d+(?:\.\d+)?\s*(?:k|grand|thousand)?)(?:\s*(thousand|grand|k))?\b/i
   );
   if (range?.[1] && range?.[2]) {
-    const a = parsePriceTokenForWatch(range[1]);
-    const b = parsePriceTokenForWatch(range[2]);
+    const sharedSuffix = String(range[3] ?? "").trim();
+    const applySharedSuffix = (token: string) =>
+      sharedSuffix && !/\b(?:k|grand|thousand)\b/i.test(token) ? `${token} ${sharedSuffix}` : token;
+    const a = parsePriceTokenForWatch(applySharedSuffix(range[1]));
+    const b = parsePriceTokenForWatch(applySharedSuffix(range[2]));
     if (a != null && b != null) {
       minPrice = Math.min(a, b);
       maxPrice = Math.max(a, b);
@@ -13672,7 +13680,7 @@ function extractWatchPricePreference(text: string): { minPrice?: number; maxPric
   }
 
   const cap = t.match(
-    /\b(?:under|below|less than|no more than|max(?:imum)?|up to)\s*(\$?\s*\d{1,3}(?:,\d{3})*|\$?\s*\d+(?:\.\d+)?\s*(?:k|grand)?)\b/i
+    /\b(?:under|below|less than|no more than|max(?:imum)?|up to)\s*(\$?\s*\d{1,3}(?:,\d{3})*|\$?\s*\d+(?:\.\d+)?\s*(?:k|grand|thousand)?)\b/i
   );
   if (cap?.[1]) {
     const parsed = parsePriceTokenForWatch(cap[1]);
@@ -13680,7 +13688,7 @@ function extractWatchPricePreference(text: string): { minPrice?: number; maxPric
   }
 
   const floor = t.match(
-    /\b(?:over|above|at least|more than|min(?:imum)?|from)\s*(\$?\s*\d{1,3}(?:,\d{3})*|\$?\s*\d+(?:\.\d+)?\s*(?:k|grand)?)\b/i
+    /\b(?:over|above|at least|more than|min(?:imum)?|from)\s*(\$?\s*\d{1,3}(?:,\d{3})*|\$?\s*\d+(?:\.\d+)?\s*(?:k|grand|thousand)?)\b/i
   );
   if (floor?.[1]) {
     const parsed = parsePriceTokenForWatch(floor[1]);

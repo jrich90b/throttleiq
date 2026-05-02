@@ -101,6 +101,18 @@
     }
   },
   {
+    "id": "watch_twilio_manual_tri_glide_price_range",
+    "text": "Great seeing you Jim and thanks for your input on the new street glide 3. I will keep an eye out for a pre owned tri-glide in the $15-20 thousand range for you. Have a great weekend.",
+    "expected": {
+      "watch_action": "set_watch",
+      "department_intent": "none",
+      "watch_model_contains": "tri glide",
+      "watch_condition": "used",
+      "watch_min_price": 15000,
+      "watch_max_price": 20000
+    }
+  },
+  {
     "id": "watch_year_color_price_cap",
     "text": "Keep an eye out for a 2020 Road Glide in black under $18k.",
     "expected": {
