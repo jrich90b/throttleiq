@@ -6379,14 +6379,23 @@ function getLastInboundMessage(conv: any): any | null {
 
 function findConversationByOutcomeToken(token: string): any | null {
   if (!token) return null;
+  const normalized = String(token).trim().toLowerCase();
+  if (!normalized) return null;
   const convs = getAllConversations();
   return (
     convs.find(
       (c: any) =>
-        c?.appointment?.staffNotify?.outcomeToken === token ||
-        c?.dealerRide?.staffNotify?.outcomeToken === token
+        String(c?.appointment?.staffNotify?.outcomeToken ?? "").trim().toLowerCase() === normalized ||
+        String(c?.dealerRide?.staffNotify?.outcomeToken ?? "").trim().toLowerCase() === normalized ||
+        String((c as any)?.financeOutcomeNotify?.outcomeToken ?? "").trim().toLowerCase() === normalized
     ) ?? null
   );
+}
+
+function isFinanceOutcomeTokenForConversation(conv: any, token: string): boolean {
+  const normalized = String(token ?? "").trim().toLowerCase();
+  if (!normalized) return false;
+  return String((conv as any)?.financeOutcomeNotify?.outcomeToken ?? "").trim().toLowerCase() === normalized;
 }
 
 type StaffOutcomeTokenMatch = {
@@ -8082,11 +8091,13 @@ async function maybePromptBusinessManagerFinanceOutcomeFallback(
     conv?.sale?.label ??
     "the deal";
   const dealerProfile = await getDealerProfileHot();
+  const outcomeLink = buildStaffOutcomeLink(token);
   const conversationLink = buildStaffInboxConversationLink(conv, dealerProfile);
   const note = String(opts.note ?? "").trim();
   const prompt = [
     `Finance outcome needed: ${customerName} — ${vehicle}.`,
     note ? `Context: ${note}` : null,
+    outcomeLink ? `Update finance outcome: ${outcomeLink}` : null,
     conversationLink ? `Open conversation: ${conversationLink}` : null,
     `Reply: OUTCOME ${token} APPROVED | DECLINED | NEEDS_INFO | PENDING.`
   ]
@@ -19154,6 +19165,53 @@ app.get("/public/appointment/outcome", async (req, res) => {
     conv.lead?.vehicle?.model ??
     conv.lead?.vehicle?.description ??
     "the bike";
+  const isFinanceOutcome = isFinanceOutcomeTokenForConversation(conv, token);
+  if (isFinanceOutcome) {
+    const currentStatus = String(conv?.financeOutcome?.status ?? "").trim();
+    const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Finance Outcome</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px; color: #111; }
+      h1 { font-size: 20px; margin: 0 0 8px; }
+      .card { border: 1px solid #ddd; border-radius: 10px; padding: 16px; margin-top: 12px; max-width: 560px; }
+      .row { margin: 8px 0; }
+      label { display: block; font-weight: 600; margin-top: 14px; }
+      button { padding: 10px 14px; margin-top: 14px; }
+      select, textarea { width: 100%; padding: 8px; margin-top: 6px; box-sizing: border-box; }
+      textarea { min-height: 90px; }
+      .muted { color: #666; font-size: 12px; margin-top: 6px; }
+    </style>
+  </head>
+  <body>
+    <h1>Finance Outcome</h1>
+    <div class="row"><strong>${escapeHtml(customer)}</strong> — ${escapeHtml(vehicle)}</div>
+    ${currentStatus ? `<div class="row">Current status: ${escapeHtml(currentStatus)}</div>` : ""}
+
+    <div class="card">
+      <form method="POST" action="/public/appointment/outcome">
+        <input type="hidden" name="token" value="${escapeHtml(token)}" />
+        <label>Outcome</label>
+        <select name="financeOutcome" required>
+          <option value="approved">Approved</option>
+          <option value="declined">Declined / not approved</option>
+          <option value="needs_more_info">Needs more information</option>
+          <option value="pending">Still pending</option>
+        </select>
+        <label>Notes (optional)</label>
+        <textarea name="note" placeholder="Add any finance context for the team..."></textarea>
+        <div class="muted">This updates the conversation and stops the staff outcome prompt when a final outcome is selected.</div>
+        <button type="submit">Submit outcome</button>
+      </form>
+    </div>
+  </body>
+</html>`;
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    return res.send(html);
+  }
   const leadVehicle = conv.lead?.vehicle ?? {};
   const holds = await listInventoryHolds();
   const leadStock = String(leadVehicle?.stockId ?? "").trim();
@@ -19740,6 +19798,50 @@ app.post("/public/appointment/outcome", async (req, res) => {
   if (!token) return res.status(400).send("Missing data");
   const conv = findConversationByOutcomeToken(token);
   if (!conv) return res.status(404).send("Not found");
+  const financeOutcomeRaw = String(req.body?.financeOutcome ?? "").trim().toLowerCase();
+  if (isFinanceOutcomeTokenForConversation(conv, token) && financeOutcomeRaw) {
+    const nowIso = new Date().toISOString();
+    const notifyState = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});
+    if (financeOutcomeRaw === "pending") {
+      notifyState.status = "pending";
+      notifyState.pendingAt = nowIso;
+      notifyState.outcomePromptRespondedAt = nowIso;
+      notifyState.updatedAt = nowIso;
+      addTodo(
+        conv,
+        "note",
+        `Finance outcome marked pending${note ? `: ${note}` : "."}`,
+        `public_finance_outcome:${token}`
+      );
+      saveConversation(conv);
+      await flushConversationStore();
+      return res.send("Thanks — finance outcome was marked pending.");
+    }
+
+    const financeStatus =
+      financeOutcomeRaw === "approved"
+        ? "approved"
+        : financeOutcomeRaw === "declined"
+          ? "declined"
+          : financeOutcomeRaw === "needs_more_info"
+            ? "needs_more_info"
+            : null;
+    if (!financeStatus) {
+      return res.status(400).send("Invalid finance outcome");
+    }
+
+    await applyFinanceOutcomeStatusFromSignal(
+      conv,
+      financeStatus,
+      note || undefined,
+      `public_finance_outcome:${token}`
+    );
+    notifyState.outcomePromptRespondedAt = nowIso;
+    notifyState.updatedAt = nowIso;
+    saveConversation(conv);
+    await flushConversationStore();
+    return res.send("Thanks — finance outcome was saved.");
+  }
   const normalizedOutcome = normalizeAppointmentOutcomeInput({
     legacyOutcome: legacyOutcomeRaw,
     primaryOutcome: primaryOutcomeRaw,
