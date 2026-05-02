@@ -1462,6 +1462,38 @@ function extractYearRangeFromText(text?: string | null): { min: number; max: num
   return null;
 }
 
+function removeWalkInNonPreferenceContext(text?: string | null): string {
+  return String(text ?? "")
+    .replace(/\([^)]*\blive(?:s|d)?\s+in\b[^)]*\)/gi, " ")
+    .replace(/\b(?:they|he|she|customer|customers?)\s+live(?:s|d)?\s+in\s+[^.;]+/gi, " ")
+    .replace(/\b(?:went over|discussed|reviewed)\s+trade\s+numbers?\s*\([^)]*\)/gi, " ")
+    .replace(/\b(?:trade|trade[-\s]?in)\s*(?:is|was|:)?\s*\(?\s*20\d{2}\s+[^.;)]*\)?/gi, " ")
+    .replace(/\bbring(?:ing)?\s+(?:their|his|her|the)\s+trade\b[^.;]*/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractWalkInPreferenceSegment(text?: string | null): string {
+  const cleaned = removeWalkInNonPreferenceContext(text);
+  if (!cleaned) return "";
+  const clauses = cleaned
+    .split(/(?<=[.;])\s+|\n+/)
+    .map(s => s.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  if (!clauses.length) return cleaned;
+  const desiredClauses = clauses.filter(clause => {
+    const t = clause.toLowerCase();
+    if (/\btrade\b/.test(t)) return false;
+    return (
+      /\b(new|used|pre[-\s]?owned)\s+20\d{2}\b/.test(t) ||
+      /\b20\d{2}\s+(?:street|road|tri|pan|low|fat|heritage|breakout|sportster|nightster|road king)\b/.test(t) ||
+      /\b(street glide|road glide|tri glide|pan america|low rider|fat boy|heritage|breakout|sportster|nightster|road king)\b/.test(t) ||
+      /\b(favorite|favourite|preferred|liked|colors?|trim|iron horse|vivid black|chrome trim|black trim)\b/.test(t)
+    );
+  });
+  return (desiredClauses.length ? desiredClauses.join(" ") : cleaned).replace(/\s+/g, " ").trim();
+}
+
 function extractSingleYearFromText(text?: string | null): number | undefined {
   if (!text) return undefined;
   const t = String(text).toLowerCase();
@@ -1757,6 +1789,10 @@ function formatWatchModelForMessage(model?: string | null): string {
 function extractTrimFromText(text?: string | null): string | undefined {
   if (!text) return undefined;
   const t = String(text).toLowerCase();
+  if (/\bchrome\s+(?:trim|finish)\b/.test(t)) return "chrome";
+  if (/\bblack(?:ed)?(?:\s|-)?(?:out|trim|finish)\b/.test(t) || /\bblack\s+trim\b/.test(t)) {
+    return "black";
+  }
   const m = t.match(/\b(cvo|st|special|limited|ultra|anniversary|standard|blacked[-\s]?out|chrome)\b/);
   if (!m) return undefined;
   const raw = m[1].replace(/\s+/g, " ").trim();
@@ -1766,7 +1802,22 @@ function extractTrimFromText(text?: string | null): string | undefined {
 
 function extractColorFromText(text?: string | null): string | undefined {
   if (!text) return undefined;
-  const t = String(text).toLowerCase();
+  const t = removeWalkInNonPreferenceContext(text).toLowerCase();
+  const colorPhrases = [
+    "iron horse metallic",
+    "iron horse",
+    "vivid black",
+    "midnight ember",
+    "blood orange",
+    "olive steel metallic",
+    "olive steel",
+    "dark billiard gray",
+    "billiard gray",
+    "gunship gray"
+  ];
+  for (const phrase of colorPhrases) {
+    if (new RegExp(`\\b${phrase.replace(/\s+/g, "\\s+")}\\b`, "i").test(t)) return phrase;
+  }
   const colorTokens = [
     "black",
     "white",
@@ -4393,25 +4444,32 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       conv.lead?.vehicle?.description ??
       meta.model ??
       "";
-    const walkInModelHint = extractWalkInModelHint(walkInCleanedComment);
+    const watchDirectiveSegment = extractWatchDirectiveSegment(walkInCleanedComment);
+    const walkInPreferenceSegment = extractWalkInPreferenceSegment(walkInCleanedComment);
+    const watchAttributeSourceText =
+      hasWatchIntentPhrase(walkInCleanedComment) && watchDirectiveSegment
+        ? watchDirectiveSegment
+        : walkInPreferenceSegment || walkInCleanedComment;
+    const walkInModelHint =
+      extractWalkInModelHint(watchAttributeSourceText) ?? extractWalkInModelHint(walkInCleanedComment);
     const parserModel =
       inventoryEntityAccepted && llmInventoryEntities?.model
         ? normalizeVehicleModel(llmInventoryEntities.model, conv.lead?.vehicle?.make ?? null)
         : undefined;
-    const inquiryModelHint = extractInquiryModelHint(walkInCleanedComment);
+    const inquiryModelHint =
+      extractInquiryModelHint(watchAttributeSourceText) ?? extractInquiryModelHint(walkInCleanedComment);
     const watchDirectiveModelHint = extractWatchDirectiveModelHint(walkInCleanedComment);
     const modelLabel =
       watchDirectiveModelHint ||
-      parserModel ||
       inquiryModelHint ||
       walkInModelHint ||
+      parserModel ||
       normalizeVehicleModel(String(modelRaw ?? ""), conv.lead?.vehicle?.make ?? null);
     const hasWatchIntentFromParser =
       !!llmIntent &&
       llmIntent.intent === "availability" &&
       llmIntent.explicitRequest === true &&
       Number(llmIntent.confidence ?? 0) >= intentConfidenceMin;
-    const watchDirectiveSegment = extractWatchDirectiveSegment(walkInCleanedComment);
     const hasWatchIntentFromText =
       hasWatchIntentPhrase(commentLower) || !!watchDirectiveSegment;
     const hasWatchIntent = hasWatchIntentFromParser || hasWatchIntentFromText;
@@ -4434,7 +4492,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const watchSourceText =
       hasWatchIntent && watchDirectiveSegment
         ? watchDirectiveSegment
-        : lead.comment ?? lead.inquiry ?? "";
+        : watchAttributeSourceText || lead.comment || lead.inquiry || "";
     const requestedConditionHint = inferWalkInRequestedCondition(
       hasWatchIntent && watchDirectiveSegment ? watchDirectiveSegment : walkInCleanedComment
     );

@@ -5716,6 +5716,7 @@ export default function Home() {
       // if selected model is a family label like "Fat Boy", treat model variants
       // (e.g. Fat Boy 114, Fat Boy Lo, Fat Boy Anniversary) as selected too.
       if (tokens.length >= 2) {
+        if (optionTokens.includes("cvo") && !tokens.includes("cvo")) return false;
         if (containsTokenSequence(optionTokens, tokens)) return true;
         const selectedCollapsed = tokens.join("");
         const optionCollapsed = optionTokens.join("");
