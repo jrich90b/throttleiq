@@ -4780,7 +4780,7 @@ const FOLLOW_UP_MESSAGES = [
   "I can also check current incentives on{labelClause} and send only what applies.{offersLine}",
   "If you’d rather stop in{labelClause}, I can send two easy time options.",
   "No rush, {name}. I can keep an eye on{labelClause} and only text when something changes.",
-  "If trade-in is part of your plan, I can start with a rough range before you come in.",
+  "Still interested, or want me to send a couple options that fit what you’re looking for?",
   "If timing shifted, totally fine. Send me a day that works and I’ll keep it easy.",
   "Still happy to help{labelClause}. If timing changed, just text me and I can pick this back up.",
   "All good either way, {name}. When you’re ready, I’m here to help."
@@ -4892,6 +4892,10 @@ const FOLLOW_UP_VARIANTS_NO_SLOTS: Record<number, string[]> = {
     "Want me to text two quick time slots so this stays easy?",
     "I can line up two windows if you want to stop by."
   ],
+  6: [
+    "Still interested{labelClause}, or want me to send a couple options that fit what you’re looking for?",
+    "Want me to keep helping narrow this down?"
+  ],
   7: [
     "If now is not ideal, no problem - I’m here whenever you want to pick this back up.",
     "No pressure at all - I can keep an eye on it and reach out only when something meaningful changes.",
@@ -4911,6 +4915,10 @@ const FOLLOW_UP_VARIANTS_NO_MODEL_NO_SLOTS: Record<number, string[]> = {
   2: [
     "Still narrowing down models, or want me to pick two best fits for you?",
     "I can send a short list matched to your budget and riding style if helpful."
+  ],
+  6: [
+    "Still interested in comparing a few bikes, or want me to send 2-3 options that fit what you’re looking for?",
+    "Want me to keep helping narrow this down?"
   ]
 };
 
