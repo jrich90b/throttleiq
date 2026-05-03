@@ -3266,12 +3266,40 @@ export function parsePreferredDateTime(
   };
 }
 
+function parseOrdinalDateInCurrentWindow(
+  text: string,
+  timeZone: string
+): { year: number; month: number; day: number } | null {
+  const match = text.match(/\b(?:the\s*)?(\d{1,2})(?:st|nd|rd|th)\b/i);
+  if (!match) return null;
+  const day = Number(match[1]);
+  if (!Number.isFinite(day) || day < 1 || day > 31) return null;
+  const nowParts = getZonedParts(new Date(), timeZone);
+  let year = nowParts.year;
+  let month = nowParts.month;
+  let candidate = new Date(Date.UTC(year, month - 1, day, 12, 0));
+  let candidateParts = getZonedParts(candidate, timeZone);
+  if (candidateParts.month !== month || candidateParts.day !== day) return null;
+  const today = new Date(Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day, 12, 0));
+  if (candidate.getTime() < today.getTime()) {
+    month += 1;
+    if (month > 12) {
+      month = 1;
+      year += 1;
+    }
+    candidate = new Date(Date.UTC(year, month - 1, day, 12, 0));
+    candidateParts = getZonedParts(candidate, timeZone);
+    if (candidateParts.month !== month || candidateParts.day !== day) return null;
+  }
+  return { year, month, day };
+}
+
 export function parseRequestedDayTime(
   text: string,
   timeZone: string
 ): { year: number; month: number; day: number; hour24: number; minute: number; dayOfWeek: string } | null {
   const t = text.toLowerCase();
-  const explicitDate = parseExplicitDate(t);
+  const explicitDate = parseExplicitDate(t) ?? parseOrdinalDateInCurrentWindow(t, timeZone);
   const dayToken = parseDayToken(t);
   let time = parseExactTime(t);
   if (!time && dayToken && !explicitDate) {

@@ -384,5 +384,23 @@
       },
       "normalized_contains": "saturday morning"
     }
+  },
+  {
+    "id": "availability_multi_date_windows_9th_16th_1",
+    "text": "Either the 9th after 1:30 or any time on the 16th",
+    "expected": {
+      "intent": "availability",
+      "intent_any": [
+        "availability",
+        "schedule"
+      ],
+      "explicit_request": true,
+      "requested": {
+        "day": "9th",
+        "time_text": "after 1:30",
+        "time_window": "range"
+      },
+      "normalized_contains": "9th after 1:30"
+    }
   }
 ]

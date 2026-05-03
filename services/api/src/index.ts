@@ -33243,7 +33243,7 @@ if (authToken && signature) {
     const hasDayToken = bookingParseText
       ? /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week|this weekend|weekend|next month)\b/i.test(
           bookingParseText
-        )
+        ) || /\b(?:the\s*)?\d{1,2}(?:st|nd|rd|th)\b/i.test(bookingParseText)
       : false;
     if (dayFromSlot && !hasDayToken) {
       if (bookingParseTimeText) {
@@ -33258,13 +33258,13 @@ if (authToken && signature) {
   const llmHasDayToken = bookingParseText
     ? /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week|this weekend|weekend|next month)\b/i.test(
         bookingParseText
-      )
+      ) || /\b(?:the\s*)?\d{1,2}(?:st|nd|rd|th)\b/i.test(bookingParseText)
     : false;
   const llmHasTimeWord = bookingParseText
     ? /\b(\d{1,2}):(\d{2})\s*(am|pm)?\b/i.test(bookingParseText)
     : false;
   const llmHasAtHour = bookingParseText
-    ? /\b(?:at|for|around|by)\s*(\d{1,2})(?::\d{2})?\b(?!\s*\/)/i.test(bookingParseText)
+    ? /\b(?:at|for|around|by|after|before)\s*(\d{1,2})(?::\d{2})?\b(?!\s*\/)/i.test(bookingParseText)
     : false;
   const llmHasDayTime = !!llmHasDayToken && (llmHasTimeWord || llmHasAtHour);
   const llmHasDayOnlyAvailability =

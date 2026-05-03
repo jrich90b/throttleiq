@@ -161,13 +161,13 @@ export function detectSoftVisitIntent(text: string): boolean {
 
 export function detectSchedulingSignals(text: string) {
   const t = String(text ?? "").toLowerCase();
+  const hasOrdinalDate = /\b(?:the\s*)?\d{1,2}(?:st|nd|rd|th)\b/i.test(t);
   const hasDayToken =
-    /\b(today|tomorrow|monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun|this week|next week|this weekend|weekend|next month)\b/i.test(
-      t
-    );
+    hasOrdinalDate ||
+    /\b(today|tomorrow|monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun|this week|next week|this weekend|weekend|next month)\b/i.test(t);
   const hasDayPart = /\b(morning|afternoon|evening|tonight|tonite)\b/i.test(t);
   const hasTimeWord = /\b(\d{1,2}):(\d{2})\s*(am|pm)?\b/i.test(t);
-  const hasAtHour = /\b(?:at|for|around|by)\s*(\d{1,2})(?::\d{2})?\b(?!\s*\/)/i.test(t);
+  const hasAtHour = /\b(?:at|for|around|by|after|before)\s*(\d{1,2})(?::\d{2})?\b(?!\s*\/)/i.test(t);
   const hasDayTime = hasDayToken && (hasTimeWord || hasAtHour);
   const softVisit = detectSoftVisitIntent(t);
   const explicit = softVisit ? false : isExplicitScheduleIntent(t);
