@@ -2480,9 +2480,39 @@ export async function parseIntentWithLLM(args: {
 
   const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
+  const noCallPreference = /\b(?:prefer|rather|only)\s+(?:text|sms|message)|\b(?:please\s+)?(?:do\s+not|don'?t)\s+call\b|\bno\s+calls?\b/i.test(
+    text
+  );
+  const inferBikeFromText = (value: string): { model: string; year: string } | null => {
+    const lower = String(value ?? "").toLowerCase();
+    const year = lower.match(/\b(20\d{2})\b/)?.[1] ?? "";
+    const modelPatterns: Array<[RegExp, string]> = [
+      [/\bstreet\s+glide\s+3\s+limited\b|\bstreet\s+glide\s+limited\s+iii\b|\btri\s+glide\b/i, "Street Glide 3 Limited"],
+      [/\bcvo\s+road\s+glide\s+st\b/i, "CVO Road Glide ST"],
+      [/\bcvo\s+street\s+glide\b/i, "CVO Street Glide"],
+      [/\bstreet\s+glide\s+limited\b/i, "Street Glide Limited"],
+      [/\broad\s+glide\s+limited\b/i, "Road Glide Limited"],
+      [/\bstreet\s+glides?\b/i, "Street Glide"],
+      [/\broad\s+glides?\b/i, "Road Glide"],
+      [/\blow\s+rider\s+s\b|\blrs\b|\bfxlrs\b/i, "Low Rider S"],
+      [/\blow\s+rider\s+st\b/i, "Low Rider ST"],
+      [/\biron\s+883s?\b|\bsportster\s+iron\s+883\b/i, "Iron 883"],
+      [/\bsportsters?\b/i, "Sportster"],
+      [/\bnightsters?\b/i, "Nightster"],
+      [/\bbreakouts?\b/i, "Breakout"],
+      [/\bfat\s+boy\b/i, "Fat Boy"],
+      [/\bheritage\s+classic\b/i, "Heritage Classic"],
+      [/\bpan\s+america\b/i, "Pan America"],
+      [/\btrikes?\b|\btri\s+glides?\b/i, "Street Glide 3 Limited"]
+    ];
+    const hit = modelPatterns.find(([pattern]) => pattern.test(lower));
+    if (!hit) return null;
+    return { model: hit[1], year };
+  };
   const voiceExamples = [
     'input: "Customer: can you call me after 4?" output: {"intent":"callback","explicit_request":true,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":true,"time_text":"after 4","phone":""},"confidence":0.97}',
     'input: "Customer: if you call me around 1-2pm i should be up. i work night shift." output: {"intent":"callback","explicit_request":true,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":true,"time_text":"around 1-2pm","phone":""},"confidence":0.98}',
+    'input: "Customer: I prefer text, please don’t call." output: {"intent":"none","explicit_request":false,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.98}',
     'input: "Customer: do you have any black street glides in stock?" output: {"intent":"availability","explicit_request":true,"availability":{"model":"Street Glide","year":"","color":"black","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.97}',
     'input: "Customer: can i test ride one this week?" output: {"intent":"test_ride","explicit_request":true,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.95}',
     'input: "Customer: I begin my riding academy next Monday and was told you do the jumpstart experience prior." output: {"intent":"none","explicit_request":false,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.95}',
@@ -2508,8 +2538,10 @@ export async function parseIntentWithLLM(args: {
     "- intent=availability only for inventory availability (bike in stock/still there/sold?).",
     "- Parts, apparel, service, accessories, gear, clothing, helmets, hoodies, gloves, brake pads, tires, inspections, maintenance, and repair questions are not motorcycle inventory availability; set intent=none.",
     "- intent=test_ride if they ask to test ride or demo the bike.",
+    "- If recent messages are about a test ride and the current customer message is only a bike/model alternate (for example \"or maybe that 2022 Iron 883\"), keep intent=test_ride and explicit_request=true.",
     "- jump start / jumpstart / riding-academy prep messages are not inventory availability requests; do not set intent=test_ride for those.",
     "- intent=callback if they ask for a call or ask you to call them.",
+    "- If the customer says they prefer text, says text only, or says do not call/don't call/no calls, intent=none and explicit_request=false. Do not classify that as callback.",
     "- If message is about appointment/schedule availability (day/time/openings), intent=none and explicit_request=false.",
     "- If no clear request, intent=none and explicit_request=false.",
     "- Use empty strings for unknown availability fields (model/year/color/stock_id).",
@@ -2582,6 +2614,48 @@ export async function parseIntentWithLLM(args: {
     typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
+
+  if (noCallPreference) {
+    return {
+      intent: "none",
+      explicitRequest: false,
+      availability,
+      callback: {
+        requested: false,
+        timeText: undefined,
+        phone: undefined
+      },
+      confidence: Math.max(confidence ?? 0, 0.98)
+    };
+  }
+
+  const inferredBike = inferBikeFromText(text);
+  const recentTestRideContext = /\b(test ride|demo ride|line up (?:the )?(?:test )?ride|set up (?:a )?(?:test )?ride)\b/i.test(
+    history.join("\n")
+  );
+  if (
+    intent === "none" &&
+    !explicitRequest &&
+    recentTestRideContext &&
+    inferredBike &&
+    !/\b(price|pricing|payment|payments|monthly|finance|financing|available|availability|in stock|photos?|pictures?|specs?)\b/i.test(
+      text
+    )
+  ) {
+    return {
+      intent: "test_ride",
+      explicitRequest: true,
+      availability: {
+        model: inferredBike.model,
+        year: inferredBike.year || undefined,
+        color: availability?.color,
+        stockId: availability?.stockId,
+        condition: availability?.condition ?? "unknown"
+      },
+      callback,
+      confidence: Math.max(confidence ?? 0, 0.95)
+    };
+  }
 
   return {
     intent,
