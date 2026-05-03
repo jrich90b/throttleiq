@@ -1476,13 +1476,43 @@ async function evaluateTestRideInventoryGate(args: {
         return true;
       });
 
-    const availableMatches = filterAvailable(await findInventoryMatches({ year, model: rawModel }));
+    const rawExactMatches = await findInventoryMatches({ year, model: rawModel });
+    const availableMatches = filterAvailable(rawExactMatches);
     if (!availableMatches.length) {
       const alternateYear = priorModelYear(year);
-      const alternateMatches = alternateYear
-        ? filterAvailable(await findInventoryMatches({ year: alternateYear, model: rawModel }))
+      const rawAlternateMatches = alternateYear
+        ? await findInventoryMatches({ year: alternateYear, model: rawModel })
         : [];
+      const alternateMatches = filterAvailable(rawAlternateMatches);
       const alternate = alternateMatches[0] ?? null;
+      console.warn("[test-ride-inventory-gate] requested bike unavailable", {
+        requested: {
+          year,
+          model: rawModel,
+          condition: lead?.vehicle?.condition ?? null
+        },
+        exactMatchCount: rawExactMatches.length,
+        availableExactMatchCount: availableMatches.length,
+        alternateYear,
+        alternateMatchCount: rawAlternateMatches.length,
+        availableAlternateMatchCount: alternateMatches.length,
+        rejectedExact: rawExactMatches.slice(0, 5).map(m => {
+          const holdKey = normalizeInventoryHoldKey(m.stockId, m.vin);
+          const soldKey = normalizeInventorySoldKey(m.stockId, m.vin);
+          return {
+            year: m.year,
+            model: m.model,
+            condition: m.condition,
+            stockId: m.stockId,
+            vin: m.vin,
+            holdKey,
+            soldKey,
+            conditionOk: requestedCondition ? inventoryItemMatchesRequestedCondition(m, requestedCondition) : true,
+            onHold: !!(holdKey && holds?.[holdKey]),
+            sold: !!(soldKey && solds?.[soldKey])
+          };
+        })
+      });
       return {
         canOfferTestRide: false,
         reason: "not_in_stock",

@@ -178,7 +178,8 @@ import {
 import {
   isBlockedCadencePersonalizationLineText,
   isManualOutboundBookingConfirmationText,
-  resolveRequestedScheduleWindowMode
+  resolveRequestedScheduleWindowMode,
+  shouldSuppressInitialInventoryPhotoAppend
 } from "./domain/workflowRegressionGuards.js";
 
 import {

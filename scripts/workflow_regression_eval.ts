@@ -1,7 +1,8 @@
 import {
   isBlockedCadencePersonalizationLineText,
   isManualOutboundBookingConfirmationText,
-  resolveRequestedScheduleWindowMode
+  resolveRequestedScheduleWindowMode,
+  shouldSuppressInitialInventoryPhotoAppend
 } from "../services/api/src/domain/workflowRegressionGuards.ts";
 
 type Case = {
@@ -61,6 +62,20 @@ const cases: Case[] = [
     id: "afternoon_window_detected",
     actual: resolveRequestedScheduleWindowMode("Friday afternoon or Saturday morning works for me"),
     expected: "window"
+  },
+  {
+    id: "suppresses_photo_append_after_out_of_stock_test_ride_copy",
+    actual: shouldSuppressInitialInventoryPhotoAppend(
+      "I’m not seeing 2025 Street Glide in stock right now, and I don’t want to book you on a bike we don’t have."
+    ),
+    expected: true
+  },
+  {
+    id: "allows_photo_append_after_available_inventory_copy",
+    actual: shouldSuppressInitialInventoryPhotoAppend(
+      "Yes — we have a 2025 Street Glide in stock. What day works best for a test ride?"
+    ),
+    expected: false
   }
 ];
 

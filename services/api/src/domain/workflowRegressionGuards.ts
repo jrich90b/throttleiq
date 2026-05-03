@@ -31,6 +31,17 @@ export function isBlockedCadencePersonalizationLineText(lineRaw: string | null |
   return false;
 }
 
+export function shouldSuppressInitialInventoryPhotoAppend(draftRaw: string | null | undefined): boolean {
+  const draft = String(draftRaw ?? "");
+  if (!draft.trim()) return false;
+  return (
+    /\b(?:i['’]?m|we['’]?re)\s+not\s+seeing\b[\s\S]{0,120}\bin\s+stock\b/i.test(draft) ||
+    /\bnot\s+seeing\b[\s\S]{0,120}\bavailable\s+for\s+a\s+test\s+ride\b/i.test(draft) ||
+    /\bdon['’]?t\s+want\s+to\s+book\b[\s\S]{0,120}\bbike\s+we\s+don['’]?t\s+have\b/i.test(draft) ||
+    /\bdon['’]?t\s+want\s+to\s+schedule\b[\s\S]{0,120}\bbike\s+we\s+don['’]?t\s+currently\s+have\b/i.test(draft)
+  );
+}
+
 export function resolveRequestedScheduleWindowMode(textRaw: string | null | undefined): RequestedScheduleWindowMode {
   const text = String(textRaw ?? "").toLowerCase();
   if (!text.trim()) return "none";

@@ -79,6 +79,7 @@ import { resolveRoutingParserDecision } from "../domain/routerV2.js";
 import { listUsers } from "../domain/userStore.js";
 import { formatEmailLayout } from "../domain/tone.js";
 import { buildOffersLine, resolveOffersUrl } from "../domain/offers.js";
+import { shouldSuppressInitialInventoryPhotoAppend } from "../domain/workflowRegressionGuards.js";
 
 function base64UrlDecode(input: string): string | null {
   try {
@@ -3994,6 +3995,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const withInitialPhoto = (text: string) => {
     if (!initialPhotoLine) return text;
     if (/here['’]s a photo/i.test(text)) return text;
+    if (shouldSuppressInitialInventoryPhotoAppend(text)) return text;
     return `${text} ${initialPhotoLine}`.trim();
   };
   const withInitialAvailabilityLine = (text: string) => {
