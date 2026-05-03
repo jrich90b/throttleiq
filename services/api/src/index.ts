@@ -8799,7 +8799,12 @@ async function applyOutcomeSold(
       const soldBy = conv.sale?.soldByName || conv.sale?.soldById || "Unknown";
       const tlpDetails = buildTlpDeliveredDetails(conv, unit, soldBy);
       const tlpNote = buildTlpDeliveredNote(unit, soldBy, note);
-      await tlpMarkDealershipVisitDelivered({ leadRef: conv.lead.leadRef, note: tlpNote, details: tlpDetails });
+      await tlpMarkDealershipVisitDelivered({
+        leadRef: conv.lead.leadRef,
+        phone: conv.lead?.phone ?? conv.leadKey,
+        note: tlpNote,
+        details: tlpDetails
+      });
     } catch (err: any) {
       const errDetail = String(err?.message ?? err ?? "")
         .replace(/\s+/g, " ")
@@ -21113,7 +21118,12 @@ app.post("/conversations/:id/close", async (req, res) => {
       soldUnit.label = buildUnitLabel(soldUnit);
       const tlpDetails = buildTlpDeliveredDetails(conv, soldUnit, soldBy);
       const note = buildTlpDeliveredNote(soldUnit, soldBy, soldNote);
-      void tlpMarkDealershipVisitDelivered({ leadRef, note, details: tlpDetails }).catch((err: any) => {
+      void tlpMarkDealershipVisitDelivered({
+        leadRef,
+        phone: conv.lead?.phone ?? conv.leadKey,
+        note,
+        details: tlpDetails
+      }).catch((err: any) => {
         const errDetail = String(err?.message ?? err ?? "")
           .replace(/\s+/g, " ")
           .trim()
@@ -26538,7 +26548,7 @@ app.post("/crm/tlp/log-contact", async (req, res) => {
   }
 
   try {
-    await tlpLogCustomerContact({ leadRef, note, categoryValue });
+    await tlpLogCustomerContact({ leadRef, phone: conv.lead?.phone ?? conv.leadKey, note, categoryValue });
     if (lastAt) setCrmLastLoggedAt(conv, lastAt);
     return res.json({ ok: true });
   } catch (err: any) {
@@ -27280,7 +27290,7 @@ app.post("/conversations/:id/send", async (req, res) => {
         TLP_HEADLESS: process.env.TLP_HEADLESS ?? "true"
       });
       console.log("📝 TLP log start", { leadRef, convId: conv.id });
-      await tlpLogCustomerContact({ leadRef, note });
+      await tlpLogCustomerContact({ leadRef, phone: conv.lead?.phone ?? conv.leadKey, note });
       if (lastAt) setCrmLastLoggedAt(conv, lastAt);
       console.log("✅ TLP log success", { leadRef, convId: conv.id });
     } catch (err: any) {
@@ -38404,7 +38414,7 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
       const leadRef = conv.lead?.leadRef;
       if (leadRef) {
         try {
-          await tlpLogCustomerContact({ leadRef, note: noteText, contactedValue });
+          await tlpLogCustomerContact({ leadRef, phone: conv.lead?.phone ?? conv.leadKey, note: noteText, contactedValue });
           const lastAt = conv.messages[conv.messages.length - 1]?.at;
           if (lastAt) setCrmLastLoggedAt(conv, lastAt);
         } catch (err: any) {

@@ -5,6 +5,7 @@ import { chromium, type Browser, type Locator, type Page } from "playwright";
 
 export type TlpLogCustomerContactArgs = {
   leadRef: string;          // Ref #
+  phone?: string;            // customer phone fallback for quick lookup
   note: string;             // compiled transcript
   categoryValue?: string;   // default: "MOTORCYCLES"
   contactedValue?: "YES" | "NO"; // default: "YES"
@@ -28,6 +29,7 @@ export type TlpDealershipVisitDeliveredDetails = {
 
 export type TlpDealershipVisitDeliveredArgs = {
   leadRef: string;
+  phone?: string;
   note: string;
   details?: TlpDealershipVisitDeliveredDetails;
 };
@@ -52,6 +54,10 @@ function sanitizeLabel(label: string): string {
 
 function escapeRegexLiteral(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeDigits(value: string | undefined): string {
+  return String(value ?? "").replace(/\D+/g, "");
 }
 
 async function captureDebugArtifacts(page: Page, step: string) {
@@ -121,7 +127,24 @@ async function loginTlp(page: Page, step: StepFn) {
   });
 }
 
-async function waitForLeadResultRow(page: Page, leadRef: string, step: StepFn): Promise<Locator> {
+async function findVisibleRowByDigits(page: Page, digits: string): Promise<Locator | null> {
+  if (digits.length < 5) return null;
+  const frames = page.frames();
+  for (const frame of frames) {
+    const rows = frame.locator("tr, [role='row']");
+    const count = Math.min(await rows.count().catch(() => 0), 100);
+    for (let i = 0; i < count; i++) {
+      const row = rows.nth(i);
+      const visible = await row.isVisible().catch(() => false);
+      if (!visible) continue;
+      const text = await row.innerText().catch(() => "");
+      if (normalizeDigits(text).includes(digits)) return row;
+    }
+  }
+  return null;
+}
+
+async function waitForLeadResultRow(page: Page, searchText: string, step: StepFn, searchLabel = "ref"): Promise<Locator> {
   try {
     await page.waitForLoadState("networkidle", { timeout: SHORT_TIMEOUT_MS });
   } catch {
@@ -135,7 +158,9 @@ async function waitForLeadResultRow(page: Page, leadRef: string, step: StepFn): 
     'tr:has(a[title="Open Lead Actions Menu"])',
     'tr:has(td.actionListing.action_dt)'
   ];
-  const refPattern = new RegExp(`(^|\\D)${escapeRegexLiteral(leadRef)}(\\D|$)`);
+  const refPattern = new RegExp(`(^|\\D)${escapeRegexLiteral(searchText)}(\\D|$)`);
+  const searchDigits = normalizeDigits(searchText);
+  const startedAt = Date.now();
   const deadline = Date.now() + DEFAULT_TIMEOUT_MS;
   let lastError = "";
 
@@ -159,6 +184,9 @@ async function waitForLeadResultRow(page: Page, leadRef: string, step: StepFn): 
         lastError = err?.message ?? String(err);
       }
     }
+
+    const digitsRow = await findVisibleRowByDigits(page, searchDigits);
+    if (digitsRow) return digitsRow;
 
     for (const selector of rowSelectors) {
       const locators = [page.locator(selector).first(), ...frames.map(frame => frame.locator(selector).first())];
@@ -187,14 +215,14 @@ async function waitForLeadResultRow(page: Page, leadRef: string, step: StepFn): 
         if (noResultVisible) break;
       }
     }
-    if (noResultVisible) {
-      throw new Error(`lead: no quick-lookup result for ref ${leadRef}`);
+    if (noResultVisible && Date.now() - startedAt > 3000) {
+      throw new Error(`lead: no quick-lookup result for ${searchLabel} ${searchText}`);
     }
     await page.waitForTimeout(500);
   }
 
   throw new Error(
-    `lead: no visible quick-lookup row for ref ${leadRef}; tried row text match plus ${rowSelectors.join(", ")}${
+    `lead: no visible quick-lookup row for ${searchLabel} ${searchText}; tried row text match plus ${rowSelectors.join(", ")}${
       lastError ? `; last error: ${lastError}` : ""
     }`
   );
@@ -223,26 +251,59 @@ async function findLeadActionsMenu(row: Locator): Promise<Locator | null> {
   return null;
 }
 
-async function submitQuickLookupRef(page: Page, leadRef: string, step: StepFn) {
-  const refInput = page.locator("#QL_Ref");
-  await step("lead: fill #QL_Ref", async () => {
-    await refInput.click({ force: true });
-    await refInput.fill(leadRef);
+async function clearQuickLookupFields(page: Page, step: StepFn) {
+  await step("lead: clear quick lookup fields", async () => {
+    const selectors = [
+      "#QL_FirstName",
+      "#QL_LastName",
+      "#QL_Phone",
+      "#QL_Email",
+      "#QL_Ref",
+      "input[name='QL_FirstName']",
+      "input[name='QL_LastName']",
+      "input[name='QL_Phone']",
+      "input[name='QL_Email']",
+      "input[name='QL_Ref']"
+    ];
+    for (const selector of selectors) {
+      const field = page.locator(selector).first();
+      try {
+        if (await field.isVisible({ timeout: 200 })) await field.fill("");
+      } catch {
+        // keep clearing known quick lookup fields
+      }
+    }
   });
-  await step("lead: dispatch #QL_Ref change", async () => {
-    await page.evaluate(ref => {
-      const input = (globalThis as any).document?.querySelector?.("#QL_Ref");
-      if (!input) return;
-      (input as any).value = ref;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      input.dispatchEvent(new Event("change", { bubbles: true }));
-      input.dispatchEvent(
+}
+
+async function submitQuickLookupValue(
+  page: Page,
+  value: string,
+  fieldLabel: "ref" | "phone",
+  selectors: string[],
+  step: StepFn
+) {
+  await clearQuickLookupFields(page, step);
+  const input = await firstVisibleLocator(page, selectors);
+  if (!input) {
+    throw new Error(`lead: quick lookup ${fieldLabel} field not found`);
+  }
+  await step(`lead: fill quick lookup ${fieldLabel}`, async () => {
+    await input.click({ force: true });
+    await input.fill(value);
+  });
+  await step(`lead: dispatch quick lookup ${fieldLabel} change`, async () => {
+    await input.evaluate((el: any, text) => {
+      el.value = text;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      el.dispatchEvent(
         new (globalThis as any).KeyboardEvent("keyup", { bubbles: true, key: "Enter", code: "Enter", keyCode: 13 })
       );
-    }, leadRef);
+    }, value);
   });
-  await step("lead: submit ref with Enter", async () => {
-    await refInput.press("Enter");
+  await step(`lead: submit ${fieldLabel} with Enter`, async () => {
+    await input.press("Enter");
   });
 
   const clicked = await step("lead: submit quick lookup fallback", async () => {
@@ -274,9 +335,8 @@ async function submitQuickLookupRef(page: Page, leadRef: string, step: StepFn) {
         // try next control
       }
     }
-    return await page.evaluate(() => {
-      const input = (globalThis as any).document?.querySelector?.("#QL_Ref") as any;
-      const form = input?.closest?.("form") as any;
+    return await input.evaluate((el: any) => {
+      const form = el?.closest?.("form") as any;
       if (!form) return false;
       if (typeof form.requestSubmit === "function") form.requestSubmit();
       else form.submit();
@@ -291,12 +351,48 @@ async function submitQuickLookupRef(page: Page, leadRef: string, step: StepFn) {
   }
 }
 
-async function openLeadByRef(page: Page, leadRef: string, step: StepFn) {
-  await submitQuickLookupRef(page, leadRef, step);
+async function submitQuickLookupRef(page: Page, leadRef: string, step: StepFn) {
+  await submitQuickLookupValue(page, leadRef, "ref", ["#QL_Ref", "input[name='QL_Ref']", "input[placeholder*='Ref']"], step);
+}
 
-  const row = await step("lead: wait quick lookup result row", async () => {
-    return await waitForLeadResultRow(page, leadRef, step);
-  });
+async function submitQuickLookupPhone(page: Page, phone: string, step: StepFn) {
+  await submitQuickLookupValue(
+    page,
+    phone,
+    "phone",
+    ["#QL_Phone", "input[name='QL_Phone']", "input[placeholder*='Phone']", "input[type='tel']"],
+    step
+  );
+}
+
+async function findLeadRowByLookup(page: Page, leadRef: string, phone: string | undefined, step: StepFn): Promise<Locator> {
+  const errors: string[] = [];
+  try {
+    await submitQuickLookupRef(page, leadRef, step);
+    return await step("lead: wait quick lookup result row", async () => {
+      return await waitForLeadResultRow(page, leadRef, step, "ref");
+    });
+  } catch (err: any) {
+    errors.push(`ref ${leadRef}: ${err?.message ?? err}`);
+  }
+
+  const phoneDigits = normalizeDigits(phone);
+  if (phoneDigits.length >= 7) {
+    try {
+      await submitQuickLookupPhone(page, phoneDigits, step);
+      return await step("lead: wait quick lookup phone result row", async () => {
+        return await waitForLeadResultRow(page, phoneDigits, step, "phone");
+      });
+    } catch (err: any) {
+      errors.push(`phone ${phoneDigits}: ${err?.message ?? err}`);
+    }
+  }
+
+  throw new Error(`lead: quick lookup failed; ${errors.join(" | ")}`);
+}
+
+async function openLeadByRef(page: Page, leadRef: string, step: StepFn, phone?: string) {
+  const row = await findLeadRowByLookup(page, leadRef, phone, step);
 
   // Click the Open Lead Actions Menu (pencilOnly -> action1)
   const actionCell = row.locator("td.actionListing.action_dt.min-mobile.noxls").first();
@@ -401,12 +497,8 @@ async function openLeadByRef(page: Page, leadRef: string, step: StepFn) {
   });
 }
 
-async function openDealershipVisitByRef(page: Page, leadRef: string, step: StepFn) {
-  await submitQuickLookupRef(page, leadRef, step);
-
-  const row = await step("lead: wait quick lookup result row", async () => {
-    return await waitForLeadResultRow(page, leadRef, step);
-  });
+async function openDealershipVisitByRef(page: Page, leadRef: string, step: StepFn, phone?: string) {
+  const row = await findLeadRowByLookup(page, leadRef, phone, step);
 
   const actionCell = row.locator("td.actionListing.action_dt.min-mobile.noxls").first();
   const openActions = await findLeadActionsMenu(row);
@@ -1097,7 +1189,7 @@ export async function tlpLogCustomerContact(args: TlpLogCustomerContactArgs): Pr
       await loginTlp(page, step);
 
       // 2) Search by Ref # and open Event Customer Contact logging modal
-      await openLeadByRef(page, args.leadRef, step);
+      await openLeadByRef(page, args.leadRef, step, args.phone);
 
       // 3) Set contact outcome to "Customer Was Contacted"
       await selectCustomerContacted(page, contactedValue, step);
@@ -1144,7 +1236,7 @@ export async function tlpMarkDealershipVisitDelivered(args: TlpDealershipVisitDe
     };
     try {
       await loginTlp(page, step);
-      await openDealershipVisitByRef(page, args.leadRef, step);
+      await openDealershipVisitByRef(page, args.leadRef, step, args.phone ?? args.details?.phone);
       await markDeliveredStep(page, step, args.note, args.details);
       await context.close();
     } catch (error) {
