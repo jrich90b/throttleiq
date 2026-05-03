@@ -350,11 +350,15 @@ async function findLeadActionsMenu(row: Locator): Promise<Locator | null> {
 async function clearQuickLookupFields(page: Page, step: StepFn) {
   await step("lead: clear quick lookup fields", async () => {
     const selectors = [
+      "#QL_First",
+      "#QL_Last",
       "#QL_FirstName",
       "#QL_LastName",
       "#QL_Phone",
       "#QL_Email",
       "#QL_Ref",
+      "input[name='QL_First']",
+      "input[name='QL_Last']",
       "input[name='QL_FirstName']",
       "input[name='QL_LastName']",
       "input[name='QL_Phone']",
