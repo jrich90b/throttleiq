@@ -1368,7 +1368,10 @@ async function collectVisitSubmitFailureDetail(page: Page): Promise<string> {
       for (const node of messageNodes as any[]) {
         if (!isVisible(node)) continue;
         const text = normalize(node.textContent);
-        if (text && /(required|invalid|please|missing|select|enter|error)/i.test(text)) messages.add(text);
+        if (/new web leads/i.test(text)) continue;
+        if (text && /(required|invalid|missing|please\s+(select|enter|choose|complete)|must\s+(select|enter|choose|complete))/i.test(text)) {
+          messages.add(text);
+        }
       }
 
       const controls = Array.from(doc?.querySelectorAll?.("input,select,textarea") ?? []);
