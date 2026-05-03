@@ -144,6 +144,24 @@ async function findVisibleRowByDigits(page: Page, digits: string): Promise<Locat
   return null;
 }
 
+async function findVisibleRowByRefAndPhone(page: Page, leadRef: string, phoneDigits: string): Promise<Locator | null> {
+  if (!leadRef || phoneDigits.length < 7) return null;
+  const refPattern = new RegExp(`(^|\\D)${escapeRegexLiteral(leadRef)}(\\D|$)`);
+  const frames = page.frames();
+  for (const frame of frames) {
+    const rows = frame.locator("tr, [role='row']");
+    const count = Math.min(await rows.count().catch(() => 0), 100);
+    for (let i = 0; i < count; i++) {
+      const row = rows.nth(i);
+      const visible = await row.isVisible().catch(() => false);
+      if (!visible) continue;
+      const text = await row.innerText().catch(() => "");
+      if (refPattern.test(text) && normalizeDigits(text).includes(phoneDigits)) return row;
+    }
+  }
+  return null;
+}
+
 async function waitForLeadResultRow(page: Page, searchText: string, step: StepFn, searchLabel = "ref"): Promise<Locator> {
   try {
     await page.waitForLoadState("networkidle", { timeout: SHORT_TIMEOUT_MS });
@@ -226,6 +244,37 @@ async function waitForLeadResultRow(page: Page, searchText: string, step: StepFn
       lastError ? `; last error: ${lastError}` : ""
     }`
   );
+}
+
+async function waitForLeadResultRowByRefAndPhone(
+  page: Page,
+  leadRef: string,
+  phoneDigits: string,
+  step: StepFn
+): Promise<Locator> {
+  try {
+    await page.waitForLoadState("networkidle", { timeout: SHORT_TIMEOUT_MS });
+  } catch {
+    // Quick lookup often updates the table without a full network-idle state.
+  }
+
+  const startedAt = Date.now();
+  const deadline = Date.now() + DEFAULT_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const row = await findVisibleRowByRefAndPhone(page, leadRef, phoneDigits);
+    if (row) return row;
+
+    const noResultVisible = await page
+      .locator("text=/No matching records|No data available|No records found|No results/i")
+      .first()
+      .isVisible()
+      .catch(() => false);
+    if (noResultVisible && Date.now() - startedAt > 3000) {
+      throw new Error(`lead: no quick-lookup result matching ref ${leadRef} and phone ${phoneDigits}`);
+    }
+    await page.waitForTimeout(500);
+  }
+  throw new Error(`lead: no visible quick-lookup row matching ref ${leadRef} and phone ${phoneDigits}`);
 }
 
 async function findLeadActionsMenu(row: Locator): Promise<Locator | null> {
@@ -381,10 +430,10 @@ async function findLeadRowByLookup(page: Page, leadRef: string, phone: string | 
     try {
       await submitQuickLookupPhone(page, phoneDigits, step);
       return await step("lead: wait quick lookup phone result row", async () => {
-        return await waitForLeadResultRow(page, phoneDigits, step, "phone");
+        return await waitForLeadResultRowByRefAndPhone(page, leadRef, phoneDigits, step);
       });
     } catch (err: any) {
-      errors.push(`phone ${phoneDigits}: ${err?.message ?? err}`);
+      errors.push(`phone ${phoneDigits} with ref ${leadRef}: ${err?.message ?? err}`);
     }
   }
 
