@@ -7185,6 +7185,44 @@ function classifyInventoryMatches(
   return { available, held, sold };
 }
 
+function holdStoreMatchesCandidate(hold: any, candidate: MentionedModelCandidate): boolean {
+  const modelNeedle = normalizeModelText(candidate.model);
+  if (!modelNeedle) return false;
+  const text = normalizeModelText(
+    [
+      hold?.label,
+      hold?.year,
+      hold?.make,
+      hold?.model,
+      hold?.trim,
+      hold?.color,
+      hold?.stockId,
+      hold?.vin
+    ]
+      .filter(Boolean)
+      .join(" ")
+  );
+  if (!normalizedModelPhrasePresent(text, modelNeedle)) return false;
+  if (candidate.year && !new RegExp(`\\b${candidate.year}\\b`).test(text)) return false;
+  return true;
+}
+
+function heldInventoryItemsFromStore(
+  holds: Record<string, unknown> | null | undefined,
+  candidate: MentionedModelCandidate
+): InventoryFeedItem[] {
+  return Object.values(holds ?? {})
+    .filter(hold => holdStoreMatchesCandidate(hold, candidate))
+    .map((hold: any) => ({
+      stockId: hold?.stockId,
+      vin: hold?.vin,
+      year: hold?.year ?? candidate.year ?? undefined,
+      make: hold?.make,
+      model: hold?.model ?? candidate.model,
+      color: hold?.color
+    }));
+}
+
 async function buildTestRideInventorySelectionReply(args: {
   conv: Conversation;
   currentEvent: { body?: string | null; receivedAt?: string | null };
@@ -7204,7 +7242,11 @@ async function buildTestRideInventorySelectionReply(args: {
   const checked: Array<{ candidate: MentionedModelCandidate; status: InventoryMatchStatus }> = [];
   for (const candidate of candidates) {
     const matches = await findInventoryMatches({ year: candidate.year, model: candidate.model });
-    checked.push({ candidate, status: classifyInventoryMatches(matches, holds, solds) });
+    const status = classifyInventoryMatches(matches, holds, solds);
+    if (!status.held.length) {
+      status.held = heldInventoryItemsFromStore(holds, candidate);
+    }
+    checked.push({ candidate, status });
   }
 
   const latest = checked[checked.length - 1];
