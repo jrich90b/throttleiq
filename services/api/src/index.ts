@@ -5526,6 +5526,12 @@ function inferCadencePersonalizationFallback(conv: any, now: Date): string | nul
 function isBlockedCadencePersonalizationLine(lineRaw: string): boolean {
   const line = String(lineRaw ?? "").trim();
   if (!line) return false;
+  if (
+    /\b(photo|photos|pic|pics|picture|pictures|image|images|video|walkaround|walk around)\b/i.test(line) &&
+    /\b(helped|sent|attached|showed|shared|gave you|got those|came through|received)\b/i.test(line)
+  ) {
+    return true;
+  }
   if (/\b(meta\s*promo|promo\s*offer|caught your eye|seemed helpful)\b/i.test(line)) {
     return true;
   }

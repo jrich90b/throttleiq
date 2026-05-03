@@ -1091,6 +1091,7 @@ export async function parseCadencePersonalizationLineWithLLM(args: {
     "- If no safe/relevant detail exists, return line as empty string.",
     "- Do not invent facts.",
     "- Do not include pricing/inventory asks, links, calls-to-action, or appointment prompts.",
+    "- Do not say a photo/video/picture helped, was sent, was attached, or was received.",
     "- Avoid sensitive details (medical/legal/financial specifics).",
     "- Do not reference family milestones/events (birthday, party, graduation, wedding, anniversary) even if mentioned in passing.",
     "- Be tense-safe: if timing is uncertain or likely past, prefer past/neutral phrasing like \"went well\" or \"hope everything's going smoothly.\"",
