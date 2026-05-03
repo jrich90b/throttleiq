@@ -1297,7 +1297,13 @@ async function markDeliveredStep(
         throw new Error("visit: submit button not found");
       }
     }
-    await waitForVisitSubmitProcessed(page);
+    try {
+      await waitForVisitSubmitProcessed(page);
+    } catch (err: any) {
+      const directSubmitted = await submitVisitLogDirect(page);
+      if (!directSubmitted) throw err;
+      await waitForVisitSubmitProcessed(page);
+    }
   });
 }
 
@@ -1359,6 +1365,28 @@ async function clickVisitSubmitFallback(page: Page): Promise<boolean> {
     }
     return false;
   })()`);
+}
+
+async function submitVisitLogDirect(page: Page): Promise<boolean> {
+  return await page
+    .evaluate(() => {
+      const root = globalThis as any;
+      const submitBtn = root.document?.querySelector?.("#TLPLOG_submitBtn") as any;
+      if (submitBtn) {
+        submitBtn.value = "";
+        submitBtn.dispatchEvent(new Event("input", { bubbles: true }));
+        submitBtn.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      if (typeof root.checkAllFieldsThatAreRequired === "function" && !root.checkAllFieldsThatAreRequired()) {
+        return false;
+      }
+      if (typeof root.logForm === "function") {
+        root.logForm("", "");
+        return true;
+      }
+      return false;
+    })
+    .catch(() => false);
 }
 
 async function collectVisitSubmitFailureDetail(page: Page): Promise<string> {
