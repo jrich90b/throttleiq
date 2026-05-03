@@ -49,6 +49,16 @@
     }
   },
   {
+    "id": "objection_affordability_ride_confidence_1",
+    "text": "I'm trying to figure out if I can afford it as well as ride. I have rode a motorcycle in over 10yrs.",
+    "expected": {
+      "act_any": ["objection", "clarification"],
+      "topic_any": ["pricing", "general"],
+      "explicit_request": false,
+      "next_action_any": ["ask_one_clarifier", "empathize_then_offer_help"]
+    }
+  },
+  {
     "id": "clarification_1",
     "text": "Not sure what makes the most sense here.",
     "expected": {
