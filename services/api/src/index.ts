@@ -4162,6 +4162,13 @@ async function suppressRelatedPhones(
   }
 }
 
+async function applySmsOptOut(conv: any, event: { from?: string } | undefined) {
+  await suppressRelatedPhones(conv, event, "sms_stop", "twilio");
+  stopFollowUpCadence(conv, "opt_out");
+  closeConversation(conv, "opt_out");
+  stopRelatedCadences(conv, "opt_out", { close: true });
+}
+
 function stopRelatedCadences(
   conv: any,
   reason: string,
@@ -30259,9 +30266,7 @@ if (authToken && signature) {
   let didConfirm = false;
   if (conv.contactPreference === "call_only") {
     if (llmOptOut || isOptOut(event.body)) {
-      await suppressRelatedPhones(conv, event, "sms_stop", "twilio");
-      stopFollowUpCadence(conv, "opt_out");
-      stopRelatedCadences(conv, "opt_out");
+      await applySmsOptOut(conv, event);
     } else if (llmNotInterested || isNotInterested(event.body)) {
       stopFollowUpCadence(conv, "not_interested");
       closeConversation(conv, "not_interested");
@@ -30271,6 +30276,13 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
   if (conv.mode === "human") {
+    if (llmOptOut || isOptOut(event.body)) {
+      await applySmsOptOut(conv, event);
+      saveConversation(conv);
+      await flushConversationStore();
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
     discardPendingDrafts(conv, "new_inbound_human_mode");
     didConfirm = confirmAppointmentIfMatchesSuggested(conv, event.body, event.providerMessageId);
     if (didConfirm) {
@@ -30597,9 +30609,7 @@ if (authToken && signature) {
   }
   await resetFollowUpCadenceOnInbound(conv, event.body ?? "");
   if (llmOptOut || isOptOut(event.body)) {
-    await suppressRelatedPhones(conv, event, "sms_stop", "twilio");
-    stopFollowUpCadence(conv, "opt_out");
-    stopRelatedCadences(conv, "opt_out");
+    await applySmsOptOut(conv, event);
     const reply = "Understood - I'll stop texting.";
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
