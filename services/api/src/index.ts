@@ -27809,6 +27809,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     regenLastAskedShortList || hasActivePendingShortListPrompt(conv);
   if (
     event.provider === "twilio" &&
+    !isAffordabilityRideConfidenceObjectionText(regenShortListInboundText) &&
     regenShortListPromptInContext &&
     (regenIsAffirmative || regenShortListClarifier.hasPreferenceHint)
   ) {
