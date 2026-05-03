@@ -225,7 +225,13 @@ function evaluateCase(c: FinanceCase): { ok: boolean; detail: string } {
     scheduleResult.allow === false &&
     scheduleResult.reason === "finance_priority_schedule_prompt_guard";
 
-  const invOk = c.expectInventoryGuard ? inventoryGuarded : inventoryResult.allow === true;
+  const inventoryAllowedByNonFinancePriority =
+    inventoryResult.allow === false &&
+    c.hints?.turnAvailabilityIntent === true &&
+    inventoryResult.reason === "availability_priority_inventory_prompt_guard";
+  const invOk = c.expectInventoryGuard
+    ? inventoryGuarded
+    : inventoryResult.allow === true || inventoryAllowedByNonFinancePriority;
   const schedOk = c.expectScheduleGuard ? scheduleGuarded : scheduleResult.allow === true;
   const ok = invOk && schedOk;
 

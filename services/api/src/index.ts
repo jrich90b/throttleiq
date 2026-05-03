@@ -175,6 +175,11 @@ import {
   isPricingText,
   looksLikeTimeSelection
 } from "./domain/legacyRegexFallback.js";
+import {
+  isBlockedCadencePersonalizationLineText,
+  isManualOutboundBookingConfirmationText,
+  resolveRequestedScheduleWindowMode
+} from "./domain/workflowRegressionGuards.js";
 
 import {
   upsertConversationByLeadKey,
@@ -5525,12 +5530,7 @@ function inferCadencePersonalizationFallback(conv: any, now: Date): string | nul
 function isBlockedCadencePersonalizationLine(lineRaw: string): boolean {
   const line = String(lineRaw ?? "").trim();
   if (!line) return false;
-  if (
-    /\b(photo|photos|pic|pics|picture|pictures|image|images|video|walkaround|walk around)\b/i.test(line) &&
-    /\b(helped|sent|attached|showed|shared|gave you|got those|came through|received)\b/i.test(line)
-  ) {
-    return true;
-  }
+  if (isBlockedCadencePersonalizationLineText(line)) return true;
   if (/\b(meta\s*promo|promo\s*offer|caught your eye|seemed helpful)\b/i.test(line)) {
     return true;
   }
@@ -10940,9 +10940,7 @@ function buildRequestedWindowSlotReply(slots: any[]): string | null {
 }
 
 function hasRequestedScheduleWindowText(text: string | null | undefined): boolean {
-  return /\b(after|before|any\s*time|anytime|between|from|around|about|morning|afternoon|evening)\b/i.test(
-    String(text ?? "")
-  );
+  return resolveRequestedScheduleWindowMode(text) !== "none";
 }
 
 async function findScheduleSlotsForRequestedWindow(args: {
@@ -10983,14 +10981,9 @@ async function findScheduleSlotsForRequestedWindow(args: {
   if (!sameDayPool.length) return [];
 
   const requestedStartUtc = localPartsToUtcDate(cfg.timezone, args.requested);
-  const t = String(args.text ?? "").toLowerCase();
-  const hasAfter = /\bafter\b/.test(t);
-  const isBefore = !hasAfter && /\bbefore\b/.test(t);
-  const isAnyTime =
-    !hasAfter &&
-    !isBefore &&
-    !/\b(between|from|around|about|morning|afternoon|evening)\b/.test(t) &&
-    /\b(any\s*time|anytime)\b/.test(t);
+  const windowMode = resolveRequestedScheduleWindowMode(args.text);
+  const isBefore = windowMode === "before";
+  const isAnyTime = windowMode === "any_time";
   const cal = await getAuthedCalendarClient();
   const timeMin = new Date().toISOString();
   const timeMax = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
@@ -27449,16 +27442,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     const scheduleOfferOnly =
       (hasScheduleKeyword || hasDayToken || hasTimeToken) &&
       (asksScheduleQuestion || offersMultipleTimeChoices);
-    const explicitBookingStatement =
-      /\b(you(?:'|’)re|you are)\s+(all set|booked|confirmed)\b/i.test(lower) ||
-      /\b(booked for|confirmed for|appointment(?: is)? set|see you then|locked in)\b/i.test(lower) ||
-      /\b(?:i|we)\s*(?:'|’)?ll\s+(?:schedule|book|set(?:\s+up)?)\b[\s\S]{0,80}\b(?:for|on|at)\b/i.test(
-        lower
-      ) ||
-      /\b(?:i|we)\s+will\s+(?:schedule|book|set(?:\s+up)?)\b[\s\S]{0,80}\b(?:for|on|at)\b/i.test(
-        lower
-      ) ||
-      /\b(?:scheduled|booked|set(?:\s+up)?)\b[\s\S]{0,80}\b(?:for|on|at)\b/i.test(lower);
+    const explicitBookingStatement = isManualOutboundBookingConfirmationText(text);
 
     // Manual outbound schedule offers/questions should not auto-confirm bookings.
     if (scheduleOfferOnly && !explicitBookingStatement) {
