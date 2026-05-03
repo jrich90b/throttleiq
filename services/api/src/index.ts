@@ -11006,8 +11006,13 @@ async function findScheduleSlotsForRequestedWindow(args: {
 
   const requestedStartUtc = localPartsToUtcDate(cfg.timezone, args.requested);
   const t = String(args.text ?? "").toLowerCase();
-  const isBefore = /\bbefore\b/.test(t);
-  const isAnyTime = /\b(any\s*time|anytime)\b/.test(t);
+  const hasAfter = /\bafter\b/.test(t);
+  const isBefore = !hasAfter && /\bbefore\b/.test(t);
+  const isAnyTime =
+    !hasAfter &&
+    !isBefore &&
+    !/\b(between|from|around|about|morning|afternoon|evening)\b/.test(t) &&
+    /\b(any\s*time|anytime)\b/.test(t);
   const cal = await getAuthedCalendarClient();
   const timeMin = new Date().toISOString();
   const timeMax = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
