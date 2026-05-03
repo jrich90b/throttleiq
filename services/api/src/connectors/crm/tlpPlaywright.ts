@@ -322,7 +322,76 @@ async function clearQuickLookupFields(page: Page, step: StepFn) {
         // keep clearing known quick lookup fields
       }
     }
+    await page.evaluate(() => {
+      const doc = (globalThis as any).document;
+      const ref = doc?.querySelector?.("#QL_Ref, input[name='QL_Ref'], input[placeholder*='Ref']");
+      if (!ref) return;
+      const allInputs = Array.from(doc.querySelectorAll("input") ?? []) as any[];
+      const refIndex = allInputs.indexOf(ref);
+      const candidates = allInputs.filter((input, index) => {
+        if (refIndex >= 0 && index > refIndex) return false;
+        const rect = input.getBoundingClientRect?.();
+        const style = (globalThis as any).getComputedStyle?.(input);
+        return (
+          style?.visibility !== "hidden" &&
+          style?.display !== "none" &&
+          (rect?.width ?? 0) > 40 &&
+          (rect?.height ?? 0) > 20
+        );
+      });
+      for (const input of candidates) {
+        input.value = "";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    });
   });
+}
+
+async function findQuickLookupInput(
+  page: Page,
+  fieldLabel: "ref" | "phone",
+  selectors: string[]
+): Promise<Locator | null> {
+  const direct = await firstVisibleLocator(page, selectors);
+  if (direct || fieldLabel !== "phone") return direct;
+
+  const tagged = await page
+    .evaluate(() => {
+      const doc = (globalThis as any).document;
+      const previous = doc?.querySelector?.("[data-tlp-quick-phone-fallback='1']");
+      previous?.removeAttribute?.("data-tlp-quick-phone-fallback");
+      const ref = doc?.querySelector?.("#QL_Ref, input[name='QL_Ref'], input[placeholder*='Ref']");
+      if (!ref) return false;
+      const allInputs = Array.from(doc.querySelectorAll("input") ?? []) as any[];
+      const refIndex = allInputs.indexOf(ref);
+      if (refIndex < 2) return false;
+      const visibleBeforeRef = allInputs.slice(0, refIndex).filter(input => {
+        const rect = input.getBoundingClientRect?.();
+        const style = (globalThis as any).getComputedStyle?.(input);
+        return (
+          style?.visibility !== "hidden" &&
+          style?.display !== "none" &&
+          (rect?.width ?? 0) > 80 &&
+          (rect?.height ?? 0) > 20
+        );
+      });
+      const phone = visibleBeforeRef.find(input => /phone/i.test([input.id, input.name, input.placeholder].join(" "))) ??
+        visibleBeforeRef[visibleBeforeRef.length - 2];
+      if (!phone) return false;
+      phone.setAttribute("data-tlp-quick-phone-fallback", "1");
+      return true;
+    })
+    .catch(() => false);
+  if (!tagged) return null;
+
+  const fallback = page.locator("[data-tlp-quick-phone-fallback='1']").first();
+  try {
+    await fallback.waitFor({ state: "visible", timeout: 1200 });
+    return fallback;
+  } catch {
+    return null;
+  }
 }
 
 async function submitQuickLookupValue(
@@ -333,7 +402,7 @@ async function submitQuickLookupValue(
   step: StepFn
 ) {
   await clearQuickLookupFields(page, step);
-  const input = await firstVisibleLocator(page, selectors);
+  const input = await findQuickLookupInput(page, fieldLabel, selectors);
   if (!input) {
     throw new Error(`lead: quick lookup ${fieldLabel} field not found`);
   }
@@ -351,11 +420,7 @@ async function submitQuickLookupValue(
       );
     }, value);
   });
-  await step(`lead: submit ${fieldLabel} with Enter`, async () => {
-    await input.press("Enter");
-  });
-
-  const clicked = await step("lead: submit quick lookup fallback", async () => {
+  const clicked = await step("lead: submit quick lookup", async () => {
     const selectors = [
       "#QL_Submit",
       "#QL_Search",
@@ -396,7 +461,12 @@ async function submitQuickLookupValue(
   if (!clicked) {
     await page.waitForTimeout(500);
   } else {
-    await page.waitForTimeout(1000);
+    await page
+      .waitForLoadState("domcontentloaded", { timeout: 2500 })
+      .catch(() => {});
+    if (!page.isClosed()) {
+      await page.waitForTimeout(1000);
+    }
   }
 }
 
