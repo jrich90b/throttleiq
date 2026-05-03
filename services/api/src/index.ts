@@ -7254,6 +7254,10 @@ async function buildTestRideInventorySelectionReply(args: {
     ? formatModelLabel(latest.candidate.year, latest.candidate.model)
     : "that bike";
   const mostRecentAvailable = [...checked].reverse().find(row => row.status.available.length > 0);
+  const mostRecentNamedAlternative = [...checked]
+    .slice(0, -1)
+    .reverse()
+    .find(row => row.status.held.length === 0 && row.status.sold.length === 0);
   if (!latest) return null;
 
   if (latest.status.available.length > 0) {
@@ -7300,6 +7304,13 @@ async function buildTestRideInventorySelectionReply(args: {
   }
 
   if (latest.status.held.length > 0) {
+    if (mostRecentNamedAlternative) {
+      const alternativeLabel = formatModelLabel(
+        mostRecentNamedAlternative.candidate.year,
+        mostRecentNamedAlternative.candidate.model
+      );
+      return `That ${latestLabel} is on hold right now. The ${alternativeLabel} you mentioned may be an option for the test ride. If that works, I can line it up.`;
+    }
     return `That ${latestLabel} is on hold right now. I can show you similar options in stock or keep an eye out if it opens back up.`;
   }
   return null;
