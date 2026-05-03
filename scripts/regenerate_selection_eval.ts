@@ -202,6 +202,53 @@ const cases: Case[] = [
         body: picked.inbound?.body ?? ""
       };
     }
+  },
+  {
+    id: "keeps_latest_model_only_test_ride_alternate",
+    expected: {
+      provider: "twilio",
+      creditAdf: false,
+      dlaNoPurchaseAdf: false,
+      bodyIncludes: "2022 iron 883"
+    },
+    run: () => {
+      const picked = pickRegenerateInbound({
+        latestDraftAt: "2026-05-03T14:38:51.000Z",
+        messages: [
+          {
+            direction: "in",
+            provider: "twilio",
+            body:
+              "So looking through your inventory you don't seem to have any of the sportsters which is really the only Harley I'm interested in test riding",
+            at: "2026-05-03T13:49:57.000Z"
+          },
+          {
+            direction: "in",
+            provider: "twilio",
+            body: "I guess maybe the 2025 breakouts? Not too picky about the color for a test ride",
+            at: "2026-05-03T13:51:39.000Z"
+          },
+          {
+            direction: "in",
+            provider: "twilio",
+            body: "Or maybe that 2022 iron 883",
+            at: "2026-05-03T13:53:01.000Z"
+          },
+          {
+            direction: "out",
+            provider: "draft_ai",
+            body: "Draft body",
+            at: "2026-05-03T14:38:51.000Z"
+          }
+        ]
+      });
+      return {
+        provider: picked.inbound?.provider ?? null,
+        creditAdf: picked.latestInboundIsCreditAdf,
+        dlaNoPurchaseAdf: picked.latestInboundIsDlaNoPurchaseAdf,
+        body: picked.inbound?.body ?? ""
+      };
+    }
   }
 ];
 

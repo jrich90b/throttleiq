@@ -22,7 +22,7 @@ export type RegenerateInboundPick = {
 };
 
 const REGEN_ACTIONABLE_SIGNAL_REGEX =
-  /\?|(?:\bwhat|\bhow|\bwhen|\bwhere|\bwhich|\bwho|\bdo you\b|\bcan you\b|\bcould you\b|\bare there\b|\bany\b|\bprice\b|\bpricing\b|\bpayment\b|\bpayments\b|\bapr\b|\brate\b|\brates\b|\bavailable\b|\bin stock\b|\binventory\b|\bbike\b|\bbikes\b|\bmodel\b|\btrade\b|\bappointment\b|\bschedule\b|\bcome in\b|\btest ride\b|\bwarranty\b|\bspecial\b|\bdeal\b|\bdeals\b)/i;
+  /\?|(?:\bwhat|\bhow|\bwhen|\bwhere|\bwhich|\bwho|\bdo you\b|\bcan you\b|\bcould you\b|\bare there\b|\bany\b|\bprice\b|\bpricing\b|\bpayment\b|\bpayments\b|\bapr\b|\brate\b|\brates\b|\bavailable\b|\bin stock\b|\binventory\b|\bbike\b|\bbikes\b|\bmodel\b|\btrade\b|\bappointment\b|\bschedule\b|\bcome in\b|\btest ride\b|\bwarranty\b|\bspecial\b|\bdeal\b|\bdeals\b|\bstreet\s+glides?\b|\broad\s+glides?\b|\biron\s+883s?\b|\bsportsters?\b|\bnightsters?\b|\bbreakouts?\b|\blow\s+rider\b|\bfat\s+boy\b|\bheritage\s+classic\b|\bpan\s+america\b|\btri\s+glides?\b|\btrikes?\b)/i;
 const REGEN_LOW_SIGNAL_FOLLOWUP_REGEX =
   /^(?:\s*(?:ok(?:ay)?|k|kk|got it|sounds good|perfect|cool|thanks?|thank you|thx|ty|lol|haha|lmao|yall could hire me\b).*)$/i;
 
