@@ -27451,7 +27451,14 @@ app.post("/conversations/:id/send", async (req, res) => {
       (asksScheduleQuestion || offersMultipleTimeChoices);
     const explicitBookingStatement =
       /\b(you(?:'|’)re|you are)\s+(all set|booked|confirmed)\b/i.test(lower) ||
-      /\b(booked for|confirmed for|appointment(?: is)? set|see you then|locked in)\b/i.test(lower);
+      /\b(booked for|confirmed for|appointment(?: is)? set|see you then|locked in)\b/i.test(lower) ||
+      /\b(?:i|we)\s*(?:'|’)?ll\s+(?:schedule|book|set(?:\s+up)?)\b[\s\S]{0,80}\b(?:for|on|at)\b/i.test(
+        lower
+      ) ||
+      /\b(?:i|we)\s+will\s+(?:schedule|book|set(?:\s+up)?)\b[\s\S]{0,80}\b(?:for|on|at)\b/i.test(
+        lower
+      ) ||
+      /\b(?:scheduled|booked|set(?:\s+up)?)\b[\s\S]{0,80}\b(?:for|on|at)\b/i.test(lower);
 
     // Manual outbound schedule offers/questions should not auto-confirm bookings.
     if (scheduleOfferOnly && !explicitBookingStatement) {
@@ -27554,6 +27561,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     let requested = parseRequestedDayTime(parseSource, schedulerTimezone);
 
     const confirmCue =
+      explicitBookingStatement ||
       /\b(see you|all set|confirmed|booked|sounds good|perfect|that works|you(?:'|’)re set|you are set)\b/i.test(
         lower
       );
