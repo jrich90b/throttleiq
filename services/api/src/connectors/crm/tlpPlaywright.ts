@@ -207,6 +207,18 @@ async function waitForLeadResultRow(page: Page, searchText: string, step: StepFn
       throw new Error(`lead: quick lookup page closed while waiting for ${searchLabel} ${searchText}`);
     }
     const frames = page.frames();
+    if (searchLabel === "ref") {
+      const checkboxSelector = `input.notepad_massLeads[value="${searchText}"], #notepadCheckBox_${searchText}`;
+      const checkboxLocators = [page.locator(checkboxSelector).first(), ...frames.map(frame => frame.locator(checkboxSelector).first())];
+      for (const checkbox of checkboxLocators) {
+        try {
+          await checkbox.waitFor({ state: "visible", timeout: 1500 });
+          return checkbox.locator("xpath=ancestor::tr[1]");
+        } catch (err: any) {
+          lastError = err?.message ?? String(err);
+        }
+      }
+    }
     const frameLocators = frames.flatMap(frame => [
       frame.locator("tr").filter({ hasText: refPattern }).first(),
       frame.locator('[role="row"]').filter({ hasText: refPattern }).first()
@@ -458,6 +470,24 @@ async function submitQuickLookupValue(
       );
     }, value);
   });
+
+  const directSubmitted = await step("lead: submit quick lookup direct", async () => {
+    return await page.evaluate(() => {
+      const root = globalThis as any;
+      if (typeof root.submitQuickLead !== "function") return false;
+      root.submitQuickLead();
+      return true;
+    });
+  });
+  if (directSubmitted) {
+    await page
+      .waitForLoadState("domcontentloaded", { timeout: 2500 })
+      .catch(() => {});
+    page = page.isClosed() ? resolveOpenPageFromContext(context) : page;
+    if (!page.isClosed()) await page.waitForTimeout(1000);
+    return page;
+  }
+
   const clicked = await step("lead: submit quick lookup", async () => {
     const selectors = [
       "#mainLeadSubmit_btn",
