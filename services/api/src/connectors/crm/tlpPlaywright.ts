@@ -789,6 +789,32 @@ async function bestEffortSelect(
   return !!handled;
 }
 
+async function bestEffortSelectFirstNonEmpty(
+  page: Page,
+  step: StepFn,
+  label: string,
+  selectors: string[]
+) {
+  const field = await firstVisibleLocator(page, selectors);
+  if (!field) return false;
+
+  const handled = await step(`visit: select first ${label}`, async () => {
+    const tag = (await field.evaluate((el: any) => String(el?.tagName ?? "").toLowerCase()).catch(() => "")) || "";
+    if (tag !== "select") return false;
+    return await field.evaluate((el: any) => {
+      const select = el as any;
+      const options = Array.from(select.options ?? []);
+      const option = (options as any[]).find(o => String(o?.value ?? "").trim() || String(o?.textContent ?? "").trim());
+      if (!option) return false;
+      select.value = option.value;
+      select.dispatchEvent(new Event("input", { bubbles: true }));
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      return true;
+    });
+  });
+  return !!handled;
+}
+
 async function bestEffortCheckFieldByText(
   page: Page,
   step: StepFn,
@@ -946,6 +972,7 @@ async function fillDealershipVisitDeliveredDetails(
       "#TLPLOG_year",
       "#TLPLOG_model_year",
       "#vehicle_year",
+      "select[placeholder*='Year']",
       "select[name*='year']"
     ]);
     if (!yearSelected) {
@@ -954,6 +981,7 @@ async function fillDealershipVisitDeliveredDetails(
         "#TLPLOG_year",
         "#TLPLOG_model_year",
         "#vehicle_year",
+        "input[placeholder*='Year']",
         "input[name*='year']"
       ]);
     }
@@ -964,6 +992,8 @@ async function fillDealershipVisitDeliveredDetails(
     "#TLPLOG_make",
     "#TLPLOG_manufacturer",
     "#vehicle_make",
+    "select[placeholder*='Make']",
+    "input[placeholder*='Make']",
     "select[name*='make']",
     "select[name*='manufacturer']"
   ]);
@@ -971,8 +1001,19 @@ async function fillDealershipVisitDeliveredDetails(
   await bestEffortSelect(page, step, "product category", details.productCategoryValue ?? "MOTORCYCLES", [
     "#TLPLOG_product_category",
     "#product_category",
+    "select[placeholder*='Category']",
     "select[name*='product_category']",
     "select[name*='category']"
+  ]);
+
+  await bestEffortSelect(page, step, "product type", "Motorcycles", [
+    "#TLPLOG_product_type",
+    "#TLPLOG_vehicle_type",
+    "#product_type",
+    "#vehicle_type",
+    "select[name*='product_type']",
+    "select[name*='vehicle_type']",
+    "select[name*='type']"
   ]);
 
   await bestEffortSelect(page, step, "model", details.model, [
@@ -981,6 +1022,8 @@ async function fillDealershipVisitDeliveredDetails(
     "#TLPLOG_motorcycle_model",
     "#TLPLOG_product_model",
     "#vehicle_model",
+    "select[placeholder*='Model']",
+    "input[placeholder*='Model']",
     "select[name*='model']",
     "input[name*='model']"
   ]);
@@ -1021,6 +1064,20 @@ async function fillDealershipVisitDeliveredDetails(
     "select[name*='salesperson']",
     "select[name*='salesman']",
     "select[name*='owner']"
+  ]);
+
+  await bestEffortSelect(page, step, "split deal", "No", [
+    "#TLPLOG_split_deal",
+    "#split_deal",
+    "select[name*='split']"
+  ]);
+
+  await bestEffortSelectFirstNonEmpty(page, step, "salesperson role", [
+    "#TLPLOG_salesperson_role",
+    "#TLPLOG_role",
+    "#salesperson_role",
+    "select[name*='salesperson_role']",
+    "select[name*='role']"
   ]);
 }
 
@@ -1121,6 +1178,59 @@ async function clickVisitSubmitFallback(page: Page): Promise<boolean> {
   })()`);
 }
 
+async function collectVisitSubmitFailureDetail(page: Page): Promise<string> {
+  return await page
+    .evaluate(() => {
+      const root = globalThis as any;
+      const doc = root.document;
+      const isVisible = (el: any) => {
+        if (!el) return false;
+        const style = root.getComputedStyle?.(el);
+        const rect = el.getBoundingClientRect?.();
+        return (
+          style?.visibility !== "hidden" &&
+          style?.display !== "none" &&
+          ((rect?.width ?? 0) > 0 || (rect?.height ?? 0) > 0)
+        );
+      };
+      const normalize = (value: any) => String(value ?? "").replace(/\s+/g, " ").trim();
+      const messages = new Set<string>();
+
+      const messageNodes = Array.from(
+        doc?.querySelectorAll?.(
+          ".error,.errors,.invalid-feedback,.validation-error,.field-validation-error,.help-block,.alert,.alert-danger,.has-error,.is-invalid"
+        ) ?? []
+      );
+      for (const node of messageNodes as any[]) {
+        if (!isVisible(node)) continue;
+        const text = normalize(node.textContent);
+        if (text && /(required|invalid|please|missing|select|enter|error)/i.test(text)) messages.add(text);
+      }
+
+      const controls = Array.from(doc?.querySelectorAll?.("input,select,textarea") ?? []);
+      for (const control of controls as any[]) {
+        if (!isVisible(control)) continue;
+        const validationMessage = normalize(control.validationMessage);
+        if (validationMessage) messages.add(validationMessage);
+        const required = control.required || control.getAttribute?.("aria-required") === "true";
+        const value = normalize(control.value);
+        if (required && !value) {
+          const label =
+            normalize(control.getAttribute?.("aria-label")) ||
+            normalize(control.getAttribute?.("placeholder")) ||
+            normalize(control.name) ||
+            normalize(control.id) ||
+            "required field";
+          messages.add(`${label} is required`);
+        }
+      }
+
+      if (messages.size) return Array.from(messages).slice(0, 5).join(" | ");
+      return "";
+    })
+    .catch(() => "");
+}
+
 async function waitForVisitSubmitProcessed(page: Page): Promise<void> {
   try {
     await page.waitForLoadState("networkidle", { timeout: SHORT_TIMEOUT_MS });
@@ -1136,10 +1246,13 @@ async function waitForVisitSubmitProcessed(page: Page): Promise<void> {
     .isVisible()
     .catch(() => false);
   if (stillVisible || validationVisible) {
+    const detail = await collectVisitSubmitFailureDetail(page);
     throw new Error(
-      validationVisible
-        ? "visit: submit appears blocked by validation"
-        : "visit: submit did not close or advance the log form"
+      detail
+        ? `visit: submit blocked or did not close; ${detail}`
+        : validationVisible
+          ? "visit: submit appears blocked by validation"
+          : "visit: submit did not close or advance the log form"
     );
   }
 }
