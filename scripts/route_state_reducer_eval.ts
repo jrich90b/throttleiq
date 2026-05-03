@@ -154,6 +154,19 @@ const testRideBikeSelectionCases: TestRideBikeSelectionCase[] = [
     expected: false
   },
   {
+    id: "keeps_test_ride_context_on_alternate_model_selection",
+    input: {
+      inboundText: "Or maybe that 2022 iron 883",
+      lastOutboundText:
+        "Here’s our current inventory so you can pick an in-stock bike. Once you pick one, I can line up the test ride right away.",
+      dialogState: "test_ride_init",
+      classificationBucket: "test_ride",
+      classificationCta: "schedule_test_ride",
+      mentionedModelCount: 1
+    },
+    expected: true
+  },
+  {
     id: "does_not_apply_without_test_ride_context",
     input: {
       inboundText: "2026 Street Glide 3 Limited black trim",

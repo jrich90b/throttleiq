@@ -7077,6 +7077,188 @@ function findMentionedModels(text: string): string[] {
   return found;
 }
 
+type MentionedModelCandidate = {
+  model: string;
+  year: string | null;
+  body: string;
+  index: number;
+};
+
+type InventoryMatchStatus = {
+  available: InventoryFeedItem[];
+  held: InventoryFeedItem[];
+  sold: InventoryFeedItem[];
+};
+
+function findMentionedModelCandidates(text: string): MentionedModelCandidate[] {
+  const body = String(text ?? "");
+  const models = findMentionedModels(body);
+  if (!models.length) return [];
+  const normalizedBody = normalizeModelText(body);
+  const year = extractYearSingle(body.toLowerCase());
+  const candidates = models.map(model => {
+    const normalizedModel = normalizeModelText(model);
+    return {
+      model,
+      year: year ? String(year) : null,
+      body,
+      index: normalizedModel ? normalizedBody.indexOf(normalizedModel) : -1
+    };
+  });
+  candidates.sort((a, b) => {
+    const ai = a.index >= 0 ? a.index : Number.MAX_SAFE_INTEGER;
+    const bi = b.index >= 0 ? b.index : Number.MAX_SAFE_INTEGER;
+    return ai - bi;
+  });
+  return candidates;
+}
+
+function recentInboundBodiesSinceLastOutbound(
+  conv: Conversation,
+  currentEvent: { body?: string | null; receivedAt?: string | null }
+): string[] {
+  const currentAtMs = new Date(String(currentEvent.receivedAt ?? "")).getTime();
+  const messages = conv.messages ?? [];
+  const eligibleMessages = messages.filter(m => {
+    if (!Number.isFinite(currentAtMs)) return true;
+    const atMs = new Date(String(m.at ?? "")).getTime();
+    return !Number.isFinite(atMs) || atMs <= currentAtMs;
+  });
+  let lastOutboundIdx = -1;
+  for (let i = eligibleMessages.length - 1; i >= 0; i -= 1) {
+    if (eligibleMessages[i]?.direction === "out") {
+      lastOutboundIdx = i;
+      break;
+    }
+  }
+  const bodies = eligibleMessages
+    .slice(lastOutboundIdx + 1)
+    .filter(m => m.direction === "in" && typeof m.body === "string" && m.body.trim())
+    .map(m => String(m.body));
+  const currentBody = String(currentEvent.body ?? "").trim();
+  if (currentBody && !bodies.some(body => body.trim() === currentBody)) {
+    bodies.push(currentBody);
+  }
+  return bodies.slice(-5);
+}
+
+function isTestRideConversationContext(
+  conv: Conversation,
+  lastOutboundText: string,
+  inboundText: string
+): boolean {
+  const state = getDialogState(conv);
+  const bucket = String(conv.classification?.bucket ?? "").toLowerCase();
+  const cta = String(conv.classification?.cta ?? "").toLowerCase();
+  const recentText = `${lastOutboundText}\n${inboundText}`.toLowerCase();
+  return (
+    state.startsWith("test_ride") ||
+    bucket === "test_ride" ||
+    cta.includes("test_ride") ||
+    /\b(test ride|ride one|line up .*ride|set up .*ride)\b/.test(recentText)
+  );
+}
+
+function classifyInventoryMatches(
+  matches: InventoryFeedItem[],
+  holds: Record<string, unknown> | null | undefined,
+  solds: Record<string, unknown> | null | undefined
+): InventoryMatchStatus {
+  const available: InventoryFeedItem[] = [];
+  const held: InventoryFeedItem[] = [];
+  const sold: InventoryFeedItem[] = [];
+  for (const item of matches) {
+    const holdKey = normalizeInventoryHoldKey(item.stockId, item.vin);
+    const soldKey = normalizeInventorySoldKey(item.stockId, item.vin);
+    if (soldKey && solds?.[soldKey]) {
+      sold.push(item);
+    } else if (holdKey && holds?.[holdKey]) {
+      held.push(item);
+    } else {
+      available.push(item);
+    }
+  }
+  return { available, held, sold };
+}
+
+async function buildTestRideInventorySelectionReply(args: {
+  conv: Conversation;
+  currentEvent: { body?: string | null; receivedAt?: string | null };
+  lastOutboundText: string;
+}): Promise<string | null> {
+  const inboundText = String(args.currentEvent.body ?? "");
+  const bodies = recentInboundBodiesSinceLastOutbound(args.conv, args.currentEvent);
+  const recentInboundText = bodies.join("\n");
+  if (!isTestRideConversationContext(args.conv, args.lastOutboundText, `${recentInboundText}\n${inboundText}`)) {
+    return null;
+  }
+  const candidates = bodies.flatMap(body => findMentionedModelCandidates(body));
+  if (!candidates.length) return null;
+
+  const holds = await listInventoryHolds();
+  const solds = await listInventorySolds();
+  const checked: Array<{ candidate: MentionedModelCandidate; status: InventoryMatchStatus }> = [];
+  for (const candidate of candidates) {
+    const matches = await findInventoryMatches({ year: candidate.year, model: candidate.model });
+    checked.push({ candidate, status: classifyInventoryMatches(matches, holds, solds) });
+  }
+
+  const latest = checked[checked.length - 1];
+  const latestLabel = latest
+    ? formatModelLabel(latest.candidate.year, latest.candidate.model)
+    : "that bike";
+  const mostRecentAvailable = [...checked].reverse().find(row => row.status.available.length > 0);
+  if (!latest) return null;
+
+  if (latest.status.available.length > 0) {
+    const selectedYear = latest.status.available[0]?.year ?? latest.candidate.year;
+    args.conv.lead = args.conv.lead ?? {};
+    args.conv.lead.vehicle = args.conv.lead.vehicle ?? {};
+    args.conv.lead.vehicle.model = latest.candidate.model;
+    if (selectedYear) args.conv.lead.vehicle.year = String(selectedYear);
+    args.conv.inventoryContext = {
+      ...(args.conv.inventoryContext ?? {}),
+      model: latest.candidate.model,
+      year: selectedYear ? String(selectedYear) : undefined,
+      updatedAt: nowIso()
+    };
+    setDialogState(args.conv, "test_ride_init");
+    return `Got it — I can line up the test ride on the ${formatModelLabel(
+      selectedYear ? String(selectedYear) : latest.candidate.year,
+      latest.candidate.model
+    )}. What day and time works best?`;
+  }
+
+  if (mostRecentAvailable) {
+    const availableYear = mostRecentAvailable.status.available[0]?.year ?? mostRecentAvailable.candidate.year;
+    args.conv.lead = args.conv.lead ?? {};
+    args.conv.lead.vehicle = args.conv.lead.vehicle ?? {};
+    args.conv.lead.vehicle.model = mostRecentAvailable.candidate.model;
+    if (availableYear) args.conv.lead.vehicle.year = String(availableYear);
+    args.conv.inventoryContext = {
+      ...(args.conv.inventoryContext ?? {}),
+      model: mostRecentAvailable.candidate.model,
+      year: availableYear ? String(availableYear) : undefined,
+      updatedAt: nowIso()
+    };
+    setDialogState(args.conv, "test_ride_init");
+    const availableLabel = formatModelLabel(
+      availableYear ? String(availableYear) : mostRecentAvailable.candidate.year,
+      mostRecentAvailable.candidate.model
+    );
+    const unavailableLine =
+      latest.status.held.length > 0
+        ? `That ${latestLabel} is on hold right now`
+        : `I’m not seeing the ${latestLabel} available for a test ride right now`;
+    return `${unavailableLine}, but we do have a ${availableLabel} available. If that works, I can line up the test ride.`;
+  }
+
+  if (latest.status.held.length > 0) {
+    return `That ${latestLabel} is on hold right now. I can show you similar options in stock or keep an eye out if it opens back up.`;
+  }
+  return null;
+}
+
 type AvailabilityPreferenceHint = {
   model?: string | null;
   year?: string | number | null;
@@ -12690,10 +12872,8 @@ async function resolveDeterministicAvailabilityReply(args: {
   }
   const holds = await listInventoryHolds();
   const solds = await listInventorySolds();
-  const availableMatches = matches.filter(m => {
-    const key = normalizeInventoryHoldKey(m.stockId, m.vin);
-    return key ? !holds?.[key] && !solds?.[key] : true;
-  });
+  const matchStatus = classifyInventoryMatches(matches, holds, solds);
+  const availableMatches = matchStatus.available;
   const leadStockId = conv.lead?.vehicle?.stockId ?? null;
   const leadVin = conv.lead?.vehicle?.vin ?? null;
   const availableMatchesForCount = otherInventoryRequest
@@ -12701,6 +12881,11 @@ async function resolveDeterministicAvailabilityReply(args: {
         m => !((leadStockId && m.stockId === leadStockId) || (leadVin && m.vin === leadVin))
       )
     : availableMatches;
+  const heldMatchesForCount = otherInventoryRequest
+    ? matchStatus.held.filter(
+        m => !((leadStockId && m.stockId === leadStockId) || (leadVin && m.vin === leadVin))
+      )
+    : matchStatus.held;
   const imageMatch = await findInventoryImageMatch({
     inboundMediaUrls: args.inboundMediaUrls,
     candidates: availableMatchesForCount
@@ -12778,7 +12963,9 @@ async function resolveDeterministicAvailabilityReply(args: {
   }
   if (otherInventoryRequest) {
     if (count <= 0) {
-      reply = `Right now that’s the only ${inventoryLabel} we have in stock. ${paintTrimPrompt}`;
+      reply = heldMatchesForCount.length
+        ? `The other ${inventoryLabel} I’m seeing is on hold right now. ${paintTrimPrompt}`
+        : `Right now that’s the only ${inventoryLabel} we have in stock. ${paintTrimPrompt}`;
     } else if (count === 1) {
       reply = `Yes — we have one other ${inventoryLabel} in stock. ${paintTrimPrompt}`;
     } else {
@@ -12788,9 +12975,11 @@ async function resolveDeterministicAvailabilityReply(args: {
     }
   } else {
     if (count <= 0) {
-      reply = `I’m not seeing ${inventoryLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}${
-        noStockColorFinishPrompt ? ` ${noStockColorFinishPrompt}` : ""
-      }`;
+      reply = heldMatchesForCount.length
+        ? `That ${inventoryLabel} is on hold right now. I can show you similar options in stock or keep an eye out if it opens back up.`
+        : `I’m not seeing ${inventoryLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()}${
+            noStockColorFinishPrompt ? ` ${noStockColorFinishPrompt}` : ""
+          }`;
     } else if (count === 1) {
       const singleLine = singleMatch ? formatInventoryLine(singleMatch) : "";
       const inStockSingleCta = "Want to come check it out?";
@@ -28610,6 +28799,20 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       classificationCta: conv.classification?.cta,
       mentionedModelCount: regenMentionedModels.length
     });
+    const regenTestRideInventoryReply =
+      regenMentionedModels.length > 0
+        ? await buildTestRideInventorySelectionReply({
+            conv,
+            currentEvent: event,
+            lastOutboundText: lastOutboundForTrade
+          })
+        : null;
+    if (regenTestRideInventoryReply) {
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(regenTestRideInventoryReply);
+      }
+      return respondWithSmsRegeneratedDraft(regenTestRideInventoryReply);
+    }
     if (regenTestRideBikeSelection) {
       const selectedModel = regenMentionedModels[0] ?? conv.lead?.vehicle?.model ?? conv.inventoryContext?.model ?? null;
       const selectedYear = extractYearSingle(String(event.body ?? "").toLowerCase()) ?? conv.lead?.vehicle?.year ?? conv.inventoryContext?.year ?? null;
@@ -34964,6 +35167,27 @@ if (authToken && signature) {
     classificationCta: conv.classification?.cta,
     mentionedModelCount: mentionedModelsEarly.length
   });
+  const testRideInventoryReply =
+    event.provider === "twilio" && mentionedModelsEarly.length > 0
+      ? await buildTestRideInventorySelectionReply({
+          conv,
+          currentEvent: event,
+          lastOutboundText
+        })
+      : null;
+  if (event.provider === "twilio" && testRideInventoryReply) {
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, testRideInventoryReply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, testRideInventoryReply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      testRideInventoryReply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (event.provider === "twilio" && testRideBikeSelection) {
     const selectedModel = mentionedModelsEarly[0] ?? conv.lead?.vehicle?.model ?? conv.inventoryContext?.model ?? null;
     const selectedYear = extractYearSingle(textLower) ?? conv.lead?.vehicle?.year ?? conv.inventoryContext?.year ?? null;
