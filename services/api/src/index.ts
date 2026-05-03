@@ -21,7 +21,6 @@ import {
   generateEmpathySupportReplyWithLLM,
   generateWebFallbackReplyWithLLM,
   classifyCadenceContextWithLLM,
-  parseCadencePersonalizationLineWithLLM,
   classifyEmpathyNeedWithLLM,
   classifyComplimentWithLLM,
   parseAffectWithLLM,
@@ -5603,40 +5602,13 @@ async function getCadencePersonalizationLine(
     return null;
   }
 
-  const parsed = await parseCadencePersonalizationLineWithLLM({ history });
-  const minConfidence = Number(process.env.LLM_CADENCE_PERSONALIZATION_CONFIDENCE_MIN ?? 0.7);
-  let line = String(parsed?.line ?? "").replace(/\s+/g, " ").trim();
-  const confidence = typeof parsed?.confidence === "number" ? parsed.confidence : null;
-  if (line && confidence != null && confidence < minConfidence) {
+  let line = inferCadencePersonalizationFallback(conv, now) ?? "";
+  if (line && isBlockedCadencePersonalizationLine(line)) {
     line = "";
-  }
-  if (line) {
-    const historyText = history.map(h => String(h.body ?? "")).join(" ").toLowerCase();
-    const latestInboundMs = Date.parse(latestInboundAt);
-    const isLikelyPastWindow =
-      Number.isFinite(latestInboundMs) && now.getTime() - latestInboundMs > 10 * 24 * 60 * 60 * 1000;
-    const hasPastCompletionCue =
-      /\b(yesterday|last night|last week|last month|for two weeks|for 2 weeks|be back|i(?:'|’)ll be back|i will be back|finished|done|completed)\b/.test(
-        historyText
-      );
-    if ((isLikelyPastWindow || hasPastCompletionCue) && /\bgoing well\b/i.test(line)) {
-      line = line
-        .replace(/\bis going well\b/gi, "went well")
-        .replace(/\bare going well\b/gi, "went well")
-        .replace(/\bgoing well\b/gi, "went well");
-    }
-  }
-  if (line) {
-    if (isBlockedCadencePersonalizationLine(line)) {
-      line = "";
-    }
   }
   if (line) {
     if (!/[.!?]$/.test(line)) line = `${line}.`;
     if (line.length > 140) line = `${line.slice(0, 139).trimEnd()}.`;
-  }
-  if (!line) {
-    line = inferCadencePersonalizationFallback(conv, now) ?? "";
   }
 
   cadence.personalizationCacheKey = cacheKey;
