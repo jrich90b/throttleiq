@@ -4080,6 +4080,17 @@ function pauseRelatedCadencesOnInbound(conv: any, event?: { from?: string }) {
   }
 }
 
+function isExplicitReadyAfterHealthRecoveryText(text: string | null | undefined): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t) return false;
+  return (
+    /\b(i'?m|im|we'?re|were)\s+(ready|good to go|able to come|able to ride)\b/.test(t) ||
+    /\bready\s+(to|for)\s+(come in|stop in|stop by|ride|test ride|demo ride|schedule|book)\b/.test(t) ||
+    /\b(can we|can i|could we|could i|let'?s)\s+(schedule|book|set up|line up)\b/.test(t) ||
+    /\b(schedule|book|set up|line up)\s+(a|the)?\s*(test ride|demo ride|appointment|time)\b/.test(t)
+  );
+}
+
 async function resetFollowUpCadenceOnInbound(conv: any, inboundText: string) {
   const cadence = conv?.followUpCadence;
   if (!cadence || cadence.status !== "active") return;
@@ -4105,6 +4116,23 @@ async function resetFollowUpCadenceOnInbound(conv: any, inboundText: string) {
   const cfg = await getSchedulerConfigHot();
   const tz = cfg.timezone || "America/New_York";
   const anchor = nowIso();
+  const healthRecoveryPaused =
+    cadence.pauseReason === "health_recovery_delay" ||
+    String(conv?.followUp?.reason ?? "").toLowerCase() === "health_recovery_delay";
+  if (healthRecoveryPaused && !isExplicitReadyAfterHealthRecoveryText(inbound)) {
+    const recoveryDays = Math.max(1, Number(process.env.HEALTH_RECOVERY_DELAY_DAYS ?? 21) || 21);
+    const fallbackUntil = computeFollowUpDueAt(anchor, recoveryDays, tz);
+    const currentUntil = cadence.pausedUntil ? new Date(cadence.pausedUntil) : null;
+    cadence.pausedUntil =
+      currentUntil && !Number.isNaN(currentUntil.getTime()) && currentUntil > new Date()
+        ? currentUntil.toISOString()
+        : fallbackUntil;
+    cadence.pauseReason = "health_recovery_delay";
+    cadence.nextDueAt = cadence.pausedUntil;
+    setFollowUpMode(conv, "active", "health_recovery_delay");
+    setDialogState(conv, "followup_paused");
+    return;
+  }
   cadence.anchorAt = anchor;
   cadence.stepIndex = 0;
   cadence.nextDueAt = computeFollowUpDueAt(anchor, FOLLOW_UP_DAY_OFFSETS[0], tz);
