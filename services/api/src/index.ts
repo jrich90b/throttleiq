@@ -5518,6 +5518,9 @@ function isBlockedCadencePersonalizationLine(lineRaw: string): boolean {
   if (/\bhope\b[\s\S]{0,80}\b(?:test ride|appointment)\b[\s\S]{0,80}\b(?:works out|plans?)\b/i.test(line)) {
     return true;
   }
+  if (/\bhope\b[\s\S]{0,80}\b(getting back into riding|back into riding|riding after)\b/i.test(line)) {
+    return true;
+  }
   return false;
 }
 
@@ -27826,6 +27829,16 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return respondWithSmsRegeneratedDraft(reply);
   }
 
+  if (isAffordabilityRideConfidenceObjectionText(event.body ?? "")) {
+    const reply = buildAffordabilityRideConfidenceObjectionReply();
+    setDialogState(conv, "pricing_init");
+    setFollowUpMode(conv, "active", "affordability_ride_confidence_objection");
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply);
+  }
+
   const dealerProfile = await getDealerProfileHot();
   const cadenceRegeneratedDraft = await buildCadenceRegeneratedDraft(conv, dealerProfile, lastDraft);
   const cadenceLastSentAtMs = new Date(String(conv?.followUpCadence?.lastSentAt ?? "")).getTime();
@@ -28930,16 +28943,6 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       return respondWithEmailRegeneratedDraft(regenReply);
     }
     return respondWithSmsRegeneratedDraft(regenReply);
-  }
-
-  if (isAffordabilityRideConfidenceObjectionText(event.body ?? "")) {
-    const reply = buildAffordabilityRideConfidenceObjectionReply();
-    setDialogState(conv, "pricing_init");
-    setFollowUpMode(conv, "active", "affordability_ride_confidence_objection");
-    if (channel === "email") {
-      return respondWithEmailRegeneratedDraft(reply);
-    }
-    return respondWithSmsRegeneratedDraft(reply);
   }
 
   if (isServiceRecordsRequest(event.body)) {
