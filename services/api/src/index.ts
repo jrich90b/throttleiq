@@ -10961,6 +10961,98 @@ function buildRequestedWindowSlotReply(slots: any[]): string | null {
   return null;
 }
 
+function hasRequestedScheduleWindowText(text: string | null | undefined): boolean {
+  return /\b(after|before|any\s*time|anytime|between|from|around|about|morning|afternoon|evening)\b/i.test(
+    String(text ?? "")
+  );
+}
+
+async function findScheduleSlotsForRequestedWindow(args: {
+  conv: any;
+  requested: NonNullable<ReturnType<typeof parseRequestedDayTime>>;
+  text: string | null | undefined;
+  appointmentType: string;
+}): Promise<any[]> {
+  if (!hasRequestedScheduleWindowText(args.text)) return [];
+  const cfg = await getSchedulerConfigHot();
+  const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
+  const durationMinutes =
+    appointmentTypes[args.appointmentType]?.durationMinutes ??
+    appointmentTypes.inventory_visit?.durationMinutes ??
+    60;
+  const preferredSalespeople = getPreferredSalespeopleForConv(cfg, args.conv);
+  const salespeople = cfg.salespeople ?? [];
+  if (!preferredSalespeople.length || !salespeople.length) return [];
+
+  const candidatesByDay = generateCandidateSlots(cfg, new Date(), durationMinutes, 14);
+  const requestedDateKey = `${args.requested.year}-${String(args.requested.month).padStart(2, "0")}-${String(
+    args.requested.day
+  ).padStart(2, "0")}`;
+  const sameLocalDate = (d: Date) => {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: cfg.timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).formatToParts(d);
+    const map: Record<string, string> = {};
+    for (const p of parts) {
+      if (p.type !== "literal") map[p.type] = p.value;
+    }
+    return `${map.year}-${map.month}-${map.day}` === requestedDateKey;
+  };
+  const sameDayPool = candidatesByDay.filter(d => sameLocalDate(d.dayStart));
+  if (!sameDayPool.length) return [];
+
+  const requestedStartUtc = localPartsToUtcDate(cfg.timezone, args.requested);
+  const t = String(args.text ?? "").toLowerCase();
+  const isBefore = /\bbefore\b/.test(t);
+  const isAnyTime = /\b(any\s*time|anytime)\b/.test(t);
+  const cal = await getAuthedCalendarClient();
+  const timeMin = new Date().toISOString();
+  const timeMax = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+
+  for (const salespersonId of preferredSalespeople) {
+    const sp = salespeople.find((p: any) => p.id === salespersonId);
+    if (!sp) continue;
+    const fb = await queryFreeBusy(cal, [sp.calendarId], timeMin, timeMax, cfg.timezone);
+    const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any;
+    const expanded = expandBusyBlocks(busy, cfg.minGapBetweenAppointmentsMinutes ?? 60);
+    const available = sameDayPool
+      .flatMap(d => d.candidates)
+      .filter(c => {
+        if (expanded.some(b => c.start < b.end && b.start < c.end)) return false;
+        if (isAnyTime) return true;
+        if (isBefore) return c.start.getTime() <= requestedStartUtc.getTime();
+        return c.start.getTime() >= requestedStartUtc.getTime();
+      })
+      .sort((a, b) => a.start.getTime() - b.start.getTime());
+    const picked: any[] = [];
+    for (const c of available) {
+      if (picked.length >= 2) break;
+      const tooClose = picked.some((r: any) => {
+        const rs = new Date(new Date(r.start).getTime() - (cfg.minGapBetweenAppointmentsMinutes ?? 60) * 60_000);
+        const re = new Date(new Date(r.end).getTime() + (cfg.minGapBetweenAppointmentsMinutes ?? 60) * 60_000);
+        return c.start < re && rs < c.end;
+      });
+      if (!tooClose) picked.push(c);
+    }
+    if (picked.length > 0) {
+      return picked.map(s => ({
+        salespersonId: sp.id,
+        salespersonName: sp.name,
+        calendarId: sp.calendarId,
+        start: s.start.toISOString(),
+        end: s.end.toISOString(),
+        startLocal: formatSlotLocal(s.start.toISOString(), cfg.timezone),
+        endLocal: formatSlotLocal(s.end.toISOString(), cfg.timezone),
+        appointmentType: args.appointmentType
+      }));
+    }
+  }
+  return [];
+}
+
 function hasScheduleTimeSignal(text: string | null | undefined): boolean {
   const t = String(text ?? "").trim();
   if (!t) return false;
@@ -29671,6 +29763,22 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
           conv,
           isTestRideDialogState(getDialogState(conv)) ? "test_ride_init" : "schedule_request"
         );
+        const appointmentType = isTestRideDialogState(getDialogState(conv)) ? "test_ride" : "inventory_visit";
+        const windowSlots = await findScheduleSlotsForRequestedWindow({
+          conv,
+          requested: parsedRequestedDayTime,
+          text: event.body,
+          appointmentType
+        }).catch(e => {
+          console.log("[regen] requested window slot lookup failed", e?.message ?? e);
+          return [];
+        });
+        const windowReply = buildRequestedWindowSlotReply(windowSlots);
+        if (windowReply) {
+          setLastSuggestedSlots(conv, windowSlots);
+          setDialogState(conv, appointmentType === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent");
+          return respondWithSmsRegeneratedDraft(windowReply);
+        }
         const requestedPhrase = formatRequestedDayTimePhrase(parsedRequestedDayTime, regenTz);
         const daySpecificReply =
           availableMatches.length > 0
