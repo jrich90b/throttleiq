@@ -7123,11 +7123,38 @@ function recentInboundBodiesSinceLastOutbound(
 ): string[] {
   const currentAtMs = new Date(String(currentEvent.receivedAt ?? "")).getTime();
   const messages = conv.messages ?? [];
-  const eligibleMessages = messages.filter(m => {
-    if (!Number.isFinite(currentAtMs)) return true;
-    const atMs = new Date(String(m.at ?? "")).getTime();
-    return !Number.isFinite(atMs) || atMs <= currentAtMs;
-  });
+  const currentBody = String(currentEvent.body ?? "").trim();
+  let currentIdx = -1;
+  if (currentBody) {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const m = messages[i];
+      if (m?.direction !== "in") continue;
+      if (String(m.body ?? "").trim() !== currentBody) continue;
+      const atMs = new Date(String(m.at ?? "")).getTime();
+      if (Number.isFinite(currentAtMs) && Number.isFinite(atMs) && Math.abs(atMs - currentAtMs) > 1000) {
+        continue;
+      }
+      currentIdx = i;
+      break;
+    }
+    if (currentIdx < 0) {
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const m = messages[i];
+        if (m?.direction === "in" && String(m.body ?? "").trim() === currentBody) {
+          currentIdx = i;
+          break;
+        }
+      }
+    }
+  }
+  const eligibleMessages =
+    currentIdx >= 0
+      ? messages.slice(0, currentIdx + 1)
+      : messages.filter(m => {
+          if (!Number.isFinite(currentAtMs)) return true;
+          const atMs = new Date(String(m.at ?? "")).getTime();
+          return !Number.isFinite(atMs) || atMs <= currentAtMs;
+        });
   let lastOutboundIdx = -1;
   for (let i = eligibleMessages.length - 1; i >= 0; i -= 1) {
     if (eligibleMessages[i]?.direction === "out") {
@@ -7139,7 +7166,6 @@ function recentInboundBodiesSinceLastOutbound(
     .slice(lastOutboundIdx + 1)
     .filter(m => m.direction === "in" && typeof m.body === "string" && m.body.trim())
     .map(m => String(m.body));
-  const currentBody = String(currentEvent.body ?? "").trim();
   if (currentBody && !bodies.some(body => body.trim() === currentBody)) {
     bodies.push(currentBody);
   }
