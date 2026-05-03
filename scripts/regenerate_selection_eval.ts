@@ -6,11 +6,13 @@ type Case = {
     provider: string | null;
     creditAdf: boolean;
     dlaNoPurchaseAdf: boolean;
+    bodyIncludes?: string;
   };
   run: () => {
     provider: string | null;
     creditAdf: boolean;
     dlaNoPurchaseAdf: boolean;
+    body?: string;
   };
 };
 
@@ -49,7 +51,8 @@ const cases: Case[] = [
       return {
         provider: picked.inbound?.provider ?? null,
         creditAdf: picked.latestInboundIsCreditAdf,
-        dlaNoPurchaseAdf: picked.latestInboundIsDlaNoPurchaseAdf
+        dlaNoPurchaseAdf: picked.latestInboundIsDlaNoPurchaseAdf,
+        body: picked.inbound?.body ?? ""
       };
     }
   },
@@ -87,7 +90,8 @@ const cases: Case[] = [
       return {
         provider: picked.inbound?.provider ?? null,
         creditAdf: picked.latestInboundIsCreditAdf,
-        dlaNoPurchaseAdf: picked.latestInboundIsDlaNoPurchaseAdf
+        dlaNoPurchaseAdf: picked.latestInboundIsDlaNoPurchaseAdf,
+        body: picked.inbound?.body ?? ""
       };
     }
   },
@@ -120,7 +124,8 @@ const cases: Case[] = [
       return {
         provider: picked.inbound?.provider ?? null,
         creditAdf: picked.latestInboundIsCreditAdf,
-        dlaNoPurchaseAdf: picked.latestInboundIsDlaNoPurchaseAdf
+        dlaNoPurchaseAdf: picked.latestInboundIsDlaNoPurchaseAdf,
+        body: picked.inbound?.body ?? ""
       };
     }
   },
@@ -151,7 +156,50 @@ const cases: Case[] = [
       return {
         provider: picked.inbound?.provider ?? null,
         creditAdf: picked.latestInboundIsCreditAdf,
-        dlaNoPurchaseAdf: picked.latestInboundIsDlaNoPurchaseAdf
+        dlaNoPurchaseAdf: picked.latestInboundIsDlaNoPurchaseAdf,
+        body: picked.inbound?.body ?? ""
+      };
+    }
+  },
+  {
+    id: "skips_quoted_reaction_to_voicemail_and_uses_prior_objection",
+    expected: {
+      provider: "twilio",
+      creditAdf: false,
+      dlaNoPurchaseAdf: false,
+      bodyIncludes: "trying to figure out if I can afford it"
+    },
+    run: () => {
+      const picked = pickRegenerateInbound({
+        latestDraftAt: "2026-05-03T10:45:06.000Z",
+        messages: [
+          {
+            direction: "in",
+            provider: "twilio",
+            body:
+              "I'm trying to figure out if I can afford it as well as ride. I have rode a motorcycle in over 10yrs.",
+            at: "2026-05-02T19:25:25.000Z"
+          },
+          {
+            direction: "in",
+            provider: "twilio",
+            body:
+              "\u200a\u200b👍\u200b to “\u200a17164032516 Deposited a new message:\n\"Hey Sally, this is Geo at American Harley Davidson. Just wanted to call and let you know that we are having our test ride days event from May 8th through the 16th.\"\nClick here: 14699825018 to listen to full voice message.\u200a”",
+            at: "2026-05-02T22:28:09.000Z"
+          },
+          {
+            direction: "out",
+            provider: "draft_ai",
+            body: "Draft body",
+            at: "2026-05-03T10:45:06.000Z"
+          }
+        ]
+      });
+      return {
+        provider: picked.inbound?.provider ?? null,
+        creditAdf: picked.latestInboundIsCreditAdf,
+        dlaNoPurchaseAdf: picked.latestInboundIsDlaNoPurchaseAdf,
+        body: picked.inbound?.body ?? ""
       };
     }
   }
@@ -163,7 +211,8 @@ for (const c of cases) {
   const ok =
     actual.provider === c.expected.provider &&
     actual.creditAdf === c.expected.creditAdf &&
-    actual.dlaNoPurchaseAdf === c.expected.dlaNoPurchaseAdf;
+    actual.dlaNoPurchaseAdf === c.expected.dlaNoPurchaseAdf &&
+    (!c.expected.bodyIncludes || String(actual.body ?? "").includes(c.expected.bodyIncludes));
   if (ok) passed += 1;
   console.log(
     `${ok ? "PASS" : "FAIL"} ${c.id} expected=${JSON.stringify(c.expected)} actual=${JSON.stringify(actual)}`

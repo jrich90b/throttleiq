@@ -37,10 +37,50 @@ function isLikelyActionableInbound(text: string): boolean {
 function isLikelyLowSignalFollowup(text: string): boolean {
   const value = String(text ?? "").trim();
   if (!value) return true;
+  if (isQuotedReactionInboundText(value)) return true;
   if (isLikelyActionableInbound(value)) return false;
   if (REGEN_LOW_SIGNAL_FOLLOWUP_REGEX.test(value)) return true;
   if (value.length <= 60) return true;
   return false;
+}
+
+function normalizeReactionInboundText(text: string): string {
+  return String(text ?? "")
+    .replace(/[\u2000-\u200F\u202A-\u202E\u2060\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isQuotedReactionInboundText(text: string): boolean {
+  const normalized = normalizeReactionInboundText(text);
+  if (!normalized) return false;
+
+  if (
+    /^(liked|loved|disliked|laughed at|emphasized|questioned)\s+["'\u201c\u201d][\s\S]{1,2000}["'\u201c\u201d]$/i.test(
+      normalized
+    )
+  ) {
+    return true;
+  }
+
+  const toQuotedMatch = normalized.match(
+    /^(.*?)\s+to\s+["'\u201c\u201d]([\s\S]{1,2000})["'\u201c\u201d]$/i
+  );
+  if (!toQuotedMatch) return false;
+
+  const reactionToken = String(toQuotedMatch[1] ?? "").trim().toLowerCase();
+  if (!reactionToken) return false;
+  if (/^(liked|loved|disliked|laughed at|emphasized|questioned)$/.test(reactionToken)) {
+    return true;
+  }
+  if (/^reacted(?:\s+with)?\s*[\p{Extended_Pictographic}\s]+$/u.test(reactionToken)) {
+    return true;
+  }
+  return !/[\p{L}\p{N}]/u.test(reactionToken);
+}
+
+function isSkippableRegenerateInbound(m: ConversationMessageLike): boolean {
+  return m.provider !== "sendgrid_adf" && isQuotedReactionInboundText(String(m.body ?? ""));
 }
 
 function isCreditAdfBody(text: string): boolean {
@@ -80,8 +120,8 @@ export function pickRegenerateInbound(args: PickArgs): RegenerateInboundPick {
     return !Number.isFinite(msgAt) || msgAt <= latestDraftAtMs;
   };
   const latestInboundBeforeDraft =
-    inboundMessages.find(m => m.body && isBeforeDraft(m)) ??
-    inboundMessages.find(m => m.body) ??
+    inboundMessages.find(m => m.body && isBeforeDraft(m) && !isSkippableRegenerateInbound(m)) ??
+    inboundMessages.find(m => m.body && !isSkippableRegenerateInbound(m)) ??
     null;
   const latestInboundBodyLower = String(latestInboundBeforeDraft?.body ?? "").toLowerCase();
   const latestInboundIsCreditAdf =
@@ -96,15 +136,15 @@ export function pickRegenerateInbound(args: PickArgs): RegenerateInboundPick {
     (latestInboundIsCreditAdf || latestInboundIsRiderToRiderFinanceAdf || latestInboundIsDlaNoPurchaseAdf
       ? latestInboundBeforeDraft
       : null) ??
-    inboundMessages.find(m => m.provider !== "sendgrid_adf" && m.body && isBeforeDraft(m)) ??
-    inboundMessages.find(m => m.body && isBeforeDraft(m)) ??
-    inboundMessages.find(m => m.provider !== "sendgrid_adf" && m.body) ??
-    inboundMessages.find(m => m.body) ??
+    inboundMessages.find(m => m.provider !== "sendgrid_adf" && m.body && isBeforeDraft(m) && !isSkippableRegenerateInbound(m)) ??
+    inboundMessages.find(m => m.body && isBeforeDraft(m) && !isSkippableRegenerateInbound(m)) ??
+    inboundMessages.find(m => m.provider !== "sendgrid_adf" && m.body && !isSkippableRegenerateInbound(m)) ??
+    inboundMessages.find(m => m.body && !isSkippableRegenerateInbound(m)) ??
     null;
 
   const inboundChronological = (args.messages ?? [])
     .map((m, index) => ({ m, index }))
-    .filter(({ m }) => m.direction === "in" && !!m.body && isBeforeDraft(m))
+    .filter(({ m }) => m.direction === "in" && !!m.body && isBeforeDraft(m) && !isSkippableRegenerateInbound(m))
     .sort((a, b) => {
       const aMs = toMs(a.m.at);
       const bMs = toMs(b.m.at);
