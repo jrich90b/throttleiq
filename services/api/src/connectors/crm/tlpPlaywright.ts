@@ -1078,6 +1078,16 @@ function normalizeVehicleCondition(value: string | undefined): string | undefine
   return undefined;
 }
 
+function inferProductClass(value: string | undefined): string {
+  const v = String(value ?? "").toLowerCase();
+  if (/\bcvo\b/.test(v)) return "CVO";
+  if (/(road glide|street glide|electra|ultra|limited|tri glide|freewheeler)/i.test(v)) return "TOURING";
+  if (/(low rider|fat boy|breakout|heritage|street bob|softail|deluxe|slim)/i.test(v)) return "SOFTAIL";
+  if (/(sportster|nightster|iron|forty|48|seventy|72)/i.test(v)) return "SPORTSTER";
+  if (/(pan america|adventure)/i.test(v)) return "ON-OFF ROAD";
+  return "CRUISER";
+}
+
 async function fillDealershipVisitDeliveredDetails(
   page: Page,
   step: StepFn,
@@ -1178,6 +1188,15 @@ async function fillDealershipVisitDeliveredDetails(
     "select[name*='product_type']",
     "select[name*='vehicle_type']",
     "select[name*='type']"
+  ]);
+
+  await bestEffortSelect(page, step, "product class", inferProductClass(details.model), [
+    "#TLPLOG_product_subcategory",
+    "#product_subcategory",
+    "select[name='product_subcategory']",
+    "select[name*='subcategory']",
+    "select[name*='product_class']",
+    "select[name*='class']"
   ]);
 
   await bestEffortSelect(page, step, "model", details.model, [
@@ -1390,6 +1409,11 @@ async function collectVisitSubmitFailureDetail(page: Page): Promise<string> {
             "required field";
           messages.add(`${label} is required`);
         }
+      }
+
+      const submitTooltip = normalize(doc?.querySelector?.("#SubmitButton .tooltiptext")?.textContent);
+      if (submitTooltip && /missing fields/i.test(submitTooltip)) {
+        messages.add(submitTooltip.replace(/^Missing Fields\s*/i, "Missing Fields: "));
       }
 
       if (messages.size) return Array.from(messages).slice(0, 5).join(" | ");
