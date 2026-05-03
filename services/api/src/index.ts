@@ -10763,6 +10763,43 @@ function resolveRequestedDateFloor(args: {
   return { floorUtc, label };
 }
 
+function parseRequestedDayTimeWithRawFallback(
+  primaryText: string | null | undefined,
+  rawText: string | null | undefined,
+  timeZone: string
+): ReturnType<typeof parseRequestedDayTime> {
+  const primary = String(primaryText ?? "").trim();
+  const raw = String(rawText ?? "").trim();
+  const first = parseRequestedDayTime(primary || raw, timeZone);
+  if (first) return first;
+  if (raw && raw !== primary) {
+    return parseRequestedDayTime(raw, timeZone);
+  }
+  return null;
+}
+
+function formatRequestedDayTimePhrase(
+  requested: NonNullable<ReturnType<typeof parseRequestedDayTime>>,
+  timeZone: string
+): string {
+  const dayStartUtc = localPartsToUtcDate(timeZone, {
+    year: requested.year,
+    month: requested.month,
+    day: requested.day,
+    hour24: 0,
+    minute: 0
+  });
+  const dayLabel = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    weekday: "short",
+    month: "short",
+    day: "numeric"
+  }).format(dayStartUtc);
+  const hh = String(requested.hour24).padStart(2, "0");
+  const mm = String(requested.minute).padStart(2, "0");
+  return `${dayLabel} at ${formatTime12h(`${hh}:${mm}`)}`;
+}
+
 function parseDayOfWeek(text: string): { day: string; date: Date } | null {
   const t = text.toLowerCase();
   if (/\btoday\b/.test(t)) {
@@ -29620,6 +29657,31 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       const labelModel = normalizeDisplayCase(modelForLookup || contextModel);
       const labelColor = contextColor ? ` in ${formatColorLabel(contextColor)}` : "";
       const unitLabel = `${labelYear}${labelModel}${labelColor}`.trim();
+      const parsedRequestedDayTime = parseRequestedDayTimeWithRawFallback(
+        String(event.body ?? ""),
+        String(event.body ?? ""),
+        regenTz
+      );
+      if (parsedRequestedDayTime) {
+        setRequestedTime(conv, {
+          day: parsedRequestedDayTime.dayOfWeek,
+          timeText: event.body
+        });
+        setDialogState(
+          conv,
+          isTestRideDialogState(getDialogState(conv)) ? "test_ride_init" : "schedule_request"
+        );
+        const requestedPhrase = formatRequestedDayTimePhrase(parsedRequestedDayTime, regenTz);
+        const daySpecificReply =
+          availableMatches.length > 0
+            ? explicitAvailabilityAskThisTurn && !recentlyConfirmedAvailable
+              ? `Absolutely — ${unitLabel} is still available right now. ${requestedPhrase} works.`
+              : `${requestedPhrase} works.`
+            : explicitAvailabilityAskThisTurn
+              ? `I’ll keep an eye on ${unitLabel} and update you right away. ${requestedPhrase} works.`
+              : `${requestedPhrase} works.`;
+        return respondWithSmsRegeneratedDraft(daySpecificReply);
+      }
       const requestedDay = parseDayOfWeek(event.body ?? "");
       const requestedDayPart = extractDayPart(event.body ?? "");
       const requestedTimeToken = extractTimeToken(String(event.body ?? ""));
@@ -36892,7 +36954,7 @@ if (authToken && signature) {
         const cfg = await getSchedulerConfigHot();
         logRouteTiming("scheduler.config", schedulerConfigStartedAt);
         const schedulingText = bookingParseText || String(event.body ?? "");
-        const requested = parseRequestedDayTime(schedulingText, cfg.timezone);
+        const requested = parseRequestedDayTimeWithRawFallback(schedulingText, String(event.body ?? ""), cfg.timezone);
         const requestedDateFloor = !requested
           ? resolveRequestedDateFloor({
               text: schedulingText,
@@ -37380,7 +37442,7 @@ if (authToken && signature) {
     try {
       const cfg = await getSchedulerConfigHot();
       const tz = cfg.timezone || "America/New_York";
-      const parsed = parseRequestedDayTime(bookingParseText || String(event.body ?? ""), tz);
+      const parsed = parseRequestedDayTimeWithRawFallback(bookingParseText, String(event.body ?? ""), tz);
       if (parsed) {
         result.requestedTime = parsed;
       }
@@ -37476,7 +37538,7 @@ if (authToken && signature) {
       try {
         const cfg = await getSchedulerConfigHot();
         const tz = cfg.timezone || "America/New_York";
-        requested = parseRequestedDayTime(bookingParseText || String(event.body ?? ""), tz);
+        requested = parseRequestedDayTimeWithRawFallback(bookingParseText, String(event.body ?? ""), tz);
       } catch {}
     }
     if (requested) {
@@ -37607,7 +37669,7 @@ if (authToken && signature) {
         try {
           const cfg = await getSchedulerConfigHot();
           const tz = cfg.timezone || "America/New_York";
-          requested = parseRequestedDayTime(bookingParseText || String(event.body ?? ""), tz);
+          requested = parseRequestedDayTimeWithRawFallback(bookingParseText, String(event.body ?? ""), tz);
         } catch {}
       }
       if (requested) {
