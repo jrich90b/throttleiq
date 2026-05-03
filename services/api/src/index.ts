@@ -12920,7 +12920,7 @@ function buildCustomerDispositionReply(text: string): string {
 function buildAffordabilityRideConfidenceObjectionReply(): string {
   return (
     "Totally understand. We can keep it low-pressure: first make sure the numbers are comfortable, " +
-    "then ease back into riding at your pace. What monthly range are you trying to stay near?"
+    "then ease back into riding at your pace. What budget range are you trying to stay near?"
   );
 }
 
