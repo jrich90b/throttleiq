@@ -14,6 +14,8 @@ const steppingBackText = "I think I'm going to keep my bike and hold off for now
 const financeInfoText = "I have $2,500 to put down and want to stay under $500/month.";
 const availabilityText = "Do you have any black street glides in stock?";
 const schedulingText = "Can I come in Monday at 3:45?";
+const affordabilityRideConfidenceText =
+  "I'm trying to figure out if I can afford it as well as ride. I have rode a motorcycle in over 10yrs.";
 
 const parsedAccepted = {
   explicitDisposition: true,
@@ -68,6 +70,17 @@ const cases: Case[] = [
       canApplyDispositionCloseout({
         conv: { followUp: { mode: "active" } },
         text: financeInfoText,
+        parsedAccepted: isDispositionParserAccepted(parsedAccepted),
+        hasDecision: true
+      })
+  },
+  {
+    id: "affordability_and_ride_confidence_blocks_closeout",
+    expected: false,
+    run: () =>
+      canApplyDispositionCloseout({
+        conv: { followUp: { mode: "active" } },
+        text: affordabilityRideConfidenceText,
         parsedAccepted: isDispositionParserAccepted(parsedAccepted),
         hasDecision: true
       })

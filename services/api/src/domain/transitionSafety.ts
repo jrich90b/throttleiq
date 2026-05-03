@@ -21,6 +21,7 @@ export function hasPostSaleOrOwnershipContext(conv: any): boolean {
 export function shouldSuppressDispositionCloseout(conv: any, text: string): boolean {
   if (isLogisticsProgressUpdateText(text)) return true;
   if (isStructuredFinanceInfoText(text)) return true;
+  if (isAffordabilityRideConfidenceObjectionText(text)) return true;
   if (hasCompetingActiveIntentText(text)) return true;
   if (!hasPostSaleOrOwnershipContext(conv)) return false;
   const t = String(text ?? "").toLowerCase();
@@ -47,6 +48,23 @@ function isStructuredFinanceInfoText(text: string): boolean {
     /\b(apr|rate|interest|financing|finance special|specials?)\b/.test(t) &&
     /\$?\s*\d[\d,]*/.test(t);
   return hasMonthlyTarget || hasDownPaymentDetail || hasTermDetail || hasFinanceProgramDetail;
+}
+
+export function isAffordabilityRideConfidenceObjectionText(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  const hasAffordabilityConcern =
+    /\b(can i afford|if i can afford|whether i can afford|trying to figure out if i can afford|afford it|budget|payment|payments|monthly|price|pricing)\b/.test(
+      t
+    );
+  const hasRideConfidenceConcern =
+    /\b(ride|rode|ridden|riding|motorcycle|bike)\b[\s\S]{0,80}\b(10\s*(?:yrs?|years?)|decade|long time|while|rusty|nervous|comfortable|confidence|again)\b/.test(
+      t
+    ) ||
+    /\b(10\s*(?:yrs?|years?)|decade|long time|while|rusty|nervous|comfortable|confidence)\b[\s\S]{0,80}\b(ride|rode|ridden|riding|motorcycle|bike)\b/.test(
+      t
+    );
+  return hasAffordabilityConcern && hasRideConfidenceConcern;
 }
 
 function hasCompetingActiveIntentText(text: string): boolean {

@@ -145,6 +145,7 @@ import { sendEmail } from "./domain/emailSender.js";
 import {
   canApplyDispositionCloseout,
   isLogisticsProgressUpdateText,
+  isAffordabilityRideConfidenceObjectionText,
   isDispositionParserAccepted,
   isResponseControlParserAccepted
 } from "./domain/transitionSafety.js";
@@ -12911,6 +12912,13 @@ function buildCustomerDispositionReply(text: string): string {
     /\b(beautiful|nice|great|awesome|amazing|love|like|clean|killer|badass|sweet)\b/i.test(textLower) &&
     /\b(bike|street glide|road glide|harley|motorcycle|ride)\b/i.test(textLower);
   return buildFriendlyReachOutClose(hasBikeCompliment);
+}
+
+function buildAffordabilityRideConfidenceObjectionReply(): string {
+  return (
+    "Totally understand. We can keep it low-pressure: first make sure the numbers are comfortable, " +
+    "then ease back into riding at your pace. What monthly range are you trying to stay near?"
+  );
 }
 
 function hasSellOnOwnSignal(text: string): boolean {
@@ -28923,6 +28931,16 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return respondWithSmsRegeneratedDraft(regenReply);
   }
 
+  if (isAffordabilityRideConfidenceObjectionText(event.body ?? "")) {
+    const reply = buildAffordabilityRideConfidenceObjectionReply();
+    setDialogState(conv, "pricing_init");
+    setFollowUpMode(conv, "active", "affordability_ride_confidence_objection");
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply);
+  }
+
   if (isServiceRecordsRequest(event.body)) {
     const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
     const hasServiceTodo = listOpenTodos().some(
@@ -30516,6 +30534,23 @@ if (authToken && signature) {
   ) {
     applyCustomerDispositionCloseout(conv, dispositionDecision);
     const reply = ensureUniqueDispositionReply(buildCustomerDispositionReply(semanticInboundText), conv);
+    const mode = webhookMode;
+    if (mode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+
+  if (isAffordabilityRideConfidenceObjectionText(semanticInboundText)) {
+    const reply = buildAffordabilityRideConfidenceObjectionReply();
+    setDialogState(conv, "pricing_init");
+    setFollowUpMode(conv, "active", "affordability_ride_confidence_objection");
     const mode = webhookMode;
     if (mode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
