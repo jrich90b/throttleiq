@@ -2705,6 +2705,16 @@ export default function Home() {
   const [holdSelection, setHoldSelection] = useState<any | null>(null);
   const [holdOnOrder, setHoldOnOrder] = useState(false);
   const [holdOnOrderLabel, setHoldOnOrderLabel] = useState("");
+  const [holdManualOpen, setHoldManualOpen] = useState(false);
+  const [holdManualUnit, setHoldManualUnit] = useState<any>({
+    year: "",
+    make: "",
+    model: "",
+    trim: "",
+    color: "",
+    stockId: "",
+    vin: ""
+  });
   const [holdNote, setHoldNote] = useState("");
   const [holdError, setHoldError] = useState<string | null>(null);
   const [holdSaving, setHoldSaving] = useState(false);
@@ -4757,6 +4767,16 @@ export default function Home() {
     setHoldSelection(null);
     setHoldOnOrder(false);
     setHoldOnOrderLabel("");
+    setHoldManualOpen(false);
+    setHoldManualUnit({
+      year: "",
+      make: "",
+      model: "",
+      trim: "",
+      color: "",
+      stockId: "",
+      vin: ""
+    });
     setHoldModalOpen(true);
     const conv =
       selectedConv?.id === convId ? selectedConv : await fetchConversationDetail(convId);
@@ -4799,10 +4819,27 @@ export default function Home() {
     }
   }
 
+  function resolveHoldSelection() {
+    if (holdSelection) return holdSelection;
+    const stockId = String(holdManualUnit?.stockId ?? "").trim();
+    const vin = String(holdManualUnit?.vin ?? "").trim();
+    if (!stockId && !vin) return null;
+    return {
+      year: String(holdManualUnit?.year ?? "").trim(),
+      make: String(holdManualUnit?.make ?? "").trim(),
+      model: String(holdManualUnit?.model ?? "").trim(),
+      trim: String(holdManualUnit?.trim ?? "").trim(),
+      color: String(holdManualUnit?.color ?? "").trim(),
+      stockId,
+      vin
+    };
+  }
+
   async function submitHold(selection: any | null, action: "hold" | "hold_clear") {
     if (!holdModalConv) return;
-    if (action === "hold" && !holdOnOrder && !selection) {
-      setHoldError("Please select a unit, or enable Bike on order.");
+    const resolved = action === "hold" && !holdOnOrder ? (selection ?? resolveHoldSelection()) : selection;
+    if (action === "hold" && !holdOnOrder && !resolved) {
+      setHoldError("Please select a unit, enter a stock/VIN, or enable Bike on order.");
       return;
     }
     setHoldSaving(true);
@@ -4814,16 +4851,16 @@ export default function Home() {
         action === "hold"
           ? {
               onOrder: holdOnOrder || undefined,
-              stockId: holdOnOrder ? "" : (selection?.stockId ?? ""),
-              vin: holdOnOrder ? "" : (selection?.vin ?? ""),
-              year: holdOnOrder ? String(leadVehicle?.year ?? "").trim() : String(selection?.year ?? "").trim(),
-              make: holdOnOrder ? String(leadVehicle?.make ?? "").trim() : String(selection?.make ?? "").trim(),
-              model: holdOnOrder ? String(leadVehicle?.model ?? "").trim() : String(selection?.model ?? "").trim(),
-              trim: holdOnOrder ? String(leadVehicle?.trim ?? "").trim() : String(selection?.trim ?? "").trim(),
-              color: holdOnOrder ? String(leadVehicle?.color ?? "").trim() : String(selection?.color ?? "").trim(),
+              stockId: holdOnOrder ? "" : (resolved?.stockId ?? ""),
+              vin: holdOnOrder ? "" : (resolved?.vin ?? ""),
+              year: holdOnOrder ? String(leadVehicle?.year ?? "").trim() : String(resolved?.year ?? "").trim(),
+              make: holdOnOrder ? String(leadVehicle?.make ?? "").trim() : String(resolved?.make ?? "").trim(),
+              model: holdOnOrder ? String(leadVehicle?.model ?? "").trim() : String(resolved?.model ?? "").trim(),
+              trim: holdOnOrder ? String(leadVehicle?.trim ?? "").trim() : String(resolved?.trim ?? "").trim(),
+              color: holdOnOrder ? String(leadVehicle?.color ?? "").trim() : String(resolved?.color ?? "").trim(),
               label: holdOnOrder
                 ? orderLabel
-                : [selection?.year, selection?.make, selection?.model, selection?.trim]
+                : [resolved?.year, resolved?.make, resolved?.model, resolved?.trim]
                     .filter(Boolean)
                     .join(" ")
                     .trim(),
@@ -17235,7 +17272,10 @@ export default function Home() {
                         onChange={e => {
                           const checked = e.target.checked;
                           setHoldOnOrder(checked);
-                          if (checked) setHoldSelection(null);
+                          if (checked) {
+                            setHoldSelection(null);
+                            setHoldManualOpen(false);
+                          }
                         }}
                       />
                       <span>Bike on order (not in stock yet)</span>
@@ -17310,7 +17350,10 @@ export default function Home() {
                               className={`w-full text-left px-3 py-2 border-b border-slate-200 last:border-b-0 hover:bg-slate-50 ${
                                 isSelected ? "bg-orange-50 ring-1 ring-orange-200" : ""
                               }`}
-                              onClick={() => setHoldSelection(it)}
+                              onClick={() => {
+                                setHoldSelection(it);
+                                setHoldManualOpen(false);
+                              }}
                               type="button"
                             >
                               <div className="flex items-start justify-between gap-3">
@@ -17348,6 +17391,72 @@ export default function Home() {
                     )}
                   </div>
 
+                  {!holdOnOrder ? (
+                    <>
+                      <div className="mt-3">
+                        <button
+                          type="button"
+                          className="text-xs text-blue-800 font-medium underline"
+                          onClick={() => {
+                            setHoldManualOpen(v => !v);
+                            setHoldSelection(null);
+                          }}
+                        >
+                          {holdManualOpen ? "Hide manual unit entry" : "Add unit manually"}
+                        </button>
+                      </div>
+                      {holdManualOpen ? (
+                        <div className="mt-2 grid gap-2 grid-cols-2 text-xs">
+                          <input
+                            className="rounded border border-slate-400 bg-white px-2 py-1 text-slate-900 placeholder:text-slate-500"
+                            placeholder="Year"
+                            value={holdManualUnit.year ?? ""}
+                            onChange={e => setHoldManualUnit((prev: any) => ({ ...prev, year: e.target.value }))}
+                          />
+                          <input
+                            className="rounded border border-slate-400 bg-white px-2 py-1 text-slate-900 placeholder:text-slate-500"
+                            placeholder="Make"
+                            value={holdManualUnit.make ?? ""}
+                            onChange={e => setHoldManualUnit((prev: any) => ({ ...prev, make: e.target.value }))}
+                          />
+                          <input
+                            className="rounded border border-slate-400 bg-white px-2 py-1 text-slate-900 placeholder:text-slate-500"
+                            placeholder="Model"
+                            value={holdManualUnit.model ?? ""}
+                            onChange={e => setHoldManualUnit((prev: any) => ({ ...prev, model: e.target.value }))}
+                          />
+                          <input
+                            className="rounded border border-slate-400 bg-white px-2 py-1 text-slate-900 placeholder:text-slate-500"
+                            placeholder="Trim"
+                            value={holdManualUnit.trim ?? ""}
+                            onChange={e => setHoldManualUnit((prev: any) => ({ ...prev, trim: e.target.value }))}
+                          />
+                          <input
+                            className="rounded border border-slate-400 bg-white px-2 py-1 text-slate-900 placeholder:text-slate-500"
+                            placeholder="Color"
+                            value={holdManualUnit.color ?? ""}
+                            onChange={e => setHoldManualUnit((prev: any) => ({ ...prev, color: e.target.value }))}
+                          />
+                          <input
+                            className="rounded border border-slate-400 bg-white px-2 py-1 text-slate-900 placeholder:text-slate-500"
+                            placeholder="Stock #"
+                            value={holdManualUnit.stockId ?? ""}
+                            onChange={e => setHoldManualUnit((prev: any) => ({ ...prev, stockId: e.target.value }))}
+                          />
+                          <input
+                            className="rounded border border-slate-400 bg-white px-2 py-1 text-slate-900 placeholder:text-slate-500 col-span-2"
+                            placeholder="VIN"
+                            value={holdManualUnit.vin ?? ""}
+                            onChange={e => setHoldManualUnit((prev: any) => ({ ...prev, vin: e.target.value }))}
+                          />
+                          <div className="col-span-2 text-[11px] text-slate-600">
+                            Stock # or VIN is required to save a held unit.
+                          </div>
+                        </div>
+                      ) : null}
+                    </>
+                  ) : null}
+
                   <div className="mt-3">
                     <div className="text-xs font-medium text-slate-700 mb-1">Note (optional)</div>
                     <textarea
@@ -17369,7 +17478,14 @@ export default function Home() {
                         ? `Selected: ${[holdSelection.year, holdSelection.make, holdSelection.model, holdSelection.trim]
                             .filter(Boolean)
                             .join(" ") || holdSelection.stockId || holdSelection.vin}`
-                        : "No unit selected"}
+                        : (() => {
+                            const resolved = resolveHoldSelection();
+                            return resolved
+                              ? `Manual: ${[resolved.year, resolved.make, resolved.model, resolved.trim]
+                                  .filter(Boolean)
+                                  .join(" ") || resolved.stockId || resolved.vin}`
+                              : "No unit selected";
+                          })()}
                     </div>
                     <div className="flex gap-2">
                       {holdModalConv?.hold ||
