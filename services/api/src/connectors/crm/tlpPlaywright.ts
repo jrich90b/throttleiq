@@ -422,6 +422,7 @@ async function submitQuickLookupValue(
   });
   const clicked = await step("lead: submit quick lookup", async () => {
     const selectors = [
+      "#mainLeadSubmit_btn",
       "#QL_Submit",
       "#QL_Search",
       "#QL_Go",
@@ -449,6 +450,15 @@ async function submitQuickLookupValue(
         // try next control
       }
     }
+    const quickLeadSubmitted = await page.evaluate(() => {
+      const root = globalThis as any;
+      if (typeof root.submitQuickLead === "function") {
+        root.submitQuickLead();
+        return true;
+      }
+      return false;
+    });
+    if (quickLeadSubmitted) return true;
     return await input.evaluate((el: any) => {
       const form = el?.closest?.("form") as any;
       if (!form) return false;
