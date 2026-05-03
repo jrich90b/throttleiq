@@ -6616,6 +6616,10 @@ function normalizeModelText(val?: string | null): string {
     .replace(/\bstreet\s+glides\b/g, "street glide")
     .replace(/\broad\s+glides\b/g, "road glide")
     .replace(/\btri\s+glides\b/g, "tri glide")
+    .replace(/\bbreakouts\b/g, "breakout")
+    .replace(/\bsportsters\b/g, "sportster")
+    .replace(/\bnightsters\b/g, "nightster")
+    .replace(/\biron\s+883s\b/g, "iron 883")
     .replace(/\blimieteds?\b/g, "limited")
     .replace(/\blimteds?\b/g, "limited")
     .replace(/\blimiteds\b/g, "limited");

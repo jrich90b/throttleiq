@@ -221,6 +221,46 @@
     }
   },
   {
+    "id": "test_ride_alternate_breakouts_plural_1",
+    "history": [
+      {
+        "direction": "in",
+        "body": "So looking through your inventory you don't seem to have any of the sportsters which is really the only Harley I'm interested in test riding"
+      }
+    ],
+    "text": "I guess maybe the 2025 breakouts? Not too picky about the color for a test ride",
+    "expected": {
+      "intent": "test_ride",
+      "explicit_request": true,
+      "availability": {
+        "model": "Breakout",
+        "year": "2025"
+      }
+    }
+  },
+  {
+    "id": "test_ride_alternate_context_iron_883_1",
+    "history": [
+      {
+        "direction": "in",
+        "body": "So looking through your inventory you don't seem to have any of the sportsters which is really the only Harley I'm interested in test riding"
+      },
+      {
+        "direction": "in",
+        "body": "I guess maybe the 2025 breakouts? Not too picky about the color for a test ride"
+      }
+    ],
+    "text": "Or maybe that 2022 iron 883",
+    "expected": {
+      "intent": "test_ride",
+      "explicit_request": true,
+      "availability": {
+        "model": "Iron 883",
+        "year": "2022"
+      }
+    }
+  },
+  {
     "id": "none_1",
     "text": "I can't do tomorrow. Do you have time Friday?",
     "expected": {
