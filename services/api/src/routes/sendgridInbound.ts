@@ -82,6 +82,7 @@ import { buildOffersLine, resolveOffersUrl } from "../domain/offers.js";
 import {
   buildHiringManagerInquiryReply,
   isHiringManagerInquiryText,
+  isTimingOnlyFollowUpTopic,
   shouldIgnoreAdfModelMismatchForTradeContext,
   shouldSuppressInitialAvailabilityLineAppend,
   shouldSuppressInitialInventoryPhotoAppend,
@@ -1603,6 +1604,11 @@ function extractWalkInModelHint(text?: string | null): string | undefined {
   if (!t) return undefined;
   const inquiryModelHint = extractInquiryModelHint(t);
   if (inquiryModelHint) return inquiryModelHint;
+  const fortyEight = t.match(/\b((?:19|20)\d{2})?\s*(?:xl\s*1200x|xl1200x|forty[-\s]?eight|forty\s*8)\b/i);
+  if (fortyEight) {
+    const year = String(fortyEight[1] ?? "").trim();
+    return [year, "Forty-Eight"].filter(Boolean).join(" ");
+  }
   if (/\biron\s*883\b/.test(t)) return "Iron 883";
   if (/\b(883\s*roadster|roadster\s*883)\b/.test(t)) return "883 Roadster";
   if (/\b(sportster\s*883|xl\s*883|xl883c)\b/.test(t)) return "Sportster 883";
@@ -1710,6 +1716,9 @@ function buildTrafficLogProWalkInTail(args: {
 
   const withTopic = (base: string): string => {
     if (!followUpTopic) return base;
+    if (isTimingOnlyFollowUpTopic(followUpTopic) && label && label !== "bike") {
+      return `${base} I'll follow up ${followUpTopic} about the ${label}.`;
+    }
     return `${base} I'll follow up about ${followUpTopic}.`;
   };
 

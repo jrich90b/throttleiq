@@ -5,6 +5,7 @@ import {
   isBlockedCadencePersonalizationLineText,
   isHiringManagerInquiryText,
   isManualOutboundBookingConfirmationText,
+  isTimingOnlyFollowUpTopic,
   resolveRequestedScheduleWindowMode,
   shouldIgnoreAdfModelMismatchForTradeContext,
   shouldSuppressInitialAvailabilityLineAppend,
@@ -152,6 +153,16 @@ const cases: Case[] = [
     id: "hiring_manager_reply_handoff",
     actual: /hiring manager follow up/i.test(buildHiringManagerInquiryReply()),
     expected: true
+  },
+  {
+    id: "walkin_next_week_is_timing_not_topic",
+    actual: isTimingOnlyFollowUpTopic("next week"),
+    expected: true
+  },
+  {
+    id: "walkin_forty_eight_is_not_timing_topic",
+    actual: isTimingOnlyFollowUpTopic("2022 Forty-Eight"),
+    expected: false
   }
 ];
 

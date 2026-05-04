@@ -72,6 +72,18 @@ export function buildHiringManagerInquiryReply(): string {
   return "Thanks for reaching out. I’ll pass your message along and have the hiring manager follow up with you.";
 }
 
+export function isTimingOnlyFollowUpTopic(textRaw: string | null | undefined): boolean {
+  const source = String(textRaw ?? "")
+    .toLowerCase()
+    .replace(/\b(?:sometime|some time|around|later)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!source) return false;
+  return /^(?:today|tomorrow|next week|this week|next month|this month|monday|tuesday|wednesday|thursday|friday|saturday|sunday|in \d+ (?:days?|weeks?|months?))$/.test(
+    source
+  );
+}
+
 export function isAccessoryCustomizationRequestText(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "").toLowerCase();
   if (!text.trim()) return false;
