@@ -84,6 +84,49 @@ export function isTimingOnlyFollowUpTopic(textRaw: string | null | undefined): b
   );
 }
 
+export function cleanCatalogModelNameForDisplay(raw: string | null | undefined): string {
+  const original = String(raw ?? "").replace(/\s+/g, " ").trim();
+  if (!original) return "";
+  const parts = original.split(/\s+/).filter(Boolean);
+  if (!parts.length) return "";
+  const isHarleyCodePrefix = (token: string): boolean =>
+    /^(?:FL|FX|XL|XR|RH|RA|VR|XG|ELW)[A-Z0-9_-]*$/i.test(token) || /^[A-Z]{1,4}\d[A-Z0-9_-]*$/i.test(token);
+  let start = 0;
+  if (parts[start] && isHarleyCodePrefix(parts[start])) {
+    start += 1;
+    while (parts[start] && /^[A-Z0-9_-]+$/.test(parts[start]) && /\d/.test(parts[start])) {
+      start += 1;
+    }
+  }
+  const cleaned = parts.slice(start).join(" ").trim() || original;
+  return cleaned
+    .toLowerCase()
+    .replace(/\banx\b/g, "anniversary")
+    .replace(/\banv\b/g, "anniversary")
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+
+export function catalogModelMentionMatchesText(textRaw: string | null | undefined, modelRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "").toLowerCase();
+  const model = String(modelRaw ?? "").trim();
+  if (!text.trim() || !model) return false;
+  const display = cleanCatalogModelNameForDisplay(model).toLowerCase();
+  const firstToken = model.split(/\s+/).filter(Boolean)[0] ?? "";
+  const code = /^(?:FL|FX|XL|XR|RH|RA|VR|XG|ELW)[A-Z0-9_-]*$/i.test(firstToken) ? firstToken : "";
+  const normalizePhrase = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/[-_/]+/g, " ")
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  const normalizedText = ` ${normalizePhrase(text)} `;
+  const normalizedDisplay = normalizePhrase(display);
+  if (normalizedDisplay && normalizedText.includes(` ${normalizedDisplay} `)) return true;
+  const normalizedCode = normalizePhrase(code);
+  return !!normalizedCode && normalizedText.includes(` ${normalizedCode} `);
+}
+
 export function isAccessoryCustomizationRequestText(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "").toLowerCase();
   if (!text.trim()) return false;

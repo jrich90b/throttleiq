@@ -1,6 +1,8 @@
 import {
   buildAccessoryCustomizationReply,
   buildHiringManagerInquiryReply,
+  catalogModelMentionMatchesText,
+  cleanCatalogModelNameForDisplay,
   isAccessoryCustomizationRequestText,
   isBlockedCadencePersonalizationLineText,
   isHiringManagerInquiryText,
@@ -163,6 +165,26 @@ const cases: Case[] = [
     id: "walkin_forty_eight_is_not_timing_topic",
     actual: isTimingOnlyFollowUpTopic("2022 Forty-Eight"),
     expected: false
+  },
+  {
+    id: "catalog_model_code_clean_low_rider_s",
+    actual: cleanCatalogModelNameForDisplay("FXLRS 1YWK LOW RIDER S"),
+    expected: "Low Rider S"
+  },
+  {
+    id: "catalog_model_code_clean_forty_eight",
+    actual: cleanCatalogModelNameForDisplay("XL1200X 1LC3 FORTY-EIGHT"),
+    expected: "Forty-Eight"
+  },
+  {
+    id: "catalog_model_mentions_code",
+    actual: catalogModelMentionMatchesText("showed him an FXLRS today", "FXLRS 1YWK LOW RIDER S"),
+    expected: true
+  },
+  {
+    id: "catalog_model_mentions_name",
+    actual: catalogModelMentionMatchesText("showed her a forty-eight", "XL1200X 1LC3 FORTY-EIGHT"),
+    expected: true
   }
 ];
 
