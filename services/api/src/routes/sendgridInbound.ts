@@ -5196,6 +5196,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       "What day and time works best to stop in?";
     ack = await applyInitialAdfPrefix(ack);
     addTodo(conv, "other", event.body, event.providerMessageId);
+    if (
+      !conv.followUpCadence?.status &&
+      !conv.appointment?.bookedEventId &&
+      conv.followUp?.mode !== "manual_handoff" &&
+      conv.followUp?.mode !== "paused_indefinite"
+    ) {
+      const cfg = await getSchedulerConfig();
+      startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
+    }
     queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     maybeAddInitialCallTodo();
     setEmailDraft(conv, ack);
