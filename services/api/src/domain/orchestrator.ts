@@ -1839,9 +1839,14 @@ export async function orchestrateInbound(
   };
 
   const agentNameOverride = String(ctx?.agentNameOverride ?? "").trim();
+  const normalizeAgentName = (value: string, fallback: string) => {
+    const clean = String(value ?? "").trim();
+    if (!clean || /^(our team|sales team|team)$/i.test(clean)) return fallback;
+    return clean;
+  };
   const getAgentNameFromProfile = (profile: any, fallback: string = "Brooke") => {
     const profileName = String(profile?.agentName ?? "").trim();
-    return agentNameOverride || profileName || fallback;
+    return normalizeAgentName(agentNameOverride || profileName, fallback);
   };
   let dealerProfileCache: any = ctx?.dealerProfile ?? null;
   const getDealerProfileWithAgentName = async () => {
@@ -2459,7 +2464,7 @@ export async function orchestrateInbound(
     schedulingIntentHint || hasSchedulingIntent(event.body) || !!dayName || !!dayPart || !!timeMatch;
   const specialsQuestion = detectDealsOrFinanceSpecialsQuestion(event.body);
   const wantsPayments =
-    (pricingIntentHint && !specialsQuestion) ||
+    ((pricingIntent || pricingIntentHint) && !specialsQuestion) ||
     detectPaymentPressure(event.body) ||
     detectPaymentFollowUp(event.body, history ?? []);
   const recentInboundAskedDown = [...(history ?? [])]

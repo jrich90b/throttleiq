@@ -28,8 +28,9 @@ const cases: Case[] = [
     },
     ctx: {
       leadSource: "Room58 - Request details",
-      pricingIntentHint: true,
-      financeIntentHint: true,
+      pricingIntentHint: false,
+      financeIntentHint: false,
+      agentNameOverride: "our team",
       lead: {
         firstName: "Joseph",
         source: "Room58 - Request details",
@@ -45,7 +46,7 @@ const cases: Case[] = [
       } as any
     },
     expectedIncludes: ["2025 Road Glide", "trade"],
-    expectedExcludes: ["How many miles are on it?", "Which one would you like pricing on?"]
+    expectedExcludes: ["How many miles are on it?", "Which one would you like pricing on?", "our team"]
   }
 ];
 
