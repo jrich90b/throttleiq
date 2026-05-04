@@ -81,10 +81,9 @@ import { formatEmailLayout } from "../domain/tone.js";
 import { buildOffersLine, resolveOffersUrl } from "../domain/offers.js";
 import {
   buildHiringManagerInquiryReply,
-  catalogModelMentionMatchesText,
-  cleanCatalogModelNameForDisplay,
   isHiringManagerInquiryText,
   isTimingOnlyFollowUpTopic,
+  pickCatalogModelLabelFromText,
   shouldIgnoreAdfModelMismatchForTradeContext,
   shouldSuppressInitialAvailabilityLineAppend,
   shouldSuppressInitialInventoryPhotoAppend,
@@ -1606,16 +1605,10 @@ function extractWalkInModelHint(text?: string | null): string | undefined {
   if (!t) return undefined;
   const inquiryModelHint = extractInquiryModelHint(t);
   if (inquiryModelHint) return inquiryModelHint;
-  const catalogMatch = getAllModels()
-    .map(model => ({
-      raw: model,
-      label: cleanCatalogModelNameForDisplay(model)
-    }))
-    .filter(m => m.label && catalogModelMentionMatchesText(t, m.raw))
-    .sort((a, b) => b.label.length - a.label.length)[0];
-  if (catalogMatch?.label) {
+  const catalogLabel = pickCatalogModelLabelFromText(t, getAllModels());
+  if (catalogLabel) {
     const year = extractSingleYearFromText(t);
-    return [year ? String(year) : "", catalogMatch.label].filter(Boolean).join(" ");
+    return [year ? String(year) : "", catalogLabel].filter(Boolean).join(" ");
   }
   const fortyEight = t.match(/\b((?:19|20)\d{2})?\s*(?:xl\s*1200x|xl1200x|forty[-\s]?eight|forty\s*8)\b/i);
   if (fortyEight) {

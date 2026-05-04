@@ -107,9 +107,13 @@ export function cleanCatalogModelNameForDisplay(raw: string | null | undefined):
 }
 
 export function catalogModelMentionMatchesText(textRaw: string | null | undefined, modelRaw: string | null | undefined): boolean {
+  return scoreCatalogModelMention(textRaw, modelRaw) > 0;
+}
+
+function scoreCatalogModelMention(textRaw: string | null | undefined, modelRaw: string | null | undefined): number {
   const text = String(textRaw ?? "").toLowerCase();
   const model = String(modelRaw ?? "").trim();
-  if (!text.trim() || !model) return false;
+  if (!text.trim() || !model) return 0;
   const display = cleanCatalogModelNameForDisplay(model).toLowerCase();
   const firstToken = model.split(/\s+/).filter(Boolean)[0] ?? "";
   const code = /^(?:FL|FX|XL|XR|RH|RA|VR|XG|ELW)[A-Z0-9_-]*$/i.test(firstToken) ? firstToken : "";
@@ -122,9 +126,29 @@ export function catalogModelMentionMatchesText(textRaw: string | null | undefine
       .trim();
   const normalizedText = ` ${normalizePhrase(text)} `;
   const normalizedDisplay = normalizePhrase(display);
-  if (normalizedDisplay && normalizedText.includes(` ${normalizedDisplay} `)) return true;
+  if (normalizedDisplay && normalizedText.includes(` ${normalizedDisplay} `)) {
+    return 10_000 + normalizedDisplay.length;
+  }
   const normalizedCode = normalizePhrase(code);
-  return !!normalizedCode && normalizedText.includes(` ${normalizedCode} `);
+  if (!normalizedCode || !normalizedText.includes(` ${normalizedCode} `)) return 0;
+  if (/\b(anniversary|anx|anv)\b/i.test(display) && !/\b(anniversary|anx|anv)\b/i.test(text)) {
+    return 100;
+  }
+  return 1_000 + normalizedDisplay.length;
+}
+
+export function pickCatalogModelLabelFromText(
+  textRaw: string | null | undefined,
+  models: Array<string | null | undefined>
+): string {
+  const scored = models
+    .map(model => ({
+      label: cleanCatalogModelNameForDisplay(model),
+      score: scoreCatalogModelMention(textRaw, model)
+    }))
+    .filter(row => row.label && row.score > 0)
+    .sort((a, b) => b.score - a.score || b.label.length - a.label.length);
+  return scored[0]?.label ?? "";
 }
 
 export function isAccessoryCustomizationRequestText(textRaw: string | null | undefined): boolean {

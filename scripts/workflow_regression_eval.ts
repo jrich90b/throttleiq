@@ -8,6 +8,7 @@ import {
   isHiringManagerInquiryText,
   isManualOutboundBookingConfirmationText,
   isTimingOnlyFollowUpTopic,
+  pickCatalogModelLabelFromText,
   resolveRequestedScheduleWindowMode,
   shouldIgnoreAdfModelMismatchForTradeContext,
   shouldSuppressInitialAvailabilityLineAppend,
@@ -185,6 +186,14 @@ const cases: Case[] = [
     id: "catalog_model_mentions_name",
     actual: catalogModelMentionMatchesText("showed her a forty-eight", "XL1200X 1LC3 FORTY-EIGHT"),
     expected: true
+  },
+  {
+    id: "catalog_picker_prefers_named_forty_eight_over_anniversary_code_match",
+    actual: pickCatalogModelLabelFromText("showed her a 2022 XL1200X Forty-eight", [
+      "XL1200X 1LN3 ANX FORTY-EIGHT ANNIVERSARY",
+      "XL1200X 1LC3 FORTY-EIGHT"
+    ]),
+    expected: "Forty-Eight"
   }
 ];
 
