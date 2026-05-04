@@ -67,7 +67,9 @@ function looksLikePricingPromptDraft(text: string): boolean {
   return (
     /\b(the price we have listed|ballpark|before taxes and fees|monthly payment|what monthly payment|what monthly|how much down|down payment|do you have a trade|60,?\s*72,?\s*or\s*84)\b/.test(
       t
-    ) || /\b(per month|\/mo|apr|financing)\b/.test(t)
+    ) ||
+    /\b(exact pricing|current price|pull (?:the )?(?:exact )?pricing|follow up with exact numbers)\b/.test(t) ||
+    /\b(per month|\/mo|apr|financing)\b/.test(t)
   );
 }
 
@@ -155,6 +157,24 @@ function hasSchedulingTurnSignal(text: string): boolean {
   );
 }
 
+function hasAccessoryCustomizationTurnSignal(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  const mentionsHandlebars =
+    /\b(handle\s*bars?|handlebars?|handbars?|bars?)\b/i.test(t) &&
+    !/\b(bar and shield|bar\s*&\s*shield)\b/i.test(t);
+  if (!mentionsHandlebars) return false;
+  return (
+    /\b(can|could|would|are)\s+(?:you|u|we|the shop)\b[\s\S]{0,80}\b(change|swap|replace|install|put|do)\b/i.test(
+      t
+    ) ||
+    /\b(change|swap|replace|install|put|do)\b[\s\S]{0,80}\b(handle\s*bars?|handlebars?|handbars?|handbars?|bars?)\b/i.test(
+      t
+    ) ||
+    /\bnot\s+a\s+fan\b[\s\S]{0,80}\b(ones|these|those|stock|current)\b/i.test(t)
+  );
+}
+
 function isDepartmentHandoff(input: DraftStateInvariantInput): boolean {
   const bucket = String(input.classificationBucket ?? "").toLowerCase();
   const cta = String(input.classificationCta ?? "").toLowerCase();
@@ -220,6 +240,7 @@ export function applyDraftStateInvariants(
         ? false
         : isShortAckText(inboundText);
   const financePriority = financeSignal || financeContextSignal;
+  const accessoryCustomizationSignal = hasAccessoryCustomizationTurnSignal(inboundText);
 
   if (shortAckSignal && inventoryPrompt) {
     return {
@@ -266,6 +287,14 @@ export function applyDraftStateInvariants(
       allow: false,
       draftText: "",
       reason: "finance_priority_schedule_prompt_guard"
+    };
+  }
+
+  if (accessoryCustomizationSignal && pricingPrompt) {
+    return {
+      allow: false,
+      draftText: "",
+      reason: "customization_priority_pricing_prompt_guard"
     };
   }
 

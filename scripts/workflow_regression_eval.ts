@@ -1,4 +1,6 @@
 import {
+  buildAccessoryCustomizationReply,
+  isAccessoryCustomizationRequestText,
   isBlockedCadencePersonalizationLineText,
   isManualOutboundBookingConfirmationText,
   resolveRequestedScheduleWindowMode,
@@ -116,6 +118,20 @@ const cases: Case[] = [
       inquiryModel: "Street Glide"
     }),
     expected: false
+  },
+  {
+    id: "handlebar_customization_request_detected",
+    actual: isAccessoryCustomizationRequestText(
+      "Are you able to change handbars not a fan of the ones on there"
+    ),
+    expected: true
+  },
+  {
+    id: "handlebar_customization_reply_acknowledges_able",
+    actual: /we can change the handlebars/i.test(
+      buildAccessoryCustomizationReply("Are you able to change handbars not a fan of the ones on there")
+    ),
+    expected: true
   }
 ];
 

@@ -132,6 +132,22 @@ const cases: Case[] = [
     }
   },
   {
+    id: "handlebar_customization_blocks_pricing_carryover",
+    expectedAllow: false,
+    expectedReason: "customization_priority_pricing_prompt_guard",
+    input: {
+      inboundText: "Are you able to change handbars not a fan of the ones on there",
+      draftText:
+        "Thanks for your interest in the 2025 Road Glide. I’ll have a manager pull the exact pricing and follow up shortly.",
+      followUpMode: "active",
+      followUpReason: "pricing",
+      dialogState: "pricing_answered",
+      classificationBucket: "inventory_interest",
+      classificationCta: "ask_payment",
+      financeContextIntent: true
+    }
+  },
+  {
     id: "availability_question_blocks_watch_without_answer",
     expectedAllow: false,
     expectedReason: "availability_priority_inventory_prompt_guard",

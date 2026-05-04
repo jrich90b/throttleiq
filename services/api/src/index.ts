@@ -176,6 +176,8 @@ import {
   looksLikeTimeSelection
 } from "./domain/legacyRegexFallback.js";
 import {
+  buildAccessoryCustomizationReply,
+  isAccessoryCustomizationRequestText,
   isBlockedCadencePersonalizationLineText,
   isManualOutboundBookingConfirmationText,
   resolveRequestedScheduleWindowMode,
@@ -28216,6 +28218,24 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return respondWithSmsRegeneratedDraft(inventoryBrowse.reply);
   }
 
+  if (event.provider === "twilio" && isAccessoryCustomizationRequestText(event.body ?? "")) {
+    const reply = buildAccessoryCustomizationReply(event.body ?? "");
+    addTodo(
+      conv,
+      "other",
+      `Accessory customization request: ${String(event.body ?? "").trim()}`,
+      (inbound as any)?.providerMessageId
+    );
+    recordRouteOutcome("regen", "accessory_customization_request", {
+      convId: conv.id,
+      leadKey: conv.leadKey
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply);
+  }
+
   const regenInboundAtMs = new Date(event.receivedAt).getTime();
   const regenLastOutboundBeforeInbound = [...(conv.messages ?? [])]
     .filter(m => m.direction === "out" && m.body)
@@ -31047,6 +31067,27 @@ if (authToken && signature) {
     const reply = buildAffordabilityRideConfidenceObjectionReply();
     setDialogState(conv, "pricing_init");
     setFollowUpMode(conv, "active", "affordability_ride_confidence_objection");
+    const mode = webhookMode;
+    if (mode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+
+  if (isAccessoryCustomizationRequestText(semanticInboundText)) {
+    const reply = buildAccessoryCustomizationReply(semanticInboundText);
+    addTodo(
+      conv,
+      "other",
+      `Accessory customization request: ${semanticInboundText.trim()}`,
+      event.providerMessageId
+    );
     const mode = webhookMode;
     if (mode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");

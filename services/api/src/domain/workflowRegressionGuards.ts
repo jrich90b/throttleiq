@@ -42,6 +42,41 @@ export function shouldSuppressInitialInventoryPhotoAppend(draftRaw: string | nul
   );
 }
 
+export function isAccessoryCustomizationRequestText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "").toLowerCase();
+  if (!text.trim()) return false;
+
+  const mentionsHandlebars =
+    /\b(handle\s*bars?|handlebars?|handbars?|bars?)\b/i.test(text) &&
+    !/\b(bar and shield|bar\s*&\s*shield)\b/i.test(text);
+  if (!mentionsHandlebars) return false;
+
+  return (
+    /\b(can|could|would|are)\s+(?:you|u|we|the shop)\b[\s\S]{0,80}\b(change|swap|replace|install|put|do)\b/i.test(
+      text
+    ) ||
+    /\b(change|swap|replace|install|put|do)\b[\s\S]{0,80}\b(handle\s*bars?|handlebars?|handbars?|bars?)\b/i.test(
+      text
+    ) ||
+    /\bnot\s+a\s+fan\b[\s\S]{0,80}\b(ones|these|those|stock|current)\b/i.test(text)
+  );
+}
+
+export function buildAccessoryCustomizationReply(textRaw: string | null | undefined): string {
+  const text = String(textRaw ?? "");
+  const hasMediaReference =
+    /\b(pic|pics|picture|photo|image|attached|sent|mms)\b/i.test(text) ||
+    /\bnot\s+a\s+fan\s+of\s+the\s+ones\b/i.test(text);
+
+  if (/\b(handle\s*bars?|handlebars?|handbars?|bars?)\b/i.test(text)) {
+    return hasMediaReference
+      ? "Yes — we can change the handlebars. The picture helps; I’ll have our team check the right bar setup, parts, and labor for that bike and follow up with options."
+      : "Yes — we can change the handlebars. I’ll have our team check the right bar setup, parts, and labor for that bike and follow up with options.";
+  }
+
+  return "Yes — we can help with that customization. I’ll have our team check the right parts and labor for that bike and follow up with options.";
+}
+
 export function shouldTreatAdfAsWalkInContext(args: {
   leadSource?: string | null;
   priorWalkIn?: boolean | null;
