@@ -105,11 +105,13 @@ export function cleanCatalogModelNameForDisplay(raw: string | null | undefined):
   const parts = original.split(/\s+/).filter(Boolean);
   if (!parts.length) return "";
   const isHarleyCodePrefix = (token: string): boolean =>
-    /^(?:FL|FX|XL|XR|RH|RA|VR|XG|ELW)[A-Z0-9_-]*$/i.test(token) || /^[A-Z]{1,4}\d[A-Z0-9_-]*$/i.test(token);
+    /^(?:FL|FX|XL|XR|RH|RA|VR|XG|ELW)[A-Z0-9_-]*$/i.test(token) ||
+    /^[A-Z]{1,4}\d[A-Z0-9_-]*$/i.test(token) ||
+    (/^[A-Z0-9_-]{2,8}$/i.test(token) && /[A-Z]/i.test(token) && /\d/.test(token));
   let start = 0;
   if (parts[start] && isHarleyCodePrefix(parts[start])) {
     start += 1;
-    while (parts[start] && /^[A-Z0-9_-]+$/.test(parts[start]) && /\d/.test(parts[start])) {
+    while (parts[start] && /^[A-Z0-9_-]+$/i.test(parts[start]) && /\d/.test(parts[start])) {
       start += 1;
     }
   }

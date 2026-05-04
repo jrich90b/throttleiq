@@ -82,6 +82,7 @@ import { buildOffersLine, resolveOffersUrl } from "../domain/offers.js";
 import {
   buildTimingAwareWalkInFollowUpLine,
   buildHiringManagerInquiryReply,
+  cleanCatalogModelNameForDisplay,
   isHiringManagerInquiryText,
   isTimingOnlyFollowUpTopic,
   pickCatalogModelLabelFromText,
@@ -907,7 +908,8 @@ function detectInitialAdfModelMismatch(args: {
 function extractInquiryModelHint(inquiry?: string | null): string | undefined {
   const mentions = extractInquiryModelMentions(inquiry);
   if (!mentions.length) return undefined;
-  return mentions[0]?.label ? normalizeDisplayCase(mentions[0].label) : undefined;
+  if (!mentions[0]?.label) return undefined;
+  return normalizeDisplayCase(cleanCatalogModelNameForDisplay(mentions[0].label));
 }
 
 function extractInquiryYearHint(inquiry?: string | null): string | undefined {
@@ -4927,7 +4929,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       !hasCompletedTestRideSignal &&
       !hasDealProgressSignal &&
       !hasHoldSignal &&
-      !hasResumeHoldSignal
+      !hasResumeHoldSignal &&
+      !walkInReminderRequest
     ) {
       if (wantsUsed) {
         const usedLabel = `used ${rangeLabel}${formatWatchModelForMessage(modelLabel)}`;

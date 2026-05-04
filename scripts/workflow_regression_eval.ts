@@ -188,6 +188,11 @@ const cases: Case[] = [
     expected: "Forty-Eight"
   },
   {
+    id: "catalog_model_code_clean_forty_eight_variant_code_only",
+    actual: cleanCatalogModelNameForDisplay("1lc3 Forty-Eight"),
+    expected: "Forty-Eight"
+  },
+  {
     id: "catalog_model_mentions_code",
     actual: catalogModelMentionMatchesText("showed him an FXLRS today", "FXLRS 1YWK LOW RIDER S"),
     expected: true
