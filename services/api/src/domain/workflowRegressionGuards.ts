@@ -47,6 +47,22 @@ export function allowNoResponseSmallTalkAck(args: {
   );
 }
 
+export function allowComplimentOnlyReply(args: {
+  complimentOnly: boolean;
+  financeSignal?: boolean;
+  availabilitySignal?: boolean;
+  schedulingSignal?: boolean;
+  callbackSignal?: boolean;
+}): boolean {
+  if (!args.complimentOnly) return false;
+  return !(
+    args.financeSignal ||
+    args.availabilitySignal ||
+    args.schedulingSignal ||
+    args.callbackSignal
+  );
+}
+
 export function shouldSuppressInitialInventoryPhotoAppend(draftRaw: string | null | undefined): boolean {
   const draft = String(draftRaw ?? "");
   if (!draft.trim()) return false;

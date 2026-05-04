@@ -1,4 +1,5 @@
 import {
+  allowComplimentOnlyReply,
   allowNoResponseSmallTalkAck,
   buildAccessoryCustomizationReply,
   buildFactoryOrderTimingHandoffReply,
@@ -82,6 +83,16 @@ const cases: Case[] = [
   {
     id: "no_response_smalltalk_allowed_without_action_signal",
     actual: allowNoResponseSmallTalkAck({ smallTalk: true }),
+    expected: true
+  },
+  {
+    id: "compliment_reply_suppressed_for_scheduling_signal",
+    actual: allowComplimentOnlyReply({ complimentOnly: true, schedulingSignal: true }),
+    expected: false
+  },
+  {
+    id: "compliment_reply_allowed_without_action_signal",
+    actual: allowComplimentOnlyReply({ complimentOnly: true }),
     expected: true
   },
   {

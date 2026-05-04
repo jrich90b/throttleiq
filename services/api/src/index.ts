@@ -176,6 +176,7 @@ import {
   looksLikeTimeSelection
 } from "./domain/legacyRegexFallback.js";
 import {
+  allowComplimentOnlyReply,
   allowNoResponseSmallTalkAck,
   buildAccessoryCustomizationReply,
   buildFactoryOrderTimingHandoffReply,
@@ -29491,7 +29492,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return respondWithSmsRegeneratedDraft(reply);
   }
 
-  if ((regenLlmComplimentOnly || isComplimentOnlyText(event.body)) && !isShortAckText(event.body)) {
+  if (
+    allowComplimentOnlyReply({
+      complimentOnly:
+        (regenLlmComplimentOnly || isComplimentOnlyText(event.body)) && !isShortAckText(event.body),
+      financeSignal: regenParserPricingIntent,
+      availabilitySignal: regenParserAvailabilityIntent,
+      schedulingSignal:
+        regenParserSchedulingIntent || regenLlmExplicitScheduleIntent || regenSchedulingLexicalIntent,
+      callbackSignal: regenParserCallbackIntent
+    })
+  ) {
     const reply = buildComplimentReply();
     if (channel === "email") {
       return respondWithEmailRegeneratedDraft(reply);
@@ -31243,7 +31254,19 @@ if (authToken && signature) {
     }
   }
 
-  if ((llmComplimentOnly || isComplimentOnlyText(event.body)) && !isShortAckText(event.body)) {
+  const complimentSchedulingSignals = detectSchedulingSignals(String(event.body ?? ""));
+  const complimentHasSchedulingSignal =
+    llmExplicitScheduleIntent ||
+    complimentSchedulingSignals.explicit ||
+    complimentSchedulingSignals.hasDayTime ||
+    complimentSchedulingSignals.hasDayOnlyAvailability ||
+    complimentSchedulingSignals.hasDayOnlyRequest;
+  if (
+    allowComplimentOnlyReply({
+      complimentOnly: (llmComplimentOnly || isComplimentOnlyText(event.body)) && !isShortAckText(event.body),
+      schedulingSignal: complimentHasSchedulingSignal
+    })
+  ) {
     const reply = buildComplimentReply();
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
