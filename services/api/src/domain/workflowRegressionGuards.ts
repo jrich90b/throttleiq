@@ -57,6 +57,21 @@ export function shouldSuppressInitialAvailabilityLineAppend(draftRaw: string | n
   );
 }
 
+export function isHiringManagerInquiryText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "").toLowerCase();
+  if (!text.trim()) return false;
+  return (
+    /\b(hiring manager|manager (?:for|about) (?:hiring|jobs?|careers?|employment)|who (?:is|do i contact).{0,80}(?:hiring|jobs?|careers?|employment))\b/i.test(
+      text
+    ) ||
+    /\b(apply|application|resume|job opening|job openings|career|careers|employment|hiring)\b/i.test(text)
+  );
+}
+
+export function buildHiringManagerInquiryReply(): string {
+  return "Thanks for reaching out. I’ll pass your message along and have the hiring manager follow up with you.";
+}
+
 export function isAccessoryCustomizationRequestText(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "").toLowerCase();
   if (!text.trim()) return false;

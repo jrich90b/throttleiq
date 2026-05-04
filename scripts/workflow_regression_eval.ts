@@ -1,7 +1,9 @@
 import {
   buildAccessoryCustomizationReply,
+  buildHiringManagerInquiryReply,
   isAccessoryCustomizationRequestText,
   isBlockedCadencePersonalizationLineText,
+  isHiringManagerInquiryText,
   isManualOutboundBookingConfirmationText,
   resolveRequestedScheduleWindowMode,
   shouldIgnoreAdfModelMismatchForTradeContext,
@@ -139,6 +141,16 @@ const cases: Case[] = [
     actual: /we can change the handlebars/i.test(
       buildAccessoryCustomizationReply("Are you able to change handbars not a fan of the ones on there")
     ),
+    expected: true
+  },
+  {
+    id: "hiring_manager_inquiry_detected",
+    actual: isHiringManagerInquiryText("Who is the hiring manager for American Harley Davidson?"),
+    expected: true
+  },
+  {
+    id: "hiring_manager_reply_handoff",
+    actual: /hiring manager follow up/i.test(buildHiringManagerInquiryReply()),
     expected: true
   }
 ];

@@ -80,6 +80,8 @@ import { listUsers } from "../domain/userStore.js";
 import { formatEmailLayout } from "../domain/tone.js";
 import { buildOffersLine, resolveOffersUrl } from "../domain/offers.js";
 import {
+  buildHiringManagerInquiryReply,
+  isHiringManagerInquiryText,
   shouldIgnoreAdfModelMismatchForTradeContext,
   shouldSuppressInitialAvailabilityLineAppend,
   shouldSuppressInitialInventoryPhotoAppend,
@@ -4149,6 +4151,56 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       note: "timed_callback_todo_only"
     });
   }
+
+  const hiringManagerInquiry =
+    isInitialAdf &&
+    isHiringManagerInquiryText(
+      [
+        effectiveInquiry,
+        inquiryRaw,
+        lead.inquiry,
+        lead.comment,
+        event.body
+      ]
+        .filter(Boolean)
+        .join("\n")
+    );
+  if (hiringManagerInquiry) {
+    let ack = buildHiringManagerInquiryReply();
+    ack = await applyInitialAdfPrefix(ack);
+    setFollowUpMode(conv, "manual_handoff", "hiring_manager_inquiry");
+    stopFollowUpCadence(conv, "manual_handoff");
+    conv.classification = {
+      ...(conv.classification ?? {}),
+      bucket: "general_inquiry",
+      cta: "contact_us",
+      channel,
+      ruleName: "hiring_manager_inquiry"
+    };
+    conv.dialogState = { name: "callback_handoff", updatedAt: new Date().toISOString() };
+    addTodo(
+      conv,
+      "other",
+      `Hiring manager inquiry: ${effectiveInquiry || inquiryRaw || event.body || "Customer asked about hiring manager."}`,
+      event.providerMessageId
+    );
+    queueInitialDraftForPreferredContact(ack);
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: "general_inquiry",
+      cta: "contact_us",
+      channel,
+      intent: "GENERAL",
+      stage: "HANDOFF",
+      draft: ack,
+      note: "hiring_manager_inquiry_handoff"
+    });
+  }
+
   if (isInitialAdf && prefersPhoneOnly && systemMode !== "suggest") {
     maybeAddInitialCallTodo();
     return res.status(200).json({
