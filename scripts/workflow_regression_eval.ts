@@ -1,11 +1,13 @@
 import {
   buildAccessoryCustomizationReply,
+  buildFactoryOrderTimingHandoffReply,
   buildHiringManagerInquiryReply,
   buildTimingAwareWalkInFollowUpLine,
   catalogModelMentionMatchesText,
   cleanCatalogModelNameForDisplay,
   isAccessoryCustomizationRequestText,
   isBlockedCadencePersonalizationLineText,
+  isFactoryOrderTimingQuestionText,
   isHiringManagerInquiryText,
   isManualOutboundBookingConfirmationText,
   isTimingOnlyFollowUpTopic,
@@ -157,6 +159,16 @@ const cases: Case[] = [
     id: "hiring_manager_reply_handoff",
     actual: /hiring manager follow up/i.test(buildHiringManagerInquiryReply()),
     expected: true
+  },
+  {
+    id: "factory_order_timing_question_detected",
+    actual: isFactoryOrderTimingQuestionText("perfect thanks. how long would it take to get a 2026 nightster in"),
+    expected: true
+  },
+  {
+    id: "factory_order_timing_reply_no_eta_guess",
+    actual: buildFactoryOrderTimingHandoffReply("2026 Nightster"),
+    expected: "I’ll check on the status of the 2026 Nightster and follow up with you."
   },
   {
     id: "walkin_next_week_is_timing_not_topic",

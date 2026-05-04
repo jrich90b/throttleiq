@@ -99,6 +99,34 @@ export function buildTimingAwareWalkInFollowUpLine(args: {
   return `${base} I'll follow up about ${followUpTopic}.`;
 }
 
+export function isFactoryOrderTimingQuestionText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "").toLowerCase();
+  if (!text.trim()) return false;
+  const asksTiming =
+    /\bhow\s+long\b/.test(text) ||
+    /\bhow\s+soon\b/.test(text) ||
+    /\b(?:eta|e\.t\.a\.)\b/.test(text) ||
+    /\b(?:timeframe|timeline|wait|take)\b/.test(text);
+  if (!asksTiming) return false;
+  return (
+    /\bfactory\b/.test(text) ||
+    /\border(?:ed|ing)?\b/.test(text) ||
+    /\ballocation\b/.test(text) ||
+    /\binbound\b/.test(text) ||
+    /\b(?:get|bring|locate)\s+(?:one|a|an|the|another)?\b[\s\S]{0,80}\b(?:in|here|from)\b/.test(text) ||
+    /\bcome\s+in\b/.test(text) ||
+    /\barriv(?:e|es|ed|ing|al)\b/.test(text)
+  );
+}
+
+export function buildFactoryOrderTimingHandoffReply(modelLabel?: string | null): string {
+  const model = String(modelLabel ?? "").replace(/\s+/g, " ").trim();
+  if (model) {
+    return `I’ll check on the status of the ${model} and follow up with you.`;
+  }
+  return "I’ll check on availability and timing and follow up with you.";
+}
+
 export function cleanCatalogModelNameForDisplay(raw: string | null | undefined): string {
   const original = String(raw ?? "").replace(/\s+/g, " ").trim();
   if (!original) return "";

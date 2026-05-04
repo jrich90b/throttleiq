@@ -135,7 +135,7 @@ function buildDealershipFaqReply(args: {
     case "custom_order":
       return "Yes — we can place a factory order and spec it with genuine Harley-Davidson options. If you want, we can map your build today.";
     case "factory_order_timing":
-      return "Factory orders are usually around 6 to 12 weeks, depending on model and build details.";
+      return `I’ll check current factory/inbound timing for ${bikeLabel} and follow up with you.`;
     case "finance_approval":
       return `Yes — we offer financing through Harley-Davidson Financial Services and partner lenders here at ${args.dealerName}.`;
     case "credit_score":

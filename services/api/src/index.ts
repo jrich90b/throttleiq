@@ -177,9 +177,12 @@ import {
 } from "./domain/legacyRegexFallback.js";
 import {
   buildAccessoryCustomizationReply,
+  buildFactoryOrderTimingHandoffReply,
   isAccessoryCustomizationRequestText,
   isBlockedCadencePersonalizationLineText,
+  isFactoryOrderTimingQuestionText,
   isManualOutboundBookingConfirmationText,
+  pickCatalogModelLabelFromText,
   resolveRequestedScheduleWindowMode,
   shouldSuppressInitialInventoryPhotoAppend
 } from "./domain/workflowRegressionGuards.js";
@@ -6559,6 +6562,24 @@ function normalizeDisplayCase(raw?: string | null): string {
   const letters = trimmed.replace(/[^A-Za-z]/g, "");
   if (!letters) return trimmed;
   return letters === letters.toUpperCase() ? toTitleCase(trimmed) : trimmed;
+}
+
+function resolveFactoryOrderTimingModelLabel(
+  body: string | null | undefined,
+  parsedAvailability?: { model?: string | null; year?: string | null } | null,
+  conv?: Conversation | null
+): string {
+  const text = String(body ?? "");
+  const catalogLabel = pickCatalogModelLabelFromText(text, getAllModels());
+  const parsedModel = normalizeDisplayCase(parsedAvailability?.model ?? "");
+  const leadModel = normalizeDisplayCase(conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description ?? "");
+  const model = catalogLabel || parsedModel || leadModel;
+  if (!model) return "";
+  const parsedYear = String(parsedAvailability?.year ?? "").trim();
+  const textYear = text.match(/\b(20\d{2})\b/)?.[1] ?? "";
+  const leadYear = String(conv?.lead?.vehicle?.year ?? "").trim();
+  const year = parsedYear || textYear || leadYear;
+  return [year, model].filter(Boolean).join(" ");
 }
 
 function pickVariantByKey(key: string | null | undefined, variants: string[]): string {
@@ -28837,6 +28858,31 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenParserCallbackIntent = regenRoutingIntentOverride === "callback";
   const regenParserAvailabilityIntent = regenRoutingIntentOverride === "availability";
   const regenRoutePolicyMode = getRoutePolicyMode();
+  if (event.provider === "twilio" && isFactoryOrderTimingQuestionText(event.body ?? "")) {
+    const modelLabel = resolveFactoryOrderTimingModelLabel(event.body ?? "", null, conv);
+    const reply = buildFactoryOrderTimingHandoffReply(modelLabel);
+    addTodo(
+      conv,
+      "other",
+      modelLabel
+        ? `Check factory/inbound timing for ${modelLabel} and follow up.`
+        : "Check factory/inbound timing and follow up.",
+      event.providerMessageId
+    );
+    setDialogState(conv, "inventory_answered");
+    setFollowUpMode(conv, "manual_handoff", "factory_order_timing");
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "factory_order_timing", { setMode: "manual_handoff" });
+    recordRouteOutcome("regen", "factory_order_timing_handoff", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      modelLabel: modelLabel || null
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply);
+  }
   if (regenRoutingParserDecision.accepted && regenRoutingParserDecision.fallbackAction === "no_response") {
     const regenNoResponseInboundText = String(event.body ?? "");
     const regenExplicitFinanceSignal =
@@ -33209,6 +33255,33 @@ if (authToken && signature) {
   const jumpStartExperienceRequest = isJumpStartExperienceText(event.body ?? "");
   const effectiveTestRideIntent = llmTestRideIntent && !jumpStartExperienceRequest;
   const llmAvailability = llmAvailabilityIntent ? intentParse?.availability ?? null : null;
+  if (event.provider === "twilio" && isFactoryOrderTimingQuestionText(event.body ?? "")) {
+    const modelLabel = resolveFactoryOrderTimingModelLabel(event.body ?? "", llmAvailability, conv);
+    const reply = buildFactoryOrderTimingHandoffReply(modelLabel);
+    addTodo(
+      conv,
+      "other",
+      modelLabel
+        ? `Check factory/inbound timing for ${modelLabel} and follow up.`
+        : "Check factory/inbound timing and follow up.",
+      event.providerMessageId
+    );
+    setDialogState(conv, "inventory_answered");
+    setFollowUpMode(conv, "manual_handoff", "factory_order_timing");
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "factory_order_timing", { setMode: "manual_handoff" });
+    logRouteOutcome("factory_order_timing_handoff", {
+      modelLabel: modelLabel || null
+    });
+    if (webhookMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(reply)}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   let mentionedUser: any | null = null;
   let ambiguousMentionUsers: any[] = [];
   let usersForMentions: Array<any> = [];
