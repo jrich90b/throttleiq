@@ -460,7 +460,9 @@ export function shouldTreatInboundAsTestRideBikeSelection(
   const testRideContext =
     normalizeLower(input.dialogState).startsWith("test_ride_") ||
     normalizeLower(input.classificationBucket) === "test_ride" ||
-    normalizeLower(input.classificationCta) === "schedule_test_ride";
+    normalizeLower(input.classificationCta) === "schedule_test_ride" ||
+    /\b(line up|set up|schedule|book)\b[\s\S]{0,80}\b(test ride|demo ride|ride)\b/.test(lastOutbound) ||
+    /\b(test ride|demo ride)\b[\s\S]{0,80}\b(pick|choose|reply with|which|what)\b/.test(lastOutbound);
   if (!testRideContext) return false;
 
   const promptedForBikeSelection =

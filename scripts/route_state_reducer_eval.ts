@@ -167,6 +167,19 @@ const testRideBikeSelectionCases: TestRideBikeSelectionCase[] = [
     expected: true
   },
   {
+    id: "keeps_test_ride_context_after_inventory_answered_state",
+    input: {
+      inboundText: "Road King, any Street Glide, OR Large CC Pan American, would be great.",
+      lastOutboundText:
+        "Here’s our current inventory so you can pick an in-stock bike. Once you pick one, I can line up the test ride right away. Here’s a photo of a 2025 Street Glide in Brilliant Red we have in stock.",
+      dialogState: "inventory_answered",
+      classificationBucket: "inventory_interest",
+      classificationCta: "check_availability",
+      mentionedModelCount: 3
+    },
+    expected: true
+  },
+  {
     id: "does_not_apply_without_test_ride_context",
     input: {
       inboundText: "2026 Street Glide 3 Limited black trim",
