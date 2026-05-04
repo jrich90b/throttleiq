@@ -2,6 +2,7 @@ import {
   isBlockedCadencePersonalizationLineText,
   isManualOutboundBookingConfirmationText,
   resolveRequestedScheduleWindowMode,
+  shouldIgnoreAdfModelMismatchForTradeContext,
   shouldSuppressInitialInventoryPhotoAppend,
   shouldTreatAdfAsWalkInContext
 } from "../services/api/src/domain/workflowRegressionGuards.ts";
@@ -99,6 +100,22 @@ const cases: Case[] = [
       walkInSignalHint: true
     }),
     expected: true
+  },
+  {
+    id: "trade_vehicle_model_does_not_trigger_adf_model_mismatch",
+    actual: shouldIgnoreAdfModelMismatchForTradeContext({
+      inquiry: "What the asking price i have a 2013 street glide to trade in what the trade in value would be?",
+      inquiryModel: "Street Glide"
+    }),
+    expected: true
+  },
+  {
+    id: "direct_requested_model_still_can_trigger_adf_model_mismatch",
+    actual: shouldIgnoreAdfModelMismatchForTradeContext({
+      inquiry: "What is the asking price on a Street Glide?",
+      inquiryModel: "Street Glide"
+    }),
+    expected: false
   }
 ];
 

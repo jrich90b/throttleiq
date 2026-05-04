@@ -80,6 +80,7 @@ import { listUsers } from "../domain/userStore.js";
 import { formatEmailLayout } from "../domain/tone.js";
 import { buildOffersLine, resolveOffersUrl } from "../domain/offers.js";
 import {
+  shouldIgnoreAdfModelMismatchForTradeContext,
   shouldSuppressInitialInventoryPhotoAppend,
   shouldTreatAdfAsWalkInContext
 } from "../domain/workflowRegressionGuards.js";
@@ -885,7 +886,13 @@ function detectInitialAdfModelMismatch(args: {
   const mentions = extractInquiryModelMentions(args.inquiry);
   if (!mentions.length) return null;
   const mismatch = mentions.find(
-    m => m.key !== leadKey && !modelsLikelySameFamilyForAdfMismatch(leadModelNormalized, m.label)
+    m =>
+      m.key !== leadKey &&
+      !modelsLikelySameFamilyForAdfMismatch(leadModelNormalized, m.label) &&
+      !shouldIgnoreAdfModelMismatchForTradeContext({
+        inquiry: args.inquiry,
+        inquiryModel: m.label
+      })
   );
   if (!mismatch) return null;
   return { leadModel: leadModelNormalized, inquiryModel: mismatch.label };

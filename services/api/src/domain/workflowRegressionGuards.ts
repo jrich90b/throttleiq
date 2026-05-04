@@ -57,6 +57,47 @@ export function shouldTreatAdfAsWalkInContext(args: {
   return true;
 }
 
+function escapeRegexLiteral(value: string): string {
+  return String(value ?? "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function shouldIgnoreAdfModelMismatchForTradeContext(args: {
+  inquiry?: string | null;
+  inquiryModel?: string | null;
+}): boolean {
+  const inquiry = String(args.inquiry ?? "");
+  const model = String(args.inquiryModel ?? "").trim();
+  if (!inquiry.trim() || !model) return false;
+
+  const modelPattern = model
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(escapeRegexLiteral)
+    .join("\\s+");
+  if (!modelPattern) return false;
+
+  const re = new RegExp(`\\b${modelPattern}\\b`, "ig");
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(inquiry))) {
+    const before = inquiry.slice(Math.max(0, match.index - 90), match.index);
+    const after = inquiry.slice(match.index + match[0].length, match.index + match[0].length + 120);
+    const window = `${before}${match[0]}${after}`;
+
+    if (
+      /\b(?:trade(?:\s|-)?in|trading|trade|apprais(?:e|al)|value)\b/i.test(window) &&
+      (
+        /\b(?:my|have|own)\b[\s\S]{0,70}\b(?:19|20)\d{2}\b/i.test(before) ||
+        /\b(?:19|20)\d{2}\b[\s\S]{0,30}$/i.test(before) ||
+        /^\W*(?:to\s+)?(?:trade(?:\s|-)?in|trade|trading|apprais(?:e|al)|value)\b/i.test(after)
+      )
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export function resolveRequestedScheduleWindowMode(textRaw: string | null | undefined): RequestedScheduleWindowMode {
   const text = String(textRaw ?? "").toLowerCase();
   if (!text.trim()) return "none";
