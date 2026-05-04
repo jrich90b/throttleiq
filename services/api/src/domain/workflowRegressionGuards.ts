@@ -63,6 +63,28 @@ export function allowComplimentOnlyReply(args: {
   );
 }
 
+export function shouldRebaseWeekdayReplyToPriorNextWeek(
+  inboundTextRaw: string | null | undefined,
+  lastOutboundTextRaw: string | null | undefined
+): boolean {
+  const inbound = String(inboundTextRaw ?? "").toLowerCase();
+  const lastOutbound = String(lastOutboundTextRaw ?? "").toLowerCase();
+  if (!inbound.trim() || !lastOutbound.trim()) return false;
+  if (!/\bnext week\b/.test(lastOutbound)) return false;
+  if (!/\b(?:monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun)\b/.test(inbound)) {
+    return false;
+  }
+  if (/\b(?:next|this)\s+(?:monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun)\b/.test(inbound)) {
+    return false;
+  }
+  if (/\b(today|tomorrow)\b/.test(inbound)) return false;
+  if (/\b\d{1,2}[/-]\d{1,2}\b/.test(inbound)) return false;
+  if (/\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2}\b/.test(inbound)) {
+    return false;
+  }
+  return true;
+}
+
 export function shouldSuppressInitialInventoryPhotoAppend(draftRaw: string | null | undefined): boolean {
   const draft = String(draftRaw ?? "");
   if (!draft.trim()) return false;

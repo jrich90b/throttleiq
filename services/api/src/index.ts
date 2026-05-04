@@ -186,6 +186,7 @@ import {
   isManualOutboundBookingConfirmationText,
   pickCatalogModelLabelFromText,
   resolveRequestedScheduleWindowMode,
+  shouldRebaseWeekdayReplyToPriorNextWeek,
   shouldSuppressInitialInventoryPhotoAppend
 } from "./domain/workflowRegressionGuards.js";
 
@@ -10785,6 +10786,46 @@ function parseRequestedDayTimeWithRawFallback(
     return parseRequestedDayTime(raw, timeZone);
   }
   return null;
+}
+
+function rebaseRequestedDayTimeFromPriorNextWeekContext(
+  requested: ReturnType<typeof parseRequestedDayTime>,
+  inboundText: string | null | undefined,
+  lastOutboundText: string | null | undefined,
+  timeZone: string
+): ReturnType<typeof parseRequestedDayTime> {
+  if (!requested) return requested;
+  if (!shouldRebaseWeekdayReplyToPriorNextWeek(inboundText, lastOutboundText)) return requested;
+  const shifted = localPartsToUtcDate(timeZone, {
+    year: requested.year,
+    month: requested.month,
+    day: requested.day,
+    hour24: 12,
+    minute: 0
+  });
+  shifted.setUTCDate(shifted.getUTCDate() + 7);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    weekday: "long"
+  }).formatToParts(shifted);
+  const map: Record<string, string> = {};
+  for (const part of parts) {
+    if (part.type !== "literal") map[part.type] = part.value;
+  }
+  const year = Number(map.year);
+  const month = Number(map.month);
+  const day = Number(map.day);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return requested;
+  return {
+    ...requested,
+    year,
+    month,
+    day,
+    dayOfWeek: String(map.weekday ?? requested.dayOfWeek).toLowerCase()
+  };
 }
 
 function formatRequestedDayTimePhrase(
@@ -29821,9 +29862,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       const labelModel = normalizeDisplayCase(modelForLookup || contextModel);
       const labelColor = contextColor ? ` in ${formatColorLabel(contextColor)}` : "";
       const unitLabel = `${labelYear}${labelModel}${labelColor}`.trim();
-      const parsedRequestedDayTime = parseRequestedDayTimeWithRawFallback(
+      let parsedRequestedDayTime = parseRequestedDayTimeWithRawFallback(
         String(event.body ?? ""),
         String(event.body ?? ""),
+        regenTz
+      );
+      parsedRequestedDayTime = rebaseRequestedDayTimeFromPriorNextWeekContext(
+        parsedRequestedDayTime,
+        String(event.body ?? ""),
+        lastOutboundText,
         regenTz
       );
       if (parsedRequestedDayTime) {
@@ -29851,17 +29898,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
           setDialogState(conv, appointmentType === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent");
           return respondWithSmsRegeneratedDraft(windowReply);
         }
-        const requestedPhrase = formatRequestedDayTimePhrase(parsedRequestedDayTime, regenTz);
-        const daySpecificReply =
-          availableMatches.length > 0
-            ? explicitAvailabilityAskThisTurn && !recentlyConfirmedAvailable
-              ? `Absolutely — ${unitLabel} is still available right now. ${requestedPhrase} works.`
-              : `${requestedPhrase} works.`
-            : explicitAvailabilityAskThisTurn
-              ? `I’ll keep an eye on ${unitLabel} and update you right away. ${requestedPhrase} works.`
-              : `${requestedPhrase} works.`;
-        return respondWithSmsRegeneratedDraft(daySpecificReply);
+        if (availableMatches.length === 0) {
+          const requestedPhrase = formatRequestedDayTimePhrase(parsedRequestedDayTime, regenTz);
+          const daySpecificReply = explicitAvailabilityAskThisTurn
+            ? `I’ll keep an eye on ${unitLabel} and update you right away. ${requestedPhrase} works.`
+            : `${requestedPhrase} works.`;
+          return respondWithSmsRegeneratedDraft(daySpecificReply);
+        }
       }
+      if (!parsedRequestedDayTime) {
       const requestedDay = parseDayOfWeek(event.body ?? "");
       const requestedDayPart = extractDayPart(event.body ?? "");
       const requestedTimeToken = extractTimeToken(String(event.body ?? ""));
@@ -29944,6 +29989,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
             ? `Next week works. I’ll keep an eye on ${unitLabel} and update you right away. What day are you thinking to stop by?`
             : "Next week works. What day are you thinking to stop by?";
       return respondWithSmsRegeneratedDraft(reply);
+      }
     }
   }
 
@@ -37200,7 +37246,12 @@ if (authToken && signature) {
         const cfg = await getSchedulerConfigHot();
         logRouteTiming("scheduler.config", schedulerConfigStartedAt);
         const schedulingText = bookingParseText || String(event.body ?? "");
-        const requested = parseRequestedDayTimeWithRawFallback(schedulingText, String(event.body ?? ""), cfg.timezone);
+        const requested = rebaseRequestedDayTimeFromPriorNextWeekContext(
+          parseRequestedDayTimeWithRawFallback(schedulingText, String(event.body ?? ""), cfg.timezone),
+          String(event.body ?? ""),
+          lastOutboundText,
+          cfg.timezone
+        );
         const requestedDateFloor = !requested
           ? resolveRequestedDateFloor({
               text: schedulingText,
@@ -37688,7 +37739,12 @@ if (authToken && signature) {
     try {
       const cfg = await getSchedulerConfigHot();
       const tz = cfg.timezone || "America/New_York";
-      const parsed = parseRequestedDayTimeWithRawFallback(bookingParseText, String(event.body ?? ""), tz);
+      const parsed = rebaseRequestedDayTimeFromPriorNextWeekContext(
+        parseRequestedDayTimeWithRawFallback(bookingParseText, String(event.body ?? ""), tz),
+        String(event.body ?? ""),
+        lastOutboundText,
+        tz
+      );
       if (parsed) {
         result.requestedTime = parsed;
       }
@@ -37784,7 +37840,12 @@ if (authToken && signature) {
       try {
         const cfg = await getSchedulerConfigHot();
         const tz = cfg.timezone || "America/New_York";
-        requested = parseRequestedDayTimeWithRawFallback(bookingParseText, String(event.body ?? ""), tz);
+        requested = rebaseRequestedDayTimeFromPriorNextWeekContext(
+          parseRequestedDayTimeWithRawFallback(bookingParseText, String(event.body ?? ""), tz),
+          String(event.body ?? ""),
+          lastOutboundText,
+          tz
+        );
       } catch {}
     }
     if (requested) {
@@ -37915,7 +37976,12 @@ if (authToken && signature) {
         try {
           const cfg = await getSchedulerConfigHot();
           const tz = cfg.timezone || "America/New_York";
-          requested = parseRequestedDayTimeWithRawFallback(bookingParseText, String(event.body ?? ""), tz);
+          requested = rebaseRequestedDayTimeFromPriorNextWeekContext(
+            parseRequestedDayTimeWithRawFallback(bookingParseText, String(event.body ?? ""), tz),
+            String(event.body ?? ""),
+            lastOutboundText,
+            tz
+          );
         } catch {}
       }
       if (requested) {

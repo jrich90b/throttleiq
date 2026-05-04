@@ -15,6 +15,7 @@ import {
   isTimingOnlyFollowUpTopic,
   pickCatalogModelLabelFromText,
   resolveRequestedScheduleWindowMode,
+  shouldRebaseWeekdayReplyToPriorNextWeek,
   shouldIgnoreAdfModelMismatchForTradeContext,
   shouldSuppressInitialAvailabilityLineAppend,
   shouldSuppressInitialInventoryPhotoAppend,
@@ -94,6 +95,22 @@ const cases: Case[] = [
     id: "compliment_reply_allowed_without_action_signal",
     actual: allowComplimentOnlyReply({ complimentOnly: true }),
     expected: true
+  },
+  {
+    id: "weekday_reply_rebases_from_prior_next_week_prompt",
+    actual: shouldRebaseWeekdayReplyToPriorNextWeek(
+      "Tuesday around 11am would work great for me if that's possible.",
+      "We can schedule a demo ride on a Breakout Monday or Tuesday next week."
+    ),
+    expected: true
+  },
+  {
+    id: "explicit_next_weekday_reply_does_not_double_rebase",
+    actual: shouldRebaseWeekdayReplyToPriorNextWeek(
+      "Next Tuesday around 11am would work great.",
+      "We can schedule a demo ride on a Breakout Monday or Tuesday next week."
+    ),
+    expected: false
   },
   {
     id: "standalone_any_time_remains_any_time",
