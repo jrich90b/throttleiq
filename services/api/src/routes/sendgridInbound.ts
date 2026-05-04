@@ -1714,7 +1714,8 @@ function buildTrafficLogProWalkInTail(args: {
   const step = Math.trunc(Number(args.step));
   if (!Number.isFinite(step) || step < 1 || step > 9) return null;
   const source = String(args.comment ?? "").toLowerCase();
-  const label = formatWatchModelForMessage(String(args.modelLabel ?? "").trim() || "bike");
+  const inferredModelLabel = String(args.modelLabel ?? "").trim() || extractWalkInModelHint(args.comment) || "";
+  const label = formatWatchModelForMessage(inferredModelLabel || "bike");
   const followUpTopic = extractTrafficLogProFollowUpTopic(args.comment);
   const hasFinanceCue =
     /\b(finance|f\s*&\s*i|f and i|credit\s*app|approval|approved|paperwork|contract|lender|bank|credit union|docs?)\b/.test(
@@ -1740,7 +1741,7 @@ function buildTrafficLogProWalkInTail(args: {
   }
   if (step === 8) {
     if (followUpTopic) {
-      return `Thanks again for coming in today - it was great working with you. I'll be in touch about ${followUpTopic}.`;
+      return withTopic("Thanks again for coming in today - it was great working with you.");
     }
     if (hasFinanceCue) {
       return "Thanks again for coming in today - it was great working with you. I'll keep you posted as we wrap up finance and final details.";
@@ -1749,7 +1750,7 @@ function buildTrafficLogProWalkInTail(args: {
   }
   if (step === 7) {
     if (followUpTopic) {
-      return `Thanks again for coming in - I'll follow up about ${followUpTopic}.`;
+      return withTopic("Thanks again for coming in.");
     }
     if (hasPricingCue || hasFinanceCue || hasFollowupCue) {
       return "Thanks again for coming in - I'll follow up with final numbers and next steps.";
@@ -1758,7 +1759,7 @@ function buildTrafficLogProWalkInTail(args: {
   }
   if (step === 6 || step === 5) {
     if (followUpTopic) {
-      return `Thanks again for your time today. I'll follow up about ${followUpTopic}.`;
+      return withTopic("Thanks again for your time today.");
     }
     if (hasPricingCue) {
       return "Thanks again for sitting down with me today. I'll follow up with the numbers we discussed and next steps.";
