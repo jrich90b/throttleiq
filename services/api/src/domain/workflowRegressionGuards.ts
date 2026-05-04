@@ -42,6 +42,21 @@ export function shouldSuppressInitialInventoryPhotoAppend(draftRaw: string | nul
   );
 }
 
+export function shouldTreatAdfAsWalkInContext(args: {
+  leadSource?: string | null;
+  priorWalkIn?: boolean | null;
+  explicitWalkInLeadSource?: boolean | null;
+  trafficLogPayloadHint?: boolean | null;
+  walkInSignalHint?: boolean | null;
+}): boolean {
+  if (args.explicitWalkInLeadSource) return true;
+  if (args.trafficLogPayloadHint && args.walkInSignalHint) return true;
+  if (!args.priorWalkIn) return false;
+  const source = String(args.leadSource ?? "").toLowerCase();
+  if (/\b(test ride|book test ride|online test ride request)\b/i.test(source)) return false;
+  return true;
+}
+
 export function resolveRequestedScheduleWindowMode(textRaw: string | null | undefined): RequestedScheduleWindowMode {
   const text = String(textRaw ?? "").toLowerCase();
   if (!text.trim()) return "none";

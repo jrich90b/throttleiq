@@ -2,7 +2,8 @@ import {
   isBlockedCadencePersonalizationLineText,
   isManualOutboundBookingConfirmationText,
   resolveRequestedScheduleWindowMode,
-  shouldSuppressInitialInventoryPhotoAppend
+  shouldSuppressInitialInventoryPhotoAppend,
+  shouldTreatAdfAsWalkInContext
 } from "../services/api/src/domain/workflowRegressionGuards.ts";
 
 type Case = {
@@ -76,6 +77,28 @@ const cases: Case[] = [
       "Yes — we have a 2025 Street Glide in stock. What day works best for a test ride?"
     ),
     expected: false
+  },
+  {
+    id: "new_test_ride_adf_overrides_prior_walkin_context",
+    actual: shouldTreatAdfAsWalkInContext({
+      leadSource: "HD.com Online Test Ride Request",
+      priorWalkIn: true,
+      explicitWalkInLeadSource: false,
+      trafficLogPayloadHint: false,
+      walkInSignalHint: false
+    }),
+    expected: false
+  },
+  {
+    id: "prior_walkin_context_stays_sticky_for_generic_adf",
+    actual: shouldTreatAdfAsWalkInContext({
+      leadSource: "Traffic Log Pro",
+      priorWalkIn: true,
+      explicitWalkInLeadSource: false,
+      trafficLogPayloadHint: true,
+      walkInSignalHint: true
+    }),
+    expected: true
   }
 ];
 

@@ -79,7 +79,10 @@ import { resolveRoutingParserDecision } from "../domain/routerV2.js";
 import { listUsers } from "../domain/userStore.js";
 import { formatEmailLayout } from "../domain/tone.js";
 import { buildOffersLine, resolveOffersUrl } from "../domain/offers.js";
-import { shouldSuppressInitialInventoryPhotoAppend } from "../domain/workflowRegressionGuards.js";
+import {
+  shouldSuppressInitialInventoryPhotoAppend,
+  shouldTreatAdfAsWalkInContext
+} from "../domain/workflowRegressionGuards.js";
 
 function base64UrlDecode(input: string): string | null {
   try {
@@ -3114,10 +3117,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const hasOutboundBeforeInbound = Array.isArray(conv.messages) && conv.messages.some((m: any) => m.direction === "out");
   const isInitialAdf = event.provider === "sendgrid_adf" && !hasOutboundBeforeInbound;
   const isExplicitWalkInLeadSource = isExplicitWalkInLeadSourceHint;
-  const isTrafficLogWalkInLead =
-    isExplicitWalkInLeadSource ||
-    (isTrafficLogProPayloadHint && walkInSignalHint) ||
-    !!conv?.lead?.walkIn;
+  const isTrafficLogWalkInLead = shouldTreatAdfAsWalkInContext({
+    leadSource,
+    priorWalkIn: !!conv?.lead?.walkIn,
+    explicitWalkInLeadSource: isExplicitWalkInLeadSource,
+    trafficLogPayloadHint: isTrafficLogProPayloadHint,
+    walkInSignalHint
+  });
   const isInitialTrafficLogWalkIn = isInitialAdf && isTrafficLogWalkInLead;
   const adfHistory = buildEffectiveHistory(conv, 6);
   const safeParser = async <T>(label: string, run: () => Promise<T | null>): Promise<T | null> => {
