@@ -1,6 +1,7 @@
 import {
   buildAccessoryCustomizationReply,
   buildHiringManagerInquiryReply,
+  buildTimingAwareWalkInFollowUpLine,
   catalogModelMentionMatchesText,
   cleanCatalogModelNameForDisplay,
   isAccessoryCustomizationRequestText,
@@ -166,6 +167,15 @@ const cases: Case[] = [
     id: "walkin_forty_eight_is_not_timing_topic",
     actual: isTimingOnlyFollowUpTopic("2022 Forty-Eight"),
     expected: false
+  },
+  {
+    id: "walkin_timing_followup_mentions_model",
+    actual: buildTimingAwareWalkInFollowUpLine({
+      base: "Thanks for stopping in today -",
+      followUpTopic: "next week",
+      modelLabel: "2022 Forty-Eight"
+    }),
+    expected: "Thanks for stopping in today - I'll follow up next week about the 2022 Forty-Eight."
   },
   {
     id: "catalog_model_code_clean_low_rider_s",

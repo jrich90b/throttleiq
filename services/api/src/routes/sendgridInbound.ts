@@ -80,6 +80,7 @@ import { listUsers } from "../domain/userStore.js";
 import { formatEmailLayout } from "../domain/tone.js";
 import { buildOffersLine, resolveOffersUrl } from "../domain/offers.js";
 import {
+  buildTimingAwareWalkInFollowUpLine,
   buildHiringManagerInquiryReply,
   isHiringManagerInquiryText,
   isTimingOnlyFollowUpTopic,
@@ -1761,7 +1762,11 @@ function buildTrafficLogProWalkInTail(args: {
   }
   if (step <= 4) {
     if (followUpTopic) {
-      return `Thanks for stopping in today - I'll follow up about ${followUpTopic}.`;
+      return buildTimingAwareWalkInFollowUpLine({
+        base: "Thanks for stopping in today -",
+        followUpTopic,
+        modelLabel: label
+      });
     }
     if (hasFollowupCue) {
       return "Thanks for stopping in today - I'll check back in soon like we discussed.";
@@ -1801,6 +1806,17 @@ function extractWatchDirectiveModelHint(text?: string | null): string | undefine
 function extractWalkInReminderRequest(text?: string | null): { timeHint: string; actionNote: string } | null {
   const raw = String(text ?? "").replace(/\s+/g, " ").trim();
   if (!raw) return null;
+  const actionThenTime = raw.match(
+    /\bremind me\b\s+\bto\b\s+(.+?)\s+\b(today|tomorrow|next week|this week|next month|this month|monday|tuesday|wednesday|thursday|friday|saturday|sunday|in \d+ (?:days?|weeks?|months?))\b/i
+  );
+  if (actionThenTime) {
+    const actionNote = String(actionThenTime[1] ?? "")
+      .replace(/\b(?:him|her|them|customer|the customer)\b/gi, "customer")
+      .replace(/\s+/g, " ")
+      .trim();
+    const timeHint = String(actionThenTime[2] ?? "").trim();
+    if (timeHint && actionNote) return { timeHint, actionNote };
+  }
   const explicit = raw.match(/\bremind me\b\s+(.+?)\s+\bto\b\s+(.+?)(?:[.;]|$)/i);
   if (explicit) {
     const timeHint = String(explicit[1] ?? "").trim();
@@ -4886,6 +4902,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       tail = "Understood — I marked this lead on hold and paused automated follow-up.";
     } else if (hasResumeHoldSignal) {
       tail = "Sounds good — I cleared the hold and reactivated follow-up.";
+    } else if (walkInReminderRequest?.timeHint && modelLabel) {
+      tail = `I’ll follow up ${walkInReminderRequest.timeHint.toLowerCase()} about the ${formatWatchModelForMessage(modelLabel)}.`;
     } else if (hasPricingFollowupIntent) {
       tail = "I’ll follow up with pricing details and next steps.";
     }
@@ -4954,7 +4972,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       !hasCreditCosignerSignal &&
       !hasDealProgressSignal &&
       !hasHoldSignal &&
-      !hasResumeHoldSignal
+      !hasResumeHoldSignal &&
+      !walkInReminderRequest
     ) {
       const tlpStepTail = buildTrafficLogProWalkInTail({
         step: trafficLogProStep,

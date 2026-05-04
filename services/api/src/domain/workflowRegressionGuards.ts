@@ -84,6 +84,21 @@ export function isTimingOnlyFollowUpTopic(textRaw: string | null | undefined): b
   );
 }
 
+export function buildTimingAwareWalkInFollowUpLine(args: {
+  base: string;
+  followUpTopic?: string | null;
+  modelLabel?: string | null;
+}): string {
+  const base = String(args.base ?? "").trim();
+  const followUpTopic = String(args.followUpTopic ?? "").trim();
+  const modelLabel = String(args.modelLabel ?? "").trim();
+  if (!base || !followUpTopic) return base;
+  if (isTimingOnlyFollowUpTopic(followUpTopic) && modelLabel && modelLabel !== "bike") {
+    return `${base} I'll follow up ${followUpTopic} about the ${modelLabel}.`;
+  }
+  return `${base} I'll follow up about ${followUpTopic}.`;
+}
+
 export function cleanCatalogModelNameForDisplay(raw: string | null | undefined): string {
   const original = String(raw ?? "").replace(/\s+/g, " ").trim();
   if (!original) return "";
