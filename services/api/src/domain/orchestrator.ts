@@ -2229,6 +2229,8 @@ export async function orchestrateInbound(
     );
   if (
     (intent === "TRADE_IN" || detectTradeRequest(event.body)) &&
+    !pricingIntent &&
+    !pricingIntentHint &&
     !noTradeMentioned &&
     detectTradeRequest(event.body) &&
     /(how|what|price|value|appraisal|bring|see it|pickup|pick up|give me|give)/i.test(event.body)
@@ -2785,6 +2787,9 @@ export async function orchestrateInbound(
     const bikeLabel = modelKnown ? `${yearLabel}${modelLabel}`.trim() : "that bike";
     const stockId = leadVehicle?.stockId ?? stockIdFromText ?? null;
     const vin = leadVehicle?.vin ?? null;
+    const leadConditionPrefix = formatRequestedConditionPrefix(
+      normalizeRequestedInventoryCondition(leadVehicle?.condition ?? null)
+    );
 
     let availabilityLine = "";
     if (wantsAvailability) {
@@ -2852,11 +2857,23 @@ export async function orchestrateInbound(
       }
     }
 
-    let paymentsLine = "";
+    let pricingOrPaymentsLine = "";
     if (wantsPayments) {
       try {
+        const paymentSpecific =
+          detectPaymentPressure(event.body) ||
+          detectPaymentFollowUp(event.body, history ?? []) ||
+          extractMonthlyBudget(event.body) != null ||
+          hasZeroDownSignal(event.body);
         const priceLookup = await findInventoryPrice({ stockId, vin, year: yearRaw, model: modelRaw });
-        const range = modelRaw ? await findPriceRange({ year: yearRaw, model: modelRaw }) : null;
+        if (!paymentSpecific) {
+          const nf = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+          pricingOrPaymentsLine =
+            priceLookup?.price != null
+              ? `The listed price on the ${leadConditionPrefix}${bikeLabel} is ${nf.format(priceLookup.price)}. Final numbers can change with tax, fees, trade-in, and financing.`
+              : `I’ll check the current price on the ${leadConditionPrefix}${bikeLabel} and follow up with exact numbers.`;
+        } else {
+          const range = modelRaw ? await findPriceRange({ year: yearRaw, model: modelRaw }) : null;
         const paymentRange =
           priceLookup?.price != null
             ? { min: priceLookup.price, max: priceLookup.price }
@@ -2878,7 +2895,7 @@ export async function orchestrateInbound(
         const downPaymentAssumed = downInfo?.assumedThousands ?? false;
 
         if (paymentRange) {
-          paymentsLine = buildMonthlyPaymentLine({
+          pricingOrPaymentsLine = buildMonthlyPaymentLine({
             priceMin: paymentRange.min,
             priceMax: paymentRange.max,
             isUsed,
@@ -2908,22 +2925,23 @@ export async function orchestrateInbound(
             } else if (!downProvided) {
               follow = "About how much down were you thinking?";
             }
-            paymentsLine = `${paymentsLine} ${follow}`.trim();
+            pricingOrPaymentsLine = `${pricingOrPaymentsLine} ${follow}`.trim();
           }
         } else {
-          paymentsLine = "I can ballpark payments once I confirm the exact price.";
+          pricingOrPaymentsLine = "I can ballpark payments once I confirm the exact price.";
+        }
         }
       } catch {
-        paymentsLine = "I can ballpark payments once I confirm the exact price.";
+        pricingOrPaymentsLine = "I’ll check the current price and follow up with exact numbers.";
       }
     }
 
     let tradeLine = "";
     if (wantsTrade) {
-      tradeLine = "We can start with an estimate based on the bike details and finalize it in person.";
+      tradeLine = "For the trade value, we can start with an estimate based on the bike details and finalize it in person.";
     }
 
-    const parts = [availabilityLine, paymentsLine, tradeLine, schedulingLine].filter(Boolean);
+    const parts = [availabilityLine, pricingOrPaymentsLine, tradeLine, schedulingLine].filter(Boolean);
     const draft = parts.join(" ").trim() || fallbackDraft;
     return finalize({
       intent,
