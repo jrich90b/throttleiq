@@ -3304,7 +3304,25 @@ export function parseRequestedDayTime(
   let time = parseExactTime(t);
   if (!time && dayToken && !explicitDate) {
     // Support messages like "Tuesday at 3" or "Tue 3?" by inferring AM/PM.
-    const atMatch = t.match(/\b(?:at|for|around|by)\s*(\d{1,2})\b(?!\s*\/)/);
+    const compactMatch = t.match(/\b(?:at|for|around|by|close\s+to|near)\s*(\d{3,4})\s*(am|pm)?\b(?!\s*\/)/);
+    if (compactMatch) {
+      const digits = compactMatch[1];
+      const numeric = Number(digits);
+      if (!(digits.length === 4 && Number.isFinite(numeric) && numeric >= 1900 && numeric <= 2099)) {
+        const split = digits.length === 3 ? 1 : 2;
+        const hourRaw = Number(digits.slice(0, split));
+        const minute = Number(digits.slice(split));
+        const meridiem = compactMatch[2];
+        if (hourRaw >= 1 && hourRaw <= 12 && minute >= 0 && minute <= 59) {
+          let hour24 = hourRaw;
+          if (meridiem === "am") hour24 = hourRaw === 12 ? 0 : hourRaw;
+          else if (meridiem === "pm") hour24 = hourRaw === 12 ? 12 : hourRaw + 12;
+          else if (hourRaw !== 12) hour24 = hourRaw <= 7 ? hourRaw + 12 : hourRaw;
+          time = { hour24, minute, timeText: compactMatch[0] };
+        }
+      }
+    }
+    const atMatch = !time ? t.match(/\b(?:at|for|around|by|close\s+to|near)\s*(\d{1,2})\b(?!\s*\/)/) : null;
     const bareMatch = t.match(/\b(\d{1,2})\b(?!\s*\/)/);
     const raw = atMatch?.[1] ?? bareMatch?.[1];
     if (raw) {

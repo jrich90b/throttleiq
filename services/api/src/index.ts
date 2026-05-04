@@ -7300,6 +7300,12 @@ async function buildTestRideInventorySelectionReply(args: {
   if (!isTestRideConversationContext(args.conv, args.lastOutboundText, `${recentInboundText}\n${inboundText}`)) {
     return null;
   }
+  const schedulingSignals = detectSchedulingSignals(inboundText);
+  const hasSchedulingRequest =
+    schedulingSignals.explicit ||
+    schedulingSignals.hasDayTime ||
+    schedulingSignals.hasDayOnlyAvailability ||
+    schedulingSignals.hasDayOnlyRequest;
   const candidates = bodies.flatMap(body => findMentionedModelCandidates(body));
   if (!candidates.length) return null;
 
@@ -7339,6 +7345,7 @@ async function buildTestRideInventorySelectionReply(args: {
       updatedAt: nowIso()
     };
     setDialogState(args.conv, "test_ride_init");
+    if (hasSchedulingRequest) return null;
     return `Got it — I can line up the test ride on the ${formatModelLabel(
       selectedYear ? String(selectedYear) : latest.candidate.year,
       latest.candidate.model
@@ -7358,6 +7365,7 @@ async function buildTestRideInventorySelectionReply(args: {
       updatedAt: nowIso()
     };
     setDialogState(args.conv, "test_ride_init");
+    if (hasSchedulingRequest) return null;
     const availableLabel = formatModelLabel(
       availableYear ? String(availableYear) : mostRecentAvailable.candidate.year,
       mostRecentAvailable.candidate.model

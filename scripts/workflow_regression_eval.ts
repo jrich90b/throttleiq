@@ -77,6 +77,11 @@ const cases: Case[] = [
     expected: true
   },
   {
+    id: "close_to_compact_time_day_time_detected",
+    actual: detectSchedulingSignals("Am I able to ride a road glide today? I can take lunch close to 430.").hasDayTime,
+    expected: true
+  },
+  {
     id: "no_response_smalltalk_suppressed_for_scheduling_signal",
     actual: allowNoResponseSmallTalkAck({ smallTalk: true, schedulingSignal: true }),
     expected: false
