@@ -18,6 +18,7 @@ import {
   shouldSuppressInitialInventoryPhotoAppend,
   shouldTreatAdfAsWalkInContext
 } from "../services/api/src/domain/workflowRegressionGuards.ts";
+import { detectSchedulingSignals } from "../services/api/src/domain/legacyRegexFallback.ts";
 
 type Case = {
   id: string;
@@ -66,6 +67,11 @@ const cases: Case[] = [
     id: "after_window_wins_over_later_any_time_clause",
     actual: resolveRequestedScheduleWindowMode("Either the 9th after 1:30 or any time on the 16th"),
     expected: "after"
+  },
+  {
+    id: "compact_ampm_day_time_detected",
+    actual: detectSchedulingSignals("Tuesday around 11am would work great for me if that's possible.").hasDayTime,
+    expected: true
   },
   {
     id: "standalone_any_time_remains_any_time",
