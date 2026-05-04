@@ -63,6 +63,26 @@ export function allowComplimentOnlyReply(args: {
   );
 }
 
+export function isCloseoutSignoffNoResponseText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "")
+    .toLowerCase()
+    .replace(/[.!]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return false;
+  if (/[?]/.test(String(textRaw ?? ""))) return false;
+  if (
+    /\b(?:call|text|appointment|schedule|book|available|availability|price|pricing|payment|trade|inventory|stock|test ride|ride today|come in|stop in)\b/i.test(
+      text
+    )
+  ) {
+    return false;
+  }
+  return /^(?:talk soon|talk to you soon|talk with you soon|see you soon|catch you later|catch you soon|sounds good talk soon|ok talk soon|okay talk soon)$/.test(
+    text
+  );
+}
+
 export function shouldRebaseWeekdayReplyToPriorNextWeek(
   inboundTextRaw: string | null | undefined,
   lastOutboundTextRaw: string | null | undefined

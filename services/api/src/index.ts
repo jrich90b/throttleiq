@@ -182,6 +182,7 @@ import {
   buildFactoryOrderTimingHandoffReply,
   isAccessoryCustomizationRequestText,
   isBlockedCadencePersonalizationLineText,
+  isCloseoutSignoffNoResponseText,
   isFactoryOrderTimingQuestionText,
   isManualOutboundBookingConfirmationText,
   pickCatalogModelLabelFromText,
@@ -28270,6 +28271,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (event.provider === "twilio" && isEmojiOnlyText(event.body ?? "")) {
     return respondRegenerateSkipped("emoji_only_inbound_no_reply");
   }
+  if (event.provider === "twilio" && isCloseoutSignoffNoResponseText(event.body ?? "")) {
+    return respondRegenerateSkipped("closeout_signoff_no_reply");
+  }
   if (event.provider === "twilio" && isInventoryBrowseLinkRequest(String(event.body ?? ""))) {
     const dealerProfile = await getDealerProfileHot();
     const inventoryBrowse = await buildInventoryBrowseReply({
@@ -33005,6 +33009,14 @@ if (authToken && signature) {
       ...(extra ?? {})
     });
   };
+  if (event.provider === "twilio" && isCloseoutSignoffNoResponseText(inboundText)) {
+    discardPendingDrafts(conv, "closeout_signoff_no_reply");
+    delete conv.emailDraft;
+    saveConversation(conv);
+    logRouteOutcome("closeout_signoff_no_reply");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   const highConfidenceFinanceTurn = false;
   const highConfidenceSchedulingTurn = false;
   const bookingParserEligible =

@@ -9,6 +9,7 @@ import {
   cleanCatalogModelNameForDisplay,
   isAccessoryCustomizationRequestText,
   isBlockedCadencePersonalizationLineText,
+  isCloseoutSignoffNoResponseText,
   isFactoryOrderTimingQuestionText,
   isHiringManagerInquiryText,
   isManualOutboundBookingConfirmationText,
@@ -100,6 +101,16 @@ const cases: Case[] = [
     id: "compliment_reply_allowed_without_action_signal",
     actual: allowComplimentOnlyReply({ complimentOnly: true }),
     expected: true
+  },
+  {
+    id: "closeout_talk_soon_suppresses_reply",
+    actual: isCloseoutSignoffNoResponseText("Talk soon!"),
+    expected: true
+  },
+  {
+    id: "closeout_question_does_not_suppress_reply",
+    actual: isCloseoutSignoffNoResponseText("Can we talk soon?"),
+    expected: false
   },
   {
     id: "weekday_reply_rebases_from_prior_next_week_prompt",
