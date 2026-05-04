@@ -45,8 +45,8 @@ const cases: Case[] = [
         }
       } as any
     },
-    expectedIncludes: ["2025 Road Glide", "trade"],
-    expectedExcludes: ["How many miles are on it?", "Which one would you like pricing on?", "our team"]
+    expectedIncludes: ["have our team check", "2025 Road Glide", "trade"],
+    expectedExcludes: ["How many miles are on it?", "Which one would you like pricing on?", "This is our team"]
   }
 ];
 

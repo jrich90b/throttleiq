@@ -2876,7 +2876,7 @@ export async function orchestrateInbound(
           pricingOrPaymentsLine =
             priceLookup?.price != null
               ? `The listed price on the ${leadConditionPrefix}${bikeLabel} is ${nf.format(priceLookup.price)}. Final numbers can change with tax, fees, trade-in, and financing.`
-              : `I’ll check the current price on the ${leadConditionPrefix}${bikeLabel} and follow up with exact numbers.`;
+              : `I’ll have our team check the current price on the ${leadConditionPrefix}${bikeLabel} and follow up with exact numbers.`;
         } else {
           const range = modelRaw ? await findPriceRange({ year: yearRaw, model: modelRaw }) : null;
         const paymentRange =
@@ -2937,7 +2937,7 @@ export async function orchestrateInbound(
         }
         }
       } catch {
-        pricingOrPaymentsLine = "I’ll check the current price and follow up with exact numbers.";
+        pricingOrPaymentsLine = "I’ll have our team check the current price and follow up with exact numbers.";
       }
     }
 

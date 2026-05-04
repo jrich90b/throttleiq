@@ -10413,7 +10413,12 @@ function getPreferredSalespeopleForConv(
 }
 
 function resolveConversationAgentName(conv: any, fallbackName?: string): string {
-  const fallback = String(fallbackName ?? "").trim() || "our team";
+  const normalizeAgentName = (raw: string | null | undefined, fallback = "Alexandra"): string => {
+    const clean = String(raw ?? "").trim();
+    if (!clean || /^(our team|sales team|team)$/i.test(clean)) return fallback;
+    return clean;
+  };
+  const fallback = normalizeAgentName(fallbackName, "Alexandra");
   const leadFirst = String(conv?.lead?.firstName ?? "")
     .trim()
     .toLowerCase();
@@ -10435,18 +10440,18 @@ function resolveConversationAgentName(conv: any, fallbackName?: string): string 
     return false;
   };
   const lockedNameRaw = String(conv?.manualSender?.userName ?? "").trim();
-  if (lockedNameRaw) {
+  if (lockedNameRaw && !/^(our team|sales team|team)$/i.test(lockedNameRaw)) {
     const first = lockedNameRaw.split(/\s+/).filter(Boolean)[0] ?? "";
-    return first || lockedNameRaw || fallback;
+    return normalizeAgentName(first || lockedNameRaw, fallback);
   }
   const manualTakeover =
     String(conv?.manualSender?.source ?? "").trim().toLowerCase() === "manual_takeover";
   const walkInLead = Boolean(conv?.lead?.walkIn);
   if (manualTakeover || walkInLead) {
     const ownerNameRaw = String(conv?.leadOwner?.name ?? "").trim();
-    if (ownerNameRaw && !matchesLeadIdentity(ownerNameRaw)) {
+    if (ownerNameRaw && !/^(our team|sales team|team)$/i.test(ownerNameRaw) && !matchesLeadIdentity(ownerNameRaw)) {
       const first = ownerNameRaw.split(/\s+/).filter(Boolean)[0] ?? "";
-      return first || ownerNameRaw || fallback;
+      return normalizeAgentName(first || ownerNameRaw, fallback);
     }
   }
   return fallback;
