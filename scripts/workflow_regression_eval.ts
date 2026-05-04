@@ -1,4 +1,5 @@
 import {
+  allowNoResponseSmallTalkAck,
   buildAccessoryCustomizationReply,
   buildFactoryOrderTimingHandoffReply,
   buildHiringManagerInquiryReply,
@@ -71,6 +72,16 @@ const cases: Case[] = [
   {
     id: "compact_ampm_day_time_detected",
     actual: detectSchedulingSignals("Tuesday around 11am would work great for me if that's possible.").hasDayTime,
+    expected: true
+  },
+  {
+    id: "no_response_smalltalk_suppressed_for_scheduling_signal",
+    actual: allowNoResponseSmallTalkAck({ smallTalk: true, schedulingSignal: true }),
+    expected: false
+  },
+  {
+    id: "no_response_smalltalk_allowed_without_action_signal",
+    actual: allowNoResponseSmallTalkAck({ smallTalk: true }),
     expected: true
   },
   {

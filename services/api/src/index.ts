@@ -176,6 +176,7 @@ import {
   looksLikeTimeSelection
 } from "./domain/legacyRegexFallback.js";
 import {
+  allowNoResponseSmallTalkAck,
   buildAccessoryCustomizationReply,
   buildFactoryOrderTimingHandoffReply,
   isAccessoryCustomizationRequestText,
@@ -28925,7 +28926,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       smallTalkMin: 0.6,
       chatterMin: 0.55
     });
-    const regenNoResponseSmallTalkQuestion = regenNoResponseSmallTalkSignal.smallTalk;
+    const regenNoResponseSmallTalkQuestion = allowNoResponseSmallTalkAck({
+      smallTalk: regenNoResponseSmallTalkSignal.smallTalk,
+      financeSignal: regenExplicitFinanceSignal || regenFinanceFollowUpAffirmativeAck,
+      availabilitySignal: regenExplicitAvailabilitySignal,
+      schedulingSignal: regenExplicitSchedulingSignal,
+      callbackSignal: regenExplicitCallbackSignal
+    });
     const regenLogisticsProgressUpdate = isLogisticsProgressUpdateText(event.body ?? "");
     const regenStoredPaymentContext = getStoredPaymentBudgetContext(conv);
     const regenNoResponseDecision = evaluateNoResponseFallback({
@@ -33940,7 +33947,13 @@ if (authToken && signature) {
       smallTalkMin: 0.6,
       chatterMin: 0.55
     });
-    const noResponseSmallTalkQuestion = noResponseSmallTalkSignal.smallTalk;
+    const noResponseSmallTalkQuestion = allowNoResponseSmallTalkAck({
+      smallTalk: noResponseSmallTalkSignal.smallTalk,
+      financeSignal: routeExecPricing,
+      availabilitySignal: routeExecAvailability,
+      schedulingSignal: routeExecScheduling,
+      callbackSignal: routeExecCallback
+    });
     const manualHandoffMode = String(conv?.followUp?.mode ?? "").toLowerCase() === "manual_handoff";
     const manualHandoffNoResponseQuestion =
       manualHandoffMode && !shortAck && /\?/.test(String(event.body ?? ""));

@@ -31,6 +31,22 @@ export function isBlockedCadencePersonalizationLineText(lineRaw: string | null |
   return false;
 }
 
+export function allowNoResponseSmallTalkAck(args: {
+  smallTalk: boolean;
+  financeSignal?: boolean;
+  availabilitySignal?: boolean;
+  schedulingSignal?: boolean;
+  callbackSignal?: boolean;
+}): boolean {
+  if (!args.smallTalk) return false;
+  return !(
+    args.financeSignal ||
+    args.availabilitySignal ||
+    args.schedulingSignal ||
+    args.callbackSignal
+  );
+}
+
 export function shouldSuppressInitialInventoryPhotoAppend(draftRaw: string | null | undefined): boolean {
   const draft = String(draftRaw ?? "");
   if (!draft.trim()) return false;
