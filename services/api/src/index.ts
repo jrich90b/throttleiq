@@ -28034,6 +28034,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const channel =
     req.body?.channel === "email" ? "email" : req.body?.channel === "sms" ? "sms" : "sms";
   const lastDraft = [...(conv.messages ?? [])].reverse().find(m => m.provider === "draft_ai" && m.body);
+  const preferLatestAdfForRegen =
+    /test ride|book test ride|online test ride request/i.test(String(conv.lead?.source ?? "")) ||
+    /test_ride|schedule_test_ride/i.test(
+      [conv.classification?.bucket, conv.classification?.cta, getDialogState(conv)].filter(Boolean).join(" ")
+    );
   const {
     inbound,
     latestInboundBeforeDraft,
@@ -28042,7 +28047,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     latestInboundIsDlaNoPurchaseAdf
   } = pickRegenerateInbound({
     messages: conv.messages ?? [],
-    latestDraftAt: lastDraft?.at ?? null
+    latestDraftAt: lastDraft?.at ?? null,
+    preferLatestAdf: preferLatestAdfForRegen
   });
   if (!inbound?.body) {
     return res.status(400).json({ ok: false, error: "no_inbound_message" });
@@ -28287,10 +28293,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     !!cadenceRegeneratedDraft?.body &&
     (cadenceDraftTimestampMatch || (cadenceStatePresent && cadenceInboundBeforeSend));
   const skipCadenceContextualRegenerate =
-    event.provider === "twilio" &&
+    event.provider === "sendgrid_adf" ||
+    (event.provider === "twilio" &&
     channel === "sms" &&
     isRegenerateInboundActionableForRouting(event.body ?? "") &&
-    !regenerateFromCadenceDraft;
+      !regenerateFromCadenceDraft);
   if (cadenceRegeneratedDraft?.body && !skipCadenceContextualRegenerate) {
     recordRouteOutcome("regen", "cadence_contextual_regenerated", {
       convId: conv.id,

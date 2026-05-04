@@ -249,6 +249,53 @@ const cases: Case[] = [
         body: picked.inbound?.body ?? ""
       };
     }
+  },
+  {
+    id: "test_ride_regen_prefers_new_adf_over_older_twilio",
+    expected: {
+      provider: "sendgrid_adf",
+      creditAdf: false,
+      dlaNoPurchaseAdf: false,
+      bodyIncludes: "Preferred method of contact"
+    },
+    run: () => {
+      const picked = pickRegenerateInbound({
+        latestDraftAt: "2026-05-04T12:10:04.000Z",
+        preferLatestAdf: true,
+        messages: [
+          {
+            direction: "in",
+            provider: "sendgrid_adf",
+            body: "WEB LEAD (ADF)\nInquiry:\nI will be in Monday night for the 2013 superglide",
+            at: "2026-04-25T01:35:08.000Z"
+          },
+          {
+            direction: "in",
+            provider: "twilio",
+            body: "Here are a couple pics of it",
+            at: "2026-04-25T13:07:24.000Z"
+          },
+          {
+            direction: "in",
+            provider: "sendgrid_adf",
+            body: "WEB LEAD (ADF)\nInquiry:\nCustomer Comments: Preferred method of contact - email-",
+            at: "2026-05-03T21:38:22.000Z"
+          },
+          {
+            direction: "out",
+            provider: "draft_ai",
+            body: "Hey Terry, just checking in on the 2026 Street Glide Limited III.",
+            at: "2026-05-04T12:10:04.000Z"
+          }
+        ]
+      });
+      return {
+        provider: picked.inbound?.provider ?? null,
+        creditAdf: picked.latestInboundIsCreditAdf,
+        dlaNoPurchaseAdf: picked.latestInboundIsDlaNoPurchaseAdf,
+        body: picked.inbound?.body ?? ""
+      };
+    }
   }
 ];
 

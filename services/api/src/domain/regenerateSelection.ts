@@ -11,6 +11,7 @@ type ConversationMessageLike = {
 type PickArgs = {
   messages: ConversationMessageLike[];
   latestDraftAt?: string | null;
+  preferLatestAdf?: boolean;
 };
 
 export type RegenerateInboundPick = {
@@ -133,6 +134,9 @@ export function pickRegenerateInbound(args: PickArgs): RegenerateInboundPick {
     latestInboundBeforeDraft?.provider === "sendgrid_adf" &&
     isDlaNoPurchaseAdfBody(latestInboundBodyLower);
   let inbound =
+    (args.preferLatestAdf && latestInboundBeforeDraft?.provider === "sendgrid_adf"
+      ? latestInboundBeforeDraft
+      : null) ??
     (latestInboundIsCreditAdf || latestInboundIsRiderToRiderFinanceAdf || latestInboundIsDlaNoPurchaseAdf
       ? latestInboundBeforeDraft
       : null) ??
