@@ -42,6 +42,21 @@ export function shouldSuppressInitialInventoryPhotoAppend(draftRaw: string | nul
   );
 }
 
+export function shouldSuppressInitialAvailabilityLineAppend(draftRaw: string | null | undefined): boolean {
+  const draft = String(draftRaw ?? "").toLowerCase();
+  if (!draft.trim()) return false;
+  return (
+    /\bwhich model\b|\bwhat model\b|\btrim or color\b/i.test(draft) ||
+    /\bi (?:just )?saw you wanted to learn more\b|\binterested in checking it out\b/i.test(draft) ||
+    /\b(payment|monthly|apr|down payment|down|budget|finance|financing|credit app|credit application|term)\b/i.test(
+      draft
+    ) ||
+    /\b(checking it out|come by|stop in|stop by|take a look|in stock|available|on hold|frees up|no longer available|sold)\b/i.test(
+      draft
+    )
+  );
+}
+
 export function isAccessoryCustomizationRequestText(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "").toLowerCase();
   if (!text.trim()) return false;

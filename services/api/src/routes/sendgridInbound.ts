@@ -81,6 +81,7 @@ import { formatEmailLayout } from "../domain/tone.js";
 import { buildOffersLine, resolveOffersUrl } from "../domain/offers.js";
 import {
   shouldIgnoreAdfModelMismatchForTradeContext,
+  shouldSuppressInitialAvailabilityLineAppend,
   shouldSuppressInitialInventoryPhotoAppend,
   shouldTreatAdfAsWalkInContext
 } from "../domain/workflowRegressionGuards.js";
@@ -4013,16 +4014,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   };
   const withInitialAvailabilityLine = (text: string) => {
     if (!initialAvailabilityLine) return text;
-    const lower = text.toLowerCase();
-    if (/which model|what model|trim or color/i.test(lower)) return text;
-    if (/i (just )?saw you wanted to learn more|interested in checking it out/i.test(lower)) return text;
-    // Keep pricing/finance first replies concise; avoid appending a second inventory prompt.
-    if (/\b(payment|monthly|apr|down payment|down|budget|finance|financing|credit app|credit application|term)\b/i.test(lower)) {
-      return text;
-    }
-    if (/\b(checking it out|come by|stop in|stop by|take a look|in stock|available)\b/i.test(lower)) {
-      return text;
-    }
+    if (shouldSuppressInitialAvailabilityLineAppend(text)) return text;
     return `${text} ${initialAvailabilityLine}`.trim();
   };
   let cachedInitialOffersLine: string | null | undefined;

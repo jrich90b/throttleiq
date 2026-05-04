@@ -5,6 +5,7 @@ import {
   isManualOutboundBookingConfirmationText,
   resolveRequestedScheduleWindowMode,
   shouldIgnoreAdfModelMismatchForTradeContext,
+  shouldSuppressInitialAvailabilityLineAppend,
   shouldSuppressInitialInventoryPhotoAppend,
   shouldTreatAdfAsWalkInContext
 } from "../services/api/src/domain/workflowRegressionGuards.ts";
@@ -80,6 +81,13 @@ const cases: Case[] = [
       "Yes — we have a 2025 Street Glide in stock. What day works best for a test ride?"
     ),
     expected: false
+  },
+  {
+    id: "suppresses_duplicate_availability_append_after_hold_copy",
+    actual: shouldSuppressInitialAvailabilityLineAppend(
+      "Thanks for your inquiry about the 2006 Heritage Softail. That unit is currently on hold, but I can text you first if it frees up."
+    ),
+    expected: true
   },
   {
     id: "new_test_ride_adf_overrides_prior_walkin_context",
