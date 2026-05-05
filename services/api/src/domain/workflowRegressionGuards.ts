@@ -187,6 +187,22 @@ export function buildRideChallengeSignupReply(args: {
   );
 }
 
+export function extractInventoryStockIdMention(textRaw: string | null | undefined): string | null {
+  const match = String(textRaw ?? "").match(/\b[A-Z0-9]{1,5}-\d{1,4}\b/i);
+  return match?.[0] ? match[0].toUpperCase() : null;
+}
+
+export function isStockNumberInventoryInterestText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "");
+  const stockId = extractInventoryStockIdMention(text);
+  if (!stockId) return false;
+  return (
+    /\b(interested|looking|look at|checking|asking|ask about|want|like|love|available|availability|in stock|still there|still have|have|stock|bike|street glide|road glide|breakout|low rider|heritage|nightster|sportster|pan america|trike)\b/i.test(
+      text
+    ) || text.trim().toUpperCase() === stockId
+  );
+}
+
 export function isTimingOnlyFollowUpTopic(textRaw: string | null | undefined): boolean {
   const source = String(textRaw ?? "")
     .toLowerCase()

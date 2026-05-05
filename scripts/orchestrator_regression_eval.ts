@@ -47,6 +47,31 @@ const cases: Case[] = [
     },
     expectedIncludes: ["have our team check", "2025 Road Glide", "trade"],
     expectedExcludes: ["How many miles are on it?", "Which one would you like pricing on?", "This is our team"]
+  },
+  {
+    id: "stock_number_interest_schedules_inventory_visit",
+    event: {
+      channel: "sms",
+      provider: "twilio",
+      from: "+17168619251",
+      to: "+17166927200",
+      body: "Very interested in thw T10-26 street glide !!",
+      providerMessageId: "orchestrator-regression-2",
+      receivedAt: now
+    },
+    ctx: {
+      lead: {
+        firstName: "Mike",
+        vehicle: {
+          year: "2016",
+          make: "Harley-Davidson",
+          model: "Street Glide",
+          condition: "used"
+        }
+      } as any
+    },
+    expectedIncludes: ["2026 Street Glide", "available", "What day and time works best"],
+    expectedExcludes: ["2016 Street Glide", "appraisal"]
   }
 ];
 

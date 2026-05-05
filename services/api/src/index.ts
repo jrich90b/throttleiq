@@ -181,6 +181,7 @@ import {
   buildAccessoryCustomizationReply,
   buildFactoryOrderTimingHandoffReply,
   buildRideChallengeSignupReply,
+  extractInventoryStockIdMention,
   hasRideChallengeSignupAcknowledgement,
   isAccessoryCustomizationRequestText,
   isBlockedCadencePersonalizationLineText,
@@ -188,6 +189,7 @@ import {
   isFactoryOrderTimingQuestionText,
   isManualOutboundBookingConfirmationText,
   isRideChallengeLeadSignal,
+  isStockNumberInventoryInterestText,
   pickCatalogModelLabelFromText,
   resolveRequestedScheduleWindowMode,
   shouldRebaseWeekdayReplyToPriorNextWeek,
@@ -29035,6 +29037,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     !!process.env.OPENAI_API_KEY &&
     !regenShortAck;
   const regenTextLower = String(event.body ?? "").toLowerCase();
+  const regenStockInventoryInterest =
+    !!extractInventoryStockIdMention(event.body ?? "") &&
+    isStockNumberInventoryInterestText(event.body ?? "");
   const regenTradePayoffParserHint =
     /\b(lien|lein|payoff|lender|loan|title|owe|owe on it|bank)\b/i.test(regenTextLower) ||
     /\b(address|info|information|details)\b/i.test(regenTextLower) ||
@@ -29157,6 +29162,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenTradeFollowupMessage =
     event.provider === "twilio" &&
     regenIsTradeLead &&
+    !regenStockInventoryInterest &&
     !isExplicitAvailabilityQuestion(event.body ?? "") &&
     !isSteppingBackDispositionText(regenTextLower) &&
     !isPricingText(event.body ?? "") &&

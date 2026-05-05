@@ -27,6 +27,10 @@ import { getAllModels, isModelInRecentYears } from "./modelsByYear.js";
 import { isWebFallbackEnabled, searchGoogleCse } from "./webFallback.js";
 import type { FinanceDocsState, LeadProfile, TradePayoffState } from "./conversationStore.js";
 import { parsePreferredDateTime, parseRequestedDayTime } from "./conversationStore.js";
+import {
+  extractInventoryStockIdMention,
+  isStockNumberInventoryInterestText
+} from "./workflowRegressionGuards.js";
 import { getSchedulerConfig, dayKey, getPreferredSalespeople } from "./schedulerConfig.js";
 import { getAuthedCalendarClient, queryFreeBusy } from "./googleCalendar.js";
 import {
@@ -1387,6 +1391,63 @@ function formatRequestedConditionPrefix(condition: "new" | "used" | null): strin
   return condition ? `${condition} ` : "";
 }
 
+async function buildStockNumberInventoryInterestReply(stockId: string): Promise<{
+  draft: string;
+  intent: OrchestratorResult["intent"];
+}> {
+  try {
+    const feedMatch = await findInventoryPrice({ stockId });
+    if (!feedMatch?.item) {
+      const resolved = await resolveInventoryUrlByStock(stockId);
+      if (resolved.ok) {
+        const status = await checkInventorySalePendingByUrl(resolved.url);
+        if (status === "AVAILABLE") {
+          return {
+            intent: "AVAILABILITY",
+            draft: `That stock number is still available. What day and time works best to stop in and take a look?`
+          };
+        }
+      }
+      return {
+        intent: "AVAILABILITY",
+        draft: `I’ll verify availability on Stock ${stockId} and follow up shortly.`
+      };
+    }
+
+    const item = feedMatch.item;
+    const holdKey = normalizeInventoryHoldKey(item.stockId, item.vin);
+    const soldKey = normalizeInventorySoldKey(item.stockId, item.vin);
+    const [holds, solds] = await Promise.all([listInventoryHolds(), listInventorySolds()]);
+    const yearLabel = item.year ? `${item.year} ` : "";
+    const modelLabel = normalizeModelLabel(item.model ?? "that bike");
+    const colorLabel = item.color ? ` in ${item.color}` : "";
+    const bikeLabel = `${yearLabel}${modelLabel}${colorLabel}`.trim() || `Stock ${stockId}`;
+
+    if (holdKey && holds?.[holdKey]) {
+      return {
+        intent: "AVAILABILITY",
+        draft: `That ${bikeLabel} is currently on hold. I can let you know if it opens back up, or we can look at similar options.`
+      };
+    }
+    if (soldKey && solds?.[soldKey]) {
+      return {
+        intent: "AVAILABILITY",
+        draft: `That ${bikeLabel} is marked sold. I can help find a similar Street Glide if you want.`
+      };
+    }
+
+    return {
+      intent: "AVAILABILITY",
+      draft: `Yes — the ${bikeLabel} is available. What day and time works best to stop in and take a look?`
+    };
+  } catch {
+    return {
+      intent: "AVAILABILITY",
+      draft: `I’ll verify availability on Stock ${stockId} and follow up shortly.`
+    };
+  }
+}
+
 function normalizeHttpUrl(raw?: string | null): string | null {
   const text = String(raw ?? "").trim();
   if (!text) return null;
@@ -2232,6 +2293,16 @@ export async function orchestrateInbound(
     /(no trade|no trade[-\s]?in|no tradein|don't have a trade|dont have a trade|without a trade)/i.test(
       event.body
     );
+  const stockIdFromText = extractInventoryStockIdMention(event.body);
+  if (stockIdFromText && isStockNumberInventoryInterestText(event.body)) {
+    const stockReply = await buildStockNumberInventoryInterestReply(stockIdFromText);
+    return finalize({
+      intent: stockReply.intent,
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft: stockReply.draft
+    });
+  }
   if (
     (intent === "TRADE_IN" || detectTradeRequest(event.body)) &&
     !pricingIntent &&
@@ -2266,7 +2337,6 @@ export async function orchestrateInbound(
   }
   const exactPressure = detectExactNumberPressure(event.body);
   const pricingAttempted = pricingIntent && pricingAttempts === 0;
-  const stockIdFromText = event.body.match(/\b[A-Z0-9]{1,5}-\d{1,4}\b/i)?.[0]?.toUpperCase() ?? null;
 
   let handoff: { required: true; reason: HandoffReason } | null = null;
   let callbackRequested = false;

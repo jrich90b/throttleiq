@@ -8,6 +8,7 @@ import {
   buildTimingAwareWalkInFollowUpLine,
   catalogModelMentionMatchesText,
   cleanCatalogModelNameForDisplay,
+  extractInventoryStockIdMention,
   hasRideChallengeSignupAcknowledgement,
   isAccessoryCustomizationRequestText,
   isBlockedCadencePersonalizationLineText,
@@ -16,6 +17,7 @@ import {
   isHiringManagerInquiryText,
   isRideChallengeLeadSignal,
   isManualOutboundBookingConfirmationText,
+  isStockNumberInventoryInterestText,
   isTimingOnlyFollowUpTopic,
   pickCatalogModelLabelFromText,
   resolveRequestedScheduleWindowMode,
@@ -260,6 +262,16 @@ const cases: Case[] = [
       agentName: "Brooke",
       dealerName: "American Harley-Davidson"
     }).includes("Thanks for signing up for this year's ride challenge."),
+    expected: true
+  },
+  {
+    id: "stock_id_extracted_from_inventory_interest",
+    actual: extractInventoryStockIdMention("Very interested in thw T10-26 street glide !!"),
+    expected: "T10-26"
+  },
+  {
+    id: "stock_id_inventory_interest_detected",
+    actual: isStockNumberInventoryInterestText("Very interested in thw T10-26 street glide !!"),
     expected: true
   },
   {
