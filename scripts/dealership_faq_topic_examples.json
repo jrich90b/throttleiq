@@ -1,0 +1,42 @@
+[
+  {
+    "id": "incoming_street_bob_turnover_1",
+    "text": "Hi! Do you have any Street Bob coming in.",
+    "expected": {
+      "topic": "factory_order_timing",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "factory_order_timing_nightster_1",
+    "text": "perfect thanks. how long would it take to get a 2026 nightster in",
+    "expected": {
+      "topic": "factory_order_timing",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "custom_order_bars_1",
+    "text": "Can I custom order one with different bars and seat?",
+    "expected": {
+      "topic": "custom_order",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "specific_in_stock_availability_stays_none_1",
+    "text": "Do you have any black Street Glides in stock?",
+    "expected": {
+      "topic": "none",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "appointment_request_stays_none_1",
+    "text": "Can I come in Wednesday at 1?",
+    "expected": {
+      "topic": "none",
+      "explicit_request": true
+    }
+  }
+]
