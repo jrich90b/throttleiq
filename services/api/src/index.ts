@@ -31,6 +31,7 @@ import {
   parsePricingPaymentsIntentWithLLM,
   parseRoutingDecisionWithLLM,
   parseAccessoryRequestWithLLM,
+  parseVehicleFactQuestionWithLLM,
   parseDialogActWithLLM,
   parseCustomerDispositionWithLLM,
   parseResponseControlWithLLM,
@@ -55,7 +56,8 @@ import type {
   JourneyIntentParse,
   SemanticSlotParse,
   UnifiedSemanticSlotParse,
-  TradePayoffParse
+  TradePayoffParse,
+  VehicleFactQuestionParse
 } from "./domain/llmDraft.js";
 import type { InboundMessageEvent, OrchestratorResult } from "./domain/types.js";
 import { sendgridInboundMiddleware, handleSendgridInbound } from "./routes/sendgridInbound.js";
@@ -4427,6 +4429,286 @@ function applyAccessoryRequestDecision(args: {
     hasHumor: args.decision.hasHumor || hasRecentHumor
   });
   return reply;
+}
+
+type VehicleFactQuestionDecision = {
+  questionType: Exclude<VehicleFactQuestionParse["questionType"], "none">;
+  requestedFields: string[];
+  confidence: number;
+  source: "parser" | "fallback";
+};
+
+function isVehicleFactQuestionParserAccepted(parsed: VehicleFactQuestionParse | null): boolean {
+  if (!parsed || parsed.questionType === "none" || !parsed.explicitRequest) return false;
+  const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_VEHICLE_FACT_CONFIDENCE_MIN ?? 0.74);
+  return confidence >= min;
+}
+
+function hasVehicleFactQuestionParserHint(text: string | null | undefined): boolean {
+  const lower = String(text ?? "").toLowerCase();
+  if (!lower.trim()) return false;
+  return /\b(year|price|asking|total|otd|out\s+the\s+door|fuel\s+injection|injected|mileage|miles|color|paint|serviced|service\s+records?|records?|tires?|battery|available|still\s+there|still\s+available|on\s+hold)\b/i.test(
+    lower
+  );
+}
+
+function resolveVehicleFactQuestionDecision(
+  text: string | null | undefined,
+  parsed: VehicleFactQuestionParse | null
+): VehicleFactQuestionDecision | null {
+  if (isVehicleFactQuestionParserAccepted(parsed) && parsed) {
+    if (parsed.questionType === "availability") return null;
+    return {
+      questionType: parsed.questionType as VehicleFactQuestionDecision["questionType"],
+      requestedFields: parsed.requestedFields ?? [],
+      confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0,
+      source: "parser"
+    };
+  }
+
+  const lower = String(text ?? "").toLowerCase().trim();
+  if (!lower) return null;
+  const fallback = (questionType: VehicleFactQuestionDecision["questionType"], requestedFields: string[]) => ({
+    questionType,
+    requestedFields,
+    confidence: 0,
+    source: "fallback" as const
+  });
+  if (/^year\s*\??$|\bwhat\s+year\b/.test(lower)) return fallback("year", ["year"]);
+  if (/\bout\s*the\s*door\b|\botd\b/.test(lower)) return fallback("otd_total", ["out_the_door_total"]);
+  if (/^total\s+price\s*\??$|\b(asking|total|sale)?\s*price\b/.test(lower)) return fallback("price", ["price"]);
+  if (/\bfuel\s+injection\b|\binjected\b/.test(lower)) return fallback("engine_feature", ["fuel_injection"]);
+  if (/\bmileage\b|\bmiles\b/.test(lower)) return fallback("mileage", ["mileage"]);
+  if (/\bcolor\b|\bpaint\b/.test(lower)) return fallback("color", ["color"]);
+  if (/\bserviced\b|\bready\b|\binspected\b/.test(lower)) return fallback("service_status", ["service_status"]);
+  if (/\bservice\s+records?\b|\bmaintenance\s+records?\b|\btires?\b|\bbattery\b/.test(lower)) {
+    return fallback("service_records", ["service_records"]);
+  }
+  return null;
+}
+
+function formatVehicleFactMoney(value: unknown): string | null {
+  if (typeof value === "string") {
+    const digits = value.replace(/[^\d.]/g, "");
+    const numeric = Number(digits);
+    if (!Number.isFinite(numeric) || numeric <= 0) return null;
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 0
+    }).format(numeric);
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return null;
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0
+  }).format(numeric);
+}
+
+function vehicleFactContextText(conv: Conversation, limit = 20): string {
+  const parts = [
+    conv.lead?.walkInComment,
+    conv.lead?.vehicle?.description,
+    conv.lead?.vehicle?.model,
+    ...(conv.messages ?? []).slice(-limit).map(m => m.body)
+  ];
+  return parts.map(part => String(part ?? "")).filter(Boolean).join("\n");
+}
+
+function extractApproxVehiclePriceFromContext(conv: Conversation): string | null {
+  const leadPrice = formatVehicleFactMoney(conv.lead?.vehicle?.listPrice);
+  if (leadPrice) return leadPrice;
+  const text = vehicleFactContextText(conv, 24);
+  const patterns = [
+    /\b(?:price|priced|asking|number)\s+(?:would\s+be\s+|is\s+|was\s+)?(?:around|about|roughly|approximately|approx\.?)?\s*\$?\s*([1-9]\d{2,5}(?:,\d{3})?)/i,
+    /\b(?:around|about|roughly|approximately|approx\.?)\s*\$?\s*([1-9]\d{2,5}(?:,\d{3})?)\b/i,
+    /\$\s*([1-9]\d{2,5}(?:,\d{3})?)\b/i
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const amount = formatVehicleFactMoney(match?.[1]);
+    if (amount) return amount;
+  }
+  return null;
+}
+
+function extractVehicleYearFromContext(conv: Conversation): string | null {
+  const explicit = String(conv.lead?.vehicle?.year ?? "").trim();
+  if (/^(19|20)\d{2}$/.test(explicit)) return explicit;
+  const text = vehicleFactContextText(conv, 24);
+  const match = text.match(/\b(19|20)\d{2}\b/);
+  return match?.[0] ?? null;
+}
+
+function extractVehicleModelFromContext(conv: Conversation): string {
+  const raw =
+    String(conv.lead?.vehicle?.model ?? "").trim() ||
+    String(conv.lead?.vehicle?.description ?? "").trim() ||
+    String(conv.lead?.vehicle?.modelOptions?.[0] ?? "").trim();
+  if (raw) return normalizeDisplayCase(raw).replace(/\bFlhrci\b/g, "FLHRCI");
+  const text = vehicleFactContextText(conv, 16);
+  const yearModel = text.match(/\b(?:19|20)\d{2}\s+([A-Za-z][A-Za-z0-9\- ]{2,40})\b/);
+  if (yearModel?.[1]) return normalizeDisplayCase(yearModel[1]).replace(/\bFlhrci\b/g, "FLHRCI");
+  return "that bike";
+}
+
+function extractVehicleColorFromContext(conv: Conversation): string | null {
+  const color = String(conv.lead?.vehicle?.color ?? "").trim();
+  return color ? normalizeDisplayCase(color) : null;
+}
+
+function extractVehicleMileageFromContext(conv: Conversation): string | null {
+  const leadMileage = Number(conv.lead?.vehicle?.mileage ?? NaN);
+  if (Number.isFinite(leadMileage) && leadMileage > 0) {
+    return `${Math.round(leadMileage).toLocaleString("en-US")} miles`;
+  }
+  const text = vehicleFactContextText(conv, 24);
+  const match = text.match(/\b(?:only\s+|approx(?:imately)?\.?\s+|about\s+|around\s+)?([1-9]\d{0,2}(?:,\d{3})+|[1-9]\d{2,5})\s*(?:mi|miles|mile)\b/i);
+  if (!match?.[1]) return null;
+  const numeric = Number(match[1].replace(/,/g, ""));
+  if (!Number.isFinite(numeric) || numeric <= 0) return null;
+  return `${Math.round(numeric).toLocaleString("en-US")} miles`;
+}
+
+function hasRecentPriceFactQuestion(conv: Conversation, receivedAt?: string | null): boolean {
+  const cutoffMs = new Date(String(receivedAt ?? "")).getTime();
+  return (conv.messages ?? [])
+    .slice(-8)
+    .some(m => {
+      if (m.direction !== "in") return false;
+      if (Number.isFinite(cutoffMs)) {
+        const atMs = new Date(String(m.at ?? "")).getTime();
+        if (Number.isFinite(atMs) && atMs > cutoffMs) return false;
+      }
+      return /\b(price|total|otd|out\s+the\s+door|asking)\b/i.test(String(m.body ?? ""));
+    });
+}
+
+async function buildVehicleFactQuestionReply(args: {
+  conv: Conversation;
+  decision: VehicleFactQuestionDecision;
+  receivedAt?: string | null;
+}): Promise<{ reply: string; needsTodo: boolean; todoSummary?: string }> {
+  const conv = args.conv;
+  const year = extractVehicleYearFromContext(conv);
+  const model = extractVehicleModelFromContext(conv);
+  const approxPrice = extractApproxVehiclePriceFromContext(conv);
+  const stockId = String(conv.lead?.vehicle?.stockId ?? (conv.lead?.vehicle as any)?.stock ?? "").trim() || null;
+  const vin = String(conv.lead?.vehicle?.vin ?? "").trim() || null;
+  const inventoryPrice = !approxPrice ? formatVehicleFactMoney((await findInventoryPrice({ stockId, vin }))?.item?.price) : null;
+  const price = approxPrice || inventoryPrice;
+
+  if (args.decision.questionType === "year") {
+    const yearText = year ? `It’s a ${year}${model && model !== "that bike" ? ` ${model}` : ""}.` : "I’ll confirm the year for you.";
+    if (price && hasRecentPriceFactQuestion(conv, args.receivedAt)) {
+      return {
+        reply: `${yearText} Price should be around ${price} before tax and fees. I’ll confirm the exact total for you.`,
+        needsTodo: true,
+        todoSummary: `Confirm exact total price for ${year ? `${year} ` : ""}${model}.`
+      };
+    }
+    return {
+      reply: yearText,
+      needsTodo: !year,
+      todoSummary: `Confirm year for ${model}.`
+    };
+  }
+
+  if (args.decision.questionType === "price" || args.decision.questionType === "otd_total") {
+    if (price) {
+      const prefix = approxPrice ? "Price should be around" : "The listed price is";
+      return {
+        reply: `${prefix} ${price} before tax and fees. I’ll confirm the exact total for you.`,
+        needsTodo: true,
+        todoSummary: `Confirm exact total price for ${year ? `${year} ` : ""}${model}.`
+      };
+    }
+    return {
+      reply: "I’ll confirm the exact price and total for you and follow up shortly.",
+      needsTodo: true,
+      todoSummary: `Confirm exact price and total for ${year ? `${year} ` : ""}${model}.`
+    };
+  }
+
+  if (args.decision.questionType === "mileage") {
+    const mileage = extractVehicleMileageFromContext(conv);
+    return mileage
+      ? { reply: `It has about ${mileage}.`, needsTodo: false }
+      : { reply: "I’ll confirm the mileage for you and follow up shortly.", needsTodo: true, todoSummary: `Confirm mileage for ${model}.` };
+  }
+
+  if (args.decision.questionType === "color") {
+    const color = extractVehicleColorFromContext(conv);
+    return color
+      ? { reply: `It’s ${color}.`, needsTodo: false }
+      : { reply: "I’ll confirm the color for you and follow up shortly.", needsTodo: true, todoSummary: `Confirm color for ${model}.` };
+  }
+
+  if (args.decision.questionType === "engine_feature") {
+    return {
+      reply: "I’ll confirm that feature for you and follow up shortly.",
+      needsTodo: true,
+      todoSummary: `Confirm requested feature for ${year ? `${year} ` : ""}${model}.`
+    };
+  }
+
+  if (args.decision.questionType === "service_status") {
+    return {
+      reply: "I’ll check the service status on it and follow up shortly.",
+      needsTodo: true,
+      todoSummary: `Confirm service status for ${year ? `${year} ` : ""}${model}.`
+    };
+  }
+
+  if (args.decision.questionType === "service_records") {
+    return {
+      reply: "I’ll check on the service records and follow up shortly.",
+      needsTodo: true,
+      todoSummary: `Check service records for ${year ? `${year} ` : ""}${model}.`
+    };
+  }
+
+  return {
+    reply: "I’ll confirm that for you and follow up shortly.",
+    needsTodo: true,
+    todoSummary: `Confirm vehicle fact for ${year ? `${year} ` : ""}${model}.`
+  };
+}
+
+async function applyVehicleFactQuestionDecision(args: {
+  conv: Conversation;
+  text: string | null | undefined;
+  providerMessageId?: string | null;
+  receivedAt?: string | null;
+  decision: VehicleFactQuestionDecision;
+  scope: "live" | "regen";
+}): Promise<string> {
+  const result = await buildVehicleFactQuestionReply({
+    conv: args.conv,
+    decision: args.decision,
+    receivedAt: args.receivedAt
+  });
+  if (result.needsTodo) {
+    addTodo(
+      args.conv,
+      "other",
+      `${result.todoSummary ?? "Confirm vehicle fact."} Customer asked: ${String(args.text ?? "").trim()}`,
+      args.providerMessageId ?? undefined
+    );
+    setFollowUpMode(args.conv, "manual_handoff", "vehicle_fact_followup");
+  }
+  recordRouteOutcome(args.scope, "vehicle_fact_question", {
+    convId: args.conv.id,
+    leadKey: args.conv.leadKey,
+    questionType: args.decision.questionType,
+    requestedFields: args.decision.requestedFields,
+    source: args.decision.source,
+    confidence: args.decision.confidence
+  });
+  return result.reply;
 }
 
 function onAppointmentBooked(conv: any) {
@@ -28969,6 +29251,31 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
   }
 
+  if (event.provider === "twilio" && hasVehicleFactQuestionParserHint(event.body ?? "")) {
+    const vehicleFactParse = await safeLlmParse("regen_vehicle_fact_question_parser", () =>
+      parseVehicleFactQuestionWithLLM({
+        text: event.body ?? "",
+        history: buildHistory(conv, 12),
+        lead: conv.lead
+      })
+    );
+    const vehicleFactDecision = resolveVehicleFactQuestionDecision(event.body ?? "", vehicleFactParse);
+    if (vehicleFactDecision) {
+      const reply = await applyVehicleFactQuestionDecision({
+        conv,
+        text: event.body ?? "",
+        providerMessageId: (inbound as any)?.providerMessageId,
+        receivedAt: event.receivedAt,
+        decision: vehicleFactDecision,
+        scope: "regen"
+      });
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(reply);
+      }
+      return respondWithSmsRegeneratedDraft(reply);
+    }
+  }
+
   const regenInboundAtMs = new Date(event.receivedAt).getTime();
   const regenLastOutboundBeforeInbound = [...(conv.messages ?? [])]
     .filter(m => m.direction === "out" && m.body)
@@ -31911,6 +32218,38 @@ if (authToken && signature) {
         providerMessageId: event.providerMessageId,
         receivedAt: event.receivedAt,
         decision: accessoryDecision,
+        scope: "live"
+      });
+      const mode = webhookMode;
+      if (mode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+  }
+
+  if (event.provider === "twilio" && !semanticShortAck && hasVehicleFactQuestionParserHint(semanticInboundText)) {
+    const vehicleFactParse = await safeLlmParse("vehicle_fact_question_parser", () =>
+      parseVehicleFactQuestionWithLLM({
+        text: semanticInboundText,
+        history: buildHistory(conv, 12),
+        lead: conv.lead
+      })
+    );
+    const vehicleFactDecision = resolveVehicleFactQuestionDecision(semanticInboundText, vehicleFactParse);
+    if (vehicleFactDecision) {
+      const reply = await applyVehicleFactQuestionDecision({
+        conv,
+        text: semanticInboundText,
+        providerMessageId: event.providerMessageId,
+        receivedAt: event.receivedAt,
+        decision: vehicleFactDecision,
         scope: "live"
       });
       const mode = webhookMode;

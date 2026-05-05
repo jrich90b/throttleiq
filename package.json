@@ -18,6 +18,7 @@
     "intent:add": "npx tsx scripts/intent_parser_add.ts",
     "pricing_payments:eval": "LLM_ENABLED=1 LLM_PRICING_PAYMENTS_PARSER_ENABLED=1 npx tsx scripts/pricing_payments_intent_eval.ts",
     "accessory_request:eval": "LLM_ENABLED=1 LLM_ACCESSORY_REQUEST_PARSER_ENABLED=1 npx tsx scripts/accessory_request_eval.ts",
+    "vehicle_fact:eval": "LLM_ENABLED=1 LLM_VEHICLE_FACT_PARSER_ENABLED=1 npx tsx scripts/vehicle_fact_question_eval.ts",
     "faq_topic:eval": "LLM_ENABLED=1 LLM_FAQ_TOPIC_PARSER_ENABLED=1 npx tsx scripts/dealership_faq_topic_eval.ts",
     "trade_payoff:eval": "LLM_ENABLED=1 LLM_TRADE_PAYOFF_PARSER_ENABLED=1 npx tsx scripts/trade_payoff_eval.ts",
     "watch_catalog_eval": "LLM_ENABLED=1 npx tsx scripts/watch_catalog_eval.ts",

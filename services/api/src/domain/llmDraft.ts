@@ -1378,6 +1378,23 @@ export type AccessoryRequestParse = {
   confidence?: number;
 };
 
+export type VehicleFactQuestionParse = {
+  questionType:
+    | "year"
+    | "price"
+    | "otd_total"
+    | "engine_feature"
+    | "mileage"
+    | "color"
+    | "service_status"
+    | "service_records"
+    | "availability"
+    | "none";
+  explicitRequest: boolean;
+  requestedFields?: string[];
+  confidence?: number;
+};
+
 export type EmpathySupportReplyParse = {
   reply: string;
   confidence?: number;
@@ -1917,6 +1934,32 @@ const ACCESSORY_REQUEST_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     explicit_request: { type: "boolean" },
     item: { type: "string" },
     has_humor: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const VEHICLE_FACT_QUESTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["question_type", "explicit_request", "requested_fields", "confidence"],
+  properties: {
+    question_type: {
+      type: "string",
+      enum: [
+        "year",
+        "price",
+        "otd_total",
+        "engine_feature",
+        "mileage",
+        "color",
+        "service_status",
+        "service_records",
+        "availability",
+        "none"
+      ]
+    },
+    explicit_request: { type: "boolean" },
+    requested_fields: { type: "array", items: { type: "string" } },
     confidence: { type: "number" }
   }
 };
@@ -3816,6 +3859,146 @@ output: {"action":"none","explicit_request":false,"item":"","has_humor":false,"c
     explicitRequest: !!parsed.explicit_request,
     item: String(parsed.item ?? "").trim() || null,
     hasHumor: !!parsed.has_humor,
+    confidence
+  };
+}
+
+export async function parseVehicleFactQuestionWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<VehicleFactQuestionParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_VEHICLE_FACT_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_VEHICLE_FACT_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_VEHICLE_FACT_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_VEHICLE_FACT_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-10).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const examples = [
+    `EXAMPLE A
+inbound: "Year ?"
+output: {"question_type":"year","explicit_request":true,"requested_fields":["year"],"confidence":0.99}`,
+    `EXAMPLE B
+inbound: "Total price ?"
+output: {"question_type":"price","explicit_request":true,"requested_fields":["price"],"confidence":0.98}`,
+    `EXAMPLE C
+inbound: "What is the out the door total?"
+output: {"question_type":"otd_total","explicit_request":true,"requested_fields":["out_the_door_total"],"confidence":0.98}`,
+    `EXAMPLE D
+inbound: "Hello yes.. is that unit fuel injection"
+output: {"question_type":"engine_feature","explicit_request":true,"requested_fields":["fuel_injection"],"confidence":0.97}`,
+    `EXAMPLE E
+inbound: "Mileage?"
+output: {"question_type":"mileage","explicit_request":true,"requested_fields":["mileage"],"confidence":0.98}`,
+    `EXAMPLE F
+inbound: "What color is it?"
+output: {"question_type":"color","explicit_request":true,"requested_fields":["color"],"confidence":0.97}`,
+    `EXAMPLE G
+inbound: "Has it been serviced yet?"
+output: {"question_type":"service_status","explicit_request":true,"requested_fields":["service_status"],"confidence":0.97}`,
+    `EXAMPLE H
+inbound: "Any service records?"
+output: {"question_type":"service_records","explicit_request":true,"requested_fields":["service_records"],"confidence":0.97}`,
+    `EXAMPLE I
+inbound: "Is that still available?"
+output: {"question_type":"availability","explicit_request":true,"requested_fields":["availability"],"confidence":0.97}`,
+    `EXAMPLE J
+inbound: "Tuesday around 11am would work great"
+output: {"question_type":"none","explicit_request":false,"requested_fields":[],"confidence":0.98}`,
+    `EXAMPLE K
+inbound: "Thanks talk soon"
+output: {"question_type":"none","explicit_request":false,"requested_fields":[],"confidence":0.98}`
+  ];
+  const prompt = [
+    "You are a strict parser for short factual questions about a specific motorcycle already being discussed.",
+    "Return only JSON matching the schema.",
+    "",
+    "Classify only direct questions asking for a concrete vehicle fact or availability status.",
+    "Question types:",
+    "- year: asks what year the unit is.",
+    "- price: asks price, asking price, sale price, or total price before exact fees/tax are known.",
+    "- otd_total: asks exact out-the-door total, final total, tax/fees included, or all-in number.",
+    "- engine_feature: asks whether the bike has a mechanical/equipment feature like fuel injection.",
+    "- mileage: asks mileage or miles.",
+    "- color: asks color/paint.",
+    "- service_status: asks whether it has been serviced, inspected, or ready.",
+    "- service_records: asks for service history/records, tire/battery age, maintenance records.",
+    "- availability: asks whether the currently discussed unit is still available/in stock/on hold.",
+    "- none: scheduling, trade appraisal, finance, generic acknowledgements, jokes, or broad inventory shopping.",
+    "",
+    "Rules:",
+    "- explicit_request=true only when the customer explicitly asks for the fact.",
+    "- A short fragment like 'Year ?' or 'Total price ?' is explicit when recent history discusses a unit.",
+    "- Do not classify appointment times as vehicle facts.",
+    "- confidence is 0..1.",
+    "",
+    ...examples,
+    "",
+    `Known lead info: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null,
+      stockId: lead?.vehicle?.stockId ?? null,
+      vin: lead?.vehicle?.vin ?? null,
+      color: lead?.vehicle?.color ?? null,
+      source: lead?.source ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "vehicle_fact_question_parser",
+      schema: VEHICLE_FACT_QUESTION_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 160,
+      debugTag: "llm-vehicle-fact-question-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const raw = String(parsed.question_type ?? "").toLowerCase();
+  const questionType: VehicleFactQuestionParse["questionType"] =
+    raw === "year" ||
+    raw === "price" ||
+    raw === "otd_total" ||
+    raw === "engine_feature" ||
+    raw === "mileage" ||
+    raw === "color" ||
+    raw === "service_status" ||
+    raw === "service_records" ||
+    raw === "availability"
+      ? raw
+      : "none";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  const requestedFields = Array.isArray(parsed.requested_fields)
+    ? parsed.requested_fields.map((field: unknown) => String(field ?? "").trim()).filter(Boolean)
+    : [];
+
+  return {
+    questionType,
+    explicitRequest: !!parsed.explicit_request,
+    requestedFields,
     confidence
   };
 }
