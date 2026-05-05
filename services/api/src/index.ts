@@ -28608,8 +28608,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenerateFromCadenceDraft =
     !!cadenceRegeneratedDraft?.body &&
     (cadenceDraftTimestampMatch || (cadenceStatePresent && cadenceInboundBeforeSend));
+  const regenerateMediaAvailabilityQuestion =
+    !!event.mediaUrls?.length && hasAvailabilityQuestionText(event.body ?? "");
   const skipCadenceContextualRegenerate =
     event.provider === "sendgrid_adf" ||
+    regenerateMediaAvailabilityQuestion ||
     (event.provider === "twilio" &&
     channel === "sms" &&
     isRegenerateInboundActionableForRouting(event.body ?? "") &&
