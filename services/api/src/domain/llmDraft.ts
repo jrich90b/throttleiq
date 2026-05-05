@@ -3719,6 +3719,9 @@ output: {"topic":"factory_order_timing","explicit_request":true,"confidence":0.9
     `EXAMPLE E2
 inbound: "when can i order a harley 750?"
 output: {"topic":"factory_order_timing","explicit_request":true,"confidence":0.96}`,
+    `EXAMPLE E3
+inbound: "Do you have any Street Bob coming in?"
+output: {"topic":"factory_order_timing","explicit_request":true,"confidence":0.96}`,
     `EXAMPLE F
 inbound: "Can I finance through the dealership?"
 output: {"topic":"finance_approval","explicit_request":true,"confidence":0.97}`,

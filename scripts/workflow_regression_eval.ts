@@ -280,9 +280,24 @@ const cases: Case[] = [
     expected: true
   },
   {
+    id: "incoming_inventory_question_routes_to_turnover",
+    actual: isFactoryOrderTimingQuestionText("Hi! Do you have any Street Bob coming in."),
+    expected: true
+  },
+  {
+    id: "customer_coming_in_does_not_route_to_turnover",
+    actual: isFactoryOrderTimingQuestionText("I am coming in tomorrow to look at the Street Bob."),
+    expected: false
+  },
+  {
     id: "factory_order_timing_reply_no_eta_guess",
     actual: buildFactoryOrderTimingHandoffReply("2026 Nightster"),
     expected: "I’ll check on the status of the 2026 Nightster and follow up with you."
+  },
+  {
+    id: "incoming_inventory_reply_no_hold_claim",
+    actual: buildFactoryOrderTimingHandoffReply("Street Bob"),
+    expected: "I’ll check on the status of the Street Bob and follow up with you."
   },
   {
     id: "walkin_next_week_is_timing_not_topic",

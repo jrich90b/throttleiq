@@ -233,6 +233,19 @@ export function buildTimingAwareWalkInFollowUpLine(args: {
 export function isFactoryOrderTimingQuestionText(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "").toLowerCase();
   if (!text.trim()) return false;
+  const asksIncomingAvailability =
+    /\b(?:do you|do u|you guys|are you|will you|can you)\b[\s\S]{0,100}\b(?:have|get|gettin'?g|receive|order)\b[\s\S]{0,100}\b(?:coming in|incoming|inbound|on order|arriv(?:e|es|ing))\b/.test(
+      text
+    ) ||
+    /\b(?:do you|do u|you guys|are you|will you|can you)\b[\s\S]{0,100}\b(?:coming in|incoming|inbound|on order|arriv(?:e|es|ing))\b/.test(
+      text
+    ) ||
+    /\b(?:any|any more|anything|models?|bikes?|units?)\b[\s\S]{0,80}\b(?:coming in|incoming|inbound|on order|arriv(?:e|es|ing))\b/.test(
+      text
+    );
+  if (asksIncomingAvailability && !/\b(?:i'?m|i am|i’ll|i will|we'?re|we are)\s+coming in\b/.test(text)) {
+    return true;
+  }
   const asksTiming =
     /\bhow\s+long\b/.test(text) ||
     /\bhow\s+soon\b/.test(text) ||
