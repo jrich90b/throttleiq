@@ -1,6 +1,7 @@
 import {
   allowComplimentOnlyReply,
   allowNoResponseSmallTalkAck,
+  buildAudioDemoStatusReply,
   buildAccessoryCustomizationReply,
   buildFactoryOrderTimingHandoffReply,
   buildHiringManagerInquiryReply,
@@ -11,6 +12,7 @@ import {
   extractInventoryStockIdMention,
   hasRideChallengeSignupAcknowledgement,
   isAccessoryCustomizationRequestText,
+  isAudioDemoStatusQuestionText,
   isBlockedCadencePersonalizationLineText,
   isCloseoutSignoffNoResponseText,
   isFactoryOrderTimingQuestionText,
@@ -248,6 +250,16 @@ const cases: Case[] = [
       buildAccessoryCustomizationReply("Are you able to change handbars not a fan of the ones on there")
     ),
     expected: true
+  },
+  {
+    id: "audio_demo_status_question_detected",
+    actual: isAudioDemoStatusQuestionText("Did you get a stereo for me to hear yet ?"),
+    expected: true
+  },
+  {
+    id: "audio_demo_status_reply_carries_tomorrow_day",
+    actual: buildAudioDemoStatusReply({ acceptedDay: "tomorrow" }),
+    expected: "I’ll check on the stereo for you and follow up shortly. What time tomorrow works best?"
   },
   {
     id: "hiring_manager_inquiry_detected",

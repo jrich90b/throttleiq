@@ -231,6 +231,28 @@ export function isStockNumberInventoryInterestText(textRaw: string | null | unde
   );
 }
 
+export function isAudioDemoStatusQuestionText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "").toLowerCase();
+  if (!text.trim()) return false;
+  return (
+    /\b(?:did you|get|got|have|find|hear back|any update)\b[\s\S]{0,80}\b(?:stereo|radio|audio|sound system|speakers?)\b/i.test(
+      text
+    ) ||
+    /\b(?:stereo|radio|audio|sound system|speakers?)\b[\s\S]{0,80}\b(?:to hear|hear yet|listen|demo|update|status)\b/i.test(
+      text
+    )
+  );
+}
+
+export function buildAudioDemoStatusReply(args?: { acceptedDay?: string | null }): string {
+  const acceptedDay = String(args?.acceptedDay ?? "").trim().toLowerCase();
+  const dayClause = acceptedDay ? ` ${acceptedDay}` : "";
+  const scheduleLine = acceptedDay
+    ? ` What time${dayClause} works best?`
+    : "";
+  return `I’ll check on the stereo for you and follow up shortly.${scheduleLine}`.trim();
+}
+
 export function isInventoryBrowseLinkRequestText(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "")
     .trim()

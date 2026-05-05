@@ -178,12 +178,14 @@ import {
 import {
   allowComplimentOnlyReply,
   allowNoResponseSmallTalkAck,
+  buildAudioDemoStatusReply,
   buildAccessoryCustomizationReply,
   buildFactoryOrderTimingHandoffReply,
   buildRideChallengeSignupReply,
   extractInventoryStockIdMention,
   hasRideChallengeSignupAcknowledgement,
   isAccessoryCustomizationRequestText,
+  isAudioDemoStatusQuestionText,
   isBlockedCadencePersonalizationLineText,
   isCloseoutSignoffNoResponseText,
   isFactoryOrderTimingQuestionText,
@@ -4202,6 +4204,47 @@ function stopRelatedCadences(
 }
 
 const nowIso = () => new Date().toISOString();
+
+function inferAcceptedScheduleDaySinceLastOutbound(
+  conv: any,
+  currentInboundText: string | null | undefined,
+  currentInboundAt?: string | null
+): string | null {
+  const currentAtMs = new Date(String(currentInboundAt ?? "")).getTime();
+  const messages = Array.isArray(conv?.messages) ? conv.messages : [];
+  const inWindow = (m: any) => {
+    if (!Number.isFinite(currentAtMs)) return true;
+    const atMs = new Date(String(m?.at ?? "")).getTime();
+    return !Number.isFinite(atMs) || atMs <= currentAtMs;
+  };
+  const relevant = messages.filter(inWindow);
+  let lastOutboundIdx = -1;
+  for (let i = relevant.length - 1; i >= 0; i--) {
+    if (relevant[i]?.direction === "out" && relevant[i]?.body) {
+      lastOutboundIdx = i;
+      break;
+    }
+  }
+  const lastOutboundText = String(lastOutboundIdx >= 0 ? relevant[lastOutboundIdx]?.body ?? "" : "").toLowerCase();
+  const inboundSince = relevant
+    .slice(Math.max(0, lastOutboundIdx + 1))
+    .filter((m: any) => m?.direction === "in" && m?.body)
+    .map((m: any) => String(m.body ?? ""))
+    .concat(String(currentInboundText ?? ""))
+    .join("\n")
+    .toLowerCase();
+
+  if (
+    /\btomorrow\b/.test(lastOutboundText) &&
+    /\b(would that work|does that work|can you|are you able|what about)\b/.test(lastOutboundText) &&
+    /\b(yes|yeah|yep|yup|ok|okay|works|that works|i'?m off|i am off|off tomorrow)\b[\s\S]{0,80}\btomorrow\b|\b(yes|yeah|yep|yup)\b[\s\S]{0,40}\b(i'?m off|i am off|off of work)\b/i.test(
+      inboundSince
+    )
+  ) {
+    return "tomorrow";
+  }
+  return null;
+}
 
 function onAppointmentBooked(conv: any) {
   if (conv?.closedReason === "sold" || conv?.sale?.soldAt || conv?.followUpCadence?.kind === "post_sale") {
@@ -28735,6 +28778,29 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     return respondWithSmsRegeneratedDraft(reply);
   }
+  if (event.provider === "twilio" && isAudioDemoStatusQuestionText(event.body ?? "")) {
+    const acceptedDay = inferAcceptedScheduleDaySinceLastOutbound(conv, event.body ?? "", event.receivedAt);
+    const reply = buildAudioDemoStatusReply({ acceptedDay });
+    addTodo(
+      conv,
+      "other",
+      `Check stereo/audio demo status: ${String(event.body ?? "").trim()}`,
+      (inbound as any)?.providerMessageId
+    );
+    if (acceptedDay) {
+      setRequestedTime(conv, { day: acceptedDay });
+      setDialogState(conv, "schedule_request");
+    }
+    recordRouteOutcome("regen", "audio_demo_status_request", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      acceptedDay
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply);
+  }
 
   const regenInboundAtMs = new Date(event.receivedAt).getTime();
   const regenLastOutboundBeforeInbound = [...(conv.messages ?? [])]
@@ -32912,6 +32978,35 @@ if (authToken && signature) {
   const inboundText = String(event.body ?? "").trim();
   const inboundLower = inboundText.toLowerCase();
   const recentHistory = buildHistory(conv, 6);
+  if (event.provider === "twilio" && isAudioDemoStatusQuestionText(inboundText)) {
+    const acceptedDay = inferAcceptedScheduleDaySinceLastOutbound(conv, inboundText, event.receivedAt);
+    const reply = buildAudioDemoStatusReply({ acceptedDay });
+    addTodo(
+      conv,
+      "other",
+      `Check stereo/audio demo status: ${inboundText}`,
+      event.providerMessageId
+    );
+    if (acceptedDay) {
+      setRequestedTime(conv, { day: acceptedDay });
+      setDialogState(conv, "schedule_request");
+    }
+    recordRouteOutcome("live", "audio_demo_status_request", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      acceptedDay
+    });
+    if (webhookMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   const routingDecisionParserEligible =
     event.provider === "twilio" &&
     process.env.LLM_ENABLED === "1" &&
