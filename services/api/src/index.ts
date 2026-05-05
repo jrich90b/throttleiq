@@ -28566,6 +28566,43 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     });
     return res.json({ ok: true, conversation: conv, draft: conv.emailDraft });
   };
+  if (
+    event.provider === "twilio" &&
+    channel === "sms" &&
+    Array.isArray(event.mediaUrls) &&
+    event.mediaUrls.length > 0 &&
+    hasAvailabilityQuestionText(event.body ?? "")
+  ) {
+    const availabilityResolution = await resolveDeterministicAvailabilityReply({
+      conv,
+      text: event.body ?? "",
+      parsedAvailability: null,
+      otherInventoryRequest: isOtherInventoryRequestText(event.body ?? ""),
+      affectHasHumor: false,
+      inboundMediaUrls: event.mediaUrls
+    });
+    if (availabilityResolution.kind === "reply") {
+      recordRouteOutcome("regen", "mms_availability_resolved_early", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        mediaCount: event.mediaUrls.length
+      });
+      return respondWithSmsRegeneratedDraft(
+        availabilityResolution.reply,
+        availabilityResolution.mediaUrls,
+        {
+          turnAvailabilityIntent: true,
+          turnFinanceIntent: false,
+          turnSchedulingIntent: false
+        }
+      );
+    }
+    recordRouteOutcome("regen", "mms_availability_early_missing_model", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      mediaCount: event.mediaUrls.length
+    });
+  }
   if (event.provider === "twilio" && isEmojiOnlyText(event.body ?? "")) {
     return respondRegenerateSkipped("emoji_only_inbound_no_reply");
   }
