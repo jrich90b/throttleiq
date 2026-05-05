@@ -27954,15 +27954,18 @@ app.post("/conversations/:id/send", async (req, res) => {
       bookingConfidence >= bookingConfidenceMin &&
       (bookingParse.intent === "schedule" || bookingParse.intent === "reschedule");
 
+    const manualOutboundRequested = explicitBookingStatement
+      ? parseRequestedDayTime(text, schedulerTimezone)
+      : null;
     const normalizedText = String(
       bookingParse?.normalizedText ??
         [String(bookingParse?.requested?.day ?? "").trim(), String(bookingParse?.requested?.timeText ?? "").trim()]
           .filter(Boolean)
           .join(" ")
     ).trim();
-    const parseSource = normalizedText || text;
+    const parseSource = manualOutboundRequested ? text : normalizedText || text;
 
-    let requested = parseRequestedDayTime(parseSource, schedulerTimezone);
+    let requested = manualOutboundRequested ?? parseRequestedDayTime(parseSource, schedulerTimezone);
 
     const confirmCue =
       explicitBookingStatement ||

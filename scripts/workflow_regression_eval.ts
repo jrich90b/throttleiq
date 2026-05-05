@@ -30,6 +30,7 @@ import {
   shouldSuppressInitialInventoryPhotoAppend,
   shouldTreatAdfAsWalkInContext
 } from "../services/api/src/domain/workflowRegressionGuards.ts";
+import { parseRequestedDayTime } from "../services/api/src/domain/conversationStore.ts";
 import { detectSchedulingSignals } from "../services/api/src/domain/legacyRegexFallback.ts";
 
 type Case = {
@@ -59,6 +60,20 @@ const cases: Case[] = [
       "I have Tue, May 12, 9:30 AM or Tue, May 12, 11:30 AM — do either of those work?"
     ),
     expected: false
+  },
+  {
+    id: "manual_outbound_meet_with_tomorrow_confirms_booking",
+    actual: isManualOutboundBookingConfirmationText("I will have you meet with Giovanni tomorrow around 4:30-5:00"),
+    expected: true
+  },
+  {
+    id: "manual_outbound_tomorrow_wins_over_prior_thursday_pickup",
+    actual:
+      parseRequestedDayTime(
+        "I will have you meet with Giovanni tomorrow around 4:30-5:00",
+        "America/New_York"
+      )?.hour24 ?? null,
+    expected: 16
   },
   {
     id: "blocks_unverified_photo_helped_personalization",
