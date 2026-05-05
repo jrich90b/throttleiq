@@ -44,6 +44,12 @@ type AuthUser = {
   role?: string;
 };
 
+type ContactListItem = {
+  id: string;
+  name: string;
+  contactCount?: number;
+};
+
 const IMAGE_TARGET_PRIORITY: CampaignAssetTarget[] = [
   "flyer_8_5x11",
   "web_banner",
@@ -258,7 +264,10 @@ export default function EmailBuilderPage() {
   const [subject, setSubject] = useState("");
   const [emailText, setEmailText] = useState("");
   const [emailHtml, setEmailHtml] = useState("");
+  const [contactLists, setContactLists] = useState<ContactListItem[]>([]);
+  const [sendMode, setSendMode] = useState<"single" | "group">("single");
   const [sendTo, setSendTo] = useState("");
+  const [sendGroupId, setSendGroupId] = useState("");
   const [testTo, setTestTo] = useState("");
 
   const [generating, setGenerating] = useState(false);
@@ -316,6 +325,22 @@ export default function EmailBuilderPage() {
     }
   }
 
+  async function loadContactLists() {
+    try {
+      const resp = await fetch("/api/contacts/lists", { cache: "no-store" });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.ok) throw new Error(data?.error ?? "Failed to load contact groups");
+      const lists: ContactListItem[] = Array.isArray(data?.lists) ? data.lists : [];
+      setContactLists(lists);
+      setSendGroupId(current => {
+        if (current && lists.some(list => list.id === current)) return current;
+        return lists[0]?.id ?? "";
+      });
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to load contact groups");
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -348,6 +373,7 @@ export default function EmailBuilderPage() {
   useEffect(() => {
     if (!authUser) return;
     void loadCampaigns();
+    void loadContactLists();
   }, [authUser]);
 
   useEffect(() => {
@@ -520,29 +546,58 @@ export default function EmailBuilderPage() {
       return;
     }
     const recipient = String(mode === "test" ? testTo : sendTo).trim();
-    if (!recipient) {
-      setError(mode === "test" ? "Enter a test email address." : "Enter a recipient email address.");
+    const groupId = String(sendGroupId ?? "").trim();
+    if (mode === "test" && !recipient) {
+      setError("Enter a test email address.");
+      return;
+    }
+    if (mode === "live" && sendMode === "single" && !recipient) {
+      setError("Enter a recipient email address.");
+      return;
+    }
+    if (mode === "live" && sendMode === "group" && !groupId) {
+      setError("Select a recipient group.");
       return;
     }
     setSending(mode);
     setError(null);
     setNotice(null);
     try {
-      const resp = await fetch("/api/campaigns/email/send", {
+      const groupSend = mode === "live" && sendMode === "group";
+      const resp = await fetch(groupSend ? "/api/contacts/broadcast" : "/api/campaigns/email/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          campaignId: selectedCampaignId,
-          to: recipient,
-          test: mode === "test",
-          subject,
-          emailBodyText: emailText,
-          emailBodyHtml: emailHtml
-        })
+        body: JSON.stringify(
+          groupSend
+            ? {
+                channel: "email",
+                listId: groupId,
+                campaignId: selectedCampaignId,
+                campaignName: String(selectedCampaign?.name ?? "").trim() || undefined,
+                subject,
+                emailBodyText: emailText,
+                emailBodyHtml: emailHtml
+              }
+            : {
+                campaignId: selectedCampaignId,
+                to: recipient,
+                test: mode === "test",
+                subject,
+                emailBodyText: emailText,
+                emailBodyHtml: emailHtml
+              }
+        )
       });
       const data = await resp.json().catch(() => null);
       if (!resp.ok || !data?.ok) {
         throw new Error(data?.details || data?.error || "Failed to send email");
+      }
+      if (groupSend) {
+        const group = contactLists.find(list => list.id === groupId);
+        setNotice(
+          `Email campaign sent to ${group?.name ?? "selected group"}: ${data.sent ?? 0}/${data.attempted ?? 0}. Skipped ${data.skipped ?? 0}, failed ${data.failed ?? 0}.`
+        );
+        return;
       }
       const sentTo = String(data?.to ?? recipient);
       const sentSubject = String(data?.subject ?? subject).trim();
@@ -852,6 +907,51 @@ export default function EmailBuilderPage() {
 
             <div className="border border-white/20 rounded p-3 bg-[#0a1020] space-y-3">
               <div className="text-xs font-semibold text-gray-200">Send Email</div>
+              <div className="inline-flex rounded border border-white/20 overflow-hidden text-xs">
+                <button
+                  type="button"
+                  className={`px-3 py-1.5 ${sendMode === "single" ? "bg-[#f28c28] text-[#111] font-semibold" : "bg-transparent text-gray-200 hover:bg-white/10"}`}
+                  onClick={() => setSendMode("single")}
+                >
+                  One recipient
+                </button>
+                <button
+                  type="button"
+                  className={`px-3 py-1.5 border-l border-white/20 ${sendMode === "group" ? "bg-[#f28c28] text-[#111] font-semibold" : "bg-transparent text-gray-200 hover:bg-white/10"}`}
+                  onClick={() => setSendMode("group")}
+                >
+                  Group
+                </button>
+              </div>
+              {sendMode === "group" ? (
+                <label className="block text-xs text-gray-300">
+                  Recipient group
+                  <div className="mt-1 flex flex-wrap gap-2">
+                    <select
+                      className="flex-1 min-w-[260px] border border-white/20 bg-[#070c17] rounded px-2.5 py-2 text-sm"
+                      value={sendGroupId}
+                      onChange={e => setSendGroupId(e.target.value)}
+                    >
+                      {contactLists.map(list => (
+                        <option key={list.id} value={list.id}>
+                          {list.name}
+                          {Number.isFinite(Number(list.contactCount)) ? ` (${Number(list.contactCount)})` : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      className="px-3 py-2 rounded bg-[#f28c28] text-[#111] text-sm font-semibold disabled:opacity-50"
+                      disabled={sending !== "" || !selectedCampaignId || !sendGroupId}
+                      onClick={() => void sendEmailNow("live")}
+                    >
+                      {sending === "live" ? "Sending..." : "Send Group"}
+                    </button>
+                  </div>
+                  <div className="mt-1 text-[11px] text-gray-400">
+                    Campaign emails are sent individually to each group contact. No CC or shared recipient list is used.
+                  </div>
+                </label>
+              ) : (
               <label className="block text-xs text-gray-300">
                 Recipient email
                 <div className="mt-1 flex flex-wrap gap-2">
@@ -870,6 +970,7 @@ export default function EmailBuilderPage() {
                   </button>
                 </div>
               </label>
+              )}
               <label className="block text-xs text-gray-300">
                 Test email
                 <div className="mt-1 flex flex-wrap gap-2">
