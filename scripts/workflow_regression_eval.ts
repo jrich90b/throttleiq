@@ -14,9 +14,11 @@ import {
   isBlockedCadencePersonalizationLineText,
   isCloseoutSignoffNoResponseText,
   isFactoryOrderTimingQuestionText,
+  isInventoryBrowseLinkRequestText,
   isHiringManagerInquiryText,
   isRideChallengeLeadSignal,
   isManualOutboundBookingConfirmationText,
+  isShortAckNoReplyText,
   isStockNumberInventoryInterestText,
   isTimingOnlyFollowUpTopic,
   pickCatalogModelLabelFromText,
@@ -116,6 +118,21 @@ const cases: Case[] = [
   {
     id: "closeout_question_does_not_suppress_reply",
     actual: isCloseoutSignoffNoResponseText("Can we talk soon?"),
+    expected: false
+  },
+  {
+    id: "perfect_short_ack_suppresses_reply",
+    actual: isShortAckNoReplyText("Perfect."),
+    expected: true
+  },
+  {
+    id: "short_ack_with_availability_question_does_not_suppress_reply",
+    actual: isShortAckNoReplyText("Perfect, is it available?"),
+    expected: false
+  },
+  {
+    id: "short_ack_with_appointment_question_does_not_suppress_reply",
+    actual: isShortAckNoReplyText("Sounds good, can I come in Wednesday?"),
     expected: false
   },
   {
@@ -274,6 +291,23 @@ const cases: Case[] = [
     id: "stock_id_inventory_interest_detected",
     actual: isStockNumberInventoryInterestText("Very interested in thw T10-26 street glide !!"),
     expected: true
+  },
+  {
+    id: "inventory_browse_link_request_detected",
+    actual: isInventoryBrowseLinkRequestText("Can you send me your inventory link?"),
+    expected: true
+  },
+  {
+    id: "inventory_browse_available_bikes_detected",
+    actual: isInventoryBrowseLinkRequestText("Can you send me the bikes you have available?"),
+    expected: true
+  },
+  {
+    id: "customer_check_out_bike_plan_not_inventory_browse",
+    actual: isInventoryBrowseLinkRequestText(
+      "I'll come tomarow and check out bike after work, and if all goes great I'll take off work Thursday and pick up."
+    ),
+    expected: false
   },
   {
     id: "factory_order_timing_question_detected",

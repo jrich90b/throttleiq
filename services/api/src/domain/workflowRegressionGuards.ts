@@ -83,6 +83,31 @@ export function isCloseoutSignoffNoResponseText(textRaw: string | null | undefin
   );
 }
 
+function isWorkflowEmojiOnlyText(text: string): boolean {
+  const t = String(text ?? "").trim();
+  return t.length > 0 && /^[\p{Extended_Pictographic}\s]+$/u.test(t);
+}
+
+export function isShortAckNoReplyText(textRaw: string | null | undefined): boolean {
+  const t = String(textRaw ?? "")
+    .trim()
+    .toLowerCase();
+  if (!t) return false;
+  if (isWorkflowEmojiOnlyText(t)) return true;
+  if (t.length > 60) return false;
+  if (/[?]/.test(t)) return false;
+  if (
+    /\b(price|pricing|payment|monthly|apr|term|down payment|trade|trade in|service|parts|apparel|available|availability|in stock|stock|test ride|appointment|schedule|call|video|photos?|email|watch)\b/i.test(
+      t
+    )
+  ) {
+    return false;
+  }
+  return /\b(thanks|thank you|thanks again|thx|ty|appreciate|got it|sounds good|sounds great|will do|ok|okay|k|kk|cool|perfect|great|all good|no problem|you bet|yep|yup|sure)\b/.test(
+    t
+  );
+}
+
 export function shouldRebaseWeekdayReplyToPriorNextWeek(
   inboundTextRaw: string | null | undefined,
   lastOutboundTextRaw: string | null | undefined
@@ -201,6 +226,34 @@ export function isStockNumberInventoryInterestText(textRaw: string | null | unde
       text
     ) || text.trim().toUpperCase() === stockId
   );
+}
+
+export function isInventoryBrowseLinkRequestText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+  if (!text) return false;
+
+  const asksForExplicitLink =
+    /\b(?:send|share|get|give|text)\b[\s\S]{0,40}\b(?:inventory|link|url|website|site|selection|list)\b/.test(
+      text
+    ) ||
+    /\b(?:inventory|link|url|website|site|selection|list)\b[\s\S]{0,40}\b(?:send|share|get|give|text|browse|see|view|look at|check)\b/.test(
+      text
+    );
+  if (asksForExplicitLink) return true;
+
+  const asksForInventoryList =
+    /\b(?:send|share|get|give|text|show)\b[\s\S]{0,40}\b(?:bikes?|units?)\b[\s\S]{0,40}\b(?:available|in stock|you have|on hand)\b/.test(
+      text
+    ) ||
+    /\b(?:what|which)\b[\s\S]{0,20}\b(?:bikes?|units?)\b[\s\S]{0,40}\b(?:available|in stock|you have|on hand)\b/.test(
+      text
+    ) ||
+    /\bwhat do you have\b/.test(text);
+
+  return asksForInventoryList;
 }
 
 export function isTimingOnlyFollowUpTopic(textRaw: string | null | undefined): boolean {

@@ -187,8 +187,10 @@ import {
   isBlockedCadencePersonalizationLineText,
   isCloseoutSignoffNoResponseText,
   isFactoryOrderTimingQuestionText,
+  isInventoryBrowseLinkRequestText,
   isManualOutboundBookingConfirmationText,
   isRideChallengeLeadSignal,
+  isShortAckNoReplyText,
   isStockNumberInventoryInterestText,
   pickCatalogModelLabelFromText,
   resolveRequestedScheduleWindowMode,
@@ -1695,14 +1697,7 @@ async function buildNoResponseWebFallbackReply(args: {
 }
 
 function isInventoryBrowseLinkRequest(text: string | null | undefined): boolean {
-  const t = String(text ?? "").trim().toLowerCase();
-  if (!t) return false;
-  const hasInventoryNoun = /\b(inventory|bikes?|units?|selection|what do you have)\b/.test(t);
-  const hasBrowseVerb = /\b(link|url|site|website|browse|see|view|check|look at|send)\b/.test(t);
-  if (hasInventoryNoun && hasBrowseVerb) return true;
-  if (/\b(send|share)\b[\s\S]{0,24}\b(inventory|bikes?|units?)\b/.test(t)) return true;
-  if (/\b(link|url)\b[\s\S]{0,24}\b(inventory|bikes?|units?)\b/.test(t)) return true;
-  return false;
+  return isInventoryBrowseLinkRequestText(text);
 }
 
 function normalizeHttpUrl(raw: string | null | undefined): string | null {
@@ -28697,6 +28692,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (event.provider === "twilio" && isCloseoutSignoffNoResponseText(event.body ?? "")) {
     return respondRegenerateSkipped("closeout_signoff_no_reply");
   }
+  if (event.provider === "twilio" && isShortAckNoReplyText(event.body ?? "")) {
+    return respondRegenerateSkipped("short_ack_no_reply");
+  }
   if (event.provider === "twilio" && isInventoryBrowseLinkRequest(String(event.body ?? ""))) {
     const dealerProfile = await getDealerProfileHot();
     const inventoryBrowse = await buildInventoryBrowseReply({
@@ -33473,6 +33471,14 @@ if (authToken && signature) {
     delete conv.emailDraft;
     saveConversation(conv);
     logRouteOutcome("closeout_signoff_no_reply");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+  if (event.provider === "twilio" && isShortAckNoReplyText(inboundText)) {
+    discardPendingDrafts(conv, "short_ack_no_reply");
+    delete conv.emailDraft;
+    saveConversation(conv);
+    logRouteOutcome("short_ack_no_reply");
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
