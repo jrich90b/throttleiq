@@ -13091,7 +13091,7 @@ async function buildExactMediaInventoryAvailabilityResolution(
   };
   return {
     kind: "reply",
-    reply: `Yes — that looks like ${detail}${url}, and it’s still available right now. Want to come check it out?`
+    reply: `Yes — that looks like ${detail}${url}, and it’s still available right now.`
   };
 }
 
@@ -28451,8 +28451,18 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       ...(draft ? { draft } : {})
     });
   };
-  const appendSmsRegeneratedDraft = (text: string, mediaUrls?: string[]) => {
-    const invariant = evaluateRegenDraftInvariant(text);
+  const appendSmsRegeneratedDraft = (
+    text: string,
+    mediaUrls?: string[],
+    invariantHints?: {
+      turnFinanceIntent?: boolean;
+      turnAvailabilityIntent?: boolean;
+      turnSchedulingIntent?: boolean;
+      financeContextIntent?: boolean;
+      shortAckIntent?: boolean;
+    }
+  ) => {
+    const invariant = evaluateRegenDraftInvariant(text, invariantHints);
     if (!invariant.allow) {
       return { ok: false as const, reason: invariant.reason ?? "draft_invariant_blocked" };
     }
@@ -28462,9 +28472,19 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     appendOutbound(conv, from, to, invariant.draftText, "draft_ai", undefined, mediaUrls);
     return { ok: true as const, draft: invariant.draftText };
   };
-  const respondWithSmsRegeneratedDraft = (text: string, mediaUrls?: string[]) => {
+  const respondWithSmsRegeneratedDraft = (
+    text: string,
+    mediaUrls?: string[],
+    invariantHints?: {
+      turnFinanceIntent?: boolean;
+      turnAvailabilityIntent?: boolean;
+      turnSchedulingIntent?: boolean;
+      financeContextIntent?: boolean;
+      shortAckIntent?: boolean;
+    }
+  ) => {
     discardPendingDrafts(conv);
-    const published = appendSmsRegeneratedDraft(text, mediaUrls);
+    const published = appendSmsRegeneratedDraft(text, mediaUrls, invariantHints);
     if (!published.ok) {
       return respondRegenerateSkipped(published.reason);
     }
@@ -30038,7 +30058,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       if (availabilityResolution.kind === "reply") {
         return respondWithSmsRegeneratedDraft(
           availabilityResolution.reply,
-          availabilityResolution.mediaUrls
+          availabilityResolution.mediaUrls,
+          {
+            turnAvailabilityIntent: true,
+            turnFinanceIntent: false,
+            turnSchedulingIntent: false
+          }
         );
       }
     }
