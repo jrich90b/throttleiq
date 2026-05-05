@@ -12872,9 +12872,22 @@ type InventoryImageMatch = {
   confidence: number;
 };
 
+type InventoryMediaExtraction = {
+  year?: string | null;
+  model?: string | null;
+  color?: string | null;
+  stockId?: string | null;
+  vin?: string | null;
+  price?: number | null;
+  rawText?: string | null;
+  confidence?: number | null;
+};
+
 const inventoryImageHashCache = new Map<string, InventoryImageHash>();
+const inventoryMediaExtractionCache = new Map<string, { sampledAt: number; result: InventoryMediaExtraction | null }>();
 const INVENTORY_IMAGE_MATCH_CACHE_TTL_MS = Number(process.env.INVENTORY_IMAGE_MATCH_CACHE_TTL_MS ?? 30 * 60 * 1000);
 const INVENTORY_IMAGE_MATCH_TIMEOUT_MS = Number(process.env.INVENTORY_IMAGE_MATCH_TIMEOUT_MS ?? 4500);
+const INVENTORY_MEDIA_VISION_TIMEOUT_MS = Number(process.env.INVENTORY_MEDIA_VISION_TIMEOUT_MS ?? 9000);
 
 function resolveUploadUrlToLocalPath(value: string): string | null {
   const raw = String(value ?? "").trim();
@@ -12889,6 +12902,197 @@ function resolveUploadUrlToLocalPath(value: string): string | null {
   const rel = pathname.replace(/^\/uploads\//, "");
   if (!rel || rel.includes("..")) return null;
   return path.resolve(getDataDir(), "uploads", rel);
+}
+
+function contentTypeForImagePath(value: string): string {
+  const ext = path.extname(value).replace(/^\./, "").toLowerCase();
+  if (ext === "png") return "image/png";
+  if (ext === "webp") return "image/webp";
+  if (ext === "gif") return "image/gif";
+  return "image/jpeg";
+}
+
+async function buildOpenAiImageUrlForMedia(value: string): Promise<string | null> {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  const localPath = resolveUploadUrlToLocalPath(raw);
+  if (localPath) {
+    try {
+      const buffer = await fs.promises.readFile(localPath);
+      const contentType = contentTypeForImagePath(localPath);
+      return `data:${contentType};base64,${buffer.toString("base64")}`;
+    } catch {
+      // Fall through to URL usage.
+    }
+  }
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return null;
+}
+
+function parseInventoryMediaExtractionJson(raw: string): InventoryMediaExtraction | null {
+  const text = String(raw ?? "").trim();
+  if (!text) return null;
+  const jsonText = text.match(/\{[\s\S]*\}/)?.[0] ?? text;
+  try {
+    const parsed = JSON.parse(jsonText);
+    if (!parsed || typeof parsed !== "object") return null;
+    const cleanString = (value: unknown) => {
+      const s = String(value ?? "").replace(/\s+/g, " ").trim();
+      return s && !/^null|unknown|n\/a$/i.test(s) ? s : null;
+    };
+    const priceRaw = String(parsed.price ?? "").replace(/[^\d.]/g, "");
+    const price = priceRaw ? Number(priceRaw) : null;
+    const result: InventoryMediaExtraction = {
+      year: cleanString(parsed.year),
+      model: cleanString(parsed.model),
+      color: cleanString(parsed.color),
+      stockId: cleanString(parsed.stockId ?? parsed.stock ?? parsed.stock_number),
+      vin: cleanString(parsed.vin),
+      rawText: cleanString(parsed.rawText ?? parsed.visibleText),
+      confidence:
+        typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+          ? Math.max(0, Math.min(1, parsed.confidence))
+          : null,
+      price: Number.isFinite(price ?? NaN) && (price ?? 0) > 0 ? price : null
+    };
+    if (!result.model && !result.stockId && !result.vin && !result.rawText) return null;
+    return result;
+  } catch {
+    return null;
+  }
+}
+
+async function extractInventoryDetailsFromInboundMedia(
+  mediaUrls?: string[] | null
+): Promise<InventoryMediaExtraction | null> {
+  if (process.env.INVENTORY_MEDIA_VISION_ENABLED === "0") return null;
+  if (!process.env.OPENAI_API_KEY) return null;
+  const urls = (mediaUrls ?? []).map(u => String(u ?? "").trim()).filter(Boolean).slice(0, 2);
+  if (!urls.length) return null;
+  const cacheKey = urls.join("|");
+  const cached = inventoryMediaExtractionCache.get(cacheKey);
+  if (cached && Date.now() - cached.sampledAt < INVENTORY_IMAGE_MATCH_CACHE_TTL_MS) {
+    return cached.result;
+  }
+  const imageUrls = (
+    await Promise.all(urls.map(url => buildOpenAiImageUrlForMedia(url)))
+  ).filter((url): url is string => !!url);
+  if (!imageUrls.length) return null;
+  const model =
+    process.env.OPENAI_INVENTORY_MEDIA_VISION_MODEL?.trim() ||
+    process.env.OPENAI_INTENT_PARSER_MODEL?.trim() ||
+    process.env.OPENAI_MODEL?.trim() ||
+    "gpt-4o-mini";
+  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: INVENTORY_MEDIA_VISION_TIMEOUT_MS });
+  try {
+    const resp = await client.responses.parse({
+      model,
+      instructions:
+        "Extract visible motorcycle inventory listing details from customer images. Return compact JSON only.",
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text:
+                "Read the image text/title and identify the motorcycle listing. Return JSON with keys: year, model, color, stockId, vin, price, rawText, confidence. Use null when unknown. Do not guess details not visible."
+            },
+            ...imageUrls.map(imageUrl => ({ type: "input_image", image_url: imageUrl }))
+          ] as any
+        }
+      ] as any,
+      max_output_tokens: 220,
+      text: {
+        format: {
+          type: "json_schema",
+          name: "inventory_media_extraction",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              year: { type: ["string", "null"] },
+              model: { type: ["string", "null"] },
+              color: { type: ["string", "null"] },
+              stockId: { type: ["string", "null"] },
+              vin: { type: ["string", "null"] },
+              price: { type: ["number", "string", "null"] },
+              rawText: { type: ["string", "null"] },
+              confidence: { type: ["number", "null"] }
+            },
+            required: ["year", "model", "color", "stockId", "vin", "price", "rawText", "confidence"]
+          }
+        }
+      } as any
+    } as any);
+    const parsedFromApi = (resp as any)?.output_parsed;
+    const result = parsedFromApi
+      ? parseInventoryMediaExtractionJson(JSON.stringify(parsedFromApi))
+      : parseInventoryMediaExtractionJson(resp.output_text ?? "");
+    inventoryMediaExtractionCache.set(cacheKey, { sampledAt: Date.now(), result });
+    return result;
+  } catch (err: any) {
+    console.warn("[inventory-media-vision] extraction failed", { error: err?.message ?? err });
+    inventoryMediaExtractionCache.set(cacheKey, { sampledAt: Date.now(), result: null });
+    return null;
+  }
+}
+
+function normalizeInventoryIdentifier(value: string | null | undefined): string {
+  return String(value ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+async function findInventoryItemFromMediaExtraction(
+  extraction: InventoryMediaExtraction | null
+): Promise<InventoryFeedItem | null> {
+  if (!extraction) return null;
+  const stockKey = normalizeInventoryIdentifier(extraction.stockId);
+  const vinKey = normalizeInventoryIdentifier(extraction.vin);
+  if (!stockKey && !vinKey) return null;
+  const items = await getInventoryFeed();
+  return (
+    items.find(item => {
+      const itemStock = normalizeInventoryIdentifier(item.stockId);
+      const itemVin = normalizeInventoryIdentifier(item.vin);
+      return (!!stockKey && itemStock === stockKey) || (!!vinKey && itemVin === vinKey);
+    }) ?? null
+  );
+}
+
+async function buildExactMediaInventoryAvailabilityResolution(
+  conv: any,
+  item: InventoryFeedItem
+): Promise<DeterministicAvailabilityResolution> {
+  const holds = await listInventoryHolds();
+  const solds = await listInventorySolds();
+  const status = classifyInventoryMatches([item], holds, solds);
+  const detail = formatBudgetInventoryOption(item);
+  const url = /^https?:\/\//i.test(String(item.url ?? "")) ? ` — ${item.url}` : "";
+  if (status.sold.length) {
+    return {
+      kind: "reply",
+      reply: `That looks like ${detail}, but it is marked sold. I can check similar options for you.`
+    };
+  }
+  if (status.held.length) {
+    return {
+      kind: "reply",
+      reply: `That looks like ${detail}, but it is on hold right now. I can check similar options or keep an eye on it if it opens back up.`
+    };
+  }
+  conv.inventoryContext = {
+    ...(conv.inventoryContext ?? {}),
+    model: item.model ?? conv.inventoryContext?.model,
+    year: item.year ?? conv.inventoryContext?.year,
+    color: item.color ?? conv.inventoryContext?.color,
+    condition: item.condition ?? conv.inventoryContext?.condition,
+    updatedAt: nowIso()
+  };
+  return {
+    kind: "reply",
+    reply: `Yes — that looks like ${detail}${url}, and it’s still available right now. Want to come check it out?`
+  };
 }
 
 async function readImageBufferForHash(url: string): Promise<Buffer | null> {
@@ -13015,10 +13219,22 @@ async function resolveDeterministicAvailabilityReply(args: {
   const incomingInventorySignal = hasIncomingInventorySignal(textLower);
   const genericInventoryAsk = isGenericInventoryAsk(textLower);
   const affectHasHumor = !!args.affectHasHumor;
+  const mediaInventoryExtraction = args.inboundMediaUrls?.length
+    ? await extractInventoryDetailsFromInboundMedia(args.inboundMediaUrls)
+    : null;
+  const exactMediaInventoryItem = await findInventoryItemFromMediaExtraction(mediaInventoryExtraction);
+  if (exactMediaInventoryItem && referencesSpecificInventoryUnit(args.text)) {
+    return buildExactMediaInventoryAvailabilityResolution(conv, exactMediaInventoryItem);
+  }
   const explicitModelFromText = findMentionedModel(textLower);
+  const mediaRawText = String(mediaInventoryExtraction?.rawText ?? "");
+  const explicitModelFromMediaText = mediaRawText ? findMentionedModel(mediaRawText) : null;
+  const mediaModel = String(mediaInventoryExtraction?.model ?? "").trim();
   const parsedModel = String(parsedAvailability?.model ?? "").trim();
   const modelFromText =
     explicitModelFromText ??
+    explicitModelFromMediaText ??
+    (mediaModel && !isGenericAvailabilityModelLabel(mediaModel) ? mediaModel : null) ??
     (parsedModel && !isGenericAvailabilityModelLabel(parsedModel) ? parsedModel : null);
   if (
     shouldPromptModelForSoldGenericInventoryAsk(
@@ -13063,14 +13279,18 @@ async function resolveDeterministicAvailabilityReply(args: {
     !!priorModel &&
     normalizeModelText(modelFromText) !== normalizeModelText(priorModel);
   const yearFromInboundText = extractYearSingle(textLower)?.toString() ?? null;
+  const yearFromMedia =
+    String(mediaInventoryExtraction?.year ?? "").match(/\b(19|20)\d{2}\b/)?.[0] ?? null;
   const yearFromText =
     yearFromInboundText ??
+    yearFromMedia ??
     (!explicitModelFromText && parsedAvailability?.year != null
       ? String(parsedAvailability.year)
       : null);
   const colorFromParser = sanitizeColorPhrase(extractColorToken(textLower));
+  const colorFromMedia = sanitizeColorPhrase(mediaInventoryExtraction?.color ?? null);
   const colorFromLlm = sanitizeColorPhrase(parsedAvailability?.color ?? null);
-  const colorFromText = pickMostSpecificColor(colorFromLlm, colorFromParser);
+  const colorFromText = pickMostSpecificColor(colorFromLlm ?? colorFromMedia, colorFromParser);
   const finishFromText = extractFinishToken(textLower);
   const explicitModelNoColorOrFinish = !!modelFromText && !colorFromText && !finishFromText;
   const llmConditionRaw =
@@ -29765,8 +29985,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       parserAvailability: null,
       shortlistPromptActive: hasActivePendingShortListPrompt(conv)
     });
+    const regenMediaAvailabilityQuestion =
+      !!event.mediaUrls?.length && hasAvailabilityQuestionText(event.body ?? "");
     const explicitAvailabilityAskThisTurn =
-      regenParserAvailabilityIntent || !!regenAvailabilityPreferenceHint;
+      regenParserAvailabilityIntent || !!regenAvailabilityPreferenceHint || regenMediaAvailabilityQuestion;
     const financeOrRateAskThisTurn = regenParserPricingIntent;
     const soldOrPostSale = isSoldOrPostSaleConversation(conv);
     const inboundExplicitModel = findMentionedModel(String(event.body ?? "").toLowerCase());
@@ -33345,7 +33567,12 @@ if (authToken && signature) {
     !customerWillCallIntent &&
     !textingTypoJoke &&
     llmCallbackRequested;
-  const llmAvailabilityIntent = parserAvailabilityIntent || (intentAccepted && intentParse?.intent === "availability");
+  const mediaAvailabilityQuestionThisTurn =
+    !!event.mediaUrls?.length && hasAvailabilityQuestionText(event.body ?? "");
+  const llmAvailabilityIntent =
+    parserAvailabilityIntent ||
+    (intentAccepted && intentParse?.intent === "availability") ||
+    mediaAvailabilityQuestionThisTurn;
   const explicitAvailabilitySignalThisTurn = llmAvailabilityIntent;
   const llmTestRideIntent = intentAccepted && intentParse?.intent === "test_ride";
   const jumpStartExperienceRequest = isJumpStartExperienceText(event.body ?? "");
