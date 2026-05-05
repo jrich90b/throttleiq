@@ -30,6 +30,7 @@ import {
   parseIntentWithLLM,
   parsePricingPaymentsIntentWithLLM,
   parseRoutingDecisionWithLLM,
+  parseAccessoryRequestWithLLM,
   parseDialogActWithLLM,
   parseCustomerDispositionWithLLM,
   parseResponseControlWithLLM,
@@ -46,6 +47,7 @@ import {
 } from "./domain/llmDraft.js";
 import type {
   AffectParse,
+  AccessoryRequestParse,
   ConversationStateParse,
   CustomerDispositionParse,
   EmpathySupportReplyParse,
@@ -4273,6 +4275,158 @@ function hasRecentLightHumorSinceLastOutbound(
     .join("\n")
     .toLowerCase();
   return /\b(lol|haha|lmao|rofl|just kidding|kidding|jk)\b|[😂🤣😅😆]/u.test(inboundSince);
+}
+
+type AccessoryRequestDecision = {
+  action: Exclude<AccessoryRequestParse["action"], "none">;
+  item: string | null;
+  hasHumor: boolean;
+  confidence: number;
+  source: "parser" | "fallback";
+};
+
+function normalizeAccessoryItemForReply(item: string | null | undefined): string {
+  const text = String(item ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (!text) return "";
+  if (/\b(handle\s*bars?|handlebars?|handbars?|bars?)\b/.test(text)) return "handlebars";
+  if (/\b(stereo|radio|audio|sound system)\b/.test(text)) return "stereo";
+  if (/\bspeakers?\b/.test(text)) return "speakers";
+  if (/\b(pipe|pipes|exhaust)\b/.test(text)) return "pipes";
+  if (/\bheated grips?\b/.test(text)) return "heated grips";
+  if (/\bseat\b/.test(text)) return "seat";
+  return text;
+}
+
+function isAccessoryRequestParserAccepted(parsed: AccessoryRequestParse | null): boolean {
+  if (!parsed || parsed.action === "none" || !parsed.explicitRequest) return false;
+  const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_ACCESSORY_REQUEST_CONFIDENCE_MIN ?? 0.74);
+  return confidence >= min;
+}
+
+function hasAccessoryRequestParserHint(text: string | null | undefined): boolean {
+  const raw = String(text ?? "");
+  const lower = raw.toLowerCase();
+  if (isAccessoryCustomizationRequestText(raw) || isAudioDemoStatusQuestionText(raw)) return true;
+  return (
+    /\b(handle\s*bars?|handlebars?|handbars?|bars?|heated grips?|seat|seats|stereo|radio|audio|sound system|speakers?|pipes?|exhaust|windshield|backrest|sissy bar|tour[-\s]?pak|luggage|fairing|tuner|stage\s*[1234])\b/i.test(
+      lower
+    ) &&
+    /\b(can|could|would|able|add|added|change|swap|replace|install|put|do|have|get|got|find|hear|listen|demo|price|cost|how much|labor|options?)\b/i.test(
+      lower
+    )
+  );
+}
+
+function resolveAccessoryRequestDecision(
+  text: string | null | undefined,
+  parsed: AccessoryRequestParse | null
+): AccessoryRequestDecision | null {
+  if (isAccessoryRequestParserAccepted(parsed) && parsed) {
+    return {
+      action: parsed.action as AccessoryRequestDecision["action"],
+      item: normalizeAccessoryItemForReply(parsed.item),
+      hasHumor: !!parsed.hasHumor,
+      confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0,
+      source: "parser"
+    };
+  }
+
+  const raw = String(text ?? "");
+  if (isAccessoryCustomizationRequestText(raw)) {
+    return {
+      action: "can_install",
+      item: normalizeAccessoryItemForReply(/handbars?|handle\s*bars?|handlebars?|bars?/i.test(raw) ? "handlebars" : ""),
+      hasHumor: /\b(lol|haha|lmao|jk|just kidding)\b|[😂🤣😅😆]/iu.test(raw),
+      confidence: 0,
+      source: "fallback"
+    };
+  }
+  if (isAudioDemoStatusQuestionText(raw)) {
+    return {
+      action: "status_check",
+      item: "stereo",
+      hasHumor: /\b(lol|haha|lmao|jk|just kidding)\b|[😂🤣😅😆]/iu.test(raw),
+      confidence: 0,
+      source: "fallback"
+    };
+  }
+  return null;
+}
+
+function buildAccessoryRequestReply(args: {
+  decision: AccessoryRequestDecision;
+  text: string | null | undefined;
+  acceptedDay?: string | null;
+  hasRecentHumor?: boolean;
+}): string {
+  const item = normalizeAccessoryItemForReply(args.decision.item);
+  const itemLabel = item || "that";
+  const hasHumor = args.decision.hasHumor || !!args.hasRecentHumor;
+  if (
+    (args.decision.action === "status_check" || args.decision.action === "demo_request") &&
+    /\b(stereo|radio|audio|sound system|speakers?)\b/i.test(itemLabel)
+  ) {
+    return buildAudioDemoStatusReply({ acceptedDay: args.acceptedDay, hasHumor });
+  }
+  if (args.decision.action === "can_install") {
+    if (/\bhandlebars?\b/i.test(itemLabel)) {
+      return buildAccessoryCustomizationReply(args.text);
+    }
+    return `Yes — we can help with ${itemLabel}. I’ll have our team check the right parts and labor for that bike and follow up with options.`;
+  }
+  if (args.decision.action === "pricing_request") {
+    return `I’ll have our team check pricing and labor for ${itemLabel} and follow up with options.`;
+  }
+  const opener = hasHumor ? "Haha, gotcha — " : "";
+  const dayClause = args.acceptedDay ? ` What time ${args.acceptedDay} works best?` : "";
+  return `${opener}I’ll check on ${itemLabel} for you and follow up shortly.${dayClause}`;
+}
+
+function applyAccessoryRequestDecision(args: {
+  conv: Conversation;
+  text: string | null | undefined;
+  providerMessageId?: string | null;
+  receivedAt?: string | null;
+  decision: AccessoryRequestDecision;
+  scope: "live" | "regen";
+}): string {
+  const acceptedDay = inferAcceptedScheduleDaySinceLastOutbound(args.conv, args.text, args.receivedAt);
+  const hasRecentHumor = hasRecentLightHumorSinceLastOutbound(args.conv, args.text, args.receivedAt);
+  const reply = buildAccessoryRequestReply({
+    decision: args.decision,
+    text: args.text,
+    acceptedDay,
+    hasRecentHumor
+  });
+  const item = normalizeAccessoryItemForReply(args.decision.item);
+  const todoLabel =
+    args.decision.action === "can_install"
+      ? "Accessory customization request"
+      : args.decision.action === "pricing_request"
+        ? "Accessory pricing request"
+        : "Accessory demo/status request";
+  addTodo(
+    args.conv,
+    "other",
+    `${todoLabel}${item ? ` (${item})` : ""}: ${String(args.text ?? "").trim()}`,
+    args.providerMessageId ?? undefined
+  );
+  if (acceptedDay) {
+    setRequestedTime(args.conv, { day: acceptedDay });
+    setDialogState(args.conv, "schedule_request");
+  }
+  recordRouteOutcome(args.scope, "accessory_request", {
+    convId: args.conv.id,
+    leadKey: args.conv.leadKey,
+    action: args.decision.action,
+    item,
+    source: args.decision.source,
+    confidence: args.decision.confidence,
+    acceptedDay,
+    hasHumor: args.decision.hasHumor || hasRecentHumor
+  });
+  return reply;
 }
 
 function onAppointmentBooked(conv: any) {
@@ -28790,47 +28944,29 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return respondWithSmsRegeneratedDraft(inventoryBrowse.reply);
   }
 
-  if (event.provider === "twilio" && isAccessoryCustomizationRequestText(event.body ?? "")) {
-    const reply = buildAccessoryCustomizationReply(event.body ?? "");
-    addTodo(
-      conv,
-      "other",
-      `Accessory customization request: ${String(event.body ?? "").trim()}`,
-      (inbound as any)?.providerMessageId
+  if (event.provider === "twilio" && hasAccessoryRequestParserHint(event.body ?? "")) {
+    const accessoryRequestParse = await safeLlmParse("regen_accessory_request_parser", () =>
+      parseAccessoryRequestWithLLM({
+        text: event.body ?? "",
+        history: buildHistory(conv, 12),
+        lead: conv.lead
+      })
     );
-    recordRouteOutcome("regen", "accessory_customization_request", {
-      convId: conv.id,
-      leadKey: conv.leadKey
-    });
-    if (channel === "email") {
-      return respondWithEmailRegeneratedDraft(reply);
+    const accessoryDecision = resolveAccessoryRequestDecision(event.body ?? "", accessoryRequestParse);
+    if (accessoryDecision) {
+      const reply = applyAccessoryRequestDecision({
+        conv,
+        text: event.body ?? "",
+        providerMessageId: (inbound as any)?.providerMessageId,
+        receivedAt: event.receivedAt,
+        decision: accessoryDecision,
+        scope: "regen"
+      });
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(reply);
+      }
+      return respondWithSmsRegeneratedDraft(reply);
     }
-    return respondWithSmsRegeneratedDraft(reply);
-  }
-  if (event.provider === "twilio" && isAudioDemoStatusQuestionText(event.body ?? "")) {
-    const acceptedDay = inferAcceptedScheduleDaySinceLastOutbound(conv, event.body ?? "", event.receivedAt);
-    const hasHumor = hasRecentLightHumorSinceLastOutbound(conv, event.body ?? "", event.receivedAt);
-    const reply = buildAudioDemoStatusReply({ acceptedDay, hasHumor });
-    addTodo(
-      conv,
-      "other",
-      `Check stereo/audio demo status: ${String(event.body ?? "").trim()}`,
-      (inbound as any)?.providerMessageId
-    );
-    if (acceptedDay) {
-      setRequestedTime(conv, { day: acceptedDay });
-      setDialogState(conv, "schedule_request");
-    }
-    recordRouteOutcome("regen", "audio_demo_status_request", {
-      convId: conv.id,
-      leadKey: conv.leadKey,
-      acceptedDay,
-      hasHumor
-    });
-    if (channel === "email") {
-      return respondWithEmailRegeneratedDraft(reply);
-    }
-    return respondWithSmsRegeneratedDraft(reply);
   }
 
   const regenInboundAtMs = new Date(event.receivedAt).getTime();
@@ -31759,25 +31895,36 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
 
-  if (isAccessoryCustomizationRequestText(semanticInboundText)) {
-    const reply = buildAccessoryCustomizationReply(semanticInboundText);
-    addTodo(
-      conv,
-      "other",
-      `Accessory customization request: ${semanticInboundText.trim()}`,
-      event.providerMessageId
+  if (event.provider === "twilio" && !semanticShortAck && hasAccessoryRequestParserHint(semanticInboundText)) {
+    const accessoryRequestParse = await safeLlmParse("accessory_request_parser", () =>
+      parseAccessoryRequestWithLLM({
+        text: semanticInboundText,
+        history: buildHistory(conv, 12),
+        lead: conv.lead
+      })
     );
-    const mode = webhookMode;
-    if (mode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+    const accessoryDecision = resolveAccessoryRequestDecision(semanticInboundText, accessoryRequestParse);
+    if (accessoryDecision) {
+      const reply = applyAccessoryRequestDecision({
+        conv,
+        text: semanticInboundText,
+        providerMessageId: event.providerMessageId,
+        receivedAt: event.receivedAt,
+        decision: accessoryDecision,
+        scope: "live"
+      });
+      const mode = webhookMode;
+      if (mode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
   }
 
   if (callOnlyRequested) {
@@ -33009,37 +33156,6 @@ if (authToken && signature) {
   const inboundText = String(event.body ?? "").trim();
   const inboundLower = inboundText.toLowerCase();
   const recentHistory = buildHistory(conv, 6);
-  if (event.provider === "twilio" && isAudioDemoStatusQuestionText(inboundText)) {
-    const acceptedDay = inferAcceptedScheduleDaySinceLastOutbound(conv, inboundText, event.receivedAt);
-    const hasHumor = hasRecentLightHumorSinceLastOutbound(conv, inboundText, event.receivedAt);
-    const reply = buildAudioDemoStatusReply({ acceptedDay, hasHumor });
-    addTodo(
-      conv,
-      "other",
-      `Check stereo/audio demo status: ${inboundText}`,
-      event.providerMessageId
-    );
-    if (acceptedDay) {
-      setRequestedTime(conv, { day: acceptedDay });
-      setDialogState(conv, "schedule_request");
-    }
-    recordRouteOutcome("live", "audio_demo_status_request", {
-      convId: conv.id,
-      leadKey: conv.leadKey,
-      acceptedDay,
-      hasHumor
-    });
-    if (webhookMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
-  }
   const routingDecisionParserEligible =
     event.provider === "twilio" &&
     process.env.LLM_ENABLED === "1" &&

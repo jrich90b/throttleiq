@@ -1370,6 +1370,14 @@ export type RoutingDecisionParse = {
   confidence?: number;
 };
 
+export type AccessoryRequestParse = {
+  action: "can_install" | "status_check" | "demo_request" | "pricing_request" | "none";
+  explicitRequest: boolean;
+  item?: string | null;
+  hasHumor?: boolean;
+  confidence?: number;
+};
+
 export type EmpathySupportReplyParse = {
   reply: string;
   confidence?: number;
@@ -1893,6 +1901,22 @@ const ROUTING_DECISION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     explicit_request: { type: "boolean" },
     fallback_action: { type: "string", enum: ["none", "clarify", "no_response"] },
     clarify_prompt: { type: "string" },
+    confidence: { type: "number" }
+  }
+};
+
+const ACCESSORY_REQUEST_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["action", "explicit_request", "item", "has_humor", "confidence"],
+  properties: {
+    action: {
+      type: "string",
+      enum: ["can_install", "status_check", "demo_request", "pricing_request", "none"]
+    },
+    explicit_request: { type: "boolean" },
+    item: { type: "string" },
+    has_humor: { type: "boolean" },
     confidence: { type: "number" }
   }
 };
@@ -3675,6 +3699,123 @@ output: {"primary_intent":"none","explicit_request":false,"fallback_action":"no_
     explicitRequest: !!parsed.explicit_request,
     fallbackAction,
     clarifyPrompt: cleanOptionalString(parsed.clarify_prompt),
+    confidence
+  };
+}
+
+export async function parseAccessoryRequestWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<AccessoryRequestParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_ACCESSORY_REQUEST_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_ACCESSORY_REQUEST_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_ACCESSORY_REQUEST_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_ACCESSORY_REQUEST_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const examples = [
+    `EXAMPLE A
+inbound: "Are you able to change handbars not a fan of the ones on there"
+output: {"action":"can_install","explicit_request":true,"item":"handlebars","has_humor":false,"confidence":0.98}`,
+    `EXAMPLE B
+inbound: "Can heated grips and seat be added?"
+output: {"action":"can_install","explicit_request":true,"item":"heated grips and seat","has_humor":false,"confidence":0.98}`,
+    `EXAMPLE C
+inbound: "Did you get a stereo for me to hear yet?"
+output: {"action":"status_check","explicit_request":true,"item":"stereo","has_humor":false,"confidence":0.97}`,
+    `EXAMPLE D
+inbound: "Do you have pipes I can hear before I pick?"
+output: {"action":"demo_request","explicit_request":true,"item":"pipes","has_humor":false,"confidence":0.96}`,
+    `EXAMPLE E
+inbound: "How much to add a better seat?"
+output: {"action":"pricing_request","explicit_request":true,"item":"seat","has_humor":false,"confidence":0.97}`,
+    `EXAMPLE F
+inbound: "\\"Off of work, and off my meds\\" lol just kidding. I am off tomorrow"
+output: {"action":"none","explicit_request":false,"item":"","has_humor":true,"confidence":0.96}`,
+    `EXAMPLE G
+inbound: "Do you have any Street Bob coming in?"
+output: {"action":"none","explicit_request":false,"item":"","has_humor":false,"confidence":0.98}`,
+    `EXAMPLE H
+inbound: "Tuesday around 11am would work great"
+output: {"action":"none","explicit_request":false,"item":"","has_humor":false,"confidence":0.98}`
+  ];
+  const prompt = [
+    "You are a strict parser for Harley-Davidson dealership accessory/customization requests.",
+    "Return only JSON matching the schema.",
+    "",
+    "Classify only questions or requests about dealer-installed accessories, parts/customization, or hearing/demoing accessory sound.",
+    "Actions:",
+    "- can_install: asks whether the dealer can add/change/install/swap an accessory or customization.",
+    "- status_check: asks whether staff got/found/checked an accessory item or demo setup.",
+    "- demo_request: asks to hear/see/demo an accessory or accessory setup.",
+    "- pricing_request: asks cost/pricing/labor for an accessory or customization.",
+    "- none: inventory availability, factory/order timing, appointment scheduling, trade, finance, generic acknowledgement, or jokes with no accessory request.",
+    "",
+    "Rules:",
+    "- explicit_request=true only for an explicit accessory/customization request.",
+    "- item should be the normalized accessory noun phrase, such as handlebars, heated grips, seat, stereo, speakers, pipes, exhaust.",
+    "- has_humor=true if the message contains an obvious joke/lol/jk, even when action is none.",
+    "- Do not classify motorcycle model availability questions as accessory requests.",
+    "- confidence is 0..1.",
+    "",
+    ...examples,
+    "",
+    `Known lead info: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null,
+      source: lead?.source ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "accessory_request_parser",
+      schema: ACCESSORY_REQUEST_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 180,
+      debugTag: "llm-accessory-request-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const actionRaw = String(parsed.action ?? "").toLowerCase();
+  const action: AccessoryRequestParse["action"] =
+    actionRaw === "can_install" ||
+    actionRaw === "status_check" ||
+    actionRaw === "demo_request" ||
+    actionRaw === "pricing_request"
+      ? actionRaw
+      : "none";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    action,
+    explicitRequest: !!parsed.explicit_request,
+    item: String(parsed.item ?? "").trim() || null,
+    hasHumor: !!parsed.has_humor,
     confidence
   };
 }
