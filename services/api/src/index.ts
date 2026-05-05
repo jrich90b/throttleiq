@@ -11783,6 +11783,57 @@ function getRecentInboundAvailabilityTextForMediaOnlyTurn(
   return null;
 }
 
+function getRegenerateAvailabilityMediaContext(
+  conv: any,
+  event: InboundMessageEvent,
+  maxAgeMs = 10 * 60 * 1000
+): { body?: string; mediaUrls?: string[] } | null {
+  const messages = Array.isArray(conv?.messages) ? conv.messages : [];
+  if (!messages.length) return null;
+  const eventAt = new Date(String(event.receivedAt ?? "")).getTime();
+  let currentIdx = -1;
+  if (event.providerMessageId) {
+    currentIdx = messages.findIndex(
+      (m: any) => String(m?.providerMessageId ?? "") === String(event.providerMessageId)
+    );
+  }
+  if (currentIdx < 0) {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const m = messages[i];
+      if (m?.direction !== "in") continue;
+      if (String(m?.body ?? "").trim() !== String(event.body ?? "").trim()) continue;
+      const msgAt = new Date(String(m?.at ?? "")).getTime();
+      if (Number.isFinite(eventAt) && Number.isFinite(msgAt) && Math.abs(eventAt - msgAt) > maxAgeMs) {
+        continue;
+      }
+      currentIdx = i;
+      break;
+    }
+  }
+  if (currentIdx < 0) return null;
+
+  const hasMedia = Array.isArray(event.mediaUrls) && event.mediaUrls.length > 0;
+  if (hasMedia && isMediaOnlyPlaceholderText(event.body)) {
+    const body = getRecentInboundAvailabilityTextForMediaOnlyTurn(conv, event, maxAgeMs);
+    return body ? { body } : null;
+  }
+
+  if (!hasMedia && hasAvailabilityQuestionText(event.body ?? "")) {
+    for (let i = currentIdx + 1; i < messages.length; i += 1) {
+      const msg = messages[i];
+      if (!msg) continue;
+      if (msg.direction === "out") break;
+      if (msg.direction !== "in") continue;
+      const msgAt = new Date(String(msg.at ?? "")).getTime();
+      if (Number.isFinite(eventAt) && Number.isFinite(msgAt) && msgAt - eventAt > maxAgeMs) break;
+      if (Array.isArray(msg.mediaUrls) && msg.mediaUrls.length > 0) {
+        return { mediaUrls: msg.mediaUrls };
+      }
+    }
+  }
+  return null;
+}
+
 function isShortAckText(text: string): boolean {
   const t = String(text ?? "").trim().toLowerCase();
   if (!t) return false;
@@ -28381,6 +28432,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     providerMessageId: inbound.providerMessageId ?? `regen_${Date.now()}`,
     receivedAt: inbound.at ?? new Date().toISOString()
   };
+  const regenAvailabilityMediaContext = getRegenerateAvailabilityMediaContext(conv, event);
+  if (regenAvailabilityMediaContext?.body) {
+    event.body = regenAvailabilityMediaContext.body;
+  }
+  if (regenAvailabilityMediaContext?.mediaUrls?.length) {
+    event.mediaUrls = regenAvailabilityMediaContext.mediaUrls;
+  }
   const regenTurnId =
     String(event.providerMessageId ?? "").trim() ||
     `${event.provider}:${event.receivedAt ?? new Date().toISOString()}`;
