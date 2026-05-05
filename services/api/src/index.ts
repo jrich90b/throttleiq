@@ -13032,7 +13032,6 @@ async function extractInventoryDetailsFromInboundMedia(
   const model =
     process.env.OPENAI_INVENTORY_MEDIA_VISION_MODEL?.trim() ||
     process.env.OPENAI_INTENT_PARSER_MODEL?.trim() ||
-    process.env.OPENAI_MODEL?.trim() ||
     "gpt-4o-mini";
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: INVENTORY_MEDIA_VISION_TIMEOUT_MS });
   try {
@@ -28597,11 +28596,26 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         }
       );
     }
+    addTodo(
+      conv,
+      "other",
+      "Verify availability from customer MMS inventory screenshot; image text could not be matched to inventory automatically.",
+      event.providerMessageId
+    );
     recordRouteOutcome("regen", "mms_availability_early_missing_model", {
       convId: conv.id,
       leadKey: conv.leadKey,
       mediaCount: event.mediaUrls.length
     });
+    return respondWithSmsRegeneratedDraft(
+      "I’m going to verify that exact bike from the screenshot and follow up shortly.",
+      undefined,
+      {
+        turnAvailabilityIntent: true,
+        turnFinanceIntent: false,
+        turnSchedulingIntent: false
+      }
+    );
   }
   if (event.provider === "twilio" && isEmojiOnlyText(event.body ?? "")) {
     return respondRegenerateSkipped("emoji_only_inbound_no_reply");
