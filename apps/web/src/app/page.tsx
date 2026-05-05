@@ -789,6 +789,23 @@ type Message = {
   };
 };
 
+function getMessageProviderDisplayLabel(message: Pick<Message, "direction" | "provider">): string {
+  const provider = String(message.provider ?? "").trim();
+  if (message.direction === "out") {
+    if (provider === "draft_ai") return "AI";
+    if (provider === "twilio" || provider === "human" || provider === "sendgrid") return "User";
+  }
+  if (message.direction === "in") {
+    if (provider === "twilio") return "Customer";
+    if (provider === "sendgrid_adf") return "WEB LEAD (ADF)";
+    if (provider === "sendgrid") return "Email";
+  }
+  if (provider === "voice_call") return "call";
+  if (provider === "voice_transcript") return "call transcript";
+  if (provider === "voice_summary") return "call summary";
+  return provider || "?";
+}
+
 type ConversationDetail = {
   id: string;
   leadKey: string;
@@ -4835,6 +4852,47 @@ export default function Home() {
     };
   }
 
+  function hasActiveUnitHold(conv: any | null | undefined) {
+    return Boolean(
+      conv?.hold ||
+        conv?.followUpCadence?.pauseReason === "unit_hold" ||
+        conv?.followUpCadence?.pauseReason === "order_hold" ||
+        conv?.followUpCadence?.stopReason === "unit_hold" ||
+        conv?.followUpCadence?.stopReason === "order_hold" ||
+        conv?.followUp?.reason === "order_hold" ||
+        conv?.followUp?.reason === "unit_hold"
+    );
+  }
+
+  function applyHoldActionConversationUpdate(conv: any) {
+    if (!conv?.id) return;
+    if (selectedConv?.id === conv.id) {
+      setSelectedConv(conv);
+    }
+    setConversations(prev =>
+      prev.map(item => {
+        if (item.id !== conv.id) return item;
+        const last = Array.isArray(conv.messages) ? conv.messages[conv.messages.length - 1] : null;
+        return {
+          ...item,
+          status: conv.status ?? item.status,
+          closedReason: conv.closedReason ?? item.closedReason,
+          hold: conv.hold,
+          followUp: conv.followUp ?? item.followUp,
+          followUpCadence: conv.followUpCadence ?? item.followUpCadence,
+          updatedAt: conv.updatedAt ?? item.updatedAt,
+          lastMessage: last
+            ? {
+                direction: last.direction,
+                body: last.body,
+                provider: last.provider
+              }
+            : item.lastMessage ?? null
+        };
+      })
+    );
+  }
+
   async function submitHold(selection: any | null, action: "hold" | "hold_clear") {
     if (!holdModalConv) return;
     const resolved = action === "hold" && !holdOnOrder ? (selection ?? resolveHoldSelection()) : selection;
@@ -4880,12 +4938,44 @@ export default function Home() {
         throw new Error(data?.error ?? "Failed to update hold");
       }
       if (selectedConv?.id === holdModalConv.id && data?.conversation) {
-        setSelectedConv(data.conversation);
+        applyHoldActionConversationUpdate(data.conversation);
       }
+      if (data?.notice) setSaveToast(data.notice);
       setHoldModalOpen(false);
       void load();
     } catch (err: any) {
       setHoldError(err?.message ?? "Failed to update hold");
+    } finally {
+      setHoldSaving(false);
+    }
+  }
+
+  async function clearSelectedHold() {
+    if (!selectedConv) return;
+    setHoldSaving(true);
+    try {
+      const resp = await fetch(
+        `/api/conversations/${encodeURIComponent(selectedConv.id)}/followup-action`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ resolution: "hold_clear" })
+        }
+      );
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || data?.ok === false) {
+        throw new Error(data?.error ?? "Failed to remove hold");
+      }
+      if (data?.conversation) {
+        applyHoldActionConversationUpdate(data.conversation);
+      } else {
+        await loadConversation(selectedConv.id);
+      }
+      setCloseReason("");
+      setSaveToast(data?.notice ?? "Unit hold removed.");
+      await load();
+    } catch (err: any) {
+      window.alert(err?.message ?? "Failed to remove hold");
     } finally {
       setHoldSaving(false);
     }
@@ -8853,14 +8943,7 @@ export default function Home() {
     const rows = filteredMessages
       .map(m => {
         const provider = m.provider ?? "?";
-        const providerLabel =
-          provider === "voice_call"
-            ? "call"
-            : provider === "voice_transcript"
-              ? "call transcript"
-              : provider === "voice_summary"
-                ? "call summary"
-                : provider;
+        const providerLabel = getMessageProviderDisplayLabel(m);
         const body =
           m.direction === "in" && provider === "sendgrid"
             ? cleanInboundEmailForDisplay(m.body)
@@ -9253,6 +9336,10 @@ export default function Home() {
     }
     if (closeReason === "hold") {
       await openHoldModal(selectedConv.id);
+      return;
+    }
+    if (closeReason === "hold_clear") {
+      await clearSelectedHold();
       return;
     }
     if (closeReason === "sold" && !soldById && soldByOptions.length) {
@@ -17488,13 +17575,7 @@ export default function Home() {
                           })()}
                     </div>
                     <div className="flex gap-2">
-                      {holdModalConv?.hold ||
-                      holdModalConv?.followUpCadence?.pauseReason === "unit_hold" ||
-                      holdModalConv?.followUpCadence?.pauseReason === "order_hold" ||
-                      holdModalConv?.followUpCadence?.stopReason === "unit_hold" ||
-                      holdModalConv?.followUpCadence?.stopReason === "order_hold" ||
-                      holdModalConv?.followUp?.reason === "order_hold" ||
-                      holdModalConv?.followUp?.reason === "unit_hold" ? (
+                      {hasActiveUnitHold(holdModalConv) ? (
                         <button
                           className="px-3 py-2 border rounded text-sm font-medium text-red-700 border-red-300 bg-white hover:bg-red-50"
                           onClick={() => submitHold(null, "hold_clear")}
@@ -18099,14 +18180,7 @@ export default function Home() {
               {filteredMessages.map(m => {
                   const isDraftMessage = m.direction === "out" && m.provider === "draft_ai";
                   const isPending = pendingDraft?.id === m.id;
-                  const providerLabel =
-                    m.provider === "voice_call"
-                      ? "call"
-                      : m.provider === "voice_transcript"
-                        ? "call transcript"
-                        : m.provider === "voice_summary"
-                        ? "call summary"
-                        : (m.provider ?? "?");
+                  const providerLabel = getMessageProviderDisplayLabel(m);
                   const isSummary = m.provider === "voice_summary";
                   if (isSummary) return null;
                   const summaryText = (() => {
@@ -18588,6 +18662,7 @@ export default function Home() {
                   <option value="">Update Lead...</option>
                   <option value="sold">Sold</option>
                   <option value="hold">Hold - Unit</option>
+                  {hasActiveUnitHold(selectedConv) ? <option value="hold_clear">Remove Hold</option> : null}
                   <option value="not_interested">Close - Not Interested</option>
                   <option value="no_response">Close - No Response</option>
                   <option value="other">Close - Other</option>
