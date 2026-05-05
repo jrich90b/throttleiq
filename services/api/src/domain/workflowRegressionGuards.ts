@@ -271,6 +271,27 @@ export function buildFactoryOrderTimingHandoffReply(modelLabel?: string | null):
   return "I’ll check on availability and timing and follow up with you.";
 }
 
+function normalizeComparableModelName(raw: string | null | undefined): string {
+  return String(raw ?? "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\b(?:harley|davidson|harley davidson|motorcycle|motorcycles|bike|bikes|the|a|an)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function shouldCarryLeadYearForRequestedModel(
+  requestedModel: string | null | undefined,
+  leadModel: string | null | undefined
+): boolean {
+  const requested = normalizeComparableModelName(requestedModel);
+  if (!requested) return true;
+  const lead = normalizeComparableModelName(leadModel);
+  if (!lead) return false;
+  return requested === lead || requested.includes(lead) || lead.includes(requested);
+}
+
 export function cleanCatalogModelNameForDisplay(raw: string | null | undefined): string {
   const original = String(raw ?? "").replace(/\s+/g, " ").trim();
   if (!original) return "";

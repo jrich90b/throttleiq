@@ -192,6 +192,7 @@ import {
   isStockNumberInventoryInterestText,
   pickCatalogModelLabelFromText,
   resolveRequestedScheduleWindowMode,
+  shouldCarryLeadYearForRequestedModel,
   shouldRebaseWeekdayReplyToPriorNextWeek,
   shouldSuppressInitialInventoryPhotoAppend
 } from "./domain/workflowRegressionGuards.js";
@@ -6587,7 +6588,11 @@ function resolveFactoryOrderTimingModelLabel(
   const parsedYear = String(parsedAvailability?.year ?? "").trim();
   const textYear = text.match(/\b(20\d{2})\b/)?.[1] ?? "";
   const leadYear = String(conv?.lead?.vehicle?.year ?? "").trim();
-  const year = parsedYear || textYear || leadYear;
+  const modelFromCurrentText = catalogLabel || parsedModel;
+  const year =
+    parsedYear ||
+    textYear ||
+    (shouldCarryLeadYearForRequestedModel(modelFromCurrentText, leadModel) ? leadYear : "");
   return [year, model].filter(Boolean).join(" ");
 }
 

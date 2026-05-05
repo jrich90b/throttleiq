@@ -22,6 +22,7 @@ import {
   pickCatalogModelLabelFromText,
   resolveRequestedScheduleWindowMode,
   shouldRebaseWeekdayReplyToPriorNextWeek,
+  shouldCarryLeadYearForRequestedModel,
   shouldIgnoreAdfModelMismatchForTradeContext,
   shouldSuppressInitialAvailabilityLineAppend,
   shouldSuppressInitialInventoryPhotoAppend,
@@ -298,6 +299,16 @@ const cases: Case[] = [
     id: "incoming_inventory_reply_no_hold_claim",
     actual: buildFactoryOrderTimingHandoffReply("Street Bob"),
     expected: "I’ll check on the status of the Street Bob and follow up with you."
+  },
+  {
+    id: "incoming_inventory_different_model_does_not_carry_lead_year",
+    actual: shouldCarryLeadYearForRequestedModel("Street Bob", "Road Glide"),
+    expected: false
+  },
+  {
+    id: "incoming_inventory_same_model_can_carry_lead_year",
+    actual: shouldCarryLeadYearForRequestedModel("Street Bob", "Street Bob 114"),
+    expected: true
   },
   {
     id: "walkin_next_week_is_timing_not_topic",
