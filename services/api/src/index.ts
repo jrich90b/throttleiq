@@ -13093,21 +13093,85 @@ function normalizeInventoryIdentifier(value: string | null | undefined): string 
   return String(value ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
+function extractStockIdFromInventoryMediaText(textRaw: string | null | undefined): string | null {
+  const text = String(textRaw ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  const explicit = text.match(/\b(?:stock|stk|stock\s*#|stock\s*number)\s*[:#-]?\s*([A-Z0-9]{1,8}[-\s]?\d{2,8})\b/i);
+  if (explicit?.[1]) return explicit[1].replace(/\s+/g, "").toUpperCase();
+  const standalone = text.match(/\b([A-Z]{1,4}\d{1,5}-\d{2})\b/i);
+  return standalone?.[1] ? standalone[1].toUpperCase() : null;
+}
+
+function normalizeInventoryMediaTextForModel(textRaw: string | null | undefined): string {
+  return String(textRaw ?? "")
+    .replace(/\bHarley[-\s]?Davidson\b/gi, " ")
+    .replace(/\b(?:FLHX|FLTRX|FLTRXS|FLTRK|FLHT|FLHXS|FXLRS|FXLRST|RH975|RH1250S|RA1250S?)\b/gi, " ")
+    .replace(/\b[A-Z]{1,4}\d{1,5}-\d{2}\b/g, " ")
+    .replace(/\b(19|20)\d{2}\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractionTextForInventoryMatch(extraction: InventoryMediaExtraction | null): string {
+  if (!extraction) return "";
+  return [
+    extraction.rawText,
+    extraction.model,
+    extraction.color,
+    extraction.stockId,
+    extraction.vin,
+    extraction.year
+  ]
+    .map(v => String(v ?? "").trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
 async function findInventoryItemFromMediaExtraction(
   extraction: InventoryMediaExtraction | null
 ): Promise<InventoryFeedItem | null> {
   if (!extraction) return null;
-  const stockKey = normalizeInventoryIdentifier(extraction.stockId);
+  const combinedText = extractionTextForInventoryMatch(extraction);
+  const stockFromText = extractStockIdFromInventoryMediaText(combinedText);
+  const stockKey = normalizeInventoryIdentifier(extraction.stockId ?? stockFromText);
   const vinKey = normalizeInventoryIdentifier(extraction.vin);
-  if (!stockKey && !vinKey) return null;
   const items = await getInventoryFeed();
-  return (
-    items.find(item => {
+  if (stockKey || vinKey) {
+    const exact = items.find(item => {
       const itemStock = normalizeInventoryIdentifier(item.stockId);
       const itemVin = normalizeInventoryIdentifier(item.vin);
       return (!!stockKey && itemStock === stockKey) || (!!vinKey && itemVin === vinKey);
-    }) ?? null
-  );
+    });
+    if (exact) return exact;
+  }
+
+  const year =
+    String(extraction.year ?? "").match(/\b(19|20)\d{2}\b/)?.[0] ??
+    extractYearSingle(combinedText.toLowerCase())?.toString() ??
+    null;
+  const model =
+    findMentionedModel(normalizeInventoryMediaTextForModel(combinedText)) ??
+    findMentionedModel(combinedText) ??
+    (extraction.model && !isGenericAvailabilityModelLabel(extraction.model) ? extraction.model : null);
+  if (!model) return null;
+  const modelForLookup = canonicalizeWatchModelLabel(model);
+  let matches = await findInventoryMatches({ year, model: modelForLookup });
+  const color = sanitizeColorPhrase(extraction.color ?? extractColorToken(combinedText.toLowerCase()));
+  if (color) {
+    matches = matches.filter(item => {
+      const itemColor = item.color ?? "";
+      if (colorMatchesExact(itemColor, color, null) || colorMatchesAlias(itemColor, color, null)) {
+        return true;
+      }
+      const itemNorm = normalizeColorBase(itemColor, false);
+      const colorNorm = normalizeColorBase(color, false);
+      return !!itemNorm && !!colorNorm && (itemNorm.includes(colorNorm) || colorNorm.includes(itemNorm));
+    });
+  }
+  const holds = await listInventoryHolds();
+  const solds = await listInventorySolds();
+  const status = classifyInventoryMatches(matches, holds, solds);
+  return status.available[0] ?? status.held[0] ?? status.sold[0] ?? null;
 }
 
 async function buildExactMediaInventoryAvailabilityResolution(
