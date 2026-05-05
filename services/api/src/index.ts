@@ -4246,6 +4246,35 @@ function inferAcceptedScheduleDaySinceLastOutbound(
   return null;
 }
 
+function hasRecentLightHumorSinceLastOutbound(
+  conv: any,
+  currentInboundText: string | null | undefined,
+  currentInboundAt?: string | null
+): boolean {
+  const currentAtMs = new Date(String(currentInboundAt ?? "")).getTime();
+  const messages = Array.isArray(conv?.messages) ? conv.messages : [];
+  const relevant = messages.filter((m: any) => {
+    if (!Number.isFinite(currentAtMs)) return true;
+    const atMs = new Date(String(m?.at ?? "")).getTime();
+    return !Number.isFinite(atMs) || atMs <= currentAtMs;
+  });
+  let lastOutboundIdx = -1;
+  for (let i = relevant.length - 1; i >= 0; i--) {
+    if (relevant[i]?.direction === "out" && relevant[i]?.body) {
+      lastOutboundIdx = i;
+      break;
+    }
+  }
+  const inboundSince = relevant
+    .slice(Math.max(0, lastOutboundIdx + 1))
+    .filter((m: any) => m?.direction === "in" && m?.body)
+    .map((m: any) => String(m.body ?? ""))
+    .concat(String(currentInboundText ?? ""))
+    .join("\n")
+    .toLowerCase();
+  return /\b(lol|haha|lmao|rofl|just kidding|kidding|jk)\b|[😂🤣😅😆]/u.test(inboundSince);
+}
+
 function onAppointmentBooked(conv: any) {
   if (conv?.closedReason === "sold" || conv?.sale?.soldAt || conv?.followUpCadence?.kind === "post_sale") {
     return;
@@ -28780,7 +28809,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
   if (event.provider === "twilio" && isAudioDemoStatusQuestionText(event.body ?? "")) {
     const acceptedDay = inferAcceptedScheduleDaySinceLastOutbound(conv, event.body ?? "", event.receivedAt);
-    const reply = buildAudioDemoStatusReply({ acceptedDay });
+    const hasHumor = hasRecentLightHumorSinceLastOutbound(conv, event.body ?? "", event.receivedAt);
+    const reply = buildAudioDemoStatusReply({ acceptedDay, hasHumor });
     addTodo(
       conv,
       "other",
@@ -28794,7 +28824,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     recordRouteOutcome("regen", "audio_demo_status_request", {
       convId: conv.id,
       leadKey: conv.leadKey,
-      acceptedDay
+      acceptedDay,
+      hasHumor
     });
     if (channel === "email") {
       return respondWithEmailRegeneratedDraft(reply);
@@ -32980,7 +33011,8 @@ if (authToken && signature) {
   const recentHistory = buildHistory(conv, 6);
   if (event.provider === "twilio" && isAudioDemoStatusQuestionText(inboundText)) {
     const acceptedDay = inferAcceptedScheduleDaySinceLastOutbound(conv, inboundText, event.receivedAt);
-    const reply = buildAudioDemoStatusReply({ acceptedDay });
+    const hasHumor = hasRecentLightHumorSinceLastOutbound(conv, inboundText, event.receivedAt);
+    const reply = buildAudioDemoStatusReply({ acceptedDay, hasHumor });
     addTodo(
       conv,
       "other",
@@ -32994,7 +33026,8 @@ if (authToken && signature) {
     recordRouteOutcome("live", "audio_demo_status_request", {
       convId: conv.id,
       leadKey: conv.leadKey,
-      acceptedDay
+      acceptedDay,
+      hasHumor
     });
     if (webhookMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");

@@ -262,6 +262,11 @@ const cases: Case[] = [
     expected: "I’ll check on the stereo for you and follow up shortly. What time tomorrow works best?"
   },
   {
+    id: "audio_demo_status_reply_can_acknowledge_humor",
+    actual: buildAudioDemoStatusReply({ acceptedDay: "tomorrow", hasHumor: true }),
+    expected: "Haha, gotcha — I’ll check on the stereo for you and follow up shortly. What time tomorrow works best?"
+  },
+  {
     id: "hiring_manager_inquiry_detected",
     actual: isHiringManagerInquiryText("Who is the hiring manager for American Harley Davidson?"),
     expected: true

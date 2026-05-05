@@ -244,13 +244,14 @@ export function isAudioDemoStatusQuestionText(textRaw: string | null | undefined
   );
 }
 
-export function buildAudioDemoStatusReply(args?: { acceptedDay?: string | null }): string {
+export function buildAudioDemoStatusReply(args?: { acceptedDay?: string | null; hasHumor?: boolean }): string {
   const acceptedDay = String(args?.acceptedDay ?? "").trim().toLowerCase();
+  const opener = args?.hasHumor ? "Haha, gotcha — " : "";
   const dayClause = acceptedDay ? ` ${acceptedDay}` : "";
   const scheduleLine = acceptedDay
     ? ` What time${dayClause} works best?`
     : "";
-  return `I’ll check on the stereo for you and follow up shortly.${scheduleLine}`.trim();
+  return `${opener}I’ll check on the stereo for you and follow up shortly.${scheduleLine}`.trim();
 }
 
 export function isInventoryBrowseLinkRequestText(textRaw: string | null | undefined): boolean {
