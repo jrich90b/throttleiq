@@ -146,6 +146,47 @@ export function buildHiringManagerInquiryReply(): string {
   return "Thanks for reaching out. I’ll pass your message along and have the hiring manager follow up with you.";
 }
 
+export function isRideChallengeLeadSignal(args: {
+  leadSource?: string | null;
+  inquiry?: string | null;
+  journeyText?: string | null;
+}): boolean {
+  const source = String(args.leadSource ?? "");
+  const inquiry = String(args.inquiry ?? "");
+  const journey = String(args.journeyText ?? "");
+  return (
+    /ride challenge|challenge signup|miles challenge/i.test(source) ||
+    /ride challenge|challenge signup|record your miles/i.test(journey) ||
+    /ride challenge|challenge signup|record your miles/i.test(inquiry)
+  );
+}
+
+export function hasRideChallengeSignupAcknowledgement(
+  messages: Array<{ direction?: string | null; body?: string | null }> | null | undefined
+): boolean {
+  return (messages ?? []).some(m => {
+    if (String(m?.direction ?? "").toLowerCase() !== "out") return false;
+    const body = String(m?.body ?? "");
+    return /\bthanks for signing up\b[\s\S]{0,120}\b(?:ride challenge|record your miles)\b/i.test(body);
+  });
+}
+
+export function buildRideChallengeSignupReply(args: {
+  firstName?: string | null;
+  agentName?: string | null;
+  dealerName?: string | null;
+}): string {
+  const firstName = String(args.firstName ?? "").trim() || "there";
+  const agentName = String(args.agentName ?? "").trim() || "Alexandra";
+  const dealerName = String(args.dealerName ?? "").trim() || "American Harley-Davidson";
+  return (
+    `Hi ${firstName} — this is ${agentName} at ${dealerName}. ` +
+    "Thanks for signing up for this year's ride challenge. " +
+    "Feel free to stop in and record your miles throughout the year. " +
+    "Let us know if you need anything to keep your bike rolling through the challenge!"
+  );
+}
+
 export function isTimingOnlyFollowUpTopic(textRaw: string | null | undefined): boolean {
   const source = String(textRaw ?? "")
     .toLowerCase()

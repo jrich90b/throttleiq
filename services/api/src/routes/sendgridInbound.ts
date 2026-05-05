@@ -82,8 +82,11 @@ import { buildOffersLine, resolveOffersUrl } from "../domain/offers.js";
 import {
   buildTimingAwareWalkInFollowUpLine,
   buildHiringManagerInquiryReply,
+  buildRideChallengeSignupReply,
   cleanCatalogModelNameForDisplay,
+  hasRideChallengeSignupAcknowledgement,
   isHiringManagerInquiryText,
+  isRideChallengeLeadSignal,
   isTimingOnlyFollowUpTopic,
   pickCatalogModelLabelFromText,
   shouldIgnoreAdfModelMismatchForTradeContext,
@@ -3033,9 +3036,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   } else {
     conv.lead.vehicle.condition = "new_model_interest";
   }
-  const nonSalesPromotionLead =
-    /ride challenge|challenge signup|miles challenge/i.test(leadSourceLower) ||
-    /ride challenge|challenge signup|record your miles/i.test(journeyText);
+  const nonSalesPromotionLead = isRideChallengeLeadSignal({
+    leadSource,
+    inquiry: lead.inquiry,
+    journeyText
+  });
   const shouldNormalizeLegacyNewCondition =
     conv.lead.vehicle.condition === "new" &&
     !nonSalesPromotionLead &&
@@ -3684,8 +3689,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   const isRideChallengeLead =
     event.provider === "sendgrid_adf" &&
-    (/ride challenge|challenge signup|miles challenge/i.test(leadSourceLower) ||
-      /ride challenge|challenge signup|record your miles|ride challenge/i.test(inquiryText));
+    isRideChallengeLeadSignal({
+      leadSource,
+      inquiry: effectiveInquiry,
+      journeyText
+    });
   const computeRideChallengeReminderDueAt = async () => {
     const cfg = await getSchedulerConfig();
     const tz = cfg.timezone || "America/New_York";
@@ -3727,17 +3735,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   };
   const isRideChallengeSignup =
     isRideChallengeLead &&
-    !(conv.messages ?? []).some((m: any) => m.direction === "out");
+    !hasRideChallengeSignupAcknowledgement(conv.messages);
   if (isRideChallengeSignup) {
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
     const agentName = profile?.agentName ?? "Alexandra";
     const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
-    const ack =
-      `Hi ${firstName} — this is ${agentName} at ${dealerName}. ` +
-      "Thanks for signing up for this year's ride challenge. " +
-      "Feel free to stop in and record your miles throughout the year. " +
-      "Let us know if you need anything to keep your bike rolling through the challenge!";
+    const ack = buildRideChallengeSignupReply({ firstName, agentName, dealerName });
     const dueAt = await applyRideChallengeReminderCadence();
     appendOutbound(conv, "dealership", leadKey, ack, "draft_ai");
     return res.status(200).json({

@@ -4,14 +4,17 @@ import {
   buildAccessoryCustomizationReply,
   buildFactoryOrderTimingHandoffReply,
   buildHiringManagerInquiryReply,
+  buildRideChallengeSignupReply,
   buildTimingAwareWalkInFollowUpLine,
   catalogModelMentionMatchesText,
   cleanCatalogModelNameForDisplay,
+  hasRideChallengeSignupAcknowledgement,
   isAccessoryCustomizationRequestText,
   isBlockedCadencePersonalizationLineText,
   isCloseoutSignoffNoResponseText,
   isFactoryOrderTimingQuestionText,
   isHiringManagerInquiryText,
+  isRideChallengeLeadSignal,
   isManualOutboundBookingConfirmationText,
   isTimingOnlyFollowUpTopic,
   pickCatalogModelLabelFromText,
@@ -219,6 +222,44 @@ const cases: Case[] = [
   {
     id: "hiring_manager_reply_handoff",
     actual: /hiring manager follow up/i.test(buildHiringManagerInquiryReply()),
+    expected: true
+  },
+  {
+    id: "ride_challenge_source_detected",
+    actual: isRideChallengeLeadSignal({
+      leadSource: "Ride Challenge",
+      inquiry: "Customer Comments: Preferred method of contact - email-"
+    }),
+    expected: true
+  },
+  {
+    id: "ride_challenge_duplicate_without_ack_still_needs_ack",
+    actual: hasRideChallengeSignupAcknowledgement([
+      {
+        direction: "out",
+        body: "Hi Mike — you mentioned a 1-3 Years timeline. I’m here when you’re ready."
+      }
+    ]),
+    expected: false
+  },
+  {
+    id: "ride_challenge_prior_signup_ack_detected",
+    actual: hasRideChallengeSignupAcknowledgement([
+      {
+        direction: "out",
+        body:
+          "Hi Mike — this is Alexandra at American Harley-Davidson. Thanks for signing up for this year's ride challenge. Feel free to stop in and record your miles throughout the year."
+      }
+    ]),
+    expected: true
+  },
+  {
+    id: "ride_challenge_signup_reply_thanks_for_signup",
+    actual: buildRideChallengeSignupReply({
+      firstName: "Mike",
+      agentName: "Brooke",
+      dealerName: "American Harley-Davidson"
+    }).includes("Thanks for signing up for this year's ride challenge."),
     expected: true
   },
   {

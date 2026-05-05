@@ -180,11 +180,14 @@ import {
   allowNoResponseSmallTalkAck,
   buildAccessoryCustomizationReply,
   buildFactoryOrderTimingHandoffReply,
+  buildRideChallengeSignupReply,
+  hasRideChallengeSignupAcknowledgement,
   isAccessoryCustomizationRequestText,
   isBlockedCadencePersonalizationLineText,
   isCloseoutSignoffNoResponseText,
   isFactoryOrderTimingQuestionText,
   isManualOutboundBookingConfirmationText,
+  isRideChallengeLeadSignal,
   pickCatalogModelLabelFromText,
   resolveRequestedScheduleWindowMode,
   shouldRebaseWeekdayReplyToPriorNextWeek,
@@ -28854,6 +28857,28 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     setDialogState(conv, "pricing_init");
     stopFollowUpCadence(conv, "meta_promo_generic_model_regen");
     setFollowUpMode(conv, "paused_indefinite", "meta_promo_generic_model_regen");
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply);
+  }
+
+  const regenRideChallengeLead =
+    event.provider === "sendgrid_adf" &&
+    isRideChallengeLeadSignal({
+      leadSource: conv.lead?.source,
+      inquiry: event.body,
+      journeyText: event.body
+    });
+  if (regenRideChallengeLead && !hasRideChallengeSignupAcknowledgement(conv.messages)) {
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra");
+    const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
+    const reply = buildRideChallengeSignupReply({ firstName, agentName, dealerName });
+    recordRouteOutcome("regen", "ride_challenge_signup_ack", {
+      convId: conv.id,
+      leadKey: conv.leadKey
+    });
     if (channel === "email") {
       return respondWithEmailRegeneratedDraft(reply);
     }
