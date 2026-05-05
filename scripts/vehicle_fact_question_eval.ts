@@ -108,6 +108,11 @@ const fixtures: Fixture[] = [
   }
 ];
 
+const burstRegression = {
+  selected: "Total price ?",
+  latest: "Year ?"
+};
+
 function normalize(input: unknown): string {
   return String(input ?? "").trim().toLowerCase();
 }
@@ -167,6 +172,25 @@ async function main() {
   console.log(`Explicit accuracy: ${explicitMatches}/${fixtures.length} (${((explicitMatches / fixtures.length) * 100).toFixed(1)}%)`);
   console.log(`Field match: ${fieldMatches}/${fieldAsserted} (${fieldAsserted ? ((fieldMatches / fieldAsserted) * 100).toFixed(1) : "100"}%)`);
   console.log(`Null parses: ${nullParses}/${fixtures.length}`);
+
+  const burstParsed = await parseVehicleFactQuestionWithLLM({
+    text: burstRegression.latest,
+    history: [
+      ...unitHistory,
+      { direction: "in", body: burstRegression.selected }
+    ]
+  });
+  const burstOk = burstParsed?.questionType === "year" && burstParsed.explicitRequest === true;
+  console.log(
+    `Burst latest fact regression: ${burstOk ? "PASS" : "FAIL"} expected=year actual=${burstParsed?.questionType ?? "null"}`
+  );
+  if (!burstOk) {
+    mismatches.push(
+      `- [burst_latest_fact_question_wins] selected=${JSON.stringify(burstRegression.selected)} latest=${JSON.stringify(
+        burstRegression.latest
+      )} | got type=${burstParsed?.questionType ?? "null"} explicit=${burstParsed?.explicitRequest ?? "null"}`
+    );
+  }
 
   if (mismatches.length) {
     console.log("\nMismatches:");

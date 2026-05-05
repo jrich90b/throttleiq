@@ -4587,6 +4587,34 @@ function hasRecentPriceFactQuestion(conv: Conversation, receivedAt?: string | nu
     });
 }
 
+function pickLatestVehicleFactInboundForRegenerate(
+  conv: Conversation,
+  selectedInbound: { body?: string | null; at?: string | null; provider?: string | null } | null | undefined
+): { body: string; at?: string | null; providerMessageId?: string | null } | null {
+  const selectedAtMs = new Date(String(selectedInbound?.at ?? "")).getTime();
+  const messages = (conv.messages ?? [])
+    .filter(m => m.direction === "in" && m.provider === "twilio" && hasVehicleFactQuestionParserHint(m.body))
+    .filter(m => {
+      if (!Number.isFinite(selectedAtMs)) return true;
+      const atMs = new Date(String(m.at ?? "")).getTime();
+      if (!Number.isFinite(atMs)) return true;
+      return atMs >= selectedAtMs && atMs - selectedAtMs <= 10 * 60 * 1000;
+    })
+    .sort((a, b) => {
+      const aMs = new Date(String(a.at ?? "")).getTime();
+      const bMs = new Date(String(b.at ?? "")).getTime();
+      if (Number.isFinite(aMs) && Number.isFinite(bMs) && aMs !== bMs) return aMs - bMs;
+      return 0;
+    });
+  const latest = messages[messages.length - 1];
+  if (!latest?.body) return null;
+  return {
+    body: String(latest.body ?? ""),
+    at: latest.at,
+    providerMessageId: latest.providerMessageId
+  };
+}
+
 async function buildVehicleFactQuestionReply(args: {
   conv: Conversation;
   decision: VehicleFactQuestionDecision;
@@ -29251,21 +29279,26 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
   }
 
-  if (event.provider === "twilio" && hasVehicleFactQuestionParserHint(event.body ?? "")) {
+  const regenVehicleFactInbound =
+    event.provider === "twilio" && hasVehicleFactQuestionParserHint(event.body ?? "")
+      ? pickLatestVehicleFactInboundForRegenerate(conv, inbound)
+      : null;
+  const regenVehicleFactText = regenVehicleFactInbound?.body ?? event.body ?? "";
+  if (event.provider === "twilio" && hasVehicleFactQuestionParserHint(regenVehicleFactText)) {
     const vehicleFactParse = await safeLlmParse("regen_vehicle_fact_question_parser", () =>
       parseVehicleFactQuestionWithLLM({
-        text: event.body ?? "",
+        text: regenVehicleFactText,
         history: buildHistory(conv, 12),
         lead: conv.lead
       })
     );
-    const vehicleFactDecision = resolveVehicleFactQuestionDecision(event.body ?? "", vehicleFactParse);
+    const vehicleFactDecision = resolveVehicleFactQuestionDecision(regenVehicleFactText, vehicleFactParse);
     if (vehicleFactDecision) {
       const reply = await applyVehicleFactQuestionDecision({
         conv,
-        text: event.body ?? "",
-        providerMessageId: (inbound as any)?.providerMessageId,
-        receivedAt: event.receivedAt,
+        text: regenVehicleFactText,
+        providerMessageId: regenVehicleFactInbound?.providerMessageId ?? (inbound as any)?.providerMessageId,
+        receivedAt: regenVehicleFactInbound?.at ?? event.receivedAt,
         decision: vehicleFactDecision,
         scope: "regen"
       });
