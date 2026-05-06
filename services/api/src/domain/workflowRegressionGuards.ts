@@ -140,16 +140,18 @@ export function inferAcceptedScheduleDayFromReplyText(
     .replace(/\s+/g, " ")
     .trim();
   if (!text) return null;
-  if (
-    !/\b(can work|works|schedule you in|what time|let me know what time|time were you thinking|time works)\b/i.test(
-      text
-    )
-  ) {
-    return null;
-  }
-  const match = text.match(
-    /\b(monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun)\b/i
-  );
+  const chunks = String(lastOutboundTextRaw ?? "")
+    .split(/[\r\n]+|(?<=[.!?])\s+/)
+    .map(s => s.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const acceptedSchedulePhrase =
+    /\b(can work|works|schedule you in|what time|let me know what time|time were you thinking|time works)\b/i;
+  const dayPattern =
+    /\b(monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun)\b/i;
+  const match = chunks
+    .filter(chunk => acceptedSchedulePhrase.test(chunk))
+    .map(chunk => chunk.match(dayPattern))
+    .find(Boolean);
   if (!match?.[1]) return null;
   const day = match[1].toLowerCase();
   const map: Record<string, string> = {

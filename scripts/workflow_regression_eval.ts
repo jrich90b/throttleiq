@@ -377,6 +377,16 @@ const cases: Case[] = [
     expected: "Tuesday"
   },
   {
+    id: "time_only_reply_ignores_later_bad_slot_draft_and_finds_prior_accepted_day",
+    actual: inferAcceptedScheduleDayFromReplyText(
+      [
+        "I can set up a trade appraisal. I have Thu, May 7, 9:30 AM or Thu, May 7, 11:30 AM — do any of these times work?",
+        "Tuesday can work. I don’t have any other questions right now — just let me know what time you are thinking so I can schedule you in."
+      ].join("\n")
+    ),
+    expected: "Tuesday"
+  },
+  {
     id: "pickup_state_not_cleared_for_explicit_pickup_reply",
     actual: shouldClearPickupStateForSchedulingReply({
       lastOutboundText: "What street address should we use for pickup?",

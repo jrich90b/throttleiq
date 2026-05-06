@@ -1678,8 +1678,13 @@ function applyAcceptedScheduleDayToTimeOnlyText(
   if (!text) return text;
   if (inferRequestedDay(text)) return text;
   if (!hasTimeOnlyScheduleSignal(text)) return text;
-  const lastOutbound = [...(history ?? [])].reverse().find(h => h.direction === "out")?.body ?? "";
-  const acceptedDay = inferAcceptedScheduleDayFromReplyText(lastOutbound);
+  const recentOutbound = [...(history ?? [])]
+    .reverse()
+    .filter(h => h.direction === "out")
+    .slice(0, 8)
+    .map(h => h.body)
+    .join("\n");
+  const acceptedDay = inferAcceptedScheduleDayFromReplyText(recentOutbound);
   return acceptedDay ? `${acceptedDay} ${text}` : text;
 }
 

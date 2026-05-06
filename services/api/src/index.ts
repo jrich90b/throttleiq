@@ -29759,7 +29759,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         const atMs = new Date(m.at ?? "").getTime();
         return !Number.isFinite(atMs) || atMs <= regenInboundAtMsForSchedulingMemory;
       })
-      .slice(-1)[0]?.body ?? ""
+      .slice(-8)
+      .map(m => String(m.body ?? ""))
+      .reverse()
+      .join("\n")
   );
   const memorySummary = conv.memorySummary?.text ?? null;
   const memorySummaryShouldUpdate = shouldUpdateMemorySummary(conv);
