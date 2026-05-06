@@ -6578,9 +6578,18 @@ async function buildCadenceRegeneratedDraft(
   if (!shouldPreferContextualStep0NoSlots) {
     let message = lastDraftMatchesCadenceSend ? String(lastDraft?.body ?? "").trim() : "";
     if (isTestRideCadenceLead) {
-      const template =
-        TEST_RIDE_FOLLOW_UP_MESSAGES[Math.min(lastSentStep, TEST_RIDE_FOLLOW_UP_MESSAGES.length - 1)];
-      message = renderFollowUpTemplate(template, baseCtx);
+      const unavailableTestRideMessage = await buildUnavailableTestRideCadenceMessage({
+        conv,
+        name: firstName,
+        label: followUpLabel
+      });
+      if (unavailableTestRideMessage) {
+        message = unavailableTestRideMessage;
+      } else {
+        const template =
+          TEST_RIDE_FOLLOW_UP_MESSAGES[Math.min(lastSentStep, TEST_RIDE_FOLLOW_UP_MESSAGES.length - 1)];
+        message = renderFollowUpTemplate(template, baseCtx);
+      }
     } else if (!message) {
       const fallbackTemplate =
         FOLLOW_UP_MESSAGES[Math.min(lastSentStep, FOLLOW_UP_MESSAGES.length - 1)] ??
@@ -8102,6 +8111,22 @@ async function canOfferTestRideForLead(lead: any, dealerProfile: any): Promise<b
   if (!model || /full line|other/i.test(String(model))) return false;
   const year = lead?.vehicle?.year ?? null;
   return hasInventoryForModelYear({ model, year, yearDelta: 1 });
+}
+
+async function buildUnavailableTestRideCadenceMessage(args: {
+  conv: any;
+  name: string;
+  label: string;
+}): Promise<string | null> {
+  const model = args.conv?.lead?.vehicle?.model ?? args.conv?.lead?.vehicle?.description ?? null;
+  if (!model || /full line|other/i.test(String(model))) return null;
+  const year = args.conv?.lead?.vehicle?.year ?? null;
+  const hasMatchingInventory = await hasInventoryForModelYear({ model, year, yearDelta: 1 });
+  if (hasMatchingInventory) return null;
+  const firstName = normalizeDisplayCase(args.name || "there");
+  const label = String(args.label ?? "").trim() || formatModelLabelForFollowUp(year, model);
+  const unitText = label || "that bike";
+  return `No rush, ${firstName}. I’m still not seeing ${unitText} available for a test ride. If you want to try something similar or pick another in-stock bike, just text me what catches your eye.`;
 }
 
 const DEFAULT_HARLEY_MODELS = [
@@ -18748,12 +18773,22 @@ async function processDueFollowUps() {
         ];
       }
     } else if (isTestRideCadenceLead) {
-      const template =
-        TEST_RIDE_FOLLOW_UP_MESSAGES[Math.min(cadence.stepIndex, TEST_RIDE_FOLLOW_UP_MESSAGES.length - 1)];
-      message = renderFollowUpTemplate(template, baseCtx);
-      cadenceNoRepeatFallbacks = TEST_RIDE_FOLLOW_UP_MESSAGES.map(template =>
-        renderFollowUpTemplate(template, baseCtx)
-      );
+      const unavailableTestRideMessage = await buildUnavailableTestRideCadenceMessage({
+        conv,
+        name: firstName,
+        label: followUpLabel
+      });
+      if (unavailableTestRideMessage) {
+        message = unavailableTestRideMessage;
+        cadenceNoRepeatFallbacks = [unavailableTestRideMessage];
+      } else {
+        const template =
+          TEST_RIDE_FOLLOW_UP_MESSAGES[Math.min(cadence.stepIndex, TEST_RIDE_FOLLOW_UP_MESSAGES.length - 1)];
+        message = renderFollowUpTemplate(template, baseCtx);
+        cadenceNoRepeatFallbacks = TEST_RIDE_FOLLOW_UP_MESSAGES.map(template =>
+          renderFollowUpTemplate(template, baseCtx)
+        );
+      }
       if (!isTestRideDialogState(getDialogState(conv))) {
         setDialogState(conv, "test_ride_init");
       }
