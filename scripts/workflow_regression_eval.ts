@@ -23,6 +23,7 @@ import {
   isHiringManagerInquiryText,
   isRideChallengeLeadSignal,
   isManualOutboundBookingConfirmationText,
+  isNonComplimentLikePhraseText,
   isShortAckNoReplyText,
   isStockNumberInventoryInterestText,
   isTimingOnlyFollowUpTopic,
@@ -371,6 +372,11 @@ const cases: Case[] = [
     id: "schedule_available_word_does_not_prioritize_inventory",
     actual: isDirectInventoryAvailabilityQuestionText("Are you available Tuesday around 10?"),
     expected: false
+  },
+  {
+    id: "like_i_said_is_not_compliment",
+    actual: isNonComplimentLikePhraseText("Like I said. I'm 💯 legit"),
+    expected: true
   },
   {
     id: "pickup_state_cleared_for_schedule_time_reply",
