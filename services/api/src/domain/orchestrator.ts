@@ -29,6 +29,7 @@ import type { FinanceDocsState, LeadProfile, TradePayoffState } from "./conversa
 import { parsePreferredDateTime, parseRequestedDayTime } from "./conversationStore.js";
 import {
   extractInventoryStockIdMention,
+  inferAcceptedScheduleDayFromReplyText,
   isStockNumberInventoryInterestText
 } from "./workflowRegressionGuards.js";
 import { getSchedulerConfig, dayKey, getPreferredSalespeople } from "./schedulerConfig.js";
@@ -1655,6 +1656,31 @@ function inferRequestedDay(text: string): string | null {
   if (/(today|tonight|tonite)/.test(t)) return "today";
   if (/(tomorrow)/.test(t)) return "tomorrow";
   return null;
+}
+
+function hasTimeOnlyScheduleSignal(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "").toLowerCase();
+  if (!text.trim()) return false;
+  return (
+    /\b(?:between|around|about|approximately|approx|at|after|before|close\s+to|near)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/i.test(
+      text
+    ) ||
+    /\b\d{1,2}:\d{2}\s*(?:am|pm)?\b/i.test(text) ||
+    /\b\d{1,2}\s*(?:am|pm)\b/i.test(text)
+  );
+}
+
+function applyAcceptedScheduleDayToTimeOnlyText(
+  textRaw: string | null | undefined,
+  history: { direction: "in" | "out"; body: string }[]
+): string {
+  const text = String(textRaw ?? "").trim();
+  if (!text) return text;
+  if (inferRequestedDay(text)) return text;
+  if (!hasTimeOnlyScheduleSignal(text)) return text;
+  const lastOutbound = [...(history ?? [])].reverse().find(h => h.direction === "out")?.body ?? "";
+  const acceptedDay = inferAcceptedScheduleDayFromReplyText(lastOutbound);
+  return acceptedDay ? `${acceptedDay} ${text}` : text;
 }
 
 function looksLikeOptOut(body: string): boolean {
@@ -4044,8 +4070,12 @@ export async function orchestrateInbound(
           const now = new Date();
           const preferredDate = ctx?.lead?.preferredDate;
           const preferredTime = ctx?.lead?.preferredTime;
+          const schedulingTextWithAcceptedDay = applyAcceptedScheduleDayToTimeOnlyText(
+            schedulingText,
+            history
+          );
           const requestedSeed =
-            [preferredDate, preferredTime].filter(Boolean).join(" ").trim() || schedulingText;
+            [preferredDate, preferredTime].filter(Boolean).join(" ").trim() || schedulingTextWithAcceptedDay;
           let requestedDay = inferRequestedDay(requestedSeed);
           requestedTime =
             preferredDate && preferredTime

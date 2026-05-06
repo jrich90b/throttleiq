@@ -16629,6 +16629,7 @@ async function buildTradeFollowupReply(args: {
   conv: any;
   inboundText: string;
   correctionLine?: string;
+  lastOutboundText?: string;
 }): Promise<string> {
   const correctionLine = String(args.correctionLine ?? "");
   const inboundText = String(args.inboundText ?? "");
@@ -16643,7 +16644,14 @@ async function buildTradeFollowupReply(args: {
   }
 
   const cfg = await getSchedulerConfigHot();
-  const requestedDay = parseDayOfWeek(inboundText);
+  const schedulingText = applyInferredScheduleDayToTimeOnlyText(
+    inboundText,
+    args.lastOutboundText ?? "",
+    args.conv?.scheduler?.lastSuggestedSlots ?? [],
+    cfg.timezone || "America/New_York"
+  );
+  const requestedDay = parseDayOfWeek(schedulingText);
+  const requestedTimeToken = extractTimeToken(schedulingText);
   let requestedDayKey: string | null = null;
   let requestedDayLabel = "";
   if (requestedDay) {
@@ -16654,6 +16662,10 @@ async function buildTradeFollowupReply(args: {
       requestedDayKey = requestedDay.day.toLowerCase();
       requestedDayLabel = requestedDay.day;
     }
+  }
+
+  if (requestedDayKey && requestedTimeToken) {
+    return `${correctionLine}${requestedDayLabel} ${formatRememberedScheduleTimeForReply(schedulingText)} can work.`;
   }
 
   const requestedDayHours = requestedDayKey ? cfg.businessHours?.[requestedDayKey] : undefined;
@@ -29738,6 +29750,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
 
   const history = buildHistory(conv, 60);
+  const regenInboundAtMsForSchedulingMemory = new Date(event.receivedAt).getTime();
+  const regenLastOutboundBeforeInboundText = String(
+    [...(conv.messages ?? [])]
+      .filter(m => m.direction === "out" && m.body)
+      .filter(m => {
+        if (!Number.isFinite(regenInboundAtMsForSchedulingMemory)) return true;
+        const atMs = new Date(m.at ?? "").getTime();
+        return !Number.isFinite(atMs) || atMs <= regenInboundAtMsForSchedulingMemory;
+      })
+      .slice(-1)[0]?.body ?? ""
+  );
   const memorySummary = conv.memorySummary?.text ?? null;
   const memorySummaryShouldUpdate = shouldUpdateMemorySummary(conv);
   const regenShortAck = isShortAckText(event.body) || isEmojiOnlyText(event.body);
@@ -29920,7 +29943,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const reply = await buildTradeFollowupReply({
       conv,
       inboundText: String(event.body ?? ""),
-      correctionLine
+      correctionLine,
+      lastOutboundText: regenLastOutboundBeforeInboundText
     });
     if (channel === "email") {
       return respondWithEmailRegeneratedDraft(reply);
@@ -31283,6 +31307,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     pricingIntentHint: regenPricingIntentHint,
     financeIntentHint: regenFinancePriorityHint,
     lead: conv.lead ?? null,
+    schedulingText: applyInferredScheduleDayToTimeOnlyText(
+      event.body,
+      regenLastOutboundBeforeInboundText,
+      conv.scheduler?.lastSuggestedSlots ?? [],
+      regenTz
+    ),
     pricingAttempts: getPricingAttempts(conv),
     allowSchedulingOffer: regenSchedulingIntentHint,
     callbackRequestedOverride:
@@ -36865,7 +36895,8 @@ if (authToken && signature) {
     const reply = await buildTradeFollowupReply({
       conv,
       inboundText: String(event.body ?? ""),
-      correctionLine
+      correctionLine,
+      lastOutboundText: String(getLastNonVoiceOutbound(conv)?.body ?? "")
     });
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
