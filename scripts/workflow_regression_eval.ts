@@ -26,6 +26,7 @@ import {
   isManualOutboundBookingConfirmationText,
   isMediaProofStatusUpdateText,
   isNonComplimentLikePhraseText,
+  isRegenerateSchedulingLanguageText,
   isShortAckNoReplyText,
   isStockNumberInventoryInterestText,
   isTimingOnlyFollowUpTopic,
@@ -135,6 +136,11 @@ const cases: Case[] = [
     id: "can_you_send_info_is_not_incidental_ack",
     actual: isIncidentalInfoAcknowledgementText("Can you send more info on that bike?"),
     expected: false
+  },
+  {
+    id: "regen_appointments_plural_later_this_month_is_actionable_schedule",
+    actual: isRegenerateSchedulingLanguageText("Thanks for info. And any appointments later this month same time."),
+    expected: true
   },
   {
     id: "no_response_smalltalk_suppressed_for_scheduling_signal",

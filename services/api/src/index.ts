@@ -204,6 +204,7 @@ import {
   isMediaProofStatusUpdateText,
   isNonComplimentLikePhraseText,
   isRideChallengeLeadSignal,
+  isRegenerateSchedulingLanguageText,
   isShortAckNoReplyText,
   isStockNumberInventoryInterestText,
   inferAcceptedScheduleDayFromReplyText,
@@ -14375,10 +14376,7 @@ function isRegenerateInboundActionableForRouting(text: string): boolean {
       lower
     );
   if (pricingSignal) return true;
-  const schedulingSignal =
-    /\b(schedule|book|appointment|appt|what time|what day|works for you|come in|stop by|stop in|today|tomorrow|this week|next week)\b/i.test(
-      lower
-    );
+  const schedulingSignal = isRegenerateSchedulingLanguageText(lower);
   if (schedulingSignal) return true;
   if (/\b(call me|give me a call|can you call|please call|have .* call|reach me|contact me)\b/i.test(raw)) {
     return true;

@@ -386,6 +386,17 @@ export function isIncidentalInfoAcknowledgementText(textRaw: string | null | und
   );
 }
 
+export function isRegenerateSchedulingLanguageText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+  if (!text) return false;
+  return /\b(schedule|book|appointments?|appt|what time|what day|works for you|come in|stop by|stop in|today|tomorrow|this week|next week|later this month|this month|same time|that time|earlier|later)\b/i.test(
+    text
+  );
+}
+
 export function isNonComplimentLikePhraseText(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "")
     .trim()

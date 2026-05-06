@@ -402,5 +402,24 @@
       },
       "normalized_contains": "9th after 1:30"
     }
+  },
+  {
+    "id": "availability_later_this_month_same_time_1",
+    "text": "Thanks for info. And any appointments later this month same time.",
+    "expected": {
+      "intent": "availability",
+      "intent_any": [
+        "availability",
+        "schedule"
+      ],
+      "explicit_request": true,
+      "requested": {
+        "day": "later this month",
+        "time_text": "same time",
+        "time_window": "range"
+      },
+      "reference": "last_suggested",
+      "normalized_contains": "later this month"
+    }
   }
 ]
