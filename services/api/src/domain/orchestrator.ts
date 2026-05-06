@@ -1701,6 +1701,45 @@ function looksLikeAttachmentPlaceholderBody(text: string): boolean {
   );
 }
 
+function isCashDeliveryPaperworkText(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\b(certified check|cashier'?s check|bank check|full amount|take delivery|taking delivery|pick(?:ing)? up|pickup)\b/.test(
+      t
+    ) &&
+    !/\b(e-?sign|finance|financing|credit app|credit application|approved|approval|loan|lender)\b/.test(t)
+  );
+}
+
+function isFinanceDocsContextText(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return /\b(e-?sign|finance|financing|credit app|credit application|approved|approval|loan|lender|insurance binder)\b/.test(
+    t
+  );
+}
+
+function recentOutboundHasCashDeliveryPaperwork(
+  history: { direction: "in" | "out"; body: string }[]
+): boolean {
+  return [...(history ?? [])]
+    .reverse()
+    .filter(m => m.direction === "out" && String(m.body ?? "").trim().length > 0)
+    .slice(0, 8)
+    .some(m => isCashDeliveryPaperworkText(m.body));
+}
+
+function recentOutboundHasFinanceDocsContext(
+  history: { direction: "in" | "out"; body: string }[]
+): boolean {
+  return [...(history ?? [])]
+    .reverse()
+    .filter(m => m.direction === "out" && String(m.body ?? "").trim().length > 0)
+    .slice(0, 8)
+    .some(m => isFinanceDocsContextText(m.body) && !isCashDeliveryPaperworkText(m.body));
+}
+
 function recentOutboundRequestedInsuranceDocs(
   history: { direction: "in" | "out"; body: string }[]
 ): boolean {
@@ -1709,6 +1748,7 @@ function recentOutboundRequestedInsuranceDocs(
     .filter(m => m.direction === "out" && String(m.body ?? "").trim().length > 0)
     .slice(0, 8);
   return recentOut.some(m =>
+    !isCashDeliveryPaperworkText(m.body) &&
     /\b(insurance|binder|proof of insurance|driver'?s?\s*licen[cs]e|drivers?\s*license|driver license|d\.?\s*l\.?|e-?sign|documents?)\b/i.test(
       String(m.body ?? "")
     )
@@ -1722,7 +1762,7 @@ function recentOutboundRequestedBinder(
     .reverse()
     .filter(m => m.direction === "out" && String(m.body ?? "").trim().length > 0)
     .slice(0, 8);
-  return recentOut.some(m => /\bbinder\b/i.test(String(m.body ?? "")));
+  return recentOut.some(m => !isCashDeliveryPaperworkText(m.body) && /\bbinder\b/i.test(String(m.body ?? "")));
 }
 
 function recentOutboundRequestedLicense(
@@ -1733,6 +1773,7 @@ function recentOutboundRequestedLicense(
     .filter(m => m.direction === "out" && String(m.body ?? "").trim().length > 0)
     .slice(0, 8);
   return recentOut.some(m =>
+    !isCashDeliveryPaperworkText(m.body) &&
     /\b(driver'?s?\s*licen[cs]e|drivers?\s*license|driver license|d\.?\s*l\.?)\b/i.test(
       String(m.body ?? "")
     )
@@ -1943,13 +1984,19 @@ export async function orchestrateInbound(
   const hasInboundMedia =
     (Array.isArray(event.mediaUrls) && event.mediaUrls.length > 0) ||
     looksLikeAttachmentPlaceholderBody(event.body);
+  const recentCashDeliveryPaperwork = recentOutboundHasCashDeliveryPaperwork(history ?? []);
+  const recentFinanceDocsContext = recentOutboundHasFinanceDocsContext(history ?? []);
+  const financeDocsStateAllowed =
+    !!ctx?.financeDocs &&
+    (recentFinanceDocsContext || !recentCashDeliveryPaperwork);
   if (
     hasInboundMedia &&
     (inboundMentionsInsuranceDocs(event.body) ||
       recentOutboundRequestedInsuranceDocs(history ?? []) ||
-      !!ctx?.financeDocs?.insuranceRequested ||
-      !!ctx?.financeDocs?.binderRequested ||
-      !!ctx?.financeDocs?.licenseRequested)
+      (financeDocsStateAllowed &&
+        (!!ctx?.financeDocs?.insuranceRequested ||
+          !!ctx?.financeDocs?.binderRequested ||
+          !!ctx?.financeDocs?.licenseRequested)))
   ) {
     const docs = resolveFinanceDocPendingState({
       state: ctx?.financeDocs ?? null,

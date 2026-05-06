@@ -6,7 +6,8 @@ type Case = {
   id: string;
   event: InboundMessageEvent;
   financeDocs: FinanceDocsState | null;
-  expectIncludes: string;
+  expectIncludes?: string;
+  expectNotIncludes?: string;
   history?: Array<{ direction: "in" | "out"; body: string }>;
 };
 
@@ -81,6 +82,36 @@ const cases: Case[] = [
       binderReceived: true
     },
     expectIncludes: "send the e-sign documents shortly"
+  },
+  {
+    id: "cash_delivery_docs_do_not_trigger_esign",
+    event: {
+      channel: "sms",
+      provider: "twilio",
+      from: "+15555550104",
+      to: "+15555550999",
+      body: "MMS image attachment",
+      mediaUrls: ["https://example.test/check.jpg"],
+      providerMessageId: "case4",
+      receivedAt: now
+    },
+    financeDocs: {
+      status: "pending",
+      requestedAt: now,
+      updatedAt: now,
+      insuranceRequested: true,
+      licenseRequested: true,
+      insuranceReceived: false,
+      licenseReceived: false
+    },
+    history: [
+      {
+        direction: "out",
+        body:
+          "We will need driver's license, insurance cards and certified check made out to American Harley-Davidson for the full amount for you to take delivery"
+      }
+    ],
+    expectNotIncludes: "e-sign"
   }
 ];
 
@@ -101,8 +132,11 @@ async function run() {
       }
     );
     const got = String(result.draft ?? "");
-    if (!got.toLowerCase().includes(c.expectIncludes.toLowerCase())) {
+    if (c.expectIncludes && !got.toLowerCase().includes(c.expectIncludes.toLowerCase())) {
       failures.push({ id: c.id, expected: c.expectIncludes, got });
+    }
+    if (c.expectNotIncludes && got.toLowerCase().includes(c.expectNotIncludes.toLowerCase())) {
+      failures.push({ id: c.id, expected: `not includes ${c.expectNotIncludes}`, got });
     }
   }
 

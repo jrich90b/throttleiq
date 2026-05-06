@@ -790,6 +790,14 @@ function detectFinanceDocRequestSignals(body: string): {
 } {
   const t = String(body ?? "").toLowerCase();
   if (!t.trim()) return { insuranceRequested: false, binderRequested: false, licenseRequested: false };
+  const cashDeliveryPaperwork =
+    /\b(certified check|cashier'?s check|bank check|full amount|take delivery|taking delivery|pick(?:ing)? up|pickup)\b/.test(
+      t
+    ) &&
+    !/\b(e-?sign|finance|financing|credit app|credit application|approved|approval|loan|lender)\b/.test(t);
+  if (cashDeliveryPaperwork) {
+    return { insuranceRequested: false, binderRequested: false, licenseRequested: false };
+  }
   const actionCue =
     /\b(send|text|photo|upload|attach|add|provide|share|submit|once you add|when you add|when you send|when you text)\b/.test(
       t
