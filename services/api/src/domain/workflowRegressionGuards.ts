@@ -397,6 +397,17 @@ export function isRegenerateSchedulingLanguageText(textRaw: string | null | unde
   );
 }
 
+export function getBroadScheduleWindowLabel(textRaw: string | null | undefined): string | null {
+  const text = String(textRaw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+  if (!text) return null;
+  if (/\blater this month\b/.test(text)) return "later this month";
+  if (/\bthis month\b/.test(text)) return "this month";
+  return null;
+}
+
 export function isNonComplimentLikePhraseText(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "")
     .trim()

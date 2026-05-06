@@ -190,6 +190,7 @@ import {
   buildFactoryOrderTimingHandoffReply,
   buildRideChallengeSignupReply,
   extractInventoryStockIdMention,
+  getBroadScheduleWindowLabel,
   hasRideChallengeSignupAcknowledgement,
   isAccessoryCustomizationRequestText,
   isAudioDemoStatusQuestionText,
@@ -31292,6 +31293,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         const requestedTimeLabel = formatTime12h(requestedTimeToken);
         setRequestedTime(conv, { timeText: event.body });
         const reply = `Got it — ${requestedTimeLabel} can work. Which day were you thinking?`;
+        return respondWithSmsRegeneratedDraft(reply);
+      }
+      const broadScheduleWindowLabel = getBroadScheduleWindowLabel(event.body);
+      if (broadScheduleWindowLabel) {
+        const sameTimeText = /\b(same time|that time|those times)\b/i.test(String(event.body ?? ""));
+        const timeQualifier = sameTimeText ? " around those same times" : "";
+        const reply = `Absolutely — ${broadScheduleWindowLabel}${timeQualifier} can work. What day ${broadScheduleWindowLabel} works best?`;
         return respondWithSmsRegeneratedDraft(reply);
       }
       const reply =

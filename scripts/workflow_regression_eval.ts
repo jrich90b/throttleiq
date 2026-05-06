@@ -10,6 +10,7 @@ import {
   catalogModelMentionMatchesText,
   cleanCatalogModelNameForDisplay,
   extractInventoryStockIdMention,
+  getBroadScheduleWindowLabel,
   hasRideChallengeSignupAcknowledgement,
   isAccessoryCustomizationRequestText,
   isAudioDemoStatusQuestionText,
@@ -141,6 +142,11 @@ const cases: Case[] = [
     id: "regen_appointments_plural_later_this_month_is_actionable_schedule",
     actual: isRegenerateSchedulingLanguageText("Thanks for info. And any appointments later this month same time."),
     expected: true
+  },
+  {
+    id: "broad_schedule_window_preserves_later_this_month",
+    actual: getBroadScheduleWindowLabel("Thanks for info. And any appointments later this month same time."),
+    expected: "later this month"
   },
   {
     id: "no_response_smalltalk_suppressed_for_scheduling_signal",
