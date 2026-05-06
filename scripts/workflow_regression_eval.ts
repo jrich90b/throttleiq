@@ -432,6 +432,13 @@ const cases: Case[] = [
     expected: true
   },
   {
+    id: "direct_availability_with_apology_tail_prioritizes_inventory",
+    actual: isDirectInventoryAvailabilityQuestionText(
+      "do you have the 26 heritage classic in brilliant red? sorry, been really busy"
+    ),
+    expected: true
+  },
+  {
     id: "schedule_available_word_does_not_prioritize_inventory",
     actual: isDirectInventoryAvailabilityQuestionText("Are you available Tuesday around 10?"),
     expected: false

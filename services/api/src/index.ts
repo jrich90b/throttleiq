@@ -35664,6 +35664,11 @@ if (authToken && signature) {
   }
   const smallTalkPreemptCandidate =
     event.provider === "twilio" &&
+    routeExecGeneral &&
+    !pricingOrPaymentsIntent &&
+    !schedulingPrimaryIntent &&
+    !availabilityPrimaryIntent &&
+    !callbackPrimaryIntent &&
     !shortAck &&
     !isLogisticsProgressUpdateText(event.body ?? "") &&
     !hasExplicitSchedulingLanguageThisTurn &&
