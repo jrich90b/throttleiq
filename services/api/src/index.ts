@@ -196,6 +196,7 @@ import {
   isCloseoutSignoffNoResponseText,
   isFactoryOrderTimingQuestionText,
   hasExplicitCalendarDateForScheduleMemory,
+  isDirectInventoryAvailabilityQuestionText,
   isInventoryBrowseLinkRequestText,
   isManualOutboundBookingConfirmationText,
   isRideChallengeLeadSignal,
@@ -30977,10 +30978,14 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       parserAvailability: null,
       shortlistPromptActive: hasActivePendingShortListPrompt(conv)
     });
+    const regenDirectAvailabilityQuestion = isDirectInventoryAvailabilityQuestionText(event.body ?? "");
     const regenMediaAvailabilityQuestion =
       !!event.mediaUrls?.length && hasAvailabilityQuestionText(event.body ?? "");
     const explicitAvailabilityAskThisTurn =
-      regenParserAvailabilityIntent || !!regenAvailabilityPreferenceHint || regenMediaAvailabilityQuestion;
+      regenParserAvailabilityIntent ||
+      !!regenAvailabilityPreferenceHint ||
+      regenDirectAvailabilityQuestion ||
+      regenMediaAvailabilityQuestion;
     const financeOrRateAskThisTurn = regenParserPricingIntent;
     const soldOrPostSale = isSoldOrPostSaleConversation(conv);
     const inboundExplicitModel = findMentionedModel(String(event.body ?? "").toLowerCase());
@@ -31013,7 +31018,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     if (
       explicitAvailabilityAskThisTurn &&
-      !visitTimingIntent &&
+      (!visitTimingIntent || regenDirectAvailabilityQuestion) &&
       !financeOrRateAskThisTurn
     ) {
       const availabilityResolution = await resolveDeterministicAvailabilityReply({
@@ -34624,9 +34629,11 @@ if (authToken && signature) {
     llmCallbackRequested;
   const mediaAvailabilityQuestionThisTurn =
     !!event.mediaUrls?.length && hasAvailabilityQuestionText(event.body ?? "");
+  const directAvailabilityQuestionThisTurn = isDirectInventoryAvailabilityQuestionText(event.body ?? "");
   const llmAvailabilityIntent =
     parserAvailabilityIntent ||
     (intentAccepted && intentParse?.intent === "availability") ||
+    directAvailabilityQuestionThisTurn ||
     mediaAvailabilityQuestionThisTurn;
   const explicitAvailabilitySignalThisTurn = llmAvailabilityIntent;
   const llmTestRideIntent = intentAccepted && intentParse?.intent === "test_ride";
@@ -36780,7 +36787,7 @@ if (authToken && signature) {
     event.provider === "twilio" &&
     availabilityExplicit &&
     !financePriorityOverride &&
-    !schedulePriorityOverride &&
+    (!schedulePriorityOverride || directAvailabilityQuestionThisTurn) &&
     !pricingSignal &&
     !pricingOrPaymentsIntent
   ) {

@@ -356,6 +356,23 @@ export function isInventoryBrowseLinkRequestText(textRaw: string | null | undefi
   return asksForInventoryList;
 }
 
+export function isDirectInventoryAvailabilityQuestionText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+  if (!text) return false;
+
+  return (
+    /\b(?:in[-\s]?stock|still in stock|stock)\b/.test(text) ||
+    /\b(?:do you|do u|you guys|y'all|ya'll)\b[\s\S]{0,70}\b(?:have|got|carry)\b/.test(text) ||
+    /\b(?:have|got)\s+any\b/.test(text) ||
+    /\b(?:still|is it|is this|is that|this one|that one)\s+(?:one\s+)?available\b/.test(text) ||
+    /\bavailability\b/.test(text) ||
+    /\bwhat do you have\b/.test(text)
+  );
+}
+
 export function shouldClearPickupStateForSchedulingReply(args: {
   inboundText?: string | null;
   lastOutboundText?: string | null;

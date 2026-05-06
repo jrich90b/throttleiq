@@ -15,6 +15,7 @@ import {
   isAudioDemoStatusQuestionText,
   isBlockedCadencePersonalizationLineText,
   isCloseoutSignoffNoResponseText,
+  isDirectInventoryAvailabilityQuestionText,
   isFactoryOrderTimingQuestionText,
   hasExplicitCalendarDateForScheduleMemory,
   inferAcceptedScheduleDayFromReplyText,
@@ -358,6 +359,18 @@ const cases: Case[] = [
       )
     ),
     expected: JSON.stringify(["Sportster", "Nightster"])
+  },
+  {
+    id: "direct_in_stock_alternatives_prioritize_availability",
+    actual: isDirectInventoryAvailabilityQuestionText(
+      "Do you the sportster or nightster in stock ? Or something a bit lighter than the low rider"
+    ),
+    expected: true
+  },
+  {
+    id: "schedule_available_word_does_not_prioritize_inventory",
+    actual: isDirectInventoryAvailabilityQuestionText("Are you available Tuesday around 10?"),
+    expected: false
   },
   {
     id: "pickup_state_cleared_for_schedule_time_reply",
