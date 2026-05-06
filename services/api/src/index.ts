@@ -152,7 +152,8 @@ import {
   isLogisticsProgressUpdateText,
   isAffordabilityRideConfidenceObjectionText,
   isDispositionParserAccepted,
-  isResponseControlParserAccepted
+  isResponseControlParserAccepted,
+  isResponseControlParserConfidentDecision
 } from "./domain/transitionSafety.js";
 import { pickRegenerateInbound } from "./domain/regenerateSelection.js";
 import { applyDraftStateInvariants } from "./domain/draftStateInvariants.js";
@@ -30701,6 +30702,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       )
     : null;
   const regenResponseControlAccepted = isResponseControlParserAccepted(regenResponseControlParse);
+  const regenResponseControlConfident = isResponseControlParserConfidentDecision(regenResponseControlParse);
   const regenLlmComplimentOnly =
     regenResponseControlAccepted && regenResponseControlParse?.intent === "compliment_only";
   const regenLlmExplicitScheduleIntent =
@@ -30763,7 +30765,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (
     allowComplimentOnlyReply({
       complimentOnly:
-        (regenLlmComplimentOnly || isComplimentOnlyText(event.body)) &&
+        (regenLlmComplimentOnly ||
+          ((!regenResponseControlParserEligible || !regenResponseControlConfident) &&
+            isComplimentOnlyText(event.body))) &&
         !isShortAckText(event.body) &&
         !(Array.isArray(event.mediaUrls) && event.mediaUrls.length > 0),
       financeSignal: regenParserPricingIntent,
@@ -31790,6 +31794,7 @@ if (authToken && signature) {
     console.log("[llm-response-control-parse]", responseControlParse);
   }
   const responseControlAccepted = isResponseControlParserAccepted(responseControlParse);
+  const responseControlConfident = isResponseControlParserConfidentDecision(responseControlParse);
   const llmOptOut = responseControlAccepted && responseControlParse?.intent === "opt_out";
   const llmNotInterested = responseControlAccepted && responseControlParse?.intent === "not_interested";
   const llmComplimentOnly = responseControlAccepted && responseControlParse?.intent === "compliment_only";
@@ -32600,7 +32605,9 @@ if (authToken && signature) {
   if (
     allowComplimentOnlyReply({
       complimentOnly:
-        (llmComplimentOnly || isComplimentOnlyText(event.body)) &&
+        (llmComplimentOnly ||
+          ((!responseControlParserEligible || !responseControlConfident) &&
+            isComplimentOnlyText(event.body))) &&
         !isShortAckText(event.body) &&
         !(Array.isArray(event.mediaUrls) && event.mediaUrls.length > 0),
       schedulingSignal: complimentHasSchedulingSignal
