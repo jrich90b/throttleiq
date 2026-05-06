@@ -1429,6 +1429,7 @@ export type DealershipFaqTopicParse = {
     | "warranty"
     | "authorized_dealer_benefits"
     | "test_ride"
+    | "test_ride_eligibility"
     | "new_vs_used"
     | "none";
   explicitRequest: boolean;
@@ -1992,6 +1993,7 @@ const DEALERSHIP_FAQ_TOPIC_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
         "warranty",
         "authorized_dealer_benefits",
         "test_ride",
+        "test_ride_eligibility",
         "new_vs_used",
         "none"
       ]
@@ -4067,6 +4069,12 @@ output: {"topic":"insurance_required","explicit_request":true,"confidence":0.98}
     `EXAMPLE L
 inbound: "What warranty comes with a new Harley?"
 output: {"topic":"warranty","explicit_request":true,"confidence":0.98}`,
+    `EXAMPLE L2
+inbound: "Is it only the 2026 models that are eligible for the test ride or any model year bike you currently have in stock?"
+output: {"topic":"test_ride_eligibility","explicit_request":true,"confidence":0.98}`,
+    `EXAMPLE L3
+inbound: "Can I test ride any bike you have in stock or just new ones?"
+output: {"topic":"test_ride_eligibility","explicit_request":true,"confidence":0.98}`,
     `EXAMPLE M
 inbound: "Do you have any black Street Glides in stock?"
 output: {"topic":"none","explicit_request":true,"confidence":0.99}`,
@@ -4102,6 +4110,7 @@ output: {"topic":"none","explicit_request":true,"confidence":0.99}`
     "- warranty: asks about factory warranty or extended coverage.",
     "- authorized_dealer_benefits: asks why buy from authorized dealer.",
     "- test_ride: asks if test rides are available.",
+    "- test_ride_eligibility: asks which model years, new/used bikes, or in-stock bikes are eligible for test rides.",
     "- new_vs_used: asks whether new or used is better.",
     "- none: not an FAQ-style question above.",
     "",
@@ -4160,6 +4169,7 @@ output: {"topic":"none","explicit_request":true,"confidence":0.99}`
     topicRaw === "warranty" ||
     topicRaw === "authorized_dealer_benefits" ||
     topicRaw === "test_ride" ||
+    topicRaw === "test_ride_eligibility" ||
     topicRaw === "new_vs_used"
       ? topicRaw
       : "none";

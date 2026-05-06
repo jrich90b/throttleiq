@@ -117,6 +117,7 @@ function buildDealershipFaqReply(args: {
     | "warranty"
     | "authorized_dealer_benefits"
     | "test_ride"
+    | "test_ride_eligibility"
     | "new_vs_used";
   lead?: LeadProfile | null;
   dealerName: string;
@@ -168,6 +169,8 @@ function buildDealershipFaqReply(args: {
       return "Authorized dealers provide factory warranty support, genuine parts, certified service, financing/trade options, and recall support.";
     case "test_ride":
       return "Yes — we offer test rides/demo opportunities based on license, weather, and bike availability.";
+    case "test_ride_eligibility":
+      return "It’s not only 2026 models — generally, any bike we have in stock and available to ride can be eligible for a test ride. We just need to confirm the specific bike is available and that the weather/safety requirements work.";
     case "new_vs_used":
       return "New gives you full warranty and latest tech; used lowers upfront cost. If you want, I can compare both options for your budget.";
     default:

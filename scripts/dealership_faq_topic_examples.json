@@ -1,5 +1,21 @@
 [
   {
+    "id": "test_ride_eligibility_any_in_stock_1",
+    "text": "Is it only the 2026 models that are eligible for the test ride or any model year bike you currently have in stock?",
+    "expected": {
+      "topic": "test_ride_eligibility",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "test_ride_eligibility_new_or_used_1",
+    "text": "Can I test ride any bike you have in stock or just new ones?",
+    "expected": {
+      "topic": "test_ride_eligibility",
+      "explicit_request": true
+    }
+  },
+  {
     "id": "incoming_street_bob_turnover_1",
     "text": "Hi! Do you have any Street Bob coming in.",
     "expected": {

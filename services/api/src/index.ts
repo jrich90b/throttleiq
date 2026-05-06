@@ -32,6 +32,7 @@ import {
   parseRoutingDecisionWithLLM,
   parseAccessoryRequestWithLLM,
   parseVehicleFactQuestionWithLLM,
+  parseDealershipFaqTopicWithLLM,
   parseDialogActWithLLM,
   parseCustomerDispositionWithLLM,
   parseResponseControlWithLLM,
@@ -57,7 +58,8 @@ import type {
   SemanticSlotParse,
   UnifiedSemanticSlotParse,
   TradePayoffParse,
-  VehicleFactQuestionParse
+  VehicleFactQuestionParse,
+  DealershipFaqTopicParse
 } from "./domain/llmDraft.js";
 import type { InboundMessageEvent, OrchestratorResult } from "./domain/types.js";
 import { sendgridInboundMiddleware, handleSendgridInbound } from "./routes/sendgridInbound.js";
@@ -4737,6 +4739,61 @@ async function applyVehicleFactQuestionDecision(args: {
     confidence: args.decision.confidence
   });
   return result.reply;
+}
+
+function hasTestRideEligibilityQuestionHint(text: string | null | undefined): boolean {
+  const lower = String(text ?? "").toLowerCase();
+  if (!/\b(test ride|demo ride|ride)\b/.test(lower)) return false;
+  return /\b(eligible|only|model years?|any model|any year|any bike|all bikes|new ones?|used ones?|currently have|in stock|stock)\b/.test(
+    lower
+  );
+}
+
+function isFaqParserAccepted(
+  parsed: DealershipFaqTopicParse | null,
+  topic: DealershipFaqTopicParse["topic"]
+): boolean {
+  if (!parsed || parsed.topic !== topic || !parsed.explicitRequest) return false;
+  const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_FAQ_TOPIC_CONFIDENCE_MIN ?? 0.72);
+  return confidence >= min;
+}
+
+function buildTestRideEligibilityReply(profile: any): string {
+  const policyText =
+    String(profile?.policies?.testRideEligibilityText ?? "").trim() ||
+    String(profile?.policies?.testRideEligibility ?? "").trim() ||
+    String(profile?.policies?.demoRideEligibilityText ?? "").trim();
+  if (policyText) return policyText;
+
+  return "It’s not only 2026 models — generally, any bike we have in stock and available to ride can be eligible for a test ride. We just need to confirm the specific bike is available and that the weather/safety requirements work.";
+}
+
+async function maybeHandleTestRideEligibilityFaq(args: {
+  conv: Conversation;
+  text: string | null | undefined;
+  providerMessageId?: string | null;
+  scope: "live" | "regen";
+}): Promise<string | null> {
+  if (!hasTestRideEligibilityQuestionHint(args.text)) return null;
+  const parsed = await safeLlmParse(`${args.scope}_faq_topic_parser`, () =>
+    parseDealershipFaqTopicWithLLM({
+      text: String(args.text ?? ""),
+      history: buildHistory(args.conv, 10),
+      lead: args.conv.lead
+    })
+  );
+  if (!isFaqParserAccepted(parsed, "test_ride_eligibility")) return null;
+
+  const profile = await getDealerProfileHot();
+  const reply = buildTestRideEligibilityReply(profile);
+  setDialogState(args.conv, "test_ride_init");
+  recordRouteOutcome(args.scope, "test_ride_eligibility_faq", {
+    convId: args.conv.id,
+    leadKey: args.conv.leadKey,
+    confidence: parsed?.confidence ?? null
+  });
+  return reply;
 }
 
 function onAppointmentBooked(conv: any) {
@@ -29939,6 +29996,21 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenParserCallbackIntent = regenRoutingIntentOverride === "callback";
   const regenParserAvailabilityIntent = regenRoutingIntentOverride === "availability";
   const regenRoutePolicyMode = getRoutePolicyMode();
+  const regenTestRideEligibilityReply =
+    event.provider === "twilio"
+      ? await maybeHandleTestRideEligibilityFaq({
+          conv,
+          text: event.body ?? "",
+          providerMessageId: event.providerMessageId,
+          scope: "regen"
+        })
+      : null;
+  if (regenTestRideEligibilityReply) {
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(regenTestRideEligibilityReply);
+    }
+    return respondWithSmsRegeneratedDraft(regenTestRideEligibilityReply);
+  }
   if (event.provider === "twilio" && isFactoryOrderTimingQuestionText(event.body ?? "")) {
     const modelLabel = resolveFactoryOrderTimingModelLabel(event.body ?? "", null, conv);
     const reply = buildFactoryOrderTimingHandoffReply(modelLabel);
@@ -34440,6 +34512,27 @@ if (authToken && signature) {
   const jumpStartExperienceRequest = isJumpStartExperienceText(event.body ?? "");
   const effectiveTestRideIntent = llmTestRideIntent && !jumpStartExperienceRequest;
   const llmAvailability = llmAvailabilityIntent ? intentParse?.availability ?? null : null;
+  const testRideEligibilityReply =
+    event.provider === "twilio"
+      ? await maybeHandleTestRideEligibilityFaq({
+          conv,
+          text: event.body ?? "",
+          providerMessageId: event.providerMessageId,
+          scope: "live"
+        })
+      : null;
+  if (testRideEligibilityReply) {
+    if (webhookMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, testRideEligibilityReply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, testRideEligibilityReply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      testRideEligibilityReply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (event.provider === "twilio" && isFactoryOrderTimingQuestionText(event.body ?? "")) {
     const modelLabel = resolveFactoryOrderTimingModelLabel(event.body ?? "", llmAvailability, conv);
     const reply = buildFactoryOrderTimingHandoffReply(modelLabel);
