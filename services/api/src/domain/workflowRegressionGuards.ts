@@ -282,6 +282,34 @@ export function isInventoryBrowseLinkRequestText(textRaw: string | null | undefi
   return asksForInventoryList;
 }
 
+export function shouldClearPickupStateForSchedulingReply(args: {
+  inboundText?: string | null;
+  lastOutboundText?: string | null;
+  dialogState?: string | null;
+}): boolean {
+  const inbound = String(args.inboundText ?? "").toLowerCase();
+  const lastOutbound = String(args.lastOutboundText ?? "").toLowerCase();
+  const dialogState = String(args.dialogState ?? "").toLowerCase();
+  if (!inbound.trim()) return false;
+  if (/\b(pick[-\s]?up|pickup|come get|driver|tow|trailer)\b/i.test(inbound)) {
+    return false;
+  }
+  const scheduleContext =
+    /\b(schedule|appointment|test_ride|test ride|demo ride)\b/.test(dialogState) ||
+    /\b(what time|what day|day and time|schedule you in|schedule|appointment|test ride|demo ride)\b/i.test(
+      lastOutbound
+    );
+  if (!scheduleContext) return false;
+  const scheduleReply =
+    /\b(morning|afternoon|evening|today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(
+      inbound
+    ) ||
+    /\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/i.test(inbound) ||
+    /\bbetween\s+\d{1,2}(?::\d{2})?\s*(?:and|-|to)\s*\d{1,2}(?::\d{2})?\b/i.test(inbound) ||
+    /\btext you when i leave\b/i.test(inbound);
+  return scheduleReply;
+}
+
 type AvailabilityModelMention = {
   model?: string | null;
   index?: number | null;

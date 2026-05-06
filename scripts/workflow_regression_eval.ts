@@ -26,6 +26,7 @@ import {
   pickCatalogModelLabelFromText,
   resolveRequestedScheduleWindowMode,
   selectRequestedAvailabilityModelMentions,
+  shouldClearPickupStateForSchedulingReply,
   shouldRebaseWeekdayReplyToPriorNextWeek,
   shouldCarryLeadYearForRequestedModel,
   shouldIgnoreAdfModelMismatchForTradeContext,
@@ -355,6 +356,26 @@ const cases: Case[] = [
       )
     ),
     expected: JSON.stringify(["Sportster", "Nightster"])
+  },
+  {
+    id: "pickup_state_cleared_for_schedule_time_reply",
+    actual: shouldClearPickupStateForSchedulingReply({
+      lastOutboundText:
+        "Tuesday can work. I don’t have any other questions right now — just let me know what time you are thinking so I can schedule you in.",
+      inboundText:
+        "Ok. I'm retired so in the morning is best for me so between 9:30 and 10:00. I'll have everything for the bike with me, title etc.",
+      dialogState: "schedule_request"
+    }),
+    expected: true
+  },
+  {
+    id: "pickup_state_not_cleared_for_explicit_pickup_reply",
+    actual: shouldClearPickupStateForSchedulingReply({
+      lastOutboundText: "What street address should we use for pickup?",
+      inboundText: "Can you pick it up at 123 Main Street?",
+      dialogState: "trade_cash"
+    }),
+    expected: false
   },
   {
     id: "factory_order_timing_question_detected",

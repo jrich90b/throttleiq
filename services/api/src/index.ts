@@ -203,6 +203,7 @@ import {
   pickCatalogModelLabelFromText,
   resolveRequestedScheduleWindowMode,
   selectRequestedAvailabilityModelMentions,
+  shouldClearPickupStateForSchedulingReply,
   shouldCarryLeadYearForRequestedModel,
   shouldRebaseWeekdayReplyToPriorNextWeek,
   shouldSuppressInitialInventoryPhotoAppend
@@ -36399,6 +36400,19 @@ if (authToken && signature) {
       reply
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
+  }
+
+  if (
+    event.provider === "twilio" &&
+    conv.pickup?.stage &&
+    shouldClearPickupStateForSchedulingReply({
+      inboundText: event.body,
+      lastOutboundText,
+      dialogState: getDialogState(conv)
+    })
+  ) {
+    conv.pickup = { ...(conv.pickup ?? {}), stage: undefined, updatedAt: nowIso() };
+    saveConversation(conv);
   }
 
   if (event.provider === "twilio" && conv.pickup?.stage) {
