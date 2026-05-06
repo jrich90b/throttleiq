@@ -12430,7 +12430,25 @@ function extractLogisticsDeadlineLabel(text: string): string | null {
   return part ? `${dayLabel} ${part}` : dayLabel;
 }
 
+function extractArrivalStatusTimeLabel(text: string): string | null {
+  const t = String(text ?? "");
+  if (!/\b(on my way|on the way|en route|headed over|heading over|heading there|coming over|coming now|be there|make it there|get there|arrive there)\b/i.test(t)) {
+    return null;
+  }
+  const match = t.match(/\b(?:by|around|about|close to|before)?\s*(\d{1,2})(?::?(\d{2}))?\s*(am|pm)?\b/i);
+  if (!match) return null;
+  const rawHour = Number(match[1]);
+  const rawMinute = match[2] ?? "00";
+  if (!Number.isFinite(rawHour) || rawHour < 1 || rawHour > 12) return null;
+  const meridiem = match[3]?.toUpperCase() || (rawHour >= 7 && rawHour <= 11 ? "AM" : "PM");
+  return `${rawHour}:${rawMinute.padStart(2, "0")} ${meridiem}`;
+}
+
 function buildLogisticsProgressAcknowledgement(text: string): string {
+  const arrivalTime = extractArrivalStatusTimeLabel(text);
+  if (arrivalTime) {
+    return `Sounds good — see you around ${arrivalTime}.`;
+  }
   const deadline = extractLogisticsDeadlineLabel(text);
   if (deadline) {
     return `Understood — I’ll review everything and let you know before ${deadline} if anything else is needed.`;

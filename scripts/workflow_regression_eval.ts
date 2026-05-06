@@ -147,6 +147,11 @@ const cases: Case[] = [
     expected: true
   },
   {
+    id: "arrival_status_on_my_way_not_schedule",
+    actual: isLogisticsProgressUpdateText("On my way doing my best to be there by 530"),
+    expected: true
+  },
+  {
     id: "plain_friday_morning_visit_not_logistics",
     actual: isLogisticsProgressUpdateText("I can come in Friday morning"),
     expected: false

@@ -14,7 +14,19 @@ export function isLogisticsProgressUpdateText(text: string): boolean {
     /\b(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|morning|afternoon|evening)\b[\s\S]{0,90}\b(?:start|star|starting|leave|leaving|head|heading|drive|driving|travel|traveling|travelling|on the road)\b/.test(
       t
     );
-  return (hasProgress && hasDeferredFollowUp) || (hasDeferredFollowUp && hasTravelDeadline);
+  const hasArrivalProgress =
+    /\b(?:on my way|on the way|en route|headed over|heading over|heading there|coming over|coming now)\b/.test(
+      t
+    ) ||
+    /\b(?:be|being|make it|get|arrive)\s+there\b/.test(t);
+  const hasArrivalTime =
+    /\b(?:by|around|about|close to|before)?\s*\d{1,2}(?::?\d{2})?\s*(?:am|pm)?\b/.test(t) ||
+    /\b(?:soon|shortly|in a few|right now)\b/.test(t);
+  return (
+    (hasProgress && hasDeferredFollowUp) ||
+    (hasDeferredFollowUp && hasTravelDeadline) ||
+    (hasArrivalProgress && hasArrivalTime)
+  );
 }
 
 export function hasPostSaleOrOwnershipContext(conv: any): boolean {
