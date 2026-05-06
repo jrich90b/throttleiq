@@ -170,7 +170,7 @@ function buildDealershipFaqReply(args: {
     case "test_ride":
       return "Yes — we offer test rides/demo opportunities based on license, weather, and bike availability.";
     case "test_ride_eligibility":
-      return "It’s not only 2026 models — generally, any bike we have in stock and available to ride can be eligible for a test ride. We just need to confirm the specific bike is available and that the weather/safety requirements work.";
+      return "It’s not only 2026 models — generally, any bike we have in stock and available to ride can be eligible for a test ride. We just need to confirm the specific bike is available.";
     case "new_vs_used":
       return "New gives you full warranty and latest tech; used lowers upfront cost. If you want, I can compare both options for your budget.";
     default:

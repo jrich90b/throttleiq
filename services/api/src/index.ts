@@ -1181,6 +1181,27 @@ function fallbackRequestedDayLabel(text: string): string | null {
   return null;
 }
 
+function customerInvitedQuestions(text: string | null | undefined): boolean {
+  const t = String(text ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!t) return false;
+  return (
+    /\bif\s+you\s+(have|got)\s+(any\s+)?questions?\b/.test(t) ||
+    /\bin\s+the\s+meantime\b.{0,100}\bquestions?\b/.test(t) ||
+    /\bplease\s+ask\b/.test(t)
+  );
+}
+
+function buildDayOnlySchedulingTimeReply(
+  dayPhrase: string,
+  inboundText: string | null | undefined
+): string {
+  const cleanDayPhrase = String(dayPhrase ?? "").replace(/\s+/g, " ").trim().replace(/[.?!]+$/g, "");
+  const timePrompt = customerInvitedQuestions(inboundText)
+    ? "I don’t have any other questions right now — just let me know what time you are thinking so I can schedule you in."
+    : "Just let me know what time you are thinking so I can schedule you in.";
+  return `${cleanDayPhrase} can work. ${timePrompt}`;
+}
+
 function buildOrchestratorFailureFallback(
   event: InboundMessageEvent,
   ctx: Parameters<typeof orchestrateInbound>[2]
@@ -4766,7 +4787,7 @@ function buildTestRideEligibilityReply(profile: any): string {
     String(profile?.policies?.demoRideEligibilityText ?? "").trim();
   if (policyText) return policyText;
 
-  return "It’s not only 2026 models — generally, any bike we have in stock and available to ride can be eligible for a test ride. We just need to confirm the specific bike is available and that the weather/safety requirements work.";
+  return "It’s not only 2026 models — generally, any bike we have in stock and available to ride can be eligible for a test ride. We just need to confirm the specific bike is available.";
 }
 
 async function maybeHandleTestRideEligibilityFaq(args: {
@@ -31043,11 +31064,6 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         requestedDateFloor?.label ||
         inferredPromptDay ||
         "";
-      const timePrompt = requestedDayPart
-        ? `What time on ${requestedDayLabel} works best for you?`
-        : requestedTimeToken
-          ? ""
-          : "What time works best for you?";
       if (requestedDayLabel && requestedTimeToken) {
         const requestedTimeLabel = formatTime12h(requestedTimeToken);
         const requestedPhrase = `${requestedDayLabel} at ${requestedTimeLabel}`;
@@ -31081,14 +31097,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
           return respondWithSmsRegeneratedDraft(rememberedReply);
         }
         const requestedPhrase = `${requestedDayLabel}${requestedDayPart ? ` ${requestedDayPart}` : ""}`;
+        const scheduleTimeReply = buildDayOnlySchedulingTimeReply(requestedPhrase, event.body);
         const daySpecificReply =
           availableMatches.length > 0
             ? explicitAvailabilityAskThisTurn && !recentlyConfirmedAvailable
-              ? `Absolutely — ${unitLabel} is still available right now. ${requestedPhrase} can work. ${timePrompt}`
-              : `${requestedPhrase} can work. ${timePrompt}`
+              ? `Absolutely — ${unitLabel} is still available right now. ${scheduleTimeReply}`
+              : scheduleTimeReply
             : explicitAvailabilityAskThisTurn
-              ? `I’ll keep an eye on ${unitLabel} and update you right away. ${requestedPhrase} can work to plan around. ${timePrompt}`
-              : `${requestedPhrase} can work. ${timePrompt}`;
+              ? `I’ll keep an eye on ${unitLabel} and update you right away. ${scheduleTimeReply}`
+              : scheduleTimeReply;
         return respondWithSmsRegeneratedDraft(daySpecificReply);
       }
       if (requestedTimeToken) {
@@ -35717,7 +35734,7 @@ if (authToken && signature) {
       if (match?.item) {
         const unitLabel = stockId || vin || "that unit";
         const dayPhrase = `${dayInfo.day} ${dayPart}`;
-        const reply = `Got it — ${unitLabel} is available right now. ${dayPhrase} can work. What time were you thinking?`;
+        const reply = `Got it — ${unitLabel} is available right now. ${buildDayOnlySchedulingTimeReply(dayPhrase, event.body)}`;
         setDialogState(conv, "schedule_request");
         const systemMode = webhookMode;
         if (systemMode === "suggest") {
@@ -38973,10 +38990,10 @@ if (authToken && signature) {
     }
     if (dayInfo?.day && !result.requestedTime) {
       const partLabel = dayPart ? ` ${dayPart}` : "";
-      result.draft = `Got it — ${dayInfo.day}${partLabel} can work. What time were you thinking?`;
+      result.draft = `Got it. ${buildDayOnlySchedulingTimeReply(`${dayInfo.day}${partLabel}`, event.body)}`;
       setDialogState(conv, "schedule_request");
     } else if (!result.requestedTime && dayPart) {
-      result.draft = `Got it — ${dayPart} can work. What time were you thinking?`;
+      result.draft = `Got it. ${buildDayOnlySchedulingTimeReply(dayPart, event.body)}`;
       setDialogState(conv, "schedule_request");
     }
   }
