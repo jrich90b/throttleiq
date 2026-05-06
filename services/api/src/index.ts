@@ -202,6 +202,7 @@ import {
   isStockNumberInventoryInterestText,
   pickCatalogModelLabelFromText,
   resolveRequestedScheduleWindowMode,
+  selectRequestedAvailabilityModelMentions,
   shouldCarryLeadYearForRequestedModel,
   shouldRebaseWeekdayReplyToPriorNextWeek,
   shouldSuppressInitialInventoryPhotoAppend
@@ -13959,7 +13960,13 @@ async function resolveDeterministicAvailabilityReply(args: {
   if (exactMediaInventoryItem && referencesSpecificInventoryUnit(args.text)) {
     return buildExactMediaInventoryAvailabilityResolution(conv, exactMediaInventoryItem);
   }
-  const explicitModelFromText = findMentionedModel(textLower);
+  const currentTextModelCandidates = findMentionedModelCandidates(args.text);
+  const requestedModelMentions = selectRequestedAvailabilityModelMentions(
+    args.text,
+    currentTextModelCandidates
+  );
+  const explicitModelFromText =
+    requestedModelMentions[0] ?? (currentTextModelCandidates.length ? null : findMentionedModel(textLower));
   const mediaRawText = String(mediaInventoryExtraction?.rawText ?? "");
   const explicitModelFromMediaText = mediaRawText ? findMentionedModel(mediaRawText) : null;
   const mediaModel = String(mediaInventoryExtraction?.model ?? "").trim();
@@ -14157,6 +14164,36 @@ async function resolveDeterministicAvailabilityReply(args: {
     const url = validInventoryUrl(item?.url);
     return url ? `${detail} — ${url}` : detail;
   };
+  if (requestedModelMentions.length >= 2) {
+    const requestedModels = requestedModelMentions.slice(0, 3);
+    const rows: string[] = [];
+    let anyAvailable = false;
+    for (const requestedModel of requestedModels) {
+      const requestedLabel = normalizeDisplayCase(canonicalizeWatchModelLabel(requestedModel) || requestedModel);
+      const requestedMatches = await findInventoryMatches({
+        year: null,
+        model: canonicalizeWatchModelLabel(requestedModel)
+      });
+      const requestedStatus = classifyInventoryMatches(requestedMatches, holds, solds);
+      if (requestedStatus.available.length > 0) {
+        anyAvailable = true;
+        const top = requestedStatus.available[0];
+        rows.push(
+          requestedStatus.available.length === 1
+            ? `${requestedLabel}: yes — ${formatInventoryLine(top)} is available right now.`
+            : `${requestedLabel}: yes — we have ${requestedStatus.available.length} in stock. Top option: ${formatInventoryLine(top)}.`
+        );
+      } else if (requestedStatus.held.length > 0) {
+        rows.push(`${requestedLabel}: I’m seeing one, but it’s on hold right now.`);
+      } else {
+        rows.push(`${requestedLabel}: I’m not seeing one in stock right now.`);
+      }
+    }
+    const tail = anyAvailable
+      ? "If one of those works, let me know what day and time you want to test ride it."
+      : "I can also check what lighter options are available for a test ride.";
+    return { kind: "reply", reply: `${rows.join(" ")} ${tail}` };
+  }
   const sentMediaUrls = new Set<string>();
   for (const msg of conv.messages ?? []) {
     if (msg.direction !== "out") continue;

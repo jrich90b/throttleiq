@@ -25,6 +25,7 @@ import {
   isTimingOnlyFollowUpTopic,
   pickCatalogModelLabelFromText,
   resolveRequestedScheduleWindowMode,
+  selectRequestedAvailabilityModelMentions,
   shouldRebaseWeekdayReplyToPriorNextWeek,
   shouldCarryLeadYearForRequestedModel,
   shouldIgnoreAdfModelMismatchForTradeContext,
@@ -340,6 +341,20 @@ const cases: Case[] = [
       "I'll come tomarow and check out bike after work, and if all goes great I'll take off work Thursday and pick up."
     ),
     expected: false
+  },
+  {
+    id: "availability_alternatives_ignore_comparison_reference_model",
+    actual: JSON.stringify(
+      selectRequestedAvailabilityModelMentions(
+        "Do you have the sportster or nightster in stock? Or something a bit lighter than the low rider",
+        [
+          { model: "Sportster", index: 16 },
+          { model: "Nightster", index: 29 },
+          { model: "Low Rider", index: 84 }
+        ]
+      )
+    ),
+    expected: JSON.stringify(["Sportster", "Nightster"])
   },
   {
     id: "factory_order_timing_question_detected",

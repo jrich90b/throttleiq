@@ -282,6 +282,60 @@ export function isInventoryBrowseLinkRequestText(textRaw: string | null | undefi
   return asksForInventoryList;
 }
 
+type AvailabilityModelMention = {
+  model?: string | null;
+  index?: number | null;
+};
+
+function normalizeAvailabilityModelMentionText(textRaw: string | null | undefined): string {
+  return String(textRaw ?? "")
+    .toLowerCase()
+    .replace(/\bstreet\s+glides\b/g, "street glide")
+    .replace(/\broad\s+glides\b/g, "road glide")
+    .replace(/\bbreakouts\b/g, "breakout")
+    .replace(/\bsportsters\b/g, "sportster")
+    .replace(/\bnightsters\b/g, "nightster")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function selectRequestedAvailabilityModelMentions(
+  textRaw: string | null | undefined,
+  candidates: AvailabilityModelMention[]
+): string[] {
+  const normalizedText = normalizeAvailabilityModelMentionText(textRaw);
+  if (!normalizedText || !candidates.length) return [];
+  const hasAlternativeSignal =
+    /\b(or|either|any|something|lighter|smaller|smaller than|lighter than)\b/.test(normalizedText);
+  if (!hasAlternativeSignal && candidates.length < 2) {
+    return candidates[0]?.model ? [String(candidates[0].model)] : [];
+  }
+
+  const selected: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const model = String(candidate.model ?? "").trim();
+    if (!model) continue;
+    const normalizedModel = normalizeAvailabilityModelMentionText(model);
+    if (!normalizedModel) continue;
+    const index =
+      typeof candidate.index === "number" && candidate.index >= 0
+        ? candidate.index
+        : normalizedText.indexOf(normalizedModel);
+    const before = index >= 0 ? normalizedText.slice(Math.max(0, index - 80), index) : "";
+    const isComparisonReference =
+      /\b(lighter|smaller|bigger|larger|heavier|easier|more manageable)\b.{0,50}\bthan(?: the)?\s*$/.test(
+        before
+      );
+    if (isComparisonReference) continue;
+    if (seen.has(normalizedModel)) continue;
+    seen.add(normalizedModel);
+    selected.push(model);
+  }
+  return selected;
+}
+
 export function isTimingOnlyFollowUpTopic(textRaw: string | null | undefined): boolean {
   const source = String(textRaw ?? "")
     .toLowerCase()
