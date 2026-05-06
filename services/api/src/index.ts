@@ -3454,6 +3454,115 @@ async function processInventoryWatchlist(targetConvId?: string) {
   }
 }
 
+async function notifyInventoryWatchersForAvailableItem(
+  matchedItem: InventoryFeedItem,
+  opts?: { reason?: string; excludeConvId?: string | null }
+): Promise<number> {
+  if (!matchedItem) return 0;
+  const holds = await listInventoryHolds();
+  const solds = await listInventorySolds();
+  const holdKey = normalizeInventoryHoldKey(matchedItem.stockId, matchedItem.vin);
+  if (holdKey && holds?.[holdKey]) return 0;
+  const soldKey = normalizeInventorySoldKey(matchedItem.stockId, matchedItem.vin);
+  if (soldKey && solds?.[soldKey]) return 0;
+
+  const cfg = await getSchedulerConfigHot();
+  const tz = cfg.timezone || "America/New_York";
+  const nowIsoValue = new Date().toISOString();
+  const matchedKey = inventoryKey(matchedItem);
+  let notified = 0;
+
+  for (const conv of getAllConversations()) {
+    if (opts?.excludeConvId && conv.id === opts.excludeConvId) continue;
+    if (conv.status === "closed") continue;
+    const phone = conv.lead?.phone ?? conv.leadKey;
+    if (phone && isSuppressed(phone)) continue;
+    if (conv.followUp?.mode === "manual_handoff") continue;
+    const watches =
+      conv.inventoryWatches?.length
+        ? conv.inventoryWatches
+        : conv.inventoryWatch
+          ? [conv.inventoryWatch]
+          : [];
+    if (!watches.length) continue;
+    if (!conv.inventoryWatches && conv.inventoryWatch) {
+      conv.inventoryWatches = [conv.inventoryWatch];
+    }
+    const matchedWatch = watches.find((watch: InventoryWatch) => {
+      if (!watch || watch.status === "paused") return false;
+      if (
+        matchedKey &&
+        watch.lastNotifiedStockId &&
+        String(watch.lastNotifiedStockId).toLowerCase() === matchedKey.toLowerCase()
+      ) {
+        const lastAtMs = new Date(String(watch.lastNotifiedAt ?? "")).getTime();
+        if (Number.isFinite(lastAtMs) && Date.now() - lastAtMs < 24 * 60 * 60 * 1000) return false;
+      }
+      return inventoryItemMatchesWatch(matchedItem, watch);
+    });
+    if (!matchedWatch) continue;
+
+    const year = matchedItem.year ?? (matchedWatch.year ? String(matchedWatch.year) : undefined);
+    const make = matchedItem.make ?? matchedWatch.make;
+    const model = matchedItem.model ?? matchedWatch.model;
+    const trim = matchedWatch.trim;
+    const color = matchedItem.color ?? matchedWatch.color;
+    const name = [year, make, model, trim].filter(Boolean).join(" ");
+    const colorText = color ? ` in ${color}` : "";
+    const leadFirstName = normalizeDisplayCase(String(conv.lead?.firstName ?? "").split(/\s+/)[0] ?? "");
+    const opener = leadFirstName ? `Hey ${leadFirstName}, good news` : "Good news";
+    const baseReply = `${opener} — ${name}${colorText} is available again. Want details or a time to check it out?`;
+    const listingUrlRaw = String(matchedItem?.url ?? "").trim();
+    const listingUrl = listingUrlRaw && /^https?:\/\//i.test(listingUrlRaw) ? listingUrlRaw : "";
+    const reply = listingUrl ? `${baseReply}\n${listingUrl}` : baseReply;
+    const imageUrl =
+      Array.isArray(matchedItem.images) && matchedItem.images.length
+        ? matchedItem.images[0]
+        : undefined;
+    const to = conv.lead?.phone ?? conv.leadKey;
+    appendOutbound(conv, "salesperson", to, reply, "draft_ai", undefined, imageUrl ? [imageUrl] : undefined);
+    matchedWatch.lastNotifiedAt = nowIsoValue;
+    matchedWatch.lastNotifiedStockId = matchedItem.stockId ?? matchedItem.vin ?? matchedKey ?? undefined;
+    setFollowUpMode(conv, "holding_inventory", opts?.reason ?? "inventory_watch_match");
+    if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
+      conv.followUpCadence = undefined;
+      startFollowUpCadence(conv, nowIsoValue, tz);
+    }
+    if (conv.followUpCadence && conv.followUpCadence.status === "active") {
+      const pauseUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+      conv.followUpCadence.pausedUntil = pauseUntil;
+      conv.followUpCadence.pauseReason = opts?.reason ?? "inventory_watch_match";
+      conv.followUpCadence.nextDueAt = pauseUntil;
+    }
+    conv.updatedAt = nowIsoValue;
+    saveConversation(conv);
+    notified += 1;
+  }
+  if (notified) await flushConversationStore();
+  return notified;
+}
+
+async function findInventoryItemForClearedHold(args: {
+  hold?: any;
+  stockId?: string | null;
+  vin?: string | null;
+  key?: string | null;
+}): Promise<InventoryFeedItem | null> {
+  const stock = String(args.stockId ?? args.hold?.stockId ?? "").trim().toLowerCase();
+  const vin = String(args.vin ?? args.hold?.vin ?? "").trim().toLowerCase();
+  const key = String(args.key ?? args.hold?.id ?? "").trim().toLowerCase();
+  if (!stock && !vin && !key) return null;
+  const items = await getInventoryFeedHot();
+  return (
+    items.find(item => {
+      const itemStock = String(item?.stockId ?? "").trim().toLowerCase();
+      const itemVin = String(item?.vin ?? "").trim().toLowerCase();
+      const itemHoldKey = String(normalizeInventoryHoldKey(item?.stockId, item?.vin) ?? "").trim().toLowerCase();
+      return (!!stock && itemStock === stock) || (!!vin && itemVin === vin) || (!!key && itemHoldKey === key);
+    }) ?? null
+  );
+}
+
 async function processInventoryHolds() {
   try {
     const holds = await listInventoryHolds();
@@ -5987,10 +6096,169 @@ async function buildCadenceLeadUnitAvailabilityOverride(args: {
     : hold
       ? "is currently on hold and may no longer be available"
       : "is no longer available";
+  if (hold && modelLabel) {
+    ensureInventoryWatchForHeldCadence(conv, {
+      year: conv?.lead?.vehicle?.year ?? null,
+      make: conv?.lead?.vehicle?.make ?? null,
+      model: conv?.lead?.vehicle?.model ?? null,
+      color: conv?.lead?.vehicle?.color ?? null,
+      condition: conv?.lead?.vehicle?.condition ?? null,
+      stockId: stockId ?? undefined,
+      vin: vin ?? undefined
+    });
+  }
   if (modelLabel) {
     return `Hey ${firstName}, quick update — ${unitText} ${statusText}. If you want, I can show you similar options in stock, or I can keep an eye out for ${watchLabel} and text you first.`;
   }
   return `Hey ${firstName}, quick update — ${unitText} ${statusText}. If you want, I can send a short list of options that fit what you’re after, or keep an eye out and text you first when a match comes in.`;
+}
+
+function getRecentVehicleMentionContext(conv: any): {
+  model: string | null;
+  year: string | null;
+  color: string | null;
+  condition: "new" | "used" | undefined;
+} {
+  const messages = [...(conv?.messages ?? [])]
+    .filter((m: any) => String(m?.body ?? "").trim() && m?.provider !== "draft_ai")
+    .slice(-30)
+    .reverse();
+  for (const message of messages) {
+    const body = String(message?.body ?? "").trim();
+    const model = findMentionedModel(body);
+    if (!model || isUnknownCadenceModel(model)) continue;
+    return {
+      model: formatModelToken(model),
+      year: extractYearSingle(body) ? String(extractYearSingle(body)) : null,
+      color: extractColorToken(body),
+      condition: normalizeWatchCondition(body)
+    };
+  }
+  const cadenceContext = resolveCadencePreferredModelContext(conv);
+  return {
+    model: cadenceContext.model,
+    year: cadenceContext.year,
+    color:
+      extractColorToken(
+        [
+          conv?.inventoryContext?.color,
+          conv?.lead?.vehicle?.color,
+          conv?.lead?.vehicle?.description,
+          conv?.lead?.walkInComment
+        ]
+          .filter(Boolean)
+          .join(" ")
+      ) ?? null,
+    condition: cadenceContext.condition
+  };
+}
+
+function inventoryColorMatchesContext(item: InventoryFeedItem, color: string | null): boolean {
+  const requestedColor = String(color ?? "").trim();
+  if (!requestedColor) return true;
+  const itemColor = String(item?.color ?? "").trim();
+  if (!itemColor) return false;
+  const leadTrim = extractTrimToken(requestedColor);
+  return (
+    normalizeColorBase(itemColor).includes(normalizeColorBase(requestedColor)) ||
+    colorMatchesExact(itemColor, requestedColor, leadTrim) ||
+    colorMatchesAlias(itemColor, requestedColor, leadTrim)
+  );
+}
+
+function buildInventoryUnitLabel(item: Partial<InventoryFeedItem>, fallbackModel?: string | null): string {
+  const year = String(item?.year ?? "").trim();
+  const model = normalizeDisplayCase(String(item?.model ?? fallbackModel ?? "").trim());
+  const color = normalizeDisplayCase(String(item?.color ?? "").trim());
+  const base = [year, model].filter(Boolean).join(" ").trim() || "that bike";
+  return color ? `${base} in ${color}` : base;
+}
+
+function ensureInventoryWatchForHeldCadence(
+  conv: any,
+  item: Partial<InventoryFeedItem> & { condition?: string | null }
+) {
+  const model = canonicalizeWatchModelLabel(item?.model ?? conv?.lead?.vehicle?.model ?? null);
+  if (!model) return;
+  const createdAt = nowIso();
+  const yearRaw = Number(item?.year ?? conv?.lead?.vehicle?.year ?? NaN);
+  const condition = normalizeWatchCondition(item?.condition ?? conv?.lead?.vehicle?.condition ?? null);
+  const color = String(item?.color ?? conv?.lead?.vehicle?.color ?? "").trim() || undefined;
+  const watch: InventoryWatch = {
+    model,
+    ...(Number.isFinite(yearRaw) ? { year: yearRaw } : {}),
+    make: String(item?.make ?? "Harley-Davidson").trim() || "Harley-Davidson",
+    ...(condition ? { condition } : {}),
+    ...(color ? { color } : {}),
+    note: "Created from held-unit follow-up guard.",
+    exactness: Number.isFinite(yearRaw) ? "year_model" : "model_only",
+    status: "active",
+    createdAt
+  };
+  const existing = Array.isArray(conv.inventoryWatches)
+    ? conv.inventoryWatches
+    : conv.inventoryWatch
+      ? [conv.inventoryWatch]
+      : [];
+  const next = [...existing];
+  const duplicate = next.some((w: InventoryWatch) => {
+    if (!w?.model) return false;
+    if (normalizeModelName(w.model) !== normalizeModelName(watch.model)) return false;
+    if ((w.year ?? null) !== (watch.year ?? null)) return false;
+    const wColor = String(w.color ?? "").trim();
+    const watchColor = String(watch.color ?? "").trim();
+    return !wColor || !watchColor || inventoryColorMatchesContext({ color: wColor } as InventoryFeedItem, watchColor);
+  });
+  if (!duplicate) next.push(watch);
+  conv.inventoryWatches = next;
+  conv.inventoryWatch = next[0];
+  conv.inventoryWatchPending = undefined;
+  setFollowUpMode(conv, "holding_inventory", "inventory_watch");
+  stopFollowUpCadence(conv, "inventory_watch");
+}
+
+async function buildCadenceHeldInventoryOverride(args: {
+  conv: any;
+  name: string;
+}): Promise<string | null> {
+  const conv = args.conv;
+  if (!conv) return null;
+  const cadenceKind = String(conv?.followUpCadence?.kind ?? "").trim().toLowerCase();
+  if (cadenceKind === "long_term" || cadenceKind === "post_sale") return null;
+  const context = getRecentVehicleMentionContext(conv);
+  if (!context.model || isUnknownCadenceModel(context.model)) return null;
+
+  let matches = await findInventoryMatches({ year: context.year, model: context.model });
+  if (!matches.length && context.year) {
+    matches = await findInventoryMatches({ year: null, model: context.model });
+  }
+  if (context.color) {
+    const colorMatches = matches.filter(item => inventoryColorMatchesContext(item, context.color));
+    if (colorMatches.length) matches = colorMatches;
+  }
+  if (context.condition) {
+    const conditionMatches = matches.filter(item => normalizeWatchCondition(item.condition) === context.condition);
+    if (conditionMatches.length) matches = conditionMatches;
+  }
+  if (!matches.length) return null;
+
+  const holds = await listInventoryHolds();
+  const solds = await listInventorySolds();
+  const status = classifyInventoryMatches(matches, holds, solds);
+  if (!status.held.length) return null;
+
+  const heldItem = status.held[0];
+  ensureInventoryWatchForHeldCadence(conv, {
+    ...heldItem,
+    model: heldItem.model ?? context.model,
+    year: heldItem.year ?? context.year ?? undefined,
+    color: heldItem.color ?? context.color ?? undefined,
+    condition: heldItem.condition ?? context.condition
+  });
+
+  const firstName = normalizeDisplayCase(args.name || "there");
+  const unitLabel = buildInventoryUnitLabel(heldItem, context.model);
+  return `Hey ${firstName}, quick update — the ${unitLabel} is on hold right now. I can keep an eye on it if it opens back up, or I can try to locate another one for you.`;
 }
 
 function ensureCadenceAnchorMessage(args: {
@@ -6563,8 +6831,17 @@ async function buildCadenceRegeneratedDraft(
     conv,
     name: firstName
   });
+  const heldInventoryOverride = leadUnitAvailabilityOverride
+    ? null
+    : await buildCadenceHeldInventoryOverride({
+        conv,
+        name: firstName
+      });
   if (leadUnitAvailabilityOverride) {
     return { body: leadUnitAvailabilityOverride };
+  }
+  if (heldInventoryOverride) {
+    return { body: heldInventoryOverride };
   }
 
   const engagedKind = cadence.kind === "engaged" || (!!(conv.engagement?.at || hasAgentContextForCadence));
@@ -6682,7 +6959,7 @@ async function buildCadenceRegeneratedDraft(
     name: firstName,
     stepIndex: lastSentStep
   });
-  if (promotionOverride) {
+  if (!heldInventoryOverride && promotionOverride) {
     message = promotionOverride;
   }
   if (lastSentStep === 3 && cadenceOffersLine && !isTestRideCadenceLead) {
@@ -18628,11 +18905,17 @@ async function processDueFollowUps() {
       }
       return isEngagedCadence ? engagedNoSlotMap[step] ?? [] : FOLLOW_UP_VARIANTS_NO_SLOTS[step] ?? [];
     };
-    const leadUnitAvailabilityOverride = await buildCadenceLeadUnitAvailabilityOverride({
-      conv,
-      name: firstName
-    });
-    let message = FOLLOW_UP_MESSAGES[cadence.stepIndex] ?? FOLLOW_UP_MESSAGES[FOLLOW_UP_MESSAGES.length - 1];
+  const leadUnitAvailabilityOverride = await buildCadenceLeadUnitAvailabilityOverride({
+    conv,
+    name: firstName
+  });
+  const heldInventoryOverride = leadUnitAvailabilityOverride
+    ? null
+    : await buildCadenceHeldInventoryOverride({
+        conv,
+        name: firstName
+      });
+  let message = FOLLOW_UP_MESSAGES[cadence.stepIndex] ?? FOLLOW_UP_MESSAGES[FOLLOW_UP_MESSAGES.length - 1];
     let cadenceNoRepeatFallbacks: string[] = [];
     let mediaUrls: string[] | undefined;
     if (isPostSale) {
@@ -18879,7 +19162,11 @@ async function processDueFollowUps() {
       message = leadUnitAvailabilityOverride;
       mediaUrls = undefined;
     }
-    if (!leadUnitAvailabilityOverride && canUseWalkInComment) {
+    if (heldInventoryOverride) {
+      message = heldInventoryOverride;
+      mediaUrls = undefined;
+    }
+    if (!leadUnitAvailabilityOverride && !heldInventoryOverride && canUseWalkInComment) {
       message = buildWalkInCommentFollowUp({
         name: firstName,
         agent: agentName,
@@ -18895,6 +19182,7 @@ async function processDueFollowUps() {
     }
     if (
       !leadUnitAvailabilityOverride &&
+      !heldInventoryOverride &&
       !isPostSale &&
       cadence.kind !== "long_term" &&
       !isTradeNoInterest &&
@@ -18904,7 +19192,7 @@ async function processDueFollowUps() {
       message = renderFollowUpTemplate(message, baseCtx);
     }
 
-    if (!leadUnitAvailabilityOverride && !isPostSale && cadence.kind !== "long_term") {
+    if (!leadUnitAvailabilityOverride && !heldInventoryOverride && !isPostSale && cadence.kind !== "long_term") {
       const promotionOverride = await buildEarlyCadencePromotionOverride({
         conv,
         name: firstName,
@@ -18917,6 +19205,7 @@ async function processDueFollowUps() {
 
     if (
       !leadUnitAvailabilityOverride &&
+      !heldInventoryOverride &&
       !isPostSale &&
       cadence.kind !== "long_term" &&
       !isTradeNoInterest &&
@@ -18944,7 +19233,7 @@ async function processDueFollowUps() {
     }
 
     const allowProactiveSchedule = shouldAllowProactiveScheduleAsk(conv, now);
-    if (!leadUnitAvailabilityOverride && conv.followUpCadence?.scheduleMuted) {
+    if (!leadUnitAvailabilityOverride && !heldInventoryOverride && conv.followUpCadence?.scheduleMuted) {
       const baseCtx = {
         name: firstName,
         agent: agentName,
@@ -18987,14 +19276,14 @@ async function processDueFollowUps() {
       : [
           ...buildCadenceCheckInFallbacks(firstName, labelClause)
         ];
-    if (!leadUnitAvailabilityOverride) {
+    if (!leadUnitAvailabilityOverride && !heldInventoryOverride) {
       message = selectNonRepeatingCadenceMessage(
         conv,
         message,
         cadenceNoRepeatFallbacks.length ? cadenceNoRepeatFallbacks : genericCadenceNoRepeatFallbacks
       );
     }
-    if (!leadUnitAvailabilityOverride && !isPostSale && cadence.kind !== "long_term") {
+    if (!leadUnitAvailabilityOverride && !heldInventoryOverride && !isPostSale && cadence.kind !== "long_term") {
       const contextLine = getFollowUpContextLine(conv, now);
       if (
         contextLine &&
@@ -23188,6 +23477,7 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
 
     const effectiveResolution =
       shouldApplyWatch && resolution === "resume" ? "pause_7" : resolution;
+    let holdReleaseNotifyCount = 0;
 
     const cadenceBlockedByWatch =
       shouldApplyWatch &&
@@ -23251,6 +23541,14 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
       cadenceNotice = holdOnOrder ? "Bike on order marked on hold." : "Unit marked on hold.";
     } else if (effectiveResolution === "hold_clear") {
       const clearKey = holdKey ?? conv.hold?.key ?? null;
+      const holdsBeforeClear = clearKey ? await listInventoryHolds() : {};
+      const holdBeforeClear = clearKey ? (holdsBeforeClear as any)?.[clearKey] : null;
+      const releasedItem = await findInventoryItemForClearedHold({
+        hold: holdBeforeClear ?? conv.hold,
+        stockId: holdStockId || conv.hold?.stockId,
+        vin: holdVin || conv.hold?.vin,
+        key: clearKey
+      });
       if (clearKey) {
         await clearInventoryHold(clearKey, null);
       }
@@ -23262,6 +23560,11 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
         setFollowUpMode(conv, "active", "manual_hold_clear");
       }
       applyResume(shouldApplyWatch);
+      if (releasedItem) {
+        holdReleaseNotifyCount = await notifyInventoryWatchersForAvailableItem(releasedItem, {
+          reason: "inventory_hold_released"
+        });
+      }
       cadenceNotice = "Unit hold removed.";
     } else if (effectiveResolution === "pause_indef") {
       applyPauseIndef(shouldApplyWatch);
@@ -23296,6 +23599,12 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
 
     if (shouldApplyWatch && !["archive", "appointment_set"].includes(effectiveResolution)) {
       setFollowUpMode(conv, "holding_inventory", "inventory_watch");
+    }
+
+    if (effectiveResolution === "hold_clear" && holdReleaseNotifyCount > 0) {
+      cadenceNotice = `Unit hold removed. ${holdReleaseNotifyCount} matching watch ${
+        holdReleaseNotifyCount === 1 ? "was" : "were"
+      } notified.`;
     }
 
     if (effectiveResolution === "resume") {
