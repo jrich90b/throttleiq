@@ -41,6 +41,7 @@ import {
 } from "../services/api/src/domain/workflowRegressionGuards.ts";
 import { parseRequestedDayTime } from "../services/api/src/domain/conversationStore.ts";
 import { detectSchedulingSignals } from "../services/api/src/domain/legacyRegexFallback.ts";
+import { isLogisticsProgressUpdateText } from "../services/api/src/domain/transitionSafety.ts";
 
 type Case = {
   id: string;
@@ -113,6 +114,16 @@ const cases: Case[] = [
     id: "close_to_compact_time_day_time_detected",
     actual: detectSchedulingSignals("Am I able to ride a road glide today? I can take lunch close to 430.").hasDayTime,
     expected: true
+  },
+  {
+    id: "logistics_driving_deadline_not_schedule",
+    actual: isLogisticsProgressUpdateText("Let me know because I start driving on Friday morning. Please"),
+    expected: true
+  },
+  {
+    id: "plain_friday_morning_visit_not_logistics",
+    actual: isLogisticsProgressUpdateText("I can come in Friday morning"),
+    expected: false
   },
   {
     id: "no_response_smalltalk_suppressed_for_scheduling_signal",

@@ -6,8 +6,15 @@ export function isLogisticsProgressUpdateText(text: string): boolean {
       t
     ) ||
     /\b(dmv|registration|register|title|plate|paperwork)\b/.test(t);
-  const hasDeferredFollowUp = /\b(let you know|get back to you|reach out)\b/.test(t);
-  return hasProgress && hasDeferredFollowUp;
+  const hasDeferredFollowUp = /\b(let (?:me|you) know|get back to (?:me|you)|reach out|follow up)\b/.test(t);
+  const hasTravelDeadline =
+    /\b(?:start|star|starting|leave|leaving|head|heading|drive|driving|travel|traveling|travelling|on the road)\b[\s\S]{0,90}\b(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|morning|afternoon|evening)\b/.test(
+      t
+    ) ||
+    /\b(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|morning|afternoon|evening)\b[\s\S]{0,90}\b(?:start|star|starting|leave|leaving|head|heading|drive|driving|travel|traveling|travelling|on the road)\b/.test(
+      t
+    );
+  return (hasProgress && hasDeferredFollowUp) || (hasDeferredFollowUp && hasTravelDeadline);
 }
 
 export function hasPostSaleOrOwnershipContext(conv: any): boolean {

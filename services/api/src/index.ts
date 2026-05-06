@@ -12411,6 +12411,25 @@ function buildInboundMediaProofAcknowledgement(): string {
   return "Thanks, got it — I received the image. I’ll review it and let you know if anything else is needed.";
 }
 
+function extractLogisticsDeadlineLabel(text: string): string | null {
+  const match = String(text ?? "").match(
+    /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+(morning|afternoon|evening))?\b/i
+  );
+  if (!match) return null;
+  const day = match[1].toLowerCase();
+  const part = match[2]?.toLowerCase();
+  const dayLabel = day.charAt(0).toUpperCase() + day.slice(1);
+  return part ? `${dayLabel} ${part}` : dayLabel;
+}
+
+function buildLogisticsProgressAcknowledgement(text: string): string {
+  const deadline = extractLogisticsDeadlineLabel(text);
+  if (deadline) {
+    return `Understood — I’ll review everything and let you know before ${deadline} if anything else is needed.`;
+  }
+  return "Understood — I’ll review everything and let you know if anything else is needed.";
+}
+
 function getRecentInboundAvailabilityTextForMediaOnlyTurn(
   conv: any,
   event: InboundMessageEvent,
@@ -29423,6 +29442,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       financeContextIntent: true
     });
   }
+  if (event.provider === "twilio" && channel === "sms" && isLogisticsProgressUpdateText(event.body ?? "")) {
+    recordRouteOutcome("regen", "logistics_progress_acknowledgement", {
+      convId: conv.id,
+      leadKey: conv.leadKey
+    });
+    return respondWithSmsRegeneratedDraft(buildLogisticsProgressAcknowledgement(event.body ?? ""), undefined, {
+      turnFinanceIntent: false,
+      turnAvailabilityIntent: false,
+      turnSchedulingIntent: false
+    });
+  }
   if (event.provider === "twilio" && isEmojiOnlyText(event.body ?? "")) {
     return respondRegenerateSkipped("emoji_only_inbound_no_reply");
   }
@@ -32185,6 +32215,23 @@ if (authToken && signature) {
       convId: conv.id,
       leadKey: conv.leadKey,
       mediaCount: event.mediaUrls?.length ?? 0
+    });
+    if (webhookMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+  if (event.provider === "twilio" && isLogisticsProgressUpdateText(event.body ?? "")) {
+    const reply = buildLogisticsProgressAcknowledgement(event.body ?? "");
+    recordRouteOutcome("live", "logistics_progress_acknowledgement", {
+      convId: conv.id,
+      leadKey: conv.leadKey
     });
     if (webhookMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
