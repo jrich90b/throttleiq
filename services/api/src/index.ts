@@ -11783,9 +11783,13 @@ function formatRememberedScheduleTimeForReply(text: string | null | undefined): 
   const raw = String(text ?? "").trim();
   const compact = raw.replace(/\s+/g, " ");
   const rangeMatch = compact.match(
-    /\b((?:around|about|approximately|approx)\s+)?\d{1,2}(?::\d{2})?\s*(?:-|to|and)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/i
+    /\b((?:between|around|about|approximately|approx)\s+)?(\d{1,2}(?::\d{2})?)\s*(?:-|to|and)\s*(\d{1,2}(?::\d{2})?)\s*(am|pm)?\b/i
   );
-  if (rangeMatch?.[0]) return rangeMatch[0].trim();
+  if (rangeMatch) {
+    const prefix = /^between\b/i.test(rangeMatch[1] ?? "") ? "between " : "";
+    const suffix = rangeMatch[4] ? rangeMatch[4].toUpperCase() : "";
+    return `${prefix}${rangeMatch[2]}-${rangeMatch[3]}${suffix ? ` ${suffix}` : ""}`.trim();
+  }
   const token = extractTimeToken(compact);
   return token ? formatTime12h(token) : compact;
 }
@@ -16666,7 +16670,12 @@ async function buildTradeFollowupReply(args: {
   }
 
   if (requestedDayKey && requestedTimeToken) {
-    return `${correctionLine}${requestedDayLabel} ${formatRememberedScheduleTimeForReply(schedulingText)} can work.`;
+    setRequestedTime(args.conv, {
+      day: requestedDayLabel,
+      timeText: schedulingText
+    });
+    setDialogState(args.conv, "schedule_request");
+    return `${correctionLine}${requestedDayLabel} ${formatRememberedScheduleTimeForReply(schedulingText)} should work. Want me to lock that in?`;
   }
 
   const requestedDayHours = requestedDayKey ? cfg.businessHours?.[requestedDayKey] : undefined;
