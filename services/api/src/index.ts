@@ -200,6 +200,7 @@ import {
   isRideChallengeLeadSignal,
   isShortAckNoReplyText,
   isStockNumberInventoryInterestText,
+  inferAcceptedScheduleDayFromReplyText,
   pickCatalogModelLabelFromText,
   resolveRequestedScheduleWindowMode,
   selectRequestedAvailabilityModelMentions,
@@ -17242,11 +17243,28 @@ function inferDayTokenFromRecentTimePrompt(
       last
     );
   const offeredSlots = isSlotOfferMessage(last);
-  if (!askedForTime && !offeredSlots) return null;
+  const acceptedDay = inferAcceptedScheduleDayFromReplyText(last);
+  if (!askedForTime && !offeredSlots && !acceptedDay) return null;
+  if (acceptedDay) return acceptedDay;
   const dayFromText = parseDayOfWeek(last)?.day ?? null;
   if (dayFromText) return dayFromText;
   const dayFromSlot = inferDayTokenFromSlot(String(lastSuggestedSlots?.[0]?.startLocal ?? ""));
   return dayFromSlot;
+}
+
+function applyInferredScheduleDayToTimeOnlyText(
+  textRaw: string | null | undefined,
+  lastOutboundText: string | null | undefined,
+  lastSuggestedSlots?: Array<{ startLocal?: string | null }>,
+  timeZone = "America/New_York"
+): string {
+  const text = String(textRaw ?? "").trim();
+  if (!text) return text;
+  if (parseDayOfWeek(text)) return text;
+  if (resolveRequestedDateFloor({ text, timeZone })) return text;
+  if (!extractTimeToken(text)) return text;
+  const inferredDay = inferDayTokenFromRecentTimePrompt(String(lastOutboundText ?? ""), lastSuggestedSlots);
+  return inferredDay ? `${inferredDay} ${text}` : text;
 }
 
 function slotMatchesReply(slotStartLocal: string, reply: string): boolean {
@@ -31039,7 +31057,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       const labelColor = contextColor ? ` in ${formatColorLabel(contextColor)}` : "";
       const unitLabel = `${labelYear}${labelModel}${labelColor}`.trim();
       let parsedRequestedDayTime = parseRequestedDayTimeWithRawFallback(
-        String(event.body ?? ""),
+        applyInferredScheduleDayToTimeOnlyText(
+          event.body,
+          lastOutboundText,
+          conv.scheduler?.lastSuggestedSlots ?? [],
+          regenTz
+        ),
         String(event.body ?? ""),
         regenTz
       );
@@ -38516,8 +38539,14 @@ if (authToken && signature) {
         const cfg = await getSchedulerConfigHot();
         logRouteTiming("scheduler.config", schedulerConfigStartedAt);
         const schedulingText = bookingParseText || String(event.body ?? "");
+        const schedulingParseText = applyInferredScheduleDayToTimeOnlyText(
+          schedulingText,
+          lastOutboundText,
+          conv.scheduler?.lastSuggestedSlots ?? [],
+          cfg.timezone
+        );
         const requested = rebaseRequestedDayTimeFromPriorNextWeekContext(
-          parseRequestedDayTimeWithRawFallback(schedulingText, String(event.body ?? ""), cfg.timezone),
+          parseRequestedDayTimeWithRawFallback(schedulingParseText, String(event.body ?? ""), cfg.timezone),
           String(event.body ?? ""),
           lastOutboundText,
           cfg.timezone
@@ -39009,8 +39038,14 @@ if (authToken && signature) {
     try {
       const cfg = await getSchedulerConfigHot();
       const tz = cfg.timezone || "America/New_York";
+      const schedulingParseText = applyInferredScheduleDayToTimeOnlyText(
+        bookingParseText,
+        lastOutboundText,
+        conv.scheduler?.lastSuggestedSlots ?? [],
+        tz
+      );
       const parsed = rebaseRequestedDayTimeFromPriorNextWeekContext(
-        parseRequestedDayTimeWithRawFallback(bookingParseText, String(event.body ?? ""), tz),
+        parseRequestedDayTimeWithRawFallback(schedulingParseText, String(event.body ?? ""), tz),
         String(event.body ?? ""),
         lastOutboundText,
         tz
@@ -39110,8 +39145,14 @@ if (authToken && signature) {
       try {
         const cfg = await getSchedulerConfigHot();
         const tz = cfg.timezone || "America/New_York";
+        const schedulingParseText = applyInferredScheduleDayToTimeOnlyText(
+          bookingParseText,
+          lastOutboundText,
+          conv.scheduler?.lastSuggestedSlots ?? [],
+          tz
+        );
         requested = rebaseRequestedDayTimeFromPriorNextWeekContext(
-          parseRequestedDayTimeWithRawFallback(bookingParseText, String(event.body ?? ""), tz),
+          parseRequestedDayTimeWithRawFallback(schedulingParseText, String(event.body ?? ""), tz),
           String(event.body ?? ""),
           lastOutboundText,
           tz
@@ -39246,8 +39287,14 @@ if (authToken && signature) {
         try {
           const cfg = await getSchedulerConfigHot();
           const tz = cfg.timezone || "America/New_York";
+          const schedulingParseText = applyInferredScheduleDayToTimeOnlyText(
+            bookingParseText,
+            lastOutboundText,
+            conv.scheduler?.lastSuggestedSlots ?? [],
+            tz
+          );
           requested = rebaseRequestedDayTimeFromPriorNextWeekContext(
-            parseRequestedDayTimeWithRawFallback(bookingParseText, String(event.body ?? ""), tz),
+            parseRequestedDayTimeWithRawFallback(schedulingParseText, String(event.body ?? ""), tz),
             String(event.body ?? ""),
             lastOutboundText,
             tz

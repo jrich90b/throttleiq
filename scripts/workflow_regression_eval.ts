@@ -16,6 +16,7 @@ import {
   isBlockedCadencePersonalizationLineText,
   isCloseoutSignoffNoResponseText,
   isFactoryOrderTimingQuestionText,
+  inferAcceptedScheduleDayFromReplyText,
   isInventoryBrowseLinkRequestText,
   isHiringManagerInquiryText,
   isRideChallengeLeadSignal,
@@ -367,6 +368,13 @@ const cases: Case[] = [
       dialogState: "schedule_request"
     }),
     expected: true
+  },
+  {
+    id: "time_only_reply_infers_accepted_tuesday_from_prior_schedule_prompt",
+    actual: inferAcceptedScheduleDayFromReplyText(
+      "Tuesday can work. I don’t have any other questions right now — just let me know what time you are thinking so I can schedule you in."
+    ),
+    expected: "Tuesday"
   },
   {
     id: "pickup_state_not_cleared_for_explicit_pickup_reply",

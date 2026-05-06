@@ -133,6 +133,47 @@ export function shouldRebaseWeekdayReplyToPriorNextWeek(
   return true;
 }
 
+export function inferAcceptedScheduleDayFromReplyText(
+  lastOutboundTextRaw: string | null | undefined
+): string | null {
+  const text = String(lastOutboundTextRaw ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return null;
+  if (
+    !/\b(can work|works|schedule you in|what time|let me know what time|time were you thinking|time works)\b/i.test(
+      text
+    )
+  ) {
+    return null;
+  }
+  const match = text.match(
+    /\b(monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun)\b/i
+  );
+  if (!match?.[1]) return null;
+  const day = match[1].toLowerCase();
+  const map: Record<string, string> = {
+    mon: "Monday",
+    monday: "Monday",
+    tue: "Tuesday",
+    tues: "Tuesday",
+    tuesday: "Tuesday",
+    wed: "Wednesday",
+    wednesday: "Wednesday",
+    thu: "Thursday",
+    thur: "Thursday",
+    thurs: "Thursday",
+    thursday: "Thursday",
+    fri: "Friday",
+    friday: "Friday",
+    sat: "Saturday",
+    saturday: "Saturday",
+    sun: "Sunday",
+    sunday: "Sunday"
+  };
+  return map[day] ?? null;
+}
+
 export function shouldSuppressInitialInventoryPhotoAppend(draftRaw: string | null | undefined): boolean {
   const draft = String(draftRaw ?? "");
   if (!draft.trim()) return false;
