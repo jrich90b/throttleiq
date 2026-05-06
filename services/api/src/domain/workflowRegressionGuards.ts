@@ -86,6 +86,25 @@ export function isCloseoutSignoffNoResponseText(textRaw: string | null | undefin
   );
 }
 
+export function isImmediateChatCallbackAvailabilityText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return false;
+  if (/\b(?:text|email)\b/.test(text) && /\b(?:only|instead|rather|prefer)\b/.test(text)) {
+    return false;
+  }
+  if (/\b(?:don['’]?t|do not|no)\s+(?:call|phone)\b/.test(text)) return false;
+  const availableNow =
+    /\b(?:i(?:'|’)?m|i am|im)\s+(?:available|free|open)\b[\s\S]{0,80}\b(?:right now|now|currently)\b/.test(
+      text
+    ) ||
+    /\b(?:available|free|open)\b[\s\S]{0,80}\b(?:right now|now|currently)\b/.test(text);
+  const chatSignal = /\b(?:chat|talk|speak|hop on (?:a )?call|jump on (?:a )?call)\b/.test(text);
+  return availableNow && chatSignal;
+}
+
 function isWorkflowEmojiOnlyText(text: string): boolean {
   const t = String(text ?? "").trim();
   return t.length > 0 && /^[\p{Extended_Pictographic}\s]+$/u.test(t);

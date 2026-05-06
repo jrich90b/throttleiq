@@ -2586,6 +2586,7 @@ export async function parseIntentWithLLM(args: {
   const voiceExamples = [
     'input: "Customer: can you call me after 4?" output: {"intent":"callback","explicit_request":true,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":true,"time_text":"after 4","phone":""},"confidence":0.97}',
     'input: "Customer: if you call me around 1-2pm i should be up. i work night shift." output: {"intent":"callback","explicit_request":true,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":true,"time_text":"around 1-2pm","phone":""},"confidence":0.98}',
+    'input: "Customer: Hi Joe, I’m available to chat right now if that works for you." output: {"intent":"callback","explicit_request":true,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":true,"time_text":"right now","phone":""},"confidence":0.94}',
     'input: "Customer: I prefer text, please don’t call." output: {"intent":"none","explicit_request":false,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.98}',
     'input: "Customer: do you have any black street glides in stock?" output: {"intent":"availability","explicit_request":true,"availability":{"model":"Street Glide","year":"","color":"black","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.97}',
     'input: "Customer: can i test ride one this week?" output: {"intent":"test_ride","explicit_request":true,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.95}',
@@ -2614,7 +2615,7 @@ export async function parseIntentWithLLM(args: {
     "- intent=test_ride if they ask to test ride or demo the bike.",
     "- If recent messages are about a test ride and the current customer message is only a bike/model alternate (for example \"or maybe that 2022 Iron 883\"), keep intent=test_ride and explicit_request=true.",
     "- jump start / jumpstart / riding-academy prep messages are not inventory availability requests; do not set intent=test_ride for those.",
-    "- intent=callback if they ask for a call or ask you to call them.",
+    "- intent=callback if they ask for a call, ask you to call them, or say they are available/free to chat/talk right now.",
     "- If the customer says they prefer text, says text only, or says do not call/don't call/no calls, intent=none and explicit_request=false. Do not classify that as callback.",
     "- If message is about appointment/schedule availability (day/time/openings), intent=none and explicit_request=false.",
     "- If no clear request, intent=none and explicit_request=false.",
@@ -3591,6 +3592,9 @@ output: {"primary_intent":"callback","explicit_request":true,"fallback_action":"
     `EXAMPLE D2
 inbound: "If you call me around 1-2pm I should be up. I work night shift."
 output: {"primary_intent":"callback","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.98}`,
+    `EXAMPLE D3
+inbound: "Hi Joe, I'm available to chat right now if that works for you."
+output: {"primary_intent":"callback","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.94}`,
     `EXAMPLE E
 inbound: "Ok thanks"
 output: {"primary_intent":"none","explicit_request":false,"fallback_action":"no_response","clarify_prompt":"","confidence":0.96}`,
@@ -3679,7 +3683,7 @@ output: {"primary_intent":"none","explicit_request":false,"fallback_action":"no_
     "- pricing_payments: price, payments, APR, term, down payment, or explicit finance promos/specials/incentives.",
     "- availability: in stock, still available, colors/trims/years inventory availability.",
     "- scheduling: appointment/day/time/come in/stop by requests.",
-    "- callback: customer asks for a phone call.",
+    "- callback: customer asks for a phone call or says they are available/free to chat/talk right now.",
     "- general: clear request but not one of the above.",
     "- none: no actionable request.",
     "",
@@ -3687,7 +3691,7 @@ output: {"primary_intent":"none","explicit_request":false,"fallback_action":"no_
     "- Use the latest inbound ask as source of truth even if prior turns were different.",
     "- If inbound is short acknowledgment only, use primary_intent=none and fallback_action=no_response.",
     "- Use fallback_action=clarify only when message is ambiguous and not safely routable.",
-    "- Only choose callback when the customer explicitly asks for a phone call (e.g., call me, have X call me, can you call).",
+    "- Only choose callback when the customer explicitly asks for a phone call (e.g., call me, have X call me, can you call) or says they are available/free to chat/talk right now.",
     "- If message says cash-ready / ready to buy / make a deal and includes a visit timing cue (today/tomorrow/day/time/coming in), choose scheduling, not callback.",
     "- Jump start / jumpstart / riding-academy prep requests should route to scheduling (in-store stop-in), not availability or pricing by default.",
     "- Dissatisfaction/complaint about feature behavior (for example Android maps, infotainment, navigation, connectivity) without a clear inventory/pricing/scheduling/callback ask should route to general with fallback_action=none.",

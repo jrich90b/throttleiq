@@ -19,6 +19,7 @@ import {
   isDirectInventoryAvailabilityQuestionText,
   isFactoryOrderTimingQuestionText,
   hasExplicitCalendarDateForScheduleMemory,
+  isImmediateChatCallbackAvailabilityText,
   inferAcceptedScheduleDayFromReplyText,
   isIncidentalInfoAcknowledgementText,
   isInventoryBrowseLinkRequestText,
@@ -71,6 +72,20 @@ const cases: Case[] = [
     id: "manual_outbound_two_slot_offer_does_not_confirm",
     actual: isManualOutboundBookingConfirmationText(
       "I have Tue, May 12, 9:30 AM or Tue, May 12, 11:30 AM — do either of those work?"
+    ),
+    expected: false
+  },
+  {
+    id: "available_to_chat_now_routes_as_callback_fallback",
+    actual: isImmediateChatCallbackAvailabilityText(
+      "Hi Joe, I'm available to chat right now if that works for you."
+    ),
+    expected: true
+  },
+  {
+    id: "text_preference_does_not_route_as_chat_callback_fallback",
+    actual: isImmediateChatCallbackAvailabilityText(
+      "I'm available to chat by text right now, please don't call."
     ),
     expected: false
   },

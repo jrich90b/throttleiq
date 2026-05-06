@@ -198,6 +198,7 @@ import {
   isCloseoutSignoffNoResponseText,
   isFactoryOrderTimingQuestionText,
   hasExplicitCalendarDateForScheduleMemory,
+  isImmediateChatCallbackAvailabilityText,
   isIncidentalInfoAcknowledgementText,
   isDirectInventoryAvailabilityQuestionText,
   isInventoryBrowseLinkRequestText,
@@ -30244,8 +30245,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       (/\b(at|around|between|from)\b/i.test(regenNoResponseInboundText) ||
         /\b\d{1,2}(?::\d{2})?\s*(am|pm)?\b/i.test(regenNoResponseInboundText) ||
         /\b(schedule|appointment|come in|stop by|visit)\b/i.test(regenNoResponseInboundText));
+    const regenImmediateChatCallbackFallback = isImmediateChatCallbackAvailabilityText(
+      regenNoResponseInboundText
+    );
     const regenExplicitCallbackSignal =
       regenParserCallbackIntent ||
+      regenImmediateChatCallbackFallback ||
       /\b(call me|give me a call|can you call|please call|have .* call|reach me|contact me)\b/i.test(
         regenNoResponseInboundText
       );
@@ -31316,7 +31321,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
 
   const regenFinancePriorityHint = regenParserPricingIntent;
-  const regenCallbackRequested = !regenTextingTypoJoke && regenParserCallbackIntent;
+  const regenCallbackFallback = isImmediateChatCallbackAvailabilityText(event.body ?? "");
+  const regenCallbackRequested =
+    !regenTextingTypoJoke && (regenParserCallbackIntent || regenCallbackFallback);
   const regenRouteDecision = buildRouteDecisionSnapshot({
     parserIntentOverride: regenRoutingIntentOverride,
     hasPricingIntent: regenParserPricingIntent,
@@ -34746,7 +34753,14 @@ if (authToken && signature) {
   const intentAccepted = !!intentParse?.explicitRequest && intentConfidence >= intentConfidenceMin;
   const intentLow =
     !!intentParse?.explicitRequest && intentConfidence > 0 && intentConfidence < intentConfidenceMin;
-  const llmCallbackRequested = parserCallbackIntent || (intentAccepted && intentParse?.intent === "callback");
+  const immediateChatCallbackFallback =
+    !parserCallbackIntent &&
+    !(intentAccepted && intentParse?.intent === "callback") &&
+    isImmediateChatCallbackAvailabilityText(event.body ?? "");
+  const llmCallbackRequested =
+    parserCallbackIntent ||
+    (intentAccepted && intentParse?.intent === "callback") ||
+    immediateChatCallbackFallback;
   const customerWillCallIntent = isCustomerWillCallText(event.body ?? "");
   const textingTypoJoke = isTextingTypoJokeText(event.body ?? "");
   const callbackRequestedOverride =
