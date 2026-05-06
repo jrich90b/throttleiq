@@ -200,6 +200,7 @@ import {
   isDirectInventoryAvailabilityQuestionText,
   isInventoryBrowseLinkRequestText,
   isManualOutboundBookingConfirmationText,
+  isMediaProofStatusUpdateText,
   isNonComplimentLikePhraseText,
   isRideChallengeLeadSignal,
   isShortAckNoReplyText,
@@ -12384,6 +12385,30 @@ function hasAvailabilityQuestionText(text: string): boolean {
   return /\b(still available|is it available|available\??|availability|in stock|do you have|have any|still there|still got)\b/.test(
     t
   );
+}
+
+function recentOutboundRequestedMediaProofContext(conv: any): boolean {
+  const recentOut = [...(conv?.messages ?? [])]
+    .reverse()
+    .filter((m: any) => m?.direction === "out" && String(m?.body ?? "").trim())
+    .slice(0, 10);
+  return recentOut.some((m: any) =>
+    /\b(insurance card|insurance cards|proof of insurance|binder|driver'?s? licen[cs]e|drivers? license|driver license|title|registration|certified check|cashier'?s check|bank check|paperwork|documents?)\b/i.test(
+      String(m?.body ?? "")
+    )
+  );
+}
+
+function shouldAcknowledgeInboundMediaProof(conv: any, event: InboundMessageEvent): boolean {
+  const hasMedia = Array.isArray(event.mediaUrls) && event.mediaUrls.length > 0;
+  if (!hasMedia) return false;
+  const body = String(event.body ?? "");
+  if (hasAvailabilityQuestionText(body)) return false;
+  return isMediaProofStatusUpdateText(body) || recentOutboundRequestedMediaProofContext(conv);
+}
+
+function buildInboundMediaProofAcknowledgement(): string {
+  return "Thanks, got it — I received the image. I’ll review it and let you know if anything else is needed.";
 }
 
 function getRecentInboundAvailabilityTextForMediaOnlyTurn(
@@ -29385,6 +29410,19 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       }
     );
   }
+  if (event.provider === "twilio" && channel === "sms" && shouldAcknowledgeInboundMediaProof(conv, event)) {
+    recordRouteOutcome("regen", "media_proof_acknowledgement", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      mediaCount: event.mediaUrls?.length ?? 0
+    });
+    return respondWithSmsRegeneratedDraft(buildInboundMediaProofAcknowledgement(), undefined, {
+      turnFinanceIntent: true,
+      turnAvailabilityIntent: false,
+      turnSchedulingIntent: false,
+      financeContextIntent: true
+    });
+  }
   if (event.provider === "twilio" && isEmojiOnlyText(event.body ?? "")) {
     return respondRegenerateSkipped("emoji_only_inbound_no_reply");
   }
@@ -29547,9 +29585,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     (cadenceDraftTimestampMatch || (cadenceStatePresent && cadenceInboundBeforeSend));
   const regenerateMediaAvailabilityQuestion =
     !!event.mediaUrls?.length && hasAvailabilityQuestionText(event.body ?? "");
+  const regenerateMediaProofUpdate = shouldAcknowledgeInboundMediaProof(conv, event);
   const skipCadenceContextualRegenerate =
     event.provider === "sendgrid_adf" ||
     regenerateMediaAvailabilityQuestion ||
+    regenerateMediaProofUpdate ||
     (event.provider === "twilio" &&
     channel === "sms" &&
     isRegenerateInboundActionableForRouting(event.body ?? "") &&
@@ -32139,6 +32179,24 @@ if (authToken && signature) {
   const systemMode = getSystemMode();
   const webhookMode =
     systemMode === "suggest" ? "suggest" : event.provider === "twilio" ? "autopilot" : effectiveMode(conv);
+  if (event.provider === "twilio" && shouldAcknowledgeInboundMediaProof(conv, event)) {
+    const reply = buildInboundMediaProofAcknowledgement();
+    recordRouteOutcome("live", "media_proof_acknowledgement", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      mediaCount: event.mediaUrls?.length ?? 0
+    });
+    if (webhookMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (isSuppressed(event.from)) {
     stopFollowUpCadence(conv, "suppressed");
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;

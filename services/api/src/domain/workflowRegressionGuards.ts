@@ -382,6 +382,22 @@ export function isNonComplimentLikePhraseText(textRaw: string | null | undefined
   return /\blike i (?:said|mentioned|told you)\b/.test(text);
 }
 
+export function isMediaProofStatusUpdateText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+  if (!text) return false;
+  return (
+    /\b(legit|proof|document|paperwork|insurance|binder|id card|driver'?s? license|drivers? license|title|registration|certified check|cashier'?s check|bank check)\b/.test(
+      text
+    ) ||
+    /\b(here|sent|attached|uploading|adding)\b[\s\S]{0,40}\b(it|this|that|card|doc|document|photo|picture|image)\b/.test(
+      text
+    )
+  );
+}
+
 export function shouldClearPickupStateForSchedulingReply(args: {
   inboundText?: string | null;
   lastOutboundText?: string | null;

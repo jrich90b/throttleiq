@@ -23,6 +23,7 @@ import {
   isHiringManagerInquiryText,
   isRideChallengeLeadSignal,
   isManualOutboundBookingConfirmationText,
+  isMediaProofStatusUpdateText,
   isNonComplimentLikePhraseText,
   isShortAckNoReplyText,
   isStockNumberInventoryInterestText,
@@ -377,6 +378,16 @@ const cases: Case[] = [
     id: "like_i_said_is_not_compliment",
     actual: isNonComplimentLikePhraseText("Like I said. I'm 💯 legit"),
     expected: true
+  },
+  {
+    id: "media_proof_status_detects_legit_update",
+    actual: isMediaProofStatusUpdateText("Like I said. I'm 💯 legit"),
+    expected: true
+  },
+  {
+    id: "media_proof_status_does_not_catch_inventory_question",
+    actual: isMediaProofStatusUpdateText("Is this available?"),
+    expected: false
   },
   {
     id: "pickup_state_cleared_for_schedule_time_reply",
