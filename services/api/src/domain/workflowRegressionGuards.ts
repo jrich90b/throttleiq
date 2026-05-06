@@ -176,6 +176,37 @@ export function inferAcceptedScheduleDayFromReplyText(
   return map[day] ?? null;
 }
 
+export function hasExplicitCalendarDateForScheduleMemory(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "");
+  if (!text.trim()) return false;
+  if (
+    /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?\b/i.test(
+      text
+    ) ||
+    /\b\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\b/i.test(
+      text
+    )
+  ) {
+    return true;
+  }
+  const numericDate = /\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/g;
+  for (const match of text.matchAll(numericDate)) {
+    const index = match.index ?? 0;
+    const after = text.slice(index + match[0].length, index + match[0].length + 40).toLowerCase();
+    const before = text.slice(Math.max(0, index - 25), index).toLowerCase();
+    if (
+      /\b(?:to\s+get|to\s+arrive|away|drive|traffic|pending|hour|hours|hr|hrs|minute|minutes|min|mins)\b/i.test(
+        after
+      ) ||
+      /\b(?:about|around|roughly|approx|approximately)\s*$/i.test(before)
+    ) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
 export function shouldSuppressInitialInventoryPhotoAppend(draftRaw: string | null | undefined): boolean {
   const draft = String(draftRaw ?? "");
   if (!draft.trim()) return false;

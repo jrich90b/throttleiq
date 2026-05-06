@@ -16,6 +16,7 @@ import {
   isBlockedCadencePersonalizationLineText,
   isCloseoutSignoffNoResponseText,
   isFactoryOrderTimingQuestionText,
+  hasExplicitCalendarDateForScheduleMemory,
   inferAcceptedScheduleDayFromReplyText,
   isInventoryBrowseLinkRequestText,
   isHiringManagerInquiryText,
@@ -385,6 +386,18 @@ const cases: Case[] = [
       ].join("\n")
     ),
     expected: "Tuesday"
+  },
+  {
+    id: "half_hour_travel_note_not_calendar_date",
+    actual: hasExplicitCalendarDateForScheduleMemory(
+      "Ok. I'm retired so in the morning is best for me so between 9:30 and 10:00. I'll text you when I leave my house 1/2 to get there traffic pending"
+    ),
+    expected: false
+  },
+  {
+    id: "numeric_calendar_date_still_blocks_prior_day_memory",
+    actual: hasExplicitCalendarDateForScheduleMemory("5/12 between 9:30 and 10:00 works"),
+    expected: true
   },
   {
     id: "pickup_state_not_cleared_for_explicit_pickup_reply",

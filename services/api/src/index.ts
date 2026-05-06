@@ -195,6 +195,7 @@ import {
   isBlockedCadencePersonalizationLineText,
   isCloseoutSignoffNoResponseText,
   isFactoryOrderTimingQuestionText,
+  hasExplicitCalendarDateForScheduleMemory,
   isInventoryBrowseLinkRequestText,
   isManualOutboundBookingConfirmationText,
   isRideChallengeLeadSignal,
@@ -16652,13 +16653,6 @@ async function buildTradeFollowupReply(args: {
   );
   const requestedDay = parseDayOfWeek(schedulingText);
   const requestedTimeToken = extractTimeToken(schedulingText);
-  console.log("[trade-followup] schedule memory", {
-    inboundPreview: inboundText.slice(0, 160),
-    lastOutboundPreview: String(args.lastOutboundText ?? "").slice(0, 240),
-    schedulingTextPreview: schedulingText.slice(0, 220),
-    requestedDay: requestedDay?.day ?? null,
-    requestedTimeToken
-  });
   let requestedDayKey: string | null = null;
   let requestedDayLabel = "";
   if (requestedDay) {
@@ -16672,11 +16666,6 @@ async function buildTradeFollowupReply(args: {
   }
 
   if (requestedDayKey && requestedTimeToken) {
-    console.log("[trade-followup] accepted day/time branch", {
-      requestedDayKey,
-      requestedDayLabel,
-      requestedTimeToken
-    });
     return `${correctionLine}${requestedDayLabel} ${formatRememberedScheduleTimeForReply(schedulingText)} can work.`;
   }
 
@@ -16696,12 +16685,6 @@ async function buildTradeFollowupReply(args: {
     return `${correctionLine}I’m booked up for ${toDayLabel(requestedDayKey)}, but the closest openings I have are ${suggested.slots[0].startLocal} or ${suggested.slots[1].startLocal} — do any of these times work?`;
   }
   if (suggested.slots.length >= 2) {
-    console.log("[trade-followup] fallback slot offer branch", {
-      requestedDayKey,
-      requestedDayLabel,
-      requestedTimeToken,
-      slots: suggested.slots.slice(0, 2).map(s => s.startLocal)
-    });
     return `${correctionLine}I can set up a trade appraisal. I have ${suggested.slots[0].startLocal} or ${suggested.slots[1].startLocal} — do any of these times work?`;
   }
   return `${correctionLine}I can set up a trade appraisal. What day and time works for you?`;
@@ -17291,8 +17274,8 @@ function applyInferredScheduleDayToTimeOnlyText(
   const text = String(textRaw ?? "").trim();
   if (!text) return text;
   if (parseDayOfWeek(text)) return text;
-  if (resolveRequestedDateFloor({ text, timeZone })) return text;
   if (!extractTimeToken(text)) return text;
+  if (hasExplicitCalendarDateForScheduleMemory(text)) return text;
   const inferredDay = inferDayTokenFromRecentTimePrompt(String(lastOutboundText ?? ""), lastSuggestedSlots);
   return inferredDay ? `${inferredDay} ${text}` : text;
 }

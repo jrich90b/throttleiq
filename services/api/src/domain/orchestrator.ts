@@ -4346,11 +4346,6 @@ export async function orchestrateInbound(
           suggestedSlots.length >= 2
             ? `I can set up a trade appraisal. I have ${suggestedSlots[0].startLocal} or ${suggestedSlots[1].startLocal} — do any of these times work?`
             : "I can set up a trade appraisal. What day and time works for you?";
-        console.log("[orchestrator] initial trade value schedule branch", {
-          hasPriorOutbound,
-          schedulingText,
-          suggestedSlots: suggestedSlots.slice(0, 2).map(s => s.startLocal)
-        });
         return finalize({
           intent: "TRADE_IN",
           stage: "ENGAGED",
