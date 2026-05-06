@@ -20,6 +20,7 @@ import {
   isFactoryOrderTimingQuestionText,
   hasExplicitCalendarDateForScheduleMemory,
   isImmediateChatCallbackAvailabilityText,
+  getScheduleDayOptionsLabel,
   inferAcceptedScheduleDayFromReplyText,
   isIncidentalInfoAcknowledgementText,
   isInventoryBrowseLinkRequestText,
@@ -88,6 +89,13 @@ const cases: Case[] = [
       "I'm available to chat by text right now, please don't call."
     ),
     expected: false
+  },
+  {
+    id: "multi_day_schedule_options_preserve_friday_or_saturday",
+    actual: getScheduleDayOptionsLabel(
+      "Ooh that looks sharp! Friday morning, early afternoon, or anytime, Saturday I can come out and take a look"
+    ),
+    expected: "Friday or Saturday"
   },
   {
     id: "manual_outbound_meet_with_tomorrow_confirms_booking",

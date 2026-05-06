@@ -105,6 +105,43 @@ export function isImmediateChatCallbackAvailabilityText(textRaw: string | null |
   return availableNow && chatSignal;
 }
 
+export function getScheduleDayOptionsLabel(textRaw: string | null | undefined): string | null {
+  const text = String(textRaw ?? "");
+  if (!text.trim()) return null;
+  const dayMatches = Array.from(
+    text.matchAll(
+      /\b(monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun)\b/gi
+    )
+  );
+  const dayMap: Record<string, string> = {
+    mon: "Monday",
+    monday: "Monday",
+    tue: "Tuesday",
+    tues: "Tuesday",
+    tuesday: "Tuesday",
+    wed: "Wednesday",
+    wednesday: "Wednesday",
+    thu: "Thursday",
+    thur: "Thursday",
+    thurs: "Thursday",
+    thursday: "Thursday",
+    fri: "Friday",
+    friday: "Friday",
+    sat: "Saturday",
+    saturday: "Saturday",
+    sun: "Sunday",
+    sunday: "Sunday"
+  };
+  const orderedUnique: string[] = [];
+  for (const match of dayMatches) {
+    const label = dayMap[String(match[1] ?? "").toLowerCase()];
+    if (label && !orderedUnique.includes(label)) orderedUnique.push(label);
+  }
+  if (orderedUnique.length < 2) return null;
+  if (orderedUnique.length === 2) return `${orderedUnique[0]} or ${orderedUnique[1]}`;
+  return `${orderedUnique.slice(0, -1).join(", ")}, or ${orderedUnique[orderedUnique.length - 1]}`;
+}
+
 function isWorkflowEmojiOnlyText(text: string): boolean {
   const t = String(text ?? "").trim();
   return t.length > 0 && /^[\p{Extended_Pictographic}\s]+$/u.test(t);

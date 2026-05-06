@@ -191,6 +191,7 @@ import {
   buildRideChallengeSignupReply,
   extractInventoryStockIdMention,
   getBroadScheduleWindowLabel,
+  getScheduleDayOptionsLabel,
   hasRideChallengeSignupAcknowledgement,
   isAccessoryCustomizationRequestText,
   isAudioDemoStatusQuestionText,
@@ -1208,10 +1209,13 @@ function buildDayOnlySchedulingTimeReply(
   inboundText: string | null | undefined
 ): string {
   const cleanDayPhrase = String(dayPhrase ?? "").replace(/\s+/g, " ").trim().replace(/[.?!]+$/g, "");
+  const dayOptionsLabel = getScheduleDayOptionsLabel(inboundText);
+  const replyDayPhrase = dayOptionsLabel || cleanDayPhrase;
+  const timeTarget = dayOptionsLabel ? ` for ${dayOptionsLabel}` : "";
   const timePrompt = customerInvitedQuestions(inboundText)
-    ? "I don’t have any other questions right now — just let me know what time you are thinking so I can schedule you in."
-    : "Just let me know what time you are thinking so I can schedule you in.";
-  return `${cleanDayPhrase} can work. ${timePrompt}`;
+    ? `I don’t have any other questions right now — just let me know what time you are thinking${timeTarget} so I can schedule you in.`
+    : `Just let me know what time you are thinking${timeTarget} so I can schedule you in.`;
+  return `${replyDayPhrase} can work. ${timePrompt}`;
 }
 
 function buildOrchestratorFailureFallback(
