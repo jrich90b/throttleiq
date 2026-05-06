@@ -373,6 +373,19 @@ export function isDirectInventoryAvailabilityQuestionText(textRaw: string | null
   );
 }
 
+export function isIncidentalInfoAcknowledgementText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+  if (!text) return false;
+  const hasInfoThanks = /\b(?:thanks?|thank you)\b[\s\S]{0,40}\binfo(?:rmation)?\b/.test(text);
+  if (!hasInfoThanks) return false;
+  return !/\b(?:send|show|give|need|want|looking for|tell me|can you|could you|would you|specs?|details|more info|more information|information on|details on)\b/.test(
+    text
+  );
+}
+
 export function isNonComplimentLikePhraseText(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "")
     .trim()

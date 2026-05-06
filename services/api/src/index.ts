@@ -197,6 +197,7 @@ import {
   isCloseoutSignoffNoResponseText,
   isFactoryOrderTimingQuestionText,
   hasExplicitCalendarDateForScheduleMemory,
+  isIncidentalInfoAcknowledgementText,
   isDirectInventoryAvailabilityQuestionText,
   isInventoryBrowseLinkRequestText,
   isManualOutboundBookingConfirmationText,
@@ -36880,7 +36881,8 @@ if (authToken && signature) {
       textLower
     ) &&
     !hasSpecsSignal(textLower);
-  const specsSignal = !finishPreferenceOnlyRaw && hasSpecsSignal(textLower);
+  const incidentalInfoAcknowledgement = isIncidentalInfoAcknowledgementText(textLower);
+  const specsSignal = !finishPreferenceOnlyRaw && !incidentalInfoAcknowledgement && hasSpecsSignal(textLower);
   const llmMediaIntent =
     semanticRoutingAccepted && semanticSlotParse?.mediaIntent ? semanticSlotParse.mediaIntent : "none";
   const photoRequested =
@@ -37096,7 +37098,10 @@ if (authToken && signature) {
       !!conv.lead?.vehicle?.model ||
       !!conv.lead?.vehicle?.description);
   const infoOnlyRequest =
-    (llmInventoryInfoIntent || isInfoOnlyRequest(textLower) || specsSignal || isCompare) && !skipInfoOnly;
+    (llmInventoryInfoIntent || isInfoOnlyRequest(textLower) || specsSignal || isCompare) &&
+    !skipInfoOnly &&
+    !incidentalInfoAcknowledgement &&
+    !schedulingPrimaryIntent;
   const testRideBikeSelection = shouldTreatInboundAsTestRideBikeSelection({
     inboundText: event.body,
     lastOutboundText,

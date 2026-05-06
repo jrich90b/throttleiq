@@ -19,6 +19,7 @@ import {
   isFactoryOrderTimingQuestionText,
   hasExplicitCalendarDateForScheduleMemory,
   inferAcceptedScheduleDayFromReplyText,
+  isIncidentalInfoAcknowledgementText,
   isInventoryBrowseLinkRequestText,
   isHiringManagerInquiryText,
   isRideChallengeLeadSignal,
@@ -123,6 +124,16 @@ const cases: Case[] = [
   {
     id: "plain_friday_morning_visit_not_logistics",
     actual: isLogisticsProgressUpdateText("I can come in Friday morning"),
+    expected: false
+  },
+  {
+    id: "thanks_for_info_is_not_specs_request",
+    actual: isIncidentalInfoAcknowledgementText("Thanks for info. And any appointments later this month same time."),
+    expected: true
+  },
+  {
+    id: "can_you_send_info_is_not_incidental_ack",
+    actual: isIncidentalInfoAcknowledgementText("Can you send more info on that bike?"),
     expected: false
   },
   {
