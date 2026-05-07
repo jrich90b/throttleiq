@@ -752,16 +752,24 @@ export function isAccessoryCustomizationRequestText(textRaw: string | null | und
   const mentionsHandlebars =
     /\b(handle\s*bars?|handlebars?|handbars?|bars?)\b/i.test(text) &&
     !/\b(bar and shield|bar\s*&\s*shield)\b/i.test(text);
-  if (!mentionsHandlebars) return false;
+  const mentionsInstallAccessory =
+    mentionsHandlebars ||
+    /\b(heated\s+(?:handle\s*)?grips?|heated\s+seat|seat|seats|windshield|backrest|sissy\s+bar|tour[-\s]?pak|luggage|fairing|pipes?|exhaust)\b/i.test(
+      text
+    );
+  if (!mentionsInstallAccessory) return false;
 
   return (
     /\b(can|could|would|are)\s+(?:you|u|we|the shop)\b[\s\S]{0,80}\b(change|swap|replace|install|put|do)\b/i.test(
       text
     ) ||
-    /\b(change|swap|replace|install|put|do)\b[\s\S]{0,80}\b(handle\s*bars?|handlebars?|handbars?|bars?)\b/i.test(
+    /\b(change|swap|replace|install|put|do|add|added)\b[\s\S]{0,80}\b(handle\s*bars?|handlebars?|handbars?|bars?|heated\s+(?:handle\s*)?grips?|heated\s+seat|seat|seats|windshield|backrest|sissy\s+bar|tour[-\s]?pak|luggage|fairing|pipes?|exhaust)\b/i.test(
       text
     ) ||
-    /\bnot\s+a\s+fan\b[\s\S]{0,80}\b(ones|these|those|stock|current)\b/i.test(text)
+    /\bnot\s+a\s+fan\b[\s\S]{0,80}\b(ones|these|those|stock|current)\b/i.test(text) ||
+    /\b(heated\s+(?:handle\s*)?grips?|heated\s+seat|seat|seats|windshield|backrest|sissy\s+bar|tour[-\s]?pak|luggage|fairing|pipes?|exhaust)\b[\s\S]{0,60}\b(possibility|possible|available|option|doable)\b/i.test(
+      text
+    )
   );
 }
 
@@ -775,6 +783,9 @@ export function buildAccessoryCustomizationReply(textRaw: string | null | undefi
     return hasMediaReference
       ? "Yes — we can change the handlebars. The picture helps; I’ll have our team check the right bar setup, parts, and labor for that bike and follow up with options."
       : "Yes — we can change the handlebars. I’ll have our team check the right bar setup, parts, and labor for that bike and follow up with options.";
+  }
+  if (/\bheated\s+(?:handle\s*)?grips?\b/i.test(text)) {
+    return "Yes — heated grips are possible. I’ll have our team check the right heated grip setup, parts, and labor for that bike and follow up with options.";
   }
 
   return "Yes — we can help with that customization. I’ll have our team check the right parts and labor for that bike and follow up with options.";

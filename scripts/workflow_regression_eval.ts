@@ -346,9 +346,21 @@ const cases: Case[] = [
     expected: true
   },
   {
+    id: "heated_grips_possibility_request_detected",
+    actual: isAccessoryCustomizationRequestText("Are heated handle grips a possibility"),
+    expected: true
+  },
+  {
     id: "handlebar_customization_reply_acknowledges_able",
     actual: /we can change the handlebars/i.test(
       buildAccessoryCustomizationReply("Are you able to change handbars not a fan of the ones on there")
+    ),
+    expected: true
+  },
+  {
+    id: "heated_grips_customization_reply_acknowledges_possible",
+    actual: /heated grips are possible/i.test(
+      buildAccessoryCustomizationReply("Are heated handle grips a possibility")
     ),
     expected: true
   },

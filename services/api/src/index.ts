@@ -4438,6 +4438,40 @@ function hasRecentLightHumorSinceLastOutbound(
   return /\b(lol|haha|lmao|rofl|just kidding|kidding|jk)\b|[😂🤣😅😆]/u.test(inboundSince);
 }
 
+function getRecentLooseArrivalWindowSinceLastOutbound(
+  conv: any,
+  currentInboundText: string | null | undefined,
+  currentInboundAt?: string | null
+): string | null {
+  const currentAtMs = new Date(String(currentInboundAt ?? "")).getTime();
+  const messages = Array.isArray(conv?.messages) ? conv.messages : [];
+  const relevant = messages.filter((m: any) => {
+    if (!Number.isFinite(currentAtMs)) return true;
+    const atMs = new Date(String(m?.at ?? "")).getTime();
+    return !Number.isFinite(atMs) || atMs <= currentAtMs;
+  });
+  let lastOutboundIdx = -1;
+  for (let i = relevant.length - 1; i >= 0; i--) {
+    if (relevant[i]?.direction === "out" && relevant[i]?.body) {
+      lastOutboundIdx = i;
+      break;
+    }
+  }
+  const inboundSince = relevant
+    .slice(Math.max(0, lastOutboundIdx + 1))
+    .filter((m: any) => m?.direction === "in" && m?.body)
+    .map((m: any) => String(m.body ?? ""))
+    .concat(String(currentInboundText ?? ""))
+    .join("\n")
+    .toLowerCase();
+  if (/\bearly\s+afternoon(?:\s*ish)?\b/i.test(inboundSince)) return "early afternoon";
+  if (/\bmid\s+afternoon(?:\s*ish)?\b/i.test(inboundSince)) return "mid-afternoon";
+  if (/\blate\s+afternoon(?:\s*ish)?\b/i.test(inboundSince)) return "late afternoon";
+  if (/\bearly\s+morning(?:\s*ish)?\b/i.test(inboundSince)) return "early morning";
+  if (/\blate\s+morning(?:\s*ish)?\b/i.test(inboundSince)) return "late morning";
+  return null;
+}
+
 type AccessoryRequestDecision = {
   action: Exclude<AccessoryRequestParse["action"], "none">;
   item: string | null;
@@ -4456,6 +4490,22 @@ function normalizeAccessoryItemForReply(item: string | null | undefined): string
   if (/\bheated grips?\b/.test(text)) return "heated grips";
   if (/\bseat\b/.test(text)) return "seat";
   return text;
+}
+
+function extractFallbackAccessoryItem(text: string | null | undefined): string {
+  const raw = String(text ?? "");
+  if (/\b(handle\s*bars?|handlebars?|handbars?|bars?)\b/i.test(raw)) return "handlebars";
+  if (/\bheated\s+(?:handle\s*)?grips?\b/i.test(raw)) return "heated grips";
+  if (/\bheated\s+seat\b/i.test(raw)) return "heated seat";
+  if (/\bseat|seats\b/i.test(raw)) return "seat";
+  if (/\bwindshield\b/i.test(raw)) return "windshield";
+  if (/\bbackrest\b/i.test(raw)) return "backrest";
+  if (/\bsissy\s+bar\b/i.test(raw)) return "sissy bar";
+  if (/\btour[-\s]?pak\b/i.test(raw)) return "tour-pak";
+  if (/\bluggage\b/i.test(raw)) return "luggage";
+  if (/\bfairing\b/i.test(raw)) return "fairing";
+  if (/\b(pipe|pipes|exhaust)\b/i.test(raw)) return "pipes";
+  return "";
 }
 
 function isAccessoryRequestParserAccepted(parsed: AccessoryRequestParse | null): boolean {
@@ -4497,7 +4547,7 @@ function resolveAccessoryRequestDecision(
   if (isAccessoryCustomizationRequestText(raw)) {
     return {
       action: "can_install",
-      item: normalizeAccessoryItemForReply(/handbars?|handle\s*bars?|handlebars?|bars?/i.test(raw) ? "handlebars" : ""),
+      item: normalizeAccessoryItemForReply(extractFallbackAccessoryItem(raw)),
       hasHumor: /\b(lol|haha|lmao|jk|just kidding)\b|[😂🤣😅😆]/iu.test(raw),
       confidence: 0,
       source: "fallback"
@@ -4520,28 +4570,32 @@ function buildAccessoryRequestReply(args: {
   text: string | null | undefined;
   acceptedDay?: string | null;
   hasRecentHumor?: boolean;
+  looseArrivalWindow?: string | null;
 }): string {
   const item = normalizeAccessoryItemForReply(args.decision.item);
   const itemLabel = item || "that";
   const hasHumor = args.decision.hasHumor || !!args.hasRecentHumor;
+  const arrivalLine = args.looseArrivalWindow
+    ? ` For ${args.looseArrivalWindow}, just give me a heads up when you know what time you’ll be here.`
+    : "";
   if (
     (args.decision.action === "status_check" || args.decision.action === "demo_request") &&
     /\b(stereo|radio|audio|sound system|speakers?)\b/i.test(itemLabel)
   ) {
-    return buildAudioDemoStatusReply({ acceptedDay: args.acceptedDay, hasHumor });
+    return `${buildAudioDemoStatusReply({ acceptedDay: args.acceptedDay, hasHumor })}${arrivalLine}`;
   }
   if (args.decision.action === "can_install") {
     if (/\bhandlebars?\b/i.test(itemLabel)) {
-      return buildAccessoryCustomizationReply(args.text);
+      return `${buildAccessoryCustomizationReply(args.text)}${arrivalLine}`;
     }
-    return `Yes — we can help with ${itemLabel}. I’ll have our team check the right parts and labor for that bike and follow up with options.`;
+    return `Yes — we can help with ${itemLabel}. I’ll have our team check the right parts and labor for that bike and follow up with options.${arrivalLine}`;
   }
   if (args.decision.action === "pricing_request") {
-    return `I’ll have our team check pricing and labor for ${itemLabel} and follow up with options.`;
+    return `I’ll have our team check pricing and labor for ${itemLabel} and follow up with options.${arrivalLine}`;
   }
   const opener = hasHumor ? "Haha, gotcha — " : "";
   const dayClause = args.acceptedDay ? ` What time ${args.acceptedDay} works best?` : "";
-  return `${opener}I’ll check on ${itemLabel} for you and follow up shortly.${dayClause}`;
+  return `${opener}I’ll check on ${itemLabel} for you and follow up shortly.${dayClause}${arrivalLine}`;
 }
 
 function applyAccessoryRequestDecision(args: {
@@ -4554,11 +4608,13 @@ function applyAccessoryRequestDecision(args: {
 }): string {
   const acceptedDay = inferAcceptedScheduleDaySinceLastOutbound(args.conv, args.text, args.receivedAt);
   const hasRecentHumor = hasRecentLightHumorSinceLastOutbound(args.conv, args.text, args.receivedAt);
+  const looseArrivalWindow = getRecentLooseArrivalWindowSinceLastOutbound(args.conv, args.text, args.receivedAt);
   const reply = buildAccessoryRequestReply({
     decision: args.decision,
     text: args.text,
     acceptedDay,
-    hasRecentHumor
+    hasRecentHumor,
+    looseArrivalWindow
   });
   const item = normalizeAccessoryItemForReply(args.decision.item);
   const todoLabel =
@@ -4585,6 +4641,7 @@ function applyAccessoryRequestDecision(args: {
     source: args.decision.source,
     confidence: args.decision.confidence,
     acceptedDay,
+    looseArrivalWindow,
     hasHumor: args.decision.hasHumor || hasRecentHumor
   });
   return reply;
