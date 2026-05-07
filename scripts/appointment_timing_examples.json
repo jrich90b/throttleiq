@@ -1,0 +1,86 @@
+[
+  {
+    "id": "provide_tomorrow_11_12_1",
+    "text": "tomorrow around 11/12 would work best for me",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Hey Rafael, sorry, that would work. I’ll schedule you in between 11-12 tomorrow."
+      }
+    ],
+    "expected": {
+      "intent": "provide_new_time",
+      "explicit_request": true,
+      "day_contains": "tomorrow",
+      "time_contains": "11/12",
+      "time_window": "range"
+    }
+  },
+  {
+    "id": "accept_prior_window_1",
+    "text": "alright, sounds good man. thank you.",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Hey Rafael, sorry, that would work. I’ll schedule you in between 11-12 tomorrow."
+      }
+    ],
+    "expected": {
+      "intent": "accept_proposed_time",
+      "explicit_request": true,
+      "reference": "last_suggested"
+    }
+  },
+  {
+    "id": "arrival_update_530_1",
+    "text": "On my way doing my best to be there by 530",
+    "expected": {
+      "intent": "arrival_update",
+      "explicit_request": true,
+      "time_contains": "5:30"
+    }
+  },
+  {
+    "id": "tentative_early_afternoon_1",
+    "text": "Early afternoon ish, wife just has to be home to get kids off the bus",
+    "expected": {
+      "intent": "tentative_time_window",
+      "explicit_request": true,
+      "time_contains": "afternoon",
+      "time_window": "range"
+    }
+  },
+  {
+    "id": "ask_dealer_for_time_saturday_1",
+    "text": "Good morning saturday would work best. let me know what time works for you.",
+    "expected": {
+      "intent": "ask_for_times",
+      "explicit_request": true,
+      "day_contains": "saturday"
+    }
+  },
+  {
+    "id": "later_this_month_same_time_1",
+    "text": "Thanks for info. And any appointments later this month same time.",
+    "history": [
+      {
+        "direction": "out",
+        "body": "I have Thu, May 7, 9:30 AM or Thu, May 7, 11:30 AM — do any of these times work?"
+      }
+    ],
+    "expected": {
+      "intent": "ask_for_times",
+      "explicit_request": true,
+      "day_contains": "later this month",
+      "time_contains": "same time"
+    }
+  },
+  {
+    "id": "photo_request_not_timing_1",
+    "text": "Can you send pictures?",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  }
+]

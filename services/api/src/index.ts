@@ -26,6 +26,7 @@ import {
   parseAffectWithLLM,
   summarizeSalespersonNoteWithLLM,
   parseBookingIntentWithLLM,
+  parseAppointmentTimingWithLLM,
   parseInventoryEntitiesWithLLM,
   parseInventoryStatusWithLLM,
   parseIntentWithLLM,
@@ -53,6 +54,7 @@ import {
 import type {
   AffectParse,
   AccessoryRequestParse,
+  AppointmentTimingParse,
   ConversationStateParse,
   CustomerDispositionParse,
   EmpathySupportReplyParse,
@@ -5132,6 +5134,37 @@ function isInventoryStatusParserAccepted(parsed: InventoryStatusParse | null): b
   const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
   const min = Number(process.env.LLM_INVENTORY_STATUS_CONFIDENCE_MIN ?? 0.72);
   return confidence >= min;
+}
+
+function isAppointmentTimingParserAccepted(parsed: AppointmentTimingParse | null): boolean {
+  if (!parsed || parsed.intent === "none") return false;
+  const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_APPOINTMENT_TIMING_CONFIDENCE_MIN ?? 0.72);
+  return confidence >= min;
+}
+
+function appointmentTimingRequestedPhrase(parsed: AppointmentTimingParse | null): string {
+  const requested = parsed?.requested ?? {};
+  const day = String(requested.day ?? "").trim();
+  const time = String(requested.timeText ?? "").trim();
+  const normalized = String(parsed?.normalizedText ?? "").trim();
+  return normalized || [day, time].filter(Boolean).join(" ").trim();
+}
+
+function buildAppointmentArrivalAck(parsed: AppointmentTimingParse | null): string {
+  const time = String(parsed?.requested?.timeText ?? "").trim();
+  const phrase = appointmentTimingRequestedPhrase(parsed);
+  if (time) return `Sounds good — I’ll watch for you ${time}.`;
+  if (phrase) return `Sounds good — I’ll watch for you around then.`;
+  return "Sounds good — I’ll watch for you.";
+}
+
+function buildTentativeAppointmentWindowAck(parsed: AppointmentTimingParse | null): string {
+  const phrase = appointmentTimingRequestedPhrase(parsed);
+  if (phrase) {
+    return `${normalizeDisplayCase(phrase)} can work. Just give me a heads up when you know the exact time so I can have everything lined up.`;
+  }
+  return "That can work. Just give me a heads up when you know the exact time so I can have everything lined up.";
 }
 
 function inventoryStatusParseToAvailabilityHint(
@@ -31348,11 +31381,37 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         })
       )
     : null;
+  const regenAppointmentTimingParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_APPOINTMENT_TIMING_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    !regenShortAck;
+  const regenAppointmentTimingParserHint =
+    regenAppointmentTimingParserEligible &&
+    (!!conv.scheduler?.lastSuggestedSlots?.length ||
+      String(conv.appointment?.status ?? "none").toLowerCase() !== "none" ||
+      /\b(on my way|leav(?:e|ing)|driv(?:e|ing)|headed|be there|there by|around|between|morning|afternoon|evening|what time works|let me know what time|same time|later this month|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(
+        regenTextLower
+      ));
+  const regenAppointmentTimingParse = regenAppointmentTimingParserHint
+    ? await safeLlmParse("regen_appointment_timing_parser", () =>
+        parseAppointmentTimingWithLLM({
+          text: event.body ?? "",
+          history: buildHistory(conv, 8),
+          lastSuggestedSlots: conv.scheduler?.lastSuggestedSlots,
+          appointment: conv.appointment
+        })
+      )
+    : null;
   if (process.env.DEBUG_INVENTORY_ENTITY_PARSER === "1" && regenInventoryEntityParse) {
     console.log("[llm-inventory-entity-parse] regen", regenInventoryEntityParse);
   }
   if (process.env.DEBUG_INVENTORY_STATUS_PARSER === "1" && regenInventoryStatusParse) {
     console.log("[llm-inventory-status-parse] regen", regenInventoryStatusParse);
+  }
+  if (process.env.LLM_APPOINTMENT_TIMING_PARSER_DEBUG === "1" && regenAppointmentTimingParse) {
+    console.log("[llm-appointment-timing-parse] regen", regenAppointmentTimingParse);
   }
   const regenStockInventoryInterest =
     !!(extractInventoryStockIdMention(event.body ?? "") || regenInventoryEntityAvailabilityHint?.stockId) &&
@@ -31512,6 +31571,31 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     return respondWithSmsRegeneratedDraft(reply);
     }
+  }
+  const regenAppointmentTimingAccepted = isAppointmentTimingParserAccepted(regenAppointmentTimingParse);
+  const regenAppointmentTimingIntent = regenAppointmentTimingAccepted
+    ? regenAppointmentTimingParse?.intent
+    : "none";
+  if (
+    event.provider === "twilio" &&
+    regenAppointmentTimingAccepted &&
+    (regenAppointmentTimingIntent === "arrival_update" ||
+      regenAppointmentTimingIntent === "tentative_time_window")
+  ) {
+    const reply =
+      regenAppointmentTimingIntent === "arrival_update"
+        ? buildAppointmentArrivalAck(regenAppointmentTimingParse)
+        : buildTentativeAppointmentWindowAck(regenAppointmentTimingParse);
+    recordRouteOutcome("regen", `appointment_timing_${regenAppointmentTimingIntent}`, {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      confidence: regenAppointmentTimingParse?.confidence ?? null
+    });
+    setDialogState(conv, "schedule_request");
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply);
   }
   if (regenTradeFollowupMessage) {
     if (conv.lead) {
@@ -31759,6 +31843,54 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       reply,
       regenInventoryStatusResolution.kind === "reply" ? regenInventoryStatusResolution.mediaUrls : undefined
     );
+  }
+  const regenAppointmentTimingAcceptedForRouting = isAppointmentTimingParserAccepted(regenAppointmentTimingParse);
+  if (
+    event.provider === "twilio" &&
+    regenAppointmentTimingAcceptedForRouting &&
+    regenAppointmentTimingParse?.intent === "ask_for_times"
+  ) {
+    const phrase = appointmentTimingRequestedPhrase(regenAppointmentTimingParse) || String(event.body ?? "");
+    const requestedDayText = String(regenAppointmentTimingParse.requested?.day ?? "").trim() || phrase;
+    const dayInfo = parseDayOfWeek(requestedDayText);
+    if (dayInfo?.day) {
+      const appointmentType = isTestRideDialogState(getDialogState(conv)) ? "test_ride" : "inventory_visit";
+      const daySlots = await findScheduleSlotsForRequestedDay({
+        conv,
+        dayInfo,
+        appointmentType
+      }).catch(e => {
+        console.log("[regen] appointment timing day slot lookup failed", e?.message ?? e);
+        return [];
+      });
+      const daySlotReply = buildRequestedDaySlotReply(daySlots);
+      if (daySlotReply) {
+        setLastSuggestedSlots(conv, daySlots);
+        setDialogState(conv, appointmentType === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent");
+        const reply = `Sounds good. ${daySlotReply}`;
+        if (channel === "email") {
+          return respondWithEmailRegeneratedDraft(reply);
+        }
+        return respondWithSmsRegeneratedDraft(reply);
+      }
+      const reply = `Sounds good. ${buildDayOnlySchedulingTimeReply(dayInfo.day, String(event.body ?? ""))}`;
+      setDialogState(conv, "schedule_request");
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(reply);
+      }
+      return respondWithSmsRegeneratedDraft(reply);
+    }
+    const broadScheduleWindowLabel = getBroadScheduleWindowLabel(phrase || event.body);
+    if (broadScheduleWindowLabel) {
+      const sameTimeText = /\b(same time|that time|those times)\b/i.test(phrase || String(event.body ?? ""));
+      const timeQualifier = sameTimeText ? " around that same time" : "";
+      const reply = `Absolutely — ${broadScheduleWindowLabel}${timeQualifier} can work. What day ${broadScheduleWindowLabel} works best?`;
+      setDialogState(conv, "schedule_request");
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(reply);
+      }
+      return respondWithSmsRegeneratedDraft(reply);
+    }
   }
   if (regenRoutingParserDecision.accepted && regenRoutingParserDecision.fallbackAction === "no_response") {
     const regenNoResponseInboundText = String(event.body ?? "");
@@ -36115,6 +36247,30 @@ if (authToken && signature) {
           })
         )
       : Promise.resolve(null);
+  const appointmentTimingParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_APPOINTMENT_TIMING_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    schedulingAllowed;
+  const appointmentTimingParserHint =
+    appointmentTimingParserEligible &&
+    (!!conv.scheduler?.lastSuggestedSlots?.length ||
+      String(conv.appointment?.status ?? "none").toLowerCase() !== "none" ||
+      /\b(on my way|leav(?:e|ing)|driv(?:e|ing)|headed|be there|there by|around|between|morning|afternoon|evening|what time works|let me know what time|same time|later this month|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(
+        textLower
+      ));
+  const appointmentTimingParsePromise =
+    appointmentTimingParserHint && !highConfidenceFinanceTurn
+      ? safeLlmParse("appointment_timing_parser", () =>
+          parseAppointmentTimingWithLLM({
+            text: event.body,
+            history: recentHistory,
+            lastSuggestedSlots: conv.scheduler?.lastSuggestedSlots,
+            appointment: conv.appointment
+          })
+        )
+      : Promise.resolve(null);
   const intentParserEligible =
     event.provider === "twilio" &&
     process.env.LLM_ENABLED === "1" &&
@@ -36194,6 +36350,7 @@ if (authToken && signature) {
   const parserStageStartedAt = Date.now();
   const [
     bookingParse,
+    appointmentTimingParse,
     intentParse,
     dialogActParse,
     vehicleInfoParse,
@@ -36203,6 +36360,7 @@ if (authToken && signature) {
   ] =
     await Promise.all([
       bookingParsePromise,
+      appointmentTimingParsePromise,
       intentParsePromise,
       dialogActParsePromise,
       vehicleInfoParsePromise,
@@ -36222,6 +36380,9 @@ if (authToken && signature) {
       reference: bookingParse.reference,
       confidence: bookingParse.confidence
     });
+  }
+  if (process.env.LLM_APPOINTMENT_TIMING_PARSER_DEBUG === "1" && appointmentTimingParse) {
+    console.log("[llm-appointment-timing-parse]", appointmentTimingParse);
   }
   const bookingParseTimeText =
     bookingParse?.requested?.timeText ??
@@ -36782,7 +36943,46 @@ if (authToken && signature) {
     !!bookingParse?.explicitRequest && bookingConfidence >= bookingConfidenceMin;
   const bookingIntentLow =
     !!bookingParse?.explicitRequest && bookingConfidence > 0 && bookingConfidence < bookingConfidenceMin;
+  const appointmentTimingAccepted = isAppointmentTimingParserAccepted(appointmentTimingParse);
+  const appointmentTimingIntent = appointmentTimingAccepted ? appointmentTimingParse?.intent : "none";
+  if (
+    event.provider === "twilio" &&
+    appointmentTimingAccepted &&
+    !pricingOrPaymentsIntent &&
+    (appointmentTimingIntent === "arrival_update" || appointmentTimingIntent === "tentative_time_window")
+  ) {
+    const reply =
+      appointmentTimingIntent === "arrival_update"
+        ? buildAppointmentArrivalAck(appointmentTimingParse)
+        : buildTentativeAppointmentWindowAck(appointmentTimingParse);
+    recordRouteOutcome("live", `appointment_timing_${appointmentTimingIntent}`, {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      confidence: appointmentTimingParse?.confidence ?? null
+    });
+    setDialogState(conv, "schedule_request");
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      saveConversation(conv);
+      await flushConversationStore();
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    saveConversation(conv);
+    await flushConversationStore();
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(reply)}</Message></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   let bookingParseText = bookingIntentAccepted ? bookingParse?.normalizedText ?? "" : "";
+  if (
+    !bookingParseText &&
+    appointmentTimingAccepted &&
+    (appointmentTimingIntent === "provide_new_time" || appointmentTimingIntent === "ask_for_times")
+  ) {
+    bookingParseText = appointmentTimingParse?.normalizedText ?? appointmentTimingRequestedPhrase(appointmentTimingParse);
+  }
   if (bookingIntentAccepted && bookingParse?.reference === "last_suggested") {
     const dayFromSlot = inferDayTokenFromSlot(conv.scheduler?.lastSuggestedSlots?.[0]?.startLocal ?? "");
     const hasDayToken = bookingParseText
@@ -36814,7 +37014,13 @@ if (authToken && signature) {
   const llmHasDayTime = !!llmHasDayToken && (llmHasTimeWord || llmHasAtHour);
   const llmHasDayOnlyAvailability =
     !!llmHasDayToken && /\b(availability|available|openings|open|time|times)\b/i.test(bookingParseText);
-  const llmHasDayOnlyRequest = bookingIntentAccepted && !!llmHasDayToken && !llmHasDayTime;
+  const llmHasAppointmentTimingDayOnlyRequest =
+    appointmentTimingAccepted &&
+    (appointmentTimingIntent === "ask_for_times" || appointmentTimingIntent === "provide_new_time") &&
+    !!llmHasDayToken &&
+    !llmHasDayTime;
+  const llmHasDayOnlyRequest =
+    (bookingIntentAccepted && !!llmHasDayToken && !llmHasDayTime) || llmHasAppointmentTimingDayOnlyRequest;
   const schedulingSignals = {
     explicit:
       schedulingSignalsBase.explicit ||

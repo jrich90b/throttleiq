@@ -1267,6 +1267,28 @@ export type BookingParse = {
   confidence?: number;
 };
 
+export type AppointmentTimingIntent =
+  | "accept_proposed_time"
+  | "provide_new_time"
+  | "tentative_time_window"
+  | "arrival_update"
+  | "ask_for_times"
+  | "decline_time"
+  | "none";
+
+export type AppointmentTimingParse = {
+  intent: AppointmentTimingIntent;
+  explicitRequest: boolean;
+  requested?: {
+    day?: string | null;
+    timeText?: string | null;
+    timeWindow?: "exact" | "range" | "unknown";
+  };
+  reference?: "last_suggested" | "last_appointment" | "none";
+  normalizedText?: string | null;
+  confidence?: number;
+};
+
 export type IntentParse = {
   intent: "callback" | "test_ride" | "availability" | "none";
   explicitRequest: boolean;
@@ -1710,6 +1732,40 @@ const BOOKING_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     intent: {
       type: "string",
       enum: ["schedule", "reschedule", "cancel", "availability", "question", "none"]
+    },
+    explicit_request: { type: "boolean" },
+    requested: {
+      type: "object",
+      additionalProperties: false,
+      required: ["day", "time_text", "time_window"],
+      properties: {
+        day: { type: "string" },
+        time_text: { type: "string" },
+        time_window: { type: "string", enum: ["exact", "range", "unknown"] }
+      }
+    },
+    reference: { type: "string", enum: ["last_suggested", "last_appointment", "none"] },
+    normalized_text: { type: "string" },
+    confidence: { type: "number" }
+  }
+};
+
+const APPOINTMENT_TIMING_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent", "explicit_request", "requested", "reference", "normalized_text", "confidence"],
+  properties: {
+    intent: {
+      type: "string",
+      enum: [
+        "accept_proposed_time",
+        "provide_new_time",
+        "tentative_time_window",
+        "arrival_update",
+        "ask_for_times",
+        "decline_time",
+        "none"
+      ]
     },
     explicit_request: { type: "boolean" },
     requested: {
@@ -2677,6 +2733,134 @@ export async function parseBookingIntentWithLLM(args: {
     requested: { day, timeText, timeWindow },
     reference,
     normalizedText: normalizedText || null,
+    confidence
+  };
+}
+
+export async function parseAppointmentTimingWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lastSuggestedSlots?: { startLocal?: string | null }[];
+  appointment?: any;
+}): Promise<AppointmentTimingParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_APPOINTMENT_TIMING_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_APPOINTMENT_TIMING_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_APPOINTMENT_TIMING_PARSER_MODEL ||
+    process.env.OPENAI_BOOKING_PARSER_MODEL ||
+    process.env.OPENAI_MODEL ||
+    "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_APPOINTMENT_TIMING_PARSER_MODEL_FALLBACK ||
+    process.env.OPENAI_BOOKING_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
+  const lastSlots = (args.lastSuggestedSlots ?? [])
+    .map(s => s.startLocal)
+    .filter(Boolean)
+    .slice(0, 4)
+    .join(" | ");
+  const apptStatus = args.appointment?.status ?? "none";
+
+  const examples = [
+    'input: "Customer: tomorrow around 11/12 would work best for me" output: {"intent":"provide_new_time","explicit_request":true,"requested":{"day":"tomorrow","time_text":"around 11/12","time_window":"range"},"reference":"last_suggested","normalized_text":"tomorrow around 11/12","confidence":0.96}',
+    'input: "Customer: alright, sounds good man. thank you." history: "out: I will schedule you in between 11-12 tomorrow" output: {"intent":"accept_proposed_time","explicit_request":true,"requested":{"day":"tomorrow","time_text":"11-12","time_window":"range"},"reference":"last_suggested","normalized_text":"tomorrow 11-12","confidence":0.91}',
+    'input: "Customer: Ok." history: "out: Tuesday between 9:30 and 10:00 can work." output: {"intent":"accept_proposed_time","explicit_request":true,"requested":{"day":"tuesday","time_text":"9:30-10:00","time_window":"range"},"reference":"last_suggested","normalized_text":"tuesday 9:30-10:00","confidence":0.88}',
+    'input: "Customer: On my way doing my best to be there by 530" output: {"intent":"arrival_update","explicit_request":true,"requested":{"day":"","time_text":"by 5:30","time_window":"range"},"reference":"none","normalized_text":"on my way by 5:30","confidence":0.96}',
+    'input: "Customer: Early afternoon ish, wife just has to be home to get kids off the bus" output: {"intent":"tentative_time_window","explicit_request":true,"requested":{"day":"","time_text":"early afternoon-ish","time_window":"range"},"reference":"last_suggested","normalized_text":"early afternoon-ish","confidence":0.93}',
+    'input: "Customer: Good morning saturday would work best. let me know what time works for you." output: {"intent":"ask_for_times","explicit_request":true,"requested":{"day":"saturday","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"saturday","confidence":0.95}',
+    'input: "Customer: Thanks for info. And any appointments later this month same time." output: {"intent":"ask_for_times","explicit_request":true,"requested":{"day":"later this month","time_text":"same time","time_window":"range"},"reference":"last_suggested","normalized_text":"later this month same time","confidence":0.94}',
+    'input: "Customer: Friday morning, early afternoon, or anytime Saturday I can come out and take a look" output: {"intent":"provide_new_time","explicit_request":true,"requested":{"day":"friday","time_text":"morning or early afternoon","time_window":"range"},"reference":"none","normalized_text":"friday morning or early afternoon, or saturday any time","confidence":0.94}',
+    'input: "Customer: I can’t do that time" output: {"intent":"decline_time","explicit_request":true,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"last_suggested","normalized_text":"","confidence":0.9}',
+    'input: "Customer: Let me know because I start driving on Friday morning" output: {"intent":"arrival_update","explicit_request":true,"requested":{"day":"friday","time_text":"morning","time_window":"range"},"reference":"none","normalized_text":"driving friday morning","confidence":0.93}',
+    'input: "Customer: Can you send pictures?" output: {"intent":"none","explicit_request":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.95}'
+  ];
+
+  const prompt = [
+    "You parse dealership appointment timing turns.",
+    "Return only JSON matching the schema.",
+    "",
+    "Intent mapping:",
+    "- accept_proposed_time: customer accepts a previously proposed exact or windowed time.",
+    "- provide_new_time: customer gives a day/time or usable appointment window.",
+    "- tentative_time_window: customer gives a loose arrival window but indicates uncertainty; do not treat as a confirmed booking.",
+    "- arrival_update: customer says they are on the way, leaving, driving in, or already headed to the dealership.",
+    "- ask_for_times: customer asks the dealership what times are available or says a day works and asks what time works.",
+    "- decline_time: customer rejects a proposed time.",
+    "- none: no appointment timing state.",
+    "",
+    "Rules:",
+    "- Do not classify product years or model numbers as appointment times.",
+    "- Arrival updates are not schedule requests and should not produce new slot offers.",
+    "- If customer says 'around 11/12', keep that full range as time_text.",
+    "- If customer says 'later this month same time', preserve later_this_month/same time context.",
+    "- Use empty strings for unknown requested.day and requested.time_text.",
+    "- confidence is 0 to 1.",
+    "",
+    `Appointment status: ${apptStatus}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    lastSlots ? `Last suggested slots: ${lastSlots}` : "Last suggested slots: (none)",
+    "Examples:",
+    ...examples,
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "appointment_timing_parser",
+      schema: APPOINTMENT_TIMING_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 220,
+      debugTag: "llm-appointment-timing-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const rawIntent = String(parsed.intent ?? "").toLowerCase();
+  const intent: AppointmentTimingParse["intent"] =
+    rawIntent === "accept_proposed_time" ||
+    rawIntent === "provide_new_time" ||
+    rawIntent === "tentative_time_window" ||
+    rawIntent === "arrival_update" ||
+    rawIntent === "ask_for_times" ||
+    rawIntent === "decline_time"
+      ? rawIntent
+      : "none";
+
+  const requested = parsed.requested && typeof parsed.requested === "object" ? parsed.requested : {};
+  const day = cleanOptionalString(requested?.day);
+  const timeText = cleanOptionalString(requested?.time_text);
+  const timeWindowRaw = String(requested?.time_window ?? "unknown").toLowerCase();
+  const timeWindow: "exact" | "range" | "unknown" =
+    timeWindowRaw === "exact" || timeWindowRaw === "range" ? timeWindowRaw : "unknown";
+  const referenceRaw = String(parsed.reference ?? "none").toLowerCase();
+  const reference: AppointmentTimingParse["reference"] =
+    referenceRaw === "last_suggested" || referenceRaw === "last_appointment" ? referenceRaw : "none";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    intent,
+    explicitRequest: !!parsed.explicit_request,
+    requested: { day, timeText, timeWindow },
+    reference,
+    normalizedText: cleanOptionalString(parsed.normalized_text) ?? null,
     confidence
   };
 }
