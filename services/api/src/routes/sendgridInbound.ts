@@ -53,10 +53,11 @@ import {
   parseResponseControlWithLLM,
   parseBookingIntentWithLLM,
   parseJourneyIntentWithLLM,
+  parseInventoryStatusWithLLM,
   parseVehicleFactQuestionWithLLM,
   parseWalkInOutcomeWithLLM
 } from "../domain/llmDraft.js";
-import type { VehicleFactQuestionParse } from "../domain/llmDraft.js";
+import type { InventoryStatusParse, VehicleFactQuestionParse } from "../domain/llmDraft.js";
 import type { InboundMessageEvent } from "../domain/types.js";
 import { getSchedulerConfig, getPreferredSalespeople } from "../domain/schedulerConfig.js";
 import { getAuthedCalendarClient, insertEvent, queryFreeBusy } from "../domain/googleCalendar.js";
@@ -2566,6 +2567,174 @@ function buildInitialAdfVehicleFactReply(args: {
   }
 }
 
+function isInitialAdfInventoryStatusParserAccepted(parsed: InventoryStatusParse | null): boolean {
+  if (!parsed || !parsed.explicitRequest || parsed.intent === "none") return false;
+  const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_INVENTORY_STATUS_CONFIDENCE_MIN ?? 0.72);
+  return confidence >= min;
+}
+
+function inventoryStatusTargetLabel(conv: any, parsed: InventoryStatusParse | null): string {
+  const target = parsed?.target ?? null;
+  const targetYear = target?.year ? String(target.year) : "";
+  const targetModel = normalizeVehicleModel(target?.model ?? "", conv?.lead?.vehicle?.make ?? null) ?? "";
+  const targetColor = target?.color ? normalizeDisplayCase(target.color) : "";
+  const leadYear = String(conv?.lead?.vehicle?.year ?? "").trim();
+  const leadModel =
+    normalizeVehicleModel(
+      conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description ?? "",
+      conv?.lead?.vehicle?.make ?? null
+    ) ?? "";
+  const leadColor = cleanVehicleColorForReply(conv?.lead?.vehicle?.color ?? null) ?? "";
+  const label = [targetYear || leadYear, targetModel || leadModel, targetColor || leadColor]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  return label || "that bike";
+}
+
+async function resolveInitialAdfInventoryStatus(
+  conv: any,
+  parsed: InventoryStatusParse | null,
+  leadStatus: "in_stock" | "on_hold" | "sold" | "not_found" | "unknown"
+): Promise<{ status: "in_stock" | "on_hold" | "sold" | "not_found" | "unknown"; label: string }> {
+  const target = parsed?.target ?? null;
+  const leadVehicle = conv?.lead?.vehicle ?? {};
+  const stockId = String(target?.stockId ?? leadVehicle.stockId ?? "").trim();
+  const vin = String(leadVehicle.vin ?? "").trim();
+  const targetModel =
+    normalizeVehicleModel(target?.model ?? leadVehicle.model ?? leadVehicle.description ?? "", leadVehicle.make ?? null) ??
+    "";
+  const targetYear = target?.year ? String(target.year) : String(leadVehicle.year ?? "").trim();
+  const targetColor = String(target?.color ?? "").trim().toLowerCase();
+  const fallbackLabel = inventoryStatusTargetLabel(conv, parsed);
+
+  if (!stockId && !targetModel) {
+    return { status: leadStatus, label: fallbackLabel };
+  }
+
+  try {
+    const [items, holds, solds] = await Promise.all([
+      getInventoryFeed(),
+      listInventoryHolds(),
+      listInventorySolds()
+    ]);
+    const storedStatus = (itemStock?: string | null, itemVin?: string | null): "on_hold" | "sold" | null => {
+      const soldKey = normalizeInventorySoldKey(itemStock, itemVin);
+      if (soldKey && solds?.[soldKey]) return "sold";
+      const holdKey = normalizeInventoryHoldKey(itemStock, itemVin);
+      if (holdKey && holds?.[holdKey]) return "on_hold";
+      return null;
+    };
+    const direct = stockId
+      ? items.find(
+          item =>
+            String(item.stockId ?? "").trim().toLowerCase() === stockId.toLowerCase() ||
+            (vin && String(item.vin ?? "").trim().toLowerCase() === vin.toLowerCase())
+        )
+      : null;
+    if (direct) {
+      const status = storedStatus(direct.stockId, direct.vin) ?? "in_stock";
+      const label =
+        formatModelLabel(direct.year ?? targetYear, direct.model ?? targetModel) ??
+        fallbackLabel;
+      return { status, label };
+    }
+
+    let matches = targetModel ? await findInventoryMatches({ year: targetYear || null, model: targetModel }) : [];
+    if (!matches.length && targetModel) {
+      matches = await findInventoryMatches({ year: null, model: targetModel });
+    }
+    if (targetColor) {
+      const colorFiltered = matches.filter(item =>
+        String(item.color ?? "").toLowerCase().includes(targetColor)
+      );
+      if (colorFiltered.length) matches = colorFiltered;
+    }
+    if (!matches.length) return { status: "not_found", label: fallbackLabel };
+
+    let sawHold = false;
+    let sawSold = false;
+    let preferredLabel = fallbackLabel;
+    for (const item of matches) {
+      preferredLabel = formatModelLabel(item.year ?? targetYear, item.model ?? targetModel) ?? preferredLabel;
+      const status = storedStatus(item.stockId, item.vin);
+      if (status === "sold") {
+        sawSold = true;
+        continue;
+      }
+      if (status === "on_hold") {
+        sawHold = true;
+        continue;
+      }
+      return { status: "in_stock", label: preferredLabel };
+    }
+    if (sawHold) return { status: "on_hold", label: preferredLabel };
+    if (sawSold) return { status: "sold", label: preferredLabel };
+    return { status: "not_found", label: preferredLabel };
+  } catch {
+    return { status: leadStatus, label: fallbackLabel };
+  }
+}
+
+async function buildInitialAdfInventoryStatusReply(args: {
+  conv: any;
+  parsed: InventoryStatusParse;
+  text: string;
+  leadStatus: "in_stock" | "on_hold" | "sold" | "not_found" | "unknown";
+}): Promise<{ reply: string; needsTodo: boolean; todoSummary?: string; followUpReason?: string }> {
+  const intent = args.parsed.intent;
+  const label = inventoryStatusTargetLabel(args.conv, args.parsed);
+  if (intent === "hold_status_question") {
+    return {
+      reply: `I don’t have an exact release time yet, but ${normalizeDisplayCase(label)} is on hold right now. I can keep an eye on it if it opens back up, or I can check similar options for you.`,
+      needsTodo: false
+    };
+  }
+  if (intent === "incoming_status_question" || intent === "factory_order_eta") {
+    const modelLabel = normalizeDisplayCase(label);
+    return {
+      reply: `I’ll check what’s incoming for the ${modelLabel} and follow up shortly.`,
+      needsTodo: true,
+      todoSummary: `Check incoming/factory timing for ${modelLabel}. Customer asked: ${args.text}`,
+      followUpReason: "factory_order_timing"
+    };
+  }
+  if (intent === "image_availability_check") {
+    return {
+      reply: "I’ll verify that exact bike from the image and follow up shortly.",
+      needsTodo: true,
+      todoSummary: `Verify availability from customer image/reference. Customer asked: ${args.text}`,
+      followUpReason: "image_availability"
+    };
+  }
+
+  const resolved = await resolveInitialAdfInventoryStatus(args.conv, args.parsed, args.leadStatus);
+  const bikeLabel = normalizeDisplayCase(resolved.label);
+  if (resolved.status === "in_stock") {
+    return {
+      reply: `Yes — the ${bikeLabel} is available right now. Would you like to stop in and take a look?`,
+      needsTodo: false
+    };
+  }
+  if (resolved.status === "on_hold") {
+    return {
+      reply: `The ${bikeLabel} is on hold right now. I can keep an eye on it if it opens back up, or I can check similar options for you.`,
+      needsTodo: false
+    };
+  }
+  if (resolved.status === "sold") {
+    return {
+      reply: `The ${bikeLabel} is no longer available, but I can help you find similar options.`,
+      needsTodo: false
+    };
+  }
+  return {
+    reply: `I’m not seeing the ${bikeLabel} in stock right now. I can check similar options or keep an eye out for you.`,
+    needsTodo: false
+  };
+}
+
 export async function handleSendgridInbound(req: Request, res: Response) {
   console.log("[sendgrid inbound] meta:", {
     contentType: req.header("content-type"),
@@ -3350,7 +3519,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     llmRoutingDecision,
     llmFaqTopic,
     llmWalkInOutcome,
-    llmVehicleFact
+    llmVehicleFact,
+    llmInventoryStatus
   ] = await Promise.all([
     safeParser("dialog_act", () =>
       parseDialogActWithLLM({
@@ -3426,6 +3596,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     ),
     safeParser("vehicle_fact_question", () =>
       parseVehicleFactQuestionWithLLM({
+        text: effectiveInquiry,
+        history: adfHistory,
+        lead: conv.lead
+      })
+    ),
+    safeParser("inventory_status", () =>
+      parseInventoryStatusWithLLM({
         text: effectiveInquiry,
         history: adfHistory,
         lead: conv.lead
@@ -6209,6 +6386,27 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       stopFollowUpCadence(conv, "manual_handoff");
     }
   }
+  const initialAdfInventoryStatusAccepted =
+    isInitialAdf &&
+    !initialAdfVehicleFactDecision &&
+    !isDepartmentLead &&
+    isInitialAdfInventoryStatusParserAccepted(llmInventoryStatus);
+  if (initialAdfInventoryStatusAccepted && llmInventoryStatus) {
+    const statusReply = await buildInitialAdfInventoryStatusReply({
+      conv,
+      parsed: llmInventoryStatus,
+      text: effectiveInquiry,
+      leadStatus: initialAvailability
+    });
+    draft = statusReply.reply;
+    suppressAvailabilityAppend = true;
+    setDialogState("inventory_answered");
+    if (statusReply.needsTodo) {
+      addTodo(conv, "other", statusReply.todoSummary ?? event.body, event.providerMessageId);
+      setFollowUpMode(conv, "manual_handoff", statusReply.followUpReason ?? "inventory_status");
+      stopFollowUpCadence(conv, "manual_handoff");
+    }
+  }
   const isPurchaseIntentLead =
     isInitialAdf &&
     !isServiceLead &&
@@ -6216,6 +6414,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     !isCreditLead &&
     !isWalkInLead &&
     !initialAdfVehicleFactDecision &&
+    !initialAdfInventoryStatusAccepted &&
     !pricingInquiryIntent &&
     inferredBucket !== "trade_in_sell" &&
     inferredBucket !== "finance_prequal" &&
@@ -6251,6 +6450,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (
     isInitialAdf &&
     !initialAdfVehicleFactDecision &&
+    !initialAdfInventoryStatusAccepted &&
     pricingInquiryIntent &&
     typeof draft === "string" &&
     !/\b(payment|monthly|apr|down|budget|finance|credit app|term)\b/i.test(draft)

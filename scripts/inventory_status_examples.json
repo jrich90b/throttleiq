@@ -11,6 +11,21 @@
     }
   },
   {
+    "id": "adf_multiline_availability_question_1",
+    "text": "WEB LEAD (ADF)\nInquiry:\nHello, do you have it in stock?",
+    "lead": {
+      "vehicle": {
+        "year": "2025",
+        "model": "Street Glide",
+        "stockId": "T36-25"
+      }
+    },
+    "expected": {
+      "intent": "availability_check",
+      "explicit_request": true
+    }
+  },
+  {
     "id": "stock_number_interest_1",
     "text": "Very interested in thw T10-26 street glide !!",
     "expected": {
