@@ -137,6 +137,14 @@ const cases: Case[] = [
     expected: true
   },
   {
+    id: "slash_time_window_day_time_parsed",
+    actual: (() => {
+      const parsed = parseRequestedDayTime("tomorrow around 11/12 would work best for me", "America/New_York");
+      return !!parsed && parsed.dayOfWeek === "friday" && parsed.hour24 === 11 && parsed.minute === 0;
+    })(),
+    expected: true
+  },
+  {
     id: "close_to_compact_time_day_time_detected",
     actual: detectSchedulingSignals("Am I able to ride a road glide today? I can take lunch close to 430.").hasDayTime,
     expected: true

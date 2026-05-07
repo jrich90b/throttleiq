@@ -3307,9 +3307,24 @@ export function parseRequestedDayTime(
   timeZone: string
 ): { year: number; month: number; day: number; hour24: number; minute: number; dayOfWeek: string } | null {
   const t = text.toLowerCase();
-  const explicitDate = parseExplicitDate(t) ?? parseOrdinalDateInCurrentWindow(t, timeZone);
   const dayToken = parseDayToken(t);
+  const slashTimeRange =
+    dayToken
+      ? t.match(/\b(?:at|for|around|by|close\s+to|near|between)\s*(\d{1,2})\s*\/\s*(\d{1,2})(?:\s*(am|pm))?\b/)
+      : null;
+  const explicitDate = slashTimeRange ? null : (parseExplicitDate(t) ?? parseOrdinalDateInCurrentWindow(t, timeZone));
   let time = parseExactTime(t);
+  if (!time && slashTimeRange) {
+    const hourRaw = Number(slashTimeRange[1]);
+    const meridiem = slashTimeRange[3];
+    if (hourRaw >= 1 && hourRaw <= 12) {
+      let hour24 = hourRaw;
+      if (meridiem === "am") hour24 = hourRaw === 12 ? 0 : hourRaw;
+      else if (meridiem === "pm") hour24 = hourRaw === 12 ? 12 : hourRaw + 12;
+      else if (hourRaw !== 12) hour24 = hourRaw <= 7 ? hourRaw + 12 : hourRaw;
+      time = { hour24, minute: 0, timeText: slashTimeRange[0] };
+    }
+  }
   if (!time && dayToken && !explicitDate) {
     // Support messages like "Tuesday at 3" or "Tue 3?" by inferring AM/PM.
     const compactMatch = t.match(/\b(?:at|for|around|by|close\s+to|near)\s*(\d{3,4})\s*(am|pm)?\b(?!\s*\/)/);

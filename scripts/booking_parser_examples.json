@@ -421,5 +421,20 @@
       "reference": "last_suggested",
       "normalized_contains": "later this month"
     }
+  },
+  {
+    "id": "schedule_tomorrow_around_11_12_1",
+    "text": "tomorrow around 11/12 would work best for me",
+    "expected": {
+      "intent": "schedule",
+      "explicit_request": true,
+      "requested": {
+        "day": "tomorrow",
+        "time_text": "around 11/12",
+        "time_window": "range"
+      },
+      "reference": "last_suggested",
+      "normalized_contains": "tomorrow around 11/12"
+    }
   }
 ]
