@@ -24,6 +24,7 @@
     "inventory_entity:eval": "LLM_ENABLED=1 LLM_INVENTORY_ENTITY_PARSER_ENABLED=1 npx tsx scripts/inventory_entity_eval.ts",
     "inventory_status:eval": "LLM_ENABLED=1 LLM_INVENTORY_STATUS_PARSER_ENABLED=1 npx tsx scripts/inventory_status_eval.ts",
     "appointment_timing:eval": "LLM_ENABLED=1 LLM_APPOINTMENT_TIMING_PARSER_ENABLED=1 npx tsx scripts/appointment_timing_eval.ts",
+    "manual_outbound_appointment:eval": "LLM_ENABLED=1 LLM_MANUAL_OUTBOUND_APPOINTMENT_PARSER_ENABLED=1 npx tsx scripts/manual_outbound_appointment_eval.ts",
     "trade_payoff:eval": "LLM_ENABLED=1 LLM_TRADE_PAYOFF_PARSER_ENABLED=1 npx tsx scripts/trade_payoff_eval.ts",
     "watch_catalog_eval": "LLM_ENABLED=1 npx tsx scripts/watch_catalog_eval.ts",
     "finance_docs_eval": "LLM_ENABLED=1 npx tsx scripts/finance_docs_eval.ts",

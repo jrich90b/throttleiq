@@ -1,0 +1,90 @@
+[
+  {
+    "id": "staff_confirms_inspection_12_noon_1",
+    "text": "I will schedule an inspection for the 12th at noon for you",
+    "expected": {
+      "state": "confirmed_booking",
+      "explicit_state": true,
+      "day_contains": "12",
+      "time_contains": "noon",
+      "time_window": "exact"
+    }
+  },
+  {
+    "id": "staff_confirms_between_11_12_tomorrow_1",
+    "text": "Hey Rafael, sorry, that would work ill schedule you in between 11-12 tomorrow",
+    "expected": {
+      "state": "confirmed_booking",
+      "explicit_state": true,
+      "day_contains": "tomorrow",
+      "time_contains": "11-12",
+      "time_window": "range"
+    }
+  },
+  {
+    "id": "staff_confirms_meet_giovanni_tomorrow_430_1",
+    "text": "I will have you meet with Giovanni tomorrow around 4:30-5:00",
+    "expected": {
+      "state": "confirmed_booking",
+      "explicit_state": true,
+      "day_contains": "tomorrow",
+      "time_contains": "4:30",
+      "time_window": "range"
+    }
+  },
+  {
+    "id": "staff_proposes_930_if_works_1",
+    "text": "Hey Jen, lets shoot for 9:30 if that works",
+    "expected": {
+      "state": "proposed_time",
+      "explicit_state": true,
+      "time_contains": "9:30",
+      "time_window": "exact"
+    }
+  },
+  {
+    "id": "staff_tentative_schedule_if_works_1",
+    "text": "I'll schedule you in at 9:30 if that works",
+    "expected": {
+      "state": "proposed_time",
+      "explicit_state": true,
+      "time_contains": "9:30"
+    }
+  },
+  {
+    "id": "staff_offers_two_slots_1",
+    "text": "I have Thu, May 7, 9:30 AM or Thu, May 7, 11:30 AM — do either work?",
+    "expected": {
+      "state": "slot_offer",
+      "explicit_state": true,
+      "day_contains": "may 7",
+      "time_contains": "9:30",
+      "time_window": "range"
+    }
+  },
+  {
+    "id": "staff_asks_time_tomorrow_1",
+    "text": "What time tomorrow are you thinking?",
+    "expected": {
+      "state": "asks_for_time",
+      "explicit_state": true,
+      "day_contains": "tomorrow"
+    }
+  },
+  {
+    "id": "staff_that_works_not_booking_1",
+    "text": "That works!",
+    "expected": {
+      "state": "none",
+      "explicit_state": false
+    }
+  },
+  {
+    "id": "staff_call_request_not_appointment_1",
+    "text": "Can you call me?",
+    "expected": {
+      "state": "none",
+      "explicit_state": false
+    }
+  }
+]

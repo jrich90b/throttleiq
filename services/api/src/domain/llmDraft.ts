@@ -1289,6 +1289,27 @@ export type AppointmentTimingParse = {
   confidence?: number;
 };
 
+export type ManualOutboundAppointmentState =
+  | "confirmed_booking"
+  | "proposed_time"
+  | "asks_for_time"
+  | "slot_offer"
+  | "reschedule_request"
+  | "none";
+
+export type ManualOutboundAppointmentParse = {
+  state: ManualOutboundAppointmentState;
+  explicitState: boolean;
+  requested?: {
+    day?: string | null;
+    timeText?: string | null;
+    timeWindow?: "exact" | "range" | "unknown";
+  };
+  reference?: "last_suggested" | "last_appointment" | "none";
+  normalizedText?: string | null;
+  confidence?: number;
+};
+
 export type IntentParse = {
   intent: "callback" | "test_ride" | "availability" | "none";
   explicitRequest: boolean;
@@ -1768,6 +1789,39 @@ const APPOINTMENT_TIMING_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
       ]
     },
     explicit_request: { type: "boolean" },
+    requested: {
+      type: "object",
+      additionalProperties: false,
+      required: ["day", "time_text", "time_window"],
+      properties: {
+        day: { type: "string" },
+        time_text: { type: "string" },
+        time_window: { type: "string", enum: ["exact", "range", "unknown"] }
+      }
+    },
+    reference: { type: "string", enum: ["last_suggested", "last_appointment", "none"] },
+    normalized_text: { type: "string" },
+    confidence: { type: "number" }
+  }
+};
+
+const MANUAL_OUTBOUND_APPOINTMENT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["state", "explicit_state", "requested", "reference", "normalized_text", "confidence"],
+  properties: {
+    state: {
+      type: "string",
+      enum: [
+        "confirmed_booking",
+        "proposed_time",
+        "asks_for_time",
+        "slot_offer",
+        "reschedule_request",
+        "none"
+      ]
+    },
+    explicit_state: { type: "boolean" },
     requested: {
       type: "object",
       additionalProperties: false,
@@ -2858,6 +2912,133 @@ export async function parseAppointmentTimingWithLLM(args: {
   return {
     intent,
     explicitRequest: !!parsed.explicit_request,
+    requested: { day, timeText, timeWindow },
+    reference,
+    normalizedText: cleanOptionalString(parsed.normalized_text) ?? null,
+    confidence
+  };
+}
+
+export async function parseManualOutboundAppointmentWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lastSuggestedSlots?: { startLocal?: string | null }[];
+  appointment?: any;
+}): Promise<ManualOutboundAppointmentParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_MANUAL_OUTBOUND_APPOINTMENT_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_MANUAL_OUTBOUND_APPOINTMENT_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_MANUAL_OUTBOUND_APPOINTMENT_PARSER_MODEL ||
+    process.env.OPENAI_APPOINTMENT_TIMING_PARSER_MODEL ||
+    process.env.OPENAI_BOOKING_PARSER_MODEL ||
+    process.env.OPENAI_MODEL ||
+    "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_MANUAL_OUTBOUND_APPOINTMENT_PARSER_MODEL_FALLBACK ||
+    process.env.OPENAI_APPOINTMENT_TIMING_PARSER_MODEL_FALLBACK ||
+    process.env.OPENAI_BOOKING_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
+  const lastSlots = (args.lastSuggestedSlots ?? [])
+    .map(s => s.startLocal)
+    .filter(Boolean)
+    .slice(0, 4)
+    .join(" | ");
+  const apptStatus = args.appointment?.status ?? "none";
+
+  const examples = [
+    'input: "Staff: I will schedule an inspection for the 12th at noon for you" output: {"state":"confirmed_booking","explicit_state":true,"requested":{"day":"12th","time_text":"noon","time_window":"exact"},"reference":"none","normalized_text":"12th at noon","confidence":0.96}',
+    'input: "Staff: Hey Rafael, sorry, that would work ill schedule you in between 11-12 tomorrow" output: {"state":"confirmed_booking","explicit_state":true,"requested":{"day":"tomorrow","time_text":"between 11-12","time_window":"range"},"reference":"none","normalized_text":"tomorrow between 11-12","confidence":0.96}',
+    'input: "Staff: I will have you meet with Giovanni tomorrow around 4:30-5:00" output: {"state":"confirmed_booking","explicit_state":true,"requested":{"day":"tomorrow","time_text":"around 4:30-5:00","time_window":"range"},"reference":"none","normalized_text":"tomorrow around 4:30-5:00","confidence":0.96}',
+    'input: "Staff: Hey Jen, lets shoot for 9:30 if that works" output: {"state":"proposed_time","explicit_state":true,"requested":{"day":"","time_text":"9:30","time_window":"exact"},"reference":"none","normalized_text":"9:30 if that works","confidence":0.96}',
+    'input: "Staff: I’ll schedule you in at 9:30 if that works" output: {"state":"proposed_time","explicit_state":true,"requested":{"day":"","time_text":"9:30","time_window":"exact"},"reference":"none","normalized_text":"9:30 if that works","confidence":0.95}',
+    'input: "Staff: I have Thu, May 7, 9:30 AM or Thu, May 7, 11:30 AM — do either work?" output: {"state":"slot_offer","explicit_state":true,"requested":{"day":"Thu, May 7","time_text":"9:30 AM or 11:30 AM","time_window":"range"},"reference":"none","normalized_text":"Thu, May 7 9:30 AM or 11:30 AM","confidence":0.96}',
+    'input: "Staff: What time tomorrow are you thinking?" output: {"state":"asks_for_time","explicit_state":true,"requested":{"day":"tomorrow","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"tomorrow","confidence":0.95}',
+    'input: "Staff: We can reschedule that for next week" output: {"state":"reschedule_request","explicit_state":true,"requested":{"day":"next week","time_text":"","time_window":"unknown"},"reference":"last_appointment","normalized_text":"next week","confidence":0.92}',
+    'input: "Staff: That works!" output: {"state":"none","explicit_state":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.93}',
+    'input: "Staff: Can you call me?" output: {"state":"none","explicit_state":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.95}'
+  ];
+
+  const prompt = [
+    "You parse dealership staff-authored outbound appointment state.",
+    "Return only JSON matching the schema.",
+    "",
+    "State mapping:",
+    "- confirmed_booking: staff clearly says the customer is scheduled, booked, set, or will be scheduled for a concrete day/time.",
+    "- proposed_time: staff proposes a time but needs customer confirmation, especially phrases like 'if that works', 'would that work', 'let's shoot for'.",
+    "- asks_for_time: staff asks the customer what day/time works.",
+    "- slot_offer: staff offers one or more appointment slots and asks the customer to choose/confirm.",
+    "- reschedule_request: staff asks to change/move an already booked appointment.",
+    "- none: no appointment state should be changed.",
+    "",
+    "Rules:",
+    "- Do not mark proposed_time as confirmed_booking.",
+    "- 'if that works' means proposed_time unless the staff also says the customer already confirmed.",
+    "- 'That works' alone is not a booking confirmation because it lacks the appointment details.",
+    "- Keep time ranges like 11-12 or 4:30-5:00 as ranges.",
+    "- Do not classify phone calls, inventory, parts, service, or pricing replies as appointment state.",
+    "- Use empty strings for unknown requested.day and requested.time_text.",
+    "- confidence is 0 to 1.",
+    "",
+    `Appointment status: ${apptStatus}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    lastSlots ? `Last suggested slots: ${lastSlots}` : "Last suggested slots: (none)",
+    "Examples:",
+    ...examples,
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "manual_outbound_appointment_parser",
+      schema: MANUAL_OUTBOUND_APPOINTMENT_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 220,
+      debugTag: "llm-manual-outbound-appointment-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const rawState = String(parsed.state ?? "").toLowerCase();
+  const state: ManualOutboundAppointmentParse["state"] =
+    rawState === "confirmed_booking" ||
+    rawState === "proposed_time" ||
+    rawState === "asks_for_time" ||
+    rawState === "slot_offer" ||
+    rawState === "reschedule_request"
+      ? rawState
+      : "none";
+  const requested = parsed.requested && typeof parsed.requested === "object" ? parsed.requested : {};
+  const day = cleanOptionalString(requested?.day);
+  const timeText = cleanOptionalString(requested?.time_text);
+  const timeWindowRaw = String(requested?.time_window ?? "unknown").toLowerCase();
+  const timeWindow: "exact" | "range" | "unknown" =
+    timeWindowRaw === "exact" || timeWindowRaw === "range" ? timeWindowRaw : "unknown";
+  const referenceRaw = String(parsed.reference ?? "none").toLowerCase();
+  const reference: ManualOutboundAppointmentParse["reference"] =
+    referenceRaw === "last_suggested" || referenceRaw === "last_appointment" ? referenceRaw : "none";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    state,
+    explicitState: !!parsed.explicit_state,
     requested: { day, timeText, timeWindow },
     reference,
     normalizedText: cleanOptionalString(parsed.normalized_text) ?? null,

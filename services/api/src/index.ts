@@ -27,6 +27,7 @@ import {
   summarizeSalespersonNoteWithLLM,
   parseBookingIntentWithLLM,
   parseAppointmentTimingWithLLM,
+  parseManualOutboundAppointmentWithLLM,
   parseInventoryEntitiesWithLLM,
   parseInventoryStatusWithLLM,
   parseIntentWithLLM,
@@ -62,6 +63,7 @@ import type {
   InventoryEntityParse,
   InventoryStatusParse,
   JourneyIntentParse,
+  ManualOutboundAppointmentParse,
   SemanticSlotParse,
   UnifiedSemanticSlotParse,
   TradePayoffParse,
@@ -5144,6 +5146,21 @@ function isAppointmentTimingParserAccepted(parsed: AppointmentTimingParse | null
 }
 
 function appointmentTimingRequestedPhrase(parsed: AppointmentTimingParse | null): string {
+  const requested = parsed?.requested ?? {};
+  const day = String(requested.day ?? "").trim();
+  const time = String(requested.timeText ?? "").trim();
+  const normalized = String(parsed?.normalizedText ?? "").trim();
+  return normalized || [day, time].filter(Boolean).join(" ").trim();
+}
+
+function isManualOutboundAppointmentParserAccepted(parsed: ManualOutboundAppointmentParse | null): boolean {
+  if (!parsed || !parsed.explicitState || parsed.state === "none") return false;
+  const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_MANUAL_OUTBOUND_APPOINTMENT_CONFIDENCE_MIN ?? 0.72);
+  return confidence >= min;
+}
+
+function manualOutboundAppointmentRequestedPhrase(parsed: ManualOutboundAppointmentParse | null): string {
   const requested = parsed?.requested ?? {};
   const day = String(requested.day ?? "").trim();
   const time = String(requested.timeText ?? "").trim();
@@ -29983,26 +30000,78 @@ app.post("/conversations/:id/send", async (req, res) => {
       }
     }
 
-    const asksForTimeChoice =
-      /\b(what time|what day|which day|which time|works best|what works|do any of these times work|let me know what time)\b/i.test(
-        lower
-      );
-    if (asksForTimeChoice) return;
-
-    const hasCallCue =
-      /\b(call|phone|reach out|give you a call|service department|parts department|motorclothes|apparel)\b/i.test(
-        lower
-      );
-    if (hasCallCue) return;
-
-    const hasAppointmentContext =
+    const manualOutboundHasAppointmentContext =
       (conv.scheduler?.lastSuggestedSlots?.length ?? 0) > 0 ||
       String(conv.appointment?.status ?? "none").toLowerCase() !== "none" ||
       String(getDialogState(conv) ?? "")
         .toLowerCase()
         .startsWith("schedule");
+    const manualOutboundAppointmentParserHint =
+      manualOutboundHasAppointmentContext ||
+      /\b(schedule|scheduled|book|booked|appointment|appt|reschedule|re-?schedule|stop by|stop in|come in|meet with|see you|what time|what day|which time|which day|works best|let me know what time|do any of these times work|if that works|let'?s shoot|tomorrow|today|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun|morning|afternoon|evening|noon|\d{1,2}(?::\d{2})?\s*(?:am|pm)\b)\b/i.test(
+        text
+      );
+    const manualOutboundAppointmentParserEligible =
+      manualOutboundAppointmentParserHint &&
+      process.env.LLM_ENABLED === "1" &&
+      process.env.LLM_MANUAL_OUTBOUND_APPOINTMENT_PARSER_ENABLED !== "0" &&
+      !!process.env.OPENAI_API_KEY;
+    const manualOutboundAppointmentParse = manualOutboundAppointmentParserEligible
+      ? await safeLlmParse("manual_outbound_appointment_parser", () =>
+          parseManualOutboundAppointmentWithLLM({
+            text,
+            history: buildHistory(conv, 8),
+            lastSuggestedSlots: conv.scheduler?.lastSuggestedSlots,
+            appointment: conv.appointment
+          })
+        )
+      : null;
+    const manualOutboundAppointmentAccepted = isManualOutboundAppointmentParserAccepted(
+      manualOutboundAppointmentParse
+    );
+    const manualOutboundAppointmentState = manualOutboundAppointmentAccepted
+      ? manualOutboundAppointmentParse?.state
+      : null;
+    const parserConfirmedBooking = manualOutboundAppointmentState === "confirmed_booking";
+    const parserRescheduleCue = manualOutboundAppointmentState === "reschedule_request";
+    const parserProposedTime = manualOutboundAppointmentState === "proposed_time";
+    const parserOfferOnly =
+      manualOutboundAppointmentState === "asks_for_time" ||
+      manualOutboundAppointmentState === "slot_offer" ||
+      parserProposedTime;
+
+    if (process.env.LLM_MANUAL_OUTBOUND_APPOINTMENT_PARSER_DEBUG === "1" && manualOutboundAppointmentParse) {
+      console.log("[llm-manual-outbound-appointment-parse] live", manualOutboundAppointmentParse);
+    }
+
+    if (parserOfferOnly) {
+      recordRouteOutcome("live", "manual_outbound_schedule_offer_only", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        channel: opts?.channel ?? null,
+        source: "manual_outbound_appointment_parser",
+        state: manualOutboundAppointmentState,
+        confidence: manualOutboundAppointmentParse?.confidence ?? null
+      });
+      return;
+    }
+
+    const asksForTimeChoice =
+      /\b(what time|what day|which day|which time|works best|what works|do any of these times work|let me know what time)\b/i.test(
+        lower
+      );
+    if (asksForTimeChoice && !parserConfirmedBooking) return;
+
+    const hasCallCue =
+      /\b(call|phone|reach out|give you a call|service department|parts department|motorclothes|apparel)\b/i.test(
+        lower
+      );
+    if (hasCallCue && !parserConfirmedBooking && !parserRescheduleCue) return;
+
+    const hasAppointmentContext = manualOutboundHasAppointmentContext;
     const hasBookedEvent = String(conv.appointment?.bookedEventId ?? "").trim().length > 0;
     const explicitRescheduleCue =
+      parserRescheduleCue ||
       /\b(reschedule|re-?schedule|change (?:the )?time|move (?:it|me)?|another time|different time|push (?:it )?back|later time|earlier time)\b/i.test(
         lower
       );
@@ -30027,8 +30096,9 @@ app.post("/conversations/:id/send", async (req, res) => {
     const scheduleOfferOnly =
       (hasScheduleKeyword || hasDayToken || hasTimeToken) &&
       (asksScheduleQuestion || offersMultipleTimeChoices);
-    const explicitBookingStatement = isManualOutboundBookingConfirmationText(text);
-    const tentativeScheduleOffer = isManualOutboundTentativeScheduleOfferText(text);
+    const explicitBookingStatement = parserConfirmedBooking || isManualOutboundBookingConfirmationText(text);
+    const tentativeScheduleOffer =
+      parserProposedTime || isManualOutboundTentativeScheduleOfferText(text);
 
     // Manual outbound schedule offers/questions should not auto-confirm bookings.
     if ((scheduleOfferOnly || tentativeScheduleOffer) && !explicitBookingStatement) {
@@ -30120,14 +30190,18 @@ app.post("/conversations/:id/send", async (req, res) => {
       bookingConfidence >= bookingConfidenceMin &&
       (bookingParse.intent === "schedule" || bookingParse.intent === "reschedule");
 
+    const parserRequestedText = parserConfirmedBooking
+      ? manualOutboundAppointmentRequestedPhrase(manualOutboundAppointmentParse)
+      : "";
     const manualOutboundRequested = explicitBookingStatement
       ? parseRequestedDayTime(text, schedulerTimezone)
       : null;
     const normalizedText = String(
-      bookingParse?.normalizedText ??
+      parserRequestedText ||
+        (bookingParse?.normalizedText ??
         [String(bookingParse?.requested?.day ?? "").trim(), String(bookingParse?.requested?.timeText ?? "").trim()]
           .filter(Boolean)
-          .join(" ")
+          .join(" "))
     ).trim();
     const parseSource = manualOutboundRequested ? text : normalizedText || text;
 
