@@ -1,0 +1,78 @@
+[
+  {
+    "id": "spec_sheet_road_glide_1",
+    "text": "Can you send me the specs on that Road Glide?",
+    "expected": {
+      "intent": "specs",
+      "explicit_request": true,
+      "focus": "general",
+      "format": "full"
+    }
+  },
+  {
+    "id": "quick_highlights_1",
+    "text": "What are the quick highlights?",
+    "history": [
+      {
+        "direction": "out",
+        "body": "I can send the full spec sheet or a quick highlights list for the 2026 Road Glide."
+      }
+    ],
+    "expected": {
+      "intent": "specs",
+      "explicit_request": true,
+      "focus": "general",
+      "format": "highlights"
+    }
+  },
+  {
+    "id": "stereo_screen_features_1",
+    "text": "What does it have for stereo and screen?",
+    "expected": {
+      "intent": "specs",
+      "explicit_request": true,
+      "focus": "features",
+      "format": "unknown"
+    }
+  },
+  {
+    "id": "compare_models_1",
+    "text": "Can you compare the Road Glide and Street Glide?",
+    "expected": {
+      "intent": "compare",
+      "explicit_request": true,
+      "focus": "general",
+      "format": "unknown"
+    }
+  },
+  {
+    "id": "appointment_later_this_month_not_specs_1",
+    "text": "Thanks for info. And any appointments later this month same time.",
+    "expected": {
+      "intent": "none",
+      "explicit_request": true,
+      "focus": "unknown",
+      "format": "unknown"
+    }
+  },
+  {
+    "id": "availability_not_specs_1",
+    "text": "Do you have any Sportster or Nightster in stock?",
+    "expected": {
+      "intent": "none",
+      "explicit_request": true,
+      "focus": "unknown",
+      "format": "unknown"
+    }
+  },
+  {
+    "id": "schedule_time_not_specs_1",
+    "text": "Tuesday around 11am would work great",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false,
+      "focus": "unknown",
+      "format": "unknown"
+    }
+  }
+]

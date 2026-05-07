@@ -1404,6 +1404,14 @@ export type VehicleFactQuestionParse = {
   confidence?: number;
 };
 
+export type VehicleInfoRequestParse = {
+  intent: "specs" | "compare" | "none";
+  explicitRequest: boolean;
+  focus: "engine" | "features" | "dimensions" | "accessories" | "general" | "unknown";
+  format: "full" | "highlights" | "unknown";
+  confidence?: number;
+};
+
 export type EmpathySupportReplyParse = {
   reply: string;
   confidence?: number;
@@ -1801,6 +1809,28 @@ const DIALOG_ACT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     ask_focus: {
       type: "string",
       enum: ["model", "budget", "timing", "condition", "other", "none"]
+    },
+    confidence: { type: "number" }
+  }
+};
+
+const VEHICLE_INFO_REQUEST_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent", "explicit_request", "focus", "format", "confidence"],
+  properties: {
+    intent: {
+      type: "string",
+      enum: ["specs", "compare", "none"]
+    },
+    explicit_request: { type: "boolean" },
+    focus: {
+      type: "string",
+      enum: ["engine", "features", "dimensions", "accessories", "general", "unknown"]
+    },
+    format: {
+      type: "string",
+      enum: ["full", "highlights", "unknown"]
     },
     confidence: { type: "number" }
   }
@@ -2904,6 +2934,138 @@ export async function parseDialogActWithLLM(args: {
     explicitRequest: !!parsed.explicit_request,
     nextAction,
     askFocus,
+    confidence
+  };
+}
+
+export async function parseVehicleInfoRequestWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<VehicleInfoRequestParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_VEHICLE_INFO_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_VEHICLE_INFO_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_VEHICLE_INFO_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_VEHICLE_INFO_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const examples = [
+    `EXAMPLE A
+inbound: "Can you send me the specs on that Road Glide?"
+output: {"intent":"specs","explicit_request":true,"focus":"general","format":"full","confidence":0.97}`,
+    `EXAMPLE B
+inbound: "What are the quick highlights?"
+output: {"intent":"specs","explicit_request":true,"focus":"general","format":"highlights","confidence":0.95}`,
+    `EXAMPLE C
+inbound: "What does it have for stereo and screen?"
+output: {"intent":"specs","explicit_request":true,"focus":"features","format":"unknown","confidence":0.96}`,
+    `EXAMPLE D
+inbound: "How heavy is it and what is the seat height?"
+output: {"intent":"specs","explicit_request":true,"focus":"dimensions","format":"unknown","confidence":0.97}`,
+    `EXAMPLE E
+inbound: "Can you compare the Road Glide and Street Glide?"
+output: {"intent":"compare","explicit_request":true,"focus":"general","format":"unknown","confidence":0.97}`,
+    `EXAMPLE F
+inbound: "full spec sheets please"
+output: {"intent":"specs","explicit_request":true,"focus":"general","format":"full","confidence":0.94}`,
+    `EXAMPLE G
+inbound: "Thanks for info. Any appointments later this month same time."
+output: {"intent":"none","explicit_request":true,"focus":"unknown","format":"unknown","confidence":0.98}`,
+    `EXAMPLE H
+inbound: "Tuesday around 11am would work great"
+output: {"intent":"none","explicit_request":false,"focus":"unknown","format":"unknown","confidence":0.98}`,
+    `EXAMPLE I
+inbound: "Do you have any Sportster or Nightster in stock?"
+output: {"intent":"none","explicit_request":true,"focus":"unknown","format":"unknown","confidence":0.98}`
+  ];
+  const prompt = [
+    "You are a strict parser for customer requests for vehicle specs, feature info, or model comparisons.",
+    "Return only JSON matching the schema.",
+    "",
+    "Intent choices:",
+    "- specs: asks for specifications, spec sheet, details, features, highlights, engine/tech/dimensions/accessory info about a bike.",
+    "- compare: asks to compare two or more models/bikes, or asks difference/vs/versus.",
+    "- none: scheduling, availability/in-stock, pricing/payment, trade, callback, acknowledgement, or general conversation.",
+    "",
+    "Focus:",
+    "- engine: engine, power, torque, horsepower, displacement, transmission.",
+    "- features: tech, electronics, stereo, audio, infotainment, screen, navigation, safety, brakes, suspension.",
+    "- dimensions: weight, seat height, length, wheelbase, tank/fuel capacity.",
+    "- accessories: trim, finish, bars, grips, seat, add-ons, packages.",
+    "- general: broad specs/details/highlights without a narrower focus.",
+    "- unknown: use with intent none.",
+    "",
+    "Rules:",
+    "- The word 'info' by itself is not enough if the actual ask is appointments, scheduling, availability, pricing, or trade.",
+    "- Do not classify inventory availability questions as specs or compare.",
+    "- Do not classify appointment dates/times as specs.",
+    "- explicit_request=true only when the customer directly asks for information or a comparison.",
+    "- confidence is 0..1.",
+    "",
+    ...examples,
+    "",
+    `Known lead info: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null,
+      condition: lead?.vehicle?.condition ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "vehicle_info_request_parser",
+      schema: VEHICLE_INFO_REQUEST_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 160,
+      debugTag: "llm-vehicle-info-request-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const intentRaw = String(parsed.intent ?? "").toLowerCase();
+  const intent: VehicleInfoRequestParse["intent"] =
+    intentRaw === "specs" || intentRaw === "compare" ? intentRaw : "none";
+  const focusRaw = String(parsed.focus ?? "").toLowerCase();
+  const focus: VehicleInfoRequestParse["focus"] =
+    focusRaw === "engine" ||
+    focusRaw === "features" ||
+    focusRaw === "dimensions" ||
+    focusRaw === "accessories" ||
+    focusRaw === "general"
+      ? focusRaw
+      : "unknown";
+  const formatRaw = String(parsed.format ?? "").toLowerCase();
+  const format: VehicleInfoRequestParse["format"] =
+    formatRaw === "full" || formatRaw === "highlights" ? formatRaw : "unknown";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    intent,
+    explicitRequest: !!parsed.explicit_request,
+    focus,
+    format,
     confidence
   };
 }

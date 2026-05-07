@@ -32,6 +32,7 @@ import {
   parseRoutingDecisionWithLLM,
   parseAccessoryRequestWithLLM,
   parseVehicleFactQuestionWithLLM,
+  parseVehicleInfoRequestWithLLM,
   parseDealershipFaqTopicWithLLM,
   parseDialogActWithLLM,
   parseCustomerDispositionWithLLM,
@@ -61,6 +62,7 @@ import type {
   UnifiedSemanticSlotParse,
   TradePayoffParse,
   VehicleFactQuestionParse,
+  VehicleInfoRequestParse,
   DealershipFaqTopicParse,
   PurchaseDeliveryLogisticsParse
 } from "./domain/llmDraft.js";
@@ -4681,6 +4683,49 @@ function hasVehicleFactQuestionParserHint(text: string | null | undefined): bool
   );
 }
 
+type VehicleInfoRequestDecision = {
+  intent: Exclude<VehicleInfoRequestParse["intent"], "none">;
+  focus: Exclude<VehicleInfoRequestParse["focus"], "unknown">;
+  format: Exclude<VehicleInfoRequestParse["format"], "unknown"> | null;
+  confidence: number;
+  source: "parser";
+};
+
+function hasVehicleInfoRequestParserHint(text: string | null | undefined): boolean {
+  const lower = String(text ?? "").toLowerCase();
+  if (!lower.trim()) return false;
+  return /\b(specs?|spec sheet|details?|more info|information|tell me about|highlights?|features?|compare|comparison|vs\.?|versus|difference|engine|motor|horsepower|torque|displacement|transmission|stereo|audio|speakers?|screen|display|infotainment|navigation|weight|seat height|dimensions?|wheelbase|fuel capacity|tank size|trim|finish|package)\b/i.test(
+    lower
+  );
+}
+
+function isVehicleInfoRequestParserAccepted(parsed: VehicleInfoRequestParse | null): boolean {
+  if (!parsed || parsed.intent === "none" || !parsed.explicitRequest) return false;
+  const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_VEHICLE_INFO_CONFIDENCE_MIN ?? 0.74);
+  return confidence >= min;
+}
+
+function isVehicleInfoRequestParserConfidentNone(parsed: VehicleInfoRequestParse | null): boolean {
+  if (!parsed || parsed.intent !== "none") return false;
+  const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_VEHICLE_INFO_CONFIDENCE_MIN ?? 0.74);
+  return confidence >= min;
+}
+
+function resolveVehicleInfoRequestDecision(
+  parsed: VehicleInfoRequestParse | null
+): VehicleInfoRequestDecision | null {
+  if (!isVehicleInfoRequestParserAccepted(parsed) || !parsed || parsed.intent === "none") return null;
+  return {
+    intent: parsed.intent,
+    focus: parsed.focus === "unknown" ? "general" : parsed.focus,
+    format: parsed.format === "unknown" ? null : parsed.format,
+    confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0,
+    source: "parser"
+  };
+}
+
 function resolveVehicleFactQuestionDecision(
   text: string | null | undefined,
   parsed: VehicleFactQuestionParse | null
@@ -8329,6 +8374,141 @@ function isInfoOnlyRequest(text: string): boolean {
       t
     ) || hasSpecsSignal(t)
   );
+}
+
+function vehicleInfoFocusForSpecs(
+  focus: VehicleInfoRequestDecision["focus"]
+): "engine" | "features" | "dimensions" | "accessories" | null {
+  if (focus === "engine" || focus === "features" || focus === "dimensions" || focus === "accessories") {
+    return focus;
+  }
+  return null;
+}
+
+async function buildVehicleInfoRequestReply(args: {
+  conv: Conversation;
+  text: string | null | undefined;
+  decision: VehicleInfoRequestDecision;
+}): Promise<string> {
+  const textLower = String(args.text ?? "").toLowerCase();
+  const mentionedModels = findMentionedModels(textLower);
+  const yearFromText = extractYearSingle(textLower);
+  const baseModelRaw =
+    (!args.decision.intent || args.decision.intent === "specs" ? mentionedModels[0] : null) ??
+    args.conv.inventoryContext?.model ??
+    args.conv.lead?.vehicle?.model ??
+    args.conv.lead?.vehicle?.description ??
+    null;
+  const baseYearRaw = yearFromText ?? args.conv.inventoryContext?.year ?? args.conv.lead?.vehicle?.year ?? null;
+  const hasBaseModel = !!baseModelRaw && !/full line|other/i.test(String(baseModelRaw));
+  const baseLabel = hasBaseModel
+    ? formatModelLabel(baseYearRaw ? String(baseYearRaw) : null, baseModelRaw)
+    : "the bike";
+  const baseLabelWithThe = baseLabel === "the bike" ? baseLabel : `the ${baseLabel}`;
+
+  if (args.decision.intent === "compare") {
+    const compareModels = mentionedModels.length >= 2 ? mentionedModels.slice(0, 2) : args.conv.compareContext?.models ?? [];
+    if (compareModels.length >= 2) {
+      const primaryLabel = formatModelLabel(baseYearRaw ? String(baseYearRaw) : null, compareModels[0]);
+      const secondaryLabel = formatModelLabel(baseYearRaw ? String(baseYearRaw) : null, compareModels[1]);
+      if (args.decision.format) {
+        const wantsHighlights = args.decision.format === "highlights";
+        const maxItems = wantsHighlights ? 4 : 8;
+        const primarySpecs = await getModelSpecs({
+          model: compareModels[0],
+          year: baseYearRaw ? String(baseYearRaw) : null
+        });
+        const secondarySpecs = await getModelSpecs({
+          model: compareModels[1],
+          year: baseYearRaw ? String(baseYearRaw) : null
+        });
+        const lines: string[] = [];
+        if (primarySpecs?.specs && Object.keys(primarySpecs.specs).length) {
+          lines.push(
+            wantsHighlights
+              ? buildGlanceSummary(primaryLabel, primarySpecs.glance) ??
+                  buildSpecsSummary(primaryLabel, primarySpecs.specs, maxItems)
+              : buildSpecsSummary(primaryLabel, primarySpecs.specs, maxItems)
+          );
+        }
+        if (secondarySpecs?.specs && Object.keys(secondarySpecs.specs).length) {
+          lines.push(
+            wantsHighlights
+              ? buildGlanceSummary(secondaryLabel, secondarySpecs.glance) ??
+                  buildSpecsSummary(secondaryLabel, secondarySpecs.specs, maxItems)
+              : buildSpecsSummary(secondaryLabel, secondarySpecs.specs, maxItems)
+          );
+        }
+        if (lines.length) {
+          args.conv.compareContext = {
+            models: compareModels,
+            year: baseYearRaw ? String(baseYearRaw) : null,
+            format: args.decision.format,
+            updatedAt: nowIso()
+          };
+          setDialogState(args.conv, "compare_answered");
+          return lines.join("\n");
+        }
+      }
+      args.conv.compareContext = {
+        models: compareModels,
+        year: baseYearRaw ? String(baseYearRaw) : null,
+        format: args.decision.format,
+        updatedAt: nowIso()
+      };
+      setDialogState(args.conv, "compare_request");
+      return `Got it — I can compare the ${primaryLabel} and the ${secondaryLabel}. Do you want the full spec sheets or a quick highlights comparison?`;
+    }
+    setDialogState(args.conv, "compare_request");
+    return "Got it — happy to compare. Which two models should I compare?";
+  }
+
+  if (!hasBaseModel) {
+    setDialogState(args.conv, "specs_single_request");
+    return "Which model are you interested in?";
+  }
+
+  const focus = vehicleInfoFocusForSpecs(args.decision.focus);
+  const format = args.decision.format;
+  const wantsSummaryNow = !!format || !!focus;
+  args.conv.specsContext = {
+    model: String(baseModelRaw),
+    year: baseYearRaw ? String(baseYearRaw) : null,
+    format: format ?? args.conv.specsContext?.format ?? null,
+    updatedAt: nowIso()
+  };
+
+  if (!wantsSummaryNow) {
+    setDialogState(args.conv, "specs_single_request");
+    return `Got it — want the full spec sheet or a quick highlights list for ${baseLabelWithThe}? If you want specific areas like engine, features, or accessories, tell me what to focus on.`;
+  }
+
+  const specs = await getModelSpecs({
+    model: String(baseModelRaw),
+    year: baseYearRaw ? String(baseYearRaw) : null
+  });
+  if (specs?.specs && Object.keys(specs.specs).length) {
+    const wantsHighlights = format === "highlights";
+    const maxItems = wantsHighlights ? 6 : 10;
+    const wantsInfotainment = hasInfotainmentSignal(textLower);
+    const infotainmentSummary =
+      focus === "features" && wantsInfotainment
+        ? buildInfotainmentSummary(baseLabel, specs.specs)
+        : null;
+    const summary =
+      infotainmentSummary ??
+      (wantsHighlights && !focus
+        ? buildGlanceSummary(baseLabel, specs.glance) ??
+          buildFocusedSpecsSummary(baseLabel, specs.specs, focus, maxItems)
+        : buildFocusedSpecsSummary(baseLabel, specs.specs, focus, maxItems));
+    setDialogState(args.conv, "specs_single_answered");
+    return summary;
+  }
+
+  setDialogState(args.conv, "specs_single_request");
+  return format === "highlights"
+    ? `Got it — I’ll pull a quick highlights list for ${baseLabelWithThe} and text it over shortly.`
+    : `Got it — I’ll pull the full spec sheet for ${baseLabelWithThe} and text it over shortly.`;
 }
 
 function normalizedModelPhrasePresent(haystackNormalized: string, modelNormalized: string): boolean {
@@ -30541,6 +30721,35 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
   }
 
+  if (event.provider === "twilio" && hasVehicleInfoRequestParserHint(event.body ?? "")) {
+    const vehicleInfoParse = await safeLlmParse("regen_vehicle_info_request_parser", () =>
+      parseVehicleInfoRequestWithLLM({
+        text: event.body ?? "",
+        history: buildHistory(conv, 12),
+        lead: conv.lead
+      })
+    );
+    const vehicleInfoDecision = resolveVehicleInfoRequestDecision(vehicleInfoParse);
+    if (vehicleInfoDecision) {
+      const reply = await buildVehicleInfoRequestReply({
+        conv,
+        text: event.body ?? "",
+        decision: vehicleInfoDecision
+      });
+      recordRouteOutcome("regen", "vehicle_info_request", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        intent: vehicleInfoDecision.intent,
+        focus: vehicleInfoDecision.focus,
+        format: vehicleInfoDecision.format
+      });
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(reply);
+      }
+      return respondWithSmsRegeneratedDraft(reply);
+    }
+  }
+
   const regenInboundAtMs = new Date(event.receivedAt).getTime();
   const regenLastOutboundBeforeInbound = [...(conv.messages ?? [])]
     .filter(m => m.direction === "out" && m.body)
@@ -35623,6 +35832,21 @@ if (authToken && signature) {
         })
       )
     : Promise.resolve(null);
+  const vehicleInfoParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_VEHICLE_INFO_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    hasVehicleInfoRequestParserHint(event.body ?? "");
+  const vehicleInfoParsePromise = vehicleInfoParserEligible
+    ? safeLlmParse("vehicle_info_request_parser", () =>
+        parseVehicleInfoRequestWithLLM({
+          text: event.body,
+          history: recentHistory,
+          lead: conv.lead
+        })
+      )
+    : Promise.resolve(null);
   const pricingPaymentsParserEligible =
     event.provider === "twilio" &&
     process.env.LLM_ENABLED === "1" &&
@@ -35655,11 +35879,20 @@ if (authToken && signature) {
       )
     : Promise.resolve(null);
   const parserStageStartedAt = Date.now();
-  const [bookingParse, intentParse, dialogActParse, pricingPaymentsParse, routingDecisionParse, affectParse] =
+  const [
+    bookingParse,
+    intentParse,
+    dialogActParse,
+    vehicleInfoParse,
+    pricingPaymentsParse,
+    routingDecisionParse,
+    affectParse
+  ] =
     await Promise.all([
       bookingParsePromise,
       intentParsePromise,
       dialogActParsePromise,
+      vehicleInfoParsePromise,
       pricingPaymentsParsePromise,
       routingDecisionParsePromise,
       affectParsePromise
@@ -35692,6 +35925,11 @@ if (authToken && signature) {
   if (process.env.DEBUG_DIALOG_ACT_PARSER === "1" && dialogActParse) {
     console.log("[llm-dialog-act-parse]", dialogActParse);
   }
+  if (process.env.LLM_VEHICLE_INFO_PARSER_DEBUG === "1" && vehicleInfoParse) {
+    console.log("[llm-vehicle-info-parse]", vehicleInfoParse);
+  }
+  const vehicleInfoDecision = resolveVehicleInfoRequestDecision(vehicleInfoParse);
+  const vehicleInfoParserBlocksInfo = isVehicleInfoRequestParserConfidentNone(vehicleInfoParse);
   const dialogActConfidence =
     typeof dialogActParse?.confidence === "number" ? dialogActParse.confidence : 0;
   const dialogActConfidenceMin = Number(process.env.LLM_DIALOG_ACT_CONFIDENCE_MIN ?? 0.72);
@@ -38043,7 +38281,11 @@ if (authToken && signature) {
     ) &&
     !hasSpecsSignal(textLower);
   const incidentalInfoAcknowledgement = isIncidentalInfoAcknowledgementText(textLower);
-  const specsSignal = !finishPreferenceOnlyRaw && !incidentalInfoAcknowledgement && hasSpecsSignal(textLower);
+  const fallbackSpecsSignal =
+    !finishPreferenceOnlyRaw && !incidentalInfoAcknowledgement && hasSpecsSignal(textLower);
+  const specsSignal =
+    vehicleInfoDecision?.intent === "specs" ||
+    (!vehicleInfoParserBlocksInfo && fallbackSpecsSignal);
   const llmMediaIntent =
     semanticRoutingAccepted && semanticSlotParse?.mediaIntent ? semanticSlotParse.mediaIntent : "none";
   const photoRequested =
@@ -38249,7 +38491,9 @@ if (authToken && signature) {
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
-  const compareRequest = isCompareRequest(textLower);
+  const compareRequest =
+    vehicleInfoDecision?.intent === "compare" ||
+    (!vehicleInfoParserBlocksInfo && isCompareRequest(textLower));
   const llmInventoryInfoIntent =
     dialogActAccepted &&
     (dialogActParse?.topic === "new_inventory" || dialogActParse?.topic === "used_inventory");
@@ -38296,7 +38540,11 @@ if (authToken && signature) {
       !!conv.lead?.vehicle?.model ||
       !!conv.lead?.vehicle?.description);
   const infoOnlyRequest =
-    (llmInventoryInfoIntent || isInfoOnlyRequest(textLower) || specsSignal || isCompare) &&
+    (!!vehicleInfoDecision ||
+      llmInventoryInfoIntent ||
+      (!vehicleInfoParserBlocksInfo && isInfoOnlyRequest(textLower)) ||
+      specsSignal ||
+      isCompare) &&
     !skipInfoOnly &&
     !incidentalInfoAcknowledgement &&
     !schedulingPrimaryIntent;
@@ -38565,14 +38813,19 @@ if (authToken && signature) {
       ? formatModelLabel(baseYearForLabel ? String(baseYearForLabel) : null, baseModelForLabel)
       : "the bike";
     const baseLabelWithThe = baseLabel === "the bike" ? baseLabel : `the ${baseLabel}`;
-    const specsFocus = extractSpecsFocus(textLower);
-    const specsFormatChoice = /\b(highlights?|highlight comparison|quick highlights?|quick highlight|quick spec)\b/i.test(
-      textLower
-    )
-      ? "highlights"
-      : /\b(full specs?|full spec|spec sheet|specs?)\b/i.test(textLower)
-        ? "full"
-        : null;
+    const specsFocus =
+      vehicleInfoDecision?.intent === "specs"
+        ? vehicleInfoFocusForSpecs(vehicleInfoDecision.focus)
+        : extractSpecsFocus(textLower);
+    const specsFormatChoice =
+      vehicleInfoDecision?.format ??
+      (/\b(highlights?|highlight comparison|quick highlights?|quick highlight|quick spec)\b/i.test(
+        textLower
+      )
+        ? "highlights"
+        : /\b(full specs?|full spec|spec sheet|specs?)\b/i.test(textLower)
+          ? "full"
+          : null);
     const wantsEverything = /\b(all (the )?details|everything|all (the )?info|all specs?|full details|everything on the page)\b/i.test(
       textLower
     );
