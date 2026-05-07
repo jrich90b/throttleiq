@@ -1461,6 +1461,24 @@ export type InventoryEntityParse = {
   confidence?: number;
 };
 
+function isIncomingInventoryFaqQuestion(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "").toLowerCase();
+  if (!text.trim()) return false;
+  if (/\b(?:i'?m|i am|i’ll|i will|we'?re|we are)\s+coming in\b/.test(text)) return false;
+  if (/\b(?:in stock|currently available|available right now|on the floor|have one now)\b/.test(text)) return false;
+  return (
+    /\b(?:do you|do u|you guys|are you|will you|can you)\b[\s\S]{0,100}\b(?:have|get|gettin'?g|receive|order)\b[\s\S]{0,100}\b(?:coming in|incoming|inbound|on order|arriv(?:e|es|ing))\b/.test(
+      text
+    ) ||
+    /\b(?:do you|do u|you guys|are you|will you|can you)\b[\s\S]{0,100}\b(?:coming in|incoming|inbound|on order|arriv(?:e|es|ing))\b/.test(
+      text
+    ) ||
+    /\b(?:any|any more|anything|models?|bikes?|units?)\b[\s\S]{0,80}\b(?:coming in|incoming|inbound|on order|arriv(?:e|es|ing))\b/.test(
+      text
+    )
+  );
+}
+
 export type WalkInOutcomeParse = {
   state:
     | "none"
@@ -4202,6 +4220,12 @@ output: {"topic":"factory_order_timing","explicit_request":true,"confidence":0.9
     `EXAMPLE E3
 inbound: "Do you have any Street Bob coming in?"
 output: {"topic":"factory_order_timing","explicit_request":true,"confidence":0.96}`,
+    `EXAMPLE E4
+inbound: "Hi! Do you have any Street Bob coming in."
+output: {"topic":"factory_order_timing","explicit_request":true,"confidence":0.96}`,
+    `EXAMPLE E5
+inbound: "Are you getting any Heritage Classics in brilliant red?"
+output: {"topic":"factory_order_timing","explicit_request":true,"confidence":0.96}`,
     `EXAMPLE F
 inbound: "Can I finance through the dealership?"
 output: {"topic":"finance_approval","explicit_request":true,"confidence":0.97}`,
@@ -4249,7 +4273,7 @@ output: {"topic":"none","explicit_request":true,"confidence":0.99}`
     "- fees_out_the_door: asks about fees/OTD/tax/docs/freight/setup.",
     "- model_availability: asks what models are available right now.",
     "- custom_order: asks about custom/factory ordering.",
-    "- factory_order_timing: asks how long factory order takes.",
+    "- factory_order_timing: asks how long factory order takes OR asks whether a model/unit is coming in, incoming, inbound, on order, arriving, or whether the dealer is getting one.",
     "- finance_approval: asks if financing is available.",
     "- credit_score: asks what credit score is needed.",
     "- finance_specials: asks about APR promotions/deals/specials.",
@@ -4270,6 +4294,7 @@ output: {"topic":"none","explicit_request":true,"confidence":0.99}`
     "",
     "Rules:",
     "- If message is a transactional request (specific availability, exact payment calc, scheduling), choose none.",
+    "- Current in-stock availability (for example \"in stock right now\") is none; future/incoming availability (for example \"coming in\", \"getting any\", \"on order\") is factory_order_timing.",
     "- explicit_request=true only when user clearly asks a question/request.",
     "- confidence is 0..1.",
     "",
@@ -4301,7 +4326,10 @@ output: {"topic":"none","explicit_request":true,"confidence":0.99}`
     (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
   if (!parsed) return null;
 
-  const topicRaw = String(parsed.topic ?? "").toLowerCase();
+  let topicRaw = String(parsed.topic ?? "").toLowerCase();
+  if (topicRaw === "none" && isIncomingInventoryFaqQuestion(text)) {
+    topicRaw = "factory_order_timing";
+  }
   const topic: DealershipFaqTopicParse["topic"] =
     topicRaw === "pricing_cost_range" ||
     topicRaw === "price_negotiation" ||
