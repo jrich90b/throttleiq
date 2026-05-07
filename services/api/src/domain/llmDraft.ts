@@ -1057,8 +1057,181 @@ export async function classifyCadenceContextWithLLM(args: {
   }
 }
 
+const CADENCE_REGENERATE_CONTEXT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["state", "allow_generic_cadence", "reason", "confidence"],
+  properties: {
+    state: {
+      type: "string",
+      enum: [
+        "active_test_ride",
+        "held_inventory_update",
+        "sold_inventory_update",
+        "purchase_delivery",
+        "trade_appraisal",
+        "watch_active",
+        "soft_exit",
+        "no_response_needed",
+        "generic_followup"
+      ]
+    },
+    allow_generic_cadence: { type: "boolean" },
+    reason: { type: "string" },
+    confidence: { type: "number" }
+  }
+};
+
+export async function parseCadenceRegenerateContextWithLLM(args: {
+  selectedInboundText?: string | null;
+  lastDraftText?: string | null;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+  dialogState?: string | null;
+  followUpMode?: string | null;
+  followUpReason?: string | null;
+  hasInventoryWatch?: boolean;
+  hasAppointment?: boolean;
+}): Promise<CadenceRegenerateContextParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_CADENCE_REGENERATE_CONTEXT_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_CADENCE_REGENERATE_CONTEXT_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_CADENCE_REGENERATE_CONTEXT_PARSER_MODEL ||
+    process.env.OPENAI_CONVERSATION_STATE_PARSER_MODEL ||
+    process.env.OPENAI_MODEL ||
+    "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_CADENCE_REGENERATE_CONTEXT_PARSER_MODEL_FALLBACK ||
+    process.env.OPENAI_CONVERSATION_STATE_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+
+  const selectedInboundText = String(args.selectedInboundText ?? "").trim();
+  const lastDraftText = String(args.lastDraftText ?? "").trim();
+  const history = (args.history ?? []).slice(-10).map(h => `${h.direction}: ${h.body}`);
+  if (!selectedInboundText && !lastDraftText && !history.length) return null;
+
+  const lead = args.lead ?? {};
+  const examples = [
+    'selected_inbound: "Customer Comments: Preferred method of contact - email-" last_draft: "Hey James, checking back about the CVO Road Glide ST. If helpful, I can send a simple compare and next-step options." context: "bike on hold" output: {"state":"held_inventory_update","allow_generic_cadence":false,"reason":"requested unit appears unavailable; do not use generic check-in","confidence":0.94}',
+    'selected_inbound: "1-2 o clock ish" history: "out: What time works for you today? in: loans finalized" output: {"state":"purchase_delivery","allow_generic_cadence":false,"reason":"pickup/delivery timing, not a generic follow-up","confidence":0.95}',
+    'selected_inbound: "Ok no problem" history: "out: Just let me know when you have a better idea of time" output: {"state":"no_response_needed","allow_generic_cadence":false,"reason":"short acknowledgement after staff reply","confidence":0.92}',
+    'selected_inbound: "I thought I was signing up for a demo day" last_draft: "Hey Joe, good news, a Road Glide came in" output: {"state":"active_test_ride","allow_generic_cadence":false,"reason":"test ride/demo day topic should route through scheduling or demo-day handling","confidence":0.93}',
+    'selected_inbound: "Can you get me numbers on the orange ST" last_draft: "Hey Gary, just checking in on the 2025 CVO Road Glide ST" output: {"state":"held_inventory_update","allow_generic_cadence":false,"reason":"specific inventory/pricing target, not generic cadence","confidence":0.9}',
+    'selected_inbound: "I am not ready right now, maybe later" last_draft: "Just checking in" output: {"state":"soft_exit","allow_generic_cadence":false,"reason":"customer is stepping back","confidence":0.9}',
+    'selected_inbound: "Do you have any Street Bob coming in?" last_draft: "I’ll check on the status of the Street Bob" output: {"state":"watch_active","allow_generic_cadence":false,"reason":"inventory watch/factory timing state should not use generic cadence","confidence":0.9}',
+    'selected_inbound: "trade-in appraisal request" last_draft: "Just checking in on your trade-in estimate" output: {"state":"trade_appraisal","allow_generic_cadence":false,"reason":"trade appraisal flow should use trade follow-up","confidence":0.9}',
+    'selected_inbound: "WEB LEAD (ADF) Customer Comments: Preferred method of contact - email-" last_draft: "Hey Sally, checking back. If helpful, I can send options." output: {"state":"generic_followup","allow_generic_cadence":true,"reason":"no newer actionable state visible","confidence":0.86}'
+  ];
+
+  const prompt = [
+    "You are a safety parser for dealership cadence draft regeneration.",
+    "Return only JSON matching the schema.",
+    "",
+    "Goal: decide whether it is safe to regenerate a generic follow-up cadence draft, or whether a specific state should block generic cadence and let routing handle the selected inbound.",
+    "",
+    "States:",
+    "- active_test_ride: test ride/demo day/scheduling context needs appointment/test-ride handling.",
+    "- held_inventory_update: customer or draft targets a specific bike that is on hold/unavailable or mentions hold/sold risk.",
+    "- sold_inventory_update: customer or draft targets a specific bike that sold/no longer available.",
+    "- purchase_delivery: loan, bank, certified check, insurance, title, pickup/delivery arrival, taking bike home.",
+    "- trade_appraisal: trade-in, appraisal, bring trade, sell bike, cash offer.",
+    "- watch_active: keep an eye out / incoming inventory / factory/order timing / watch state.",
+    "- soft_exit: customer is stepping back, not ready, later, no pressure.",
+    "- no_response_needed: short acknowledgement/signoff with no useful reply needed.",
+    "- generic_followup: only when no specific state applies and a generic check-in is safe.",
+    "",
+    "Rules:",
+    "- allow_generic_cadence must be false for every state except generic_followup.",
+    "- If there is purchase/delivery timing, choose purchase_delivery even if the original lead was trade/appraisal.",
+    "- If the customer asks a concrete question or gives a concrete timing/status update, do not choose generic_followup.",
+    "- If uncertain, choose the specific state when there is clear evidence; otherwise generic_followup with lower confidence.",
+    "- confidence is 0..1.",
+    "",
+    `Lead: ${JSON.stringify({
+      source: lead?.source ?? null,
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null,
+      stockId: lead?.vehicle?.stockId ?? null
+    })}`,
+    `Dialog state: ${args.dialogState ?? "none"}`,
+    `Follow-up mode: ${args.followUpMode ?? "none"}`,
+    `Follow-up reason: ${args.followUpReason ?? "none"}`,
+    `Has inventory watch: ${args.hasInventoryWatch ? "yes" : "no"}`,
+    `Has appointment: ${args.hasAppointment ? "yes" : "no"}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Selected inbound: ${selectedInboundText || "(none)"}`,
+    `Last draft: ${lastDraftText || "(none)"}`,
+    "Examples:",
+    ...examples
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "cadence_regenerate_context_parser",
+      schema: CADENCE_REGENERATE_CONTEXT_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 160,
+      debugTag: "llm-cadence-regenerate-context-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const rawState = String(parsed.state ?? "").toLowerCase();
+  const state: CadenceRegenerateContextParse["state"] =
+    rawState === "active_test_ride" ||
+    rawState === "held_inventory_update" ||
+    rawState === "sold_inventory_update" ||
+    rawState === "purchase_delivery" ||
+    rawState === "trade_appraisal" ||
+    rawState === "watch_active" ||
+    rawState === "soft_exit" ||
+    rawState === "no_response_needed"
+      ? rawState
+      : "generic_followup";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    state,
+    allowGenericCadence: state === "generic_followup" ? !!parsed.allow_generic_cadence : false,
+    reason: cleanOptionalString(parsed.reason),
+    confidence
+  };
+}
+
 export type CadencePersonalizationParse = {
   line: string;
+  confidence?: number;
+};
+
+export type CadenceRegenerateContextState =
+  | "active_test_ride"
+  | "held_inventory_update"
+  | "sold_inventory_update"
+  | "purchase_delivery"
+  | "trade_appraisal"
+  | "watch_active"
+  | "soft_exit"
+  | "no_response_needed"
+  | "generic_followup";
+
+export type CadenceRegenerateContextParse = {
+  state: CadenceRegenerateContextState;
+  allowGenericCadence: boolean;
+  reason?: string | null;
   confidence?: number;
 };
 

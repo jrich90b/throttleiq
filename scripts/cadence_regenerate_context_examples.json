@@ -1,0 +1,97 @@
+[
+  {
+    "id": "held_inventory_blocks_generic_1",
+    "selectedInboundText": "WEB LEAD (ADF)\nInquiry:\nCustomer Comments: Preferred method of contact - email-",
+    "lastDraftText": "Hey James, checking back about the CVO Road Glide ST. If helpful, I can send a simple compare and next-step options.",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Hey James, thanks for your test ride inquiry. We actually put a hold on the CVO Road Glide."
+      }
+    ],
+    "expected": {
+      "state": "held_inventory_update",
+      "allow_generic_cadence": false
+    }
+  },
+  {
+    "id": "purchase_delivery_timing_blocks_generic_1",
+    "selectedInboundText": "1-2 o'clock ish",
+    "lastDraftText": "I can set up a trade appraisal. I have Thu, May 7, 4:00 PM or Fri, May 8, 2:30 PM — do any of these times work?",
+    "history": [
+      {
+        "direction": "in",
+        "body": "Loans finalized just need to send them insurance paperwork"
+      },
+      {
+        "direction": "out",
+        "body": "Thanks for sending that over John, I will get rolling on everything. What time works for you today?"
+      }
+    ],
+    "expected": {
+      "state": "purchase_delivery",
+      "allow_generic_cadence": false
+    }
+  },
+  {
+    "id": "demo_day_blocks_generic_1",
+    "selectedInboundText": "I thought I was signing up for a demo day like Kawasaki does",
+    "lastDraftText": "Hey Joe, good news — we just got 2026 Harley-Davidson Road Glide in stock. Want details or a time to check it out?",
+    "history": [
+      {
+        "direction": "out",
+        "body": "If the test ride for the Road Glide Limited is still on your list, I can help get it set up."
+      }
+    ],
+    "expected": {
+      "state": "active_test_ride",
+      "allow_generic_cadence": false
+    }
+  },
+  {
+    "id": "watch_active_blocks_generic_1",
+    "selectedInboundText": "Do you have any Street Bob coming in?",
+    "lastDraftText": "Hey Jen, just checking in on the 2022 Forty-Eight.",
+    "history": [
+      {
+        "direction": "out",
+        "body": "I’ll check on the status of the Street Bob and follow up with you."
+      }
+    ],
+    "hasInventoryWatch": true,
+    "expected": {
+      "state": "watch_active",
+      "allow_generic_cadence": false
+    }
+  },
+  {
+    "id": "short_ack_no_response_1",
+    "selectedInboundText": "Ok no problem",
+    "lastDraftText": "Awesome, glad that works for you!",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Just let me know when you have a better idea of time so I can have everything lined up."
+      }
+    ],
+    "expected": {
+      "state": "no_response_needed",
+      "allow_generic_cadence": false
+    }
+  },
+  {
+    "id": "safe_generic_followup_1",
+    "selectedInboundText": "WEB LEAD (ADF)\nInquiry:\nCustomer Comments: Preferred method of contact - email-",
+    "lastDraftText": "Hey Sally, checking back. If helpful, I can send a simple compare and next-step options.",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Hey Sally, happy to send a short list. Are you leaning Touring, Cruiser, Sport, Adventure Touring, or Trike?"
+      }
+    ],
+    "expected": {
+      "state": "generic_followup",
+      "allow_generic_cadence": true
+    }
+  }
+]

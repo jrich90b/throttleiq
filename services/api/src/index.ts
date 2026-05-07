@@ -21,6 +21,7 @@ import {
   generateEmpathySupportReplyWithLLM,
   generateWebFallbackReplyWithLLM,
   classifyCadenceContextWithLLM,
+  parseCadenceRegenerateContextWithLLM,
   classifyEmpathyNeedWithLLM,
   classifyComplimentWithLLM,
   parseAffectWithLLM,
@@ -55,6 +56,7 @@ import {
 import type {
   AffectParse,
   AccessoryRequestParse,
+  CadenceRegenerateContextParse,
   AppointmentTimingParse,
   ConversationStateParse,
   CustomerDispositionParse,
@@ -5142,6 +5144,13 @@ function isAppointmentTimingParserAccepted(parsed: AppointmentTimingParse | null
   if (!parsed || parsed.intent === "none") return false;
   const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
   const min = Number(process.env.LLM_APPOINTMENT_TIMING_CONFIDENCE_MIN ?? 0.72);
+  return confidence >= min;
+}
+
+function isCadenceRegenerateContextParserAccepted(parsed: CadenceRegenerateContextParse | null): boolean {
+  if (!parsed) return false;
+  const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_CADENCE_REGENERATE_CONTEXT_CONFIDENCE_MIN ?? 0.74);
   return confidence >= min;
 }
 
@@ -31155,6 +31164,45 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return respondWithSmsRegeneratedDraft(reply);
   }
 
+  const cadenceRegenContextParserEligible =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_CADENCE_REGENERATE_CONTEXT_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    !!lastDraft?.body &&
+    !!conv?.followUpCadence;
+  const cadenceRegenContextParse = cadenceRegenContextParserEligible
+    ? await safeLlmParse("cadence_regenerate_context_parser", () =>
+        parseCadenceRegenerateContextWithLLM({
+          selectedInboundText: event.body ?? "",
+          lastDraftText: lastDraft?.body ?? "",
+          history: buildHistory(conv, 12),
+          lead: conv.lead,
+          dialogState: getDialogState(conv),
+          followUpMode: conv.followUp?.mode ?? null,
+          followUpReason: conv.followUp?.reason ?? null,
+          hasInventoryWatch:
+            !!conv.inventoryWatch ||
+            (Array.isArray(conv.inventoryWatches) && conv.inventoryWatches.length > 0),
+          hasAppointment: !!conv.appointment?.whenIso || !!conv.appointment?.bookedEventId
+        })
+      )
+    : null;
+  const cadenceRegenContextAccepted = isCadenceRegenerateContextParserAccepted(cadenceRegenContextParse);
+  const cadenceRegenBlocksGeneric =
+    cadenceRegenContextAccepted && cadenceRegenContextParse?.allowGenericCadence === false;
+  if (process.env.LLM_CADENCE_REGENERATE_CONTEXT_PARSER_DEBUG === "1" && cadenceRegenContextParse) {
+    console.log("[llm-cadence-regenerate-context-parse] regen", cadenceRegenContextParse);
+  }
+  if (cadenceRegenContextAccepted && cadenceRegenContextParse?.state === "no_response_needed") {
+    logRegenDecisionTrace("cadence.regenerate_context_parser", {
+      state: cadenceRegenContextParse.state,
+      allowGenericCadence: cadenceRegenContextParse.allowGenericCadence,
+      confidence: cadenceRegenContextParse.confidence ?? null,
+      reason: cadenceRegenContextParse.reason ?? null
+    });
+    return respondRegenerateSkipped("cadence_regenerate_no_response_needed");
+  }
+
   const dealerProfile = await getDealerProfileHot();
   const cadenceRegeneratedDraft = await buildCadenceRegeneratedDraft(conv, dealerProfile, lastDraft);
   const cadenceLastSentAtMs = new Date(String(conv?.followUpCadence?.lastSentAt ?? "")).getTime();
@@ -31179,6 +31227,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     !!event.mediaUrls?.length && hasAvailabilityQuestionText(event.body ?? "");
   const regenerateMediaProofUpdate = shouldAcknowledgeInboundMediaProof(conv, event);
   const skipCadenceContextualRegenerate =
+    cadenceRegenBlocksGeneric ||
     (event.provider === "sendgrid_adf" && !regenerateFromCadenceDraft) ||
     regenerateMediaAvailabilityQuestion ||
     regenerateMediaProofUpdate ||
@@ -31186,6 +31235,16 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     channel === "sms" &&
     isRegenerateInboundActionableForRouting(event.body ?? "") &&
       !regenerateFromCadenceDraft);
+  if (cadenceRegenContextAccepted) {
+    logRegenDecisionTrace("cadence.regenerate_context_parser", {
+      state: cadenceRegenContextParse?.state ?? null,
+      allowGenericCadence: cadenceRegenContextParse?.allowGenericCadence ?? null,
+      blocksGeneric: cadenceRegenBlocksGeneric,
+      confidence: cadenceRegenContextParse?.confidence ?? null,
+      reason: cadenceRegenContextParse?.reason ?? null,
+      regenerateFromCadenceDraft
+    });
+  }
   if (cadenceRegeneratedDraft?.body && !skipCadenceContextualRegenerate) {
     recordRouteOutcome("regen", "cadence_contextual_regenerated", {
       convId: conv.id,
