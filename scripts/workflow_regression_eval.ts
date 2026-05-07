@@ -83,6 +83,16 @@ const cases: Case[] = [
     expected: true
   },
   {
+    id: "manual_outbound_tentative_booking_text_does_not_confirm",
+    actual: isManualOutboundBookingConfirmationText("I'll schedule you in at 9:30 if that works"),
+    expected: false
+  },
+  {
+    id: "manual_outbound_schedule_you_in_between_window_confirms",
+    actual: isManualOutboundBookingConfirmationText("Hey Rafael, sorry, that would work ill schedule you in between 11-12 tomorrow"),
+    expected: true
+  },
+  {
     id: "available_to_chat_now_routes_as_callback_fallback",
     actual: isImmediateChatCallbackAvailabilityText(
       "Hi Joe, I'm available to chat right now if that works for you."
@@ -146,6 +156,14 @@ const cases: Case[] = [
     id: "slash_time_window_day_time_parsed",
     actual: (() => {
       const parsed = parseRequestedDayTime("tomorrow around 11/12 would work best for me", "America/New_York");
+      return !!parsed && parsed.dayOfWeek === "friday" && parsed.hour24 === 11 && parsed.minute === 0;
+    })(),
+    expected: true
+  },
+  {
+    id: "dash_time_window_day_time_parsed",
+    actual: (() => {
+      const parsed = parseRequestedDayTime("ill schedule you in between 11-12 tomorrow", "America/New_York");
       return !!parsed && parsed.dayOfWeek === "friday" && parsed.hour24 === 11 && parsed.minute === 0;
     })(),
     expected: true

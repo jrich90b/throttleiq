@@ -3308,21 +3308,23 @@ export function parseRequestedDayTime(
 ): { year: number; month: number; day: number; hour24: number; minute: number; dayOfWeek: string } | null {
   const t = text.toLowerCase();
   const dayToken = parseDayToken(t);
-  const slashTimeRange =
+  const timeRange =
     dayToken
-      ? t.match(/\b(?:at|for|around|by|close\s+to|near|between)\s*(\d{1,2})\s*\/\s*(\d{1,2})(?:\s*(am|pm))?\b/)
+      ? t.match(
+          /\b(?:at|for|around|by|close\s+to|near|between)\s*(\d{1,2})(?::\d{2})?\s*(?:\/|-|to)\s*(\d{1,2})(?::\d{2})?(?:\s*(am|pm))?\b/
+        )
       : null;
-  const explicitDate = slashTimeRange ? null : (parseExplicitDate(t) ?? parseOrdinalDateInCurrentWindow(t, timeZone));
+  const explicitDate = timeRange ? null : (parseExplicitDate(t) ?? parseOrdinalDateInCurrentWindow(t, timeZone));
   let time = parseExactTime(t);
-  if (!time && slashTimeRange) {
-    const hourRaw = Number(slashTimeRange[1]);
-    const meridiem = slashTimeRange[3];
+  if (!time && timeRange) {
+    const hourRaw = Number(timeRange[1]);
+    const meridiem = timeRange[3];
     if (hourRaw >= 1 && hourRaw <= 12) {
       let hour24 = hourRaw;
       if (meridiem === "am") hour24 = hourRaw === 12 ? 0 : hourRaw;
       else if (meridiem === "pm") hour24 = hourRaw === 12 ? 12 : hourRaw + 12;
       else if (hourRaw !== 12) hour24 = hourRaw <= 7 ? hourRaw + 12 : hourRaw;
-      time = { hour24, minute: 0, timeText: slashTimeRange[0] };
+      time = { hour24, minute: 0, timeText: timeRange[0] };
     }
   }
   if (!time && dayToken && !explicitDate) {

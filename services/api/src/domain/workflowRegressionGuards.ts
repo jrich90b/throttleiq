@@ -3,13 +3,14 @@ export type RequestedScheduleWindowMode = "after" | "before" | "any_time" | "win
 export function isManualOutboundBookingConfirmationText(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "").toLowerCase();
   if (!text.trim()) return false;
+  if (isManualOutboundTentativeScheduleOfferText(text)) return false;
   return (
     /\b(you(?:'|’)re|you are)\s+(all set|booked|confirmed)\b/i.test(text) ||
     /\b(booked for|confirmed for|appointment(?: is)? set|see you then|locked in)\b/i.test(text) ||
-    /\b(?:i|we)\s*(?:'|’)?ll\s+(?:schedule|book|set(?:\s+up)?)\b[\s\S]{0,80}\b(?:for|on|at)\b/i.test(
+    /\b(?:i|we)\s*(?:'|’)?ll\s+(?:schedule|book|set(?:\s+up)?)\b[\s\S]{0,80}\b(?:for|on|at|in|between|from)\b/i.test(
       text
     ) ||
-    /\b(?:i|we)\s+will\s+(?:schedule|book|set(?:\s+up)?)\b[\s\S]{0,80}\b(?:for|on|at)\b/i.test(
+    /\b(?:i|we)\s+will\s+(?:schedule|book|set(?:\s+up)?)\b[\s\S]{0,80}\b(?:for|on|at|in|between|from)\b/i.test(
       text
     ) ||
     /\b(?:i|we)\s+will\s+have\s+you\s+meet\b[\s\S]{0,120}\b(?:today|tomorrow|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun)\b/i.test(
