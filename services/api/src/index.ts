@@ -32815,9 +32815,11 @@ if (authToken && signature) {
           ? humanModeSemanticSlotParse.confidence
           : 0;
       const humanModeSemanticConfidenceMin = Number(process.env.LLM_SEMANTIC_SLOT_CONFIDENCE_MIN ?? 0.76);
-      const humanModeSemanticAccepted =
+      const humanModeSemanticConfident =
         !!humanModeSemanticSlotParse &&
-        humanModeSemanticConfidence >= humanModeSemanticConfidenceMin &&
+        humanModeSemanticConfidence >= humanModeSemanticConfidenceMin;
+      const humanModeSemanticAccepted =
+        humanModeSemanticConfident &&
         (humanModeSemanticSlotParse.watchAction !== "none" ||
           !!humanModeSemanticSlotParse.watch?.model ||
           !!humanModeSemanticSlotParse.watch?.year ||
@@ -32828,7 +32830,8 @@ if (authToken && signature) {
       const humanModeWatch = humanModeSemanticAccepted ? humanModeSemanticSlotParse.watch : null;
       const humanModeWatchIntent =
         !humanModeDemoDayQuestion &&
-        (humanModeWatchAction === "set_watch" || isWatchConfirmationIntentText(humanModeText));
+        (humanModeWatchAction === "set_watch" ||
+          (!humanModeSemanticConfident && isWatchConfirmationIntentText(humanModeText)));
       if (humanModeWatchIntent) {
         const humanModeInventoryEntityParserEligible =
           event.provider === "twilio" &&
@@ -33201,20 +33204,23 @@ if (authToken && signature) {
   const semanticSlotConfidence =
     typeof semanticSlotParse?.confidence === "number" ? semanticSlotParse.confidence : 0;
   const semanticSlotConfidenceMin = Number(process.env.LLM_SEMANTIC_SLOT_CONFIDENCE_MIN ?? 0.76);
+  const semanticSlotConfident =
+    !!semanticSlotParse && semanticSlotConfidence >= semanticSlotConfidenceMin;
   const semanticSlotAccepted =
-    !!semanticSlotParse &&
-    semanticSlotConfidence >= semanticSlotConfidenceMin &&
-    (semanticSlotParse.watchAction !== "none" ||
-      semanticSlotParse.departmentIntent !== "none" ||
-      !!semanticSlotParse.watch?.model ||
-      !!semanticSlotParse.watch?.year ||
-      !!semanticSlotParse.watch?.color ||
-      (!!semanticSlotParse.watch?.condition && semanticSlotParse.watch.condition !== "unknown"));
+    semanticSlotConfident &&
+    (semanticSlotParse?.watchAction !== "none" ||
+      semanticSlotParse?.departmentIntent !== "none" ||
+      !!semanticSlotParse?.watch?.model ||
+      !!semanticSlotParse?.watch?.year ||
+      !!semanticSlotParse?.watch?.color ||
+      (!!semanticSlotParse?.watch?.condition && semanticSlotParse.watch.condition !== "unknown"));
   const semanticWatchAction =
     semanticSlotAccepted && semanticSlotParse ? semanticSlotParse.watchAction : "none";
   const semanticWatch =
     semanticSlotAccepted && semanticSlotParse?.watch ? semanticSlotParse.watch : null;
   const watchBlockedByDemoDayQuestion = isDemoDayEventQuestionText(event.body ?? "");
+  const semanticWatchParserBlocksNewWatch =
+    semanticSlotConfident && semanticWatchAction !== "set_watch";
   const semanticDepartmentIntent =
     semanticSlotAccepted &&
     semanticSlotParse &&
@@ -34890,7 +34896,8 @@ if (authToken && signature) {
       : seed.downPayment
   });
   let watchHandledEarly = false;
-  const earlyWatchIntentText = isWatchConfirmationIntentText(String(event.body ?? ""));
+  const earlyWatchIntentText =
+    !semanticWatchParserBlocksNewWatch && isWatchConfirmationIntentText(String(event.body ?? ""));
   const earlyWatchIntentLLM = !watchBlockedByDemoDayQuestion && semanticWatchAction === "set_watch";
   const earlyWatchPrompted = /\b(keep an eye|keep me posted|watch for|watch\b)\b/i.test(
     lastOutboundText
@@ -38350,7 +38357,8 @@ if (authToken && signature) {
   const watchPrompted = /\b(keep an eye|keep me posted|watch for|watch\b)\b/i.test(
     lastOutboundText
   );
-  const watchIntentText = isWatchConfirmationIntentText(String(event.body ?? ""));
+  const watchIntentText =
+    !semanticWatchParserBlocksNewWatch && isWatchConfirmationIntentText(String(event.body ?? ""));
   const promptedWatchAffirm =
     !watchBlockedByDemoDayQuestion &&
     watchPrompted &&
@@ -38361,7 +38369,7 @@ if (authToken && signature) {
     !schedulingExplicit;
   const explicitWatchIntent =
     !watchBlockedByDemoDayQuestion &&
-    (watchIntentText || promptedWatchAffirm || semanticWatchAction === "set_watch");
+    (semanticWatchAction === "set_watch" || watchIntentText || promptedWatchAffirm);
   const watchIntent =
     event.provider === "twilio" &&
     !conv.inventoryWatchPending &&

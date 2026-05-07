@@ -86,6 +86,7 @@ import {
   cleanCatalogModelNameForDisplay,
   hasRideChallengeSignupAcknowledgement,
   isHiringManagerInquiryText,
+  isDemoDayEventQuestionText,
   isRideChallengeLeadSignal,
   isTimingOnlyFollowUpTopic,
   pickCatalogModelLabelFromText,
@@ -2668,13 +2669,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         process.env.LLM_ENABLED === "1" &&
         process.env.LLM_SEMANTIC_SLOT_PARSER_ENABLED === "1" &&
         !!process.env.OPENAI_API_KEY;
+      const demoDayEventQuestion = isDemoDayEventQuestionText(bodyText);
       const watchParserHint =
-        /\b(let me know|keep me posted|keep an eye out|watch(?:ing)? for|notify me|text me when|if you get one|when you get one|as soon as one comes in)\b/i.test(
+        !demoDayEventQuestion &&
+        (/\b(let me know|keep me posted|keep an eye out|watch(?:ing)? for|notify me|text me when|if you get one|when you get one|as soon as one comes in)\b/i.test(
           bodyTextLower
         ) ||
-        hasWatchIntentPhrase(bodyTextLower) ||
-        !!conv.inventoryWatchPending ||
-        !!conv.inventoryWatch;
+          hasWatchIntentPhrase(bodyTextLower) ||
+          !!conv.inventoryWatchPending ||
+          !!conv.inventoryWatch);
       if (watchParserEligible && watchParserHint) {
         try {
           const semantic = await parseSemanticSlotsWithLLM({
@@ -2688,9 +2691,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           const semanticConfidence =
             typeof semantic?.confidence === "number" ? semantic.confidence : 0;
           const semanticConfidenceMin = Number(process.env.LLM_SEMANTIC_SLOT_CONFIDENCE_MIN ?? 0.76);
-          const semanticAccepted =
+          const semanticConfident =
             !!semantic &&
-            semanticConfidence >= semanticConfidenceMin &&
+            semanticConfidence >= semanticConfidenceMin;
+          const semanticAccepted =
+            semanticConfident &&
             (semantic.watchAction !== "none" ||
               !!semantic.watch?.model ||
               !!semantic.watch?.year ||
@@ -2698,7 +2703,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           const watchAction = semanticAccepted ? semantic.watchAction : "none";
           const watchIntent =
             watchAction === "set_watch" ||
-            hasWatchIntentPhrase(bodyTextLower);
+            (!semanticConfident && hasWatchIntentPhrase(bodyTextLower));
           if (watchIntent) {
             const inventoryParserEligible =
               process.env.LLM_ENABLED === "1" &&

@@ -208,6 +208,22 @@
     }
   },
   {
+    "id": "demo_day_question_not_watch",
+    "text": "Let me know if you guys have a demo day like Kawasaki",
+    "expected": {
+      "watch_action": "none",
+      "department_intent": "none"
+    }
+  },
+  {
+    "id": "demo_days_question_not_watch",
+    "text": "Do you guys have demo days?",
+    "expected": {
+      "watch_action": "none",
+      "department_intent": "none"
+    }
+  },
+  {
     "id": "watch_stop_found_one",
     "text": "I found one already, stop looking for me.",
     "expected": {
