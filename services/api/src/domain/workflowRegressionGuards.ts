@@ -19,6 +19,21 @@ export function isManualOutboundBookingConfirmationText(textRaw: string | null |
   );
 }
 
+export function isManualOutboundTentativeScheduleOfferText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!text) return false;
+  const hasScheduleSignal =
+    /\b(today|tomorrow|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun)\b/i.test(
+      text
+    ) ||
+    /\b\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/i.test(text) ||
+    /\b(morning|afternoon|evening|noon)\b/i.test(text);
+  if (!hasScheduleSignal) return false;
+  return /\b(if\s+(that|this|it)\s+works?|if\s+(that|this|it)(?:'s| is)?\s+ok(?:ay)?|if\s+you\s+can\s+make\s+(that|this|it)\s+work|does\s+(that|this|it)\s+work)\b/i.test(
+    text
+  );
+}
+
 export function isBlockedCadencePersonalizationLineText(lineRaw: string | null | undefined): boolean {
   const line = String(lineRaw ?? "").trim();
   if (!line) return false;

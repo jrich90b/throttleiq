@@ -204,6 +204,7 @@ import {
   isDirectInventoryAvailabilityQuestionText,
   isInventoryBrowseLinkRequestText,
   isManualOutboundBookingConfirmationText,
+  isManualOutboundTentativeScheduleOfferText,
   isMediaProofStatusUpdateText,
   isNonComplimentLikePhraseText,
   isRideChallengeLeadSignal,
@@ -1216,6 +1217,16 @@ function buildDayOnlySchedulingTimeReply(
     ? `I don’t have any other questions right now — just let me know what time you are thinking${timeTarget} so I can schedule you in.`
     : `Just let me know what time you are thinking${timeTarget} so I can schedule you in.`;
   return `${replyDayPhrase} can work. ${timePrompt}`;
+}
+
+function customerAskedDealerToSuggestAppointmentTime(text: string | null | undefined): boolean {
+  const t = String(text ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!t) return false;
+  return (
+    /\blet\s+me\s+know\b.{0,80}\bwhat\s+time(?:s)?\b.{0,80}\b(work|works|available|open|good)\b/.test(t) ||
+    /\bwhat\s+time(?:s)?\b.{0,80}\b(work|works|available|open|good)\b.{0,80}\b(for\s+(you|u|y'?all|you\s+guys|your\s+team)|on\s+your\s+end)\b/.test(t) ||
+    /\bwhatever\s+time(?:s)?\b.{0,80}\b(work|works|available|open|good)\b.{0,80}\b(for\s+(you|u|y'?all|you\s+guys|your\s+team)|on\s+your\s+end)\b/.test(t)
+  );
 }
 
 function buildOrchestratorFailureFallback(
@@ -12125,8 +12136,77 @@ function buildRequestedWindowSlotReply(slots: any[]): string | null {
   return null;
 }
 
+function buildRequestedDaySlotReply(slots: any[]): string | null {
+  if (slots.length === 1) {
+    return `I have ${slots[0].startLocal}. Does that work?`;
+  }
+  if (slots.length >= 2) {
+    return `I have ${slots[0].startLocal} or ${slots[1].startLocal} — do either of those work?`;
+  }
+  return null;
+}
+
 function hasRequestedScheduleWindowText(text: string | null | undefined): boolean {
   return resolveRequestedScheduleWindowMode(text) !== "none";
+}
+
+async function findScheduleSlotsForRequestedDay(args: {
+  conv: any;
+  dayInfo: { day: string; date: Date };
+  appointmentType: string;
+}): Promise<any[]> {
+  const cfg = await getSchedulerConfigHot();
+  const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
+  const durationMinutes =
+    appointmentTypes[args.appointmentType]?.durationMinutes ??
+    appointmentTypes.inventory_visit?.durationMinutes ??
+    60;
+  const preferredSalespeople = getPreferredSalespeopleForConv(cfg, args.conv);
+  const salespeople = cfg.salespeople ?? [];
+  if (!preferredSalespeople.length || !salespeople.length) return [];
+
+  const candidatesByDay = generateCandidateSlots(cfg, new Date(), durationMinutes, 14);
+  const requestedDayKey = dayKey(args.dayInfo.date, cfg.timezone);
+  const dayPool = candidatesByDay.filter(d => dayKey(d.dayStart, cfg.timezone) === requestedDayKey);
+  if (!dayPool.length) return [];
+
+  let cal: any = null;
+  try {
+    cal = await getAuthedCalendarClient();
+  } catch {
+    cal = null;
+  }
+
+  const timeMin = new Date().toISOString();
+  const timeMax = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+  for (const salespersonId of preferredSalespeople) {
+    const sp = salespeople.find((p: any) => p.id === salespersonId);
+    if (!sp) continue;
+    let expanded: { start: Date; end: Date }[] = [];
+    if (cal) {
+      try {
+        const fb = await queryFreeBusy(cal, [sp.calendarId], timeMin, timeMax, cfg.timezone);
+        const busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any;
+        expanded = expandBusyBlocks(busy, cfg.minGapBetweenAppointmentsMinutes ?? 60);
+      } catch {
+        expanded = [];
+      }
+    }
+    const picked = pickSlotsForSalesperson(cfg, sp.id, sp.calendarId, dayPool, expanded, 2);
+    if (picked.length > 0) {
+      return picked.map((slot: any) => ({
+        salespersonId: sp.id,
+        salespersonName: sp.name,
+        calendarId: sp.calendarId,
+        start: slot.start,
+        end: slot.end,
+        startLocal: formatSlotLocal(slot.start, cfg.timezone),
+        endLocal: formatSlotLocal(slot.end, cfg.timezone),
+        appointmentType: args.appointmentType
+      }));
+    }
+  }
+  return [];
 }
 
 async function findScheduleSlotsForRequestedWindow(args: {
@@ -29138,9 +29218,10 @@ app.post("/conversations/:id/send", async (req, res) => {
       (hasScheduleKeyword || hasDayToken || hasTimeToken) &&
       (asksScheduleQuestion || offersMultipleTimeChoices);
     const explicitBookingStatement = isManualOutboundBookingConfirmationText(text);
+    const tentativeScheduleOffer = isManualOutboundTentativeScheduleOfferText(text);
 
     // Manual outbound schedule offers/questions should not auto-confirm bookings.
-    if (scheduleOfferOnly && !explicitBookingStatement) {
+    if ((scheduleOfferOnly || tentativeScheduleOffer) && !explicitBookingStatement) {
       recordRouteOutcome("live", "manual_outbound_schedule_offer_only", {
         convId: conv.id,
         leadKey: conv.leadKey,
@@ -31817,6 +31898,27 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
           return respondWithSmsRegeneratedDraft(rememberedReply);
         }
         const requestedPhrase = `${requestedDayLabel}${requestedDayPart ? ` ${requestedDayPart}` : ""}`;
+        if (requestedDay && customerAskedDealerToSuggestAppointmentTime(event.body)) {
+          const appointmentType = isTestRideDialogState(getDialogState(conv)) ? "test_ride" : "inventory_visit";
+          const daySlots = await findScheduleSlotsForRequestedDay({
+            conv,
+            dayInfo: requestedDay,
+            appointmentType
+          }).catch(e => {
+            console.log("[regen] requested day slot lookup failed", e?.message ?? e);
+            return [];
+          });
+          const daySlotReply = buildRequestedDaySlotReply(daySlots);
+          if (daySlotReply) {
+            setLastSuggestedSlots(conv, daySlots);
+            setDialogState(conv, appointmentType === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent");
+            const inventoryPrefix =
+              availableMatches.length > 0 && explicitAvailabilityAskThisTurn && !recentlyConfirmedAvailable
+                ? `Absolutely — ${unitLabel} is still available right now. `
+                : "";
+            return respondWithSmsRegeneratedDraft(`${inventoryPrefix}${daySlotReply}`);
+          }
+        }
         const scheduleTimeReply = buildDayOnlySchedulingTimeReply(requestedPhrase, event.body);
         const daySpecificReply =
           availableMatches.length > 0
@@ -39809,9 +39911,31 @@ if (authToken && signature) {
       } catch {}
     }
     if (dayInfo?.day && !result.requestedTime) {
-      const partLabel = dayPart ? ` ${dayPart}` : "";
-      result.draft = `Got it. ${buildDayOnlySchedulingTimeReply(`${dayInfo.day}${partLabel}`, event.body)}`;
-      setDialogState(conv, "schedule_request");
+      let offeredDealerSuggestedSlots = false;
+      if (customerAskedDealerToSuggestAppointmentTime(event.body)) {
+        const appointmentType = isTestRideDialogState(getDialogState(conv)) ? "test_ride" : "inventory_visit";
+        const daySlots = await findScheduleSlotsForRequestedDay({
+          conv,
+          dayInfo,
+          appointmentType
+        }).catch(e => {
+          console.log("[live] requested day slot lookup failed", e?.message ?? e);
+          return [];
+        });
+        const daySlotReply = buildRequestedDaySlotReply(daySlots);
+        if (daySlotReply) {
+          result.draft = `Sounds good. ${daySlotReply}`;
+          result.suggestedSlots = daySlots;
+          setLastSuggestedSlots(conv, daySlots);
+          setDialogState(conv, appointmentType === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent");
+          offeredDealerSuggestedSlots = true;
+        }
+      }
+      if (!offeredDealerSuggestedSlots) {
+        const partLabel = dayPart ? ` ${dayPart}` : "";
+        result.draft = `Got it. ${buildDayOnlySchedulingTimeReply(`${dayInfo.day}${partLabel}`, event.body)}`;
+        setDialogState(conv, "schedule_request");
+      }
     } else if (!result.requestedTime && dayPart) {
       result.draft = `Got it. ${buildDayOnlySchedulingTimeReply(dayPart, event.body)}`;
       setDialogState(conv, "schedule_request");

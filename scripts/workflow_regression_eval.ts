@@ -27,6 +27,7 @@ import {
   isHiringManagerInquiryText,
   isRideChallengeLeadSignal,
   isManualOutboundBookingConfirmationText,
+  isManualOutboundTentativeScheduleOfferText,
   isMediaProofStatusUpdateText,
   isNonComplimentLikePhraseText,
   isRegenerateSchedulingLanguageText,
@@ -75,6 +76,11 @@ const cases: Case[] = [
       "I have Tue, May 12, 9:30 AM or Tue, May 12, 11:30 AM — do either of those work?"
     ),
     expected: false
+  },
+  {
+    id: "manual_outbound_tentative_time_offer_does_not_confirm",
+    actual: isManualOutboundTentativeScheduleOfferText("Hey Jen, lets shoot for 9:30 if that works"),
+    expected: true
   },
   {
     id: "available_to_chat_now_routes_as_callback_fallback",
