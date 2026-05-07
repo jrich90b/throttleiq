@@ -6595,6 +6595,9 @@ function getRecentVehicleMentionContext(conv: any): {
   year: string | null;
   color: string | null;
   condition: "new" | "used" | undefined;
+  stockId?: string | null;
+  vin?: string | null;
+  source?: string | null;
 } {
   const cadenceContext = resolveCadencePreferredModelContext(conv);
   const messages = [...(conv?.messages ?? [])]
@@ -6651,8 +6654,101 @@ function getRecentVehicleMentionContext(conv: any): {
           .filter(Boolean)
           .join(" ")
       ) ?? null,
-    condition: cadenceContext.condition
+    condition: cadenceContext.condition,
+    stockId: null,
+    vin: null,
+    source: "deterministic_context"
   };
+}
+
+function isLikelyCadenceInventoryTargetText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "").trim();
+  if (!text) return false;
+  if (extractInventoryStockIdMention(text)) return true;
+  if (/\b(checking back|checking in|circling back|interested in|wanted to ride|wanted to see|quick update|follow(?:ing)? up)\b/i.test(text)) {
+    return true;
+  }
+  return /\b(?:cvo|road glide|street glide|low rider|breakout|heritage|nightster|sportster|pan america|street bob|fat boy|freewheeler|tri glide|road king)\b/i.test(
+    text
+  );
+}
+
+async function getParserCadenceInventoryTargetContext(args: {
+  conv: any;
+  lastDraft?: any;
+}): Promise<ReturnType<typeof getRecentVehicleMentionContext> | null> {
+  const conv = args.conv;
+  if (
+    process.env.LLM_ENABLED !== "1" ||
+    process.env.LLM_INVENTORY_ENTITY_PARSER_ENABLED === "0" ||
+    !process.env.OPENAI_API_KEY
+  ) {
+    return null;
+  }
+
+  const candidates: Array<{ source: string; text: string }> = [];
+  const lastDraftText = String(args.lastDraft?.body ?? "").trim();
+  if (isLikelyCadenceInventoryTargetText(lastDraftText)) {
+    candidates.push({ source: "last_draft", text: lastDraftText });
+  }
+  for (const message of [...(conv?.messages ?? [])].slice(-16).reverse()) {
+    const text = String(message?.body ?? "").trim();
+    if (!text || text === lastDraftText) continue;
+    if (!isLikelyCadenceInventoryTargetText(text)) continue;
+    candidates.push({ source: `recent_${message?.direction ?? "message"}`, text });
+    if (candidates.length >= 4) break;
+  }
+
+  for (const candidate of candidates) {
+    const parsed = await parseInventoryEntitiesWithLLM({
+      text: candidate.text,
+      history: buildHistory(conv, 8),
+      lead: conv?.lead
+    }).catch(e => {
+      console.log("[cadence] inventory target parser failed", e?.message ?? e);
+      return null;
+    });
+    if (!isInventoryEntityParserAccepted(parsed)) continue;
+    const targetType = parsed?.targetType ?? "none";
+    if (targetType === "none" || targetType === "generic_inventory" || targetType === "image_reference") {
+      continue;
+    }
+    const model = String(parsed?.model ?? "").trim() || null;
+    const stockOrVin = String(parsed?.stockId ?? "").trim() || null;
+    const stockId = targetType === "vin" ? null : stockOrVin;
+    const vin = targetType === "vin" ? stockOrVin : null;
+    if (!model && !stockId && !vin) continue;
+    const year = parsed?.year != null ? String(parsed.year) : null;
+    const color = String(parsed?.color ?? "").trim() || null;
+    const condition = normalizeWatchCondition(parsed?.condition ?? null);
+    recordDecisionTrace({
+      scope: "regen",
+      stage: "cadence.inventory_target_parser",
+      convId: conv?.id,
+      leadKey: conv?.leadKey,
+      detail: {
+        source: candidate.source,
+        targetType,
+        model,
+        year,
+        color,
+        stockId,
+        vin,
+        condition: condition ?? null,
+        confidence: parsed?.confidence ?? null
+      }
+    });
+    return {
+      model,
+      year,
+      color,
+      condition,
+      stockId,
+      vin,
+      source: `parser:${candidate.source}`
+    };
+  }
+  return null;
 }
 
 function inventoryColorMatchesContext(item: InventoryFeedItem, color: string | null): boolean {
@@ -6734,8 +6830,9 @@ function findExactCadenceUnavailableUnit(args: {
   conv: any;
   holds: Record<string, any>;
   solds: Record<string, any>;
+  extraRefs?: Array<ReturnType<typeof getCadenceExactInventoryRefs>[number]>;
 }): { kind: "hold" | "sold"; item: any; ref: ReturnType<typeof getCadenceExactInventoryRefs>[number] } | null {
-  for (const ref of getCadenceExactInventoryRefs(args.conv)) {
+  for (const ref of [...(args.extraRefs ?? []), ...getCadenceExactInventoryRefs(args.conv)]) {
     const soldKey = normalizeInventorySoldKey(ref.stockId, ref.vin);
     const holdKey = normalizeInventoryHoldKey(ref.stockId, ref.vin);
     const sold = soldKey ? args.solds?.[soldKey] : null;
@@ -6792,15 +6889,39 @@ function ensureInventoryWatchForHeldCadence(
 async function buildCadenceHeldInventoryOverride(args: {
   conv: any;
   name: string;
+  lastDraft?: any;
 }): Promise<string | null> {
   const conv = args.conv;
   if (!conv) return null;
   const cadenceKind = String(conv?.followUpCadence?.kind ?? "").trim().toLowerCase();
   if (cadenceKind === "long_term" || cadenceKind === "post_sale") return null;
-  const context = getRecentVehicleMentionContext(conv);
+  const parserContext = await getParserCadenceInventoryTargetContext({
+    conv,
+    lastDraft: args.lastDraft
+  });
+  const context = parserContext ?? getRecentVehicleMentionContext(conv);
   const holds = await listInventoryHolds();
   const solds = await listInventorySolds();
-  const exactUnavailable = findExactCadenceUnavailableUnit({ conv, holds, solds });
+  const parserExactRefs =
+    context.stockId || context.vin
+      ? [
+          {
+            source: context.source ?? "parser",
+            stockId: context.stockId ?? null,
+            vin: context.vin ?? null,
+            label: null,
+            unit: {
+              year: context.year ?? undefined,
+              model: context.model ?? undefined,
+              color: context.color ?? undefined,
+              condition: context.condition ?? undefined,
+              stockId: context.stockId ?? undefined,
+              vin: context.vin ?? undefined
+            }
+          }
+        ]
+      : [];
+  const exactUnavailable = findExactCadenceUnavailableUnit({ conv, holds, solds, extraRefs: parserExactRefs });
   if (exactUnavailable) {
     const firstName = normalizeDisplayCase(args.name || "there");
     const fallbackModel =
@@ -7515,7 +7636,8 @@ async function buildCadenceRegeneratedDraft(
     ? null
     : await buildCadenceHeldInventoryOverride({
         conv,
-        name: firstName
+        name: firstName,
+        lastDraft
       });
   if (leadUnitAvailabilityOverride) {
     return { body: leadUnitAvailabilityOverride };

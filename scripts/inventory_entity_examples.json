@@ -77,5 +77,14 @@
       "is_availability_question": true,
       "model_contains": null
     }
+  },
+  {
+    "id": "cadence_checking_back_cvo_road_glide_st_target_1",
+    "text": "Hey James, checking back about the 2026 CVO Road Glide ST. If helpful, I can send a simple compare and next-step options.",
+    "expected": {
+      "target_type": "exact_year_model",
+      "model_contains": "cvo road glide st",
+      "year": 2026
+    }
   }
 ]
