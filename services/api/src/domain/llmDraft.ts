@@ -2514,6 +2514,15 @@ export async function parseBookingIntentWithLLM(args: {
       : "none";
   const messageText = String(args.text ?? "");
   const messageLower = messageText.toLowerCase();
+  const hasExistingAppointment =
+    String(args.appointment?.status ?? "none").toLowerCase() !== "none";
+  const explicitRescheduleCue =
+    /\b(reschedule|re-?schedule|move (?:my appointment|it|me|that)|change (?:my appointment|the appointment|the time|it|that)|push (?:my appointment|it|that)|different time|another time)\b/i.test(
+      messageText
+    );
+  if (intent === "reschedule" && !hasExistingAppointment && !explicitRescheduleCue) {
+    intent = "schedule";
+  }
   if (
     intent === "question" &&
     /\b(price|pricing|otd|out[-\s]?the[-\s]?door|payment|payments|monthly|apr|finance|financing)\b/i.test(
@@ -2567,7 +2576,7 @@ export async function parseBookingIntentWithLLM(args: {
   if (
     reference === "none" &&
     intent === "reschedule" &&
-    String(args.appointment?.status ?? "none").toLowerCase() !== "none"
+    hasExistingAppointment
   ) {
     reference = "last_appointment";
   }
