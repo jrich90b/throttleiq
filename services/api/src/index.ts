@@ -30169,7 +30169,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         conv,
         text: event.body ?? "",
         providerMessageId: (inbound as any)?.providerMessageId,
-        receivedAt: event.receivedAt,
+        receivedAt: (inbound as any)?.at ?? event.receivedAt,
         decision: accessoryDecision,
         scope: "regen"
       });
