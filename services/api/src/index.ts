@@ -6001,7 +6001,7 @@ function resolveCadencePreferredModelContext(conv: any): {
   const contextCondition = normalizeWatchCondition(conv?.inventoryContext?.condition ?? null);
 
   const recentInbounds = (conv?.messages ?? [])
-    .filter((m: any) => m?.direction === "in" && String(m?.body ?? "").trim())
+    .filter((m: any) => m?.direction === "in" && m?.provider !== "sendgrid_adf" && String(m?.body ?? "").trim())
     .slice(-20)
     .reverse();
   let inboundModel: string | null = null;
@@ -6202,6 +6202,16 @@ function getRecentVehicleMentionContext(conv: any): {
       cadenceModelKey.length > messageModelKey.length
         ? cadenceModel
         : messageModel;
+    if (
+      cadenceModel &&
+      messageModelKey &&
+      cadenceModelKey &&
+      !cadenceModelKey.includes(messageModelKey) &&
+      !messageModelKey.includes(cadenceModelKey) &&
+      message?.direction !== "in"
+    ) {
+      continue;
+    }
     const bodyYear = extractYearSingle(body);
     return {
       model: modelToUse,
