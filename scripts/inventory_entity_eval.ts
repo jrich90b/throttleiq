@@ -9,6 +9,9 @@ type Example = {
   history?: { direction: "in" | "out"; body: string }[];
   lead?: any;
   expected: {
+    target_type?: string | null;
+    is_availability_question?: boolean | null;
+    is_test_ride_context?: boolean | null;
     model_contains?: string | null;
     year?: number | null;
     color_contains?: string | null;
@@ -65,6 +68,15 @@ for (const ex of examples) {
         ? !result.model
         : norm(result.model).includes(norm(expected.model_contains))
     );
+  }
+  if (Object.hasOwn(expected, "target_type")) {
+    checks.push(norm(result.targetType) === norm(expected.target_type));
+  }
+  if (Object.hasOwn(expected, "is_availability_question")) {
+    checks.push((result.isAvailabilityQuestion ?? null) === expected.is_availability_question);
+  }
+  if (Object.hasOwn(expected, "is_test_ride_context")) {
+    checks.push((result.isTestRideContext ?? null) === expected.is_test_ride_context);
   }
   if (Object.hasOwn(expected, "year")) {
     checks.push((result.year ?? null) === expected.year);

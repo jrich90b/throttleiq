@@ -1670,6 +1670,19 @@ export type DealershipFaqTopicParse = {
 };
 
 export type InventoryEntityParse = {
+  targetType?:
+    | "stock_id"
+    | "vin"
+    | "exact_year_model"
+    | "model_only"
+    | "color_model"
+    | "alternate_request"
+    | "generic_inventory"
+    | "image_reference"
+    | "none"
+    | null;
+  isAvailabilityQuestion?: boolean | null;
+  isTestRideContext?: boolean | null;
   model?: string | null;
   year?: number | null;
   yearMin?: number | null;
@@ -2381,6 +2394,9 @@ const INVENTORY_ENTITY_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
   required: [
+    "target_type",
+    "is_availability_question",
+    "is_test_ride_context",
     "model",
     "year",
     "year_min",
@@ -2396,6 +2412,22 @@ const INVENTORY_ENTITY_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     "confidence"
   ],
   properties: {
+    target_type: {
+      type: "string",
+      enum: [
+        "stock_id",
+        "vin",
+        "exact_year_model",
+        "model_only",
+        "color_model",
+        "alternate_request",
+        "generic_inventory",
+        "image_reference",
+        "none"
+      ]
+    },
+    is_availability_question: { type: "boolean" },
+    is_test_ride_context: { type: "boolean" },
     model: { type: "string" },
     year: { type: "integer" },
     year_min: { type: "integer" },
@@ -5814,17 +5846,20 @@ export async function parseInventoryEntitiesWithLLM(args: {
   const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
   const voiceExamples = [
-    'input: "Customer: do you have any black street glides in stock?" output: {"model":"Street Glide","year":0,"year_min":0,"year_max":0,"color":"black","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.97}',
-    'input: "Customer: looking for a 2026 road glide limited in vivid black" output: {"model":"Road Glide Limited","year":2026,"year_min":0,"year_max":0,"color":"vivid black","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.97}',
-    'input: "Customer: Very interested in thw T10-26 street glide !!" output: {"model":"Street Glide","year":2026,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"T10-26","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.97}',
-    'input: "Customer: do you have the 26 heritage classic in brilliant red?" output: {"model":"Heritage Classic","year":2026,"year_min":0,"year_max":0,"color":"brilliant red","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.97}',
-    'input: "Customer: any pre-owned street glides around 13 to 14 thousand?" output: {"model":"Street Glide","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"used","min_price":13000,"max_price":14000,"monthly_budget":0,"down_payment":0,"confidence":0.96}',
-    'input: "Customer: how about a tri glide instead?" output: {"model":"Street Glide 3 Limited","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.95}',
-    'input: "Customer: how about a triglycerides instead?" output: {"model":"Street Glide 3 Limited","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.93}',
-    'input: "Customer: if i can stay around 500 a month with 2500 down id do it" output: {"model":"","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":500,"down_payment":2500,"confidence":0.95}',
-    'input: "Customer: anything between 2021 and 2023 under 20k?" output: {"model":"","year":0,"year_min":2021,"year_max":2023,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":20000,"monthly_budget":0,"down_payment":0,"confidence":0.94}',
-    'input: "Customer: im after a black trim cvo street glide st" output: {"model":"CVO Street Glide ST","year":0,"year_min":0,"year_max":0,"color":"","trim":"black trim","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.93}',
-    'input: "Customer: tuesday at 4 works for me" output: {"model":"","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.92}'
+    'input: "Customer: do you have any black street glides in stock?" output: {"target_type":"color_model","is_availability_question":true,"is_test_ride_context":false,"model":"Street Glide","year":0,"year_min":0,"year_max":0,"color":"black","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.97}',
+    'input: "Customer: looking for a 2026 road glide limited in vivid black" output: {"target_type":"color_model","is_availability_question":true,"is_test_ride_context":false,"model":"Road Glide Limited","year":2026,"year_min":0,"year_max":0,"color":"vivid black","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.97}',
+    'input: "Customer: Very interested in thw T10-26 street glide !!" output: {"target_type":"stock_id","is_availability_question":true,"is_test_ride_context":false,"model":"Street Glide","year":2026,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"T10-26","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.97}',
+    'input: "Customer: do you have the 26 heritage classic in brilliant red?" output: {"target_type":"color_model","is_availability_question":true,"is_test_ride_context":false,"model":"Heritage Classic","year":2026,"year_min":0,"year_max":0,"color":"brilliant red","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.97}',
+    'input: "Customer: Road King, any Street Glide, OR Large CC Pan America, would be great." output: {"target_type":"alternate_request","is_availability_question":true,"is_test_ride_context":true,"model":"Road King","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.94}',
+    'input: "Customer: Is this available as well? [MMS image attachment]" output: {"target_type":"image_reference","is_availability_question":true,"is_test_ride_context":false,"model":"","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.94}',
+    'input: "Customer: any pre-owned street glides around 13 to 14 thousand?" output: {"target_type":"model_only","is_availability_question":true,"is_test_ride_context":false,"model":"Street Glide","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"used","min_price":13000,"max_price":14000,"monthly_budget":0,"down_payment":0,"confidence":0.96}',
+    'input: "Customer: Ken lives in Silver Creek and is looking at a 2026 Street Glide 3 Limited in Iron Horse with Chrome trim. Trade is a 2015 Tri Glide." output: {"target_type":"color_model","is_availability_question":true,"is_test_ride_context":false,"model":"Street Glide 3 Limited","year":2026,"year_min":0,"year_max":0,"color":"Iron Horse","trim":"Chrome trim","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.94}',
+    'input: "Customer: how about a tri glide instead?" output: {"target_type":"alternate_request","is_availability_question":true,"is_test_ride_context":false,"model":"Street Glide 3 Limited","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.95}',
+    'input: "Customer: how about a triglycerides instead?" output: {"target_type":"alternate_request","is_availability_question":true,"is_test_ride_context":false,"model":"Street Glide 3 Limited","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.93}',
+    'input: "Customer: if i can stay around 500 a month with 2500 down id do it" output: {"target_type":"none","is_availability_question":false,"is_test_ride_context":false,"model":"","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":500,"down_payment":2500,"confidence":0.95}',
+    'input: "Customer: anything between 2021 and 2023 under 20k?" output: {"target_type":"generic_inventory","is_availability_question":true,"is_test_ride_context":false,"model":"","year":0,"year_min":2021,"year_max":2023,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":20000,"monthly_budget":0,"down_payment":0,"confidence":0.94}',
+    'input: "Customer: im after a black trim cvo street glide st" output: {"target_type":"color_model","is_availability_question":true,"is_test_ride_context":false,"model":"CVO Street Glide ST","year":0,"year_min":0,"year_max":0,"color":"","trim":"black trim","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.93}',
+    'input: "Customer: tuesday at 4 works for me" output: {"target_type":"none","is_availability_question":false,"is_test_ride_context":false,"model":"","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.92}'
   ];
   const prompt = [
     "You extract structured motorcycle shopping entities from dealership inbound text.",
@@ -5836,11 +5871,17 @@ export async function parseInventoryEntitiesWithLLM(args: {
     "- year_min/year_max: explicit range if present (e.g. 2021-2023); else 0/0.",
     "- color: explicit color request only; else empty string.",
     "- trim: explicit trim/style/finish token only; else empty string.",
-    "- stock_id: explicit stock/unit number only, preserving dealer format such as T10-26 or U570-24; else empty string.",
+    "- stock_id: explicit stock/unit number or VIN only, preserving dealer format such as T10-26, U570-24, or the VIN text; else empty string.",
     "- condition: explicit new/used/pre-owned request only; use unknown when not explicit.",
     "- min_price/max_price: explicit numeric price range only; else 0.",
     "- monthly_budget/down_payment: explicit numeric monthly/down values only; else 0.",
+    "- target_type: stock_id for explicit stock/unit number; vin for explicit VIN; exact_year_model for a specific year/model; color_model for specific model plus color/finish; model_only for model without year/color; alternate_request for alternative choices after a prior option; generic_inventory for broad filters without a model; image_reference for availability questions about an attached image/screenshot; none for no inventory target.",
+    "- is_availability_question: true when the customer is asking about availability, options, in-stock status, or expressing inventory interest in a concrete target; false for pure scheduling, thanks, humor, finance-only, or paperwork updates.",
+    "- is_test_ride_context: true when the message or recent history indicates the target is for a test ride/demo ride.",
     "- Do not infer values not in the message.",
+    "- Use current message as source of truth over prior lead vehicle. Prior lead/history only helps interpret alternates/test-ride context.",
+    "- Do not treat locations as colors (e.g. Silver Creek is not silver).",
+    "- Do not treat trade-in vehicle year/model as the shopping target unless the customer explicitly says they want another one.",
     "- confidence is 0..1.",
     "",
     `Known lead: ${JSON.stringify({
@@ -5885,8 +5926,25 @@ export async function parseInventoryEntitiesWithLLM(args: {
     typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
+  const targetTypeRaw = String(parsed.target_type ?? "").trim();
+  const validTargetTypes: NonNullable<InventoryEntityParse["targetType"]>[] = [
+    "stock_id",
+    "vin",
+    "exact_year_model",
+    "model_only",
+    "color_model",
+    "alternate_request",
+    "generic_inventory",
+    "image_reference",
+    "none"
+  ];
 
   return {
+    targetType: validTargetTypes.includes(targetTypeRaw as NonNullable<InventoryEntityParse["targetType"]>)
+      ? (targetTypeRaw as NonNullable<InventoryEntityParse["targetType"]>)
+      : "none",
+    isAvailabilityQuestion: !!parsed.is_availability_question,
+    isTestRideContext: !!parsed.is_test_ride_context,
     model: cleanOptionalString(parsed.model),
     year: toYear(parsed.year),
     yearMin: toYear(parsed.year_min),

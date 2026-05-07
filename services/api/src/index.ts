@@ -5117,6 +5117,17 @@ function inventoryEntityParseToAvailabilityHint(
   parsed: InventoryEntityParse | null
 ): AvailabilityParseHint | null {
   if (!isInventoryEntityParserAccepted(parsed)) return null;
+  const targetType = parsed?.targetType ?? "none";
+  const availabilityLikeTarget =
+    parsed?.isAvailabilityQuestion ||
+    targetType === "stock_id" ||
+    targetType === "vin" ||
+    targetType === "exact_year_model" ||
+    targetType === "model_only" ||
+    targetType === "color_model" ||
+    targetType === "alternate_request" ||
+    targetType === "image_reference";
+  if (!availabilityLikeTarget || targetType === "none") return null;
   const hint: AvailabilityParseHint = {
     model: parsed?.model ?? null,
     year: parsed?.year != null ? String(parsed.year) : null,
@@ -32867,9 +32878,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const regenDirectAvailabilityQuestion = isDirectInventoryAvailabilityQuestionText(event.body ?? "");
     const regenMediaAvailabilityQuestion =
       !!event.mediaUrls?.length && hasAvailabilityQuestionText(event.body ?? "");
+    const regenInventoryEntityAvailabilityThisTurn =
+      !!regenInventoryEntityAvailabilityHint && !!regenInventoryEntityParse?.isAvailabilityQuestion;
     const explicitAvailabilityAskThisTurn =
       regenParserAvailabilityIntent ||
       !!regenAvailabilityPreferenceHint ||
+      regenInventoryEntityAvailabilityThisTurn ||
       regenStockInventoryInterest ||
       regenDirectAvailabilityQuestion ||
       regenMediaAvailabilityQuestion;
@@ -39007,10 +39021,13 @@ if (authToken && signature) {
   const stockInventoryInterestThisTurn =
     !!(extractInventoryStockIdMention(event.body ?? "") || inventoryEntityAvailabilityHint?.stockId) &&
     isStockNumberInventoryInterestText(event.body ?? "");
+  const inventoryEntityAvailabilityThisTurn =
+    !!inventoryEntityAvailabilityHint && !!inventoryEntityParse?.isAvailabilityQuestion;
   const availabilityRouteEligible =
     routeExecAvailability ||
     explicitAvailabilitySignalThisTurn ||
     availabilityPreferenceReply ||
+    inventoryEntityAvailabilityThisTurn ||
     stockInventoryInterestThisTurn;
   const availabilityExplicit =
     availabilityRouteEligible &&
@@ -39033,7 +39050,7 @@ if (authToken && signature) {
     const availabilityResolution = await resolveDeterministicAvailabilityReply({
       conv,
       text: event.body ?? "",
-      parsedAvailability: availabilityPreferenceHint ?? llmAvailability,
+      parsedAvailability: availabilityPreferenceHint ?? inventoryEntityAvailabilityHint ?? llmAvailability,
       otherInventoryRequest,
       affectHasHumor: !!acceptedAffect?.hasHumor,
       inboundMediaUrls: event.mediaUrls

@@ -3,6 +3,8 @@
     "id": "stock_interest_t10_26_street_glide_1",
     "text": "Very interested in thw T10-26 street glide !!",
     "expected": {
+      "target_type": "stock_id",
+      "is_availability_question": true,
       "model_contains": "street glide",
       "year": 2026,
       "stock_id": "T10-26"
@@ -12,6 +14,8 @@
     "id": "availability_heritage_brilliant_red_1",
     "text": "do you have the 26 heritage classic in brilliant red? sorry, been really busy",
     "expected": {
+      "target_type": "color_model",
+      "is_availability_question": true,
       "model_contains": "heritage classic",
       "year": 2026,
       "color_contains": "brilliant red"
@@ -21,6 +25,8 @@
     "id": "used_street_glide_budget_1",
     "text": "I'm looking for a pre-owned Street Glide around thirteen or fourteen thousand",
     "expected": {
+      "target_type": "model_only",
+      "is_availability_question": true,
       "model_contains": "street glide",
       "condition": "used",
       "max_price": 14000
@@ -30,8 +36,46 @@
     "id": "schedule_only_no_model_1",
     "text": "Tuesday around 11am would work great for me if that's possible.",
     "expected": {
+      "target_type": "none",
+      "is_availability_question": false,
       "model_contains": null,
       "stock_id": null
+    }
+  },
+  {
+    "id": "test_ride_alternate_choices_1",
+    "text": "Road King, any Street Glide, OR Large CC Pan America, would be great.",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Once you pick one, I can line up the test ride right away."
+      }
+    ],
+    "expected": {
+      "target_type": "alternate_request",
+      "is_availability_question": true,
+      "is_test_ride_context": true,
+      "model_contains": "road king"
+    }
+  },
+  {
+    "id": "silver_creek_not_color_trade_year_not_target_1",
+    "text": "Ken and his wife live in Silver Creek. They liked the 2026 Street Glide 3 Limited in Iron Horse with Chrome trim and have a 2015 Tri Glide to trade.",
+    "expected": {
+      "target_type": "color_model",
+      "is_availability_question": true,
+      "model_contains": "street glide 3 limited",
+      "year": 2026,
+      "color_contains": "iron horse"
+    }
+  },
+  {
+    "id": "image_reference_availability_1",
+    "text": "Is this available as well? MMS image attachment",
+    "expected": {
+      "target_type": "image_reference",
+      "is_availability_question": true,
+      "model_contains": null
     }
   }
 ]
