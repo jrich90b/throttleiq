@@ -72,6 +72,38 @@ const cases: Case[] = [
     },
     expectedIncludes: ["2026 Street Glide", "available", "What day and time works best"],
     expectedExcludes: ["2016 Street Glide", "appraisal"]
+  },
+  {
+    id: "initial_adf_sale_price_routes_pricing_handoff_not_payments",
+    event: {
+      channel: "sms",
+      provider: "sendgrid_adf",
+      from: "+17166059249",
+      to: "+17166927200",
+      body: "What is the sale price",
+      providerMessageId: "orchestrator-regression-3",
+      receivedAt: now
+    },
+    ctx: {
+      leadSource: "Room58 - Request details",
+      pricingIntentHint: true,
+      financeIntentHint: true,
+      lead: {
+        firstName: "Ashanti",
+        source: "Room58 - Request details",
+        vehicle: {
+          year: "2002",
+          make: "Harley-Davidson",
+          model: "Road King Classic",
+          color: "U882-02 White Pearl",
+          stockId: "U882-02",
+          vin: "1HD1FRW192Y615723",
+          condition: "used"
+        }
+      } as any
+    },
+    expectedIncludes: ["2002 Road King Classic", "exact pricing"],
+    expectedExcludes: ["monthly payment", "how much down", "60, 72, or 84"]
   }
 ];
 

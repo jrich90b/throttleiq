@@ -38,6 +38,30 @@ const cases: Case[] = [
       })
   },
   {
+    id: "sale_price_text_routes_room58_price_handoff",
+    expected: true,
+    run: () =>
+      shouldRouteRoom58PriceHandoff({
+        isInitialAdf: true,
+        leadSourceLower: "room58 - request details",
+        inquiryRaw: "What is the sale price",
+        hasInventoryIdentifiers: true,
+        pricingInquiryIntent: true
+      })
+  },
+  {
+    id: "price_plus_trade_not_price_only_handoff",
+    expected: false,
+    run: () =>
+      shouldRouteRoom58PriceHandoff({
+        isInitialAdf: true,
+        leadSourceLower: "room58 - request details",
+        inquiryRaw: "What the asking price i have a 2013 street glide to trade in what the trade in value would be?",
+        hasInventoryIdentifiers: true,
+        pricingInquiryIntent: true
+      })
+  },
+  {
     id: "donald_walkin_not_room58_price_handoff",
     expected: false,
     run: () =>

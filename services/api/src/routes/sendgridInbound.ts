@@ -73,7 +73,7 @@ import { resolveInventoryUrlByStock } from "../domain/inventoryUrlResolver.js";
 import { listInventoryHolds, normalizeInventoryHoldKey } from "../domain/inventoryHolds.js";
 import { listInventorySolds, normalizeInventorySoldKey } from "../domain/inventorySolds.js";
 import { getAllModels, isModelInRecentYearsForMake } from "../domain/modelsByYear.js";
-import { shouldRouteRoom58PriceHandoff } from "../domain/adfPolicy.js";
+import { isPriceOnlyInquiryText, shouldRouteRoom58PriceHandoff } from "../domain/adfPolicy.js";
 import { isResponseControlParserAccepted } from "../domain/transitionSafety.js";
 import { resolveRoutingParserDecision } from "../domain/routerV2.js";
 import { listUsers } from "../domain/userStore.js";
@@ -6064,9 +6064,19 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     );
     const yearLabel = conv.lead?.vehicle?.year ? `${conv.lead?.vehicle?.year} ` : "";
     const bikeLabel = modelLabel ? `${yearLabel}${modelLabel}`.trim() : "the bike";
-    draft =
-      `Thanks for your question on the ${bikeLabel}. ` +
-      "I can help with a payment estimate. What monthly payment feels comfortable for you, about how much down, and were you thinking 60, 72, or 84 months?";
+    if (isPriceOnlyInquiryText(inquiryTextRaw)) {
+      draft =
+        `Thanks for your question on the ${bikeLabel}. ` +
+        "I’ll have our team confirm the sale price and follow up with exact numbers shortly.";
+      addTodo(conv, "pricing", event.body, event.providerMessageId);
+      setFollowUpMode(conv, "manual_handoff", "price_confirm");
+      stopFollowUpCadence(conv, "manual_handoff");
+      markPricingEscalated(conv);
+    } else {
+      draft =
+        `Thanks for your question on the ${bikeLabel}. ` +
+        "I can help with a payment estimate. What monthly payment feels comfortable for you, about how much down, and were you thinking 60, 72, or 84 months?";
+    }
     suppressAvailabilityAppend = true;
   }
   if (

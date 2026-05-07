@@ -11,7 +11,9 @@ export function extractAdfInquiryCandidates(raw?: string | null): string[] {
 export function isPriceOnlyInquiryText(text?: string | null): boolean {
   const t = String(text ?? "").trim();
   if (!t) return false;
-  return /^(price|pricing|price\?|what(?:'s| is)? the price\??|how much\??)$/i.test(t);
+  return /^(?:price|pricing|price\?|how much\??|(?:what(?:'s| is)?|what is|what's|what)\s+(?:the\s+)?(?:(?:sale|asking|list|listed|current|cash)\s+)?price\??|(?:sale|asking|list|listed|current|cash)\s+price\??)$/i.test(
+    t
+  );
 }
 
 export function shouldRouteRoom58PriceHandoff(args: {
