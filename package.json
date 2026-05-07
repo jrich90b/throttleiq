@@ -26,6 +26,7 @@
     "adf_policy:eval": "npx tsx scripts/adf_policy_eval.ts",
     "disposition_transition:eval": "npx tsx scripts/disposition_transition_eval.ts",
     "response_control:eval": "npx tsx scripts/response_control_eval.ts",
+    "purchase_delivery_logistics:eval": "LLM_ENABLED=1 LLM_PURCHASE_DELIVERY_LOGISTICS_PARSER_ENABLED=1 npx tsx scripts/purchase_delivery_logistics_eval.ts",
     "regenerate_selection:eval": "npx tsx scripts/regenerate_selection_eval.ts",
     "conversation_replay:eval": "npx tsx scripts/conversation_replay_eval.ts",
     "route_watchdog:run": "npx tsx scripts/route_audit_watchdog.ts",

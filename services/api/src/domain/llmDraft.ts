@@ -1322,8 +1322,15 @@ export type TradeTargetValueParse = {
 };
 
 export type ResponseControlParse = {
-  intent: "opt_out" | "not_interested" | "schedule_request" | "compliment_only" | "none";
+  intent: "opt_out" | "not_interested" | "schedule_request" | "compliment_only" | "no_response" | "none";
   explicitRequest: boolean;
+  confidence?: number;
+};
+
+export type PurchaseDeliveryLogisticsParse = {
+  intent: "delivery_progress" | "delivery_timing" | "docs_status" | "none";
+  explicitRequest: boolean;
+  timingText?: string | null;
   confidence?: number;
 };
 
@@ -1835,9 +1842,24 @@ const RESPONSE_CONTROL_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   properties: {
     intent: {
       type: "string",
-      enum: ["opt_out", "not_interested", "schedule_request", "compliment_only", "none"]
+      enum: ["opt_out", "not_interested", "schedule_request", "compliment_only", "no_response", "none"]
     },
     explicit_request: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const PURCHASE_DELIVERY_LOGISTICS_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent", "explicit_request", "timing_text", "confidence"],
+  properties: {
+    intent: {
+      type: "string",
+      enum: ["delivery_progress", "delivery_timing", "docs_status", "none"]
+    },
+    explicit_request: { type: "boolean" },
+    timing_text: { type: "string" },
     confidence: { type: "number" }
   }
 };
@@ -3255,6 +3277,7 @@ export async function parseResponseControlWithLLM(args: {
     "- not_interested: customer clearly declines buying/follow-up for now.",
     "- schedule_request: customer explicitly asks to book/schedule/pick a day/time.",
     "- compliment_only: customer only compliments the bike/team without request/action.",
+    "- no_response: customer only acknowledges/signs off and no useful customer-facing reply is needed.",
     "- none: anything else.",
     "",
     "Rules:",
@@ -3263,6 +3286,7 @@ export async function parseResponseControlWithLLM(args: {
     "- If customer says not interested / pass / no thanks / not moving forward => not_interested.",
     "- schedule_request only for explicit scheduling intent (appointment/time/day availability).",
     "- compliment_only only if no other request/intent is present.",
+    "- no_response for short acknowledgements/signoffs like Perfect, Sounds good, Talk soon, Ok, thumbs-up text, when there is no question or requested action.",
     "- Do not classify phrasing like 'like I said' as compliment_only; that is conversational context, not praise.",
     "- If the customer attaches media while giving paperwork/proof/status, use intent=none unless the text is only praise.",
     "- If uncertain, intent=none and explicit_request=false.",
@@ -3272,6 +3296,8 @@ export async function parseResponseControlWithLLM(args: {
     'input: "That bike looks awesome" output: {"intent":"compliment_only","explicit_request":true,"confidence":0.94}',
     'input: "Like I said, I am legit" output: {"intent":"none","explicit_request":false,"confidence":0.92}',
     'input: "Looks great, can I come Tuesday?" output: {"intent":"schedule_request","explicit_request":true,"confidence":0.95}',
+    'input: "Talk soon!" output: {"intent":"no_response","explicit_request":false,"confidence":0.96}',
+    'input: "Perfect." output: {"intent":"no_response","explicit_request":false,"confidence":0.94}',
     'input: "Here is my insurance card" output: {"intent":"none","explicit_request":false,"confidence":0.91}',
     "",
     `Known lead info: ${JSON.stringify({
@@ -3305,6 +3331,7 @@ export async function parseResponseControlWithLLM(args: {
     intentRaw === "opt_out" ||
     intentRaw === "not_interested" ||
     intentRaw === "schedule_request" ||
+    intentRaw === "no_response" ||
     intentRaw === "compliment_only"
       ? intentRaw
       : "none";
@@ -3317,6 +3344,105 @@ export async function parseResponseControlWithLLM(args: {
   return {
     intent,
     explicitRequest,
+    confidence
+  };
+}
+
+export async function parsePurchaseDeliveryLogisticsWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<PurchaseDeliveryLogisticsParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_PURCHASE_DELIVERY_LOGISTICS_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_PURCHASE_DELIVERY_LOGISTICS_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_PURCHASE_DELIVERY_LOGISTICS_PARSER_MODEL ||
+    process.env.OPENAI_MODEL ||
+    "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_PURCHASE_DELIVERY_LOGISTICS_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-10).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const prompt = [
+    "You are a strict parser for motorcycle purchase/delivery logistics in dealership SMS.",
+    "Return only JSON matching the schema.",
+    "",
+    "Classify exactly one intent:",
+    "- delivery_progress: customer gives progress/status about finalizing purchase, loan, bank, check, insurance, title, paperwork, or travel toward pickup/delivery.",
+    "- delivery_timing: customer gives an arrival or pickup window for an already active purchase/delivery context.",
+    "- docs_status: customer sends/mentions paperwork, insurance card, license, title, PDF, check, or proof documents.",
+    "- none: shopping, trade appraisal scheduling, test ride scheduling, inventory availability, generic appointment setting, compliments, or unrelated chat.",
+    "",
+    "Rules:",
+    "- This parser is for active purchase/delivery logistics, not ordinary appointments.",
+    "- delivery_timing requires recent context that the customer is buying/picking up/taking delivery or sending purchase docs.",
+    "- If the customer says they are coming to inspect/appraise a trade or test ride, intent=none.",
+    "- timing_text should contain the arrival/pickup timing phrase if present, else empty string.",
+    "- explicit_request is true only when the customer asks a question/action; status updates can be false.",
+    "- confidence is 0..1.",
+    "",
+    "Examples:",
+    'input: "Speaking with bank now, finalizing loan" output: {"intent":"delivery_progress","explicit_request":false,"timing_text":"","confidence":0.96}',
+    'input: "Loans finalized just need to send them insurance paperwork" output: {"intent":"delivery_progress","explicit_request":false,"timing_text":"","confidence":0.97}',
+    'input: "Like I said. I am legit" output: {"intent":"docs_status","explicit_request":false,"timing_text":"","confidence":0.88}',
+    'input: "Let me know because I start driving on Friday morning. Please" output: {"intent":"delivery_progress","explicit_request":true,"timing_text":"Friday morning","confidence":0.94}',
+    'input: "On my way doing my best to be there by 530" output: {"intent":"delivery_progress","explicit_request":false,"timing_text":"by 530","confidence":0.97}',
+    'input: "Early afternoon ish, wife just has to be home to get kids off the bus" output: {"intent":"delivery_timing","explicit_request":false,"timing_text":"early afternoon-ish","confidence":0.93}',
+    'input: "1-2 o clock ish" output: {"intent":"delivery_timing","explicit_request":false,"timing_text":"1-2 o clock-ish","confidence":0.94}',
+    'input: "Can I come in Friday morning to look at it?" output: {"intent":"none","explicit_request":true,"timing_text":"","confidence":0.95}',
+    'input: "Tuesday around 11am would work for a test ride" output: {"intent":"none","explicit_request":true,"timing_text":"","confidence":0.97}',
+    "",
+    `Known lead info: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null,
+      source: lead?.source ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "purchase_delivery_logistics_parser",
+      schema: PURCHASE_DELIVERY_LOGISTICS_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 160,
+      debugTag: "llm-purchase-delivery-logistics-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const intentRaw = String(parsed.intent ?? "").toLowerCase();
+  const intent: PurchaseDeliveryLogisticsParse["intent"] =
+    intentRaw === "delivery_progress" ||
+    intentRaw === "delivery_timing" ||
+    intentRaw === "docs_status"
+      ? intentRaw
+      : "none";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    intent,
+    explicitRequest: !!parsed.explicit_request,
+    timingText: cleanOptionalString(parsed.timing_text),
     confidence
   };
 }

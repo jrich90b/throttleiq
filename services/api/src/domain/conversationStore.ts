@@ -301,6 +301,7 @@ export type DialogStateName =
   | "callback_requested"
   | "callback_handoff"
   | "call_only"
+  | "purchase_delivery"
   | "followup_paused"
   | "followup_resumed"
   | "customer_stepping_back"

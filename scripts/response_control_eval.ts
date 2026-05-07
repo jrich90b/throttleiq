@@ -1,6 +1,7 @@
 import {
   isResponseControlParserAccepted,
-  isResponseControlParserConfidentDecision
+  isResponseControlParserConfidentDecision,
+  isResponseControlNoResponseAccepted
 } from "../services/api/src/domain/transitionSafety.ts";
 
 type Case = {
@@ -25,6 +26,12 @@ const noneIntent = {
   intent: "none",
   explicitRequest: false,
   confidence: 0.99
+};
+
+const noResponseIntent = {
+  intent: "no_response",
+  explicitRequest: false,
+  confidence: 0.93
 };
 
 const cases: Case[] = [
@@ -52,6 +59,11 @@ const cases: Case[] = [
     id: "low_confidence_parse_is_not_authoritative",
     expected: false,
     run: () => isResponseControlParserConfidentDecision(weakSchedule)
+  },
+  {
+    id: "no_response_intent_is_authoritative_without_explicit_request",
+    expected: true,
+    run: () => isResponseControlNoResponseAccepted(noResponseIntent)
   }
 ];
 

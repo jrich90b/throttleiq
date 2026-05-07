@@ -136,6 +136,16 @@ export function isResponseControlParserConfidentDecision(parsed: {
   return !!parsed?.intent && confidence >= confidenceMin;
 }
 
+export function isResponseControlNoResponseAccepted(parsed: {
+  intent?: string | null;
+  confidence?: number;
+} | null): boolean {
+  const confidenceMin = Number(process.env.LLM_RESPONSE_CONTROL_NO_RESPONSE_CONFIDENCE_MIN ?? 0.82);
+  const confidence =
+    typeof parsed?.confidence === "number" && Number.isFinite(parsed.confidence) ? parsed.confidence : 0;
+  return parsed?.intent === "no_response" && confidence >= confidenceMin;
+}
+
 export function canApplyDispositionCloseout(args: {
   conv: any;
   text: string;

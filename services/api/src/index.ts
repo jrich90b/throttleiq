@@ -36,6 +36,7 @@ import {
   parseDialogActWithLLM,
   parseCustomerDispositionWithLLM,
   parseResponseControlWithLLM,
+  parsePurchaseDeliveryLogisticsWithLLM,
   parseSalespersonMentionWithLLM,
   parseJourneyIntentWithLLM,
   parseConversationStateWithLLM,
@@ -59,7 +60,8 @@ import type {
   UnifiedSemanticSlotParse,
   TradePayoffParse,
   VehicleFactQuestionParse,
-  DealershipFaqTopicParse
+  DealershipFaqTopicParse,
+  PurchaseDeliveryLogisticsParse
 } from "./domain/llmDraft.js";
 import type { InboundMessageEvent, OrchestratorResult } from "./domain/types.js";
 import { sendgridInboundMiddleware, handleSendgridInbound } from "./routes/sendgridInbound.js";
@@ -153,7 +155,8 @@ import {
   isAffordabilityRideConfidenceObjectionText,
   isDispositionParserAccepted,
   isResponseControlParserAccepted,
-  isResponseControlParserConfidentDecision
+  isResponseControlParserConfidentDecision,
+  isResponseControlNoResponseAccepted
 } from "./domain/transitionSafety.js";
 import { pickRegenerateInbound } from "./domain/regenerateSelection.js";
 import { applyDraftStateInvariants } from "./domain/draftStateInvariants.js";
@@ -4544,6 +4547,11 @@ function resolveAccessoryRequestDecision(
       confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0,
       source: "parser"
     };
+  }
+  const parsedConfidence = typeof parsed?.confidence === "number" ? parsed.confidence : 0;
+  const parsedConfidenceMin = Number(process.env.LLM_ACCESSORY_REQUEST_CONFIDENCE_MIN ?? 0.74);
+  if (parsed && parsed.action === "none" && parsedConfidence >= parsedConfidenceMin) {
+    return null;
   }
 
   const raw = String(text ?? "");
@@ -13081,6 +13089,90 @@ function shouldRouteAsPurchaseDeliveryTiming(
   if (!isPurchaseDeliveryTimingText(text)) return false;
   const recentContext = getRecentConversationTextForDeliveryContext(conv, text, currentInboundAt);
   return isPurchaseDeliveryContextText(recentContext);
+}
+
+function hasPurchaseDeliveryLogisticsParserHint(
+  conv: any,
+  textRaw: string | null | undefined,
+  receivedAt?: string | null
+): boolean {
+  const text = String(textRaw ?? "").toLowerCase();
+  if (!text.trim()) return false;
+  if (
+    /\b(loan(?:s)? finalized|finalizing loan|bank|certified check|cashier'?s check|insurance|proof of insurance|title|registration|paperwork|documents?|pdf|license|driver'?s? licen[cs]e|take delivery|deliver|delivery|pick(?:ing)? up|pickup|taking it home|on my way|headed over|heading over|driving|start driving)\b/i.test(
+      text
+    )
+  ) {
+    return true;
+  }
+  if (isPurchaseDeliveryTimingText(text)) {
+    const recentContext = getRecentConversationTextForDeliveryContext(conv, text, receivedAt);
+    return isPurchaseDeliveryContextText(recentContext);
+  }
+  return false;
+}
+
+function isPurchaseDeliveryLogisticsParserAccepted(
+  parsed: PurchaseDeliveryLogisticsParse | null
+): boolean {
+  if (!parsed || parsed.intent === "none") return false;
+  const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_PURCHASE_DELIVERY_LOGISTICS_CONFIDENCE_MIN ?? 0.78);
+  return confidence >= min;
+}
+
+function isPurchaseDeliveryLogisticsParserConfidentNone(
+  parsed: PurchaseDeliveryLogisticsParse | null
+): boolean {
+  if (!parsed || parsed.intent !== "none") return false;
+  const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_PURCHASE_DELIVERY_LOGISTICS_CONFIDENCE_MIN ?? 0.78);
+  return confidence >= min;
+}
+
+function buildPurchaseDeliveryLogisticsReply(args: {
+  text: string | null | undefined;
+  parsed: PurchaseDeliveryLogisticsParse;
+}): string {
+  if (args.parsed.intent === "delivery_timing") {
+    return buildPurchaseDeliveryTimingReply(args.parsed.timingText || args.text);
+  }
+  if (args.parsed.intent === "docs_status") {
+    return buildInboundMediaProofAcknowledgement();
+  }
+  return buildLogisticsProgressAcknowledgement(args.parsed.timingText || args.text || "");
+}
+
+function applyPurchaseDeliveryLogisticsDecision(args: {
+  conv: Conversation;
+  text: string | null | undefined;
+  providerMessageId?: string | null;
+  parsed: PurchaseDeliveryLogisticsParse;
+  scope: "live" | "regen";
+}): string {
+  const reply = buildPurchaseDeliveryLogisticsReply({
+    text: args.text,
+    parsed: args.parsed
+  });
+  if (args.parsed.intent === "delivery_timing") {
+    addTodo(
+      args.conv,
+      "note",
+      `Customer plans pickup/delivery arrival ${formatPurchaseDeliveryArrivalWindow(
+        args.parsed.timingText || args.text || ""
+      )}.`,
+      args.providerMessageId ?? undefined
+    );
+  }
+  setDialogState(args.conv, "purchase_delivery");
+  recordRouteOutcome(args.scope, "purchase_delivery_logistics", {
+    convId: args.conv.id,
+    leadKey: args.conv.leadKey,
+    intent: args.parsed.intent,
+    timingText: args.parsed.timingText ?? null,
+    confidence: args.parsed.confidence ?? null
+  });
+  return reply;
 }
 
 function extractLogisticsDeadlineLabel(text: string): string | null {
@@ -30173,7 +30265,39 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       financeContextIntent: true
     });
   }
+  const regenPurchaseDeliveryLogisticsParse =
+    event.provider === "twilio" &&
+    channel === "sms" &&
+    hasPurchaseDeliveryLogisticsParserHint(conv, event.body ?? "", (inbound as any)?.at ?? event.receivedAt)
+      ? await safeLlmParse("regen_purchase_delivery_logistics_parser", () =>
+          parsePurchaseDeliveryLogisticsWithLLM({
+            text: event.body ?? "",
+            history: buildHistory(conv, 12),
+            lead: conv.lead
+          })
+        )
+      : null;
+  if (isPurchaseDeliveryLogisticsParserAccepted(regenPurchaseDeliveryLogisticsParse)) {
+    const reply = applyPurchaseDeliveryLogisticsDecision({
+      conv,
+      text: event.body ?? "",
+      providerMessageId: (inbound as any)?.providerMessageId,
+      parsed: regenPurchaseDeliveryLogisticsParse as PurchaseDeliveryLogisticsParse,
+      scope: "regen"
+    });
+    return respondWithSmsRegeneratedDraft(reply, undefined, {
+      turnFinanceIntent: false,
+      turnAvailabilityIntent: false,
+      turnSchedulingIntent: false
+    });
+  }
   if (event.provider === "twilio" && channel === "sms" && isLogisticsProgressUpdateText(event.body ?? "")) {
+    if (isPurchaseDeliveryLogisticsParserConfidentNone(regenPurchaseDeliveryLogisticsParse)) {
+      recordRouteOutcome("regen", "purchase_delivery_logistics_parser_blocked_regex", {
+        convId: conv.id,
+        leadKey: conv.leadKey
+      });
+    } else {
     recordRouteOutcome("regen", "logistics_progress_acknowledgement", {
       convId: conv.id,
       leadKey: conv.leadKey
@@ -30183,6 +30307,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       turnAvailabilityIntent: false,
       turnSchedulingIntent: false
     });
+    }
   }
   if (event.provider === "twilio" && isEmojiOnlyText(event.body ?? "")) {
     return respondRegenerateSkipped("emoji_only_inbound_no_reply");
@@ -30730,6 +30855,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     event.provider === "twilio" &&
     shouldRouteAsPurchaseDeliveryTiming(conv, event.body ?? "", (inbound as any)?.at ?? event.receivedAt)
   ) {
+    if (isPurchaseDeliveryLogisticsParserConfidentNone(regenPurchaseDeliveryLogisticsParse)) {
+      recordRouteOutcome("regen", "purchase_delivery_timing_parser_blocked_regex", {
+        convId: conv.id,
+        leadKey: conv.leadKey
+      });
+    } else {
     const reply = buildPurchaseDeliveryTimingReply(event.body ?? "");
     addTodo(
       conv,
@@ -30742,6 +30873,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       return respondWithEmailRegeneratedDraft(reply);
     }
     return respondWithSmsRegeneratedDraft(reply);
+    }
   }
   if (regenTradeFollowupMessage) {
     if (conv.lead) {
@@ -31525,6 +31657,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     : null;
   const regenResponseControlAccepted = isResponseControlParserAccepted(regenResponseControlParse);
   const regenResponseControlConfident = isResponseControlParserConfidentDecision(regenResponseControlParse);
+  if (isResponseControlNoResponseAccepted(regenResponseControlParse)) {
+    return respondRegenerateSkipped("response_control_no_response");
+  }
   const regenLlmComplimentOnly =
     regenResponseControlAccepted && regenResponseControlParse?.intent === "compliment_only";
   const regenLlmExplicitScheduleIntent =
@@ -32652,6 +32787,7 @@ if (authToken && signature) {
   const llmComplimentOnly = responseControlAccepted && responseControlParse?.intent === "compliment_only";
   const llmExplicitScheduleIntent =
     responseControlAccepted && responseControlParse?.intent === "schedule_request";
+  const llmNoResponse = isResponseControlNoResponseAccepted(responseControlParse);
   if (getDialogState(conv) === "none" && conv.classification?.bucket === "inventory_interest") {
     setDialogState(conv, "inventory_init");
   }
@@ -32664,6 +32800,18 @@ if (authToken && signature) {
       closeConversation(conv, "not_interested");
       stopRelatedCadences(conv, "not_interested", { close: true });
     }
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+  if (llmNoResponse && conv.mode !== "human") {
+    discardPendingDrafts(conv, "response_control_no_response");
+    delete conv.emailDraft;
+    saveConversation(conv);
+    recordRouteOutcome("live", "response_control_no_response", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      confidence: responseControlParse?.confidence ?? null
+    });
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
@@ -33015,7 +33163,43 @@ if (authToken && signature) {
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
+  const liveEarlyPurchaseDeliveryLogisticsParse =
+    event.provider === "twilio" &&
+    hasPurchaseDeliveryLogisticsParserHint(conv, event.body ?? "", event.receivedAt)
+      ? await safeLlmParse("purchase_delivery_logistics_parser_early", () =>
+          parsePurchaseDeliveryLogisticsWithLLM({
+            text: event.body ?? "",
+            history: buildHistory(conv, 12),
+            lead: conv.lead
+          })
+        )
+      : null;
+  if (isPurchaseDeliveryLogisticsParserAccepted(liveEarlyPurchaseDeliveryLogisticsParse)) {
+    const reply = applyPurchaseDeliveryLogisticsDecision({
+      conv,
+      text: event.body ?? "",
+      providerMessageId: event.providerMessageId,
+      parsed: liveEarlyPurchaseDeliveryLogisticsParse as PurchaseDeliveryLogisticsParse,
+      scope: "live"
+    });
+    if (webhookMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (event.provider === "twilio" && isLogisticsProgressUpdateText(event.body ?? "")) {
+    if (isPurchaseDeliveryLogisticsParserConfidentNone(liveEarlyPurchaseDeliveryLogisticsParse)) {
+      recordRouteOutcome("live", "purchase_delivery_logistics_parser_blocked_regex", {
+        convId: conv.id,
+        leadKey: conv.leadKey
+      });
+    } else {
     const reply = buildLogisticsProgressAcknowledgement(event.body ?? "");
     recordRouteOutcome("live", "logistics_progress_acknowledgement", {
       convId: conv.id,
@@ -33031,6 +33215,7 @@ if (authToken && signature) {
       reply
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
+    }
   }
   if (isSuppressed(event.from)) {
     stopFollowUpCadence(conv, "suppressed");
@@ -37824,6 +38009,12 @@ if (authToken && signature) {
     event.provider === "twilio" &&
     shouldRouteAsPurchaseDeliveryTiming(conv, event.body ?? "", event.receivedAt)
   ) {
+    if (isPurchaseDeliveryLogisticsParserConfidentNone(liveEarlyPurchaseDeliveryLogisticsParse)) {
+      recordRouteOutcome("live", "purchase_delivery_timing_parser_blocked_regex", {
+        convId: conv.id,
+        leadKey: conv.leadKey
+      });
+    } else {
     const reply = buildPurchaseDeliveryTimingReply(event.body ?? "");
     addTodo(
       conv,
@@ -37843,6 +38034,7 @@ if (authToken && signature) {
       reply
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
+    }
   }
   if (event.provider === "twilio" && tradeFollowupMessage) {
     if (conv.lead) {
