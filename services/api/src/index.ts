@@ -27,6 +27,7 @@ import {
   summarizeSalespersonNoteWithLLM,
   parseBookingIntentWithLLM,
   parseInventoryEntitiesWithLLM,
+  parseInventoryStatusWithLLM,
   parseIntentWithLLM,
   parsePricingPaymentsIntentWithLLM,
   parseRoutingDecisionWithLLM,
@@ -57,6 +58,7 @@ import type {
   EmpathySupportReplyParse,
   WebFallbackReplyParse,
   InventoryEntityParse,
+  InventoryStatusParse,
   JourneyIntentParse,
   SemanticSlotParse,
   UnifiedSemanticSlotParse,
@@ -5123,6 +5125,127 @@ function inventoryEntityParseToAvailabilityHint(
     return null;
   }
   return hint;
+}
+
+function isInventoryStatusParserAccepted(parsed: InventoryStatusParse | null): boolean {
+  if (!parsed || !parsed.explicitRequest || parsed.intent === "none") return false;
+  const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_INVENTORY_STATUS_CONFIDENCE_MIN ?? 0.72);
+  return confidence >= min;
+}
+
+function inventoryStatusParseToAvailabilityHint(
+  parsed: InventoryStatusParse | null
+): AvailabilityParseHint | null {
+  if (!isInventoryStatusParserAccepted(parsed)) return null;
+  const target = parsed?.target ?? null;
+  const hint: AvailabilityParseHint = {
+    model: target?.model ?? null,
+    year: target?.year != null ? String(target.year) : null,
+    color: target?.color ?? null,
+    stockId: target?.stockId ?? null,
+    condition:
+      target?.condition && target.condition !== "unknown"
+        ? target.condition
+        : null
+  };
+  if (!hint.model && !hint.year && !hint.color && !hint.stockId && !hint.condition) {
+    return null;
+  }
+  return hint;
+}
+
+function buildHoldStatusQuestionReply(conv: any, parsed?: InventoryStatusParse | null): string {
+  const target = parsed?.target ?? null;
+  const holdLabel =
+    String(conv?.hold?.label ?? "").trim() ||
+    [conv?.hold?.year, conv?.hold?.model, conv?.hold?.color].filter(Boolean).join(" ").trim() ||
+    [target?.year, target?.model, target?.color].filter(Boolean).join(" ").trim() ||
+    [conv?.inventoryContext?.year, conv?.inventoryContext?.model, conv?.inventoryContext?.color]
+      .filter(Boolean)
+      .join(" ")
+      .trim() ||
+    [conv?.lead?.vehicle?.year, conv?.lead?.vehicle?.model, conv?.lead?.vehicle?.color]
+      .filter(Boolean)
+      .join(" ")
+      .trim() ||
+    "that bike";
+  const label = normalizeDisplayCase(holdLabel);
+  return `I don’t have an exact release time yet, but ${label} is on hold right now. I can keep an eye on it if it opens back up, or I can check similar options for you.`;
+}
+
+async function maybeHandleInventoryStatusParserRoute(args: {
+  conv: Conversation;
+  text: string | null | undefined;
+  providerMessageId?: string | null;
+  scope: "live" | "regen";
+  parsedStatus: InventoryStatusParse | null;
+  parsedAvailability?: AvailabilityParseHint | null;
+  otherInventoryRequest?: boolean;
+  affectHasHumor?: boolean;
+  inboundMediaUrls?: string[];
+}): Promise<DeterministicAvailabilityResolution | null> {
+  if (!isInventoryStatusParserAccepted(args.parsedStatus)) return null;
+  const intent = args.parsedStatus?.intent;
+  if (intent === "hold_status_question") {
+    recordRouteOutcome(args.scope, "inventory_status_hold_question", {
+      convId: args.conv.id,
+      leadKey: args.conv.leadKey,
+      confidence: args.parsedStatus?.confidence ?? null
+    });
+    return { kind: "reply", reply: buildHoldStatusQuestionReply(args.conv, args.parsedStatus) };
+  }
+  if (intent === "incoming_status_question" || intent === "factory_order_eta") {
+    const modelLabel = resolveFactoryOrderTimingModelLabel(
+      args.text ?? "",
+      args.parsedAvailability ?? inventoryStatusParseToAvailabilityHint(args.parsedStatus),
+      args.conv
+    );
+    const reply = buildFactoryOrderTimingHandoffReply(modelLabel);
+    addTodo(
+      args.conv,
+      "other",
+      modelLabel
+        ? `Check factory/inbound timing for ${modelLabel} and follow up.`
+        : "Check factory/inbound timing and follow up.",
+      args.providerMessageId ?? undefined
+    );
+    setDialogState(args.conv, "inventory_answered");
+    setFollowUpMode(args.conv, "manual_handoff", "factory_order_timing");
+    stopFollowUpCadence(args.conv, "manual_handoff");
+    stopRelatedCadences(args.conv, "factory_order_timing", { setMode: "manual_handoff" });
+    recordRouteOutcome(args.scope, "inventory_status_factory_or_incoming", {
+      convId: args.conv.id,
+      leadKey: args.conv.leadKey,
+      intent,
+      modelLabel: modelLabel || null,
+      confidence: args.parsedStatus?.confidence ?? null
+    });
+    return { kind: "reply", reply };
+  }
+  if (
+    intent === "availability_check" ||
+    intent === "alternate_inventory_request" ||
+    intent === "image_availability_check"
+  ) {
+    const resolution = await resolveDeterministicAvailabilityReply({
+      conv: args.conv,
+      text: args.text ?? "",
+      parsedAvailability: args.parsedAvailability ?? inventoryStatusParseToAvailabilityHint(args.parsedStatus),
+      otherInventoryRequest: args.otherInventoryRequest || intent === "alternate_inventory_request",
+      affectHasHumor: args.affectHasHumor,
+      inboundMediaUrls: args.inboundMediaUrls
+    });
+    recordRouteOutcome(args.scope, "inventory_status_availability_route", {
+      convId: args.conv.id,
+      leadKey: args.conv.leadKey,
+      intent,
+      kind: resolution.kind,
+      confidence: args.parsedStatus?.confidence ?? null
+    });
+    return resolution;
+  }
+  return null;
 }
 
 function buildTestRideEligibilityReply(profile: any): string {
@@ -31209,8 +31332,27 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     : null;
   const regenInventoryEntityAvailabilityHint =
     inventoryEntityParseToAvailabilityHint(regenInventoryEntityParse);
+  const regenInventoryStatusParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_INVENTORY_STATUS_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    !regenShortAck;
+  const regenInventoryStatusParse = regenInventoryStatusParserEligible
+    ? await safeLlmParse("regen_inventory_status_parser", () =>
+        parseInventoryStatusWithLLM({
+          text: event.body ?? "",
+          history: buildHistory(conv, 8),
+          lead: conv.lead,
+          hasInboundMedia: !!(inbound as any)?.mediaUrls?.length
+        })
+      )
+    : null;
   if (process.env.DEBUG_INVENTORY_ENTITY_PARSER === "1" && regenInventoryEntityParse) {
     console.log("[llm-inventory-entity-parse] regen", regenInventoryEntityParse);
+  }
+  if (process.env.DEBUG_INVENTORY_STATUS_PARSER === "1" && regenInventoryStatusParse) {
+    console.log("[llm-inventory-status-parse] regen", regenInventoryStatusParse);
   }
   const regenStockInventoryInterest =
     !!(extractInventoryStockIdMention(event.body ?? "") || regenInventoryEntityAvailabilityHint?.stockId) &&
@@ -31590,6 +31732,33 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       return respondWithEmailRegeneratedDraft(regenFactoryOrderTimingReply);
     }
     return respondWithSmsRegeneratedDraft(regenFactoryOrderTimingReply);
+  }
+  const regenInventoryStatusResolution =
+    event.provider === "twilio"
+      ? await maybeHandleInventoryStatusParserRoute({
+          conv,
+          text: event.body ?? "",
+          providerMessageId: event.providerMessageId,
+          scope: "regen",
+          parsedStatus: regenInventoryStatusParse,
+          parsedAvailability: regenInventoryEntityAvailabilityHint,
+          otherInventoryRequest: isOtherInventoryRequestText(event.body ?? ""),
+          affectHasHumor: !!regenAcceptedAffect?.hasHumor,
+          inboundMediaUrls: (inbound as any)?.mediaUrls
+        })
+      : null;
+  if (regenInventoryStatusResolution) {
+    const reply =
+      regenInventoryStatusResolution.kind === "reply"
+        ? regenInventoryStatusResolution.reply
+        : "Which model are you asking about?";
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(
+      reply,
+      regenInventoryStatusResolution.kind === "reply" ? regenInventoryStatusResolution.mediaUrls : undefined
+    );
   }
   if (regenRoutingParserDecision.accepted && regenRoutingParserDecision.fallbackAction === "no_response") {
     const regenNoResponseInboundText = String(event.body ?? "");
@@ -35558,6 +35727,26 @@ if (authToken && signature) {
     inventoryEntityAccepted && inventoryEntityParse?.color ? inventoryEntityParse.color : null;
   const inventoryEntityAvailabilityHint =
     inventoryEntityParseToAvailabilityHint(inventoryEntityParse);
+  const inventoryStatusParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_INVENTORY_STATUS_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    !emojiOnly &&
+    !isShortAckText(inboundText);
+  const inventoryStatusParse = inventoryStatusParserEligible
+    ? await safeLlmParse("inventory_status_parser", () =>
+        parseInventoryStatusWithLLM({
+          text: event.body ?? "",
+          history: buildHistory(conv, 8),
+          lead: conv.lead,
+          hasInboundMedia: !!event.mediaUrls?.length
+        })
+      )
+    : null;
+  if (process.env.DEBUG_INVENTORY_STATUS_PARSER === "1" && inventoryStatusParse) {
+    console.log("[llm-inventory-status-parse]", inventoryStatusParse);
+  }
   const applyEntityBudgetSeed = (seed: {
     minPrice?: number;
     maxPrice?: number;
@@ -36141,6 +36330,59 @@ if (authToken && signature) {
     llmExplicitScheduleIntent || scheduleFromDialogAct;
   paymentOrPricingNoSchedule = false;
   const pricingOrPaymentsIntent = parserOnlyPricingIntent;
+  const inventoryStatusResolution =
+    event.provider === "twilio" && !pricingSignal && !explicitScheduleSignal
+      ? await maybeHandleInventoryStatusParserRoute({
+          conv,
+          text: event.body ?? "",
+          providerMessageId: event.providerMessageId,
+          scope: "live",
+          parsedStatus: inventoryStatusParse,
+          parsedAvailability: inventoryEntityAvailabilityHint,
+          otherInventoryRequest,
+          affectHasHumor: !!acceptedAffect?.hasHumor,
+          inboundMediaUrls: event.mediaUrls
+        })
+      : null;
+  if (inventoryStatusResolution) {
+    const reply =
+      inventoryStatusResolution.kind === "reply"
+        ? inventoryStatusResolution.reply
+        : "Which model are you asking about?";
+    const extraMediaUrls =
+      inventoryStatusResolution.kind === "reply" && Array.isArray(inventoryStatusResolution.mediaUrls)
+        ? inventoryStatusResolution.mediaUrls
+        : [];
+    if (webhookMode === "suggest") {
+      appendOutbound(
+        conv,
+        event.to,
+        event.from,
+        reply,
+        "draft_ai",
+        undefined,
+        extraMediaUrls.length ? extraMediaUrls : undefined
+      );
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(
+      conv,
+      event.to,
+      event.from,
+      reply,
+      "twilio",
+      undefined,
+      extraMediaUrls.length ? extraMediaUrls : undefined
+    );
+    const mediaTags = extraMediaUrls.length
+      ? extraMediaUrls.map(u => `\n    <Media>${escapeXml(u)}</Media>`).join("")
+      : "";
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}${mediaTags}\n  </Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (
     getDialogState(conv) === "none" &&
     !isScheduleDialogState(getDialogState(conv)) &&

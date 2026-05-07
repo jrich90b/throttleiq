@@ -1469,6 +1469,22 @@ export type InventoryEntityParse = {
   confidence?: number;
 };
 
+export type InventoryStatusIntent =
+  | "availability_check"
+  | "hold_status_question"
+  | "incoming_status_question"
+  | "factory_order_eta"
+  | "alternate_inventory_request"
+  | "image_availability_check"
+  | "none";
+
+export type InventoryStatusParse = {
+  intent: InventoryStatusIntent;
+  explicitRequest: boolean;
+  target: InventoryEntityParse;
+  confidence?: number;
+};
+
 function isIncomingInventoryFaqQuestion(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "").toLowerCase();
   if (!text.trim()) return false;
@@ -2109,6 +2125,48 @@ const INVENTORY_ENTITY_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     max_price: { type: "number" },
     monthly_budget: { type: "number" },
     down_payment: { type: "number" },
+    confidence: { type: "number" }
+  }
+};
+
+const INVENTORY_STATUS_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "intent",
+    "explicit_request",
+    "model",
+    "year",
+    "year_min",
+    "year_max",
+    "color",
+    "trim",
+    "stock_id",
+    "condition",
+    "confidence"
+  ],
+  properties: {
+    intent: {
+      type: "string",
+      enum: [
+        "availability_check",
+        "hold_status_question",
+        "incoming_status_question",
+        "factory_order_eta",
+        "alternate_inventory_request",
+        "image_availability_check",
+        "none"
+      ]
+    },
+    explicit_request: { type: "boolean" },
+    model: { type: "string" },
+    year: { type: "integer" },
+    year_min: { type: "integer" },
+    year_max: { type: "integer" },
+    color: { type: "string" },
+    trim: { type: "string" },
+    stock_id: { type: "string" },
+    condition: { type: "string", enum: ["new", "used", "unknown"] },
     confidence: { type: "number" }
   }
 };
@@ -5306,6 +5364,135 @@ export async function parseInventoryEntitiesWithLLM(args: {
     maxPrice: toNum(parsed.max_price),
     monthlyBudget: toNum(parsed.monthly_budget),
     downPayment: toNum(parsed.down_payment),
+    confidence
+  };
+}
+
+export async function parseInventoryStatusWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+  hasInboundMedia?: boolean;
+}): Promise<InventoryStatusParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_INVENTORY_STATUS_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_INVENTORY_STATUS_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_INVENTORY_STATUS_PARSER_MODEL ||
+    process.env.OPENAI_INVENTORY_ENTITY_PARSER_MODEL ||
+    process.env.OPENAI_MODEL ||
+    "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_INVENTORY_STATUS_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const examples = [
+    'input: "Customer: do you have the 26 heritage classic in brilliant red?" output: {"intent":"availability_check","explicit_request":true,"model":"Heritage Classic","year":2026,"year_min":0,"year_max":0,"color":"brilliant red","trim":"","stock_id":"","condition":"unknown","confidence":0.97}',
+    'input: "Customer: Very interested in thw T10-26 street glide !!" output: {"intent":"availability_check","explicit_request":true,"model":"Street Glide","year":2026,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"T10-26","condition":"unknown","confidence":0.97}',
+    'input: "Customer: Really? How long is it on hold for" output: {"intent":"hold_status_question","explicit_request":true,"model":"","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","confidence":0.96}',
+    'input: "Customer: Hi! Do you have any Street Bob coming in." output: {"intent":"incoming_status_question","explicit_request":true,"model":"Street Bob","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","confidence":0.96}',
+    'input: "Customer: how long would it take to get a 2026 nightster in" output: {"intent":"factory_order_eta","explicit_request":true,"model":"Nightster","year":2026,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","confidence":0.96}',
+    'input: "Customer: Do you the sportster or nightster in stock? Or something a bit lighter than the low rider" output: {"intent":"alternate_inventory_request","explicit_request":true,"model":"Sportster","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","confidence":0.95}',
+    'input: "Customer: Is this available as well? [MMS image attachment]" output: {"intent":"image_availability_check","explicit_request":true,"model":"","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","confidence":0.95}',
+    'input: "Customer: On my way doing my best to be there by 530" output: {"intent":"none","explicit_request":false,"model":"","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","confidence":0.96}',
+    'input: "Customer: Perfect." output: {"intent":"none","explicit_request":false,"model":"","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","confidence":0.96}'
+  ];
+  const prompt = [
+    "You are an inventory-status router for dealership SMS.",
+    "Return only JSON matching the schema.",
+    "",
+    "Intent rules:",
+    "- availability_check: asks if a specific bike/model/stock/color is available or in stock now.",
+    "- hold_status_question: asks about a bike already described as on hold, including how long it is on hold.",
+    "- incoming_status_question: asks whether a model is coming in, inbound, on order, or expected soon.",
+    "- factory_order_eta: asks how long it takes to get/order a model from the factory.",
+    "- alternate_inventory_request: asks for alternatives or multiple models/options after a prior bike was too big/unavailable.",
+    "- image_availability_check: asks if an attached/screenshot bike is available.",
+    "- none: no inventory status request.",
+    "- explicit_request is true only for a customer ask that should receive an inventory/status answer.",
+    "- Extract target fields only when explicit in the customer message; do not infer from history except that hold_status_question may have empty target.",
+    "- If hasInboundMedia is true and text says this/that/it available, use image_availability_check.",
+    "",
+    `Has inbound media: ${args.hasInboundMedia ? "yes" : "no"}`,
+    `Known lead: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null,
+      stockId: lead?.vehicle?.stockId ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    "Examples:",
+    ...examples,
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "inventory_status_parser",
+      schema: INVENTORY_STATUS_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 220,
+      debugTag: "llm-inventory-status-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const toNum = (v: unknown): number | null => {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return Math.round(n);
+  };
+  const toYear = (v: unknown): number | null => {
+    const n = toNum(v);
+    return n && n >= 1900 && n <= 2100 ? n : null;
+  };
+  const intentRaw = String(parsed.intent ?? "").trim();
+  const validIntents: InventoryStatusIntent[] = [
+    "availability_check",
+    "hold_status_question",
+    "incoming_status_question",
+    "factory_order_eta",
+    "alternate_inventory_request",
+    "image_availability_check",
+    "none"
+  ];
+  const intent = validIntents.includes(intentRaw as InventoryStatusIntent)
+    ? (intentRaw as InventoryStatusIntent)
+    : "none";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return {
+    intent,
+    explicitRequest: !!parsed.explicit_request,
+    target: {
+      model: cleanOptionalString(parsed.model),
+      year: toYear(parsed.year),
+      yearMin: toYear(parsed.year_min),
+      yearMax: toYear(parsed.year_max),
+      color: cleanOptionalString(parsed.color),
+      trim: cleanOptionalString(parsed.trim),
+      stockId: cleanOptionalString(parsed.stock_id),
+      condition:
+        parsed.condition === "new" || parsed.condition === "used" || parsed.condition === "unknown"
+          ? parsed.condition
+          : "unknown",
+      confidence
+    },
     confidence
   };
 }

@@ -1,0 +1,81 @@
+[
+  {
+    "id": "availability_heritage_brilliant_red_1",
+    "text": "do you have the 26 heritage classic in brilliant red? sorry, been really busy",
+    "expected": {
+      "intent": "availability_check",
+      "explicit_request": true,
+      "model_contains": "heritage classic",
+      "year": 2026,
+      "color_contains": "brilliant red"
+    }
+  },
+  {
+    "id": "stock_number_interest_1",
+    "text": "Very interested in thw T10-26 street glide !!",
+    "expected": {
+      "intent": "availability_check",
+      "explicit_request": true,
+      "model_contains": "street glide",
+      "stock_id": "T10-26"
+    }
+  },
+  {
+    "id": "hold_duration_question_1",
+    "text": "Really? How long is it on hold for",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Quick update - the 2026 CVO Road Glide ST is on hold right now."
+      }
+    ],
+    "expected": {
+      "intent": "hold_status_question",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "incoming_street_bob_1",
+    "text": "Hi! Do you have any Street Bob coming in.",
+    "expected": {
+      "intent": "incoming_status_question",
+      "explicit_request": true,
+      "model_contains": "street bob"
+    }
+  },
+  {
+    "id": "factory_eta_nightster_1",
+    "text": "how long would it take to get a 2026 nightster in",
+    "expected": {
+      "intent": "factory_order_eta",
+      "explicit_request": true,
+      "model_contains": "nightster",
+      "year": 2026
+    }
+  },
+  {
+    "id": "alternate_sportster_nightster_1",
+    "text": "Do you the sportster or nightster in stock ? Or something a bit lighter than the low rider",
+    "expected": {
+      "intent": "alternate_inventory_request",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "image_availability_1",
+    "text": "Is this available as well?",
+    "has_inbound_media": true,
+    "expected": {
+      "intent": "image_availability_check",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "arrival_update_not_inventory_1",
+    "text": "On my way doing my best to be there by 530",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  }
+]
