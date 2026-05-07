@@ -197,6 +197,7 @@ import {
   isAudioDemoStatusQuestionText,
   isBlockedCadencePersonalizationLineText,
   isCloseoutSignoffNoResponseText,
+  isDemoDayEventQuestionText,
   isFactoryOrderTimingQuestionText,
   hasExplicitCalendarDateForScheduleMemory,
   isImmediateChatCallbackAvailabilityText,
@@ -17876,6 +17877,7 @@ function buildInventoryWatchConfirmation(watch: InventoryWatch): string {
 function isWatchConfirmationIntentText(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
+  if (isDemoDayEventQuestionText(t)) return false;
   const intent =
     /\b(let me know|lmk|keep me posted|keep an eye out|watch for|notify me|text me|call me|shoot me(?: a)? (?:text|message|one)|shot me(?: a)? (?:text|message|one)|send(?:ing)? (?:it|one|them)?\s*my way|send(?:ing)? (?:it|one|them)?\s*over)\b/.test(
       t
@@ -32789,12 +32791,14 @@ if (authToken && signature) {
       process.env.LLM_SEMANTIC_SLOT_PARSER_ENABLED === "1" &&
       !!process.env.OPENAI_API_KEY &&
       !humanModeShortAck;
+    const humanModeDemoDayQuestion = isDemoDayEventQuestionText(humanModeText);
     const humanModeWatchHint =
+      !humanModeDemoDayQuestion &&
       /\b(let me know|lmk|keep me posted|keep an eye out|watch for|notify me|if you get one|if you get it|if you get another|when you get one|when you get it|when you get another|as soon as one comes in)\b/i.test(
         humanModeTextLower
       ) ||
-      !!conv.inventoryWatchPending ||
-      !!conv.inventoryWatch;
+      (!humanModeDemoDayQuestion && !!conv.inventoryWatchPending) ||
+      (!humanModeDemoDayQuestion && !!conv.inventoryWatch);
     if (humanModeWatchParserEligible && humanModeWatchHint) {
       const humanModeSemanticSlotParse = await safeLlmParse("semantic_slot_parser_human_mode", () =>
         parseSemanticSlotsWithLLM({
@@ -32823,7 +32827,8 @@ if (authToken && signature) {
         : "none";
       const humanModeWatch = humanModeSemanticAccepted ? humanModeSemanticSlotParse.watch : null;
       const humanModeWatchIntent =
-        humanModeWatchAction === "set_watch" || isWatchConfirmationIntentText(humanModeText);
+        !humanModeDemoDayQuestion &&
+        (humanModeWatchAction === "set_watch" || isWatchConfirmationIntentText(humanModeText));
       if (humanModeWatchIntent) {
         const humanModeInventoryEntityParserEligible =
           event.provider === "twilio" &&
@@ -33209,6 +33214,7 @@ if (authToken && signature) {
     semanticSlotAccepted && semanticSlotParse ? semanticSlotParse.watchAction : "none";
   const semanticWatch =
     semanticSlotAccepted && semanticSlotParse?.watch ? semanticSlotParse.watch : null;
+  const watchBlockedByDemoDayQuestion = isDemoDayEventQuestionText(event.body ?? "");
   const semanticDepartmentIntent =
     semanticSlotAccepted &&
     semanticSlotParse &&
@@ -34885,11 +34891,12 @@ if (authToken && signature) {
   });
   let watchHandledEarly = false;
   const earlyWatchIntentText = isWatchConfirmationIntentText(String(event.body ?? ""));
-  const earlyWatchIntentLLM = semanticWatchAction === "set_watch";
+  const earlyWatchIntentLLM = !watchBlockedByDemoDayQuestion && semanticWatchAction === "set_watch";
   const earlyWatchPrompted = /\b(keep an eye|keep me posted|watch for|watch\b)\b/i.test(
     lastOutboundText
   );
   const earlyPromptedWatchAffirm =
+    !watchBlockedByDemoDayQuestion &&
     earlyWatchPrompted &&
     isAffirmative(event.body) &&
     !schedulingSignalsBase.hasDayTime &&
@@ -34901,6 +34908,7 @@ if (authToken && signature) {
     event.provider === "twilio" &&
     !conv.inventoryWatchPending &&
     !preParserNonWatchPrimaryIntent &&
+    !watchBlockedByDemoDayQuestion &&
     (earlyWatchIntentLLM || earlyWatchIntentText || earlyPromptedWatchAffirm);
   const earlyWatchAsSideEffectOnly =
     earlyWatchIntent && hasPrimaryIntentBeyondWatch(String(event.body ?? ""));
@@ -37518,6 +37526,19 @@ if (authToken && signature) {
   if (
     event.provider === "twilio" &&
     conv.inventoryWatchPending &&
+    watchBlockedByDemoDayQuestion
+  ) {
+    // Demo-day/event questions can contain "let me know if..." but are not
+    // inventory-watch confirmations.
+    conv.inventoryWatchPending = undefined;
+    if (getDialogState(conv) === "inventory_watch_prompted") {
+      setDialogState(conv, "inventory_init");
+    }
+  }
+
+  if (
+    event.provider === "twilio" &&
+    conv.inventoryWatchPending &&
     isExplicitAvailabilityQuestion(textLower) &&
     !isWatchConfirmationIntentText(String(event.body ?? ""))
   ) {
@@ -38331,6 +38352,7 @@ if (authToken && signature) {
   );
   const watchIntentText = isWatchConfirmationIntentText(String(event.body ?? ""));
   const promptedWatchAffirm =
+    !watchBlockedByDemoDayQuestion &&
     watchPrompted &&
     isAffirmative(event.body) &&
     !schedulingSignals.hasDayTime &&
@@ -38338,14 +38360,14 @@ if (authToken && signature) {
     !schedulingSignals.hasDayOnlyRequest &&
     !schedulingExplicit;
   const explicitWatchIntent =
-    watchIntentText ||
-    promptedWatchAffirm ||
-    semanticWatchAction === "set_watch";
+    !watchBlockedByDemoDayQuestion &&
+    (watchIntentText || promptedWatchAffirm || semanticWatchAction === "set_watch");
   const watchIntent =
     event.provider === "twilio" &&
     !conv.inventoryWatchPending &&
     !watchHandledEarly &&
     !suppressWatchIntentThisTurn &&
+    !watchBlockedByDemoDayQuestion &&
     explicitWatchIntent;
   const watchAsSideEffectOnly = watchIntent && hasPrimaryIntentBeyondWatch(String(event.body ?? ""));
   if (watchIntent) {

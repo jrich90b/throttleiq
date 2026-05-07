@@ -361,6 +361,24 @@ export function buildRideChallengeSignupReply(args: {
   );
 }
 
+export function isDemoDayEventQuestionText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+  if (!text) return false;
+  const hasDemoEvent =
+    /\b(demo day|demo days|demo event|demo ride event|test ride days?|ride event|ride challenge|kawasaki demo)\b/i.test(
+      text
+    ) || /\bdemo\b[\s\S]{0,40}\b(kawasaki|event|day|days|ride)\b/i.test(text);
+  if (!hasDemoEvent) return false;
+  return (
+    /\b(do you|are you|have|having|got|offer|sign(?:ing)? up|signup|signed up|let me know|when|if)\b/i.test(
+      text
+    ) || /\?/.test(text)
+  );
+}
+
 export function extractInventoryStockIdMention(textRaw: string | null | undefined): string | null {
   const match = String(textRaw ?? "").match(/\b[A-Z0-9]{1,5}-\d{1,4}\b/i);
   return match?.[0] ? match[0].toUpperCase() : null;

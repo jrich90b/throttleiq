@@ -16,6 +16,7 @@ import {
   isAudioDemoStatusQuestionText,
   isBlockedCadencePersonalizationLineText,
   isCloseoutSignoffNoResponseText,
+  isDemoDayEventQuestionText,
   isDirectInventoryAvailabilityQuestionText,
   isFactoryOrderTimingQuestionText,
   hasExplicitCalendarDateForScheduleMemory,
@@ -428,6 +429,21 @@ const cases: Case[] = [
       dealerName: "American Harley-Davidson"
     }).includes("Thanks for signing up for this year's ride challenge."),
     expected: true
+  },
+  {
+    id: "demo_day_question_detected",
+    actual: isDemoDayEventQuestionText("Let me know if you guys have a demo day like Kawasaki"),
+    expected: true
+  },
+  {
+    id: "demo_day_question_with_question_mark_detected",
+    actual: isDemoDayEventQuestionText("Do you guys have demo days from Harley?"),
+    expected: true
+  },
+  {
+    id: "normal_inventory_watch_request_not_demo_day_question",
+    actual: isDemoDayEventQuestionText("Let me know if you get a Road Glide in black"),
+    expected: false
   },
   {
     id: "stock_id_extracted_from_inventory_interest",
