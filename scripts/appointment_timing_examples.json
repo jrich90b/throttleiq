@@ -1,5 +1,22 @@
 [
   {
+    "id": "coming_in_tomorrow_10_11_purchase_visit_1",
+    "text": "hey Joe! I'm gonna be in tomorrow morning around 10-11 to see a few bikes",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Let me know if you have any specific questions or would like to come down and take a look at it."
+      }
+    ],
+    "expected": {
+      "intent": "provide_new_time",
+      "explicit_request": true,
+      "day_contains": "tomorrow",
+      "time_contains": "10-11",
+      "time_window": "range"
+    }
+  },
+  {
     "id": "provide_tomorrow_11_12_1",
     "text": "tomorrow around 11/12 would work best for me",
     "history": [

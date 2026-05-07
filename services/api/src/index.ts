@@ -17541,7 +17541,10 @@ function hasActionableRequestBeyondMention(text: string): boolean {
   const hasTimeToken =
     /\b(\d{1,2}(:\d{2})?\s*(am|pm)\b|between\s+\d{1,2}|around\s+\d{1,2}|at\s+\d{1,2})/.test(body);
   const hasScheduleCue =
-    /\b(schedule|book|set up|set|reschedul|reschedule|move|bump|pickup|pick up|delivery|stop in|come in)\b/.test(
+    /\b(schedule|book|set up|set|reschedul|reschedule|move|bump|pickup|pick up|delivery|stop in|come in|come by|come down|stop by|take a look)\b/.test(
+      body
+    ) ||
+    /\b(?:i(?:'|’)?m|i am|i(?:'|’)?ll|i will|we(?:'|’)?re|we are|we(?:'|’)?ll|we will)\s+(?:gonna\s+|going to\s+)?be\s+in\b/.test(
       body
     );
   if (hasScheduleCue && (hasDayToken || hasTimeToken || /\?/.test(body))) return true;
