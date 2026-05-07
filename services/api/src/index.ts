@@ -6403,10 +6403,10 @@ async function buildCadenceHeldInventoryOverride(args: {
     index: 0
   };
   const status = classifyInventoryMatches(matches, holds, solds);
-  if (!status.held.length) {
+  if (!matches.length && !status.held.length) {
     status.held = heldInventoryItemsFromStore(holds, candidate);
   }
-  if (!status.sold.length) {
+  if (!matches.length && !status.sold.length) {
     status.sold = soldInventoryItemsFromStore(solds, candidate);
   }
   status.held = filterStatusItemsByContextColor(status.held, context.color);
