@@ -91,6 +91,11 @@ const cases: Case[] = [
     expected: false
   },
   {
+    id: "manual_outbound_loose_ack_does_not_confirm_booking",
+    actual: isManualOutboundBookingConfirmationText("That works!"),
+    expected: false
+  },
+  {
     id: "manual_outbound_schedule_you_in_between_window_confirms",
     actual: isManualOutboundBookingConfirmationText("Hey Rafael, sorry, that would work ill schedule you in between 11-12 tomorrow"),
     expected: true

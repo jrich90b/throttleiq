@@ -6483,6 +6483,76 @@ function buildInventoryUnitLabel(item: Partial<InventoryFeedItem>, fallbackModel
   return color ? `${base} in ${color}` : base;
 }
 
+function buildUnavailableStoreUnitLabel(
+  item: any,
+  fallbackModel?: string | null,
+  fallbackStockId?: string | null,
+  fallbackVin?: string | null
+): string {
+  const label = String(item?.label ?? "").replace(/\s+/g, " ").trim();
+  if (label) return label;
+  const built = buildInventoryUnitLabel(item ?? {}, fallbackModel);
+  if (built && built !== "that bike") return built;
+  const stockId = String(item?.stockId ?? fallbackStockId ?? "").trim();
+  const vin = String(item?.vin ?? fallbackVin ?? "").trim();
+  return stockId ? `stock ${stockId}` : vin ? `VIN ${vin}` : "that bike";
+}
+
+function getCadenceExactInventoryRefs(conv: any): Array<{
+  source: string;
+  stockId: string | null;
+  vin: string | null;
+  label: string | null;
+  unit?: any;
+}> {
+  const refs: Array<{
+    source: string;
+    stockId: string | null;
+    vin: string | null;
+    label: string | null;
+    unit?: any;
+  }> = [];
+  const seen = new Set<string>();
+  const add = (source: string, unit: any, stockRaw?: any, vinRaw?: any, labelRaw?: any) => {
+    const stockId = String(stockRaw ?? unit?.stockId ?? unit?.stock ?? "").trim() || null;
+    const vin = String(vinRaw ?? unit?.vin ?? "").trim() || null;
+    if (!stockId && !vin) return;
+    const key = `${stockId ?? ""}|${vin ?? ""}`.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    const label = String(labelRaw ?? unit?.label ?? "").replace(/\s+/g, " ").trim() || null;
+    refs.push({ source, stockId, vin, label, unit });
+  };
+
+  add("lead", conv?.lead?.vehicle, conv?.lead?.vehicle?.stockId ?? conv?.lead?.vehicle?.stock ?? conv?.lead?.stockId, conv?.lead?.vehicle?.vin ?? conv?.lead?.vin);
+  add("hold", conv?.hold, conv?.hold?.stockId, conv?.hold?.vin, conv?.hold?.label);
+  add("sale", conv?.sale, conv?.sale?.stockId, conv?.sale?.vin, conv?.sale?.label);
+
+  for (const message of [...(conv?.messages ?? [])].slice(-20).reverse()) {
+    const body = String(message?.body ?? "");
+    const stockId = extractInventoryStockIdMention(body);
+    if (stockId) add("recent_message_stock", null, stockId, null, null);
+  }
+
+  return refs;
+}
+
+function findExactCadenceUnavailableUnit(args: {
+  conv: any;
+  holds: Record<string, any>;
+  solds: Record<string, any>;
+}): { kind: "hold" | "sold"; item: any; ref: ReturnType<typeof getCadenceExactInventoryRefs>[number] } | null {
+  for (const ref of getCadenceExactInventoryRefs(args.conv)) {
+    const soldKey = normalizeInventorySoldKey(ref.stockId, ref.vin);
+    const holdKey = normalizeInventoryHoldKey(ref.stockId, ref.vin);
+    const sold = soldKey ? args.solds?.[soldKey] : null;
+    if (sold) return { kind: "sold", item: { ...ref.unit, ...sold, label: sold.label ?? ref.label }, ref };
+    const hold = holdKey ? args.holds?.[holdKey] : null;
+    if (hold) return { kind: "hold", item: { ...ref.unit, ...hold, label: hold.label ?? ref.label }, ref };
+  }
+  return null;
+}
+
 function ensureInventoryWatchForHeldCadence(
   conv: any,
   item: Partial<InventoryFeedItem> & { condition?: string | null }
@@ -6535,6 +6605,55 @@ async function buildCadenceHeldInventoryOverride(args: {
   const cadenceKind = String(conv?.followUpCadence?.kind ?? "").trim().toLowerCase();
   if (cadenceKind === "long_term" || cadenceKind === "post_sale") return null;
   const context = getRecentVehicleMentionContext(conv);
+  const holds = await listInventoryHolds();
+  const solds = await listInventorySolds();
+  const exactUnavailable = findExactCadenceUnavailableUnit({ conv, holds, solds });
+  if (exactUnavailable) {
+    const firstName = normalizeDisplayCase(args.name || "there");
+    const fallbackModel =
+      context.model && !isUnknownCadenceModel(context.model)
+        ? context.model
+        : conv?.lead?.vehicle?.model ?? exactUnavailable.item?.model ?? null;
+    const unitLabel = buildUnavailableStoreUnitLabel(
+      exactUnavailable.item,
+      fallbackModel,
+      exactUnavailable.ref.stockId,
+      exactUnavailable.ref.vin
+    );
+    const statusText =
+      exactUnavailable.kind === "sold" ? "has sold" : "is on hold right now";
+    if (exactUnavailable.kind === "hold") {
+      ensureInventoryWatchForHeldCadence(conv, {
+        ...exactUnavailable.item,
+        model: exactUnavailable.item?.model ?? fallbackModel ?? undefined,
+        year: exactUnavailable.item?.year ?? context.year ?? conv?.lead?.vehicle?.year ?? undefined,
+        color: exactUnavailable.item?.color ?? context.color ?? conv?.lead?.vehicle?.color ?? undefined,
+        condition: exactUnavailable.item?.condition ?? context.condition ?? conv?.lead?.vehicle?.condition
+      });
+    }
+    const recentContextText = (conv.messages ?? [])
+      .slice(-8)
+      .map((message: any) => String(message?.body ?? ""))
+      .join("\n");
+    const rideContext = isTestRideConversationContext(conv, recentContextText, recentContextText);
+    const nextStep = rideContext
+      ? "If you want, I can check inventory with you so you can choose another bike to ride."
+      : "If you want, I can check inventory with you so you can choose another bike.";
+    recordDecisionTrace({
+      scope: "regen",
+      stage: "cadence.exact_unavailable_inventory_override",
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      detail: {
+        status: exactUnavailable.kind,
+        source: exactUnavailable.ref.source,
+        stockId: exactUnavailable.ref.stockId,
+        vin: exactUnavailable.ref.vin,
+        label: unitLabel
+      }
+    });
+    return `Hey ${firstName}, I know you were interested in the ${unitLabel}, but that bike ${statusText}. ${nextStep}`;
+  }
   if (!context.model || isUnknownCadenceModel(context.model)) return null;
 
   let matches = await findInventoryMatches({ year: context.year, model: context.model });
@@ -6550,8 +6669,6 @@ async function buildCadenceHeldInventoryOverride(args: {
     if (conditionMatches.length) matches = conditionMatches;
   }
 
-  const holds = await listInventoryHolds();
-  const solds = await listInventorySolds();
   const candidate: MentionedModelCandidate = {
     model: context.model,
     year: context.year,
@@ -29860,16 +29977,11 @@ app.post("/conversations/:id/send", async (req, res) => {
 
     let requested = manualOutboundRequested ?? parseRequestedDayTime(parseSource, schedulerTimezone);
 
-    const confirmCue =
-      explicitBookingStatement ||
-      /\b(see you|all set|confirmed|booked|sounds good|perfect|that works|you(?:'|’)re set|you are set)\b/i.test(
-        lower
-      );
     const shouldInferManualAppointment =
       !didSetAppointment &&
       !!requested &&
       !hasCallCue &&
-      (bookingAccepted || (confirmCue && (hasScheduleKeyword || hasAppointmentContext)));
+      (bookingAccepted || explicitBookingStatement);
 
     if (shouldInferManualAppointment && requested) {
       const whenUtc = localPartsToUtcDate(schedulerTimezone, requested).toISOString();
