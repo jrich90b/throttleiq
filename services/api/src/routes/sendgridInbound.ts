@@ -53,8 +53,10 @@ import {
   parseResponseControlWithLLM,
   parseBookingIntentWithLLM,
   parseJourneyIntentWithLLM,
+  parseVehicleFactQuestionWithLLM,
   parseWalkInOutcomeWithLLM
 } from "../domain/llmDraft.js";
+import type { VehicleFactQuestionParse } from "../domain/llmDraft.js";
 import type { InboundMessageEvent } from "../domain/types.js";
 import { getSchedulerConfig, getPreferredSalespeople } from "../domain/schedulerConfig.js";
 import { getAuthedCalendarClient, insertEvent, queryFreeBusy } from "../domain/googleCalendar.js";
@@ -2414,6 +2416,156 @@ function isPricingPaymentInquiry(text?: string | null): boolean {
   );
 }
 
+type AdfVehicleFactDecision = {
+  questionType: Exclude<VehicleFactQuestionParse["questionType"], "none" | "availability">;
+  requestedFields: string[];
+  confidence: number;
+  source: "parser" | "fallback";
+};
+
+function isAdfVehicleFactParserAccepted(parsed: VehicleFactQuestionParse | null): boolean {
+  if (!parsed || parsed.questionType === "none" || parsed.questionType === "availability") return false;
+  if (!parsed.explicitRequest) return false;
+  const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_VEHICLE_FACT_CONFIDENCE_MIN ?? 0.74);
+  return confidence >= min;
+}
+
+function resolveAdfVehicleFactDecision(
+  text: string | null | undefined,
+  parsed: VehicleFactQuestionParse | null
+): AdfVehicleFactDecision | null {
+  if (isAdfVehicleFactParserAccepted(parsed) && parsed) {
+    return {
+      questionType: parsed.questionType as AdfVehicleFactDecision["questionType"],
+      requestedFields: parsed.requestedFields ?? [],
+      confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0,
+      source: "parser"
+    };
+  }
+
+  const lower = String(text ?? "").toLowerCase().trim();
+  if (!lower) return null;
+  const fallback = (questionType: AdfVehicleFactDecision["questionType"], requestedFields: string[]) => ({
+    questionType,
+    requestedFields,
+    confidence: 0,
+    source: "fallback" as const
+  });
+  if (isPriceOnlyInquiryText(text)) return fallback("price", ["price"]);
+  if (/\bout\s*the\s*door\b|\botd\b/.test(lower)) return fallback("otd_total", ["out_the_door_total"]);
+  if (/^year\s*\??$|\bwhat\s+year\b/.test(lower)) return fallback("year", ["year"]);
+  if (/\bfuel\s+injection\b|\binjected\b/.test(lower)) return fallback("engine_feature", ["fuel_injection"]);
+  if (/\bmileage\b|\bmiles\b/.test(lower)) return fallback("mileage", ["mileage"]);
+  if (/\bcolor\b|\bpaint\b/.test(lower)) return fallback("color", ["color"]);
+  if (/\bserviced\b|\bready\b|\binspected\b/.test(lower)) return fallback("service_status", ["service_status"]);
+  if (/\bservice\s+records?\b|\bmaintenance\s+records?\b|\btires?\b|\bbattery\b/.test(lower)) {
+    return fallback("service_records", ["service_records"]);
+  }
+  if (/\b(?:how\s+long|when)\b[\s\S]{0,60}\b(?:hold|held|free\s+up|available)\b|\bhold\b[\s\S]{0,40}\b(?:expire|expires|until|for)\b/.test(lower)) {
+    return fallback("hold_timing", ["hold_timing"]);
+  }
+  return null;
+}
+
+function cleanVehicleColorForReply(raw?: string | null): string | null {
+  const cleaned = String(raw ?? "")
+    .replace(/\b[A-Z]\d{1,4}-\d{2}\b/gi, "")
+    .replace(/\b(?:stock|vin)\b[:#]?\s*\S+/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned ? normalizeDisplayCase(cleaned) : null;
+}
+
+function buildInitialAdfVehicleFactReply(args: {
+  conv: any;
+  decision: AdfVehicleFactDecision;
+  text: string;
+}): { reply: string; needsTodo: boolean; todoReason: string; todoSummary: string } {
+  const vehicle = args.conv?.lead?.vehicle ?? {};
+  const year = String(vehicle.year ?? "").trim();
+  const model =
+    normalizeVehicleModel(vehicle.model ?? vehicle.description ?? "", vehicle.make ?? null) ||
+    "the bike";
+  const bikeLabel = [year, model && model !== "the bike" ? model : ""].filter(Boolean).join(" ").trim() || "the bike";
+  const color = cleanVehicleColorForReply(vehicle.color ?? null);
+  const confirmExact = `I’ll have our team confirm the sale price on the ${bikeLabel} and follow up with exact numbers shortly.`;
+
+  switch (args.decision.questionType) {
+    case "price":
+    case "otd_total":
+      return {
+        reply: confirmExact,
+        needsTodo: true,
+        todoReason: "pricing",
+        todoSummary: `Confirm sale price for ${bikeLabel}. Customer asked: ${args.text}`
+      };
+    case "year":
+      return year
+        ? {
+            reply: `It’s a ${year}${model && model !== "the bike" ? ` ${model}` : ""}.`,
+            needsTodo: false,
+            todoReason: "other",
+            todoSummary: ""
+          }
+        : {
+            reply: `I’ll confirm the year on the ${bikeLabel} and follow up shortly.`,
+            needsTodo: true,
+            todoReason: "other",
+            todoSummary: `Confirm year for ${bikeLabel}. Customer asked: ${args.text}`
+          };
+    case "color":
+      return color
+        ? {
+            reply: `It’s ${color}.`,
+            needsTodo: false,
+            todoReason: "other",
+            todoSummary: ""
+          }
+        : {
+            reply: `I’ll confirm the color on the ${bikeLabel} and follow up shortly.`,
+            needsTodo: true,
+            todoReason: "other",
+            todoSummary: `Confirm color for ${bikeLabel}. Customer asked: ${args.text}`
+          };
+    case "mileage":
+      return {
+        reply: `I’ll confirm the mileage on the ${bikeLabel} and follow up shortly.`,
+        needsTodo: true,
+        todoReason: "other",
+        todoSummary: `Confirm mileage for ${bikeLabel}. Customer asked: ${args.text}`
+      };
+    case "engine_feature":
+      return {
+        reply: `I’ll confirm that feature on the ${bikeLabel} and follow up shortly.`,
+        needsTodo: true,
+        todoReason: "other",
+        todoSummary: `Confirm requested feature for ${bikeLabel}. Customer asked: ${args.text}`
+      };
+    case "service_status":
+      return {
+        reply: `I’ll check the service status on the ${bikeLabel} and follow up shortly.`,
+        needsTodo: true,
+        todoReason: "other",
+        todoSummary: `Confirm service status for ${bikeLabel}. Customer asked: ${args.text}`
+      };
+    case "service_records":
+      return {
+        reply: `I’ll check on the service records for the ${bikeLabel} and follow up shortly.`,
+        needsTodo: true,
+        todoReason: "other",
+        todoSummary: `Check service records for ${bikeLabel}. Customer asked: ${args.text}`
+      };
+    case "hold_timing":
+      return {
+        reply: `I’ll check the hold timing on the ${bikeLabel} and follow up shortly.`,
+        needsTodo: true,
+        todoReason: "other",
+        todoSummary: `Check hold timing for ${bikeLabel}. Customer asked: ${args.text}`
+      };
+  }
+}
+
 export async function handleSendgridInbound(req: Request, res: Response) {
   console.log("[sendgrid inbound] meta:", {
     contentType: req.header("content-type"),
@@ -3197,7 +3349,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     llmResponseControl,
     llmRoutingDecision,
     llmFaqTopic,
-    llmWalkInOutcome
+    llmWalkInOutcome,
+    llmVehicleFact
   ] = await Promise.all([
     safeParser("dialog_act", () =>
       parseDialogActWithLLM({
@@ -3266,6 +3419,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     ),
     safeParser("walkin_outcome", () =>
       parseWalkInOutcomeWithLLM({
+        text: effectiveInquiry,
+        history: adfHistory,
+        lead: conv.lead
+      })
+    ),
+    safeParser("vehicle_fact_question", () =>
+      parseVehicleFactQuestionWithLLM({
         text: effectiveInquiry,
         history: adfHistory,
         lead: conv.lead
@@ -6014,12 +6174,48 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       "We’re not scheduling test rides right now, but I’m happy to help with pricing or set one up when we reopen. " +
       "If you want to stop by to check it out, just let me know.";
   }
+  const initialAdfVehicleFactDecision = isInitialAdf
+    ? resolveAdfVehicleFactDecision(effectiveInquiry, llmVehicleFact)
+    : null;
+  const skipInitialAdfVehicleFactForTrade =
+    !!initialAdfVehicleFactDecision &&
+    (initialAdfVehicleFactDecision.questionType === "price" ||
+      initialAdfVehicleFactDecision.questionType === "otd_total") &&
+    /\btrade(?:[\s-]?in)?\b/i.test(inquiryText);
+  if (initialAdfVehicleFactDecision && !skipInitialAdfVehicleFactForTrade) {
+    const vehicleFactReply = buildInitialAdfVehicleFactReply({
+      conv,
+      decision: initialAdfVehicleFactDecision,
+      text: effectiveInquiry
+    });
+    draft = vehicleFactReply.reply;
+    suppressAvailabilityAppend = true;
+    if (vehicleFactReply.needsTodo) {
+      addTodo(
+        conv,
+        vehicleFactReply.todoReason as any,
+        vehicleFactReply.todoSummary,
+        event.providerMessageId
+      );
+      if (
+        initialAdfVehicleFactDecision.questionType === "price" ||
+        initialAdfVehicleFactDecision.questionType === "otd_total"
+      ) {
+        setFollowUpMode(conv, "manual_handoff", "price_confirm");
+        markPricingEscalated(conv);
+      } else {
+        setFollowUpMode(conv, "manual_handoff", "vehicle_fact_followup");
+      }
+      stopFollowUpCadence(conv, "manual_handoff");
+    }
+  }
   const isPurchaseIntentLead =
     isInitialAdf &&
     !isServiceLead &&
     !isSellLead &&
     !isCreditLead &&
     !isWalkInLead &&
+    !initialAdfVehicleFactDecision &&
     !pricingInquiryIntent &&
     inferredBucket !== "trade_in_sell" &&
     inferredBucket !== "finance_prequal" &&
@@ -6054,6 +6250,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
   if (
     isInitialAdf &&
+    !initialAdfVehicleFactDecision &&
     pricingInquiryIntent &&
     typeof draft === "string" &&
     !/\b(payment|monthly|apr|down|budget|finance|credit app|term)\b/i.test(draft)

@@ -47,6 +47,13 @@ const fixtures: Fixture[] = [
     history: unitHistory
   },
   {
+    id: "sale_price_question_1",
+    text: "What is the sale price",
+    expectedType: "price",
+    expectedExplicit: true,
+    expectedFieldContains: "price"
+  },
+  {
     id: "otd_total_question_1",
     text: "What is the out the door total?",
     expectedType: "otd_total",

@@ -31361,11 +31361,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
             source: "fallback" as const
           }
         : null);
-    if (
-      adfVehicleFactDecision &&
-      (adfVehicleFactDecision.questionType === "price" ||
-        adfVehicleFactDecision.questionType === "otd_total")
-    ) {
+    if (adfVehicleFactDecision) {
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
       const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra");
       const firstName = normalizeDisplayCase(conv.lead?.firstName);
@@ -31376,19 +31372,37 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         .join(" ")
         .trim() || "the bike";
       const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
-      const reply =
-        `${greeting}This is ${agentName} at ${dealerName}. ` +
-        `I’ll have our team confirm the sale price on the ${bikeLabel} and follow up with exact numbers shortly.`;
-      addTodo(
-        conv,
-        "pricing",
-        `Confirm sale price for ${bikeLabel}. Customer asked: ${String(event.body ?? "").trim()}`,
-        event.providerMessageId
-      );
-      setFollowUpMode(conv, "manual_handoff", "price_confirm");
-      stopFollowUpCadence(conv, "manual_handoff");
-      markPricingEscalated(conv);
-      recordRouteOutcome("regen", "adf_price_handoff", {
+      const withPrefix = (body: string) =>
+        `${greeting}This is ${agentName} at ${dealerName}. ${body}`.trim();
+      const priceQuestion =
+        adfVehicleFactDecision.questionType === "price" ||
+        adfVehicleFactDecision.questionType === "otd_total";
+      let reply: string;
+      if (priceQuestion) {
+        reply = withPrefix(
+          `I’ll have our team confirm the sale price on the ${bikeLabel} and follow up with exact numbers shortly.`
+        );
+        addTodo(
+          conv,
+          "pricing",
+          `Confirm sale price for ${bikeLabel}. Customer asked: ${String(event.body ?? "").trim()}`,
+          event.providerMessageId
+        );
+        setFollowUpMode(conv, "manual_handoff", "price_confirm");
+        stopFollowUpCadence(conv, "manual_handoff");
+        markPricingEscalated(conv);
+      } else {
+        const factReply = await applyVehicleFactQuestionDecision({
+          conv,
+          text: event.body ?? "",
+          providerMessageId: event.providerMessageId,
+          receivedAt: event.receivedAt,
+          decision: adfVehicleFactDecision,
+          scope: "regen"
+        });
+        reply = withPrefix(factReply);
+      }
+      recordRouteOutcome("regen", "adf_vehicle_fact_handoff", {
         convId: conv.id,
         leadKey: conv.leadKey,
         questionType: adfVehicleFactDecision.questionType,
@@ -31396,10 +31410,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         confidence: adfVehicleFactDecision.confidence
       });
       return respondWithSmsRegeneratedDraft(reply, undefined, {
-        turnFinanceIntent: true,
+        turnFinanceIntent: priceQuestion,
         turnAvailabilityIntent: false,
         turnSchedulingIntent: false,
-        financeContextIntent: true
+        financeContextIntent: priceQuestion
       });
     }
   }
