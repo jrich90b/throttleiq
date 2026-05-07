@@ -4596,7 +4596,7 @@ function isVehicleFactQuestionParserAccepted(parsed: VehicleFactQuestionParse | 
 function hasVehicleFactQuestionParserHint(text: string | null | undefined): boolean {
   const lower = String(text ?? "").toLowerCase();
   if (!lower.trim()) return false;
-  return /\b(year|price|asking|total|otd|out\s+the\s+door|fuel\s+injection|injected|mileage|miles|color|paint|serviced|service\s+records?|records?|tires?|battery|available|still\s+there|still\s+available|on\s+hold)\b/i.test(
+  return /\b(year|price|asking|total|otd|out\s+the\s+door|fuel\s+injection|injected|mileage|miles|color|paint|serviced|service\s+records?|records?|tires?|battery|available|still\s+there|still\s+available|on\s+hold|how\s+long|hold\s+for|held\s+for|hold\s+expire|hold\s+expires|free\s+up)\b/i.test(
     lower
   );
 }
@@ -4632,6 +4632,9 @@ function resolveVehicleFactQuestionDecision(
   if (/\bserviced\b|\bready\b|\binspected\b/.test(lower)) return fallback("service_status", ["service_status"]);
   if (/\bservice\s+records?\b|\bmaintenance\s+records?\b|\btires?\b|\bbattery\b/.test(lower)) {
     return fallback("service_records", ["service_records"]);
+  }
+  if (/\b(?:how\s+long|when)\b[\s\S]{0,60}\b(?:hold|held|free\s+up|available)\b|\bhold\b[\s\S]{0,40}\b(?:expire|expires|until|for)\b/.test(lower)) {
+    return fallback("hold_timing", ["hold_timing"]);
   }
   return null;
 }
@@ -4701,6 +4704,44 @@ function extractVehicleModelFromContext(conv: Conversation): string {
   const yearModel = text.match(/\b(?:19|20)\d{2}\s+([A-Za-z][A-Za-z0-9\- ]{2,40})\b/);
   if (yearModel?.[1]) return normalizeDisplayCase(yearModel[1]).replace(/\bFlhrci\b/g, "FLHRCI");
   return "that bike";
+}
+
+function formatHoldUntilForReply(value: unknown): string | null {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  const date = new Date(raw);
+  if (!Number.isFinite(date.getTime())) return raw;
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "America/New_York"
+  }).format(date);
+}
+
+function buildHoldStatusUnitLabel(conv: Conversation): string {
+  const hold = conv.hold;
+  const watch = Array.isArray(conv.inventoryWatches) && conv.inventoryWatches.length
+    ? conv.inventoryWatches[0]
+    : conv.inventoryWatch;
+  const fromParts = (...parts: unknown[]) =>
+    parts
+      .map(part => String(part ?? "").trim())
+      .filter(Boolean)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+  const holdLabel =
+    String(hold?.label ?? "").trim() ||
+    fromParts(hold?.year, hold?.make, hold?.model, hold?.trim, hold?.color) ||
+    String(hold?.stockId ?? hold?.vin ?? "").trim();
+  if (holdLabel) return holdLabel;
+  const watchLabel = fromParts(watch?.year, watch?.make, watch?.model, watch?.trim, watch?.color);
+  if (watchLabel) return watchLabel;
+  const model = extractVehicleModelFromContext(conv);
+  return model && model !== "that bike" ? model : "that bike";
 }
 
 function extractVehicleColorFromContext(conv: Conversation): string | null {
@@ -4776,6 +4817,23 @@ async function buildVehicleFactQuestionReply(args: {
   const vin = String(conv.lead?.vehicle?.vin ?? "").trim() || null;
   const inventoryPrice = !approxPrice ? formatVehicleFactMoney((await findInventoryPrice({ stockId, vin }))?.item?.price) : null;
   const price = approxPrice || inventoryPrice;
+
+  if (args.decision.questionType === "hold_timing") {
+    const unitLabel = buildHoldStatusUnitLabel(conv);
+    const unitText = unitLabel === "that bike" ? "it" : `the ${unitLabel}`;
+    const holdUntil = formatHoldUntilForReply(conv.hold?.until);
+    if (holdUntil) {
+      return {
+        reply: `${unitText[0]?.toUpperCase() ?? "I"}${unitText.slice(1)} is currently marked on hold until ${holdUntil}. I’ll keep an eye on it and let you know if it opens back up.`,
+        needsTodo: false
+      };
+    }
+    return {
+      reply: `I don’t have the exact hold timing in front of me, but I’ll check on it and follow up. If ${unitText} opens back up, I’ll let you know right away. I can also look for another one if you want.`,
+      needsTodo: true,
+      todoSummary: `Check hold timing for ${unitLabel}.`
+    };
+  }
 
   if (args.decision.questionType === "year") {
     const yearText = year ? `It’s a ${year}${model && model !== "that bike" ? ` ${model}` : ""}.` : "I’ll confirm the year for you.";
@@ -4874,7 +4932,9 @@ async function applyVehicleFactQuestionDecision(args: {
       `${result.todoSummary ?? "Confirm vehicle fact."} Customer asked: ${String(args.text ?? "").trim()}`,
       args.providerMessageId ?? undefined
     );
-    setFollowUpMode(args.conv, "manual_handoff", "vehicle_fact_followup");
+    if (args.decision.questionType !== "hold_timing" || args.conv.followUp?.mode !== "holding_inventory") {
+      setFollowUpMode(args.conv, "manual_handoff", "vehicle_fact_followup");
+    }
   }
   recordRouteOutcome(args.scope, "vehicle_fact_question", {
     convId: args.conv.id,

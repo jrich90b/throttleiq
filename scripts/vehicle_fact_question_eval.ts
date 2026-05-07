@@ -11,6 +11,7 @@ type ExpectedType =
   | "service_status"
   | "service_records"
   | "availability"
+  | "hold_timing"
   | "none";
 
 type Fixture = {
@@ -93,6 +94,13 @@ const fixtures: Fixture[] = [
     expectedType: "availability",
     expectedExplicit: true,
     expectedFieldContains: "availability"
+  },
+  {
+    id: "hold_timing_question_1",
+    text: "Really? How long is it on hold for",
+    expectedType: "hold_timing",
+    expectedExplicit: true,
+    expectedFieldContains: "hold"
   },
   {
     id: "schedule_not_vehicle_fact_1",

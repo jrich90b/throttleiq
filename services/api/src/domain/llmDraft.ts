@@ -1389,6 +1389,7 @@ export type VehicleFactQuestionParse = {
     | "service_status"
     | "service_records"
     | "availability"
+    | "hold_timing"
     | "none";
   explicitRequest: boolean;
   requestedFields?: string[];
@@ -1956,6 +1957,7 @@ const VEHICLE_FACT_QUESTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
         "service_status",
         "service_records",
         "availability",
+        "hold_timing",
         "none"
       ]
     },
@@ -3928,6 +3930,9 @@ output: {"question_type":"service_records","explicit_request":true,"requested_fi
     `EXAMPLE I
 inbound: "Is that still available?"
 output: {"question_type":"availability","explicit_request":true,"requested_fields":["availability"],"confidence":0.97}`,
+    `EXAMPLE I2
+inbound: "Really? How long is it on hold for"
+output: {"question_type":"hold_timing","explicit_request":true,"requested_fields":["hold_timing"],"confidence":0.97}`,
     `EXAMPLE J
 inbound: "Tuesday around 11am would work great"
 output: {"question_type":"none","explicit_request":false,"requested_fields":[],"confidence":0.98}`,
@@ -3950,6 +3955,7 @@ output: {"question_type":"none","explicit_request":false,"requested_fields":[],"
     "- service_status: asks whether it has been serviced, inspected, or ready.",
     "- service_records: asks for service history/records, tire/battery age, maintenance records.",
     "- availability: asks whether the currently discussed unit is still available/in stock/on hold.",
+    "- hold_timing: asks how long a currently-held unit is on hold for, when the hold expires, or when it may free up.",
     "- none: scheduling, trade appraisal, finance, generic acknowledgements, jokes, or broad inventory shopping.",
     "",
     "Rules:",
@@ -3999,7 +4005,8 @@ output: {"question_type":"none","explicit_request":false,"requested_fields":[],"
     raw === "color" ||
     raw === "service_status" ||
     raw === "service_records" ||
-    raw === "availability"
+    raw === "availability" ||
+    raw === "hold_timing"
       ? raw
       : "none";
   const confidence =
