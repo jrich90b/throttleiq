@@ -3724,19 +3724,19 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   let inferredBucket = rule.bucket;
   let inferredCta = rule.cta;
-  if (!leadSource || rule.ruleName === "default") {
-    if (semanticPartsIntent || partsIntentFromText) {
-      inferredBucket = "parts";
-      inferredCta = "parts_request";
-    } else if (parserBucketCta) {
+  if (semanticPartsIntent || partsIntentFromText) {
+    inferredBucket = "parts";
+    inferredCta = "parts_request";
+  } else if (semanticApparelIntent || apparelIntentFromText) {
+    inferredBucket = "apparel";
+    inferredCta = "apparel_request";
+  } else if (semanticServiceIntent || serviceSupportIntentFromParser) {
+    inferredBucket = "service";
+    inferredCta = "service_request";
+  } else if (!leadSource || rule.ruleName === "default") {
+    if (parserBucketCta) {
       inferredBucket = parserBucketCta.bucket;
       inferredCta = parserBucketCta.cta;
-    } else if (semanticApparelIntent || apparelIntentFromText) {
-      inferredBucket = "apparel";
-      inferredCta = "apparel_request";
-    } else if (semanticServiceIntent || serviceSupportIntentFromParser) {
-      inferredBucket = "service";
-      inferredCta = "service_request";
     } else if (marketingEventIntentFromParser) {
       inferredBucket = "event_promo";
       inferredCta = "event_rsvp";
