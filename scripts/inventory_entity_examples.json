@@ -1,0 +1,37 @@
+[
+  {
+    "id": "stock_interest_t10_26_street_glide_1",
+    "text": "Very interested in thw T10-26 street glide !!",
+    "expected": {
+      "model_contains": "street glide",
+      "year": 2026,
+      "stock_id": "T10-26"
+    }
+  },
+  {
+    "id": "availability_heritage_brilliant_red_1",
+    "text": "do you have the 26 heritage classic in brilliant red? sorry, been really busy",
+    "expected": {
+      "model_contains": "heritage classic",
+      "year": 2026,
+      "color_contains": "brilliant red"
+    }
+  },
+  {
+    "id": "used_street_glide_budget_1",
+    "text": "I'm looking for a pre-owned Street Glide around thirteen or fourteen thousand",
+    "expected": {
+      "model_contains": "street glide",
+      "condition": "used",
+      "max_price": 14000
+    }
+  },
+  {
+    "id": "schedule_only_no_model_1",
+    "text": "Tuesday around 11am would work great for me if that's possible.",
+    "expected": {
+      "model_contains": null,
+      "stock_id": null
+    }
+  }
+]

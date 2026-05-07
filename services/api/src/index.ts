@@ -55,6 +55,7 @@ import type {
   CustomerDispositionParse,
   EmpathySupportReplyParse,
   WebFallbackReplyParse,
+  InventoryEntityParse,
   JourneyIntentParse,
   SemanticSlotParse,
   UnifiedSemanticSlotParse,
@@ -5044,6 +5045,41 @@ function isFaqParserAccepted(
   return confidence >= min;
 }
 
+type AvailabilityParseHint = {
+  model?: string | null;
+  year?: string | null;
+  color?: string | null;
+  stockId?: string | null;
+  condition?: string | null;
+};
+
+function isInventoryEntityParserAccepted(parsed: InventoryEntityParse | null): boolean {
+  if (!parsed) return false;
+  const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_INVENTORY_ENTITY_CONFIDENCE_MIN ?? 0.68);
+  return confidence >= min;
+}
+
+function inventoryEntityParseToAvailabilityHint(
+  parsed: InventoryEntityParse | null
+): AvailabilityParseHint | null {
+  if (!isInventoryEntityParserAccepted(parsed)) return null;
+  const hint: AvailabilityParseHint = {
+    model: parsed?.model ?? null,
+    year: parsed?.year != null ? String(parsed.year) : null,
+    color: parsed?.color ?? null,
+    stockId: parsed?.stockId ?? null,
+    condition:
+      parsed?.condition && parsed.condition !== "unknown"
+        ? parsed.condition
+        : null
+  };
+  if (!hint.model && !hint.year && !hint.color && !hint.stockId && !hint.condition) {
+    return null;
+  }
+  return hint;
+}
+
 function buildTestRideEligibilityReply(profile: any): string {
   const policyText =
     String(profile?.policies?.testRideEligibilityText ?? "").trim() ||
@@ -5077,6 +5113,70 @@ async function maybeHandleTestRideEligibilityFaq(args: {
     convId: args.conv.id,
     leadKey: args.conv.leadKey,
     confidence: parsed?.confidence ?? null
+  });
+  return reply;
+}
+
+function hasFactoryOrderTimingParserHint(text: string | null | undefined): boolean {
+  const lower = String(text ?? "").toLowerCase();
+  if (!lower.trim()) return false;
+  return (
+    isFactoryOrderTimingQuestionText(lower) ||
+    /\b(coming in|incoming|on order|factory|from the factory|get one|locate one|order one|how long|eta|when can you get)\b/i.test(
+      lower
+    )
+  );
+}
+
+async function maybeHandleFactoryOrderTimingFaq(args: {
+  conv: Conversation;
+  text: string | null | undefined;
+  providerMessageId?: string | null;
+  scope: "live" | "regen";
+  parsedAvailability?: AvailabilityParseHint | null;
+}): Promise<string | null> {
+  if (!hasFactoryOrderTimingParserHint(args.text)) return null;
+  const parsed = await safeLlmParse(`${args.scope}_factory_order_faq_topic_parser`, () =>
+    parseDealershipFaqTopicWithLLM({
+      text: String(args.text ?? ""),
+      history: buildHistory(args.conv, 10),
+      lead: args.conv.lead
+    })
+  );
+  const parserAccepted = isFaqParserAccepted(parsed, "factory_order_timing");
+  if (!parserAccepted) {
+    const confidence = typeof parsed?.confidence === "number" ? parsed.confidence : 0;
+    const min = Number(process.env.LLM_FAQ_TOPIC_CONFIDENCE_MIN ?? 0.72);
+    if (parsed && parsed.topic !== "factory_order_timing" && confidence >= min) {
+      return null;
+    }
+    if (!isFactoryOrderTimingQuestionText(args.text ?? "")) return null;
+  }
+
+  const modelLabel = resolveFactoryOrderTimingModelLabel(
+    args.text ?? "",
+    args.parsedAvailability ?? null,
+    args.conv
+  );
+  const reply = buildFactoryOrderTimingHandoffReply(modelLabel);
+  addTodo(
+    args.conv,
+    "other",
+    modelLabel
+      ? `Check factory/inbound timing for ${modelLabel} and follow up.`
+      : "Check factory/inbound timing and follow up.",
+    args.providerMessageId ?? undefined
+  );
+  setDialogState(args.conv, "inventory_answered");
+  setFollowUpMode(args.conv, "manual_handoff", "factory_order_timing");
+  stopFollowUpCadence(args.conv, "manual_handoff");
+  stopRelatedCadences(args.conv, "factory_order_timing", { setMode: "manual_handoff" });
+  recordRouteOutcome(args.scope, "factory_order_timing_handoff", {
+    convId: args.conv.id,
+    leadKey: args.conv.leadKey,
+    modelLabel: modelLabel || null,
+    confidence: parsed?.confidence ?? null,
+    parserTopic: parsed?.topic ?? null
   });
   return reply;
 }
@@ -8561,8 +8661,9 @@ async function buildTestRideInventorySelectionReply(args: {
 
 type AvailabilityPreferenceHint = {
   model?: string | null;
-  year?: string | number | null;
+  year?: string | null;
   color?: string | null;
+  stockId?: string | null;
   condition?: string | null;
 };
 
@@ -8593,6 +8694,7 @@ function buildAvailabilityPreferenceReplyHint(args: {
     model?: string | null;
     year?: string | number | null;
     color?: string | null;
+    stockId?: string | null;
     condition?: string | null;
   } | null;
   shortlistPromptActive?: boolean;
@@ -8617,11 +8719,12 @@ function buildAvailabilityPreferenceReplyHint(args: {
     model,
     year:
       yearFromText != null
-        ? yearFromText
+        ? String(yearFromText)
         : shouldCarryParserYear && parserAvailability?.year != null
-          ? parserAvailability.year
+          ? String(parserAvailability.year)
           : null,
     color: parserAvailability?.color ?? colorFromText ?? null,
+    stockId: parserAvailability?.stockId ?? null,
     condition: conditionFromParser ?? conditionFromText ?? null
   };
   return hint;
@@ -14777,7 +14880,7 @@ async function findInventoryImageMatch(args: {
 async function resolveDeterministicAvailabilityReply(args: {
   conv: any;
   text: string;
-  parsedAvailability?: { model?: string | null; year?: string | number | null; color?: string | null; condition?: string | null } | null;
+  parsedAvailability?: AvailabilityParseHint | null;
   otherInventoryRequest?: boolean;
   affectHasHumor?: boolean;
   inboundMediaUrls?: string[];
@@ -14795,6 +14898,51 @@ async function resolveDeterministicAvailabilityReply(args: {
   const exactMediaInventoryItem = await findInventoryItemFromMediaExtraction(mediaInventoryExtraction);
   if (exactMediaInventoryItem && referencesSpecificInventoryUnit(args.text)) {
     return buildExactMediaInventoryAvailabilityResolution(conv, exactMediaInventoryItem);
+  }
+  const stockIdFromText = extractInventoryStockIdMention(args.text);
+  const stockIdFromParser = String(parsedAvailability?.stockId ?? "").trim() || null;
+  const requestedStockKey = normalizeInventoryIdentifier(stockIdFromText ?? stockIdFromParser);
+  if (requestedStockKey) {
+    const items = await getInventoryFeed();
+    const exactStockItem = items.find(item => {
+      const itemStock = normalizeInventoryIdentifier(item.stockId);
+      const itemVin = normalizeInventoryIdentifier(item.vin);
+      return itemStock === requestedStockKey || itemVin === requestedStockKey;
+    });
+    if (exactStockItem) {
+      const holds = await listInventoryHolds();
+      const solds = await listInventorySolds();
+      const status = classifyInventoryMatches([exactStockItem], holds, solds);
+      const detail = formatBudgetInventoryOption(exactStockItem);
+      const url = /^https?:\/\//i.test(String(exactStockItem.url ?? ""))
+        ? ` — ${exactStockItem.url}`
+        : "";
+      conv.inventoryContext = {
+        ...(conv.inventoryContext ?? {}),
+        model: exactStockItem.model ?? conv.inventoryContext?.model,
+        year: exactStockItem.year ?? conv.inventoryContext?.year,
+        color: exactStockItem.color ?? conv.inventoryContext?.color,
+        condition: exactStockItem.condition ?? conv.inventoryContext?.condition,
+        stockId: exactStockItem.stockId ?? conv.inventoryContext?.stockId,
+        updatedAt: nowIso()
+      };
+      if (status.sold.length) {
+        return {
+          kind: "reply",
+          reply: `${detail} is marked sold. I can check similar options for you.`
+        };
+      }
+      if (status.held.length) {
+        return {
+          kind: "reply",
+          reply: `${detail} is on hold right now. I can check similar options or keep an eye on it if it opens back up.`
+        };
+      }
+      return {
+        kind: "reply",
+        reply: `Yes — ${detail}${url} is available right now. Let me know what day and time works for you to stop in.`
+      };
+    }
   }
   const currentTextModelCandidates = findMentionedModelCandidates(args.text);
   const requestedModelMentions = selectRequestedAvailabilityModelMentions(
@@ -30716,8 +30864,28 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     !!process.env.OPENAI_API_KEY &&
     !regenShortAck;
   const regenTextLower = String(event.body ?? "").toLowerCase();
+  const regenInventoryEntityParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_INVENTORY_ENTITY_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    !regenShortAck;
+  const regenInventoryEntityParse = regenInventoryEntityParserEligible
+    ? await safeLlmParse("regen_inventory_entity_parser", () =>
+        parseInventoryEntitiesWithLLM({
+          text: event.body ?? "",
+          history: buildHistory(conv, 8),
+          lead: conv.lead
+        })
+      )
+    : null;
+  const regenInventoryEntityAvailabilityHint =
+    inventoryEntityParseToAvailabilityHint(regenInventoryEntityParse);
+  if (process.env.DEBUG_INVENTORY_ENTITY_PARSER === "1" && regenInventoryEntityParse) {
+    console.log("[llm-inventory-entity-parse] regen", regenInventoryEntityParse);
+  }
   const regenStockInventoryInterest =
-    !!extractInventoryStockIdMention(event.body ?? "") &&
+    !!(extractInventoryStockIdMention(event.body ?? "") || regenInventoryEntityAvailabilityHint?.stockId) &&
     isStockNumberInventoryInterestText(event.body ?? "");
   const regenTradePayoffParserHint =
     /\b(lien|lein|payoff|lender|loan|title|owe|owe on it|bank)\b/i.test(regenTextLower) ||
@@ -31079,30 +31247,21 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     return respondWithSmsRegeneratedDraft(regenTestRideEligibilityReply);
   }
-  if (event.provider === "twilio" && isFactoryOrderTimingQuestionText(event.body ?? "")) {
-    const modelLabel = resolveFactoryOrderTimingModelLabel(event.body ?? "", null, conv);
-    const reply = buildFactoryOrderTimingHandoffReply(modelLabel);
-    addTodo(
-      conv,
-      "other",
-      modelLabel
-        ? `Check factory/inbound timing for ${modelLabel} and follow up.`
-        : "Check factory/inbound timing and follow up.",
-      event.providerMessageId
-    );
-    setDialogState(conv, "inventory_answered");
-    setFollowUpMode(conv, "manual_handoff", "factory_order_timing");
-    stopFollowUpCadence(conv, "manual_handoff");
-    stopRelatedCadences(conv, "factory_order_timing", { setMode: "manual_handoff" });
-    recordRouteOutcome("regen", "factory_order_timing_handoff", {
-      convId: conv.id,
-      leadKey: conv.leadKey,
-      modelLabel: modelLabel || null
-    });
+  const regenFactoryOrderTimingReply =
+    event.provider === "twilio"
+      ? await maybeHandleFactoryOrderTimingFaq({
+          conv,
+          text: event.body ?? "",
+          providerMessageId: event.providerMessageId,
+          scope: "regen",
+          parsedAvailability: regenInventoryEntityAvailabilityHint
+        })
+      : null;
+  if (regenFactoryOrderTimingReply) {
     if (channel === "email") {
-      return respondWithEmailRegeneratedDraft(reply);
+      return respondWithEmailRegeneratedDraft(regenFactoryOrderTimingReply);
     }
-    return respondWithSmsRegeneratedDraft(reply);
+    return respondWithSmsRegeneratedDraft(regenFactoryOrderTimingReply);
   }
   if (regenRoutingParserDecision.accepted && regenRoutingParserDecision.fallbackAction === "no_response") {
     const regenNoResponseInboundText = String(event.body ?? "");
@@ -31940,7 +32099,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const regenAvailabilityPreferenceHint = buildAvailabilityPreferenceReplyHint({
       inboundText: event.body ?? "",
       lastOutboundText,
-      parserAvailability: null,
+      parserAvailability: regenInventoryEntityAvailabilityHint,
       shortlistPromptActive: hasActivePendingShortListPrompt(conv)
     });
     const regenDirectAvailabilityQuestion = isDirectInventoryAvailabilityQuestionText(event.body ?? "");
@@ -31949,6 +32108,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const explicitAvailabilityAskThisTurn =
       regenParserAvailabilityIntent ||
       !!regenAvailabilityPreferenceHint ||
+      regenStockInventoryInterest ||
       regenDirectAvailabilityQuestion ||
       regenMediaAvailabilityQuestion;
     const financeOrRateAskThisTurn = regenParserPricingIntent;
@@ -31989,7 +32149,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       const availabilityResolution = await resolveDeterministicAvailabilityReply({
         conv,
         text: event.body ?? "",
-        parsedAvailability: regenAvailabilityPreferenceHint,
+        parsedAvailability: regenAvailabilityPreferenceHint ?? regenInventoryEntityAvailabilityHint,
         otherInventoryRequest: regenOtherInventoryRequest,
         affectHasHumor: !!regenAcceptedAffect?.hasHumor,
         inboundMediaUrls: event.mediaUrls
@@ -35063,6 +35223,8 @@ if (authToken && signature) {
     inventoryEntityAccepted && inventoryEntityParse?.year ? inventoryEntityParse.year : null;
   const inventoryEntityColorHint =
     inventoryEntityAccepted && inventoryEntityParse?.color ? inventoryEntityParse.color : null;
+  const inventoryEntityAvailabilityHint =
+    inventoryEntityParseToAvailabilityHint(inventoryEntityParse);
   const applyEntityBudgetSeed = (seed: {
     minPrice?: number;
     maxPrice?: number;
@@ -35745,7 +35907,9 @@ if (authToken && signature) {
   const llmTestRideIntent = intentAccepted && intentParse?.intent === "test_ride";
   const jumpStartExperienceRequest = isJumpStartExperienceText(event.body ?? "");
   const effectiveTestRideIntent = llmTestRideIntent && !jumpStartExperienceRequest;
-  const llmAvailability = llmAvailabilityIntent ? intentParse?.availability ?? null : null;
+  const llmAvailability = llmAvailabilityIntent
+    ? (inventoryEntityAvailabilityHint ?? intentParse?.availability ?? null)
+    : inventoryEntityAvailabilityHint;
   const testRideEligibilityReply =
     event.provider === "twilio"
       ? await maybeHandleTestRideEligibilityFaq({
@@ -35767,31 +35931,24 @@ if (authToken && signature) {
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
-  if (event.provider === "twilio" && isFactoryOrderTimingQuestionText(event.body ?? "")) {
-    const modelLabel = resolveFactoryOrderTimingModelLabel(event.body ?? "", llmAvailability, conv);
-    const reply = buildFactoryOrderTimingHandoffReply(modelLabel);
-    addTodo(
-      conv,
-      "other",
-      modelLabel
-        ? `Check factory/inbound timing for ${modelLabel} and follow up.`
-        : "Check factory/inbound timing and follow up.",
-      event.providerMessageId
-    );
-    setDialogState(conv, "inventory_answered");
-    setFollowUpMode(conv, "manual_handoff", "factory_order_timing");
-    stopFollowUpCadence(conv, "manual_handoff");
-    stopRelatedCadences(conv, "factory_order_timing", { setMode: "manual_handoff" });
-    logRouteOutcome("factory_order_timing_handoff", {
-      modelLabel: modelLabel || null
-    });
+  const factoryOrderTimingReply =
+    event.provider === "twilio"
+      ? await maybeHandleFactoryOrderTimingFaq({
+          conv,
+          text: event.body ?? "",
+          providerMessageId: event.providerMessageId,
+          scope: "live",
+          parsedAvailability: llmAvailability
+        })
+      : null;
+  if (factoryOrderTimingReply) {
     if (webhookMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      appendOutbound(conv, event.to, event.from, factoryOrderTimingReply, "draft_ai");
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(reply)}</Message>\n</Response>`;
+    appendOutbound(conv, event.to, event.from, factoryOrderTimingReply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(factoryOrderTimingReply)}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
   let mentionedUser: any | null = null;
@@ -37900,8 +38057,14 @@ if (authToken && signature) {
     shortlistPromptActive: hasActivePendingShortListPrompt(conv)
   });
   const availabilityPreferenceReply = !!availabilityPreferenceHint;
+  const stockInventoryInterestThisTurn =
+    !!(extractInventoryStockIdMention(event.body ?? "") || inventoryEntityAvailabilityHint?.stockId) &&
+    isStockNumberInventoryInterestText(event.body ?? "");
   const availabilityRouteEligible =
-    routeExecAvailability || explicitAvailabilitySignalThisTurn || availabilityPreferenceReply;
+    routeExecAvailability ||
+    explicitAvailabilitySignalThisTurn ||
+    availabilityPreferenceReply ||
+    stockInventoryInterestThisTurn;
   const availabilityExplicit =
     availabilityRouteEligible &&
     !/\b(sound system|audio system|stereo|speakers?|speaker system)\b/i.test(textLower) &&
