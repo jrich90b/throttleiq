@@ -6300,17 +6300,16 @@ async function buildCadenceHeldInventoryOverride(args: {
     const conditionMatches = matches.filter(item => normalizeWatchCondition(item.condition) === context.condition);
     if (conditionMatches.length) matches = conditionMatches;
   }
-  if (!matches.length) return null;
 
   const holds = await listInventoryHolds();
   const solds = await listInventorySolds();
-  const status = classifyInventoryMatches(matches, holds, solds);
   const candidate: MentionedModelCandidate = {
     model: context.model,
     year: context.year,
     body: [context.year, context.model, context.color].filter(Boolean).join(" "),
     index: 0
   };
+  const status = classifyInventoryMatches(matches, holds, solds);
   if (!status.held.length) {
     status.held = heldInventoryItemsFromStore(holds, candidate);
   }
