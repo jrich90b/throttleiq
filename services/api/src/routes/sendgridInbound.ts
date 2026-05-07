@@ -4366,6 +4366,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const agentEsc = esc(agentName);
     const dealerEsc = esc(dealerName);
     body = body.replace(new RegExp(`\\bthis is\\s+${agentEsc}\\s+at\\s+${dealerEsc}\\.?\\s*`, "ig"), "");
+    if (firstName) {
+      const firstEsc = esc(firstName);
+      body = body.replace(new RegExp(`\\b(thanks\\s+for\\s+(?:the\\s+)?note),\\s*${firstEsc}\\s*[—-]\\s*`, "ig"), "$1 — ");
+    }
     return `${prefix}${body}`.trim();
   };
 

@@ -868,7 +868,7 @@ export function isTakeOffMilwaukeeEightEngineRequestText(textRaw: string | null 
 }
 
 export function buildTakeOffMilwaukeeEightEngineReply(): string {
-  return "Thanks — I got your note about looking for a take-off Milwaukee-Eight 114/117. I’ll have our parts team keep an eye out, and if one becomes available from an upgrade we’ll reach out.";
+  return "I got your note about looking for a take-off Milwaukee-Eight 114/117. I’ll have our parts team keep an eye out, and if one becomes available from an upgrade we’ll reach out.";
 }
 
 export function shouldTreatAdfAsWalkInContext(args: {

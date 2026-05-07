@@ -690,7 +690,7 @@ const cases: Case[] = [
     id: "takeoff_m8_engine_parts_reply_mentions_parts_watch",
     actual: buildTakeOffMilwaukeeEightEngineReply(),
     expected:
-      "Thanks — I got your note about looking for a take-off Milwaukee-Eight 114/117. I’ll have our parts team keep an eye out, and if one becomes available from an upgrade we’ll reach out."
+      "I got your note about looking for a take-off Milwaukee-Eight 114/117. I’ll have our parts team keep an eye out, and if one becomes available from an upgrade we’ll reach out."
   }
 ];
 
