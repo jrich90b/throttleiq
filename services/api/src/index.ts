@@ -30107,7 +30107,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     !!event.mediaUrls?.length && hasAvailabilityQuestionText(event.body ?? "");
   const regenerateMediaProofUpdate = shouldAcknowledgeInboundMediaProof(conv, event);
   const skipCadenceContextualRegenerate =
-    event.provider === "sendgrid_adf" ||
+    (event.provider === "sendgrid_adf" && !regenerateFromCadenceDraft) ||
     regenerateMediaAvailabilityQuestion ||
     regenerateMediaProofUpdate ||
     (event.provider === "twilio" &&
