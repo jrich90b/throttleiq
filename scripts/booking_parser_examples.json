@@ -436,5 +436,18 @@
       "reference": "last_suggested",
       "normalized_contains": "tomorrow around 11/12"
     }
+  },
+  {
+    "id": "schedule_day_only_asks_dealer_time_1",
+    "text": "Good morning saturday would work best. let me know what time works for you.",
+    "expected": {
+      "intent": "schedule",
+      "explicit_request": true,
+      "requested": {
+        "day": "saturday",
+        "time_window": "unknown"
+      },
+      "normalized_contains": "saturday"
+    }
   }
 ]
