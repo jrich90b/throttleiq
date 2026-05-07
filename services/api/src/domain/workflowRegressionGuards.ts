@@ -505,6 +505,47 @@ export function isMediaProofStatusUpdateText(textRaw: string | null | undefined)
   );
 }
 
+export function isPurchaseDeliveryContextText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+  if (!text) return false;
+  const hasDeliveryOrPurchaseSignal =
+    /\b(pick(?:ing)? up|pickup|take delivery|delivery|deliver|sale (?:was )?finalized|sale finalized|finalize(?:d|ing)? (?:the )?(?:sale|deal)|buy(?:ing)? the bike|buy(?:ing)? it|purchas(?:e|ing)|taking it home)\b/.test(
+      text
+    ) ||
+    /\b(loan(?:s)? finalized|loan(?:s)? approved|bank|insurance paperwork|insurance card|proof of insurance|title|registration|certified check|cashier'?s check)\b/.test(
+      text
+    ) ||
+    /\b(i don'?t wanna miss out on (?:the )?bike|i do not want to miss out on (?:the )?bike|what time works for you today|get rolling on everything|everything lined up before you get here)\b/.test(
+      text
+    );
+  if (!hasDeliveryOrPurchaseSignal) return false;
+  const tradeOnly =
+    /\b(trade appraisal|appraisal request|professional evaluation|evaluate (?:my|your|the) trade|pick your trade in up|pickup for (?:the )?trade)\b/.test(
+      text
+    ) && !/\b(loan(?:s)? finalized|insurance paperwork|pick up bike|pick up the bike|taking it home|delivery|certified check)\b/.test(text);
+  return !tradeOnly;
+}
+
+export function isPurchaseDeliveryTimingText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+  if (!text) return false;
+  return (
+    /\b(early|mid|late)\s+(morning|afternoon|evening)(?:\s*ish)?\b/.test(text) ||
+    /\b\d{1,2}(?::\d{2})?\s*(?:-|to|and|\/)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm|o'?clock)?(?:\s*ish)?\b/.test(
+      text
+    ) ||
+    /\b(?:around|about|approx(?:imately)?|close to)?\s*\d{1,2}(?::\d{2})?\s*(?:am|pm|o'?clock)(?:\s*ish)?\b/.test(
+      text
+    )
+  );
+}
+
 export function shouldClearPickupStateForSchedulingReply(args: {
   inboundText?: string | null;
   lastOutboundText?: string | null;

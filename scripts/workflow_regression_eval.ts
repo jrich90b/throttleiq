@@ -30,6 +30,8 @@ import {
   isManualOutboundTentativeScheduleOfferText,
   isMediaProofStatusUpdateText,
   isNonComplimentLikePhraseText,
+  isPurchaseDeliveryContextText,
+  isPurchaseDeliveryTimingText,
   isRegenerateSchedulingLanguageText,
   isShortAckNoReplyText,
   isStockNumberInventoryInterestText,
@@ -550,6 +552,22 @@ const cases: Case[] = [
       dialogState: "trade_cash"
     }),
     expected: false
+  },
+  {
+    id: "purchase_delivery_context_detects_loan_insurance_pickup",
+    actual: isPurchaseDeliveryContextText(
+      [
+        "Loans finalized just need to send them insurance paper work",
+        "Thanks for sending that over John, I will get rolling on everything. What time works for you today?",
+        "1-2 o'clock ish"
+      ].join("\n")
+    ),
+    expected: true
+  },
+  {
+    id: "purchase_delivery_timing_detects_oclock_range",
+    actual: isPurchaseDeliveryTimingText("1-2 o'clock ish"),
+    expected: true
   },
   {
     id: "factory_order_timing_question_detected",

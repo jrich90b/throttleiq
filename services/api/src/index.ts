@@ -207,6 +207,8 @@ import {
   isManualOutboundTentativeScheduleOfferText,
   isMediaProofStatusUpdateText,
   isNonComplimentLikePhraseText,
+  isPurchaseDeliveryContextText,
+  isPurchaseDeliveryTimingText,
   isRideChallengeLeadSignal,
   isRegenerateSchedulingLanguageText,
   isShortAckNoReplyText,
@@ -13024,6 +13026,60 @@ function shouldAcknowledgeInboundMediaProof(conv: any, event: InboundMessageEven
 
 function buildInboundMediaProofAcknowledgement(): string {
   return "Thanks, got it — I received the image. I’ll review it and let you know if anything else is needed.";
+}
+
+function getRecentConversationTextForDeliveryContext(
+  conv: any,
+  currentInboundText: string | null | undefined,
+  currentInboundAt?: string | null
+): string {
+  const currentAtMs = new Date(String(currentInboundAt ?? "")).getTime();
+  const messages = Array.isArray(conv?.messages) ? conv.messages : [];
+  return messages
+    .filter((m: any) => {
+      if (!Number.isFinite(currentAtMs)) return true;
+      const atMs = new Date(String(m?.at ?? "")).getTime();
+      return !Number.isFinite(atMs) || atMs <= currentAtMs;
+    })
+    .slice(-24)
+    .map((m: any) => String(m?.body ?? ""))
+    .concat(String(currentInboundText ?? ""))
+    .join("\n");
+}
+
+function formatPurchaseDeliveryArrivalWindow(text: string | null | undefined): string {
+  const raw = String(text ?? "").trim().replace(/\s+/g, " ");
+  if (/\bearly\s+afternoon(?:\s*ish)?\b/i.test(raw)) return "early afternoon";
+  if (/\bmid\s+afternoon(?:\s*ish)?\b/i.test(raw)) return "mid-afternoon";
+  if (/\blate\s+afternoon(?:\s*ish)?\b/i.test(raw)) return "late afternoon";
+  if (/\bearly\s+morning(?:\s*ish)?\b/i.test(raw)) return "early morning";
+  if (/\blate\s+morning(?:\s*ish)?\b/i.test(raw)) return "late morning";
+  const range = raw.match(
+    /\b(\d{1,2}(?::\d{2})?)\s*(?:-|to|and|\/)\s*(\d{1,2}(?::\d{2})?)\s*(am|pm)?(?:\s*o'?clock)?(?:\s*ish)?\b/i
+  );
+  if (range) {
+    const suffix = range[3] ? ` ${range[3].toUpperCase()}` : "";
+    const ish = /\bish\b/i.test(raw) ? "-ish" : "";
+    return `${range[1]}-${range[2]}${suffix}${ish}`;
+  }
+  const remembered = formatRememberedScheduleTimeForReply(raw);
+  return remembered || "that time";
+}
+
+function buildPurchaseDeliveryTimingReply(text: string | null | undefined): string {
+  const arrival = formatPurchaseDeliveryArrivalWindow(text);
+  return `Sounds good — ${arrival} works. I’ll make sure everything is lined up before you get here.`;
+}
+
+function shouldRouteAsPurchaseDeliveryTiming(
+  conv: any,
+  currentInboundText: string | null | undefined,
+  currentInboundAt?: string | null
+): boolean {
+  const text = String(currentInboundText ?? "");
+  if (!isPurchaseDeliveryTimingText(text)) return false;
+  const recentContext = getRecentConversationTextForDeliveryContext(conv, text, currentInboundAt);
+  return isPurchaseDeliveryContextText(recentContext);
 }
 
 function extractLogisticsDeadlineLabel(text: string): string | null {
@@ -30668,6 +30724,23 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       /\b(inspection|appraisal|bring (it|the bike) (in|by)|coming in|come in|stop in|call for (an )?appointment|call (to )?(set|schedule) (an )?appointment|check my schedule|i(?:'|’)ll call|i will call|let you know when i(?:'|’)m coming in|let you know when i am coming in)\b/i.test(
         regenTextLower
       ));
+  if (
+    event.provider === "twilio" &&
+    shouldRouteAsPurchaseDeliveryTiming(conv, event.body ?? "", (inbound as any)?.at ?? event.receivedAt)
+  ) {
+    const reply = buildPurchaseDeliveryTimingReply(event.body ?? "");
+    addTodo(
+      conv,
+      "note",
+      `Customer plans pickup/delivery arrival ${formatPurchaseDeliveryArrivalWindow(event.body ?? "")}.`,
+      (inbound as any)?.providerMessageId
+    );
+    setDialogState(conv, "schedule_request");
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply);
+  }
   if (regenTradeFollowupMessage) {
     if (conv.lead) {
       conv.lead.vehicle = conv.lead.vehicle ?? {};
@@ -37719,6 +37792,30 @@ if (authToken && signature) {
       /\b(inspection|appraisal|bring (it|the bike) (in|by)|coming in|come in|stop in|call for (an )?appointment|call (to )?(set|schedule) (an )?appointment|check my schedule|i(?:'|’)ll call|i will call|let you know when i(?:'|’)m coming in|let you know when i am coming in)\b/i.test(
         textLower
       ));
+  if (
+    event.provider === "twilio" &&
+    shouldRouteAsPurchaseDeliveryTiming(conv, event.body ?? "", event.receivedAt)
+  ) {
+    const reply = buildPurchaseDeliveryTimingReply(event.body ?? "");
+    addTodo(
+      conv,
+      "note",
+      `Customer plans pickup/delivery arrival ${formatPurchaseDeliveryArrivalWindow(event.body ?? "")}.`,
+      event.providerMessageId
+    );
+    setDialogState(conv, "schedule_request");
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (event.provider === "twilio" && tradeFollowupMessage) {
     if (conv.lead) {
       conv.lead.vehicle = conv.lead.vehicle ?? {};
