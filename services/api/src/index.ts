@@ -76,6 +76,7 @@ import type {
 } from "./domain/llmDraft.js";
 import type { InboundMessageEvent, OrchestratorResult } from "./domain/types.js";
 import { sendgridInboundMiddleware, handleSendgridInbound } from "./routes/sendgridInbound.js";
+import { isPriceOnlyInquiryText } from "./domain/adfPolicy.js";
 import { resolveInventoryUrlByStock } from "./domain/inventoryUrlResolver.js";
 import { checkInventorySalePendingByUrl } from "./domain/inventoryChecker.js";
 import { getDealerProfile, saveDealerProfile } from "./domain/dealerProfile.js";
@@ -31337,6 +31338,71 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
 
   const dealerProfile = await getDealerProfileHot();
+  if (event.provider === "sendgrid_adf" && hasVehicleFactQuestionParserHint(event.body ?? "")) {
+    const adfVehicleFactParse =
+      process.env.LLM_ENABLED === "1" &&
+      process.env.LLM_VEHICLE_FACT_PARSER_ENABLED !== "0" &&
+      !!process.env.OPENAI_API_KEY
+        ? await safeLlmParse("regen_adf_vehicle_fact_question_parser", () =>
+            parseVehicleFactQuestionWithLLM({
+              text: event.body ?? "",
+              history: buildHistory(conv, 12),
+              lead: conv.lead
+            })
+          )
+        : null;
+    const adfVehicleFactDecision =
+      resolveVehicleFactQuestionDecision(event.body ?? "", adfVehicleFactParse) ??
+      (isPriceOnlyInquiryText(event.body ?? "")
+        ? {
+            questionType: "price" as const,
+            requestedFields: ["price"],
+            confidence: 0,
+            source: "fallback" as const
+          }
+        : null);
+    if (
+      adfVehicleFactDecision &&
+      (adfVehicleFactDecision.questionType === "price" ||
+        adfVehicleFactDecision.questionType === "otd_total")
+    ) {
+      const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+      const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra");
+      const firstName = normalizeDisplayCase(conv.lead?.firstName);
+      const year = extractVehicleYearFromContext(conv);
+      const model = extractVehicleModelFromContext(conv);
+      const bikeLabel = [year, model && model !== "that bike" ? model : ""]
+        .filter(Boolean)
+        .join(" ")
+        .trim() || "the bike";
+      const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
+      const reply =
+        `${greeting}This is ${agentName} at ${dealerName}. ` +
+        `I’ll have our team confirm the sale price on the ${bikeLabel} and follow up with exact numbers shortly.`;
+      addTodo(
+        conv,
+        "pricing",
+        `Confirm sale price for ${bikeLabel}. Customer asked: ${String(event.body ?? "").trim()}`,
+        event.providerMessageId
+      );
+      setFollowUpMode(conv, "manual_handoff", "price_confirm");
+      stopFollowUpCadence(conv, "manual_handoff");
+      markPricingEscalated(conv);
+      recordRouteOutcome("regen", "adf_price_handoff", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        questionType: adfVehicleFactDecision.questionType,
+        source: adfVehicleFactDecision.source,
+        confidence: adfVehicleFactDecision.confidence
+      });
+      return respondWithSmsRegeneratedDraft(reply, undefined, {
+        turnFinanceIntent: true,
+        turnAvailabilityIntent: false,
+        turnSchedulingIntent: false,
+        financeContextIntent: true
+      });
+    }
+  }
   const cadenceRegeneratedDraft = await buildCadenceRegeneratedDraft(conv, dealerProfile, lastDraft);
   const cadenceLastSentAtMs = new Date(String(conv?.followUpCadence?.lastSentAt ?? "")).getTime();
   const lastDraftAtMs = new Date(String(lastDraft?.at ?? "")).getTime();
