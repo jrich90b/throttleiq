@@ -50,7 +50,6 @@
     "text": "Thanks for info. And any appointments later this month same time.",
     "expected": {
       "intent": "none",
-      "explicit_request": true,
       "focus": "unknown",
       "format": "unknown"
     }

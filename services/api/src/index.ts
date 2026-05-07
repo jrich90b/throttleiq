@@ -13377,10 +13377,12 @@ function shouldRouteAsPurchaseDeliveryTiming(
 function hasPurchaseDeliveryLogisticsParserHint(
   conv: any,
   textRaw: string | null | undefined,
-  receivedAt?: string | null
+  receivedAt?: string | null,
+  hasMedia = false
 ): boolean {
   const text = String(textRaw ?? "").toLowerCase();
   if (!text.trim()) return false;
+  if (hasMedia && recentOutboundRequestedMediaProofContext(conv)) return true;
   if (
     /\b(loan(?:s)? finalized|finalizing loan|bank|certified check|cashier'?s check|insurance|proof of insurance|title|registration|paperwork|documents?|pdf|license|driver'?s? licen[cs]e|take delivery|deliver|delivery|pick(?:ing)? up|pickup|taking it home|on my way|headed over|heading over|driving|start driving)\b/i.test(
       text
@@ -30580,23 +30582,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       }
     );
   }
-  if (event.provider === "twilio" && channel === "sms" && shouldAcknowledgeInboundMediaProof(conv, event)) {
-    recordRouteOutcome("regen", "media_proof_acknowledgement", {
-      convId: conv.id,
-      leadKey: conv.leadKey,
-      mediaCount: event.mediaUrls?.length ?? 0
-    });
-    return respondWithSmsRegeneratedDraft(buildInboundMediaProofAcknowledgement(), undefined, {
-      turnFinanceIntent: true,
-      turnAvailabilityIntent: false,
-      turnSchedulingIntent: false,
-      financeContextIntent: true
-    });
-  }
   const regenPurchaseDeliveryLogisticsParse =
     event.provider === "twilio" &&
     channel === "sms" &&
-    hasPurchaseDeliveryLogisticsParserHint(conv, event.body ?? "", (inbound as any)?.at ?? event.receivedAt)
+    hasPurchaseDeliveryLogisticsParserHint(
+      conv,
+      event.body ?? "",
+      (inbound as any)?.at ?? event.receivedAt,
+      (event.mediaUrls?.length ?? 0) > 0
+    )
       ? await safeLlmParse("regen_purchase_delivery_logistics_parser", () =>
           parsePurchaseDeliveryLogisticsWithLLM({
             text: event.body ?? "",
@@ -30617,6 +30611,19 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       turnFinanceIntent: false,
       turnAvailabilityIntent: false,
       turnSchedulingIntent: false
+    });
+  }
+  if (event.provider === "twilio" && channel === "sms" && shouldAcknowledgeInboundMediaProof(conv, event)) {
+    recordRouteOutcome("regen", "media_proof_acknowledgement_fallback", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      mediaCount: event.mediaUrls?.length ?? 0
+    });
+    return respondWithSmsRegeneratedDraft(buildInboundMediaProofAcknowledgement(), undefined, {
+      turnFinanceIntent: true,
+      turnAvailabilityIntent: false,
+      turnSchedulingIntent: false,
+      financeContextIntent: true
     });
   }
   if (event.provider === "twilio" && channel === "sms" && isLogisticsProgressUpdateText(event.body ?? "")) {
@@ -33514,27 +33521,14 @@ if (authToken && signature) {
   const systemMode = getSystemMode();
   const webhookMode =
     systemMode === "suggest" ? "suggest" : event.provider === "twilio" ? "autopilot" : effectiveMode(conv);
-  if (event.provider === "twilio" && shouldAcknowledgeInboundMediaProof(conv, event)) {
-    const reply = buildInboundMediaProofAcknowledgement();
-    recordRouteOutcome("live", "media_proof_acknowledgement", {
-      convId: conv.id,
-      leadKey: conv.leadKey,
-      mediaCount: event.mediaUrls?.length ?? 0
-    });
-    if (webhookMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
-  }
   const liveEarlyPurchaseDeliveryLogisticsParse =
     event.provider === "twilio" &&
-    hasPurchaseDeliveryLogisticsParserHint(conv, event.body ?? "", event.receivedAt)
+    hasPurchaseDeliveryLogisticsParserHint(
+      conv,
+      event.body ?? "",
+      event.receivedAt,
+      (event.mediaUrls?.length ?? 0) > 0
+    )
       ? await safeLlmParse("purchase_delivery_logistics_parser_early", () =>
           parsePurchaseDeliveryLogisticsWithLLM({
             text: event.body ?? "",
@@ -33550,6 +33544,24 @@ if (authToken && signature) {
       providerMessageId: event.providerMessageId,
       parsed: liveEarlyPurchaseDeliveryLogisticsParse as PurchaseDeliveryLogisticsParse,
       scope: "live"
+    });
+    if (webhookMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+  if (event.provider === "twilio" && shouldAcknowledgeInboundMediaProof(conv, event)) {
+    const reply = buildInboundMediaProofAcknowledgement();
+    recordRouteOutcome("live", "media_proof_acknowledgement_fallback", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      mediaCount: event.mediaUrls?.length ?? 0
     });
     if (webhookMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");

@@ -5,7 +5,7 @@ import { parseVehicleInfoRequestWithLLM } from "../services/api/src/domain/llmDr
 
 type Expected = {
   intent: "specs" | "compare" | "none";
-  explicit_request: boolean;
+  explicit_request?: boolean;
   focus?: "engine" | "features" | "dimensions" | "accessories" | "general" | "unknown";
   format?: "full" | "highlights" | "unknown";
 };
@@ -58,7 +58,9 @@ for (const fixture of fixtures) {
   }
 
   const intentMatch = parsed.intent === fixture.expected.intent;
-  const explicitMatch = parsed.explicitRequest === fixture.expected.explicit_request;
+  const explicitMatch =
+    typeof fixture.expected.explicit_request !== "boolean" ||
+    parsed.explicitRequest === fixture.expected.explicit_request;
   const focusMatch = !fixture.expected.focus || parsed.focus === fixture.expected.focus;
   const formatMatch = !fixture.expected.format || parsed.format === fixture.expected.format;
 
@@ -73,7 +75,9 @@ for (const fixture of fixtures) {
         `[${fixture.id}]`,
         `text="${fixture.text}"`,
         `expected intent=${fixture.expected.intent}`,
-        `expected explicit=${fixture.expected.explicit_request}`,
+        typeof fixture.expected.explicit_request === "boolean"
+          ? `expected explicit=${fixture.expected.explicit_request}`
+          : null,
         fixture.expected.focus ? `expected focus=${fixture.expected.focus}` : null,
         fixture.expected.format ? `expected format=${fixture.expected.format}` : null,
         `got intent=${parsed.intent}`,

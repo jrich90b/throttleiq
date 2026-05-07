@@ -18,6 +18,25 @@ const fixtures: Fixture[] = [
     expectedIntent: "delivery_progress"
   },
   {
+    id: "certified_check_progress",
+    text: "Certified chek has been Maide for the motorcycle",
+    expectedIntent: "delivery_progress"
+  },
+  {
+    id: "insurance_status_docs",
+    text: "Insured already too",
+    expectedIntent: "docs_status"
+  },
+  {
+    id: "media_proof_legit_docs",
+    text: "Like I said. I'm 💯 legit",
+    history: [
+      { direction: "out", body: "Thanks, got it — I received the image. I’ll review it and let you know if anything else is needed." },
+      { direction: "in", body: "Certified check has been made for the motorcycle" }
+    ],
+    expectedIntent: "docs_status"
+  },
+  {
     id: "start_driving_deadline",
     text: "Let me know be cause I star driving on Friday morning. Please",
     expectedIntent: "delivery_progress",

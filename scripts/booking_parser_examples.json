@@ -449,5 +449,23 @@
       },
       "normalized_contains": "saturday"
     }
+  },
+  {
+    "id": "schedule_multi_day_open_window_friday_saturday_1",
+    "text": "Ooh that looks sharp! Friday morning, early afternoon, or anytime Saturday I can come out and take a look",
+    "expected": {
+      "intent": "schedule",
+      "intent_any": [
+        "schedule",
+        "availability"
+      ],
+      "explicit_request": true,
+      "requested": {
+        "day": "friday",
+        "time_text": "morning",
+        "time_window": "range"
+      },
+      "normalized_contains": "friday"
+    }
   }
 ]
