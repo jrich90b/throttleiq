@@ -10463,6 +10463,29 @@ function ensureAppointmentOutcomeToken(appt: any): string {
   return token;
 }
 
+function isConfirmedCalendarAppointment(appt: any): boolean {
+  return !!(
+    appt &&
+    String(appt.status ?? "").trim().toLowerCase() === "confirmed" &&
+    String(appt.bookedEventId ?? "").trim() &&
+    String(appt.bookedSalespersonId ?? "").trim() &&
+    String(appt.whenIso ?? "").trim()
+  );
+}
+
+function clearAppointmentStaffPromptState(appt: any): boolean {
+  const notify = appt?.staffNotify;
+  if (!notify || typeof notify !== "object") return false;
+  let changed = false;
+  for (const key of ["bookedSentAt", "followUpSentAt", "lastEventId", "outcomeToken"]) {
+    if (Object.prototype.hasOwnProperty.call(notify, key)) {
+      delete notify[key];
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 function getOutcomeStaffNotifyTarget(conv: any): any {
   if (conv?.appointment) {
     conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
@@ -11335,7 +11358,7 @@ function findPendingStaffOutcomeCandidates(staff: any, fromPhoneRaw: string): Pe
     const ownerAssigneeId = String(conv?.leadOwner?.id ?? "").trim();
 
     const appointmentNotify = conv?.appointment?.staffNotify ?? null;
-    if (appointmentNotify) {
+    if (appointmentNotify && isConfirmedCalendarAppointment(conv?.appointment)) {
       const appointmentToken = String(appointmentNotify?.outcomeToken ?? "").trim().toLowerCase();
       if (appointmentToken && !appointmentNotify?.outcome) {
         const appointmentAssigneeId = String(conv?.appointment?.bookedSalespersonId ?? "").trim();
@@ -20855,8 +20878,13 @@ async function processStaffAppointmentNotifications() {
   };
 
   for (const conv of convs) {
-    const appt = conv.appointment;
-    if (!appt?.bookedEventId || !appt.bookedSalespersonId || !appt.whenIso) continue;
+    const appt: any = conv.appointment;
+    if (!isConfirmedCalendarAppointment(appt)) {
+      if (clearAppointmentStaffPromptState(appt)) {
+        changed = true;
+      }
+      continue;
+    }
     if (conv.status === "closed") continue;
 
     const user = users.find(u => u.id === appt.bookedSalespersonId);
@@ -23454,6 +23482,7 @@ app.patch("/calendar/events/:calendarId/:eventId", requirePermission("canEditApp
         appt.bookedCalendarId = null;
         appt.matchedSlot = undefined;
         appt.reschedulePending = status === "cancelled";
+        clearAppointmentStaffPromptState(appt);
         if (conv?.id) {
           markOpenTodosDoneForConversationByClass(conv.id, ["appointment"]);
         }
@@ -30020,6 +30049,10 @@ app.post("/conversations/:id/send", async (req, res) => {
         chosenSlot.end,
         colorId
       );
+      if (!String(eventObj?.id ?? "").trim()) {
+        console.log("[manual-outbound-schedule-book] calendar event missing id");
+        return false;
+      }
 
       appt.status = "confirmed";
       appt.whenIso = chosenSlot.start;
@@ -30381,7 +30414,38 @@ app.post("/conversations/:id/send", async (req, res) => {
         timeText: normalizedText || text
       });
       setDialogState(conv, "schedule_booked");
-      await maybeBookManualOutboundAppointmentEvent();
+      const booked = await maybeBookManualOutboundAppointmentEvent();
+      if (!booked || !String(conv.appointment?.bookedEventId ?? "").trim()) {
+        conv.appointment.status = "none";
+        conv.appointment.whenIso = null;
+        conv.appointment.bookedEventId = null;
+        conv.appointment.bookedEventLink = null;
+        conv.appointment.bookedSalespersonId = null;
+        conv.appointment.bookedSalespersonName = null;
+        conv.appointment.bookedCalendarId = null;
+        conv.appointment.reschedulePending = true;
+        clearAppointmentStaffPromptState(conv.appointment);
+        setDialogState(conv, "schedule_request");
+        addTodo(
+          conv,
+          "call",
+          `Manual appointment could not be booked on calendar. Requested: ${whenText}.`,
+          opts?.sourceMessageId ? String(opts.sourceMessageId) : undefined,
+          conv.leadOwner
+            ? {
+                id: String(conv.leadOwner.id ?? "").trim() || undefined,
+                name: String(conv.leadOwner.name ?? "").trim() || undefined
+              }
+            : undefined
+        );
+        recordRouteOutcome("live", "manual_outbound_schedule_calendar_failed", {
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          channel: opts?.channel ?? null,
+          whenIso: whenUtc
+        });
+        return;
+      }
       recordRouteOutcome("live", "manual_outbound_schedule_confirmed", {
         convId: conv.id,
         leadKey: conv.leadKey,
@@ -30395,7 +30459,43 @@ app.post("/conversations/:id/send", async (req, res) => {
 
     if (didSetAppointment) {
       setDialogState(conv, "schedule_booked");
-      await maybeBookManualOutboundAppointmentEvent();
+      const booked = await maybeBookManualOutboundAppointmentEvent();
+      if (!booked || !String(conv.appointment?.bookedEventId ?? "").trim()) {
+        const appt = conv.appointment;
+        if (!appt) return;
+        const requestedWhen = appt.whenIso
+          ? formatSlotLocal(String(appt.whenIso), schedulerTimezone)
+          : "the requested time";
+        appt.status = "none";
+        appt.whenIso = null;
+        appt.bookedEventId = null;
+        appt.bookedEventLink = null;
+        appt.bookedSalespersonId = null;
+        appt.bookedSalespersonName = null;
+        appt.bookedCalendarId = null;
+        appt.reschedulePending = true;
+        clearAppointmentStaffPromptState(appt);
+        setDialogState(conv, "schedule_request");
+        addTodo(
+          conv,
+          "call",
+          `Manual appointment could not be booked on calendar. Requested: ${requestedWhen}.`,
+          opts?.sourceMessageId ? String(opts.sourceMessageId) : undefined,
+          conv.leadOwner
+            ? {
+                id: String(conv.leadOwner.id ?? "").trim() || undefined,
+                name: String(conv.leadOwner.name ?? "").trim() || undefined
+              }
+            : undefined
+        );
+        recordRouteOutcome("live", "manual_outbound_schedule_calendar_failed", {
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          channel: opts?.channel ?? null,
+          whenIso: conv.appointment?.whenIso ?? null
+        });
+        return;
+      }
       recordRouteOutcome("live", "manual_outbound_schedule_confirmed", {
         convId: conv.id,
         leadKey: conv.leadKey,
@@ -35384,6 +35484,7 @@ if (authToken && signature) {
         conv.appointment.bookedSalespersonId = null;
         conv.appointment.acknowledged = true;
         conv.appointment.reschedulePending = true;
+        clearAppointmentStaffPromptState(conv.appointment);
       }
       if (isYes) {
         try {
